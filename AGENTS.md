@@ -82,6 +82,9 @@ smaller and clearer.
   filesystem order in emitted artifacts.
 - Put scratch files, screenshots, and logs only in gitignored locations such as
   `.playwright-mcp/`, `test-results/`, or `playwright-report/`.
+- Keep durable agent bookkeeping — notes, plans, handover prompts, commands,
+  subagent definitions — in `.agents/` (see `.agents/README.md`), not in `/tmp`
+  or other scratch.
 
 ## Run From The Root
 

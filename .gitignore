@@ -38,9 +38,11 @@ examples/*/src/runtime/
 .angee/workspaces/
 
 # Claude Code session state
+# .claude/commands and .claude/agents are symlinks into .agents/ and are tracked.
 .claude/scheduled_tasks.lock
 .claude/projects/
 .claude/worktrees/
+.claude/settings.local.json
 
 # Playwright scratch
 .playwright-mcp/
