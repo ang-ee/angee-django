@@ -95,11 +95,14 @@ Before decomposing backend code, classify each fact by its Django owner:
   service, or composer function.
 - Compatibility facades exist only for an explicit compatibility promise.
 
-Settings helpers return plain Django setting mappings. Do not pass `globals()`
+Settings helpers are pure functions of their arguments: they return plain
+Django setting mappings and do not read the environment. Do not pass `globals()`
 into framework code or let helpers mutate a settings module from the outside;
-the host may apply the returned mapping in one visible step. `ANGEE_DATA_DIR`
-must come from the environment or an explicitly passed path; examples should not
-invent a local data directory fallback.
+the host may apply the returned mapping in one visible step. The host owns where
+runtime and data live — it resolves any `ANGEE_RUNTIME_DIR` / `ANGEE_DATA_DIR`
+override and passes explicit paths to the helper. Anchor host defaults to a
+fixed location via `__file__` (e.g. the repo-root control directory), never to
+the current working directory.
 
 Keep `angee` as a namespace package. Do not add `src/angee/__init__.py`; split
 addon distributions must be able to contribute packages under the shared

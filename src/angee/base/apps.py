@@ -395,3 +395,11 @@ class BaseConfig(BaseAddonConfig):
     default = True
     name = "angee.base"
     label = "base"
+
+    def ready(self) -> None:
+        """Register composed models for revision tracking once they load."""
+
+        super().ready()
+        from angee.base.mixins.models import register_revision_models
+
+        register_revision_models()

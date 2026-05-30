@@ -6,11 +6,22 @@ from django.conf import settings
 from django.db import models
 from django_sqids import SqidsField
 
-from angee.base.mixins.models import AngeeModel, SqidMixin
+from angee.base.mixins.models import (
+    AngeeModel,
+    HistoryMixin,
+    RevisionMixin,
+    SqidMixin,
+)
 
 
-class Note(SqidMixin, AngeeModel):
-    """A short note used to exercise backend composition."""
+class Note(SqidMixin, AngeeModel, HistoryMixin, RevisionMixin):
+    """A short note used to exercise backend composition.
+
+    Metadata changes are audited through ``history``; the ``body`` field is
+    versioned through ``revisions`` so edits can be rolled back.
+    """
+
+    revisioned_fields = ("body",)
 
     DRAFT = "draft"
     ACTIVE = "active"

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
@@ -159,3 +159,71 @@ class SqidMixin(models.Model):
         """Return the row with this opaque external id or ``None``."""
 
         return cls.from_sqid(value)
+
+
+class HistoryMixin(models.Model):
+    """Marker: audit a source model with django-simple-history.
+
+    The composer emits ``HistoricalRecords`` onto the composed concrete model
+    (with its app label), so each save appends to a ``Historical<Model>``
+    shadow table exposed as ``instance.history``. Addons just mix this in.
+    """
+
+    class Meta:
+        """Django model options."""
+
+        abstract = True
+
+
+class RevisionMixin(models.Model):
+    """Snapshot named fields into django-reversion versions.
+
+    A model declares ``revisioned_fields``; the base addon registers the
+    concrete model with django-reversion so edits made inside a revision block
+    (every request, via the revision middleware) are versioned and revertible.
+    Use this for large content fields that would bloat the history table.
+    """
+
+    revisioned_fields: ClassVar[tuple[str, ...]] = ()
+
+    class Meta:
+        """Django model options."""
+
+        abstract = True
+
+    @property
+    def revisions(self) -> Any:
+        """Return this row's versions, newest first."""
+
+        import reversion
+
+        return reversion.models.Version.objects.get_for_object(self)
+
+    def revert_to(self, version: Any) -> None:
+        """Restore the revisioned fields from a version and save.
+
+        Only the declared fields are versioned, so the row is restored field by
+        field rather than through a whole-object deserialization.
+        """
+
+        data = version.field_dict
+        for name in self.revisioned_fields:
+            if name in data:
+                setattr(self, name, data[name])
+        self.save()
+
+
+def register_revision_models() -> None:
+    """Register every composed model declaring ``revisioned_fields``.
+
+    Run from the base addon's ``ready()`` once concrete models are loaded, so
+    django-reversion tracks the runtime models, not the abstract sources.
+    """
+
+    import reversion
+    from django.apps import apps
+
+    for model in apps.get_models():
+        fields = getattr(model, "revisioned_fields", ())
+        if fields and not reversion.is_registered(model):
+            reversion.register(model, fields=list(fields))

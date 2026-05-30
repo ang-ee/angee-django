@@ -18,7 +18,7 @@ from django.db import models
 from angee.base.apps import BaseAddonConfig
 from angee.base.compose.rebac import write_permissions
 from angee.base.graphql.schema import render_sdl
-from angee.base.mixins.models import AngeeModel
+from angee.base.mixins.models import AngeeModel, HistoryMixin
 
 
 @dataclass(slots=True)
@@ -217,6 +217,10 @@ def _models_source(
         model_class = cast(type[AngeeModel], raw_model)
         source_alias = _source_alias(model_class)
         imports.extend(_class_import(model_class, source_alias))
+        if issubclass(model_class, HistoryMixin):
+            imports.append(
+                "from simple_history.models import HistoricalRecords"
+            )
         aliased_extensions: list[tuple[type[models.Model], str]] = []
         target_extensions = extensions.get(
             model_class.get_composition_label(), ()
@@ -248,6 +252,14 @@ def _models_source(
         if db_table is not None:
             meta_lines.append(f"        db_table = {db_table}")
         meta_lines.extend(_rebac_meta_source(model_class))
+        body_lines: list[str] = []
+        if issubclass(model_class, HistoryMixin):
+            args = f'app="{addon.label}"'
+            excluded = _history_excluded_fields(model_class)
+            if excluded:
+                args += f", excluded_fields={excluded!r}"
+            body_lines.append(f"    history = HistoricalRecords({args})")
+            body_lines.append("")
         lines.extend(
             [
                 f"{meta_name} = getattr({source_alias}, 'Meta', object)",
@@ -255,6 +267,7 @@ def _models_source(
                 f"class {model_class.__name__}({', '.join(base_names)}):",
                 f'    """Concrete {model_class.__name__} model."""',
                 "",
+                *body_lines,
                 f"    class Meta({meta_name}):",
                 *meta_lines,
                 "",
@@ -278,6 +291,23 @@ def _class_import(model_class: type[models.Model], alias: str) -> list[str]:
             f"{model_class.__name__} as {alias}"
         )
     ]
+
+
+def _history_excluded_fields(model_class: type[models.Model]) -> list[str]:
+    """Return virtual local fields the history shadow table cannot copy.
+
+    Non-concrete fields such as the ``sqid`` projection have no column of their
+    own; simple-history cannot mirror them, and the shadow row rebuilds them
+    from the copied primary key.
+    """
+
+    return sorted(
+        field.name
+        for field in model_class._meta.get_fields()
+        if getattr(field, "concrete", True) is False
+        and not field.is_relation
+        and not getattr(field, "auto_created", False)
+    )
 
 
 def _rebac_meta_source(model_class: type[models.Model]) -> list[str]:

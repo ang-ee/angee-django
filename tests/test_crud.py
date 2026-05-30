@@ -94,4 +94,19 @@ def test_crud_fields_merge_into_a_schema() -> None:
     ).as_str()
 
     assert "createGroup(data: GroupInput!): GroupType!" in sdl
-    assert "deleteGroup: GroupType!" in sdl
+    assert "deleteGroup(id: ID!): DeletePreview!" in sdl
+    assert "type DeletePreview" in sdl
+
+
+@pytest.mark.django_db
+def test_collect_delete_preview_counts_affected_rows() -> None:
+    """The cascade preview reports what removing a row would delete."""
+
+    from angee.base.graphql.crud import collect_delete_preview
+
+    group = Group.objects.create(name="reviewers")
+    preview = collect_delete_preview(group)
+
+    assert preview.total_deleted_count == 1
+    assert not preview.has_blockers
+    assert any(g.count == 1 for g in preview.deleted)

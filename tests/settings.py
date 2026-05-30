@@ -7,6 +7,8 @@ INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.auth",
     "rebac",
+    "reversion",
+    "simple_history",
     "angee.base.apps.BaseConfig",
 ]
 DATABASES = {

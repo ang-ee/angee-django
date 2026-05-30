@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -18,9 +17,9 @@ def compose_defaults(
     *,
     addons: Sequence[str],
     runtime_dir: Path,
+    data_dir: Path,
     root_urlconf: str,
     asgi_application: str,
-    data_dir: Path | None = None,
     runtime_module: str = "runtime",
     debug: bool = False,
     use_tz: bool = True,
@@ -33,14 +32,12 @@ def compose_defaults(
 ) -> dict[str, Any]:
     """Return Django setting values derived from Angee composition.
 
-    ``ANGEE_RUNTIME_DIR`` and ``ANGEE_DATA_DIR`` environment variables
-    override caller-provided paths. ``ANGEE_DATA_DIR`` is required unless
-    ``data_dir`` is passed deliberately, so local commands do not create
-    databases in surprising places.
+    ``runtime_dir`` and ``data_dir`` are explicit inputs. The host settings
+    module decides them, resolving any ``ANGEE_RUNTIME_DIR`` or
+    ``ANGEE_DATA_DIR`` override itself, and passes the result. This helper is
+    a pure function of its arguments and does not read the environment.
     """
 
-    runtime_dir = Path(os.environ.get("ANGEE_RUNTIME_DIR", runtime_dir))
-    data_dir = _resolve_data_dir(data_dir)
     # Required side effect: put the runtime parent on the path so the generated
     # ``runtime`` package (and its emitted addon models) is importable.
     if str(runtime_dir.parent) not in sys.path:
@@ -56,6 +53,8 @@ def compose_defaults(
                 "django.contrib.auth",
                 "django.contrib.sessions",
                 "rebac",
+                "reversion",
+                "simple_history",
                 f"{BaseConfig.__module__}.{BaseConfig.__name__}",
                 *(f"{cls.__module__}.{cls.__name__}" for cls in addon_configs),
                 *extra_installed_apps,
@@ -66,6 +65,8 @@ def compose_defaults(
             "django.contrib.sessions.middleware.SessionMiddleware",
             "django.contrib.auth.middleware.AuthenticationMiddleware",
             "rebac.middleware.ActorMiddleware",
+            "simple_history.middleware.HistoryRequestMiddleware",
+            "reversion.middleware.RevisionMiddleware",
             *extra_middleware,
         ],
         "AUTHENTICATION_BACKENDS": [
@@ -94,19 +95,6 @@ def compose_defaults(
         },
         "STATIC_URL": static_url,
     }
-
-
-def _resolve_data_dir(data_dir: Path | None) -> Path:
-    """Return the explicit data directory or fail before Django opens state."""
-
-    value = os.environ.get("ANGEE_DATA_DIR")
-    if value:
-        return Path(value)
-    if data_dir is not None:
-        return Path(data_dir)
-    raise ImproperlyConfigured(
-        "ANGEE_DATA_DIR must be set before importing host settings"
-    )
 
 
 def _addon_config_classes(
