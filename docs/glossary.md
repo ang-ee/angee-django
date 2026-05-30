@@ -33,7 +33,7 @@ composes addons.
 **Project** — a runnable product: a host app plus the addons it composes.
 
 **Addon contract** — what an addon declares for the composer to consume (source
-models and their `Meta`, GraphQL overrides, routes, slots, resources). Contracts
+models, native Strawberry GraphQL classes, routes, slots, resources). Contracts
 are the seams between addons.
 
 **Seams** — the named extension points and boundaries the framework owns. The
@@ -52,19 +52,28 @@ Generated output — change the source, not the artifact.
 **`runtime/`** — the directory of generated backend output (concrete apps, schemas,
 codegen stubs, migrations). Output, not source.
 
-**`Meta`** — the declarative backend contract attached to a model. Unknown keys
-fail early.
+**Model extension** — an abstract source model with `extends = "app.Model"`.
+The composer emits it as an additional base for the target model.
+
+**`Meta`** — Django's model options class. Keep Angee facts out of `Meta` unless
+the owning library explicitly supports them, such as `rebac_resource_type`.
 
 **REBAC** — Relationship-Based Access Control (via `django-zed-rebac`).
 Authorization is structural: reads scope through the model manager, writes check
-the instance.
+the instance. Addons use the library's `rebac_schema` / `permissions.zed`
+contract; Angee wires sync into the build.
+
+**Resource** — YAML or CSV data owned by an addon and imported idempotently by
+tier (`master`, `install`, `demo`). Addons list resource files in their
+`AppConfig.resources` manifest.
 
 **Symbolic model reference** — referring to a model by symbol/string across addon
 boundaries instead of importing it, to avoid import cycles.
 
-**Virtual operation** — a GraphQL operation that is not derived from a model.
-Handwritten `graphql/` code exists only for virtual operations and non-model
-types; model-backed GraphQL is auto-generated.
+**GraphQL contribution** — native Strawberry types, queries, mutations, and
+subscriptions exported from an addon's conventional `graphql.py`. The composer
+merges these classes into named schemas; it does not introduce a parallel schema
+language.
 
 ## Frontend
 

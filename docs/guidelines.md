@@ -77,6 +77,20 @@ Don't Repeat Yourself is a fundamental software development principle that
 encourages avoiding code repetition. **Reuse highly tested existing code
 whenever possible.**
 
+### Put Behavior on the Owning Object
+
+Rules belong beside the data they interpret. Prefer methods and properties on the
+class that owns a fact over loose helper functions that repeatedly decode the
+same shape from the outside. The test: if a function branches on — or repeatedly
+reads — the internal shape of one object, it wants to be a method on that object;
+a function that switches on a value's type is asking for polymorphism on that
+type.
+
+Keep a function loose for orchestration across objects, a pure transform with no
+natural owner, or an integration entrypoint — and such a function may still call
+into the owners. Django draws the line cleanly: `DateField.to_python` is a method
+on the field, but it calls the ownerless `parse_date` to parse the string.
+
 ### Use First-Principles Thinking
 
 First-principles thinking is one of the best ways to reverse-engineer complicated
