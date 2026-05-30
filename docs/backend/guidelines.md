@@ -41,8 +41,9 @@ normalizes, or renames a Django object, delete it.
 ## Rules
 
 - Domain behavior lives on models, managers, and querysets.
-- Ordinary source models inherit `AngeeModel`; compose explicit mixins only when
-  the model needs a narrower shape.
+- Ordinary source models inherit `AngeeModel`; that inheritance is the composer
+  contract for emitted models and model extensions. Compose explicit mixins only
+  when the model needs a narrower shape.
 - Put behavior on the object that owns the shape, the Django way: coerce values
   with `Field.to_python`/`get_prep_value` instead of branching on field type from
   outside; ask `model._meta` (`get_field`, `label_lower`) and
@@ -88,8 +89,15 @@ base manifest fields are:
 - `depends_on`: addon labels or app names that must compose first.
 - `rebac_schema`: a `django-zed-rebac` schema file, defaulting to
   `permissions.zed` and skipped when absent.
-- `resources`: a dict of resource tiers to explicit file lists. Empty tiers are
-  the default; addons list files such as `resources/demo/010_notes.note.yaml`.
+- `resources`: a dict of `ResourceTier` keys to explicit file lists. String
+  keys such as `"demo"` are accepted as AppConfig shorthand. Tiers default to no
+  files, so addons only declare the tiers they use.
+
+Settings helpers return plain Django setting mappings. Do not pass `globals()`
+into framework code or let helpers mutate a settings module from the outside;
+the host may apply the returned mapping in one visible step. `ANGEE_DATA_DIR`
+must come from the environment or an explicitly passed path; examples should not
+invent a local data directory fallback.
 
 Keep `angee` as a namespace package. Do not add `src/angee/__init__.py`; split
 addon distributions must be able to contribute packages under the shared
