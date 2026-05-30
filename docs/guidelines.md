@@ -88,11 +88,29 @@ elements and reassemble them from the ground up.
 
 - Do not reinvent the wheel.
 - Every piece of functionality should be built as a clean and reusable module.
-- Use consistent naming for methods, variables, and other code elements.
 - Follow the best practices for the framework you're using — for example, PEP 8
   for Python. For this project, the specifics live in
   [Backend Guidelines](backend/guidelines.md) and
   [Frontend Guidelines](frontend/guidelines.md).
+
+### Name So Code Can Be Found, Not Guessed
+
+This is a framework, and its names are the index people navigate by. Consistent,
+predictable naming of files, folders, packages, classes, and methods lets a reader
+know what a thing is called and where it lives without searching. Inconsistent
+naming taxes every future reader, forever — so naming gets special attention here.
+
+- **One concept, one name, everywhere** — across files, directories, packages,
+  classes, and methods. A new name is a design decision; don't coin a synonym for
+  something that already has one.
+- **Encode the role in the name, consistently** — the file says what kind of code
+  it holds, the class suffix says what kind of thing it is, the method verb says
+  what it does, and they all agree.
+- **Follow the host framework's conventions exactly** instead of inventing your
+  own; match the surrounding ecosystem so the framework can locate code by name
+  (convention over configuration). The concrete per-language conventions — modeled
+  on Django for the backend — live in [Backend Guidelines](backend/guidelines.md)
+  and [Frontend Guidelines](frontend/guidelines.md).
 
 > A **smart** person learns from their mistakes, but a truly **wise** person
 > learns from the mistakes of others.

@@ -28,6 +28,30 @@ hand-rolling a concern. Python dependency setup belongs in `pyproject.toml` and
 - Use symbolic model references across addon boundaries; avoid import cycles.
 - Build output must be byte-deterministic.
 
+## Naming
+
+Naming is structural: Django and the composer both locate code by name, so a
+wrong name is a broken contract, not a style nit. Django is the reference — match
+it exactly.
+
+- **Modules** are lowercase, single-word, named by role: `models.py`,
+  `managers.py`, `admin.py`, `forms.py`, `urls.py`, `apps.py`, `signals.py`,
+  `mixins.py`, `validators.py`, `fields.py`, `backends.py`.
+- **Structural directories** are fixed and discovered by name — never rename them:
+  `migrations/`, `management/commands/`, `templatetags/`, `templates/`,
+  `backends/`.
+- **Packages / addons** are short and lowercase — no CamelCase, no stray
+  underscores (`auth`, `contenttypes`, `storage`) — and match the addon label.
+- **Classes** are PascalCase with a role suffix that mirrors the module: `*Field`,
+  `*Mixin`, `*Manager`, `*QuerySet`, `*Form`, `*Admin`, and `*Config` for the
+  `AppConfig`.
+- **Methods / functions** are snake_case and verb-first from a stable vocabulary:
+  `get_*` (accessors), `is_*` / `has_*` (booleans), `as_*` / `to_*` / `from_*`
+  (conversions), `create_*` / `save_*` / `delete_*` (mutations);
+  `_leading_underscore` for internal. Settings and constants are `UPPER_SNAKE`.
+- **camelCase only when extending an external API that uses it** (e.g. Django's
+  `unittest` assertions). Otherwise never.
+
 ## Checks
 
 Run the narrowest relevant check while editing, then the broad check before
