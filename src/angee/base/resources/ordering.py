@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Sequence
 
-from angee.base.resources.entries import ResourceEntry, ResourceLoadError
+from angee.base.resources.entries import ResourceEntry
+from angee.base.resources.exceptions import ResourceLoadError
 
 EntryKey = tuple[str, str]
 

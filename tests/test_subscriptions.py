@@ -11,6 +11,7 @@ from channels.layers import InMemoryChannelLayer
 from django.contrib.auth.models import Group
 from rebac import anonymous_actor
 
+from angee.base import signals
 from angee.base.graphql import subscriptions
 from angee.base.graphql.subscriptions import ChangeEvent, changes
 
@@ -42,7 +43,7 @@ def test_changes_builds_a_named_subscription_field() -> None:
 
     sdl = strawberry.Schema(query=Query, subscription=surface).as_str()
     assert "groupChanged: ChangeEvent!" in sdl
-    assert Group in subscriptions._connected
+    assert Group in signals._connected
 
 
 def test_gate_event_passes_through_non_rebac_models(monkeypatch) -> None:
@@ -114,7 +115,7 @@ def test_subscribe_yields_broadcast_payloads(monkeypatch) -> None:
         pending = asyncio.ensure_future(stream.__anext__())
         await asyncio.sleep(0.05)  # let the subscriber join the group
         await layer.group_send(
-            subscriptions._group(Group),
+            signals.change_group(Group),
             {"type": "angee.change", "payload": _payload(id="7")},
         )
         try:
@@ -136,6 +137,6 @@ def test_json_safe_normalizes_values() -> None:
     """Non-primitive values become JSON-serializable representations."""
 
     when = datetime.datetime(2026, 5, 30, 12, 0, 0)
-    assert subscriptions._json_safe(when) == "2026-05-30T12:00:00"
-    assert subscriptions._json_safe([when]) == ["2026-05-30T12:00:00"]
-    assert subscriptions._json_safe(3) == 3
+    assert signals._json_safe(when) == "2026-05-30T12:00:00"
+    assert signals._json_safe([when]) == ["2026-05-30T12:00:00"]
+    assert signals._json_safe(3) == 3

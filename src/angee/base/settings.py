@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -34,14 +33,11 @@ def compose_defaults(
 
     ``runtime_dir`` and ``data_dir`` are explicit inputs. The host settings
     module decides them, resolving any ``ANGEE_RUNTIME_DIR`` or
-    ``ANGEE_DATA_DIR`` override itself, and passes the result. This helper is
-    a pure function of its arguments and does not read the environment.
+    ``ANGEE_DATA_DIR`` override itself, and passes the result. This helper is a
+    pure function of its arguments: it does not read the environment or mutate
+    global state. The host owns making the generated ``runtime`` package
+    importable (putting ``runtime_dir.parent`` on ``sys.path``).
     """
-
-    # Required side effect: put the runtime parent on the path so the generated
-    # ``runtime`` package (and its emitted addon models) is importable.
-    if str(runtime_dir.parent) not in sys.path:
-        sys.path.insert(0, str(runtime_dir.parent))
 
     addon_configs = _addon_config_classes(addons)
     return {

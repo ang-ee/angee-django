@@ -15,8 +15,8 @@ from django.db import connection, models
 from rebac import system_context
 
 from angee.base.apps import BaseAddonConfig
-from angee.base.mixins.models import AngeeModel
-from angee.base.resources.entries import ResourceLoadError
+from angee.base.models import AngeeModel
+from angee.base.resources.exceptions import ResourceLoadError
 from angee.base.resources.models import Resource
 
 
@@ -49,7 +49,7 @@ def test_base_addon_owns_resource_source_model() -> None:
     """Resource is an addon model owned by the base addon."""
 
     assert Resource.__module__ == "angee.base.resources.models"
-    assert Resource in apps.get_app_config("base").get_model_classes()
+    assert Resource in apps.get_app_config("base").model_classes
 
 
 def test_resource_manifest_accepts_enum_keys_and_string_shorthand(
@@ -58,7 +58,7 @@ def test_resource_manifest_accepts_enum_keys_and_string_shorthand(
     """Resource tiers are enum-owned while AppConfigs stay easy to author."""
 
     config = config_for(tmp_path)
-    manifest = config.get_resource_manifest()
+    manifest = config.resource_manifest
 
     # Output keys are the normalized tier values; each entry normalizes to a
     # dict, regardless of how the AppConfig authored it (enum or string key,
@@ -81,7 +81,7 @@ def test_resource_manifest_rejects_unknown_tiers(tmp_path: Path) -> None:
     config = BrokenConfig(BrokenConfig.name, module)
 
     with pytest.raises(ImproperlyConfigured, match="Unknown resource tier"):
-        config.get_resource_manifest()
+        config.resource_manifest
 
 
 @pytest.mark.django_db(transaction=True)

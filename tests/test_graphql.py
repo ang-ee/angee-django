@@ -44,7 +44,8 @@ class FakeAddon:
     def __init__(self, schemas: dict[str, dict[str, tuple]]) -> None:
         self._schemas = schemas
 
-    def get_schema_parts(self) -> dict[str, dict[str, tuple]]:
+    @property
+    def schema_parts(self) -> dict[str, dict[str, tuple]]:
         return self._schemas
 
 

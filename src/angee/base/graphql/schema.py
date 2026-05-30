@@ -20,6 +20,10 @@ from strawberry.tools import merge_types
 
 from angee.base.apps import SCHEMA_PART_KEYS, BaseAddonConfig, SchemaParts
 from angee.base.discovery import discover_addons
+from angee.base.graphql.introspection import (
+    surface_field_names,
+    surface_name,
+)
 
 DEFAULT_SCHEMA_NAME = "public"
 
@@ -38,12 +42,12 @@ def collect_schema_parts(
     discovered = discover_addons() if addons is None else tuple(addons)
     collected: dict[str, SchemaParts] = {}
     for addon in discovered:
-        for name, parts in addon.get_schema_parts().items():
+        for name, parts in addon.schema_parts.items():
             bucket = collected.setdefault(
                 name, {key: () for key in SCHEMA_PART_KEYS}
             )
             for key in SCHEMA_PART_KEYS:
-                bucket[key] = _dedupe(bucket[key] + parts[key])
+                bucket[key] = _dedupe_by_identity(bucket[key] + parts[key])
     return collected
 
 
@@ -108,37 +112,20 @@ def _merge_root(
         return None
     owners: dict[str, object] = {}
     for surface in surfaces:
-        for field_name in _surface_field_names(surface):
+        for field_name in surface_field_names(surface):
             previous = owners.setdefault(field_name, surface)
             if previous is not surface:
                 raise ImproperlyConfigured(
                     f"GraphQL schema {schema_name!r} {key} field "
                     f"{field_name!r} is contributed by both "
-                    f"{_surface_name(previous)} and {_surface_name(surface)}"
+                    f"{surface_name(previous)} and {surface_name(surface)}"
                 )
     return merge_types(
         _ROOT_TYPE_NAMES[key], cast("tuple[type, ...]", surfaces)
     )
 
 
-def _surface_field_names(surface: object) -> tuple[str, ...]:
-    """Return the field names declared by one Strawberry surface."""
-
-    definition = getattr(surface, "__strawberry_definition__", None)
-    if definition is None:
-        raise ImproperlyConfigured(
-            f"{_surface_name(surface)} is not a Strawberry type"
-        )
-    return tuple(field.python_name for field in definition.fields)
-
-
-def _surface_name(surface: object) -> str:
-    """Return a readable label for a schema surface in error messages."""
-
-    return getattr(surface, "__name__", repr(surface))
-
-
-def _dedupe(values: tuple[object, ...]) -> tuple[object, ...]:
+def _dedupe_by_identity(values: tuple[object, ...]) -> tuple[object, ...]:
     """Keep the first occurrence of each contribution by identity."""
 
     seen: set[int] = set()

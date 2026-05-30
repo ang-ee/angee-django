@@ -19,6 +19,9 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models.deletion import Collector, ProtectedError
 
+from angee.base.graphql.introspection import django_model, surface_name
+from angee.base.models import instance_from_public_id
+
 
 @strawberry.type
 class DeletePreviewGroup:
@@ -56,7 +59,8 @@ def crud(
     (``createNote`` and so on) unless ``name`` overrides the singular.
     """
 
-    singular = name or _model(node)._meta.model_name
+    model = django_model(node)
+    singular = name or model._meta.model_name
     annotations: dict[str, Any] = {}
     namespace: dict[str, Any] = {"__annotations__": annotations}
 
@@ -86,17 +90,18 @@ def crud(
             "delete",
             DeletePreview,
             strawberry.mutation(
-                resolver=_delete_resolver(_model(node)),
+                resolver=_delete_resolver(model),
                 permission_classes=permission_classes,
             ),
         )
 
     if not annotations:
         raise ImproperlyConfigured(
-            f"crud({_surface_name(node)}) needs at least one of create, "
+            f"crud({surface_name(node)}) needs at least one of create, "
             "update, or delete"
         )
-    surface = type(f"{_capitalize(singular)}Mutation", (), namespace)
+    type_name = f"{singular[:1].upper()}{singular[1:]}Mutation"
+    surface = type(type_name, (), namespace)
     return strawberry.type(surface)
 
 
@@ -144,12 +149,7 @@ def _resolve_for_delete(
 ) -> models.Model:
     """Return the REBAC-scoped row to delete, or fail when out of reach."""
 
-    getter = getattr(model, "from_public_id", None)
-    instance = (
-        getter(public_id)
-        if callable(getter)
-        else model._default_manager.filter(pk=public_id).first()
-    )
+    instance = instance_from_public_id(model, public_id)
     if instance is None:
         raise ValueError(
             f"{model._meta.object_name} {public_id!r} was not found"
@@ -180,26 +180,3 @@ def _count_by_model(
     for instance in instances:
         counts[type(instance)] = counts.get(type(instance), 0) + 1
     return counts
-
-
-def _model(node: type) -> type[models.Model]:
-    """Return the Django model backing a strawberry-django type."""
-
-    definition = getattr(node, "__strawberry_django_definition__", None)
-    if definition is None:
-        raise ImproperlyConfigured(
-            f"{_surface_name(node)} is not a strawberry_django type"
-        )
-    return definition.model
-
-
-def _capitalize(singular: str) -> str:
-    """Return the singular with its first letter upper-cased."""
-
-    return singular[:1].upper() + singular[1:]
-
-
-def _surface_name(node: object) -> str:
-    """Return a readable label for a node type in error messages."""
-
-    return getattr(node, "__name__", repr(node))

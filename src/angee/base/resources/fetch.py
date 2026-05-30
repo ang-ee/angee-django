@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from django.conf import settings
 
-from angee.base.resources.entries import ResourceLoadError
+from angee.base.resources.exceptions import ResourceLoadError
 
 ALLOWED_SCHEMES = frozenset({"http", "https"})
 

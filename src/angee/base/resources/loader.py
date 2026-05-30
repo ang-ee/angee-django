@@ -17,12 +17,13 @@ from import_export.instance_loaders import BaseInstanceLoader
 from import_export.results import RowResult
 from import_export.utils import get_related_model
 
+from angee.base.models import instance_from_public_id, public_id_of
 from angee.base.resources.entries import (
     FROZEN_TIERS,
     RESERVED_ROW_KEYS,
     ResourceEntry,
-    ResourceLoadError,
 )
+from angee.base.resources.exceptions import ResourceLoadError
 
 if TYPE_CHECKING:
     from angee.base.resources.models import Resource
@@ -30,8 +31,7 @@ from angee.base.resources.widgets import (
     NativeJSONWidget,
     XrefForeignKeyWidget,
     XrefManyToManyWidget,
-    _ledger_manager,
-    public_id,
+    XrefWidgetMixin,
 )
 
 
@@ -47,12 +47,21 @@ class AngeeResource(resources.ModelResource):
         "JSONField": lambda **kwargs: NativeJSONWidget(**kwargs),
     }
 
-    def __init__(self, *, entry: ResourceEntry) -> None:
+    def __init__(
+        self,
+        *,
+        entry: ResourceEntry,
+        ledger_model: type[models.Model],
+    ) -> None:
         self.entry = entry
+        self.ledger_model = ledger_model
         self._existing_ledgers: dict[str, Resource | None] = {}
         self._adopted_instances: dict[str, models.Model] = {}
         self._row_hashes: dict[str, str] = {}
         super().__init__()
+        for field in self.fields.values():
+            if isinstance(field.widget, XrefWidgetMixin):
+                field.widget.ledger_model = ledger_model
 
     @classmethod
     def get_fk_widget(cls, field: Any) -> functools.partial[Any]:
@@ -109,12 +118,8 @@ class AngeeResource(resources.ModelResource):
             if adopted is not None:
                 self._adopted_instances[xref] = adopted
                 if self.entry.tier in FROZEN_TIERS:
-                    _upsert_ledger(
-                        entry=self.entry,
-                        model=self._meta.model,
-                        xref=xref,
-                        instance=adopted,
-                        row_hash=row_hash,
+                    self._upsert_ledger(
+                        xref=xref, instance=adopted, row_hash=row_hash
                     )
                     return self._skip_result(adopted)
 
@@ -141,12 +146,8 @@ class AngeeResource(resources.ModelResource):
 
         xref = _row_xref(self.entry, row, row_number=kwargs["row_number"])
         _restore_auto_fields(self, instance, row)
-        _upsert_ledger(
-            entry=self.entry,
-            model=self._meta.model,
-            xref=xref,
-            instance=instance,
-            row_hash=self._row_hashes[xref],
+        self._upsert_ledger(
+            xref=xref, instance=instance, row_hash=self._row_hashes[xref]
         )
 
     def instance_for_xref(self, xref: str) -> models.Model | None:
@@ -164,8 +165,7 @@ class AngeeResource(resources.ModelResource):
         """Return the ledger row for this resource file and target model."""
 
         return (
-            _ledger_manager()
-            .filter(
+            self.ledger_model._default_manager.filter(
                 source_addon=self.entry.addon.name,
                 source_path=self.entry.source,
                 xref=xref,
@@ -173,6 +173,23 @@ class AngeeResource(resources.ModelResource):
             )
             .order_by("pk")
             .first()
+        )
+
+    def _upsert_ledger(
+        self, *, xref: str, instance: models.Model, row_hash: str
+    ) -> None:
+        """Create or update the ledger row for one imported resource row."""
+
+        self.ledger_model._default_manager.update_or_create(
+            source_addon=self.entry.addon.name,
+            source_path=self.entry.source,
+            xref=xref,
+            target_model=self._meta.model._meta.label,
+            defaults={
+                "tier": self.entry.tier,
+                "content_hash": row_hash,
+                "target_id": public_id_of(instance),
+            },
         )
 
     def _instance_from_ledger(
@@ -186,9 +203,7 @@ class AngeeResource(resources.ModelResource):
         target_id = str(ledger.target_id)
         if not target_id:
             return None
-        from angee.base.resources.widgets import _instance_from_public_id
-
-        instance = _instance_from_public_id(self._meta.model, target_id)
+        instance = instance_from_public_id(self._meta.model, target_id)
         if instance is None:
             return None
         expected = self._meta.model._meta.concrete_model
@@ -246,9 +261,11 @@ class XrefInstanceLoader(BaseInstanceLoader):
         return self.resource.instance_for_xref(xref)
 
 
-def resource_for(
+def build_resource(
     model: type[models.Model],
     entry: ResourceEntry,
+    *,
+    ledger_model: type[models.Model],
 ) -> AngeeResource:
     """Return an import-export resource instance for one model."""
 
@@ -272,7 +289,10 @@ def resource_for(
             )
         },
     )
-    return cast(AngeeResource, resource_type(entry=entry))
+    return cast(
+        AngeeResource,
+        resource_type(entry=entry, ledger_model=ledger_model),
+    )
 
 
 def result_counts(rows: list[RowResult]) -> tuple[int, int, int]:
@@ -289,29 +309,6 @@ def result_counts(rows: list[RowResult]) -> tuple[int, int, int]:
         elif row.import_type == RowResult.IMPORT_TYPE_SKIP:
             skipped += 1
     return created, updated, skipped
-
-
-def _upsert_ledger(
-    *,
-    entry: ResourceEntry,
-    model: type[models.Model],
-    xref: str,
-    instance: models.Model,
-    row_hash: str,
-) -> None:
-    """Create or update the ledger row for one imported resource row."""
-
-    _ledger_manager().update_or_create(
-        source_addon=entry.addon.name,
-        source_path=entry.source,
-        xref=xref,
-        target_model=model._meta.label,
-        defaults={
-            "tier": entry.tier,
-            "content_hash": row_hash,
-            "target_id": public_id(instance),
-        },
-    )
 
 
 def _row_xref(

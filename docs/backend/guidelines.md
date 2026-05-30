@@ -48,10 +48,30 @@ normalizes, or renames a Django object, delete it.
   outside; ask `model._meta` (`get_field`, `label_lower`) and
   `Field.value_from_object` rather than re-decoding model shape; surface query
   behavior through `Manager.from_queryset`; and give objects classmethod factories
-  and `deconstruct`-style methods to construct and serialize themselves. Reserve
-  module-level functions for cross-object orchestration — discovery, ordering,
-  emission, conflict checks. This is the backend application of **Find the
-  owner** in `AGENTS.md` and the Django-Native Rule above.
+  and `deconstruct`-style methods to construct and serialize themselves. This is
+  the backend application of **Find the owner** in `AGENTS.md` and the
+  Django-Native Rule above.
+- Compose behavior onto the class that owns the data. When several functions
+  take the same object and read, transform, or emit from it, that object should
+  be a class and those functions its methods — the runtime build owns its own
+  plan/emit/check/reset (e.g. an `AngeeRuntime` object), not a module of loose
+  functions wrapped around a passive dataclass. Keep a module-level function only
+  for orchestration that genuinely has no owner, and prefer forming a cohesive
+  class even then. A dataclass that only holds fields while a sibling module
+  mutates and emits from it is a missing class. Organizing behavior into named
+  files and classes is what keeps the framework consistent and normalized: a
+  class is a fixed home that forces related behavior together and resists the
+  drift that loose, scattered functions invite.
+- Imports go at the top of the module. A function-local or deferred import is a
+  smell that a module boundary is wrong — an import cycle, or a layer reaching
+  across a seam — so fix the seam (move the shared fact to its owning module, or
+  invert the dependency) instead of hiding the import inside a function. Two
+  exceptions, both narrow: a dependency that is genuinely optional at runtime
+  (isolate it behind its own module), and Django's app-loading order — an
+  `AppConfig` module is imported in app-populate phase 1, before the registry is
+  ready, so it must defer importing model classes (and signal wiring that pulls
+  them in) until a method runs after `ready()`. Mark such a deferral with a
+  comment naming the reason; everywhere else, hoist.
 - Source models are abstract. Concrete apps are emitted by the composer.
 - Keep Django `Meta` for Django and library-owned options such as
   `rebac_resource_type`; Angee extension facts live on the owning model class.
@@ -79,10 +99,11 @@ API list for behavior that can live clearly beside the code.
 Django's own facts before adding an Angee fact: the addon root is
 `AppConfig.path`, source models live in `models.py`, and GraphQL contributions
 live in `graphql.py`. Put validation, normalization, and path resolution for one
-addon on the `AppConfig` subclass. Keep loose functions for cross-addon
-orchestration such as discovery, ordering, emission, and conflict checks. Put
-current manifest attributes and their exact authoring forms in the `AppConfig`
-base class docstrings, not in this guideline.
+addon on the `AppConfig` subclass. Prefer methods on the object that owns the
+data — the `AppConfig` for one addon, a runtime build object for composition —
+over loose functions; keep a function loose only for orchestration no single
+object owns. Put current manifest attributes and their exact authoring forms in
+the `AppConfig` base class docstrings, not in this guideline.
 
 Before decomposing backend code, classify each fact by its Django owner:
 

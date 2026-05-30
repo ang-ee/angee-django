@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 from angee.base.settings import compose_defaults
@@ -24,6 +25,10 @@ RUNTIME_DIR = Path(
 DATA_DIR = Path(
     os.environ.get("ANGEE_DATA_DIR", REPO_ROOT / ".angee" / "data")
 )
+
+# The host owns making the generated ``runtime`` package importable.
+if str(RUNTIME_DIR.parent) not in sys.path:
+    sys.path.insert(0, str(RUNTIME_DIR.parent))
 
 COMPOSED_SETTINGS = compose_defaults(
     addons=("example.notes",),

@@ -3,23 +3,28 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
-from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
-from django.db.models.utils import make_model_tuple
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import system_context
 
+from angee.base.discovery import discover_addons
 from angee.base.resources.entries import (
     LoadResult,
     ResourceEntry,
     ResourceGroup,
-    ResourceLoadError,
     ResourceRow,
     ValidationResult,
+    resolve_model,
+)
+from angee.base.resources.exceptions import ResourceLoadError
+from angee.base.resources.loader import (
+    DryRunRollback,
+    build_resource,
+    result_counts,
 )
 from angee.base.resources.ordering import order_entries
 
@@ -38,22 +43,17 @@ class ResourceQuerySet(models.QuerySet[Any]):
     ) -> ValidationResult:
         """Parse resource files and validate model resource headers."""
 
-        from angee.base.resources.loader import resource_for
-        from angee.base.resources.widgets import set_ledger_model
-
         groups = self._groups_for(addons, tiers=tiers)
         self._check_xref_collisions(groups)
-        set_ledger_model(self.model)
-        try:
-            checked_files = 0
-            checked_rows = 0
-            for group in groups:
-                checked_files += 1
-                checked_rows += len(group.rows)
-                resource = resource_for(group.model, group.entry)
-                resource.before_import(group.dataset())
-        finally:
-            set_ledger_model(None)
+        checked_files = 0
+        checked_rows = 0
+        for group in groups:
+            checked_files += 1
+            checked_rows += len(group.rows)
+            resource = build_resource(
+                group.model, group.entry, ledger_model=self.model
+            )
+            resource.before_import(group.to_dataset())
         return ValidationResult(
             checked_files=checked_files,
             checked_rows=checked_rows,
@@ -69,13 +69,6 @@ class ResourceQuerySet(models.QuerySet[Any]):
     ) -> LoadResult:
         """Load the given resource tiers from the addons idempotently."""
 
-        from angee.base.resources.loader import (
-            DryRunRollback,
-            resource_for,
-            result_counts,
-        )
-        from angee.base.resources.widgets import set_ledger_model
-
         active_tiers = self._normalize_tiers(tiers)
         if self.model.Tier.DEMO in active_tiers and not (
             settings.DEBUG or allow_non_dev
@@ -88,14 +81,15 @@ class ResourceQuerySet(models.QuerySet[Any]):
         created = 0
         updated = 0
         skipped = 0
-        set_ledger_model(self.model)
         try:
             with system_context(reason="resources.load"), transaction.atomic():
                 for group in groups:
-                    resource = resource_for(group.model, group.entry)
+                    resource = build_resource(
+                        group.model, group.entry, ledger_model=self.model
+                    )
                     try:
                         result = resource.import_data(
-                            group.dataset(),
+                            group.to_dataset(),
                             dry_run=False,
                             raise_errors=True,
                             use_transactions=False,
@@ -113,8 +107,6 @@ class ResourceQuerySet(models.QuerySet[Any]):
                     raise DryRunRollback()
         except DryRunRollback:
             pass
-        finally:
-            set_ledger_model(None)
         return LoadResult(created=created, updated=updated, skipped=skipped)
 
     def diff_addons(
@@ -123,18 +115,10 @@ class ResourceQuerySet(models.QuerySet[Any]):
         *,
         tiers: Iterable[object] | None = None,
     ) -> tuple[tuple[str, int], ...]:
-        """Return ``(display, row count)`` per resource file in load order.
-
-        Binary entries report ``0`` rows since base cannot read them.
-        """
+        """Return ``(display, row count)`` per resource file in load order."""
 
         return tuple(
-            (
-                entry.display,
-                0
-                if entry.resolved_kind == "binary"
-                else len(entry.read_resource_rows()),
-            )
+            (entry.display, len(entry.read_resource_rows()))
             for entry in self._entries_for(addons, tiers=tiers)
         )
 
@@ -149,13 +133,8 @@ class ResourceQuerySet(models.QuerySet[Any]):
         groups: list[ResourceGroup] = []
         by_key: dict[tuple[str, str], ResourceGroup] = {}
         for entry in self._entries_for(addons, tiers=tiers):
-            if entry.resolved_kind == "binary":
-                raise ResourceLoadError(
-                    f"{entry.display}: binary resources are not "
-                    "implemented yet"
-                )
             for row in entry.read_resource_rows():
-                model = self._model_for_label(row.model_label)
+                model = resolve_model(row.model_label)
                 key = (entry.source, model._meta.label_lower)
                 group = by_key.get(key)
                 if group is None:
@@ -173,13 +152,11 @@ class ResourceQuerySet(models.QuerySet[Any]):
     ) -> tuple[ResourceEntry, ...]:
         """Return declared resource entries in dependency-respecting order."""
 
-        from angee.base.discovery import discover_addons
-
         discovered = tuple(discover_addons() if addons is None else addons)
         active_tiers = self._normalize_tiers(tiers)
         entries: list[ResourceEntry] = []
         for addon in discovered:
-            manifest = addon.get_resource_manifest()
+            manifest = addon.resource_manifest
             for active_tier in active_tiers:
                 for declaration in manifest[active_tier]:
                     entries.append(
@@ -206,25 +183,6 @@ class ResourceQuerySet(models.QuerySet[Any]):
         """Return one normalized tier value."""
 
         return self.model.Tier.from_value(tier)
-
-    def _model_for_label(self, label: str) -> type[models.Model]:
-        """Resolve a model label through Django's app registry."""
-
-        try:
-            app_label, model_name = make_model_tuple(label)
-        except ValueError as exc:
-            raise ImproperlyConfigured(
-                f"Invalid model label {label!r}"
-            ) from exc
-        if not app_label or not model_name:
-            raise ImproperlyConfigured(f"Invalid model label {label!r}")
-        try:
-            return cast(
-                type[models.Model],
-                apps.get_model(app_label, model_name),
-            )
-        except LookupError as exc:
-            raise ImproperlyConfigured(f"Unknown model {label!r}") from exc
 
     def _check_xref_collisions(
         self,

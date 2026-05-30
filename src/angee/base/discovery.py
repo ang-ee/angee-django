@@ -53,7 +53,7 @@ def _toposort(
             )
         visiting.add(name)
         addon = by_name[name]
-        for dependency in sorted(addon.get_dependencies()):
+        for dependency in sorted(addon.dependencies):
             dependency_name = aliases.get(dependency)
             if dependency_name is None:
                 raise ImproperlyConfigured(

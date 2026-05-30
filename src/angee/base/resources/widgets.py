@@ -5,33 +5,26 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from django.apps import apps
 from django.db import models
 from django.db.models import Q
-from django.db.models.utils import make_model_tuple
 from import_export import widgets
 
-from angee.base.mixins.models import AngeeModel
-
-_active_ledger_model: type[models.Model] | None = None
-
-
-def set_ledger_model(model: type[models.Model] | None) -> None:
-    """Set the concrete Resource model for the current load context."""
-
-    global _active_ledger_model  # noqa: PLW0603
-    _active_ledger_model = model
+from angee.base.models import instance_from_public_id
+from angee.base.resources.entries import resolve_model
 
 
-def _ledger_manager() -> models.Manager[Any]:
-    """Return the concrete Resource model's default manager."""
+class XrefWidgetMixin:
+    """Carry the concrete ledger model the resource binds at load time.
 
-    if _active_ledger_model is not None:
-        return _active_ledger_model._default_manager
-    return apps.get_model("base", "Resource")._default_manager
+    Import-export builds widgets through classmethods, so the owning
+    ``AngeeResource`` sets ``ledger_model`` on each xref widget instance after
+    its fields are built, instead of through any module global.
+    """
+
+    ledger_model: type[models.Model] | None = None
 
 
-class XrefForeignKeyWidget(widgets.ForeignKeyWidget):
+class XrefForeignKeyWidget(XrefWidgetMixin, widgets.ForeignKeyWidget):
     """Resolve ``<addon>.<xref>`` foreign keys through the ledger."""
 
     def clean(
@@ -47,7 +40,7 @@ class XrefForeignKeyWidget(widgets.ForeignKeyWidget):
             return None
         if not isinstance(value, str):
             raise ValueError("xref foreign keys must be strings")
-        target = resolve_xref(value)
+        target = resolve_xref(value, self.ledger_model)
         if target._meta.concrete_model is not self.model._meta.concrete_model:
             raise ValueError(
                 f"xref {value!r} targets {target._meta.label}, "
@@ -56,7 +49,7 @@ class XrefForeignKeyWidget(widgets.ForeignKeyWidget):
         return target.pk if self.key_is_id else target
 
 
-class XrefManyToManyWidget(widgets.ManyToManyWidget):
+class XrefManyToManyWidget(XrefWidgetMixin, widgets.ManyToManyWidget):
     """Resolve list or comma-separated xrefs through the ledger."""
 
     def clean(
@@ -70,7 +63,7 @@ class XrefManyToManyWidget(widgets.ManyToManyWidget):
         del row, kwargs
         targets: list[models.Model] = []
         for ref in xref_list(value):
-            target = resolve_xref(ref)
+            target = resolve_xref(ref, self.ledger_model)
             if (
                 target._meta.concrete_model
                 is not self.model._meta.concrete_model
@@ -99,15 +92,19 @@ class NativeJSONWidget(widgets.JSONWidget):
         return super().clean(value, row=row, **kwargs)
 
 
-def resolve_xref(value: str) -> models.Model:
+def resolve_xref(
+    value: str,
+    ledger_model: type[models.Model] | None,
+) -> models.Model:
     """Resolve ``<addon>.<xref>`` through the resource ledger."""
 
+    if ledger_model is None:
+        raise ValueError("xref resolution requires a bound ledger model")
     if "." not in value:
         raise ValueError("xrefs must use <addon>.<xref>")
     addon_ref, xref = value.split(".", 1)
     ledger = (
-        _ledger_manager()
-        .filter(xref=xref)
+        ledger_model._default_manager.filter(xref=xref)
         .filter(
             Q(source_addon=addon_ref)
             | Q(source_addon__endswith=f".{addon_ref}")
@@ -118,8 +115,8 @@ def resolve_xref(value: str) -> models.Model:
     )
     if ledger is None:
         raise ValueError(f"unresolved xref {value!r}")
-    model = _model_from_label(str(getattr(ledger, "target_model")))
-    target = _instance_from_public_id(model, str(getattr(ledger, "target_id")))
+    model = resolve_model(str(getattr(ledger, "target_model")))
+    target = instance_from_public_id(model, str(getattr(ledger, "target_id")))
     if target is None:
         raise ValueError(f"xref {value!r} has no ORM target")
     return target
@@ -140,30 +137,3 @@ def xref_list(value: Any) -> list[str]:
             refs.append(item)
         return refs
     raise ValueError("many-to-many values must be a list or string")
-
-
-def _model_from_label(label: str) -> type[models.Model]:
-    """Return one model class from a stored model label."""
-
-    app_label, model_name = make_model_tuple(label)
-    return apps.get_model(app_label, model_name)
-
-
-def _instance_from_public_id(
-    model: type[models.Model],
-    value: str,
-) -> models.Model | None:
-    """Return a model row by public id or primary key."""
-
-    from_public_id = getattr(model, "from_public_id", None)
-    if callable(from_public_id):
-        return from_public_id(value)
-    return model._default_manager.filter(pk=value).first()
-
-
-def public_id(instance: models.Model) -> str:
-    """Return an instance public id or primary key."""
-
-    if isinstance(instance, AngeeModel):
-        return instance.public_id
-    return str(instance.pk)

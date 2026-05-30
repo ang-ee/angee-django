@@ -48,6 +48,9 @@ def test_resources_does_not_import_compose() -> None:
 def test_serving_does_not_import_compose() -> None:
     imports = _module_imports(BASE / "asgi.py")
     imports |= _module_imports(BASE / "urls.py")
+    imports |= _module_imports(BASE / "views.py")
+    imports |= _module_imports(BASE / "consumers.py")
+    imports |= _module_imports(BASE / "signals.py")
     assert not any(name.startswith("angee.base.compose") for name in imports)
 
 

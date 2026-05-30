@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import os
 import sys
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
@@ -16,6 +17,8 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.utils.functional import cached_property
 from django.utils.module_loading import module_has_submodule
+
+from angee.base.resources.tiers import ResourceTier
 
 ResourceManifest: TypeAlias = Mapping[object, object]
 """Resource files keyed by enum tiers or string shorthand."""
@@ -33,17 +36,30 @@ SCHEMA_PART_KEYS: tuple[str, ...] = (
 """Merge buckets an addon may contribute to a named schema, in merge order."""
 
 
-def _running_angee_build() -> bool:
-    """Return true while the ``angee build`` command is composing the runtime.
+BUILDING_ENV_VAR = "ANGEE_BUILDING"
+"""Env flag a launcher sets before ``django.setup()`` to mark a build."""
 
-    ``import_models()`` runs during ``apps.populate()``, before any management
-    command handler executes, so argv is the only signal available about the
-    invocation. The build regenerates and re-imports the runtime models itself;
-    importing the previous output here would double-register them in Django's
-    app registry, so the build invocation skips the import.
+
+def _running_angee_build() -> bool:
+    """Return true while an ``angee build`` is composing the runtime.
+
+    The build regenerates and re-imports the runtime models itself, so
+    ``import_models()`` must skip importing the previous output to avoid
+    double-registering it in Django's app registry. ``import_models()`` runs
+    during ``apps.populate()`` — before any management command handler, and
+    before the build pipeline starts — so nothing in-process can own the signal
+    at that point; it has to exist at interpreter startup.
+
+    A launcher (or a programmatic caller) therefore sets
+    :data:`BUILDING_ENV_VAR` ahead of ``django.setup()``. The argv check is the
+    cold-start fallback for a bare ``manage.py angee build`` where nothing set
+    the variable yet.
     """
 
-    return sys.argv[1:3] == ["angee", "build"]
+    if os.environ.get(BUILDING_ENV_VAR) == "1":
+        return True
+    argv = sys.argv[1:]
+    return len(argv) >= 2 and argv[0] == "angee" and argv[1] == "build"
 
 
 def _module_exists(dotted_path: str) -> bool:
@@ -76,6 +92,15 @@ class BaseAddonConfig(AppConfig):
     depends_on: ClassVar[tuple[str, ...]] = ()
     """Addon labels or app names that must compose before this addon."""
 
+    source_model_modules: ClassVar[tuple[str, ...]] = ()
+    """Extra dotted modules to scan for source models, besides ``models.py``.
+
+    An addon whose source models live outside its conventional ``models``
+    module (the base addon keeps its ``Resource`` ledger in the ``resources``
+    subpackage) lists those modules here so the composer discovers them without
+    a re-export.
+    """
+
     rebac_schema: ClassVar[str | None] = "permissions.zed"
     """REBAC schema file read by django-zed-rebac, relative to the app root.
 
@@ -92,28 +117,21 @@ class BaseAddonConfig(AppConfig):
     and reviews see changes.
     """
 
-    def get_resource_manifest(self) -> dict[str, tuple[dict[str, Any], ...]]:
-        """Return normalized resource entries by tier.
+    @cached_property
+    def resource_manifest(self) -> dict[str, tuple[dict[str, Any], ...]]:
+        """Normalized resource entries by tier, validated and cached.
 
         Keys are normalized tier values; values are tuples of normalized entry
-        dicts (``path``/``url``/``model``/``kind``/``encoding``/``depends_on``
-        keys). Result is cached for the lifetime of this config instance.
+        dicts (``path``/``url``/``model``/``encoding``/``depends_on``/``adopt``
+        keys), cached for the lifetime of this config instance.
         """
-
-        return self._resource_manifest
-
-    @cached_property
-    def _resource_manifest(self) -> dict[str, tuple[dict[str, Any], ...]]:
-        """Validate and cache the declared resource manifest."""
-
-        from angee.base.resources.models import Resource
 
         raw = self.resources or {}
         manifest: dict[str, tuple[dict[str, Any], ...]] = {
-            tier: () for tier in Resource.Tier.values
+            tier: () for tier in ResourceTier.values
         }
         for raw_tier, entries in raw.items():
-            tier = Resource.Tier.from_value(raw_tier)
+            tier = ResourceTier.from_value(raw_tier)
             manifest[tier] = self._resource_entries(entries)
         return manifest
 
@@ -166,19 +184,15 @@ class BaseAddonConfig(AppConfig):
             entry["depends_on"] = tuple(entry["depends_on"])
         return entry
 
-    def get_dependencies(self) -> tuple[str, ...]:
-        """Return dependency aliases used to order addon composition."""
+    @cached_property
+    def dependencies(self) -> tuple[str, ...]:
+        """Dependency aliases used to order addon composition."""
 
         return tuple(str(dep) for dep in self.depends_on)
 
-    def get_rebac_schema_path(self) -> Path | None:
-        """Return the existing django-zed-rebac schema path, when declared."""
-
-        return self._rebac_schema_path
-
     @cached_property
-    def _rebac_schema_path(self) -> Path | None:
-        """Return the cached django-zed-rebac schema path."""
+    def rebac_schema_path(self) -> Path | None:
+        """The existing django-zed-rebac schema path, when declared."""
 
         if self.rebac_schema is None:
             return None
@@ -193,26 +207,23 @@ class BaseAddonConfig(AppConfig):
             f"{relative_path!r}"
         )
 
-    def get_source_models_module(self) -> ModuleType | None:
-        """Return the source ``models.py`` module imported by Django."""
-
-        return self._source_models_module
-
     @cached_property
-    def _source_models_module(self) -> ModuleType | None:
-        """Return the cached source ``models.py`` module."""
+    def source_models_module(self) -> ModuleType | None:
+        """The source ``models.py`` module imported by Django."""
 
         if self.models_module is not None:
             return self.models_module
         return self.import_optional_module("models")
 
-    def get_model_classes(self) -> tuple[type[models.Model], ...]:
-        """Return abstract source models owned by this addon."""
+    @property
+    def model_classes(self) -> tuple[type[models.Model], ...]:
+        """Abstract source models owned by this addon."""
 
         return self._model_contributions[0]
 
-    def get_model_extensions(self) -> tuple[type[models.Model], ...]:
-        """Return abstract source models that extend another source model."""
+    @property
+    def model_extensions(self) -> tuple[type[models.Model], ...]:
+        """Abstract source models that extend another source model."""
 
         return self._model_contributions[1]
 
@@ -222,27 +233,28 @@ class BaseAddonConfig(AppConfig):
     ) -> tuple[tuple[type[models.Model], ...], tuple[type[models.Model], ...]]:
         """Return cached source model contributions declared by this addon."""
 
-        module = self.get_source_models_module()
-        if module is None:
-            return (), ()
+        # Deferred: this AppConfig module loads in app-populate phase 1, before
+        # the registry is ready, so it cannot import model classes at the top.
+        from angee.base.models import AngeeModel
+
         models_owned: list[type[models.Model]] = []
         extensions: list[type[models.Model]] = []
+        seen: set[type] = set()
         package_prefix = self.name + "."
-        for _name, value in inspect.getmembers(module, inspect.isclass):
-            if not self._belongs_to_source_module(
-                value, self.name, package_prefix
-            ):
-                continue
-            if not self._is_source_model(value):
-                continue
-            from angee.base.mixins.models import AngeeModel
-
-            model_class = cast(type[AngeeModel], value)
-            target = model_class.get_extension_target()
-            if target:
-                extensions.append(model_class)
-                continue
-            models_owned.append(model_class)
+        for module in self._source_modules():
+            for _name, value in inspect.getmembers(module, inspect.isclass):
+                if value in seen or not self._belongs_to_source_module(
+                    value, self.name, package_prefix
+                ):
+                    continue
+                if not self._is_source_model(value):
+                    continue
+                seen.add(value)
+                model_class = cast(type[AngeeModel], value)
+                if model_class.get_extension_target():
+                    extensions.append(model_class)
+                else:
+                    models_owned.append(model_class)
         return (
             tuple(sorted(models_owned, key=lambda cls: cls._meta.object_name)),
             tuple(
@@ -257,34 +269,36 @@ class BaseAddonConfig(AppConfig):
             ),
         )
 
-    def get_graphql_module(self) -> ModuleType | None:
-        """Return the addon ``graphql.py`` module, when present."""
+    def _source_modules(self) -> tuple[ModuleType, ...]:
+        """Return the modules scanned for this addon's source models."""
 
-        return self._graphql_module
+        modules: list[ModuleType] = []
+        if self.source_models_module is not None:
+            modules.append(self.source_models_module)
+        modules.extend(
+            importlib.import_module(dotted)
+            for dotted in self.source_model_modules
+        )
+        return tuple(modules)
 
     @cached_property
-    def _graphql_module(self) -> ModuleType | None:
-        """Return the cached addon ``graphql.py`` module."""
+    def graphql_module(self) -> ModuleType | None:
+        """The addon ``graphql.py`` module, when present."""
 
         return self.import_optional_module("graphql")
 
-    def get_schema_parts(self) -> dict[str, SchemaParts]:
-        """Return GraphQL schema contributions declared by this addon, by name.
+    @cached_property
+    def schema_parts(self) -> dict[str, SchemaParts]:
+        """GraphQL schema contributions declared by this addon, by name.
 
         An addon ``graphql.py`` may export a ``schemas`` mapping of schema name
         to a parts mapping. Each part is normalized to a tuple keyed by the
         merge buckets in ``SCHEMA_PART_KEYS``; absent buckets default to empty.
         The collector asks this owner instead of re-scanning the module, so the
-        parts contract lives in one place.
+        parts contract lives in one place. Validated and cached.
         """
 
-        return self._schema_parts
-
-    @cached_property
-    def _schema_parts(self) -> dict[str, SchemaParts]:
-        """Validate and cache this addon's declared schema parts."""
-
-        module = self.get_graphql_module()
+        module = self.graphql_module
         if module is None:
             return {}
         schemas = getattr(module, "schemas", None)
@@ -380,7 +394,7 @@ class BaseAddonConfig(AppConfig):
     def _is_source_model(self, value: type) -> bool:
         """Return true for abstract Angee models declared by this addon."""
 
-        from angee.base.mixins.models import AngeeModel
+        from angee.base.models import AngeeModel  # deferred: see above
 
         return (
             issubclass(value, AngeeModel)
@@ -395,11 +409,14 @@ class BaseConfig(BaseAddonConfig):
     default = True
     name = "angee.base"
     label = "base"
+    source_model_modules = ("angee.base.resources.models",)
 
     def ready(self) -> None:
         """Register composed models for revision tracking once they load."""
 
         super().ready()
-        from angee.base.mixins.models import register_revision_models
+        # Deferred: ``ready()`` runs after the registry is populated; importing
+        # signal wiring (and its model deps) at the top would load too early.
+        from angee.base.signals import register_revision_models
 
         register_revision_models()

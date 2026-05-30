@@ -2,17 +2,40 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, TypeAlias
 
 import tablib
+import yaml
+from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
+from django.db.models.utils import make_model_tuple
+
+from angee.base.resources.exceptions import ResourceLoadError
+from angee.base.resources.fetch import fetch_url
 
 if TYPE_CHECKING:
     from angee.base.apps import BaseAddonConfig
+
+
+def resolve_model(label: str) -> type[models.Model]:
+    """Return the model class named by an ``app_label.ModelName`` label."""
+
+    try:
+        app_label, model_name = make_model_tuple(label)
+    except ValueError as exc:
+        raise ImproperlyConfigured(f"Invalid model label {label!r}") from exc
+    if not app_label or not model_name:
+        raise ImproperlyConfigured(f"Invalid model label {label!r}")
+    try:
+        return apps.get_model(app_label, model_name)
+    except LookupError as exc:
+        raise ImproperlyConfigured(f"Unknown model {label!r}") from exc
+
 
 ResourceDeclaration: TypeAlias = str | Path | Mapping[str, Any]
 """One declared resource entry: a path string or an options mapping."""
@@ -31,17 +54,7 @@ TEXT_FORMATS = {
     ".yaml": "yaml",
     ".yml": "yaml",
 }
-BINARY_FORMATS = {
-    ".xls": "xls",
-    ".xlsx": "xlsx",
-    ".ods": "ods",
-}
-TABULAR_SUFFIXES = frozenset(TEXT_FORMATS) | frozenset(BINARY_FORMATS)
 STRUCTURED_FORMATS = frozenset({"json", "yaml"})
-
-
-class ResourceLoadError(RuntimeError):
-    """Raised when resource rows cannot be loaded."""
 
 
 @dataclass(slots=True)
@@ -53,9 +66,11 @@ class ResourceEntry:
     path: str | None = None
     url: str | None = None
     model: str | None = None
-    kind: str | None = None
     encoding: str = "utf-8"
     depends_on: tuple[str, ...] = ()
+    adopt: bool = False
+    """Adopt a pre-existing row matched by a unique field when no ledger row
+    exists yet, instead of treating the row as new. Off by default."""
     _rows: tuple[ResourceRow, ...] | None = field(
         default=None,
         init=False,
@@ -78,9 +93,9 @@ class ResourceEntry:
             path=entry.get("path"),
             url=entry.get("url"),
             model=entry.get("model"),
-            kind=entry.get("kind"),
             encoding=entry.get("encoding") or "utf-8",
             depends_on=tuple(entry.get("depends_on", ())),
+            adopt=bool(entry.get("adopt", False)),
         )
 
     @property
@@ -90,33 +105,16 @@ class ResourceEntry:
         return self.url or self.path or ""
 
     @property
-    def is_url(self) -> bool:
-        """Return true when this entry is fetched from a URL."""
-
-        return self.url is not None
-
-    @property
     def display(self) -> str:
         """Return a compact owner-qualified source."""
 
         return f"{self.addon.name}:{self.source}"
-
-    @property
-    def resolved_kind(self) -> str:
-        """Return the entry kind, inferring tabular vs binary by suffix."""
-
-        if self.kind:
-            return self.kind
-        suffix = PurePosixPath(self.source).suffix.lower()
-        return "tabular" if suffix in TABULAR_SUFFIXES else "binary"
 
     def materialize(self) -> Path:
         """Return a local path for this entry, fetching URLs into the cache."""
 
         if self._local_path is None:
             if self.url is not None:
-                from angee.base.resources.fetch import fetch_url
-
                 self._local_path = fetch_url(self.url)
             else:
                 self._local_path = Path(self.addon.path) / (self.path or "")
@@ -140,7 +138,7 @@ class ResourceEntry:
             )
         return self._rows
 
-    def inferred_model_label(self) -> str:
+    def infer_model_label(self) -> str:
         """Infer ``app.Model`` from the tabular filename."""
 
         stem = PurePosixPath(self.source).name
@@ -182,8 +180,6 @@ class ResourceEntry:
         if not text.strip():
             return [], None
         if file_format == "json":
-            import json
-
             try:
                 data = json.loads(text)
             except json.JSONDecodeError as exc:
@@ -191,8 +187,6 @@ class ResourceEntry:
                     f"{self.display} could not be parsed as json"
                 ) from exc
         else:
-            import yaml
-
             try:
                 data = yaml.safe_load(text)
             except yaml.YAMLError as exc:
@@ -243,17 +237,11 @@ class ResourceEntry:
         path: Path,
         file_format: str,
     ) -> list[dict[str, Any]]:
-        """Read csv/tsv/xls/xlsx/ods records through tablib."""
+        """Read csv/tsv records through tablib."""
 
-        content: str | bytes
-        if file_format in {"csv", "tsv"}:
-            content = path.read_text(encoding=self.encoding)
-            if not content.strip():
-                return []
-        else:
-            content = path.read_bytes()
-            if not content:
-                return []
+        content = path.read_text(encoding=self.encoding)
+        if not content.strip():
+            return []
         dataset = tablib.Dataset()
         try:
             dataset.load(content, format=file_format)
@@ -280,9 +268,9 @@ class ResourceEntry:
         """Return the tablib format for this entry's local file."""
 
         suffix = path.suffix.lower()
-        file_format = TEXT_FORMATS.get(suffix) or BINARY_FORMATS.get(suffix)
+        file_format = TEXT_FORMATS.get(suffix)
         if file_format is None:
-            allowed = ", ".join(sorted(TEXT_FORMATS | BINARY_FORMATS))
+            allowed = ", ".join(sorted(TEXT_FORMATS))
             raise ImproperlyConfigured(
                 f"{self.display} has unsupported format {suffix!r}; "
                 f"expected one of {allowed}"
@@ -312,9 +300,7 @@ class ResourceRow:
 
         payload = dict(record)
         raw_model = (
-            payload.get("model")
-            or fallback_model
-            or entry.inferred_model_label()
+            payload.get("model") or fallback_model or entry.infer_model_label()
         )
         raw_xref = payload.get("_xref") or payload.get("xref")
         if not isinstance(raw_xref, str) or not raw_xref.strip():
@@ -361,7 +347,7 @@ class ResourceGroup:
     model: type[models.Model]
     rows: list[ResourceRow]
 
-    def dataset(self) -> tablib.Dataset:
+    def to_dataset(self) -> tablib.Dataset:
         """Return a tablib dataset for import-export."""
 
         headers = self._headers()

@@ -11,7 +11,8 @@ from django.core.exceptions import ImproperlyConfigured
 
 from angee.base.apps import BaseAddonConfig
 from angee.base.management.commands.angee_resources import Command
-from angee.base.resources.entries import ResourceEntry, ResourceLoadError
+from angee.base.resources.entries import ResourceEntry
+from angee.base.resources.exceptions import ResourceLoadError
 from angee.base.resources.fetch import fetch_url
 from angee.base.resources.models import Resource
 from angee.base.resources.ordering import order_entries
@@ -57,7 +58,7 @@ def test_entries_normalize_strings_and_mappings(tmp_path: Path) -> None:
         },
     )
 
-    entries = config.get_resource_manifest()["master"]
+    entries = config.resource_manifest["master"]
 
     assert entries[0] == {"path": "a.csv"}
     assert entries[1] == {
@@ -79,7 +80,7 @@ def test_entry_rejects_path_and_url_together(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ImproperlyConfigured, match="exactly one of"):
-        config.get_resource_manifest()
+        config.resource_manifest
 
 
 def test_order_entries_respects_depends_on(tmp_path: Path) -> None:
@@ -152,20 +153,6 @@ def test_meta_model_conflict_raises(tmp_path: Path) -> None:
 
     with pytest.raises(ResourceLoadError, match="model conflict"):
         entry.read_resource_rows()
-
-
-def test_binary_entry_is_not_implemented(tmp_path: Path) -> None:
-    """A binary resource is recognized but rejected during validation."""
-
-    config = make_config(
-        tmp_path,
-        "tests.binary_addon",
-        "binary_addon",
-        {"master": [{"path": "img/logo.png"}]},
-    )
-
-    with pytest.raises(ResourceLoadError, match="binary resources are not"):
-        Resource._default_manager.validate_addons((config,), tiers=["master"])
 
 
 def test_fetch_url_rejects_non_http_scheme() -> None:

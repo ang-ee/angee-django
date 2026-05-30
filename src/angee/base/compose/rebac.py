@@ -7,20 +7,6 @@ from pathlib import Path
 from django.core.management import call_command
 
 from angee.base.apps import BaseAddonConfig
-from angee.base.discovery import discover_addons
-
-
-def iter_permission_paths(
-    addons: tuple[BaseAddonConfig, ...] | None = None,
-) -> tuple[Path, ...]:
-    """Return package permission files in build order."""
-
-    discovered = discover_addons() if addons is None else addons
-    return tuple(
-        path
-        for addon in discovered
-        if (path := addon.get_rebac_schema_path()) is not None
-    )
 
 
 def write_permissions(
@@ -32,7 +18,7 @@ def write_permissions(
     sections: list[str] = []
     seen: set[Path] = set()
     for addon in addons:
-        path = addon.get_rebac_schema_path()
+        path = addon.rebac_schema_path
         if path is None:
             continue
         resolved = path.resolve()
