@@ -29,7 +29,26 @@ render-time (no stale-offset fetch), `parseCurrentUser` boundary guard (no
 simplified, invalidation provider uses a Fragment (headless). NOT yet committed
 (await architect). Next: Phase 2 (@angee/base).
 
-## ▶ M3 FRONTEND — IN FLIGHT (full end-to-end, phased). Plan: `.agents/plans/m3-frontend.md`
+## ▶ M3 FRONTEND — Phases 1–4 DONE + gate green; Phase 5 = user's browser click-through
+Commits: `1e53680` (P1 SDK→offset contract), `5fac779`/`443d8be`/`7380853` (P2
+@angee/base: foundation+tokens / 22 primitives / createApp+views+shell+auth),
+`baa9e4a` (P3 example notes+auth web app + /auth/csrf/), P4 (dev-stack Vite
+service — template committed; rendered `.angee/angee.yaml` is workspace-local).
+Reuse strategy worked: the prototype's base was on our stack, so primitives +
+token system ported near-verbatim (provenance stripped) and the SDK-bound views/
+createApp were reconstructed on the new offset hooks. **Full static gate GREEN:**
+`pnpm -r typecheck` (sdk/base/notes-web/host), 106 sdk vitest, ruff, mypy src/
+(52), 101 pytest, 15 example tests, build --check, host `vite build`. **Live dev
+smoke GREEN:** Vite serves the SPA and transforms the whole module graph (?raw SDL
++ @angee/base + @angee/sdk + notes addon) with no errors. **Remaining (Phase 5):**
+the visual browser click-through (login alice/alice → notes offset list/paging →
+create/edit/delete → status filter → aggregate counts → live noteChanged) — needs a
+browser; no browser tool in-session, so this is the user's check via `angee dev` ->
+http://127.0.0.1:5173 (frontend) against Django on 8100. The GraphQL contract
+itself (login/offset-notes/aggregate/REBAC) is already proven by the 15 example
+HTTP tests.
+
+## (historical) ▶ M3 FRONTEND — IN FLIGHT (full end-to-end, phased). Plan: `.agents/plans/m3-frontend.md`
 Phase 1 committed (`1e53680`). **Phase 2 (@angee/base) IN PROGRESS** — strategy
 locked (plan §Phase 2): the prototype's base is already on our stack
 (base-ui + tailwind-variants + TanStack + lucide + valibot + cmdk). Reuse near-

@@ -70,7 +70,8 @@ jobs:
       DJANGO_SETTINGS_MODULE: {{ django_settings }}
     depends_on: [permissions]
 
-  # Render GraphQL SDL to runtime/schemas/<name>.graphql for React codegen.
+  # Render GraphQL SDL to runtime/schemas/<name>.graphql; the SPA imports it to
+  # derive its urql cache config.
   schema:
     runtime: local
     workdir: source://app
@@ -78,6 +79,13 @@ jobs:
     env:
       DJANGO_SETTINGS_MODULE: {{ django_settings }}
     depends_on: [build]
+
+  # Install the JS workspace so the frontend service has its node_modules.
+  # Idempotent and fast when the lockfile is already satisfied.
+  deps:
+    runtime: local
+    workdir: source://framework
+    command: ["pnpm", "install"]
 
 services:
   # Daphne runserver: ASGI (HTTP + WebSocket) under Django's autoreloader.
@@ -90,3 +98,13 @@ services:
     env:
       DJANGO_SETTINGS_MODULE: {{ django_settings }}
     after: [resources, schema]
+
+  # Vite dev server for the SPA. It proxies /graphql/ and /auth/csrf/ to Django,
+  # so the SPA and backend share the session cookie across the two ports.
+  frontend:
+    runtime: local
+    workdir: source://framework
+    command: ["pnpm", "--filter", "@angee-example/notes-host", "dev"]
+    env:
+      ANGEE_DJANGO_URL: http://127.0.0.1:{{ django_port }}
+    after: [deps, schema, web]
