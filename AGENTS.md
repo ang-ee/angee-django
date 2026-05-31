@@ -110,6 +110,9 @@ smaller and clearer.
 - If a search looks too small, narrow and rerun it.
 - Sort build-time iteration; never use wall-clock time, random ids, or
   filesystem order in emitted artifacts.
+- A clean/reset command may delete only the configured generated runtime
+  directory, and only after verifying Angee's generated sentinel in it; it must
+  preserve `*/migrations/` unless it explicitly documents deleting migrations.
 - Put scratch files, screenshots, and logs only in gitignored locations such as
   `.playwright-mcp/`, `test-results/`, or `playwright-report/`.
 - Keep durable agent bookkeeping — notes, plans, handover prompts, commands,
@@ -128,13 +131,16 @@ angee dev            # from the repo root — runs the examples/notes-angee stac
 ```
 
 `angee dev` is for bringing the long-running stack up. To run a one-shot Django
-management command against the example — composing the runtime, making
-migrations, inspecting resources — drive its `manage.py` through `uv` from the
-repository root, never by `cd`-ing into the project:
+management command against the example, drive its `manage.py` through `uv` from
+the repository root, never by `cd`-ing into the project. The composer is
+emit-only; migrations, then resource data, are separate later steps (a fresh
+process loads the freshly emitted concrete models):
 
 ```sh
-uv run examples/notes-angee/manage.py angee build --no-apply   # compose runtime
-uv run examples/notes-angee/manage.py angee_resources diff     # inspect resources
+uv run examples/notes-angee/manage.py angee build              # emit runtime sources
+uv run examples/notes-angee/manage.py makemigrations base notes
+uv run examples/notes-angee/manage.py migrate
+uv run examples/notes-angee/manage.py resources load           # data, after migrate
 ```
 
 For an isolated branch, create a workspace and run the stack inside it. `angee

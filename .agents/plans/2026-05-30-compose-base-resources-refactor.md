@@ -1,28 +1,33 @@
 # Compose / Base / Resources Refactor — Implementation Plan
 
-> **For the executing agent (Codex):** This is a clean **rewrite**, not a port.
-> Do **NOT** copy code from the old tree. Read each module's *contract* below and
-> the guidelines (`AGENTS.md`, `docs/guidelines.md`, `docs/backend/guidelines.md`,
-> `docs/stack.md`, `docs/glossary.md`), then write each module fresh, decomposing
-> behavior into classes and methods per the guidelines. The old tree is kept at
-> `src/angee/_base_old/` as a **behavioral reference only** (what it does, the
-> edge cases it handles) — never as a source to paste. It is deleted in the final
-> slice. Execute **slice by slice**, verifying each before the next.
+> **For the executing agent (Codex).** This is a clean **rewrite**, not a port.
+> Do **NOT** copy or mechanically translate the old code. For each module, read the
+> *contract* here and the guidelines (`AGENTS.md`, `docs/guidelines.md`,
+> `docs/backend/guidelines.md` — especially **Package Layering**, compose-onto-classes,
+> imports-at-top, naming, docstrings — `docs/stack.md`, `docs/glossary.md`), then
+> write the module fresh, decomposing behavior into classes and methods per the
+> guidelines. The pre-refactor tree is preserved at `.agents/reference/base_old/`
+> as a **behavioral reference only** (what it does and the edge cases it handles) —
+> never as a source to paste; it is deleted in the final slice. Execute **slice by
+> slice**, running each slice's verification gate before the next, and commit per
+> slice.
 
 **Goal:** Restructure the framework core from one `angee.base` package into three
 clean packages — `angee.compose` (build-time), `angee.base` (runtime), and
 `angee.resources` (resource subsystem) — dropping `.angee-manifest.json` and the
-build flag, composing behavior onto classes, and putting every import at module
-top, with the whole tree rewritten to the guidelines.
+"is a build running" flag, composing behavior onto classes, and putting every
+import at module top, rewritten to the guidelines.
 
-**Architecture:** Three layers with a one-way dependency rule:
-`resources → base` and `compose → base` (+ `compose` uses `resources` only as a
-build input via discovery). `base` is pure runtime and imports neither. The build
-becomes **emit-only**; `makemigrations`/`migrate` run as a separate later step, so
-no "is a build running" flag is needed. `Resource` is emitted under the `base` app
-label via the `source_model_modules` composition seam, keeping `base.Resource`.
+**Architecture:** Three layers, one-way dependency (a test enforces it):
+`angee.base` is pure runtime and imports neither sibling; `angee.resources` and
+`angee.compose` may import `angee.base`; `angee.compose` reads resource/addon
+declarations at build time but no serving module imports it. The build is **emit
+only** (Stage 1); `makemigrations`/SDL/`migrate`/sync/resource-load are separate
+later steps (Stage 2) run in a fresh process; the Go `angee` CLI orchestrates the
+stages out of band. `Resource` is emitted under the `base` app label via the
+`source_model_modules` seam, keeping `base.Resource`.
 
-**Tech Stack:** Python 3.14, Django 6, strawberry-django, channels/daphne,
+**Tech stack:** Python 3.14, Django 6, strawberry-django, channels/daphne,
 django-zed-rebac, django-import-export, django-reversion, django-simple-history,
 django-sqids, tablib, pytest-django, ruff, mypy, uv.
 
@@ -31,342 +36,325 @@ django-sqids, tablib, pytest-django, ruff, mypy, uv.
 ## 1. Target architecture
 
 Three sibling packages under the `angee` namespace package (no
-`src/angee/__init__.py`). Every public module/class/method/function and every
-declarative manifest attribute gets a docstring; private helpers get one when
-their role is not obvious from name + signature.
+`src/angee/__init__.py`). Each package: docstring-only `__init__.py` (except the
+`base/graphql` re-export facade, which keeps `__all__`) and a `py.typed` marker.
+Docstrings on every public module/class/method/function, declarative manifest
+attribute, and public module-level constant; private helpers when their role is
+not obvious from name + signature.
 
-### 1.1 `angee.base` — runtime (imports neither compose nor resources)
+### 1.1 `angee.base` — runtime (imports neither `compose` nor `resources`)
 
 | Module | Responsibility |
 |---|---|
-| `base/apps.py` | `BaseAddonConfig` (the addon contract) + `BaseConfig`. The contract exposes addon facts as cached_property: `model_classes`, `model_extensions`, `schema_parts`, `rebac_schema_path`, `resource_manifest`, `dependencies`, `source_models_module`, `graphql_module`. Declares `source_model_modules`, `depends_on`, `rebac_schema`, `resources`. `import_models()` adoption stays (loads `runtime/<label>/models.py`). `BaseConfig` (label `base`) sets `source_model_modules = ("angee.resources.models",)` and wires `register_revision_models` from `ready()`. |
+| `base/apps.py` | `BaseAddonConfig` (addon contract) + `BaseConfig`. Facts as `cached_property`: `model_classes`, `model_extensions`, `schema_parts`, `rebac_schema_path`, `resource_manifest`, `dependencies`, `source_models_module`, `graphql_module`. Declares `source_model_modules`, `depends_on`, `rebac_schema`, `resources`. `_model_contributions` scans `source_models_module` **plus** each `source_model_modules` entry; classes from an explicitly listed module are owned by this config **regardless of package prefix** (do not filter them out by `_belongs_to_source_module`). `import_models()` adoption stays. `BaseConfig` (label `base`): `source_model_modules = ("angee.resources.models",)`; `ready()` calls `register_revision_models` via a deferred import (Django phase-1). |
+| `base/discovery.py` | `discover_addons()` — installed `BaseAddonConfig`s in dependency order. **Lives in `base`** because serving code (schema building, ASGI routing) enumerates addons; `compose` and the `resources` command import it from here. |
 | `base/mixins.py` | `TimestampMixin`, `SqidMixin`, `HistoryMixin`, `RevisionMixin`. |
-| `base/models.py` | `AngeeModel` (abstract base; composition/extension classmethods, `public_id`/`from_public_id` typed `Self`), `instance_from_public_id`, `public_id_of` (AngeeModel-or-plain duality, in ONE place). |
-| `base/signals.py` | Change publishers (`connect_publishers`, `_on_save`, `_on_delete`, `_publish`, `_broadcast`, `change_group`, `_json_safe`) + `register_revision_models`. |
-| `base/graphql/__init__.py` | Re-export `crud`, `changes`, `ChangeEvent`, schema helpers. |
-| `base/graphql/introspection.py` | `surface_name`, `surface_field_names`, `django_model` (the only place that reads Strawberry internals). |
-| `base/graphql/crud.py` | `crud(...)` factory + `DeletePreview`/`collect_delete_preview`. |
-| `base/graphql/subscriptions.py` | `changes(...)` + `ChangeEvent` + REBAC gating + actor resolution. |
-| `base/graphql/schema.py` | Named-schema composition (`build_schema`, `collect_schema_*`, `render_sdl`). Consider a small owner class (see §2.4). |
+| `base/models.py` | `AngeeModel` (abstract base; composition/extension classmethods, `public_id` property, `from_public_id -> Self | None`); `instance_from_public_id`, `public_id_of` (the single AngeeModel-or-plain-Django duality helpers). |
+| `base/deletion.py` | `DeletionPreview` / `DeletionPreviewGroup` domain objects + `DeletionPreview.from_instance(instance)` owning Django's `Collector` cascade forecast. (Moved out of graphql.) |
+| `base/signals.py` | Change publishers (`connect_publishers`, `_on_save`, `_on_delete`, `_publish`, `_broadcast`, `change_group`, `_json_safe`) + `register_revision_models`. `_publish` uses `public_id_of(instance)`. |
+| `base/access.py` | `ChangeReadGate(model, actor)` — REBAC read-gate + field redaction for change events (`filter(payload) -> ChangeEvent | None`), resolving `model_resource_type`/`gated_read_fields` once. (Authorization moved out of graphql; could instead be owned by `django-zed-rebac` if it exposes the hook.) |
+| `base/graphql/__init__.py` | Re-export facade (`__all__` allowed): `crud`, `changes`, `ChangeEvent`, `GraphQLSchemas`, `DEFAULT_SCHEMA_NAME`. No `render_sdl`. |
+| `base/graphql/introspection.py` | `surface_name`, `surface_field_names`, `django_model` — the **only** reader of Strawberry internals. |
+| `base/graphql/schema.py` | `GraphQLSchemas` owner: `from_discovery()` / `from_addons(addons)`, cached `parts`, `names()`, `build(name) -> strawberry.Schema`; private `_merge_root`/`_dedupe_by_identity`. Live schema only — no SDL files. |
+| `base/graphql/events.py` | `ChangeEvent` Strawberry type (+ `from_payload`). |
+| `base/graphql/crud.py` | `crud(...)` factory + the Strawberry `DeletePreview`/`DeletePreviewGroup` output types + delete resolver that adapts a `base.deletion.DeletionPreview`. No `Collector` logic. |
+| `base/graphql/subscriptions.py` | `changes(model, field=...)` thin factory (wires `connect_publishers`) + the resolver (reads `actor` from `info.context`, drains the channel stream, applies `ChangeReadGate`). The channel-drain stream stays a stateless `_subscribe` generator here. |
 | `base/views.py` | `graphql_endpoint` + cached `_get_view`. |
-| `base/consumers.py` | `AngeeGraphQLWSConsumer`. |
-| `base/asgi.py` | `build_application()` routing only. |
+| `base/consumers.py` | `AngeeGraphQLWSConsumer` + `scope_actor` (moved here; the WS transport owns scope→context). |
+| `base/asgi.py` | `build_application()` routing only (uses `GraphQLSchemas.names()`/`build`). |
 | `base/urls.py` | `urlpatterns` only. |
-| `base/settings.py` | `compose_defaults(...)` host serve-settings helper (pure; adds `angee.resources` to INSTALLED_APPS; no `.angee-manifest` anything). |
+| `base/settings.py` | `compose_defaults(...)` — pure host settings helper producing the build vs run app sets (see §2.1). No manifest, no `sys.path` mutation. |
 
-### 1.2 `angee.resources` — resource subsystem (imports `base`; never `compose`)
+### 1.2 `angee.resources` — resource subsystem (imports `base`, never `compose`)
 
-A plain Django app (has an `AppConfig` so its management command is discoverable;
-it is **not** an Angee source addon — `discover_addons` only collects
-`BaseAddonConfig` instances). Its abstract `Resource` source model is pulled into
-the `base` label by `BaseConfig.source_model_modules`, so the emitted concrete
-model is `base.Resource`.
+A plain Django app (has an `AppConfig` so its `resources` command is discoverable;
+it is **not** a `BaseAddonConfig`, so `discover_addons` ignores it). Its abstract
+`Resource` source model is pulled into the `base` label via
+`BaseConfig.source_model_modules`, so the emitted concrete model is `base.Resource`.
 
 | Module | Responsibility |
 |---|---|
-| `resources/apps.py` | Plain `AppConfig` (`name = "angee.resources"`) so the command is discovered. |
-| `resources/exceptions.py` | `ResourceLoadError` (leaf; no intra-package imports). |
+| `resources/apps.py` | Plain `AppConfig` (`name = "angee.resources"`). |
+| `resources/exceptions.py` | `ResourceLoadError` (leaf). |
 | `resources/tiers.py` | `ResourceTier` TextChoices + `from_value` (leaf). |
-| `resources/entries.py` | `ResourceEntry` (with `adopt: bool = False`), `ResourceRow`, `ResourceGroup`, `LoadResult`, `ValidationResult`, `resolve_model`, format/declaration value types. |
+| `resources/entries.py` | `ResourceEntry` (with `adopt: bool = False`), `ResourceRow`, `ResourceGroup`, `LoadResult`, `ValidationResult`, `resolve_model`, text-format constants (csv/tsv/json/yaml only — no binary). |
 | `resources/ordering.py` | `order_entries` (depends_on topo-sort). |
 | `resources/fetch.py` | `fetch_url` (http/https cache). |
-| `resources/widgets.py` | `XrefForeignKeyWidget`/`XrefManyToManyWidget` (+ `XrefWidgetMixin` carrying the ledger model), `resolve_xref`, `xref_list`. No module global. |
-| `resources/loader.py` | `AngeeResource` (import-export `ModelResource`) owning row hashing, xref, adoption, ledger upsert as **methods**; `build_resource` factory; `result_counts`. |
-| `resources/managers.py` | `ResourceQuerySet` + `ResourceManager` (validate/load/diff). Caller passes `addons`; the manager does not reach into discovery (see §2.4). |
+| `resources/widgets.py` | `XrefForeignKeyWidget`/`XrefManyToManyWidget` + `XrefWidgetMixin` (ledger-model carrier), `resolve_xref(value, ledger_model)`, `xref_list`. No module global. |
+| `resources/loader.py` | `AngeeResource` (import-export `ModelResource`) owning row-hash / xref / adopt / ledger-upsert as **methods**; adoption gated on `self.entry.adopt`; `build_resource(model, entry, *, ledger_model)` factory; `result_counts`. |
+| `resources/managers.py` | `ResourceQuerySet` + `ResourceManager` (validate/load/diff). Methods **take `addons`** (caller discovers + passes); no `discover_addons` import. |
 | `resources/models.py` | `Resource(AngeeModel)` abstract source model; `Tier = ResourceTier`. |
-| `resources/management/commands/angee_resources.py` | `validate`/`load`/`diff` subcommands; discovers addons and passes them in. |
+| `resources/management/commands/resources.py` | `resources load|validate|diff` — discovers addons (`base.discovery`) and passes them in. |
 
-### 1.3 `angee.compose` — build-time (imports `base`; uses `resources` only via discovery)
+### 1.3 `angee.compose` — build-time (imports `base`; reads `resources` only as build input)
 
 | Module | Responsibility |
 |---|---|
-| `compose/discovery.py` | `discover_addons()` — installed `BaseAddonConfig`s in dependency order. |
-| `compose/runtime.py` | **`AngeeRuntime`** — the build object owning the whole emit lifecycle (see §2.4). `RuntimePlan` disappears into its state. |
+| `compose/apps.py` | Plain `ComposeConfig(AppConfig)` (`name = "angee.compose"`) so the `angee` command is discoverable; not a `BaseAddonConfig`. |
+| `compose/runtime.py` | **`AngeeRuntime`** — owns the build (see §2.4): `from_settings()`/`from_addons()`, `render_sources()`, `emit()`, `check()`, `reset()`, `clean()`, and the Stage-2 SDL methods `render_schema_sdl()`/`write_schema_sdl()`/`check_schema_sdl()` (import `base.graphql.GraphQLSchemas`). `RuntimePlan` disappears into its state. |
 | `compose/rebac.py` | `write_permissions`, `sync_permissions`. |
-| `compose/management/commands/angee.py` | `build` (emit + optional check) and `clean` subcommands. `makemigrations`/`migrate` are a **separate** step (see §2.1). |
+| `compose/management/commands/angee.py` | `build` (emit + `--check`) and `clean` subcommands; an `schema` subcommand for SDL emit/check (run settings). Migrations are Django-native (separate). |
 
-### 1.4 Layering rules (enforced by a test, §5)
+### 1.4 Layering (a test enforces)
 
 - `base` imports neither `compose` nor `resources`.
 - `resources` imports `base`, never `compose`.
-- `compose` imports `base`; it touches `resources` only through discovery /
-  emission at build time, never on the serving path.
+- `compose` imports `base`; no serving module (`asgi`, `urls`, `views`, `consumers`,
+  `signals`, `models`, `graphql/*`) imports `compose`.
+- Addon discovery is a `base`-level registry read shared by both upper layers.
 
 ---
 
-## 2. Resolved design decisions
+## 2. Design decisions
 
-### 2.1 Build is emit-only; the flag is gone
+### 2.1 Build stages, atomic commands, build/run app sets — and why there is no flag
 
 The old `ANGEE_BUILDING`/argv flag existed only because emit and `makemigrations`
-ran in **one process**: `import_models()` eagerly loads the previously-emitted
-runtime at `django.setup()`, so when emit regenerated those files in the same
-process, `makemigrations` diffed against stale, cached modules.
+ran in one process: `import_models()` eagerly loads the previously-emitted runtime
+at `django.setup()`, so regenerating in the same process left `makemigrations`
+diffing stale modules. The fix is to separate the stages and let build and run use
+different `INSTALLED_APPS`. `import_models()` adoption **stays**.
 
-**New design — split the two steps:**
+- **Build app set** (from `compose_defaults`): source addons + `angee.compose`
+  (command host). No runtime serving apps.
+- **Run app set**: `angee.base` + `angee.resources` + source addons (with
+  `import_models()` adoption).
 
-- `AngeeRuntime.emit()` reads source addons' **abstract** models and writes
-  `runtime/<label>/models.py`, `runtime/<name>.graphql`, and `permissions.zed`.
-  Emission consumes source models only, so whatever the registry holds is
-  irrelevant — no flag, no suppression.
-- `makemigrations` + `migrate` + `sync_permissions` run as a **separate, later
-  step** (a fresh process). That process's `django.setup()` imports the
-  just-emitted concrete models normally via the unchanged `import_models()`
-  adoption, and the autodetector sees prior migration history for free through
-  the normal `call_command`. Header normalization (strip wall-clock timestamps)
-  runs after `makemigrations`.
+Stages — each an **atomic, single-purpose** management command, safe in its own
+process. The **Go `angee` CLI / `angee dev` orchestrates** the order out of band;
+no Python command runs the whole pipeline.
 
-`import_models()` adoption **stays**. There is no isolated registry and no
-autodetector reimplementation. `angee dev` (and the `angee` command) sequence:
-`build` (emit) → `makemigrations` → `migrate` → serve as distinct steps.
+- **Stage 1 — Compose (the real Django build).** `manage.py angee build` under
+  build settings: `AngeeRuntime.emit()` writes `runtime/<label>/models.py`,
+  `runtime/__init__.py` (generated sentinel + `RUNTIME_APPS`), and the combined
+  `permissions.zed`, all from the **abstract** source models. No runtime load, no
+  SDL, no migrations. `angee build --check` is a pure in-memory `{path: text}` diff
+  of rendered model sources + permissions vs disk. `angee clean` per §2.3.
+- **Stage 2 — Post-build runtime steps**, run under run settings in a fresh process
+  that loads the emitted concrete models normally, in dependency order:
+  `makemigrations <all labels>` (one call, + header normalization) → `migrate` →
+  `manage.py angee schema` (emit/check `runtime/schemas/*.graphql`; needs concrete
+  models loaded) → permission sync (one owner — see §2.4) → `manage.py resources
+  load` (data; needs DB, strictly after `migrate`).
+- **Stage 3 — Frontend build** consumes the emitted SDL (out of scope here).
 
-> Decision for the plan-review agents to confirm: the exact command surface —
-> whether `angee build` emits-only and a sibling step runs migrations, or `angee
-> build` shells a fresh `makemigrations` subprocess after emit. Default: `angee
-> build` emits + checks; migrations are a separate documented step the CLI runs.
+Prefer Django-native commands (`makemigrations`, `migrate`) where they exist; add
+an `angee`/`resources` subcommand only where Django has none. `compose_defaults`
+stays pure: the host resolves `ANGEE_RUNTIME_DIR`/`ANGEE_DATA_DIR` and puts the
+runtime parent on `sys.path`; the CLI selects build vs run settings per invocation.
 
 ### 2.2 `Resource` emits the `base` label
 
-`BaseConfig.source_model_modules = ("angee.resources.models",)`. The composer
-scans `BaseConfig`'s `models.py` (only `AngeeModel`, excluded) **plus** that extra
-module, finds the abstract `Resource`, and emits it into `runtime/base/models.py`
-under `app_label = "base"` → `base.Resource`. `MIGRATION_MODULES["base"] =
-"runtime.base.migrations"` (already produced by `compose_defaults`). `angee.resources`
-itself is a plain app and emits no concrete models.
+`BaseConfig.source_model_modules = ("angee.resources.models",)`. `_model_contributions`
+scans `BaseConfig.models_module` (only `AngeeModel`, excluded) plus that module, and
+**owns** the abstract `Resource` it finds there even though its dotted path is
+outside `angee.base` (the package-prefix filter must not drop explicitly listed
+modules). It emits into `runtime/base/models.py` as `app_label = "base"` →
+`base.Resource`. `compose_defaults` sets `MIGRATION_MODULES["base"] =
+"runtime.base.migrations"`. `angee.resources` itself emits no concrete models.
+Refer to the concrete model via `apps.get_model("base", "Resource")`, never by
+importing `runtime/`.
 
 ### 2.3 Drop `.angee-manifest.json`
 
-- `emit()` does **not** write a manifest; delete the manifest writer and the
-  `_resource_manifest` emission helper.
-- The reset/clean destructive guard no longer keys off the manifest. Re-ground it
-  on the explicit `runtime_dir` the host passes plus the generated
-  `runtime/__init__.py` (which carries `RUNTIME_APPS`): refuse to delete a
-  directory that is not the configured runtime dir / lacks that marker.
-- `--check` renders the would-be output to an in-memory `{relative_path: text}`
-  map and diffs it against what is on disk — no manifest, no git.
-- Remove the manifest from `_generated_source_files` / drift inclusion.
+- `emit()` writes no manifest; there is no `_resource_manifest` emission helper.
+- `runtime/__init__.py` carries a generated **sentinel** line plus `RUNTIME_APPS`.
+- `reset()`/`clean()` refuse to delete unless `path == resolved ANGEE_RUNTIME_DIR`
+  **and** (the dir is empty **or** `runtime/__init__.py` carries the sentinel).
+  Parse the previous `RUNTIME_APPS` by reading text, never by importing generated
+  code. Preserve `*/migrations/`; delete only known generated file classes. A first
+  build into an empty configured dir is allowed.
+- `--check`: model-source drift = pure `{path: text}` diff (Stage 1); SDL drift =
+  import-then-render-then-diff in the run-settings `angee schema` step (Stage 2).
 
 ### 2.4 Compose behavior onto classes
 
-- **`AngeeRuntime`** (`compose/runtime.py`) owns the build. Constructors:
-  `AngeeRuntime.from_settings(addons=None)` (discovers via `discover_addons`,
-  reads `settings.ANGEE_RUNTIME_DIR`/`ANGEE_RUNTIME_MODULE`) and
-  `AngeeRuntime.from_addons(addons, *, runtime_dir, runtime_module)`. State:
-  addons, extension grouping, runtime labels, runtime_dir. Methods:
-  `render_sources() -> dict[str, str]` (deterministic `{relative_path: text}`),
-  `emit()` (write the rendered map + permissions + schema SDL),
-  `check()` (diff `render_sources()` + rendered SDL against disk; raise on drift),
-  `reset()` (authoritative reset preserving migrations, guard per §2.3),
-  `clean()`. Field-collision and extension grouping are private methods. The
-  emission string-building helpers (`_models_source`, `_class_import`, …) may stay
-  module-level **pure** renderers owned by the class, or become private methods —
-  decide by cohesion, not layering. `RuntimePlan`, `pipeline.run`, and
-  `clean_runtime` disappear into `AngeeRuntime`.
-- **`AngeeResource`** (`resources/loader.py`) owns row hashing, xref derivation,
-  adoption, and ledger upsert as **methods** (not loose functions that take the
-  resource from outside). `build_resource(model, entry, *, ledger_model)` stays a
-  thin factory (or becomes `AngeeResource.build(...)`).
-- **`ResourceManager`** does not call `discover_addons`. Its methods take `addons`
-  (the management command / `AngeeRuntime` discovers and passes them), removing the
-  `managers → discovery` edge so all of `resources` imports cleanly at top.
-- **GraphQL schemas**: optional small `GraphQLSchemas.from_addons(addons)` owner
-  with `names()`, `build(name)`, `render_sdl()`. Lower priority; only if it reads
-  cleaner than the current module functions.
+- **`AngeeRuntime`** (`compose/runtime.py`) owns the whole build lifecycle (§2.1
+  Stage 1 + the Stage-2 SDL methods). `RuntimePlan` becomes its private state. The
+  pure string-building renderers may stay module-level functions in `runtime.py`
+  (a pure renderer that returns text may stay a function) or be private methods —
+  decide by cohesion.
+- **`GraphQLSchemas`** (`base/graphql/schema.py`) folds addon parts once and owns
+  `names()`/`build(name)`; replaces the loose `collect_*`/`build_schema`/`render_sdl`
+  functions and the double discover/fold ASGI does today.
+- **`AngeeResource`** (`resources/loader.py`) owns row-hash / xref / adopt /
+  ledger-upsert as methods.
+- **`ResourceManager`** methods take `addons` (no `discover_addons` import), so all
+  of `resources` imports cleanly at top.
+- **`DeletionPreview`** (`base/deletion.py`) owns the `Collector` cascade forecast;
+  `crud` only serializes it.
+- **`ChangeReadGate`** (`base/access.py`) owns change-event read authorization.
+- **One permission-sync owner:** pick `compose.sync_permissions` (wrapping the
+  library) **or** the library `rebac sync` directly, and document the choice; do
+  not keep two competing sync paths.
 
-### 2.5 Imports at module top
+### 2.5 GraphQL placement (build vs runtime)
 
-Every import at the top of its module. The **only** permitted deferrals, each
-marked with a one-line comment naming the reason:
-- Django app-loading order: `base/apps.py` (an `AppConfig` module, loaded in
-  populate phase 1 before the registry is ready) defers importing model classes
-  and signal wiring until a method that runs after `ready()`. Verified necessary:
-  importing `angee.base.models` at apps top raises `AppRegistryNotReady`.
-- `TYPE_CHECKING`-only imports stay under the module-top `if TYPE_CHECKING:` block.
+`base.graphql` owns only the **live** schema + the Strawberry surface. SDL file
+rendering/writing/checking is **build-time** and lives in `compose` (the Stage-2
+`AngeeRuntime` SDL methods), importing `base.graphql.GraphQLSchemas` (`compose →
+base`, allowed). `subscriptions.py` is split: `ChangeEvent` → `events.py`;
+authorization (`ChangeReadGate`) → `base/access.py` (not graphql); `scope_actor` →
+`consumers.py`; leaving a thin `changes()` factory + resolver + stream.
+`introspection.py` stays the sole Strawberry-internal reader. `schema_parts`
+normalization stays on `BaseAddonConfig` (AppConfig owns addon-local facts).
 
-No other function-local imports anywhere. The cycles that forced them are removed
-structurally (leaf `exceptions.py`/`tiers.py`; `resolve_model` in `entries`;
-`ResourceManager` no longer importing discovery; `Resource` not re-exported through
-`base.models`).
+### 2.6 Imports at module top
 
-### 2.6 `adopt` is opt-in
+Every import at the top. The only permitted deferrals, each marked with a one-line
+reason comment: (a) Django app-loading order — `base/apps.py` defers importing model
+classes and signal wiring until a method that runs after `ready()` (verified:
+importing `angee.base.models` at apps top raises `AppRegistryNotReady`); (b)
+`TYPE_CHECKING` blocks. Probe optional/generated modules with
+`importlib.util.find_spec` (verifying parents), never `try/except ImportError`.
+
+### 2.7 `adopt` is opt-in
 
 `ResourceEntry.adopt: bool = False`, declared per entry (`{"adopt": true}`).
-`AngeeResource` only adopts a pre-existing row (matched by a single unique field)
-when `self.entry.adopt`; otherwise a row without a ledger entry is always treated
-as new. Default off changes nothing for the existing demo load.
+`AngeeResource` adopts a pre-existing row (single unique-field match) only when
+`self.entry.adopt`; otherwise a row without a ledger entry is always new. Default
+off is behavior-neutral for the existing demo load.
 
-### 2.7 Naming & docstrings
+### 2.8 Naming & docstrings
 
-Follow the backend Naming section exactly (role-named modules; `*Config`,
-`*Mixin`, `*Manager`, `*QuerySet`, `*Widget` suffixes; verb-first `get_/is_/has_/
-as_/to_/from_/create_` methods). Docstrings on every public symbol and manifest
-attribute; private helpers where the role is not obvious.
+Follow the backend Naming section exactly (role-named modules; `*Config`/`*Mixin`/
+`*Manager`/`*QuerySet`/`*Widget` suffixes; verb-first `get_/is_/has_/as_/to_/from_/
+create_` methods). Docstrings per §1 intro.
 
 ---
 
 ## 3. Execution model
 
-1. **Preserve reference, don't copy.** `git mv src/angee/base src/angee/_base_old`.
-   Codex reads `_base_old` only to understand behavior/edge-cases; it writes every
-   new module fresh from the contracts above + the guidelines. `_base_old` is
-   deleted in the final slice. (`_base_old` is not a valid addon — exclude it from
-   discovery/imports; nothing new imports it.)
-2. **Slice by slice.** Execute the slices in §4 in order. Each slice: write the
-   module(s) fresh, decompose into classes/methods per guidelines, then run that
-   slice's verification gate before moving on. Commit per slice.
-3. **Per-slice gate:** `uv run ruff check .` and `uv run ruff format --check .`
-   clean for touched files; `uv run mypy src/` clean; the slice's named tests
-   pass. Full suite + example e2e + example build run at the end (Slice 9).
-4. **No placeholders, no TODOs.** Each module is complete when its slice closes.
+1. **Preserve reference outside the package.** `git mv src/angee/base
+   .agents/reference/base_old` (NOT under `src/angee`, so it is not linted, typed,
+   packaged, or importable). Delete stale `__pycache__` and any committed
+   `.angee-manifest.json` in example runtime output. Codex reads `base_old` only to
+   understand behavior; it writes every new module fresh. Delete `base_old` in the
+   final slice.
+2. **Slice by slice** (§4), in order. Each slice: write the module(s) fresh,
+   decompose per guidelines, put that behavior's tests in the same slice, run the
+   gate, commit.
+3. **Per-slice gate:** `ruff check`/`ruff format --check` clean; `mypy src/` clean
+   (clean throughout, since `base_old` is outside `src`); that slice's tests pass.
+   A minimal `base/__init__.py` + `base/apps.py` scaffold must exist before any
+   slice triggers `django.setup()`.
+4. **No placeholders/TODOs.** A module is complete when its slice closes.
 
 ---
 
 ## 4. Slices
 
-> Each slice lists scope, target files, the classes/methods/contracts to create,
-> decomposition guidance, and its verification gate. Write fresh; do not paste.
-
 ### Slice 0 — Scaffold & preserve
-- `git mv src/angee/base src/angee/_base_old`.
-- Create empty package dirs: `src/angee/base/`, `src/angee/compose/`,
-  `src/angee/resources/` with `__init__.py` (and `management/commands/` skeletons
-  where needed). Keep `angee` a namespace package (no `src/angee/__init__.py`).
-- Gate: `uv run python -c "import angee"` style sanity is N/A yet; just confirm the
-  tree exists and `ruff` parses empty packages. Commit.
+`git mv src/angee/base .agents/reference/base_old`; delete stale `__pycache__` and
+example `.angee-manifest.json`. Create `base/`, `compose/`, `resources/` package
+dirs with docstring-only `__init__.py` + `py.typed` + `management/commands/`
+skeletons where needed. Update `pyproject.toml` `testpaths`/`pythonpath` for the new
+`resources/tests/`. Gate: tree parses; ruff clean. Commit.
 
-### Slice 1 — `base/mixins.py` + `base/models.py`
-- `mixins.py`: the four mixins, top-level `import reversion`.
-- `models.py`: `AngeeModel` (abstract; `get_composition_label`,
-  `get_extension_target`, `normalize_model_label`, `get_extension_bases`,
-  `public_id` property, `from_public_id(cls) -> Self | None`),
-  `instance_from_public_id(model, value)` and `public_id_of(instance)` (the single
-  duality helpers — AngeeModel via its contract, plain Django via pk). No
-  `Resource` re-export.
-- Gate: `tests/test_composition.py` (rewritten in Slice 8) will cover these; for
-  now `mypy`/`ruff` clean + `python -c "from angee.base.models import AngeeModel"`
-  under Django settings. Commit.
+### Slice 1 — `base/mixins.py` + `base/models.py` (+ `base/__init__.py`)
+Per §1.1. Tests: `tests/test_composition.py` (AngeeModel/REBAC mixin), id-helper
+duality. Gate: those tests + mypy/ruff. Commit.
 
-### Slice 2 — `resources` leaf + value modules
-- `resources/exceptions.py` (`ResourceLoadError`), `resources/tiers.py`
-  (`ResourceTier`), `resources/entries.py` (`ResourceEntry` with `adopt`,
-  `ResourceRow`, `ResourceGroup`, `LoadResult`, `ValidationResult`, `resolve_model`,
-  format constants — **text formats only**, no binary surface),
-  `resources/ordering.py`, `resources/fetch.py`. All imports at top
-  (`entries` imports `fetch` and `exceptions` from leaves — no cycle).
-- Gate: `mypy`/`ruff` clean. Commit.
+### Slice 2 — `resources` leaves & value modules
+`exceptions.py`, `tiers.py`, `entries.py` (incl. `adopt`, text formats only,
+`resolve_model`), `ordering.py`, `fetch.py`. Tests: ordering, fetch (scheme reject,
+cache), entry value behavior, model conflict. Gate + commit.
 
 ### Slice 3 — `resources` import-export core
-- `resources/widgets.py` (xref widgets + `XrefWidgetMixin` ledger-model carrier;
-  `resolve_xref(value, ledger_model)`; no module global).
-- `resources/loader.py` (`AngeeResource` with row-hash/xref/adopt/ledger-upsert as
-  methods; `adopt` gated on `entry.adopt`; `build_resource` factory; `result_counts`).
-- `resources/managers.py` (`ResourceQuerySet`+`ResourceManager`; methods take
-  `addons`, no `discover_addons` import).
-- `resources/models.py` (`Resource(AngeeModel)`, `Tier = ResourceTier`).
-- `resources/apps.py` (plain `AppConfig`), `resources/management/commands/angee_resources.py`.
-- Gate: `resources/tests/` (rewritten Slice 8) cover load/validate/diff/ordering/
-  fetch/adopt; `mypy`/`ruff` clean. Commit.
+`widgets.py`, `loader.py` (`AngeeResource` methods + adopt-gating), `managers.py`
+(addons-passed), `models.py` (`Resource`, `Tier`), `apps.py`,
+`management/commands/resources.py`. Tests: load/validate/diff, xref collision,
+adopt-flag on/off. Gate + commit.
 
-### Slice 4 — `base/apps.py`
-- `BaseAddonConfig` (cached_property facts; `source_model_modules`;
-  `_model_contributions` scanning `source_models_module` + extra modules with the
-  documented deferred `AngeeModel` import; `import_models()` adoption) + `BaseConfig`
-  (`source_model_modules = ("angee.resources.models",)`; `ready()` → deferred
-  `register_revision_models`).
-- Gate: `tests/test_apps.py` (Slice 8); `mypy`/`ruff` clean. Commit.
+### Slice 4 — `base/apps.py` + `base/discovery.py`
+`BaseAddonConfig` (cached_property facts; `source_model_modules` ownership fix;
+deferred model imports) + `BaseConfig`; `discover_addons`. Tests: `tests/test_apps.py`
+(`schema_parts` normalize/reject; `model_classes` includes `base.Resource` via
+`source_model_modules`), discovery order/cycle. Gate + commit.
 
-### Slice 5 — `base/graphql/*`
-- `introspection.py`, `crud.py`, `subscriptions.py`, `schema.py` (optionally
-  `GraphQLSchemas`), `__init__.py` re-exports.
-- Gate: `tests/test_graphql.py`, `tests/test_crud.py`, `tests/test_subscriptions.py`
-  (Slice 8). Commit.
+### Slice 5 — `base/deletion.py`, `base/signals.py`, `base/access.py`
+`DeletionPreview.from_instance` (Collector); change publishers (+ `public_id_of`) +
+`register_revision_models`; `ChangeReadGate`. Tests: deletion preview, signal
+publish/`change_group`, gate filter/redact. Gate + commit.
 
-### Slice 6 — `base` serving + `base/signals.py`
-- `signals.py` (publishers + `register_revision_models`), `views.py`,
-  `consumers.py`, `asgi.py`, `urls.py`.
-- Gate: import-time + `tests/test_subscriptions.py` for signal wiring. Commit.
+### Slice 6 — `base/graphql/*`
+`introspection.py`, `schema.py` (`GraphQLSchemas`), `crud.py` (factory + delete
+resolver adapting `base.deletion`), `events.py`, `subscriptions.py`, `__init__.py`
+facade. Tests: `tests/test_graphql.py` (merge + collision), `tests/test_crud.py`
+(delete-preview), `tests/test_subscriptions.py` (changes + gating via `ChangeReadGate`).
+Gate + commit.
 
-### Slice 7 — `base/settings.py`
-- `compose_defaults(...)` pure helper: INSTALLED_APPS (incl. `angee.resources`),
-  MIDDLEWARE, AUTHENTICATION_BACKENDS, CHANNEL_LAYERS, REBAC_*, MIGRATION_MODULES
-  (base + addons → `runtime.<label>.migrations`), no manifest, no `sys.path`
-  mutation (host owns that). 
-- Gate: `tests/test_settings.py` (Slice 8). Commit.
+### Slice 7 — `base` serving + `base/settings.py`
+`views.py`, `consumers.py` (+ `scope_actor`), `asgi.py`, `urls.py`;
+`compose_defaults` (build + run app sets; MIGRATION_MODULES incl. base). Tests:
+`tests/test_settings.py` (base migration redirect; build set installs
+`angee.compose`; run set installs `angee.resources`; single install of each).
+Gate + commit.
 
-### Slice 8 — `compose/*` + the build/migrate split
-- `compose/discovery.py` (`discover_addons`), `compose/rebac.py`
-  (`write_permissions`, `sync_permissions`), `compose/runtime.py` (`AngeeRuntime`
-  per §2.4 — emit-only build, `render_sources()` map, `check()` diff, `reset()`/
-  `clean()` guard per §2.3, **no manifest, no flag**),
-  `compose/management/commands/angee.py` (`build` = emit+check; `clean`; migrations
-  are the separate documented step per §2.1).
-- Gate: example build (emit) then a separate `makemigrations` run; `tests/
-  test_layering.py` (compose isolation), `tests/test_composition.py`. Commit.
+### Slice 8 — `angee.compose`
+`apps.py` (`ComposeConfig`), `discovery` already in base, `rebac.py`
+(`write_permissions`/`sync_permissions`), `runtime.py` (`AngeeRuntime`: emit-only
+build, `render_sources()` map, `--check` diff, reset/clean guard per §2.3, Stage-2
+SDL methods importing `GraphQLSchemas`), `management/commands/angee.py`
+(`build`/`clean`/`schema`). Tests: `tests/test_layering.py` (the §1.4 rules incl.
+command packages), `tests/test_composition.py` (emit + separate `makemigrations`
+yields a non-stale migration with no flag; first build from no runtime; stale-runtime
+`--check`; SDL render only after fresh run-settings load). Gate: example build (emit)
++ separate `makemigrations`. Commit.
 
-### Slice 9 — Tests rewrite, cleanup, full verification
-- Rewrite/move all tests to the new structure: `tests/` (settings, apps,
-  composition, graphql, crud, subscriptions, layering, settings) and
-  `resources/tests/` (resources, resource_features). Update `pyproject.toml`
-  `testpaths`/`pythonpath` if paths move. Layering test asserts the §1.4 rules.
-- Delete `src/angee/_base_old/`.
-- Full gate (all green): `uv run ruff check .`, `uv run ruff format --check .`,
-  `uv run mypy src/`, `uv run pytest`, example e2e
-  (`--ds=host.settings`), `angee build` (emit) + `makemigrations` + the example
-  composer flow. Commit.
+### Slice 9 — cleanup & full verification
+Update every test/example import (`angee.base.resources.*`/`angee.base.compose.*`),
+the `get_commands()["resources"] == "angee.resources"` assertion, and the dev
+template (`templates/stacks/dev/.../angee.yaml.jinja`) to invoke the atomic commands
+in stage order (defer `--watch`/asset handling — CLI/template concerns). Delete
+`.agents/reference/base_old/`. Full gate (all green): `ruff check .`,
+`ruff format --check .`, `mypy src/`, `pytest`, example e2e (`--ds=host.settings`),
+the full example stage sequence (`angee build` → `makemigrations` → `migrate` →
+`angee schema` → permission sync → `resources load`). Commit.
 
 ---
 
 ## 5. Tests
 
-Rewrite (not copy) to cover, at least, what the current suite covers:
-`compose_defaults` (base migration redirect + single install), `BaseAddonConfig`
-facts (`model_classes` incl. `base.Resource` via `source_model_modules`,
-`schema_parts` normalization/rejection), REBAC composition, CRUD/delete-preview,
-GraphQL merge + collision, subscriptions gating + publishers (now in `signals`),
-resource load/validate/diff/ordering/fetch/xref-collision/adopt-flag, and the
-layering rules. Add a test that emit + a separate `makemigrations` produces a
-correct (non-stale) migration without any build flag.
-
----
+Rewrite (not copy) to cover at least the current suite plus the new behavior:
+`compose_defaults` (base migration redirect; build set installs `angee.compose`; run
+set installs `angee.resources`; single install of each); `BaseAddonConfig` facts
+(`model_classes` includes `base.Resource` via `source_model_modules`; `schema_parts`
+normalize/reject); discovery order/cycle; REBAC composition; `crud` delete-preview;
+`GraphQLSchemas` merge + collision; subscriptions gating via `ChangeReadGate` +
+publishers in `signals`; resource load/validate/diff/ordering/fetch/xref-collision
+and the `adopt` flag on/off; the §1.4 layering rules (static imports **and** that
+`base` does not import `compose`/`resources`); and the build tests in Slice 8
+(emit+separate-makemigrations non-stale; first build; stale `--check`; SDL after
+fresh load).
 
 ## 6. Verification & review gates
 
-- Per-slice: ruff (check+format), mypy, that slice's tests.
-- Final: full `pytest`, example e2e (`--ds=host.settings`), `angee build` emit +
-  separate `makemigrations`/`migrate`, drift `--check`.
-- After execution, re-run the three-reviewer pass (Claude subagent + Codex +
-  Gemini) against the rewritten tree on the same lenses (Django idiom, classes,
-  imports, lifted code) and fix anything they surface.
+Per slice: ruff (check+format), mypy, the slice's tests. Final: full `pytest`,
+example e2e, the full stage sequence, drift `--check`. After execution, re-run the
+three-reviewer pass over the rewritten tree (Django idiom, classes, imports, lifted
+code, layering) and fix what it surfaces.
 
----
+## 7. Self-review checklist
 
-## 7. Pre-execution workflow (before Codex runs)
-
-1. **Review the plan + guidelines with three agents.** Dispatch Claude subagent,
-   Codex, Gemini to (a) stress-test this plan for gaps/risks (esp. §2.1 build split,
-   §2.2 base-label emission, §2.5 import exceptions, the slice ordering) and (b)
-   check whether `docs/*guidelines*` fully and unambiguously specify the rules an
-   executor must follow (compose-onto-classes, imports-at-top + Django exception,
-   naming, docstrings, "rewrite don't copy").
-2. **Improve guidelines & docs** from that review so the executor needs only the
-   guidelines + this plan — no tribal knowledge.
-3. **Then** let Codex execute slice by slice.
-
----
-
-## 8. Self-review checklist (run before handing to the review agents)
-
-- [ ] Every old module maps to a new home (apps, mixins, models, signals, graphql/*,
-      views, consumers, asgi, urls, settings → base; discovery, runtime, rebac,
-      angee cmd → compose; exceptions, tiers, entries, ordering, fetch, widgets,
-      loader, managers, models, angee_resources cmd → resources). No module lost.
-- [ ] The flag (`ANGEE_BUILDING`/argv/`_running_angee_build`) appears **nowhere** in
-      the target; the build is emit-only and migrations are a separate step.
-- [ ] `.angee-manifest.json` is written nowhere; reset/clean guard re-grounded;
-      `--check` is emit-and-diff.
-- [ ] `base.Resource` (not `resources.Resource`) is the emitted label.
-- [ ] No function-local imports except the documented Django-phase-1 deferrals in
-      `base/apps.py` and `TYPE_CHECKING` blocks.
-- [ ] Layering: `base` imports neither `compose` nor `resources`.
-- [ ] Each slice has a concrete verification gate; final gate covers ruff/mypy/
-      pytest/e2e/build.
+- [ ] Every old module maps to a new home; nothing lost (apps, discovery, mixins,
+      models, deletion, signals, access, graphql/*, views, consumers, asgi, urls,
+      settings → base; runtime, rebac, angee cmd → compose; exceptions, tiers,
+      entries, ordering, fetch, widgets, loader, managers, models, resources cmd →
+      resources).
+- [ ] No `ANGEE_BUILDING`/argv/`_running_angee_build` anywhere; build is emit-only;
+      migrations/SDL/load are separate Stage-2 steps.
+- [ ] `.angee-manifest.json` written nowhere; reset/clean guard per §2.3; `--check`
+      is emit-and-diff (sources) + import-render-diff (SDL).
+- [ ] `base.Resource` is the emitted label; `source_model_modules` ownership bypasses
+      the prefix filter; referenced via `apps.get_model`.
+- [ ] `render_sdl` lives in `compose`, not `base.graphql`; `subscriptions.py` split
+      (events/access/consumers); `crud` delete-preview in `base.deletion`.
+- [ ] No function-local imports except documented Django-phase-1 deferrals + `TYPE_CHECKING`.
+- [ ] Layering: `base` imports neither sibling; `discover_addons` in `base`.
+- [ ] `angee` command host (`angee.compose`) and `resources` command host
+      (`angee.resources`) are installed in the right app sets and excluded from
+      addon discovery.
+- [ ] `py.typed` in each package; `__init__` docstring-only except the graphql facade.
+- [ ] Each slice has a concrete gate; final gate covers ruff/mypy/pytest/e2e + the
+      full stage sequence.

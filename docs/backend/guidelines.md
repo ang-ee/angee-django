@@ -38,6 +38,48 @@ resources, and failing fast on collisions.
 A wrapper must prove it adds a real new concept. If it only forwards,
 normalizes, or renames a Django object, delete it.
 
+## Package Layering
+
+The framework core is three packages with a one-way dependency rule that a test
+enforces:
+
+- `angee.base` is the runtime foundation (models, mixins, graphql, serving,
+  settings helper). It must not import `angee.compose` or `angee.resources`.
+- `angee.resources` is the resource subsystem. It may import `angee.base`, never
+  `angee.compose`.
+- `angee.compose` is the build-time composer. It may import `angee.base` and may
+  read resource declarations during build-time composition, but no serving module
+  (`asgi`, `urls`, `views`, `consumers`, `signals`, `models`, `graphql`) may
+  import `angee.compose`.
+
+Rules that follow from the layering:
+
+- **Addon discovery is a runtime registry read**, not a build-only concern:
+  serving code (schema building, ASGI routing) enumerates installed addons too.
+  It lives in the lowest package that serves both runtime and build —
+  `angee.base` — so serving code never imports `angee.compose` just to list
+  addons; `angee.compose` imports it from `angee.base`.
+- **A management command must live in an installed Django app.** A non-addon
+  package that owns commands (the composer, the resource subsystem) provides a
+  plain `AppConfig` and is installed, and is excluded from `BaseAddonConfig`
+  discovery (discovery collects only `BaseAddonConfig` instances).
+- **Build and run may use different `INSTALLED_APPS`.** The settings helper emits
+  a build app set (source addons + the composer command host, no runtime serving
+  apps) and a run app set (runtime + resources + source addons with
+  `import_models()` adoption). Because the build process never loads the runtime
+  apps, there is no "is a build running" flag: the build emits source from the
+  abstract models, and `makemigrations`/SDL render/`migrate` run as a later step
+  in a fresh run-settings process that loads the freshly emitted concrete models
+  normally.
+- **`source_model_modules` lists explicit source-model inputs for an
+  `AppConfig`,** even when their dotted path is outside the app package. The
+  composer owns those classes by declaration; it must not infer ownership from
+  package prefix alone. (This is how `angee.resources`'s `Resource` is emitted
+  under the `base` label without `base` importing `resources`.)
+- **Refer to an emitted concrete model through the app registry**
+  (`apps.get_model("base", "Resource")`), never by importing the generated
+  `runtime/` tree.
+
 ## Rules
 
 - Domain behavior lives on models, managers, and querysets.
@@ -71,7 +113,20 @@ normalizes, or renames a Django object, delete it.
   `AppConfig` module is imported in app-populate phase 1, before the registry is
   ready, so it must defer importing model classes (and signal wiring that pulls
   them in) until a method runs after `ready()`. Mark such a deferral with a
-  comment naming the reason; everywhere else, hoist.
+  comment naming the reason; everywhere else, hoist. Within `src/angee` these are
+  the only function-local imports allowed — phase-1 deferrals and `TYPE_CHECKING`
+  blocks. Probe optional or generated modules with `importlib.util.find_spec`
+  (verifying each parent first) rather than `try/except ImportError`, so an absent
+  generated `runtime/` reads as "not built yet," not a swallowed error.
+- A pure renderer that takes its owner and returns a value with no other state may
+  stay a module-level function in the owner's module; make it a method only when
+  it reads more than one field of the owner or shares state with sibling helpers.
+- A package `__init__.py` whose sole job is re-exporting a stable public API is a
+  compatibility surface; `__all__` is allowed there (the usual "avoid `__all__`"
+  rule targets ordinary modules).
+- When restructuring or lifting existing code, reconstruct each module from its
+  contract, tests, and these guidelines — do not paste or mechanically port the
+  old code, and do not keep the old modules importable inside `src/angee`.
 - Source models are abstract. Concrete apps are emitted by the composer.
 - Keep Django `Meta` for Django and library-owned options such as
   `rebac_resource_type`; Angee extension facts live on the owning model class.
@@ -90,9 +145,9 @@ normalizes, or renames a Django object, delete it.
 ## Framework Contracts
 
 Framework contracts should be self-explaining in code. Add docstrings to public
-modules, classes, methods, functions, and declarative manifest attributes. Add
-docstrings to private helpers when their role is not obvious from the function
-name and signature. Do not maintain a parallel spec, field inventory, or model
+modules, classes, methods, functions, declarative manifest attributes, and public
+module-level constants. Add docstrings to private helpers when their role is not
+obvious from the function name and signature. Do not maintain a parallel spec, field inventory, or model
 API list for behavior that can live clearly beside the code.
 
 `AppConfig` is the addon manifest and owns addon-local interpretation. Use
