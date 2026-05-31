@@ -1,0 +1,49 @@
+import type { ReactNode } from "react";
+
+import { PAGE_ELEMENT_SLOT } from "./types";
+
+export const COLUMN_SLOT = Symbol.for("@angee/base.page.column");
+
+export type PageColumnAlign = "left" | "center" | "right";
+export type ColumnAggregate =
+  | "count"
+  | "sum"
+  | "avg"
+  | "min"
+  | "max"
+  | (string & {});
+
+export interface ColumnProps<
+  TRow extends object = Record<string, unknown>,
+> {
+  field: string;
+  header?: ReactNode;
+  widget?: string;
+  sortable?: boolean;
+  aggregate?: ColumnAggregate;
+  align?: PageColumnAlign;
+  render?: (row: TRow) => ReactNode;
+}
+
+export interface ColumnDescriptor<
+  TRow extends object = Record<string, unknown>,
+> {
+  field: string;
+  header?: ReactNode;
+  widget?: string;
+  sortable?: boolean;
+  aggregate?: ColumnAggregate;
+  align?: PageColumnAlign;
+  render?: (row: TRow) => ReactNode;
+}
+
+function ColumnMarker<
+  TRow extends object = Record<string, unknown>,
+>(_props: ColumnProps<TRow>): null {
+  return null;
+}
+
+export const Column = Object.assign(ColumnMarker, {
+  [PAGE_ELEMENT_SLOT]: "column" as const,
+  [COLUMN_SLOT]: true,
+});

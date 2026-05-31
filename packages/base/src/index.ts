@@ -20,6 +20,8 @@ export {
 
 // Data-bound views.
 export * from "./views";
+export * from "./widgets";
+export * from "./feedback";
 
 // App shell (chrome) and auth surface.
 export * from "./shell";

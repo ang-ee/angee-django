@@ -15,6 +15,7 @@ import {
   createRouter,
   useNavigate,
 } from "@tanstack/react-router";
+import { NuqsAdapter } from "nuqs/adapters/tanstack-router";
 import {
   AppRuntimeProvider,
   AuthProvider,
@@ -32,7 +33,9 @@ import {
   type SlotContribution,
 } from "@angee/sdk";
 
+import { ModalsHost } from "./feedback";
 import { enBaseBundle } from "./i18n";
+import { defaultWidgets } from "./widgets";
 
 /** A route that also carries the page component the chrome renders. */
 export interface BaseAddonRoute extends AddonRoute {
@@ -87,7 +90,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
   }
 
   const runtime: AppRuntime = {
-    widgets: composed.widgets,
+    widgets: { ...defaultWidgets, ...composed.widgets },
     menus: composed.menus,
     // Seed the base namespace under the merged addon bundles; an addon key wins.
     i18n: mergeI18n(enBaseBundle, composed.i18n),
@@ -104,7 +107,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     composed.routes.find((route) => route.shell !== "public")?.path ??
     "/";
 
-  const rootRoute = createRootRoute({ component: Outlet });
+  const rootRoute = createRootRoute({ component: RootOutlet });
 
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -168,10 +171,20 @@ function AppFrame({
   const clients = useSchemaClients();
   return (
     <AppRuntimeProvider runtime={runtime}>
-      <RelayInvalidationProvider client={clients[subscriptionSchema]}>
-        <AuthProvider auth={auth}>{children}</AuthProvider>
-      </RelayInvalidationProvider>
+      <ModalsHost>
+        <RelayInvalidationProvider client={clients[subscriptionSchema]}>
+          <AuthProvider auth={auth}>{children}</AuthProvider>
+        </RelayInvalidationProvider>
+      </ModalsHost>
     </AppRuntimeProvider>
+  );
+}
+
+function RootOutlet(): ReactNode {
+  return (
+    <NuqsAdapter>
+      <Outlet />
+    </NuqsAdapter>
   );
 }
 
