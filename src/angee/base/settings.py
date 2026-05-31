@@ -76,6 +76,7 @@ def compose_defaults(
         else ("graphiql" if debug else None),
         "REBAC_BACKEND": "local",
         "REBAC_LOCAL_BACKEND_STORAGE": "registry",
+        "REBAC_STRICT_MODE": True,
         "REBAC_FIELD_READ_MODE": "redact",
         "REBAC_ALLOW_SUDO": True,
         "MIGRATION_MODULES": {

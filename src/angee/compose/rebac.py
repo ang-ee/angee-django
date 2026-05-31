@@ -5,8 +5,6 @@ from __future__ import annotations
 from collections.abc import Iterable
 from pathlib import Path
 
-from django.core.management import call_command
-
 from angee.base.apps import BaseAddonConfig
 
 
@@ -39,12 +37,3 @@ def write_permissions(
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(render_permissions(addons), encoding="utf-8")
     return target
-
-
-def sync_permissions(*, check: bool = False) -> None:
-    """Delegate permission loading to django-zed-rebac."""
-
-    args = ["sync"]
-    if check:
-        args.append("--check")
-    call_command("rebac", *args, verbosity=0)

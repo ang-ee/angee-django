@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,7 +16,7 @@ from rebac import system_context
 from angee.base.models import AngeeModel
 from angee.resources.entries import ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
-from angee.resources.fetch import fetch_url
+from angee.resources.fetch import _SchemeCheckedRedirectHandler, fetch_url
 from angee.resources.models import Resource
 from angee.resources.ordering import order_entries
 from angee.resources.widgets import resolve_xref
@@ -225,6 +226,23 @@ def test_fetch_url_rejects_non_http_urls() -> None:
         fetch_url("file:///private/resource.csv")
 
 
+def test_fetch_url_rejects_redirect_to_non_http_url() -> None:
+    """Redirected resource URLs are limited to http and https targets."""
+
+    request = urllib.request.Request("https://example.test/data.csv")
+    handler = _SchemeCheckedRedirectHandler()
+
+    with pytest.raises(ResourceLoadError, match="disallowed scheme"):
+        handler.redirect_request(
+            request,
+            None,
+            302,
+            "Found",
+            {},
+            "file:///private/resource.csv",
+        )
+
+
 def test_fetch_url_caches_by_full_url(
     tmp_path: Path,
     settings: Any,
@@ -253,13 +271,25 @@ def test_fetch_url_caches_by_full_url(
 
             return None
 
-    def urlopen(request: Any) -> Response:
-        """Record the requested URL and return a fake response."""
+    class Opener:
+        """Tiny opener matching urllib's opener surface."""
 
-        calls.append(request.full_url)
-        return Response()
+        def open(self, request: Any) -> Response:
+            """Record the requested URL and return a fake response."""
 
-    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+            calls.append(request.full_url)
+            return Response()
+
+    def build_opener(*handlers: object) -> Opener:
+        """Return an opener with redirect scheme checks installed."""
+
+        assert any(
+            isinstance(handler, _SchemeCheckedRedirectHandler)
+            for handler in handlers
+        )
+        return Opener()
+
+    monkeypatch.setattr("urllib.request.build_opener", build_opener)
 
     first = fetch_url("https://example.test/data.csv")
     second = fetch_url("https://example.test/data.csv")

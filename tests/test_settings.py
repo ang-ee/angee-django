@@ -60,6 +60,14 @@ def test_run_app_set_installs_resources_once(tmp_path: Path) -> None:
     assert installed.count("angee.compose.apps.ComposeConfig") == 1
 
 
+def test_rebac_strict_mode_is_explicitly_pinned(tmp_path: Path) -> None:
+    """Composed hosts keep REBAC strict mode enabled by default."""
+
+    settings = _compose(tmp_path)
+
+    assert settings["REBAC_STRICT_MODE"] is True
+
+
 def test_build_app_set_installs_compose_without_runtime_apps(
     tmp_path: Path,
 ) -> None:
