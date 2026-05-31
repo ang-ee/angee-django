@@ -12,7 +12,6 @@ from django.db import models
 
 from angee.base.apps import BaseAddonConfig
 from angee.base.discovery import discover_addons
-from angee.base.graphql.schema import GraphQLSchemas
 from angee.base.mixins import HistoryMixin
 from angee.base.models import AngeeModel
 from angee.compose.rebac import render_permissions
@@ -126,43 +125,6 @@ class AngeeRuntime:
                     path.rmdir()
                 except OSError:
                     pass
-
-    def render_schema_sdl(self) -> dict[str, str]:
-        """Return printed GraphQL SDL per schema name."""
-
-        schemas = GraphQLSchemas.from_addons(self.addons)
-        return {name: schemas.build(name).as_str() for name in schemas.names()}
-
-    def write_schema_sdl(self) -> None:
-        """Write rendered GraphQL SDL files under ``runtime/schemas``."""
-
-        for name, sdl in self.render_schema_sdl().items():
-            self._write(self.runtime_dir / "schemas" / f"{name}.graphql", sdl)
-
-    def check_schema_sdl(self) -> None:
-        """Raise when rendered SDL differs from ``runtime/schemas`` files."""
-
-        expected = self.render_schema_sdl()
-        schema_dir = self.runtime_dir / "schemas"
-        actual = (
-            {
-                path.stem: path.read_text(encoding="utf-8")
-                for path in sorted(schema_dir.glob("*.graphql"))
-            }
-            if schema_dir.exists()
-            else {}
-        )
-        drift = sorted(
-            (set(expected) ^ set(actual))
-            | {
-                name
-                for name in expected.keys() & actual.keys()
-                if expected[name] != actual[name]
-            }
-        )
-        if drift:
-            rendered = ", ".join(f"schemas/{name}.graphql" for name in drift)
-            raise RuntimeError(f"generated GraphQL SDL is stale: {rendered}")
 
     def _models_source(
         self,

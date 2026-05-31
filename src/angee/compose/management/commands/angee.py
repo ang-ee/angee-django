@@ -32,10 +32,6 @@ class Command(BaseCommand):
         clean = subcommands.add_parser("clean")
         clean.set_defaults(handler=self._handle_clean)
 
-        schema = subcommands.add_parser("schema")
-        schema.add_argument("--check", action="store_true")
-        schema.set_defaults(handler=self._handle_schema)
-
     def handle(self, *args: Any, **options: Any) -> None:
         """Dispatch the selected subcommand."""
 
@@ -67,18 +63,3 @@ class Command(BaseCommand):
         except RuntimeError as error:
             raise CommandError(str(error)) from error
         self.stdout.write(self.style.SUCCESS("angee clean: ok"))
-
-    def _handle_schema(self, options: dict[str, Any]) -> None:
-        """Write or check rendered GraphQL SDL files."""
-
-        runtime = AngeeRuntime.from_settings()
-        try:
-            if options["check"]:
-                runtime.check_schema_sdl()
-                message = "angee schema --check: ok"
-            else:
-                runtime.write_schema_sdl()
-                message = "angee schema: ok"
-        except RuntimeError as error:
-            raise CommandError(str(error)) from error
-        self.stdout.write(self.style.SUCCESS(message))

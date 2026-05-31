@@ -200,7 +200,7 @@ class BaseAddonConfig(AppConfig):
         """Import emitted concrete models when the runtime package exists."""
 
         super().import_models()
-        if _compose_build_app_set_installed():
+        if getattr(settings, "ANGEE_BUILD", False):
             return
         runtime_module = getattr(settings, "ANGEE_RUNTIME_MODULE", None)
         if not runtime_module:
@@ -375,14 +375,3 @@ def _normalize_depends_on(value: object) -> tuple[str, ...]:
             "resource depends_on must be a string or iterable"
         )
     return tuple(str(item) for item in value)
-
-
-def _compose_build_app_set_installed() -> bool:
-    """Return whether settings selected the source-only command app set."""
-
-    installed = set(getattr(settings, "INSTALLED_APPS", ()))
-    compose_apps = {"angee.compose", "angee.compose.apps.ComposeConfig"}
-    resource_apps = {"angee.resources", "angee.resources.apps.ResourcesConfig"}
-    return bool(compose_apps & installed) and not bool(
-        resource_apps & installed
-    )

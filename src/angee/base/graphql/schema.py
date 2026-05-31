@@ -104,6 +104,11 @@ class GraphQLSchemas:
             extensions=cast(list[Any], list(parts["extensions"])),
         )
 
+    def render_sdl(self) -> dict[str, str]:
+        """Return printed GraphQL SDL for every contributed schema."""
+
+        return {name: self.build(name).as_str() for name in self.names()}
+
     def _merge_root(
         self,
         schema_name: str,

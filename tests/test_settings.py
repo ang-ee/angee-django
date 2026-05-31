@@ -49,15 +49,18 @@ def test_base_is_installed_exactly_once(tmp_path: Path) -> None:
     assert installed.count(base_app) == 1
 
 
-def test_run_app_set_installs_resources_once(tmp_path: Path) -> None:
-    """Run settings install runtime and command hosts once."""
+def test_run_app_set_installs_resources_without_compose(
+    tmp_path: Path,
+) -> None:
+    """Run settings install runtime and resource command hosts."""
 
     settings = _compose(tmp_path)
     installed = settings["INSTALLED_APPS"]
 
     assert installed.count("angee.base.apps.BaseConfig") == 1
     assert installed.count("angee.resources.apps.ResourcesConfig") == 1
-    assert installed.count("angee.compose.apps.ComposeConfig") == 1
+    assert "angee.compose.apps.ComposeConfig" not in installed
+    assert settings["ANGEE_BUILD"] is False
 
 
 def test_rebac_strict_mode_is_explicitly_pinned(tmp_path: Path) -> None:
@@ -86,3 +89,4 @@ def test_build_app_set_installs_compose_without_runtime_apps(
     assert "angee.compose.apps.ComposeConfig" in installed
     assert "angee.base.apps.BaseConfig" in installed
     assert "angee.resources.apps.ResourcesConfig" not in installed
+    assert settings["ANGEE_BUILD"] is True

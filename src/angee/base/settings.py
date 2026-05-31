@@ -71,6 +71,7 @@ def compose_defaults(
         "ANGEE_RUNTIME_DIR": runtime_dir,
         "ANGEE_DATA_DIR": data_dir,
         "ANGEE_RUNTIME_MODULE": runtime_module,
+        "ANGEE_BUILD": build,
         "ANGEE_GRAPHQL_IDE": graphql_ide
         if graphql_ide is not None
         else ("graphiql" if debug else None),
@@ -127,7 +128,6 @@ def _run_installed_apps(
             "simple_history",
             BASE_APP,
             RESOURCES_APP,
-            COMPOSE_APP,
             *(f"{cls.__module__}.{cls.__name__}" for cls in addon_configs),
             *extra_installed_apps,
         ]

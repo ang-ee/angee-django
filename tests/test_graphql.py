@@ -118,6 +118,21 @@ def test_build_schema_includes_mutation_root() -> None:
     assert result.data == {"ping": "pong"}
 
 
+def test_render_sdl_prints_each_schema() -> None:
+    """Named schemas render to deterministic SDL strings."""
+
+    rendered = GraphQLSchemas.from_addons(
+        [
+            addon(public={"query": [HelloQuery]}),
+            addon(console={"query": [WorldQuery]}),
+        ]
+    ).render_sdl()
+
+    assert set(rendered) == {"public", "console"}
+    assert "hello: String!" in rendered["public"]
+    assert "world: String!" in rendered["console"]
+
+
 def test_build_schema_unknown_name_lists_available() -> None:
     """An unknown schema name reports the names that do exist."""
 
