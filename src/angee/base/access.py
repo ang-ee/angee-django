@@ -55,7 +55,10 @@ class ChangeReadGate:
         payload: Mapping[str, Any],
         resource: ObjectRef,
     ) -> dict[str, Any]:
-        """Return ``payload`` with unreadable field-gated values removed."""
+        """Return ``payload`` with unreadable field-gated values removed.
+
+        Each gated field performs one backend check.
+        """
 
         fields = payload.get("changed_fields")
         values = payload.get("changed_values")

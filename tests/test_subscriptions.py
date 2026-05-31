@@ -180,14 +180,20 @@ def test_subscription_resolver_gates_events_through_sync_adapter(
 
     monkeypatch.setattr(subscriptions, "_subscribe", subscribe)
     monkeypatch.setattr(subscriptions, "_gate_event", gate_event)
-    monkeypatch.setattr(subscriptions, "sync_to_async", sync_adapter, raising=False)
+    monkeypatch.setattr(
+        subscriptions,
+        "sync_to_async",
+        sync_adapter,
+        raising=False,
+    )
     surface = changes(Group, field="groupChanged")
     field = surface.__strawberry_definition__.fields[0]
     resolver = field.base_resolver.wrapped_func
 
     async def scenario() -> list[ChangeEvent]:
         events: list[ChangeEvent] = []
-        async for event in resolver(object(), SimpleNamespace(context={"actor": ANON})):
+        info = SimpleNamespace(context={"actor": ANON})
+        async for event in resolver(object(), info):
             events.append(event)
         return events
 
@@ -197,7 +203,9 @@ def test_subscription_resolver_gates_events_through_sync_adapter(
     assert [event.id for event in events] == [strawberry.ID("9")]
 
 
-def test_ws_consumer_executes_operations_inside_actor_context(monkeypatch) -> None:
+def test_ws_consumer_executes_operations_inside_actor_context(
+    monkeypatch,
+) -> None:
     """WebSocket GraphQL operations install the connection actor."""
 
     seen: list[object] = []
