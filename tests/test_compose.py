@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from django.apps import apps
@@ -59,3 +60,24 @@ def test_runtime_clean_requires_generated_sentinel(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="not an Angee runtime directory"):
         runtime.clean()
+
+
+def test_clean_then_emit_is_idempotent(tmp_path: Path, settings: Any) -> None:
+    """A migrations-only runtime remainder can be emitted and cleaned again."""
+
+    runtime = runtime_for(tmp_path)
+    settings.ANGEE_RUNTIME_DIR = runtime.runtime_dir
+    runtime.emit()
+    migration_path = (
+        runtime.runtime_dir / "base" / "migrations" / "0001_initial.py"
+    )
+    migration_path.write_text("# migration\n", encoding="utf-8")
+
+    runtime.clean()
+    runtime.emit()
+
+    assert "ANGEE GENERATED RUNTIME" in (
+        runtime.runtime_dir / "__init__.py"
+    ).read_text(encoding="utf-8")
+    runtime.clean()
+    runtime.clean()

@@ -7,7 +7,7 @@ from typing import Any
 import strawberry
 import strawberry_django
 from django.core.exceptions import ImproperlyConfigured
-from django.db import models
+from django.db import models, transaction
 
 from angee.base.deletion import (
     DeletionPreview,
@@ -130,10 +130,11 @@ def _delete_resolver(model: type[models.Model]) -> Any:
     def delete(id: strawberry.ID) -> DeletePreview:
         """Delete one model instance by public id when unblocked."""
 
-        instance = _resolve_for_delete(model, str(id))
-        preview = DeletionPreview.from_instance(instance)
-        if not preview.has_blockers:
-            instance.delete()
+        with transaction.atomic():
+            instance = _resolve_for_delete(model, str(id))
+            preview = DeletionPreview.from_instance(instance)
+            if not preview.has_blockers:
+                instance.delete()
         return DeletePreview.from_domain(preview)
 
     return delete

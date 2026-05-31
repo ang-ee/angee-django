@@ -7,9 +7,12 @@ import strawberry
 import strawberry_django
 from django.contrib.auth.models import Group
 from django.core.exceptions import ImproperlyConfigured
+from django.db import transaction
 from strawberry import auto
 
+from angee.base.deletion import DeletionPreview, DeletionPreviewGroup
 from angee.base.graphql import crud
+from angee.base.graphql.crud import _delete_resolver
 
 
 @strawberry_django.type(Group)
@@ -102,7 +105,6 @@ def test_crud_fields_merge_into_a_schema() -> None:
 def test_delete_preview_output_adapts_deletion_domain() -> None:
     """CRUD delete output serializes the deletion preview domain object."""
 
-    from angee.base.deletion import DeletionPreview
     from angee.base.graphql.crud import DeletePreview
 
     group = Group.objects.create(name="reviewers")
@@ -111,3 +113,106 @@ def test_delete_preview_output_adapts_deletion_domain() -> None:
     assert preview.total_deleted_count == 1
     assert not preview.has_blockers
     assert any(g.count == 1 for g in preview.deleted)
+
+
+@pytest.mark.django_db
+def test_delete_resolver_preserves_blocked_and_removes_unblocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Blocked deletes leave rows present; unblocked deletes remove them."""
+
+    blocked = Group.objects.create(name="blocked")
+    removable = Group.objects.create(name="removable")
+    previews = iter(
+        (
+            DeletionPreview(
+                total_deleted_count=1,
+                deleted=(),
+                updated=(),
+                blocked=(DeletionPreviewGroup(label="groups", count=1),),
+            ),
+            DeletionPreview(
+                total_deleted_count=1,
+                deleted=(DeletionPreviewGroup(label="groups", count=1),),
+                updated=(),
+                blocked=(),
+            ),
+        )
+    )
+
+    def preview_for(
+        cls: type[DeletionPreview],
+        instance: Group,
+    ) -> DeletionPreview:
+        del cls, instance
+        return next(previews)
+
+    monkeypatch.setattr(
+        DeletionPreview,
+        "from_instance",
+        classmethod(preview_for),
+    )
+    delete = _delete_resolver(Group)
+
+    blocked_preview = delete(str(blocked.pk))
+    removable_preview = delete(str(removable.pk))
+
+    assert blocked_preview.has_blockers
+    assert Group.objects.filter(pk=blocked.pk).exists()
+    assert not removable_preview.has_blockers
+    assert not Group.objects.filter(pk=removable.pk).exists()
+
+
+@pytest.mark.django_db
+def test_delete_resolver_previews_and_deletes_inside_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preview and delete run inside one database transaction."""
+
+    group = Group.objects.create(name="transactional")
+    active = False
+    entered = False
+
+    class Atomic:
+        """Small transaction context used to observe resolver boundaries."""
+
+        def __enter__(self) -> None:
+            nonlocal active, entered
+            active = True
+            entered = True
+
+        def __exit__(self, *exc: object) -> None:
+            nonlocal active
+            active = False
+
+    def atomic(*args: object, **kwargs: object) -> Atomic:
+        """Return a transaction context that records entry."""
+
+        del args, kwargs
+        return Atomic()
+
+    def preview_for(
+        cls: type[DeletionPreview],
+        instance: Group,
+    ) -> DeletionPreview:
+        del cls, instance
+        assert active
+        return DeletionPreview(
+            total_deleted_count=1,
+            deleted=(DeletionPreviewGroup(label="groups", count=1),),
+            updated=(),
+            blocked=(),
+        )
+
+    monkeypatch.setattr(transaction, "atomic", atomic)
+    monkeypatch.setattr(
+        DeletionPreview,
+        "from_instance",
+        classmethod(preview_for),
+    )
+
+    _delete_resolver(Group)(str(group.pk))
+
+    assert entered
+    assert not active
+    assert not Group.objects.filter(pk=group.pk).exists()

@@ -5,10 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, cast
 
-from angee.base.discovery import discover_addons
 from django.apps import apps
 from django.core.management.base import BaseCommand, CommandParser
 
+from angee.base.discovery import discover_addons
 from angee.resources.models import Resource
 
 DEFAULT_TIERS = ("master", "install")

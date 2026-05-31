@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from angee.base.mixins import HistoryMixin, RevisionMixin, SqidMixin
-from angee.base.models import AngeeModel
 from django.conf import settings
 from django.db import models
 from django_sqids import SqidsField
+
+from angee.base.mixins import HistoryMixin, RevisionMixin, SqidMixin
+from angee.base.models import AngeeModel
 
 
 class Note(SqidMixin, AngeeModel, HistoryMixin, RevisionMixin):

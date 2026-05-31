@@ -6,7 +6,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from django.db import models
-from django.db.models.deletion import Collector, ProtectedError
+from django.db.models.deletion import (
+    Collector,
+    ProtectedError,
+    RestrictedError,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +42,7 @@ class DeletionPreview:
 
     @property
     def has_blockers(self) -> bool:
-        """Return whether any protected rows block deletion."""
+        """Return whether any related rows block deletion."""
 
         return bool(self.blocked)
 
@@ -52,14 +56,23 @@ class DeletionPreview:
             collector.collect([instance])
         except ProtectedError as error:
             blocked = _groups(_count_by_model(error.protected_objects))
+        except RestrictedError as error:
+            blocked = _groups(_count_by_model(error.restricted_objects))
 
-        deleted_counts = {
+        deleted_counts: dict[type[models.Model], int] = {
             model: len(rows) for model, rows in collector.data.items()
         }
-        updated_counts = {
-            model: sum(len(rows) for rows in updates.values())
-            for model, updates in collector.field_updates.items()
-        }
+        for queryset in collector.fast_deletes:
+            deleted_counts[queryset.model] = (
+                deleted_counts.get(queryset.model, 0) + queryset.count()
+            )
+
+        updated_counts: dict[type[models.Model], int] = {}
+        for (field, _value), object_groups in collector.field_updates.items():
+            model = field.model
+            updated_counts[model] = updated_counts.get(model, 0) + sum(
+                len(group) for group in object_groups
+            )
         return cls(
             total_deleted_count=sum(deleted_counts.values()),
             deleted=_groups(deleted_counts),

@@ -43,6 +43,10 @@ def test_resource_manifest_normalizes_tiers_and_entries() -> None:
                     "depends_on": ["resources/users.csv"],
                     "adopt": True,
                 },
+                {
+                    "path": "resources/comments.yaml",
+                    "depends_on": "resources/notes.yaml",
+                },
             ),
             "demo": {"url": "https://example.test/demo.csv"},
         }
@@ -56,6 +60,10 @@ def test_resource_manifest_normalizes_tiers_and_entries() -> None:
             "path": "resources/notes.yaml",
             "depends_on": ("resources/users.csv",),
             "adopt": True,
+        },
+        {
+            "path": "resources/comments.yaml",
+            "depends_on": ("resources/notes.yaml",),
         },
     )
     assert config.resource_manifest["demo"] == (

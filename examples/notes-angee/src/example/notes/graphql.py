@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import strawberry
 import strawberry_django
-from angee.base.graphql import changes, crud
 from django.apps import apps
 from strawberry import auto
+
+from angee.base.graphql import changes, crud
 
 Note = apps.get_model("notes", "Note")
 

@@ -99,6 +99,31 @@ def test_resource_entry_reads_structured_rows_and_fields(
     assert rows[0].dataset_row == {"_xref": "n1", "title": "First"}
 
 
+def test_resource_entry_rejects_reserved_keys_in_structured_fields(
+    tmp_path: Path,
+) -> None:
+    """Structured field envelopes cannot override loader-owned keys."""
+
+    resource_dir = tmp_path / "resources"
+    resource_dir.mkdir()
+    (resource_dir / "notes.yaml").write_text(
+        "_meta:\n"
+        "  model: base.ImportNote\n"
+        "rows:\n"
+        "  - _xref: n1\n"
+        "    fields:\n"
+        "      _xref: n2\n"
+        "      title: First\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ImproperlyConfigured, match="reserved keys: _xref"):
+        entry(
+            tmp_path,
+            {"path": "resources/notes.yaml"},
+        ).read_resource_rows()
+
+
 def test_resource_entry_rejects_model_conflicts(tmp_path: Path) -> None:
     """File metadata cannot disagree with the entry model."""
 
@@ -157,6 +182,20 @@ def test_order_entries_respects_same_and_cross_addon_dependencies(
     ordered = order_entries([third, second, first])
 
     assert [item.source for item in ordered] == ["a.csv", "b.csv", "c.csv"]
+
+
+def test_resource_entry_treats_string_depends_on_as_one_dependency(
+    tmp_path: Path,
+) -> None:
+    """A bare dependency string is one resource key."""
+
+    resource_entry = ResourceEntry.from_declaration(
+        addon(tmp_path),
+        "master",
+        {"path": "b.csv", "depends_on": "a.csv"},
+    )
+
+    assert resource_entry.depends_on == ("a.csv",)
 
 
 def test_order_entries_detects_cycles(tmp_path: Path) -> None:

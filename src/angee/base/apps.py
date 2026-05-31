@@ -334,7 +334,7 @@ class BaseAddonConfig(AppConfig):
         else:
             entry["path"] = self._relative_path(path)
         if "depends_on" in entry:
-            entry["depends_on"] = tuple(entry["depends_on"])
+            entry["depends_on"] = _normalize_depends_on(entry["depends_on"])
         return entry
 
     def _resource_tier_value(self, value: object) -> str:
@@ -389,6 +389,18 @@ def _module_exists(dotted_path: str) -> bool:
     if parent and not _module_exists(parent):
         return False
     return importlib.util.find_spec(dotted_path) is not None
+
+
+def _normalize_depends_on(value: object) -> tuple[str, ...]:
+    """Return resource dependency keys, treating a string as one key."""
+
+    if isinstance(value, str):
+        return (value,)
+    if not isinstance(value, Iterable):
+        raise ImproperlyConfigured(
+            "resource depends_on must be a string or iterable"
+        )
+    return tuple(str(item) for item in value)
 
 
 def _compose_build_app_set_installed() -> bool:

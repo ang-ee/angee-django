@@ -351,6 +351,13 @@ class AngeeRuntime:
             encoding="utf-8"
         ):
             return
+        remaining_files = [
+            path for path in self.runtime_dir.rglob("*") if path.is_file()
+        ]
+        if remaining_files and all(
+            self._is_preserved_migration_path(path) for path in remaining_files
+        ):
+            return
         raise RuntimeError(
             f"{self.runtime_dir} is not an Angee runtime directory"
         )

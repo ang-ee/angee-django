@@ -131,6 +131,9 @@ class ResourceEntry:
             raw: Mapping[str, Any] = {"path": str(declaration)}
         else:
             raw = declaration
+        depends_on = raw.get("depends_on", ())
+        if isinstance(depends_on, str):
+            depends_on = (depends_on,)
         return cls(
             addon=addon,
             tier=tier,
@@ -138,7 +141,7 @@ class ResourceEntry:
             url=_optional_string(raw.get("url")),
             model=_optional_string(raw.get("model")),
             encoding=str(raw.get("encoding") or "utf-8"),
-            depends_on=tuple(str(item) for item in raw.get("depends_on", ())),
+            depends_on=tuple(str(item) for item in depends_on),
             adopt=bool(raw.get("adopt", False)),
         )
 
@@ -370,7 +373,7 @@ class ResourceRow:
     def dataset_row(self) -> dict[str, Any]:
         """Return the row as an import-export dataset mapping."""
 
-        return {"_xref": self.xref, **self.values}
+        return {**self.values, "_xref": self.xref}
 
     @staticmethod
     def _values_for(payload: dict[str, Any]) -> dict[str, Any]:
@@ -381,6 +384,12 @@ class ResourceRow:
             if not isinstance(fields_value, Mapping):
                 raise ImproperlyConfigured(
                     "resource row fields must map names"
+                )
+            reserved = RESERVED_ROW_KEYS & set(fields_value)
+            if reserved:
+                raise ImproperlyConfigured(
+                    "resource row fields cannot contain reserved keys: "
+                    f"{', '.join(sorted(reserved))}"
                 )
             return dict(fields_value)
         return {
