@@ -49,6 +49,18 @@ def test_runtime_emit_and_check_detect_drift(tmp_path: Path) -> None:
         runtime.check()
 
 
+def test_runtime_check_ignores_schema_command_output(tmp_path: Path) -> None:
+    """GraphQL SDL files are checked by the schema command, not build."""
+
+    runtime = runtime_for(tmp_path)
+    runtime.emit()
+    schema_path = tmp_path / "runtime" / "schemas" / "public.graphql"
+    schema_path.parent.mkdir()
+    schema_path.write_text("type Query { ok: Boolean! }\n", encoding="utf-8")
+
+    runtime.check()
+
+
 def test_runtime_clean_requires_generated_sentinel(tmp_path: Path) -> None:
     """Clean refuses to delete a non-generated configured runtime dir."""
 

@@ -347,6 +347,9 @@ class AngeeRuntime:
     def _is_checked_source(self, path: Path) -> bool:
         """Return whether ``path`` participates in source drift checks."""
 
+        relative = path.relative_to(self.runtime_dir)
+        if relative.parts and relative.parts[0] == "schemas":
+            return False
         if "__pycache__" in path.parts:
             return False
         if self._is_numbered_migration(path):
