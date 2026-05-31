@@ -312,7 +312,10 @@ def test_resolve_xref_requires_exact_source_addon() -> None:
 
             app_label = "base"
 
-    models_to_create = (ResolveExactTarget, ResolveExactLedger)
+    models_to_create: tuple[type[models.Model], ...] = (
+        ResolveExactTarget,
+        ResolveExactLedger,
+    )
     with connection.schema_editor() as schema_editor:
         for model in models_to_create:
             schema_editor.create_model(model)
@@ -370,7 +373,7 @@ def test_resolve_xref_reports_ambiguous_source_rows() -> None:
 
             app_label = "base"
 
-    models_to_create = (
+    models_to_create: tuple[type[models.Model], ...] = (
         ResolveAmbiguousTargetA,
         ResolveAmbiguousTargetB,
         ResolveAmbiguousLedger,
@@ -479,6 +482,78 @@ def test_resource_manager_loads_rows_and_resolves_xrefs(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_resource_validate_cleans_rows_and_resolves_xrefs(
+    tmp_path: Path,
+) -> None:
+    """Validation runs widget cleaning inside a rolled-back import."""
+
+    class ValidateNote(AngeeModel):
+        """Note-like model with an FK that must resolve by xref."""
+
+        title = models.CharField(max_length=80)
+        created_by = models.ForeignKey(
+            "base.ValidateUser",
+            on_delete=models.CASCADE,
+        )
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "base"
+
+    class ValidateUser(AngeeModel):
+        """User-like model referenced by validation rows."""
+
+        username = models.CharField(max_length=40, unique=True)
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "base"
+
+    class ValidateLedger(Resource):
+        """Concrete resource ledger for validation tests."""
+
+        class Meta(Resource.Meta):
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+            abstract = False
+
+    resource_dir = tmp_path / "resources"
+    resource_dir.mkdir()
+    (resource_dir / "010_base.validatenote.yaml").write_text(
+        "- _xref: note\n"
+        "  title: Broken reference\n"
+        "  created_by: tests.resource_addon.missing\n",
+        encoding="utf-8",
+    )
+    owner = addon(
+        tmp_path,
+        manifest={
+            "master": ({"path": "resources/010_base.validatenote.yaml"},),
+            "install": (),
+            "demo": (),
+        },
+    )
+
+    models_to_create = (ValidateUser, ValidateNote, ValidateLedger)
+    with connection.schema_editor() as schema_editor:
+        for model in models_to_create:
+            schema_editor.create_model(model)
+    try:
+        with pytest.raises(ResourceLoadError, match="unresolved xref"):
+            ValidateLedger.objects.validate_addons(
+                (owner,),
+                tiers=[Resource.Tier.MASTER],
+            )
+    finally:
+        with connection.schema_editor() as schema_editor:
+            for model in reversed(models_to_create):
+                schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
 def test_resource_adoption_is_opt_in(tmp_path: Path) -> None:
     """Rows without ledgers adopt existing targets only when requested."""
 
@@ -549,6 +624,144 @@ def test_resource_adoption_is_opt_in(tmp_path: Path) -> None:
         with system_context(reason="resource adoption assertions"):
             assert AdoptUser.objects.count() == 1
         assert AdoptLedger.objects.get(xref="existing").target_id
+    finally:
+        with connection.schema_editor() as schema_editor:
+            for model in reversed(models_to_create):
+                schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_resource_adoption_uses_explicit_unique_field(
+    tmp_path: Path,
+) -> None:
+    """A named adoption field resolves ambiguity between unique fields."""
+
+    class ExplicitAdoptUser(AngeeModel):
+        """Model with multiple unique fields."""
+
+        username = models.CharField(max_length=40, unique=True)
+        email = models.EmailField(unique=True)
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "base"
+
+    class ExplicitAdoptLedger(Resource):
+        """Concrete resource ledger for explicit adoption tests."""
+
+        class Meta(Resource.Meta):
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+            abstract = False
+
+    resource_dir = tmp_path / "resources"
+    resource_dir.mkdir()
+    (resource_dir / "010_base.explicitadoptuser.csv").write_text(
+        "_xref,username,email\nexisting,alice,alice@example.test\n",
+        encoding="utf-8",
+    )
+    owner = addon(
+        tmp_path,
+        manifest={
+            "master": (),
+            "install": (
+                {
+                    "path": "resources/010_base.explicitadoptuser.csv",
+                    "adopt": "username",
+                },
+            ),
+            "demo": (),
+        },
+    )
+
+    models_to_create = (ExplicitAdoptUser, ExplicitAdoptLedger)
+    with connection.schema_editor() as schema_editor:
+        for model in models_to_create:
+            schema_editor.create_model(model)
+    try:
+        ExplicitAdoptUser.objects.create(
+            username="alice",
+            email="alice@example.test",
+        )
+
+        result = ExplicitAdoptLedger.objects.load_addons(
+            (owner,),
+            tiers=[Resource.Tier.INSTALL],
+        )
+
+        assert result.skipped == 1
+        with system_context(reason="explicit adoption assertions"):
+            assert ExplicitAdoptUser.objects.count() == 1
+        assert ExplicitAdoptLedger.objects.get(xref="existing").target_id
+    finally:
+        with connection.schema_editor() as schema_editor:
+            for model in reversed(models_to_create):
+                schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_resource_adoption_rejects_ambiguous_unique_fields(
+    tmp_path: Path,
+) -> None:
+    """Implicit adoption fails when a row has multiple unique candidates."""
+
+    class AmbiguousAdoptUser(AngeeModel):
+        """Model with multiple unique fields."""
+
+        username = models.CharField(max_length=40, unique=True)
+        email = models.EmailField(unique=True)
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "base"
+
+    class AmbiguousAdoptLedger(Resource):
+        """Concrete resource ledger for ambiguous adoption tests."""
+
+        class Meta(Resource.Meta):
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+            abstract = False
+
+    resource_dir = tmp_path / "resources"
+    resource_dir.mkdir()
+    (resource_dir / "010_base.ambiguousadoptuser.csv").write_text(
+        "_xref,username,email\nexisting,alice,alice@example.test\n",
+        encoding="utf-8",
+    )
+    owner = addon(
+        tmp_path,
+        manifest={
+            "master": (),
+            "install": (
+                {
+                    "path": "resources/010_base.ambiguousadoptuser.csv",
+                    "adopt": True,
+                },
+            ),
+            "demo": (),
+        },
+    )
+
+    models_to_create = (AmbiguousAdoptUser, AmbiguousAdoptLedger)
+    with connection.schema_editor() as schema_editor:
+        for model in models_to_create:
+            schema_editor.create_model(model)
+    try:
+        AmbiguousAdoptUser.objects.create(
+            username="alice",
+            email="alice@example.test",
+        )
+
+        with pytest.raises(ImproperlyConfigured, match="multiple unique"):
+            AmbiguousAdoptLedger.objects.load_addons(
+                (owner,),
+                tiers=[Resource.Tier.INSTALL],
+            )
     finally:
         with connection.schema_editor() as schema_editor:
             for model in reversed(models_to_create):

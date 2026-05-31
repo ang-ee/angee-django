@@ -41,20 +41,10 @@ class ResourceQuerySet(models.QuerySet[Any]):
 
         groups = self._groups_for(addons, tiers=tiers)
         self._check_xref_collisions(groups)
-        checked_files = 0
-        checked_rows = 0
-        for group in groups:
-            checked_files += 1
-            checked_rows += len(group.rows)
-            resource = build_resource(
-                group.model,
-                group.entry,
-                ledger_model=self.model,
-            )
-            resource.before_import(group.to_dataset())
+        self._import_groups(groups, dry_run=True)
         return ValidationResult(
-            checked_files=checked_files,
-            checked_rows=checked_rows,
+            checked_files=len(groups),
+            checked_rows=sum(len(group.rows) for group in groups),
         )
 
     def load_addons(
@@ -77,11 +67,28 @@ class ResourceQuerySet(models.QuerySet[Any]):
 
         groups = self._groups_for(addons, tiers=active_tiers)
         self._check_xref_collisions(groups)
+        return self._import_groups(
+            groups,
+            dry_run=dry_run,
+            allow_non_dev=allow_non_dev,
+        )
+
+    def _import_groups(
+        self,
+        groups: tuple[ResourceGroup, ...],
+        *,
+        dry_run: bool,
+        allow_non_dev: bool = False,
+    ) -> LoadResult:
+        """Import ``groups`` and optionally roll the transaction back."""
+
+        del allow_non_dev
         created = 0
         updated = 0
         skipped = 0
         try:
-            with system_context(reason="resources.load"), transaction.atomic():
+            reason = "resources.validate" if dry_run else "resources.load"
+            with system_context(reason=reason), transaction.atomic():
                 for group in groups:
                     resource = build_resource(
                         group.model,

@@ -108,8 +108,8 @@ class ResourceEntry:
     depends_on: tuple[str, ...] = ()
     """Resource source keys that must load before this entry."""
 
-    adopt: bool = False
-    """Whether one unique-field match may adopt an unledgered row."""
+    adopt: str | bool = False
+    """Unique field used for adoption; ``True`` infers one unique field."""
 
     _rows: tuple[ResourceRow, ...] | None = field(
         default=None,
@@ -134,6 +134,8 @@ class ResourceEntry:
         depends_on = raw.get("depends_on", ())
         if isinstance(depends_on, str):
             depends_on = (depends_on,)
+        raw_adopt = raw.get("adopt", False)
+        adopt = raw_adopt if isinstance(raw_adopt, str) else bool(raw_adopt)
         return cls(
             addon=addon,
             tier=tier,
@@ -142,7 +144,7 @@ class ResourceEntry:
             model=_optional_string(raw.get("model")),
             encoding=str(raw.get("encoding") or "utf-8"),
             depends_on=tuple(str(item) for item in depends_on),
-            adopt=bool(raw.get("adopt", False)),
+            adopt=adopt,
         )
 
     @property

@@ -9,6 +9,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 import tablib
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from import_export import fields, resources
 from import_export.instance_loaders import BaseInstanceLoader
@@ -88,6 +89,7 @@ class AngeeResource(resources.ModelResource):
 
         del kwargs
         self._validate_headers(list(dataset.headers or []))
+        self._prime_existing_ledgers(dataset)
 
     def before_import_row(
         self,
@@ -149,12 +151,31 @@ class AngeeResource(resources.ModelResource):
     def instance_for_xref(self, xref: str) -> models.Model | None:
         """Return an existing or adopted instance for a row xref."""
 
-        if xref not in self._existing_ledgers:
-            self._existing_ledgers[xref] = self._ledger_for_xref(xref)
+        self._ledger_for_xref(xref)
         ledger = self._existing_ledgers[xref]
         if ledger is None:
             return self._adopted_instances.get(xref)
         return self._instance_from_ledger(ledger)
+
+    def _prime_existing_ledgers(self, dataset: tablib.Dataset) -> None:
+        """Load existing ledger rows for this import dataset in one query."""
+
+        xrefs = {
+            self._row_xref(row, row_number=index)
+            for index, row in enumerate(dataset.dict, start=1)
+        }
+        self._existing_ledgers = {xref: None for xref in xrefs}
+        if not xrefs:
+            return
+        ledgers = self.ledger_model._default_manager.filter(
+            source_addon=self.entry.addon.name,
+            xref__in=xrefs,
+        )
+        for ledger in ledgers:
+            self._existing_ledgers[str(getattr(ledger, "xref"))] = cast(
+                "Resource",
+                ledger,
+            )
 
     def _record_row_state(
         self,
@@ -235,7 +256,9 @@ class AngeeResource(resources.ModelResource):
     def _ledger_for_xref(self, xref: str) -> Resource | None:
         """Return this entry's ledger row for ``xref`` if it exists."""
 
-        return (
+        if xref in self._existing_ledgers:
+            return self._existing_ledgers[xref]
+        ledger = (
             self.ledger_model._default_manager.filter(
                 source_addon=self.entry.addon.name,
                 xref=xref,
@@ -243,6 +266,8 @@ class AngeeResource(resources.ModelResource):
             .order_by("pk")
             .first()
         )
+        self._existing_ledgers[xref] = cast("Resource | None", ledger)
+        return self._existing_ledgers[xref]
 
     def _upsert_ledger(
         self,
@@ -293,24 +318,29 @@ class AngeeResource(resources.ModelResource):
     ) -> models.Model | None:
         """Return an existing unique-field target when adoption is enabled."""
 
-        if not self.entry.adopt:
+        adopt = self.entry.adopt
+        if not adopt:
             return None
 
-        candidates: list[tuple[str, Any]] = []
-        for field in self._meta.model._meta.fields:
-            if field.primary_key or not getattr(field, "unique", False):
-                continue
-            resource_field = self.fields.get(field.name)
-            if resource_field is None:
-                continue
-            if resource_field.column_name not in row:
-                continue
-            value = row.get(resource_field.column_name)
-            if value in (None, ""):
-                continue
-            candidates.append((field.name, value))
+        if isinstance(adopt, str):
+            candidate = self._adoption_candidate(row, adopt)
+            candidates = [] if candidate is None else [candidate]
+        else:
+            candidates = []
+            for field in self._meta.model._meta.fields:
+                if not self._is_adoptable_field(field):
+                    continue
+                candidate = self._adoption_candidate(row, field.name)
+                if candidate is not None:
+                    candidates.append(candidate)
+            if len(candidates) > 1:
+                names = ", ".join(name for name, _value in candidates)
+                raise ImproperlyConfigured(
+                    f"{self.entry.display}: adopt=True matched multiple "
+                    f"unique fields: {names}"
+                )
 
-        if len(candidates) != 1:
+        if not candidates:
             return None
         field_name, value = candidates[0]
         matches = list(
@@ -319,6 +349,54 @@ class AngeeResource(resources.ModelResource):
         if len(matches) != 1:
             return None
         return matches[0]
+
+    def _adoption_candidate(
+        self,
+        row: Mapping[str, Any],
+        field_name: str,
+    ) -> tuple[str, Any] | None:
+        """Return a row value for one configured adoption field."""
+
+        field = self._unique_adoption_field(field_name)
+        resource_field = self.fields.get(field.name)
+        if resource_field is None:
+            raise ImproperlyConfigured(
+                f"{self.entry.display}: adopt field {field_name!r} is not "
+                "importable"
+            )
+        if resource_field.column_name not in row:
+            return None
+        value = row.get(resource_field.column_name)
+        if value in (None, ""):
+            return None
+        return field.name, value
+
+    def _unique_adoption_field(
+        self,
+        field_name: str,
+    ) -> models.Field[Any, Any]:
+        """Return the unique model field named by an adoption declaration."""
+
+        try:
+            field = self._meta.model._meta.get_field(field_name)
+        except FieldDoesNotExist as error:
+            raise ImproperlyConfigured(
+                f"{self.entry.display}: adopt field {field_name!r} does "
+                "not exist"
+            ) from error
+        if not isinstance(field, models.Field) or not self._is_adoptable_field(
+            field
+        ):
+            raise ImproperlyConfigured(
+                f"{self.entry.display}: adopt field {field_name!r} must be "
+                "a unique model field"
+            )
+        return field
+
+    def _is_adoptable_field(self, field: models.Field[Any, Any]) -> bool:
+        """Return whether ``field`` can identify an adopted target."""
+
+        return not field.primary_key and bool(getattr(field, "unique", False))
 
     def _skip_result(self, instance: models.Model | None) -> RowResult:
         """Return an import-export skip result for one row."""
