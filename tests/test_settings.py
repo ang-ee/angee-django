@@ -50,14 +50,14 @@ def test_base_is_installed_exactly_once(tmp_path: Path) -> None:
 
 
 def test_run_app_set_installs_resources_once(tmp_path: Path) -> None:
-    """Run settings install the runtime base and resource command host."""
+    """Run settings install runtime and command hosts once."""
 
     settings = _compose(tmp_path)
     installed = settings["INSTALLED_APPS"]
 
     assert installed.count("angee.base.apps.BaseConfig") == 1
     assert installed.count("angee.resources.apps.ResourcesConfig") == 1
-    assert "angee.compose.apps.ComposeConfig" not in installed
+    assert installed.count("angee.compose.apps.ComposeConfig") == 1
 
 
 def test_build_app_set_installs_compose_without_runtime_apps(

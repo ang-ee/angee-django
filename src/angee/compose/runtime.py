@@ -13,6 +13,7 @@ from django.db import models
 from angee.base.apps import BaseAddonConfig
 from angee.base.discovery import discover_addons
 from angee.base.graphql.schema import GraphQLSchemas
+from angee.base.mixins import HistoryMixin
 from angee.base.models import AngeeModel
 from angee.compose.rebac import render_permissions
 
@@ -183,6 +184,10 @@ class AngeeRuntime:
             model_class = cast(type[AngeeModel], raw_model)
             source_alias = self._source_alias(model_class)
             imports.extend(self._class_import(model_class, source_alias))
+            if issubclass(model_class, HistoryMixin):
+                imports.append(
+                    "from simple_history.models import HistoricalRecords"
+                )
             extension_bases = tuple(
                 base
                 for extension in self.extensions.get(
@@ -215,6 +220,7 @@ class AngeeRuntime:
             if db_table is not None:
                 meta_lines.append(f"        db_table = {db_table}")
             meta_lines.extend(self._rebac_meta_source(model_class))
+            body_lines = self._history_source(addon, model_class)
             lines.extend(
                 [
                     f"{meta_name} = getattr({source_alias}, 'Meta', object)",
@@ -222,6 +228,7 @@ class AngeeRuntime:
                     f"class {model_class.__name__}({', '.join(base_names)}):",
                     f'    """Concrete {model_class.__name__} model."""',
                     "",
+                    *body_lines,
                     f"    class Meta({meta_name}):",
                     *meta_lines,
                     "",
@@ -237,6 +244,21 @@ class AngeeRuntime:
             f"{GENERATED_SENTINEL}\n\n"
             f"RUNTIME_APPS = {list(self.labels)!r}\n"
         )
+
+    def _history_source(
+        self,
+        addon: BaseAddonConfig,
+        model_class: type[models.Model],
+    ) -> list[str]:
+        """Return simple-history declarations for a concrete model."""
+
+        if not issubclass(model_class, HistoryMixin):
+            return []
+        args = f'app="{addon.label}"'
+        excluded = self._history_excluded_fields(model_class)
+        if excluded:
+            args += f", excluded_fields={excluded!r}"
+        return [f"    history = HistoricalRecords({args})", ""]
 
     def _extensions_for(
         self,
@@ -360,6 +382,8 @@ class AngeeRuntime:
         """Write ``text`` to ``path``, creating parents first."""
 
         path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and path.read_text(encoding="utf-8") == text:
+            return
         path.write_text(text, encoding="utf-8")
 
     def _source_alias(self, model_class: type[models.Model]) -> str:
@@ -400,6 +424,20 @@ class AngeeRuntime:
         if "db_table" in original:
             return repr(str(original["db_table"]))
         return None
+
+    def _history_excluded_fields(
+        self,
+        model_class: type[models.Model],
+    ) -> list[str]:
+        """Return source fields simple-history cannot mirror."""
+
+        return sorted(
+            field.name
+            for field in model_class._meta.get_fields()
+            if getattr(field, "concrete", True) is False
+            and not field.is_relation
+            and not getattr(field, "auto_created", False)
+        )
 
     def _declared_fields(
         self,

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import reversion
-from angee.base.graphql import build_schema
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.test import TransactionTestCase
 from rebac import actor_context, system_context, to_subject_ref
+
+from angee.base.graphql import GraphQLSchemas
 
 Note = apps.get_model("notes", "Note")
 User = get_user_model()
@@ -54,7 +55,8 @@ class NotesVersioningTests(TransactionTestCase):
             "totalDeletedCount hasBlockers deleted { label count } } }"
         )
         with actor_context(to_subject_ref(self.user)):
-            result = build_schema("console").execute_sync(
+            schema = GraphQLSchemas.from_discovery().build("console")
+            result = schema.execute_sync(
                 query, variable_values={"id": self.note.sqid}
             )
 

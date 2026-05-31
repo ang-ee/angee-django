@@ -30,7 +30,7 @@ class NotesAuthorizationTests(TransactionTestCase):
     def setUp(self) -> None:
         call_command("rebac", "sync", verbosity=0)
         call_command(
-            "angee_resources", "load", "demo", allow_non_dev=True, verbosity=0
+            "resources", "load", "demo", allow_non_dev=True, verbosity=0
         )
         with system_context(reason="test-setup"):
             self.alice = User.objects.get(username="alice")
@@ -63,7 +63,7 @@ class NotesAuthorizationTests(TransactionTestCase):
             notes_before = Note.objects.count()
             users_before = User.objects.count()
         call_command(
-            "angee_resources", "load", "demo", allow_non_dev=True, verbosity=0
+            "resources", "load", "demo", allow_non_dev=True, verbosity=0
         )
         with system_context(reason="test"):
             self.assertEqual(Note.objects.count(), notes_before)

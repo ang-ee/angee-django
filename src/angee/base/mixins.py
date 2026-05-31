@@ -7,7 +7,6 @@ from typing import Any, ClassVar
 import reversion
 from django.db import models
 from django_sqids import SqidsField
-from simple_history.models import HistoricalRecords
 
 
 class TimestampMixin(models.Model):
@@ -39,9 +38,6 @@ class SqidMixin(models.Model):
 
 class HistoryMixin(models.Model):
     """Mark a model as tracked by django-simple-history."""
-
-    history = HistoricalRecords(inherit=True)
-    """Historical row manager supplied by django-simple-history."""
 
     class Meta:
         """Django model options for history-only abstract inheritance."""

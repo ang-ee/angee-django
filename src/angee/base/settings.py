@@ -126,6 +126,7 @@ def _run_installed_apps(
             "simple_history",
             BASE_APP,
             RESOURCES_APP,
+            COMPOSE_APP,
             *(f"{cls.__module__}.{cls.__name__}" for cls in addon_configs),
             *extra_installed_apps,
         ]
