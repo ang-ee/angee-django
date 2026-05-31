@@ -1,0 +1,159 @@
+// @angee/sdk — the headless contract layer. The SDL is the source of truth; the
+// SDK builds documents against it, runs them through one urql client per named
+// schema, normalizes the cache, and keeps it live from the change firehose. No
+// rendering lives here — that is the rendered binding's job.
+
+// Runtime document assembly.
+export {
+  buildSelection,
+  printSelection,
+  assembleDetailDocument,
+  assembleListDocument,
+  assembleMutationDocument,
+  assembleAggregateDocument,
+  assembleGroupByDocument,
+  aggregateFieldName,
+  groupByFieldName,
+  typeNameForModel,
+  singularFieldName,
+  pluralFieldName,
+  pageToConnectionArgs,
+  encodeOffsetCursor,
+  RELAY_MAX_PAGE_SIZE,
+  RELAY_PAGE_SIZE_OPTIONS,
+  type SelectionField,
+  type ConnectionArgs,
+  type MutationAction,
+  type AssembleListDocumentOptions,
+} from "./selection";
+
+// Transport: clients, cache config, CSRF, per-schema provider.
+export {
+  cacheConfigFromSchema,
+  type CacheConfig,
+} from "./cache-config";
+export {
+  createUrqlClient,
+  createCsrfTokenProvider,
+  graphQLWebSocketUrl,
+  type AngeeUrqlClientOptions,
+  type CsrfTokenProvider,
+  type CsrfTokenOptions,
+} from "./graphql-client";
+export {
+  createSchemaClients,
+  GraphQLProvider,
+  GraphQLClientProvider,
+  useResetClient,
+} from "./graphql-provider";
+
+// Resource data access.
+export {
+  useResourceList,
+  useResourceRecord,
+  useResourceMutation,
+  type UseResourceListOptions,
+  type UseResourceListResult,
+  type UseResourceRecordResult,
+  type ResourceMutate,
+  type ResourceMutationVariables,
+} from "./resource-hooks";
+export type { Row, PageInfo, ConnectionResult } from "./resource-result";
+
+// Aggregates.
+export {
+  useAggregateQuery,
+  useResourceGroupBy,
+  selectMeasure,
+  type AggregateBucket,
+  type AggregateFn,
+  type GroupByResult,
+  type MeasureMap,
+  type UseAggregateOptions,
+  type UseGroupByOptions,
+  type GroupBySpecInput,
+} from "./aggregates";
+export { autoExtractAggregate, autoExtractGroupBy } from "./aggregate-extract";
+
+// Authored (bespoke) operations.
+export {
+  useAuthoredQuery,
+  useAuthoredMutation,
+  useAuthoredSubscription,
+  type AuthoredQueryOptions,
+  type AuthoredQueryResult,
+  type AuthoredMutate,
+  type AuthoredSubscriptionOptions,
+} from "./authored-hooks";
+
+// Live invalidation.
+export {
+  RelayInvalidationProvider,
+  useRegisterModelRefetch,
+  useModelInvalidation,
+  useInvalidateModels,
+  CHANGE_EVENTS_DOCUMENT,
+} from "./relay-invalidation";
+
+// Cross-cutting context: runtime registry, auth, the context factory.
+export { makeContext, type ContextBinding } from "./make-context";
+export {
+  AppRuntimeProvider,
+  useAppRuntime,
+  useWidget,
+  useMenus,
+  useSlot,
+  useT,
+  type AppRuntime,
+} from "./runtime";
+export {
+  AuthProvider,
+  useAuth,
+  currentUserToAuthState,
+  ANONYMOUS_AUTH,
+  type AuthState,
+  type AuthUser,
+  type CurrentUserPayload,
+} from "./auth";
+export {
+  useRuntimeAuthState,
+  useLoginWithPassword,
+  useLogout,
+  CURRENT_USER_DOCUMENT,
+  LOGIN_DOCUMENT,
+  LOGOUT_DOCUMENT,
+  type LoginCredentials,
+  type LoginResult,
+} from "./auth-hooks";
+
+// i18n helpers.
+export {
+  interpolateMessage,
+  translateWithFallback,
+  type I18nResources,
+  type MessageResources,
+  type MessageVars,
+} from "./i18n";
+
+// Addon composition.
+export {
+  defineAddon,
+  composeAddons,
+  mergeChatterContributions,
+  mergeSlotContributions,
+  type AddonManifest,
+  type AddonRoute,
+  type ComposedAddons,
+  type ChatterContribution,
+  type SlotContribution,
+  type MenuItem,
+  type WidgetMap,
+} from "./define-addon";
+
+// Generated, per-schema type contracts.
+export type {
+  ResourceTypeMap,
+  ResourceTypeName,
+  ResourceFilter,
+  ResourceOrder,
+} from "./__generated__/resource-types";

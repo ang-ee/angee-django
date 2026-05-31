@@ -93,6 +93,8 @@ Dependency changes must update this file in the same change.
 | mypy | Python type checking | Strict backend checks |
 | pytest + pytest-django | Backend tests | Synthetic project and integration fixtures |
 | Vitest | TypeScript and React tests | Frontend unit checks |
+| happy-dom | DOM environment for Vitest | Per-file env opt-in for hook and component tests |
+| @testing-library/react | React component and hook test rendering | Provider-wrapped render and hook harnesses |
 | Playwright | Browser tests | End-to-end checks |
 | Storybook | Component workshop | `@angee/base` and addon previews |
 | GitHub Actions | CI | Build, lint, type, test gates |

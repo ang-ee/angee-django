@@ -1,0 +1,54 @@
+import {
+  getNamedType,
+  isObjectType,
+  type GraphQLSchema,
+} from "graphql";
+import { relayPagination } from "@urql/exchange-graphcache/extras";
+import type { KeyingConfig, ResolverConfig } from "@urql/exchange-graphcache";
+
+/**
+ * The graphcache keying + resolver configuration, derived from the schema so it
+ * stays correct as the schema grows — no hand-maintained type list. An entity
+ * (any object type exposing an `id`) is normalized by its Sqid id; every other
+ * object type is a value object and is null-keyed. Every query field returning a
+ * relay `*Connection` gets a pagination resolver so pages merge into one list.
+ */
+export interface CacheConfig {
+  keys: KeyingConfig;
+  resolvers: ResolverConfig;
+}
+
+function hasIdField(fields: Record<string, unknown>): boolean {
+  return "id" in fields;
+}
+
+export function cacheConfigFromSchema(schema: GraphQLSchema): CacheConfig {
+  const keys: KeyingConfig = {};
+  const operationTypes = new Set(
+    [schema.getQueryType(), schema.getMutationType(), schema.getSubscriptionType()]
+      .filter((type) => type != null)
+      .map((type) => type.name),
+  );
+
+  for (const type of Object.values(schema.getTypeMap())) {
+    if (!isObjectType(type)) continue;
+    if (type.name.startsWith("__") || operationTypes.has(type.name)) continue;
+    keys[type.name] = hasIdField(type.getFields())
+      ? (data) => (typeof data.id === "string" ? data.id : null)
+      : () => null;
+  }
+
+  const resolvers: ResolverConfig = {};
+  const queryType = schema.getQueryType();
+  if (queryType) {
+    const queryResolvers: Record<string, ReturnType<typeof relayPagination>> = {};
+    for (const [fieldName, field] of Object.entries(queryType.getFields())) {
+      if (getNamedType(field.type).name.endsWith("Connection")) {
+        queryResolvers[fieldName] = relayPagination();
+      }
+    }
+    if (Object.keys(queryResolvers).length > 0) resolvers.Query = queryResolvers;
+  }
+
+  return { keys, resolvers };
+}

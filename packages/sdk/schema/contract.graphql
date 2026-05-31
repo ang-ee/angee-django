@@ -1,0 +1,215 @@
+# Pinned GraphQL contract for the SDK.
+#
+# This is the shape the SDK builds documents against: relay connections with
+# totalCount/edges/pageInfo, opaque Sqid node ids, noun-first CRUD mutations
+# (`saleCreate` / `saleUpdate` / `saleDelete`) taking an `input:`, a single
+# `events` change firehose, and aggregate / group-by fields. The `Sale` model
+# carries numeric fields so aggregate measures (sum/avg/min/max) are exercised.
+#
+# The runtime schema served per named endpoint conforms to this contract; this
+# file is the source the codegen and the document-builder tests both read.
+
+scalar Sqid
+scalar Decimal
+scalar DateTime
+
+enum SaleState {
+  DRAFT
+  OPEN
+  CLOSED
+}
+
+type Owner {
+  id: Sqid!
+  firstName: String!
+  lastName: String!
+}
+
+type Sale {
+  id: Sqid!
+  title: String!
+  state: SaleState!
+  total: Decimal!
+  quantity: Int!
+  owner: Owner!
+  createdAt: DateTime!
+}
+
+type SaleEdge {
+  node: Sale!
+  cursor: String!
+}
+
+type PageInfo {
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: String
+  endCursor: String
+}
+
+type SaleConnection {
+  totalCount: Int!
+  edges: [SaleEdge!]!
+  pageInfo: PageInfo!
+}
+
+input SaleFilter {
+  state: SaleState
+  title: String
+}
+
+input SaleOrder {
+  title: String
+  state: String
+  total: String
+  createdAt: String
+}
+
+input SaleCreateInput {
+  title: String!
+  state: SaleState
+  total: Decimal
+  quantity: Int
+}
+
+input SaleUpdateInput {
+  title: String
+  state: SaleState
+  total: Decimal
+  quantity: Int
+}
+
+type DeletePreviewGroup {
+  model: String!
+  count: Int!
+}
+
+type DeletePreview {
+  ok: Boolean!
+  id: Sqid
+  totalDeletedCount: Int!
+  deleted: [DeletePreviewGroup!]!
+  updated: [DeletePreviewGroup!]!
+  blocked: [DeletePreviewGroup!]!
+  hasBlockers: Boolean!
+}
+
+type SaleSumFields {
+  total: Decimal
+  quantity: Int
+}
+
+type SaleAvgFields {
+  total: Float
+  quantity: Float
+}
+
+type SaleMinFields {
+  total: Decimal
+  quantity: Int
+}
+
+type SaleMaxFields {
+  total: Decimal
+  quantity: Int
+}
+
+type SaleAggregate {
+  count: Int!
+  sum: SaleSumFields
+  avg: SaleAvgFields
+  min: SaleMinFields
+  max: SaleMaxFields
+}
+
+enum SaleGroupByField {
+  STATE
+  OWNER
+}
+
+input SaleGroupBySpec {
+  field: SaleGroupByField!
+}
+
+type SaleGroupKey {
+  state: SaleState
+  owner: Sqid
+}
+
+type SaleGrouped {
+  key: SaleGroupKey!
+  count: Int!
+  sum: SaleSumFields
+  avg: SaleAvgFields
+  min: SaleMinFields
+  max: SaleMaxFields
+}
+
+type SaleGroupByResult {
+  totalCount: Int!
+  results: [SaleGrouped!]!
+}
+
+type ChangeEvent {
+  model: String!
+  id: Sqid!
+  action: String!
+  changedFields: [String!]!
+  computedFieldsChanged: [String!]!
+}
+
+type CurrentUser {
+  id: Sqid!
+  username: String!
+  email: String
+  isStaff: Boolean!
+  isSuperuser: Boolean!
+  roles: [String!]!
+}
+
+input LoginInput {
+  username: String!
+  password: String!
+}
+
+type LoginResult {
+  ok: Boolean!
+  error: String
+  user: CurrentUser
+}
+
+type LogoutResult {
+  ok: Boolean!
+}
+
+type Query {
+  currentUser: CurrentUser
+  sale(id: Sqid!): Sale
+  sales(
+    filters: SaleFilter
+    order: [SaleOrder!]
+    search: String
+    first: Int
+    after: String
+    last: Int
+    before: String
+  ): SaleConnection!
+  salesAggregate(filters: SaleFilter, search: String): SaleAggregate!
+  salesGroupBy(
+    groupBy: [SaleGroupBySpec!]!
+    filters: SaleFilter
+    search: String
+  ): SaleGroupByResult!
+}
+
+type Mutation {
+  login(input: LoginInput!): LoginResult!
+  logout: LogoutResult!
+  saleCreate(input: SaleCreateInput!): Sale!
+  saleUpdate(id: Sqid!, input: SaleUpdateInput!): Sale!
+  saleDelete(id: Sqid!): DeletePreview!
+}
+
+type Subscription {
+  events: ChangeEvent!
+}
