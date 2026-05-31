@@ -18,6 +18,7 @@ from angee.resources.exceptions import ResourceLoadError
 from angee.resources.fetch import fetch_url
 from angee.resources.models import Resource
 from angee.resources.ordering import order_entries
+from angee.resources.widgets import resolve_xref
 
 
 @dataclass(slots=True)
@@ -269,6 +270,138 @@ def test_fetch_url_caches_by_full_url(
     assert calls == ["https://example.test/data.csv"]
 
 
+def test_resource_unique_constraint_is_addon_xref_pair() -> None:
+    """The ledger identity is the source addon and row xref."""
+
+    constraints = {
+        constraint.name: constraint
+        for constraint in Resource.Meta.constraints
+        if isinstance(constraint, models.UniqueConstraint)
+    }
+
+    assert constraints["%(app_label)s_resource_addon_xref"].fields == (
+        "source_addon",
+        "xref",
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_resolve_xref_requires_exact_source_addon() -> None:
+    """A short suffix alias does not resolve a dotted source addon."""
+
+    class ResolveExactTarget(models.Model):
+        """Target model resolved by exact xref tests."""
+
+        name = models.CharField(max_length=40)
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "base"
+
+    class ResolveExactLedger(models.Model):
+        """Ledger model without the production uniqueness constraint."""
+
+        source_addon = models.CharField(max_length=200)
+        xref = models.CharField(max_length=160)
+        target_model = models.CharField(max_length=120)
+        target_id = models.CharField(max_length=120, blank=True, default="")
+
+        class Meta:
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+
+    models_to_create = (ResolveExactTarget, ResolveExactLedger)
+    with connection.schema_editor() as schema_editor:
+        for model in models_to_create:
+            schema_editor.create_model(model)
+    try:
+        target = ResolveExactTarget.objects.create(name="target")
+        ResolveExactLedger.objects.create(
+            source_addon="tests.resource_addon",
+            xref="target",
+            target_model="base.ResolveExactTarget",
+            target_id=str(target.pk),
+        )
+
+        with pytest.raises(ValueError, match="unresolved xref"):
+            resolve_xref("resource_addon.target", ResolveExactLedger)
+    finally:
+        with connection.schema_editor() as schema_editor:
+            for model in reversed(models_to_create):
+                schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_resolve_xref_reports_ambiguous_source_rows() -> None:
+    """Duplicate addon/xref ledger rows fail before choosing a target."""
+
+    class ResolveAmbiguousTargetA(models.Model):
+        """First target model for ambiguous xref tests."""
+
+        name = models.CharField(max_length=40)
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "base"
+
+    class ResolveAmbiguousTargetB(models.Model):
+        """Second target model for ambiguous xref tests."""
+
+        name = models.CharField(max_length=40)
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "base"
+
+    class ResolveAmbiguousLedger(models.Model):
+        """Ledger model without the production uniqueness constraint."""
+
+        source_addon = models.CharField(max_length=200)
+        xref = models.CharField(max_length=160)
+        target_model = models.CharField(max_length=120)
+        target_id = models.CharField(max_length=120, blank=True, default="")
+
+        class Meta:
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+
+    models_to_create = (
+        ResolveAmbiguousTargetA,
+        ResolveAmbiguousTargetB,
+        ResolveAmbiguousLedger,
+    )
+    with connection.schema_editor() as schema_editor:
+        for model in models_to_create:
+            schema_editor.create_model(model)
+    try:
+        first = ResolveAmbiguousTargetA.objects.create(name="first")
+        second = ResolveAmbiguousTargetB.objects.create(name="second")
+        ResolveAmbiguousLedger.objects.create(
+            source_addon="tests.resource_addon",
+            xref="shared",
+            target_model="base.ResolveAmbiguousTargetA",
+            target_id=str(first.pk),
+        )
+        ResolveAmbiguousLedger.objects.create(
+            source_addon="tests.resource_addon",
+            xref="shared",
+            target_model="base.ResolveAmbiguousTargetB",
+            target_id=str(second.pk),
+        )
+
+        with pytest.raises(ValueError, match="ambiguous xref"):
+            resolve_xref("tests.resource_addon.shared", ResolveAmbiguousLedger)
+    finally:
+        with connection.schema_editor() as schema_editor:
+            for model in reversed(models_to_create):
+                schema_editor.delete_model(model)
+
+
 @pytest.mark.django_db(transaction=True)
 def test_resource_manager_loads_rows_and_resolves_xrefs(
     tmp_path: Path,
@@ -434,7 +567,7 @@ def _write_resource_files(tmp_path: Path) -> Addon:
     (resource_dir / "020_base.importnote.yaml").write_text(
         "- _xref: note_framework_map\n"
         "  title: Framework map\n"
-        "  created_by: resource_addon.user_alice\n"
+        "  created_by: tests.resource_addon.user_alice\n"
         "  tags:\n"
         "    - composition\n"
         "    - resources\n",

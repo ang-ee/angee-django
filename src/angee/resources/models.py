@@ -49,7 +49,7 @@ class Resource(AngeeModel):
         ordering = ("source_addon", "source_path", "xref", "target_model")
         constraints = (
             models.UniqueConstraint(
-                fields=("source_addon", "source_path", "xref", "target_model"),
-                name="%(app_label)s_resource_source_target",
+                fields=("source_addon", "xref"),
+                name="%(app_label)s_resource_addon_xref",
             ),
         )

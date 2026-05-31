@@ -238,9 +238,7 @@ class AngeeResource(resources.ModelResource):
         return (
             self.ledger_model._default_manager.filter(
                 source_addon=self.entry.addon.name,
-                source_path=self.entry.source,
                 xref=xref,
-                target_model=self._meta.model._meta.label,
             )
             .order_by("pk")
             .first()
@@ -257,10 +255,10 @@ class AngeeResource(resources.ModelResource):
 
         self.ledger_model._default_manager.update_or_create(
             source_addon=self.entry.addon.name,
-            source_path=self.entry.source,
             xref=xref,
-            target_model=self._meta.model._meta.label,
             defaults={
+                "source_path": self.entry.source,
+                "target_model": self._meta.model._meta.label,
                 "content_hash": row_hash,
                 "target_id": public_id_of(instance),
                 "tier": self.entry.tier,

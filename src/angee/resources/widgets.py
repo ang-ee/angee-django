@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from typing import Any
 
 from django.db import models
-from django.db.models import Q
 from import_export import widgets
 
 from angee.base.models import instance_from_public_id
@@ -98,19 +97,18 @@ def resolve_xref(
         raise ValueError("xref resolution requires a bound ledger model")
     if "." not in value:
         raise ValueError("xrefs must use <addon>.<xref>")
-    addon_ref, xref = value.split(".", 1)
-    ledger = (
-        ledger_model._default_manager.filter(xref=xref)
-        .filter(
-            Q(source_addon=addon_ref)
-            | Q(source_addon__endswith=f".{addon_ref}")
-        )
-        .exclude(target_id="")
-        .order_by("source_addon", "source_path", "target_model", "pk")
-        .first()
+    addon_ref, xref = value.rsplit(".", 1)
+    matches = list(
+        ledger_model._default_manager.filter(
+            source_addon=addon_ref,
+            xref=xref,
+        ).exclude(target_id="")[:2]
     )
-    if ledger is None:
+    if not matches:
         raise ValueError(f"unresolved xref {value!r}")
+    if len(matches) > 1:
+        raise ValueError(f"ambiguous xref {value!r}")
+    ledger = matches[0]
     model = resolve_model(str(getattr(ledger, "target_model")))
     target = instance_from_public_id(model, str(getattr(ledger, "target_id")))
     if target is None:
