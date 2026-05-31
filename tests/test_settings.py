@@ -47,3 +47,34 @@ def test_base_is_installed_exactly_once(tmp_path: Path) -> None:
     installed = settings["INSTALLED_APPS"]
     base_app = "angee.base.apps.BaseConfig"
     assert installed.count(base_app) == 1
+
+
+def test_run_app_set_installs_resources_once(tmp_path: Path) -> None:
+    """Run settings install the runtime base and resource command host."""
+
+    settings = _compose(tmp_path)
+    installed = settings["INSTALLED_APPS"]
+
+    assert installed.count("angee.base.apps.BaseConfig") == 1
+    assert installed.count("angee.resources.apps.ResourcesConfig") == 1
+    assert "angee.compose.apps.ComposeConfig" not in installed
+
+
+def test_build_app_set_installs_compose_without_runtime_apps(
+    tmp_path: Path,
+) -> None:
+    """Build settings install source addons and the compose command host."""
+
+    settings = compose_defaults(
+        addons=("example.notes",),
+        runtime_dir=tmp_path / "runtime",
+        data_dir=tmp_path / "data",
+        root_urlconf="host.urls",
+        asgi_application="host.asgi.application",
+        build=True,
+    )
+    installed = settings["INSTALLED_APPS"]
+
+    assert "angee.compose.apps.ComposeConfig" in installed
+    assert "angee.base.apps.BaseConfig" not in installed
+    assert "angee.resources.apps.ResourcesConfig" not in installed

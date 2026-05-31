@@ -10,6 +10,7 @@ from django.contrib.auth.models import Group
 from rebac import anonymous_actor
 
 from angee.base import signals
+from angee.base.consumers import scope_actor
 from angee.base.graphql import subscriptions
 from angee.base.graphql.events import ChangeEvent
 from angee.base.graphql.subscriptions import changes
@@ -138,3 +139,9 @@ def test_subscribe_yields_broadcast_payloads(monkeypatch) -> None:
 
     payload = asyncio.run(scenario())
     assert payload["id"] == "7"
+
+
+def test_scope_actor_defaults_to_anonymous() -> None:
+    """A scope without an authenticated user resolves to anonymous."""
+
+    assert scope_actor({}) == anonymous_actor()
