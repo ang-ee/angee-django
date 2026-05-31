@@ -6,9 +6,10 @@ from collections.abc import AsyncGenerator, Mapping
 from typing import Any
 
 import strawberry
+from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 from django.db import models
-from rebac import SubjectRef, anonymous_actor
+from rebac import SubjectRef, actor_context, anonymous_actor
 
 from angee.base.access import ChangeReadGate
 from angee.base.graphql.events import ChangeEvent
@@ -29,10 +30,14 @@ def changes(model: type[models.Model], *, field: str) -> type:
 
         del self
         actor = _actor_from_info(info)
-        async for payload in _subscribe(model):
-            event = _gate_event(model, actor, payload)
-            if event is not None:
-                yield event
+        with actor_context(actor):
+            async for payload in _subscribe(model):
+                event = await sync_to_async(
+                    _gate_event,
+                    thread_sensitive=True,
+                )(model, actor, payload)
+                if event is not None:
+                    yield event
 
     resolve.__name__ = field
     namespace = {field: strawberry.subscription(resolver=resolve, name=field)}
