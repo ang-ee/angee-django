@@ -10,10 +10,16 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.apps import apps
 from django.db import models, transaction
-from django.db.models.signals import post_delete, post_save
+from django.db.models.signals import post_delete, post_save, pre_save
+from rebac import current_actor
 
+from angee.base.mixins import AuditMixin
 from angee.base.models import public_id_of
 from angee.base.serialization import json_safe
+
+# The REBAC subject type that maps to a person; only a user actor stamps audit
+# ids (a service or anonymous actor leaves them unset).
+_USER_SUBJECT_TYPE = "auth/user"
 
 _connected: set[type[models.Model]] = set()
 
@@ -25,6 +31,34 @@ def register_revision_models() -> None:
         fields = getattr(model, "revisioned_fields", ())
         if fields and not reversion.is_registered(model):
             reversion.register(model, fields=list(fields))
+
+
+def connect_audit_stamping() -> None:
+    """Stamp ``AuditMixin`` rows from the ambient actor on every save.
+
+    Wired once for the whole runtime (not per model), so any model that mixes
+    in ``AuditMixin`` records its creator and updater without per-addon glue.
+    """
+
+    pre_save.connect(_stamp_audit_actor, dispatch_uid="angee-audit-stamp")
+
+
+def _stamp_audit_actor(
+    sender: type[models.Model],
+    instance: models.Model,
+    raw: bool = False,
+    **kwargs: Any,
+) -> None:
+    """Record the acting user as the row's creator/updater before it saves."""
+
+    del sender, kwargs
+    if raw or not isinstance(instance, AuditMixin):
+        return
+    actor = current_actor()
+    if actor is not None and actor.subject_type == _USER_SUBJECT_TYPE:
+        instance.stamp_audit_actor(
+            actor.subject_id, creating=instance.pk is None
+        )
 
 
 def change_group(model: type[models.Model]) -> str:

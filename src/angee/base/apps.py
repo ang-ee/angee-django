@@ -372,9 +372,13 @@ class BaseConfig(BaseAddonConfig):
             return
         # Deferred: ready() runs after app population; signal wiring imports
         # model-dependent modules that are unsafe during phase 1.
-        from angee.base.signals import register_revision_models
+        from angee.base.signals import (
+            connect_audit_stamping,
+            register_revision_models,
+        )
 
         register_revision_models()
+        connect_audit_stamping()
 
 
 def _module_exists(dotted_path: str) -> bool:

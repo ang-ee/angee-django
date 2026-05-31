@@ -64,11 +64,19 @@ class AuditMixin(models.Model):
         abstract = True
 
     def stamp_audit_actor(self, user_id: Any, *, creating: bool) -> None:
-        """Stamp audit ids from the acting user without fetching the user."""
+        """Stamp audit ids from the acting user without fetching the user.
 
-        if creating and getattr(self, "created_by_id", None) is None:
-            setattr(self, "created_by_id", user_id)
-        if not creating:
+        On create both the creator and the updater default to the acting user;
+        on update only ``updated_by`` advances. Ids already set (for example,
+        loaded data) are left untouched.
+        """
+
+        if creating:
+            if getattr(self, "created_by_id", None) is None:
+                setattr(self, "created_by_id", user_id)
+            if getattr(self, "updated_by_id", None) is None:
+                setattr(self, "updated_by_id", user_id)
+        else:
             setattr(self, "updated_by_id", user_id)
 
 
@@ -96,7 +104,8 @@ class RevisionMixin(models.Model):
     def revisions(self) -> Any:
         """Return this row's django-reversion versions newest-first."""
 
-        return reversion.models.Version.objects.get_for_object(self)
+        versions = reversion.models.Version.objects.get_for_object(self)
+        return versions.select_related("revision")
 
     def revert_to(self, version: Any) -> None:
         """Restore declared revisioned fields from ``version`` and save."""
