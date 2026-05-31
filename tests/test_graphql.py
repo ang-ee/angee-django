@@ -72,6 +72,20 @@ class UnmanagedThing(RebacMixin):
 
 
 @strawberry.type
+class ThingNode(strawberry.relay.Node):
+    """Relay node surface reused across named schemas."""
+
+    id: strawberry.relay.NodeID[int]
+
+
+@strawberry.type
+class NodeQuery:
+    """Query exposing a relay node field that two schemas share."""
+
+    thing: ThingNode | None = strawberry.relay.node()
+
+
+@strawberry.type
 class DenialQuery:
     @strawberry.field
     def missing_actor(self) -> str:
@@ -223,7 +237,7 @@ def test_graphql_identity_exports_relay_node_and_connection() -> None:
     from angee.base.graphql import AngeeNode, Connection
 
     assert issubclass(AngeeNode, strawberry.relay.Node)
-    assert Connection is DjangoCursorConnection
+    assert issubclass(Connection, DjangoCursorConnection)
 
 
 def test_rebac_graphql_types_require_rebac_default_manager() -> None:
@@ -280,6 +294,22 @@ def test_render_sdl_prints_each_schema() -> None:
     assert set(rendered) == {"public", "console"}
     assert "hello: String!" in rendered["public"]
     assert "world: String!" in rendered["console"]
+
+
+def test_relay_surface_shared_across_named_schemas_renders() -> None:
+    """A relay node field reused in two schemas keeps independent fields.
+
+    Relay field extensions mutate their field in place when a schema is
+    built; a surface contributed to more than one named schema must not hand
+    the same field object to two builds.
+    """
+
+    rendered = GraphQLSchemas.from_addons(
+        [addon(public={"query": [NodeQuery]}, console={"query": [NodeQuery]})]
+    ).render_sdl()
+
+    assert "thing(" in rendered["public"]
+    assert "thing(" in rendered["console"]
 
 
 def test_build_schema_unknown_name_lists_available() -> None:

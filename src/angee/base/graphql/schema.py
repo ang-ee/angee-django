@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Iterable
 from typing import Any, cast
 
@@ -14,6 +15,7 @@ from rebac.graphql.strawberry import RebacExtension
 from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
 from rebac.managers import RebacManager
 from strawberry.tools import merge_types
+from strawberry.types.base import get_object_definition
 
 from angee.base.apps import SCHEMA_PART_KEYS, BaseAddonConfig, SchemaParts
 from angee.base.discovery import discover_addons
@@ -145,10 +147,16 @@ class GraphQLSchemas:
                         f"{field_name!r} is contributed by both "
                         f"{surface_name(previous)} and {surface_name(surface)}"
                     )
-        return merge_types(
+        root = merge_types(
             _ROOT_TYPE_NAMES[key],
             cast(tuple[type, ...], surfaces),
         )
+        # Each named schema owns independent field objects: relay field
+        # extensions mutate fields in place during build, so a surface shared
+        # across schemas must not hand the same field to two schema builds.
+        definition = get_object_definition(root, strict=True)
+        definition.fields = [copy.copy(field) for field in definition.fields]
+        return root
 
     def _dedupe_by_identity(
         self,
