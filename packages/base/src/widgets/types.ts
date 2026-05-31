@@ -25,7 +25,3 @@ export interface WidgetDefinition<TValue = unknown, TRow = unknown> {
   read: ComponentType<WidgetRenderProps<TValue, TRow>>;
   cell?: ComponentType<WidgetRenderProps<TValue, TRow>>;
 }
-
-export function widgetLabel(field: WidgetField | undefined, fallback: string): string {
-  return typeof field?.label === "string" ? field.label : fallback;
-}

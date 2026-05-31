@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import { PAGE_ELEMENT_SLOT } from "./types";
+import type { WidgetOption } from "../../widgets/types";
 
 export const FIELD_SLOT = Symbol.for("@angee/base.page.field");
 
@@ -20,6 +21,9 @@ export interface FieldProps {
   readOnly?: boolean;
   title?: boolean;
   kind?: PageFieldKind;
+  options?: readonly WidgetOption[];
+  placeholder?: string;
+  description?: ReactNode;
 }
 
 export interface FieldDescriptor {
@@ -29,6 +33,9 @@ export interface FieldDescriptor {
   readOnly?: boolean;
   title?: boolean;
   kind?: PageFieldKind;
+  options?: readonly WidgetOption[];
+  placeholder?: string;
+  description?: ReactNode;
 }
 
 function FieldMarker(_props: FieldProps): null {

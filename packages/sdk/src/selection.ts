@@ -136,6 +136,11 @@ export interface AssembleListDocumentOptions {
   withOrder?: boolean;
 }
 
+export interface AssembleGroupByDocumentOptions {
+  /** Select these fields from the grouped row's `key` object. */
+  keyFields: readonly string[];
+}
+
 /**
  * Offset-paginated list document. Pages with `pagination: { offset, limit }`, so
  * the client jumps to any page (`offset = (page - 1) * limit`). Selects
@@ -198,36 +203,49 @@ export function assembleMutationDocument(
   );
 }
 
-/** Aggregate field name (`Sale` -> `saleAggregate`). One field serves both the
- * ungrouped total and the grouped buckets. */
+/** Aggregate field name (`Sale` -> `saleAggregate`). */
 export function aggregateFieldName(modelLabel: string): string {
   return `${singularFieldName(modelLabel)}Aggregate`;
 }
 
-/**
- * The aggregate document. With no `groupByDimensions` it selects the total
- * `count`; with them it declares the `groupBy` enum-list variable the server
- * groups on and selects `groups { count <dimension fields> }`, one bucket per
- * distinct key.
- */
+/** Grouped-rows field name (`Sale` -> `saleGroups`). */
+export function groupByFieldName(modelLabel: string): string {
+  return `${singularFieldName(modelLabel)}Groups`;
+}
+
+/** The ungrouped aggregate document selects the model total count. */
 export function assembleAggregateDocument(
   modelLabel: string,
-  groupByDimensions: readonly string[] = [],
 ): string {
   const field = aggregateFieldName(modelLabel);
-  const dims = [...new Set(groupByDimensions.map(assertName))];
-  if (dims.length === 0) {
-    return `query ${field} { ${field} { count } }`;
-  }
+  return `query ${field} { ${field} { count } }`;
+}
+
+/**
+ * The grouped aggregate document selects an offset-paginated list of grouped
+ * buckets. The caller supplies both the backend group spec variable and the
+ * key fields it wants rendered back from each row.
+ */
+export function assembleGroupByDocument(
+  modelLabel: string,
+  options: AssembleGroupByDocumentOptions,
+): string {
   const typeName = typeNameForModel(modelLabel);
+  const field = groupByFieldName(modelLabel);
+  const keyFields = [...new Set(options.keyFields.map(assertName))];
+  const keySelection = keyFields.length > 0 ? keyFields.join(" ") : "__typename";
   return (
-    `query ${field}($groupBy: [${typeName}GroupBy!]) { ` +
-    `${field}(groupBy: $groupBy) { count groups { count ${dims.join(" ")} } } }`
+    `query ${field}($groupBy: [${typeName}GroupBySpec!]!, ` +
+    `$pagination: OffsetPaginationInput) { ` +
+    `${field}(groupBy: $groupBy, pagination: $pagination) { ` +
+    `totalCount results { key { ${keySelection} } count } ` +
+    `pageInfo { offset limit } } }`
   );
 }
 
 export const MAX_PAGE_SIZE = 100;
 export const PAGE_SIZE_OPTIONS = [10, 20, 50, 80, MAX_PAGE_SIZE] as const;
+export const DEFAULT_PAGE_SIZE = PAGE_SIZE_OPTIONS[2];
 
 /** Clamp a requested page size (the offset `limit`) to `[1, MAX_PAGE_SIZE]`. */
 export function clampPageSize(pageSize: number): number {

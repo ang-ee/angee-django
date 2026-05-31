@@ -6,8 +6,13 @@ import {
   type AggregateBucket,
 } from "./aggregate-extract";
 import { useDocumentQuery } from "./document-query";
-import { useStableArray } from "./stable-deps";
-import { aggregateFieldName, assembleAggregateDocument } from "./selection";
+import { useStableArray, useStableVariables } from "./stable-deps";
+import {
+  aggregateFieldName,
+  assembleAggregateDocument,
+  assembleGroupByDocument,
+  groupByFieldName,
+} from "./selection";
 
 export type { AggregateBucket, GroupByResult } from "./aggregate-extract";
 
@@ -40,16 +45,39 @@ export function useAggregateQuery(
 }
 
 /**
- * A group-by dimension: the enum value to group on (`by`, e.g. `"STATUS"`) and
- * the field that carries its value in each bucket (`field`, e.g. `"status"`).
+ * A group-by dimension: `field` is the backend enum value to group on
+ * (`"STATUS"`), and `key` is the field selected from the returned group key
+ * (`"status"`). `by` is accepted for callers still passing the previous name.
  */
 export interface GroupByDimension {
-  by: string;
   field: string;
+  key?: string;
+  by?: string;
+  granularity?: string;
 }
 
 export interface UseGroupByOptions extends UseAggregateOptions {
   dimensions: readonly GroupByDimension[];
+  page?: number;
+  pageSize?: number;
+}
+
+function dimensionField(dimension: GroupByDimension): string {
+  return dimension.by ?? dimension.field;
+}
+
+function dimensionKey(dimension: GroupByDimension): string {
+  return dimension.key ?? dimension.field;
+}
+
+function paginationVariables(
+  page: number | undefined,
+  pageSize: number | undefined,
+): Record<string, number> | undefined {
+  if (pageSize === undefined) return undefined;
+  const safePage = Math.max(1, Math.floor(page ?? 1));
+  const limit = Math.max(1, Math.floor(pageSize));
+  return { offset: (safePage - 1) * limit, limit };
 }
 
 /** Grouped totals for a model: one bucket per distinct group key. */
@@ -58,25 +86,39 @@ export function useResourceGroupBy(
   options: UseGroupByOptions,
 ): {
   count: number;
+  totalCount: number;
   buckets: readonly AggregateBucket[];
   fetching: boolean;
   error: Error | null;
 } {
-  const { dimensions, enabled = true } = options;
+  const { dimensions, enabled = true, page, pageSize } = options;
   const active = enabled && Boolean(modelLabel) && dimensions.length > 0;
-  const fields = useStableArray(dimensions.map((dimension) => dimension.field));
-  const groupBy = useStableArray(dimensions.map((dimension) => dimension.by));
+  const keyFields = useStableArray(dimensions.map(dimensionKey));
+  const groupBy = useMemo(
+    () =>
+      dimensions.map((dimension) => ({
+        field: dimensionField(dimension),
+        ...(dimension.granularity
+          ? { granularity: dimension.granularity }
+          : {}),
+      })),
+    [dimensions],
+  );
+  const variables = useStableVariables({
+    groupBy,
+    pagination: paginationVariables(page, pageSize) ?? null,
+  });
 
   const document = useMemo(
-    () => assembleAggregateDocument(modelLabel, fields),
-    [modelLabel, fields],
+    () => assembleGroupByDocument(modelLabel, { keyFields }),
+    [modelLabel, keyFields],
   );
-  const variables = useMemo(() => ({ groupBy }), [groupBy]);
 
   const run = useDocumentQuery(document, variables, active);
-  const result = autoExtractGroupBy(run.data, aggregateFieldName(modelLabel));
+  const result = autoExtractGroupBy(run.data, groupByFieldName(modelLabel));
   return {
     count: result.count,
+    totalCount: result.totalCount,
     buckets: result.buckets,
     fetching: run.fetching,
     error: run.error,

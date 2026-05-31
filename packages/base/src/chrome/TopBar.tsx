@@ -5,7 +5,6 @@ import { Glyph } from "./Glyph";
 import { GlobalSearch } from "./GlobalSearch";
 import { Systray } from "./Systray";
 import { TopMenu, type TopMenuProps } from "./TopMenu";
-import { UserMenu } from "./UserMenu";
 
 export interface TopBarProps {
   title?: ReactNode;
@@ -26,7 +25,7 @@ export function TopBar({
     <header
       aria-label="Workspace top bar"
       className={cn(
-        "area-topbar z-topbar flex h-topbar-h min-w-0 items-center gap-3 border-b border-border-on-rail bg-rail px-3 text-on-rail",
+        "area-topbar z-topbar flex h-topbar-h min-w-0 items-center gap-3 border-b border-border-on-rail bg-rail px-3 pl-4 text-on-rail",
         className,
       )}
     >
@@ -41,7 +40,6 @@ export function TopBar({
       {children}
       <GlobalSearch />
       <Systray />
-      <UserMenu />
     </header>
   );
 }

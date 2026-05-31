@@ -1,34 +1,35 @@
 import type { ReactElement } from "react";
 
-import { Input } from "../ui/input";
+import { Textarea } from "../ui/textarea";
 import { widgetLabel } from "./label";
 import type { WidgetDefinition, WidgetRenderProps } from "./types";
 
-function TextEdit({
+function TextareaEdit({
   value,
   onChange,
   field,
   readOnly,
 }: WidgetRenderProps<string>): ReactElement {
   return (
-    <Input
+    <Textarea
       value={value ?? ""}
       readOnly={readOnly}
       aria-label={widgetLabel(field, "Text")}
-      placeholder={typeof field?.label === "string" ? field.label : undefined}
+      placeholder={field?.label === undefined ? undefined : widgetLabel(field, "Text")}
+      rows={6}
       onChange={(event) => onChange?.(event.currentTarget.value)}
     />
   );
 }
 
-function TextRead({
+function TextareaRead({
   value,
 }: WidgetRenderProps<string>): ReactElement {
-  return <span className="text-13 text-fg">{value ?? ""}</span>;
+  return <p className="whitespace-pre-wrap text-13 text-fg">{value ?? ""}</p>;
 }
 
-export const textWidget = {
-  edit: TextEdit,
-  read: TextRead,
-  cell: TextRead,
+export const textareaWidget = {
+  edit: TextareaEdit,
+  read: TextareaRead,
+  cell: TextareaRead,
 } satisfies WidgetDefinition<string>;

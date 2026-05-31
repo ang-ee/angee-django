@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useMemo,
+  useState,
   type ReactNode,
 } from "react";
 import { useQueryStates, type HistoryOptions } from "nuqs";
@@ -12,6 +13,7 @@ import type {
 } from "@angee/sdk";
 
 import {
+  createDataViewState,
   dataViewQueryParsers,
   dataViewReducer,
   dataViewStateFromQueryValues,
@@ -33,9 +35,9 @@ export interface DataViewContextValue {
   setSort: (sort: DataViewSort | null) => void;
   setFilter: (filter: DataViewFilter) => void;
   setGroup: (group: DataViewGroup | null) => void;
-  setSelection: (selection: Iterable<string>) => void;
-  toggleSelection: (id: string, selected?: boolean) => void;
-  clearSelection: () => void;
+  setSelectedIds: (selectedIds: Iterable<string>) => void;
+  toggleSelectedId: (id: string, selected?: boolean) => void;
+  clearSelectedIds: () => void;
   setView: (view: DataViewKind) => void;
   resourceListOptions: <TName extends ResourceTypeName = ResourceTypeName>(
     input: {
@@ -61,17 +63,29 @@ export function DataViewProvider({
   const [queryValues, setQueryValues] = useQueryStates(dataViewQueryParsers, {
     history,
   });
-  const state = useMemo(
+  const [selectedIds, setSelectedIdsState] = useState<ReadonlySet<string>>(
+    () => new Set(initialState?.selectedIds ?? []),
+  );
+  const queryState = useMemo(
     () => dataViewStateFromQueryValues(queryValues, initialState),
     [queryValues, initialState],
+  );
+  const state = useMemo<DataViewState>(
+    () => ({ ...queryState, selectedIds }),
+    [queryState, selectedIds],
   );
 
   const dispatch = useCallback(
     (action: DataViewAction) => {
-      const next = dataViewReducer(state, action);
-      void setQueryValues(dataViewStateToQueryValues(next));
+      setSelectedIdsState((current) => reduceSelectedIds(current, action));
+      if (isLocalSelectionAction(action)) return;
+      void setQueryValues((current) => {
+        const currentState = dataViewStateFromQueryValues(current, initialState);
+        const next = dataViewReducer(currentState, action);
+        return dataViewStateToQueryValues(next);
+      });
     },
-    [setQueryValues, state],
+    [initialState, setQueryValues],
   );
 
   const value = useMemo<DataViewContextValue>(
@@ -83,11 +97,11 @@ export function DataViewProvider({
       setSort: (sort) => dispatch({ type: "setSort", sort }),
       setFilter: (filter) => dispatch({ type: "setFilter", filter }),
       setGroup: (group) => dispatch({ type: "setGroup", group }),
-      setSelection: (selection) =>
-        dispatch({ type: "setSelection", selection }),
-      toggleSelection: (id, selected) =>
-        dispatch({ type: "toggleSelection", id, selected }),
-      clearSelection: () => dispatch({ type: "clearSelection" }),
+      setSelectedIds: (selectedIds) =>
+        dispatch({ type: "setSelectedIds", selectedIds }),
+      toggleSelectedId: (id, selected) =>
+        dispatch({ type: "toggleSelectedId", id, selected }),
+      clearSelectedIds: () => dispatch({ type: "clearSelectedIds" }),
       setView: (view) => dispatch({ type: "setView", view }),
       resourceListOptions: (input) =>
         dataViewStateToResourceListOptions(state, input),
@@ -112,4 +126,29 @@ export function useDataView(): DataViewContextValue {
 
 export function useDataViewMaybe(): DataViewContextValue | null {
   return useContext(DataViewContext);
+}
+
+function isLocalSelectionAction(
+  action: DataViewAction,
+): action is Extract<
+  DataViewAction,
+  | { type: "setSelectedIds" }
+  | { type: "toggleSelectedId" }
+  | { type: "clearSelectedIds" }
+> {
+  return (
+    action.type === "setSelectedIds"
+    || action.type === "toggleSelectedId"
+    || action.type === "clearSelectedIds"
+  );
+}
+
+function reduceSelectedIds(
+  selectedIds: ReadonlySet<string>,
+  action: DataViewAction,
+): ReadonlySet<string> {
+  return dataViewReducer(
+    createDataViewState({ selectedIds }),
+    action,
+  ).selectedIds;
 }

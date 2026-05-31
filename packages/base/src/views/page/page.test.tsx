@@ -127,4 +127,35 @@ describe("page element markers", () => {
       ),
     ).toEqual([{ id: "create", label: "New", onClick: create }]);
   });
+
+  test("fail fast on duplicate descriptor owners", () => {
+    expect(() =>
+      parsePageColumns(
+        <>
+          <Column field="title" />
+          <Column field="title" />
+        </>,
+      ),
+    ).toThrow("Duplicate page column field: title");
+
+    expect(() =>
+      parsePageFields(
+        <>
+          <Field name="title" />
+          <Group>
+            <Field name="title" />
+          </Group>
+        </>,
+      ),
+    ).toThrow("Duplicate page field name: title");
+
+    expect(() =>
+      parsePageActions(
+        <>
+          <Action id="archive" label="Archive" />
+          <Action id="archive" label="Archive" />
+        </>,
+      ),
+    ).toThrow("Duplicate page action id: archive");
+  });
 });

@@ -1,8 +1,8 @@
 import type { ReactElement } from "react";
 
 import { Select } from "../ui/select";
+import { widgetLabel } from "./label";
 import type { WidgetDefinition, WidgetRenderProps } from "./types";
-import { widgetLabel } from "./types";
 
 function SelectEdit({
   value,

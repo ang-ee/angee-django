@@ -11,16 +11,20 @@ export {
   assembleListDocument,
   assembleMutationDocument,
   assembleAggregateDocument,
+  assembleGroupByDocument,
   aggregateFieldName,
+  groupByFieldName,
   typeNameForModel,
   singularFieldName,
   pluralFieldName,
   clampPageSize,
+  DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
   PAGE_SIZE_OPTIONS,
   type SelectionField,
   type MutationAction,
   type AssembleListDocumentOptions,
+  type AssembleGroupByDocumentOptions,
 } from "./selection";
 
 // Transport: clients, cache config, CSRF, per-schema provider.

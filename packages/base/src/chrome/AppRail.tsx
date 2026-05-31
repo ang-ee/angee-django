@@ -5,6 +5,7 @@ import { useMenus, type MenuItem } from "@angee/sdk";
 import { cn } from "../lib/cn";
 import { Tooltip } from "../ui/tooltip";
 import { Glyph } from "./Glyph";
+import { UserMenu } from "./UserMenu";
 
 export interface AppRailProps {
   className?: string;
@@ -18,9 +19,9 @@ type MenuWithChrome = MenuItem & {
 };
 
 const RAIL_BUTTON =
-  "relative grid size-9 place-content-center rounded-6 text-on-rail-mut outline-none transition-colors hover:bg-rail-hi hover:text-on-rail-hi focus-visible:focus-ring [&_.glyph]:size-4";
+  "group relative grid size-9 place-content-center rounded-6 text-on-rail-mut outline-none transition-colors hover:bg-rail-hi hover:text-on-rail-hi focus-visible:focus-ring [&_.glyph]:size-4";
 const RAIL_BUTTON_ACTIVE =
-  "bg-rail-hi text-on-rail-hi before:absolute before:-left-1 before:top-1/2 before:h-4 before:w-0.5 before:-translate-y-1/2 before:rounded-r-2 before:bg-brand before:content-['']";
+  "bg-rail-hi text-on-rail-hi before:absolute before:-left-[7px] before:top-1/2 before:h-[18px] before:w-[3px] before:-translate-y-1/2 before:rounded-r-2 before:bg-brand before:content-['']";
 
 export function AppRail({ className }: AppRailProps): ReactElement {
   const items = railItems(useMenus() as readonly MenuWithChrome[]);
@@ -50,6 +51,7 @@ export function AppRail({ className }: AppRailProps): ReactElement {
           <RailItem key={item.id} item={item} />
         ))}
       </nav>
+      <UserMenu side="right" align="end" />
     </aside>
   );
 }

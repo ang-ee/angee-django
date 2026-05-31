@@ -48,28 +48,30 @@ describe("useAggregateQuery", () => {
 describe("useResourceGroupBy", () => {
   test("returns buckets keyed by the grouped dimension", async () => {
     const { fetch, bodies } = mockTransport({
-      saleAggregate: {
-        count: 5,
-        groups: [
-          { count: 3, state: "OPEN" },
-          { count: 2, state: "CLOSED" },
+      saleGroups: {
+        totalCount: 2,
+        results: [
+          { count: 3, key: { state: "OPEN" } },
+          { count: 2, key: { state: "CLOSED" } },
         ],
       },
     });
     const { result } = renderHook(
       () =>
         useResourceGroupBy("Sale", {
-          dimensions: [{ by: "STATE", field: "state" }],
+          dimensions: [{ field: "STATE", key: "state" }],
         }),
       { wrapper: wrapperWith(fetch) },
     );
     await waitFor(() => expect(result.current.fetching).toBe(false));
     expect(result.current.count).toBe(5);
+    expect(result.current.totalCount).toBe(2);
     expect(result.current.buckets.map((bucket) => bucket.key?.state)).toEqual([
       "OPEN",
       "CLOSED",
     ]);
-    expect(bodies[0]?.variables.groupBy).toEqual(["STATE"]);
-    expect(bodies[0]?.query).toContain("saleAggregate(groupBy:");
+    expect(bodies[0]?.variables.groupBy).toEqual([{ field: "STATE" }]);
+    expect(bodies[0]?.variables.pagination).toBeNull();
+    expect(bodies[0]?.query).toContain("saleGroups(groupBy:");
   });
 });

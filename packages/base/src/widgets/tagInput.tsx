@@ -4,8 +4,8 @@ import { X } from "lucide-react";
 import { cn } from "../lib/cn";
 import { Button } from "../ui/button";
 import { Chip } from "../ui/chip";
+import { widgetLabel } from "./label";
 import type { WidgetDefinition, WidgetRenderProps } from "./types";
-import { widgetLabel } from "./types";
 
 function TagInputEdit({
   value,

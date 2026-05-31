@@ -60,6 +60,7 @@ export function UsernamePasswordForm({
           disabled={fetching}
           value={username}
           onChange={(event) => setUsername(event.target.value)}
+          aria-label="Username"
           aria-invalid={hasError}
           aria-describedby={hasError ? errorId : undefined}
         />
@@ -78,6 +79,7 @@ export function UsernamePasswordForm({
           disabled={fetching}
           value={password}
           onChange={(event) => setPassword(event.target.value)}
+          aria-label="Password"
           aria-invalid={hasError}
           aria-describedby={hasError ? errorId : undefined}
         />

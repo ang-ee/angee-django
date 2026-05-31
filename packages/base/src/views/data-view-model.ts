@@ -2,15 +2,14 @@ import {
   createLoader,
   createParser,
   createSerializer,
-  parseAsArrayOf,
   parseAsInteger,
   parseAsJson,
-  parseAsString,
   parseAsStringLiteral,
   type LoaderInput,
   type inferParserType,
 } from "nuqs";
 import {
+  DEFAULT_PAGE_SIZE,
   clampPageSize,
   type ResourceTypeName,
   type UseResourceListOptions,
@@ -24,7 +23,7 @@ export const DATA_VIEW_GROUP_GRANULARITIES = [
   "quarter",
   "year",
 ] as const;
-export const DEFAULT_DATA_VIEW_PAGE_SIZE = 50;
+export const DEFAULT_DATA_VIEW_PAGE_SIZE = DEFAULT_PAGE_SIZE;
 
 export type DataViewKind = (typeof DATA_VIEW_KINDS)[number];
 export type DataViewGroupGranularity =
@@ -50,7 +49,7 @@ export interface DataViewState {
   sort: DataViewSort | null;
   filter: DataViewFilter;
   group: DataViewGroup | null;
-  selection: ReadonlySet<string>;
+  selectedIds: ReadonlySet<string>;
   view: DataViewKind;
 }
 
@@ -60,7 +59,7 @@ export interface DataViewInitialState {
   sort?: DataViewSort | null;
   filter?: DataViewFilter;
   group?: DataViewGroup | null;
-  selection?: Iterable<string>;
+  selectedIds?: Iterable<string>;
   view?: DataViewKind;
 }
 
@@ -70,9 +69,9 @@ export type DataViewAction =
   | { type: "setSort"; sort: DataViewSort | null }
   | { type: "setFilter"; filter: DataViewFilter }
   | { type: "setGroup"; group: DataViewGroup | null }
-  | { type: "setSelection"; selection: Iterable<string> }
-  | { type: "toggleSelection"; id: string; selected?: boolean }
-  | { type: "clearSelection" }
+  | { type: "setSelectedIds"; selectedIds: Iterable<string> }
+  | { type: "toggleSelectedId"; id: string; selected?: boolean }
+  | { type: "clearSelectedIds" }
   | { type: "setView"; view: DataViewKind };
 
 export const dataViewSortParser = createParser<DataViewSort>({
@@ -96,7 +95,6 @@ export const dataViewQueryParsers = {
   sort: dataViewSortParser,
   filter: dataViewFilterParser,
   group: dataViewGroupParser,
-  selection: parseAsArrayOf(parseAsString).withDefault([]),
   view: parseAsStringLiteral(DATA_VIEW_KINDS).withDefault("list"),
 };
 
@@ -116,7 +114,7 @@ export function createDataViewState(
     sort: initial.sort ? normaliseSort(initial.sort) : null,
     filter: normaliseFilter(initial.filter),
     group: initial.group ? normaliseGroup(initial.group) : null,
-    selection: new Set(initial.selection ?? []),
+    selectedIds: new Set(initial.selectedIds ?? []),
     view: initial.view ?? "list",
   };
 }
@@ -148,12 +146,12 @@ export function dataViewReducer(
         ...state,
         group: action.group ? normaliseGroup(action.group) : null,
       });
-    case "setSelection":
-      return { ...state, selection: new Set(action.selection) };
-    case "toggleSelection":
-      return { ...state, selection: toggledSelection(state.selection, action) };
-    case "clearSelection":
-      return { ...state, selection: new Set() };
+    case "setSelectedIds":
+      return { ...state, selectedIds: new Set(action.selectedIds) };
+    case "toggleSelectedId":
+      return { ...state, selectedIds: toggledSelectedIds(state.selectedIds, action) };
+    case "clearSelectedIds":
+      return { ...state, selectedIds: new Set() };
     case "setView":
       return { ...state, view: action.view };
   }
@@ -168,7 +166,6 @@ export function dataViewStateToQueryValues(
     sort: state.sort,
     filter: hasFilter(state.filter) ? state.filter : null,
     group: state.group,
-    selection: [...state.selection],
     view: state.view,
   };
 }
@@ -184,7 +181,6 @@ export function dataViewStateFromQueryValues(
     sort: values.sort ?? base.sort,
     filter: values.filter ?? base.filter,
     group: values.group ?? base.group,
-    selection: values.selection.length > 0 ? values.selection : base.selection,
     view: values.view ?? base.view,
   });
 }
@@ -229,14 +225,14 @@ export function dataViewStateToResourceListOptions<
 }
 
 function resetQueryScope(state: DataViewState): DataViewState {
-  return { ...state, page: 1, selection: new Set() };
+  return { ...state, page: 1, selectedIds: new Set() };
 }
 
-function toggledSelection(
-  selection: ReadonlySet<string>,
-  action: Extract<DataViewAction, { type: "toggleSelection" }>,
+function toggledSelectedIds(
+  selectedIds: ReadonlySet<string>,
+  action: Extract<DataViewAction, { type: "toggleSelectedId" }>,
 ): ReadonlySet<string> {
-  const next = new Set(selection);
+  const next = new Set(selectedIds);
   const shouldSelect = action.selected ?? !next.has(action.id);
   if (shouldSelect) next.add(action.id);
   else next.delete(action.id);
@@ -316,6 +312,25 @@ function isGroupGranularity(value: string): value is DataViewGroupGranularity {
 }
 
 function dataViewFilterFromUnknown(value: unknown): DataViewFilter | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (!isDataViewFilter(value)) return null;
   return value as DataViewFilter;
+}
+
+function isDataViewFilter(value: unknown): value is DataViewFilter {
+  return isDataViewFilterObject(value);
+}
+
+function isDataViewFilterValue(value: unknown): boolean {
+  if (value == null) return true;
+  if (typeof value === "string") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "boolean") return true;
+  if (Array.isArray(value)) return value.every(isDataViewFilterValue);
+  return isDataViewFilterObject(value);
+}
+
+function isDataViewFilterObject(value: unknown): value is DataViewFilter {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  if (Object.getPrototypeOf(value) !== Object.prototype) return false;
+  return Object.values(value).every(isDataViewFilterValue);
 }

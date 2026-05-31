@@ -22,18 +22,22 @@ export interface ChatterTab {
   id: ChatterTabId;
   label: React.ReactNode;
   icon?: string;
+  count?: number;
+  panelClassName?: string;
   children: React.ReactNode;
 }
 
 export interface ChatterProps {
   tabs?: readonly ChatterTab[];
   children?: React.ReactNode;
+  composer?: React.ReactNode;
   className?: string;
 }
 
 export function Chatter({
   tabs,
   children,
+  composer,
   className,
 }: ChatterProps): React.ReactElement | null {
   const { activeTab, collapsed, setActiveTab, setWidth, width } = useChatter();
@@ -84,9 +88,12 @@ export function Chatter({
                   key={tab.id}
                   value={tab.id}
                   icon={tab.icon ? <Glyph name={tab.icon} /> : undefined}
-                  className="h-8 px-2.5"
+                  className="h-8 px-2.5 text-13 font-semibold leading-5"
                 >
                   {tab.label}
+                  {typeof tab.count === "number" ? (
+                    <Tabs.Count>{tab.count}</Tabs.Count>
+                  ) : null}
                 </Tabs.Tab>
               ))}
             </Tabs.List>
@@ -96,12 +103,18 @@ export function Chatter({
                 value={tab.id}
                 className="min-h-0 flex-1"
               >
-                <ScrollArea className="h-full" viewportClassName="p-4">
+                <ScrollArea
+                  className="h-full"
+                  viewportClassName={cn("p-4", tab.panelClassName)}
+                >
                   {tab.children}
                 </ScrollArea>
               </Tabs.Panel>
             ))}
           </Tabs>
+          {composer ? (
+            <div className="border-t border-border-subtle p-3">{composer}</div>
+          ) : null}
         </Panel>
       </PanelGroup>
     </aside>

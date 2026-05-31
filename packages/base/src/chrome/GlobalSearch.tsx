@@ -50,7 +50,7 @@ export function GlobalSearch({
         <Glyph name="search" />
         <span className="min-w-0 flex-1 truncate">{placeholder}</span>
         <kbd className="rounded border border-kbd-on-rail-border bg-kbd-on-rail px-1.5 py-0.5 text-2xs font-medium text-on-rail-mut">
-          Cmd K
+          ⌘K
         </kbd>
       </button>
       <DialogRoot open={open} onOpenChange={setOpen}>

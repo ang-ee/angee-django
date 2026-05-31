@@ -60,7 +60,8 @@ export function AggregatePanel({
   const error = grouped ? group.error : ungrouped.error;
   const total = grouped ? group.count : (ungrouped.aggregate?.count ?? 0);
   const primary = dimensions[0];
-  const heading = title ?? primary?.label ?? primary?.field ?? "Total";
+  const primaryKey = primary?.key ?? primary?.field;
+  const heading = title ?? primary?.label ?? primaryKey ?? "Total";
 
   // Largest count drives the bar widths so the panel reads as a tiny chart.
   const maxCount = group.buckets.reduce(
@@ -94,7 +95,7 @@ export function AggregatePanel({
       ) : (
         <ul className="flex flex-col gap-1.5">
           {group.buckets.map((bucket, index) => {
-            const key = primary ? keyValue(bucket, primary.field) : null;
+            const key = primaryKey ? keyValue(bucket, primaryKey) : null;
             const width = maxCount > 0 ? (bucket.count / maxCount) * 100 : 0;
             return (
               <li key={`${String(key)}#${index}`} className="flex flex-col gap-1">

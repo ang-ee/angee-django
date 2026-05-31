@@ -337,18 +337,15 @@ class IAMGraphQLTests(TransactionTestCase):
         # Ungrouped total is actor-scoped to alice's three notes.
         self.assertEqual(data["total"]["count"], 3)
 
-        # group-by status: groups paginate (totalCount). The library emits
-        # group keys as raw scalars (status: String), so the value is the
-        # column value ("active"/"draft"), not the NoteStatus enum member.
-        # Enum-typed group keys would be a strawberry-django-aggregates
-        # improvement, not an angee workaround.
+        # group-by status: groups paginate (totalCount) and carry typed enum
+        # keys, matching the schema's NoteStatus group key.
         self.assertEqual(data["byStatus"]["totalCount"], 3)
         self.assertEqual(
             {
                 row["key"]["status"]: row["count"]
                 for row in data["byStatus"]["results"]
             },
-            {"active": 1, "draft": 1, "in_review": 1},
+            {"ACTIVE": 1, "DRAFT": 1, "IN_REVIEW": 1},
         )
 
         # group-by a date granularity (month) buckets the same three notes.

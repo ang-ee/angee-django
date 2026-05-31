@@ -15,8 +15,8 @@ export interface TopMenuTab {
 
 const DEFAULT_TABS: readonly TopMenuTab[] = [
   { id: "all", label: "All", filter: {} },
-  { id: "starred", label: "Starred", filter: { is_starred: true } },
-  { id: "archive", label: "Archive", filter: { state: "archived" } },
+  { id: "starred", label: "Starred", filter: { isStarred: true } },
+  { id: "archive", label: "Archive", filter: { status: { exact: "ARCHIVED" } } },
 ];
 
 const tabClass =

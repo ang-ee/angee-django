@@ -6,9 +6,11 @@ import { describe, expect, test } from "vitest";
 import {
   aggregateFieldName,
   assembleAggregateDocument,
+  assembleGroupByDocument,
   assembleDetailDocument,
   assembleListDocument,
   assembleMutationDocument,
+  groupByFieldName,
 } from "./selection";
 import { changeSubscriptionDocument } from "./relay-invalidation";
 
@@ -92,17 +94,24 @@ describe("aggregate documents", () => {
     expect(aggregateFieldName("Sale")).toBe("saleAggregate");
   });
 
+  test("the group field name is the singular noun plus Groups", () => {
+    expect(groupByFieldName("Sale")).toBe("saleGroups");
+  });
+
   test("the ungrouped aggregate selects just count", () => {
     const document = assembleAggregateDocument("Sale");
     expect(document).toBe("query saleAggregate { saleAggregate { count } }");
     expectValid(document);
   });
 
-  test("the grouped aggregate declares groupBy and selects per-bucket dimensions", () => {
-    const document = assembleAggregateDocument("Sale", ["state"]);
+  test("the grouped aggregate declares groupBy and offset pagination", () => {
+    const document = assembleGroupByDocument("Sale", { keyFields: ["state"] });
     expect(document).toBe(
-      "query saleAggregate($groupBy: [SaleGroupBy!]) { " +
-        "saleAggregate(groupBy: $groupBy) { count groups { count state } } }",
+      "query saleGroups($groupBy: [SaleGroupBySpec!]!, " +
+        "$pagination: OffsetPaginationInput) { " +
+        "saleGroups(groupBy: $groupBy, pagination: $pagination) { " +
+        "totalCount results { key { state } count } " +
+        "pageInfo { offset limit } } }",
     );
     expectValid(document);
   });

@@ -1,6 +1,5 @@
 import * as React from "react";
 import type { Row } from "@angee/sdk";
-import { Plus } from "lucide-react";
 
 import { Button } from "../ui/button";
 import {
@@ -11,6 +10,8 @@ import {
 } from "../ui/dialog";
 import { ListView, type ListColumn, type ListViewProps } from "./ListView";
 import { FormView, type FormField, type FormViewProps } from "./FormView";
+import type { DataViewGroup } from "./data-view-model";
+import type { GroupDescriptor } from "./page";
 
 /** Where the open record's form renders relative to the list. */
 export type RecordPlacement = "inline" | "drawer";
@@ -22,6 +23,7 @@ export interface DataPageProps<TRow extends Row = Row> {
   columns: readonly ListColumn<TRow>[];
   /** Fields for the record form. */
   formFields: readonly FormField[];
+  formGroups?: readonly GroupDescriptor[];
   /** Currently open record id; `"new"` (or the `creating` flag) opens a blank form. */
   recordId?: string | null;
   /** True when creating a new record (an alternative to `recordId === null`). */
@@ -36,6 +38,7 @@ export interface DataPageProps<TRow extends Row = Row> {
   filter?: ListViewProps<TRow>["filter"];
   order?: ListViewProps<TRow>["order"];
   pageSize?: number;
+  defaultGroup?: DataViewGroup | null;
   fields?: ListViewProps<TRow>["fields"];
   /** Form options forwarded to `FormView`. */
   returning?: FormViewProps["returning"];
@@ -49,6 +52,7 @@ export function DataPage<TRow extends Row = Row>({
   model,
   columns,
   formFields,
+  formGroups,
   recordId,
   creating = false,
   onSelect,
@@ -57,6 +61,7 @@ export function DataPage<TRow extends Row = Row>({
   filter,
   order,
   pageSize,
+  defaultGroup,
   fields,
   returning,
   hideCreate = false,
@@ -81,6 +86,8 @@ export function DataPage<TRow extends Row = Row>({
       filter={filter}
       order={order}
       pageSize={pageSize}
+      defaultGroup={defaultGroup}
+      onCreate={!hideCreate && onSelect ? () => onSelect(null) : undefined}
       onRowClick={
         onSelect
           ? (row) => {
@@ -96,29 +103,15 @@ export function DataPage<TRow extends Row = Row>({
       model={model}
       id={editId}
       fields={formFields}
+      groups={formGroups}
       returning={returning}
       onSaved={handleSaved}
     />
   ) : null;
 
-  const header = hideCreate ? null : (
-    <div className="flex items-center justify-end">
-      <Button
-        variant="primary"
-        size="sm"
-        onClick={() => onSelect?.(null)}
-        disabled={!onSelect}
-      >
-        <Plus className="glyph" aria-hidden />
-        New
-      </Button>
-    </div>
-  );
-
   if (placement === "drawer") {
     return (
       <div className={["flex flex-col gap-3", className].filter(Boolean).join(" ")}>
-        {header}
         {list}
         <DialogRoot
           open={open}
@@ -144,7 +137,6 @@ export function DataPage<TRow extends Row = Row>({
         .join(" ")}
     >
       <div className="flex flex-col gap-3">
-        {header}
         {list}
       </div>
       {open ? (

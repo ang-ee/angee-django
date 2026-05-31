@@ -11,7 +11,8 @@
 #  - a `@oneOf` order input over an `Ordering` enum, and lookup-object filters;
 #  - verb-first `create/update/delete` mutations taking `data:` / a `Patch` (whose
 #    id travels inside the patch) / an `id:`, with the cascade `DeletePreview`;
-#  - one `<noun>Aggregate(groupBy:)` field returning `{ count, groups }`;
+#  - one `<noun>Aggregate` field returning `{ count }` and one
+#    `<noun>Groups(...)` field returning offset-paginated grouped rows;
 #  - session login (`login`/`logout`/`currentUser`);
 #  - a per-model `<noun>Changed` change event.
 #
@@ -42,6 +43,27 @@ enum Ordering {
   DESC
   DESC_NULLS_FIRST
   DESC_NULLS_LAST
+}
+
+enum Granularity {
+  YEAR
+  QUARTER
+  MONTH
+  WEEK
+  DAY
+  HOUR
+  MINUTE
+  SECOND
+  YEAR_NUMBER
+  QUARTER_NUMBER
+  MONTH_NUMBER
+  ISO_WEEK_NUMBER
+  DAY_OF_YEAR
+  DAY_OF_MONTH
+  DAY_OF_WEEK
+  HOUR_NUMBER
+  MINUTE_NUMBER
+  SECOND_NUMBER
 }
 
 type Sale implements Node {
@@ -129,22 +151,37 @@ input SalePatch {
   tags: [String!]
 }
 
-enum SaleGroupBy {
+enum SaleGroupableField {
   STATE
   IS_FEATURED
-  CREATED_AT_MONTH
+  CREATED_AT
+}
+
+input SaleGroupBySpec {
+  field: SaleGroupableField!
+  granularity: Granularity = null
+}
+
+type SaleGroupKey {
+  state: SaleState
+  isFeatured: Boolean
+  createdAt: DateTime
+  createdAtMonth: DateTime
 }
 
 type SaleGrouped {
+  key: SaleGroupKey!
   count: Int!
-  state: SaleState
-  isFeatured: Boolean
-  createdAtMonth: DateTime
+}
+
+type SaleGroupedResult {
+  pageInfo: OffsetPaginationInfo!
+  totalCount: Int!
+  results: [SaleGrouped!]!
 }
 
 type SaleAggregate {
   count: Int!
-  groups: [SaleGrouped!]!
 }
 
 type DeletePreviewGroup {
@@ -191,7 +228,11 @@ type Query {
     filters: SaleFilter
     order: SaleOrder
   ): SaleOffsetPaginated!
-  saleAggregate(groupBy: [SaleGroupBy!]): SaleAggregate!
+  saleAggregate: SaleAggregate!
+  saleGroups(
+    groupBy: [SaleGroupBySpec!]!
+    pagination: OffsetPaginationInput
+  ): SaleGroupedResult!
 }
 
 type Mutation {

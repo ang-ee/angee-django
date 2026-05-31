@@ -7,6 +7,7 @@ import {
   PopoverContent,
   PopoverPortal,
   PopoverPositioner,
+  type PopoverPositionerProps,
   PopoverRoot,
   PopoverTrigger,
 } from "../ui/popover";
@@ -14,9 +15,17 @@ import { Glyph } from "./Glyph";
 
 export interface UserMenuProps {
   className?: string;
+  side?: PopoverPositionerProps["side"];
+  align?: PopoverPositionerProps["align"];
+  sideOffset?: PopoverPositionerProps["sideOffset"];
 }
 
-export function UserMenu({ className }: UserMenuProps): ReactElement {
+export function UserMenu({
+  className,
+  side = "bottom",
+  align = "end",
+  sideOffset = 8,
+}: UserMenuProps): ReactElement {
   const { user } = useAuth();
   const { logout, fetching } = useLogout();
   const navigate = useNavigate();
@@ -43,7 +52,7 @@ export function UserMenu({ className }: UserMenuProps): ReactElement {
         {initials(displayName)}
       </PopoverTrigger>
       <PopoverPortal>
-        <PopoverPositioner side="bottom" align="end" sideOffset={8}>
+        <PopoverPositioner side={side} align={align} sideOffset={sideOffset}>
           <PopoverContent
             aria-label="User menu"
             className="w-60 p-1 text-13"

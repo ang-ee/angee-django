@@ -2,9 +2,9 @@
 // widgets read. Kept free of React so they unit-test directly.
 //
 // The aggregate field is count-only: the ungrouped result carries the total
-// `count`; a grouped result adds `groups`, each carrying its own `count` and the
-// dimension values it was grouped by. Everything on a group except `count` forms
-// the bucket key.
+// `count`. Grouped results are offset-paginated envelopes with `results`; older
+// schemas exposed grouped rows as `groups` beneath the aggregate field, so the
+// extractor accepts both shapes while the document builder emits the newer one.
 
 /** One aggregate row: an optional group key and a count. */
 export interface AggregateBucket {
@@ -13,7 +13,10 @@ export interface AggregateBucket {
 }
 
 export interface GroupByResult {
+  /** Sum of row counts in the returned buckets. */
   count: number;
+  /** Total number of groups in the backend result, independent of pagination. */
+  totalCount: number;
   buckets: readonly AggregateBucket[];
 }
 
@@ -25,10 +28,16 @@ function countOf(value: unknown): number {
   return typeof value === "number" ? value : 0;
 }
 
-/** A group object becomes a bucket: its `count`, with the rest as the key. */
+/** A legacy group object becomes a bucket: its `count`, with the rest as key. */
 function toBucket(group: Record<string, unknown>): AggregateBucket {
   const { count, ...key } = group;
   return { key, count: countOf(count) };
+}
+
+/** A grouped-result row carries its key under `key` and its row count. */
+function toGroupedResultBucket(group: Record<string, unknown>): AggregateBucket {
+  const key = isRecord(group.key) ? group.key : {};
+  return { key, count: countOf(group.count) };
 }
 
 /** Extract the ungrouped aggregate bucket at `field` (count only), or null. */
@@ -45,10 +54,20 @@ export function autoExtractAggregate(
 /** Extract the grouped buckets and the total count at `field`. */
 export function autoExtractGroupBy(data: unknown, field: string): GroupByResult {
   const node = isRecord(data) ? data[field] : undefined;
-  if (!isRecord(node)) return { count: 0, buckets: [] };
+  if (!isRecord(node)) return { count: 0, totalCount: 0, buckets: [] };
+  if (Array.isArray(node.results)) {
+    const buckets = node.results.filter(isRecord).map(toGroupedResultBucket);
+    return {
+      count: buckets.reduce((total, bucket) => total + bucket.count, 0),
+      totalCount: countOf(node.totalCount),
+      buckets,
+    };
+  }
   const groups = Array.isArray(node.groups) ? node.groups : [];
+  const buckets = groups.filter(isRecord).map(toBucket);
   return {
     count: countOf(node.count),
-    buckets: groups.filter(isRecord).map(toBucket),
+    totalCount: buckets.length,
+    buckets,
   };
 }

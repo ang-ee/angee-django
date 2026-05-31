@@ -34,10 +34,15 @@ export type {
 export function parsePageColumns<
   TRow extends object = Record<string, unknown>,
 >(children: ReactNode): ColumnDescriptor<TRow>[] {
-  return pageChildren(children).flatMap((child) => {
+  const columns = pageChildren(children).flatMap((child) => {
     const props = pageElementProps<ColumnProps<TRow>>(child, "column");
     return props ? [columnDescriptor(props)] : [];
   });
+  return assertUniqueDescriptor(
+    columns,
+    (column) => column.field,
+    "column field",
+  );
 }
 
 export function parsePageFields(children: ReactNode): FieldDescriptor[] {
@@ -51,7 +56,7 @@ export function parsePageFields(children: ReactNode): FieldDescriptor[] {
     const group = pageElementProps<GroupProps>(child, "group");
     if (group) fields.push(...parsePageFields(group.children));
   }
-  return fields;
+  return assertUniqueDescriptor(fields, (field) => field.name, "field name");
 }
 
 export function parsePageGroups(children: ReactNode): GroupDescriptor[] {
@@ -62,10 +67,11 @@ export function parsePageGroups(children: ReactNode): GroupDescriptor[] {
 }
 
 export function parsePageActions(children: ReactNode): ActionDescriptor[] {
-  return pageChildren(children).flatMap((child) => {
+  const actions = pageChildren(children).flatMap((child) => {
     const props = pageElementProps<ActionProps>(child, "action");
     return props ? [actionDescriptor(props)] : [];
   });
+  return assertUniqueDescriptor(actions, (action) => action.id, "action id");
 }
 
 function columnDescriptor<
@@ -79,6 +85,7 @@ function columnDescriptor<
     ...(props.aggregate !== undefined ? { aggregate: props.aggregate } : {}),
     ...(props.align !== undefined ? { align: props.align } : {}),
     ...(props.render !== undefined ? { render: props.render } : {}),
+    ...(props.tone !== undefined ? { tone: props.tone } : {}),
   };
 }
 
@@ -90,6 +97,9 @@ function fieldDescriptor(props: FieldProps): FieldDescriptor {
     ...(props.readOnly !== undefined ? { readOnly: props.readOnly } : {}),
     ...(props.title !== undefined ? { title: props.title } : {}),
     ...(props.kind !== undefined ? { kind: props.kind } : {}),
+    ...(props.options !== undefined ? { options: props.options } : {}),
+    ...(props.placeholder !== undefined ? { placeholder: props.placeholder } : {}),
+    ...(props.description !== undefined ? { description: props.description } : {}),
   };
 }
 
@@ -114,8 +124,25 @@ function groupDescriptor(props: GroupProps): GroupDescriptor {
 }
 
 function parseDirectPageFields(children: ReactNode): FieldDescriptor[] {
-  return pageChildren(children).flatMap((child) => {
+  const fields = pageChildren(children).flatMap((child) => {
     const props = pageElementProps<FieldProps>(child, "field");
     return props ? [fieldDescriptor(props)] : [];
   });
+  return assertUniqueDescriptor(fields, (field) => field.name, "field name");
+}
+
+function assertUniqueDescriptor<TDescriptor>(
+  descriptors: TDescriptor[],
+  key: (descriptor: TDescriptor) => string,
+  label: string,
+): TDescriptor[] {
+  const seen = new Set<string>();
+  for (const descriptor of descriptors) {
+    const value = key(descriptor);
+    if (seen.has(value)) {
+      throw new Error(`Duplicate page ${label}: ${value}`);
+    }
+    seen.add(value);
+  }
+  return descriptors;
 }

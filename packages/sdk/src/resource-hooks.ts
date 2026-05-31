@@ -19,6 +19,7 @@ import {
   assembleListDocument,
   assembleMutationDocument,
   clampPageSize,
+  DEFAULT_PAGE_SIZE,
   type MutationAction,
 } from "./selection";
 import type {
@@ -68,8 +69,6 @@ export interface UseResourceListResult {
   refetch: () => void;
 }
 
-const DEFAULT_PAGE_SIZE = 50;
-
 /** Read an offset-paginated list of records, selecting exactly `fields`. */
 export function useResourceList<TName extends ResourceTypeName = ResourceTypeName>(
   modelLabel: string,
@@ -97,18 +96,25 @@ export function useResourceList<TName extends ResourceTypeName = ResourceTypeNam
   const filterKey = JSON.stringify(filter ?? null);
   const orderKey = JSON.stringify(order ?? null);
 
-  const [page, setPageState] = useState(() => Math.max(1, Math.floor(initialPage)));
+  const requestedPage = normalisePage(initialPage);
+  const [page, setPageState] = useState(() => requestedPage);
 
   // A new query identity (model, page size, filter, or order) resets to page 1.
   // Adjust during render — not in an effect — so the first request against the
   // new query uses the reset offset, never a stale deep-page offset.
   const resetKey = `${modelLabel}|${size}|${filterKey}|${orderKey}`;
   const resetKeyRef = useRef(resetKey);
+  const requestedPageRef = useRef(requestedPage);
   let currentPage = page;
   if (resetKeyRef.current !== resetKey) {
     resetKeyRef.current = resetKey;
+    requestedPageRef.current = requestedPage;
     currentPage = 1;
     setPageState(1);
+  } else if (requestedPageRef.current !== requestedPage) {
+    requestedPageRef.current = requestedPage;
+    currentPage = requestedPage;
+    setPageState(requestedPage);
   }
 
   const variables = useMemo(() => {
@@ -165,6 +171,10 @@ export function useResourceList<TName extends ResourceTypeName = ResourceTypeNam
     error: run.error,
     refetch: run.refetch,
   };
+}
+
+function normalisePage(page: number): number {
+  return Math.max(1, Math.floor(page));
 }
 
 export interface UseResourceRecordResult {

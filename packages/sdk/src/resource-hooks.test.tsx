@@ -83,6 +83,31 @@ describe("useResourceList", () => {
     );
   });
 
+  test("tracks initialPage changes from the owning view state", async () => {
+    const { fetch, bodies } = mockTransport({
+      sales: {
+        totalCount: 12,
+        results: [{ id: "6", title: "F" }],
+        pageInfo: { offset: 5, limit: 5 },
+      },
+    });
+    const { result, rerender } = renderHook(
+      ({ page }) =>
+        useResourceList("Sale", {
+          fields: ["title"],
+          pageSize: 5,
+          initialPage: page,
+        }),
+      { initialProps: { page: 1 }, wrapper: wrapperWith(fetch) },
+    );
+    await waitFor(() => expect(result.current.fetching).toBe(false));
+    rerender({ page: 2 });
+    await waitFor(() => expect(result.current.page).toBe(2));
+    await waitFor(() =>
+      expect(bodies.at(-1)?.variables.pagination).toEqual({ offset: 5, limit: 5 }),
+    );
+  });
+
   test("does not fetch when disabled", () => {
     const { fetch } = mockTransport({});
     const { result } = renderHook(

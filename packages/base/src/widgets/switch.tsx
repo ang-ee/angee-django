@@ -2,8 +2,8 @@ import type { ReactElement } from "react";
 
 import { Switch } from "../ui/switch";
 import { cn } from "../lib/cn";
+import { widgetLabel } from "./label";
 import type { WidgetDefinition, WidgetRenderProps } from "./types";
-import { widgetLabel } from "./types";
 
 function SwitchEdit({
   value,

@@ -17,7 +17,7 @@ describe("data-view model", () => {
       sort: { field: "updatedAt", dir: "desc" },
       filter: { title: { iContains: "alpha" } },
       group: { field: "updatedAt", granularity: "day" },
-      selection: ["note-1", "note-2"],
+      selectedIds: ["note-1", "note-2"],
       view: "board",
     });
 
@@ -31,7 +31,8 @@ describe("data-view model", () => {
       JSON.stringify({ title: { iContains: "alpha" } }),
     );
     expect(params.get("group")).toBe("updatedAt:day");
-    expect(params.get("selection")).toBe("note-1,note-2");
+    expect(params.has("selectedIds")).toBe(false);
+    expect(params.has("selection")).toBe(false);
     expect(params.get("view")).toBe("board");
 
     const roundTrip = parseDataViewSearchParams(query);
@@ -43,7 +44,7 @@ describe("data-view model", () => {
       field: "updatedAt",
       granularity: "day",
     });
-    expect([...roundTrip.selection]).toEqual(["note-1", "note-2"]);
+    expect([...roundTrip.selectedIds]).toEqual([]);
     expect(roundTrip.view).toBe("board");
   });
 
@@ -51,7 +52,7 @@ describe("data-view model", () => {
     const state = createDataViewState({
       page: 4,
       pageSize: 20,
-      selection: ["note-1"],
+      selectedIds: ["note-1"],
     });
 
     const sorted = dataViewReducer(state, {
@@ -59,7 +60,7 @@ describe("data-view model", () => {
       sort: { field: "title", dir: "asc" },
     });
     expect(sorted.page).toBe(1);
-    expect([...sorted.selection]).toEqual([]);
+    expect([...sorted.selectedIds]).toEqual([]);
 
     const filtered = dataViewReducer(sorted, {
       type: "setFilter",
@@ -76,20 +77,20 @@ describe("data-view model", () => {
     expect(resized.page).toBe(1);
   });
 
-  test("updates selection as a set of stable ids", () => {
+  test("updates selected ids as local row state", () => {
     const state = createDataViewState();
 
     const selected = dataViewReducer(state, {
-      type: "toggleSelection",
+      type: "toggleSelectedId",
       id: "note-1",
     });
-    expect([...selected.selection]).toEqual(["note-1"]);
+    expect([...selected.selectedIds]).toEqual(["note-1"]);
 
     const cleared = dataViewReducer(selected, {
-      type: "toggleSelection",
+      type: "toggleSelectedId",
       id: "note-1",
     });
-    expect([...cleared.selection]).toEqual([]);
+    expect([...cleared.selectedIds]).toEqual([]);
   });
 
   test("maps view state onto SDK offset list options", () => {

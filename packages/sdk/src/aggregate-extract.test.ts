@@ -17,7 +17,27 @@ describe("autoExtractAggregate", () => {
 });
 
 describe("autoExtractGroupBy", () => {
-  test("maps groups into buckets keyed by their dimension values", () => {
+  test("maps grouped result rows into buckets keyed by their key object", () => {
+    const data = {
+      saleGroups: {
+        totalCount: 2,
+        results: [
+          { count: 3, key: { state: "OPEN" } },
+          { count: 2, key: { state: "CLOSED" } },
+        ],
+      },
+    };
+    expect(autoExtractGroupBy(data, "saleGroups")).toEqual({
+      count: 5,
+      totalCount: 2,
+      buckets: [
+        { key: { state: "OPEN" }, count: 3 },
+        { key: { state: "CLOSED" }, count: 2 },
+      ],
+    });
+  });
+
+  test("keeps reading legacy aggregate groups", () => {
     const data = {
       saleAggregate: {
         count: 5,
@@ -29,6 +49,7 @@ describe("autoExtractGroupBy", () => {
     };
     expect(autoExtractGroupBy(data, "saleAggregate")).toEqual({
       count: 5,
+      totalCount: 2,
       buckets: [
         { key: { state: "OPEN" }, count: 3 },
         { key: { state: "CLOSED" }, count: 2 },
@@ -39,6 +60,7 @@ describe("autoExtractGroupBy", () => {
   test("returns an empty result when the field is absent", () => {
     expect(autoExtractGroupBy({}, "saleAggregate")).toEqual({
       count: 0,
+      totalCount: 0,
       buckets: [],
     });
   });

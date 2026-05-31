@@ -19,13 +19,6 @@ from angee.base.models import public_id_of
 Note = apps.get_model("notes", "Note")
 User = apps.get_model("iam", "User")
 
-# Register the model's TextChoices as the one GraphQL enum, named for the addon
-# so the wire type does not collide with another addon's ``Status``. This
-# single registration is what ``status: auto`` on NoteType resolves to, so the
-# type, inputs, filter, and aggregate bucket all share one ``NoteStatus``.
-NoteStatus = strawberry.enum(Note.Status, name="NoteStatus")
-
-
 @strawberry_django.type(Note)
 class NoteType(AngeeNode):
     """GraphQL projection of a note."""
@@ -84,7 +77,7 @@ class NoteInput:
 
     title: str
     body: str = ""
-    status: NoteStatus = NoteStatus.DRAFT
+    status: Note.Status = Note.Status.DRAFT
     tags: list[str] = strawberry.field(default_factory=list)
     is_starred: bool = False
 
@@ -96,7 +89,7 @@ class NotePatch:
     id: relay.GlobalID
     title: str | None = strawberry.UNSET
     body: str | None = strawberry.UNSET
-    status: NoteStatus | None = strawberry.UNSET
+    status: Note.Status | None = strawberry.UNSET
     tags: list[str] | None = strawberry.UNSET
     is_starred: bool | None = strawberry.UNSET
 

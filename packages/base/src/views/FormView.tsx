@@ -7,127 +7,133 @@ import {
 } from "@angee/sdk";
 
 import { Button } from "../ui/button";
-import { FieldControl, FieldLabel, FieldRoot } from "../ui/field";
-import { Select, type SelectChoice } from "../ui/select";
+import {
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+  FieldRoot,
+} from "../ui/field";
 import { Spinner } from "../ui/spinner";
-import { Switch } from "../ui/switch";
-import { Textarea } from "../ui/textarea";
+import {
+  useResolvedWidget,
+  type WidgetDefinition,
+  type WidgetField,
+} from "../widgets";
+import {
+  parsePageFields,
+  parsePageGroups,
+  type FieldDescriptor,
+  type GroupDescriptor,
+  type PageFieldKind,
+} from "./page";
 
-/** How a field is rendered and edited. */
-export type FieldKind = "text" | "textarea" | "select" | "switch" | "readonly";
-
-/** One editable (or read-only) field on the form. */
-export interface FormField {
-  /** Key in the record/patch this field reads and writes. */
-  name: string;
-  /** Label shown above the control; defaults to the field name. */
-  label?: React.ReactNode;
-  kind: FieldKind;
-  /** Choices for a `"select"` field. */
-  options?: readonly SelectChoice[];
-  placeholder?: string;
-  /** Helper text shown beneath the control. */
-  description?: React.ReactNode;
-}
+export type FieldKind = PageFieldKind;
+export type FormField = FieldDescriptor;
 
 export interface FormViewProps {
-  /** Model label, e.g. `"notes.Note"`. */
   model: string;
-  /** Record id to edit; `null`/`undefined` creates a new record. */
   id?: string | null;
-  /** Fields rendered, in order. Their names also seed the read selection. */
-  fields: readonly FormField[];
-  /** Selected back from the mutation (and seeded for edit). Defaults to names + `id`. */
+  fields?: readonly FieldDescriptor[];
+  groups?: readonly GroupDescriptor[];
+  children?: React.ReactNode;
   returning?: readonly string[];
-  /** Called with the saved record after a successful create/update. */
   onSaved?: (row: Row) => void;
-  /** Label for the submit button; defaults to "Create"/"Save". */
   submitLabel?: React.ReactNode;
   className?: string;
 }
 
 type Values = Record<string, unknown>;
 
-/** Default value an empty draft uses for a field of the given kind. */
-function emptyValue(kind: FieldKind): unknown {
-  return kind === "switch" ? false : "";
-}
-
-/** A fresh draft for create mode: one empty value per editable field. */
-function emptyDraft(fields: readonly FormField[]): Values {
-  const draft: Values = {};
-  for (const field of fields) draft[field.name] = emptyValue(field.kind);
-  return draft;
-}
-
-/** Project a loaded record onto the form's fields, filling gaps with empties. */
-function recordToValues(record: Row, fields: readonly FormField[]): Values {
-  const values: Values = {};
-  for (const field of fields) {
-    values[field.name] = record[field.name] ?? emptyValue(field.kind);
-  }
-  return values;
-}
-
-/** A form bound to one record: reads it (edit) and writes create/update. */
 export function FormView({
   model,
   id,
   fields,
+  groups,
+  children,
   returning,
   onSaved,
   submitLabel,
   className,
 }: FormViewProps): React.ReactElement {
+  const resolvedFields = React.useMemo(
+    () => fields ?? parsePageFields(children),
+    [children, fields],
+  );
+  const resolvedGroups = React.useMemo(
+    () => groups ?? parsePageGroups(children),
+    [children, groups],
+  );
   const isCreate = id == null;
-
   const selection = React.useMemo(() => {
     const paths = new Set<string>(["id"]);
-    for (const field of fields) paths.add(field.name);
+    for (const field of resolvedFields) paths.add(field.name);
     for (const extra of returning ?? []) paths.add(extra);
     return [...paths];
-  }, [fields, returning]);
+  }, [resolvedFields, returning]);
 
   const { record, fetching: loading } = useResourceRecord(model, id ?? null, {
     fields: selection,
     enabled: !isCreate,
   });
-
   const [mutate, mutation] = useResourceMutation(
     model,
     isCreate ? "create" : "update",
     { fields: selection },
   );
-
   const form = useForm({
-    defaultValues: emptyDraft(fields) as Values,
+    defaultValues: emptyDraft(resolvedFields),
     onSubmit: async ({ value }) => {
       const data: Values = { ...value };
       if (!isCreate && id != null) data.id = id;
       const saved = await mutate({ data });
       if (saved) {
-        form.reset(recordToValues(saved, fields));
+        form.reset(recordToValues(saved, resolvedFields));
         onSaved?.(saved);
       }
     },
   });
 
-  // Seed once per loaded record id; afterwards the draft is the form's to own.
   const seededIdRef = React.useRef<string | null>(null);
   React.useEffect(() => {
     if (isCreate) {
       if (seededIdRef.current !== null) {
         seededIdRef.current = null;
-        form.reset(emptyDraft(fields));
+        form.reset(emptyDraft(resolvedFields));
       }
       return;
     }
     const recordId = typeof record?.id === "string" ? record.id : null;
     if (record && recordId && seededIdRef.current !== recordId) {
       seededIdRef.current = recordId;
-      form.reset(recordToValues(record, fields));
+      form.reset(recordToValues(record, resolvedFields));
     }
-  }, [isCreate, record, fields, form]);
+  }, [isCreate, record, resolvedFields, form]);
+
+  const titleField = resolvedFields.find((field) => field.title);
+  const statusField = resolvedFields.find((field) => field.widget === "statusbar");
+  const bodyFields = React.useMemo(
+    () =>
+      statusField
+        ? resolvedFields.filter((field) => field.name !== statusField.name)
+        : resolvedFields,
+    [resolvedFields, statusField],
+  );
+  const bodyGroups = React.useMemo(
+    () =>
+      statusField
+        ? resolvedGroups.map((group) => ({
+            ...group,
+            fields: group.fields.filter(
+              (field) => field.name !== statusField.name,
+            ),
+          }))
+        : resolvedGroups,
+    [resolvedGroups, statusField],
+  );
+  const sections = React.useMemo(
+    () => formSections(bodyFields, bodyGroups),
+    [bodyFields, bodyGroups],
+  );
 
   return (
     <form
@@ -137,67 +143,73 @@ export function FormView({
         void form.handleSubmit();
       }}
     >
-      {loading ? (
-        <div className="flex items-center gap-2 text-13 text-fg-muted">
-          <Spinner size="sm" />
-          Loading…
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="truncate text-22 font-semibold text-fg">
+            {titleField ? String(form.getFieldValue(titleField.name) ?? "") : "Record"}
+          </h2>
+          {loading ? (
+            <div className="mt-1 flex items-center gap-2 text-13 text-fg-muted">
+              <Spinner size="sm" />
+              Loading...
+            </div>
+          ) : null}
         </div>
-      ) : null}
+        {statusField ? (
+          <form.Field name={statusField.name}>
+            {(api) => (
+              <FieldWidget
+                field={statusField}
+                value={api.state.value}
+                readOnly={statusField.readOnly}
+                onChange={(next) => api.handleChange(next)}
+              />
+            )}
+          </form.Field>
+        ) : null}
+      </div>
 
-      {fields.map((field) => (
-        <form.Field key={field.name} name={field.name}>
-          {(api) => {
-            const value = api.state.value;
-            const label = field.label ?? field.name;
-            const readOnly = field.kind === "readonly";
-            return (
-              <FieldRoot>
-                <FieldLabel>{label}</FieldLabel>
-                {field.kind === "textarea" ? (
-                  <Textarea
-                    name={field.name}
-                    value={String(value ?? "")}
-                    placeholder={field.placeholder}
-                    rows={4}
-                    onChange={(event) => api.handleChange(event.target.value)}
-                    onBlur={api.handleBlur}
-                  />
-                ) : field.kind === "select" ? (
-                  <Select
-                    options={field.options ?? []}
-                    value={value == null ? "" : String(value)}
-                    placeholder={field.placeholder}
-                    onValueChange={(next) => api.handleChange(next)}
-                  />
-                ) : field.kind === "switch" ? (
-                  <Switch
-                    checked={Boolean(value)}
-                    onCheckedChange={(checked) => api.handleChange(checked)}
-                  />
-                ) : (
-                  <FieldControl
-                    name={field.name}
-                    value={String(value ?? "")}
-                    placeholder={field.placeholder}
-                    readOnly={readOnly}
-                    onChange={(event) => api.handleChange(event.target.value)}
-                    onBlur={api.handleBlur}
-                  />
-                )}
-                {field.description ? (
-                  <p className="text-xs leading-5 text-fg-muted">
-                    {field.description}
-                  </p>
-                ) : null}
-                {api.state.meta.errors.length > 0 ? (
-                  <p className="text-xs leading-5 text-danger-text">
-                    {api.state.meta.errors.join(", ")}
-                  </p>
-                ) : null}
-              </FieldRoot>
-            );
-          }}
-        </form.Field>
+      {sections.map((section, sectionIndex) => (
+        <section
+          key={section.key}
+          className="grid gap-4 border-t border-border-subtle pt-4"
+        >
+          {section.label ? (
+            <h3 className="text-sm font-semibold text-fg">{section.label}</h3>
+          ) : sectionIndex > 0 ? null : null}
+          <div
+            className={
+              section.columns === 2
+                ? "grid gap-4 md:grid-cols-2"
+                : "grid gap-4"
+            }
+          >
+            {section.fields.map((field) => (
+              <form.Field key={field.name} name={field.name}>
+                {(api) => {
+                  const errors = api.state.meta.errors;
+                  return (
+                    <FieldRoot>
+                      <FieldLabel>{field.label ?? field.name}</FieldLabel>
+                      <FieldWidget
+                        field={field}
+                        value={api.state.value}
+                        readOnly={field.readOnly}
+                        onChange={(next) => api.handleChange(next)}
+                      />
+                      {field.description ? (
+                        <FieldDescription>{field.description}</FieldDescription>
+                      ) : null}
+                      {errors.length > 0 ? (
+                        <FieldError>{errors.join(", ")}</FieldError>
+                      ) : null}
+                    </FieldRoot>
+                  );
+                }}
+              </form.Field>
+            ))}
+          </div>
+        </section>
       ))}
 
       {mutation.error ? (
@@ -211,4 +223,93 @@ export function FormView({
       </div>
     </form>
   );
+}
+
+function FieldWidget({
+  field,
+  value,
+  readOnly,
+  onChange,
+}: {
+  field: FieldDescriptor;
+  value: unknown;
+  readOnly?: boolean;
+  onChange?: (value: unknown) => void;
+}): React.ReactElement {
+  const widget = useResolvedWidget(widgetId(field)) ?? fallbackWidget();
+  const Component = readOnly ? widget.read : (widget.edit ?? widget.read);
+  const widgetField: WidgetField = {
+    name: field.name,
+    label: field.label,
+    options: field.options,
+  };
+  return (
+    <Component
+      value={value}
+      field={widgetField}
+      readOnly={readOnly}
+      onChange={onChange}
+    />
+  );
+}
+
+type FormSection = {
+  key: string;
+  label?: React.ReactNode;
+  columns?: number;
+  fields: readonly FieldDescriptor[];
+};
+
+function formSections(
+  fields: readonly FieldDescriptor[],
+  groups: readonly GroupDescriptor[],
+): readonly FormSection[] {
+  if (groups.length === 0) return [{ key: "fields", fields }];
+  const groupedNames = new Set<string>();
+  const sections: FormSection[] = groups.flatMap((group, index) => {
+    if (group.fields.length === 0) return [];
+    for (const field of group.fields) groupedNames.add(field.name);
+    return [
+      {
+        key: `group:${index}:${String(group.label ?? "")}`,
+        label: group.label,
+        columns: group.columns,
+        fields: group.fields,
+      },
+    ];
+  });
+  const ungrouped = fields.filter((field) => !groupedNames.has(field.name));
+  if (ungrouped.length > 0) sections.unshift({ key: "fields", fields: ungrouped });
+  return sections;
+}
+
+function emptyDraft(fields: readonly FieldDescriptor[]): Values {
+  const draft: Values = {};
+  for (const field of fields) draft[field.name] = emptyValue(field);
+  return draft;
+}
+
+function recordToValues(record: Row, fields: readonly FieldDescriptor[]): Values {
+  const values: Values = {};
+  for (const field of fields) {
+    values[field.name] = record[field.name] ?? emptyValue(field);
+  }
+  return values;
+}
+
+function emptyValue(field: FieldDescriptor): unknown {
+  if (field.widget === "tagInput") return [];
+  if (field.kind === "switch" || field.widget === "switch") return false;
+  return "";
+}
+
+function widgetId(field: FieldDescriptor): string {
+  if (field.widget) return field.widget;
+  return field.kind ?? "text";
+}
+
+function fallbackWidget(): WidgetDefinition {
+  return {
+    read: ({ value }) => <span className="text-13 text-fg">{String(value ?? "")}</span>,
+  };
 }
