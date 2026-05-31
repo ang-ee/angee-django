@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from angee.base.apps import BaseAddonConfig
+
 SRC = Path(__file__).resolve().parents[1] / "src" / "angee"
 BASE = SRC / "base"
 RESOURCES = SRC / "resources"
@@ -38,6 +40,12 @@ def test_base_does_not_import_sibling_packages() -> None:
     imports = _tree_imports(BASE)
     assert not any(name.startswith("angee.compose") for name in imports)
     assert not any(name.startswith("angee.resources") for name in imports)
+
+
+def test_addons_use_conventional_model_sources_only() -> None:
+    """Addon source models come from the addon's own models module."""
+
+    assert not hasattr(BaseAddonConfig, "source_model_modules")
 
 
 def test_resources_does_not_import_compose() -> None:

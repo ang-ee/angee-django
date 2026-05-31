@@ -6,7 +6,6 @@ import importlib
 import importlib.util
 import inspect
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import Any, ClassVar, TypeAlias, cast
@@ -37,14 +36,6 @@ RESOURCE_TIER_VALUES: tuple[str, ...] = ("master", "install", "demo")
 """Resource tier values accepted in addon manifests."""
 
 
-@dataclass(frozen=True, slots=True)
-class _SourceModule:
-    """One module scanned for source model declarations."""
-
-    module: ModuleType
-    explicit: bool
-
-
 class BaseAddonConfig(AppConfig):
     """Base AppConfig for Django apps that participate in Angee composition."""
 
@@ -53,9 +44,6 @@ class BaseAddonConfig(AppConfig):
 
     depends_on: ClassVar[tuple[str, ...]] = ()
     """Addon labels or app names that must compose before this addon."""
-
-    source_model_modules: ClassVar[tuple[str, ...]] = ()
-    """Extra dotted modules scanned for source model declarations."""
 
     rebac_schema: ClassVar[str | None] = "permissions.zed"
     """Optional REBAC schema path relative to the addon package root."""
@@ -179,12 +167,12 @@ class BaseAddonConfig(AppConfig):
         seen: set[type] = set()
         for source in self._source_modules():
             for _name, value in inspect.getmembers(
-                source.module,
+                source,
                 inspect.isclass,
             ):
                 if value in seen:
                     continue
-                if not self._belongs_to_source_module(value, source):
+                if not self._belongs_to_source_module(value):
                     continue
                 if not self._is_source_model(value):
                     continue
@@ -228,33 +216,20 @@ class BaseAddonConfig(AppConfig):
             return None
         return importlib.import_module(f"{self.name}.{module_name}")
 
-    def _source_modules(self) -> tuple[_SourceModule, ...]:
+    def _source_modules(self) -> tuple[ModuleType, ...]:
         """Return modules scanned for this addon's source models."""
 
-        modules: list[_SourceModule] = []
         if self.source_models_module is not None:
-            modules.append(
-                _SourceModule(self.source_models_module, explicit=False)
-            )
-        for dotted_path in self.source_model_modules:
-            modules.append(
-                _SourceModule(
-                    importlib.import_module(dotted_path),
-                    explicit=True,
-                )
-            )
-        return tuple(modules)
+            return (self.source_models_module,)
+        return ()
 
     def _belongs_to_source_module(
         self,
         value: type,
-        source: _SourceModule,
     ) -> bool:
         """Return whether ``value`` is owned by a scanned source module."""
 
         origin = value.__module__
-        if source.explicit:
-            return origin == source.module.__name__
         package_prefix = f"{self.name}."
         return origin == self.name or origin.startswith(package_prefix)
 
@@ -367,7 +342,6 @@ class BaseConfig(BaseAddonConfig):
     default = True
     name = "angee.base"
     label = "base"
-    source_model_modules = ("angee.resources.models",)
 
     def ready(self) -> None:
         """Wire runtime model registration after Django populates apps."""

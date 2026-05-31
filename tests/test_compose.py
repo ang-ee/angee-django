@@ -29,6 +29,7 @@ def test_runtime_renders_base_resource_sources(tmp_path: Path) -> None:
     assert "ANGEE GENERATED RUNTIME" in sources[Path("__init__.py")]
     assert "RUNTIME_APPS = ['base']" in sources[Path("__init__.py")]
     assert "class Resource" in sources[Path("base/models.py")]
+    assert 'app_label = "base"' in sources[Path("base/models.py")]
     assert ".angee-manifest.json" not in {str(path) for path in sources}
 
 

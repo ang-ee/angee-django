@@ -16,6 +16,7 @@ from angee.base.graphql.schema import GraphQLSchemas
 from angee.base.mixins import HistoryMixin
 from angee.base.models import AngeeModel
 from angee.compose.rebac import render_permissions
+from angee.resources.models import Resource
 
 GENERATED_SENTINEL = "# ANGEE GENERATED RUNTIME - DO NOT EDIT"
 """Sentinel required before destructive runtime cleanup."""
@@ -34,11 +35,10 @@ class AngeeRuntime:
 
         self.addons = tuple(addons)
         self.runtime_dir = runtime_dir
+        self.sources_by_label = self._sources_by_label()
         self.extensions = self._extensions_for()
         self._check_field_collisions()
-        self.labels = tuple(
-            addon.label for addon in self.addons if addon.model_classes
-        )
+        self.labels = tuple(sorted(self.sources_by_label))
 
     @classmethod
     def from_settings(cls) -> AngeeRuntime:
@@ -67,13 +67,14 @@ class AngeeRuntime:
             Path("__init__.py"): self._runtime_init_source(),
             Path("permissions.zed"): render_permissions(self.addons),
         }
-        for addon in self.addons:
-            if not addon.model_classes:
-                continue
-            root = Path(addon.label)
+        for label, source_models in self.sources_by_label.items():
+            root = Path(label)
             sources[root / "__init__.py"] = ""
             sources[root / "migrations" / "__init__.py"] = ""
-            sources[root / "models.py"] = self._models_source(addon)
+            sources[root / "models.py"] = self._models_source(
+                label,
+                source_models,
+            )
         return sources
 
     def emit(self) -> None:
@@ -163,8 +164,12 @@ class AngeeRuntime:
             rendered = ", ".join(f"schemas/{name}.graphql" for name in drift)
             raise RuntimeError(f"generated GraphQL SDL is stale: {rendered}")
 
-    def _models_source(self, addon: BaseAddonConfig) -> str:
-        """Return concrete model source for one addon."""
+    def _models_source(
+        self,
+        label: str,
+        source_models: tuple[type[AngeeModel], ...],
+    ) -> str:
+        """Return concrete model source for one target label."""
 
         lines = [
             '"""Concrete Django models emitted by Angee."""',
@@ -180,8 +185,7 @@ class AngeeRuntime:
                 tuple[tuple[type[models.Model], str], ...],
             ]
         ] = []
-        for raw_model in addon.model_classes:
-            model_class = cast(type[AngeeModel], raw_model)
+        for model_class in source_models:
             source_alias = self._source_alias(model_class)
             imports.extend(self._class_import(model_class, source_alias))
             if issubclass(model_class, HistoryMixin):
@@ -214,13 +218,13 @@ class AngeeRuntime:
             ]
             meta_lines = [
                 "        abstract = False",
-                f'        app_label = "{addon.label}"',
+                f'        app_label = "{label}"',
             ]
             db_table = self._db_table_source(model_class)
             if db_table is not None:
                 meta_lines.append(f"        db_table = {db_table}")
             meta_lines.extend(self._rebac_meta_source(model_class))
-            body_lines = self._history_source(addon, model_class)
+            body_lines = self._history_source(label, model_class)
             lines.extend(
                 [
                     f"{meta_name} = getattr({source_alias}, 'Meta', object)",
@@ -247,14 +251,14 @@ class AngeeRuntime:
 
     def _history_source(
         self,
-        addon: BaseAddonConfig,
+        label: str,
         model_class: type[models.Model],
     ) -> list[str]:
         """Return simple-history declarations for a concrete model."""
 
         if not issubclass(model_class, HistoryMixin):
             return []
-        args = f'app="{addon.label}"'
+        args = f'app="{label}"'
         excluded = self._history_excluded_fields(model_class)
         if excluded:
             args += f", excluded_fields={excluded!r}"
@@ -266,9 +270,9 @@ class AngeeRuntime:
         """Return model extensions grouped by target composition label."""
 
         known_targets = {
-            cast(type[AngeeModel], model).get_composition_label()
-            for addon in self.addons
-            for model in addon.model_classes
+            model.get_composition_label()
+            for source_models in self.sources_by_label.values()
+            for model in source_models
         }
         grouped: dict[str, list[type[AngeeModel]]] = {}
         for extension in (
@@ -296,9 +300,8 @@ class AngeeRuntime:
     def _check_field_collisions(self) -> None:
         """Raise when composed bases declare the same direct field."""
 
-        for addon in self.addons:
-            for raw_model in addon.model_classes:
-                model_class = cast(type[AngeeModel], raw_model)
+        for source_models in self.sources_by_label.values():
+            for model_class in source_models:
                 label = model_class.get_composition_label()
                 owners: dict[str, type[models.Model]] = {}
                 bases = (
@@ -319,6 +322,23 @@ class AngeeRuntime:
                             f"both {previous._meta.label} and "
                             f"{base._meta.label}"
                         )
+
+    def _sources_by_label(self) -> dict[str, tuple[type[AngeeModel], ...]]:
+        """Return source models grouped by emitted runtime app label."""
+
+        grouped: dict[str, list[type[AngeeModel]]] = {}
+        for addon in self.addons:
+            models_for_label = grouped.setdefault(addon.label, [])
+            models_for_label.extend(
+                cast(type[AngeeModel], model)
+                for model in addon.model_classes
+            )
+        grouped.setdefault("base", []).append(Resource)
+        return {
+            label: tuple(source_models)
+            for label, source_models in sorted(grouped.items())
+            if source_models
+        }
 
     def _actual_source_paths(self) -> set[Path]:
         """Return generated source paths currently on disk."""

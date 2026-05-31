@@ -12,7 +12,6 @@ from django.core.exceptions import ImproperlyConfigured
 import angee.base
 from angee.base.apps import BaseAddonConfig, BaseConfig
 from angee.base.discovery import discover_addons
-from angee.resources.models import Resource
 
 
 def _module(name: str) -> ModuleType:
@@ -23,10 +22,10 @@ def _module(name: str) -> ModuleType:
     return module
 
 
-def test_base_addon_owns_resource_model() -> None:
-    """The Resource ledger is a base addon source model."""
+def test_base_addon_declares_no_source_models() -> None:
+    """The base addon keeps source ownership outside its package."""
 
-    assert Resource in apps.get_app_config("base").model_classes
+    assert apps.get_app_config("base").model_classes == ()
 
 
 def test_resource_manifest_normalizes_tiers_and_entries() -> None:
