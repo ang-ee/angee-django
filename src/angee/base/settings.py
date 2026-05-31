@@ -100,6 +100,7 @@ def _build_installed_apps(
             "rebac",
             "reversion",
             "simple_history",
+            BASE_APP,
             *(f"{cls.__module__}.{cls.__name__}" for cls in addon_configs),
             COMPOSE_APP,
             *extra_installed_apps,

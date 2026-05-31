@@ -1,4 +1,4 @@
-"""Django management command for Angee compose operations."""
+"""Angee build-time management commands."""
 
 from __future__ import annotations
 
@@ -15,13 +15,13 @@ from angee.compose.runtime import AngeeRuntime
 
 
 class Command(BaseCommand):
-    """Expose runtime build, clean, and schema commands."""
+    """Expose Angee runtime build and cleanup commands."""
 
-    help = "Run Angee composition commands."
+    help = "Build and inspect Angee runtime output."
     requires_system_checks: list[str] = []
 
     def add_arguments(self, parser: CommandParser) -> None:
-        """Add compose subcommands."""
+        """Add Angee subcommands."""
 
         subcommands = parser.add_subparsers(dest="subcommand", required=True)
 
@@ -59,7 +59,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(message))
 
     def _handle_clean(self, options: dict[str, Any]) -> None:
-        """Clean generated runtime source files."""
+        """Delete generated runtime sources."""
 
         del options
         try:
@@ -69,7 +69,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS("angee clean: ok"))
 
     def _handle_schema(self, options: dict[str, Any]) -> None:
-        """Emit or check runtime GraphQL SDL files."""
+        """Write or check rendered GraphQL SDL files."""
 
         runtime = AngeeRuntime.from_settings()
         try:

@@ -76,5 +76,5 @@ def test_build_app_set_installs_compose_without_runtime_apps(
     installed = settings["INSTALLED_APPS"]
 
     assert "angee.compose.apps.ComposeConfig" in installed
-    assert "angee.base.apps.BaseConfig" not in installed
+    assert "angee.base.apps.BaseConfig" in installed
     assert "angee.resources.apps.ResourcesConfig" not in installed

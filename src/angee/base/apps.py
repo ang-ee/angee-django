@@ -212,6 +212,8 @@ class BaseAddonConfig(AppConfig):
         """Import emitted concrete models when the runtime package exists."""
 
         super().import_models()
+        if _compose_app_installed():
+            return
         runtime_module = getattr(settings, "ANGEE_RUNTIME_MODULE", None)
         if not runtime_module:
             return
@@ -387,3 +389,16 @@ def _module_exists(dotted_path: str) -> bool:
     if parent and not _module_exists(parent):
         return False
     return importlib.util.find_spec(dotted_path) is not None
+
+
+def _compose_app_installed() -> bool:
+    """Return whether settings selected the compose command app set."""
+
+    installed = set(getattr(settings, "INSTALLED_APPS", ()))
+    return bool(
+        {
+            "angee.compose",
+            "angee.compose.apps.ComposeConfig",
+        }
+        & installed
+    )

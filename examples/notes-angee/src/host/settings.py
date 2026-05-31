@@ -30,6 +30,12 @@ DATA_DIR = Path(
 if str(RUNTIME_DIR.parent) not in sys.path:
     sys.path.insert(0, str(RUNTIME_DIR.parent))
 
+BUILD_SETTINGS = (
+    len(sys.argv) >= 3
+    and sys.argv[1] == "angee"
+    and sys.argv[2] in {"build", "clean"}
+)
+
 COMPOSED_SETTINGS = compose_defaults(
     addons=("example.notes",),
     runtime_dir=RUNTIME_DIR,
@@ -37,6 +43,7 @@ COMPOSED_SETTINGS = compose_defaults(
     root_urlconf="host.urls",
     asgi_application="host.asgi.application",
     debug=DEBUG,
+    build=BUILD_SETTINGS,
 )
 globals().update(COMPOSED_SETTINGS)
 
