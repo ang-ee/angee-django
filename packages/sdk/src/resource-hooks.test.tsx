@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { fetchExchange } from "urql";
 import { describe, expect, test, vi } from "vitest";
@@ -39,16 +39,16 @@ function wrapperWith(fetch: typeof globalThis.fetch) {
 }
 
 describe("useResourceList", () => {
-  test("requests the model's connection and returns flattened rows", async () => {
+  test("requests the offset page and returns rows, total, and page count", async () => {
     const { fetch, bodies } = mockTransport({
       sales: {
-        totalCount: 2,
-        edges: [{ node: { id: "1", title: "A" } }, { node: { id: "2", title: "B" } }],
-        pageInfo: { endCursor: "c2", hasNextPage: false },
+        totalCount: 12,
+        results: [{ id: "1", title: "A" }, { id: "2", title: "B" }],
+        pageInfo: { offset: 0, limit: 50 },
       },
     });
     const { result } = renderHook(
-      () => useResourceList("Sale", { fields: ["title"] }),
+      () => useResourceList("Sale", { fields: ["title"], pageSize: 5 }),
       { wrapper: wrapperWith(fetch) },
     );
     await waitFor(() => expect(result.current.fetching).toBe(false));
@@ -56,8 +56,31 @@ describe("useResourceList", () => {
       { id: "1", title: "A" },
       { id: "2", title: "B" },
     ]);
-    expect(result.current.total).toBe(2);
+    expect(result.current.total).toBe(12);
+    expect(result.current.pageCount).toBe(3);
+    expect(result.current.page).toBe(1);
     expect(bodies[0]?.query).toContain("sales(");
+    expect(bodies[0]?.variables.pagination).toEqual({ offset: 0, limit: 5 });
+  });
+
+  test("setPage jumps to the page's offset", async () => {
+    const { fetch, bodies } = mockTransport({
+      sales: {
+        totalCount: 12,
+        results: [{ id: "6", title: "F" }],
+        pageInfo: { offset: 5, limit: 5 },
+      },
+    });
+    const { result } = renderHook(
+      () => useResourceList("Sale", { fields: ["title"], pageSize: 5 }),
+      { wrapper: wrapperWith(fetch) },
+    );
+    await waitFor(() => expect(result.current.fetching).toBe(false));
+    act(() => result.current.setPage(2));
+    await waitFor(() => expect(result.current.page).toBe(2));
+    await waitFor(() =>
+      expect(bodies.at(-1)?.variables.pagination).toEqual({ offset: 5, limit: 5 }),
+    );
   });
 
   test("does not fetch when disabled", () => {
@@ -95,15 +118,15 @@ describe("useResourceRecord", () => {
 });
 
 describe("useResourceMutation", () => {
-  test("create runs the mutation and resolves to the created node", async () => {
-    const { fetch, bodies } = mockTransport({ saleCreate: { id: "9", title: "New" } });
+  test("create runs the verb-first mutation and resolves to the created node", async () => {
+    const { fetch, bodies } = mockTransport({ createSale: { id: "9", title: "New" } });
     const { result } = renderHook(
       () => useResourceMutation("Sale", "create", { fields: ["title"] }),
       { wrapper: wrapperWith(fetch) },
     );
     const [mutate] = result.current;
-    const node = await mutate({ input: { title: "New" } });
+    const node = await mutate({ data: { title: "New" } });
     expect(node).toEqual({ id: "9", title: "New" });
-    expect(bodies[0]?.query).toContain("saleCreate(input:");
+    expect(bodies[0]?.query).toContain("createSale(data:");
   });
 });

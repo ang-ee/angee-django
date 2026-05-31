@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useMutation as useUrqlMutation } from "urql";
 
 import { DISABLED_DOCUMENTS } from "./disabled-documents";
@@ -9,8 +9,8 @@ import {
 } from "./relay-invalidation";
 import { useStableArray } from "./stable-deps";
 import {
-  extractConnection,
   extractNode,
+  extractPage,
   type PageInfo,
   type Row,
 } from "./resource-result";
@@ -18,7 +18,7 @@ import {
   assembleDetailDocument,
   assembleListDocument,
   assembleMutationDocument,
-  pageToConnectionArgs,
+  clampPageSize,
   type MutationAction,
 } from "./selection";
 import type {
@@ -30,18 +30,16 @@ import type {
 export type { PageInfo } from "./resource-result";
 export type { MutationAction } from "./selection";
 
-/** A filter/order accepted as the model's generated input or any record. */
+/** A filter accepted as the model's generated input or any record. */
 type Filter<TName extends ResourceTypeName> = ResourceFilter<TName> | Record<string, unknown>;
-type Order<TName extends ResourceTypeName> =
-  | ResourceOrder<TName>
-  | Record<string, unknown>
-  | ReadonlyArray<ResourceOrder<TName> | Record<string, unknown>>;
+/** A single `@oneOf` order accepted as the model's generated input or any record. */
+type Order<TName extends ResourceTypeName> = ResourceOrder<TName> | Record<string, unknown>;
 
 export interface UseResourceListOptions<TName extends ResourceTypeName> {
   fields: readonly string[];
-  page?: number;
   pageSize?: number;
-  search?: string;
+  /** 1-based initial page; the hook then owns the page through its setters. */
+  initialPage?: number;
   filter?: Filter<TName>;
   order?: Order<TName>;
   enabled?: boolean;
@@ -49,8 +47,22 @@ export interface UseResourceListOptions<TName extends ResourceTypeName> {
 
 export interface UseResourceListResult {
   rows: readonly Row[];
+  /** Total matching rows, owned and reported by the backend. */
   total: number | undefined;
+  /** Total pages = ceil(total / pageSize); undefined until `total` is known. */
+  pageCount: number | undefined;
+  /** 1-based index of the page currently shown. */
+  page: number;
+  pageSize: number;
   pageInfo: PageInfo | undefined;
+  hasNext: boolean;
+  hasPrev: boolean;
+  /** Jump to any 1-based page (offset pagination); clamped to `[1, pageCount]`. */
+  setPage: (page: number) => void;
+  firstPage: () => void;
+  nextPage: () => void;
+  prevPage: () => void;
+  lastPage: () => void;
   fetching: boolean;
   error: Error | null;
   refetch: () => void;
@@ -58,21 +70,21 @@ export interface UseResourceListResult {
 
 const DEFAULT_PAGE_SIZE = 50;
 
-/** Read a relay-paginated list of records, selecting exactly `fields`. */
+/** Read an offset-paginated list of records, selecting exactly `fields`. */
 export function useResourceList<TName extends ResourceTypeName = ResourceTypeName>(
   modelLabel: string,
   options: UseResourceListOptions<TName>,
 ): UseResourceListResult {
   const {
     fields,
-    page = 1,
     pageSize = DEFAULT_PAGE_SIZE,
-    search,
+    initialPage = 1,
     filter,
     order,
     enabled = true,
   } = options;
   const active = enabled && Boolean(modelLabel);
+  const size = clampPageSize(pageSize);
   const stableFields = useStableArray(fields);
   const withFilter = filter !== undefined;
   const withOrder = order !== undefined;
@@ -82,20 +94,77 @@ export function useResourceList<TName extends ResourceTypeName = ResourceTypeNam
     [modelLabel, stableFields, withFilter, withOrder],
   );
 
+  const filterKey = JSON.stringify(filter ?? null);
+  const orderKey = JSON.stringify(order ?? null);
+
+  const [page, setPageState] = useState(() => Math.max(1, Math.floor(initialPage)));
+
+  // A new query identity (model, page size, filter, or order) resets to page 1.
+  // Adjust during render — not in an effect — so the first request against the
+  // new query uses the reset offset, never a stale deep-page offset.
+  const resetKey = `${modelLabel}|${size}|${filterKey}|${orderKey}`;
+  const resetKeyRef = useRef(resetKey);
+  let currentPage = page;
+  if (resetKeyRef.current !== resetKey) {
+    resetKeyRef.current = resetKey;
+    currentPage = 1;
+    setPageState(1);
+  }
+
   const variables = useMemo(() => {
-    const { first, after } = pageToConnectionArgs(page, pageSize);
-    const vars: Record<string, unknown> = { first, after, search: search ?? null };
+    const vars: Record<string, unknown> = {
+      pagination: { offset: (currentPage - 1) * size, limit: size },
+    };
     if (withFilter) vars.filters = filter;
-    if (withOrder) vars.order = Array.isArray(order) ? order : [order];
+    if (withOrder) vars.order = order;
     return vars;
-  }, [page, pageSize, search, withFilter, withOrder, filter, order]);
+    // `filter`/`order` are keyed by their serialized form so the memo is stable
+    // when a caller passes a fresh-but-equal object each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPage, size, withFilter, withOrder, filterKey, orderKey]);
 
   const run = useDocumentQuery(document, variables, active);
-  // Register so the change firehose (and post-write invalidation) refresh this
-  // list — the writes the normalized cache can't see on its own.
+  // Register so a change event (and post-write invalidation) refresh this list —
+  // the writes the normalized cache can't see on its own.
   useRegisterModelRefetch(modelLabel, run.refetch, active);
-  const { rows, total, pageInfo } = extractConnection(run.data);
-  return { rows, total, pageInfo, fetching: run.fetching, error: run.error, refetch: run.refetch };
+  const { rows, total, pageInfo } = extractPage(run.data);
+  const pageCount = total === undefined ? undefined : Math.max(1, Math.ceil(total / size));
+
+  const setPage = useCallback(
+    (next: number) => {
+      const floored = Math.max(1, Math.floor(next));
+      setPageState(pageCount ? Math.min(floored, pageCount) : floored);
+    },
+    [pageCount],
+  );
+  const firstPage = useCallback(() => setPageState(1), []);
+  const nextPage = useCallback(
+    () => setPageState((current) => (pageCount ? Math.min(current + 1, pageCount) : current + 1)),
+    [pageCount],
+  );
+  const prevPage = useCallback(() => setPageState((current) => Math.max(1, current - 1)), []);
+  const lastPage = useCallback(() => {
+    if (pageCount) setPageState(pageCount);
+  }, [pageCount]);
+
+  return {
+    rows,
+    total,
+    pageCount,
+    page: currentPage,
+    pageSize: size,
+    pageInfo,
+    hasNext: pageCount !== undefined && currentPage < pageCount,
+    hasPrev: currentPage > 1,
+    setPage,
+    firstPage,
+    nextPage,
+    prevPage,
+    lastPage,
+    fetching: run.fetching,
+    error: run.error,
+    refetch: run.refetch,
+  };
 }
 
 export interface UseResourceRecordResult {
@@ -132,15 +201,20 @@ export function useResourceRecord(
 }
 
 export interface ResourceMutationVariables {
+  /** For `create`/`update`: the input/patch (an `update` patch carries its id). */
+  data?: Record<string, unknown>;
+  /** For `delete`: the relay id to remove. */
   id?: string;
-  input?: Record<string, unknown>;
 }
 
 export type ResourceMutate = (
   variables: ResourceMutationVariables,
 ) => Promise<Row | null>;
 
-/** Build a create / update / delete mutation, returning the mutated node. */
+/**
+ * Build a create / update / delete mutation. `create`/`update` resolve to the
+ * mutated node; `delete` resolves to the cascade `DeletePreview`.
+ */
 export function useResourceMutation(
   modelLabel: string,
   action: MutationAction,

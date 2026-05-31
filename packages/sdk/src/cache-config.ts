@@ -9,9 +9,10 @@ import type { KeyingConfig, ResolverConfig } from "@urql/exchange-graphcache";
 /**
  * The graphcache keying + resolver configuration, derived from the schema so it
  * stays correct as the schema grows — no hand-maintained type list. An entity
- * (any object type exposing an `id`) is normalized by its Sqid id; every other
+ * (any object type exposing an `id`) is normalized by its relay id; every other
  * object type is a value object and is null-keyed. Every query field returning a
- * relay `*Connection` gets a pagination resolver so pages merge into one list.
+ * relay `*Connection` gets a pagination resolver so cursor pages merge into one
+ * list; offset-paginated fields need none — each page is cached by its variables.
  */
 export interface CacheConfig {
   keys: KeyingConfig;

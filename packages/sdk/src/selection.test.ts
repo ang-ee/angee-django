@@ -2,11 +2,10 @@ import { describe, expect, test } from "vitest";
 
 import {
   buildSelection,
-  encodeOffsetCursor,
-  pageToConnectionArgs,
+  clampPageSize,
+  MAX_PAGE_SIZE,
   printSelection,
   pluralFieldName,
-  RELAY_MAX_PAGE_SIZE,
   singularFieldName,
   typeNameForModel,
 } from "./selection";
@@ -91,28 +90,12 @@ describe("model naming", () => {
   });
 });
 
-describe("pagination", () => {
-  test("the first page has a null cursor", () => {
-    expect(pageToConnectionArgs(1, 50)).toEqual({ first: 50, after: null });
-  });
-
-  test("later pages encode the previous page's last offset as the cursor", () => {
-    expect(pageToConnectionArgs(2, 50)).toEqual({
-      first: 50,
-      after: encodeOffsetCursor(49),
-    });
-    expect(pageToConnectionArgs(3, 20)).toEqual({
-      first: 20,
-      after: encodeOffsetCursor(39),
-    });
-  });
-
-  test("clamps page size to the relay maximum and floors the page at 1", () => {
-    expect(pageToConnectionArgs(1, 9999).first).toBe(RELAY_MAX_PAGE_SIZE);
-    expect(pageToConnectionArgs(0, 50)).toEqual({ first: 50, after: null });
-  });
-
-  test("encodeOffsetCursor round-trips through the relay cursor encoding", () => {
-    expect(atob(encodeOffsetCursor(5))).toBe("arrayconnection:5");
+describe("clampPageSize", () => {
+  test("clamps to the maximum page size and floors at 1", () => {
+    expect(clampPageSize(50)).toBe(50);
+    expect(clampPageSize(9999)).toBe(MAX_PAGE_SIZE);
+    expect(clampPageSize(0)).toBe(1);
+    expect(clampPageSize(-5)).toBe(1);
+    expect(clampPageSize(20.7)).toBe(20);
   });
 });

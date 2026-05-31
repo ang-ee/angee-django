@@ -1,66 +1,45 @@
 import { describe, expect, test } from "vitest";
 
-import {
-  autoExtractAggregate,
-  autoExtractGroupBy,
-  selectMeasure,
-} from "./aggregate-extract";
+import { autoExtractAggregate, autoExtractGroupBy } from "./aggregate-extract";
 
 describe("autoExtractAggregate", () => {
-  test("reads count and the present measure operators", () => {
-    const data = {
-      salesAggregate: { count: 6, sum: { total: "1125.00" }, avg: { total: 187.5 } },
-    };
-    expect(autoExtractAggregate(data, "salesAggregate")).toEqual({
+  test("reads the ungrouped total count", () => {
+    const data = { saleAggregate: { count: 6 } };
+    expect(autoExtractAggregate(data, "saleAggregate")).toEqual({
       key: null,
       count: 6,
-      measures: { sum: { total: "1125.00" }, avg: { total: 187.5 } },
     });
   });
 
   test("returns null when the field is absent", () => {
-    expect(autoExtractAggregate({}, "salesAggregate")).toBeNull();
+    expect(autoExtractAggregate({}, "saleAggregate")).toBeNull();
   });
 });
 
 describe("autoExtractGroupBy", () => {
-  test("maps results into buckets carrying key, count, and measures", () => {
+  test("maps groups into buckets keyed by their dimension values", () => {
     const data = {
-      salesGroupBy: {
-        totalCount: 2,
-        results: [
-          { key: { state: "OPEN" }, count: 3, sum: { total: "700.00" } },
-          { key: { state: "CLOSED" }, count: 2, sum: { total: "350.00" } },
+      saleAggregate: {
+        count: 5,
+        groups: [
+          { count: 3, state: "OPEN" },
+          { count: 2, state: "CLOSED" },
         ],
       },
     };
-    expect(autoExtractGroupBy(data, "salesGroupBy")).toEqual({
-      totalCount: 2,
+    expect(autoExtractGroupBy(data, "saleAggregate")).toEqual({
+      count: 5,
       buckets: [
-        { key: { state: "OPEN" }, count: 3, measures: { sum: { total: "700.00" } } },
-        { key: { state: "CLOSED" }, count: 2, measures: { sum: { total: "350.00" } } },
+        { key: { state: "OPEN" }, count: 3 },
+        { key: { state: "CLOSED" }, count: 2 },
       ],
     });
   });
 
   test("returns an empty result when the field is absent", () => {
-    expect(autoExtractGroupBy({}, "salesGroupBy")).toEqual({
-      totalCount: 0,
+    expect(autoExtractGroupBy({}, "saleAggregate")).toEqual({
+      count: 0,
       buckets: [],
     });
-  });
-});
-
-describe("selectMeasure", () => {
-  test("reads a measure value by operator and field", () => {
-    const bucket = { key: null, count: 1, measures: { sum: { total: "700.00" } } };
-    expect(selectMeasure(bucket, "sum", "total")).toBe("700.00");
-  });
-
-  test("returns null for a missing bucket or measure", () => {
-    expect(selectMeasure(null, "sum", "total")).toBeNull();
-    expect(
-      selectMeasure({ key: null, count: 1, measures: {} }, "avg", "total"),
-    ).toBeNull();
   });
 });

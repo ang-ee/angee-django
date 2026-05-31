@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from strawberry_django.pagination import OffsetPaginated
+
 from angee.base.graphql.crud import crud
 from angee.base.graphql.events import ChangeEvent
 from angee.base.graphql.node import AngeeConnection as Connection
@@ -15,6 +17,7 @@ __all__ = [
     "ChangeEvent",
     "Connection",
     "GraphQLSchemas",
+    "OffsetPaginated",
     "changes",
     "crud",
 ]

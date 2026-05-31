@@ -12,7 +12,7 @@ from rebac import current_actor
 from strawberry import auto, relay
 from strawberry_django_aggregates import AggregateBuilder
 
-from angee.base.graphql import AngeeNode, Connection, changes, crud
+from angee.base.graphql import AngeeNode, OffsetPaginated, changes, crud
 
 Note = apps.get_model("notes", "Note")
 
@@ -123,7 +123,7 @@ _note_aggregates = AggregateBuilder(
 class NotesQuery:
     """Public notes queries."""
 
-    notes: Connection[NoteType] = strawberry_django.connection(
+    notes: OffsetPaginated[NoteType] = strawberry_django.offset_paginated(
         filters=NoteFilter,
         order=NoteOrder,
     )

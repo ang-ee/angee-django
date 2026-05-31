@@ -30,12 +30,12 @@ function mockTransport() {
         data: {
           sales: {
             totalCount: 1,
-            edges: [{ node: { id: "1", title: "A" } }],
-            pageInfo: { endCursor: "c1", hasNextPage: false },
+            results: [{ id: "1", title: "A" }],
+            pageInfo: { offset: 0, limit: 50 },
           },
-          saleCreate: { id: "9", title: "New" },
-          saleUpdate: { id: "1", title: "Edited" },
-          saleDelete: { ok: true, id: "1" },
+          createSale: { id: "9", title: "New" },
+          updateSale: { id: "1", title: "Edited" },
+          deleteSale: { totalDeletedCount: 1, hasBlockers: false },
         },
       }),
       { status: 200, headers: { "content-type": "application/json" } },
@@ -97,7 +97,7 @@ describe("useResourceMutation invalidates membership-changing writes", () => {
   test("create invalidates the model", async () => {
     const { result, spy } = runMutation("create");
     await act(async () => {
-      await result.current[0]({ input: { title: "New" } });
+      await result.current[0]({ data: { title: "New" } });
     });
     expect(spy).toHaveBeenCalledTimes(1);
   });
@@ -113,7 +113,7 @@ describe("useResourceMutation invalidates membership-changing writes", () => {
   test("update does not invalidate (graphcache updates the entity in place)", async () => {
     const { result, spy } = runMutation("update");
     await act(async () => {
-      await result.current[0]({ id: "1", input: { title: "Edited" } });
+      await result.current[0]({ data: { id: "1", title: "Edited" } });
     });
     expect(spy).not.toHaveBeenCalled();
   });

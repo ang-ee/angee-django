@@ -14,36 +14,38 @@ describe("cache keys", () => {
   const key = (typename: string, data: Record<string, unknown>): string | null =>
     keys[typename]?.({ __typename: typename, ...data }) ?? null;
 
-  test("keys an entity by its Sqid id", () => {
+  test("keys an entity by its relay id", () => {
     expect(key("Sale", { id: "abc" })).toBe("abc");
-    expect(key("Owner", { id: "xyz" })).toBe("xyz");
+    expect(key("Viewer", { id: "xyz" })).toBe("xyz");
   });
 
-  test("null-keys connection and page-info value objects", () => {
-    expect(key("SaleConnection", {})).toBeNull();
-    expect(key("SaleEdge", {})).toBeNull();
-    expect(key("PageInfo", {})).toBeNull();
+  test("null-keys page and page-info value objects", () => {
+    expect(key("SaleOffsetPaginated", {})).toBeNull();
+    expect(key("OffsetPaginationInfo", { offset: 0 })).toBeNull();
   });
 
   test("null-keys aggregate value objects (no id)", () => {
     expect(key("SaleAggregate", { count: 1 })).toBeNull();
-    expect(key("SaleSumFields", { total: "1" })).toBeNull();
-    expect(key("SaleGroupByResult", {})).toBeNull();
+    expect(key("SaleGrouped", { count: 1 })).toBeNull();
+    expect(key("DeletePreview", {})).toBeNull();
   });
 
   test("does not register a key for the root operation types", () => {
     expect(keys.Query).toBeUndefined();
     expect(keys.Mutation).toBeUndefined();
+    expect(keys.Subscription).toBeUndefined();
   });
 });
 
 describe("relay resolvers", () => {
-  test("installs a pagination resolver on each connection-returning query field", () => {
-    expect(typeof resolvers.Query?.sales).toBe("function");
+  test("offset-paginated list fields get no cursor-merge resolver", () => {
+    // Offset pages replace the list (jump-to-page); urql caches each page by its
+    // variables, so no relay pagination resolver is wired.
+    expect(resolvers.Query?.sales).toBeUndefined();
   });
 
-  test("leaves entity-returning query fields alone", () => {
+  test("leaves entity and aggregate query fields alone", () => {
     expect(resolvers.Query?.sale).toBeUndefined();
-    expect(resolvers.Query?.salesAggregate).toBeUndefined();
+    expect(resolvers.Query?.saleAggregate).toBeUndefined();
   });
 });

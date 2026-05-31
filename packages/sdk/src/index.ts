@@ -11,18 +11,14 @@ export {
   assembleListDocument,
   assembleMutationDocument,
   assembleAggregateDocument,
-  assembleGroupByDocument,
   aggregateFieldName,
-  groupByFieldName,
   typeNameForModel,
   singularFieldName,
   pluralFieldName,
-  pageToConnectionArgs,
-  encodeOffsetCursor,
-  RELAY_MAX_PAGE_SIZE,
-  RELAY_PAGE_SIZE_OPTIONS,
+  clampPageSize,
+  MAX_PAGE_SIZE,
+  PAGE_SIZE_OPTIONS,
   type SelectionField,
-  type ConnectionArgs,
   type MutationAction,
   type AssembleListDocumentOptions,
 } from "./selection";
@@ -58,20 +54,17 @@ export {
   type ResourceMutate,
   type ResourceMutationVariables,
 } from "./resource-hooks";
-export type { Row, PageInfo, ConnectionResult } from "./resource-result";
+export type { Row, PageInfo, PageResult } from "./resource-result";
 
 // Aggregates.
 export {
   useAggregateQuery,
   useResourceGroupBy,
-  selectMeasure,
   type AggregateBucket,
-  type AggregateFn,
   type GroupByResult,
-  type MeasureMap,
+  type GroupByDimension,
   type UseAggregateOptions,
   type UseGroupByOptions,
-  type GroupBySpecInput,
 } from "./aggregates";
 export { autoExtractAggregate, autoExtractGroupBy } from "./aggregate-extract";
 
@@ -92,7 +85,7 @@ export {
   useRegisterModelRefetch,
   useModelInvalidation,
   useInvalidateModels,
-  CHANGE_EVENTS_DOCUMENT,
+  changeSubscriptionDocument,
 } from "./relay-invalidation";
 
 // Cross-cutting context: runtime registry, auth, the context factory.

@@ -6,11 +6,13 @@ import { makeContext } from "./make-context";
 export interface AuthUser {
   id: string;
   name: string;
-  email?: string;
-  roles?: readonly string[];
   username?: string;
+  firstName?: string;
+  lastName?: string;
+  email?: string;
   isStaff?: boolean;
-  isSuperuser?: boolean;
+  isActive?: boolean;
+  roles?: readonly string[];
 }
 
 /** Client-side auth state. Gating from it is UX only; the server authorizes. */
@@ -27,36 +29,63 @@ export const ANONYMOUS_AUTH: AuthState = {
   hasRole: () => false,
 };
 
-/** The `currentUser` payload shape the auth query resolves. */
+/** The `currentUser` payload shape the auth query resolves (the User node). */
 export interface CurrentUserPayload {
   id: string;
   username: string;
-  email?: string | null;
+  firstName: string;
+  lastName: string;
+  email: string;
   isStaff: boolean;
-  isSuperuser: boolean;
-  roles: readonly string[];
+  isActive: boolean;
 }
 
-/** Map a resolved (or null) `currentUser` to an `AuthState`. */
+const asString = (value: unknown): string => (typeof value === "string" ? value : "");
+
+/**
+ * Narrow an untrusted `currentUser` value to the payload, or null. A signed-in
+ * user always has a string `id` and `username`; the rest is coerced so a partial
+ * response can never surface as `"undefined undefined"` downstream.
+ */
+export function parseCurrentUser(value: unknown): CurrentUserPayload | null {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.id !== "string" || typeof record.username !== "string") {
+    return null;
+  }
+  return {
+    id: record.id,
+    username: record.username,
+    firstName: asString(record.firstName),
+    lastName: asString(record.lastName),
+    email: asString(record.email),
+    isStaff: record.isStaff === true,
+    isActive: record.isActive === true,
+  };
+}
+
+/**
+ * Map a resolved (or null) `currentUser` to an `AuthState`. Roles are not on the
+ * User node — REBAC owns authorization, and role-gating in the UI is deferred —
+ * so `hasRole` is always false here; the server is the authorization boundary.
+ */
 export function currentUserToAuthState(
   payload: CurrentUserPayload | null | undefined,
 ): AuthState {
   if (!payload) return ANONYMOUS_AUTH;
-  const roles = payload.roles;
+  const fullName = `${payload.firstName} ${payload.lastName}`.trim();
   const user: AuthUser = {
     id: payload.id,
-    name: payload.username,
-    email: payload.email ?? undefined,
-    roles,
+    name: fullName || payload.username,
     username: payload.username,
+    firstName: payload.firstName,
+    lastName: payload.lastName,
+    email: payload.email || undefined,
     isStaff: payload.isStaff,
-    isSuperuser: payload.isSuperuser,
+    isActive: payload.isActive,
+    roles: [],
   };
-  return {
-    user,
-    status: "authenticated",
-    hasRole: (role: string) => roles.includes(role),
-  };
+  return { user, status: "authenticated", hasRole: () => false };
 }
 
 const AuthContext = makeContext<AuthState>("AuthProvider");

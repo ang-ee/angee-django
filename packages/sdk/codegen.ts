@@ -11,8 +11,6 @@ import type { CodegenConfig } from "@graphql-codegen/cli";
 // diverge, point each output at its own `runtime/schemas/<name>.graphql` via a
 // per-output `schema` override.
 const scalars = {
-  Sqid: "string",
-  Decimal: "string",
   DateTime: "string",
   Date: "string",
   JSON: "unknown",

@@ -1,15 +1,16 @@
 // Pure extractors for the single-root-field documents the builder emits. Each
-// resource document selects exactly one root field (the node, the connection,
-// or the mutation payload), so extraction starts by reading that one value.
+// resource document selects exactly one root field (the node, the page, or the
+// mutation payload), so extraction starts by reading that one value.
 
 export type Row = Record<string, unknown>;
 
+/** An offset page's echoed window: where it starts and how many it asked for. */
 export interface PageInfo {
-  endCursor: string | null;
-  hasNextPage: boolean;
+  offset: number;
+  limit: number | null;
 }
 
-export interface ConnectionResult {
+export interface PageResult {
   rows: readonly Row[];
   total: number | undefined;
   pageInfo: PageInfo | undefined;
@@ -32,27 +33,25 @@ export function extractNode(data: unknown): Row | null {
   return isRecord(value) ? value : null;
 }
 
-/** The rows, total, and page info a relay connection document returns. */
-export function extractConnection(data: unknown): ConnectionResult {
-  const connection = rootValue(data);
-  if (!isRecord(connection)) {
+/** The rows, total, and page info an offset-paginated document returns. */
+export function extractPage(data: unknown): PageResult {
+  const page = rootValue(data);
+  if (!isRecord(page)) {
     return { rows: [], total: undefined, pageInfo: undefined };
   }
-  const edges = Array.isArray(connection.edges) ? connection.edges : [];
+  const results = Array.isArray(page.results) ? page.results : [];
   return {
-    rows: edges
-      .map((edge) => (isRecord(edge) ? edge.node : undefined))
-      .filter(isRecord),
-    total: typeof connection.totalCount === "number" ? connection.totalCount : undefined,
-    pageInfo: toPageInfo(connection.pageInfo),
+    rows: results.filter(isRecord),
+    total: typeof page.totalCount === "number" ? page.totalCount : undefined,
+    pageInfo: toPageInfo(page.pageInfo),
   };
 }
 
-/** Narrow a response `pageInfo` to the declared shape, field by field. */
+/** Narrow a response `pageInfo` to the declared offset shape. */
 function toPageInfo(value: unknown): PageInfo | undefined {
   if (!isRecord(value)) return undefined;
   return {
-    endCursor: typeof value.endCursor === "string" ? value.endCursor : null,
-    hasNextPage: value.hasNextPage === true,
+    offset: typeof value.offset === "number" ? value.offset : 0,
+    limit: typeof value.limit === "number" ? value.limit : null,
   };
 }

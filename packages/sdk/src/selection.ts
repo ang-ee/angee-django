@@ -79,7 +79,9 @@ export function printSelection(fields: readonly SelectionField[]): string {
 /**
  * The GraphQL type name for a model label. Accepts a bare type name (`Note`) or
  * a Django label whose final segment is the type (`notes.Note`); the first
- * letter is upper-cased so the result is a valid type name either way.
+ * letter is upper-cased so the result is a valid type name either way. This name
+ * heads the input/order/filter/group-by types strawberry-django derives from the
+ * model (`NoteInput`, `NoteOrder`, …), not the GraphQL object type (`NoteType`).
  */
 export function typeNameForModel(modelLabel: string): string {
   const segment = modelLabel.split(".").pop() ?? "";
@@ -117,28 +119,29 @@ function pluralize(value: string): string {
   return `${value}s`;
 }
 
-function capitalize(value: string): string {
-  return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-/** Relay detail document: `query <singular>($id: Sqid!){ <singular>(id:){…} }`. */
+/** Relay detail document: `query <singular>($id: ID!){ <singular>(id:){…} }`. */
 export function assembleDetailDocument(
   modelLabel: string,
   fieldPaths: readonly string[],
 ): string {
   const singular = singularFieldName(modelLabel);
   const selection = printSelection(buildSelection(fieldPaths));
-  return `query ${singular}($id: Sqid!) { ${singular}(id: $id) { ${selection} } }`;
+  return `query ${singular}($id: ID!) { ${singular}(id: $id) { ${selection} } }`;
 }
 
 export interface AssembleListDocumentOptions {
   /** Declare `$filters: <Type>Filter` and pass it to the connection. */
   withFilter?: boolean;
-  /** Declare `$order: [<Type>Order!]` and pass it to the connection. */
+  /** Declare `$order: <Type>Order` and pass it to the connection. */
   withOrder?: boolean;
 }
 
-/** Relay connection document with `totalCount / edges { node } / pageInfo`. */
+/**
+ * Offset-paginated list document. Pages with `pagination: { offset, limit }`, so
+ * the client jumps to any page (`offset = (page - 1) * limit`). Selects
+ * `totalCount` — the backend owns the count, from which the client derives the
+ * page count — plus the page `results` and the echoed `offset`/`limit`.
+ */
 export function assembleListDocument(
   modelLabel: string,
   fieldPaths: readonly string[],
@@ -147,131 +150,86 @@ export function assembleListDocument(
   const typeName = typeNameForModel(modelLabel);
   const plural = pluralFieldName(modelLabel);
   const selection = printSelection(buildSelection(fieldPaths));
-  const declared = ["$first: Int", "$after: String", "$search: String"];
-  const args = ["search: $search", "first: $first", "after: $after"];
+  const declared = ["$pagination: OffsetPaginationInput"];
+  const args = ["pagination: $pagination"];
   if (options.withFilter) {
     declared.push(`$filters: ${typeName}Filter`);
     args.push("filters: $filters");
   }
   if (options.withOrder) {
-    declared.push(`$order: [${typeName}Order!]`);
+    declared.push(`$order: ${typeName}Order`);
     args.push("order: $order");
   }
   return (
     `query ${plural}(${declared.join(", ")}) { ` +
     `${plural}(${args.join(", ")}) { ` +
-    `totalCount edges { node { ${selection} } } ` +
-    `pageInfo { endCursor hasNextPage } } }`
+    `totalCount results { ${selection} } pageInfo { offset limit } } }`
   );
 }
 
 export type MutationAction = "create" | "update" | "delete";
 
+// The cascade summary a delete returns: counts grouped by model label, plus
+// whether anything blocked the delete.
+const DELETE_PREVIEW_SELECTION =
+  "totalDeletedCount hasBlockers " +
+  "deleted { label count } updated { label count } blocked { label count }";
+
 /**
- * Noun-first CRUD mutation. `create`/`update` return the mutated node's
- * selection; `delete` returns the `DeletePreview` `{ ok id }` shape.
+ * Verb-first CRUD mutation. `create` takes a `<Type>Input`; `update` takes a
+ * `<Type>Patch` carrying its own id, so it needs no separate id variable; both
+ * return the mutated node's selection. `delete` takes an id and returns the
+ * cascade `DeletePreview`.
  */
 export function assembleMutationDocument(
   modelLabel: string,
   action: MutationAction,
   fieldPaths: readonly string[],
 ): string {
-  const singular = singularFieldName(modelLabel);
   const typeName = typeNameForModel(modelLabel);
-  const op = `${singular}${capitalize(action)}`;
+  const op = `${action}${typeName}`;
   if (action === "delete") {
-    return `mutation ${op}($id: Sqid!) { ${op}(id: $id) { ok id } }`;
+    return `mutation ${op}($id: ID!) { ${op}(id: $id) { ${DELETE_PREVIEW_SELECTION} } }`;
   }
+  const inputType = action === "create" ? `${typeName}Input` : `${typeName}Patch`;
   const selection = printSelection(buildSelection(fieldPaths));
-  if (action === "create") {
-    return (
-      `mutation ${op}($input: ${typeName}CreateInput!) { ` +
-      `${op}(input: $input) { ${selection} } }`
-    );
-  }
   return (
-    `mutation ${op}($id: Sqid!, $input: ${typeName}UpdateInput!) { ` +
-    `${op}(id: $id, input: $input) { ${selection} } }`
+    `mutation ${op}($data: ${inputType}!) { ${op}(data: $data) { ${selection} } }`
   );
 }
 
-/** Single-row aggregate field name (`Sale` -> `salesAggregate`). */
+/** Aggregate field name (`Sale` -> `saleAggregate`). One field serves both the
+ * ungrouped total and the grouped buckets. */
 export function aggregateFieldName(modelLabel: string): string {
-  return `${pluralFieldName(modelLabel)}Aggregate`;
+  return `${singularFieldName(modelLabel)}Aggregate`;
 }
-
-/** Grouped aggregate field name (`Sale` -> `salesGroupBy`). */
-export function groupByFieldName(modelLabel: string): string {
-  return `${pluralFieldName(modelLabel)}GroupBy`;
-}
-
-export function assembleAggregateDocument(
-  modelLabel: string,
-  measureFields: readonly string[] = [],
-): string {
-  const field = aggregateFieldName(modelLabel);
-  const measures = printMeasures(measureFields);
-  return (
-    `query ${field}($search: String) { ` +
-    `${field}(search: $search) { count${measures ? ` ${measures}` : ""} } }`
-  );
-}
-
-export function assembleGroupByDocument(
-  modelLabel: string,
-  keyFields: readonly string[],
-  measureFields: readonly string[] = [],
-): string {
-  const typeName = typeNameForModel(modelLabel);
-  const field = groupByFieldName(modelLabel);
-  const keySelection = keyFields.map(assertName).join(" ");
-  const measures = printMeasures(measureFields);
-  return (
-    `query ${field}($groupBy: [${typeName}GroupBySpec!]!, $search: String) { ` +
-    `${field}(groupBy: $groupBy, search: $search) { ` +
-    `totalCount results { key { ${keySelection} } ` +
-    `count${measures ? ` ${measures}` : ""} } } }`
-  );
-}
-
-/** The four numeric measure operators, each over the same field set. */
-const MEASURE_OPERATORS = ["sum", "avg", "min", "max"] as const;
-
-function printMeasures(measureFields: readonly string[]): string {
-  const fields = [...new Set(measureFields.map(assertName))];
-  if (fields.length === 0) return "";
-  const body = fields.join(" ");
-  return MEASURE_OPERATORS.map((op) => `${op} { ${body} }`).join(" ");
-}
-
-/** Relay connection arguments derived from offset-style `page`/`pageSize`. */
-export interface ConnectionArgs {
-  first: number;
-  after: string | null;
-}
-
-export const RELAY_MAX_PAGE_SIZE = 100;
-export const RELAY_PAGE_SIZE_OPTIONS = [10, 20, 50, 80, RELAY_MAX_PAGE_SIZE] as const;
 
 /**
- * Translate 1-based `page`/`pageSize` to relay `{ first, after }`. The cursor
- * encodes the offset of the previous page's last row, so jump-to-page works
- * against the schema's offset-backed relay cursor.
+ * The aggregate document. With no `groupByDimensions` it selects the total
+ * `count`; with them it declares the `groupBy` enum-list variable the server
+ * groups on and selects `groups { count <dimension fields> }`, one bucket per
+ * distinct key.
  */
-export function pageToConnectionArgs(
-  page: number,
-  pageSize: number,
-): ConnectionArgs {
-  const safePage = Math.max(1, Math.floor(page));
-  const safeSize = Math.min(RELAY_MAX_PAGE_SIZE, Math.max(1, Math.floor(pageSize)));
-  const offset = (safePage - 1) * safeSize;
-  return {
-    first: safeSize,
-    after: offset === 0 ? null : encodeOffsetCursor(offset - 1),
-  };
+export function assembleAggregateDocument(
+  modelLabel: string,
+  groupByDimensions: readonly string[] = [],
+): string {
+  const field = aggregateFieldName(modelLabel);
+  const dims = [...new Set(groupByDimensions.map(assertName))];
+  if (dims.length === 0) {
+    return `query ${field} { ${field} { count } }`;
+  }
+  const typeName = typeNameForModel(modelLabel);
+  return (
+    `query ${field}($groupBy: [${typeName}GroupBy!]) { ` +
+    `${field}(groupBy: $groupBy) { count groups { count ${dims.join(" ")} } } }`
+  );
 }
 
-/** base64 of `arrayconnection:<index>` — the schema's relay cursor encoding. */
-export function encodeOffsetCursor(index: number): string {
-  return btoa(`arrayconnection:${index}`);
+export const MAX_PAGE_SIZE = 100;
+export const PAGE_SIZE_OPTIONS = [10, 20, 50, 80, MAX_PAGE_SIZE] as const;
+
+/** Clamp a requested page size (the offset `limit`) to `[1, MAX_PAGE_SIZE]`. */
+export function clampPageSize(pageSize: number): number {
+  return Math.min(MAX_PAGE_SIZE, Math.max(1, Math.floor(pageSize)));
 }

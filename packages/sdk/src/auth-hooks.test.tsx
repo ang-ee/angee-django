@@ -49,10 +49,11 @@ function wrapperWith(fetch: typeof globalThis.fetch) {
 const USER = {
   id: "u1",
   username: "ada",
+  firstName: "Ada",
+  lastName: "Lovelace",
   email: "ada@example.com",
   isStaff: true,
-  isSuperuser: false,
-  roles: ["admin"],
+  isActive: true,
 };
 
 describe("useRuntimeAuthState", () => {
@@ -63,8 +64,10 @@ describe("useRuntimeAuthState", () => {
     await waitFor(() => expect(result.current.fetching).toBe(false));
     expect(result.current.auth.status).toBe("authenticated");
     expect(result.current.auth.user?.username).toBe("ada");
-    expect(result.current.auth.hasRole("admin")).toBe(true);
+    expect(result.current.auth.user?.name).toBe("Ada Lovelace");
     expect(result.current.auth.user?.isStaff).toBe(true);
+    // Role-gating is deferred — REBAC authorizes server-side.
+    expect(result.current.auth.hasRole("admin")).toBe(false);
   });
 
   test("maps a null currentUser to an anonymous state", async () => {
@@ -79,7 +82,7 @@ describe("useRuntimeAuthState", () => {
 
 describe("useLoginWithPassword", () => {
   test("returns the payload and rebuilds the client on success", async () => {
-    const fetch = authFetch({ login: { ok: true, error: null, user: USER } });
+    const fetch = authFetch({ login: { ok: true, user: USER } });
     const { result } = renderHook(
       () => ({ client: useClient(), api: useLoginWithPassword() }),
       { wrapper: wrapperWith(fetch) },
@@ -94,25 +97,24 @@ describe("useLoginWithPassword", () => {
   });
 
   test("does not rebuild the client when login fails", async () => {
-    const fetch = authFetch({ login: { ok: false, error: "bad", user: null } });
+    const fetch = authFetch({ login: { ok: false, user: null } });
     const { result } = renderHook(
       () => ({ client: useClient(), api: useLoginWithPassword() }),
       { wrapper: wrapperWith(fetch) },
     );
     const before = result.current.client;
-    let payload: { ok: boolean; error?: string | null } | undefined;
+    let payload: { ok: boolean } | undefined;
     await act(async () => {
       payload = await result.current.api.login({ username: "ada", password: "x" });
     });
     expect(payload?.ok).toBe(false);
-    expect(payload?.error).toBe("bad");
     expect(result.current.client).toBe(before);
   });
 });
 
 describe("useLogout", () => {
   test("rebuilds the client on success", async () => {
-    const fetch = authFetch({ logout: { ok: true } });
+    const fetch = authFetch({ logout: true });
     const { result } = renderHook(
       () => ({ client: useClient(), api: useLogout() }),
       { wrapper: wrapperWith(fetch) },

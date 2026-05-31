@@ -34,47 +34,42 @@ function wrapperWith(fetch: typeof globalThis.fetch) {
 }
 
 describe("useAggregateQuery", () => {
-  test("returns the count and measures bucket", async () => {
-    const { fetch, bodies } = mockTransport({
-      salesAggregate: { count: 6, sum: { total: "1125.00" } },
+  test("returns the ungrouped count bucket", async () => {
+    const { fetch, bodies } = mockTransport({ saleAggregate: { count: 6 } });
+    const { result } = renderHook(() => useAggregateQuery("Sale"), {
+      wrapper: wrapperWith(fetch),
     });
-    const { result } = renderHook(
-      () => useAggregateQuery("Sale", { measureFields: ["total"] }),
-      { wrapper: wrapperWith(fetch) },
-    );
     await waitFor(() => expect(result.current.fetching).toBe(false));
     expect(result.current.aggregate?.count).toBe(6);
-    expect(result.current.aggregate?.measures.sum?.total).toBe("1125.00");
-    expect(bodies[0]?.query).toContain("salesAggregate(");
+    expect(bodies[0]?.query).toContain("saleAggregate");
   });
 });
 
 describe("useResourceGroupBy", () => {
-  test("returns buckets keyed by the group fields", async () => {
+  test("returns buckets keyed by the grouped dimension", async () => {
     const { fetch, bodies } = mockTransport({
-      salesGroupBy: {
-        totalCount: 2,
-        results: [
-          { key: { state: "OPEN" }, count: 3, sum: { total: "700.00" } },
-          { key: { state: "CLOSED" }, count: 2, sum: { total: "350.00" } },
+      saleAggregate: {
+        count: 5,
+        groups: [
+          { count: 3, state: "OPEN" },
+          { count: 2, state: "CLOSED" },
         ],
       },
     });
     const { result } = renderHook(
       () =>
         useResourceGroupBy("Sale", {
-          groupBy: [{ field: "STATE" }],
-          keyFields: ["state"],
-          measureFields: ["total"],
+          dimensions: [{ by: "STATE", field: "state" }],
         }),
       { wrapper: wrapperWith(fetch) },
     );
     await waitFor(() => expect(result.current.fetching).toBe(false));
-    expect(result.current.totalCount).toBe(2);
-    expect(result.current.buckets.map((b) => b.key?.state)).toEqual([
+    expect(result.current.count).toBe(5);
+    expect(result.current.buckets.map((bucket) => bucket.key?.state)).toEqual([
       "OPEN",
       "CLOSED",
     ]);
-    expect(bodies[0]?.variables.groupBy).toEqual([{ field: "STATE" }]);
+    expect(bodies[0]?.variables.groupBy).toEqual(["STATE"]);
+    expect(bodies[0]?.query).toContain("saleAggregate(groupBy:");
   });
 });

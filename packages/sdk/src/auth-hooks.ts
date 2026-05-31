@@ -3,22 +3,25 @@ import { useMutation as useUrqlMutation } from "urql";
 
 import {
   currentUserToAuthState,
+  parseCurrentUser,
   type AuthState,
   type CurrentUserPayload,
 } from "./auth";
 import { useDocumentQuery } from "./document-query";
 import { useResetClient } from "./graphql-provider";
 
-const USER_SELECTION = "id username email isStaff isSuperuser roles";
+const USER_SELECTION = "id username firstName lastName email isStaff isActive";
 
-/** Read the signed-in user; the change firehose and reset keep it current. */
+/** Read the signed-in user; a client reset (login/logout) keeps it current. */
 export const CURRENT_USER_DOCUMENT = `query angeeCurrentUser { currentUser { ${USER_SELECTION} } }`;
 
 /** Exchange a username/password for a session. */
-export const LOGIN_DOCUMENT = `mutation angeeLogin($input: LoginInput!) { login(input: $input) { ok error user { ${USER_SELECTION} } } }`;
+export const LOGIN_DOCUMENT =
+  `mutation angeeLogin($username: String!, $password: String!) { ` +
+  `login(username: $username, password: $password) { ok user { ${USER_SELECTION} } } }`;
 
-/** End the current session. */
-export const LOGOUT_DOCUMENT = "mutation angeeLogout { logout { ok } }";
+/** End the current session; the verb resolves to a boolean. */
+export const LOGOUT_DOCUMENT = "mutation angeeLogout { logout }";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -32,8 +35,8 @@ export function useRuntimeAuthState(): {
 } {
   const run = useDocumentQuery(CURRENT_USER_DOCUMENT, {}, true);
   const auth = useMemo(() => {
-    const payload = isRecord(run.data) ? run.data.currentUser : null;
-    return currentUserToAuthState(payload as CurrentUserPayload | null);
+    const value = isRecord(run.data) ? run.data.currentUser : null;
+    return currentUserToAuthState(parseCurrentUser(value));
   }, [run.data]);
   return { auth, fetching: run.fetching, error: run.error };
 }
@@ -45,7 +48,6 @@ export interface LoginCredentials {
 
 export interface LoginResult {
   ok: boolean;
-  error?: string | null;
   user?: CurrentUserPayload | null;
 }
 
@@ -58,13 +60,13 @@ export function useLoginWithPassword(): {
   fetching: boolean;
   error: Error | null;
 } {
-  const [state, execute] = useUrqlMutation<{ login: LoginResult }, { input: LoginCredentials }>(
+  const [state, execute] = useUrqlMutation<{ login: LoginResult }, LoginCredentials>(
     LOGIN_DOCUMENT,
   );
   const reset = useResetClient();
   const login = useCallback(
     async (credentials: LoginCredentials): Promise<LoginResult> => {
-      const result = await execute({ input: credentials });
+      const result = await execute(credentials);
       if (result.error) throw result.error;
       const payload = result.data?.login ?? { ok: false };
       if (payload.ok) reset();
@@ -81,12 +83,12 @@ export function useLogout(): {
   fetching: boolean;
   error: Error | null;
 } {
-  const [state, execute] = useUrqlMutation<{ logout: { ok: boolean } }>(LOGOUT_DOCUMENT);
+  const [state, execute] = useUrqlMutation<{ logout: boolean }>(LOGOUT_DOCUMENT);
   const reset = useResetClient();
   const logout = useCallback(async (): Promise<boolean> => {
     const result = await execute({});
     if (result.error) throw result.error;
-    const ok = Boolean(result.data?.logout?.ok);
+    const ok = Boolean(result.data?.logout);
     if (ok) reset();
     return ok;
   }, [execute, reset]);

@@ -1,10 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import {
-  extractConnection,
-  extractNode,
-  type PageInfo,
-} from "./resource-result";
+import { extractNode, extractPage, type PageInfo } from "./resource-result";
 
 describe("extractNode", () => {
   test("returns the single root field's record", () => {
@@ -19,25 +15,25 @@ describe("extractNode", () => {
   });
 });
 
-describe("extractConnection", () => {
-  test("flattens edges to nodes and reads totalCount/pageInfo", () => {
-    const pageInfo: PageInfo = { endCursor: "c2", hasNextPage: true };
+describe("extractPage", () => {
+  test("reads results, totalCount, and the offset pageInfo", () => {
+    const pageInfo: PageInfo = { offset: 0, limit: 50 };
     const data = {
       sales: {
         totalCount: 2,
-        edges: [{ node: { id: "1" } }, { node: { id: "2" } }],
+        results: [{ id: "1" }, { id: "2" }],
         pageInfo,
       },
     };
-    expect(extractConnection(data)).toEqual({
+    expect(extractPage(data)).toEqual({
       rows: [{ id: "1" }, { id: "2" }],
       total: 2,
       pageInfo,
     });
   });
 
-  test("returns empty rows and undefined total for an absent connection", () => {
-    expect(extractConnection({})).toEqual({
+  test("returns empty rows and undefined total for an absent page", () => {
+    expect(extractPage({})).toEqual({
       rows: [],
       total: undefined,
       pageInfo: undefined,
@@ -48,13 +44,10 @@ describe("extractConnection", () => {
     const data = {
       sales: {
         totalCount: 0,
-        edges: [],
-        pageInfo: { endCursor: 123, hasNextPage: "yes" },
+        results: [],
+        pageInfo: { offset: "x", limit: "y" },
       },
     };
-    expect(extractConnection(data).pageInfo).toEqual({
-      endCursor: null,
-      hasNextPage: false,
-    });
+    expect(extractPage(data).pageInfo).toEqual({ offset: 0, limit: null });
   });
 });

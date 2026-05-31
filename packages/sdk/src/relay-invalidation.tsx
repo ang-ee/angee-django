@@ -1,64 +1,92 @@
 import {
   createElement,
+  Fragment,
   useEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
+import { Provider as UrqlProvider } from "urql";
+import type { Client } from "@urql/core";
 
 import { useAuthoredSubscription } from "./authored-hooks";
 import { makeContext } from "./make-context";
 import { createRefetchRegistry, type RefetchRegistry } from "./relay-registry";
 import { typeNameForModel } from "./selection";
 
-/** The single change firehose: one stream of every change the actor may see. */
-export const CHANGE_EVENTS_DOCUMENT =
-  "subscription angeeEvents { events { model id action changedFields computedFieldsChanged } }";
-
-interface ChangeEvent {
-  model: string;
-  id: string;
-  action: string;
-  changedFields: readonly string[];
-  computedFieldsChanged: readonly string[];
+/**
+ * The change subscription for one model: `subscription { <noun>Changed { … } }`,
+ * the per-model event the schema publishes. Derived from the GraphQL typename so
+ * it never drifts from the field naming (`Note` -> `noteChanged`).
+ */
+export function changeSubscriptionDocument(typename: string): string {
+  const field = `${typename.charAt(0).toLowerCase()}${typename.slice(1)}Changed`;
+  return (
+    `subscription angee${typename}Changed { ` +
+    `${field} { model id action changedFields changedValues } }`
+  );
 }
 
 const RegistryContext = makeContext<RefetchRegistry>("RelayInvalidationProvider");
 
-/** Drives the registry from the change firehose; mounted only when subscribing. */
-function ChangeEventListener(props: { registry: RefetchRegistry }): ReactNode {
-  const { registry } = props;
-  useAuthoredSubscription<{ events: ChangeEvent }>(
-    CHANGE_EVENTS_DOCUMENT,
-    undefined,
-    {
-      onData: (data) => {
-        const model = data.events?.model;
-        if (model) registry.invalidate([typeNameForModel(model)]);
-      },
-    },
-  );
+/** Subscribe to one model's change event and invalidate it on every push. */
+function ModelChangeListener(props: {
+  typename: string;
+  registry: RefetchRegistry;
+}): ReactNode {
+  const { typename, registry } = props;
+  const document = useMemo(() => changeSubscriptionDocument(typename), [typename]);
+  useAuthoredSubscription(document, undefined, {
+    onData: () => registry.invalidate([typename]),
+  });
   return null;
 }
 
+/** Open one change subscription per model in view, on the given client. */
+function LiveInvalidation(props: {
+  registry: RefetchRegistry;
+  client: Client;
+}): ReactNode {
+  const { registry, client } = props;
+  const typenames = useSyncExternalStore(
+    registry.subscribe,
+    registry.typenames,
+    registry.typenames,
+  );
+  return createElement(
+    UrqlProvider,
+    { value: client },
+    typenames.map((typename) =>
+      createElement(ModelChangeListener, { key: typename, typename, registry }),
+    ),
+  );
+}
+
 /**
- * Provide the refetch registry and, by default, subscribe to the change
- * firehose so cross-actor writes and deletes refetch the right queries. Pass
- * `autoSubscribe={false}` to use the registry without the live stream.
+ * Provide the refetch registry. When `client` is given — the endpoint that
+ * carries the change subscriptions, i.e. the console schema — and `autoSubscribe`
+ * is on (the default), also open one `<noun>Changed` subscription per model in
+ * view, so cross-actor writes and deletes refetch the right queries. Without a
+ * client the registry still works for post-write invalidation.
  */
 export function RelayInvalidationProvider(props: {
+  client?: Client;
   autoSubscribe?: boolean;
   children: ReactNode;
 }): ReactNode {
   const [registry] = useState(createRefetchRegistry);
   const autoSubscribe = props.autoSubscribe ?? true;
+  const client = props.client;
   return RegistryContext.Provider({
     value: registry,
     children: createElement(
-      "div",
-      { style: { display: "contents" } },
-      autoSubscribe ? createElement(ChangeEventListener, { registry }) : null,
+      Fragment,
+      null,
+      autoSubscribe && client
+        ? createElement(LiveInvalidation, { registry, client })
+        : null,
       props.children,
     ),
   });

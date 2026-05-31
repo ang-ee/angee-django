@@ -1,17 +1,33 @@
 # Pinned GraphQL contract for the SDK.
 #
-# This is the shape the SDK builds documents against: relay connections with
-# totalCount/edges/pageInfo, opaque Sqid node ids, noun-first CRUD mutations
-# (`saleCreate` / `saleUpdate` / `saleDelete`) taking an `input:`, a single
-# `events` change firehose, and aggregate / group-by fields. The `Sale` model
-# carries numeric fields so aggregate measures (sum/avg/min/max) are exercised.
+# A synthetic model (`Sale`) that exercises the conventions the document builder
+# follows, so the framework SDK stays free of any consumer model. It mirrors the
+# shapes strawberry-django emits, so a document valid here is valid against a real
+# runtime endpoint:
 #
-# The runtime schema served per named endpoint conforms to this contract; this
-# file is the source the codegen and the document-builder tests both read.
+#  - standard relay node ids (`id: ID!`) and a `Node` interface;
+#  - offset pagination (`totalCount`, `results`, `pageInfo { offset limit }`) read
+#    with `pagination: { offset, limit }`, so the client owns "page N of M";
+#  - a `@oneOf` order input over an `Ordering` enum, and lookup-object filters;
+#  - verb-first `create/update/delete` mutations taking `data:` / a `Patch` (whose
+#    id travels inside the patch) / an `id:`, with the cascade `DeletePreview`;
+#  - one `<noun>Aggregate(groupBy:)` field returning `{ count, groups }`;
+#  - session login (`login`/`logout`/`currentUser`);
+#  - a per-model `<noun>Changed` change event.
+#
+# This file is the source the codegen and the document-builder tests both read.
 
-scalar Sqid
-scalar Decimal
+directive @oneOf on INPUT_OBJECT
+
 scalar DateTime
+
+scalar JSON
+
+"""An object with a Globally Unique ID"""
+interface Node {
+  """The Globally Unique ID of this object"""
+  id: ID!
+}
 
 enum SaleState {
   DRAFT
@@ -19,74 +35,124 @@ enum SaleState {
   CLOSED
 }
 
-type Owner {
-  id: Sqid!
-  firstName: String!
-  lastName: String!
+enum Ordering {
+  ASC
+  ASC_NULLS_FIRST
+  ASC_NULLS_LAST
+  DESC
+  DESC_NULLS_FIRST
+  DESC_NULLS_LAST
 }
 
-type Sale {
-  id: Sqid!
+type Sale implements Node {
+  id: ID!
   title: String!
   state: SaleState!
-  total: Decimal!
-  quantity: Int!
-  owner: Owner!
+  isFeatured: Boolean!
+  tags: JSON!
   createdAt: DateTime!
+  updatedAt: DateTime!
 }
 
-type SaleEdge {
-  node: Sale!
-  cursor: String!
-}
-
-type PageInfo {
-  hasNextPage: Boolean!
-  hasPreviousPage: Boolean!
-  startCursor: String
-  endCursor: String
-}
-
-type SaleConnection {
+type SaleOffsetPaginated {
+  pageInfo: OffsetPaginationInfo!
   totalCount: Int!
-  edges: [SaleEdge!]!
-  pageInfo: PageInfo!
+  results: [Sale!]!
+}
+
+type OffsetPaginationInfo {
+  offset: Int!
+  limit: Int
+}
+
+input OffsetPaginationInput {
+  offset: Int! = 0
+  limit: Int
+}
+
+input BoolBaseFilterLookup {
+  exact: Boolean
+  isNull: Boolean
+  inList: [Boolean!]
+}
+
+input StrFilterLookup {
+  exact: String
+  isNull: Boolean
+  inList: [String!]
+  iExact: String
+  contains: String
+  iContains: String
+  startsWith: String
+  iStartsWith: String
+  endsWith: String
+  iEndsWith: String
+  regex: String
+  iRegex: String
+}
+
+input SaleStateFilterLookup {
+  exact: SaleState
+  isNull: Boolean
+  inList: [SaleState!]
 }
 
 input SaleFilter {
-  state: SaleState
-  title: String
+  state: SaleStateFilterLookup
+  isFeatured: BoolBaseFilterLookup
+  title: StrFilterLookup
+  AND: SaleFilter
+  OR: SaleFilter
+  NOT: SaleFilter
+  DISTINCT: Boolean
 }
 
-input SaleOrder {
-  title: String
-  state: String
-  total: String
-  createdAt: String
+input SaleOrder @oneOf {
+  title: Ordering
+  state: Ordering
+  createdAt: Ordering
+  updatedAt: Ordering
 }
 
-input SaleCreateInput {
+input SaleInput {
   title: String!
-  state: SaleState
-  total: Decimal
-  quantity: Int
+  state: SaleState! = DRAFT
+  isFeatured: Boolean! = false
+  tags: [String!]! = []
 }
 
-input SaleUpdateInput {
+input SalePatch {
+  id: ID!
   title: String
   state: SaleState
-  total: Decimal
-  quantity: Int
+  isFeatured: Boolean
+  tags: [String!]
+}
+
+enum SaleGroupBy {
+  STATE
+  IS_FEATURED
+  CREATED_AT_MONTH
+}
+
+type SaleGrouped {
+  count: Int!
+  state: SaleState
+  isFeatured: Boolean
+  createdAtMonth: DateTime
+}
+
+type SaleAggregate {
+  count: Int!
+  groups: [SaleGrouped!]!
 }
 
 type DeletePreviewGroup {
-  model: String!
+  label: String!
   count: Int!
 }
 
 type DeletePreview {
-  ok: Boolean!
-  id: Sqid
   totalDeletedCount: Int!
   deleted: [DeletePreviewGroup!]!
   updated: [DeletePreviewGroup!]!
@@ -94,122 +160,48 @@ type DeletePreview {
   hasBlockers: Boolean!
 }
 
-type SaleSumFields {
-  total: Decimal
-  quantity: Int
+type Viewer implements Node {
+  id: ID!
+  username: String!
+  firstName: String!
+  lastName: String!
+  email: String!
+  isStaff: Boolean!
+  isActive: Boolean!
 }
 
-type SaleAvgFields {
-  total: Float
-  quantity: Float
-}
-
-type SaleMinFields {
-  total: Decimal
-  quantity: Int
-}
-
-type SaleMaxFields {
-  total: Decimal
-  quantity: Int
-}
-
-type SaleAggregate {
-  count: Int!
-  sum: SaleSumFields
-  avg: SaleAvgFields
-  min: SaleMinFields
-  max: SaleMaxFields
-}
-
-enum SaleGroupByField {
-  STATE
-  OWNER
-}
-
-input SaleGroupBySpec {
-  field: SaleGroupByField!
-}
-
-type SaleGroupKey {
-  state: SaleState
-  owner: Sqid
-}
-
-type SaleGrouped {
-  key: SaleGroupKey!
-  count: Int!
-  sum: SaleSumFields
-  avg: SaleAvgFields
-  min: SaleMinFields
-  max: SaleMaxFields
-}
-
-type SaleGroupByResult {
-  totalCount: Int!
-  results: [SaleGrouped!]!
+type LoginPayload {
+  ok: Boolean!
+  user: Viewer
 }
 
 type ChangeEvent {
   model: String!
-  id: Sqid!
+  id: ID!
   action: String!
-  changedFields: [String!]!
-  computedFieldsChanged: [String!]!
-}
-
-type CurrentUser {
-  id: Sqid!
-  username: String!
-  email: String
-  isStaff: Boolean!
-  isSuperuser: Boolean!
-  roles: [String!]!
-}
-
-input LoginInput {
-  username: String!
-  password: String!
-}
-
-type LoginResult {
-  ok: Boolean!
-  error: String
-  user: CurrentUser
-}
-
-type LogoutResult {
-  ok: Boolean!
+  changedFields: [String!]
+  changedValues: JSON
 }
 
 type Query {
-  currentUser: CurrentUser
-  sale(id: Sqid!): Sale
+  currentUser: Viewer
+  sale(id: ID!): Sale
   sales(
+    pagination: OffsetPaginationInput
     filters: SaleFilter
-    order: [SaleOrder!]
-    search: String
-    first: Int
-    after: String
-    last: Int
-    before: String
-  ): SaleConnection!
-  salesAggregate(filters: SaleFilter, search: String): SaleAggregate!
-  salesGroupBy(
-    groupBy: [SaleGroupBySpec!]!
-    filters: SaleFilter
-    search: String
-  ): SaleGroupByResult!
+    order: SaleOrder
+  ): SaleOffsetPaginated!
+  saleAggregate(groupBy: [SaleGroupBy!]): SaleAggregate!
 }
 
 type Mutation {
-  login(input: LoginInput!): LoginResult!
-  logout: LogoutResult!
-  saleCreate(input: SaleCreateInput!): Sale!
-  saleUpdate(id: Sqid!, input: SaleUpdateInput!): Sale!
-  saleDelete(id: Sqid!): DeletePreview!
+  login(username: String!, password: String!): LoginPayload!
+  logout: Boolean!
+  createSale(data: SaleInput!): Sale!
+  updateSale(data: SalePatch!): Sale!
+  deleteSale(id: ID!): DeletePreview!
 }
 
 type Subscription {
-  events: ChangeEvent!
+  saleChanged: ChangeEvent!
 }

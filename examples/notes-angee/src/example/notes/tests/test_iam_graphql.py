@@ -79,15 +79,13 @@ class IAMGraphQLTests(TransactionTestCase):
         page = self.graphql(
             """
             query {
-              notes(first: 10) {
+              notes(pagination: { limit: 10 }) {
                 totalCount
-                edges {
-                  node {
-                    id
-                    title
-                    tags
-                    wordCount
-                  }
+                results {
+                  id
+                  title
+                  tags
+                  wordCount
                 }
               }
             }
@@ -97,9 +95,9 @@ class IAMGraphQLTests(TransactionTestCase):
         notes = page["data"]["notes"]
         self.assertGreaterEqual(notes["totalCount"], 3)
         welcome = next(
-            edge["node"]
-            for edge in notes["edges"]
-            if edge["node"]["title"] == "Welcome to Angee"
+            node
+            for node in notes["results"]
+            if node["title"] == "Welcome to Angee"
         )
         relay_id = welcome["id"]
         self.assertNotEqual(relay_id, self.welcome.sqid)
@@ -137,40 +135,41 @@ class IAMGraphQLTests(TransactionTestCase):
             {"id": relay_id, "title": "Welcome through Relay"},
         )
 
-    def test_notes_connection_paginates_in_declared_order(self) -> None:
+    def test_notes_paginate_in_declared_order(self) -> None:
         alice = Client()
         self.login(alice, "alice")
         full = self.notes(alice)
-        ordered = [edge["node"]["title"] for edge in full["edges"]]
+        ordered = [node["title"] for node in full["results"]]
 
         first_page = self.post(
             alice,
             """
             query {
-              notes(first: 1) {
-                pageInfo { hasNextPage endCursor }
-                edges { node { title } }
+              notes(pagination: { offset: 0, limit: 1 }) {
+                totalCount
+                pageInfo { offset limit }
+                results { title }
               }
             }
             """,
         )["data"]["notes"]
-        next_page = self.post(
+        second_page = self.post(
             alice,
             """
-            query After($cursor: String) {
-              notes(first: 1, after: $cursor) {
-                edges { node { title } }
+            query {
+              notes(pagination: { offset: 1, limit: 1 }) {
+                results { title }
               }
             }
             """,
-            {"cursor": first_page["pageInfo"]["endCursor"]},
         )["data"]["notes"]
 
-        # Meta.ordering is ("-updated_at", "title", "sqid"); keyset pages
+        # Meta.ordering is ("-updated_at", "title", "sqid"); offset pages
         # follow that order without overlap.
-        self.assertEqual(first_page["edges"][0]["node"]["title"], ordered[0])
-        self.assertTrue(first_page["pageInfo"]["hasNextPage"])
-        self.assertEqual(next_page["edges"][0]["node"]["title"], ordered[1])
+        self.assertEqual(first_page["results"][0]["title"], ordered[0])
+        self.assertEqual(first_page["pageInfo"], {"offset": 0, "limit": 1})
+        self.assertGreater(first_page["totalCount"], 1)
+        self.assertEqual(second_page["results"][0]["title"], ordered[1])
 
     def test_note_aggregate_counts_are_actor_scoped(self) -> None:
         self.graphql(
@@ -252,17 +251,15 @@ class IAMGraphQLTests(TransactionTestCase):
         self.login(alice, "alice")
         alice_notes = self.notes(alice)
         welcome_id = next(
-            edge["node"]["id"]
-            for edge in alice_notes["edges"]
-            if edge["node"]["title"] == "Welcome to Angee"
+            node["id"]
+            for node in alice_notes["results"]
+            if node["title"] == "Welcome to Angee"
         )
 
         bob = Client()
         self.login(bob, "bob")
         bob_notes = self.notes(bob)
-        bob_titles = {
-            edge["node"]["title"] for edge in bob_notes["edges"]
-        }
+        bob_titles = {node["title"] for node in bob_notes["results"]}
 
         self.assertNotIn("Welcome to Angee", bob_titles)
         self.assertEqual(
@@ -305,15 +302,15 @@ class IAMGraphQLTests(TransactionTestCase):
         self.assertTrue(result["data"]["login"]["ok"])
 
     def notes(self, client: Client) -> dict[str, Any]:
-        """Return the relay connection of notes visible to ``client``."""
+        """Return the offset page of notes visible to ``client``."""
 
         page = self.post(
             client,
             """
             query {
-              notes(first: 20) {
+              notes(pagination: { limit: 20 }) {
                 totalCount
-                edges { node { id title } }
+                results { id title }
               }
             }
             """,

@@ -3,6 +3,45 @@
 **This file is the source of truth for the in-flight program. Re-read it after any
 compaction before acting.** Keep it updated as work lands.
 
+## ✅ M3 Phase 1 DONE — SDK → new contract + offset pagination (gate green)
+The SDK now consumes the emitted contract: relay `ID!` nodes, real
+`NoteStatus`/`Ordering`/`NoteGroupBy` enums, `NoteOrder @oneOf`, `NoteFilter`
+lookup objects, verb-first `createNote(data:)`/`updateNote(data: NotePatch)`/
+`deleteNote(id:)`, the new cascade `DeletePreview`, one
+`noteAggregate(groupBy:)→{count,groups[]}` (count-only), `login(username,password)`/
+`logout:Boolean`/`currentUser→UserType` (role-gating deferred, F6), and per-model
+`<model>Changed` subscriptions on the **console** client (registry made
+observable; `RelayInvalidationProvider({client})` opens one sub per model in view).
+**Pagination = OFFSET (architect chose jump-to-page).** Backend swapped
+`strawberry_django.connection` → `offset_paginated` (notes list), `OffsetPaginated`
+exported from `angee.base.graphql`. SDK list hook does offset paging with real
+jump-to-page (`setPage`), `total`/`pageCount` from backend `totalCount`. SDK fixture
+stays a synthetic neutral `Sale` (framework stays consumer-model-free); document
+tests validate against it. Gate: SDK codegen+typecheck+**106 vitest**; backend ruff,
+`mypy src/`, **101 pytest**, example **15 tests**, `build --check` — all green.
+Files: `packages/sdk/src/{selection,resource-result,resource-hooks,aggregates,
+aggregate-extract,auth,auth-hooks,relay-registry,relay-invalidation,cache-config}.ts(x)`
++ tests, `schema/contract.graphql`, `codegen.ts`, `index.ts`; backend
+`src/angee/base/graphql/__init__.py`, `examples/notes-angee/src/example/notes/schema.py`,
+`tests/test_iam_graphql.py`. react-reviewer pass applied: page-reset moved to
+render-time (no stale-offset fetch), `parseCurrentUser` boundary guard (no
+"undefined undefined"), `variables` memo keyed by serialized filter/order, `hasNext`
+simplified, invalidation provider uses a Fragment (headless). NOT yet committed
+(await architect). Next: Phase 2 (@angee/base).
+
+## ▶ M3 FRONTEND — IN FLIGHT (full end-to-end, phased). Plan: `.agents/plans/m3-frontend.md`
+Workspace `m3-frontend` (branch `workspace/m3-frontend`), off `main`. `angee dev`
+runs the backend from here. Architect decisions: (1) full M3 now — SDK fix +
+`@angee/base` + example web app + Vite dev-serving + browser e2e; (2) **pagination =
+native keyset cursors; `totalCount` is backend-owned (read from the connection),
+derive pages from it — never synthesize**; (3) **live updates = per-model
+`<model>Changed` subscriptions on the console schema** (not the dead `events`
+firehose). The local frontend is ONLY `packages/sdk` (no `@angee/base`, no example
+web app yet); `angee dev` is backend-only today. The SDK is geared to the old
+synthetic `Sale` schema — see the contract delta in the plan. Tasks #1–#5 track the
+phases. Phase 1 (SDK→contract) first; it's what the architect flagged and the
+foundation for the rest.
+
 ## ✅ M2 DONE — `angee dev` lifecycle + full SDL (current)
 Compose/build/serve collapsed to **one boot, no `ANGEE_BUILD` flag**: the composer
 emits the runtime in app-populate **phase 2** (`ComposeConfig.import_models`, ordered

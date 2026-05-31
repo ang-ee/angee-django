@@ -7,11 +7,10 @@ import {
   aggregateFieldName,
   assembleAggregateDocument,
   assembleDetailDocument,
-  assembleGroupByDocument,
   assembleListDocument,
   assembleMutationDocument,
-  groupByFieldName,
 } from "./selection";
+import { changeSubscriptionDocument } from "./relay-invalidation";
 
 const contract = buildSchema(
   readFileSync(new URL("../schema/contract.graphql", import.meta.url), "utf8"),
@@ -24,34 +23,34 @@ function expectValid(document: string): void {
 }
 
 describe("assembleDetailDocument", () => {
-  test("queries the singular field by Sqid id", () => {
-    const document = assembleDetailDocument("Sale", ["title", "owner.firstName"]);
+  test("queries the singular field by relay id", () => {
+    const document = assembleDetailDocument("Sale", ["title", "state"]);
     expect(document).toBe(
-      "query sale($id: Sqid!) { sale(id: $id) { id title owner { id firstName } } }",
+      "query sale($id: ID!) { sale(id: $id) { id title state } }",
     );
     expectValid(document);
   });
 });
 
 describe("assembleListDocument", () => {
-  test("builds the relay connection with totalCount/edges/pageInfo", () => {
+  test("builds the offset page with totalCount/results/pageInfo", () => {
     const document = assembleListDocument("Sale", ["title"]);
     expect(document).toBe(
-      "query sales($first: Int, $after: String, $search: String) { " +
-        "sales(search: $search, first: $first, after: $after) { " +
-        "totalCount edges { node { id title } } " +
-        "pageInfo { endCursor hasNextPage } } }",
+      "query sales($pagination: OffsetPaginationInput) { " +
+        "sales(pagination: $pagination) { " +
+        "totalCount results { id title } pageInfo { offset limit } } }",
     );
     expectValid(document);
   });
 
-  test("adds filters and order variables on request", () => {
+  test("adds filters and the @oneOf order variable on request", () => {
     const document = assembleListDocument("Sale", ["title"], {
       withFilter: true,
       withOrder: true,
     });
+    expect(document).toContain("$pagination: OffsetPaginationInput");
     expect(document).toContain("$filters: SaleFilter");
-    expect(document).toContain("$order: [SaleOrder!]");
+    expect(document).toContain("$order: SaleOrder");
     expect(document).toContain("filters: $filters");
     expect(document).toContain("order: $order");
     expectValid(document);
@@ -59,56 +58,62 @@ describe("assembleListDocument", () => {
 });
 
 describe("assembleMutationDocument", () => {
-  test("create takes a noun-first input", () => {
+  test("create takes a verb-first data input", () => {
     const document = assembleMutationDocument("Sale", "create", ["title"]);
     expect(document).toBe(
-      "mutation saleCreate($input: SaleCreateInput!) { " +
-        "saleCreate(input: $input) { id title } }",
+      "mutation createSale($data: SaleInput!) { " +
+        "createSale(data: $data) { id title } }",
     );
     expectValid(document);
   });
 
-  test("update takes id plus input", () => {
+  test("update takes a patch whose id travels inside the data", () => {
     const document = assembleMutationDocument("Sale", "update", ["title"]);
     expect(document).toBe(
-      "mutation saleUpdate($id: Sqid!, $input: SaleUpdateInput!) { " +
-        "saleUpdate(id: $id, input: $input) { id title } }",
+      "mutation updateSale($data: SalePatch!) { " +
+        "updateSale(data: $data) { id title } }",
     );
     expectValid(document);
   });
 
-  test("delete returns the DeletePreview ok/id shape", () => {
+  test("delete returns the cascade DeletePreview shape", () => {
     const document = assembleMutationDocument("Sale", "delete", []);
     expect(document).toBe(
-      "mutation saleDelete($id: Sqid!) { saleDelete(id: $id) { ok id } }",
+      "mutation deleteSale($id: ID!) { deleteSale(id: $id) { " +
+        "totalDeletedCount hasBlockers " +
+        "deleted { label count } updated { label count } blocked { label count } } }",
     );
     expectValid(document);
   });
 });
 
 describe("aggregate documents", () => {
-  test("field names are plural", () => {
-    expect(aggregateFieldName("Sale")).toBe("salesAggregate");
-    expect(groupByFieldName("Sale")).toBe("salesGroupBy");
+  test("the field name is the singular noun plus Aggregate", () => {
+    expect(aggregateFieldName("Sale")).toBe("saleAggregate");
   });
 
-  test("aggregate selects count plus each measure operator", () => {
-    const document = assembleAggregateDocument("Sale", ["total"]);
-    expect(document).toBe(
-      "query salesAggregate($search: String) { " +
-        "salesAggregate(search: $search) { " +
-        "count sum { total } avg { total } min { total } max { total } } }",
-    );
+  test("the ungrouped aggregate selects just count", () => {
+    const document = assembleAggregateDocument("Sale");
+    expect(document).toBe("query saleAggregate { saleAggregate { count } }");
     expectValid(document);
   });
 
-  test("group-by selects the key fields and measures per bucket", () => {
-    const document = assembleGroupByDocument("Sale", ["state"], ["total"]);
+  test("the grouped aggregate declares groupBy and selects per-bucket dimensions", () => {
+    const document = assembleAggregateDocument("Sale", ["state"]);
     expect(document).toBe(
-      "query salesGroupBy($groupBy: [SaleGroupBySpec!]!, $search: String) { " +
-        "salesGroupBy(groupBy: $groupBy, search: $search) { " +
-        "totalCount results { key { state } " +
-        "count sum { total } avg { total } min { total } max { total } } } }",
+      "query saleAggregate($groupBy: [SaleGroupBy!]) { " +
+        "saleAggregate(groupBy: $groupBy) { count groups { count state } } }",
+    );
+    expectValid(document);
+  });
+});
+
+describe("changeSubscriptionDocument", () => {
+  test("subscribes to the model's change event", () => {
+    const document = changeSubscriptionDocument("Sale");
+    expect(document).toBe(
+      "subscription angeeSaleChanged { " +
+        "saleChanged { model id action changedFields changedValues } }",
     );
     expectValid(document);
   });
