@@ -26,6 +26,39 @@ strawberry-django). Reconstruct, never copy; **no p1 baggage**; no provenance an
   (main session) verify + commit.** Codex CAN edit `src/`/`tests/`/`docs/`/`examples/` (Slice 1
   proves it).
 
+## ✅ M1 BUILD — slices 1–7 complete, cleaned, schema builds, committed
+All 7 slices land. Gate green (ruff/mypy/**97 pytest**); `angee build --check`,
+`manage.py schema`, and `manage.py test example.notes` (14 example tests) all pass; fresh-ledger
+e2e (build → makemigrations iam base notes → migrate → rebac sync → resources load 11 rows →
+login(alice)/currentUser → notes relay connection scoped to alice → bob sees only his notes at
+root and via `node(id:)` → noteAggregate alice-scoped count=3 → anonymous mutation →
+PERMISSION_DENIED) all green. Workarounds removed:
+- **Relay Node interface** — `AngeeNode` is now a real `@strawberry.interface` over `relay.Node`
+  declaring `sqid: relay.NodeID[str]`. Its own definition (not Node's inherited one) means the MRO
+  yields two distinct interfaces (`AngeeNode`, `Node`), so the doubled-`Node` interface never
+  appears. `normalize_node_interfaces` deleted.
+- **Schema assembly bug** — root cause: relay `NodeExtension.apply` mutates the SAME shared
+  `StrawberryField` when a surface (`NotesQuery`) is contributed to multiple named schemas
+  (`public` + `console`); the second build re-applies and trips `assert base_resolver is None`.
+  Fix lives at the merge seam: `GraphQLSchemas._merge_root` gives each named schema independent
+  field copies (`copy.copy` of each merged-root field). The nested `revisions` connection is
+  DROPPED — reversion `Version` is a Python property, not a REBAC-scopable Django relation, and
+  Note has no genuine child relation to demo a nested connection over; the top-level `notes`
+  connection is the must-have and works. `word_count` resolves via
+  `@strawberry_django.field(only=["body"])`.
+- **User-model dance** — `register_build_user_model()` + the `import_models` override are GONE.
+  `AUTH_USER_MODEL="iam.User"` is set ONLY in the RUN app set; the emit-only BUILD keeps Django's
+  default contrib.auth user (it only renders sources, never resolves the FK). The composer emits
+  the concrete swappable `iam.User` into `runtime/iam/models.py`, so it resolves at run with no
+  runtime registration.
+- **depends_on** — `IAMConfig`/`NotesConfig` use plain `depends_on = ("base",)`; the unused
+  `ClassVar` import dropped from iam/apps.py. `BaseAddonConfig.dependencies` now reuses
+  `_normalize_depends_on`, so a bare-string `depends_on="base"` resolves to `("base",)`
+  (test in tests/test_apps.py).
+**Residual note:** `rebac.W003` on `notes.Note.created_by → iam.User` is an ORM select_related
+hint, not a GraphQL leak — `created_by` is NOT exposed on `NoteType`, so there is no nested user
+path to leak. M2 research (wuoceuykb) wires `manage.py schema` into `angee dev`.
+
 ## The main thing (core intent — drives every milestone)
 The point of this program is a **GraphQL contract change** and its propagation to the
 client:
@@ -156,8 +189,13 @@ label must not be `auth`; if it is genuinely replaced, label `auth` is free.
   already wired). Token/bearer deferred.
 - **F4 — denial codes: `UNAUTHENTICATED` + `PERMISSION_DENIED`** (Apollo standard + the
   user's item 3 spelling; p1 used NOT_AUTHENTICATED — deliberately diverge).
-- **F5 — rename each addon GraphQL module `graphql.py` → `schema.py`** (one discovery
-  hook in apps.py) to kill the graphql-core shadow so `manage.py test` works (item 11).
+- **F5 — addon GraphQL contribution module = `schema.py`** (one discovery hook in
+  apps.py resolves `schema`) — strawberry's idiom AND it kills the graphql-core import
+  shadow so `manage.py test` works (item 11). **DECISION (architect): keep `schema.py`;
+  make it INTENTIONAL** — document in `docs/backend/guidelines.md` + the Naming section
+  that addon GraphQL contributions live in `schema.py` while the framework GraphQL
+  *subsystem* is the `angee.base.graphql` package (a different kind of module). Both
+  addons (iam, notes) already use `schema.py`; ensure every future addon does too.
 - **F6 — defer `currentUser.role_refs`** (not needed for M1).
 - **F7 — delete the combined runtime `permissions.zed` emit** (compose/runtime.py:67);
   `rebac sync` reads each addon's own `.zed` — one owner per fact. Also delete the dead
