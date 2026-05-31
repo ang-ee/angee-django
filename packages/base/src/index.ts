@@ -24,6 +24,8 @@ export * from "./widgets";
 export * from "./feedback";
 
 // App shell (chrome) and auth surface.
+export * from "./chrome";
+export * from "./communication";
 export * from "./shell";
 export * from "./auth";
 
