@@ -1,45 +1,80 @@
-"""Tests for REBAC-aware model composition."""
+"""Tests for Angee model composition primitives."""
 
 from __future__ import annotations
 
-from angee.base.compose.emission import _rebac_meta_source
-from angee.base.models import AngeeModel
-from rebac import RebacMixin
+import pytest
+from django.db import connection, models
+from rebac import RebacMixin, system_context
+
+from angee.base.mixins import SqidMixin
+from angee.base.models import (
+    AngeeModel,
+    instance_from_public_id,
+    public_id_of,
+)
+
+
+class PublicIdThing(SqidMixin, AngeeModel):
+    """Concrete test model with an Angee public identifier."""
+
+    name = models.CharField(max_length=32)
+
+    class Meta:
+        """Django model options for the test model."""
+
+        app_label = "tests"
+
+
+class PlainPublicIdThing(models.Model):
+    """Concrete test model that does not use AngeeModel."""
+
+    name = models.CharField(max_length=32)
+
+    class Meta:
+        """Django model options for the test model."""
+
+        app_label = "tests"
 
 
 def test_every_angee_model_carries_the_rebac_mixin() -> None:
-    """The shared base wires REBAC enforcement into all source models."""
+    """AngeeModel wires REBAC behavior into every source model."""
 
     assert issubclass(AngeeModel, RebacMixin)
 
 
-def test_composer_carries_rebac_binding_to_concrete_models() -> None:
-    """The REBAC resource binding survives abstract -> concrete composition.
+@pytest.mark.django_db(transaction=True)
+def test_public_id_helpers_support_angee_and_plain_django_models() -> None:
+    """ID helpers use Angee public IDs for Angee models and PKs otherwise."""
 
-    The REBAC metaclass moves ``rebac_resource_type`` off ``Meta`` onto
-    ``_meta``, so a concrete model built from an abstract source would lose it
-    unless the composer re-emits it.
-    """
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(PublicIdThing)
+        schema_editor.create_model(PlainPublicIdThing)
 
-    class GatedThing(AngeeModel):
-        class Meta:
-            abstract = True
-            app_label = "base"
-            rebac_resource_type = "demo/thing"
-            rebac_id_attr = "sqid"
+    try:
+        angee_instance = PublicIdThing.objects.create(name="angee")
+        plain_instance = PlainPublicIdThing.objects.create(name="plain")
 
-    assert _rebac_meta_source(GatedThing) == [
-        "        rebac_resource_type = 'demo/thing'",
-        "        rebac_id_attr = 'sqid'",
-    ]
-
-
-def test_composer_omits_rebac_binding_for_plain_models() -> None:
-    """A model that declares no resource type emits no REBAC Meta lines."""
-
-    class PlainThing(AngeeModel):
-        class Meta:
-            abstract = True
-            app_label = "base"
-
-    assert _rebac_meta_source(PlainThing) == []
+        assert public_id_of(angee_instance) == angee_instance.sqid
+        assert public_id_of(plain_instance) == str(plain_instance.pk)
+        with system_context(reason="test public-id lookup"):
+            assert (
+                instance_from_public_id(
+                    PublicIdThing, angee_instance.public_id
+                )
+                == angee_instance
+            )
+            assert (
+                PublicIdThing.from_public_id(angee_instance.public_id)
+                == angee_instance
+            )
+        assert (
+            instance_from_public_id(PlainPublicIdThing, str(plain_instance.pk))
+            == plain_instance
+        )
+        with system_context(reason="test missing public-id lookup"):
+            assert instance_from_public_id(PublicIdThing, "missing") is None
+        assert instance_from_public_id(PlainPublicIdThing, "0") is None
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(PlainPublicIdThing)
+            schema_editor.delete_model(PublicIdThing)

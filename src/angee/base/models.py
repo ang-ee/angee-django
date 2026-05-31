@@ -1,0 +1,151 @@
+"""Runtime model primitives shared by composed Angee applications."""
+
+from __future__ import annotations
+
+from typing import Any, Self, TypeVar, cast
+
+from django.core.exceptions import ImproperlyConfigured
+from django.db import models
+from django.db.models.utils import make_model_tuple
+from rebac import RebacMixin
+
+from angee.base.mixins import TimestampMixin
+
+_ModelT = TypeVar("_ModelT", bound=models.Model)
+
+
+class AngeeModel(TimestampMixin, RebacMixin):
+    """Abstract base model for Angee source and runtime models."""
+
+    extends: str | None = None
+    """Optional ``app_label.ModelName`` target this source model extends."""
+
+    class Meta:
+        """Django model options for Angee's abstract model base."""
+
+        abstract = True
+
+    @classmethod
+    def get_composition_label(cls) -> str:
+        """Return this model's normalized composition label."""
+
+        return cls._meta.label_lower
+
+    @classmethod
+    def get_extension_target(cls) -> str | None:
+        """Return the normalized model label this source model extends."""
+
+        target = cls.extends
+        if target is None:
+            return None
+        if not isinstance(target, str):
+            raise ImproperlyConfigured(
+                f"{cls.__module__}.{cls.__name__}.extends must be a string."
+            )
+        try:
+            app_label, model_name = make_model_tuple(target)
+        except ValueError as error:
+            raise ImproperlyConfigured(
+                f"{cls.__module__}.{cls.__name__}.extends must be "
+                "an 'app_label.ModelName' reference."
+            ) from error
+        return f"{app_label}.{model_name}"
+
+    @classmethod
+    def get_extension_bases(cls) -> tuple[type[models.Model], ...]:
+        """Return abstract model bases contributed by this extension."""
+
+        if cls.get_extension_target() is None:
+            return ()
+
+        bases = tuple(
+            base
+            for base in cls.__bases__
+            if _is_contributed_extension_base(base)
+        )
+        return bases or (cls,)
+
+    @property
+    def public_id(self) -> str:
+        """Return the stable public identifier for this model instance."""
+
+        value = _public_id_value(self)
+        if value in (None, ""):
+            return ""
+        return str(value)
+
+    @classmethod
+    def from_public_id(cls, value: str) -> Self | None:
+        """Return the instance addressed by ``value``, if one exists."""
+
+        if value == "":
+            return None
+
+        lookup = cls._public_id_lookup(value)
+        try:
+            instance = cls._default_manager.filter(**lookup).first()
+        except TypeError, ValueError:
+            return None
+        return cast(Self | None, instance)
+
+    @classmethod
+    def _public_id_lookup(cls, value: str) -> dict[str, Any]:
+        """Return the Django lookup for this model's public identifier."""
+
+        if _has_model_field(cls, "sqid"):
+            return {"sqid": value}
+        return {cls._meta.pk.name: value}
+
+
+def instance_from_public_id(
+    model: type[_ModelT], value: str
+) -> _ModelT | None:
+    """Return ``model`` instance addressed by Angee or Django public ID."""
+
+    if issubclass(model, AngeeModel):
+        return cast(_ModelT | None, model.from_public_id(value))
+
+    try:
+        instance = model._default_manager.filter(pk=value).first()
+    except TypeError, ValueError:
+        return None
+    return cast(_ModelT | None, instance)
+
+
+def public_id_of(instance: models.Model) -> str:
+    """Return the Angee public ID or Django primary key for ``instance``."""
+
+    if isinstance(instance, AngeeModel):
+        return instance.public_id
+    if instance.pk is None:
+        return ""
+    return str(instance.pk)
+
+
+def _is_contributed_extension_base(value: type) -> bool:
+    """Return whether ``value`` is an abstract model extension base."""
+
+    if not issubclass(value, models.Model):
+        return False
+    if value in {models.Model, TimestampMixin, RebacMixin, AngeeModel}:
+        return False
+    model = cast(type[models.Model], value)
+    meta = model._meta
+    return bool(meta.abstract)
+
+
+def _has_model_field(model: type[models.Model], name: str) -> bool:
+    """Return whether ``model`` exposes a concrete or private field."""
+
+    return any(
+        field.name == name or field.attname == name
+        for field in (*model._meta.fields, *model._meta.private_fields)
+    )
+
+
+def _public_id_value(instance: models.Model) -> Any:
+    """Return the raw public identifier value owned by ``instance``."""
+
+    if _has_model_field(type(instance), "sqid"):
+        return getattr(instance, "sqid")
+    return instance.pk
