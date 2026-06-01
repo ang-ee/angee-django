@@ -9,10 +9,12 @@ import {
   useChatterContent,
 } from "@angee/base";
 import { useAuthoredQuery } from "@angee/sdk";
+import { useNavigate, useParams } from "@tanstack/react-router";
 
 import { NOTE_STATUS_OPTIONS, NOTE_STATUS_TONES } from "./note-status";
 
 const MODEL = "notes.Note";
+const NOTE_LIST_PATH = "/notes";
 const NOTE_REVISIONS_QUERY = `
   query NoteRevisions($id: ID!) {
     noteRevisions(id: $id) {
@@ -38,6 +40,14 @@ interface NoteRevisionsData {
 type NoteRevisionsVariables = Record<string, unknown> & {
   id: string;
 };
+
+interface NoteRouteParams {
+  id?: string;
+}
+
+interface NotePageProps {
+  routeRecordId?: string;
+}
 
 const columns: readonly ListColumn[] = [
   { field: "title", header: "Title" },
@@ -132,12 +142,39 @@ const formGroups: readonly PageGroupDescriptor[] = [
   },
 ];
 
+export function NoteRecordPage(): React.ReactElement {
+  const params = useParams({ strict: false }) as Partial<NoteRouteParams>;
+  return <NotePage routeRecordId={routeRecordId(params.id)} />;
+}
+
 /** The notes console page: a count-by-status panel above the data table. */
-export function NotePage(): React.ReactElement {
+export function NotePage({
+  routeRecordId,
+}: NotePageProps = {}): React.ReactElement {
+  const navigate = useNavigate();
   const [recordId, setRecordId] = React.useState<string | null | undefined>(
-    undefined,
+    routeRecordId,
   );
   const [creating, setCreating] = React.useState(false);
+  React.useEffect(() => {
+    setCreating(false);
+    setRecordId(routeRecordId);
+  }, [routeRecordId]);
+  const handleSelect = React.useCallback(
+    (id: string | null) => {
+      setCreating(id === null);
+      setRecordId(id);
+      if (typeof id === "string") {
+        void navigate({ to: noteRecordPath(id) });
+      }
+    },
+    [navigate],
+  );
+  const handleClose = React.useCallback(() => {
+    setCreating(false);
+    setRecordId(undefined);
+    void navigate({ to: NOTE_LIST_PATH });
+  }, [navigate]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -152,17 +189,26 @@ export function NotePage(): React.ReactElement {
         placement="inline"
         pageSize={50}
         defaultGroup={{ field: "updatedAt", granularity: "day" }}
-        onSelect={(id) => {
-          setCreating(id === null);
-          setRecordId(id);
-        }}
-        onClose={() => {
-          setCreating(false);
-          setRecordId(undefined);
-        }}
+        rowHref={(row) =>
+          typeof row.id === "string" ? noteRecordPath(row.id) : NOTE_LIST_PATH}
+        onSelect={handleSelect}
+        onClose={handleClose}
       />
     </div>
   );
+}
+
+function noteRecordPath(id: string): string {
+  return `${NOTE_LIST_PATH}/${encodeURIComponent(id)}`;
+}
+
+function routeRecordId(id: string | undefined): string | undefined {
+  if (id === undefined) return undefined;
+  try {
+    return decodeURIComponent(id);
+  } catch {
+    return id;
+  }
 }
 
 function NoteChatter({

@@ -61,6 +61,7 @@ export interface DataPageProps<TRow extends Row = Row> {
   returning?: FormViewProps["returning"];
   /** Hides the built-in "New" button when the host owns creation. */
   hideCreate?: boolean;
+  rowHref?: (row: TRow) => string;
   className?: string;
 }
 
@@ -114,6 +115,7 @@ function DataPageBody<TRow extends Row = Row>({
   fields,
   returning,
   hideCreate = false,
+  rowHref,
   className,
 }: DataPageProps<TRow>): React.ReactElement {
   const dataView = useDataView();
@@ -243,6 +245,7 @@ function DataPageBody<TRow extends Row = Row>({
       defaultGroup={defaultGroup}
       onCreate={!hideCreate && onSelect ? () => onSelect(null) : undefined}
       onListStateChange={handleListStateChange}
+      rowHref={rowHref}
       onRowClick={
         onSelect
           ? (row) => {

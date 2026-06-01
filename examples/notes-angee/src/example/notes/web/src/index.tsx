@@ -1,6 +1,6 @@
 import type { BaseAddon } from "@angee/base";
 
-import { NotePage } from "./NotePage";
+import { NotePage, NoteRecordPage } from "./NotePage";
 
 /** The notes addon: one console route and a menu entry pointing at it. */
 const notes: BaseAddon = {
@@ -14,6 +14,15 @@ const notes: BaseAddon = {
       icon: "notes",
       breadcrumbs: [{ label: "Notes" }],
       component: NotePage,
+    },
+    {
+      name: "notes.record",
+      path: "/notes/$id",
+      shell: "console",
+      title: "Notes",
+      icon: "notes",
+      breadcrumbs: [{ label: "Notes", to: "/notes" }],
+      component: NoteRecordPage,
     },
   ],
   menus: [{ id: "notes", label: "Notes", to: "/notes" }],
