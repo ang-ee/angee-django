@@ -240,4 +240,66 @@ describe("DataPage", () => {
       });
     });
   });
+
+  test("lets the seeded default group be cleared", async () => {
+    const view = render(
+      <NuqsTestingAdapter>
+        <DataPage
+          model="notes.Note"
+          columns={[...columns, { field: "updatedAt", header: "Updated At" }]}
+          formFields={formFields}
+          defaultGroup={{ field: "updatedAt", granularity: "day" }}
+        />
+      </NuqsTestingAdapter>,
+    );
+
+    const removeGroup = await screen.findByRole("button", {
+      name: "Remove group",
+    });
+    fireEvent.click(removeGroup);
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Remove group" }),
+      ).toBeNull(),
+    );
+
+    await act(async () => {
+      view.unmount();
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+  });
+
+  test("lets the seeded default group granularity be changed", async () => {
+    const view = render(
+      <NuqsTestingAdapter>
+        <DataPage
+          model="notes.Note"
+          columns={[...columns, { field: "updatedAt", header: "Updated At" }]}
+          formFields={formFields}
+          defaultGroup={{ field: "updatedAt", granularity: "day" }}
+        />
+      </NuqsTestingAdapter>,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Filter, group, favorites",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Month" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("Updated · Month")).toBeTruthy(),
+    );
+
+    await act(async () => {
+      view.unmount();
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+  });
 });

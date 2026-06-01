@@ -46,6 +46,7 @@ import {
   type DataViewContextValue,
 } from "./data-view-context";
 import {
+  dataViewGroupsEqual,
   dataViewSortToResourceOrder,
   type DataViewFilter,
   type DataViewGroup,
@@ -101,7 +102,6 @@ export function ListView<TRow extends Row = Row>(
     <DataViewProvider
       initialState={{
         pageSize: props.pageSize,
-        group: props.defaultGroup ?? null,
       }}
     >
       <ListViewBound {...props} />
@@ -140,10 +140,20 @@ function ListViewBody<TRow extends Row = Row>({
     }
   }, [dataView, pageSize]);
 
+  const handledDefaultGroupRef = React.useRef<DataViewGroup | null>(null);
   React.useEffect(() => {
-    if (defaultGroup && dataView.state.group === null) {
-      dataView.setGroup(defaultGroup);
+    if (!defaultGroup) {
+      handledDefaultGroupRef.current = null;
+      return;
     }
+    if (
+      handledDefaultGroupRef.current
+      && dataViewGroupsEqual(handledDefaultGroupRef.current, defaultGroup)
+    ) {
+      return;
+    }
+    handledDefaultGroupRef.current = defaultGroup;
+    if (dataView.state.group === null) dataView.setGroup(defaultGroup);
   }, [dataView, defaultGroup]);
 
   const requestedFields = React.useMemo(() => {

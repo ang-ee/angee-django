@@ -86,7 +86,6 @@ export function DataPage<TRow extends Row = Row>({
     <DataViewProvider
       initialState={{
         pageSize,
-        group: defaultGroup ?? null,
       }}
     >
       <DataPageBody

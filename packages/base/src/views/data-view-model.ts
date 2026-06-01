@@ -357,7 +357,7 @@ function serializeDataViewGroupStack(
   return groups.map(serializeDataViewGroup).join(",");
 }
 
-function dataViewGroupsEqual(
+export function dataViewGroupsEqual(
   left: DataViewGroup,
   right: DataViewGroup,
 ): boolean {
