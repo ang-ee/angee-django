@@ -101,7 +101,7 @@ Dependency changes must update this file in the same change.
 | Vitest | TypeScript and React tests | Frontend unit checks |
 | happy-dom | DOM environment for Vitest | Per-file env opt-in for hook and component tests |
 | @testing-library/react | React component and hook test rendering | Provider-wrapped render and hook harnesses |
-| Playwright | Browser tests | End-to-end checks |
+| Playwright | Browser tests | `@angee/e2e` harness: workspace-isolated runner, role `storageState` login, GraphQL `api` fixture, Page Object base (`docs/testing/e2e.md`) |
 | Storybook | Component workshop | `@angee/base` and addon previews |
 | GitHub Actions | CI | Build, lint, type, test gates |
 | Copier | Project and addon templates | Angee templates |

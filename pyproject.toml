@@ -6,6 +6,8 @@ build-backend = "hatchling.build"
 name = "django-angee"
 version = "0.1.0"
 description = "Thin Django composition primitives for Angee applications."
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
 requires-python = ">=3.14"
 dependencies = [
   "channels>=4.0",
@@ -46,6 +48,8 @@ artifacts = [
 [tool.hatch.build.targets.sdist]
 only-include = [
   "AGENTS.md",
+  "LICENSE",
+  "README.md",
   "docs",
   "examples",
   "pyproject.toml",

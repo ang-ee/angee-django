@@ -48,6 +48,7 @@ examples/*/src/runtime/
 .playwright-mcp/
 test-results/
 playwright-report/
+.auth/
 
 # Storybook scratch logs
 packages/storybook-host/*.log

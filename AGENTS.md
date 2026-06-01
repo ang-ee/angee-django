@@ -35,9 +35,43 @@ stack DRY.
 
 ## Repository Layout
 
-_Placeholder — this will be expanded as code lands._ The tree will map the
-framework core addon, the base addons, the host and composer, and where source
-models, generated `runtime/` output, and frontend packages live.
+A map by role, not a file inventory — each addon's `AppConfig` and module
+docstrings own the current contract, and this points to the owner. Everything is
+an addon: `src/angee/` holds the framework core and base addons, and the example
+shows a host composing a consumer addon on top.
+
+```text
+.
+├── src/angee/              # `django-angee` — the framework core and base addons
+│   ├── base/               # framework core addon: runtime foundation, app contracts, GraphQL buckets
+│   ├── compose/            # the composer — emits the concrete runtime (`manage.py angee build`)
+│   ├── iam/                # IAM base addon — identity and the swappable user model
+│   └── resources/          # resources base addon — tiered data import/export (`resources` command)
+├── packages/               # frontend workspace (pnpm)
+│   ├── sdk/                # `@angee/sdk` — headless bindings
+│   ├── base/               # `@angee/base` — the single rendered (styled) binding
+│   └── e2e/                # `@angee/e2e` — Playwright e2e harness (`docs/testing/e2e.md`)
+├── templates/              # Copier templates the operator renders
+│   ├── stacks/dev/         # dev Stack template (`angee init --dev`)
+│   └── workspaces/dev/     # dev Workspace template (`angee ws create … --template dev`)
+├── examples/notes-angee/   # the example project `angee dev` runs from the repo root
+│   ├── manage.py           # Django entrypoint (`uv run examples/notes-angee/manage.py …`)
+│   └── src/
+│       ├── host/           # the host app — composes the addons into the running project
+│       ├── example/notes/  # a consumer addon — product logic for the example
+│       ├── web/            # the project frontend (Vite + React)
+│       └── runtime/        # concrete apps + SDL emitted by the composer — output, not source
+├── docs/                   # intent docs — glossary, stack, guidelines, and `docs/howto/`
+├── tests/                  # framework tests (composition, GraphQL, IAM, CRUD, …)
+├── .agents/                # durable agent bookkeeping — notes, plans, sub-agents (`.agents/README.md`)
+├── README.md               # human entry point; `AGENTS.md` is the agent/contributor entry point
+├── pyproject.toml, uv.lock                             # Python package + locked graph
+└── package.json, pnpm-workspace.yaml, pnpm-lock.yaml   # JS workspace + locked graph
+```
+
+You edit **source models** in addons; the composer emits the concrete apps and
+the `runtime/` tree. Generated `runtime/` is output — change the source, not the
+artifact (see `docs/glossary.md`).
 
 ## Constitution
 

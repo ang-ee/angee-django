@@ -100,11 +100,14 @@ services:
     after: [resources, schema]
 
   # Vite dev server for the SPA. It proxies /graphql/ and /auth/csrf/ to Django,
-  # so the SPA and backend share the session cookie across the two ports.
+  # so the SPA and backend share the session cookie across the two ports. The UI
+  # port is the workspace's allocation, so an isolated workspace serves on its own
+  # port and the e2e harness (docs/testing/e2e.md) targets the same URL.
   frontend:
     runtime: local
     workdir: source://framework
     command: ["pnpm", "--filter", "@angee-example/notes-host", "dev"]
     env:
       ANGEE_DJANGO_URL: http://127.0.0.1:{{ django_port }}
+      ANGEE_UI_PORT: "{{ ui_port }}"
     after: [deps, schema, web]

@@ -52,5 +52,16 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": DATA_DIR / "db.sqlite3",
+        # SQLite locks the whole file on write. Under the ASGI server's
+        # concurrent requests (and parallel e2e — docs/testing/e2e.md) the
+        # default config raises "database is locked". WAL lets readers run during
+        # a write; IMMEDIATE takes the write lock at BEGIN rather than on first
+        # write, avoiding deferred-upgrade deadlocks; timeout makes a contended
+        # writer wait instead of failing.
+        "OPTIONS": {
+            "init_command": "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
+            "transaction_mode": "IMMEDIATE",
+            "timeout": 20,
+        },
     }
 }
