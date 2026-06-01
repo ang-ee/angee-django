@@ -35,6 +35,7 @@ export interface DataViewContextValue {
   setSort: (sort: DataViewSort | null) => void;
   setFilter: (filter: DataViewFilter) => void;
   setGroup: (group: DataViewGroup | null) => void;
+  setGroupStack: (groupStack: readonly DataViewGroup[]) => void;
   setSelectedIds: (selectedIds: Iterable<string>) => void;
   toggleSelectedId: (id: string, selected?: boolean) => void;
   clearSelectedIds: () => void;
@@ -97,6 +98,8 @@ export function DataViewProvider({
       setSort: (sort) => dispatch({ type: "setSort", sort }),
       setFilter: (filter) => dispatch({ type: "setFilter", filter }),
       setGroup: (group) => dispatch({ type: "setGroup", group }),
+      setGroupStack: (groupStack) =>
+        dispatch({ type: "setGroupStack", groupStack }),
       setSelectedIds: (selectedIds) =>
         dispatch({ type: "setSelectedIds", selectedIds }),
       toggleSelectedId: (id, selected) =>

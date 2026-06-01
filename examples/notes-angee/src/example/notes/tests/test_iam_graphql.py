@@ -9,6 +9,7 @@ import reversion
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
+from django.db.models import Count
 from django.test import Client, TransactionTestCase
 from rebac import system_context
 
@@ -333,25 +334,36 @@ class IAMGraphQLTests(TransactionTestCase):
             }
             """
         )["data"]
+        expected_status_counts = {
+            str(row["status"]).upper(): row["count"]
+            for row in Note.objects.as_user(self.alice)
+            .values("status")
+            .annotate(count=Count("pk"))
+        }
+        expected_total = sum(expected_status_counts.values())
 
-        # Ungrouped total is actor-scoped to alice's three notes.
-        self.assertEqual(data["total"]["count"], 3)
+        # Ungrouped total is actor-scoped to alice's visible demo rows.
+        self.assertGreaterEqual(expected_total, 52)
+        self.assertEqual(data["total"]["count"], expected_total)
 
         # group-by status: groups paginate (totalCount) and carry typed enum
         # keys, matching the schema's NoteStatus group key.
-        self.assertEqual(data["byStatus"]["totalCount"], 3)
+        self.assertEqual(
+            data["byStatus"]["totalCount"], len(expected_status_counts)
+        )
         self.assertEqual(
             {
                 row["key"]["status"]: row["count"]
                 for row in data["byStatus"]["results"]
             },
-            {"ACTIVE": 1, "DRAFT": 1, "IN_REVIEW": 1},
+            expected_status_counts,
         )
 
-        # group-by a date granularity (month) buckets the same three notes.
+        # group-by a date granularity (month) buckets the same scoped rows.
         self.assertGreaterEqual(data["byMonth"]["totalCount"], 1)
         self.assertEqual(
-            sum(row["count"] for row in data["byMonth"]["results"]), 3
+            sum(row["count"] for row in data["byMonth"]["results"]),
+            expected_total,
         )
         self.assertTrue(data["byMonth"]["results"][0]["key"]["updatedAtMonth"])
 

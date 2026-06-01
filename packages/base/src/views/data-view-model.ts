@@ -49,6 +49,7 @@ export interface DataViewState {
   sort: DataViewSort | null;
   filter: DataViewFilter;
   group: DataViewGroup | null;
+  groupStack: readonly DataViewGroup[];
   selectedIds: ReadonlySet<string>;
   view: DataViewKind;
 }
@@ -59,6 +60,7 @@ export interface DataViewInitialState {
   sort?: DataViewSort | null;
   filter?: DataViewFilter;
   group?: DataViewGroup | null;
+  groupStack?: readonly DataViewGroup[];
   selectedIds?: Iterable<string>;
   view?: DataViewKind;
 }
@@ -69,6 +71,7 @@ export type DataViewAction =
   | { type: "setSort"; sort: DataViewSort | null }
   | { type: "setFilter"; filter: DataViewFilter }
   | { type: "setGroup"; group: DataViewGroup | null }
+  | { type: "setGroupStack"; groupStack: readonly DataViewGroup[] }
   | { type: "setSelectedIds"; selectedIds: Iterable<string> }
   | { type: "toggleSelectedId"; id: string; selected?: boolean }
   | { type: "clearSelectedIds" }
@@ -86,6 +89,12 @@ export const dataViewGroupParser = createParser<DataViewGroup>({
   eq: dataViewGroupsEqual,
 });
 
+export const dataViewGroupStackParser = createParser<readonly DataViewGroup[]>({
+  parse: parseDataViewGroupStack,
+  serialize: serializeDataViewGroupStack,
+  eq: dataViewGroupStacksEqual,
+});
+
 export const dataViewFilterParser =
   parseAsJson<DataViewFilter>(dataViewFilterFromUnknown);
 
@@ -95,6 +104,7 @@ export const dataViewQueryParsers = {
   sort: dataViewSortParser,
   filter: dataViewFilterParser,
   group: dataViewGroupParser,
+  then: dataViewGroupStackParser,
   view: parseAsStringLiteral(DATA_VIEW_KINDS).withDefault("list"),
 };
 
@@ -106,6 +116,9 @@ const serializeDataViewQuery = createSerializer(dataViewQueryParsers);
 export function createDataViewState(
   initial: DataViewInitialState = {},
 ): DataViewState {
+  const groupStack = normaliseGroupStack(
+    initial.groupStack ?? (initial.group ? [initial.group] : []),
+  );
   return {
     page: normalisePage(initial.page),
     pageSize: clampPageSize(
@@ -113,7 +126,8 @@ export function createDataViewState(
     ),
     sort: initial.sort ? normaliseSort(initial.sort) : null,
     filter: normaliseFilter(initial.filter),
-    group: initial.group ? normaliseGroup(initial.group) : null,
+    group: groupStack[0] ?? null,
+    groupStack,
     selectedIds: new Set(initial.selectedIds ?? []),
     view: initial.view ?? "list",
   };
@@ -145,7 +159,16 @@ export function dataViewReducer(
       return resetQueryScope({
         ...state,
         group: action.group ? normaliseGroup(action.group) : null,
+        groupStack: action.group ? [normaliseGroup(action.group)] : [],
       });
+    case "setGroupStack": {
+      const groupStack = normaliseGroupStack(action.groupStack);
+      return resetQueryScope({
+        ...state,
+        group: groupStack[0] ?? null,
+        groupStack,
+      });
+    }
     case "setSelectedIds":
       return { ...state, selectedIds: new Set(action.selectedIds) };
     case "toggleSelectedId":
@@ -166,6 +189,7 @@ export function dataViewStateToQueryValues(
     sort: state.sort,
     filter: hasFilter(state.filter) ? state.filter : null,
     group: state.group,
+    then: state.groupStack.length > 1 ? state.groupStack.slice(1) : null,
     view: state.view,
   };
 }
@@ -181,6 +205,13 @@ export function dataViewStateFromQueryValues(
     sort: values.sort ?? base.sort,
     filter: values.filter ?? base.filter,
     group: values.group ?? base.group,
+    groupStack:
+      values.group || values.then
+        ? [
+            ...(values.group ? [values.group] : []),
+            ...(values.then ?? []),
+          ]
+        : base.groupStack,
     view: values.view ?? base.view,
   });
 }
@@ -258,6 +289,21 @@ function normaliseGroup(group: DataViewGroup): DataViewGroup {
   };
 }
 
+function normaliseGroupStack(
+  groups: readonly DataViewGroup[],
+): readonly DataViewGroup[] {
+  const seen = new Set<string>();
+  const normalised: DataViewGroup[] = [];
+  for (const group of groups) {
+    const next = normaliseGroup(group);
+    const key = serializeDataViewGroup(next);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalised.push(next);
+  }
+  return normalised;
+}
+
 function normaliseFilter(filter: DataViewFilter | undefined): DataViewFilter {
   return filter ? { ...filter } : {};
 }
@@ -298,11 +344,32 @@ function serializeDataViewGroup(group: DataViewGroup): string {
     : group.field;
 }
 
+function parseDataViewGroupStack(value: string): readonly DataViewGroup[] | null {
+  if (!value) return [];
+  const groups = value.split(",").map(parseDataViewGroup);
+  if (groups.some((group) => group === null)) return null;
+  return normaliseGroupStack(groups as DataViewGroup[]);
+}
+
+function serializeDataViewGroupStack(
+  groups: readonly DataViewGroup[],
+): string {
+  return groups.map(serializeDataViewGroup).join(",");
+}
+
 function dataViewGroupsEqual(
   left: DataViewGroup,
   right: DataViewGroup,
 ): boolean {
   return left.field === right.field && left.granularity === right.granularity;
+}
+
+function dataViewGroupStacksEqual(
+  left: readonly DataViewGroup[],
+  right: readonly DataViewGroup[],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((group, index) => dataViewGroupsEqual(group, right[index]!));
 }
 
 function isGroupGranularity(value: string): value is DataViewGroupGranularity {

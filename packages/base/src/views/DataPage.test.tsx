@@ -11,6 +11,10 @@ import {
 import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 
+import {
+  Breadcrumb,
+  BreadcrumbProvider,
+} from "../chrome/Breadcrumb";
 import { DataPage } from "./DataPage";
 import type { FormField } from "./FormView";
 import type { ListColumn } from "./ListView";
@@ -154,6 +158,38 @@ describe("DataPage", () => {
     await waitFor(() =>
       expect(boardButton.getAttribute("aria-pressed")).toBe("true"),
     );
+
+    await act(async () => {
+      view.unmount();
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+  });
+
+  test("publishes persistent breadcrumbs for the selected record", async () => {
+    const view = render(
+      <NuqsTestingAdapter>
+        <BreadcrumbProvider initialTrail={[{ label: "Notes" }]}>
+          <Breadcrumb />
+          <DataPage
+            model="notes.Note"
+            columns={columns}
+            formFields={formFields}
+            recordId="note-2"
+            placement="inline"
+            pageSize={2}
+          />
+        </BreadcrumbProvider>
+      </NuqsTestingAdapter>,
+    );
+
+    const breadcrumb = screen.getByRole("navigation", { name: "Breadcrumb" });
+    await waitFor(() =>
+      expect(within(breadcrumb).getByText("Second")).toBeTruthy(),
+    );
+    expect(within(breadcrumb).getByText("Second").getAttribute("aria-current"))
+      .toBe("page");
 
     await act(async () => {
       view.unmount();

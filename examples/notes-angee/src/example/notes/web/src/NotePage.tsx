@@ -1,6 +1,5 @@
 import * as React from "react";
 import {
-  AggregatePanel,
   DataPage,
   Glyph,
   Spinner,
@@ -44,7 +43,7 @@ const columns: readonly ListColumn[] = [
   { field: "title", header: "Title" },
   { field: "tags", header: "Tags" },
   { field: "status", header: "Status", tone: NOTE_STATUS_TONES },
-  { field: "wordCount", header: "Words", align: "right" },
+  { field: "wordCount", header: "Word Count", align: "right" },
   { field: "updatedAt", header: "Updated At" },
 ];
 
@@ -99,12 +98,6 @@ const bodyField = {
   label: "Body",
   widget: "markdown.editor",
 } satisfies FormField;
-const isStarredField = {
-  name: "isStarred",
-  label: "Starred",
-  widget: "switch",
-} satisfies FormField;
-
 const formFields: readonly FormField[] = [
   titleField,
   statusField,
@@ -115,7 +108,6 @@ const formFields: readonly FormField[] = [
   createdAtField,
   updatedAtField,
   bodyField,
-  isStarredField,
 ];
 
 const formGroups: readonly PageGroupDescriptor[] = [
@@ -125,7 +117,6 @@ const formGroups: readonly PageGroupDescriptor[] = [
     fields: [
       titleField,
       tagsField,
-      isStarredField,
       wordCountField,
       createdByField,
       updatedByField,
@@ -151,11 +142,6 @@ export function NotePage(): React.ReactElement {
   return (
     <div className="flex flex-col gap-4">
       <NoteChatter recordId={recordId} creating={creating} />
-      <AggregatePanel
-        model={MODEL}
-        dimensions={[{ field: "STATUS", key: "status", label: "By status" }]}
-        title="Notes by status"
-      />
       <DataPage
         model={MODEL}
         columns={columns}
@@ -163,7 +149,7 @@ export function NotePage(): React.ReactElement {
         formGroups={formGroups}
         recordId={recordId}
         creating={creating}
-        placement="drawer"
+        placement="inline"
         pageSize={50}
         defaultGroup={{ field: "updatedAt", granularity: "day" }}
         onSelect={(id) => {

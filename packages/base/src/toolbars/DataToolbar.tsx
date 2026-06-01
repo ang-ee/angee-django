@@ -1,24 +1,70 @@
 import type { ReactElement, ReactNode } from "react";
-import { Grid2X2, List, Plus, X } from "lucide-react";
+import {
+  Calendar,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Filter,
+  Grid2X2,
+  List,
+  Plus,
+  Search,
+  SlidersHorizontal,
+  Star,
+  X,
+} from "lucide-react";
 import type { UseResourceListResult } from "@angee/sdk";
 
 import { cn } from "../lib/cn";
 import { Button } from "../ui/button";
 import { Chip } from "../ui/chip";
-import { Input } from "../ui/input";
-import type { DataViewGroup, DataViewKind } from "../views/data-view-model";
+import {
+  PopoverContent,
+  PopoverPortal,
+  PopoverPositioner,
+  PopoverRoot,
+  PopoverTrigger,
+} from "../ui/popover";
+import type {
+  DataViewFilter,
+  DataViewGroup,
+  DataViewGroupGranularity,
+  DataViewKind,
+} from "../views/data-view-model";
 
 export interface DataToolbarProps {
   list: UseResourceListResult;
   view: DataViewKind;
   group?: DataViewGroup | null;
+  groupStack?: readonly DataViewGroup[];
+  groupOptions?: readonly DataToolbarGroupOption[];
+  filterOptions?: readonly DataToolbarFilterOption[];
+  activeFilterIds?: readonly string[];
   filterText?: string;
   createLabel?: ReactNode;
   onCreate?: () => void;
   onFilterTextChange?: (value: string) => void;
+  onFilterToggle?: (id: string) => void;
   onClearGroup?: () => void;
+  onGroupStackChange?: (groups: readonly DataViewGroup[]) => void;
+  onPageChange?: (page: number) => void;
   onViewChange?: (view: DataViewKind) => void;
   className?: string;
+}
+
+export interface DataToolbarFilterOption {
+  id: string;
+  label: ReactNode;
+  chipLabel?: ReactNode;
+  filter: DataViewFilter;
+}
+
+export interface DataToolbarGroupOption {
+  id: string;
+  label: ReactNode;
+  group: DataViewGroup;
+  type?: "date" | "value";
+  granularities?: readonly DataViewGroupGranularity[];
 }
 
 export interface DataViewSwitcherProps {
@@ -32,11 +78,18 @@ export function DataToolbar({
   list,
   view,
   group,
+  groupStack,
+  groupOptions = [],
+  filterOptions = [],
+  activeFilterIds = [],
   filterText = "",
   createLabel = "New",
   onCreate,
+  onFilterToggle,
   onFilterTextChange,
   onClearGroup,
+  onGroupStackChange,
+  onPageChange,
   onViewChange,
   className,
 }: DataToolbarProps): ReactElement {
@@ -46,11 +99,17 @@ export function DataToolbar({
   const end = list.total === undefined
     ? list.page * list.pageSize
     : Math.min(list.total, list.page * list.pageSize);
+  const groups = groupStack ?? (group ? [group] : []);
+  const activeFilters = filterOptions.filter((option) =>
+    activeFilterIds.includes(option.id),
+  );
+  const pageLabel = `${start}-${end}${list.total !== undefined ? ` / ${list.total}` : ""}`;
 
   return (
-    <div
+    <section
+      aria-label="Data controls"
       className={cn(
-        "flex min-h-control-h flex-wrap items-center gap-2 border-b border-border-subtle bg-sheet px-3 py-2",
+        "flex min-h-11 items-center gap-2 border-b border-border-subtle bg-sheet px-3 py-2",
         className,
       )}
     >
@@ -60,39 +119,316 @@ export function DataToolbar({
           {createLabel}
         </Button>
       ) : null}
-      {group ? (
-        <Chip tone="brand" size="sm" className="gap-1">
-          Group by: {groupLabel(group)}
-          {onClearGroup ? (
-            <button
-              type="button"
-              aria-label="Clear grouping"
-              className="ml-0.5 rounded-full text-brand-soft-text outline-none hover:bg-on-brand-soft-hover focus-visible:focus-ring"
-              onClick={onClearGroup}
-            >
-              <X className="size-3" aria-hidden />
-            </button>
-          ) : null}
-        </Chip>
-      ) : null}
-      {onFilterTextChange ? (
-        <Input
+      <FilterPicker
+        groups={groups}
+        groupOptions={groupOptions}
+        activeFilters={activeFilters}
+        activeFilterIds={activeFilterIds}
+        filterOptions={filterOptions}
+        filterText={filterText}
+        onClearGroup={onClearGroup}
+        onFilterTextChange={onFilterTextChange}
+        onFilterToggle={onFilterToggle}
+        onGroupStackChange={onGroupStackChange}
+      />
+      <div className="min-w-2 flex-1" />
+      <button
+        type="button"
+        className="h-6 rounded px-1.5 text-13 tabular-nums text-fg outline-none hover:bg-inset focus-visible:focus-ring"
+        aria-label={`Records ${pageLabel}`}
+      >
+        {pageLabel}
+      </button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="iconSm"
+        aria-label="Previous page"
+        disabled={!list.hasPrev}
+        onClick={() => onPageChange?.(Math.max(1, list.page - 1))}
+      >
+        <ChevronLeft className="glyph" aria-hidden />
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="iconSm"
+        aria-label="Next page"
+        disabled={!list.hasNext}
+        onClick={() => onPageChange?.(list.page + 1)}
+      >
+        <ChevronRight className="glyph" aria-hidden />
+      </Button>
+      <DataViewSwitcher view={view} onViewChange={onViewChange} />
+    </section>
+  );
+}
+
+function FilterPicker({
+  groups,
+  groupOptions,
+  filterOptions,
+  activeFilters,
+  activeFilterIds,
+  filterText,
+  onFilterTextChange,
+  onFilterToggle,
+  onClearGroup,
+  onGroupStackChange,
+}: {
+  groups: readonly DataViewGroup[];
+  groupOptions: readonly DataToolbarGroupOption[];
+  filterOptions: readonly DataToolbarFilterOption[];
+  activeFilters: readonly DataToolbarFilterOption[];
+  activeFilterIds: readonly string[];
+  filterText: string;
+  onFilterTextChange?: (value: string) => void;
+  onFilterToggle?: (id: string) => void;
+  onClearGroup?: () => void;
+  onGroupStackChange?: (groups: readonly DataViewGroup[]) => void;
+}): ReactElement {
+  return (
+    <PopoverRoot>
+      <div className="inline-flex h-8 min-w-0 max-w-xl flex-1 items-center gap-1 overflow-hidden rounded-md border border-transparent bg-inset pl-2 pr-1 text-13 text-fg focus-within:border-border-focus focus-within:bg-sheet focus-within:focus-ring">
+        <Search className="size-3.5 shrink-0 text-fg-muted" aria-hidden />
+        {groups.map((nextGroup, index) => (
+          <FacetChip
+            key={`${nextGroup.field}:${nextGroup.granularity ?? ""}`}
+            label={index === 0 ? "Group by" : "Then"}
+            value={groupLabel(nextGroup)}
+            removeLabel={`Remove ${index === 0 ? "group" : "group level"}`}
+            onRemove={() => {
+              const next = groups.filter((_, groupIndex) => groupIndex !== index);
+              if (next.length === 0) onClearGroup?.();
+              else onGroupStackChange?.(next);
+            }}
+          />
+        ))}
+        {activeFilters.map((option) => (
+          <FacetChip
+            key={option.id}
+            label="Filter"
+            value={option.chipLabel ?? option.label}
+            removeLabel={`Remove ${String(option.chipLabel ?? option.label)}`}
+            onRemove={() => onFilterToggle?.(option.id)}
+          />
+        ))}
+        <input
           type="search"
           value={filterText}
           placeholder="Filter..."
           aria-label="Filter records"
-          className="h-7 w-48"
-          onChange={(event) => onFilterTextChange(event.currentTarget.value)}
+          className="h-full min-w-[7rem] flex-1 border-0 bg-transparent text-13 text-fg outline-none placeholder:text-fg-muted"
+          onChange={(event) => onFilterTextChange?.(event.currentTarget.value)}
         />
+        <PopoverTrigger
+          className="grid size-6 shrink-0 place-content-center rounded text-fg-muted outline-none transition-colors hover:bg-sheet hover:text-fg focus-visible:focus-ring"
+          aria-label="Filter, group, favorites"
+        >
+          <ChevronDown className="size-3" aria-hidden />
+        </PopoverTrigger>
+      </div>
+      <PopoverPortal>
+        <PopoverPositioner sideOffset={6} align="start">
+          <PopoverContent className="grid w-[45rem] max-w-[calc(100vw-2rem)] grid-cols-3">
+            <PickerColumn icon={<Filter className="size-3.5" />} title="Filters">
+              {filterOptions.length === 0 ? (
+                <PickerMuted>No filters</PickerMuted>
+              ) : (
+                filterOptions.map((option) => (
+                  <PickerButton
+                    key={option.id}
+                    active={activeFilterIds.includes(option.id)}
+                    onClick={() => onFilterToggle?.(option.id)}
+                  >
+                    {option.label}
+                  </PickerButton>
+                ))
+              )}
+              <PickerDivider />
+              <PickerButton muted>
+                <Plus className="size-3" aria-hidden />
+                Add custom filter
+              </PickerButton>
+            </PickerColumn>
+            <PickerColumn
+              icon={<SlidersHorizontal className="size-3.5" />}
+              title="Group by"
+            >
+              {groupOptions.map((option) => (
+                <GroupOptionButton
+                  key={option.id}
+                  option={option}
+                  groups={groups}
+                  onGroupStackChange={onGroupStackChange}
+                />
+              ))}
+              <PickerDivider />
+              <PickerButton muted>
+                <Plus className="size-3" aria-hidden />
+                Add custom group
+              </PickerButton>
+            </PickerColumn>
+            <PickerColumn icon={<Star className="size-3.5" />} title="Favorites">
+              <PickerButton muted>
+                <Plus className="size-3" aria-hidden />
+                Save current search
+              </PickerButton>
+            </PickerColumn>
+          </PopoverContent>
+        </PopoverPositioner>
+      </PopoverPortal>
+    </PopoverRoot>
+  );
+}
+
+function FacetChip({
+  label,
+  value,
+  removeLabel,
+  onRemove,
+}: {
+  label: ReactNode;
+  value: ReactNode;
+  removeLabel: string;
+  onRemove: () => void;
+}): ReactElement {
+  return (
+    <Chip tone="brand" size="sm" className="max-w-52 gap-1">
+      <span className="shrink-0">{label}:</span>
+      <span className="truncate">{value}</span>
+      <button
+        type="button"
+        aria-label={removeLabel}
+        className="ml-0.5 rounded-full text-brand-soft-text outline-none hover:bg-on-brand-soft-hover focus-visible:focus-ring"
+        onClick={onRemove}
+      >
+        <X className="size-3" aria-hidden />
+      </button>
+    </Chip>
+  );
+}
+
+function PickerColumn({
+  icon,
+  title,
+  children,
+}: {
+  icon: ReactNode;
+  title: ReactNode;
+  children: ReactNode;
+}): ReactElement {
+  return (
+    <section className="min-w-0 border-r border-border-subtle p-3 last:border-r-0">
+      <h3 className="mb-2 flex items-center gap-2 text-13 font-semibold text-fg">
+        <span className="text-brand-soft-text">{icon}</span>
+        {title}
+      </h3>
+      <div className="grid gap-1">{children}</div>
+    </section>
+  );
+}
+
+function PickerButton({
+  active = false,
+  muted = false,
+  children,
+  onClick,
+}: {
+  active?: boolean;
+  muted?: boolean;
+  children: ReactNode;
+  onClick?: () => void;
+}): ReactElement {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "flex h-7 min-w-0 items-center gap-2 rounded-md px-2 text-left text-13 outline-none transition-colors focus-visible:focus-ring",
+        active
+          ? "bg-brand-soft font-medium text-brand-soft-text"
+          : muted
+            ? "text-fg-muted hover:bg-inset hover:text-fg"
+            : "text-fg hover:bg-inset",
+      )}
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  );
+}
+
+function GroupOptionButton({
+  option,
+  groups,
+  onGroupStackChange,
+}: {
+  option: DataToolbarGroupOption;
+  groups: readonly DataViewGroup[];
+  onGroupStackChange?: (groups: readonly DataViewGroup[]) => void;
+}): ReactElement {
+  const activeIndex = groups.findIndex((group) => group.field === option.group.field);
+  const active = activeIndex >= 0;
+  const granularities = option.granularities ?? DEFAULT_GRANULARITIES;
+  const selectedGranularity =
+    activeIndex >= 0
+      ? groups[activeIndex]?.granularity
+      : option.group.granularity;
+
+  return (
+    <div className={cn("rounded-md", active && "bg-brand-soft")}>
+      <PickerButton
+        active={active}
+        onClick={() => {
+          if (!onGroupStackChange) return;
+          if (active) {
+            onGroupStackChange(
+              groups.filter((_, index) => index !== activeIndex),
+            );
+          } else {
+            onGroupStackChange([...groups, option.group]);
+          }
+        }}
+      >
+        {option.type === "date" ? (
+          <Calendar className="size-3 text-fg-muted" aria-hidden />
+        ) : null}
+        <span className="min-w-0 flex-1 truncate">{option.label}</span>
+      </PickerButton>
+      {option.type === "date" && active ? (
+        <div className="flex px-2 pb-1">
+          {granularities.map((granularity) => (
+            <button
+              key={granularity}
+              type="button"
+              className={cn(
+                "h-5 rounded px-1.5 text-2xs font-medium outline-none focus-visible:focus-ring",
+                selectedGranularity === granularity
+                  ? "bg-brand text-on-brand"
+                  : "text-fg-muted hover:bg-sheet",
+              )}
+              onClick={() => {
+                const next = groups.map((group, index) =>
+                  index === activeIndex ? { ...group, granularity } : group,
+                );
+                onGroupStackChange?.(next);
+              }}
+            >
+              {titleCase(granularity)}
+            </button>
+          ))}
+        </div>
       ) : null}
-      <div className="min-w-2 flex-1" />
-      <span className="text-13 tabular-nums text-fg-muted">
-        {start}-{end}
-        {list.total !== undefined ? ` / ${list.total}` : ""}
-      </span>
-      <DataViewSwitcher view={view} onViewChange={onViewChange} />
     </div>
   );
+}
+
+function PickerDivider(): ReactElement {
+  return <div className="my-1 border-t border-border-subtle" />;
+}
+
+function PickerMuted({ children }: { children: ReactNode }): ReactElement {
+  return <p className="px-2 py-1 text-13 text-fg-muted">{children}</p>;
 }
 
 export function DataViewSwitcher({
@@ -134,13 +470,26 @@ export function DataViewSwitcher({
 }
 
 function groupLabel(group: DataViewGroup): string {
-  const field = titleCase(group.field);
+  const field = groupFieldLabel(group.field);
   return group.granularity ? `${field} · ${titleCase(group.granularity)}` : field;
 }
+
+const DEFAULT_GRANULARITIES: readonly DataViewGroupGranularity[] = [
+  "year",
+  "quarter",
+  "month",
+  "week",
+  "day",
+];
 
 function titleCase(value: string): string {
   return value
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
     .replace(/[_-]+/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function groupFieldLabel(field: string): string {
+  const label = titleCase(field);
+  return label.endsWith(" At") ? label.slice(0, -3) : label;
 }

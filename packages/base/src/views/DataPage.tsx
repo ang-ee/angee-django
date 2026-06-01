@@ -2,6 +2,10 @@ import * as React from "react";
 import type { Row } from "@angee/sdk";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
+import {
+  useBreadcrumb,
+  type BreadcrumbItem,
+} from "../chrome/Breadcrumb";
 import { cn } from "../lib/cn";
 import { DataViewSwitcher } from "../toolbars";
 import { Button } from "../ui/button";
@@ -113,6 +117,14 @@ function DataPageBody<TRow extends Row = Row>({
   className,
 }: DataPageProps<TRow>): React.ReactElement {
   const dataView = useDataView();
+  const { items: breadcrumbItems, setItems: setBreadcrumbItems } =
+    useBreadcrumb();
+  const baseTrailRef = React.useRef<readonly BreadcrumbItem[] | null>(null);
+  if (baseTrailRef.current === null) {
+    baseTrailRef.current = breadcrumbItems.length > 0
+      ? breadcrumbItems
+      : [{ label: collectionLabelForModel(model) }];
+  }
   const [listState, setListState] =
     React.useState<ListViewState<TRow> | null>(null);
   const [pendingNavigation, setPendingNavigation] =
@@ -121,6 +133,36 @@ function DataPageBody<TRow extends Row = Row>({
   // A record is open when an id is selected or a create was requested.
   const open = creating || recordId != null;
   const editId = creating ? null : recordId ?? null;
+  const recordBreadcrumb = React.useMemo(
+    () =>
+      recordBreadcrumbLabel({
+        columns,
+        creating,
+        formFields,
+        listState,
+        model,
+        recordId,
+      }),
+    [columns, creating, formFields, listState, model, recordId],
+  );
+
+  React.useEffect(() => {
+    const baseTrail = baseTrailRef.current ?? [
+      { label: collectionLabelForModel(model) },
+    ];
+    setBreadcrumbItems(
+      open ? [...baseTrail, { label: recordBreadcrumb }] : baseTrail,
+    );
+  }, [model, open, recordBreadcrumb, setBreadcrumbItems]);
+
+  React.useEffect(
+    () => () => {
+      setBreadcrumbItems(
+        baseTrailRef.current ?? [{ label: collectionLabelForModel(model) }],
+      );
+    },
+    [model, setBreadcrumbItems],
+  );
 
   const handleListStateChange = React.useCallback(
     (next: ListViewState<TRow>) => {
@@ -178,6 +220,17 @@ function DataPageBody<TRow extends Row = Row>({
       }}
     />
   ) : null;
+  const recordToolbar = open ? (
+    <div className="flex min-h-11 items-center gap-2 border-b border-border-subtle bg-sheet px-3 py-2">
+      {!hideCreate && onSelect ? (
+        <Button type="button" variant="primary" size="sm" onClick={() => onSelect(null)}>
+          {createLabelForModel(model)}
+        </Button>
+      ) : null}
+      <div className="min-w-2 flex-1" />
+      {recordHeaderActions}
+    </div>
+  ) : null;
 
   const list = (
     <ListView<TRow>
@@ -208,7 +261,6 @@ function DataPageBody<TRow extends Row = Row>({
       groups={formGroups}
       returning={returning}
       onSaved={handleSaved}
-      headerActions={recordHeaderActions}
     />
   ) : null;
 
@@ -234,25 +286,18 @@ function DataPageBody<TRow extends Row = Row>({
   }
 
   return (
-    <div
-      className={cn("grid gap-4 lg:grid-cols-[2fr_1fr]", className)}
-    >
-      <div className="flex flex-col gap-3">
-        {list}
-      </div>
+    <div className={cn("min-w-0", className)}>
       {open ? (
-        <div className="rounded-md border border-border bg-sheet p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-fg">
-              {editId == null ? "New record" : "Edit record"}
-            </h2>
-            <Button variant="ghost" size="sm" onClick={() => onClose?.()}>
-              Close
-            </Button>
+        <>
+          <div hidden>{list}</div>
+          <div className="overflow-hidden rounded-md border border-border bg-sheet">
+            {recordToolbar}
+            <div className="px-6 py-8">{recordForm}</div>
           </div>
-          {recordForm}
-        </div>
-      ) : null}
+        </>
+      ) : (
+        list
+      )}
     </div>
   );
 }
@@ -386,6 +431,64 @@ function buildRecordNavigation<TRow extends Row>({
             }
           : undefined,
   };
+}
+
+function createLabelForModel(model: string): string {
+  const name = model.split(".").at(-1) ?? "record";
+  return `New ${titleCase(name).toLowerCase()}`;
+}
+
+function collectionLabelForModel(model: string): string {
+  const name = model.split(".").at(-1) ?? "records";
+  return `${titleCase(name)}s`;
+}
+
+function recordBreadcrumbLabel<TRow extends Row>({
+  columns,
+  creating,
+  formFields,
+  listState,
+  model,
+  recordId,
+}: {
+  columns: readonly ListColumn<TRow>[];
+  creating: boolean;
+  formFields: readonly FormField[];
+  listState: ListViewState<TRow> | null;
+  model: string;
+  recordId?: string | null;
+}): React.ReactNode {
+  if (creating) return createLabelForModel(model);
+  const row = typeof recordId === "string"
+    ? listState?.rows.find((candidate) => rowId(candidate) === recordId)
+    : undefined;
+  const titlePath =
+    formFields.find((field) => field.title)?.name ?? columns[0]?.field;
+  const value = titlePath && row ? readPath(row, titlePath) : null;
+  return breadcrumbValue(value) ?? titleCase(model.split(".").at(-1) ?? "Record");
+}
+
+function readPath(row: Row, path: string): unknown {
+  let current: unknown = row;
+  for (const key of path.split(".")) {
+    if (current == null || typeof current !== "object") return undefined;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current;
+}
+
+function breadcrumbValue(value: unknown): React.ReactNode | null {
+  if (typeof value === "string" && value.trim()) return value;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  return null;
+}
+
+function titleCase(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function rowId(row: Row | undefined): string | null {

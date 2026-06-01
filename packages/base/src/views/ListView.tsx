@@ -13,18 +13,18 @@ import {
   type UseResourceListOptions,
   type UseResourceListResult,
 } from "@angee/sdk";
-import { formatDistanceToNow } from "date-fns";
+import { format, formatDistanceToNow } from "date-fns";
 import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
-  ChevronLeft,
-  ChevronRight,
-  ChevronsLeft,
-  ChevronsRight,
 } from "lucide-react";
 
-import { DataToolbar } from "../toolbars";
+import {
+  DataToolbar,
+  type DataToolbarFilterOption,
+  type DataToolbarGroupOption,
+} from "../toolbars";
 import { Badge, type BadgeVariant } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -66,6 +66,7 @@ export interface ListViewProps<TRow extends Row = Row> {
   pageSize?: number;
   defaultGroup?: DataViewGroup | null;
   onCreate?: () => void;
+  createLabel?: React.ReactNode;
   onRowClick?: (row: TRow) => void;
   onListStateChange?: (state: ListViewState<TRow>) => void;
   rowHref?: (row: TRow) => string;
@@ -122,6 +123,7 @@ function ListViewBody<TRow extends Row = Row>({
   pageSize,
   defaultGroup,
   onCreate,
+  createLabel,
   onRowClick,
   onListStateChange,
   rowHref,
@@ -210,7 +212,19 @@ function ListViewBody<TRow extends Row = Row>({
   const allPageSelected =
     pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
   const somePageSelected = pageIds.some((id) => selectedIds.has(id));
-  const groupedRows = groupRows(rowModels, dataView.state.group);
+  const groupedRows = groupRows(rowModels, dataView.state.groupStack);
+  const groupOptions = React.useMemo(
+    () => buildGroupOptions(columns, defaultGroup),
+    [columns, defaultGroup],
+  );
+  const filterOptions = React.useMemo(
+    () => buildFilterOptions(columns, rows),
+    [columns, rows],
+  );
+  const activeFilterIds = activeFilterIdsFor(
+    dataView.state.filter,
+    filterOptions,
+  );
 
   const setPage = React.useCallback(
     (page: number) => {
@@ -236,10 +250,22 @@ function ListViewBody<TRow extends Row = Row>({
         list={list}
         view={dataView.state.view}
         group={dataView.state.group}
+        groupStack={dataView.state.groupStack}
+        groupOptions={groupOptions}
+        filterOptions={filterOptions}
+        activeFilterIds={activeFilterIds}
         filterText={filterText}
+        createLabel={createLabel ?? createLabelForModel(model)}
         onCreate={onCreate}
-        onClearGroup={() => dataView.setGroup(null)}
+        onClearGroup={() => dataView.setGroupStack([])}
+        onGroupStackChange={dataView.setGroupStack}
         onViewChange={dataView.setView}
+        onPageChange={setPage}
+        onFilterToggle={(id) =>
+          dataView.setFilter(
+            nextFacetFilter(dataView.state.filter, filterOptions, id),
+          )
+        }
         onFilterTextChange={(value) =>
           dataView.setFilter(nextTextFilter(dataView.state.filter, value))
         }
@@ -303,29 +329,16 @@ function ListViewBody<TRow extends Row = Row>({
                 </TableCell>
               </TableRow>
             ) : (
-              groupedRows.flatMap((group) => [
-                ...(group.label !== null
-                  ? [
-                      <GroupHeader
-                        key={`group:${group.label}`}
-                        label={group.label}
-                        rows={group.rows}
-                        colSpan={columns.length + 1}
-                      />,
-                    ]
-                  : []),
-                ...group.rows.map((row) => (
-                  <RecordRow
-                    key={row.id}
-                    row={row}
-                    columns={columns}
-                    dataView={dataView}
-                    interactive={interactive}
-                    rowHref={rowHref}
-                    onRowClick={onRowClick}
-                  />
-                )),
-              ])
+              groupedRows.flatMap((group) =>
+                renderGroupRows({
+                  group,
+                  columns,
+                  dataView,
+                  interactive,
+                  rowHref,
+                  onRowClick,
+                }),
+              )
             )}
           </TableBody>
         </Table>
@@ -335,9 +348,7 @@ function ListViewBody<TRow extends Row = Row>({
           <Spinner size="sm" />
           Loading...
         </div>
-      ) : (
-        <Pager list={list} onPageChange={setPage} />
-      )}
+      ) : null}
     </div>
   );
 }
@@ -450,12 +461,13 @@ function BoardRows<TRow extends Row>({
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
 }): React.ReactElement {
-  if (groups.every((group) => group.rows.length === 0)) {
+  const leaves = groups.flatMap(flattenLeaves);
+  if (leaves.every((group) => group.rows.length === 0)) {
     return <div className="px-3 py-8 text-center text-fg-muted">{emptyMessage}</div>;
   }
   return (
     <div className="grid gap-3 p-3 md:grid-cols-2 xl:grid-cols-3">
-      {groups.flatMap((group) =>
+      {leaves.flatMap((group) =>
         group.rows.map((row) => {
           const href = rowHref?.(row.original);
           const card = (
@@ -503,13 +515,73 @@ function BoardRows<TRow extends Row>({
   );
 }
 
+function renderGroupRows<TRow extends Row>({
+  group,
+  columns,
+  dataView,
+  interactive,
+  rowHref,
+  onRowClick,
+}: {
+  group: RowGroup<TRow>;
+  columns: readonly ColumnDescriptor<TRow>[];
+  dataView: DataViewContextValue;
+  interactive: boolean;
+  rowHref?: (row: TRow) => string;
+  onRowClick?: (row: TRow) => void;
+}): React.ReactElement[] {
+  const output: React.ReactElement[] = [];
+  if (group.label !== null) {
+    output.push(
+      <GroupHeader
+        key={`group:${group.key}`}
+        label={group.label}
+        rows={group.rows}
+        depth={group.depth}
+        colSpan={columns.length + 1}
+      />,
+    );
+  }
+  if (group.children.length > 0) {
+    for (const child of group.children) {
+      output.push(
+        ...renderGroupRows({
+          group: child,
+          columns,
+          dataView,
+          interactive,
+          rowHref,
+          onRowClick,
+        }),
+      );
+    }
+    return output;
+  }
+  for (const row of group.rows) {
+    output.push(
+      <RecordRow
+        key={row.id}
+        row={row}
+        columns={columns}
+        dataView={dataView}
+        interactive={interactive}
+        rowHref={rowHref}
+        onRowClick={onRowClick}
+      />,
+    );
+  }
+  return output;
+}
+
 function GroupHeader<TRow extends Row>({
   label,
   rows,
+  depth,
   colSpan,
 }: {
   label: string;
   rows: readonly TableRowModel<TRow>[];
+  depth: number;
   colSpan: number;
 }): React.ReactElement {
   const words = rows.reduce((total, row) => {
@@ -518,12 +590,19 @@ function GroupHeader<TRow extends Row>({
   }, 0);
   return (
     <TableRow>
-      <TableCell colSpan={colSpan} className="bg-sheet-2 py-2">
+      <TableCell colSpan={colSpan} className="h-8 bg-sheet-2 py-1.5">
         <div className="flex items-center justify-between gap-3 text-13">
-          <span className="font-semibold text-fg">{label}</span>
+          <span
+            className="inline-flex items-center gap-2 font-semibold text-fg"
+            style={{ paddingLeft: `${depth * 1.25}rem` }}
+          >
+            <span>{label}</span>
+            <span className="font-normal text-fg-muted">
+              {rows.length.toLocaleString()}
+            </span>
+          </span>
           <span className="text-fg-muted">
-            {rows.length} {rows.length === 1 ? "record" : "records"}
-            {words > 0 ? ` · ${words.toLocaleString()} words` : ""}
+            {words > 0 ? `${words.toLocaleString()} words` : ""}
           </span>
         </div>
       </TableCell>
@@ -548,76 +627,24 @@ function SelectionBar({
   );
 }
 
-function Pager({
-  list,
-  onPageChange,
-}: {
-  list: UseResourceListResult;
-  onPageChange: (page: number) => void;
-}): React.ReactElement {
-  const pageCount = list.pageCount ?? 1;
-  return (
-    <div className="flex items-center justify-between gap-3 border-t border-border px-3 py-2 text-13 text-fg-muted">
-      <span>{list.total ?? 0} total</span>
-      <div className="flex items-center gap-2">
-        <span>
-          Page {list.page} of {pageCount}
-        </span>
-        <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="iconSm"
-            aria-label="First page"
-            disabled={!list.hasPrev}
-            onClick={() => onPageChange(1)}
-          >
-            <ChevronsLeft className="glyph" aria-hidden />
-          </Button>
-          <Button
-            variant="ghost"
-            size="iconSm"
-            aria-label="Previous page"
-            disabled={!list.hasPrev}
-            onClick={() => onPageChange(Math.max(1, list.page - 1))}
-          >
-            <ChevronLeft className="glyph" aria-hidden />
-          </Button>
-          <Button
-            variant="ghost"
-            size="iconSm"
-            aria-label="Next page"
-            disabled={!list.hasNext}
-            onClick={() => onPageChange(list.page + 1)}
-          >
-            <ChevronRight className="glyph" aria-hidden />
-          </Button>
-          <Button
-            variant="ghost"
-            size="iconSm"
-            aria-label="Last page"
-            disabled={!list.hasNext}
-            onClick={() => {
-              if (list.pageCount) onPageChange(list.pageCount);
-            }}
-          >
-            <ChevronsRight className="glyph" aria-hidden />
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 type RowGroup<TRow extends Row> = {
+  key: string;
   label: string | null;
+  depth: number;
   rows: readonly TableRowModel<TRow>[];
+  children: readonly RowGroup<TRow>[];
 };
 
 function groupRows<TRow extends Row>(
   rows: readonly TableRowModel<TRow>[],
-  group: DataViewGroup | null,
+  groupStack: readonly DataViewGroup[],
+  depth = 0,
+  parentKey = "root",
 ): readonly RowGroup<TRow>[] {
-  if (!group) return [{ label: null, rows }];
+  const [group, ...rest] = groupStack;
+  if (!group) {
+    return [{ key: parentKey, label: null, depth, rows, children: [] }];
+  }
   const groups = new Map<string, TableRowModel<TRow>[]>();
   for (const row of rows) {
     const key = groupKey(readPath(row.original, group.field), group);
@@ -626,24 +653,48 @@ function groupRows<TRow extends Row>(
     groups.set(key, next);
   }
   return [...groups.entries()].map(([label, groupRows]) => ({
+    key: `${parentKey}:${label}`,
     label,
+    depth,
     rows: groupRows,
+    children: groupRows.length > 0
+      ? groupRowsByRest(groupRows, rest, depth + 1, `${parentKey}:${label}`)
+      : [],
   }));
+}
+
+function groupRowsByRest<TRow extends Row>(
+  rows: readonly TableRowModel<TRow>[],
+  groupStack: readonly DataViewGroup[],
+  depth: number,
+  parentKey: string,
+): readonly RowGroup<TRow>[] {
+  return groupRows(rows, groupStack, depth, parentKey).filter(
+    (group) => group.label !== null || group.children.length > 0,
+  );
+}
+
+function flattenLeaves<TRow extends Row>(group: RowGroup<TRow>): RowGroup<TRow>[] {
+  if (group.children.length === 0) return [group];
+  return group.children.flatMap(flattenLeaves);
 }
 
 function groupKey(value: unknown, group: DataViewGroup): string {
   if (value == null) return "No value";
   const date = parseDate(value);
-  if (!date) return String(value);
+  if (!date) return typeof value === "string" ? statusLabel(value) : String(value);
   if (group.granularity === "year") return String(date.getFullYear());
-  if (group.granularity === "month") {
-    return date.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  if (group.granularity === "quarter") {
+    const quarter = Math.floor(date.getMonth() / 3) + 1;
+    return `Q${quarter} ${date.getFullYear()}`;
   }
-  return date.toLocaleDateString(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
+  if (group.granularity === "month") {
+    return format(date, "MMMM yyyy");
+  }
+  if (group.granularity === "week") {
+    return `Week of ${format(date, "MMMM d, yyyy")}`;
+  }
+  return format(date, "MMMM d, yyyy");
 }
 
 function cellContent<TRow extends Row>(
@@ -655,7 +706,7 @@ function cellContent<TRow extends Row>(
   if (column.tone) {
     const label = value == null ? "" : String(value);
     const tone = column.tone[label] ?? "default";
-    return <Badge variant={tone}>{label || "-"}</Badge>;
+    return <Badge variant={tone}>{label ? statusLabel(label) : "-"}</Badge>;
   }
   if (Array.isArray(value)) {
     return (
@@ -724,6 +775,156 @@ function mergeFilters(
   return { ...base, ...view };
 }
 
+function buildGroupOptions<TRow extends Row>(
+  columns: readonly ColumnDescriptor<TRow>[],
+  defaultGroup: DataViewGroup | null | undefined,
+): readonly DataToolbarGroupOption[] {
+  const options: DataToolbarGroupOption[] = [];
+  const seen = new Set<string>();
+  const addOption = (option: DataToolbarGroupOption) => {
+    if (seen.has(option.id)) return;
+    seen.add(option.id);
+    options.push(option);
+  };
+
+  if (defaultGroup) {
+    addOption({
+      id: defaultGroup.field,
+      label: groupFieldLabel(defaultGroup.field),
+      group: defaultGroup,
+      type: looksLikeDateField(defaultGroup.field) ? "date" : "value",
+    });
+  }
+
+  for (const column of columns) {
+    if (looksLikeDateField(column.field)) {
+      addOption({
+        id: column.field,
+        label: groupFieldLabel(column.field),
+        group: { field: column.field, granularity: "day" },
+        type: "date",
+      });
+      continue;
+    }
+    if (column.field === "status" || column.tone) {
+      addOption({
+        id: column.field,
+        label: column.header ?? groupFieldLabel(column.field),
+        group: { field: column.field },
+        type: "value",
+      });
+    }
+  }
+
+  return options;
+}
+
+function buildFilterOptions<TRow extends Row>(
+  columns: readonly ColumnDescriptor<TRow>[],
+  rows: readonly TRow[],
+): readonly DataToolbarFilterOption[] {
+  return columns.flatMap((column) => {
+    if (column.field !== "status" && !column.tone) return [];
+    return statusValues(column, rows).map((value) => ({
+      id: `${column.field}:${value}`,
+      label: statusLabel(value),
+      chipLabel: statusLabel(value),
+      filter: { [column.field]: { exact: value } },
+    }));
+  });
+}
+
+function statusValues<TRow extends Row>(
+  column: ColumnDescriptor<TRow>,
+  rows: readonly TRow[],
+): string[] {
+  const values = new Set<string>();
+  if (column.tone) {
+    for (const key of Object.keys(column.tone)) {
+      if (key === key.toUpperCase()) values.add(key);
+    }
+  }
+  if (values.size === 0) {
+    for (const row of rows) {
+      const value = readPath(row, column.field);
+      if (typeof value === "string" && value.trim()) values.add(value);
+    }
+  }
+  return [...values].sort(compareStatusValue);
+}
+
+const STATUS_ORDER = ["DRAFT", "IN_REVIEW", "ACTIVE", "ARCHIVED"];
+
+function compareStatusValue(left: string, right: string): number {
+  const leftIndex = STATUS_ORDER.indexOf(left.toUpperCase());
+  const rightIndex = STATUS_ORDER.indexOf(right.toUpperCase());
+  if (leftIndex !== -1 || rightIndex !== -1) {
+    return (leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex)
+      - (rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex);
+  }
+  return left.localeCompare(right);
+}
+
+function activeFilterIdsFor(
+  filter: DataViewFilter,
+  options: readonly DataToolbarFilterOption[],
+): readonly string[] {
+  return options.flatMap((option) => {
+    const facet = facetFilter(option);
+    if (!facet) return [];
+    return statusFilterValues(filter, facet.field).includes(facet.value)
+      ? [option.id]
+      : [];
+  });
+}
+
+function nextFacetFilter(
+  filter: DataViewFilter,
+  options: readonly DataToolbarFilterOption[],
+  id: string,
+): DataViewFilter {
+  const option = options.find((candidate) => candidate.id === id);
+  const facet = option ? facetFilter(option) : null;
+  if (!facet) return filter;
+  const current = statusFilterValues(filter, facet.field);
+  const nextValues = current.includes(facet.value)
+    ? current.filter((value) => value !== facet.value)
+    : [...current, facet.value];
+  const next = { ...filter };
+  if (nextValues.length === 0) {
+    delete next[facet.field];
+  } else if (nextValues.length === 1) {
+    next[facet.field] = { exact: nextValues[0] };
+  } else {
+    next[facet.field] = { inList: nextValues };
+  }
+  return next;
+}
+
+function facetFilter(
+  option: DataToolbarFilterOption,
+): { field: string; value: string } | null {
+  const entry = Object.entries(option.filter)[0];
+  if (!entry) return null;
+  const [field, lookup] = entry;
+  if (!field || !lookup || typeof lookup !== "object" || Array.isArray(lookup)) {
+    return null;
+  }
+  const exact = (lookup as Record<string, unknown>).exact;
+  return typeof exact === "string" ? { field, value: exact } : null;
+}
+
+function statusFilterValues(filter: DataViewFilter, field: string): readonly string[] {
+  const lookup = filter[field];
+  if (!lookup || typeof lookup !== "object" || Array.isArray(lookup)) return [];
+  const exact = (lookup as Record<string, unknown>).exact;
+  if (typeof exact === "string") return [exact];
+  const inList = (lookup as Record<string, unknown>).inList;
+  return Array.isArray(inList)
+    ? inList.filter((value): value is string => typeof value === "string")
+    : [];
+}
+
 function textFilterValue(filter: DataViewFilter): string {
   const title = filter.title;
   if (!title || typeof title !== "object" || Array.isArray(title)) return "";
@@ -737,6 +938,27 @@ function nextTextFilter(filter: DataViewFilter, value: string): DataViewFilter {
   if (trimmed) next.title = { iContains: trimmed };
   else delete next.title;
   return next;
+}
+
+function createLabelForModel(model: string): string {
+  const name = model.split(".").at(-1) ?? "record";
+  return `New ${groupFieldLabel(name).toLowerCase()}`;
+}
+
+function groupFieldLabel(field: string): string {
+  const label = titleCase(field);
+  return label.endsWith(" At") ? label.slice(0, -3) : label;
+}
+
+function statusLabel(value: string): string {
+  return titleCase(value.toLowerCase());
+}
+
+function titleCase(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function looksLikeDateField(field: string): boolean {

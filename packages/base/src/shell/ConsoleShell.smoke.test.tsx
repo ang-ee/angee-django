@@ -94,8 +94,9 @@ describe("ConsoleShell", () => {
     expect(notesLink.getAttribute("aria-current")).toBe("page");
 
     expect(screen.getByRole("banner", { name: "Workspace top bar" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "All" }).getAttribute("aria-selected"))
-      .toBe("true");
+    expect(
+      screen.getByRole("tab", { name: "All notes" }).getAttribute("aria-selected"),
+    ).toBe("true");
     expect(screen.getByRole("search", { name: "Global search" })).toBeTruthy();
 
     const breadcrumb = screen.getByRole("navigation", { name: "Breadcrumb" });

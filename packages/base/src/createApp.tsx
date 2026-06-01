@@ -34,12 +34,16 @@ import {
 } from "@angee/sdk";
 
 import { ModalsHost } from "./feedback";
+import type { BreadcrumbItem } from "./chrome/Breadcrumb";
 import { enBaseBundle } from "./i18n";
 import { defaultWidgets } from "./widgets";
 
 /** A route that also carries the page component the chrome renders. */
 export interface BaseAddonRoute extends AddonRoute {
   component: ComponentType;
+  title?: ReactNode;
+  icon?: string;
+  breadcrumbs?: readonly BreadcrumbItem[];
 }
 
 /** An addon manifest whose routes carry their page components. */
@@ -47,10 +51,18 @@ export interface BaseAddon extends Omit<AddonManifest, "routes"> {
   routes?: readonly BaseAddonRoute[];
 }
 
+/** Props passed from the active route into a shell chrome component. */
+export interface ShellChromeProps {
+  children: ReactNode;
+  title?: ReactNode;
+  icon?: string;
+  breadcrumbs?: readonly BreadcrumbItem[];
+}
+
 /** A shell registered with `createApp`: the chrome component + auth policy. */
 export interface ShellConfig {
   /** Chrome wrapping route bodies (e.g. `ConsoleShell`). */
-  chrome: ComponentType<{ children: ReactNode }>;
+  chrome: ComponentType<ShellChromeProps>;
   /** Gate routes behind sign-in. Defaults to `true` for every shell but `public`. */
   requireAuth?: boolean;
 }
@@ -85,8 +97,19 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const composed = composeAddons(input.addons as readonly AddonManifest[]);
 
   const pageByRoute = new Map<string, ComponentType>();
+  const chromePropsByRoute = new Map<
+    string,
+    Omit<ShellChromeProps, "children">
+  >();
   for (const addon of input.addons) {
-    for (const route of addon.routes ?? []) pageByRoute.set(route.name, route.component);
+    for (const route of addon.routes ?? []) {
+      pageByRoute.set(route.name, route.component);
+      chromePropsByRoute.set(route.name, {
+        title: route.title,
+        icon: route.icon,
+        breadcrumbs: route.breadcrumbs,
+      });
+    }
   }
 
   const runtime: AppRuntime = {
@@ -120,7 +143,12 @@ export function createApp(input: CreateAppInput): AngeeApp {
       getParentRoute: () => rootRoute,
       path: route.path,
       component: () => (
-        <RouteScreen route={route} page={pageByRoute.get(route.name)} shells={input.shells} />
+        <RouteScreen
+          route={route}
+          page={pageByRoute.get(route.name)}
+          chromeProps={chromePropsByRoute.get(route.name)}
+          shells={input.shells}
+        />
       ),
     }),
   );
@@ -191,16 +219,18 @@ function RootOutlet(): ReactNode {
 function RouteScreen({
   route,
   page: Page,
+  chromeProps,
   shells,
 }: {
   route: AddonRoute;
   page: ComponentType | undefined;
+  chromeProps: Omit<ShellChromeProps, "children"> | undefined;
   shells: Record<string, ShellConfig>;
 }): ReactNode {
   const shell = shells[route.shell];
   const Chrome = shell?.chrome ?? PassthroughChrome;
   const requireAuth = shell?.requireAuth ?? route.shell !== "public";
-  const body = <Chrome>{Page ? <Page /> : null}</Chrome>;
+  const body = <Chrome {...chromeProps}>{Page ? <Page /> : null}</Chrome>;
   return requireAuth ? <RequireAuth>{body}</RequireAuth> : body;
 }
 

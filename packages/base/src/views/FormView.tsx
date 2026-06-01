@@ -115,22 +115,22 @@ export function FormView({
   const statusField = resolvedFields.find((field) => field.widget === "statusbar");
   const bodyFields = React.useMemo(
     () =>
-      statusField
-        ? resolvedFields.filter((field) => field.name !== statusField.name)
-        : resolvedFields,
-    [resolvedFields, statusField],
+      resolvedFields.filter(
+        (field) =>
+          field.name !== statusField?.name && field.name !== titleField?.name,
+      ),
+    [resolvedFields, statusField?.name, titleField?.name],
   );
   const bodyGroups = React.useMemo(
     () =>
-      statusField
-        ? resolvedGroups.map((group) => ({
-            ...group,
-            fields: group.fields.filter(
-              (field) => field.name !== statusField.name,
-            ),
-          }))
-        : resolvedGroups,
-    [resolvedGroups, statusField],
+      resolvedGroups.map((group) => ({
+        ...group,
+        fields: group.fields.filter(
+          (field) =>
+            field.name !== statusField?.name && field.name !== titleField?.name,
+        ),
+      })),
+    [resolvedGroups, statusField?.name, titleField?.name],
   );
   const sections = React.useMemo(
     () => formSections(bodyFields, bodyGroups),
@@ -139,17 +139,36 @@ export function FormView({
 
   return (
     <form
-      className={["flex flex-col gap-4", className].filter(Boolean).join(" ")}
+      className={["mx-auto flex w-full max-w-5xl flex-col gap-6", className]
+        .filter(Boolean)
+        .join(" ")}
       onSubmit={(event) => {
         event.preventDefault();
         void form.handleSubmit();
       }}
     >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="truncate text-22 font-semibold text-fg">
-            {titleField ? String(form.getFieldValue(titleField.name) ?? "") : "Record"}
-          </h2>
+      <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="min-w-0 self-start">
+          {titleField ? (
+            <form.Field name={titleField.name}>
+              {(api) => (
+                <input
+                  value={String(api.state.value ?? "")}
+                  placeholder="Untitled"
+                  aria-label={fieldAriaLabel(titleField)}
+                  readOnly={titleField.readOnly}
+                  className="block w-full min-w-0 border-0 bg-transparent p-0 text-28 font-semibold leading-9 text-fg outline-none placeholder:text-fg-subtle focus-visible:focus-ring"
+                  onChange={(event) =>
+                    api.handleChange(event.currentTarget.value)
+                  }
+                />
+              )}
+            </form.Field>
+          ) : (
+            <h2 className="truncate text-28 font-semibold leading-9 text-fg">
+              Record
+            </h2>
+          )}
           {loading ? (
             <div className="mt-1 flex items-center gap-2 text-13 text-fg-muted">
               <Spinner size="sm" />
@@ -180,14 +199,14 @@ export function FormView({
         ) : null}
       </div>
 
-      {sections.map((section, sectionIndex) => (
+      {sections.map((section) => (
         <section
           key={section.key}
-          className="grid gap-4 border-t border-border-subtle pt-4"
+          className="grid gap-3"
         >
           {section.label ? (
             <h3 className="text-sm font-semibold text-fg">{section.label}</h3>
-          ) : sectionIndex > 0 ? null : null}
+          ) : null}
           <div
             className={
               section.columns === 2
@@ -317,6 +336,10 @@ function emptyValue(field: FieldDescriptor): unknown {
 function widgetId(field: FieldDescriptor): string {
   if (field.widget) return field.widget;
   return field.kind ?? "text";
+}
+
+function fieldAriaLabel(field: FieldDescriptor): string {
+  return typeof field.label === "string" ? field.label : field.name;
 }
 
 function fallbackWidget(): WidgetDefinition {

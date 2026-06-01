@@ -14,7 +14,7 @@ export interface TopMenuTab {
 }
 
 const DEFAULT_TABS: readonly TopMenuTab[] = [
-  { id: "all", label: "All", filter: {} },
+  { id: "all", label: "All notes", filter: {} },
   { id: "starred", label: "Starred", filter: { isStarred: true } },
   { id: "archive", label: "Archive", filter: { status: { exact: "ARCHIVED" } } },
 ];
