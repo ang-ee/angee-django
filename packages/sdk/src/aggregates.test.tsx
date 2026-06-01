@@ -43,6 +43,19 @@ describe("useAggregateQuery", () => {
     expect(result.current.aggregate?.count).toBe(6);
     expect(bodies[0]?.query).toContain("saleAggregate");
   });
+
+  test("passes a filter to the aggregate field", async () => {
+    const { fetch, bodies } = mockTransport({ saleAggregate: { count: 2 } });
+    const filter = { state: { exact: "OPEN" } };
+    const { result } = renderHook(
+      () => useAggregateQuery("Sale", { filter }),
+      { wrapper: wrapperWith(fetch) },
+    );
+    await waitFor(() => expect(result.current.fetching).toBe(false));
+    expect(result.current.aggregate?.count).toBe(2);
+    expect(bodies[0]?.variables.filter).toEqual(filter);
+    expect(bodies[0]?.query).toContain("saleAggregate(filter: $filter)");
+  });
 });
 
 describe("useResourceGroupBy", () => {
@@ -73,5 +86,30 @@ describe("useResourceGroupBy", () => {
     expect(bodies[0]?.variables.groupBy).toEqual([{ field: "STATE" }]);
     expect(bodies[0]?.variables.pagination).toBeNull();
     expect(bodies[0]?.query).toContain("saleGroups(groupBy:");
+  });
+
+  test("passes a filter to grouped aggregate buckets", async () => {
+    const { fetch, bodies } = mockTransport({
+      saleGroups: {
+        totalCount: 1,
+        results: [{ count: 3, key: { state: "OPEN" } }],
+      },
+    });
+    const filter = { title: { iContains: "launch" } };
+    const { result } = renderHook(
+      () =>
+        useResourceGroupBy("Sale", {
+          dimensions: [{ field: "STATE", key: "state" }],
+          filter,
+          page: 2,
+          pageSize: 10,
+        }),
+      { wrapper: wrapperWith(fetch) },
+    );
+    await waitFor(() => expect(result.current.fetching).toBe(false));
+    expect(result.current.totalCount).toBe(1);
+    expect(bodies[0]?.variables.filter).toEqual(filter);
+    expect(bodies[0]?.variables.pagination).toEqual({ offset: 10, limit: 10 });
+    expect(bodies[0]?.query).toContain("filter: $filter");
   });
 });

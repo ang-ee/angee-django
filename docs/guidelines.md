@@ -259,7 +259,7 @@ TensorFlow · Transformers · LLMs (Large Language Models)
 ## Applying These Guidelines
 
 This document is the shared **development process and coding principles** for all
-work in this repository. It sits above the language-specific rules:
+work in the Django / React Runtime. It sits above the language-specific rules:
 
 - **Process and principles (this file)** — how to approach any task, regardless of
   language or layer.

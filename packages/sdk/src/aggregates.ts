@@ -13,6 +13,10 @@ import {
   assembleGroupByDocument,
   groupByFieldName,
 } from "./selection";
+import type {
+  ResourceFilter,
+  ResourceTypeName,
+} from "./__generated__/resource-types";
 
 export type { AggregateBucket, GroupByResult } from "./aggregate-extract";
 
@@ -20,23 +24,37 @@ export type { AggregateBucket, GroupByResult } from "./aggregate-extract";
 // every render.
 const NO_VARIABLES: Record<string, unknown> = {};
 
-export interface UseAggregateOptions {
+/** A filter accepted as the model's generated input or any record. */
+type Filter<TName extends ResourceTypeName> =
+  | ResourceFilter<TName>
+  | Record<string, unknown>;
+
+export interface UseAggregateOptions<
+  TName extends ResourceTypeName = ResourceTypeName,
+> {
   enabled?: boolean;
+  filter?: Filter<TName>;
 }
 
 /** The ungrouped total for a model. */
-export function useAggregateQuery(
+export function useAggregateQuery<
+  TName extends ResourceTypeName = ResourceTypeName,
+>(
   modelLabel: string,
-  options: UseAggregateOptions = {},
+  options: UseAggregateOptions<TName> = {},
 ): { aggregate: AggregateBucket | null; fetching: boolean; error: Error | null } {
-  const { enabled = true } = options;
+  const { enabled = true, filter } = options;
   const active = enabled && Boolean(modelLabel);
+  const withFilter = filter !== undefined;
 
   const document = useMemo(
-    () => assembleAggregateDocument(modelLabel),
-    [modelLabel],
+    () => assembleAggregateDocument(modelLabel, { withFilter }),
+    [modelLabel, withFilter],
   );
-  const run = useDocumentQuery(document, NO_VARIABLES, active);
+  const variables = useStableVariables(
+    withFilter ? { filter: filter as Record<string, unknown> } : NO_VARIABLES,
+  );
+  const run = useDocumentQuery(document, variables, active);
   return {
     aggregate: autoExtractAggregate(run.data, aggregateFieldName(modelLabel)),
     fetching: run.fetching,
@@ -56,7 +74,9 @@ export interface GroupByDimension {
   granularity?: string;
 }
 
-export interface UseGroupByOptions extends UseAggregateOptions {
+export interface UseGroupByOptions<
+  TName extends ResourceTypeName = ResourceTypeName,
+> extends UseAggregateOptions<TName> {
   dimensions: readonly GroupByDimension[];
   page?: number;
   pageSize?: number;
@@ -81,9 +101,11 @@ function paginationVariables(
 }
 
 /** Grouped totals for a model: one bucket per distinct group key. */
-export function useResourceGroupBy(
+export function useResourceGroupBy<
+  TName extends ResourceTypeName = ResourceTypeName,
+>(
   modelLabel: string,
-  options: UseGroupByOptions,
+  options: UseGroupByOptions<TName>,
 ): {
   count: number;
   totalCount: number;
@@ -91,8 +113,9 @@ export function useResourceGroupBy(
   fetching: boolean;
   error: Error | null;
 } {
-  const { dimensions, enabled = true, page, pageSize } = options;
+  const { dimensions, enabled = true, filter, page, pageSize } = options;
   const active = enabled && Boolean(modelLabel) && dimensions.length > 0;
+  const withFilter = filter !== undefined;
   const keyFields = useStableArray(dimensions.map(dimensionKey));
   const groupBy = useMemo(
     () =>
@@ -107,11 +130,12 @@ export function useResourceGroupBy(
   const variables = useStableVariables({
     groupBy,
     pagination: paginationVariables(page, pageSize) ?? null,
+    ...(withFilter ? { filter } : {}),
   });
 
   const document = useMemo(
-    () => assembleGroupByDocument(modelLabel, { keyFields }),
-    [modelLabel, keyFields],
+    () => assembleGroupByDocument(modelLabel, { keyFields, withFilter }),
+    [modelLabel, keyFields, withFilter],
   );
 
   const run = useDocumentQuery(document, variables, active);

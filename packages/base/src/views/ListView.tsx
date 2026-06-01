@@ -10,6 +10,9 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useNavigate } from "@tanstack/react-router";
 import {
   useResourceList,
+  useResourceGroupBy,
+  type AggregateBucket,
+  type GroupByDimension,
   type ResourceTypeName,
   type Row,
   type UseResourceListOptions,
@@ -139,7 +142,7 @@ function ListViewBody<TRow extends Row = Row>({
     if (pageSize && dataView.state.pageSize !== pageSize) {
       dataView.setPageSize(pageSize);
     }
-  }, [dataView, pageSize]);
+  }, [dataView.setPageSize, dataView.state.pageSize, pageSize]);
 
   const handledDefaultGroupRef = React.useRef<DataViewGroup | null>(null);
   React.useEffect(() => {
@@ -155,7 +158,7 @@ function ListViewBody<TRow extends Row = Row>({
     }
     handledDefaultGroupRef.current = defaultGroup;
     if (dataView.state.group === null) dataView.setGroup(defaultGroup);
-  }, [dataView, defaultGroup]);
+  }, [dataView.setGroup, dataView.state.group, defaultGroup]);
 
   const requestedFields = React.useMemo(() => {
     const paths = new Set<string>(["id"]);
@@ -168,13 +171,26 @@ function ListViewBody<TRow extends Row = Row>({
     () => mergeFilters(filter, dataView.state.filter),
     [dataView.state.filter, filter],
   );
+  const groupDimensions = React.useMemo(
+    () => dataView.state.groupStack.map(dataViewGroupToAggregateDimension),
+    [dataView.state.groupStack],
+  );
+  const groupAggregation = useResourceGroupBy(model, {
+    dimensions: groupDimensions,
+    filter: mergedFilter,
+    enabled: groupDimensions.length > 0,
+  });
+  const groupCounts = React.useMemo(
+    () => buildGroupCountMap(groupAggregation.buckets, dataView.state.groupStack),
+    [dataView.state.groupStack, groupAggregation.buckets],
+  );
   const sortOrder = dataViewSortToResourceOrder(dataView.state.sort);
   const list = useResourceList(model, {
     fields: requestedFields,
     filter: mergedFilter,
     order: sortOrder ?? order,
     pageSize: dataView.state.pageSize,
-    initialPage: dataView.state.page,
+    page: dataView.state.page,
   });
 
   const tableColumns = React.useMemo(
@@ -270,9 +286,8 @@ function ListViewBody<TRow extends Row = Row>({
   const setPage = React.useCallback(
     (page: number) => {
       dataView.setPage(page);
-      list.setPage(page);
     },
-    [dataView, list],
+    [dataView.setPage],
   );
 
   const filterText = textFilterValue(dataView.state.filter);
@@ -392,6 +407,7 @@ function ListViewBody<TRow extends Row = Row>({
                           interactive,
                           rowHref,
                           onRowClick,
+                          groupCounts,
                         })
                       : null;
                   })}
@@ -725,6 +741,7 @@ function renderListItem<TRow extends Row>({
   interactive,
   rowHref,
   onRowClick,
+  groupCounts,
 }: {
   item: ListRenderItem<TRow>;
   columns: readonly ColumnDescriptor<TRow>[];
@@ -732,6 +749,7 @@ function renderListItem<TRow extends Row>({
   interactive: boolean;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
+  groupCounts: ReadonlyMap<string, number>;
 }): React.ReactElement {
   if (item.kind === "group") {
     return (
@@ -739,6 +757,7 @@ function renderListItem<TRow extends Row>({
         key={`group:${item.group.key}`}
         label={item.group.label ?? ""}
         rows={item.group.rows}
+        count={groupCounts.get(groupPathKey(item.group.path))}
         depth={item.group.depth}
         colSpan={columns.length + 1}
       />
@@ -778,18 +797,23 @@ function VirtualPaddingRow({
 function GroupHeader<TRow extends Row>({
   label,
   rows,
+  count,
   depth,
   colSpan,
 }: {
   label: string;
   rows: readonly TableRowModel<TRow>[];
+  count: number | undefined;
   depth: number;
   colSpan: number;
 }): React.ReactElement {
-  const words = rows.reduce((total, row) => {
-    const value = readPath(row.original, "wordCount");
-    return total + (typeof value === "number" ? value : 0);
-  }, 0);
+  const rowCount = count ?? rows.length;
+  const words = count === undefined
+    ? rows.reduce((total, row) => {
+        const value = readPath(row.original, "wordCount");
+        return total + (typeof value === "number" ? value : 0);
+      }, 0)
+    : 0;
   return (
     <TableRow>
       <TableCell colSpan={colSpan} className="h-8 bg-sheet-2 py-1.5">
@@ -800,7 +824,7 @@ function GroupHeader<TRow extends Row>({
           >
             <span>{label}</span>
             <span className="font-normal text-fg-muted">
-              {rows.length.toLocaleString()}
+              {rowCount.toLocaleString()}
             </span>
           </span>
           <span className="text-fg-muted">
@@ -832,6 +856,7 @@ function SelectionBar({
 type RowGroup<TRow extends Row> = {
   key: string;
   label: string | null;
+  path: readonly string[];
   depth: number;
   rows: readonly TableRowModel<TRow>[];
   children: readonly RowGroup<TRow>[];
@@ -841,11 +866,18 @@ function groupRows<TRow extends Row>(
   rows: readonly TableRowModel<TRow>[],
   groupStack: readonly DataViewGroup[],
   depth = 0,
-  parentKey = "root",
+  parentPath: readonly string[] = [],
 ): readonly RowGroup<TRow>[] {
   const [group, ...rest] = groupStack;
   if (!group) {
-    return [{ key: parentKey, label: null, depth, rows, children: [] }];
+    return [{
+      key: groupPathKey(parentPath) || "root",
+      label: null,
+      path: parentPath,
+      depth,
+      rows,
+      children: [],
+    }];
   }
   const groups = new Map<string, TableRowModel<TRow>[]>();
   for (const row of rows) {
@@ -854,24 +886,28 @@ function groupRows<TRow extends Row>(
     next.push(row);
     groups.set(key, next);
   }
-  return [...groups.entries()].map(([label, groupRows]) => ({
-    key: `${parentKey}:${label}`,
-    label,
-    depth,
-    rows: groupRows,
-    children: groupRows.length > 0
-      ? groupRowsByRest(groupRows, rest, depth + 1, `${parentKey}:${label}`)
-      : [],
-  }));
+  return [...groups.entries()].map(([label, groupRows]) => {
+    const path = [...parentPath, label];
+    return {
+      key: groupPathKey(path),
+      label,
+      path,
+      depth,
+      rows: groupRows,
+      children: groupRows.length > 0
+        ? groupRowsByRest(groupRows, rest, depth + 1, path)
+        : [],
+    };
+  });
 }
 
 function groupRowsByRest<TRow extends Row>(
   rows: readonly TableRowModel<TRow>[],
   groupStack: readonly DataViewGroup[],
   depth: number,
-  parentKey: string,
+  parentPath: readonly string[],
 ): readonly RowGroup<TRow>[] {
-  return groupRows(rows, groupStack, depth, parentKey).filter(
+  return groupRows(rows, groupStack, depth, parentPath).filter(
     (group) => group.label !== null || group.children.length > 0,
   );
 }
@@ -922,6 +958,53 @@ function groupKey(value: unknown, group: DataViewGroup): string {
     return `Week of ${format(date, "MMMM d, yyyy")}`;
   }
   return format(date, "MMMM d, yyyy");
+}
+
+function dataViewGroupToAggregateDimension(
+  group: DataViewGroup,
+): GroupByDimension {
+  return {
+    field: graphQLEnumValue(group.field),
+    key: aggregateKeyField(group),
+    ...(group.granularity
+      ? { granularity: group.granularity.toUpperCase() }
+      : {}),
+  };
+}
+
+function aggregateKeyField(group: DataViewGroup): string {
+  return group.granularity
+    ? `${group.field}${titleCase(group.granularity).replace(/\s+/g, "")}`
+    : group.field;
+}
+
+function buildGroupCountMap(
+  buckets: readonly AggregateBucket[],
+  groupStack: readonly DataViewGroup[],
+): ReadonlyMap<string, number> {
+  const counts = new Map<string, number>();
+  if (groupStack.length === 0) return counts;
+  for (const bucket of buckets) {
+    const labels: string[] = [];
+    for (const group of groupStack) {
+      const value = bucket.key?.[aggregateKeyField(group)];
+      labels.push(groupKey(value, group));
+      const key = groupPathKey(labels);
+      counts.set(key, (counts.get(key) ?? 0) + bucket.count);
+    }
+  }
+  return counts;
+}
+
+function groupPathKey(path: readonly string[]): string {
+  return JSON.stringify(path);
+}
+
+function graphQLEnumValue(field: string): string {
+  return field
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[-\s]+/g, "_")
+    .toUpperCase();
 }
 
 function cellContent<TRow extends Row>(

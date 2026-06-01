@@ -2,7 +2,9 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -55,6 +57,10 @@ export interface DataViewProviderProps {
 }
 
 const DataViewContext = createContext<DataViewContextValue | null>(null);
+type DataViewActions = Omit<
+  DataViewContextValue,
+  "state" | "resourceListOptions"
+>;
 
 export function DataViewProvider({
   children,
@@ -67,6 +73,10 @@ export function DataViewProvider({
   const [selectedIds, setSelectedIdsState] = useState<ReadonlySet<string>>(
     () => new Set(initialState?.selectedIds ?? []),
   );
+  const mountedRef = useRef(true);
+  const scheduledDispatchesRef = useRef<Set<ReturnType<typeof setTimeout>>>(
+    new Set(),
+  );
   const queryState = useMemo(
     () => dataViewStateFromQueryValues(queryValues, initialState),
     [queryValues, initialState],
@@ -78,38 +88,59 @@ export function DataViewProvider({
 
   const dispatch = useCallback(
     (action: DataViewAction) => {
-      setSelectedIdsState((current) => reduceSelectedIds(current, action));
-      if (isLocalSelectionAction(action)) return;
-      void setQueryValues((current) => {
-        const currentState = dataViewStateFromQueryValues(current, initialState);
-        const next = dataViewReducer(currentState, action);
-        return dataViewStateToQueryValues(next);
-      });
+      if (isLocalSelectionAction(action)) {
+        setSelectedIdsState((current) => reduceSelectedIds(current, action));
+        return;
+      }
+      const timeout = globalThis.setTimeout(() => {
+        scheduledDispatchesRef.current.delete(timeout);
+        if (!mountedRef.current) return;
+        setSelectedIdsState((current) => reduceSelectedIds(current, action));
+        void setQueryValues((current) => {
+          const currentState = dataViewStateFromQueryValues(
+            current,
+            initialState,
+          );
+          const next = dataViewReducer(currentState, action);
+          return dataViewStateToQueryValues(next);
+        });
+      }, 0);
+      scheduledDispatchesRef.current.add(timeout);
     },
     [initialState, setQueryValues],
+  );
+
+  useEffect(
+    () => {
+      mountedRef.current = true;
+      return () => {
+        mountedRef.current = false;
+        for (const timeout of scheduledDispatchesRef.current) {
+          globalThis.clearTimeout(timeout);
+        }
+        scheduledDispatchesRef.current.clear();
+      };
+    },
+    [],
+  );
+
+  const actions = useMemo(() => createDataViewActions(dispatch), [dispatch]);
+  const resourceListOptions = useCallback(
+    <TName extends ResourceTypeName = ResourceTypeName>(input: {
+      fields: readonly string[];
+      enabled?: boolean;
+    }): UseResourceListOptions<TName> =>
+      dataViewStateToResourceListOptions(state, input),
+    [state],
   );
 
   const value = useMemo<DataViewContextValue>(
     () => ({
       state,
-      setPage: (page) => dispatch({ type: "setPage", page }),
-      setPageSize: (pageSize) =>
-        dispatch({ type: "setPageSize", pageSize }),
-      setSort: (sort) => dispatch({ type: "setSort", sort }),
-      setFilter: (filter) => dispatch({ type: "setFilter", filter }),
-      setGroup: (group) => dispatch({ type: "setGroup", group }),
-      setGroupStack: (groupStack) =>
-        dispatch({ type: "setGroupStack", groupStack }),
-      setSelectedIds: (selectedIds) =>
-        dispatch({ type: "setSelectedIds", selectedIds }),
-      toggleSelectedId: (id, selected) =>
-        dispatch({ type: "toggleSelectedId", id, selected }),
-      clearSelectedIds: () => dispatch({ type: "clearSelectedIds" }),
-      setView: (view) => dispatch({ type: "setView", view }),
-      resourceListOptions: (input) =>
-        dataViewStateToResourceListOptions(state, input),
+      ...actions,
+      resourceListOptions,
     }),
-    [dispatch, state],
+    [actions, resourceListOptions, state],
   );
 
   return (
@@ -154,4 +185,24 @@ function reduceSelectedIds(
     createDataViewState({ selectedIds }),
     action,
   ).selectedIds;
+}
+
+function createDataViewActions(
+  dispatch: (action: DataViewAction) => void,
+): DataViewActions {
+  return {
+    setPage: (page) => dispatch({ type: "setPage", page }),
+    setPageSize: (pageSize) => dispatch({ type: "setPageSize", pageSize }),
+    setSort: (sort) => dispatch({ type: "setSort", sort }),
+    setFilter: (filter) => dispatch({ type: "setFilter", filter }),
+    setGroup: (group) => dispatch({ type: "setGroup", group }),
+    setGroupStack: (groupStack) =>
+      dispatch({ type: "setGroupStack", groupStack }),
+    setSelectedIds: (selectedIds) =>
+      dispatch({ type: "setSelectedIds", selectedIds }),
+    toggleSelectedId: (id, selected) =>
+      dispatch({ type: "toggleSelectedId", id, selected }),
+    clearSelectedIds: () => dispatch({ type: "clearSelectedIds" }),
+    setView: (view) => dispatch({ type: "setView", view }),
+  };
 }

@@ -9,7 +9,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db.models import QuerySet
-from rebac import current_actor
+from rebac.errors import MissingActorError
 from strawberry import auto, relay
 from strawberry_django_aggregates import AggregateBuilder
 
@@ -121,9 +121,11 @@ def _rebac_scoped(info: strawberry.Info | None = None) -> QuerySet[Any]:
     queryset (its one host-agnostic seam); this hook is the only Angee
     glue. Scope must be applied eagerly: ``compute_aggregation`` runs
     ``.values().annotate()`` paths that bypass ``RebacQuerySet._fetch_all``,
-    where row scoping would otherwise fire. Under REBAC strict mode an
-    unscoped queryset would raise ``MissingActorError`` at materialisation,
-    so a missing actor yields an empty result rather than a leak.
+    where row scoping would otherwise fire. Let the queryset owner resolve the
+    ambient actor/sudo state so aggregate queries match the list query's
+    permission semantics. Under REBAC strict mode a request with no actor
+    raises ``MissingActorError``, so that case yields an empty result rather
+    than a leak.
 
     ``on_field_deny("allow")`` relaxes field-read enforcement here because the
     same ``.values().annotate()`` paths do not apply per-field redaction. That
@@ -133,12 +135,11 @@ def _rebac_scoped(info: strawberry.Info | None = None) -> QuerySet[Any]:
     the bucket keys/counts.
     """
 
-    actor = current_actor()
-    queryset = Note.objects.all()
-    if actor is None:
+    queryset = Note.objects.all().on_field_deny("allow")
+    try:
+        cast(Any, queryset)._apply_scope_in_place()
+    except MissingActorError:
         return cast(QuerySet[Any], queryset.none())
-    queryset = queryset.with_actor(actor).on_field_deny("allow")
-    cast(Any, queryset)._apply_scope_in_place()
     return cast(QuerySet[Any], queryset)
 
 
@@ -157,6 +158,7 @@ _note_aggregates = AggregateBuilder(
     model=Note,
     aggregate_fields=["id"],
     group_by_fields=["status", "updated_at"],
+    filter_type=NoteFilter,
     pagination_style="offset",
     get_queryset=_rebac_scoped,
 ).build()

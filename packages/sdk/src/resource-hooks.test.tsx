@@ -83,7 +83,7 @@ describe("useResourceList", () => {
     );
   });
 
-  test("tracks initialPage changes from the owning view state", async () => {
+  test("tracks controlled page changes from the owning view state", async () => {
     const { fetch, bodies } = mockTransport({
       sales: {
         totalCount: 12,
@@ -96,7 +96,7 @@ describe("useResourceList", () => {
         useResourceList("Sale", {
           fields: ["title"],
           pageSize: 5,
-          initialPage: page,
+          page,
         }),
       { initialProps: { page: 1 }, wrapper: wrapperWith(fetch) },
     );

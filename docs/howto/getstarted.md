@@ -33,15 +33,15 @@ CLI, REST, **and** GraphQL so a human, a script, or an agent drives the exact
 same lifecycle. The operator is deliberately framework-agnostic: it knows
 nothing about Django or React, it just runs whatever Services you declare.
 
-> The operator lives in its own repository, `fyltr/angee`, and its full docs are
+> The operator lives in its own repository, `ang-ee/angee`, and its full docs are
 > published at **[docs.angee.ai](https://docs.angee.ai)** — start with
 > [Concepts](https://docs.angee.ai/guide/concepts).
 
-### This repository
+### Django / React Runtime
 
-This repository — `fyltr/angee-django` — is the **framework** and the **base
-addons** that ship with it, and it is the first and default **Host**: the
-application runtime that runs *inside* an operator-managed Service.
+The **Django / React Runtime** — `ang-ee/angee-django` — is the **framework** and
+the **base addons** that ship with it, and it is the first and default **Host**:
+the application runtime that runs *inside* an operator-managed Service.
 
 The framework is a thin composition layer. You write **source models**
 (abstract Django models), GraphQL contributions, REBAC permissions, and React
@@ -50,11 +50,28 @@ concrete, runnable Django + GraphQL + React application under a generated
 `runtime/` tree. Everything — including the framework core — is an addon, so the
 first question for any change is always *which level owns it.*
 
+Concretely, you build in **addons**, and each addon bundles two halves that ship
+together: a **Django app** — models, permissions, and operations — and the
+**React components** that render it. You never wire them together by hand. From
+your declarations the composer emits a **production-ready, typed API** — a GraphQL
+schema and the matching TypeScript contract — so the frontend talks to the
+backend through a generated, type-safe client that is always in sync. Write a
+field or an operation in Python, and the React side sees it, fully typed, with no
+hand-written API layer in between. You write Django and React; the seam between
+them is generated, not maintained.
+
+And every app the runtime composes is reachable three ways at once: a **React UI**
+for people, a **typed API** for systems, and an **MCP** tool surface for agents.
+Your data, your knowledge, your files — any domain you model — becomes available
+to **users, systems, and agents** alike, all through the same permissions. At its
+heart, that is what `angee-django` does: it **connects your domain data to agents,
+safely**, and serves it to whoever — or whatever — is allowed to ask.
+
 > The vocabulary (addon, composer, host, project, source model, seams…) is
 > defined once in the [Glossary](../glossary.md). The root rules and how the
 > framework composes live in [`AGENTS.md`](../../AGENTS.md).
 
-So: **the operator runs things; this repository decides what those things are.**
+So: **the operator runs things; the Django / React Runtime decides what those things are.**
 
 ## What can you build with Angee?
 
@@ -132,26 +149,26 @@ run a business-critical product on unattended.
 
 ## How can I get access?
 
-Access is by invitation to the **`fyltr` GitHub organization**. Once you are
+Access is by invitation to the **`ang-ee` GitHub organization**. Once you are
 invited you should receive a GitHub email — accept it, and you will have the two
 repositories:
 
-- **[`fyltr/angee`](https://github.com/fyltr/angee)** — the operator and CLI.
-- **[`fyltr/angee-django`](https://github.com/fyltr/angee-django)** — the
-  framework, base addons, and default Host (this repository).
+- **[`ang-ee/angee`](https://github.com/ang-ee/angee)** — the operator and CLI.
+- **[`ang-ee/angee-django`](https://github.com/ang-ee/angee-django)** — the
+  framework, base addons, and default Host (the Django / React Runtime).
 
 If you expected an invitation and don't see one, ask your Angee contact to add
 your GitHub account to the org.
 
 ## I have access — now what?
 
-Start from this repository; it ships the Stack template and the example project,
-so it brings the whole stack up for you.
+Start from the Django / React Runtime; it ships the Stack template and the
+example project, so it brings the whole stack up for you.
 
 1. **Clone the framework.**
 
    ```sh
-   git clone https://github.com/fyltr/angee-django.git
+   git clone https://github.com/ang-ee/angee-django.git
    cd angee-django
    ```
 

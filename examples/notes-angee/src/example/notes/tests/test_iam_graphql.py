@@ -341,6 +341,38 @@ class IAMGraphQLTests(TransactionTestCase):
         )
         self.assertTrue(data["byMonth"]["results"][0]["key"]["updatedAtMonth"])
 
+    def test_note_aggregates_accept_the_note_filter_input(self) -> None:
+        self.graphql('mutation { login(username: "alice", password: "alice") { ok } }')
+        data = self.graphql(
+            """
+            query {
+              total: noteAggregate(filter: {status: {exact: DRAFT}}) {
+                count
+              }
+              byStatus: noteGroups(
+                groupBy: [{field: STATUS}],
+                filter: {status: {exact: DRAFT}}
+              ) {
+                totalCount
+                results { key { status } count }
+              }
+            }
+            """
+        )["data"]
+        expected_total = (
+            Note.objects.as_user(self.alice)
+            .filter(status=Note.Status.DRAFT)
+            .count()
+        )
+
+        self.assertGreater(expected_total, 0)
+        self.assertEqual(data["total"]["count"], expected_total)
+        self.assertEqual(data["byStatus"]["totalCount"], 1)
+        self.assertEqual(
+            data["byStatus"]["results"],
+            [{"key": {"status": "DRAFT"}, "count": expected_total}],
+        )
+
     def test_platform_admin_sees_every_users_notes(self) -> None:
         self.login(self.client, "admin")
         data = self.graphql(

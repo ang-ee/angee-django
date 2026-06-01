@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.14"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -325,7 +325,7 @@ requires-dist = [
     { name = "django-reversion", specifier = ">=5.1" },
     { name = "django-simple-history", specifier = ">=3.7" },
     { name = "django-sqids", specifier = ">=0.1" },
-    { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.9.0" },
+    { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.10.0" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "strawberry-django-aggregates", specifier = ">=0.3.0" },
     { name = "strawberry-graphql", specifier = ">=0.270" },
@@ -407,14 +407,14 @@ wheels = [
 
 [[package]]
 name = "django-zed-rebac"
-version = "0.9.0"
+version = "0.10.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/fa/3d/d20f9fdd898b40adfe54ced3f849243f1be23f7506d87a16797c47fb04c4/django_zed_rebac-0.9.0.tar.gz", hash = "sha256:c65089eec5dc8c7cab7c92dbd5f1e6bdb2200504a4af2045507c4cc820738d69", size = 203132, upload-time = "2026-05-30T03:45:18.186Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b2/fc/1b27ca3784072758aab63c01482ff1b912c3b4ff10adfb0e7635de8a01be/django_zed_rebac-0.10.0.tar.gz", hash = "sha256:7d06d809ff2196086fb5e059c99a23ab06ac73eff058210bd1177dc83e0406f1", size = 211077, upload-time = "2026-06-01T22:30:15.043Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/75/25/0c9e9e858bb9713b16d1eb8fd4e96f79ea7f6cf5529027390c5ecef87b4b/django_zed_rebac-0.9.0-py3-none-any.whl", hash = "sha256:8c929c95abd81fdd51e9ecae7134049d593752b7f67b88fdebfdfae4589eebc8", size = 160270, upload-time = "2026-05-30T03:45:16.908Z" },
+    { url = "https://files.pythonhosted.org/packages/66/5e/3186ebf4571e81baa36824d546d19d4d289e70b310850b6694c1580b3c8e/django_zed_rebac-0.10.0-py3-none-any.whl", hash = "sha256:d1fab5db3256b2cd3c57ff6fcd16fb3c6cae0f82e9781e5f6e0a88b62fb01954", size = 165370, upload-time = "2026-06-01T22:30:13.925Z" },
 ]
 
 [package.optional-dependencies]

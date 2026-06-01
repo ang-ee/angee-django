@@ -246,7 +246,7 @@ export function dataViewStateToResourceListOptions<
   const options: UseResourceListOptions<TName> = {
     fields: input.fields,
     pageSize: state.pageSize,
-    initialPage: state.page,
+    page: state.page,
   };
   if (hasFilter(state.filter)) options.filter = state.filter;
   const order = dataViewSortToResourceOrder(state.sort);

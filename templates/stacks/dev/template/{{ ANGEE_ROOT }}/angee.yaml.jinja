@@ -54,7 +54,10 @@ jobs:
   permissions:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "python", "manage.py", "rebac", "sync", "--yes"]
+    command:
+      - sh
+      - "-c"
+      - uv run python manage.py rebac sync --yes && uv run python manage.py rebac_roles sync
     env:
       DJANGO_SETTINGS_MODULE: {{ django_settings }}
     depends_on: [migrate]

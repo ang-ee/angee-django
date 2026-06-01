@@ -20,11 +20,3 @@ class NotesConfig(BaseAddonConfig):
             "resources/demo/020_notes.note.yaml",
         ),
     }
-
-    def ready(self) -> None:
-        """Wire note ownership relationships to the model lifecycle."""
-
-        super().ready()
-        from example.notes import signals
-
-        signals.connect()

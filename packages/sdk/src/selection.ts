@@ -139,6 +139,13 @@ export interface AssembleListDocumentOptions {
 export interface AssembleGroupByDocumentOptions {
   /** Select these fields from the grouped row's `key` object. */
   keyFields: readonly string[];
+  /** Declare `$filter: <Type>Filter` and pass it to the grouped field. */
+  withFilter?: boolean;
+}
+
+export interface AssembleAggregateDocumentOptions {
+  /** Declare `$filter: <Type>Filter` and pass it to the aggregate field. */
+  withFilter?: boolean;
 }
 
 /**
@@ -216,9 +223,14 @@ export function groupByFieldName(modelLabel: string): string {
 /** The ungrouped aggregate document selects the model total count. */
 export function assembleAggregateDocument(
   modelLabel: string,
+  options: AssembleAggregateDocumentOptions = {},
 ): string {
+  const typeName = typeNameForModel(modelLabel);
   const field = aggregateFieldName(modelLabel);
-  return `query ${field} { ${field} { count } }`;
+  if (!options.withFilter) {
+    return `query ${field} { ${field} { count } }`;
+  }
+  return `query ${field}($filter: ${typeName}Filter) { ${field}(filter: $filter) { count } }`;
 }
 
 /**
@@ -234,10 +246,18 @@ export function assembleGroupByDocument(
   const field = groupByFieldName(modelLabel);
   const keyFields = [...new Set(options.keyFields.map(assertName))];
   const keySelection = keyFields.length > 0 ? keyFields.join(" ") : "__typename";
+  const declared = [
+    `$groupBy: [${typeName}GroupBySpec!]!`,
+    "$pagination: OffsetPaginationInput",
+  ];
+  const args = ["groupBy: $groupBy", "pagination: $pagination"];
+  if (options.withFilter) {
+    declared.push(`$filter: ${typeName}Filter`);
+    args.push("filter: $filter");
+  }
   return (
-    `query ${field}($groupBy: [${typeName}GroupBySpec!]!, ` +
-    `$pagination: OffsetPaginationInput) { ` +
-    `${field}(groupBy: $groupBy, pagination: $pagination) { ` +
+    `query ${field}(${declared.join(", ")}) { ` +
+    `${field}(${args.join(", ")}) { ` +
     `totalCount results { key { ${keySelection} } count } ` +
     `pageInfo { offset limit } } }`
   );

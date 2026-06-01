@@ -6,9 +6,9 @@ browser. Three model facts shape the implementation:
 * ``created_at`` / ``updated_at`` are ``auto_now_add`` / ``auto_now``
   (``angee.base.mixins``), so they cannot be set on insert — they are backfilled
   with a second ``bulk_update``.
-* A note is visible to its owner through a REBAC ``owner`` tuple, not a column.
-  ``bulk_create`` fires no ``post_save`` signal, so the tuples are written here
-  explicitly, mirroring :func:`example.notes.signals.grant_owner`.
+* Ownership is field-backed by ``created_by`` and admin reach is const-backed
+  via ``angee/role:admin`` in ``permissions.zed``, so a note carries no per-row
+  REBAC tuples — bulk insert writes none.
 * Generation is seeded (``Faker.seed_instance``) so a run is reproducible.
 """
 
@@ -24,15 +24,8 @@ from django.core.management.base import (
     CommandError,
     CommandParser,
 )
-from example.notes.signals import RESOURCE_TYPE, USER_TYPE
 from faker import Faker
-from rebac import (
-    ObjectRef,
-    RelationshipTuple,
-    SubjectRef,
-    system_context,
-    write_relationships,
-)
+from rebac import system_context
 
 _TAGS = (
     "idea",
@@ -128,18 +121,9 @@ class Command(BaseCommand):
                     for _ in range(size)
                 ]
                 note_model.objects.bulk_create(notes)
-                # Visibility: bulk_create fired no grant_owner signal, so write the
-                # owner tuples ourselves (same shape as signals.grant_owner).
-                write_relationships(
-                    [
-                        RelationshipTuple(
-                            resource=ObjectRef(RESOURCE_TYPE, str(note.sqid)),
-                            relation="owner",
-                            subject=SubjectRef.of(USER_TYPE, str(owner.pk)),
-                        )
-                        for note in notes
-                    ]
-                )
+                # Owner access is field-backed by created_by and admin reach is
+                # const-backed via angee/role:admin, so bulk insert writes no
+                # per-note REBAC tuples.
                 # Backfill the timestamps auto_now_add/auto_now ignored on insert.
                 for note in notes:
                     stamp = faker.date_time_between(start_date=start, end_date=end, tzinfo=timezone.utc)

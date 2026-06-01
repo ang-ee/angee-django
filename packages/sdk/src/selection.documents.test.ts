@@ -104,12 +104,36 @@ describe("aggregate documents", () => {
     expectValid(document);
   });
 
+  test("the ungrouped aggregate accepts the model filter on request", () => {
+    const document = assembleAggregateDocument("Sale", { withFilter: true });
+    expect(document).toBe(
+      "query saleAggregate($filter: SaleFilter) { " +
+        "saleAggregate(filter: $filter) { count } }",
+    );
+    expectValid(document);
+  });
+
   test("the grouped aggregate declares groupBy and offset pagination", () => {
     const document = assembleGroupByDocument("Sale", { keyFields: ["state"] });
     expect(document).toBe(
       "query saleGroups($groupBy: [SaleGroupBySpec!]!, " +
         "$pagination: OffsetPaginationInput) { " +
         "saleGroups(groupBy: $groupBy, pagination: $pagination) { " +
+        "totalCount results { key { state } count } " +
+        "pageInfo { offset limit } } }",
+    );
+    expectValid(document);
+  });
+
+  test("the grouped aggregate accepts the model filter on request", () => {
+    const document = assembleGroupByDocument("Sale", {
+      keyFields: ["state"],
+      withFilter: true,
+    });
+    expect(document).toBe(
+      "query saleGroups($groupBy: [SaleGroupBySpec!]!, " +
+        "$pagination: OffsetPaginationInput, $filter: SaleFilter) { " +
+        "saleGroups(groupBy: $groupBy, pagination: $pagination, filter: $filter) { " +
         "totalCount results { key { state } count } " +
         "pageInfo { offset limit } } }",
     );

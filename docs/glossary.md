@@ -1,6 +1,6 @@
 # Glossary
 
-Shared vocabulary for working in this repository. Terms are defined once here;
+Shared vocabulary for working in the Django / React Runtime. Terms are defined once here;
 other docs link to this file instead of redefining them. This is a living
 document — add a term when it first needs explaining, and keep each definition to
 the smallest accurate statement.

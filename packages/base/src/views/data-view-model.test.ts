@@ -112,7 +112,7 @@ describe("data-view model", () => {
     ).toEqual({
       fields: ["id", "title"],
       pageSize: 20,
-      initialPage: 2,
+      page: 2,
       filter: { title: { iContains: "alpha" } },
       order: { updatedAt: "DESC" },
       enabled: false,

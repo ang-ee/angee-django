@@ -73,13 +73,80 @@ export type PopoverViewportProps = React.ComponentPropsWithoutRef<
 >;
 
 export const PopoverRoot = BasePopover.Root;
-export const PopoverTrigger = BasePopover.Trigger;
 export const PopoverPortal = BasePopover.Portal;
 export const PopoverPositioner = BasePopover.Positioner;
 export const PopoverArrow = BasePopover.Arrow;
 export const PopoverBackdrop = BasePopover.Backdrop;
 export const PopoverClose = BasePopover.Close;
 export const PopoverViewport = BasePopover.Viewport;
+
+export const PopoverTrigger = React.forwardRef<
+  HTMLButtonElement,
+  PopoverTriggerProps
+>(function PopoverTrigger(
+  {
+    disabled,
+    onClickCapture,
+    onMouseDownCapture,
+    onPointerDownCapture,
+    ...props
+  },
+  ref,
+) {
+  const pendingPointerPressRef = React.useRef(false);
+  return (
+    <BasePopover.Trigger
+      ref={ref}
+      disabled={disabled}
+      onPointerDownCapture={(event) => {
+        onPointerDownCapture?.(event);
+        if (!shouldDeferPopoverPress(event, disabled)) return;
+        pendingPointerPressRef.current = true;
+        stopPopoverPress(event);
+      }}
+      onMouseDownCapture={(event) => {
+        onMouseDownCapture?.(event);
+        if (!shouldDeferPopoverPress(event, disabled)) return;
+        pendingPointerPressRef.current = true;
+        stopPopoverPress(event);
+      }}
+      onClickCapture={(event) => {
+        onClickCapture?.(event);
+        if (
+          disabled
+          || event.defaultPrevented
+          || !event.isTrusted
+          || !pendingPointerPressRef.current
+        ) {
+          return;
+        }
+        pendingPointerPressRef.current = false;
+        stopPopoverPress(event);
+        const trigger = event.currentTarget;
+        globalThis.setTimeout(() => {
+          if (trigger.isConnected) trigger.click();
+        }, 0);
+      }}
+      {...props}
+    />
+  );
+});
+PopoverTrigger.displayName = "PopoverTrigger";
+
+function shouldDeferPopoverPress(
+  event: React.SyntheticEvent<HTMLButtonElement>,
+  disabled: boolean | undefined,
+): boolean {
+  return !disabled && event.isTrusted && !event.defaultPrevented;
+}
+
+function stopPopoverPress(
+  event: React.SyntheticEvent<HTMLButtonElement>,
+): void {
+  event.preventDefault();
+  event.stopPropagation();
+  event.nativeEvent.stopImmediatePropagation?.();
+}
 
 export interface PopoverVirtualAnchorRect {
   x: number;

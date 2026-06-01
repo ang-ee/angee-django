@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation as useUrqlMutation } from "urql";
 
 import { DISABLED_DOCUMENTS } from "./disabled-documents";
@@ -39,6 +39,8 @@ type Order<TName extends ResourceTypeName> = ResourceOrder<TName> | Record<strin
 export interface UseResourceListOptions<TName extends ResourceTypeName> {
   fields: readonly string[];
   pageSize?: number;
+  /** 1-based page owned by the caller. Use this for URL/router-owned lists. */
+  page?: number;
   /** 1-based initial page; the hook then owns the page through its setters. */
   initialPage?: number;
   filter?: Filter<TName>;
@@ -96,26 +98,35 @@ export function useResourceList<TName extends ResourceTypeName = ResourceTypeNam
   const filterKey = JSON.stringify(filter ?? null);
   const orderKey = JSON.stringify(order ?? null);
 
-  const requestedPage = normalisePage(initialPage);
-  const [page, setPageState] = useState(() => requestedPage);
-
-  // A new query identity (model, page size, filter, or order) resets to page 1.
-  // Adjust during render — not in an effect — so the first request against the
-  // new query uses the reset offset, never a stale deep-page offset.
+  const controlledPage = options.page === undefined
+    ? undefined
+    : normalisePage(options.page);
+  const initial = normalisePage(initialPage);
   const resetKey = `${modelLabel}|${size}|${filterKey}|${orderKey}`;
-  const resetKeyRef = useRef(resetKey);
-  const requestedPageRef = useRef(requestedPage);
-  let currentPage = page;
-  if (resetKeyRef.current !== resetKey) {
-    resetKeyRef.current = resetKey;
-    requestedPageRef.current = requestedPage;
-    currentPage = 1;
-    setPageState(1);
-  } else if (requestedPageRef.current !== requestedPage) {
-    requestedPageRef.current = requestedPage;
-    currentPage = requestedPage;
-    setPageState(requestedPage);
-  }
+  const [pageState, setPageState] = useState(() => ({
+    resetKey,
+    initial,
+    page: initial,
+  }));
+  const currentPage = controlledPage
+    ?? (pageState.resetKey !== resetKey
+      ? 1
+      : pageState.initial !== initial
+        ? initial
+        : pageState.page);
+
+  useEffect(() => {
+    if (controlledPage !== undefined) return;
+    setPageState((current) => {
+      if (current.resetKey !== resetKey) {
+        return { resetKey, initial, page: 1 };
+      }
+      if (current.initial !== initial) {
+        return { resetKey, initial, page: initial };
+      }
+      return current;
+    });
+  }, [controlledPage, initial, resetKey]);
 
   const variables = useMemo(() => {
     const vars: Record<string, unknown> = {
@@ -139,19 +150,41 @@ export function useResourceList<TName extends ResourceTypeName = ResourceTypeNam
   const setPage = useCallback(
     (next: number) => {
       const floored = Math.max(1, Math.floor(next));
-      setPageState(pageCount ? Math.min(floored, pageCount) : floored);
+      setPageState({
+        resetKey,
+        initial,
+        page: pageCount ? Math.min(floored, pageCount) : floored,
+      });
     },
-    [pageCount],
+    [initial, pageCount, resetKey],
   );
-  const firstPage = useCallback(() => setPageState(1), []);
+  const firstPage = useCallback(
+    () => setPageState({ resetKey, initial, page: 1 }),
+    [initial, resetKey],
+  );
   const nextPage = useCallback(
-    () => setPageState((current) => (pageCount ? Math.min(current + 1, pageCount) : current + 1)),
-    [pageCount],
+    () =>
+      setPageState((current) => {
+        const page = current.resetKey === resetKey ? current.page : 1;
+        return {
+          resetKey,
+          initial,
+          page: pageCount ? Math.min(page + 1, pageCount) : page + 1,
+        };
+      }),
+    [initial, pageCount, resetKey],
   );
-  const prevPage = useCallback(() => setPageState((current) => Math.max(1, current - 1)), []);
+  const prevPage = useCallback(
+    () =>
+      setPageState((current) => {
+        const page = current.resetKey === resetKey ? current.page : 1;
+        return { resetKey, initial, page: Math.max(1, page - 1) };
+      }),
+    [initial, resetKey],
+  );
   const lastPage = useCallback(() => {
-    if (pageCount) setPageState(pageCount);
-  }, [pageCount]);
+    if (pageCount) setPageState({ resetKey, initial, page: pageCount });
+  }, [initial, pageCount, resetKey]);
 
   return {
     rows,

@@ -25,6 +25,7 @@ export function useDocumentQuery(
     query: enabled ? document : DISABLED_DOCUMENTS.query,
     variables,
     pause: !enabled,
+    requestPolicy: "cache-first",
   });
   const refetch = useCallback(
     () => reexecute({ requestPolicy: "network-only" }),

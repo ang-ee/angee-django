@@ -161,7 +161,7 @@ function DataPageBody<TRow extends Row = Row>({
     }
     handledDefaultGroupRef.current = defaultGroup;
     if (dataView.state.group === null) dataView.setGroup(defaultGroup);
-  }, [dataView, defaultGroup, open, placement]);
+  }, [dataView.setGroup, dataView.state.group, defaultGroup, open, placement]);
   const recordBreadcrumb = React.useMemo(
     () =>
       recordBreadcrumbLabel({
@@ -372,7 +372,7 @@ function ListStateProbe<TRow extends Row>({
     if (pageSize && dataView.state.pageSize !== pageSize) {
       dataView.setPageSize(pageSize);
     }
-  }, [dataView, pageSize]);
+  }, [dataView.setPageSize, dataView.state.pageSize, pageSize]);
 
   const requestedFields = React.useMemo(() => {
     const paths = new Set<string>(["id"]);
@@ -390,7 +390,7 @@ function ListStateProbe<TRow extends Row>({
     filter: mergedFilter,
     order: sortOrder ?? order,
     pageSize: dataView.state.pageSize,
-    initialPage: dataView.state.page,
+    page: dataView.state.page,
   });
   const rows = list.rows as readonly TRow[];
   const listState = React.useMemo<ListViewState<TRow>>(

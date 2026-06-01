@@ -228,10 +228,11 @@ type Query {
     filters: SaleFilter
     order: SaleOrder
   ): SaleOffsetPaginated!
-  saleAggregate: SaleAggregate!
+  saleAggregate(filter: SaleFilter): SaleAggregate!
   saleGroups(
     groupBy: [SaleGroupBySpec!]!
     pagination: OffsetPaginationInput
+    filter: SaleFilter
   ): SaleGroupedResult!
 }
 

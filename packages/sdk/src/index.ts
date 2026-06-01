@@ -24,6 +24,7 @@ export {
   type SelectionField,
   type MutationAction,
   type AssembleListDocumentOptions,
+  type AssembleAggregateDocumentOptions,
   type AssembleGroupByDocumentOptions,
 } from "./selection";
 

@@ -2,15 +2,16 @@
 
 import {
   act,
+  cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
-import { useState, type ReactElement } from "react";
+import { useState, type ComponentProps, type ReactElement } from "react";
 import { NuqsTestingAdapter } from "nuqs/adapters/testing";
-import { beforeAll, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
 import {
   Breadcrumb,
@@ -52,7 +53,7 @@ vi.mock("@angee/sdk", async (importOriginal) => {
       );
       const requestedPage = Math.min(
         pageCount,
-        Math.max(1, options.initialPage ?? 1),
+        Math.max(1, options.page ?? options.initialPage ?? 1),
       );
       const [page, setPageState] = ReactRuntime.useState(requestedPage);
       ReactRuntime.useEffect(() => {
@@ -91,6 +92,13 @@ vi.mock("@angee/sdk", async (importOriginal) => {
       error: null,
       refetch: vi.fn(),
     }),
+    useResourceGroupBy: () => ({
+      count: 0,
+      totalCount: 0,
+      buckets: [],
+      fetching: false,
+      error: null,
+    }),
     useResourceMutation: () => [
       sdkMocks.mutate,
       { fetching: false, error: null },
@@ -112,24 +120,39 @@ describe("DataPage", () => {
     Element.prototype.getAnimations ??= () => [];
   });
 
+  afterEach(async () => {
+    await act(async () => {
+      cleanup();
+      await nextTask();
+    });
+  });
+
   test("renders record navigation and reuses the view switcher in record chrome", async () => {
     const onSelect = vi.fn();
     const onClose = vi.fn();
 
-    const view = render(
-      <NuqsTestingAdapter>
-        <DataPage
-          model="notes.Note"
-          columns={columns}
-          formFields={formFields}
-          recordId="note-2"
-          placement="inline"
-          pageSize={2}
-          onSelect={onSelect}
-          onClose={onClose}
-        />
-      </NuqsTestingAdapter>,
-    );
+    function Harness(): ReactElement {
+      const [recordId, setRecordId] = useState<string | null>("note-2");
+      return (
+        <TestUrlState>
+          <DataPage
+            model="notes.Note"
+            columns={columns}
+            formFields={formFields}
+            recordId={recordId}
+            placement="inline"
+            pageSize={2}
+            onSelect={(id) => {
+              onSelect(id);
+              setRecordId(id);
+            }}
+            onClose={onClose}
+          />
+        </TestUrlState>
+      );
+    }
+
+    render(<Harness />);
 
     const pager = await screen.findByRole("navigation", {
       name: "Record navigation",
@@ -144,8 +167,11 @@ describe("DataPage", () => {
     await waitFor(() => expect(onSelect).toHaveBeenCalledWith("note-3"));
     await waitFor(() =>
       expect(
-        screen.queryByRole("navigation", { name: "Record navigation" }),
-      ).toBeNull(),
+        screen
+          .getByRole("navigation", { name: "Record navigation" })
+          .textContent?.replace(/\s+/g, " ")
+          .trim(),
+      ).toContain("3 of 4"),
     );
 
     const switcher = screen.getByRole("group", {
@@ -159,18 +185,11 @@ describe("DataPage", () => {
     await waitFor(() =>
       expect(boardButton.getAttribute("aria-pressed")).toBe("true"),
     );
-
-    await act(async () => {
-      view.unmount();
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
-    });
   });
 
   test("publishes persistent breadcrumbs for the selected record", async () => {
-    const view = render(
-      <NuqsTestingAdapter>
+    render(
+      <TestUrlState>
         <BreadcrumbProvider initialTrail={[{ label: "Notes" }]}>
           <Breadcrumb />
           <DataPage
@@ -182,7 +201,7 @@ describe("DataPage", () => {
             pageSize={2}
           />
         </BreadcrumbProvider>
-      </NuqsTestingAdapter>,
+      </TestUrlState>,
     );
 
     const breadcrumb = screen.getByRole("navigation", { name: "Breadcrumb" });
@@ -191,13 +210,6 @@ describe("DataPage", () => {
     );
     expect(within(breadcrumb).getByText("Second").getAttribute("aria-current"))
       .toBe("page");
-
-    await act(async () => {
-      view.unmount();
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
-    });
   });
 
   test("opens a selected row and keeps the record breadcrumb published", async () => {
@@ -206,7 +218,7 @@ describe("DataPage", () => {
         undefined,
       );
       return (
-        <NuqsTestingAdapter>
+        <TestUrlState>
           <BreadcrumbProvider initialTrail={[{ label: "Notes" }]}>
             <Breadcrumb />
             <DataPage
@@ -219,11 +231,11 @@ describe("DataPage", () => {
               onSelect={setRecordId}
             />
           </BreadcrumbProvider>
-        </NuqsTestingAdapter>
+        </TestUrlState>
       );
     }
 
-    const view = render(<Harness />);
+    render(<Harness />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Open First" }));
     const breadcrumb = screen.getByRole("navigation", { name: "Breadcrumb" });
@@ -232,25 +244,18 @@ describe("DataPage", () => {
     );
     expect(within(breadcrumb).getByText("First").getAttribute("aria-current"))
       .toBe("page");
-
-    await act(async () => {
-      view.unmount();
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
-    });
   });
 
   test("lets the seeded default group be cleared", async () => {
-    const view = render(
-      <NuqsTestingAdapter>
+    render(
+      <TestUrlState>
         <DataPage
           model="notes.Note"
           columns={[...columns, { field: "updatedAt", header: "Updated At" }]}
           formFields={formFields}
           defaultGroup={{ field: "updatedAt", granularity: "day" }}
         />
-      </NuqsTestingAdapter>,
+      </TestUrlState>,
     );
 
     const removeGroup = await screen.findByRole("button", {
@@ -263,25 +268,89 @@ describe("DataPage", () => {
         screen.queryByRole("button", { name: "Remove group" }),
       ).toBeNull(),
     );
+  });
 
-    await act(async () => {
-      view.unmount();
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
+  test("paginates through the URL-owned data view state", async () => {
+    const onUrlUpdate = vi.fn();
+    render(
+      <TestUrlState
+        searchParams="?group=updatedAt:day"
+        onUrlUpdate={onUrlUpdate}
+      >
+        <DataPage
+          model="notes.Note"
+          columns={[...columns, { field: "updatedAt", header: "Updated At" }]}
+          formFields={formFields}
+          pageSize={2}
+          defaultGroup={{ field: "updatedAt", granularity: "day" }}
+        />
+      </TestUrlState>,
+    );
+
+    await screen.findByRole("button", { name: "Records 1-2 / 4" });
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Records 3-4 / 4" }),
+      ).toBeTruthy(),
+    );
+    await waitFor(() => {
+      const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
+      expect(latest?.searchParams.get("page")).toBe("2");
+    });
+  });
+
+  test("changing the group resets a deep page through the data view state", async () => {
+    const onUrlUpdate = vi.fn();
+    render(
+      <TestUrlState
+        searchParams="?group=updatedAt:day&page=2&pageSize=2"
+        onUrlUpdate={onUrlUpdate}
+      >
+        <DataPage
+          model="notes.Note"
+          columns={[...columns, { field: "updatedAt", header: "Updated At" }]}
+          formFields={formFields}
+          pageSize={2}
+          defaultGroup={{ field: "updatedAt", granularity: "day" }}
+        />
+      </TestUrlState>,
+    );
+
+    await screen.findByRole("button", { name: "Records 3-4 / 4" });
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Filter, group, favorites",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Month" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("Updated · Month")).toBeTruthy(),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Records 1-2 / 4" }),
+      ).toBeTruthy(),
+    );
+    await waitFor(() => {
+      const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
+      expect(latest?.searchParams.get("group")).toBe("updatedAt:month");
+      expect(latest?.searchParams.get("page")).not.toBe("2");
     });
   });
 
   test("lets the seeded default group granularity be changed", async () => {
-    const view = render(
-      <NuqsTestingAdapter>
+    render(
+      <TestUrlState>
         <DataPage
           model="notes.Note"
           columns={[...columns, { field: "updatedAt", header: "Updated At" }]}
           formFields={formFields}
           defaultGroup={{ field: "updatedAt", granularity: "day" }}
         />
-      </NuqsTestingAdapter>,
+      </TestUrlState>,
     );
 
     fireEvent.click(
@@ -294,12 +363,23 @@ describe("DataPage", () => {
     await waitFor(() =>
       expect(screen.getByText("Updated · Month")).toBeTruthy(),
     );
-
-    await act(async () => {
-      view.unmount();
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
-    });
   });
 });
+
+function nextTask(): Promise<void> {
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, 0);
+  });
+}
+
+function TestUrlState({
+  children,
+  hasMemory = true,
+  ...props
+}: ComponentProps<typeof NuqsTestingAdapter>): ReactElement {
+  return (
+    <NuqsTestingAdapter {...props} hasMemory={hasMemory}>
+      {children}
+    </NuqsTestingAdapter>
+  );
+}

@@ -4,18 +4,25 @@
 // @rebac_schema_revision: 1
 
 definition notes/note {
-    relation owner: auth/user
+    relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
 
-    permission read   = owner + editor + reader
-    permission write  = owner + editor
-    permission delete = owner
+    // Universal-admin reach without a per-note grant. Every note points at the
+    // platform admin role via a const-backed relation (synthetic — no stored
+    // tuple, no column), so `admin->member` resolves the actor's membership in
+    // angee/role:admin. One role membership covers every note, the way GCP IAM's
+    // admin-at-a-scope covers every resource under it.
+    relation admin: angee/role // rebac:const=admin
+
+    permission read   = owner + editor + reader + admin->member
+    permission write  = owner + editor + admin->member
+    permission delete = owner + admin->member
 
     // Owners alone see the personal flags; readers get the rest of the note.
     permission read__is_starred  = owner
     permission read__reminder_at = owner
 
     // Status transitions are an editorial action.
-    permission write__status = owner + editor
+    permission write__status = owner + editor + admin->member
 }

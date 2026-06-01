@@ -1,8 +1,8 @@
 """Authorization behaviour of the composed notes addon.
 
 These exercise the real runtime model against the permission schema: demo
-resources seed users and notes, ownership signals grant the creators access,
-and field permissions redact owner-only fields from other readers.
+resources seed users and notes, field-backed ownership lets creators read their
+rows, and field permissions redact owner-only fields from other readers.
 """
 
 from __future__ import annotations
@@ -18,6 +18,8 @@ from rebac import (
     system_context,
     write_relationships,
 )
+from rebac.backends import backend
+from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
 
 Note = apps.get_model("notes", "Note")
@@ -31,6 +33,7 @@ class NotesAuthorizationTests(TransactionTestCase):
         call_command("rebac", "sync", verbosity=0)
         call_command("resources", "load", "demo", allow_non_dev=True, verbosity=0)
         with system_context(reason="test-setup"):
+            self.admin = User.objects.get(username="admin")
             self.alice = User.objects.get(username="alice")
             self.bob = User.objects.get(username="bob")
             self.welcome = Note.objects.get(title="Welcome to Angee")
@@ -38,8 +41,8 @@ class NotesAuthorizationTests(TransactionTestCase):
     def test_note_is_a_rebac_resource(self) -> None:
         self.assertEqual(model_resource_type(Note), "notes/note")
 
-    def test_demo_load_grants_each_creator_ownership(self) -> None:
-        # created_by drives the owner grant: a user reaches only their notes.
+    def test_demo_load_uses_created_by_field_backed_ownership(self) -> None:
+        # created_by drives the owner relation: a user reaches only their notes.
         alice_notes = list(Note.objects.as_user(self.alice))
         bob_notes = list(Note.objects.as_user(self.bob))
 
@@ -48,6 +51,56 @@ class NotesAuthorizationTests(TransactionTestCase):
         self.assertTrue(all(note.created_by_id == self.alice.pk for note in alice_notes))
         self.assertTrue(all(note.created_by_id == self.bob.pk for note in bob_notes))
         self.assertFalse({note.sqid for note in alice_notes} & {note.sqid for note in bob_notes})
+        relationship_model = active_relationship_model()
+        self.assertFalse(
+            relationship_model.objects.filter(
+                resource_type="notes/note",
+                relation="owner",
+            ).exists()
+        )
+        definition = backend().schema().get_definition("notes/note")
+        if definition is None:
+            self.fail("notes/note must be present in the synced REBAC schema")
+        owner = next(relation for relation in definition.relations if relation.name == "owner")
+        backing = owner.backing
+        if backing is None:
+            self.fail("notes/note#owner must be field-backed by created_by")
+        self.assertEqual(backing.attname, "created_by")
+
+    def test_platform_admin_reaches_all_notes(self) -> None:
+        with system_context(reason="test"):
+            total = Note.objects.count()
+        relationship_model = active_relationship_model()
+
+        # as_user(admin) is NOT bracketed in sudo, so reach is purely
+        # relationship-based: the const-backed admin relation points every note
+        # at angee/role:admin, and admin->member resolves the superuser's
+        # membership (written by the IAM signal).
+        admin_notes = Note.objects.as_user(self.admin)
+
+        self.assertEqual(admin_notes.count(), total)
+        self.assertGreaterEqual(
+            {note.created_by_id for note in admin_notes},
+            {self.admin.pk, self.alice.pk, self.bob.pk},
+        )
+        # One role membership powers it — not a grant per note.
+        self.assertTrue(
+            relationship_model.objects.filter(
+                resource_type="angee/role",
+                resource_id="admin",
+                relation="member",
+            ).exists()
+        )
+        # The admin relation is synthetic (const-backed): the note table holds
+        # no REBAC tuples at all.
+        self.assertFalse(relationship_model.objects.filter(resource_type="notes/note").exists())
+        admin_rel = next(
+            relation
+            for relation in backend().schema().get_definition("notes/note").relations
+            if relation.name == "admin"
+        )
+        self.assertEqual(admin_rel.backing.kind, "const")
+        self.assertEqual(admin_rel.backing.target_id, "admin")
 
     def test_demo_load_is_idempotent(self) -> None:
         with system_context(reason="test"):
@@ -87,7 +140,14 @@ class NotesAuthorizationTests(TransactionTestCase):
 
     def test_deleting_a_note_clears_its_relationships(self) -> None:
         sqid = self.welcome.sqid
+        relationship_model = active_relationship_model()
         with system_context(reason="test"):
             Note.objects.get(sqid=sqid).delete()
-        # The owner can no longer reach the note: its grants were cleared.
+        # Owner reach is field-backed and admin reach const-backed, so a note
+        # carries no tuples; deleting the row removes it and leaves no orphans.
         self.assertEqual(list(Note.objects.as_user(self.alice).filter(sqid=sqid)), [])
+        self.assertFalse(
+            relationship_model.objects.filter(
+                resource_type="notes/note", resource_id=str(sqid)
+            ).exists()
+        )

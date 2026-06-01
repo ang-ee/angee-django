@@ -4,11 +4,15 @@
 // @rebac_schema_revision: 1
 
 definition auth/user {
-    relation admin: angee/role#admin
+    // Const-backed universal admin: every user points at angee/role:admin
+    // (synthetic — no per-user tuple), so admin->member resolves the actor's
+    // platform-admin membership. This is what lets a superuser reach every
+    // user with REBAC_SUPERUSER_BYPASS off, through relationships alone.
+    relation admin: angee/role // rebac:const=admin
 
-    permission read = admin
-    permission write = admin
-    permission delete = admin
+    permission read = admin->member
+    permission write = admin->member
+    permission delete = admin->member
 }
 
 definition auth/group {
@@ -16,5 +20,5 @@ definition auth/group {
 }
 
 definition angee/role {
-    relation admin: auth/user | auth/group#member
+    relation member: auth/user | auth/group#member
 }
