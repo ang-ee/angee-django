@@ -7,6 +7,7 @@ import {
   type Row as TableRowModel,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { useNavigate } from "@tanstack/react-router";
 import {
   useResourceList,
   type ResourceTypeName,
@@ -476,6 +477,106 @@ function RecordRow<TRow extends Row>({
   const id = row.id;
   const selected = dataView.state.selectedIds.has(id);
   const href = rowHref?.(row.original);
+  if (href) {
+    return (
+      <LinkedRecordRow
+        row={row}
+        columns={columns}
+        dataView={dataView}
+        href={href}
+      />
+    );
+  }
+  return (
+    <PlainRecordRow
+      row={row}
+      columns={columns}
+      dataView={dataView}
+      interactive={interactive}
+      onRowClick={onRowClick}
+    />
+  );
+}
+
+function LinkedRecordRow<TRow extends Row>({
+  row,
+  columns,
+  dataView,
+  href,
+}: {
+  row: TableRowModel<TRow>;
+  columns: readonly ColumnDescriptor<TRow>[];
+  dataView: DataViewContextValue;
+  href: string;
+}): React.ReactElement {
+  const id = row.id;
+  const selected = dataView.state.selectedIds.has(id);
+  const navigate = useNavigate();
+  const openHref = React.useCallback(
+    (event: React.MouseEvent<HTMLTableRowElement>) => {
+      if (isInteractiveTarget(event.target)) return;
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+        window.open(href, "_blank", "noopener");
+        return;
+      }
+      event.preventDefault();
+      void navigate({ to: href });
+    },
+    [href, navigate],
+  );
+  return (
+    <TableRow
+      interactive
+      role="link"
+      tabIndex={0}
+      data-selected={selected ? "" : undefined}
+      onClick={openHref}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" || event.target !== event.currentTarget) {
+          return;
+        }
+        event.preventDefault();
+        void navigate({ to: href });
+      }}
+    >
+      <TableCell className="w-8">
+        <Checkbox
+          size="sm"
+          aria-label="Select row"
+          checked={selected}
+          onClick={(event) => event.stopPropagation()}
+          onCheckedChange={(checked) =>
+            dataView.toggleSelectedId(id, checked)
+          }
+        />
+      </TableCell>
+      {columns.map((column, index) => (
+        <TableCell
+          key={column.field}
+          className={ALIGN_CLASS[column.align ?? "left"]}
+        >
+          {cellContent(column, row.original)}
+        </TableCell>
+      ))}
+    </TableRow>
+  );
+}
+
+function PlainRecordRow<TRow extends Row>({
+  row,
+  columns,
+  dataView,
+  interactive,
+  onRowClick,
+}: {
+  row: TableRowModel<TRow>;
+  columns: readonly ColumnDescriptor<TRow>[];
+  dataView: DataViewContextValue;
+  interactive: boolean;
+  onRowClick?: (row: TRow) => void;
+}): React.ReactElement {
+  const id = row.id;
+  const selected = dataView.state.selectedIds.has(id);
   return (
     <TableRow
       interactive={interactive}
@@ -498,11 +599,7 @@ function RecordRow<TRow extends Row>({
           key={column.field}
           className={ALIGN_CLASS[column.align ?? "left"]}
         >
-          {href ? (
-            <a href={href} className="block text-inherit no-underline">
-              {cellContent(column, row.original)}
-            </a>
-          ) : interactive && index === 0 && onRowClick ? (
+          {interactive && index === 0 && onRowClick ? (
             <button
               type="button"
               className="block w-full min-w-0 rounded-sm text-left text-inherit outline-none focus-visible:focus-ring"
@@ -569,9 +666,12 @@ function BoardRows<TRow extends Row>({
           );
           if (href) {
             return (
-              <a key={row.id} href={href} className="block text-inherit no-underline">
+              <BoardLinkCard
+                key={row.id}
+                href={href}
+              >
                 {card}
-              </a>
+              </BoardLinkCard>
             );
           }
           return (
@@ -587,6 +687,27 @@ function BoardRows<TRow extends Row>({
         }),
       )}
     </div>
+  );
+}
+
+function BoardLinkCard({
+  href,
+  children,
+}: {
+  href: string;
+  children: React.ReactNode;
+}): React.ReactElement {
+  const navigate = useNavigate();
+  return (
+    <button
+      type="button"
+      className="block w-full text-left text-inherit"
+      onClick={() => {
+        void navigate({ to: href });
+      }}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -886,6 +1007,15 @@ function setPageSelection(
     else next.delete(id);
   }
   dataView.setSelectedIds(next);
+}
+
+function isInteractiveTarget(target: EventTarget): boolean {
+  return target instanceof HTMLElement
+    && Boolean(
+      target.closest(
+        "a,button,input,select,textarea,label,[role='button'],[role='menuitem'],[role='checkbox']",
+      ),
+    );
 }
 
 function mergeFilters(

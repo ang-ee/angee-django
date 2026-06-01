@@ -1,5 +1,8 @@
 import * as React from "react";
-import type { Row } from "@angee/sdk";
+import {
+  useResourceList,
+  type Row,
+} from "@angee/sdk";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import {
@@ -27,7 +30,13 @@ import {
   useDataView,
   useDataViewMaybe,
 } from "./data-view-context";
-import type { DataViewGroup, DataViewKind } from "./data-view-model";
+import {
+  dataViewGroupsEqual,
+  dataViewSortToResourceOrder,
+  type DataViewFilter,
+  type DataViewGroup,
+  type DataViewKind,
+} from "./data-view-model";
 import type { GroupDescriptor } from "./page";
 
 /** Where the open record's form renders relative to the list. */
@@ -82,12 +91,15 @@ export function DataPage<TRow extends Row = Row>({
     );
   }
 
+  const initialState = React.useMemo(
+    () => ({
+      pageSize,
+    }),
+    [pageSize],
+  );
+
   return (
-    <DataViewProvider
-      initialState={{
-        pageSize,
-      }}
-    >
+    <DataViewProvider initialState={initialState}>
       <DataPageBody
         {...props}
         pageSize={pageSize}
@@ -130,10 +142,26 @@ function DataPageBody<TRow extends Row = Row>({
     React.useState<ListViewState<TRow> | null>(null);
   const [pendingNavigation, setPendingNavigation] =
     React.useState<PendingRecordNavigation | null>(null);
+  const handledDefaultGroupRef = React.useRef<DataViewGroup | null>(null);
 
   // A record is open when an id is selected or a create was requested.
   const open = creating || recordId != null;
   const editId = creating ? null : recordId ?? null;
+  React.useEffect(() => {
+    if (!open || placement === "drawer") return;
+    if (!defaultGroup) {
+      handledDefaultGroupRef.current = null;
+      return;
+    }
+    if (
+      handledDefaultGroupRef.current
+      && dataViewGroupsEqual(handledDefaultGroupRef.current, defaultGroup)
+    ) {
+      return;
+    }
+    handledDefaultGroupRef.current = defaultGroup;
+    if (dataView.state.group === null) dataView.setGroup(defaultGroup);
+  }, [dataView, defaultGroup, open, placement]);
   const recordBreadcrumb = React.useMemo(
     () =>
       recordBreadcrumbLabel({
@@ -254,6 +282,18 @@ function DataPageBody<TRow extends Row = Row>({
       }
     />
   );
+  const listStateOnly = open ? (
+    <ListStateProbe<TRow>
+      model={model}
+      columns={columns}
+      fields={fields}
+      filter={filter}
+      order={order}
+      pageSize={pageSize}
+      dataView={dataView}
+      onListStateChange={handleListStateChange}
+    />
+  ) : null;
 
   const recordForm = open ? (
     <FormView
@@ -291,7 +331,7 @@ function DataPageBody<TRow extends Row = Row>({
     <div className={cn("min-w-0", className)}>
       {open ? (
         <>
-          <div hidden>{list}</div>
+          {listStateOnly}
           <div className="overflow-hidden rounded-md border border-border bg-sheet">
             {recordToolbar}
             <div className="px-6 py-8">{recordForm}</div>
@@ -307,6 +347,78 @@ function DataPageBody<TRow extends Row = Row>({
 interface PendingRecordNavigation {
   page: number;
   edge: "first" | "last";
+}
+
+function ListStateProbe<TRow extends Row>({
+  model,
+  columns,
+  fields,
+  filter,
+  order,
+  pageSize,
+  dataView,
+  onListStateChange,
+}: {
+  model: string;
+  columns: readonly ListColumn<TRow>[];
+  fields?: ListViewProps<TRow>["fields"];
+  filter?: ListViewProps<TRow>["filter"];
+  order?: ListViewProps<TRow>["order"];
+  pageSize?: number;
+  dataView: ReturnType<typeof useDataView>;
+  onListStateChange: (state: ListViewState<TRow>) => void;
+}): null {
+  React.useEffect(() => {
+    if (pageSize && dataView.state.pageSize !== pageSize) {
+      dataView.setPageSize(pageSize);
+    }
+  }, [dataView, pageSize]);
+
+  const requestedFields = React.useMemo(() => {
+    const paths = new Set<string>(["id"]);
+    for (const column of columns) paths.add(column.field);
+    for (const extra of fields ?? []) paths.add(extra);
+    return [...paths];
+  }, [columns, fields]);
+  const mergedFilter = React.useMemo(
+    () => mergeFilters(filter, dataView.state.filter),
+    [dataView.state.filter, filter],
+  );
+  const sortOrder = dataViewSortToResourceOrder(dataView.state.sort);
+  const list = useResourceList(model, {
+    fields: requestedFields,
+    filter: mergedFilter,
+    order: sortOrder ?? order,
+    pageSize: dataView.state.pageSize,
+    initialPage: dataView.state.page,
+  });
+  const rows = list.rows as readonly TRow[];
+  const listState = React.useMemo<ListViewState<TRow>>(
+    () => ({
+      rows,
+      total: list.total,
+      page: list.page,
+      pageSize: list.pageSize,
+      pageCount: list.pageCount,
+      hasNext: list.hasNext,
+      hasPrev: list.hasPrev,
+      fetching: list.fetching,
+    }),
+    [
+      rows,
+      list.total,
+      list.page,
+      list.pageSize,
+      list.pageCount,
+      list.hasNext,
+      list.hasPrev,
+      list.fetching,
+    ],
+  );
+  React.useEffect(() => {
+    onListStateChange(listState);
+  }, [listState, onListStateChange]);
+  return null;
 }
 
 interface RecordNavigation {
@@ -495,6 +607,14 @@ function titleCase(value: string): string {
 
 function rowId(row: Row | undefined): string | null {
   return typeof row?.id === "string" ? row.id : null;
+}
+
+function mergeFilters<TRow extends Row>(
+  base: ListViewProps<TRow>["filter"],
+  view: DataViewFilter,
+): ListViewProps<TRow>["filter"] {
+  if (!base) return Object.keys(view).length > 0 ? view : undefined;
+  return { ...base, ...view };
 }
 
 function listStatesEqual<TRow extends Row>(

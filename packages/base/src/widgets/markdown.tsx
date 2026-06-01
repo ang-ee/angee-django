@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -102,6 +103,8 @@ function MarkdownEdit({
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
+  const pendingChangeRef = useRef<string | null>(null);
+  const changeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const syncingRef = useRef(false);
   const readOnlyCompartment = useMemo(() => new Compartment(), []);
   const editableCompartment = useMemo(() => new Compartment(), []);
@@ -111,12 +114,34 @@ function MarkdownEdit({
     onChangeRef.current = onChange;
   }, [onChange]);
 
+  const flushPendingChange = useCallback(() => {
+    if (changeTimerRef.current !== null) {
+      clearTimeout(changeTimerRef.current);
+      changeTimerRef.current = null;
+    }
+    const pending = pendingChangeRef.current;
+    pendingChangeRef.current = null;
+    if (pending !== null) onChangeRef.current?.(pending);
+  }, []);
+
+  const scheduleChange = useCallback(
+    (next: string) => {
+      pendingChangeRef.current = next;
+      if (changeTimerRef.current !== null) return;
+      changeTimerRef.current = setTimeout(flushPendingChange, 16);
+    },
+    [flushPendingChange],
+  );
+
   useEffect(() => {
     const parent = hostRef.current;
     if (!parent) return undefined;
     const updateListener = EditorView.updateListener.of((update) => {
       if (!update.docChanged || syncingRef.current) return;
-      onChangeRef.current?.(update.state.doc.toString());
+      scheduleChange(update.state.doc.toString());
+    });
+    const blurHandler = EditorView.domEventHandlers({
+      blur: flushPendingChange,
     });
     const state = EditorState.create({
       doc: value ?? "",
@@ -127,6 +152,7 @@ function MarkdownEdit({
         EditorView.lineWrapping,
         CODEMIRROR_THEME,
         updateListener,
+        blurHandler,
         readOnlyCompartment.of(EditorState.readOnly.of(Boolean(readOnly))),
         editableCompartment.of(EditorView.editable.of(!readOnly)),
         placeholderCompartment.of(placeholder(String(field?.label ?? "Markdown"))),
@@ -135,10 +161,11 @@ function MarkdownEdit({
     const view = new EditorView({ parent, state });
     viewRef.current = view;
     return () => {
+      flushPendingChange();
       view.destroy();
       viewRef.current = null;
     };
-  }, []);
+  }, [flushPendingChange, scheduleChange]);
 
   useEffect(() => {
     const view = viewRef.current;

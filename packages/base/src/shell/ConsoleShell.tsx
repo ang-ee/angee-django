@@ -10,7 +10,6 @@ import { TopBar, type TopBarProps } from "../chrome/TopBar";
 import { Chatter } from "../communication/Chatter";
 import { ChatterProvider } from "../communication/chatter-context";
 import { cn } from "../lib/cn";
-import { DataViewProvider } from "../views/data-view-context";
 
 export interface ConsoleShellProps {
   children: React.ReactNode;
@@ -39,27 +38,25 @@ export function ConsoleShell({
   return (
     <ChatterProvider>
       <BreadcrumbProvider initialTrail={trail}>
-        <DataViewProvider>
-          <div
-            className={cn(
-              "console-grid h-screen w-screen bg-canvas text-fg",
-              className,
-            )}
-          >
-            <AppRail className="area-rail" />
-            <TopBar
-              className="area-topbar"
-              title={title}
-              icon={icon}
-              topMenu={topMenu}
-            />
-            <Breadcrumb className="area-crumbs" />
-            <main className="area-content min-h-0 min-w-0 overflow-auto bg-canvas">
-              {children}
-            </main>
-            {showChatter ? <Chatter className="area-chatter" /> : null}
-          </div>
-        </DataViewProvider>
+        <div
+          className={cn(
+            "console-grid h-screen w-screen bg-canvas text-fg",
+            className,
+          )}
+        >
+          <AppRail className="area-rail" />
+          <TopBar
+            className="area-topbar"
+            title={title}
+            icon={icon}
+            topMenu={topMenu}
+          />
+          <Breadcrumb className="area-crumbs" />
+          <main className="area-content min-h-0 min-w-0 overflow-auto bg-canvas">
+            {children}
+          </main>
+          {showChatter ? <Chatter className="area-chatter" /> : null}
+        </div>
       </BreadcrumbProvider>
     </ChatterProvider>
   );
