@@ -54,10 +54,9 @@ class BaseAddonConfig(AppConfig):
     settings_defaults: ClassVar[Mapping[str, object]] = {}
     """Django setting defaults this addon contributes to a composed host.
 
-    The composer folds these into the run app set beneath framework defaults
-    and host overrides; the build app set ignores them (it must keep Django's
-    defaults, e.g. ``AUTH_USER_MODEL``, while the concrete runtime is emitted).
-    Two addons contributing the same key with different values is an error.
+    ``compose_defaults`` folds these in beneath framework defaults and host
+    overrides (e.g. the IAM addon contributes ``AUTH_USER_MODEL``). Two addons
+    contributing the same key with conflicting values is a composition error.
     """
 
     resources: ClassVar[ResourceManifest] = {}
@@ -209,11 +208,18 @@ class BaseAddonConfig(AppConfig):
         )
 
     def import_models(self) -> None:
-        """Adopt this addon's emitted concrete models when present.
+        """Adopt this addon's emitted concrete models for its label.
 
-        The composer emits the runtime earlier in this same phase, so the
-        package normally exists. An absent runtime reads as "not built yet"
-        (e.g. a host with no composer installed) rather than an error.
+        This is the composition hook (``docs/composer.md``). The composer's
+        ``import_models`` ran earlier in the same phase-2 loop and wrote
+        ``runtime/<label>/models.py``; here the source addon imports it so the
+        *generated* concrete models register under this addon's own ``label``.
+        The source addon lends its label and — via ``MIGRATION_MODULES`` —
+        its migration namespace ``runtime.<label>.migrations`` to the emitted
+        models. ``super().import_models()`` first imports the addon's own
+        ``models.py``, which holds only abstract sources and registers no
+        table. An absent runtime reads as "not built yet" (e.g. a host with
+        no composer installed) rather than an error.
         """
 
         super().import_models()

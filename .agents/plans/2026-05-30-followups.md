@@ -120,6 +120,47 @@ breadth the framework is meant to carry. Build each at the level that owns it
 (`AGENTS.md` → Repository Role) and wire stack libraries per `docs/stack.md` (add a
 dependency only with an owner row).
 
+### 2.0 Composer emission mode — runtime source on disk vs in-memory adopt
+
+Today the composer always writes concrete model source to
+`runtime/<label>/models.py` and the source addon adopts it by importing that
+module (`docs/composer.md`). Proposal: a setting (e.g.
+`ANGEE_RUNTIME_EMIT = "disk" | "memory"`, default `"disk"`) that lets a host skip
+writing model source and instead have the adopt hook build the concrete model
+classes in process — `type(name, bases, ns)` registered under the addon label,
+the same registration the imported file produces, without the file.
+
+How it would work:
+- `disk` (current): `ComposeConfig.import_models` writes the tree;
+  `BaseAddonConfig.import_models` imports `runtime.<label>.models`.
+- `memory`: emission renders the same class objects but registers them directly;
+  the adopt hook calls the composer to materialize+register instead of
+  `importlib.import_module`.
+
+The asymmetry that constrains the name: **migrations must stay on disk
+regardless.** Migration history is persisted, hand-evolved files
+(`MIGRATION_MODULES` → `runtime.<label>.migrations`) and cannot be virtualized.
+So the setting only governs whether *model source* is written; `makemigrations`
+would diff the in-memory concrete models against the on-disk migrations (works,
+but the serialized model state comes from runtime-built classes). Name it for
+that scope (`...write_models`), not "write runtime".
+
+What `memory` mode costs (why `disk` stays default):
+- no reviewable/diffable generated `models.py`; `schema --check` / drift over
+  model source no longer applies.
+- IDE navigation, stack traces, and `import runtime.<label>.models` break.
+- tension with `AGENTS.md` ("Compose at build time. Do not monkey-patch,
+  register at runtime") and the §4 invariant "emit-only build (no flag)":
+  building model classes via `type()` at import *is* runtime metaprogramming.
+  Adopting this means consciously reopening that rule for an opt-in mode.
+
+When it's worth evaluating: ephemeral/serverless boots, teams that refuse to
+commit generated code, filesystem-free test composition. Decide whether the
+opt-in earns relaxing the no-runtime-metaprogramming rule. The build-time-emit
+choice and the prior-art that informs it (the runtime-composition camp — DJP,
+Open edX — never emits because it never composes models across addons) are in
+`.agents/notes/composer-extraction/prior-art-comparison.md`.
+
 ### 2.1 Model & field bindings
 - Auto-emit the `sqid` field from a per-model `sqid_prefix` (currently the model
   declares `SqidsField` by hand); the composer owns the emission.
@@ -178,6 +219,12 @@ and CI workflows running the per-area Checks (`docs/backend/guidelines.md`).
 
 ## 3. Reconciliations & risks
 
+- **Stale `ANGEE_BUILD` layering prose.** `docs/backend/guidelines.md`
+  §Package Layering (the "Build and run use different `INSTALLED_APPS`" bullet)
+  still describes the retired two-app-set / `ANGEE_BUILD` split; the code is now
+  single-boot emit-then-adopt. `docs/composer.md` is the accurate owner doc —
+  reconcile the guidelines bullet to point at it (part of the §1 layering
+  settle-together cluster).
 - **Dev command surface.** The dev stack template
   (`templates/stacks/dev/.../angee.yaml.jinja`) and the Go `angee` CLI must match
   the management command surface (`angee build` / `clean` / `schema`,

@@ -1,4 +1,12 @@
-"""Build-time runtime source rendering and emission."""
+"""Build-time runtime source rendering and emission.
+
+``AngeeRuntime`` is the composer's emitter: it reads the discovered addons'
+abstract source models and renders the concrete Django apps under
+``runtime/<label>/`` that each source addon then adopts (see
+``angee.compose.apps`` and ``docs/composer.md``). ``render_sources`` is the
+seam — everything reaching it is generic plugin composition (discover, order,
+drift, clean); everything inside it is Angee's concrete emission.
+"""
 
 from __future__ import annotations
 
@@ -21,7 +29,25 @@ GENERATED_SENTINEL = "# ANGEE GENERATED RUNTIME - DO NOT EDIT"
 
 
 class AngeeRuntime:
-    """Owner for Angee runtime rendering, emission, checks, and cleanup."""
+    """Owner for Angee runtime rendering, emission, checks, and cleanup.
+
+    One object owns the whole build-time lifecycle so the plan and the emit
+    travel together (``docs/backend/guidelines.md`` → compose-onto-classes):
+
+    - ``render_sources`` — the seam: returns ``{relative path: text}`` for the
+      whole runtime. Every other entry point renders through it.
+    - ``emit`` / ``emit_if_stale`` — write that map to ``runtime_dir``.
+      ``emit`` is the destructive ``angee build`` pass (resets, prunes
+      orphans); ``emit_if_stale`` is the write-only boot heal called from the
+      composer's ``import_models``.
+    - ``is_current`` / ``check`` / ``_drift`` — disk vs the rendered map.
+    - ``reset`` / ``clean`` — delete generated files behind the
+      ``GENERATED_SENTINEL`` gate while preserving ``*/migrations/``.
+
+    Construction groups source models by emitted label, resolves ``extends``
+    extensions, and fails fast on field collisions, so an invalid composition
+    never reaches emission.
+    """
 
     def __init__(
         self,
@@ -73,7 +99,17 @@ class AngeeRuntime:
         return cls(addons, runtime_dir=runtime_dir)
 
     def render_sources(self) -> dict[Path, str]:
-        """Return generated runtime source files keyed by relative path."""
+        """Return generated runtime source files keyed by relative path.
+
+        The composition seam. The returned map (path relative to
+        ``runtime_dir`` → file text) is the single source of truth that
+        ``emit`` writes and ``_drift`` compares against disk. It contains the
+        generated package ``__init__`` plus, per label, an empty
+        app/migrations ``__init__`` and a ``models.py``. Migrations themselves
+        are never rendered here — Django's ``makemigrations`` owns
+        ``runtime/<label>/migrations/`` (redirected via
+        ``MIGRATION_MODULES``), and cleanup preserves it.
+        """
 
         sources: dict[Path, str] = {
             Path("__init__.py"): self._runtime_init_source(),
@@ -181,7 +217,20 @@ class AngeeRuntime:
         label: str,
         source_models: tuple[type[AngeeModel], ...],
     ) -> str:
-        """Return concrete model source for one target label."""
+        """Return concrete model source for one target label.
+
+        This is what makes a source addon's abstract models real. For each
+        source model it emits a concrete class that imports the abstract source
+        (aliased ``Abstract<Name>``) and any ``extends`` extension bases, lists
+        the extension bases ahead of the source in the MRO, and pins
+        ``Meta.abstract = False`` with ``app_label = label`` — so the generated
+        class registers under the source addon's label when that addon adopts
+        ``runtime.<label>.models``. Library-owned ``Meta`` facts ride along
+        (``db_table``, ``swappable``, REBAC options), and ``HistoryMixin``
+        models gain a ``HistoricalRecords`` field. Field collisions across the
+        composed bases are rejected at construction
+        (``_check_field_collisions``).
+        """
 
         lines = [
             '"""Concrete Django models emitted by Angee."""',
