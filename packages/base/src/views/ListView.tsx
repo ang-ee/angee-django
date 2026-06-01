@@ -6,6 +6,7 @@ import {
   type ColumnDef,
   type Row as TableRowModel,
 } from "@tanstack/react-table";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   useResourceList,
   type ResourceTypeName,
@@ -212,7 +213,36 @@ function ListViewBody<TRow extends Row = Row>({
   const allPageSelected =
     pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
   const somePageSelected = pageIds.some((id) => selectedIds.has(id));
-  const groupedRows = groupRows(rowModels, dataView.state.groupStack);
+  const groupedRows = React.useMemo(
+    () => groupRows(rowModels, dataView.state.groupStack),
+    [dataView.state.groupStack, rowModels],
+  );
+  const listItems = React.useMemo(
+    () => flattenListItems(groupedRows),
+    [groupedRows],
+  );
+  const tableScrollRef = React.useRef<HTMLDivElement | null>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: listItems.length,
+    getScrollElement: () => tableScrollRef.current,
+    initialRect: { width: 1024, height: 600 },
+    estimateSize: (index) =>
+      listItems[index]?.kind === "group" ? GROUP_ROW_HEIGHT : RECORD_ROW_HEIGHT,
+    overscan: 10,
+  });
+  const virtualItems = rowVirtualizer.getVirtualItems();
+  const visibleIndexes = virtualItems.length > 0
+    ? virtualItems.map((item) => item.index)
+    : listItems.slice(0, Math.min(listItems.length, 20)).map((_, index) => index);
+  const firstVirtualItem = virtualItems[0];
+  const lastVirtualItem = virtualItems[virtualItems.length - 1];
+  const paddingTop = firstVirtualItem?.start ?? 0;
+  const paddingBottom = Math.max(
+    0,
+    virtualItems.length > 0
+      ? rowVirtualizer.getTotalSize() - (lastVirtualItem?.end ?? 0)
+      : estimatedListHeight(listItems.slice(visibleIndexes.length)),
+  );
   const groupOptions = React.useMemo(
     () => buildGroupOptions(columns, defaultGroup),
     [columns, defaultGroup],
@@ -289,59 +319,82 @@ function ListViewBody<TRow extends Row = Row>({
           onRowClick={onRowClick}
         />
       ) : (
-        <Table>
-          <TableHeader>
-            {table.getHeaderGroups().map((group) => (
-              <TableRow key={group.id}>
-                <TableHead className="w-8">
-                  <Checkbox
-                    size="sm"
-                    aria-label="Select all rows on this page"
-                    checked={allPageSelected}
-                    indeterminate={!allPageSelected && somePageSelected}
-                    onCheckedChange={(checked) =>
-                      setPageSelection(dataView, pageIds, checked)
-                    }
-                  />
-                </TableHead>
-                {group.headers.map((header) => (
-                  <TableHead
-                    key={header.id}
-                    className={ALIGN_CLASS[alignOf(header.column.columnDef)]}
-                  >
-                    {flexRender(
-                      header.column.columnDef.header,
-                      header.getContext(),
-                    )}
+        <div
+          ref={tableScrollRef}
+          className="max-h-[calc(100vh-12rem)] overflow-auto"
+        >
+          <Table>
+            <TableHeader>
+              {table.getHeaderGroups().map((group) => (
+                <TableRow key={group.id}>
+                  <TableHead sticky className="w-8">
+                    <Checkbox
+                      size="sm"
+                      aria-label="Select all rows on this page"
+                      checked={allPageSelected}
+                      indeterminate={!allPageSelected && somePageSelected}
+                      onCheckedChange={(checked) =>
+                        setPageSelection(dataView, pageIds, checked)
+                      }
+                    />
                   </TableHead>
-                ))}
-              </TableRow>
-            ))}
-          </TableHeader>
-          <TableBody>
-            {rowModels.length === 0 && !list.fetching ? (
-              <TableRow>
-                <TableCell
-                  colSpan={Math.max(1, columns.length + 1)}
-                  className="py-8 text-center text-fg-muted"
-                >
-                  {emptyMessage}
-                </TableCell>
-              </TableRow>
-            ) : (
-              groupedRows.flatMap((group) =>
-                renderGroupRows({
-                  group,
-                  columns,
-                  dataView,
-                  interactive,
-                  rowHref,
-                  onRowClick,
-                }),
-              )
-            )}
-          </TableBody>
-        </Table>
+                  {group.headers.map((header) => (
+                    <TableHead
+                      sticky
+                      key={header.id}
+                      className={ALIGN_CLASS[alignOf(header.column.columnDef)]}
+                    >
+                      {flexRender(
+                        header.column.columnDef.header,
+                        header.getContext(),
+                      )}
+                    </TableHead>
+                  ))}
+                </TableRow>
+              ))}
+            </TableHeader>
+            <TableBody>
+              {rowModels.length === 0 && !list.fetching ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={Math.max(1, columns.length + 1)}
+                    className="py-8 text-center text-fg-muted"
+                  >
+                    {emptyMessage}
+                  </TableCell>
+                </TableRow>
+              ) : (
+                <>
+                  {paddingTop > 0 ? (
+                    <VirtualPaddingRow
+                      height={paddingTop}
+                      colSpan={columns.length + 1}
+                    />
+                  ) : null}
+                  {visibleIndexes.map((index) => {
+                    const item = listItems[index];
+                    return item
+                      ? renderListItem({
+                          item,
+                          columns,
+                          dataView,
+                          interactive,
+                          rowHref,
+                          onRowClick,
+                        })
+                      : null;
+                  })}
+                  {paddingBottom > 0 ? (
+                    <VirtualPaddingRow
+                      height={paddingBottom}
+                      colSpan={columns.length + 1}
+                    />
+                  ) : null}
+                </>
+              )}
+            </TableBody>
+          </Table>
+        </div>
       )}
       {list.fetching ? (
         <div className="flex items-center justify-center gap-2 border-t border-border px-3 py-4 text-13 text-fg-muted">
@@ -527,62 +580,68 @@ function BoardRows<TRow extends Row>({
   );
 }
 
-function renderGroupRows<TRow extends Row>({
-  group,
+const GROUP_ROW_HEIGHT = 32;
+const RECORD_ROW_HEIGHT = 40;
+
+type ListRenderItem<TRow extends Row> =
+  | { kind: "group"; group: RowGroup<TRow> }
+  | { kind: "row"; row: TableRowModel<TRow> };
+
+function renderListItem<TRow extends Row>({
+  item,
   columns,
   dataView,
   interactive,
   rowHref,
   onRowClick,
 }: {
-  group: RowGroup<TRow>;
+  item: ListRenderItem<TRow>;
   columns: readonly ColumnDescriptor<TRow>[];
   dataView: DataViewContextValue;
   interactive: boolean;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
-}): React.ReactElement[] {
-  const output: React.ReactElement[] = [];
-  if (group.label !== null) {
-    output.push(
+}): React.ReactElement {
+  if (item.kind === "group") {
+    return (
       <GroupHeader
-        key={`group:${group.key}`}
-        label={group.label}
-        rows={group.rows}
-        depth={group.depth}
+        key={`group:${item.group.key}`}
+        label={item.group.label ?? ""}
+        rows={item.group.rows}
+        depth={item.group.depth}
         colSpan={columns.length + 1}
-      />,
+      />
     );
   }
-  if (group.children.length > 0) {
-    for (const child of group.children) {
-      output.push(
-        ...renderGroupRows({
-          group: child,
-          columns,
-          dataView,
-          interactive,
-          rowHref,
-          onRowClick,
-        }),
-      );
-    }
-    return output;
-  }
-  for (const row of group.rows) {
-    output.push(
-      <RecordRow
-        key={row.id}
-        row={row}
-        columns={columns}
-        dataView={dataView}
-        interactive={interactive}
-        rowHref={rowHref}
-        onRowClick={onRowClick}
-      />,
-    );
-  }
-  return output;
+  return (
+    <RecordRow
+      key={item.row.id}
+      row={item.row}
+      columns={columns}
+      dataView={dataView}
+      interactive={interactive}
+      rowHref={rowHref}
+      onRowClick={onRowClick}
+    />
+  );
+}
+
+function VirtualPaddingRow({
+  height,
+  colSpan,
+}: {
+  height: number;
+  colSpan: number;
+}): React.ReactElement {
+  return (
+    <TableRow aria-hidden="true" className="border-0">
+      <TableCell
+        colSpan={colSpan}
+        className="p-0"
+        style={{ height }}
+      />
+    </TableRow>
+  );
 }
 
 function GroupHeader<TRow extends Row>({
@@ -683,6 +742,31 @@ function groupRowsByRest<TRow extends Row>(
 ): readonly RowGroup<TRow>[] {
   return groupRows(rows, groupStack, depth, parentKey).filter(
     (group) => group.label !== null || group.children.length > 0,
+  );
+}
+
+function flattenListItems<TRow extends Row>(
+  groups: readonly RowGroup<TRow>[],
+): ListRenderItem<TRow>[] {
+  const output: ListRenderItem<TRow>[] = [];
+  for (const group of groups) {
+    if (group.label !== null) output.push({ kind: "group", group });
+    if (group.children.length > 0) {
+      output.push(...flattenListItems(group.children));
+    } else {
+      for (const row of group.rows) output.push({ kind: "row", row });
+    }
+  }
+  return output;
+}
+
+function estimatedListHeight<TRow extends Row>(
+  items: readonly ListRenderItem<TRow>[],
+): number {
+  return items.reduce(
+    (height, item) =>
+      height + (item.kind === "group" ? GROUP_ROW_HEIGHT : RECORD_ROW_HEIGHT),
+    0,
   );
 }
 
