@@ -1,4 +1,5 @@
 import {
+  AUTH_LOGIN_CARD_FOOTER_SLOT,
   ConsoleShell,
   LoginPage,
   createApp,
@@ -19,9 +20,7 @@ const authAddon: BaseAddon = {
       name: "auth.login",
       path: "/login",
       shell: "public",
-      component: () => (
-        <LoginPage redirectTo="/notes" footer={<DemoCredentials />} />
-      ),
+      component: () => <LoginPage redirectTo="/notes" />,
     },
   ],
 };
@@ -36,5 +35,12 @@ createApp({
     public: { url: "/graphql/public/", cache: cacheConfigFromSDL(publicSDL) },
     console: { url: "/graphql/console/", cache: cacheConfigFromSDL(consoleSDL) },
   },
+  slots: [
+    {
+      slot: AUTH_LOGIN_CARD_FOOTER_SLOT,
+      id: "notes-demo-users",
+      content: <DemoCredentials />,
+    },
+  ],
   home: "/notes",
 }).mount("#root");

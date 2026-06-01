@@ -430,7 +430,7 @@ function RecordRow<TRow extends Row>({
           }
         />
       </TableCell>
-      {columns.map((column) => (
+      {columns.map((column, index) => (
         <TableCell
           key={column.field}
           className={ALIGN_CLASS[column.align ?? "left"]}
@@ -439,6 +439,18 @@ function RecordRow<TRow extends Row>({
             <a href={href} className="block text-inherit no-underline">
               {cellContent(column, row.original)}
             </a>
+          ) : interactive && index === 0 && onRowClick ? (
+            <button
+              type="button"
+              className="block w-full min-w-0 rounded-sm text-left text-inherit outline-none focus-visible:focus-ring"
+              aria-label={`Open ${rowActionLabel(column, row.original)}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onRowClick(row.original);
+              }}
+            >
+              {cellContent(column, row.original)}
+            </button>
           ) : (
             cellContent(column, row.original)
           )}
@@ -722,6 +734,21 @@ function cellContent<TRow extends Row>(
   const date = looksLikeDateField(column.field) ? parseDate(value) : null;
   if (date) return formatDistanceToNow(date, { addSuffix: true });
   return displayValue(value);
+}
+
+function rowActionLabel<TRow extends Row>(
+  column: ColumnDescriptor<TRow>,
+  row: TRow,
+): string {
+  const value = readPath(row, column.field);
+  if (Array.isArray(value)) {
+    const label = value.map((item) => String(item)).join(", ").trim();
+    return label || "record";
+  }
+  if (typeof value === "string" && value.trim()) return value;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  return "record";
 }
 
 function readPath(row: Row, path: string): unknown {

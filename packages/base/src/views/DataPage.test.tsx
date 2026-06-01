@@ -8,6 +8,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { useState, type ReactElement } from "react";
 import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 
@@ -189,6 +190,47 @@ describe("DataPage", () => {
       expect(within(breadcrumb).getByText("Second")).toBeTruthy(),
     );
     expect(within(breadcrumb).getByText("Second").getAttribute("aria-current"))
+      .toBe("page");
+
+    await act(async () => {
+      view.unmount();
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+  });
+
+  test("opens a selected row and keeps the record breadcrumb published", async () => {
+    function Harness(): ReactElement {
+      const [recordId, setRecordId] = useState<string | null | undefined>(
+        undefined,
+      );
+      return (
+        <NuqsTestingAdapter>
+          <BreadcrumbProvider initialTrail={[{ label: "Notes" }]}>
+            <Breadcrumb />
+            <DataPage
+              model="notes.Note"
+              columns={columns}
+              formFields={formFields}
+              recordId={recordId}
+              placement="inline"
+              pageSize={2}
+              onSelect={setRecordId}
+            />
+          </BreadcrumbProvider>
+        </NuqsTestingAdapter>
+      );
+    }
+
+    const view = render(<Harness />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open First" }));
+    const breadcrumb = screen.getByRole("navigation", { name: "Breadcrumb" });
+    await waitFor(() =>
+      expect(within(breadcrumb).getByText("First")).toBeTruthy(),
+    );
+    expect(within(breadcrumb).getByText("First").getAttribute("aria-current"))
       .toBe("page");
 
     await act(async () => {

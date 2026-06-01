@@ -52,15 +52,16 @@ describe("composeAddons", () => {
   test("a later slot contribution with the same key overrides the earlier one", () => {
     const a = defineAddon({
       id: "a",
-      slots: [{ slot: "header", id: "logo", sequence: 1 }],
+      slots: [{ slot: "header", id: "logo", sequence: 1, content: "A" }],
     });
     const b = defineAddon({
       id: "b",
-      slots: [{ slot: "header", id: "logo", sequence: 2 }],
+      slots: [{ slot: "header", id: "logo", sequence: 2, content: "B" }],
     });
     const slots = composeAddons([a, b]).slots;
     expect(slots).toHaveLength(1);
     expect(slots[0]?.sequence).toBe(2);
+    expect(slots[0]?.content).toBe("B");
   });
 
   test("the same slot id under a different slot is kept separate", () => {

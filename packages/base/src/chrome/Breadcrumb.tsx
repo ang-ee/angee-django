@@ -3,6 +3,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactElement,
   type ReactNode,
@@ -39,11 +40,16 @@ export function BreadcrumbProvider({
   items,
 }: BreadcrumbProviderProps): ReactElement {
   const seed = items ?? initialTrail ?? DEFAULT_ITEMS;
+  const seedKey = useMemo(() => trailKey(seed), [seed]);
+  const seedKeyRef = useRef(seedKey);
   const [trail, setTrail] = useState<readonly BreadcrumbItem[]>(seed);
 
   useEffect(() => {
-    setTrail(seed);
-  }, [seed]);
+    if (items !== undefined || seedKeyRef.current !== seedKey) {
+      seedKeyRef.current = seedKey;
+      setTrail(seed);
+    }
+  }, [items, seed, seedKey]);
 
   const value = useMemo<BreadcrumbContextValue>(
     () => ({ items: trail, setItems: setTrail }),
@@ -105,4 +111,18 @@ export function Breadcrumb({ className }: BreadcrumbProps): ReactElement {
       })}
     </nav>
   );
+}
+
+function trailKey(items: readonly BreadcrumbItem[]): string {
+  return items.map((item, index) => {
+    const label = itemLabelKey(item.label);
+    return `${index}:${item.to ?? ""}:${label}`;
+  }).join("|");
+}
+
+function itemLabelKey(label: ReactNode): string {
+  if (typeof label === "string" || typeof label === "number") {
+    return String(label);
+  }
+  return "";
 }

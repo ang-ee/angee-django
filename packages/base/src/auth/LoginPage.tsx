@@ -1,9 +1,20 @@
-import { useCallback, type ReactNode } from "react";
+import {
+  Fragment,
+  isValidElement,
+  useCallback,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { AngeeLogo } from "@angee/logo-react";
 import { useNavigate } from "@tanstack/react-router";
+import { useSlot, type SlotContribution } from "@angee/sdk";
 
 import { PublicShell } from "../shell/PublicShell";
 import { UsernamePasswordForm } from "./UsernamePasswordForm";
+
+export const AUTH_LOGIN_METHOD_SLOT = "auth.login.method";
+export const AUTH_LOGIN_CARD_FOOTER_SLOT = "auth.login.card-footer";
+export const AUTH_LOGIN_PAGE_FOOTER_SLOT = "auth.login.page-footer";
 
 export interface LoginPageProps {
   brand?: ReactNode;
@@ -37,12 +48,22 @@ export function LoginPage({
     }
     window.location.assign(target);
   }, [navigate, redirectTo]);
+  const methodSlot = useSlot(AUTH_LOGIN_METHOD_SLOT);
+  const cardFooterSlot = useSlot(AUTH_LOGIN_CARD_FOOTER_SLOT);
+  const pageFooterSlot = useSlot(AUTH_LOGIN_PAGE_FOOTER_SLOT);
+  const cardFooter = footer
+    ?? (slotEntriesHaveContent(cardFooterSlot)
+      ? <SlotOutlet entries={cardFooterSlot} />
+      : null);
+  const pageFooter = slotEntriesHaveContent(pageFooterSlot)
+    ? <SlotOutlet entries={pageFooterSlot} />
+    : null;
 
   return (
     <PublicShell
       hero={hero === undefined ? <LoginHero /> : hero}
       cardLead={<MobileBrandLead brand={brand} />}
-      footer={footer}
+      footer={pageFooter}
       showAtmosphere={showAtmosphere}
       backgroundImageUrl={backgroundImageUrl}
     >
@@ -50,7 +71,13 @@ export function LoginPage({
       {cardHeader === null ? null : (
         <div className="mb-7 mt-7 h-px bg-border" aria-hidden="true" />
       )}
+      <SlotOutlet entries={methodSlot} />
       <UsernamePasswordForm onSuccess={onSuccess} />
+      {cardFooter ? (
+        <div className="mt-6 rounded-md border border-border-subtle bg-inset px-4 py-3">
+          {cardFooter}
+        </div>
+      ) : null}
     </PublicShell>
   );
 }
@@ -117,6 +144,31 @@ function DefaultCardHeader(): ReactNode {
       <p className="mt-1.5 text-sm text-fg-muted">Sign in to your account.</p>
     </div>
   );
+}
+
+function SlotOutlet({
+  entries,
+}: {
+  entries: readonly SlotContribution[];
+}): ReactElement | null {
+  const nodes = entries.flatMap((entry) => slotNode(entry.content, entry.id));
+  return nodes.length > 0 ? <>{nodes}</> : null;
+}
+
+function slotNode(value: unknown, key: string): ReactNode[] {
+  if (value == null || typeof value === "boolean") return [];
+  if (typeof value === "string" || typeof value === "number") {
+    return [<span key={key}>{value}</span>];
+  }
+  if (isValidElement(value)) return [<Fragment key={key}>{value}</Fragment>];
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => slotNode(item, `${key}:${index}`));
+  }
+  return [];
+}
+
+function slotEntriesHaveContent(entries: readonly SlotContribution[]): boolean {
+  return entries.some((entry) => slotNode(entry.content, entry.id).length > 0);
 }
 
 function safeRedirect(value: string | null | undefined): string | null {
