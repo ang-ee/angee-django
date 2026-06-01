@@ -1,1 +1,6 @@
-export { DataToolbar, type DataToolbarProps } from "./DataToolbar";
+export {
+  DataToolbar,
+  DataViewSwitcher,
+  type DataToolbarProps,
+  type DataViewSwitcherProps,
+} from "./DataToolbar";

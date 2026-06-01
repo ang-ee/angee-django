@@ -7,6 +7,7 @@ export {
   ListView,
   type ListViewProps,
   type ListColumn,
+  type ListViewState,
   type ColumnAlign,
 } from "./ListView";
 export {

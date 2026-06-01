@@ -39,6 +39,7 @@ export interface FormViewProps {
   returning?: readonly string[];
   onSaved?: (row: Row) => void;
   submitLabel?: React.ReactNode;
+  headerActions?: React.ReactNode;
   className?: string;
 }
 
@@ -53,6 +54,7 @@ export function FormView({
   returning,
   onSaved,
   submitLabel,
+  headerActions,
   className,
 }: FormViewProps): React.ReactElement {
   const resolvedFields = React.useMemo(
@@ -155,17 +157,26 @@ export function FormView({
             </div>
           ) : null}
         </div>
-        {statusField ? (
-          <form.Field name={statusField.name}>
-            {(api) => (
-              <FieldWidget
-                field={statusField}
-                value={api.state.value}
-                readOnly={statusField.readOnly}
-                onChange={(next) => api.handleChange(next)}
-              />
-            )}
-          </form.Field>
+        {statusField || headerActions ? (
+          <div className="flex min-w-0 flex-col items-end gap-2">
+            {statusField ? (
+              <form.Field name={statusField.name}>
+                {(api) => (
+                  <FieldWidget
+                    field={statusField}
+                    value={api.state.value}
+                    readOnly={statusField.readOnly}
+                    onChange={(next) => api.handleChange(next)}
+                  />
+                )}
+              </form.Field>
+            ) : null}
+            {headerActions ? (
+              <div className="flex flex-wrap items-center justify-end gap-3">
+                {headerActions}
+              </div>
+            ) : null}
+          </div>
         ) : null}
       </div>
 

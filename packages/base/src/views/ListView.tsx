@@ -67,9 +67,21 @@ export interface ListViewProps<TRow extends Row = Row> {
   defaultGroup?: DataViewGroup | null;
   onCreate?: () => void;
   onRowClick?: (row: TRow) => void;
+  onListStateChange?: (state: ListViewState<TRow>) => void;
   rowHref?: (row: TRow) => string;
   emptyMessage?: React.ReactNode;
   className?: string;
+}
+
+export interface ListViewState<TRow extends Row = Row> {
+  rows: readonly TRow[];
+  total: number | undefined;
+  page: number;
+  pageSize: number;
+  pageCount: number | undefined;
+  hasNext: boolean;
+  hasPrev: boolean;
+  fetching: boolean;
 }
 
 const ALIGN_CLASS: Record<PageColumnAlign, string> = {
@@ -111,6 +123,7 @@ function ListViewBody<TRow extends Row = Row>({
   defaultGroup,
   onCreate,
   onRowClick,
+  onListStateChange,
   rowHref,
   emptyMessage = "No records.",
   className,
@@ -155,6 +168,32 @@ function ListViewBody<TRow extends Row = Row>({
     [columns, dataView],
   );
   const rows = list.rows as readonly TRow[];
+  const listState = React.useMemo<ListViewState<TRow>>(
+    () => ({
+      rows,
+      total: list.total,
+      page: list.page,
+      pageSize: list.pageSize,
+      pageCount: list.pageCount,
+      hasNext: list.hasNext,
+      hasPrev: list.hasPrev,
+      fetching: list.fetching,
+    }),
+    [
+      rows,
+      list.total,
+      list.page,
+      list.pageSize,
+      list.pageCount,
+      list.hasNext,
+      list.hasPrev,
+      list.fetching,
+    ],
+  );
+  React.useEffect(() => {
+    onListStateChange?.(listState);
+  }, [listState, onListStateChange]);
+
   const table = useReactTable<TRow>({
     data: rows as TRow[],
     columns: tableColumns,

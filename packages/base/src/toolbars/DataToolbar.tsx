@@ -21,6 +21,13 @@ export interface DataToolbarProps {
   className?: string;
 }
 
+export interface DataViewSwitcherProps {
+  view: DataViewKind;
+  onViewChange?: (view: DataViewKind) => void;
+  ariaLabel?: string;
+  className?: string;
+}
+
 export function DataToolbar({
   list,
   view,
@@ -83,28 +90,45 @@ export function DataToolbar({
         {start}-{end}
         {list.total !== undefined ? ` / ${list.total}` : ""}
       </span>
-      <div className="flex items-center gap-1">
-        <Button
-          type="button"
-          variant="ghost"
-          size="iconSm"
-          aria-label="List view"
-          active={view === "list"}
-          onClick={() => onViewChange?.("list")}
-        >
-          <List className="glyph" aria-hidden />
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="iconSm"
-          aria-label="Board view"
-          active={view === "board"}
-          onClick={() => onViewChange?.("board")}
-        >
-          <Grid2X2 className="glyph" aria-hidden />
-        </Button>
-      </div>
+      <DataViewSwitcher view={view} onViewChange={onViewChange} />
+    </div>
+  );
+}
+
+export function DataViewSwitcher({
+  view,
+  onViewChange,
+  ariaLabel = "View switcher",
+  className,
+}: DataViewSwitcherProps): ReactElement {
+  return (
+    <div
+      className={cn("flex items-center gap-1", className)}
+      role="group"
+      aria-label={ariaLabel}
+    >
+      <Button
+        type="button"
+        variant="ghost"
+        size="iconSm"
+        aria-label="List view"
+        aria-pressed={view === "list"}
+        active={view === "list"}
+        onClick={() => onViewChange?.("list")}
+      >
+        <List className="glyph" aria-hidden />
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="iconSm"
+        aria-label="Board view"
+        aria-pressed={view === "board"}
+        active={view === "board"}
+        onClick={() => onViewChange?.("board")}
+      >
+        <Grid2X2 className="glyph" aria-hidden />
+      </Button>
     </div>
   );
 }
