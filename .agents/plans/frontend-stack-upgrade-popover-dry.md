@@ -27,10 +27,10 @@ checklist in §10; file-level surface in the P1 UI Inventory (bottom).
 **Committed:**
 - `424dfba` — Base UI `rc.0` → `@base-ui/react@1.5.0` (rename across 14 sites + 3 ref-type fixes + deleted the `PopoverTrigger` rc-era hack).
 - `40f3311` — ListView hard-freeze fix: `autoResetPageIndex:false` in `ListView.tsx` + memoize `extractPage(run.data)` in `useResourceList`. Safari/WebKit-verified (the freeze was TanStack Table, NOT the popover — earlier popover/`useTransition` theories were wrong).
+- `ea860c3` — storybook-first master checklist (§10) + this resume block.
+- `4740a6a` — **slice #1 accepted:** data-driven chrome icon registry (Glyph→runtime registry single owner; trimmed vocab; AppRail fallback; menu/nav icons render). Full cadence ran: codex lift → review caught the dual-registry → codex rework → verified clean + visual. Stage-1.0 follow-up: base-icon resolution in Storybook (§10 1.0/1.1).
 
-**Uncommitted working tree:**
-- **Codex slice #1 (menu/icon chrome)** — `packages/sdk/src/define-addon.ts` (`MenuItem.icon`), `packages/base/src/chrome/{AppRail,TopMenu,icon-registry}`, notes web `index.tsx`. Menu icons now render (screenshot-verified) **but NOT accepted**: review says rework it — wire `Glyph` → the runtime addon-icon registry (it has zero readers) and trim the ~90 speculative icon ids copied from the source (see §10 1.1).
-- This plan's own edits.
+**Uncommitted working tree:** only this plan's latest edits. No code pending.
 
 **References & live services:**
 - **Look&feel target:** mockup `../angee-console-mockups/angee-console-react` → http://localhost:5174/#/notes (user-run; dense grouped rows, status badges, tag chips, avatars). Screenshot it to compare.
@@ -40,7 +40,7 @@ checklist in §10; file-level surface in the P1 UI Inventory (bottom).
 
 **Engine & review:** lift via the **Codex plugin** (`codex:codex-rescue` subagent; `codex` CLI ready + ChatGPT auth). Every slice gets THREE reviews: `architecture-reviewer` + `react-reviewer` + **visual-vs-mockup** (the missing lens that let a weak look through).
 
-**Open decisions:** D-A (nuqs vs TanStack Router search) gates Stage 2; addon frontend-package placement (§10 1.6, no location exists yet); token/visual-layout copy is allowed (architect override), all other logic reconstructed.
+**Open decisions:** D-A (nuqs vs TanStack Router search) gates Stage 2; token/visual-layout copy is allowed (architect override), all other logic reconstructed. **Resolved:** addon UI → `src/<namespace>/<addon>/web/` (e.g. `src/angee/auth/web/`), co-located with addon backend; base UI stays in `packages/base`. Storybook host → `packages/storybook/` (default, unless changed).
 
 **Next action:** §10 **1.0 stand up Storybook** → **1.1 `page/` layout lift** (fixes the empty-band/weak-header); also rework the icon slice per review before accepting it.
 
@@ -336,6 +336,7 @@ don't copy (tokens/visual-layout exempt per override). Goal: enhanced, cleaner, 
 - [ ] done [ ] verified [ ] checked by human (final qa) — Stand up a clean Storybook (new `storybook-host`-style package) loading our tokens/theme via one entry stylesheet; runs locally
 - [ ] done [ ] verified [ ] checked by human (final qa) — Visual-review harness: screenshot a story + the mockup screen (`:5174`) and compare; per-component parity log
 - [ ] done [ ] verified [ ] checked by human (final qa) — Story conventions (CSF template) + a "kitchen-sink" overview story
+- [ ] done [ ] verified [ ] checked by human (final qa) — Base icons resolve in Storybook (static `baseIcons` fallback in `useIcon`, or a base-runtime decorator) — `Glyph` currently needs createApp seeding (carried from the icon slice)
 
 ### 1.1 Foundation — tokens / layout / primitives / fragments
 - [x] done [x] verified [ ] checked by human (final qa) — Design tokens at P1 parity (185 vars identical; ours cleaner) — no copy needed
@@ -343,7 +344,7 @@ don't copy (tokens/visual-layout exempt per override). Goal: enhanced, cleaner, 
 - [ ] done [ ] verified [ ] checked by human (final qa) — `layouts/` (6) + `ui/form-layout` (FormGrid/FormActions/FormFooter/FieldRow) + grid-area form placement + stories
 - [ ] done [ ] verified [ ] checked by human (final qa) — `ui/` primitives parity (~29 missing: accordion, collapsible, drawer/sheet, dropdown-menu, context-menu, toggle, toggle-group/segmented, slider, number-field, calendar, radio-group, command, navigation-menu, selection-bar, avatar/kinded-avatar, status-icon, code, kbd, alert/banner, text-link, nav-link, section-eyebrow, form) + stories
 - [ ] done [ ] verified [ ] checked by human (final qa) — `fragments/` (31: RecordHeader, CollectionHeader, InfoRow, MetricStrip, MetaGrid, EmptyState, DirtyPill, …) + stories
-- [ ] done [ ] verified [ ] checked by human (final qa) — Icon system: **wire `Glyph` → runtime addon-icon registry**, trim copied vocabulary (slice-1 review fix), icon stories
+- [x] done [x] verified [ ] checked by human (final qa) — Icon system: `Glyph`→runtime addon-icon registry (single owner), vocabulary trimmed, AppRail fallback, menu/nav icons render — committed `4740a6a`. **Stage-1.0 follow-up:** base icons resolve only via createApp seeding → add a static `baseIcons` fallback in `useIcon` (or a base-runtime Storybook decorator) so they render standalone.
 
 ### 1.2 Chrome / shell (presentational)
 - [ ] done [ ] verified [ ] checked by human (final qa) — AppRail/AppBrand/TopBar/TopMenu(+Rail/+Dropdown)/Breadcrumb/Systray/UserMenu/GlobalSearch/Spotlight/AppChooser + menu-tree + stories
@@ -367,10 +368,13 @@ don't copy (tokens/visual-layout exempt per override). Goal: enhanced, cleaner, 
 - [ ] done [ ] verified [ ] checked by human (final qa) — `preview/`(5) · `upload/`(4) · `cells/`(6) + stories
 
 ### 1.6 Addon UI (presentational) — per addon
-> **Placement decision (architect, OPEN):** where do addon frontend packages live here? P1
-> uses `addons/<name>/ui/base/src/{views,fragments,widgets,…}`; this repo has no
-> frontend-addon location yet (only `examples/notes-angee/src/web` + backend `src/angee/*`).
-> Decide before lifting. Skip empty stubs: connect/integrate/money/sequence/uom.
+> **Placement — DECIDED (architect, 2026-06-01):** addon UI lives at
+> **`src/<namespace>/<addon>/web/`** — co-located with each addon's backend, exactly like
+> the existing notes consumer addon (`examples/notes-angee/src/example/notes/web/`). So the
+> lifted framework addons become full-stack units, e.g. `src/angee/auth/web/`,
+> `src/angee/storage/web/` (backend Python beside `web/` frontend). Base/framework UI
+> primitives stay in `packages/base`; addon UI composes `@angee/base` + `@angee/sdk`.
+> Skip empty stubs: connect/integrate/money/sequence/uom.
 - [ ] done [ ] verified [ ] checked by human (final qa) — auth UI (login + fragments + views) — ~31 files
 - [ ] done [ ] verified [ ] checked by human (final qa) — storage UI (views + widgets + upload) — ~37 files
 - [ ] done [ ] verified [ ] checked by human (final qa) — operator UI (views) — ~31 files
