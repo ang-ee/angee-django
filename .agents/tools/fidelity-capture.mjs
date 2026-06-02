@@ -35,6 +35,8 @@ if (!baseUrl || !route || !name) {
 }
 const hash = flags.includes("--hash");
 const dirty = flags.includes("--dirty"); // type into the form to surface dirty-only controls
+const storageState = (flags.find((f) => f.startsWith("--storage=")) || "").split("=")[1]; // capture an authenticated app screen
+const login = (flags.find((f) => f.startsWith("--login=")) || "").split("=")[1]; // live-login as <user> on baseUrl/login before capturing
 const outDir =
   "/Users/alexis/Work/angee/angee-django/examples/notes-angee/e2e/test-results/fidelity";
 mkdirSync(outDir, { recursive: true });
@@ -81,8 +83,19 @@ const EXTRACT = () => {
 };
 
 const browser = await chromium.launch();
-const page = await (await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 })).newPage();
+const page = await (await browser.newContext({
+  viewport: { width: 1440, height: 900 },
+  deviceScaleFactor: 2,
+  ...(storageState ? { storageState } : {}),
+})).newPage();
 try {
+  if (login) {
+    await page.goto(`${baseUrl}/login`, { waitUntil: "domcontentloaded", timeout: 15000 });
+    await page.getByLabel("Username").fill(login);
+    await page.getByLabel("Password").fill(login);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.waitForURL((u) => !u.pathname.includes("/login"), { timeout: 12000 });
+  }
   await page.goto(url, { waitUntil: "networkidle", timeout: 20000 });
   await new Promise((r) => setTimeout(r, 1200));
   if (dirty) {
