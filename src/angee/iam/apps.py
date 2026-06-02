@@ -15,6 +15,11 @@ class IAMConfig(BaseAddonConfig):
     settings_defaults = {"AUTH_USER_MODEL": "iam.User"}
     """IAM owns the swappable user model it emits as the composed default."""
 
+    resources = {
+        "master": ({"path": "resources/master/010_iam.vendor.yaml", "adopt": "slug"},),
+    }
+    """Default vendor catalogue, adopted by slug so reloads stay idempotent."""
+
     def ready(self) -> None:
         """Wire IAM-owned REBAC relationships after app population."""
 
