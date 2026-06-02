@@ -230,6 +230,13 @@ function ListViewBody<TRow extends Row = Row>({
     getCoreRowModel: getCoreRowModel(),
     getRowId: (row, index) =>
       typeof row.id === "string" ? row.id : String(index),
+    // Pagination/sort/filter/grouping are owned by the data-view (URL) state, not the
+    // table. Without this, TanStack Table auto-resets its own page index whenever the
+    // `data` reference changes; that reset fires `onStateChange` → re-render → new
+    // `data` identity → reset again, an infinite loop that hard-locks WebKit when a
+    // re-render storm (grouped rows + opening the filter popover) keeps it fed.
+    autoResetPageIndex: false,
+    autoResetExpanded: false,
   });
 
   const rowModels = table.getRowModel().rows;

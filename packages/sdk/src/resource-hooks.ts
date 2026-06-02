@@ -144,7 +144,11 @@ export function useResourceList<TName extends ResourceTypeName = ResourceTypeNam
   // Register so a change event (and post-write invalidation) refresh this list —
   // the writes the normalized cache can't see on its own.
   useRegisterModelRefetch(modelLabel, run.refetch, active);
-  const { rows, total, pageInfo } = extractPage(run.data);
+  // Stabilize the extracted page by the source data identity: `extractPage` allocates
+  // a fresh `rows` array each call, so without this every render hands consumers a new
+  // reference — which (e.g.) makes TanStack Table re-process its data and churns derived
+  // memos. urql keeps `data` referentially stable until a new result arrives.
+  const { rows, total, pageInfo } = useMemo(() => extractPage(run.data), [run.data]);
   const pageCount = total === undefined ? undefined : Math.max(1, Math.ceil(total / size));
 
   const setPage = useCallback(
