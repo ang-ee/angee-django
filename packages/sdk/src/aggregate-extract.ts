@@ -10,6 +10,7 @@
 export interface AggregateBucket {
   key: Record<string, unknown> | null;
   count: number;
+  filter?: Record<string, unknown> | null;
 }
 
 export interface GroupByResult {
@@ -37,7 +38,9 @@ function toBucket(group: Record<string, unknown>): AggregateBucket {
 /** A grouped-result row carries its key under `key` and its row count. */
 function toGroupedResultBucket(group: Record<string, unknown>): AggregateBucket {
   const key = isRecord(group.key) ? group.key : {};
-  return { key, count: countOf(group.count) };
+  const bucket: AggregateBucket = { key, count: countOf(group.count) };
+  if (isRecord(group.filter)) bucket.filter = group.filter;
+  return bucket;
 }
 
 /** Extract the ungrouped aggregate bucket at `field` (count only), or null. */

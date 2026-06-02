@@ -37,6 +37,33 @@ describe("autoExtractGroupBy", () => {
     });
   });
 
+  test("extracts the grouped result row's filter echo", () => {
+    const filter = { state: { exact: "OPEN" } };
+    const data = {
+      saleGroups: {
+        totalCount: 1,
+        results: [{ count: 3, key: { state: "OPEN" }, filter }],
+      },
+    };
+    expect(autoExtractGroupBy(data, "saleGroups").buckets[0]).toEqual({
+      key: { state: "OPEN" },
+      count: 3,
+      filter,
+    });
+  });
+
+  test("leaves the grouped bucket filter absent when no echo is returned", () => {
+    const data = {
+      saleGroups: {
+        totalCount: 1,
+        results: [{ count: 3, key: { state: "OPEN" } }],
+      },
+    };
+    expect(autoExtractGroupBy(data, "saleGroups").buckets[0]).not.toHaveProperty(
+      "filter",
+    );
+  });
+
   test("keeps reading legacy aggregate groups", () => {
     const data = {
       saleAggregate: {

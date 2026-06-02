@@ -172,6 +172,7 @@ type SaleGroupKey {
 type SaleGrouped {
   key: SaleGroupKey!
   count: Int!
+  filter: JSON!
 }
 
 type SaleGroupedResult {

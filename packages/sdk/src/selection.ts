@@ -141,6 +141,8 @@ export interface AssembleGroupByDocumentOptions {
   keyFields: readonly string[];
   /** Declare `$filter: <Type>Filter` and pass it to the grouped field. */
   withFilter?: boolean;
+  /** Select the grouped row's echoed list filter when the backend exposes it. */
+  withFilterEcho?: boolean;
 }
 
 export interface AssembleAggregateDocumentOptions {
@@ -255,10 +257,13 @@ export function assembleGroupByDocument(
     declared.push(`$filter: ${typeName}Filter`);
     args.push("filter: $filter");
   }
+  const resultSelection = options.withFilterEcho
+    ? `key { ${keySelection} } count filter`
+    : `key { ${keySelection} } count`;
   return (
     `query ${field}(${declared.join(", ")}) { ` +
     `${field}(${args.join(", ")}) { ` +
-    `totalCount results { key { ${keySelection} } count } ` +
+    `totalCount results { ${resultSelection} } ` +
     `pageInfo { offset limit } } }`
   );
 }

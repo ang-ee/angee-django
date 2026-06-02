@@ -122,6 +122,22 @@ describe("aggregate documents", () => {
         "totalCount results { key { state } count } " +
         "pageInfo { offset limit } } }",
     );
+    expect(document).not.toContain("filter");
+    expectValid(document);
+  });
+
+  test("the grouped aggregate selects the filter echo on request", () => {
+    const document = assembleGroupByDocument("Sale", {
+      keyFields: ["state"],
+      withFilterEcho: true,
+    });
+    expect(document).toBe(
+      "query saleGroups($groupBy: [SaleGroupBySpec!]!, " +
+        "$pagination: OffsetPaginationInput) { " +
+        "saleGroups(groupBy: $groupBy, pagination: $pagination) { " +
+        "totalCount results { key { state } count filter } " +
+        "pageInfo { offset limit } } }",
+    );
     expectValid(document);
   });
 

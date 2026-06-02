@@ -80,6 +80,7 @@ export interface UseGroupByOptions<
   dimensions: readonly GroupByDimension[];
   page?: number;
   pageSize?: number;
+  withFilterEcho?: boolean;
 }
 
 function dimensionField(dimension: GroupByDimension): string {
@@ -113,7 +114,14 @@ export function useResourceGroupBy<
   fetching: boolean;
   error: Error | null;
 } {
-  const { dimensions, enabled = true, filter, page, pageSize } = options;
+  const {
+    dimensions,
+    enabled = true,
+    filter,
+    page,
+    pageSize,
+    withFilterEcho = false,
+  } = options;
   const active = enabled && Boolean(modelLabel) && dimensions.length > 0;
   const withFilter = filter !== undefined;
   const keyFields = useStableArray(dimensions.map(dimensionKey));
@@ -134,8 +142,13 @@ export function useResourceGroupBy<
   });
 
   const document = useMemo(
-    () => assembleGroupByDocument(modelLabel, { keyFields, withFilter }),
-    [modelLabel, keyFields, withFilter],
+    () =>
+      assembleGroupByDocument(modelLabel, {
+        keyFields,
+        withFilter,
+        withFilterEcho,
+      }),
+    [modelLabel, keyFields, withFilter, withFilterEcho],
   );
 
   const run = useDocumentQuery(document, variables, active);
