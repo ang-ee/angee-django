@@ -39,18 +39,45 @@ import { DataPage } from "./DataPage";
 import type { FormField } from "./FormView";
 import type { ListColumn } from "./ListView";
 import type {
-  Row,
+  AggregateBucket,
+  GroupByDimension,
   ResourceTypeName,
+  Row,
+  UseGroupByOptions,
   UseResourceListOptions,
   UseResourceListResult,
 } from "@angee/sdk";
 
 const sdkMocks = vi.hoisted(() => ({
   rows: [
-    { id: "note-1", title: "First", status: "ACTIVE", priority: "High" },
-    { id: "note-2", title: "Second", status: "ACTIVE", priority: "Low" },
-    { id: "note-3", title: "Third", status: "DRAFT", priority: "Medium" },
-    { id: "note-4", title: "Fourth", status: "ARCHIVED", priority: "Low" },
+    {
+      id: "note-1",
+      title: "First",
+      status: "ACTIVE",
+      priority: "High",
+      updatedAt: "2026-01-03T10:00:00.000Z",
+    },
+    {
+      id: "note-2",
+      title: "Second",
+      status: "ACTIVE",
+      priority: "Low",
+      updatedAt: "2026-02-03T10:00:00.000Z",
+    },
+    {
+      id: "note-3",
+      title: "Third",
+      status: "DRAFT",
+      priority: "Medium",
+      updatedAt: "2026-03-03T10:00:00.000Z",
+    },
+    {
+      id: "note-4",
+      title: "Fourth",
+      status: "ARCHIVED",
+      priority: "Low",
+      updatedAt: "2026-04-03T10:00:00.000Z",
+    },
   ] satisfies Row[],
   mutate: vi.fn(async ({ data }: { data: Row }) => data),
 }));
@@ -58,6 +85,74 @@ const sdkMocks = vi.hoisted(() => ({
 vi.mock("@angee/sdk", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/sdk")>();
   const ReactRuntime = await import("react");
+  function filteredRows(
+    rows: readonly Row[],
+    filter: UseResourceListOptions<ResourceTypeName>["filter"],
+  ): readonly Row[] {
+    if (!filter) return rows;
+    return rows.filter((row) =>
+      Object.entries(filter as Record<string, unknown>).every(
+        ([field, lookup]) => matchesLookup(readPath(row, field), lookup),
+      ),
+    );
+  }
+  function matchesLookup(value: unknown, lookup: unknown): boolean {
+    if (!lookup || typeof lookup !== "object" || Array.isArray(lookup)) {
+      return value === lookup;
+    }
+    const record = lookup as Record<string, unknown>;
+    if ("exact" in record) return value === record.exact;
+    if (Array.isArray(record.inList)) return record.inList.includes(value);
+    if (typeof record.iContains === "string") {
+      return String(value ?? "")
+        .toLowerCase()
+        .includes(record.iContains.toLowerCase());
+    }
+    return true;
+  }
+  function readPath(row: Row, path: string): unknown {
+    let current: unknown = row;
+    for (const key of path.split(".")) {
+      if (current == null || typeof current !== "object") return undefined;
+      current = (current as Record<string, unknown>)[key];
+    }
+    return current;
+  }
+  function groupBuckets(
+    rows: readonly Row[],
+    dimensions: readonly GroupByDimension[],
+    baseFilter: UseGroupByOptions<ResourceTypeName>["filter"],
+  ): readonly AggregateBucket[] {
+    const buckets = new Map<string, AggregateBucket>();
+    for (const row of rows) {
+      const key: Record<string, unknown> = {};
+      const filter = { ...(baseFilter as Record<string, unknown> | undefined) };
+      for (const dimension of dimensions) {
+        const keyField = dimension.key ?? dimension.field;
+        const sourceField = sourceFieldForAggregateKey(keyField);
+        const value = readPath(row, sourceField);
+        key[keyField] = value;
+        filter[sourceField] = { exact: value };
+      }
+      const bucketKey = JSON.stringify(key);
+      const current = buckets.get(bucketKey);
+      if (current) {
+        buckets.set(bucketKey, { ...current, count: current.count + 1 });
+      } else {
+        buckets.set(bucketKey, { key, count: 1, filter });
+      }
+    }
+    return [...buckets.values()];
+  }
+  function sourceFieldForAggregateKey(key: string): string {
+    const field = key.replace(/(?:Day|Week|Month|Quarter|Year)$/, "");
+    if (!field.includes("_")) {
+      return `${field.charAt(0).toLowerCase()}${field.slice(1)}`;
+    }
+    return field
+      .toLowerCase()
+      .replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
+  }
   return {
     ...actual,
     useResourceList: (
@@ -65,9 +160,13 @@ vi.mock("@angee/sdk", async (importOriginal) => {
       options: UseResourceListOptions<ResourceTypeName>,
     ): UseResourceListResult => {
       const pageSize = options.pageSize ?? 50;
+      const active = options.enabled !== false;
+      const matchingRows = active
+        ? filteredRows(sdkMocks.rows, options.filter)
+        : [];
       const pageCount = Math.max(
         1,
-        Math.ceil(sdkMocks.rows.length / pageSize),
+        Math.ceil(matchingRows.length / pageSize),
       );
       const requestedPage = Math.min(
         pageCount,
@@ -78,7 +177,7 @@ vi.mock("@angee/sdk", async (importOriginal) => {
         setPageState(requestedPage);
       }, [requestedPage]);
       const visiblePage = Math.min(page, pageCount);
-      const rows = sdkMocks.rows.slice(
+      const rows = matchingRows.slice(
         (visiblePage - 1) * pageSize,
         visiblePage * pageSize,
       );
@@ -87,7 +186,7 @@ vi.mock("@angee/sdk", async (importOriginal) => {
       };
       return {
         rows,
-        total: sdkMocks.rows.length,
+        total: active ? matchingRows.length : undefined,
         pageCount,
         page: visiblePage,
         pageSize,
@@ -110,13 +209,38 @@ vi.mock("@angee/sdk", async (importOriginal) => {
       error: null,
       refetch: vi.fn(),
     }),
-    useResourceGroupBy: () => ({
-      count: 0,
-      totalCount: 0,
-      buckets: [],
-      fetching: false,
-      error: null,
-    }),
+    useResourceGroupBy: (
+      _model: string,
+      options: UseGroupByOptions<ResourceTypeName>,
+    ) => {
+      if (options.enabled === false || options.dimensions.length === 0) {
+        return {
+          count: 0,
+          totalCount: 0,
+          buckets: [],
+          fetching: false,
+          error: null,
+        };
+      }
+      const buckets = groupBuckets(
+        filteredRows(sdkMocks.rows, options.filter),
+        options.dimensions,
+        options.filter,
+      );
+      const pageSize = options.pageSize ?? buckets.length;
+      const page = Math.max(1, options.page ?? 1);
+      const visibleBuckets = buckets.slice(
+        (page - 1) * pageSize,
+        page * pageSize,
+      );
+      return {
+        count: visibleBuckets.reduce((total, bucket) => total + bucket.count, 0),
+        totalCount: buckets.length,
+        buckets: visibleBuckets,
+        fetching: false,
+        error: null,
+      };
+    },
     useResourceMutation: () => [
       sdkMocks.mutate,
       { fetching: false, error: null },
@@ -362,6 +486,38 @@ describe("DataPage", () => {
     );
   });
 
+  test("renders grouped lists folded and expands group items lazily", async () => {
+    const onSelect = vi.fn();
+
+    render(
+      <TestUrlState searchParams="?group=status&pageSize=2">
+        <DataPage
+          model="notes.Note"
+          columns={columns}
+          formFields={formFields}
+          onSelect={onSelect}
+        />
+      </TestUrlState>,
+    );
+
+    await screen.findByRole("button", { name: "Groups 1-2 / 3 groups" });
+    const activeGroup = await screen.findByRole("button", { name: /Active/ });
+    expect(activeGroup.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("button", { name: "Open First" })).toBeNull();
+
+    fireEvent.click(activeGroup);
+
+    await waitFor(() =>
+      expect(activeGroup.getAttribute("aria-expanded")).toBe("true"),
+    );
+    expect(await screen.findByRole("button", { name: "Open First" }))
+      .toBeTruthy();
+    expect(screen.getByText("1-2 / 2")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open First" }));
+    expect(onSelect).toHaveBeenCalledWith("note-1");
+  });
+
   test("paginates through the URL-owned data view state", async () => {
     const onUrlUpdate = vi.fn();
     render(
@@ -379,12 +535,12 @@ describe("DataPage", () => {
       </TestUrlState>,
     );
 
-    await screen.findByRole("button", { name: "Records 1-2 / 4" });
+    await screen.findByRole("button", { name: "Groups 1-2 / 4 groups" });
     fireEvent.click(screen.getByRole("button", { name: "Next page" }));
 
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "Records 3-4 / 4" }),
+        screen.getByRole("button", { name: "Groups 3-4 / 4 groups" }),
       ).toBeTruthy(),
     );
     await waitFor(() => {
@@ -407,7 +563,7 @@ describe("DataPage", () => {
       </TestUrlState>,
     );
 
-    await screen.findByRole("button", { name: "Records 1-2 / 4" });
+    await screen.findByRole("button", { name: "Groups 1-2 / 4 groups" });
     await screen.findByRole("button", { name: "Remove group" });
     await waitFor(() => {
       const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
@@ -433,7 +589,7 @@ describe("DataPage", () => {
       </TestUrlState>,
     );
 
-    await screen.findByRole("button", { name: "Records 3-4 / 4" });
+    await screen.findByRole("button", { name: "Groups 3-4 / 4 groups" });
     fireEvent.click(
       await screen.findByRole("button", {
         name: "Filter, group, favorites",
@@ -446,7 +602,7 @@ describe("DataPage", () => {
     );
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "Records 1-2 / 4" }),
+        screen.getByRole("button", { name: "Groups 1-2 / 4 groups" }),
       ).toBeTruthy(),
     );
     await waitFor(() => {

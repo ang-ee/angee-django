@@ -53,6 +53,8 @@ export interface DataToolbarProps {
   onVisibleFieldToggle?: (id: string, visible: boolean) => void;
   onPageChange?: (page: number) => void;
   onViewChange?: (view: DataViewKind) => void;
+  pagerSubject?: string;
+  pagerTotalUnit?: string;
   className?: string;
 }
 
@@ -104,6 +106,8 @@ export function DataToolbar({
   onVisibleFieldToggle,
   onPageChange,
   onViewChange,
+  pagerSubject = "Records",
+  pagerTotalUnit,
   className,
 }: DataToolbarProps): ReactElement {
   const start = list.total === undefined || list.total === 0
@@ -116,7 +120,11 @@ export function DataToolbar({
   const activeFilters = filterOptions.filter((option) =>
     activeFilterIds.includes(option.id),
   );
-  const pageLabel = `${start}-${end}${list.total !== undefined ? ` / ${list.total}` : ""}`;
+  const pageLabel = `${start}-${end}${
+    list.total !== undefined
+      ? ` / ${list.total}${pagerTotalUnit ? ` ${pagerTotalUnit}` : ""}`
+      : ""
+  }`;
 
   return (
     <section
@@ -148,7 +156,7 @@ export function DataToolbar({
       <button
         type="button"
         className="h-6 rounded px-1.5 text-13 tabular-nums text-fg outline-none hover:bg-inset focus-visible:focus-ring"
-        aria-label={`Records ${pageLabel}`}
+        aria-label={`${pagerSubject} ${pageLabel}`}
       >
         {pageLabel}
       </button>

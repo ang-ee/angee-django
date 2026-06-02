@@ -28,9 +28,16 @@ export class NotesPage extends PageObject {
   }
 
   // --- pager ---
-  /** The "Records N-M / total" label (a control in the pager). */
+  /** The top pager label. In a flat list it reads "Records N-M / total"; in a
+   *  grouped list it pages the groups and reads "Groups N-M / total groups". */
   get recordsLabel(): Locator {
-    return this.page.locator('[aria-label^="Records "]').first();
+    return this.page
+      .locator('[aria-label^="Records "], [aria-label^="Groups "]')
+      .first();
+  }
+  /** A collapsed group-header disclosure in a grouped list. */
+  get groupHeaders(): Locator {
+    return this.page.locator('tbody tr [aria-expanded]');
   }
   get nextPageButton(): Locator {
     return this.page.getByRole("button", { name: /next page/i });
@@ -91,9 +98,13 @@ export class NotesPage extends PageObject {
     await this.page.getByText("Group by", { exact: false }).first().waitFor();
   }
 
-  /** Navigate to the first record's form by clicking its row. Targets a record
-   *  row specifically so a grouped list's header rows don't get clicked. */
+  /** Navigate to the first record's form. The list groups + folds by default,
+   *  so expand the first group to reveal records, then click a record row. */
   async openFirstNote(): Promise<void> {
+    if (!(await this.recordRows.first().isVisible().catch(() => false))) {
+      await this.groupHeaders.first().click();
+      await this.recordRows.first().waitFor({ state: "visible", timeout: 10000 });
+    }
     await this.recordRows.first().click();
     await this.page.waitForURL(/\/notes\/.+/, { timeout: 10000 });
     await this.page.locator(".cm-content").first().waitFor({ timeout: 15000 });
