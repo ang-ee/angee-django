@@ -1,5 +1,4 @@
-import { createElement, type ComponentType, type SVGProps } from "react";
-import { AngeeLogo } from "@angee/logo-react";
+import { type ComponentType, type SVGProps } from "react";
 import { useAppRuntime } from "@angee/sdk";
 import {
   Activity,
@@ -18,6 +17,8 @@ import {
   Zap,
 } from "lucide-react";
 
+import { AngeeMark } from "./AngeeMark";
+
 export type IconProps = SVGProps<SVGSVGElement> & {
   size?: number | string;
   strokeWidth?: number | string;
@@ -25,28 +26,11 @@ export type IconProps = SVGProps<SVGSVGElement> & {
 
 export type IconComponent = ComponentType<IconProps>;
 
-function AngeeCubeIcon({ size = 20, strokeWidth, ...props }: IconProps) {
-  const pixelSize = typeof size === "number" ? size : undefined;
-  return createElement(AngeeLogo, {
-    ...props,
-    bgColor: null,
-    geometry: "cube",
-    preset: "gold",
-    // Tight crop: without this the cube sits in the full-lockup viewBox (≈4× too
-    // much padding) and renders as a speck. `pad: 0` fits the viewBox to the cube.
-    pad: 0,
-    size: pixelSize,
-    strokeWidth: typeof strokeWidth === "number" ? strokeWidth : undefined,
-    width: size,
-    height: size,
-  });
-}
-
 export const baseIcons = {
   activity: Activity,
   agent: Zap,
-  angee: AngeeCubeIcon,
-  "angee-cube": AngeeCubeIcon,
+  angee: AngeeMark,
+  "angee-cube": AngeeMark,
   archive: Archive,
   auth: Shield,
   bell: Bell,
