@@ -7,9 +7,17 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import {
+  RouterContextProvider,
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from "@tanstack/react-router";
 import { AppRuntimeProvider, type Row } from "@angee/sdk";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+import { ModalsHost } from "../feedback";
 import { defaultWidgets } from "../widgets";
 import { FormView, type FormField } from "./FormView";
 
@@ -125,9 +133,24 @@ describe("FormView", () => {
 });
 
 function renderForm(id: string | null): void {
+  const rootRoute = createRootRoute();
+  const indexRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/",
+    component: () => null,
+  });
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([indexRoute]),
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+  });
+
   render(
-    <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-      <FormView model="notes.Note" id={id} fields={fields} />
-    </AppRuntimeProvider>,
+    <RouterContextProvider router={router}>
+      <ModalsHost>
+        <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+          <FormView model="notes.Note" id={id} fields={fields} />
+        </AppRuntimeProvider>
+      </ModalsHost>
+    </RouterContextProvider>,
   );
 }

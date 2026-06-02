@@ -1,5 +1,6 @@
 import * as React from "react";
-import { useForm } from "@tanstack/react-form";
+import { useForm, useStore } from "@tanstack/react-form";
+import { useBlocker } from "@tanstack/react-router";
 import {
   useResourceMutation,
   useResourceRecord,
@@ -8,6 +9,7 @@ import {
 
 import { Button } from "../ui/button";
 import { ErrorBanner } from "../fragments/ErrorBanner";
+import { useConfirm } from "../feedback";
 import {
   FieldDescription,
   FieldError,
@@ -15,7 +17,9 @@ import {
   FieldRoot,
 } from "../ui/field";
 import { FormActions } from "../ui/form-layout";
+import { Input } from "../ui/input";
 import { Spinner } from "../ui/spinner";
+import { cn } from "../lib/cn";
 import {
   useResolvedWidget,
   type WidgetDefinition,
@@ -46,6 +50,13 @@ export interface FormViewProps {
 }
 
 type Values = Record<string, unknown>;
+
+const TITLE_TEXT_CLASS =
+  "block w-full min-w-0 truncate text-28 font-semibold leading-9 text-fg";
+const TITLE_INPUT_CLASS =
+  "h-auto min-h-9 rounded-none border-0 bg-transparent px-0 py-0 shadow-none " +
+  "text-28 font-semibold leading-9 hover:border-transparent focus:border-transparent " +
+  "focus:bg-transparent focus-visible:border-transparent placeholder:text-fg-subtle";
 
 export function FormView({
   model,
@@ -88,6 +99,10 @@ export function FormView({
     () => emptyDraft(resolvedFields),
     [resolvedFields],
   );
+  const formReadOnly = React.useMemo(
+    () => resolvedFields.length > 0 && resolvedFields.every((field) => field.readOnly),
+    [resolvedFields],
+  );
   const baselineValuesRef = React.useRef<Values>(defaultValues);
   const [saveError, setSaveError] = React.useState<string | null>(null);
   const form = useForm({
@@ -113,6 +128,11 @@ export function FormView({
         );
       }
     },
+  });
+  const formIsDirty = useStore(form.store, (state) => state.isDirty);
+  useUnsavedChangesNavigationGuard({
+    isDirty: formIsDirty,
+    readOnly: formReadOnly,
   });
 
   const seededIdRef = React.useRef<string | null>(null);
@@ -140,7 +160,7 @@ export function FormView({
     }
   }, [defaultValues, isCreate, record, resolvedFields, form]);
 
-  const titleField = resolvedFields.find((field) => field.title);
+  const titleField = titleFieldFor(resolvedFields);
   const statusField = resolvedFields.find((field) => field.widget === "statusbar");
   const bodyFields = React.useMemo(
     () =>
@@ -168,9 +188,7 @@ export function FormView({
 
   return (
     <form
-      className={["mx-auto flex w-full max-w-5xl flex-col gap-6", className]
-        .filter(Boolean)
-        .join(" ")}
+      className={cn("mx-auto flex w-full max-w-5xl flex-col gap-6", className)}
       onSubmit={(event) => {
         event.preventDefault();
         void form.handleSubmit();
@@ -182,16 +200,21 @@ export function FormView({
             {titleField ? (
               <form.Field name={titleField.name}>
                 {(api) => (
-                  <input
-                    value={String(api.state.value ?? "")}
-                    placeholder="Untitled"
-                    aria-label={fieldAriaLabel(titleField)}
-                    readOnly={titleField.readOnly}
-                    className="block w-full min-w-0 border-0 bg-transparent p-0 text-28 font-semibold leading-9 text-fg outline-none placeholder:text-fg-subtle focus-visible:focus-ring"
-                    onChange={(event) =>
-                      api.handleChange(event.currentTarget.value)
-                    }
-                  />
+                  titleField.readOnly ? (
+                    <h1 className={TITLE_TEXT_CLASS}>
+                      {titleText(api.state.value)}
+                    </h1>
+                  ) : (
+                    <Input
+                      value={String(api.state.value ?? "")}
+                      placeholder={titleField.placeholder ?? "Untitled"}
+                      aria-label={fieldAriaLabel(titleField)}
+                      className={cn(TITLE_TEXT_CLASS, TITLE_INPUT_CLASS)}
+                      onChange={(event) =>
+                        api.handleChange(event.currentTarget.value)
+                      }
+                    />
+                  )
                 )}
               </form.Field>
             ) : (
@@ -317,6 +340,32 @@ export function FormView({
   );
 }
 
+function useUnsavedChangesNavigationGuard({
+  isDirty,
+  readOnly,
+}: {
+  isDirty: boolean;
+  readOnly: boolean;
+}): void {
+  const confirm = useConfirm();
+  const shouldBlockFn = React.useCallback(async () => {
+    if (readOnly || !isDirty) return false;
+    const leave = await confirm({
+      title: "Unsaved changes — leave without saving?",
+      cancel: "Stay",
+      confirm: "Leave",
+      danger: true,
+    });
+    return !leave;
+  }, [confirm, isDirty, readOnly]);
+
+  useBlocker({
+    shouldBlockFn,
+    enableBeforeUnload: isDirty && !readOnly,
+    disabled: readOnly || !isDirty,
+  });
+}
+
 function FieldWidget({
   field,
   value,
@@ -373,6 +422,18 @@ function formSections(
   const ungrouped = fields.filter((field) => !groupedNames.has(field.name));
   if (ungrouped.length > 0) sections.unshift({ key: "fields", fields: ungrouped });
   return sections;
+}
+
+function titleFieldFor(
+  fields: readonly FieldDescriptor[],
+): FieldDescriptor | undefined {
+  return fields.find((field) => field.title) ??
+    fields.find((field) => field.name === "title");
+}
+
+function titleText(value: unknown): string {
+  const text = String(value ?? "").trim();
+  return text || "Untitled";
 }
 
 function emptyDraft(fields: readonly FieldDescriptor[]): Values {

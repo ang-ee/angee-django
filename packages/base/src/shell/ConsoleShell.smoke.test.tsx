@@ -93,10 +93,9 @@ describe("ConsoleShell", () => {
     expect(notesLink.getAttribute("href")).toBe("/notes");
     expect(notesLink.getAttribute("aria-current")).toBe("page");
 
-    expect(screen.getByRole("banner", { name: "Workspace top bar" })).toBeTruthy();
-    expect(
-      screen.getByRole("tab", { name: "All notes" }).getAttribute("aria-selected"),
-    ).toBe("true");
+    const topBar = screen.getByRole("banner", { name: "Workspace top bar" });
+    // The top menu is data-driven (useMenus) and renders the app menu links.
+    expect(within(topBar).getAllByText("Notes").length).toBeGreaterThan(0);
     expect(screen.getByRole("search", { name: "Global search" })).toBeTruthy();
 
     const breadcrumb = screen.getByRole("navigation", { name: "Breadcrumb" });

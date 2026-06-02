@@ -9,7 +9,19 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { useState, type ComponentProps, type ReactElement } from "react";
+import {
+  RouterContextProvider,
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from "@tanstack/react-router";
+import {
+  useMemo,
+  useState,
+  type ComponentProps,
+  type ReactElement,
+} from "react";
 import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
@@ -17,6 +29,7 @@ import {
   Breadcrumb,
   BreadcrumbProvider,
 } from "../chrome/Breadcrumb";
+import { ModalsHost } from "../feedback";
 import { DataPage } from "./DataPage";
 import type { FormField } from "./FormView";
 import type { ListColumn } from "./ListView";
@@ -377,9 +390,26 @@ function TestUrlState({
   hasMemory = true,
   ...props
 }: ComponentProps<typeof NuqsTestingAdapter>): ReactElement {
+  const router = useMemo(() => {
+    const rootRoute = createRootRoute();
+    const indexRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/",
+      component: () => null,
+    });
+    return createRouter({
+      routeTree: rootRoute.addChildren([indexRoute]),
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+    });
+  }, []);
+
   return (
-    <NuqsTestingAdapter {...props} hasMemory={hasMemory}>
-      {children}
-    </NuqsTestingAdapter>
+    <RouterContextProvider router={router}>
+      <ModalsHost>
+        <NuqsTestingAdapter {...props} hasMemory={hasMemory}>
+          {children}
+        </NuqsTestingAdapter>
+      </ModalsHost>
+    </RouterContextProvider>
   );
 }
