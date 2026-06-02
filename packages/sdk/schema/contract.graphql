@@ -11,8 +11,8 @@
 #  - a `@oneOf` order input over an `Ordering` enum, and lookup-object filters;
 #  - verb-first `create/update/delete` mutations taking `data:` / a `Patch` (whose
 #    id travels inside the patch) / an `id:`, with the cascade `DeletePreview`;
-#  - one `<noun>Aggregate` field returning `{ count }` and one
-#    `<noun>Groups(...)` field returning offset-paginated grouped rows;
+#  - one `<noun>Aggregate` field returning `{ count, sum, avg, min, max }` and
+#    one `<noun>Groups(...)` field returning offset-paginated grouped rows;
 #  - session login (`login`/`logout`/`currentUser`);
 #  - a per-model `<noun>Changed` change event.
 #
@@ -23,6 +23,8 @@ directive @oneOf on INPUT_OBJECT
 scalar DateTime
 
 scalar JSON
+
+scalar BigInt
 
 """An object with a Globally Unique ID"""
 interface Node {
@@ -80,6 +82,7 @@ type Sale implements Node {
   id: ID!
   title: String!
   state: SaleState!
+  amount: Int!
   isFeatured: Boolean!
   tags: JSON!
   createdAt: DateTime!
@@ -189,6 +192,10 @@ type SaleGrouped {
   key: SaleGroupKey!
   count: Int!
   filter: JSON!
+  sum: SaleSumFields
+  avg: SaleAvgFields
+  min: SaleMinFields
+  max: SaleMaxFields
 }
 
 type SaleGroupedResult {
@@ -199,6 +206,26 @@ type SaleGroupedResult {
 
 type SaleAggregate {
   count: Int!
+  sum: SaleSumFields
+  avg: SaleAvgFields
+  min: SaleMinFields
+  max: SaleMaxFields
+}
+
+type SaleSumFields {
+  amount: BigInt
+}
+
+type SaleAvgFields {
+  amount: Float
+}
+
+type SaleMinFields {
+  amount: Int
+}
+
+type SaleMaxFields {
+  amount: Int
 }
 
 type DeletePreviewGroup {

@@ -113,6 +113,16 @@ describe("aggregate documents", () => {
     expectValid(document);
   });
 
+  test("the ungrouped aggregate selects requested measures", () => {
+    const document = assembleAggregateDocument("Sale", {
+      measures: [{ op: "sum", field: "amount" }],
+    });
+    expect(document).toBe(
+      "query saleAggregate { saleAggregate { count sum { amount } } }",
+    );
+    expectValid(document);
+  });
+
   test("the grouped aggregate declares groupBy and offset pagination", () => {
     const document = assembleGroupByDocument("Sale", { keyFields: ["state"] });
     expect(document).toBe(
@@ -136,6 +146,21 @@ describe("aggregate documents", () => {
         "$pagination: OffsetPaginationInput) { " +
         "saleGroups(groupBy: $groupBy, pagination: $pagination) { " +
         "totalCount results { key { state } count filter } " +
+        "pageInfo { offset limit } } }",
+    );
+    expectValid(document);
+  });
+
+  test("the grouped aggregate selects requested measures", () => {
+    const document = assembleGroupByDocument("Sale", {
+      keyFields: ["state"],
+      measures: [{ op: "sum", field: "amount" }],
+    });
+    expect(document).toBe(
+      "query saleGroups($groupBy: [SaleGroupBySpec!]!, " +
+        "$pagination: OffsetPaginationInput) { " +
+        "saleGroups(groupBy: $groupBy, pagination: $pagination) { " +
+        "totalCount results { key { state } count sum { amount } } " +
         "pageInfo { offset limit } } }",
     );
     expectValid(document);

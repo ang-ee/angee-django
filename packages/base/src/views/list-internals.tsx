@@ -14,6 +14,8 @@ import type { Virtualizer } from "@tanstack/react-virtual";
 import { useNavigate } from "@tanstack/react-router";
 import type {
   AggregateBucket,
+  AggregateMeasure,
+  AggregateMeasureOperator,
   GroupByDimension,
   GroupByOrder,
   Row,
@@ -40,6 +42,7 @@ import {
 import type { DataViewContextValue } from "./data-view-context";
 import type { DataViewGroup } from "./data-view-model";
 import type {
+  ColumnAggregate,
   ColumnDescriptor,
   PageColumnAlign,
 } from "./page";
@@ -55,6 +58,12 @@ export type RowGroup<TRow extends Row> = {
   rows: readonly TableRowModel<TRow>[];
   children: readonly RowGroup<TRow>[];
 };
+
+export interface GroupMeasure extends AggregateMeasure {
+  columnId: string;
+  label: string;
+  unit: string;
+}
 
 export type ListRenderItem<TRow extends Row> =
   | { kind: "group"; group: RowGroup<TRow> }
@@ -90,6 +99,7 @@ export function SelectionBar({
 }
 
 export interface FlatListBodyProps<TRow extends Row> {
+  columns: readonly ColumnDescriptor<TRow>[];
   table: TableModel<TRow>;
   rowModels: readonly TableRowModel<TRow>[];
   listItems: readonly ListRenderItem<TRow>[];
@@ -108,6 +118,7 @@ export interface FlatListBodyProps<TRow extends Row> {
 }
 
 export function FlatListBody<TRow extends Row>({
+  columns,
   table,
   rowModels,
   listItems,
@@ -125,6 +136,10 @@ export function FlatListBody<TRow extends Row>({
   fetching,
 }: FlatListBodyProps<TRow>): React.ReactElement {
   const colSpan = Math.max(1, visibleColumnCount + 1);
+  const measures = React.useMemo(
+    () => groupMeasuresFromColumns(columns),
+    [columns],
+  );
   const virtualItems = rowVirtualizer.getVirtualItems();
   const visibleIndexes = virtualItems.length > 0
     ? virtualItems.map((item) => item.index)
@@ -200,6 +215,7 @@ export function FlatListBody<TRow extends Row>({
                       interactive,
                       rowHref,
                       onRowClick,
+                      measures,
                     })
                   : null;
               })}
@@ -232,6 +248,8 @@ export function buildColumns<TRow extends Row>(
     meta: {
       align: column.align ?? "left",
       label: column.header ?? column.field,
+      field: column.field,
+      aggregate: column.aggregate,
     },
   }));
 }
@@ -420,6 +438,7 @@ function renderListItem<TRow extends Row>({
   interactive,
   rowHref,
   onRowClick,
+  measures,
 }: {
   item: ListRenderItem<TRow>;
   colSpan: number;
@@ -427,6 +446,7 @@ function renderListItem<TRow extends Row>({
   interactive: boolean;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
+  measures: readonly GroupMeasure[];
 }): React.ReactElement {
   if (item.kind === "group") {
     return (
@@ -436,6 +456,7 @@ function renderListItem<TRow extends Row>({
         rows={item.group.rows}
         depth={item.group.depth}
         colSpan={colSpan}
+        measures={measures}
       />
     );
   }
@@ -474,17 +495,19 @@ function GroupHeader<TRow extends Row>({
   rows,
   depth,
   colSpan,
+  measures,
 }: {
   label: string;
   rows: readonly TableRowModel<TRow>[];
   depth: number;
   colSpan: number;
+  measures: readonly GroupMeasure[];
 }): React.ReactElement {
   const rowCount = rows.length;
-  const words = rows.reduce((total, row) => {
-    const value = readPath(row.original, "wordCount");
-    return total + (typeof value === "number" ? value : 0);
-  }, 0);
+  const summaries = measures.flatMap((measure) => {
+    const value = measureRows(rows, measure);
+    return value == null ? [] : [formatMeasure(value, measure)];
+  });
   return (
     <TableRow>
       <TableCell colSpan={colSpan} className="h-8 bg-sheet-2 py-1.5">
@@ -499,7 +522,7 @@ function GroupHeader<TRow extends Row>({
             </span>
           </span>
           <span className="text-fg-muted">
-            {words > 0 ? `${words.toLocaleString()} words` : ""}
+            {summaries.join(" · ")}
           </span>
         </div>
       </TableCell>
@@ -644,6 +667,114 @@ export function readPath(row: Row, path: string): unknown {
   return current;
 }
 
+export function groupMeasuresFromColumns<TRow extends Row>(
+  columns: readonly ColumnDescriptor<TRow>[],
+): readonly GroupMeasure[] {
+  const measures: GroupMeasure[] = [];
+  const seen = new Set<string>();
+  for (const column of columns) {
+    if (!isMeasureOperator(column.aggregate)) continue;
+    const key = `${column.aggregate}:${column.field}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const label = columnLabel(column);
+    measures.push({
+      op: column.aggregate,
+      field: column.field,
+      columnId: column.field,
+      label,
+      unit: measureUnit(label),
+    });
+  }
+  return measures;
+}
+
+function isMeasureOperator(
+  aggregate: ColumnAggregate | undefined,
+): aggregate is AggregateMeasureOperator {
+  return (
+    aggregate === "sum" ||
+    aggregate === "avg" ||
+    aggregate === "min" ||
+    aggregate === "max"
+  );
+}
+
+function columnLabel<TRow extends Row>(column: ColumnDescriptor<TRow>): string {
+  const header = column.header;
+  if (typeof header === "string") return header;
+  if (typeof header === "number") return String(header);
+  return titleCase(column.field);
+}
+
+function measureUnit(label: string): string {
+  const normalized = label.trim();
+  const countLabel = normalized.match(/^(.+)\s+count$/i)?.[1]?.trim();
+  return pluralize((countLabel || normalized).toLowerCase());
+}
+
+function pluralize(value: string): string {
+  if (value.endsWith("y") && !/[aeiou]y$/.test(value)) {
+    return `${value.slice(0, -1)}ies`;
+  }
+  if (value.endsWith("s")) return value;
+  return `${value}s`;
+}
+
+export function measureValue(
+  bucket: AggregateBucket,
+  measure: Pick<GroupMeasure, "op" | "field">,
+): unknown {
+  return bucket[measure.op]?.[measure.field];
+}
+
+export function formatMeasure(
+  value: unknown,
+  measure: Pick<GroupMeasure, "unit">,
+): string {
+  const formatted = formatMeasureValue(value);
+  return measure.unit ? `${formatted} ${measure.unit}` : formatted;
+}
+
+function formatMeasureValue(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value.toLocaleString();
+  }
+  if (typeof value === "bigint") return value.toLocaleString();
+  if (typeof value === "string" && /^-?\d+$/.test(value)) {
+    return BigInt(value).toLocaleString();
+  }
+  return value == null ? "" : String(value);
+}
+
+function measureRows<TRow extends Row>(
+  rows: readonly TableRowModel<TRow>[],
+  measure: GroupMeasure,
+): number | null {
+  const values = rows
+    .map((row) => numericValue(readPath(row.original, measure.field)))
+    .filter((value): value is number => value !== null);
+  if (values.length === 0) return null;
+  if (measure.op === "sum") {
+    return values.reduce((total, value) => total + value, 0);
+  }
+  if (measure.op === "avg") {
+    return values.reduce((total, value) => total + value, 0) / values.length;
+  }
+  if (measure.op === "min") return Math.min(...values);
+  return Math.max(...values);
+}
+
+function numericValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "bigint") return Number(value);
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
 function displayValue(value: unknown): React.ReactNode {
   if (value == null) return "";
   if (typeof value === "boolean") return value ? "Yes" : "No";
@@ -657,10 +788,20 @@ export function alignOf<TRow extends Row>(column: ColumnDef<TRow>): PageColumnAl
 
 function columnMeta<TRow extends Row>(
   column: ColumnDef<TRow>,
-): { align?: PageColumnAlign; label?: React.ReactNode } {
+): {
+  align?: PageColumnAlign;
+  label?: React.ReactNode;
+  field?: string;
+  aggregate?: ColumnAggregate;
+} {
   return (
     column.meta as
-      | { align?: PageColumnAlign; label?: React.ReactNode }
+      | {
+          align?: PageColumnAlign;
+          label?: React.ReactNode;
+          field?: string;
+          aggregate?: ColumnAggregate;
+        }
       | undefined
   ) ?? {};
 }
@@ -704,7 +845,7 @@ export function statusLabel(value: string): string {
   return titleCase(value.toLowerCase());
 }
 
-function titleCase(value: string): string {
+export function titleCase(value: string): string {
   return value
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
     .replace(/[_-]+/g, " ")

@@ -5,7 +5,10 @@ import { fetchExchange } from "@urql/core";
 import { describe, expect, test, vi } from "vitest";
 
 import { createSchemaClients, GraphQLProvider } from "./graphql-provider";
-import { useAggregateQuery, useResourceGroupBy } from "./aggregates";
+import {
+  useResourceAggregate,
+  useResourceGroupBy,
+} from "./aggregates";
 
 function mockTransport(payload: unknown) {
   const bodies: Array<{ query: string; variables: Record<string, unknown> }> = [];
@@ -33,10 +36,14 @@ function wrapperWith(fetch: typeof globalThis.fetch) {
     createElement(GraphQLProvider, { clients, schema: "public", children });
 }
 
-describe("useAggregateQuery", () => {
+function compactGraphQL(query: string | undefined): string {
+  return query?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+describe("useResourceAggregate", () => {
   test("returns the ungrouped count bucket", async () => {
     const { fetch, bodies } = mockTransport({ saleAggregate: { count: 6 } });
-    const { result } = renderHook(() => useAggregateQuery("Sale"), {
+    const { result } = renderHook(() => useResourceAggregate("Sale"), {
       wrapper: wrapperWith(fetch),
     });
     await waitFor(() => expect(result.current.fetching).toBe(false));
@@ -48,13 +55,31 @@ describe("useAggregateQuery", () => {
     const { fetch, bodies } = mockTransport({ saleAggregate: { count: 2 } });
     const filter = { state: { exact: "OPEN" } };
     const { result } = renderHook(
-      () => useAggregateQuery("Sale", { filter }),
+      () => useResourceAggregate("Sale", { filter }),
       { wrapper: wrapperWith(fetch) },
     );
     await waitFor(() => expect(result.current.fetching).toBe(false));
     expect(result.current.aggregate?.count).toBe(2);
     expect(bodies[0]?.variables.filter).toEqual(filter);
     expect(bodies[0]?.query).toContain("saleAggregate(filter: $filter)");
+  });
+
+  test("requests and returns ungrouped measures", async () => {
+    const { fetch, bodies } = mockTransport({
+      saleAggregate: { count: 6, sum: { amount: "120" } },
+    });
+    const { result } = renderHook(
+      () =>
+        useResourceAggregate("Sale", {
+          measures: [{ op: "sum", field: "amount" }],
+        }),
+      { wrapper: wrapperWith(fetch) },
+    );
+    await waitFor(() => expect(result.current.fetching).toBe(false));
+    expect(result.current.aggregate?.sum?.amount).toBe("120");
+    expect(compactGraphQL(bodies[0]?.query)).toContain(
+      "saleAggregate { count sum { amount } }",
+    );
   });
 });
 
@@ -111,5 +136,27 @@ describe("useResourceGroupBy", () => {
     expect(bodies[0]?.variables.filter).toEqual(filter);
     expect(bodies[0]?.variables.pagination).toEqual({ offset: 10, limit: 10 });
     expect(bodies[0]?.query).toContain("filter: $filter");
+  });
+
+  test("requests and returns grouped measures", async () => {
+    const { fetch, bodies } = mockTransport({
+      saleGroups: {
+        totalCount: 1,
+        results: [
+          { count: 3, key: { state: "OPEN" }, sum: { amount: "42" } },
+        ],
+      },
+    });
+    const { result } = renderHook(
+      () =>
+        useResourceGroupBy("Sale", {
+          dimensions: [{ field: "STATE", key: "state" }],
+          measures: [{ op: "sum", field: "amount" }],
+        }),
+      { wrapper: wrapperWith(fetch) },
+    );
+    await waitFor(() => expect(result.current.fetching).toBe(false));
+    expect(result.current.buckets[0]?.sum?.amount).toBe("42");
+    expect(compactGraphQL(bodies[0]?.query)).toContain("count sum { amount }");
   });
 });

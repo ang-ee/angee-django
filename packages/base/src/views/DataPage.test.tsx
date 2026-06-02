@@ -46,6 +46,7 @@ import type {
   AggregateBucket,
   GroupByDimension,
   ResourceTypeName,
+  UseAggregateOptions,
   Row,
   UseGroupByOptions,
   UseResourceListOptions,
@@ -59,6 +60,7 @@ const sdkMocks = vi.hoisted(() => ({
       title: "First",
       status: "ACTIVE",
       priority: "High",
+      wordCount: 10,
       updatedAt: "2026-01-03T10:00:00.000Z",
     },
     {
@@ -66,6 +68,7 @@ const sdkMocks = vi.hoisted(() => ({
       title: "Second",
       status: "ACTIVE",
       priority: "Low",
+      wordCount: 20,
       updatedAt: "2026-02-03T10:00:00.000Z",
     },
     {
@@ -73,6 +76,7 @@ const sdkMocks = vi.hoisted(() => ({
       title: "Third",
       status: "DRAFT",
       priority: "Medium",
+      wordCount: 5,
       updatedAt: "2026-03-03T10:00:00.000Z",
     },
     {
@@ -80,9 +84,12 @@ const sdkMocks = vi.hoisted(() => ({
       title: "Fourth",
       status: "ARCHIVED",
       priority: "Low",
+      wordCount: 8,
       updatedAt: "2026-04-03T10:00:00.000Z",
     },
   ] satisfies Row[],
+  aggregateCalls: [] as Array<UseAggregateOptions<ResourceTypeName>>,
+  groupByCalls: [] as Array<UseGroupByOptions<ResourceTypeName>>,
   mutate: vi.fn(async ({ data }: { data: Row }) => data),
 }));
 
@@ -126,6 +133,7 @@ vi.mock("@angee/sdk", async (importOriginal) => {
     rows: readonly Row[],
     dimensions: readonly GroupByDimension[],
     baseFilter: UseGroupByOptions<ResourceTypeName>["filter"],
+    measures: UseGroupByOptions<ResourceTypeName>["measures"],
   ): readonly AggregateBucket[] {
     const buckets = new Map<string, AggregateBucket>();
     for (const row of rows) {
@@ -141,12 +149,50 @@ vi.mock("@angee/sdk", async (importOriginal) => {
       const bucketKey = JSON.stringify(key);
       const current = buckets.get(bucketKey);
       if (current) {
-        buckets.set(bucketKey, { ...current, count: current.count + 1 });
+        buckets.set(
+          bucketKey,
+          applyMeasures({ ...current, count: current.count + 1 }, row, measures),
+        );
       } else {
-        buckets.set(bucketKey, { key, count: 1, filter });
+        buckets.set(
+          bucketKey,
+          applyMeasures({ key, count: 1, filter }, row, measures),
+        );
       }
     }
     return [...buckets.values()];
+  }
+  function aggregateBucket(
+    rows: readonly Row[],
+    measures: UseAggregateOptions<ResourceTypeName>["measures"],
+  ): AggregateBucket {
+    return rows.reduce<AggregateBucket>(
+      (bucket, row) => applyMeasures(bucket, row, measures),
+      { key: null, count: rows.length },
+    );
+  }
+  function applyMeasures(
+    bucket: AggregateBucket,
+    row: Row,
+    measures: UseGroupByOptions<ResourceTypeName>["measures"],
+  ): AggregateBucket {
+    let next = bucket;
+    for (const measure of measures ?? []) {
+      if (measure.op !== "sum") continue;
+      const value = numberValue(readPath(row, measure.field));
+      const current = numberValue(next.sum?.[measure.field]);
+      next = {
+        ...next,
+        sum: {
+          ...next.sum,
+          [measure.field]: current + value,
+        },
+      };
+    }
+    return next;
+  }
+  function numberValue(value: unknown): number {
+    return typeof value === "number" && Number.isFinite(value) ? value : 0;
   }
   function sourceFieldForAggregateKey(key: string): string {
     const field = key.replace(/(?:Day|Week|Month|Quarter|Year)$/, "");
@@ -217,6 +263,7 @@ vi.mock("@angee/sdk", async (importOriginal) => {
       _model: string,
       options: UseGroupByOptions<ResourceTypeName>,
     ) => {
+      sdkMocks.groupByCalls.push(options);
       if (options.enabled === false || options.dimensions.length === 0) {
         return {
           count: 0,
@@ -230,6 +277,7 @@ vi.mock("@angee/sdk", async (importOriginal) => {
         filteredRows(sdkMocks.rows, options.filter),
         options.dimensions,
         options.filter,
+        options.measures,
       );
       const pageSize = options.pageSize ?? buckets.length;
       const page = Math.max(1, options.page ?? 1);
@@ -241,6 +289,20 @@ vi.mock("@angee/sdk", async (importOriginal) => {
         count: visibleBuckets.reduce((total, bucket) => total + bucket.count, 0),
         totalCount: buckets.length,
         buckets: visibleBuckets,
+        fetching: false,
+        error: null,
+      };
+    },
+    useResourceAggregate: (
+      _model: string,
+      options: UseAggregateOptions<ResourceTypeName>,
+    ) => {
+      sdkMocks.aggregateCalls.push(options);
+      const active = options.enabled !== false;
+      return {
+        aggregate: active
+          ? aggregateBucket(filteredRows(sdkMocks.rows, options.filter), options.measures)
+          : null,
         fetching: false,
         error: null,
       };
@@ -543,6 +605,54 @@ describe("DataPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Open First" }));
     expect(onSelect).toHaveBeenCalledWith("note-1");
+  });
+
+  test("renders grouped list aggregate measures and a grand total footer", async () => {
+    sdkMocks.groupByCalls.length = 0;
+    sdkMocks.aggregateCalls.length = 0;
+    const measuredColumns = [
+      { field: "title", header: "Title" },
+      { field: "status", header: "Status" },
+      {
+        field: "wordCount",
+        header: "Word Count",
+        align: "right",
+        aggregate: "sum",
+      },
+    ] satisfies readonly ListColumn[];
+
+    render(
+      <TestUrlState searchParams="?group=status&pageSize=10">
+        <DataPage
+          model="notes.Note"
+          columns={measuredColumns}
+          formFields={formFields}
+          list={GroupListView}
+        />
+      </TestUrlState>,
+    );
+
+    const activeGroup = await screen.findByRole("button", { name: /Active/ });
+    expect(within(activeGroup).getByText("30 words")).toBeTruthy();
+    expect(
+      (await screen.findByLabelText("Total Word Count: 43 words")).textContent,
+    ).toBe("43 words");
+    expect(
+      sdkMocks.groupByCalls.some((call) =>
+        call.measures?.some(
+          (measure) =>
+            measure.op === "sum" && measure.field === "wordCount",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      sdkMocks.aggregateCalls.some((call) =>
+        call.measures?.some(
+          (measure) =>
+            measure.op === "sum" && measure.field === "wordCount",
+        ),
+      ),
+    ).toBe(true);
   });
 
   test("paginates through the URL-owned data view state", async () => {

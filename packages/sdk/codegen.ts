@@ -13,6 +13,7 @@ import type { CodegenConfig } from "@graphql-codegen/cli";
 const scalars = {
   DateTime: "string",
   Date: "string",
+  BigInt: "string",
   JSON: "unknown",
 } as const;
 

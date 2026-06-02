@@ -65,9 +65,11 @@ export type { Row, PageInfo, PageResult } from "./resource-result";
 
 // Aggregates.
 export {
-  useAggregateQuery,
+  useResourceAggregate,
   useResourceGroupBy,
   type AggregateBucket,
+  type AggregateMeasure,
+  type AggregateMeasureOperator,
   type GroupByResult,
   type GroupByDimension,
   type GroupByOrder,

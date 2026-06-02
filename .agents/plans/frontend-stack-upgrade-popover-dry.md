@@ -67,11 +67,20 @@ review → render-verify on live `:5173` vs mockup `:5174`).
   blockers; folded token/barrel/doc/test), render-verified live (band gone, 0
   GraphQL errors, 3 new portal tests). Form/record toolbar still in the card →
   folds into V4.
-- [ ] **V2 — aggregate chain (grouped list).** Stage-1 chained group-by is wired
-  (`groupStack`); OPEN against real data: nested year→month buckets with backend
-  counts/totals + per-group and footer aggregate rollups. The screenshot shows
-  only a bare count chip (10/10/8) per group — the richer column aggregates +
-  nested rollup chain still need wiring/polish.
+- [x] **V2 — aggregate chain (grouped list). DONE (full mockup parity, 2 slices).**
+  Was: only a bare count chip per group. Now each group header shows count + the
+  measured column's rollup (e.g. "411 words") and a footer grand total ("Total
+  414,808 words"). **V2a (backend, 667cb39):** `word_count` denormalized to a
+  real column (computed on save via a shared `count_words` owner, backfilled,
+  seed-populated), exposed + added to the order and `aggregate_fields`, Word
+  Count sort re-enabled. **V2b (SDK+frontend):** `AggregateBucket` carries
+  per-bucket measures; `assembleGroupByDocument`/`assembleAggregateDocument` +
+  `useResourceGroupBy`/`useResourceAggregate` select requested measures (stable
+  vars); the grouped list derives measures from the `ColumnDescriptor.aggregate`
+  marker and renders per-group values + a footer grand total (whole-list filter,
+  not page-derived); the flat-list `GroupHeader` was generalized off its
+  hardcoded `wordCount`. Reviewed (django/react/arch, no blockers, findings
+  folded); live-verified, 0 errors.
 - [x] **V3 — FormView fields blanked after save until reload. DONE.** Original
   "SDK cache" hypothesis was WRONG — live tracing proved the mutation persists,
   the result returns the full node, and the cache normalizes (the breadcrumb/

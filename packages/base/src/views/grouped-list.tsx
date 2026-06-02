@@ -12,6 +12,7 @@ import {
   type VisibilityState,
 } from "@tanstack/react-table";
 import {
+  useResourceAggregate,
   useResourceGroupBy,
   useResourceList,
   type AggregateBucket,
@@ -33,6 +34,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableFooter,
   TableHead,
   TableHeader,
   TableRow,
@@ -48,9 +50,15 @@ import {
   TABLE_SCROLL_STYLE,
   alignOf,
   bucketValueLabels,
+  formatMeasure,
+  groupMeasuresFromColumns,
   groupOrderByForSort,
   groupFieldLabel,
+  measureValue,
+  titleCase,
+  type GroupMeasure,
 } from "./list-internals";
+import type { ColumnDescriptor } from "./page";
 
 const GROUPED_LIST_ITEM_PAGE_SIZE = 20;
 
@@ -80,6 +88,7 @@ export function groupPagerStatesEqual(
 
 export interface GroupedListBodyProps<TRow extends Row> {
   model: string;
+  columns: readonly ColumnDescriptor<TRow>[];
   table: TableModel<TRow>;
   tableColumns: readonly ColumnDef<TRow>[];
   columnVisibility: VisibilityState;
@@ -99,6 +108,7 @@ export interface GroupedListBodyProps<TRow extends Row> {
 
 export function GroupedListBody<TRow extends Row>({
   model,
+  columns,
   table,
   tableColumns,
   columnVisibility,
@@ -116,6 +126,15 @@ export function GroupedListBody<TRow extends Row>({
   onPagerStateChange,
 }: GroupedListBodyProps<TRow>): React.ReactElement {
   const colSpan = Math.max(1, visibleColumnCount + 1);
+  const measures = React.useMemo(
+    () => groupMeasuresFromColumns(columns),
+    [columns],
+  );
+  const grandTotal = useResourceAggregate(model, {
+    filter: mergedFilter,
+    measures,
+    enabled: groupDimensions.length > 0 && measures.length > 0,
+  });
   const [topPagerState, setTopPagerState] =
     React.useState<GroupPagerState | null>(null);
   const handlePagerStateChange = React.useCallback(
@@ -154,6 +173,7 @@ export function GroupedListBody<TRow extends Row>({
           </TableHeader>
           <GroupLevel
             model={model}
+            measures={measures}
             axes={groupDimensions}
             groups={dataView.state.groupStack}
             filter={mergedFilter}
@@ -174,6 +194,13 @@ export function GroupedListBody<TRow extends Row>({
             emptyMessage={emptyMessage}
             onPagerStateChange={handlePagerStateChange}
           />
+          {measures.length > 0 ? (
+            <GroupMeasureFooter
+              table={table}
+              measures={measures}
+              aggregate={grandTotal.aggregate}
+            />
+          ) : null}
         </Table>
       </div>
       {topPagerState?.fetching ? (
@@ -201,6 +228,7 @@ interface GroupRenderProps<TRow extends Row> {
 }
 
 interface GroupLevelProps<TRow extends Row> extends GroupRenderProps<TRow> {
+  measures: readonly GroupMeasure[];
   axes: readonly GroupByDimension[];
   groups: readonly DataViewGroup[];
   filter: ListFilter;
@@ -215,6 +243,7 @@ interface GroupLevelProps<TRow extends Row> extends GroupRenderProps<TRow> {
 
 function GroupLevel<TRow extends Row>({
   model,
+  measures,
   axes,
   groups,
   filter,
@@ -254,6 +283,7 @@ function GroupLevel<TRow extends Row>({
   const groupAggregation = useResourceGroupBy(model, {
     dimensions,
     filter,
+    measures,
     orderBy: groupOrderBy,
     page: levelPage,
     pageSize,
@@ -370,6 +400,7 @@ function GroupLevel<TRow extends Row>({
             key={key}
             bodyId={index === 0 ? regionId : undefined}
             model={model}
+            measures={measures}
             bucket={bucket}
             bucketKey={key}
             group={currentGroup}
@@ -480,6 +511,7 @@ function SubGroupPager({
 }
 
 interface GroupSectionProps<TRow extends Row> extends GroupRenderProps<TRow> {
+  measures: readonly GroupMeasure[];
   bucket: AggregateBucket;
   bucketKey: string;
   group: DataViewGroup | undefined;
@@ -498,6 +530,7 @@ interface GroupSectionProps<TRow extends Row> extends GroupRenderProps<TRow> {
 
 function GroupSection<TRow extends Row>({
   model,
+  measures,
   bucket,
   bucketKey,
   group,
@@ -543,7 +576,8 @@ function GroupSection<TRow extends Row>({
               id={headerId}
               type="button"
               className={cn(
-                "flex min-h-9 w-full min-w-0 items-center gap-3 px-3 py-1.5 text-left text-13 outline-none focus-visible:focus-ring",
+                "flex min-h-9 w-full min-w-0 items-center gap-3 px-3 py-1.5 text-left text-13 outline-none",
+                "focus-visible:focus-ring",
                 expandable
                   ? "text-fg hover:bg-inset"
                   : "cursor-not-allowed text-fg-muted",
@@ -566,6 +600,13 @@ function GroupSection<TRow extends Row>({
               </span>
               <span className="inline-flex shrink-0 items-center gap-2">
                 <CountBadge value={bucket.count} />
+                {measures.map((measure) => (
+                  <GroupMeasureValue
+                    key={`${measure.op}:${measure.field}`}
+                    bucket={bucket}
+                    measure={measure}
+                  />
+                ))}
                 {!expandable ? (
                   <span className="text-13 font-normal text-fg-muted">
                     Items unavailable
@@ -579,6 +620,7 @@ function GroupSection<TRow extends Row>({
       {branch ? (
         <BranchGroupSection
           model={model}
+          measures={measures}
           axes={remainingAxes}
           groups={remainingGroups}
           filter={cumulativeFilter}
@@ -626,6 +668,7 @@ function GroupSection<TRow extends Row>({
 }
 
 interface BranchGroupSectionProps<TRow extends Row> extends GroupRenderProps<TRow> {
+  measures: readonly GroupMeasure[];
   axes: readonly GroupByDimension[];
   groups: readonly DataViewGroup[];
   filter: ListFilter;
@@ -638,6 +681,7 @@ interface BranchGroupSectionProps<TRow extends Row> extends GroupRenderProps<TRo
 
 function BranchGroupSection<TRow extends Row>({
   model,
+  measures,
   axes,
   groups,
   filter,
@@ -660,6 +704,7 @@ function BranchGroupSection<TRow extends Row>({
   return (
     <GroupLevel
       model={model}
+      measures={measures}
       axes={axes}
       groups={groups}
       filter={filter}
@@ -680,6 +725,63 @@ function BranchGroupSection<TRow extends Row>({
       onRowClick={onRowClick}
       emptyMessage={emptyMessage}
     />
+  );
+}
+
+function GroupMeasureValue({
+  bucket,
+  measure,
+}: {
+  bucket: AggregateBucket;
+  measure: GroupMeasure;
+}): React.ReactElement | null {
+  const value = measureValue(bucket, measure);
+  if (value == null) return null;
+  return (
+    <span className="text-13 font-normal tabular-nums text-fg-muted">
+      {formatMeasure(value, measure)}
+    </span>
+  );
+}
+
+function GroupMeasureFooter<TRow extends Row>({
+  table,
+  measures,
+  aggregate,
+}: {
+  table: TableModel<TRow>;
+  measures: readonly GroupMeasure[];
+  aggregate: AggregateBucket | null;
+}): React.ReactElement {
+  const byColumn = new Map(measures.map((measure) => [measure.columnId, measure]));
+  return (
+    <TableFooter>
+      <TableRow>
+        <TableCell className="w-8 text-fg-muted">{titleCase("total")}</TableCell>
+        {table.getVisibleLeafColumns().map((column) => {
+          const measure = byColumn.get(column.id);
+          const value = measure && aggregate
+            ? measureValue(aggregate, measure)
+            : undefined;
+          const formatted = measure && value != null
+            ? formatMeasure(value, measure)
+            : "";
+          return (
+            <TableCell
+              key={column.id}
+              className={ALIGN_CLASS[alignOf(column.columnDef)]}
+              aria-label={
+                measure
+                  ? `Total ${measure.label}${formatted ? `: ${formatted}` : ""}`
+                  : undefined
+              }
+            >
+              {formatted}
+            </TableCell>
+          );
+        })}
+      </TableRow>
+    </TableFooter>
   );
 }
 
@@ -729,7 +831,7 @@ function LeafGroupSection<TRow extends Row>({
     enabled: expanded,
   });
   const rows = list.rows as readonly TRow[];
-  // Lazy per-group fetches need row models here; onColumnVisibilityChange is omitted because parent visibility is read-only.
+  // Lazy per-group fetches need row models here; parent visibility is read-only.
   const table = useReactTable<TRow>({
     data: rows as TRow[],
     columns: tableColumns as ColumnDef<TRow>[],

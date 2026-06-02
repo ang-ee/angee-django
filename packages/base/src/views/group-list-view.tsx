@@ -238,6 +238,7 @@ function GroupListViewBody<TRow extends Row = Row>({
         {groupedListMode ? (
           <GroupedListBody
             model={model}
+            columns={columns}
             table={surface.table}
             tableColumns={surface.tableColumns}
             columnVisibility={surface.columnVisibility}
@@ -271,6 +272,7 @@ function GroupListViewBody<TRow extends Row = Row>({
           />
         ) : (
           <FlatListBody
+            columns={columns}
             table={surface.table}
             rowModels={surface.rowModels}
             listItems={surface.listItems}

@@ -168,6 +168,7 @@ function ListViewBody<TRow extends Row = Row>({
           </div>
         ) : (
           <FlatListBody
+            columns={columns}
             table={surface.table}
             rowModels={surface.rowModels}
             listItems={surface.listItems}
