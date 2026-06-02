@@ -48,6 +48,7 @@ import {
   TABLE_SCROLL_STYLE,
   alignOf,
   bucketValueLabels,
+  groupOrderByForSort,
   groupFieldLabel,
 } from "./list-internals";
 
@@ -246,9 +247,14 @@ function GroupLevel<TRow extends Row>({
   const [localPage, setLocalPage] = React.useState(1);
   const levelPage = depth === 0 ? page : localPage;
   const levelEnabled = enabled && dimensions.length > 0;
+  const groupOrderBy = React.useMemo(
+    () => groupOrderByForSort(dataView.state.sort, currentGroup),
+    [currentGroup, dataView.state.sort],
+  );
   const groupAggregation = useResourceGroupBy(model, {
     dimensions,
     filter,
+    orderBy: groupOrderBy,
     page: levelPage,
     pageSize,
     withFilterEcho: true,

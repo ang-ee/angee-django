@@ -58,16 +58,15 @@ The single tracked list of unresolved look&feel/behavior gaps, so none scatter.
 Each is driven by the standard cadence (Codex → arch + react + visual-vs-mockup
 review → render-verify on live `:5173` vs mockup `:5174`).
 
-- [ ] **V1 — grey band above content (every console page).** **Root cause
-  confirmed:** `console-grid` (`packages/base/src/styles/index.css:341`) reserves
-  a `control` grid row (`--spacing-control-h`) but `ConsoleShell.tsx` renders
-  nothing into `area-control` → a fixed-height empty grey strip between the
-  breadcrumb and the content. The breadcrumb row (`area-crumbs`, white `bg-sheet`)
-  is also doing weak double-duty as the page header. **Fix:** render the intended
-  page control band into `area-control` — a dense page header + page-level actions
-  matching mockup `:5174` (preferred), or drop the row via the existing
-  `console-grid-no-control` utility if no band is wanted. (= §10 1.1
-  empty-band/weak-header.)
+- [x] **V1 — grey band above content (every console page). DONE (commit
+  8853b5d).** Root cause was `console-grid` reserving a fixed-height `control`
+  row that `ConsoleShell` never filled. Fix: control row → `auto` height + an
+  unstyled `area-control` host; a `ControlBand` context/portal primitive carries
+  the flush `bg-sheet` band styling; the list `DataToolbar` moved into it (flush
+  under the breadcrumb), the body renders standalone. Reviewed (arch+react, no
+  blockers; folded token/barrel/doc/test), render-verified live (band gone, 0
+  GraphQL errors, 3 new portal tests). Form/record toolbar still in the card →
+  folds into V4.
 - [ ] **V2 — aggregate chain (grouped list).** Stage-1 chained group-by is wired
   (`groupStack`); OPEN against real data: nested year→month buckets with backend
   counts/totals + per-group and footer aggregate rollups. The screenshot shows
@@ -88,6 +87,21 @@ review → render-verify on live `:5173` vs mockup `:5174`).
 - [ ] **V7 — right-edge bleed (triage).** A thin purple underline is clipped at
   the far right of the topbar/content in the notes screenshot (~x≈1830); confirm
   whether it's a real overflow / scrollbar artifact or expected.
+- [x] **V8 — group order ignored the column sort. DONE.** A grouped list's
+  column sort only ordered within-group rows; the buckets ignored it. Wired an
+  optional group `orderBy` through `assembleGroupByDocument` + `useResourceGroupBy`
+  and translate `dataView.state.sort` → per-level bucket order in the grouped
+  list. Backend already exposed it; accepted field is the snake_case bucketed
+  alias (`updated_at_day`). Reviewed (folded contract-drift fix +`expectValid`,
+  `fieldToSnake` dedupe, translator relocated, tighter types); verified live
+  (asc→oldest, desc→newest, 0 errors) + sdk/base suites green.
+- [x] **V9 — sort offered on non-orderable columns (GraphQL crash). DONE (commit
+  8853b5d).** Headers showed sort toggles on every column, but `NoteOrder @oneOf`
+  only accepts title/status/updatedAt/createdAt; sorting Word Count/Tags raised
+  "Field not defined by type / @oneOf must specify exactly one key". `word_count`
+  is a Python property and `tags` is M2M — neither is DB-orderable, so the notes
+  columns now mark them `sortable: false` (the header affordance already gated on
+  `ColumnDescriptor.sortable`). Verified live (0 errors).
 
 ---
 

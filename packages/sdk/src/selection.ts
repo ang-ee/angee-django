@@ -141,6 +141,8 @@ export interface AssembleGroupByDocumentOptions {
   keyFields: readonly string[];
   /** Declare `$filter: <Type>Filter` and pass it to the grouped field. */
   withFilter?: boolean;
+  /** Declare `$orderBy: [<Type>GroupOrder!]` and pass it to the grouped field. */
+  withOrderBy?: boolean;
   /** Select the grouped row's echoed list filter when the backend exposes it. */
   withFilterEcho?: boolean;
 }
@@ -256,6 +258,10 @@ export function assembleGroupByDocument(
   if (options.withFilter) {
     declared.push(`$filter: ${typeName}Filter`);
     args.push("filter: $filter");
+  }
+  if (options.withOrderBy) {
+    declared.push(`$orderBy: [${typeName}GroupOrder!]`);
+    args.push("orderBy: $orderBy");
   }
   const resultSelection = options.withFilterEcho
     ? `key { ${keySelection} } count filter`

@@ -15,6 +15,7 @@ import { useNavigate } from "@tanstack/react-router";
 import type {
   AggregateBucket,
   GroupByDimension,
+  GroupByOrder,
   Row,
 } from "@angee/sdk";
 import { format, formatDistanceToNow } from "date-fns";
@@ -528,6 +529,24 @@ export function dataViewGroupToAggregateDimension(
   };
 }
 
+export function groupOrderByForSort(
+  sort: DataViewContextValue["state"]["sort"],
+  group: DataViewGroup | undefined,
+): readonly GroupByOrder[] | undefined {
+  if (!sort || !group || sort.field !== group.field) return undefined;
+  return [
+    {
+      field: groupOrderField(group),
+      direction: sort.dir === "asc" ? "ASC" : "DESC",
+    },
+  ];
+}
+
+export function groupOrderField(group: DataViewGroup): string {
+  const field = fieldToSnake(group.field);
+  return group.granularity ? `${field}_${group.granularity}` : field;
+}
+
 function aggregateKeyField(group: DataViewGroup): string {
   return group.granularity
     ? `${group.field}${titleCase(group.granularity).replace(/\s+/g, "")}`
@@ -665,10 +684,15 @@ function isInteractiveTarget(target: EventTarget): boolean {
 }
 
 function graphQLEnumValue(field: string): string {
+  return fieldToSnake(field).toUpperCase();
+}
+
+function fieldToSnake(field: string): string {
   return field
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .replace(/[-\s]+/g, "_")
-    .toUpperCase();
+    .toLowerCase();
 }
 
 export function groupFieldLabel(field: string): string {

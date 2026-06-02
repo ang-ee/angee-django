@@ -74,10 +74,16 @@ export interface GroupByDimension {
   granularity?: string;
 }
 
+export interface GroupByOrder {
+  field: string;
+  direction: "ASC" | "DESC";
+}
+
 export interface UseGroupByOptions<
   TName extends ResourceTypeName = ResourceTypeName,
 > extends UseAggregateOptions<TName> {
   dimensions: readonly GroupByDimension[];
+  orderBy?: readonly GroupByOrder[];
   page?: number;
   pageSize?: number;
   withFilterEcho?: boolean;
@@ -118,6 +124,7 @@ export function useResourceGroupBy<
     dimensions,
     enabled = true,
     filter,
+    orderBy,
     page,
     pageSize,
     withFilterEcho = false,
@@ -135,10 +142,15 @@ export function useResourceGroupBy<
       })),
     [dimensions],
   );
+  const orderVariables = useStableVariables(
+    orderBy === undefined ? undefined : { orderBy },
+  );
+  const withOrderBy = orderVariables.orderBy !== undefined;
   const variables = useStableVariables({
     groupBy,
     pagination: paginationVariables(page, pageSize) ?? null,
     ...(withFilter ? { filter } : {}),
+    ...(withOrderBy ? { orderBy: orderVariables.orderBy } : {}),
   });
 
   const document = useMemo(
@@ -146,9 +158,10 @@ export function useResourceGroupBy<
       assembleGroupByDocument(modelLabel, {
         keyFields,
         withFilter,
+        withOrderBy,
         withFilterEcho,
       }),
-    [modelLabel, keyFields, withFilter, withFilterEcho],
+    [modelLabel, keyFields, withFilter, withOrderBy, withFilterEcho],
   );
 
   const run = useDocumentQuery(document, variables, active);

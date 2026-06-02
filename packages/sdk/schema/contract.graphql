@@ -66,6 +66,16 @@ enum Granularity {
   SECOND_NUMBER
 }
 
+enum NullsPosition {
+  FIRST
+  LAST
+}
+
+enum OrderDirection {
+  ASC
+  DESC
+}
+
 type Sale implements Node {
   id: ID!
   title: String!
@@ -162,6 +172,12 @@ input SaleGroupBySpec {
   granularity: Granularity = null
 }
 
+input SaleGroupOrder {
+  field: String!
+  direction: OrderDirection! = ASC
+  nulls: NullsPosition = null
+}
+
 type SaleGroupKey {
   state: SaleState
   isFeatured: Boolean
@@ -234,6 +250,7 @@ type Query {
     groupBy: [SaleGroupBySpec!]!
     pagination: OffsetPaginationInput
     filter: SaleFilter
+    orderBy: [SaleGroupOrder!] = null
   ): SaleGroupedResult!
 }
 

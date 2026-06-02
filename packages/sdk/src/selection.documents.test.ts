@@ -155,6 +155,21 @@ describe("aggregate documents", () => {
     );
     expectValid(document);
   });
+
+  test("the grouped aggregate accepts group ordering on request", () => {
+    const document = assembleGroupByDocument("Sale", {
+      keyFields: ["createdAtMonth"],
+      withOrderBy: true,
+    });
+    expect(document).toBe(
+      "query saleGroups($groupBy: [SaleGroupBySpec!]!, " +
+        "$pagination: OffsetPaginationInput, $orderBy: [SaleGroupOrder!]) { " +
+        "saleGroups(groupBy: $groupBy, pagination: $pagination, orderBy: $orderBy) { " +
+        "totalCount results { key { createdAtMonth } count } " +
+        "pageInfo { offset limit } } }",
+    );
+    expectValid(document);
+  });
 });
 
 describe("changeSubscriptionDocument", () => {

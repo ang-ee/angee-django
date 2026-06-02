@@ -70,6 +70,7 @@ export {
   type AggregateBucket,
   type GroupByResult,
   type GroupByDimension,
+  type GroupByOrder,
   type UseAggregateOptions,
   type UseGroupByOptions,
 } from "./aggregates";
