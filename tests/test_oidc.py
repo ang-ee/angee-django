@@ -8,9 +8,10 @@ from typing import Any
 from urllib import parse
 
 import pytest
+from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
-from django.db import connection, models
+from django.db import connection
 from rebac import system_context
 
 from angee.iam import identity
@@ -22,7 +23,7 @@ from angee.iam.oidc.errors import (
     INVALID_STATE,
     OidcFlowError,
 )
-from tests.test_connections import Client, Credential, ExternalAccount, Vendor
+from tests.conftest import Client, ExternalAccount, Vendor, _create_missing_tables
 
 
 def test_discovery_fallback_fills_blank_authorize_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -201,6 +202,29 @@ def test_resolver_create_on_login_provisions_user_and_external_account(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_async_resolver_create_on_login_provisions_user_and_external_account(
+    oidc_tables: None,
+) -> None:
+    """The ASGI-facing resolver path provisions through thread-sensitive sync ORM."""
+
+    vendor, client = _vendor_and_client(create_on_login=True, allowed_email_domains=["example.com"])
+
+    user = async_to_sync(identity.aresolve)(
+        client,
+        sub="sub-async",
+        email="async@example.com",
+        claims={"sub": "sub-async", "email": "async@example.com", "name": "Async User"},
+    )
+
+    assert user.email == "async@example.com"
+    assert user.is_superuser is False
+    with system_context(reason="test oidc assertions"):
+        account = ExternalAccount.objects.get(vendor=vendor, external_id="sub-async")
+    assert account.email == "async@example.com"
+    assert account.display_name == "Async User"
+
+
+@pytest.mark.django_db(transaction=True)
 def test_resolver_disallowed_domain_raises_403(
     oidc_tables: None,
 ) -> None:
@@ -294,20 +318,6 @@ def oidc_tables() -> Iterator[None]:
             with connection.schema_editor() as schema_editor:
                 for model in reversed(created_models):
                     schema_editor.delete_model(model)
-
-
-def _create_missing_tables() -> list[type[models.Model]]:
-    """Create OIDC test tables only when pytest did not sync them up front."""
-
-    existing_tables = set(connection.introspection.table_names())
-    test_models = [Vendor, ExternalAccount, Client, Credential]
-    missing = [model for model in test_models if model._meta.db_table not in existing_tables]
-    if not missing:
-        return []
-    with connection.schema_editor() as schema_editor:
-        for model in missing:
-            schema_editor.create_model(model)
-    return missing
 
 
 def _vendor_and_client(**overrides: Any) -> tuple[Vendor, Client]:

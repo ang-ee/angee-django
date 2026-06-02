@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, cast
 
+from asgiref.sync import sync_to_async
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.base_user import AbstractBaseUser
@@ -61,6 +62,17 @@ def resolve(client: Any, *, sub: str, email: str | None, claims: dict[str, Any])
     raise OidcFlowError(IDENTITY_RESOLUTION_FAILED, 403)
 
 
+async def aresolve(client: Any, *, sub: str, email: str | None, claims: dict[str, Any]) -> AbstractBaseUser:
+    """Async wrapper for ``resolve`` that keeps sync ORM work thread-sensitive."""
+
+    return await sync_to_async(resolve, thread_sensitive=True)(
+        client,
+        sub=sub,
+        email=email,
+        claims=claims,
+    )
+
+
 def complete_login(client: Any, *, code: str, state_token: str, redirect_uri: str) -> AbstractBaseUser:
     """Complete an OIDC login redirect and return the resolved IAM user."""
 
@@ -77,6 +89,17 @@ def complete_login(client: Any, *, code: str, state_token: str, redirect_uri: st
     if not sub:
         raise OidcFlowError(INVALID_ID_TOKEN, 400)
     return resolve(client, sub=str(sub), email=_claim_email(claims), claims=claims)
+
+
+async def acomplete_login(client: Any, *, code: str, state_token: str, redirect_uri: str) -> AbstractBaseUser:
+    """Async wrapper for ``complete_login`` that keeps sync ORM work thread-sensitive."""
+
+    return await sync_to_async(complete_login, thread_sensitive=True)(
+        client,
+        code=code,
+        state_token=state_token,
+        redirect_uri=redirect_uri,
+    )
 
 
 def complete_link(
@@ -127,6 +150,25 @@ def complete_link(
             external_account=account,
         )
     return cast(models.Model, account)
+
+
+async def acomplete_link(
+    client: Any,
+    user: AbstractBaseUser,
+    *,
+    code: str,
+    state_token: str,
+    redirect_uri: str,
+) -> models.Model:
+    """Async wrapper for ``complete_link`` that keeps sync ORM work thread-sensitive."""
+
+    return await sync_to_async(complete_link, thread_sensitive=True)(
+        client,
+        user,
+        code=code,
+        state_token=state_token,
+        redirect_uri=redirect_uri,
+    )
 
 
 def _domain_allowed(client: Any, email: str | None) -> bool:

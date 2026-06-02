@@ -15,62 +15,7 @@ from rebac.models import active_relationship_model
 
 from angee.iam.credentials import CredentialKind, StaticTokenCredentialHandler
 from angee.iam.models import AccountStatus
-from angee.iam.models import Client as AbstractClient
-from angee.iam.models import Credential as AbstractCredential
-from angee.iam.models import ExternalAccount as AbstractExternalAccount
-from angee.iam.models import Vendor as AbstractVendor
-
-
-class Vendor(AbstractVendor):
-    """Concrete test vendor."""
-
-    class Meta(AbstractVendor.Meta):
-        """Django model options for the test model."""
-
-        abstract = False
-        app_label = "iam"
-        db_table = "test_connections_vendor"
-        rebac_resource_type = "auth/vendor"
-        rebac_id_attr = "sqid"
-
-
-class ExternalAccount(AbstractExternalAccount):
-    """Concrete test external account."""
-
-    class Meta(AbstractExternalAccount.Meta):
-        """Django model options for the test model."""
-
-        abstract = False
-        app_label = "iam"
-        db_table = "test_connections_external_account"
-        rebac_resource_type = "auth/external_account"
-        rebac_id_attr = "sqid"
-
-
-class Client(AbstractClient):
-    """Concrete test client."""
-
-    class Meta(AbstractClient.Meta):
-        """Django model options for the test model."""
-
-        abstract = False
-        app_label = "iam"
-        db_table = "test_connections_client"
-        rebac_resource_type = "auth/client"
-        rebac_id_attr = "sqid"
-
-
-class Credential(AbstractCredential):
-    """Concrete test credential."""
-
-    class Meta(AbstractCredential.Meta):
-        """Django model options for the test model."""
-
-        abstract = False
-        app_label = "iam"
-        db_table = "test_connections_credential"
-        rebac_resource_type = "auth/credential"
-        rebac_id_attr = "sqid"
+from tests.conftest import Client, Credential, ExternalAccount, Vendor, _create_missing_tables
 
 
 @pytest.mark.django_db(transaction=True)
@@ -220,18 +165,64 @@ def test_connection_managers_authorize_their_own_writes() -> None:
                     schema_editor.delete_model(model)
 
 
-def _create_missing_tables() -> list[type]:
-    """Create test tables only when pytest did not sync them up front."""
+@pytest.mark.django_db(transaction=True)
+def test_client_manager_syncs_shape_and_secret_from_settings(settings: Any) -> None:
+    """Client seeds are settings-authored and keep secrets out of resource files."""
 
-    existing_tables = set(connection.introspection.table_names())
-    models = [Vendor, ExternalAccount, Client, Credential]
-    missing = [model for model in models if model._meta.db_table not in existing_tables]
-    if not missing:
-        return []
-    with connection.schema_editor() as schema_editor:
-        for model in missing:
-            schema_editor.create_model(model)
-    return missing
+    created_models = _create_missing_tables()
+    try:
+        with system_context(reason="test setup"):
+            Vendor.objects.create(slug="google", display_name="Google")
+
+        settings.ANGEE_IAM_CLIENTS = (
+            {
+                "vendor": "google",
+                "environment": "prod",
+                "display_name": "Google Login",
+                "client_id": "google-client",
+                "client_secret": "from-settings",
+                "issuer": "https://accounts.google.com",
+                "authorize_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
+                "token_endpoint": "https://oauth2.googleapis.com/token",
+                "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
+                "is_oidc": True,
+                "default_scopes": ["openid", "email"],
+                "allowed_email_domains": ["example.com"],
+            },
+        )
+
+        synced = Client.objects.sync_from_settings()
+
+        assert len(synced) == 1
+        with system_context(reason="test assertions"):
+            client = Client.objects.get(vendor__slug="google", environment="prod")
+        assert client.display_name == "Google Login"
+        assert client.client_secret == "from-settings"
+        assert client.is_oidc is True
+        assert client.default_scopes == ["openid", "email"]
+
+        settings.ANGEE_IAM_CLIENTS = (
+            {
+                "vendor": "google",
+                "environment": "prod",
+                "display_name": "Google Login Updated",
+                "client_id": "google-client-updated",
+                "is_enabled": False,
+            },
+        )
+
+        Client.objects.sync_from_settings()
+
+        client.refresh_from_db()
+        assert client.display_name == "Google Login Updated"
+        assert client.client_id == "google-client-updated"
+        assert client.client_secret == "from-settings"
+        assert client.is_enabled is False
+    finally:
+        if created_models:
+            with connection.schema_editor() as schema_editor:
+                for model in reversed(created_models):
+                    schema_editor.delete_model(model)
 
 
 def _owner_tuple_exists(owner: Any, resource: Any) -> bool:

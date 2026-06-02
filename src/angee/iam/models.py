@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from django.conf import settings
@@ -325,6 +326,103 @@ class ExternalAccount(SqidMixin, AuditMixin, AngeeModel):
         return f"{vendor_slug}:{self.external_id}"
 
 
+class ClientManager(RebacManager):
+    """Manager for settings-sourced OAuth/OIDC client configuration."""
+
+    seed_fields = frozenset(
+        {
+            "display_name",
+            "client_id",
+            "issuer",
+            "authorize_endpoint",
+            "token_endpoint",
+            "revoke_endpoint",
+            "userinfo_endpoint",
+            "jwks_uri",
+            "discovery_url",
+            "is_oidc",
+            "is_enabled",
+            "scopes_catalogue",
+            "default_scopes",
+            "supports_refresh",
+            "refresh_rotates",
+            "supports_pkce",
+            "max_refresh_age_seconds",
+            "link_on_email_match",
+            "create_on_login",
+            "allowed_email_domains",
+        }
+    )
+    setting_fields = seed_fields | frozenset({"vendor", "environment", "client_secret"})
+    required_setting_fields = frozenset({"vendor", "display_name", "client_id"})
+
+    def sync_from_settings(
+        self,
+        entries: Iterable[Mapping[str, Any]] | Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> tuple[Any, ...]:
+        """Create or update clients declared in ``settings.ANGEE_IAM_CLIENTS``.
+
+        The host owns reading environment variables. IAM reads only Django
+        settings and keeps secrets out of resource files.
+        """
+
+        synced: list[Any] = []
+        with system_context(reason="iam.clients.seed"), transaction.atomic():
+            for index, entry in enumerate(self._setting_entries(entries), start=1):
+                synced.append(self._sync_setting_entry(index, entry))
+        return tuple(synced)
+
+    def _setting_entries(
+        self,
+        entries: Iterable[Mapping[str, Any]] | Mapping[str, Mapping[str, Any]] | None,
+    ) -> tuple[Mapping[str, Any], ...]:
+        """Return normalized setting entries from an explicit value or settings."""
+
+        raw_entries = getattr(settings, "ANGEE_IAM_CLIENTS", ()) if entries is None else entries
+        if not raw_entries:
+            return ()
+        if isinstance(raw_entries, Mapping):
+            values = tuple(raw_entries.values())
+        elif isinstance(raw_entries, Iterable) and not isinstance(raw_entries, str | bytes):
+            values = tuple(raw_entries)
+        else:
+            raise ValueError("ANGEE_IAM_CLIENTS must be a sequence or mapping of client entries.")
+        for index, entry in enumerate(values, start=1):
+            if not isinstance(entry, Mapping):
+                raise ValueError(f"ANGEE_IAM_CLIENTS entry {index} must be a mapping.")
+        return values
+
+    def _sync_setting_entry(self, index: int, entry: Mapping[str, Any]) -> Any:
+        """Upsert one settings-authored client row."""
+
+        self._validate_setting_entry(index, entry)
+        vendor_slug = str(entry["vendor"])
+        environment = str(entry.get("environment") or "prod")
+        defaults = {field: entry[field] for field in sorted(self.seed_fields) if field in entry}
+        if "client_secret" in entry:
+            defaults["client_secret"] = str(entry.get("client_secret") or "")
+        vendor_model = self.model._meta.get_field("vendor").remote_field.model
+        vendor = vendor_model.objects.get(slug=vendor_slug)
+        client, _created = self.update_or_create(
+            vendor=vendor,
+            environment=environment,
+            defaults=defaults,
+        )
+        return client
+
+    def _validate_setting_entry(self, index: int, entry: Mapping[str, Any]) -> None:
+        """Raise a clear error for malformed client seed settings."""
+
+        unknown = set(entry) - self.setting_fields
+        if unknown:
+            names = ", ".join(sorted(str(name) for name in unknown))
+            raise ValueError(f"ANGEE_IAM_CLIENTS entry {index} has unknown field(s): {names}")
+        missing = {field for field in self.required_setting_fields if not entry.get(field)}
+        if missing:
+            names = ", ".join(sorted(missing))
+            raise ValueError(f"ANGEE_IAM_CLIENTS entry {index} is missing required field(s): {names}")
+
+
 class Client(SqidMixin, AuditMixin, AngeeModel):
     """OAuth/OIDC client configuration and login policy for a vendor."""
 
@@ -356,6 +454,8 @@ class Client(SqidMixin, AuditMixin, AngeeModel):
     link_on_email_match = models.BooleanField(default=False)
     create_on_login = models.BooleanField(default=False)
     allowed_email_domains = models.JSONField(default=list)
+
+    objects = ClientManager()
 
     class Meta:
         """Django model options for clients."""
