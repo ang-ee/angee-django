@@ -8,9 +8,10 @@ from typing import Any
 from django.conf import settings
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import UnicodeUsernameValidator
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 from django_sqids import SqidsField
+from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.managers import RebacManager
 from rebac.permissions_mixin import RebacPermissionsMixin
 
@@ -214,7 +215,14 @@ class AccountManager(RebacManager):
         }
     )
 
-    def link(self, vendor: Any, external_id: str, **identity: Any) -> Any:
+    def link(
+        self,
+        vendor: Any,
+        external_id: str,
+        *,
+        owner: Any | None = None,
+        **identity: Any,
+    ) -> Any:
         """Create or update one ``(vendor, external_id)`` external account."""
 
         reason = "iam.connections.link"
@@ -234,15 +242,15 @@ class AccountManager(RebacManager):
             "last_used_at": None,
             **update_values,
         }
-        instance, created = self.system_context(reason=reason).update_or_create(
-            vendor=vendor,
-            external_id=external_id,
-            defaults=update_values,
-            create_defaults=create_values,
-        )
-        if created:
-            # owner grant wired in S2 (auth/* owner relation)
-            return instance
+        with system_context(reason=reason), transaction.atomic():
+            instance, created = self.update_or_create(
+                vendor=vendor,
+                external_id=external_id,
+                defaults=update_values,
+                create_defaults=create_values,
+            )
+            if created and owner is not None:
+                _grant_owner_relation(instance, owner)
         return instance
 
 
@@ -401,15 +409,15 @@ class CredentialManager(RebacManager):
             **operation_values,
             **update_values,
         }
-        instance, created = self.system_context(reason=reason).update_or_create(
-            user=user,
-            client=client,
-            defaults={**operation_values, **update_values},
-            create_defaults=create_values,
-        )
-        if created:
-            # owner grant wired in S2 (auth/* owner relation)
-            return instance
+        with system_context(reason=reason), transaction.atomic():
+            instance, created = self.update_or_create(
+                user=user,
+                client=client,
+                defaults={**operation_values, **update_values},
+                create_defaults=create_values,
+            )
+            if created:
+                _grant_owner_relation(instance, user)
         return instance
 
 
@@ -487,3 +495,21 @@ def _validated_manager_values(
         names = ", ".join(sorted(unknown))
         raise ValueError(f"Unknown {model.__name__} field(s): {names}")
     return dict(values)
+
+
+def _grant_owner_relation(resource: Any, owner: Any) -> None:
+    """Write one ``owner`` relationship tuple for a newly created resource.
+
+    Runs inside the caller's ambient ``system_context`` + ``transaction.atomic``
+    so the owner grant commits or rolls back together with the row it owns.
+    """
+
+    write_relationships(
+        [
+            RelationshipTuple(
+                resource=to_object_ref(resource),
+                relation="owner",
+                subject=to_subject_ref(owner),
+            )
+        ]
+    )

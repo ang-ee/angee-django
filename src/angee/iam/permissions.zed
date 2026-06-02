@@ -1,7 +1,7 @@
 // Authorization schema for the IAM addon.
 // @rebac_package: iam
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
 
 definition auth/user {
     // Const-backed universal admin: every user points at angee/role:admin
@@ -13,6 +13,48 @@ definition auth/user {
     permission read = admin->member
     permission write = admin->member
     permission delete = admin->member
+}
+
+definition auth/vendor {
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    // Non-admin catalogue reads for the connect-account picker are deferred
+    // to S5's public GraphQL surface; do not open read here.
+    permission read = admin->member
+    permission write = admin->member
+    permission delete = admin->member
+}
+
+definition auth/client {
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    // Admin-only by design: Client holds OAuth secrets (projection-excluded).
+    // Permanent, not an S5-deferred decision like auth/vendor's read.
+    permission read = admin->member
+    permission write = admin->member
+    permission delete = admin->member
+}
+
+definition auth/external_account {
+    relation owner: auth/user
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = owner + admin->member
+    permission write = owner + admin->member
+    permission delete = owner + admin->member
+}
+
+definition auth/credential {
+    relation owner: auth/user
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = owner + admin->member
+    permission write = owner + admin->member
+    permission delete = owner + admin->member
 }
 
 definition auth/group {
