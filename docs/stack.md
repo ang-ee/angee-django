@@ -48,8 +48,8 @@ Dependency changes must update this file in the same change.
 | Pick | Owns | Angee adds |
 |---|---|---|
 | React 19 | View library | Component conventions |
-| TypeScript >= 5 | Language and type system | Branded boundary types |
-| urql 5 | GraphQL client, normalized cache, subscriptions | Provider stack and invalidation wiring |
+| TypeScript >= 6 | Language and type system | Branded boundary types |
+| urql React 5 + @urql/core 6 | GraphQL client, normalized cache, subscriptions | Provider stack and invalidation wiring |
 | graphql-ws 6 | GraphQL WebSocket lifecycle | Connection params and retry policy |
 | TanStack Router | Type-safe routing | `defineAddon` to `createApp` route composition |
 | TanStack Form | Form state | `FormView` binding |

@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
-import { fetchExchange, useClient } from "urql";
+import { fetchExchange } from "@urql/core";
+import { useClient } from "urql";
 import { describe, expect, test, vi } from "vitest";
 
 import {

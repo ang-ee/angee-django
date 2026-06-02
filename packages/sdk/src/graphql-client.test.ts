@@ -1,4 +1,4 @@
-import { fetchExchange } from "urql";
+import { fetchExchange } from "@urql/core";
 import { describe, expect, test, vi } from "vitest";
 
 import {

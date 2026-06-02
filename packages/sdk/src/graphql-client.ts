@@ -6,7 +6,9 @@ import {
   subscriptionExchange,
   type Client,
   type Exchange,
-} from "urql";
+  type ExecutionResult,
+} from "@urql/core";
+import type { FetchBody } from "@urql/core/internal";
 
 import type { CacheConfig } from "./cache-config";
 
@@ -114,6 +116,9 @@ export function createUrqlClient(options: AngeeUrqlClientOptions): Client {
   return createClient({
     url: options.url,
     fetch: fetchWithSession,
+    // Always POST; the Django endpoint is CSRF-protected and reads operations
+    // from the request body rather than the query string.
+    preferGetMethod: false,
     exchanges: options.exchanges ?? [
       cacheExchange({ keys: cache.keys, resolvers: cache.resolvers }),
       subscriptionExchange({
@@ -127,13 +132,6 @@ export function createUrqlClient(options: AngeeUrqlClientOptions): Client {
 }
 
 const FATAL_WS_CLOSE_CODES = new Set([1000, 1008, 4400, 4401, 4403, 4406, 4409]);
-
-interface ForwardedSubscription {
-  query?: string;
-  variables?: Record<string, unknown>;
-  operationName?: string;
-  extensions?: Record<string, unknown>;
-}
 
 /**
  * A graphql-ws-backed forwarder for urql's subscriptionExchange. The WS URL is
@@ -150,9 +148,9 @@ function subscriptionForwarder(endpoint: string) {
     shouldRetry: (event) =>
       !(event instanceof CloseEvent && FATAL_WS_CLOSE_CODES.has(event.code)),
   });
-  return (request: ForwardedSubscription) => ({
+  return (request: FetchBody) => ({
     subscribe(sink: {
-      next: (value: unknown) => void;
+      next: (value: ExecutionResult) => void;
       error: (error: unknown) => void;
       complete: () => void;
     }) {

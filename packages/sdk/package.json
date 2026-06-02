@@ -27,19 +27,19 @@
     "urql": "^5.0.0"
   },
   "dependencies": {
-    "@urql/core": "^5.0.0",
-    "@urql/exchange-graphcache": "^7.2.4",
+    "@urql/core": "^6.0.1",
+    "@urql/exchange-graphcache": "^9.0.0",
     "graphql-ws": "^6.0.8"
   },
   "devDependencies": {
-    "@graphql-codegen/cli": "^7.1.0",
+    "@graphql-codegen/cli": "^7.1.1",
     "@graphql-codegen/typescript": "^6.0.2",
     "@testing-library/react": "^16.1.0",
-    "@types/node": "^22.10.0",
+    "@types/node": "^25.9.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "graphql": "^16.14.0",
-    "happy-dom": "^16.0.0",
+    "happy-dom": "^20.9.0",
     "i18next": "^26.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
