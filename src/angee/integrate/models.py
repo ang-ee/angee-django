@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Any
 
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 
 from angee.base.fields import StateField
@@ -43,10 +44,11 @@ class Capability(SqidMixin, AuditMixin, AngeeModel):
         abstract = True
 
     def report_status(self, *, status: CapabilityStatus | str, error: str = "") -> None:
-        """Record local status telemetry and push the account rollup when available.
+        """Record local status telemetry and push this capability's account contribution.
 
-        The caller owns persistence (``save(update_fields=...)``); the account
-        rollup is a no-op until S8 adds ``ExternalAccount.note_capability_status``.
+        The caller owns persistence for this capability row. ``ExternalAccount``
+        owns its rollup write and tracks each capability by the reporting
+        capability primary key.
         """
 
         reported_at = timezone.now()
@@ -56,10 +58,10 @@ class Capability(SqidMixin, AuditMixin, AngeeModel):
         self.last_error = error
         self.last_error_at = reported_at if error else None
 
-        # account rollup wired in S8 (ExternalAccount.note_capability_status)
+        # ExternalAccount owns persistence for the account-level rollup.
         note_capability_status = getattr(self.account, "note_capability_status", None)
         if callable(note_capability_status):
-            note_capability_status(status=status, error=error)
+            note_capability_status(capability_key=str(self.pk), status=status, error=error)
 
 
 class Bridge(Capability):
@@ -80,7 +82,60 @@ class Bridge(Capability):
 
         abstract = True
 
-    def sync(self) -> None:
+    def mark_sync_started(self, *, now: datetime) -> None:
+        """Persist the start timestamp for one scheduler sync attempt."""
+
+        self.last_sync_started_at = now
+        with transaction.atomic():
+            self.save(update_fields=["last_sync_started_at", "updated_at"])
+
+    def record_sync(self, result: Any, *, now: datetime) -> None:
+        """Persist one successful scheduler sync result and healthy status report."""
+
+        self.last_sync_completed_at = now
+        self.last_sync_status = "ok"
+        self.last_sync_items = result if isinstance(result, int) and not isinstance(result, bool) else 0
+        self.next_sync_at = self._next_sync_at(now=now)
+        with transaction.atomic():
+            self.report_status(status="active")
+            self.save(
+                update_fields=[
+                    "cursor",
+                    "last_error",
+                    "last_error_at",
+                    "last_sync_completed_at",
+                    "last_sync_items",
+                    "last_sync_status",
+                    "last_used_at",
+                    "last_used_status",
+                    "next_sync_at",
+                    "status",
+                    "updated_at",
+                ]
+            )
+
+    def record_sync_error(self, error: Exception, *, now: datetime) -> None:
+        """Persist one failed scheduler sync result and error status report."""
+
+        error_message = f"{type(error).__name__}: {error}"[:500]
+        self.last_sync_status = "error"
+        self.next_sync_at = self._next_sync_at(now=now)
+        with transaction.atomic():
+            self.report_status(status="error", error=error_message)
+            self.save(
+                update_fields=[
+                    "last_error",
+                    "last_error_at",
+                    "last_sync_status",
+                    "last_used_at",
+                    "last_used_status",
+                    "next_sync_at",
+                    "status",
+                    "updated_at",
+                ]
+            )
+
+    def sync(self) -> Any:
         """Synchronize this bridge with its external system."""
 
         raise NotImplementedError("Bridge subclasses must implement sync().")
@@ -104,3 +159,8 @@ class Bridge(Capability):
         """Stop this bridge's live vendor subscription."""
 
         raise NotImplementedError("Bridge subclasses must implement stop_live().")
+
+    def _next_sync_at(self, *, now: datetime) -> datetime:
+        """Return the next polling timestamp from this bridge's interval."""
+
+        return now + timedelta(seconds=int(self.poll_interval))

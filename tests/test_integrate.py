@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from django.db import models
 
+from angee.iam.models import AccountStatus
 from angee.integrate.models import Bridge, Capability, CapabilityStatus
 from tests.conftest import ExternalAccount
 
@@ -47,9 +48,13 @@ def test_concrete_bridge_inherits_scheduler_field() -> None:
 def test_report_status_records_telemetry_and_pushes_rollup() -> None:
     """report_status writes local telemetry and calls the account rollup when present."""
 
-    calls: list[tuple[object, str]] = []
+    calls: list[tuple[object, object, str]] = []
     account = ExternalAccount()
-    account.note_capability_status = lambda *, status, error: calls.append((status, error))  # type: ignore[attr-defined]
+
+    def note_capability_status(*, capability_key: object, status: object, error: str) -> None:
+        calls.append((capability_key, status, error))
+
+    account.note_capability_status = note_capability_status  # type: ignore[method-assign]
     bridge = ConcreteBridge()
     bridge.account = account
 
@@ -60,7 +65,7 @@ def test_report_status_records_telemetry_and_pushes_rollup() -> None:
     assert bridge.last_error == "boom"
     assert bridge.last_error_at is not None
     assert bridge.last_used_at is not None
-    assert calls == [(CapabilityStatus.ERROR, "boom")]
+    assert calls == [("None", CapabilityStatus.ERROR, "boom")]
 
     # A bare-string status with no error clears the error timestamp.
     bridge.report_status(status="active")
@@ -70,13 +75,15 @@ def test_report_status_records_telemetry_and_pushes_rollup() -> None:
     assert bridge.last_error_at is None
 
 
-def test_report_status_no_ops_rollup_until_account_supports_it() -> None:
-    """report_status leaves the rollup a no-op when the account lacks the S8 method."""
+def test_report_status_updates_unsaved_account_rollup_in_memory() -> None:
+    """report_status updates an unsaved account without trying to persist it."""
 
     bridge = ConcreteBridge()
-    bridge.account = ExternalAccount()  # no note_capability_status yet (pre-S8)
+    bridge.account = ExternalAccount()
 
-    bridge.report_status(status=CapabilityStatus.ACTIVE)
+    bridge.report_status(status=CapabilityStatus.ERROR, error="boom")
 
-    assert bridge.status == CapabilityStatus.ACTIVE
-    assert bridge.last_error == ""
+    assert bridge.status == CapabilityStatus.ERROR
+    assert bridge.account.status == AccountStatus.ERROR
+    assert bridge.account.capability_statuses == {"None": AccountStatus.ERROR.value}
+    assert bridge.account.last_error == "boom"
