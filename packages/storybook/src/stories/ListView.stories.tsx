@@ -108,8 +108,15 @@ function ListFixture() {
   return (
     <div className="max-w-5xl overflow-hidden rounded-md border border-border bg-sheet">
       <DataToolbar
-        list={list}
+        pager={{
+          total: list.total,
+          page: list.page,
+          pageSize: list.pageSize,
+          hasNext: list.hasNext,
+          hasPrev: list.hasPrev,
+        }}
         view="list"
+        onViewChange={() => undefined}
         visibleFields={visibleFields}
         createLabel="New note"
         onCreate={() => undefined}

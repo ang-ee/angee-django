@@ -32,7 +32,6 @@ import {
   useDataViewMaybe,
 } from "./data-view-context";
 import {
-  dataViewGroupsEqual,
   dataViewSortToResourceOrder,
   type DataViewFilter,
   type DataViewGroup,
@@ -67,6 +66,10 @@ export interface DataPageProps<TRow extends Row = Row> {
   pageSize?: number;
   defaultGroup?: DataViewGroup | null;
   fields?: ListViewProps<TRow>["fields"];
+  /** List component used for the collection surface. Defaults to the lean flat list. */
+  list?: React.ComponentType<
+    ListViewProps<TRow> & { defaultGroup?: DataViewGroup | null }
+  >;
   /** Form options forwarded to `FormView`. */
   returning?: FormViewProps["returning"];
   /** Hides the built-in "New" button when the host owns creation. */
@@ -125,6 +128,9 @@ function DataPageBody<TRow extends Row = Row>({
   pageSize,
   defaultGroup,
   fields,
+  list: ListComponent = ListView as React.ComponentType<
+    ListViewProps<TRow> & { defaultGroup?: DataViewGroup | null }
+  >,
   returning,
   hideCreate = false,
   rowHref,
@@ -143,26 +149,13 @@ function DataPageBody<TRow extends Row = Row>({
     React.useState<ListViewState<TRow> | null>(null);
   const [pendingNavigation, setPendingNavigation] =
     React.useState<PendingRecordNavigation | null>(null);
-  const handledDefaultGroupRef = React.useRef<DataViewGroup | null>(null);
 
   // A record is open when an id is selected or a create was requested.
   const open = creating || recordId != null;
   const editId = creating ? null : recordId ?? null;
-  React.useEffect(() => {
-    if (!open || placement === "drawer") return;
-    if (!defaultGroup) {
-      handledDefaultGroupRef.current = null;
-      return;
-    }
-    if (
-      handledDefaultGroupRef.current
-      && dataViewGroupsEqual(handledDefaultGroupRef.current, defaultGroup)
-    ) {
-      return;
-    }
-    handledDefaultGroupRef.current = defaultGroup;
-    if (dataView.state.group === null) dataView.setGroup(defaultGroup);
-  }, [dataView.setGroup, dataView.state.group, defaultGroup, open, placement]);
+  // `defaultGroup` is forwarded to the list component (below); GroupListView is
+  // its sole owner/seeder. The lean ListView ignores it, so a flat page never
+  // seeds group state.
   const recordBreadcrumb = React.useMemo(
     () =>
       recordBreadcrumbLabel({
@@ -263,7 +256,7 @@ function DataPageBody<TRow extends Row = Row>({
   ) : null;
 
   const list = (
-    <ListView<TRow>
+    <ListComponent
       model={model}
       columns={columns}
       fields={fields}

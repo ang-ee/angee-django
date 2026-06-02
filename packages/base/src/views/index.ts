@@ -11,6 +11,10 @@ export {
   type ColumnAlign,
 } from "./ListView";
 export {
+  GroupListView,
+  type GroupListViewProps,
+} from "./group-list-view";
+export {
   FORM_VIEW_NOTEBOOK_SLOT,
   FormView,
   formViewNotebookSlot,

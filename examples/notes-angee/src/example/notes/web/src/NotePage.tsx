@@ -2,6 +2,7 @@ import * as React from "react";
 import {
   DataPage,
   Glyph,
+  GroupListView,
   Spinner,
   type FormField,
   type ListColumn,
@@ -187,6 +188,7 @@ export function NotePage({
         recordId={recordId}
         creating={creating}
         placement="inline"
+        list={GroupListView}
         pageSize={50}
         defaultGroup={{ field: "updatedAt", granularity: "day" }}
         rowHref={(row) =>

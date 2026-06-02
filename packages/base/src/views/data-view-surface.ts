@@ -60,6 +60,7 @@ export interface UseDataViewSurfaceProps<TRow extends Row = Row> {
   order?: UseResourceListOptions<ResourceTypeName>["order"];
   pageSize?: number;
   dataView: DataViewContextValue;
+  groupStack?: readonly DataViewGroup[];
   enabled?: boolean;
   onListStateChange?: (state: ListViewState<TRow>) => void;
 }
@@ -97,6 +98,7 @@ export function useDataViewSurface<TRow extends Row = Row>({
   order,
   pageSize,
   dataView,
+  groupStack,
   enabled = true,
   onListStateChange,
 }: UseDataViewSurfaceProps<TRow>): DataViewSurface<TRow> {
@@ -117,7 +119,10 @@ export function useDataViewSurface<TRow extends Row = Row>({
     () => mergeFilters(filter, dataView.state.filter),
     [dataView.state.filter, filter],
   );
-  const sortOrder = dataViewSortToResourceOrder(dataView.state.sort);
+  const sortOrder = React.useMemo(
+    () => dataViewSortToResourceOrder(dataView.state.sort),
+    [dataView.state.sort],
+  );
   const list = useResourceList(model, {
     fields: requestedFields,
     filter: mergedFilter,
@@ -203,12 +208,23 @@ export function useDataViewSurface<TRow extends Row = Row>({
 
   const rowModels = table.getRowModel().rows;
   const selectedIds = dataView.state.selectedIds;
-  const pageIds = rows.flatMap((row, index) =>
-    typeof row.id === "string" ? [row.id] : [String(index)],
+  // Memoize so the surface returns stable references — safe for a memoized
+  // FlatListBody and so the freeze guard isn't the only thing absorbing churn.
+  const pageIds = React.useMemo(
+    () =>
+      rows.flatMap((row, index) =>
+        typeof row.id === "string" ? [row.id] : [String(index)],
+      ),
+    [rows],
   );
-  const allPageSelected =
-    pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
-  const somePageSelected = pageIds.some((id) => selectedIds.has(id));
+  const allPageSelected = React.useMemo(
+    () => pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id)),
+    [pageIds, selectedIds],
+  );
+  const somePageSelected = React.useMemo(
+    () => pageIds.some((id) => selectedIds.has(id)),
+    [pageIds, selectedIds],
+  );
   const setPageSelection = React.useCallback(
     (checked: boolean) => {
       const next = new Set(dataView.state.selectedIds);
@@ -220,9 +236,10 @@ export function useDataViewSurface<TRow extends Row = Row>({
     },
     [dataView, pageIds],
   );
+  const rowGroupStack = groupStack ?? dataView.state.groupStack;
   const groupedRows = React.useMemo(
-    () => groupRows(rowModels, dataView.state.groupStack),
-    [dataView.state.groupStack, rowModels],
+    () => groupRows(rowModels, rowGroupStack),
+    [rowGroupStack, rowModels],
   );
   const listItems = React.useMemo(
     () => flattenListItems(groupedRows),

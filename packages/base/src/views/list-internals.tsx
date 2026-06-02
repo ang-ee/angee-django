@@ -1,7 +1,6 @@
 // Leaf row/column/cell primitives for the data-view list surfaces: record rows,
 // `cellContent`, column building, and the group key/label helpers. Imports only
-// ui/sdk/page leaves — it must NOT import ListView, grouped-list, or board-view,
-// so those modules can depend on it without a cycle.
+// ui/sdk/page leaves so parent view modules can depend on it without a cycle.
 import * as React from "react";
 import {
   flexRender,
@@ -26,6 +25,7 @@ import {
 } from "lucide-react";
 
 import { Badge } from "../ui/badge";
+import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Chip } from "../ui/chip";
 import {
@@ -70,6 +70,23 @@ export const TABLE_SCROLL_STYLE: React.CSSProperties = {
 };
 export const GROUP_ROW_HEIGHT = 32;
 export const RECORD_ROW_HEIGHT = 40;
+
+export function SelectionBar({
+  count,
+  onClear,
+}: {
+  count: number;
+  onClear: () => void;
+}): React.ReactElement {
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-border-subtle bg-brand px-3 py-2 text-13 text-on-brand">
+      <span>{count} selected</span>
+      <Button type="button" variant="ghost" size="sm" onClick={onClear}>
+        Clear
+      </Button>
+    </div>
+  );
+}
 
 export interface FlatListBodyProps<TRow extends Row> {
   table: TableModel<TRow>;

@@ -37,7 +37,11 @@ import { ModalsHost } from "../feedback";
 import { parseFlatSearch, stringifyFlatSearch } from "../createApp";
 import { DataPage } from "./DataPage";
 import type { FormField } from "./FormView";
-import type { ListColumn } from "./ListView";
+import {
+  ListView,
+  type ListColumn,
+} from "./ListView";
+import { GroupListView } from "./group-list-view";
 import type {
   AggregateBucket,
   GroupByDimension,
@@ -269,6 +273,26 @@ describe("DataPage", () => {
     });
   });
 
+  test("renders the lean ListView as a flat list without group controls", async () => {
+    render(
+      <TestUrlState searchParams="?view=board&group=status">
+        {/* Lean ListView ignores grouping/board even when the URL carries them,
+            and its type no longer accepts defaultGroup. */}
+        <ListView model="notes.Note" columns={columns} />
+      </TestUrlState>,
+    );
+
+    expect(await screen.findByText("First")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Board view" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove group" })).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Filter and favorites" }),
+    );
+
+    expect(screen.queryByText("Group by")).toBeNull();
+  });
+
   test("renders record navigation and reuses the view switcher in record chrome", async () => {
     const onSelect = vi.fn();
     const onClose = vi.fn();
@@ -355,6 +379,7 @@ describe("DataPage", () => {
           model="notes.Note"
           columns={boardColumns}
           formFields={formFields}
+          list={GroupListView}
           onSelect={onSelect}
           rowHref={(row) => row.id === "note-1" ? "/notes/note-1" : ""}
         />
@@ -469,6 +494,7 @@ describe("DataPage", () => {
           model="notes.Note"
           columns={[...columns, { field: "updatedAt", header: "Updated At" }]}
           formFields={formFields}
+          list={GroupListView}
           defaultGroup={{ field: "updatedAt", granularity: "day" }}
         />
       </TestUrlState>,
@@ -495,6 +521,7 @@ describe("DataPage", () => {
           model="notes.Note"
           columns={columns}
           formFields={formFields}
+          list={GroupListView}
           onSelect={onSelect}
         />
       </TestUrlState>,
@@ -529,6 +556,7 @@ describe("DataPage", () => {
           model="notes.Note"
           columns={[...columns, { field: "updatedAt", header: "Updated At" }]}
           formFields={formFields}
+          list={GroupListView}
           pageSize={2}
           defaultGroup={{ field: "updatedAt", granularity: "day" }}
         />
@@ -557,6 +585,7 @@ describe("DataPage", () => {
           model="notes.Note"
           columns={[...columns, { field: "updatedAt", header: "Updated At" }]}
           formFields={formFields}
+          list={GroupListView}
           pageSize={2}
           defaultGroup={{ field: "updatedAt", granularity: "day" }}
         />
@@ -583,6 +612,7 @@ describe("DataPage", () => {
           model="notes.Note"
           columns={[...columns, { field: "updatedAt", header: "Updated At" }]}
           formFields={formFields}
+          list={GroupListView}
           pageSize={2}
           defaultGroup={{ field: "updatedAt", granularity: "day" }}
         />
@@ -619,6 +649,7 @@ describe("DataPage", () => {
           model="notes.Note"
           columns={[...columns, { field: "updatedAt", header: "Updated At" }]}
           formFields={formFields}
+          list={GroupListView}
           defaultGroup={{ field: "updatedAt", granularity: "day" }}
         />
       </TestUrlState>,
