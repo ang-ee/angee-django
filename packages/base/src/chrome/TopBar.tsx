@@ -4,7 +4,6 @@ import { cn } from "../lib/cn";
 import { useChatter } from "../communication/chatter-context";
 import { Button } from "../ui/button";
 import { Tooltip } from "../ui/tooltip";
-import { AppBrand } from "./AppBrand";
 import { GlobalSearch } from "./GlobalSearch";
 import { Glyph } from "./Glyph";
 import { Systray } from "./Systray";
@@ -12,9 +11,9 @@ import { TopMenu, type TopMenuProps } from "./TopMenu";
 import { UserMenu } from "./UserMenu";
 
 export interface TopBarProps {
-  title?: ReactNode;
-  icon?: string;
-  appHref?: string;
+  /** Optional leading brand/lockup. Omit inside ConsoleShell — the rail's
+   * app-switcher already carries the brand mark, so the top bar starts with
+   * the menu (matching the console shell). */
   brand?: ReactNode;
   hideSearch?: boolean;
   hideSystray?: boolean;
@@ -31,9 +30,6 @@ export interface TopBarProps {
 }
 
 export function TopBar({
-  title = "Console",
-  icon: _icon = "layout-dashboard",
-  appHref = "/",
   brand,
   hideSearch = false,
   hideSystray = false,
@@ -56,7 +52,7 @@ export function TopBar({
         className,
       )}
     >
-      {brand ?? <AppBrand name={title} to={appHref} />}
+      {brand}
       <TopMenu
         tabs={topMenu}
         items={menuItems}

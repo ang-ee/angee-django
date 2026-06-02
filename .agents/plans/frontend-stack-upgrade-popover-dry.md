@@ -345,6 +345,7 @@ visual + placement. Per surface:
 2. **Derive the fidelity spec** from the fingerprint + P1 source (slot order, conditional rules) — concrete, not prose.
 3. **Diff our render:** run the same extractor on our Storybook story / app screen and compare the band/side/order fingerprint → placement, ordering, and missing-control drift surface automatically. This is the visual-vs-mockup gate; "weak copy" can't pass silently.
    - **Proven (form):** `/notes/1/edit --dirty` → `Discard` & `Save` both `band=top side=left` (dirty-only). Captured as the gate below.
+   - **Known limitation:** the band/side fingerprint does NOT distinguish the rail from the top bar (both bucket to `top:left`) and counts a label once even if duplicated — so it MISSED a duplicate brand mark (Angee cube in the rail AND `<AppBrand>` wordmark in the top bar; fixed by dropping the top-bar brand in `ConsoleShell`/`TopBar` — the rail's `AppChooser` is the sole switcher/brand, per the mockup). TODO: extend the extractor to tag the rail vs top-bar landmark and flag duplicate brand/control labels. Until then, pair the fingerprint with an eyeball pass for the shell.
 
 ## STAGE 1 — All visual components in Storybook (no backend)
 

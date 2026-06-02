@@ -47,9 +47,9 @@ export function ConsoleShell({
           <AppRail className="area-rail" />
           <TopBar
             className="area-topbar"
-            title={title}
-            icon={icon}
             topMenu={topMenu}
+            showChatterToggle={showChatter}
+            showUserMenu
           />
           <Breadcrumb className="area-crumbs" />
           <main className="area-content min-h-0 min-w-0 overflow-auto bg-canvas">
