@@ -416,11 +416,13 @@ visual + placement. Per surface:
 > **Placement — DECIDED (architect, 2026-06-01):** addon UI lives at
 > **`src/<namespace>/<addon>/web/`** — co-located with each addon's backend, exactly like
 > the existing notes consumer addon (`examples/notes-angee/src/example/notes/web/`). So the
-> lifted framework addons become full-stack units, e.g. `src/angee/auth/web/`,
+> lifted framework addons become full-stack units, e.g. `src/angee/iam/web/`,
 > `src/angee/storage/web/` (backend Python beside `web/` frontend). Base/framework UI
 > primitives stay in `packages/base`; addon UI composes `@angee/base` + `@angee/sdk`.
 > Skip empty stubs: connect/integrate/money/sequence/uom.
-- [ ] done [ ] verified [ ] checked by human (final qa) — auth UI (login + fragments + views) — ~31 files
+> **Note:** P1's `auth` UI maps to this repo's **`iam`** addon (label `iam`), so its UI
+> root is **`src/angee/iam/web/`**, not `auth/web`. See `.agents/plans/iam-roles-lift.md` (D6).
+- [ ] done [ ] verified [ ] checked by human (final qa) — auth/iam UI (login + fragments + views) — ~31 files → `src/angee/iam/web/`; backend lift in `iam-roles-lift.md`
 - [ ] done [ ] verified [ ] checked by human (final qa) — storage UI (views + widgets + upload) — ~37 files
 - [ ] done [ ] verified [ ] checked by human (final qa) — operator UI (views) — ~31 files
 - [ ] done [ ] verified [ ] checked by human (final qa) — agents UI (Chat + views + fragments) — ~21 files
