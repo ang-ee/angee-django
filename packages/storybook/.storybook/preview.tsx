@@ -1,5 +1,6 @@
 import type { Preview } from "@storybook/react-vite";
 import { withThemeByDataAttribute } from "@storybook/addon-themes";
+import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { AppRuntimeProvider, type AppRuntime } from "@angee/sdk";
 import { baseIcons } from "@angee/base";
 
@@ -28,9 +29,11 @@ const preview: Preview = {
     }),
     (Story) => (
       <AppRuntimeProvider runtime={previewRuntime}>
-        <div className="min-h-screen bg-canvas p-6 font-sans text-fg">
-          <Story />
-        </div>
+        <NuqsTestingAdapter>
+          <div className="min-h-screen bg-canvas p-6 font-sans text-fg">
+            <Story />
+          </div>
+        </NuqsTestingAdapter>
       </AppRuntimeProvider>
     ),
   ],
