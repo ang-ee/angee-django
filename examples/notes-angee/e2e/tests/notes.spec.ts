@@ -14,9 +14,19 @@ interface NotesData {
   notes: { totalCount: number; results: { id: string; title: string }[] };
 }
 
-// Stable anchors from the demo seed (`resources load demo`). The seed grows over
-// time, so assert these are *present* rather than pinning a volatile count.
+// Stable curated notes from the demo seed (`resources load demo`), all owned by
+// alice. The dev stack also bulk-seeds thousands of lorem notes, so these are
+// paginated off page 1 — assert each via a title-filtered query (page-order
+// independent), never by scanning a single visible page.
 const ALICE_ANCHORS = ["Quarterly planning", "Reading list", "Welcome to Angee"];
+
+function notesByTitleQuery(title: string): string {
+  // Titles here are trusted test constants with no embedded quotes.
+  return `query { notes(filters: { title: { exact: "${title}" } }) {
+    totalCount
+    results { id title }
+  } }`;
+}
 
 async function noteIds(request: APIRequestContext): Promise<Set<string>> {
   const result = await new GraphQLClient(request).query<NotesData>(NOTES_QUERY);
@@ -27,20 +37,24 @@ async function noteIds(request: APIRequestContext): Promise<Set<string>> {
 test.describe("alice — authenticated", () => {
   test.use({ storageState: roleStatePath("alice") });
 
-  test("sees her notes in the UI", async ({ page }) => {
+  test("sees her scoped notes in the UI, consistent with the backend", async ({ page, api }) => {
     const notes = new NotesPage(page);
-    await notes.goto();
-    for (const title of ALICE_ANCHORS) {
-      await expect(notes.noteByTitle(title)).toBeVisible();
-    }
-  });
+    await notes.gotoReady();
+    await expect(notes.rows.first()).toBeVisible();
+    const uiTotal = await notes.recordTotal();
+    expect(uiTotal).toBeGreaterThan(0);
 
-  test("notes query returns her scoped notes, including the demo anchors", async ({ api }) => {
+    // the list's record total reflects her backend scope, not a fixed dataset
     const result = await api.query<NotesData>(NOTES_QUERY);
     expect(result.errors).toBeUndefined();
-    expect(result.data?.notes.totalCount).toBeGreaterThan(0);
-    const titles = (result.data?.notes.results ?? []).map((note) => note.title);
+    expect(result.data?.notes.totalCount).toBe(uiTotal);
+  });
+
+  test("her REBAC scope includes the curated shared notes", async ({ api }) => {
     for (const anchor of ALICE_ANCHORS) {
+      const result = await api.query<NotesData>(notesByTitleQuery(anchor));
+      expect(result.errors).toBeUndefined();
+      const titles = (result.data?.notes.results ?? []).map((note) => note.title);
       expect(titles).toContain(anchor);
     }
   });

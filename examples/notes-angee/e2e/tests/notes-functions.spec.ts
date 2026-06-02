@@ -105,4 +105,25 @@ test.describe("notes list — functions & buttons", () => {
     await notes.chatterToggle.click();
     await expect(page.getByText("Something went wrong")).toHaveCount(0);
   });
+
+  test("the New note button opens a blank create form", async ({ page }) => {
+    const notes = new NotesPage(page);
+    await notes.gotoReady();
+    await notes.openCreateForm();
+    await expect(notes.titleInput).toBeVisible();
+    await expect(page.getByText("Something went wrong")).toHaveCount(0);
+  });
+
+  test("the user menu opens and offers sign out", async ({ page }) => {
+    const notes = new NotesPage(page);
+    await notes.gotoReady();
+    const signOut = await notes.openUserMenu();
+    await expect(signOut).toBeVisible();
+  });
+
+  test("global search is present in the top chrome", async ({ page }) => {
+    const notes = new NotesPage(page);
+    await notes.gotoReady();
+    await expect(notes.globalSearch).toBeVisible();
+  });
 });

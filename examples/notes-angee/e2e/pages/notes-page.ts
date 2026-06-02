@@ -69,7 +69,7 @@ export class NotesPage extends PageObject {
   async recordTotal(): Promise<number> {
     const label = (await this.recordsLabel.getAttribute("aria-label")) ?? "";
     const match = label.match(/\/\s*([\d,]+)/);
-    return match ? Number(match[1].replace(/,/g, "")) : 0;
+    return match?.[1] ? Number(match[1].replace(/,/g, "")) : 0;
   }
 
   /** Open the Visible-fields chooser; returns its column checkbox items. */
@@ -106,5 +106,49 @@ export class NotesPage extends PageObject {
     const body = this.page.locator(".cm-content").first();
     await body.click();
     await this.page.keyboard.type(text);
+  }
+
+  // --- record form sheet (title row, status stepper, actions, notebook) ---
+  /** The inline editable record title input. */
+  get titleInput(): Locator {
+    return this.page.getByRole("textbox", { name: "Title" });
+  }
+  get starButton(): Locator {
+    return this.page.getByRole("button", { name: "Star" });
+  }
+  get shareButton(): Locator {
+    return this.page.getByRole("button", { name: "Share" });
+  }
+  /** A status-stepper step by its label (Draft / In Review / Active / Archived). */
+  statusStep(label: string): Locator {
+    return this.page.getByText(label, { exact: true });
+  }
+  /** A notebook tab by name; the body field renders in the first ("Body") tab. */
+  notebookTab(name: string | RegExp): Locator {
+    return this.page.getByRole("tab", { name });
+  }
+
+  /** Edit the title input — a reliable way to mark the form dirty. */
+  async editTitle(text: string): Promise<void> {
+    await this.titleInput.click();
+    await this.page.keyboard.type(text);
+  }
+
+  // --- chrome ---
+  get globalSearch(): Locator {
+    return this.page.getByRole("search");
+  }
+  /** Open the user menu and return its sign-out item. */
+  async openUserMenu(): Promise<Locator> {
+    await this.userMenuButton.click();
+    const signOut = this.page.getByRole("menuitem", { name: /sign out|log ?out/i });
+    await signOut.waitFor({ state: "visible" });
+    return signOut;
+  }
+
+  /** Click "New note" and wait for the blank create form. */
+  async openCreateForm(): Promise<void> {
+    await this.newNoteButton.click();
+    await this.titleInput.waitFor({ state: "visible", timeout: 10000 });
   }
 }

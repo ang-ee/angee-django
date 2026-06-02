@@ -8,7 +8,7 @@ import { NotesPage } from "../pages/notes-page";
 test.describe("notes form — dirty-save", () => {
   test.use({ storageState: roleStatePath("alice") });
 
-  test("a clean form shows no Save/Discard; editing surfaces both in the top band", async ({ page }) => {
+  test("a clean form shows no Save/Discard; editing surfaces both above the body", async ({ page }) => {
     const notes = new NotesPage(page);
     await notes.gotoReady();
     await notes.openFirstNote();
@@ -21,11 +21,14 @@ test.describe("notes form — dirty-save", () => {
     await expect(notes.saveButton).toBeVisible();
     await expect(notes.discardButton).toBeVisible();
 
-    // both sit in the same (top control) band, above the form body
-    const saveY = (await notes.saveButton.boundingBox())?.y ?? -1;
-    const bodyY = (await page.locator(".cm-content").first().boundingBox())?.y ?? 1e9;
-    expect(saveY).toBeGreaterThan(0);
-    expect(saveY).toBeLessThan(bodyY);
+    // the actions sit in the top control band, above the form body. Editing the
+    // body can scroll the band out of view, so bring it back before comparing.
+    await notes.saveButton.scrollIntoViewIfNeeded();
+    const saveBox = await notes.saveButton.boundingBox();
+    const bodyBox = await page.locator(".cm-content").first().boundingBox();
+    expect(saveBox).not.toBeNull();
+    expect(bodyBox).not.toBeNull();
+    expect(saveBox!.y).toBeLessThan(bodyBox!.y);
   });
 
   test("Discard resets the form and clears the dirty actions", async ({ page }) => {
@@ -51,7 +54,7 @@ test.describe("notes form — dirty-save", () => {
     await notes.gotoReady();
     await notes.openFirstNote();
 
-    const stamp = ` seamless-${Date.now().toString().slice(-5)}`;
+    const stamp = " seamless-edit";
     await notes.editBody(stamp);
     await notes.saveButton.click();
     await expect(notes.saveButton).toHaveCount(0); // baseline reset (works)
@@ -59,3 +62,63 @@ test.describe("notes form — dirty-save", () => {
     await expect(page.locator(".cm-content").first()).toContainText(stamp.trim());
   });
 });
+
+// The record-sheet chrome: inline title, status stepper, record actions, and the
+// notebook that hosts the body. These are the layout the form was rebuilt around.
+test.describe("notes form — sheet chrome", () => {
+  test.use({ storageState: roleStatePath("alice") });
+
+  test("renders the inline title, status stepper, record actions, and body notebook", async ({ page }) => {
+    const notes = new NotesPage(page);
+    await notes.gotoReady();
+    await notes.openFirstNote();
+
+    await expect(notes.titleInput).toBeVisible();
+    await expect(notes.statusStep("In Review").first()).toBeVisible(); // the stepper
+    await expect(notes.starButton).toBeVisible();
+    await expect(notes.shareButton).toBeVisible();
+    await expect(notes.notebookTab("Body")).toBeVisible();
+    await expect(page.getByText("Something went wrong")).toHaveCount(0);
+  });
+
+  test("editing then navigating away triggers the unsaved-changes guard", async ({ page }) => {
+    const notes = new NotesPage(page);
+    await notes.gotoReady();
+    await notes.openFirstNote();
+    const formUrl = page.url();
+
+    // edit the title (a reliable dirty trigger) then try to leave via the rail
+    await notes.editTitle(" guard");
+    await expect(notes.saveButton).toBeVisible();
+    await page
+      .getByRole("navigation", { name: "Primary navigation" })
+      .getByRole("link", { name: "Notes" })
+      .click();
+
+    // the guard intercepts: a confirm appears and navigation is blocked
+    await expect(page.getByText(/unsaved changes/i)).toBeVisible();
+    await expect(page).toHaveURL(formUrl);
+
+    // "Stay" keeps us on the form with the edit intact
+    await page.getByRole("button", { name: /^Stay$/ }).click();
+    await expect(page).toHaveURL(formUrl);
+    await expect(notes.saveButton).toBeVisible();
+  });
+});
+
+// Every login can open one of its own records and get the same working sheet.
+for (const role of ["admin", "alice", "bob"] as const) {
+  test.describe(`${role} — record form`, () => {
+    test.use({ storageState: roleStatePath(role) });
+
+    test("opens a scoped record and renders the form sheet", async ({ page }) => {
+      const notes = new NotesPage(page);
+      await notes.gotoReady();
+      await notes.openFirstNote();
+      await expect(page).toHaveURL(/\/notes\/.+/);
+      await expect(notes.titleInput).toBeVisible();
+      await expect(notes.notebookTab("Body")).toBeVisible();
+      await expect(page.getByText("Something went wrong")).toHaveCount(0);
+    });
+  });
+}
