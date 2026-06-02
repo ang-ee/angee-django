@@ -43,7 +43,10 @@ checklist in §10; file-level surface in the P1 UI Inventory (bottom).
 
 **Open decisions:** D-A (nuqs vs TanStack Router search) gates Stage 2; token/visual-layout copy is allowed (architect override), all other logic reconstructed. **Resolved:** addon UI → `src/<namespace>/<addon>/web/` (e.g. `src/angee/auth/web/`), co-located with addon backend; base UI stays in `packages/base`. Storybook host → `packages/storybook/` (default, unless changed).
 
-**Next action:** §10 **1.0 stand up Storybook** → **1.1 `page/` layout lift** (fixes the empty-band/weak-header); also rework the icon slice per review before accepting it.
+**Autonomous loop active:** `/loop` cron `bc7f168e` fires every 15 min — each fire checks Codex progress; if idle, runs the next §10 slice via Codex + reviewers (anchored to exact mockup/P1 sources, screenshot-vs-mockup gated); when the whole lift is done, builds e2e for all logins (alice/bob/admin) exercising every function/button.
+
+**Next action / in-flight:** Icon slices committed (`4740a6a`, `bd4c934` real Angee mark). **Slice 1.0 (Storybook) committed** (`packages/storybook/`, Storybook 10 + react-vite; CSF stories Button + TopMenu; preview decorator seeds `baseIcons` into `AppRuntimeProvider` so icons resolve in stories; `storybook build` succeeded). Fixes applied during accept: Codex left a broken typecheck (`@types/node` divergence + checkJs on the `.mjs` config) → aligned `@types/node` to workspace `^22` and narrowed tsconfig to TS sources; workspace typecheck green; main app restored (a Codex `pnpm install` had reshuffled vite's store and 500'd the running dev server — restart fixed it).
+**PENDING next fire:** (a) run `architecture-reviewer` + `react-reviewer` on slice 1.0; (b) start Storybook + screenshot a story to confirm it renders with icons; (c) **review item:** Codex diverged storybook's toolchain to upgrade targets (vite 8 / TS 6 / @vitejs/plugin-react 6) vs the workspace (vite 6 / TS 5.9) — decide align vs leave (Storybook 10 likely needs vite ≥7). Then advance **1.1 `page/` layout** (the empty-band/weak-header fix).
 
 ---
 

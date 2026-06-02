@@ -1,0 +1,29 @@
+{
+  "name": "@angee/storybook",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "NODE_OPTIONS=\"${NODE_OPTIONS:+$NODE_OPTIONS }--disable-warning=DEP0205\" storybook dev -p 6006",
+    "build": "NODE_OPTIONS=\"${NODE_OPTIONS:+$NODE_OPTIONS }--disable-warning=DEP0205\" storybook build -o storybook-static",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@angee/base": "workspace:*",
+    "@angee/sdk": "workspace:*",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "react-router-dom": "^7.10.0"
+  },
+  "devDependencies": {
+    "@storybook/addon-themes": "^10.1.0",
+    "@storybook/react-vite": "^10.1.0",
+    "@tailwindcss/vite": "^4.3.0",
+    "@types/node": "^22.19.19",
+    "@vitejs/plugin-react": "^6.0.1",
+    "storybook": "^10.1.0",
+    "tailwindcss": "^4.3.0",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.11"
+  }
+}
