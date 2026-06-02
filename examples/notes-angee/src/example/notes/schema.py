@@ -31,12 +31,7 @@ class NoteType(AngeeNode):
     is_starred: auto
     created_at: auto
     updated_at: auto
-
-    @strawberry_django.field(only=["body"])
-    def word_count(self) -> int:
-        """Return the computed word count."""
-
-        return cast(int, self.word_count)
+    word_count: auto
 
     @strawberry_django.field(only=["created_by_id"])
     def created_by(self) -> strawberry.ID | None:
@@ -119,6 +114,7 @@ class NoteOrder:
     status: auto
     updated_at: auto
     created_at: auto
+    word_count: auto
 
 
 def _rebac_scoped(info: strawberry.Info | None = None) -> QuerySet[Any]:
@@ -153,8 +149,8 @@ def _rebac_scoped(info: strawberry.Info | None = None) -> QuerySet[Any]:
 # Aggregation is owned by ``strawberry-django-aggregates``: it emits the
 # group-by surface (offset-paginated groups, multi-axis composite keys, the
 # full granularity track, having, and ordering). Angee contributes only the
-# REBAC-scoped queryset. Count is the M2 measure (notes carry no summable
-# numeric column; ``word_count`` is a Python property).
+# REBAC-scoped queryset. Count is the M2 measure; ``word_count`` is the
+# summable numeric column exposed to grouped and ungrouped aggregates.
 #
 # Group-by axes are non-gated read fields only. ``is_starred`` and
 # ``reminder_at`` are owner-gated reads (``permissions.zed``: ``read__*``);
@@ -169,7 +165,7 @@ def _rebac_scoped(info: strawberry.Info | None = None) -> QuerySet[Any]:
 # resolved from the live filter type by the library (>=0.4.1).
 _note_aggregates = AggregateBuilder(
     model=Note,
-    aggregate_fields=["id"],
+    aggregate_fields=["id", "word_count"],
     group_by_fields=["status", "updated_at"],
     filter_type=NoteFilter,
     pagination_style="offset",

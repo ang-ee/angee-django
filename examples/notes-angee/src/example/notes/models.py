@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from django.db import models
 from django_sqids import SqidsField
 
@@ -35,6 +37,7 @@ class Note(SqidMixin, AuditMixin, AngeeModel, HistoryMixin, RevisionMixin):
     sqid = SqidsField(real_field_name="id", prefix="nte", min_length=8)
     title = models.CharField(max_length=160)
     body = models.TextField(blank=True, default="")
+    word_count = models.PositiveIntegerField(default=0, db_index=True)
     status = StateField(choices_enum=Status, default=Status.DRAFT)
     tags = models.JSONField(blank=True, default=list)
     is_starred = models.BooleanField(default=False, db_index=True)
@@ -53,8 +56,21 @@ class Note(SqidMixin, AuditMixin, AngeeModel, HistoryMixin, RevisionMixin):
 
         return self.title
 
-    @property
-    def word_count(self) -> int:
-        """Return the number of whitespace-delimited words in the body."""
+    @staticmethod
+    def count_words(body: str) -> int:
+        """Return the number of whitespace-delimited words in ``body``."""
 
-        return len(self.body.split())
+        return len((body or "").split())
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Persist the current number of whitespace-delimited body words."""
+
+        self.word_count = self.count_words(self.body)
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None:
+            field_names = set(update_fields)
+            if "body" in field_names:
+                field_names.add("word_count")
+                field_names.add("updated_at")
+                kwargs["update_fields"] = field_names
+        super().save(*args, **kwargs)

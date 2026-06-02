@@ -105,7 +105,8 @@ class Command(BaseCommand):
                 notes = [
                     note_model(
                         title=faker.sentence(nb_words=4).rstrip("."),
-                        body="\n\n".join(faker.paragraphs(nb=3)),
+                        body=(body := "\n\n".join(faker.paragraphs(nb=3))),
+                        word_count=note_model.count_words(body),
                         status=faker.random_element(statuses),
                         is_starred=faker.boolean(chance_of_getting_true=15),
                         tags=list(

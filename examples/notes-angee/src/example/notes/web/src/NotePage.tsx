@@ -54,7 +54,7 @@ const columns: readonly ListColumn[] = [
   { field: "title", header: "Title" },
   { field: "tags", header: "Tags", sortable: false },
   { field: "status", header: "Status", tone: NOTE_STATUS_TONES },
-  { field: "wordCount", header: "Word Count", align: "right", sortable: false },
+  { field: "wordCount", header: "Word Count", align: "right" },
   { field: "updatedAt", header: "Updated At" },
 ];
 
