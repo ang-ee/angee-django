@@ -97,11 +97,18 @@ class NotePatch:
 
 @strawberry_django.filter_type(Note, lookups=True)
 class NoteFilter:
-    """Field lookups accepted when filtering the notes connection."""
+    """Field lookups accepted when filtering the notes connection.
+
+    Every grouped-aggregate axis (see ``group_by_fields`` below) needs a
+    matching field here so a bucket's ``filter`` echo can mirror it back as a
+    list-query filter; ``updated_at`` is therefore filterable as well as a
+    group axis.
+    """
 
     status: auto
     is_starred: auto
     title: auto
+    updated_at: auto
 
 
 @strawberry_django.order_type(Note)
@@ -154,6 +161,12 @@ def _rebac_scoped(info: strawberry.Info | None = None) -> QuerySet[Any]:
 # exposing either as an axis would leak the owner-only value through the bucket
 # keys/counts, because aggregation runs with field enforcement relaxed (see
 # ``_rebac_scoped``).
+# ``enable_filter_echo`` adds a ``filter: JSON!`` to each grouped bucket: a value
+# shaped like ``notes(filters:)`` that re-selects that bucket's rows, so a client
+# can lazily page a group's items through the existing scoped list query. The
+# status axis is a choices column exposed as a GraphQL enum, so the echo must
+# emit the enum wire name (``DRAFT``) not the stored value (``draft``) —
+# resolved from the live filter type by the library (>=0.4.1).
 _note_aggregates = AggregateBuilder(
     model=Note,
     aggregate_fields=["id"],
@@ -161,6 +174,7 @@ _note_aggregates = AggregateBuilder(
     filter_type=NoteFilter,
     pagination_style="offset",
     get_queryset=_rebac_scoped,
+    enable_filter_echo=True,
 ).build()
 
 

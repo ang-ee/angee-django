@@ -327,7 +327,7 @@ requires-dist = [
     { name = "django-sqids", specifier = ">=0.1" },
     { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.10.0" },
     { name = "pyyaml", specifier = ">=6" },
-    { name = "strawberry-django-aggregates", specifier = ">=0.3.0" },
+    { name = "strawberry-django-aggregates", specifier = ">=0.4.1" },
     { name = "strawberry-graphql", specifier = ">=0.270" },
     { name = "strawberry-graphql-django", specifier = ">=0.86" },
     { name = "tablib", specifier = ">=3" },
@@ -803,16 +803,16 @@ wheels = [
 
 [[package]]
 name = "strawberry-django-aggregates"
-version = "0.3.0"
+version = "0.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
     { name = "strawberry-graphql" },
     { name = "strawberry-graphql-django" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/35/36/746ae4c2a3b8c62b3f1eb4d2e55f0bf714bc43f77540825c4fdbfa9e6b8b/strawberry_django_aggregates-0.3.0.tar.gz", hash = "sha256:40703cde4fdfaac7c68d20ab1dcf5f21dffaaa036d9f2a37942d8d7ae23cc3db", size = 131927, upload-time = "2026-05-31T23:29:44.539Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b8/06/9d1c59cf18c4a78ce95f3723661342940563d17fd7f02c93c6171bf60ef1/strawberry_django_aggregates-0.4.1.tar.gz", hash = "sha256:96c9d42ef9ce08f4f44051f2c98ceb8db3efae18b52d19d46b5b43267f4e3e68", size = 142411, upload-time = "2026-06-02T16:24:44.537Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/40/16/76cd3b7ad63257d3a82b27af2b192fae3d388e849d250ce6e9186aae44c2/strawberry_django_aggregates-0.3.0-py3-none-any.whl", hash = "sha256:d4672ccb089c9e1c5bf0fb406b002f6f3a52639a40ea36b675b77413bf68200b", size = 92147, upload-time = "2026-05-31T23:29:43.388Z" },
+    { url = "https://files.pythonhosted.org/packages/5a/e3/bbb8c393a915c24b35b56d8f30cca7f08c331a38ac2f0eb371d2cb3c4df6/strawberry_django_aggregates-0.4.1-py3-none-any.whl", hash = "sha256:e0f2ce90e06c5a20f70297319baddcd043be20e6dc225129c08ccf0e69ada93f", size = 98041, upload-time = "2026-06-02T16:24:43.559Z" },
 ]
 
 [[package]]

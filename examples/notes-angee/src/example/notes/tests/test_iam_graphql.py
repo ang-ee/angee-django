@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any, cast
 
 import reversion
@@ -373,6 +374,68 @@ class IAMGraphQLTests(TransactionTestCase):
             [{"key": {"status": "DRAFT"}, "count": expected_total}],
         )
 
+    def test_note_group_filter_round_trips_to_scoped_notes_query(self) -> None:
+        alice = Client()
+        self.login(alice, "alice")
+
+        bucket = self.post(
+            alice,
+            """
+            query {
+              noteGroups(
+                groupBy: [
+                  {field: STATUS},
+                  {field: UPDATED_AT, granularity: DAY}
+                ],
+                pagination: {limit: 1}
+              ) {
+                results {
+                  key {
+                    status
+                    updatedAtDay
+                    updatedAtDayRange { from to }
+                  }
+                  filter
+                  count
+                }
+              }
+            }
+            """,
+        )["data"]["noteGroups"]["results"][0]
+
+        rows = self.post(
+            alice,
+            """
+            query BucketRows($filter: NoteFilter) {
+              notes(filters: $filter, pagination: {limit: 100}) {
+                results { status updatedAt }
+              }
+            }
+            """,
+            {"filter": bucket["filter"]},
+        )["data"]["notes"]["results"]
+        start = _parse_datetime(bucket["key"]["updatedAtDayRange"]["from"])
+        end = _parse_datetime(bucket["key"]["updatedAtDayRange"]["to"])
+
+        self.assertGreater(len(rows), 0)
+        self.assertEqual(
+            bucket["filter"],
+            {
+                "status": {"exact": bucket["key"]["status"]},
+                "updatedAt": {
+                    "gte": bucket["key"]["updatedAtDayRange"]["from"],
+                    "lt": bucket["key"]["updatedAtDayRange"]["to"],
+                },
+            },
+        )
+        self.assertTrue(
+            all(
+                row["status"] == bucket["key"]["status"]
+                and start <= _parse_datetime(row["updatedAt"]) < end
+                for row in rows
+            )
+        )
+
     def test_platform_admin_sees_every_users_notes(self) -> None:
         self.login(self.client, "admin")
         data = self.graphql(
@@ -539,3 +602,9 @@ class IAMGraphQLTests(TransactionTestCase):
         )
         self.assertEqual(response.status_code, 200)
         return cast(dict[str, Any], json.loads(response.content))
+
+
+def _parse_datetime(value: str) -> datetime:
+    """Return the datetime encoded by a GraphQL DateTime string."""
+
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
