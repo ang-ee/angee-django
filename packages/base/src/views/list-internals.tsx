@@ -1,7 +1,7 @@
 // Leaf row/column/cell primitives for the data-view list surfaces: record rows,
 // `cellContent`, column building, and the group key/label helpers. Imports only
-// ui/sdk/page leaves — it must NOT import ListView or grouped-list, so both can
-// depend on it without a cycle (list-internals <- grouped-list <- ListView).
+// ui/sdk/page leaves — it must NOT import ListView, grouped-list, or board-view,
+// so those modules can depend on it without a cycle.
 import * as React from "react";
 import {
   flexRender,
