@@ -336,11 +336,21 @@ to data/features per P1. Engine: **Codex lifts** each slice; **3 reviews per sli
 File-level surface = the **P1 UI Inventory** below. Sift the source per slice; reconstruct,
 don't copy (tokens/visual-layout exempt per override). Goal: enhanced, cleaner, denser.
 
+### Fidelity method — capture placement from the live mockup, don't hand-list it
+Don't enumerate fine-grained look&feel/placement details by hand (they get missed — e.g.
+"Save/Discard go on **top**, not under the form"). Lift them mechanically from the two
+ground truths: **P1 source** owns behaviour/contract; the **live mockup `:5174`** owns
+visual + placement. Per surface:
+1. **Capture mockup truth:** `node .agents/tools/fidelity-capture.mjs http://127.0.0.1:5174 <route> <name> --hash [--dirty]` → a screenshot + a **placement-aware control inventory** (`test-results/fidelity/<name>.json`): every visible control/heading with its layout **band** (top control strip / body / bottom) and **side** (left/right). `--dirty` types into the form to surface dirty-only controls. Mockup routes are react-router paths (`/notes`, `/notes/:id`, `/notes/:id/edit`, `/files/:id`, `/health/:id`, `/calendar`, `/settings/preferences`, …).
+2. **Derive the fidelity spec** from the fingerprint + P1 source (slot order, conditional rules) — concrete, not prose.
+3. **Diff our render:** run the same extractor on our Storybook story / app screen and compare the band/side/order fingerprint → placement, ordering, and missing-control drift surface automatically. This is the visual-vs-mockup gate; "weak copy" can't pass silently.
+   - **Proven (form):** `/notes/1/edit --dirty` → `Discard` & `Save` both `band=top side=left` (dirty-only). Captured as the gate below.
+
 ## STAGE 1 — All visual components in Storybook (no backend)
 
 ### 1.0 Storybook & visual tooling
 - [x] done [x] verified [ ] checked by human (final qa) — Stand up a clean Storybook — `packages/storybook/` (Storybook 10 + react-vite, vite 6 / TS 5.7 aligned to workspace); loads tokens via `@angee/base/styles.css`; runs at `:6006`
-- [x] done [ ] verified [ ] checked by human (final qa) — Visual-review harness: Playwright screenshot of a story (`test-results/sb-story.mjs`) + compare to mockup (`:5174`); per-component parity log TBD
+- [x] done [x] verified [ ] checked by human (final qa) — Visual-review harness: **`.agents/tools/fidelity-capture.mjs`** — captures a screenshot + placement-aware control inventory (band/side) from the live mockup `:5174` (and from our stories), so look&feel/placement is lifted + diffed mechanically, not hand-listed (see "Fidelity method" above)
 - [x] done [ ] verified [ ] checked by human (final qa) — Story conventions (CSF) established (Button + TopMenu); kitchen-sink overview story TBD
 - [x] done [x] verified [ ] checked by human (final qa) — Base icons resolve in Storybook via a preview decorator seeding `baseIcons` into `AppRuntimeProvider` (TopMenu story renders icons)
 
@@ -367,7 +377,7 @@ don't copy (tokens/visual-layout exempt per override). Goal: enhanced, cleaner, 
 - [ ] done [ ] verified [ ] checked by human (final qa) — ListView: dense rows, collapsible grouped rows w/ counts, status badges, tag chips, avatars, column chooser, selection bar, aggregate footer, **column sort cycle (asc→desc→none, aria-sort), row-link nav (click/Enter/modifier), skeleton/empty/error/filtered-empty states, indeterminate select-all** + stories
 - [ ] done [ ] verified [ ] checked by human (final qa) — DataToolbar/CollectionDataToolbar: search, removable chips, custom filters, group-by + granularities, favorites, view switcher, Pager (list range + page-size popover; form record-number; prev/next) + stories
 - [ ] done [ ] verified [ ] checked by human (final qa) — DataPage/ResourcePage: `Page→Header→ControlBand→Body`(navigator aside + content); record placement inline/drawer + stories
-- [ ] done [ ] verified [ ] checked by human (final qa) — FormView + form-layout DSL (Field/Group/Header/Title/StatusBar/SmartButton/Notebook/Tab/Panel/Relation), **unsaved-changes nav guard, inline save-error banner, inline H1 title input (edit)/H1 (read-only), form record-pager + More overflow menu** + stories
+- [ ] done [ ] verified [ ] checked by human (final qa) — FormView + form-layout DSL (Field/Group/Header/Title/StatusBar/SmartButton/Notebook/Tab/Panel/Relation), **Save/Discard in the top control band (left, dirty-only) — never a bottom bar; control-band right group = smart-buttons → record-pager → view-switcher; unsaved-changes nav guard, inline save-error banner, inline H1 title input (edit)/H1 (read-only), More overflow menu** + stories (gate against the mockup fidelity fingerprint)
 - [ ] done [ ] verified [ ] checked by human (final qa) — BoardView/CalendarView/GalleryView/GanttView/TimelineView/TreeView/GraphView/DashboardView + stories
 
 ### 1.4 Widgets (presentational triplets edit/read/cell)
@@ -509,6 +519,7 @@ lift, not optional polish.
 | [ ] | `45b9fa0da fix notes server-side grouping integration`; `5e4d89d8b feat(DataView): grouped rows with collapsible carets + per-group summary` | Nested group rows | Group rows must be nested/collapsible with stable keys, summaries, and aggregate values, not a single flat group. |
 | [ ] | `b53a8fb63 Extract base pagination primitive`; P1 `packages/base/src/ui/pagination.tsx` + `views/data-view-model.ts` | Pager / page number | The pager has **two modes**, both showing position (not just a flat record range): **list** mode shows the record range `1-50 / N` with a **page-size popover** (options 10/20/50/80/100/200, default 50) and prev/next; **form** mode shows the record number `N / total` with prev/next to page through records. The current page / record position must always be visible. |
 | [ ] | `890a05111 Fix form save regression: send {id, input} with writable fields only`; `45c492557 page reload fix for saving`; `0d636d65c checkpoint commit - notes saving` | Form save behavior | Save and Discard controls appear only when the form is dirty. Saving must not flash/reload the form, must not revert to the initial value, and must reset the dirty baseline to the saved value. |
+| [ ] | mockup `/notes/1/edit --dirty` fingerprint (`Discard`,`Save` → band=top side=left); P1 `views/FormView.tsx` `FormViewToolbar`; mockup `pages/NotesForm.tsx:121-133` | Form action placement | Save/Discard render in the **top control band, left group** (beside Actions) — NOT in a bottom action bar. The control band's right group holds smart-buttons → record pager → view-switcher. Verify with the fidelity fingerprint, not by eye. |
 | [ ] | `83b7bae67 Notes views: restore NoteListView/NoteFormView; fix empty-form derivation`; `db161b717 Notes form: editable title, single status, audit fields, plain word count` | Form derivation | New/empty record forms must derive their editable field state correctly and render a single header status/title, not duplicate body/header fields. |
 | [ ] | `8c1ec64b1 Add readonly widget chrome and note word counter`; `98cd86aef notes form fields: drop bogus owner, bind word-count to real field`; `62478b4c5 notes: render backend word-count aggregate, drop client reduce` | Notes word count | Notes must override the word-count field with widget id `notes.wordCounter`. The form widget must read the live markdown body through `useFormState`, while list/group totals must use backend aggregate data. |
 | [ ] | `f4c39fb66 Lift markdown CodeMirror commands`; `d01ede91c Implement plan 010 markdown baseline` | Markdown editor | Markdown editor must keep CodeMirror command wiring, toolbar buttons, link input, keybindings, and preview behavior. |
