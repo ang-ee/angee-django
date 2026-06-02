@@ -6,13 +6,15 @@ import json
 from typing import Any
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import UnicodeUsernameValidator
 from django.db import models, transaction
 from django.utils import timezone
 from django_sqids import SqidsField
-from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import RelationshipTuple, app_settings, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.managers import RebacManager
+from rebac.models import active_relationship_model
 from rebac.permissions_mixin import RebacPermissionsMixin
 
 from angee.base.fields import EncryptedField, StateField
@@ -249,9 +251,36 @@ class AccountManager(RebacManager):
                 defaults=update_values,
                 create_defaults=create_values,
             )
-            if created and owner is not None:
+            if owner is not None and (created or self.owner_for(instance) is None):
                 _grant_owner_relation(instance, owner)
         return instance
+
+    def owner_for(self, account: Any) -> AbstractBaseUser | None:
+        """Return the user granted owner on ``account``, if one exists."""
+
+        resource_ref = to_object_ref(account)
+        Relationship = active_relationship_model()
+        with system_context(reason="iam.connections.owner"):
+            row = (
+                Relationship.objects.filter(
+                    resource_type=resource_ref.resource_type,
+                    resource_id=resource_ref.resource_id,
+                    relation="owner",
+                    subject_type=app_settings.REBAC_USER_TYPE,
+                    optional_subject_relation="",
+                )
+                .order_by("subject_id")
+                .first()
+            )
+            if row is None:
+                return None
+            UserModel = get_user_model()
+            # REBAC exposes SubjectRef creation publicly, but not inverse model lookup.
+            user_id_attr = str(getattr(UserModel._meta, "rebac_id_attr", None) or app_settings.REBAC_USER_ID_ATTR)
+            try:
+                return UserModel.objects.get(**{user_id_attr: row.subject_id})
+            except UserModel.DoesNotExist:
+                return None
 
 
 class ExternalAccount(SqidMixin, AuditMixin, AngeeModel):
