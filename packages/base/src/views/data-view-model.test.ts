@@ -3,49 +3,85 @@ import { describe, expect, test } from "vitest";
 import {
   createDataViewState,
   dataViewReducer,
+  dataViewSearchToState,
   dataViewSortToResourceOrder,
+  dataViewStateToSearch,
   dataViewStateToResourceListOptions,
-  parseDataViewSearchParams,
-  serializeDataViewState,
 } from "./data-view-model";
 
 describe("data-view model", () => {
-  test("serializes URL state through nuqs-compatible parsers", () => {
+  test("round-trips flat URL search state", () => {
     const state = createDataViewState({
       page: 3,
       pageSize: 20,
       sort: { field: "updatedAt", dir: "desc" },
       filter: { title: { iContains: "alpha" } },
-      group: { field: "updatedAt", granularity: "day" },
+      groupStack: [
+        { field: "status", granularity: "year" },
+        { field: "updatedAt", granularity: "month" },
+        { field: "owner" },
+      ],
       selectedIds: ["note-1", "note-2"],
       view: "board",
     });
 
-    const query = serializeDataViewState(state);
-    const params = new URLSearchParams(query);
+    const search = dataViewStateToSearch(state);
 
-    expect(params.get("page")).toBe("3");
-    expect(params.get("pageSize")).toBe("20");
-    expect(params.get("sort")).toBe("updatedAt:desc");
-    expect(params.get("filter")).toBe(
+    expect(search.page).toBe(3);
+    expect(search.pageSize).toBe(20);
+    expect(search.sort).toBe("updatedAt:desc");
+    expect(search.filter).toBe(
       JSON.stringify({ title: { iContains: "alpha" } }),
     );
-    expect(params.get("group")).toBe("updatedAt:day");
-    expect(params.has("selectedIds")).toBe(false);
-    expect(params.has("selection")).toBe(false);
-    expect(params.get("view")).toBe("board");
+    expect(search.group).toBe("status:year");
+    expect(search.then).toBe("updatedAt:month,owner");
+    expect("selectedIds" in search).toBe(false);
+    expect("selection" in search).toBe(false);
+    expect(search.view).toBe("board");
 
-    const roundTrip = parseDataViewSearchParams(query);
+    const roundTrip = dataViewSearchToState(search);
     expect(roundTrip.page).toBe(3);
     expect(roundTrip.pageSize).toBe(20);
     expect(roundTrip.sort).toEqual({ field: "updatedAt", dir: "desc" });
     expect(roundTrip.filter).toEqual({ title: { iContains: "alpha" } });
     expect(roundTrip.group).toEqual({
-      field: "updatedAt",
-      granularity: "day",
+      field: "status",
+      granularity: "year",
     });
+    expect(roundTrip.groupStack).toEqual([
+      { field: "status", granularity: "year" },
+      { field: "updatedAt", granularity: "month" },
+      { field: "owner" },
+    ]);
     expect([...roundTrip.selectedIds]).toEqual([]);
     expect(roundTrip.view).toBe("board");
+  });
+
+  test("omits default search values", () => {
+    expect(dataViewStateToSearch(createDataViewState())).toEqual({});
+  });
+
+  test("parses Router search strings without JSON-quoting URL values", () => {
+    const state = dataViewSearchToState({
+      page: "2",
+      pageSize: "80",
+      group: "status:year",
+      then: "updatedAt:month",
+      sort: "title:asc",
+      filter: JSON.stringify({ status: { exact: "ACTIVE" } }),
+      view: "board",
+    });
+
+    expect(state.page).toBe(2);
+    expect(state.pageSize).toBe(80);
+    expect(state.group).toEqual({ field: "status", granularity: "year" });
+    expect(state.groupStack).toEqual([
+      { field: "status", granularity: "year" },
+      { field: "updatedAt", granularity: "month" },
+    ]);
+    expect(state.sort).toEqual({ field: "title", dir: "asc" });
+    expect(state.filter).toEqual({ status: { exact: "ACTIVE" } });
+    expect(state.view).toBe("board");
   });
 
   test("resets page and clears selection when query scope changes", () => {

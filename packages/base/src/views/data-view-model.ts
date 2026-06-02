@@ -1,14 +1,4 @@
 import {
-  createLoader,
-  createParser,
-  createSerializer,
-  parseAsInteger,
-  parseAsJson,
-  parseAsStringLiteral,
-  type LoaderInput,
-  type inferParserType,
-} from "nuqs";
-import {
   DEFAULT_PAGE_SIZE,
   clampPageSize,
   type ResourceTypeName,
@@ -65,6 +55,22 @@ export interface DataViewInitialState {
   view?: DataViewKind;
 }
 
+const DATA_VIEW_SEARCH_SHAPE = {
+  page: undefined as number | undefined,
+  pageSize: undefined as number | undefined,
+  sort: undefined as string | undefined,
+  filter: undefined as string | undefined,
+  group: undefined as string | undefined,
+  then: undefined as string | undefined,
+  view: undefined as string | undefined,
+};
+
+export type DataViewSearchKey = keyof typeof DATA_VIEW_SEARCH_SHAPE;
+export type DataViewSearch = Partial<typeof DATA_VIEW_SEARCH_SHAPE>;
+export const DATA_VIEW_SEARCH_KEYS = Object.keys(
+  DATA_VIEW_SEARCH_SHAPE,
+) as DataViewSearchKey[];
+
 export type DataViewAction =
   | { type: "setPage"; page: number }
   | { type: "setPageSize"; pageSize: number }
@@ -76,42 +82,6 @@ export type DataViewAction =
   | { type: "toggleSelectedId"; id: string; selected?: boolean }
   | { type: "clearSelectedIds" }
   | { type: "setView"; view: DataViewKind };
-
-export const dataViewSortParser = createParser<DataViewSort>({
-  parse: parseDataViewSort,
-  serialize: serializeDataViewSort,
-  eq: dataViewSortsEqual,
-});
-
-export const dataViewGroupParser = createParser<DataViewGroup>({
-  parse: parseDataViewGroup,
-  serialize: serializeDataViewGroup,
-  eq: dataViewGroupsEqual,
-});
-
-export const dataViewGroupStackParser = createParser<readonly DataViewGroup[]>({
-  parse: parseDataViewGroupStack,
-  serialize: serializeDataViewGroupStack,
-  eq: dataViewGroupStacksEqual,
-});
-
-export const dataViewFilterParser =
-  parseAsJson<DataViewFilter>(dataViewFilterFromUnknown);
-
-export const dataViewQueryParsers = {
-  page: parseAsInteger.withDefault(1),
-  pageSize: parseAsInteger.withDefault(DEFAULT_DATA_VIEW_PAGE_SIZE),
-  sort: dataViewSortParser,
-  filter: dataViewFilterParser,
-  group: dataViewGroupParser,
-  then: dataViewGroupStackParser,
-  view: parseAsStringLiteral(DATA_VIEW_KINDS).withDefault("list"),
-};
-
-export type DataViewQueryValues = inferParserType<typeof dataViewQueryParsers>;
-
-const loadDataViewQuery = createLoader(dataViewQueryParsers);
-const serializeDataViewQuery = createSerializer(dataViewQueryParsers);
 
 export function createDataViewState(
   initial: DataViewInitialState = {},
@@ -180,51 +150,64 @@ export function dataViewReducer(
   }
 }
 
-export function dataViewStateToQueryValues(
-  state: DataViewState,
-): Partial<DataViewQueryValues> {
-  return {
-    page: state.page,
-    pageSize: state.pageSize,
-    sort: state.sort,
-    filter: hasFilter(state.filter) ? state.filter : null,
-    group: state.group,
-    then: state.groupStack.length > 1 ? state.groupStack.slice(1) : null,
-    view: state.view,
-  };
+export function dataViewStateToSearch(state: DataViewState): DataViewSearch {
+  const search: DataViewSearch = {};
+  if (state.page !== 1) search.page = state.page;
+  if (state.pageSize !== DEFAULT_DATA_VIEW_PAGE_SIZE) {
+    search.pageSize = state.pageSize;
+  }
+  if (state.sort) search.sort = serializeDataViewSort(state.sort);
+  if (hasFilter(state.filter)) search.filter = JSON.stringify(state.filter);
+  if (state.group) search.group = serializeDataViewGroup(state.group);
+  if (state.groupStack.length > 1) {
+    search.then = serializeDataViewGroupStack(state.groupStack.slice(1));
+  }
+  if (state.view !== "list") search.view = state.view;
+  return search;
 }
 
-export function dataViewStateFromQueryValues(
-  values: DataViewQueryValues,
+export function dataViewSearchToState(
+  search: DataViewSearch | Record<string, unknown>,
   initial: DataViewInitialState = {},
 ): DataViewState {
   const base = createDataViewState(initial);
+  const page = parseSearchInteger(search.page);
+  const pageSize = parseSearchInteger(search.pageSize);
+  const sort = parseSearchSort(search.sort);
+  const filter = parseSearchFilter(search.filter);
+  const group = parseSearchGroup(search.group);
+  const then = parseSearchGroupStack(search.then);
+  const view = parseSearchView(search.view);
   return createDataViewState({
-    page: values.page ?? base.page,
-    pageSize: values.pageSize ?? base.pageSize,
-    sort: values.sort ?? base.sort,
-    filter: values.filter ?? base.filter,
-    group: values.group ?? base.group,
+    page: page ?? base.page,
+    pageSize: pageSize ?? base.pageSize,
+    sort: sort ?? base.sort,
+    filter: filter ?? base.filter,
+    group: group ?? base.group,
     groupStack:
-      values.group || values.then
+      group || then
         ? [
-            ...(values.group ? [values.group] : []),
-            ...(values.then ?? []),
+            ...(group ? [group] : []),
+            ...(then ?? []),
           ]
         : base.groupStack,
-    view: values.view ?? base.view,
+    view: view ?? base.view,
   });
 }
 
-export function parseDataViewSearchParams(
-  input: LoaderInput,
-  initial: DataViewInitialState = {},
-): DataViewState {
-  return dataViewStateFromQueryValues(loadDataViewQuery(input), initial);
-}
-
-export function serializeDataViewState(state: DataViewState): string {
-  return serializeDataViewQuery(dataViewStateToQueryValues(state));
+export function mergeDataViewSearch(
+  current: Record<string, unknown>,
+  next: Partial<Record<DataViewSearchKey, unknown>>,
+): Record<string, unknown> {
+  const merged = { ...current };
+  for (const key of DATA_VIEW_SEARCH_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(next, key)) {
+      merged[key] = next[key];
+    } else {
+      delete merged[key];
+    }
+  }
+  return merged;
 }
 
 export function dataViewSortToResourceOrder(
@@ -312,6 +295,47 @@ function hasFilter(filter: DataViewFilter): boolean {
   return Object.keys(filter).length > 0;
 }
 
+// The model emits numbers in memory; reads also accept URL-stringified values.
+function parseSearchInteger(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseSearchSort(value: unknown): DataViewSort | null {
+  if (typeof value !== "string") return null;
+  return parseDataViewSort(value);
+}
+
+function parseSearchFilter(value: unknown): DataViewFilter | null {
+  if (typeof value !== "string" || value === "") return null;
+  try {
+    return dataViewFilterFromUnknown(JSON.parse(value));
+  } catch {
+    return null;
+  }
+}
+
+function parseSearchGroup(value: unknown): DataViewGroup | null {
+  if (typeof value !== "string") return null;
+  return parseDataViewGroup(value);
+}
+
+function parseSearchGroupStack(
+  value: unknown,
+): readonly DataViewGroup[] | null {
+  if (typeof value !== "string") return null;
+  return parseDataViewGroupStack(value);
+}
+
+function parseSearchView(value: unknown): DataViewKind | null {
+  if (typeof value !== "string") return null;
+  return isDataViewKind(value) ? value : null;
+}
+
 function parseDataViewSort(value: string): DataViewSort | null {
   const [field, dir, extra] = value.split(":");
   if (!field || extra !== undefined) return null;
@@ -321,13 +345,6 @@ function parseDataViewSort(value: string): DataViewSort | null {
 
 function serializeDataViewSort(sort: DataViewSort): string {
   return `${sort.field}:${sort.dir}`;
-}
-
-function dataViewSortsEqual(
-  left: DataViewSort,
-  right: DataViewSort,
-): boolean {
-  return left.field === right.field && left.dir === right.dir;
 }
 
 function parseDataViewGroup(value: string): DataViewGroup | null {
@@ -364,18 +381,14 @@ export function dataViewGroupsEqual(
   return left.field === right.field && left.granularity === right.granularity;
 }
 
-function dataViewGroupStacksEqual(
-  left: readonly DataViewGroup[],
-  right: readonly DataViewGroup[],
-): boolean {
-  if (left.length !== right.length) return false;
-  return left.every((group, index) => dataViewGroupsEqual(group, right[index]!));
-}
-
 function isGroupGranularity(value: string): value is DataViewGroupGranularity {
   return DATA_VIEW_GROUP_GRANULARITIES.includes(
     value as DataViewGroupGranularity,
   );
+}
+
+function isDataViewKind(value: string): value is DataViewKind {
+  return DATA_VIEW_KINDS.includes(value as DataViewKind);
 }
 
 function dataViewFilterFromUnknown(value: unknown): DataViewFilter | null {

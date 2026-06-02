@@ -81,6 +81,13 @@ export function DataPage<TRow extends Row = Row>({
   ...props
 }: DataPageProps<TRow>): React.ReactElement {
   const dataView = useDataViewMaybe();
+  const initialState = React.useMemo(
+    () => ({
+      pageSize,
+    }),
+    [pageSize],
+  );
+
   if (dataView) {
     return (
       <DataPageBody
@@ -90,13 +97,6 @@ export function DataPage<TRow extends Row = Row>({
       />
     );
   }
-
-  const initialState = React.useMemo(
-    () => ({
-      pageSize,
-    }),
-    [pageSize],
-  );
 
   return (
     <DataViewProvider initialState={initialState}>

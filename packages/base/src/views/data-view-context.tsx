@@ -2,13 +2,11 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from "react";
-import { useQueryStates, type HistoryOptions } from "nuqs";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import type {
   ResourceTypeName,
   UseResourceListOptions,
@@ -16,11 +14,11 @@ import type {
 
 import {
   createDataViewState,
-  dataViewQueryParsers,
   dataViewReducer,
-  dataViewStateFromQueryValues,
-  dataViewStateToQueryValues,
+  dataViewSearchToState,
+  dataViewStateToSearch,
   dataViewStateToResourceListOptions,
+  mergeDataViewSearch,
   type DataViewAction,
   type DataViewFilter,
   type DataViewGroup,
@@ -53,7 +51,6 @@ export interface DataViewContextValue {
 export interface DataViewProviderProps {
   children: ReactNode;
   initialState?: DataViewInitialState;
-  history?: HistoryOptions;
 }
 
 const DataViewContext = createContext<DataViewContextValue | null>(null);
@@ -61,25 +58,25 @@ type DataViewActions = Omit<
   DataViewContextValue,
   "state" | "resourceListOptions"
 >;
+type DataViewNavigate = (options: {
+  search: (current: Record<string, unknown>) => Record<string, unknown>;
+  replace?: boolean;
+}) => Promise<void> | void;
 
 export function DataViewProvider({
   children,
   initialState,
-  history = "push",
 }: DataViewProviderProps): ReactNode {
-  const [queryValues, setQueryValues] = useQueryStates(dataViewQueryParsers, {
-    history,
-  });
+  const search = useSearch({ strict: false });
+  // Narrow Router navigation to functional search updates; no from is supplied
+  // because the updater is route-agnostic.
+  const navigate = useNavigate() as DataViewNavigate;
   const [selectedIds, setSelectedIdsState] = useState<ReadonlySet<string>>(
     () => new Set(initialState?.selectedIds ?? []),
   );
-  const mountedRef = useRef(true);
-  const scheduledDispatchesRef = useRef<Set<ReturnType<typeof setTimeout>>>(
-    new Set(),
-  );
   const queryState = useMemo(
-    () => dataViewStateFromQueryValues(queryValues, initialState),
-    [queryValues, initialState],
+    () => dataViewSearchToState(search, initialState),
+    [search, initialState],
   );
   const state = useMemo<DataViewState>(
     () => ({ ...queryState, selectedIds }),
@@ -92,36 +89,19 @@ export function DataViewProvider({
         setSelectedIdsState((current) => reduceSelectedIds(current, action));
         return;
       }
-      const timeout = globalThis.setTimeout(() => {
-        scheduledDispatchesRef.current.delete(timeout);
-        if (!mountedRef.current) return;
-        setSelectedIdsState((current) => reduceSelectedIds(current, action));
-        void setQueryValues((current) => {
-          const currentState = dataViewStateFromQueryValues(
-            current,
-            initialState,
-          );
+      setSelectedIdsState((current) => reduceSelectedIds(current, action));
+      void navigate({
+        search: (current) => {
+          const currentState = dataViewSearchToState(current, initialState);
           const next = dataViewReducer(currentState, action);
-          return dataViewStateToQueryValues(next);
-        });
-      }, 0);
-      scheduledDispatchesRef.current.add(timeout);
+          return mergeDataViewSearch(current, dataViewStateToSearch(next));
+        },
+        // View-state writes replace history so filter/sort/page churn does not
+        // spam Back; selection churn stays local.
+        replace: true,
+      });
     },
-    [initialState, setQueryValues],
-  );
-
-  useEffect(
-    () => {
-      mountedRef.current = true;
-      return () => {
-        mountedRef.current = false;
-        for (const timeout of scheduledDispatchesRef.current) {
-          globalThis.clearTimeout(timeout);
-        }
-        scheduledDispatchesRef.current.clear();
-      };
-    },
-    [],
+    [initialState, navigate],
   );
 
   const actions = useMemo(() => createDataViewActions(dispatch), [dispatch]);

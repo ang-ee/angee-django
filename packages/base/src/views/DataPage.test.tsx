@@ -10,19 +10,23 @@ import {
   within,
 } from "@testing-library/react";
 import {
-  RouterContextProvider,
+  Outlet,
+  RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
+  useRouterState,
 } from "@tanstack/react-router";
 import {
+  createContext,
+  useContext,
+  useEffect,
   useMemo,
   useState,
-  type ComponentProps,
   type ReactElement,
+  type ReactNode,
 } from "react";
-import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
 import {
@@ -30,6 +34,7 @@ import {
   BreadcrumbProvider,
 } from "../chrome/Breadcrumb";
 import { ModalsHost } from "../feedback";
+import { parseFlatSearch, stringifyFlatSearch } from "../createApp";
 import { DataPage } from "./DataPage";
 import type { FormField } from "./FormView";
 import type { ListColumn } from "./ListView";
@@ -200,8 +205,9 @@ describe("DataPage", () => {
     );
   });
 
-  test("renders grouped board lanes without repeating the group column on cards", async () => {
+  test("reads board state from Router search and writes view changes", async () => {
     const onSelect = vi.fn();
+    const onUrlUpdate = vi.fn();
     const boardColumns = [
       { field: "title", header: "Title" },
       {
@@ -217,20 +223,19 @@ describe("DataPage", () => {
     ] satisfies readonly ListColumn[];
 
     render(
-      <TestUrlState>
+      <TestUrlState
+        searchParams="?view=board&group=status"
+        onUrlUpdate={onUrlUpdate}
+      >
         <DataPage
           model="notes.Note"
           columns={boardColumns}
           formFields={formFields}
-          defaultGroup={{ field: "status" }}
           onSelect={onSelect}
           rowHref={(row) => row.id === "note-1" ? "/notes/note-1" : ""}
         />
       </TestUrlState>,
     );
-
-    await screen.findByRole("button", { name: "Remove group" });
-    fireEvent.click(screen.getByRole("button", { name: "Board view" }));
 
     const activeLane = await screen.findByRole("region", { name: "Active" });
     const draftLane = await screen.findByRole("region", { name: "Draft" });
@@ -263,6 +268,13 @@ describe("DataPage", () => {
     });
     fireEvent.click(clickableCard);
     expect(onSelect).toHaveBeenCalledWith("note-2");
+
+    fireEvent.click(screen.getByRole("button", { name: "List view" }));
+    await waitFor(() => {
+      const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
+      expect(latest?.searchParams.get("view")).toBeNull();
+      expect(latest?.searchParams.get("group")).toBe("status");
+    });
   });
 
   test("publishes persistent breadcrumbs for the selected record", async () => {
@@ -282,7 +294,9 @@ describe("DataPage", () => {
       </TestUrlState>,
     );
 
-    const breadcrumb = screen.getByRole("navigation", { name: "Breadcrumb" });
+    const breadcrumb = await screen.findByRole("navigation", {
+      name: "Breadcrumb",
+    });
     await waitFor(() =>
       expect(within(breadcrumb).getByText("Second")).toBeTruthy(),
     );
@@ -379,6 +393,29 @@ describe("DataPage", () => {
     });
   });
 
+  test("keeps page size and default group updates from the same commit", async () => {
+    const onUrlUpdate = vi.fn();
+    render(
+      <TestUrlState onUrlUpdate={onUrlUpdate}>
+        <DataPage
+          model="notes.Note"
+          columns={[...columns, { field: "updatedAt", header: "Updated At" }]}
+          formFields={formFields}
+          pageSize={2}
+          defaultGroup={{ field: "updatedAt", granularity: "day" }}
+        />
+      </TestUrlState>,
+    );
+
+    await screen.findByRole("button", { name: "Records 1-2 / 4" });
+    await screen.findByRole("button", { name: "Remove group" });
+    await waitFor(() => {
+      const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
+      expect(latest?.searchParams.get("pageSize")).toBe("2");
+      expect(latest?.searchParams.get("group")).toBe("updatedAt:day");
+    });
+  });
+
   test("changing the group resets a deep page through the data view state", async () => {
     const onUrlUpdate = vi.fn();
     render(
@@ -450,31 +487,76 @@ function nextTask(): Promise<void> {
   });
 }
 
+interface TestUrlStateProps {
+  children: ReactNode;
+  searchParams?: string;
+  onUrlUpdate?: (url: URL) => void;
+}
+
+const TestUrlStateContext = createContext<TestUrlStateProps | null>(null);
+
 function TestUrlState({
   children,
-  hasMemory = true,
-  ...props
-}: ComponentProps<typeof NuqsTestingAdapter>): ReactElement {
+  searchParams = "",
+  onUrlUpdate,
+}: TestUrlStateProps): ReactElement {
   const router = useMemo(() => {
-    const rootRoute = createRootRoute();
+    const rootRoute = createRootRoute({ component: TestUrlStateRoot });
     const indexRoute = createRoute({
       getParentRoute: () => rootRoute,
       path: "/",
-      component: () => null,
+      component: TestUrlStateScreen,
     });
     return createRouter({
       routeTree: rootRoute.addChildren([indexRoute]),
-      history: createMemoryHistory({ initialEntries: ["/"] }),
+      history: createMemoryHistory({
+        initialEntries: [initialTestUrl(searchParams)],
+      }),
+      parseSearch: parseFlatSearch,
+      stringifySearch: stringifyFlatSearch,
     });
-  }, []);
+  }, [searchParams]);
 
   return (
-    <RouterContextProvider router={router}>
-      <ModalsHost>
-        <NuqsTestingAdapter {...props} hasMemory={hasMemory}>
-          {children}
-        </NuqsTestingAdapter>
-      </ModalsHost>
-    </RouterContextProvider>
+    <TestUrlStateContext.Provider value={{ children, onUrlUpdate }}>
+      <RouterProvider router={router} />
+    </TestUrlStateContext.Provider>
   );
+}
+
+function TestUrlStateRoot(): ReactElement {
+  return (
+    <ModalsHost>
+      <Outlet />
+    </ModalsHost>
+  );
+}
+
+function TestUrlStateScreen(): ReactElement {
+  const context = useContext(TestUrlStateContext);
+  return (
+    <>
+      <TestUrlStateObserver onUrlUpdate={context?.onUrlUpdate} />
+      {context?.children}
+    </>
+  );
+}
+
+function TestUrlStateObserver({
+  onUrlUpdate,
+}: {
+  onUrlUpdate?: (url: URL) => void;
+}): null {
+  const href = useRouterState({
+    select: (state) => state.location.href,
+  });
+  useEffect(() => {
+    onUrlUpdate?.(new URL(href, "https://angee.test"));
+  }, [href, onUrlUpdate]);
+  return null;
+}
+
+function initialTestUrl(searchParams: string): string {
+  if (!searchParams) return "/";
+  return searchParams.startsWith("?") ? `/${searchParams}` : `/?${searchParams}`;
 }

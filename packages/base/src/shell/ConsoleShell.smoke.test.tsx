@@ -9,10 +9,10 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { useMemo, type ReactNode, type SVGProps } from "react";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 
+import { parseFlatSearch, stringifyFlatSearch } from "../createApp";
 import { ConsoleShell } from "./ConsoleShell";
 import { useChatterContent } from "../communication";
 
@@ -51,11 +51,7 @@ vi.mock("@angee/sdk", async (importOriginal) => {
 
 function renderInRouter(children: ReactNode) {
   const rootRoute = createRootRoute({
-    component: () => (
-      <NuqsTestingAdapter>
-        <Outlet />
-      </NuqsTestingAdapter>
-    ),
+    component: () => <Outlet />,
   });
   const notesRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -70,6 +66,8 @@ function renderInRouter(children: ReactNode) {
   const router = createRouter({
     routeTree: rootRoute.addChildren([notesRoute, archiveRoute]),
     history: createMemoryHistory({ initialEntries: ["/notes"] }),
+    parseSearch: parseFlatSearch,
+    stringifySearch: stringifyFlatSearch,
   });
 
   return render(<RouterProvider router={router} />);

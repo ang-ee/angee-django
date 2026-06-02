@@ -51,6 +51,11 @@ export class NotesPage extends PageObject {
   get rows(): Locator {
     return this.page.locator("tbody tr");
   }
+  /** Record rows only — they carry role="link"; grouped lists also render
+   *  non-navigable group-header rows, which this excludes. */
+  get recordRows(): Locator {
+    return this.page.locator("tbody tr[role=link]");
+  }
 
   /** Navigate to /notes and wait past the "Loading workspace…" bootstrap until
    * the list (its pager record label) has rendered. */
@@ -86,9 +91,10 @@ export class NotesPage extends PageObject {
     await this.page.getByText("Group by", { exact: false }).first().waitFor();
   }
 
-  /** Navigate to the first record's form by clicking its row. */
+  /** Navigate to the first record's form by clicking its row. Targets a record
+   *  row specifically so a grouped list's header rows don't get clicked. */
   async openFirstNote(): Promise<void> {
-    await this.rows.first().click();
+    await this.recordRows.first().click();
     await this.page.waitForURL(/\/notes\/.+/, { timeout: 10000 });
     await this.page.locator(".cm-content").first().waitFor({ timeout: 15000 });
   }

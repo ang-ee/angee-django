@@ -116,13 +116,15 @@ export function ListView<TRow extends Row = Row>(
   props: ListViewProps<TRow>,
 ): React.ReactElement {
   const dataView = useDataViewMaybe();
+  const initialState = React.useMemo(
+    () => ({
+      pageSize: props.pageSize,
+    }),
+    [props.pageSize],
+  );
   if (dataView) return <ListViewBody {...props} dataView={dataView} />;
   return (
-    <DataViewProvider
-      initialState={{
-        pageSize: props.pageSize,
-      }}
-    >
+    <DataViewProvider initialState={initialState}>
       <ListViewBound {...props} />
     </DataViewProvider>
   );

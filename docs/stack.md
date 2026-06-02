@@ -51,11 +51,11 @@ Dependency changes must update this file in the same change.
 | TypeScript >= 6 | Language and type system | Branded boundary types |
 | urql React 5 + @urql/core 6 | GraphQL client, normalized cache, subscriptions | Provider stack and invalidation wiring |
 | graphql-ws 6 | GraphQL WebSocket lifecycle | Connection params and retry policy |
-| TanStack Router | Type-safe routing | `defineAddon` to `createApp` route composition |
+| TanStack Router | Type-safe routing and search params | `defineAddon` to `createApp` route composition and flat URL search codec |
 | TanStack Form | Form state | `FormView` binding |
 | TanStack Table | Columns, sort, filter, grouping, selection | `ListView` and `BoardView` bindings |
 | TanStack Virtual | Row and column virtualization | Long-list wiring |
-| nuqs | Type-safe URL query state | View state (page, sort, filter, group) in the address bar |
+| nuqs | Type-safe URL query state | Remaining chrome query state such as top-menu tabs |
 | valibot | Schema validation | Server-emitted schema binding |
 | i18next | Runtime i18n | Per-addon namespace convention |
 | date-fns | Date and relative-time formatting | Date and timestamp widgets |
