@@ -1,11 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { TopMenu, type TopMenuTab } from "@angee/base";
+import { TopMenu } from "@angee/base";
 
-const tabs: readonly TopMenuTab[] = [
-  { id: "all", label: "All notes", icon: "list", filter: {} },
-  { id: "starred", label: "Starred", icon: "star", filter: { isStarred: true } },
-  { id: "archive", label: "Archive", icon: "archive", filter: { status: { exact: "ARCHIVED" } } },
-];
+import { chromeMenuItems, topMenuTabs } from "./chrome-fixtures";
 
 const meta = {
   title: "Chrome/TopMenu",
@@ -19,10 +15,18 @@ export default meta;
 
 type Story = StoryObj<typeof meta>;
 
-export const Default: Story = {
+export const RuntimeMenu: Story = {
   render: () => (
     <div className="rounded-md bg-rail p-2 text-on-rail">
-      <TopMenu tabs={tabs} />
+      <TopMenu items={chromeMenuItems} />
+    </div>
+  ),
+};
+
+export const DataTabs: Story = {
+  render: () => (
+    <div className="rounded-md bg-rail p-2 text-on-rail">
+      <TopMenu tabs={topMenuTabs} />
     </div>
   ),
 };

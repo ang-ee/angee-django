@@ -1,0 +1,22 @@
+import type { Meta, StoryObj } from "@storybook/react-vite";
+import { Systray } from "@angee/base";
+
+const meta = {
+  title: "Chrome/Systray",
+  component: Systray,
+  parameters: {
+    layout: "centered",
+  },
+} satisfies Meta<typeof Systray>;
+
+export default meta;
+
+type Story = StoryObj<typeof meta>;
+
+export const Default: Story = {
+  render: () => (
+    <div className="rounded-md bg-rail p-3 text-on-rail">
+      <Systray />
+    </div>
+  ),
+};
