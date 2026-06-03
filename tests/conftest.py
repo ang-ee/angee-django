@@ -8,6 +8,7 @@ from angee.iam.models import Credential as AbstractCredential
 from angee.iam.models import ExternalAccount as AbstractExternalAccount
 from angee.iam.models import OAuthClient as AbstractOAuthClient
 from angee.iam.models import Vendor as AbstractVendor
+from angee.integrate.models import WebhookSubscription as AbstractWebhookSubscription
 
 
 class Vendor(AbstractVendor):
@@ -59,6 +60,19 @@ class Credential(AbstractCredential):
         app_label = "iam"
         db_table = "test_connections_credential"
         rebac_resource_type = "auth/credential"
+        rebac_id_attr = "sqid"
+
+
+class WebhookSubscription(AbstractWebhookSubscription):
+    """Concrete integrate webhook subscription used by source-addon tests."""
+
+    class Meta(AbstractWebhookSubscription.Meta):
+        """Django model options for the canonical test webhook subscription."""
+
+        abstract = False
+        app_label = "integrate"
+        db_table = "test_integrate_webhook_subscription"
+        rebac_resource_type = "integrate/webhook_subscription"
         rebac_id_attr = "sqid"
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import socket
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -16,7 +17,7 @@ from rebac import system_context
 from angee.base.models import AngeeModel
 from angee.resources.entries import ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
-from angee.resources.fetch import _SchemeCheckedRedirectHandler, fetch_url
+from angee.resources.fetch import _PublicUrlRedirectHandler, fetch_url
 from angee.resources.models import Resource
 from angee.resources.ordering import order_entries
 from angee.resources.widgets import resolve_xref
@@ -210,17 +211,33 @@ def test_order_entries_detects_cycles(tmp_path: Path) -> None:
 def test_fetch_url_rejects_non_http_urls() -> None:
     """Remote resources are limited to http and https URLs."""
 
-    with pytest.raises(ResourceLoadError, match="http/https"):
+    with pytest.raises(ResourceLoadError, match="http or https"):
         fetch_url("file:///private/resource.csv")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1/data.csv",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://[fd00:ec2::254]/data.csv",
+        "http://10.0.0.5/data.csv",
+    ],
+)
+def test_fetch_url_rejects_ssrf_unsafe_targets(url: str) -> None:
+    """Fetch refuses hosts that resolve to loopback, private, link-local, or metadata IPs."""
+
+    with pytest.raises(ResourceLoadError, match="public IP"):
+        fetch_url(url)
 
 
 def test_fetch_url_rejects_redirect_to_non_http_url() -> None:
     """Redirected resource URLs are limited to http and https targets."""
 
     request = urllib.request.Request("https://example.test/data.csv")
-    handler = _SchemeCheckedRedirectHandler()
+    handler = _PublicUrlRedirectHandler()
 
-    with pytest.raises(ResourceLoadError, match="disallowed scheme"):
+    with pytest.raises(ResourceLoadError, match="http or https"):
         handler.redirect_request(
             request,
             None,
@@ -271,10 +288,15 @@ def test_fetch_url_caches_by_full_url(
     def build_opener(*handlers: object) -> Opener:
         """Return an opener with redirect scheme checks installed."""
 
-        assert any(isinstance(handler, _SchemeCheckedRedirectHandler) for handler in handlers)
+        assert any(isinstance(handler, _PublicUrlRedirectHandler) for handler in handlers)
         return Opener()
 
     monkeypatch.setattr("urllib.request.build_opener", build_opener)
+    # The pre-flight SSRF guard resolves the host; pin it to a public address.
+    monkeypatch.setattr(
+        "angee.base.net.socket.getaddrinfo",
+        lambda *args, **kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))],
+    )
 
     first = fetch_url("https://example.test/data.csv")
     second = fetch_url("https://example.test/data.csv")

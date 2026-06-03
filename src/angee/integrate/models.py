@@ -6,10 +6,13 @@ account; a human must run ``uv run examples/notes-angee/manage.py makemigrations
 
 from __future__ import annotations
 
+import json
+import logging
 from datetime import datetime, timedelta
 from typing import Any
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.utils import timezone
 from django_sqids import SqidsField
@@ -19,8 +22,11 @@ from rebac.managers import RebacManager
 from angee.base.fields import EncryptedField, StateField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
+from angee.base.net import validate_public_url
 from angee.base.relations import grant_owner
-from angee.integrate.validators import validate_public_url
+from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
+
+logger = logging.getLogger(__name__)
 
 
 class CapabilityStatus(models.TextChoices):
@@ -35,8 +41,12 @@ class CapabilityStatus(models.TextChoices):
 class Capability(SqidMixin, AuditMixin, AngeeModel):
     """Abstract base for domain-owned capabilities.
 
-    The concrete domain subclass owns its ``rebac_resource_type``.
+    The concrete domain subclass owns its ``rebac_resource_type``. A pure base:
+    ``_composer_emits = False`` keeps it out of runtime emission (the domain
+    subclass is what the composer emits).
     """
+
+    _composer_emits = False
 
     account = models.ForeignKey("iam.ExternalAccount", on_delete=models.PROTECT, related_name="+")
     config = models.JSONField(default=dict)
@@ -72,7 +82,13 @@ class Capability(SqidMixin, AuditMixin, AngeeModel):
 
 
 class Bridge(Capability):
-    """Abstract base for capabilities that synchronize or subscribe to vendor data."""
+    """Abstract base for capabilities that synchronize or subscribe to vendor data.
+
+    Another pure base — ``_composer_emits`` is non-inherited, so this re-declares
+    the opt-out (``Capability``'s does not carry down).
+    """
+
+    _composer_emits = False
 
     cursor = models.JSONField(default=dict)
     poll_interval = models.PositiveIntegerField(default=300)
@@ -157,6 +173,14 @@ class Bridge(Capability):
 
         raise NotImplementedError("Bridge subclasses must implement verify_webhook().")
 
+    def dispatch_inbound(self, request_or_payload: Any) -> bool:
+        """Verify one inbound webhook and apply it to this bridge when authentic."""
+
+        if not self.verify_webhook(request_or_payload):
+            return False
+        self.handle_webhook(request_or_payload)
+        return True
+
     def start_live(self) -> None:
         """Start or renew this bridge's live vendor subscription."""
 
@@ -190,6 +214,59 @@ class WebhookSubscriptionManager(RebacManager):
                 grant_owner(instance, instance.owner)
         return instance
 
+    def deliver_event(
+        self,
+        *,
+        kind: Any,
+        payload: Any,
+        impl_app: str = "",
+        account: Any | None = None,
+    ) -> dict[str, int]:
+        """Deliver one integration event to every matching enabled subscription.
+
+        Actor-less framework fan-out: it reads subscriptions across all owners, so
+        it runs under ``system_context``. Each subscription matches and delivers
+        itself; this method only owns the row-set loop and the success/error tally.
+        """
+
+        kind_value = str(getattr(kind, "value", kind))
+        body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        delivered = 0
+        errors = 0
+        with system_context(reason="integrate.webhooks.deliver"):
+            for subscription in self.filter(enabled=True).order_by("pk"):
+                if not subscription.matches(kind=kind_value, impl_app=impl_app, account=account):
+                    continue
+                try:
+                    status = subscription.deliver(body)
+                except Exception as exc:
+                    logger.exception("Webhook delivery failed for subscription %s.", subscription.public_id)
+                    subscription.record_delivery_failure(
+                        status=self._failure_status(exc),
+                        error=self._error_message(exc),
+                    )
+                    errors += 1
+                else:
+                    subscription.record_delivery(status)
+                    delivered += 1
+        return {"delivered": delivered, "errors": errors}
+
+    @staticmethod
+    def _failure_status(exc: Exception) -> str:
+        """Return an HTTP status string from a delivery exception when available."""
+
+        if isinstance(exc, WebhookDeliveryError):
+            return exc.status
+        return ""
+
+    @staticmethod
+    def _error_message(exc: Exception) -> str:
+        """Return a compact telemetry message for a delivery exception."""
+
+        if isinstance(exc, ValidationError):
+            return "; ".join(str(message) for message in exc.messages)
+        return f"{type(exc).__name__}: {exc}"
+
 
 class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
     """Outbound webhook endpoint owned by one user."""
@@ -221,6 +298,55 @@ class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
     class Meta:
         """Django model options for webhook subscriptions."""
 
-        abstract = False
+        abstract = True
         rebac_resource_type = "integrate/webhook_subscription"
         rebac_id_attr = "sqid"
+
+    _delivery_update_fields = (
+        "consecutive_failures",
+        "last_delivery_at",
+        "last_delivery_status",
+        "last_error",
+        "updated_at",
+    )
+
+    def matches(self, *, kind: str, impl_app: str, account: Any | None) -> bool:
+        """Return whether this subscription should receive one event."""
+
+        if kind not in {str(value) for value in self.event_kinds or ()}:
+            return False
+        impl_app_filter = tuple(str(value) for value in self.impl_app_filter or ())
+        if impl_app_filter and impl_app not in impl_app_filter:
+            return False
+        if self.account_filter_id is None:
+            return True
+        return account is not None and self.account_filter_id == getattr(account, "pk", None)
+
+    def deliver(self, body: bytes) -> str:
+        """POST one signed event body to this subscription's pinned target; raise on non-2xx."""
+
+        return PinnedWebhookClient(str(self.target_url)).post(secret=str(self.secret), body=body)
+
+    def record_delivery(self, status: str) -> None:
+        """Persist success telemetry for one delivery attempt (mirrors ``Bridge.record_sync``)."""
+
+        self.last_delivery_at = timezone.now()
+        self.last_delivery_status = status
+        self.last_error = ""
+        self.consecutive_failures = 0
+        self.save(update_fields=self._delivery_update_fields)
+
+    def record_delivery_failure(self, *, status: str, error: str) -> None:
+        """Persist failure telemetry for one delivery attempt (mirrors ``Bridge.record_sync_error``).
+
+        Takes the already-classified ``status``/``error``: the delivery layer
+        owns turning a delivery exception into those strings.
+        """
+
+        self.last_delivery_at = timezone.now()
+        self.last_delivery_status = status
+        self.last_error = error
+        # Atomic add so concurrent fan-outs to the same subscription don't lose an
+        # increment — this counter is the thing failure policy gates on.
+        self.consecutive_failures = models.F("consecutive_failures") + 1
+        self.save(update_fields=self._delivery_update_fields)

@@ -248,13 +248,15 @@ class BaseAddonConfig(AppConfig):
         return origin == self.name or origin.startswith(package_prefix)
 
     def _is_source_model(self, value: type) -> bool:
-        """Return true for abstract Angee source models."""
+        """Return true for abstract Angee source models the composer emits."""
 
         # Deferred for the same Django app-populate phase as
         # ``_model_contributions``.
         from angee.base.models import AngeeModel
 
-        return issubclass(value, AngeeModel) and value is not AngeeModel and value._meta.abstract
+        if not (issubclass(value, AngeeModel) and value is not AngeeModel and value._meta.abstract):
+            return False
+        return cast(type[AngeeModel], value).is_composer_emitted()
 
     def _schema_part_values(
         self,

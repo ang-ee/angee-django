@@ -13,10 +13,3 @@ class IntegrateConfig(BaseAddonConfig):
     label = "integrate"
     depends_on = ("iam",)
     rebac_schema = "permissions.zed"
-
-    def _is_source_model(self, value: type) -> bool:
-        """Keep import-only capability bases out of runtime emission."""
-
-        if value.__name__ in {"Capability", "Bridge"}:
-            return False
-        return super()._is_source_model(value)

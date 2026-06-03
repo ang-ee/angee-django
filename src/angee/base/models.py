@@ -20,6 +20,14 @@ class AngeeModel(TimestampMixin, RebacMixin):
     extends: str | None = None
     """Optional ``app_label.ModelName`` target this source model extends."""
 
+    _composer_emits: bool = True
+    """Per-class opt-out of runtime emission, read only via ``is_composer_emitted``.
+
+    The read is non-inherited, so this ``True`` documents the default rather than
+    acting as one: a base opts out with ``_composer_emits = False`` in its own
+    body, and that opt-out does not carry to subclasses.
+    """
+
     class Meta:
         """Django model options for Angee's abstract model base."""
 
@@ -30,6 +38,20 @@ class AngeeModel(TimestampMixin, RebacMixin):
         """Return this model's normalized composition label."""
 
         return cls._meta.label_lower
+
+    @classmethod
+    def is_composer_emitted(cls) -> bool:
+        """Return whether the composer emits a concrete table for this model.
+
+        Read **non-inherited** from the declaring class — deliberately unlike
+        ``extends``, which is inherited. An abstract base that exists only for
+        other source models to subclass (e.g. ``integrate.Capability``) sets
+        ``_composer_emits = False`` to stay out of emission; because the read is
+        non-inherited, a concrete subclass that does not re-declare it still
+        emits, and each such base opts out for itself.
+        """
+
+        return cls.__dict__.get("_composer_emits", True)
 
     @classmethod
     def get_extension_target(cls) -> str | None:

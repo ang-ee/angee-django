@@ -15,11 +15,11 @@ from django.db import connection
 from rebac import system_context, to_object_ref, to_subject_ref
 from rebac.models import active_relationship_model
 
+from angee.base.net import validate_public_url
 from angee.integrate.events import EventKind
-from angee.integrate.models import Bridge, WebhookSubscription
-from angee.integrate.validators import validate_public_url
-from angee.integrate.webhooks import HTTP_TIMEOUT_SECONDS, SIGNATURE_HEADER, deliver_event, dispatch_inbound
-from tests.conftest import ExternalAccount, Vendor, _create_missing_tables
+from angee.integrate.models import Bridge, Capability
+from angee.integrate.webhooks import HTTP_TIMEOUT_SECONDS, SIGNATURE_HEADER
+from tests.conftest import ExternalAccount, Vendor, WebhookSubscription, _create_missing_tables
 
 
 class DispatchBridge(Bridge):
@@ -141,6 +141,15 @@ def test_validate_public_url_accepts_public_dns(monkeypatch: pytest.MonkeyPatch)
     validate_public_url("https://hooks.example.test/events")
 
 
+def test_composer_emits_opt_out_is_per_class() -> None:
+    """``composer_emits=False`` keeps the abstract bases unemitted, non-inherited."""
+
+    assert Capability.is_composer_emitted() is False
+    assert Bridge.is_composer_emitted() is False
+    # A concrete subclass that never opts out still emits — the opt-out is per-class.
+    assert DispatchBridge.is_composer_emitted() is True
+
+
 @pytest.mark.django_db(transaction=True)
 def test_deliver_event_signs_and_posts_only_matching_subscriptions(
     webhook_tables: None,
@@ -203,7 +212,7 @@ def test_deliver_event_signs_and_posts_only_matching_subscriptions(
             account_filter=other_account,
         )
 
-    result = deliver_event(
+    result = WebhookSubscription.objects.deliver_event(
         kind=EventKind.BRIDGE_SYNCED,
         payload=payload,
         impl_app="notes",
@@ -270,7 +279,7 @@ def test_deliver_event_failure_increments_consecutive_failures(
             consecutive_failures=4,
         )
 
-    result = deliver_event(
+    result = WebhookSubscription.objects.deliver_event(
         kind=EventKind.BRIDGE_ERRORED,
         payload={"bridge": "br_1"},
     )
@@ -318,7 +327,7 @@ def test_deliver_event_rejects_unsafe_resolved_target_without_connecting(
             event_kinds=[EventKind.BRIDGE_ERRORED.value],
         )
 
-    result = deliver_event(
+    result = WebhookSubscription.objects.deliver_event(
         kind=EventKind.BRIDGE_ERRORED,
         payload={"bridge": "br_1"},
     )
@@ -353,7 +362,7 @@ def test_deliver_event_redirect_response_fails_without_following(
             consecutive_failures=2,
         )
 
-    result = deliver_event(
+    result = WebhookSubscription.objects.deliver_event(
         kind=EventKind.BRIDGE_ERRORED,
         payload={"bridge": "br_1"},
     )
@@ -377,7 +386,7 @@ def test_dispatch_inbound_verifies_then_handles_fixture_bridge() -> None:
     bridge.calls = []
     bridge.accepts = True
 
-    result = dispatch_inbound(bridge=bridge, request_or_payload=payload)
+    result = bridge.dispatch_inbound(payload)
 
     assert result is True
     assert bridge.calls == [("verify", payload), ("handle", payload)]
@@ -392,7 +401,7 @@ def test_dispatch_inbound_rejects_without_handling_when_verify_returns_false() -
     bridge.calls = []
     bridge.accepts = False
 
-    result = dispatch_inbound(bridge=bridge, request_or_payload=payload)
+    result = bridge.dispatch_inbound(payload)
 
     assert result is False
     assert bridge.calls == [("verify", payload)]
@@ -409,7 +418,7 @@ def test_dispatch_inbound_does_not_handle_when_verify_raises() -> None:
     bridge.verify_error = RuntimeError("bad signature")
 
     with pytest.raises(RuntimeError, match="bad signature"):
-        dispatch_inbound(bridge=bridge, request_or_payload=payload)
+        bridge.dispatch_inbound(payload)
 
     assert bridge.calls == [("verify", payload)]
 
