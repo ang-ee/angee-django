@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
@@ -9,6 +10,7 @@ from urllib import parse
 
 import pytest
 from asgiref.sync import async_to_sync
+from cryptography.hazmat.primitives.asymmetric import rsa
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.db import connection
@@ -24,7 +26,7 @@ from angee.iam.oidc.errors import (
     INVALID_STATE,
     OidcFlowError,
 )
-from tests.conftest import ExternalAccount, OAuthClient, Vendor, _create_missing_tables
+from tests.conftest import Credential, ExternalAccount, OAuthClient, Vendor, _create_missing_tables
 
 
 def test_discovery_fallback_fills_blank_authorize_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -127,6 +129,52 @@ def test_verify_id_token_rejects_bad_nonce(monkeypatch: pytest.MonkeyPatch) -> N
     with pytest.raises(OidcFlowError) as exc_info:
         oidc_client.verify_id_token(oauth_client, "token", nonce="nonce", _jwks_client=_FakeJwksClient())
 
+    assert exc_info.value.code == INVALID_ID_TOKEN
+
+
+def test_verify_id_token_accepts_rs256_and_rejects_ps256() -> None:
+    """ID token verification accepts only the configured asymmetric algorithms."""
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    oauth_client = _stub_oauth_client()
+    now = int(time.time())
+    claims = {
+        "aud": oauth_client.client_id,
+        "exp": now + 60,
+        "iat": now,
+        "iss": oauth_client.issuer,
+        "nonce": "nonce",
+        "sub": "sub-alg",
+    }
+    rs256_token = oidc_client.jwt.encode(
+        claims,
+        private_key,
+        algorithm="RS256",
+        headers={"kid": "kid"},
+    )
+    ps256_token = oidc_client.jwt.encode(
+        claims,
+        private_key,
+        algorithm="PS256",
+        headers={"kid": "kid"},
+    )
+    jwks_client = _FakeJwksClient(private_key.public_key())
+
+    verified = oidc_client.verify_id_token(
+        oauth_client,
+        rs256_token,
+        nonce="nonce",
+        _jwks_client=jwks_client,
+    )
+
+    assert verified["sub"] == "sub-alg"
+    with pytest.raises(OidcFlowError) as exc_info:
+        oidc_client.verify_id_token(
+            oauth_client,
+            ps256_token,
+            nonce="nonce",
+            _jwks_client=jwks_client,
+        )
     assert exc_info.value.code == INVALID_ID_TOKEN
 
 
@@ -329,7 +377,11 @@ def test_complete_link_rejects_account_owned_by_another_user(
         email="owner@example.com",
         identity_claims={"sub": "sub-linked"},
     )
-    state_token, _record = oidc_state.issue(oauth_client, "https://app.example/callback")
+    state_token, _record = oidc_state.issue(
+        oauth_client,
+        "https://app.example/callback",
+        user_id=str(other.pk),
+    )
     monkeypatch.setattr(
         identity.client_module,
         "exchange_code",
@@ -352,6 +404,50 @@ def test_complete_link_rejects_account_owned_by_another_user(
 
     assert exc_info.value.code == "account_already_linked"
     assert exc_info.value.http_status == 409
+
+
+@pytest.mark.django_db(transaction=True)
+def test_complete_link_binds_to_state_user_after_session_swap(
+    oidc_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Account linking uses the start-flow user captured in state, not a later session user."""
+
+    start_user = get_user_model().objects.create_user(username="link-start", email="start@example.com")
+    swapped_user = get_user_model().objects.create_user(username="link-swapped", email="swapped@example.com")
+    vendor, oauth_client = _vendor_and_oauth_client()
+    state_token, _record = oidc_state.issue(
+        oauth_client,
+        "https://app.example/callback",
+        user_id=str(start_user.pk),
+    )
+    monkeypatch.setattr(
+        identity.client_module,
+        "exchange_code",
+        lambda *args, **kwargs: {"access_token": "access", "id_token": "id-token"},
+    )
+    monkeypatch.setattr(
+        identity.client_module,
+        "verify_id_token",
+        lambda *args, **kwargs: {"sub": "sub-swapped", "email": "start@example.com"},
+    )
+
+    account = identity.complete_link(
+        oauth_client,
+        swapped_user,
+        code="code",
+        state_token=state_token,
+        redirect_uri="https://app.example/callback",
+    )
+
+    with system_context(reason="test oidc assertions"):
+        owner = ExternalAccount.objects.owner_for(account)
+        start_credential = Credential.objects.filter(user=start_user, external_account=account).exists()
+        swapped_credential = Credential.objects.filter(user=swapped_user, external_account=account).exists()
+    assert owner is not None
+    assert owner.pk == start_user.pk
+    assert start_credential is True
+    assert swapped_credential is False
 
 
 def test_state_records_are_single_use() -> None:
@@ -432,8 +528,11 @@ def _stub_oauth_client(**overrides: Any) -> SimpleNamespace:
 class _FakeJwksClient:
     """JWKS client test double returning a stable signing key."""
 
+    def __init__(self, key: object = "secret") -> None:
+        self.key = key
+
     def get_signing_key_from_jwt(self, token: str) -> SimpleNamespace:
         """Return the key object shape PyJWT exposes."""
 
         del token
-        return SimpleNamespace(key="secret")
+        return SimpleNamespace(key=self.key)

@@ -143,7 +143,7 @@ async def acomplete_login(
 
 def complete_link(
     oauth_client: Any,
-    user: AbstractBaseUser,
+    user: AbstractBaseUser | None = None,
     *,
     code: str,
     state_token: str,
@@ -151,8 +151,10 @@ def complete_link(
 ) -> models.Model:
     """Complete an authenticated account-link redirect and return the external account."""
 
+    del user
     record = state.consume(state_token)
     _validate_state_record(oauth_client, record, redirect_uri)
+    link_user = _link_state_user(record)
     tokens = client_module.exchange_code(
         oauth_client,
         code=code,
@@ -175,18 +177,18 @@ def complete_link(
         account = Account.objects.filter(vendor=oauth_client.vendor, external_id=str(sub)).first()
         if account is not None:
             owner = Account.objects.owner_for(account)
-            if owner is not None and owner.pk != user.pk:
+            if owner is not None and owner.pk != link_user.pk:
                 raise OidcFlowError("account_already_linked", 409)
         account = Account.objects.link(
             oauth_client.vendor,
             str(sub),
-            owner=user,
+            owner=link_user,
             email=email,
             identity_claims=claims,
             display_name=_display_name(claims, email),
         )
         Credential.objects.upsert_for_user(
-            user,
+            link_user,
             oauth_client,
             "oauth",
             tokens,
@@ -197,7 +199,7 @@ def complete_link(
 
 async def acomplete_link(
     oauth_client: Any,
-    user: AbstractBaseUser,
+    user: AbstractBaseUser | None = None,
     *,
     code: str,
     state_token: str,
@@ -288,6 +290,20 @@ def _claim_email(claims: dict[str, Any]) -> str | None:
 
     value = claims.get("email")
     return str(value) if value else None
+
+
+def _link_state_user(record: state.StateRecord) -> AbstractBaseUser:
+    """Return the user captured when the authenticated link flow started."""
+
+    if not record.user_id:
+        raise OidcFlowError(INVALID_STATE, 400)
+    UserModel = get_user_model()
+    with system_context(reason="iam.oidc.link_user"):
+        try:
+            user = UserModel.objects.get(pk=record.user_id)
+        except UserModel.DoesNotExist as exc:
+            raise OidcFlowError(INVALID_STATE, 400) from exc
+    return cast(AbstractBaseUser, user)
 
 
 def _validate_state_record(oauth_client: Any, record: state.StateRecord, redirect_uri: str) -> None:

@@ -24,9 +24,12 @@ from strawberry.permission import BasePermission
 from angee.base.deletion import DeletionPreview
 from angee.base.graphql import AngeeNode, OffsetPaginated
 from angee.base.graphql.crud import DeletePreview
+from angee.base.relations import revoke_owner
 from angee.iam import identity
+from angee.iam.credentials import CredentialKind
 from angee.iam.oidc import client as client_module
 from angee.iam.oidc import state
+from angee.iam.oidc.errors import OidcFlowError
 
 try:
     User = apps.get_model("iam", "User")
@@ -501,9 +504,14 @@ class IAMMutation:
     ) -> OidcStartPayload:
         """Start an authenticated OIDC account-link flow."""
 
-        _session_user(info)
+        user = _session_user(info)
         oauth_client = _enabled_oidc_oauth_client(oauth_client_sqid)
-        return _start_oidc_flow(_request(info), oauth_client, redirect_uri)
+        return _start_oidc_flow(
+            _request(info),
+            oauth_client,
+            redirect_uri,
+            user_id=str(user.pk),
+        )
 
     @strawberry.mutation
     def link_account_complete(
@@ -516,11 +524,10 @@ class IAMMutation:
         """Complete an authenticated OIDC account-link flow."""
 
         request = _request(info)
-        user = _session_user(info)
+        _session_user(info)
         oauth_client = _oauth_client_for_remembered_state(request, state)
         account = identity.complete_link(
             oauth_client,
-            user,
             code=code,
             state_token=state,
             redirect_uri=redirect_uri,
@@ -536,15 +543,66 @@ class IAMMutation:
         """Remove this session user's credential link to an external account."""
 
         user = _session_user(info)
-        deleted, _details = (
+        with system_context(reason="iam.graphql.unlink_account.lookup"):
+            credential = (
+                Credential.objects.select_related(
+                    "oauth_client",
+                    "external_account",
+                )
+                .filter(
+                    user=user,
+                    external_account__sqid=external_account_sqid,
+                )
+                .first()
+            )
+        if credential is None:
+            return False
+        if _would_remove_only_oidc_sign_in_method(user, credential):
+            raise OidcFlowError("only_sign_in_method", 409)
+        _revoke_remote_oauth_token(credential)
+        external_account = credential.external_account
+        with system_context(reason="iam.graphql.unlink_account"), transaction.atomic():
+            revoke_owner(external_account, user)
+            deleted, _details = (
+                Credential.objects.filter(pk=credential.pk)
+                .with_action("delete")
+                .delete()
+            )
+        return deleted > 0
+
+
+def _would_remove_only_oidc_sign_in_method(user: Any, credential: Any) -> bool:
+    """Return whether unlinking ``credential`` would leave a passwordless user unable to sign in."""
+
+    if user.has_usable_password() or credential.kind != CredentialKind.OAUTH:
+        return False
+    with system_context(reason="iam.graphql.unlink_account.guard"):
+        oidc_account_count = (
             Credential.objects.filter(
                 user=user,
-                external_account__sqid=external_account_sqid,
+                kind=CredentialKind.OAUTH,
+                oauth_client__is_oidc=True,
+                external_account__isnull=False,
             )
-            .with_action("delete")
-            .delete()
+            .values("external_account_id")
+            .distinct()
+            .count()
         )
-        return deleted > 0
+    return oidc_account_count <= 1
+
+
+def _revoke_remote_oauth_token(credential: Any) -> None:
+    """Best-effort remote revocation before removing a local OAuth credential."""
+
+    try:
+        oauth_client = credential.oauth_client
+        if not getattr(oauth_client, "revoke_endpoint", ""):
+            return
+        token = str(credential.reveal().get("access_token") or "")
+        if token:
+            client_module.revoke_token(oauth_client, token)
+    except Exception:
+        return
 
 
 @strawberry.type
@@ -649,10 +707,12 @@ def _start_oidc_flow(
     request: HttpRequest,
     oauth_client: Any,
     redirect_uri: str,
+    *,
+    user_id: str | None = None,
 ) -> OidcStartPayload:
     """Issue state, remember its OAuth client, and return the authorize URL."""
 
-    state_token, record = state.issue(oauth_client, redirect_uri)
+    state_token, record = state.issue(oauth_client, redirect_uri, user_id=user_id)
     _remember_flow_oauth_client(request, state_token, oauth_client)
     authorize_url = client_module.build_authorize_url(
         oauth_client,

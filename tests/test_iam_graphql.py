@@ -18,7 +18,9 @@ from rebac.roles import grant
 
 from angee.base.apps import SCHEMA_PART_KEYS
 from angee.base.graphql.schema import GraphQLSchemas
+from angee.iam import identity
 from angee.iam.credentials import CredentialKind
+from angee.iam.oidc.errors import OidcFlowError
 from angee.iam.signals import PLATFORM_ADMIN_ROLE
 from tests.conftest import Credential, ExternalAccount, OAuthClient, Vendor
 from tests.conftest import _create_missing_tables as _create_connection_tables
@@ -340,6 +342,112 @@ def test_unlink_account_only_removes_callers_credential(
     with system_context(reason="test assertions"):
         assert not Credential.objects.filter(user=alice, external_account=account).exists()
         assert Credential.objects.filter(user=bob, external_account=account).exists()
+
+
+def test_unlink_account_revokes_owner_so_oidc_login_is_blocked(
+    iam_connection_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unlinking an OIDC credential revokes ownership so future OIDC login fails."""
+
+    user = User.objects.create_user(
+        username="unlink-oidc-owner",
+        email="owner@example.com",
+        password="password",
+    )
+    vendor, oauth_client = _vendor_and_oauth_client(
+        "unlink-oidc",
+        is_oidc=True,
+        is_enabled=True,
+        revoke_endpoint="https://issuer.example/revoke",
+    )
+    account = ExternalAccount.objects.link(
+        vendor,
+        "sub-unlinked",
+        owner=user,
+        email="owner@example.com",
+    )
+    Credential.objects.upsert_for_user(
+        user,
+        oauth_client,
+        CredentialKind.OAUTH,
+        {"access_token": "unlink-access"},
+        external_account=account,
+    )
+    revoked_tokens: list[str] = []
+
+    def revoke_token(selected_oauth_client: Any, token: str) -> None:
+        assert selected_oauth_client.pk == oauth_client.pk
+        revoked_tokens.append(token)
+
+    monkeypatch.setattr(iam_schema.client_module, "revoke_token", revoke_token)
+
+    data = _data(
+        _execute(
+            _schema("public"),
+            """
+            mutation Unlink($sqid: String!) {
+              unlinkAccount(externalAccountSqid: $sqid)
+            }
+            """,
+            {"sqid": account.sqid},
+            user=user,
+        )
+    )
+
+    assert data["unlinkAccount"] is True
+    assert revoked_tokens == ["unlink-access"]
+    with system_context(reason="test assertions"):
+        assert ExternalAccount.objects.owner_for(account) is None
+        assert not Credential.objects.filter(user=user, external_account=account).exists()
+    with pytest.raises(OidcFlowError):
+        identity.resolve(
+            oauth_client,
+            sub="sub-unlinked",
+            email="owner@example.com",
+            claims={"sub": "sub-unlinked"},
+        )
+
+
+def test_unlink_account_blocks_last_oidc_sign_in_method_for_passwordless_user(
+    iam_connection_tables: None,
+) -> None:
+    """Passwordless users cannot remove their last OIDC sign-in credential."""
+
+    user = User.objects.create_user(username="unlink-passwordless", email="passwordless@example.com")
+    vendor, oauth_client = _vendor_and_oauth_client("unlink-guard", is_oidc=True, is_enabled=True)
+    account = ExternalAccount.objects.link(
+        vendor,
+        "sub-guard",
+        owner=user,
+        email="passwordless@example.com",
+    )
+    Credential.objects.upsert_for_user(
+        user,
+        oauth_client,
+        CredentialKind.OAUTH,
+        {"access_token": "guard-access"},
+        external_account=account,
+    )
+
+    result = _execute(
+        _schema("public"),
+        """
+        mutation Unlink($sqid: String!) {
+          unlinkAccount(externalAccountSqid: $sqid)
+        }
+        """,
+        {"sqid": account.sqid},
+        user=user,
+    )
+
+    assert result.errors is not None
+    assert "only_sign_in_method" in result.errors[0].message
+    with system_context(reason="test assertions"):
+        owner = ExternalAccount.objects.owner_for(account)
+        assert owner is not None
+        assert owner.pk == user.pk
+        assert Credential.objects.filter(user=user, external_account=account).exists()
 
 
 @pytest.fixture()

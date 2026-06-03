@@ -21,6 +21,11 @@ from angee.iam.oidc.errors import (
 )
 
 HTTP_TIMEOUT_SECONDS = 10
+_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/125.0.0.0 Safari/537.36"
+)
 _DISCOVERY_FIELDS = {
     "issuer": "issuer",
     "authorize_endpoint": "authorization_endpoint",
@@ -31,15 +36,7 @@ _DISCOVERY_FIELDS = {
 }
 _ALLOWED_JWT_ALGORITHMS = (
     "RS256",
-    "RS384",
-    "RS512",
     "ES256",
-    "ES384",
-    "ES512",
-    "PS256",
-    "PS384",
-    "PS512",
-    "EdDSA",
 )
 
 
@@ -147,7 +144,11 @@ def verify_id_token(
     if not issuer or not jwks_uri:
         raise OidcFlowError(MISSING_ENDPOINT, 400)
     try:
-        jwks_client = _jwks_client or PyJWKClient(jwks_uri)
+        jwks_client = _jwks_client or PyJWKClient(
+            jwks_uri,
+            headers={"User-Agent": _BROWSER_USER_AGENT},
+            timeout=HTTP_TIMEOUT_SECONDS,
+        )
         signing_key = jwks_client.get_signing_key_from_jwt(id_token)
         claims = jwt.decode(
             id_token,
@@ -186,6 +187,23 @@ def fetch_userinfo(oauth_client: object, access_token: str) -> dict[str, Any]:
         raise
     except Exception as exc:
         raise OidcFlowError(USERINFO_FAILED, 400) from exc
+
+
+def revoke_token(oauth_client: object, token: str) -> None:
+    """Best-effort RFC 7009 token revocation for an OAuth credential."""
+
+    revoke_endpoint = str(getattr(oauth_client, "revoke_endpoint", "") or "")
+    if not revoke_endpoint or not token:
+        return
+    fields = {
+        "client_id": str(getattr(oauth_client, "client_id", "")),
+        "token": token,
+        "token_type_hint": "access_token",
+    }
+    client_secret = str(getattr(oauth_client, "client_secret", "") or "")
+    if client_secret:
+        fields["client_secret"] = client_secret
+    _post_form_no_response(revoke_endpoint, fields)
 
 
 def _endpoint(oauth_client: object, oauth_client_field: str, discovery_field: str) -> str:
@@ -245,6 +263,23 @@ def _post_form(url: str, fields: Mapping[str, str]) -> dict[str, Any]:
             return _loads_json(response.read(), error_code=TOKEN_EXCHANGE_FAILED)
     except (error.HTTPError, error.URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise OidcFlowError(TOKEN_EXCHANGE_FAILED, 400) from exc
+
+
+def _post_form_no_response(url: str, fields: Mapping[str, str]) -> None:
+    """POST a form body when the endpoint may return an empty response."""
+
+    data = parse.urlencode(fields).encode("utf-8")
+    req = request.Request(
+        url,
+        data=data,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": _BROWSER_USER_AGENT,
+        },
+        method="POST",
+    )
+    with request.urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as response:
+        response.read()
 
 
 def _loads_json(payload: bytes, *, error_code: str) -> dict[str, Any]:

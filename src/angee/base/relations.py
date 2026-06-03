@@ -8,7 +8,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from rebac import RelationshipTuple, to_object_ref, to_subject_ref, write_relationships
+from rebac import (
+    RelationshipTuple,
+    delete_relationships,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
+from rebac.types import RelationshipFilter
 
 
 def grant_owner(resource: Any, subject: Any) -> None:
@@ -26,4 +33,21 @@ def grant_owner(resource: Any, subject: Any) -> None:
                 subject=to_subject_ref(subject),
             )
         ]
+    )
+
+
+def revoke_owner(resource: Any, subject: Any) -> None:
+    """Delete this subject's ``owner`` relationship tuple for one resource."""
+
+    resource_ref = to_object_ref(resource)
+    subject_ref = to_subject_ref(subject)
+    delete_relationships(
+        RelationshipFilter(
+            resource_type=resource_ref.resource_type,
+            resource_id=resource_ref.resource_id,
+            relation="owner",
+            subject_type=subject_ref.subject_type,
+            subject_id=subject_ref.subject_id,
+            optional_subject_relation=subject_ref.optional_relation,
+        )
     )

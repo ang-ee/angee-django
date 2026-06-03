@@ -21,6 +21,7 @@ class StateRecord:
 
     oauth_client_id: str
     redirect_uri: str
+    user_id: str | None
     nonce: str
     code_verifier: str | None
     created_at: datetime
@@ -29,6 +30,8 @@ class StateRecord:
 def issue(
     oauth_client: object,
     redirect_uri: str,
+    *,
+    user_id: str | None = None,
 ) -> tuple[str, StateRecord]:
     """Create and cache one single-use OIDC state record."""
 
@@ -38,6 +41,7 @@ def issue(
             getattr(oauth_client, "sqid", getattr(oauth_client, "pk", ""))
         ),
         redirect_uri=redirect_uri,
+        user_id=user_id,
         nonce=secrets.token_urlsafe(32),
         code_verifier=secrets.token_urlsafe(64)
         if getattr(oauth_client, "supports_pkce", False)
