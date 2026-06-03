@@ -17,6 +17,7 @@ from rebac import ObjectRef, actor_context, system_context
 from rebac.actors import to_subject_ref
 from rebac.models import active_relationship_model
 from rebac.roles import ROLE_RELATION, grant
+from strawberry import relay
 
 from angee.base.apps import SCHEMA_PART_KEYS
 from angee.base.graphql.schema import GraphQLSchemas
@@ -92,6 +93,58 @@ def test_permission_hub_queries_are_admin_only(
 
         allowed = _execute(console_schema, query, user=admin)
         assert allowed.errors is None
+
+
+def test_roles_query_excludes_role_types_missing_from_rebac_schema(
+    iam_permission_hub_tables: None,
+) -> None:
+    """Tuple-derived roles are limited to resource types in the installed schema."""
+
+    admin = _platform_admin("hub-role-filter-admin")
+    target = User.objects.create_user(
+        username="hub-role-filter-target",
+        email="target@example.com",
+    )
+    grant(actor=target, role="angee/role:admin")
+    subject_ref = to_subject_ref(target)
+    with system_context(reason="test orphaned role tuple"):
+        active_relationship_model().objects.create(
+            resource_type="notes/role",
+            resource_id="note_admin",
+            relation=ROLE_RELATION,
+            subject_type=subject_ref.subject_type,
+            subject_id=subject_ref.subject_id,
+            optional_subject_relation=subject_ref.optional_relation,
+            caveat_name="",
+            caveat_context=None,
+            expires_at=None,
+        )
+    console_schema = _schema("console")
+
+    data = _data(
+        _execute(
+            console_schema,
+            """
+            query {
+              roles { id namespace label }
+              grants(pagination: {limit: 10}) {
+                results { role }
+              }
+            }
+            """,
+            user=admin,
+        )
+    )
+    roles = data["roles"]
+    grants = data["grants"]["results"]
+    schema_role_types = iam_schema._schema_role_resource_types()
+
+    assert {"id": "admin", "namespace": "angee", "label": "Admin"} in roles
+    assert {"id": "note_admin", "namespace": "notes", "label": "Note Admin"} not in roles
+    assert {f"{role['namespace']}/role" for role in roles} <= schema_role_types
+    assert "angee/role:admin" in {grant["role"] for grant in grants}
+    assert "notes/role:note_admin" not in {grant["role"] for grant in grants}
+    assert {grant["role"].split(":", 1)[0] for grant in grants} <= schema_role_types
 
 
 def test_permission_hub_mutations_are_admin_only(
@@ -175,6 +228,89 @@ def test_grant_role_then_revoke_role_writes_and_removes_role_tuple(
 
     assert revoked["revokeRole"] is True
     assert not _role_membership_exists(target, variables["role"])
+
+
+def test_grant_role_accepts_user_relay_global_id(
+    iam_permission_hub_tables: None,
+) -> None:
+    """The grant mutation accepts the relay global id exposed by UserType.id."""
+
+    admin = _platform_admin("hub-relay-admin")
+    target = User.objects.create_user(
+        username="hub-relay-target",
+        email="target@example.com",
+    )
+    console_schema = _schema("console")
+    node_id = str(getattr(target, "sqid", target.pk))
+    variables = {
+        "principalId": relay.to_base64(iam_schema.UserType, node_id),
+        "role": "angee/role:relay_writer",
+    }
+
+    granted = _data(
+        _execute(
+            console_schema,
+            """
+            mutation Grant($principalId: String!, $role: String!) {
+              grantRole(principalId: $principalId, role: $role)
+            }
+            """,
+            variables,
+            user=admin,
+        )
+    )
+
+    assert granted["grantRole"] is True
+    assert _role_membership_exists(target, variables["role"])
+
+    revoked = _data(
+        _execute(
+            console_schema,
+            """
+            mutation Revoke($principalId: String!, $role: String!) {
+              revokeRole(principalId: $principalId, role: $role)
+            }
+            """,
+            variables,
+            user=admin,
+        )
+    )
+
+    assert revoked["revokeRole"] is True
+    assert not _role_membership_exists(target, variables["role"])
+
+
+def test_grant_role_ignores_non_user_relay_global_id(
+    iam_permission_hub_tables: None,
+) -> None:
+    """A non-user relay global id is handled as a raw principal id."""
+
+    admin = _platform_admin("hub-relay-guard-admin")
+    target = User.objects.create_user(
+        username="hub-relay-guard-target",
+        email="target@example.com",
+    )
+    console_schema = _schema("console")
+    role = "angee/role:relay_guard"
+    result = _execute(
+        console_schema,
+        """
+        mutation Grant($principalId: String!, $role: String!) {
+          grantRole(principalId: $principalId, role: $role)
+        }
+        """,
+        {
+            "principalId": relay.to_base64(
+                iam_schema.VendorType,
+                str(getattr(target, "sqid", target.pk)),
+            ),
+            "role": role,
+        },
+        user=admin,
+    )
+
+    assert result.errors is not None
+    assert not _role_membership_exists(target, role)
 
 
 def test_revoke_role_returns_false_for_missing_membership(

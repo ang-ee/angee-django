@@ -10,7 +10,6 @@ import {
   Alert,
   Button,
   Code,
-  Input,
   MetricGrid,
   Select,
   SurfacePanel,
@@ -23,17 +22,22 @@ import {
 import {
   IAM_GRANT_ROLE_MUTATION,
   IAM_OVERVIEW_QUERY,
+  IAM_USERS_QUERY,
   type IAMGrantRoleData,
   type IAMGrantRoleVariables,
   type IAMOverviewData,
   type IAMOverviewVariables,
+  type IAMUsersData,
+  type IAMUsersVariables,
 } from "../documents";
+import { userLabel } from "../identity-labels";
 import {
   roleRef,
   roleRows,
 } from "../identity-rows";
 
 const OVERVIEW_COUNT_LIMIT = 1;
+const USER_PICKER_LIMIT = 500;
 
 export function OverviewPage(): ReactElement {
   const variables = useMemo<IAMOverviewVariables>(
@@ -43,6 +47,14 @@ export function OverviewPage(): ReactElement {
   const query = useAuthoredQuery<IAMOverviewData, IAMOverviewVariables>(
     IAM_OVERVIEW_QUERY,
     variables,
+  );
+  const userVariables = useMemo<IAMUsersVariables>(
+    () => ({ pagination: { offset: 0, limit: USER_PICKER_LIMIT } }),
+    [],
+  );
+  const usersQuery = useAuthoredQuery<IAMUsersData, IAMUsersVariables>(
+    IAM_USERS_QUERY,
+    userVariables,
   );
   const [grantRole, grantState] = useAuthoredMutation<
     IAMGrantRoleData,
@@ -60,11 +72,25 @@ export function OverviewPage(): ReactElement {
       })),
     [roles],
   );
-  const [principalId, setPrincipalId] = useState("");
+  const users = useMemo(
+    () => [...(usersQuery.data?.users.results ?? [])],
+    [usersQuery.data],
+  );
+  const userTotalCount = usersQuery.data?.users.totalCount ?? 0;
+  const hasTruncatedUsers = userTotalCount > USER_PICKER_LIMIT;
+  const principalOptions = useMemo(
+    () =>
+      users.map((user) => ({
+        value: user.id,
+        label: userLabel(user),
+      })),
+    [users],
+  );
+  const [selectedPrincipalId, setSelectedPrincipalId] = useState("");
   const [selectedRole, setSelectedRole] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
   const [grantedRole, setGrantedRole] = useState<{
-    principalId: string;
+    principalLabel: string;
     role: string;
   } | null>(null);
 
@@ -78,10 +104,18 @@ export function OverviewPage(): ReactElement {
     }
   }, [roleOptions, selectedRole]);
 
+  useEffect(() => {
+    if (
+      selectedPrincipalId &&
+      !principalOptions.some((option) => option.value === selectedPrincipalId)
+    ) {
+      setSelectedPrincipalId("");
+    }
+  }, [principalOptions, selectedPrincipalId]);
+
   async function handleGrant(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    const trimmedPrincipalId = principalId.trim();
-    if (!trimmedPrincipalId || !selectedRole) {
+    if (!selectedPrincipalId || !selectedRole) {
       setGrantedRole(null);
       setActionError("Choose a principal and role before granting access.");
       return;
@@ -91,14 +125,22 @@ export function OverviewPage(): ReactElement {
     setGrantedRole(null);
     try {
       const result = await grantRole({
-        principalId: trimmedPrincipalId,
+        principalId: selectedPrincipalId,
         role: selectedRole,
       });
       if (result?.grantRole === false) {
         throw new Error("Could not grant role.");
       }
-      setPrincipalId("");
-      setGrantedRole({ principalId: trimmedPrincipalId, role: selectedRole });
+      const selectedPrincipal = users.find(
+        (user) => user.id === selectedPrincipalId,
+      );
+      setSelectedPrincipalId("");
+      setGrantedRole({
+        principalLabel: selectedPrincipal
+          ? userLabel(selectedPrincipal)
+          : selectedPrincipalId,
+        role: selectedRole,
+      });
       query.refetch();
     } catch (caught) {
       setActionError(
@@ -112,6 +154,11 @@ export function OverviewPage(): ReactElement {
       {query.error ? (
         <Alert intent="danger" title="Identity overview unavailable">
           {query.error.message}
+        </Alert>
+      ) : null}
+      {usersQuery.error ? (
+        <Alert intent="danger" title="Users unavailable">
+          {usersQuery.error.message}
         </Alert>
       ) : null}
       <MetricGrid
@@ -154,12 +201,22 @@ export function OverviewPage(): ReactElement {
           >
             <label className="grid min-w-0 gap-1.5 text-13 font-medium text-fg">
               Principal
-              <Input
-                value={principalId}
-                placeholder="User ID"
-                autoComplete="off"
-                onChange={(event) => setPrincipalId(event.currentTarget.value)}
+              <Select
+                value={selectedPrincipalId}
+                options={principalOptions}
+                placeholder={
+                  usersQuery.fetching ? "Loading users" : "Select user"
+                }
+                aria-label="Principal"
+                disabled={usersQuery.fetching || principalOptions.length === 0}
+                onValueChange={(value) => setSelectedPrincipalId(value)}
               />
+              {hasTruncatedUsers ? (
+                <span className="text-12 font-normal text-fg-muted">
+                  Showing first {USER_PICKER_LIMIT.toLocaleString()} of{" "}
+                  {userTotalCount.toLocaleString()} users.
+                </span>
+              ) : null}
             </label>
             <label className="grid min-w-0 gap-1.5 text-13 font-medium text-fg">
               Role
@@ -176,7 +233,7 @@ export function OverviewPage(): ReactElement {
                 type="submit"
                 variant="primary"
                 pending={grantState.fetching}
-                disabled={!principalId.trim() || !selectedRole}
+                disabled={!selectedPrincipalId || !selectedRole}
               >
                 Grant
               </Button>
@@ -192,7 +249,7 @@ export function OverviewPage(): ReactElement {
               <span className="inline-flex min-w-0 flex-wrap items-center gap-1">
                 <Code>{grantedRole.role}</Code>
                 <span>to</span>
-                <Code>{grantedRole.principalId}</Code>
+                <Code>{grantedRole.principalLabel}</Code>
               </span>
             </Alert>
           ) : null}

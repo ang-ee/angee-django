@@ -11,3 +11,7 @@ export function resourceLabel(resourceType: string): string {
   const slash = resourceType.lastIndexOf("/");
   return titleLabel(slash >= 0 ? resourceType.slice(slash + 1) : resourceType);
 }
+
+export function userLabel(user: { username: string; email: string }): string {
+  return user.email ? `${user.username} <${user.email}>` : user.username;
+}

@@ -29,14 +29,27 @@ test.describe("iam console — admin", () => {
     }
   });
 
-  test("the Overview surfaces the grant composer", async ({ page }) => {
+  test("the Overview grant composer gates the Grant button", async ({
+    page,
+  }) => {
     await page.goto("/iam");
     await expect(page.getByText("Grant Role")).toBeVisible({ timeout: 20000 });
-    await expect(page.getByPlaceholder("User ID")).toBeVisible();
+    const principal = page.getByLabel("Principal");
+    await expect(principal).toBeVisible();
     await expect(page.getByLabel("Role")).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: "Grant", exact: true }),
-    ).toBeVisible();
+
+    // The composer grants a real platform role, so this test only exercises the
+    // button gating — it never submits. Grant stays disabled until a principal
+    // is chosen (a role is preselected); picking one enables it.
+    const grant = page.getByRole("button", { name: "Grant", exact: true });
+    await expect(grant).toBeDisabled();
+    await principal.click();
+    await page
+      .getByRole("option")
+      .filter({ hasText: /bob/ })
+      .first()
+      .click();
+    await expect(grant).toBeEnabled();
   });
 
   test("the Schema view renders the permission graph", async ({ page }) => {

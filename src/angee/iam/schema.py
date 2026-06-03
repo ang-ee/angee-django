@@ -66,6 +66,7 @@ Credential = apps.get_model("iam", "Credential")
 
 _OIDC_SESSION_OAUTH_CLIENT_PREFIX = "angee.iam.oidc.oauth_client:"
 _PERMISSION_HUB_LIST_CAP = 1000
+_ROLE_SUFFIX = "/role"
 
 
 @strawberry_django.type(User)
@@ -625,7 +626,13 @@ def _relationship_ordering(*, include_relation: bool = False) -> tuple[str, ...]
 def _role_namespace(resource_type: str) -> str:
     """Return the namespace portion of a role resource type."""
 
-    return resource_type.removesuffix("/role")
+    return resource_type.removesuffix(_ROLE_SUFFIX)
+
+
+def _is_role_type(resource_type: str) -> bool:
+    """Return whether ``resource_type`` names a role resource."""
+
+    return resource_type.endswith(_ROLE_SUFFIX)
 
 
 def _role_label(role_id: str) -> str:
@@ -644,7 +651,7 @@ def _validate_role(value: str) -> ObjectRef:
     """Return ``value`` as a role object ref or raise."""
 
     role = ObjectRef.parse(value)
-    if not role.resource_type.endswith("/role"):
+    if not _is_role_type(role.resource_type):
         raise ValueError("Role must use '<namespace>/role:<id>' format.")
     return role
 
@@ -676,7 +683,7 @@ def _permission_hub_roles() -> list[IAMRoleType]:
 
     rows = (
         active_relationship_model()
-        .objects.filter(resource_type__endswith="/role")
+        .objects.filter(resource_type__in=_schema_role_resource_types())
         .order_by(*_relationship_ordering())[:_PERMISSION_HUB_LIST_CAP]
     )
     roles: dict[tuple[str, str], IAMRoleType] = {}
@@ -700,13 +707,23 @@ def _permission_hub_grants(info: strawberry.Info) -> QuerySet[Any]:
         QuerySet[Any],
         active_relationship_model()
         .objects.filter(
-            resource_type__endswith="/role",
+            resource_type__in=_schema_role_resource_types(),
             relation=ROLE_RELATION,
             subject_type=app_settings.REBAC_USER_TYPE,
             optional_subject_relation="",
         )
         .order_by(*_relationship_ordering()),
     )
+
+
+def _schema_role_resource_types() -> set[str]:
+    """Return role resource types declared by the installed REBAC schema."""
+
+    return {
+        definition.resource_type
+        for definition in rebac_backend().schema().definitions
+        if _is_role_type(definition.resource_type)
+    }
 
 
 def _schema_allowed_subject_name(allowed: Any) -> str:
@@ -810,18 +827,27 @@ def _permission_relationships(
 def _user_principal(principal_id: str) -> Any:
     """Return the user addressed by a role-grant principal id."""
 
+    resolved_id = principal_id
+    try:
+        global_id = relay.GlobalID.from_id(principal_id)
+    except ValueError:
+        pass
+    else:
+        if global_id.type_name == _user_graphql_type_name():
+            resolved_id = global_id.node_id
+
     lookups: list[dict[str, str]] = []
     subject_id_attr = str(
         getattr(User._meta, "rebac_id_attr", None)
         or app_settings.REBAC_USER_ID_ATTR
     )
-    lookups.append({subject_id_attr: principal_id})
+    lookups.append({subject_id_attr: resolved_id})
     public_lookup = getattr(User, "_public_id_lookup", None)
     if callable(public_lookup):
-        lookups.append(public_lookup(principal_id))
+        lookups.append(public_lookup(resolved_id))
     pk = User._meta.pk
     if pk is not None:
-        lookups.append({pk.name: principal_id})
+        lookups.append({pk.name: resolved_id})
 
     tried: set[tuple[tuple[str, str], ...]] = set()
     with system_context(reason="iam.graphql.permission_hub.principal"):
@@ -837,6 +863,12 @@ def _user_principal(principal_id: str) -> Any:
             if user is not None:
                 return user
     raise ValueError(f"User principal {principal_id!r} was not found.")
+
+
+def _user_graphql_type_name() -> str:
+    """Return the registered GraphQL type name for console user rows."""
+
+    return str(cast(Any, UserType).__strawberry_definition__.name)
 
 
 @strawberry.type
