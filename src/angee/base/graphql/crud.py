@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 import strawberry
 import strawberry_django
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
+from strawberry import relay
 
 from angee.base.deletion import (
     DeletionPreview,
@@ -38,7 +39,7 @@ class DeletePreviewNode:
 
     label: str
     object_label: str
-    object_id: Optional[str]
+    object_id: str | None
     children: list["DeletePreviewNode"]
 
     @classmethod
@@ -141,11 +142,11 @@ def crud(
 def _delete_resolver(model: type[models.Model]) -> Any:
     """Return a mutation resolver that previews then deletes."""
 
-    def delete(id: strawberry.ID, confirm: bool = True) -> DeletePreview:
-        """Delete one model instance by public id when unblocked."""
+    def delete(id: relay.GlobalID, confirm: bool = True) -> DeletePreview:
+        """Delete one model instance by global id when unblocked."""
 
         with transaction.atomic():
-            instance = _resolve_for_delete(model, str(id))
+            instance = _resolve_for_delete(model, id.node_id)
             preview = DeletionPreview.from_instance(instance)
             if confirm and not preview.has_blockers:
                 instance.delete()

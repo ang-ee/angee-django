@@ -47,11 +47,14 @@ jobs:
       DJANGO_SETTINGS_MODULE: {{ django_settings }}
 
   # Generate migrations against the freshly emitted concrete models. Mandatory:
-  # the composer emits models.py, never migration files.
+  # the composer emits models.py, never migration files. No app list — the set of
+  # composed apps is owned by the composer (each redirects to
+  # runtime/<label>/migrations via MIGRATION_MODULES); bare makemigrations
+  # discovers them, so a new addon never has to be re-listed here.
   makemigrations:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "python", "manage.py", "makemigrations", "base", "iam", "notes", "operator"]
+    command: ["uv", "run", "python", "manage.py", "makemigrations"]
     env:
       DJANGO_SETTINGS_MODULE: {{ django_settings }}
     depends_on: [build]
