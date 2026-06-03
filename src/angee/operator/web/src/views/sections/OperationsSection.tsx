@@ -59,11 +59,11 @@ export function OperationsSection(): ReactNode {
     destroy.result.fetching ||
     jobRun.result.fetching;
 
-  if (result.fetching && !snapshot) {
-    return <SectionLoading label="Loading operations" />;
-  }
   if (result.error && !snapshot) {
     return <SectionError message={result.error.message} />;
+  }
+  if (result.fetching && !snapshot) {
+    return <SectionLoading label="Loading operations" />;
   }
 
   const jobs = snapshot?.jobs ?? [];

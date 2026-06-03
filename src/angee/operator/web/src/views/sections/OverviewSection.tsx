@@ -23,11 +23,11 @@ export function OverviewSection(): ReactNode {
     secrets: true,
   });
 
-  if (result.fetching && !snapshot) {
-    return <SectionLoading label="Loading overview" />;
-  }
   if (result.error && !snapshot) {
     return <SectionError message={result.error.message} />;
+  }
+  if (result.fetching && !snapshot) {
+    return <SectionLoading label="Loading overview" />;
   }
 
   const stack = snapshot?.stack ?? null;

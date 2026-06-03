@@ -387,6 +387,9 @@ importers:
       '@angee/sdk':
         specifier: workspace:*
         version: link:../../../../packages/sdk
+      graphql-ws:
+        specifier: ^6.0.8
+        version: 6.0.8(graphql@16.14.0)(ws@8.21.0)
       lucide-react:
         specifier: ^1.17.0
         version: 1.17.0(react@19.2.6)

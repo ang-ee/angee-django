@@ -41,11 +41,11 @@ export function ServicesSection(): ReactNode {
   const restart = useOperatorAction<DaemonActionData, ServiceActionVars>(SERVICE_RESTART_MUTATION);
   const busy = start.result.fetching || stop.result.fetching || restart.result.fetching;
 
-  if (result.fetching && !snapshot) {
-    return <SectionLoading label="Loading services" />;
-  }
   if (result.error && !snapshot) {
     return <SectionError message={result.error.message} />;
+  }
+  if (result.fetching && !snapshot) {
+    return <SectionLoading label="Loading services" />;
   }
 
   const services = snapshot?.services ?? [];

@@ -43,11 +43,11 @@ export function WorkspacesSection(): ReactNode {
   const destroy = useOperatorAction<DaemonActionData, WorkspaceActionVars>(WORKSPACE_DESTROY_MUTATION);
   const busy = syncBase.result.fetching || destroy.result.fetching;
 
-  if (result.fetching && !snapshot) {
-    return <SectionLoading label="Loading workspaces" />;
-  }
   if (result.error && !snapshot) {
     return <SectionError message={result.error.message} />;
+  }
+  if (result.fetching && !snapshot) {
+    return <SectionLoading label="Loading workspaces" />;
   }
 
   const workspaces = snapshot?.workspaces ?? [];

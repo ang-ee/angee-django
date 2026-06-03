@@ -41,11 +41,11 @@ export function SourcesSection(): ReactNode {
   const push = useOperatorAction<DaemonActionData, SourceActionVars>(SOURCE_PUSH_MUTATION);
   const busy = fetchSource.result.fetching || pull.result.fetching || push.result.fetching;
 
-  if (result.fetching && !snapshot) {
-    return <SectionLoading label="Loading sources" />;
-  }
   if (result.error && !snapshot) {
     return <SectionError message={result.error.message} />;
+  }
+  if (result.fetching && !snapshot) {
+    return <SectionLoading label="Loading sources" />;
   }
 
   const sources = snapshot?.sources ?? [];

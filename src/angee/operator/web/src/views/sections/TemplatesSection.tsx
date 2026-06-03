@@ -11,11 +11,11 @@ export function TemplatesSection(): ReactNode {
   const t = useT("operator");
   const { snapshot, result } = useOperatorSnapshot({ templates: true });
 
-  if (result.fetching && !snapshot) {
-    return <SectionLoading label="Loading templates" />;
-  }
   if (result.error && !snapshot) {
     return <SectionError message={result.error.message} />;
+  }
+  if (result.fetching && !snapshot) {
+    return <SectionLoading label="Loading templates" />;
   }
 
   const templates = snapshot?.templates ?? [];

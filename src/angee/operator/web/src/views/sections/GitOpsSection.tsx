@@ -36,11 +36,11 @@ export function GitOpsSection(): ReactNode {
   const t = useT("operator");
   const { snapshot, result } = useOperatorSnapshot({ gitOps: true });
 
-  if (result.fetching && !snapshot) {
-    return <SectionLoading label="Loading GitOps topology" />;
-  }
   if (result.error && !snapshot) {
     return <SectionError message={result.error.message} />;
+  }
+  if (result.fetching && !snapshot) {
+    return <SectionLoading label="Loading GitOps topology" />;
   }
 
   const gitOps = snapshot?.gitOps ?? null;

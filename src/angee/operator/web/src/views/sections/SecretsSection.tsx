@@ -44,11 +44,11 @@ export function SecretsSection(): ReactNode {
   const deleteSecret = useOperatorAction<DaemonActionData, SecretDeleteVars>(SECRET_DELETE_MUTATION);
   const busy = setSecret.result.fetching || deleteSecret.result.fetching;
 
-  if (result.fetching && !snapshot) {
-    return <SectionLoading label="Loading secrets" />;
-  }
   if (result.error && !snapshot) {
     return <SectionError message={result.error.message} />;
+  }
+  if (result.fetching && !snapshot) {
+    return <SectionLoading label="Loading secrets" />;
   }
 
   const secrets = snapshot?.secrets ?? [];
