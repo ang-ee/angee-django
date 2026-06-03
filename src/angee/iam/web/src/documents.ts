@@ -98,6 +98,7 @@ export const IAM_GRANTS_QUERY = `
       results {
         principalId
         principalType
+        principalLabel
         role
       }
     }
@@ -335,6 +336,7 @@ export type IAMUsersVariables = IAMPaginationVariables;
 export interface IAMGrant {
   principalId: string;
   principalType: string;
+  principalLabel: string | null;
   role: string;
 }
 

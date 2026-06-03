@@ -243,6 +243,12 @@ class IAMGrantType:
         return str(cast(Any, self).subject_type)
 
     @strawberry_django.field
+    def principal_label(self) -> str | None:
+        """Return the principal's display name - no user object exposed."""
+
+        return _user_display_label(cast(Any, self).subject_id)
+
+    @strawberry_django.field
     def role(self) -> str:
         """Return the canonical granted role ref."""
 
@@ -822,6 +828,23 @@ def _permission_relationships(
     if relation:
         rows = rows.filter(relation=relation)
     return cast(QuerySet[Any], rows)
+
+
+def _user_display_label(subject_id: Any) -> str | None:
+    """Return a user principal's display name without exposing the user object.
+
+    Delegates to :func:`_user_principal` - the one owner of "grant subject id ->
+    user" (REBAC-id-attr aware, read under ``system_context``) - and returns only
+    a display string, never the guarded user object.
+    """
+
+    if not subject_id:
+        return None
+    try:
+        user = _user_principal(str(subject_id))
+    except ValueError:
+        return None
+    return str(user.get_full_name() or user.username)
 
 
 def _user_principal(principal_id: str) -> Any:

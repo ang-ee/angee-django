@@ -147,6 +147,46 @@ def test_roles_query_excludes_role_types_missing_from_rebac_schema(
     assert {grant["role"].split(":", 1)[0] for grant in grants} <= schema_role_types
 
 
+def test_grants_query_labels_principals_by_display_name(
+    iam_permission_hub_tables: None,
+) -> None:
+    """The grants list surfaces each principal's display name, not a raw id."""
+
+    admin = _platform_admin("hub-label-admin")
+    named = User.objects.create_user(
+        username="hub-label-named",
+        email="named@example.com",
+        first_name="Named",
+        last_name="Owner",
+    )
+    plain = User.objects.create_user(
+        username="hub-label-plain",
+        email="plain@example.com",
+    )
+    grant(actor=named, role="angee/role:admin")
+    grant(actor=plain, role="angee/role:admin")
+
+    data = _data(
+        _execute(
+            _schema("console"),
+            """
+            query {
+              grants(pagination: {limit: 50}) {
+                results { principalId principalLabel }
+              }
+            }
+            """,
+            user=admin,
+        )
+    )
+    labels = {
+        row["principalId"]: row["principalLabel"]
+        for row in data["grants"]["results"]
+    }
+    assert labels[str(named.pk)] == "Named Owner"
+    assert labels[str(plain.pk)] == "hub-label-plain"
+
+
 def test_permission_hub_mutations_are_admin_only(
     iam_permission_hub_tables: None,
 ) -> None:

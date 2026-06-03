@@ -16,6 +16,7 @@ export interface IAMGrantRow extends Record<string, unknown> {
   principalId: string;
   principalType: string;
   principalRef: string;
+  principalLabel: string;
   role: string;
   namespace: string;
   roleName: string;
@@ -66,6 +67,7 @@ export function grantRows(grants: readonly IAMGrant[]): IAMGrantRow[] {
         principalId: grant.principalId,
         principalType: grant.principalType,
         principalRef: principal,
+        principalLabel: grant.principalLabel || principal,
         role: grant.role,
         namespace: roleNamespace(grant.role),
         roleName: roleName(grant.role),

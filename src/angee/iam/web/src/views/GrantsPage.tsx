@@ -66,7 +66,7 @@ export function GrantsPage(): ReactElement {
   async function revoke(row: IAMGrantRow): Promise<void> {
     const confirmed = await confirm({
       title: "Revoke role?",
-      body: `Revoke ${row.role} from ${row.principalRef}?`,
+      body: `Revoke ${row.role} from ${row.principalLabel}?`,
       cancel: "Keep role",
       confirm: "Revoke",
       danger: true,
@@ -95,9 +95,16 @@ export function GrantsPage(): ReactElement {
   const grantColumns = useMemo<readonly ListColumn<IAMGrantRow>[]>(
     () => [
       {
-        field: "principalRef",
+        field: "principalLabel",
         header: "Principal",
-        render: (row) => <Code truncate>{row.principalRef}</Code>,
+        render: (row) => (
+          <span className="flex min-w-0 flex-col">
+            <span className="truncate text-13 text-fg">{row.principalLabel}</span>
+            <Code truncate variant="muted" className="text-2xs">
+              {row.principalRef}
+            </Code>
+          </span>
+        ),
       },
       {
         field: "role",
