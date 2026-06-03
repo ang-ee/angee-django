@@ -13,6 +13,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.core.management import call_command
 from django.db import connection
 from django.test import RequestFactory
+from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 from rebac.roles import grant
 
@@ -72,6 +73,33 @@ def test_available_connections_returns_only_enabled_oauth_clients_without_secret
     assert [row["vendor"]["slug"] for row in connections] == ["enabled"]
     assert connections[0]["isOidc"] is True
     assert "clientSecret" not in public_schema.as_str()
+
+
+def test_available_connections_joins_vendor_without_per_row_queries(
+    iam_connection_tables: None,
+) -> None:
+    """The picker joins vendor columns, so its query count stays flat as rows grow."""
+
+    query = """
+        query {
+          availableConnections(pagination: {limit: 10}) {
+            totalCount
+            results { oauthClientSqid vendor { slug displayName icon } }
+          }
+        }
+    """
+    _vendor_and_oauth_client("solo", is_oidc=True, is_enabled=True)
+    public_schema = _schema("public")
+    with CaptureQueriesContext(connection) as one_row:
+        _data(_execute(public_schema, query))
+
+    _vendor_and_oauth_client("dup-a", is_oidc=True, is_enabled=True)
+    _vendor_and_oauth_client("dup-b", is_oidc=True, is_enabled=True)
+    with CaptureQueriesContext(connection) as three_rows:
+        data = _data(_execute(public_schema, query))
+
+    assert data["availableConnections"]["totalCount"] == 3
+    assert len(three_rows.captured_queries) == len(one_row.captured_queries)
 
 
 def test_login_start_rejects_non_oidc_or_disabled_oauth_client(

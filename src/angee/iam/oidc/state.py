@@ -5,6 +5,7 @@ from __future__ import annotations
 import secrets
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 
 from django.conf import settings
 from django.core.cache import cache
@@ -14,6 +15,18 @@ from angee.iam.oidc.errors import INVALID_STATE, OidcFlowError
 
 _DEFAULT_STATE_TTL_SECONDS = 600
 _CACHE_PREFIX = "angee.iam.oidc.state:"
+
+
+class StateFlow(StrEnum):
+    """Which redirect mutation may consume one OIDC state token.
+
+    A token minted for a login must not complete a link (and vice versa);
+    ``identity._validate_state_record`` fails closed when the flow does not
+    match, so a leaked state cannot be replayed across flows.
+    """
+
+    LOGIN = "login"
+    LINK = "link"
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +40,7 @@ class StateRecord:
     code_verifier: str | None
     created_at: datetime
     next_path: str = ""
+    flow: StateFlow = StateFlow.LOGIN
 
 
 def issue(
@@ -35,6 +49,7 @@ def issue(
     *,
     user_id: str | None = None,
     next_path: str = "",
+    flow: StateFlow = StateFlow.LOGIN,
 ) -> tuple[str, StateRecord]:
     """Create and cache one single-use OIDC state record."""
 
@@ -51,6 +66,7 @@ def issue(
         else None,
         created_at=timezone.now(),
         next_path=next_path,
+        flow=flow,
     )
     cache.set(_cache_key(state_token), record, timeout=_state_ttl_seconds())
     return state_token, record

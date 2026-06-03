@@ -18,6 +18,10 @@ definition auth/user {
 definition auth/vendor {
     relation admin: angee/role // rebac:const=admin
 
+    // Unsatisfiable for a table-backed insert: the sqid only exists post-insert,
+    // so the create check sees an empty resource id and denies everyone. Console
+    // creates run elevated (system_context) behind PlatformAdminPermission — see
+    // iam/schema.py IAMVendorMutation. Kept to document the admin-only intent.
     permission create = admin->member
     // Non-admin catalogue reads for the connect-account picker are deferred
     // to S5's public GraphQL surface; do not open read here.
@@ -29,6 +33,8 @@ definition auth/vendor {
 definition auth/oauth_client {
     relation admin: angee/role // rebac:const=admin
 
+    // Same as auth/vendor: const-admin create can't gate an id-less insert, so
+    // console creates run elevated behind PlatformAdminPermission. Documents intent.
     permission create = admin->member
     // Admin-only by design: OAuthClient holds OAuth secrets (projection-excluded).
     // Permanent, not an S5-deferred decision like auth/vendor's read.

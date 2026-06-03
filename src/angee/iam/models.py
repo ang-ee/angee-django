@@ -613,6 +613,20 @@ class CredentialManager(RebacManager):
     )
     operation_fields = frozenset({"kind", "material"})
 
+    def connected_for(self, user: Any) -> models.QuerySet[Any]:
+        """Return ``user``'s external-account-backed credentials.
+
+        Each row is a credential whose ``external_account`` (and that account's
+        ``credential``) is preloaded under the ambient actor's scope. Owns the
+        "what counts as a connected account" predicate for the self-service
+        connected-accounts surface.
+        """
+
+        return self.filter(
+            user=user,
+            external_account__isnull=False,
+        ).rebac_select_related("external_account", "external_account__credential")
+
     def upsert_for_user(
         self,
         user: Any,

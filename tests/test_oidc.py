@@ -465,6 +465,7 @@ def test_complete_link_populates_credential_token_fields(
         oauth_client,
         "https://app.example/callback",
         user_id=str(link_user.pk),
+        flow="link",
     )
     tokens = {
         "access_token": "access-token",
@@ -595,6 +596,7 @@ def test_userinfo_claims_merge_into_login_and_link_claims(
         "https://app.example/callback",
         user_id=str(link_user.pk),
         next_path="/link-next",
+        flow="link",
     )
     link_result = identity.complete_link(
         oauth_client,
@@ -633,6 +635,7 @@ def test_complete_link_rejects_account_owned_by_another_user(
         oauth_client,
         "https://app.example/callback",
         user_id=str(other.pk),
+        flow="link",
     )
     monkeypatch.setattr(
         identity.client_module,
@@ -673,6 +676,7 @@ def test_complete_link_binds_to_state_user_after_session_swap(
         oauth_client,
         "https://app.example/callback",
         user_id=str(start_user.pk),
+        flow="link",
     )
     monkeypatch.setattr(
         identity.client_module,
@@ -718,6 +722,36 @@ def test_state_records_are_single_use() -> None:
 
     assert exc_info.value.code == INVALID_STATE
     assert exc_info.value.http_status == 400
+
+
+def test_state_flow_binding_rejects_cross_flow_completion() -> None:
+    """A login token cannot complete a link, and a link token cannot complete a login."""
+
+    oauth_client = SimpleNamespace(sqid="clt_flow", pk=7, supports_pkce=False)
+
+    login_token, _login = oidc_state.issue(
+        oauth_client, "https://app.example/callback", flow="login"
+    )
+    with pytest.raises(OidcFlowError) as link_exc:
+        identity.complete_link(
+            oauth_client,
+            code="code",
+            state_token=login_token,
+            redirect_uri="https://app.example/callback",
+        )
+    assert link_exc.value.code == INVALID_STATE
+
+    link_token, _link = oidc_state.issue(
+        oauth_client, "https://app.example/callback", user_id="1", flow="link"
+    )
+    with pytest.raises(OidcFlowError) as login_exc:
+        identity.complete_login(
+            oauth_client,
+            code="code",
+            state_token=link_token,
+            redirect_uri="https://app.example/callback",
+        )
+    assert login_exc.value.code == INVALID_STATE
 
 
 @pytest.fixture()

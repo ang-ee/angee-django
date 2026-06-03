@@ -14,7 +14,7 @@ from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.models import AnonymousUser
 from django.db import transaction
-from django.db.models import QuerySet
+from django.db.models import F, QuerySet
 from django.http import HttpRequest
 from django.utils.http import url_has_allowed_host_and_scheme
 from rebac import PermissionDenied, system_context
@@ -202,14 +202,21 @@ class AvailableConnection:
 
     @strawberry.field
     def vendor(self) -> AvailableConnectionVendor:
-        """Return the picker-safe vendor projection."""
+        """Return the picker-safe vendor projection from the joined columns.
 
-        with system_context(reason="iam.graphql.available_connection_vendor"):
-            vendor = Vendor.objects.get(pk=cast(Any, self).vendor_id)
+        ``_available_connections`` annotates the vendor columns onto each row, so
+        this reads them off the same row — one query for the whole page, no
+        per-row vendor fetch. A ``select_related`` join can't be used here: the
+        picker is public/system-scoped, so there is no actor to check a
+        materialised REBAC-bound ``Vendor`` instance against (the related-row
+        guard fails closed). Annotated columns carry no such instance.
+        """
+
+        row = cast(Any, self)
         return AvailableConnectionVendor(
-            slug=str(vendor.slug),
-            display_name=str(vendor.display_name),
-            icon=str(vendor.icon),
+            slug=str(row.picker_vendor_slug),
+            display_name=str(row.picker_vendor_display_name),
+            icon=str(row.picker_vendor_icon),
         )
 
 
@@ -384,7 +391,12 @@ def _available_connections(
         OAuthClient.objects.system_context(reason="iam.graphql.available_connections")
         .filter(is_enabled=True, is_oidc=True)
         .exclude(client_id="")
-        .exclude(discovery_url="", authorize_endpoint=""),
+        .exclude(discovery_url="", authorize_endpoint="")
+        .annotate(
+            picker_vendor_slug=F("vendor__slug"),
+            picker_vendor_display_name=F("vendor__display_name"),
+            picker_vendor_icon=F("vendor__icon"),
+        ),
     )
 
 
@@ -393,14 +405,7 @@ def _my_connected_accounts(
 ) -> QuerySet[Any]:
     """Return this session user's credential-backed connected accounts."""
 
-    user = _session_user(info)
-    return cast(
-        QuerySet[Any],
-        Credential.objects.filter(
-            user=user,
-            external_account__isnull=False,
-        ).rebac_select_related("external_account", "external_account__credential"),
-    )
+    return Credential.objects.connected_for(_session_user(info))
 
 
 def _console_oauth_clients(
@@ -599,6 +604,7 @@ class IAMMutation:
                 redirect_uri,
                 user_id=str(user.pk),
                 next_path=_coerce_next_path(next, request),
+                flow=state.StateFlow.LINK,
             )
         except OidcFlowError as error:
             return _oidc_start_error(error)
@@ -709,7 +715,18 @@ def _revoke_remote_oauth_token(credential: Any) -> None:
 
 @strawberry.type
 class IAMVendorMutation:
-    """Admin mutations for the vendor catalogue."""
+    """Admin mutations for the vendor catalogue.
+
+    Hand-rolled (not ``crud()``) on purpose: the writes run under
+    ``system_context``, gated by :class:`PlatformAdminPermission`. ``crud()``
+    relies on REBAC's per-row write-gate, but ``auth/vendor``'s const-backed
+    ``create = admin->member`` is unsatisfiable for a table-backed row — the
+    sqid is only computed after the insert, so the create check always sees an
+    empty resource id and fails closed for everyone. The const-admin reach is
+    therefore enforced at the GraphQL layer and the insert runs elevated, the
+    same shape the IAM managers use (``AccountManager.link`` /
+    ``CredentialManager.upsert_for_user`` create under ``system_context``).
+    """
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def create_vendor(self, data: VendorInput) -> VendorType:
@@ -737,7 +754,12 @@ class IAMVendorMutation:
 
 @strawberry.type
 class IAMOAuthClientMutation:
-    """Admin mutations for non-secret OAuth/OIDC client registration."""
+    """Admin mutations for non-secret OAuth/OIDC client registration.
+
+    Hand-rolled under ``system_context`` for the same reason as
+    :class:`IAMVendorMutation`: the const-backed ``create`` gate cannot apply to
+    a not-yet-inserted row, so the const-admin gate lives at the GraphQL layer.
+    """
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def create_oauth_client(self, data: OAuthClientInput) -> OAuthClientType:
@@ -812,6 +834,7 @@ def _start_oidc_flow(
     *,
     user_id: str | None = None,
     next_path: str = "/",
+    flow: state.StateFlow = state.StateFlow.LOGIN,
 ) -> OidcStartPayload:
     """Issue state, remember its OAuth client, and return the authorize URL."""
 
@@ -820,6 +843,7 @@ def _start_oidc_flow(
         redirect_uri,
         user_id=user_id,
         next_path=next_path,
+        flow=flow,
     )
     _remember_flow_oauth_client(request, state_token, oauth_client)
     authorize_url = client_module.build_authorize_url(

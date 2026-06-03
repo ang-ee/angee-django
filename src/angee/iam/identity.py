@@ -126,7 +126,7 @@ def complete_login(
     """Complete an OIDC login redirect and return the resolved user with claims."""
 
     record = state.consume(state_token)
-    _validate_state_record(oauth_client, record, redirect_uri)
+    _validate_state_record(oauth_client, record, redirect_uri, expected_flow=state.StateFlow.LOGIN)
     tokens = client_module.exchange_code(
         oauth_client,
         code=code,
@@ -175,7 +175,7 @@ def complete_link(
 
     del user
     record = state.consume(state_token)
-    _validate_state_record(oauth_client, record, redirect_uri)
+    _validate_state_record(oauth_client, record, redirect_uri, expected_flow=state.StateFlow.LINK)
     link_user = _link_state_user(record)
     tokens = client_module.exchange_code(
         oauth_client,
@@ -365,9 +365,19 @@ def _link_state_user(record: state.StateRecord) -> AbstractBaseUser:
     return cast(AbstractBaseUser, user)
 
 
-def _validate_state_record(oauth_client: Any, record: state.StateRecord, redirect_uri: str) -> None:
+def _validate_state_record(
+    oauth_client: Any,
+    record: state.StateRecord,
+    redirect_uri: str,
+    *,
+    expected_flow: state.StateFlow,
+) -> None:
     """Fail closed when a consumed state record does not match this flow."""
 
     oauth_client_id = str(getattr(oauth_client, "sqid", getattr(oauth_client, "pk", "")))
-    if record.oauth_client_id != oauth_client_id or record.redirect_uri != redirect_uri:
+    if (
+        record.flow != expected_flow
+        or record.oauth_client_id != oauth_client_id
+        or record.redirect_uri != redirect_uri
+    ):
         raise OidcFlowError(INVALID_STATE, 400)

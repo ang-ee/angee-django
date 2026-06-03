@@ -225,6 +225,38 @@ def test_oauth_client_manager_syncs_shape_and_secret_from_settings(settings: Any
                     schema_editor.delete_model(model)
 
 
+@pytest.mark.django_db(transaction=True)
+def test_iam_oauth_clients_command_runs_the_settings_sync(settings: Any) -> None:
+    """The ``iam_oauth_clients`` command is a thin trigger for ``sync_from_settings``."""
+
+    created_models = _create_missing_tables()
+    try:
+        with system_context(reason="test setup"):
+            Vendor.objects.create(slug="github", display_name="GitHub")
+        settings.ANGEE_IAM_OAUTH_CLIENTS = (
+            {
+                "vendor": "github",
+                "display_name": "GitHub Login",
+                "client_id": "gh-client",
+                "client_secret": "gh-secret",
+                "is_oidc": True,
+            },
+        )
+
+        call_command("iam_oauth_clients", verbosity=0)
+
+        with system_context(reason="test assertions"):
+            oauth_client = OAuthClient.objects.get(vendor__slug="github", environment="prod")
+        assert oauth_client.display_name == "GitHub Login"
+        assert oauth_client.client_id == "gh-client"
+        assert oauth_client.client_secret == "gh-secret"
+    finally:
+        if created_models:
+            with connection.schema_editor() as schema_editor:
+                for model in reversed(created_models):
+                    schema_editor.delete_model(model)
+
+
 def _owner_tuple_exists(owner: Any, resource: Any) -> bool:
     """Return whether ``owner`` has the stored owner relation on ``resource``."""
 
