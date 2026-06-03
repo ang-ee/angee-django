@@ -18,5 +18,6 @@ class NotesConfig(BaseAddonConfig):
         "demo": (
             "resources/demo/010_auth.user.yaml",
             "resources/demo/020_notes.note.yaml",
+            "resources/demo/030_iam.oauth_client.yaml",
         ),
     }

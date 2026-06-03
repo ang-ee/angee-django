@@ -26,6 +26,32 @@ test.describe("iam auth — credential login", () => {
   }
 });
 
+test.describe("iam auth — OAuth sign-in", () => {
+  // The demo OIDC connection (seeded in the demo resource tier) surfaces a
+  // "Continue with <provider>" button; clicking it starts the provider redirect
+  // with a same-site redirect_uri and PKCE. The external hop is blocked so the
+  // test never leaves.
+  test("the provider button starts an OIDC redirect with PKCE", async ({
+    page,
+  }) => {
+    await page.route(/accounts\.google\.com/, (route) => route.abort());
+    const login = new LoginPage(page);
+    await login.goto();
+
+    const provider = page.getByRole("button", { name: /continue with/i });
+    await provider.waitFor({ state: "visible", timeout: 15000 });
+
+    const [request] = await Promise.all([
+      page.waitForRequest(/accounts\.google\.com/, { timeout: 10000 }),
+      provider.click(),
+    ]);
+    const url = request.url();
+    expect(url).toContain("redirect_uri=");
+    expect(url).toContain(encodeURIComponent("/login/callback"));
+    expect(url).toContain("code_challenge="); // PKCE
+  });
+});
+
 test.describe("iam auth — OAuth callback", () => {
   // A malformed provider return (no code/state) must not hang: the callback
   // shows an error and a way back to sign-in, with no provider round-trip.

@@ -81,7 +81,7 @@ jobs:
     command:
       - sh
       - "-c"
-      - uv run python manage.py resources load install && uv run python manage.py resources load demo
+      - uv run python manage.py resources load master install && uv run python manage.py resources load demo
     env:
       DJANGO_SETTINGS_MODULE: {{ django_settings }}
     depends_on: [permissions]
