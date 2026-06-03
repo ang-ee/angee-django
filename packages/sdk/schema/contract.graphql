@@ -11,8 +11,8 @@
 #  - a `@oneOf` order input over an `Ordering` enum, and lookup-object filters;
 #  - verb-first `create/update/delete` mutations taking `data:` / a `Patch` (whose
 #    id travels inside the patch) / an `id:`, with the cascade `DeletePreview`;
-#  - one `<noun>Aggregate` field returning `{ count }` and one
-#    `<noun>Groups(...)` field returning offset-paginated grouped rows;
+#  - one `<noun>Aggregate` field returning `{ count, sum, avg, min, max }` and
+#    one `<noun>Groups(...)` field returning offset-paginated grouped rows;
 #  - session login (`login`/`logout`/`currentUser`);
 #  - a per-model `<noun>Changed` change event.
 #
@@ -23,6 +23,8 @@ directive @oneOf on INPUT_OBJECT
 scalar DateTime
 
 scalar JSON
+
+scalar BigInt
 
 """An object with a Globally Unique ID"""
 interface Node {
@@ -66,10 +68,21 @@ enum Granularity {
   SECOND_NUMBER
 }
 
+enum NullsPosition {
+  FIRST
+  LAST
+}
+
+enum OrderDirection {
+  ASC
+  DESC
+}
+
 type Sale implements Node {
   id: ID!
   title: String!
   state: SaleState!
+  amount: Int!
   isFeatured: Boolean!
   tags: JSON!
   createdAt: DateTime!
@@ -162,6 +175,12 @@ input SaleGroupBySpec {
   granularity: Granularity = null
 }
 
+input SaleGroupOrder {
+  field: String!
+  direction: OrderDirection! = ASC
+  nulls: NullsPosition = null
+}
+
 type SaleGroupKey {
   state: SaleState
   isFeatured: Boolean
@@ -173,6 +192,10 @@ type SaleGrouped {
   key: SaleGroupKey!
   count: Int!
   filter: JSON!
+  sum: SaleSumFields
+  avg: SaleAvgFields
+  min: SaleMinFields
+  max: SaleMaxFields
 }
 
 type SaleGroupedResult {
@@ -183,11 +206,38 @@ type SaleGroupedResult {
 
 type SaleAggregate {
   count: Int!
+  sum: SaleSumFields
+  avg: SaleAvgFields
+  min: SaleMinFields
+  max: SaleMaxFields
+}
+
+type SaleSumFields {
+  amount: BigInt
+}
+
+type SaleAvgFields {
+  amount: Float
+}
+
+type SaleMinFields {
+  amount: Int
+}
+
+type SaleMaxFields {
+  amount: Int
 }
 
 type DeletePreviewGroup {
   label: String!
   count: Int!
+}
+
+type DeletePreviewNode {
+  label: String!
+  objectLabel: String!
+  objectId: String
+  children: [DeletePreviewNode!]!
 }
 
 type DeletePreview {
@@ -196,6 +246,7 @@ type DeletePreview {
   updated: [DeletePreviewGroup!]!
   blocked: [DeletePreviewGroup!]!
   hasBlockers: Boolean!
+  root: DeletePreviewNode!
 }
 
 type Viewer implements Node {
@@ -234,6 +285,7 @@ type Query {
     groupBy: [SaleGroupBySpec!]!
     pagination: OffsetPaginationInput
     filter: SaleFilter
+    orderBy: [SaleGroupOrder!] = null
   ): SaleGroupedResult!
 }
 
@@ -242,7 +294,7 @@ type Mutation {
   logout: Boolean!
   createSale(data: SaleInput!): Sale!
   updateSale(data: SalePatch!): Sale!
-  deleteSale(id: ID!): DeletePreview!
+  deleteSale(id: ID!, confirm: Boolean! = true): DeletePreview!
 }
 
 type Subscription {

@@ -52,6 +52,98 @@ checklist in §10; file-level surface in the P1 UI Inventory (bottom).
 
 ---
 
+## ⚠ Open visual issues — consolidated (user-flagged "still many", 2026-06-02)
+
+The single tracked list of unresolved look&feel/behavior gaps, so none scatter.
+Each is driven by the standard cadence (Codex → arch + react + visual-vs-mockup
+review → render-verify on live `:5173` vs mockup `:5174`).
+
+- [x] **V1 — grey band above content (every console page). DONE (commit
+  8853b5d).** Root cause was `console-grid` reserving a fixed-height `control`
+  row that `ConsoleShell` never filled. Fix: control row → `auto` height + an
+  unstyled `area-control` host; a `ControlBand` context/portal primitive carries
+  the flush `bg-sheet` band styling; the list `DataToolbar` moved into it (flush
+  under the breadcrumb), the body renders standalone. Reviewed (arch+react, no
+  blockers; folded token/barrel/doc/test), render-verified live (band gone, 0
+  GraphQL errors, 3 new portal tests). Form/record toolbar still in the card →
+  folds into V4.
+- [x] **V2 — aggregate chain (grouped list). DONE (full mockup parity, 2 slices).**
+  Was: only a bare count chip per group. Now each group header shows count + the
+  measured column's rollup (e.g. "411 words") and a footer grand total ("Total
+  414,808 words"). **V2a (backend, 667cb39):** `word_count` denormalized to a
+  real column (computed on save via a shared `count_words` owner, backfilled,
+  seed-populated), exposed + added to the order and `aggregate_fields`, Word
+  Count sort re-enabled. **V2b (SDK+frontend):** `AggregateBucket` carries
+  per-bucket measures; `assembleGroupByDocument`/`assembleAggregateDocument` +
+  `useResourceGroupBy`/`useResourceAggregate` select requested measures (stable
+  vars); the grouped list derives measures from the `ColumnDescriptor.aggregate`
+  marker and renders per-group values + a footer grand total (whole-list filter,
+  not page-derived); the flat-list `GroupHeader` was generalized off its
+  hardcoded `wordCount`. Reviewed (django/react/arch, no blockers, findings
+  folded); live-verified, 0 errors.
+- [x] **V3 — FormView fields blanked after save until reload. DONE.** Original
+  "SDK cache" hypothesis was WRONG — live tracing proved the mutation persists,
+  the result returns the full node, and the cache normalizes (the breadcrumb/
+  other views update with no reload). The real cause: `@tanstack/react-form`
+  1.33.0 re-seeds an *untouched* form from `defaultValues` whenever that ref
+  deep-changes, and the post-save `onSaved → onSelect` re-render passed a fresh
+  empty-draft `defaultValues`, clobbering the just-saved values after
+  `form.reset(savedValues)`. Fix: feed `useForm` from a stable `baselineValuesRef`
+  (the single baseline authority, reassigned only on seed/save/create-reset) +
+  guard comment. Browser-free regression test added (fails pre-fix). Reviewed
+  (react+arch, no blockers); live-verified the title persists post-save, 0 errors.
+- [x] **V4 — FormView layout (redefined by user). DONE.** User: "we do not need
+  tabs but i want the layout of the form of p1 — with the save discard dirty
+  buttons in the view tool bar." Removed the notebook/Tabs (body renders inline
+  as a full-width section); the P1 sheet layout stays (title row + status stepper
+  + 2-col details grid + body); the dirty-only Save/Discard moved OUT of the form
+  into the shell control band (the view toolbar) via a `ControlBand` portal, with
+  a brand-soft highlight when dirty and Save submitting through `handleSubmit()`
+  (it's portaled outside the `<form>`). FormView gained a `toolbar` prop;
+  DataPage feeds the record pager + view switcher into it and dropped its
+  in-content record toolbar. Removed all notebook machinery + the
+  `FORM_VIEW_NOTEBOOK_SLOT` export. (Deferred, not requested: smart-buttons /
+  More-actions menu — need record-relation data.) Reviewed (react+arch, no
+  blockers); live-verified (no tabs, body inline, Save/Discard in toolbar, save
+  persists, 0 errors).
+- [x] **V5 — FormView record pager scope (total-only + page-local). DONE.** The
+  pager used to vanish over a grouped list (the flat one-page probe couldn't
+  locate a record opened from an old date-group). Now `buildRecordNavigation`
+  always returns a nav when a record is open: it shows the filtered total
+  ("of N"), with page-local Prev/Next when the record is in the loaded slice and
+  disabled otherwise (no position query, per the chosen scope). Lives in the
+  control band alongside Save/Discard (V4). Verified live.
+- [ ] **V6 — general fidelity vs mockup.** Density, real page header, focus/border
+  states (umbrella; V1 is its headline instance).
+- [x] **V7 — right-edge bleed. DONE (root flagged).** The clipped purple
+  underline was the **Chatter** tablist (Angee/Comments/Activity): its 3 tabs are
+  ~269px but the panel gives ~253px with `overflow-x: visible`, so the last tab's
+  active underline bled past the panel edge. Fixed by tightening the tabs
+  (`px-2`/`font-medium`, matching the reference) + `overflow-x-auto min-w-0` on
+  the tablist so it clips cleanly + scrolls instead of bleeding. **Deeper root
+  flagged (separate follow-up):** the chatter renders at its MIN width (260px),
+  not the 332px default — its resize `Panel.onResize → updateWidth` feeds the
+  panel size (aside − handle) back into the aside `width`, collapsing it to min
+  on mount. Fixing that (so the chatter is 332 and all 3 tabs fit without scroll)
+  touches the resize wiring and is out of this minor triage's scope.
+- [x] **V8 — group order ignored the column sort. DONE.** A grouped list's
+  column sort only ordered within-group rows; the buckets ignored it. Wired an
+  optional group `orderBy` through `assembleGroupByDocument` + `useResourceGroupBy`
+  and translate `dataView.state.sort` → per-level bucket order in the grouped
+  list. Backend already exposed it; accepted field is the snake_case bucketed
+  alias (`updated_at_day`). Reviewed (folded contract-drift fix +`expectValid`,
+  `fieldToSnake` dedupe, translator relocated, tighter types); verified live
+  (asc→oldest, desc→newest, 0 errors) + sdk/base suites green.
+- [x] **V9 — sort offered on non-orderable columns (GraphQL crash). DONE (commit
+  8853b5d).** Headers showed sort toggles on every column, but `NoteOrder @oneOf`
+  only accepts title/status/updatedAt/createdAt; sorting Word Count/Tags raised
+  "Field not defined by type / @oneOf must specify exactly one key". `word_count`
+  is a Python property and `tags` is M2M — neither is DB-orderable, so the notes
+  columns now mark them `sortable: false` (the header affordance already gated on
+  `ColumnDescriptor.sortable`). Verified live (0 errors).
+
+---
+
 > **Reconcile with the single source of truth.** `.agents/plans/notes-auth-lift.md` is
 > "the one plan." This file is a focused sub-plan for one workstream; it must not
 > contradict it. In particular it is **gated by that plan's open decision D-A — view-state

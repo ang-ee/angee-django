@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 import strawberry
 import strawberry_django
@@ -12,6 +12,7 @@ from django.db import models, transaction
 from angee.base.deletion import (
     DeletionPreview,
     DeletionPreviewGroup,
+    DeletionPreviewNode,
 )
 from angee.base.graphql.introspection import django_model, surface_name
 from angee.base.models import instance_from_public_id
@@ -32,6 +33,27 @@ class DeletePreviewGroup:
 
 
 @strawberry.type
+class DeletePreviewNode:
+    """GraphQL output for one deletion preview tree node."""
+
+    label: str
+    object_label: str
+    object_id: Optional[str]
+    children: list["DeletePreviewNode"]
+
+    @classmethod
+    def from_domain(cls, node: DeletionPreviewNode) -> DeletePreviewNode:
+        """Return GraphQL output for a domain preview tree node."""
+
+        return cls(
+            label=node.label,
+            object_label=node.object_label,
+            object_id=node.object_id,
+            children=[DeletePreviewNode.from_domain(child) for child in node.children],
+        )
+
+
+@strawberry.type
 class DeletePreview:
     """GraphQL output for a cascade deletion preview."""
 
@@ -40,6 +62,9 @@ class DeletePreview:
     updated: list[DeletePreviewGroup]
     blocked: list[DeletePreviewGroup]
     has_blockers: bool
+    root: DeletePreviewNode = strawberry.field(
+        description="Tree apex for the target row; deleted counts already include that row."
+    )
 
     @classmethod
     def from_domain(cls, preview: DeletionPreview) -> DeletePreview:
@@ -51,6 +76,7 @@ class DeletePreview:
             updated=[DeletePreviewGroup.from_domain(group) for group in preview.updated],
             blocked=[DeletePreviewGroup.from_domain(group) for group in preview.blocked],
             has_blockers=preview.has_blockers,
+            root=DeletePreviewNode.from_domain(preview.root),
         )
 
 
@@ -115,13 +141,13 @@ def crud(
 def _delete_resolver(model: type[models.Model]) -> Any:
     """Return a mutation resolver that previews then deletes."""
 
-    def delete(id: strawberry.ID) -> DeletePreview:
+    def delete(id: strawberry.ID, confirm: bool = True) -> DeletePreview:
         """Delete one model instance by public id when unblocked."""
 
         with transaction.atomic():
             instance = _resolve_for_delete(model, str(id))
             preview = DeletionPreview.from_instance(instance)
-            if not preview.has_blockers:
+            if confirm and not preview.has_blockers:
                 instance.delete()
         return DeletePreview.from_domain(preview)
 

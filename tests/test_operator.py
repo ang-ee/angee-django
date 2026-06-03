@@ -1,0 +1,325 @@
+"""Tests for the operator daemon-bridge addon."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+import strawberry
+from rebac import SubjectRef
+
+from angee.operator import schema as operator_schema
+from angee.operator.daemon import OperatorDaemon
+
+_TOKEN_ENV_KEYS = ("ANGEE_OPERATOR_TOKEN", "ANGEE_SECRET_OPERATOR_TOKEN")
+_URL_ENV_KEYS = ("ANGEE_OPERATOR_GRAPHQL_ENDPOINT", "ANGEE_OPERATOR_URL")
+_CONNECTION_QUERY = "{ operatorConnection { endpoint token } }"
+_ACTOR = SubjectRef.of("auth/user", "abc")
+
+
+@pytest.fixture
+def clean_operator_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Drop operator endpoint/token env so resolution stays deterministic."""
+
+    for key in (*_TOKEN_ENV_KEYS, *_URL_ENV_KEYS):
+        monkeypatch.delenv(key, raising=False)
+
+
+# --- endpoint resolution ------------------------------------------------------
+
+
+def test_endpoint_defaults_to_same_origin_proxy(clean_operator_env: None) -> None:
+    """With nothing configured the endpoint is the CORS-free proxy default."""
+
+    assert OperatorDaemon.from_settings().endpoint == "/operator/graphql"
+
+
+def test_endpoint_full_setting_wins_without_doubling_graphql(
+    clean_operator_env: None,
+    settings: pytest.FixtureRequest,
+) -> None:
+    """A full endpoint is returned verbatim, not re-suffixed."""
+
+    settings.ANGEE_OPERATOR_GRAPHQL_ENDPOINT = "http://localhost:9000/graphql"
+
+    assert OperatorDaemon.from_settings().endpoint == "http://localhost:9000/graphql"
+
+
+def test_endpoint_base_url_gains_one_graphql_suffix(
+    clean_operator_env: None,
+    settings: pytest.FixtureRequest,
+) -> None:
+    """A base URL is suffixed with a single ``/graphql``."""
+
+    settings.ANGEE_OPERATOR_URL = "http://localhost:9000"
+
+    assert OperatorDaemon.from_settings().endpoint == "http://localhost:9000/graphql"
+
+
+def test_endpoint_reads_base_url_from_environment(
+    clean_operator_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A base URL resolves from the environment when no setting is present."""
+
+    monkeypatch.setenv("ANGEE_OPERATOR_URL", "http://daemon:9000")
+
+    assert OperatorDaemon.from_settings().endpoint == "http://daemon:9000/graphql"
+
+
+# --- admin bearer -------------------------------------------------------------
+
+
+def test_admin_bearer_prefers_setting(
+    clean_operator_env: None,
+    settings: pytest.FixtureRequest,
+) -> None:
+    """A configured setting is the resolved admin bearer."""
+
+    settings.ANGEE_OPERATOR_TOKEN = "from-settings"
+
+    assert OperatorDaemon.from_settings().admin_bearer == "from-settings"
+
+
+def test_admin_bearer_falls_back_to_secret_env(
+    clean_operator_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The secret env key is the final fallback for the admin bearer."""
+
+    monkeypatch.setenv("ANGEE_SECRET_OPERATOR_TOKEN", "from-secret-env")
+
+    assert OperatorDaemon.from_settings().admin_bearer == "from-secret-env"
+
+
+def test_admin_bearer_absent_is_none(clean_operator_env: None) -> None:
+    """No configured bearer resolves to ``None``."""
+
+    assert OperatorDaemon.from_settings().admin_bearer is None
+
+
+# --- minting ------------------------------------------------------------------
+
+
+def test_mint_token_posts_actor_scope_ttl_and_returns_token(
+    clean_operator_env: None,
+    settings: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A configured bridge mints over the admin bearer and returns the token."""
+
+    settings.ANGEE_OPERATOR_URL = "http://localhost:9000"
+    settings.ANGEE_OPERATOR_TOKEN = "admin-bearer"
+    settings.ANGEE_OPERATOR_TOKEN_SCOPE = ["service:read"]
+    settings.ANGEE_OPERATOR_TOKEN_TTL = "30m"
+    seen: dict[str, object] = {}
+
+    def fake_post(self: OperatorDaemon, url: str, payload: dict[str, object]) -> dict[str, object]:
+        seen.update(url=url, payload=payload, bearer=self.admin_bearer)
+        return {"token": "minted-abc"}
+
+    monkeypatch.setattr(OperatorDaemon, "_post_json", fake_post)
+
+    assert OperatorDaemon.from_settings().mint_token("auth/user:abc") == "minted-abc"
+    assert seen["url"] == "http://localhost:9000/tokens/mint"
+    assert seen["payload"] == {"actor": "auth/user:abc", "scope": ["service:read"], "ttl": "30m"}
+    assert seen["bearer"] == "admin-bearer"
+
+
+def test_mint_token_derives_host_from_full_graphql_endpoint(
+    clean_operator_env: None,
+    settings: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The mint host is derived from a full GraphQL endpoint when that is all that is set."""
+
+    settings.ANGEE_OPERATOR_GRAPHQL_ENDPOINT = "http://daemon:9000/graphql"
+    settings.ANGEE_OPERATOR_TOKEN = "admin-bearer"
+    seen: dict[str, object] = {}
+
+    def fake_post(self: OperatorDaemon, url: str, payload: dict[str, object]) -> dict[str, object]:
+        seen["url"] = url
+        return {"token": "ok"}
+
+    monkeypatch.setattr(OperatorDaemon, "_post_json", fake_post)
+
+    assert OperatorDaemon.from_settings().mint_token("auth/user:abc") == "ok"
+    assert seen["url"] == "http://daemon:9000/tokens/mint"
+
+
+def test_mint_token_preserves_mount_prefix(
+    clean_operator_env: None,
+    settings: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A daemon behind a path prefix mints under that prefix, not the bare host.
+
+    Otherwise the admin bearer would POST to a sibling service on the same origin
+    (``https://host/tokens/mint`` instead of ``https://host/operator/...``).
+    """
+
+    settings.ANGEE_OPERATOR_URL = "https://host/operator"
+    settings.ANGEE_OPERATOR_TOKEN = "admin-bearer"
+    seen: dict[str, object] = {}
+
+    def fake_post(self: OperatorDaemon, url: str, payload: dict[str, object]) -> dict[str, object]:
+        seen["url"] = url
+        return {"token": "ok"}
+
+    monkeypatch.setattr(OperatorDaemon, "_post_json", fake_post)
+
+    assert OperatorDaemon.from_settings().mint_token("auth/user:abc") == "ok"
+    assert seen["url"] == "https://host/operator/tokens/mint"
+
+
+def test_mint_token_strips_only_trailing_graphql_from_prefixed_endpoint(
+    clean_operator_env: None,
+    settings: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A prefixed GraphQL endpoint keeps the prefix, dropping only ``/graphql``."""
+
+    settings.ANGEE_OPERATOR_GRAPHQL_ENDPOINT = "https://host/operator/graphql"
+    settings.ANGEE_OPERATOR_TOKEN = "admin-bearer"
+    seen: dict[str, object] = {}
+
+    def fake_post(self: OperatorDaemon, url: str, payload: dict[str, object]) -> dict[str, object]:
+        seen["url"] = url
+        return {"token": "ok"}
+
+    monkeypatch.setattr(OperatorDaemon, "_post_json", fake_post)
+
+    assert OperatorDaemon.from_settings().mint_token("auth/user:abc") == "ok"
+    assert seen["url"] == "https://host/operator/tokens/mint"
+
+
+def test_mint_token_none_when_unconfigured(clean_operator_env: None) -> None:
+    """No bearer or reachable host hides the connection."""
+
+    assert OperatorDaemon.from_settings().mint_token("auth/user:abc") is None
+
+
+def test_mint_token_none_on_transport_error(
+    clean_operator_env: None,
+    settings: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed mint call hides the connection rather than raising."""
+
+    settings.ANGEE_OPERATOR_URL = "http://localhost:9000"
+    settings.ANGEE_OPERATOR_TOKEN = "admin-bearer"
+
+    def boom(self: OperatorDaemon, url: str, payload: dict[str, object]) -> dict[str, object]:
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(OperatorDaemon, "_post_json", boom)
+
+    assert OperatorDaemon.from_settings().mint_token("auth/user:abc") is None
+
+
+# --- resolver gate ------------------------------------------------------------
+
+
+def _execute() -> strawberry.types.ExecutionResult:
+    """Run the connection query against a freshly built schema."""
+
+    schema = strawberry.Schema(query=operator_schema.OperatorQuery)
+    return schema.execute_sync(_CONNECTION_QUERY)
+
+
+class _StubDaemon:
+    """Stand-in daemon that returns a fixed token without any network call."""
+
+    endpoint = "http://localhost:9000/graphql"
+
+    def __init__(self, token: str | None) -> None:
+        self._token = token
+        self.minted_for: str | None = None
+
+    def mint_token(self, actor: str) -> str | None:
+        self.minted_for = actor
+        return self._token
+
+
+def test_connection_hidden_for_anonymous(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No actor hides the connection without touching the gate."""
+
+    monkeypatch.setattr(operator_schema, "current_actor", lambda: None)
+
+    result = _execute()
+
+    assert result.errors is None
+    assert result.data == {"operatorConnection": None}
+
+
+def test_connection_hidden_when_read_denied(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An actor denied ``read`` on the connection sees ``None``."""
+
+    monkeypatch.setattr(operator_schema, "current_actor", lambda: _ACTOR)
+    monkeypatch.setattr(operator_schema, "backend", lambda: object())
+    monkeypatch.setattr(
+        operator_schema,
+        "check_field_access",
+        lambda *args, **kwargs: SimpleNamespace(allowed=False),
+    )
+
+    result = _execute()
+
+    assert result.errors is None
+    assert result.data == {"operatorConnection": None}
+
+
+def test_connection_hidden_when_mint_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An authorized actor sees ``None`` when no token can be minted."""
+
+    stub = _StubDaemon(token=None)
+    monkeypatch.setattr(operator_schema, "current_actor", lambda: _ACTOR)
+    monkeypatch.setattr(operator_schema, "backend", lambda: object())
+    monkeypatch.setattr(
+        operator_schema,
+        "check_field_access",
+        lambda *args, **kwargs: SimpleNamespace(allowed=True),
+    )
+    monkeypatch.setattr(operator_schema.OperatorDaemon, "from_settings", classmethod(lambda cls: stub))
+
+    result = _execute()
+
+    assert result.errors is None
+    assert result.data == {"operatorConnection": None}
+
+
+def test_connection_returns_minted_token_for_authorized_actor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An authorized actor receives the endpoint and a token minted for them."""
+
+    stub = _StubDaemon(token="minted-xyz")
+    monkeypatch.setattr(operator_schema, "current_actor", lambda: _ACTOR)
+    monkeypatch.setattr(operator_schema, "backend", lambda: object())
+    monkeypatch.setattr(
+        operator_schema,
+        "check_field_access",
+        lambda *args, **kwargs: SimpleNamespace(allowed=True),
+    )
+    monkeypatch.setattr(operator_schema.OperatorDaemon, "from_settings", classmethod(lambda cls: stub))
+
+    result = _execute()
+
+    assert result.errors is None
+    assert result.data == {
+        "operatorConnection": {
+            "endpoint": "http://localhost:9000/graphql",
+            "token": "minted-xyz",
+        }
+    }
+    assert stub.minted_for == "auth/user:abc"
+
+
+# --- schema surface -----------------------------------------------------------
+
+
+def test_operator_contributes_only_the_console_surface() -> None:
+    """The addon installs its query and type into the console bucket only."""
+
+    assert set(operator_schema.schemas) == {"console"}
+    console = operator_schema.schemas["console"]
+    assert operator_schema.OperatorQuery in console["query"]
+    assert operator_schema.OperatorConnectionInfo in console["types"]

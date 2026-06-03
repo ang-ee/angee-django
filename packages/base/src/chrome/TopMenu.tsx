@@ -11,6 +11,7 @@ import {
   navigationMenuVariants,
 } from "../ui/navigation-menu";
 import {
+  appSectionItems,
   buildMenuTree,
   menuItemIcon,
   menuItemLabel,
@@ -112,7 +113,10 @@ function TopMenuLinks({
     select: (state) => state.location.pathname,
   });
   const tree = buildMenuTree(items ?? runtimeItems);
-  const menuItems = topMenuItems(tree);
+  // An explicit `items` list is a shell scoping its own nav — render it as given.
+  // The default top bar is the *active app's* sections: the rail switches apps,
+  // the top bar navigates within the one you're in, so a sibling app never leaks.
+  const menuItems = items ? topMenuItems(tree) : appSectionItems(tree, pathname);
   const hasPopup = menuItems.some((item) => Boolean(item.children?.length));
 
   if (!menuItems.length) return null;

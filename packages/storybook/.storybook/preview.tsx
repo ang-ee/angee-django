@@ -8,7 +8,7 @@ import {
   type AngeeUrqlClientOptions,
   type AppRuntime,
 } from "@angee/sdk";
-import { baseIcons } from "@angee/base";
+import { ToastProvider, baseIcons } from "@angee/base";
 import {
   Outlet,
   RouterProvider,
@@ -102,9 +102,11 @@ const withAngeeProviders: Decorator = (Story) => {
       <AuthProvider auth={previewAuth}>
         <GraphQLClientProvider config={previewSchemas} schema="public">
           <NuqsTestingAdapter>
-            <div className="min-h-screen bg-canvas p-6 font-sans text-fg">
-              <RouterProvider router={router} />
-            </div>
+            <ToastProvider>
+              <div className="min-h-screen bg-canvas p-6 font-sans text-fg">
+                <RouterProvider router={router} />
+              </div>
+            </ToastProvider>
           </NuqsTestingAdapter>
         </GraphQLClientProvider>
       </AuthProvider>

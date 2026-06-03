@@ -1,0 +1,29 @@
+// Authorization schema for the operator addon.
+// @rebac_package: operator
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 1
+
+definition operator/role {
+    // Roles-as-namespace with a runtime hierarchy: `includes` lets one operator
+    // role imply another, and resources gate on `effective_member` so granted +
+    // implied members both resolve. Platform admins (angee/role:admin) are
+    // implicit members of every operator role.
+    relation member:   auth/user | auth/group#member | angee/role:admin#member
+    relation includes: operator/role#effective_member
+
+    permission effective_member = member + includes
+}
+
+definition operator/connection {
+    // Platform admins (angee/role:admin) reach the connection through a
+    // const-backed relation, exactly like iam/auth/user — the grant lives wholly
+    // in this schema. The forward check synthesises the admin subject from the
+    // persisted schema, so no per-object tuple is stored; a table-less
+    // (`managed = False`) `OperatorConnection` model backs the type only to
+    // satisfy the rebac.E009 system check and is never read. The operator_admin
+    // role stays as the grantable path for non-admin operators.
+    relation admin:  angee/role // rebac:const=admin
+    relation reader: operator/role:operator_admin#effective_member
+
+    permission read = admin->member + reader
+}

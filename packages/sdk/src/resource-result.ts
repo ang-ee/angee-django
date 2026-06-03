@@ -16,6 +16,27 @@ export interface PageResult {
   pageInfo: PageInfo | undefined;
 }
 
+export interface DeletePreviewGroup {
+  label: string;
+  count: number;
+}
+
+export interface DeletePreviewNode {
+  label: string;
+  objectLabel: string;
+  objectId: string | null;
+  children: readonly DeletePreviewNode[];
+}
+
+export interface DeletePreview {
+  totalDeletedCount: number;
+  deleted: readonly DeletePreviewGroup[];
+  updated: readonly DeletePreviewGroup[];
+  blocked: readonly DeletePreviewGroup[];
+  hasBlockers: boolean;
+  root: DeletePreviewNode;
+}
+
 function isRecord(value: unknown): value is Row {
   return typeof value === "object" && value !== null;
 }
@@ -47,11 +68,66 @@ export function extractPage(data: unknown): PageResult {
   };
 }
 
+/** The cascade preview a delete mutation returns, or null. */
+export function extractDeletePreview(data: unknown): DeletePreview | null {
+  const preview = rootValue(data);
+  if (!isRecord(preview)) return null;
+  const root = toDeletePreviewNode(preview.root);
+  if (
+    typeof preview.totalDeletedCount !== "number" ||
+    typeof preview.hasBlockers !== "boolean" ||
+    root === null
+  ) {
+    return null;
+  }
+  return {
+    totalDeletedCount: preview.totalDeletedCount,
+    deleted: toDeletePreviewGroups(preview.deleted),
+    updated: toDeletePreviewGroups(preview.updated),
+    blocked: toDeletePreviewGroups(preview.blocked),
+    hasBlockers: preview.hasBlockers,
+    root,
+  };
+}
+
 /** Narrow a response `pageInfo` to the declared offset shape. */
 function toPageInfo(value: unknown): PageInfo | undefined {
   if (!isRecord(value)) return undefined;
   return {
     offset: typeof value.offset === "number" ? value.offset : 0,
     limit: typeof value.limit === "number" ? value.limit : null,
+  };
+}
+
+function toDeletePreviewGroups(value: unknown): DeletePreviewGroup[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((group) =>
+    isRecord(group) && typeof group.label === "string" && typeof group.count === "number"
+      ? [{ label: group.label, count: group.count }]
+      : [],
+  );
+}
+
+function toDeletePreviewNode(value: unknown): DeletePreviewNode | null {
+  if (
+    !isRecord(value) ||
+    typeof value.label !== "string" ||
+    typeof value.objectLabel !== "string" ||
+    (value.objectId !== null &&
+      value.objectId !== undefined &&
+      typeof value.objectId !== "string")
+  ) {
+    return null;
+  }
+  return {
+    label: value.label,
+    objectLabel: value.objectLabel,
+    objectId: value.objectId ?? null,
+    children: Array.isArray(value.children)
+      ? value.children.flatMap((child) => {
+          const node = toDeletePreviewNode(child);
+          return node ? [node] : [];
+        })
+      : [],
   };
 }

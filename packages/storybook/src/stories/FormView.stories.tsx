@@ -3,14 +3,12 @@ import {
   AppRuntimeProvider,
   GraphQLClientProvider,
   type AngeeUrqlClientOptions,
-  type SlotContribution,
 } from "@angee/sdk";
 import {
   FormView,
   ModalsHost,
   baseIcons,
   defaultWidgets,
-  formViewNotebookSlot,
   type FormField,
   type PageGroupDescriptor,
 } from "@angee/base";
@@ -206,38 +204,6 @@ const readOnlyGroups = [
   },
 ] satisfies readonly PageGroupDescriptor[];
 
-const storyNotebookSlots = [
-  {
-    slot: formViewNotebookSlot("notes.Note"),
-    id: "linked-notes",
-    sequence: 10,
-    content: {
-      label: "Linked notes",
-      count: 2,
-      children: (
-        <div className="grid gap-2 p-4 text-13">
-          <NotebookRow title="Support handoff" detail="Updated yesterday" />
-          <NotebookRow title="Import smoke test" detail="Owner: Sofia Marin" />
-        </div>
-      ),
-    },
-  },
-  {
-    slot: formViewNotebookSlot("notes.Note"),
-    id: "activity",
-    sequence: 20,
-    content: {
-      label: "Activity",
-      count: 4,
-      children: (
-        <div className="grid gap-2 p-4 text-13 text-fg-muted">
-          <p>4 updates are ready to render in this notebook panel.</p>
-        </div>
-      ),
-    },
-  },
-] satisfies readonly SlotContribution[];
-
 const storySchemas = {
   public: {
     url: "/graphql/public/",
@@ -297,7 +263,7 @@ function FormViewFixture({
         <AppRuntimeProvider
           runtime={{
             icons: baseIcons,
-            slots: storyNotebookSlots,
+            slots: [],
             widgets: defaultWidgets,
           }}
         >
@@ -320,21 +286,6 @@ function FormViewFixture({
         </AppRuntimeProvider>
       </GraphQLClientProvider>
     </ModalsHost>
-  );
-}
-
-function NotebookRow({
-  detail,
-  title,
-}: {
-  detail: string;
-  title: string;
-}) {
-  return (
-    <div className="rounded border border-border-subtle bg-inset px-3 py-2">
-      <p className="font-medium text-fg">{title}</p>
-      <p className="mt-1 text-xs text-fg-muted">{detail}</p>
-    </div>
   );
 }
 

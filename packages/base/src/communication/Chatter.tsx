@@ -75,13 +75,13 @@ export function Chatter({
             variant="card"
             className="flex h-full min-h-0 flex-col"
           >
-            <Tabs.List className="shrink-0 px-3 pt-2">
+            <Tabs.List className="shrink-0 min-w-0 overflow-x-auto px-2 pt-2">
               {resolvedTabs.map((tab) => (
                 <Tabs.Tab
                   key={tab.id}
                   value={tab.id}
                   icon={tab.icon ? <Glyph name={tab.icon} /> : undefined}
-                  className="h-8 px-2.5 text-13 font-semibold leading-5"
+                  className="h-8 px-2 text-13 font-medium leading-5"
                 >
                   {tab.label}
                   {typeof tab.count === "number" ? (

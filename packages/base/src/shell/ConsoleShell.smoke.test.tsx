@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import {
   Outlet,
   RouterProvider,
@@ -10,10 +10,11 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { useMemo, type ReactNode, type SVGProps } from "react";
-import { beforeAll, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
 import { parseFlatSearch, stringifyFlatSearch } from "../createApp";
 import { ConsoleShell } from "./ConsoleShell";
+import { ControlBand } from "./ControlBand";
 import { useChatterContent } from "../communication";
 
 vi.mock("@angee/logo-react", () => ({
@@ -42,9 +43,20 @@ vi.mock("@angee/sdk", async (importOriginal) => {
       fetching: false,
       error: null,
     }),
+    // Two apps: "Notes" (with two sections) and a sibling "Ops". The rail
+    // switches apps; the top bar shows the active app's sections.
     useMenus: () => [
-      { id: "notes", label: "Notes", to: "/notes", icon: "file" },
-      { id: "archive", label: "Archive", to: "/archive", icon: "archive" },
+      {
+        id: "notes",
+        label: "Notes",
+        to: "/notes",
+        icon: "file",
+        children: [
+          { id: "notes.all", label: "All notes", to: "/notes", icon: "list" },
+          { id: "notes.archive", label: "Archived", to: "/notes/archive", icon: "archive" },
+        ],
+      },
+      { id: "ops", label: "Ops", to: "/ops", icon: "activity" },
     ],
   };
 });
@@ -60,11 +72,16 @@ function renderInRouter(children: ReactNode) {
   });
   const archiveRoute = createRoute({
     getParentRoute: () => rootRoute,
-    path: "/archive",
+    path: "/notes/archive",
+    component: () => null,
+  });
+  const opsRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/ops",
     component: () => null,
   });
   const router = createRouter({
-    routeTree: rootRoute.addChildren([notesRoute, archiveRoute]),
+    routeTree: rootRoute.addChildren([notesRoute, archiveRoute, opsRoute]),
     history: createMemoryHistory({ initialEntries: ["/notes"] }),
     parseSearch: parseFlatSearch,
     stringifySearch: stringifyFlatSearch,
@@ -77,6 +94,7 @@ describe("ConsoleShell", () => {
   beforeAll(() => {
     Element.prototype.getAnimations ??= () => [];
   });
+  afterEach(() => cleanup());
 
   test("composes rail navigation, top chrome, breadcrumbs, content, and chatter", async () => {
     renderInRouter(
@@ -86,14 +104,20 @@ describe("ConsoleShell", () => {
     );
     await screen.findByText("Body content");
 
+    // The rail is the app switcher: one icon per app (Notes is active here, Ops
+    // is the sibling).
     const rail = screen.getByRole("navigation", { name: "Primary navigation" });
     const notesLink = within(rail).getByRole("link", { name: "Notes" });
     expect(notesLink.getAttribute("href")).toBe("/notes");
     expect(notesLink.getAttribute("aria-current")).toBe("page");
+    expect(within(rail).getByRole("link", { name: "Ops" })).toBeTruthy();
 
+    // The top bar navigates within the active app: it lists Notes' sections and
+    // never the sibling app's entry.
     const topBar = screen.getByRole("banner", { name: "Workspace top bar" });
-    // The top menu is data-driven (useMenus) and renders the app menu links.
-    expect(within(topBar).getAllByText("Notes").length).toBeGreaterThan(0);
+    expect(within(topBar).getByText("All notes")).toBeTruthy();
+    expect(within(topBar).getByText("Archived")).toBeTruthy();
+    expect(within(topBar).queryByText("Ops")).toBeNull();
     expect(screen.getByRole("search", { name: "Global search" })).toBeTruthy();
 
     const breadcrumb = screen.getByRole("navigation", { name: "Breadcrumb" });
@@ -104,6 +128,45 @@ describe("ConsoleShell", () => {
     expect(screen.getByRole("tab", { name: "Angee" })).toBeTruthy();
     expect(screen.getByText("No agent yet")).toBeTruthy();
     expect(screen.getByText("Set up your assistant")).toBeTruthy();
+  });
+
+  test("portals a ControlBand into the area-control row", async () => {
+    const { container } = renderInRouter(
+      <ConsoleShell title="Notes" icon="file">
+        <ControlBand>
+          <button type="button">Band control</button>
+        </ControlBand>
+        <section aria-label="Page body">Body content</section>
+      </ConsoleShell>,
+    );
+    await screen.findByText("Body content");
+
+    const control = container.querySelector(".area-control");
+    const button = await screen.findByRole("button", { name: "Band control" });
+    // Lands in the shell's control row, not inline in the content area.
+    expect(control?.contains(button)).toBe(true);
+    expect(screen.getByRole("main").contains(button)).toBe(false);
+  });
+
+  test("leaves the area-control row empty when no ControlBand is mounted", async () => {
+    const { container } = renderInRouter(
+      <ConsoleShell title="Notes" icon="file">
+        <section aria-label="Page body">Body content</section>
+      </ConsoleShell>,
+    );
+    await screen.findByText("Body content");
+
+    // Empty host → the auto-height grid row collapses to zero (no grey band).
+    expect(container.querySelector(".area-control")?.children.length).toBe(0);
+  });
+
+  test("renders the band inline when there is no shell above", () => {
+    render(
+      <ControlBand>
+        <button type="button">Standalone control</button>
+      </ControlBand>,
+    );
+    expect(screen.getByRole("button", { name: "Standalone control" })).toBeTruthy();
   });
 
   test("lets page content publish chatter tabs through context", async () => {

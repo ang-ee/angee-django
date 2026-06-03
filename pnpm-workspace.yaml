@@ -3,6 +3,7 @@ packages:
   - "examples/*/e2e"
   - "examples/*/src/web"
   - "examples/*/src/example/*/web"
+  - "src/angee/*/web"
 allowBuilds:
   esbuild: true
   "@tailwindcss/oxide": true

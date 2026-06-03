@@ -344,7 +344,7 @@
   grid-template-rows:
     var(--spacing-topbar-h)
     var(--spacing-crumbs-h)
-    var(--spacing-control-h)
+    auto
     1fr;
   grid-template-areas:
     "rail topbar  topbar"
@@ -357,7 +357,7 @@
   grid-template-columns: var(--spacing-rail-w) 1fr auto;
   grid-template-rows:
     var(--spacing-topbar-h)
-    var(--spacing-control-h)
+    auto
     1fr;
   grid-template-areas:
     "rail topbar  topbar"

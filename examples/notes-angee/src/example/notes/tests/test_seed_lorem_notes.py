@@ -52,6 +52,18 @@ class SeedLoremNotesTests(TransactionTestCase):
         high = datetime(2024, 1, 1, tzinfo=timezone.utc)
         self.assertTrue(all(low <= n.created_at < high for n in alice_notes))
 
+    def test_seeded_notes_store_word_count(self) -> None:
+        self._seed(count=5, owner="alice", fresh=True, seed=42, batch=2)
+
+        with system_context(reason="test"):
+            notes = list(Note.objects.filter(created_by=self.alice))
+
+        self.assertEqual(len(notes), 5)
+        self.assertTrue(any(note.word_count > 0 for note in notes))
+        self.assertTrue(
+            all(note.word_count == Note.count_words(note.body) for note in notes)
+        )
+
     def test_owner_isolation(self) -> None:
         self._seed(count=30, owner="alice", fresh=True)
         alice_sqids = {n.sqid for n in Note.objects.as_user(self.alice)}

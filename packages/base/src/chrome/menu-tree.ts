@@ -92,6 +92,42 @@ export function topMenuItems(
   return railMenuItems(itemsOrTree);
 }
 
+/**
+ * The active app's section links for the top bar: the children of the root the
+ * current path belongs to, rendered flat. Apps live in the rail / app-switcher;
+ * the top bar navigates *within* the active app, so a sibling app's sections
+ * never leak here. A single-page app (a root with no children, e.g. Notes)
+ * contributes nothing.
+ */
+export function appSectionItems(
+  itemsOrTree: readonly ChromeMenuItem[] | MenuTree,
+  pathname: string,
+): readonly ChromeMenuItem[] {
+  const tree = isMenuTree(itemsOrTree) ? itemsOrTree : buildMenuTree(itemsOrTree);
+  const active = activeAppRoot(tree, pathname);
+  return (active?.children ?? []).filter((child) => menuItemTarget(child));
+}
+
+/**
+ * The root the current path belongs to — the app whose own target or a child's
+ * target is the longest prefix of `pathname` (most-specific wins).
+ */
+function activeAppRoot(tree: MenuTree, pathname: string): ChromeMenuItem | undefined {
+  let best: ChromeMenuItem | undefined;
+  let bestLength = -1;
+  for (const root of tree.roots) {
+    for (const candidate of [root, ...(root.children ?? [])]) {
+      const target = menuItemTarget(candidate);
+      if (!target || !menuItemMatchesPath(candidate, pathname)) continue;
+      if (target.length > bestLength) {
+        best = root;
+        bestLength = target.length;
+      }
+    }
+  }
+  return best;
+}
+
 export function menuItemTarget(item: ChromeMenuItem): string | undefined {
   return item.to ?? item.children?.find((child) => child.to)?.to;
 }

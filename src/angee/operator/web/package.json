@@ -1,0 +1,42 @@
+{
+  "name": "@angee/operator",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "codegen": "graphql-codegen --config codegen.ts",
+    "pretypecheck": "pnpm codegen",
+    "typecheck": "tsc --noEmit",
+    "pretest": "pnpm codegen",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@angee/base": "workspace:*",
+    "@angee/sdk": "workspace:*",
+    "lucide-react": "^1.17.0",
+    "urql": "^5.0.0"
+  },
+  "peerDependencies": {
+    "@tanstack/react-router": "^1",
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "devDependencies": {
+    "@graphql-codegen/cli": "^7.1.1",
+    "@graphql-codegen/typescript": "^6.0.2",
+    "@tanstack/react-router": "^1.170.8",
+    "@testing-library/react": "^16.1.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "graphql": "^16.14.0",
+    "happy-dom": "^20.9.0",
+    "react": "^19",
+    "react-dom": "^19",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.7"
+  }
+}

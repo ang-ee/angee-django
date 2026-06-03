@@ -110,6 +110,14 @@ describe("useResourceMutation invalidates membership-changing writes", () => {
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
+  test("delete dry-run does not invalidate the model", async () => {
+    const { result, spy } = runMutation("delete");
+    await act(async () => {
+      await result.current[0]({ id: "1", confirm: false });
+    });
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   test("update does not invalidate (graphcache updates the entity in place)", async () => {
     const { result, spy } = runMutation("update");
     await act(async () => {

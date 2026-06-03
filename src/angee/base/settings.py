@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
+from django.utils.module_loading import module_has_submodule
 
 from angee.base.apps import BaseAddonConfig, BaseConfig
 
@@ -152,10 +154,42 @@ def _migration_modules(
     addon_configs: Sequence[type[BaseAddonConfig]],
     runtime_module: str,
 ) -> dict[str, str]:
-    """Return migration module overrides for emitted runtime apps."""
+    """Return migration module overrides for emitted runtime apps.
 
-    labels = {config_class.label for config_class in addon_configs}
+    Only addons whose package ships a ``models`` module get a redirected
+    migration namespace, because the composer emits ``runtime/<label>/`` (and its
+    migration package) only for label-owning model sources. A model-less addon —
+    e.g. a pure GraphQL/REBAC bridge with no ``models.py`` — has no runtime
+    package, so mapping it would point Django's migration loader at a missing
+    ``runtime.<label>.migrations``.
+
+    The presence check is a settings-time-safe *heuristic*: the true owner is the
+    composer's emitted label set (``AngeeRuntime.sources_by_label``, derived from
+    owned ``model_classes``), but resolving that needs models imported, which is
+    unsafe before app population. The heuristic is exact for an addon that either
+    has no ``models.py`` or has one declaring owned source models; only an
+    *empty* or *extension-only* ``models.py`` would be mis-mapped. Closing that
+    gap means the composer emitting an empty migration package for every composed
+    addon (it already holds the full ``self.addons`` list) so this can map every
+    label — a tracked follow-up, not needed for any current addon.
+    """
+
+    labels = {
+        config_class.label for config_class in addon_configs if _emits_runtime_models(config_class)
+    }
     return {label: f"{runtime_module}.{label}.migrations" for label in sorted(labels)}
+
+
+def _emits_runtime_models(config_class: type[BaseAddonConfig]) -> bool:
+    """Return whether the addon's package ships a ``models`` module.
+
+    A settings-time-safe heuristic for "the composer emits a runtime app for this
+    label" (see ``_migration_modules``); checks file presence without importing,
+    since models cannot be imported before app population.
+    """
+
+    package = importlib.import_module(config_class.name)
+    return module_has_submodule(package, "models")
 
 
 def _addon_settings_defaults(

@@ -81,10 +81,15 @@ describe("assembleMutationDocument", () => {
   test("delete returns the cascade DeletePreview shape", () => {
     const document = assembleMutationDocument("Sale", "delete", []);
     expect(document).toBe(
-      "mutation deleteSale($id: ID!) { deleteSale(id: $id) { " +
+      "mutation deleteSale($id: ID!, $confirm: Boolean) { deleteSale(id: $id, confirm: $confirm) { " +
         "totalDeletedCount hasBlockers " +
-        "deleted { label count } updated { label count } blocked { label count } } }",
+        "deleted { label count } updated { label count } blocked { label count } " +
+        "root { label objectLabel objectId " +
+        "children { label objectLabel objectId " +
+        "children { label objectLabel objectId } } } } }",
     );
+    expect(document).toContain("confirm: $confirm");
+    expect(document).toContain("root { label objectLabel objectId");
     expectValid(document);
   });
 });
@@ -109,6 +114,16 @@ describe("aggregate documents", () => {
     expect(document).toBe(
       "query saleAggregate($filter: SaleFilter) { " +
         "saleAggregate(filter: $filter) { count } }",
+    );
+    expectValid(document);
+  });
+
+  test("the ungrouped aggregate selects requested measures", () => {
+    const document = assembleAggregateDocument("Sale", {
+      measures: [{ op: "sum", field: "amount" }],
+    });
+    expect(document).toBe(
+      "query saleAggregate { saleAggregate { count sum { amount } } }",
     );
     expectValid(document);
   });
@@ -141,6 +156,21 @@ describe("aggregate documents", () => {
     expectValid(document);
   });
 
+  test("the grouped aggregate selects requested measures", () => {
+    const document = assembleGroupByDocument("Sale", {
+      keyFields: ["state"],
+      measures: [{ op: "sum", field: "amount" }],
+    });
+    expect(document).toBe(
+      "query saleGroups($groupBy: [SaleGroupBySpec!]!, " +
+        "$pagination: OffsetPaginationInput) { " +
+        "saleGroups(groupBy: $groupBy, pagination: $pagination) { " +
+        "totalCount results { key { state } count sum { amount } } " +
+        "pageInfo { offset limit } } }",
+    );
+    expectValid(document);
+  });
+
   test("the grouped aggregate accepts the model filter on request", () => {
     const document = assembleGroupByDocument("Sale", {
       keyFields: ["state"],
@@ -151,6 +181,21 @@ describe("aggregate documents", () => {
         "$pagination: OffsetPaginationInput, $filter: SaleFilter) { " +
         "saleGroups(groupBy: $groupBy, pagination: $pagination, filter: $filter) { " +
         "totalCount results { key { state } count } " +
+        "pageInfo { offset limit } } }",
+    );
+    expectValid(document);
+  });
+
+  test("the grouped aggregate accepts group ordering on request", () => {
+    const document = assembleGroupByDocument("Sale", {
+      keyFields: ["createdAtMonth"],
+      withOrderBy: true,
+    });
+    expect(document).toBe(
+      "query saleGroups($groupBy: [SaleGroupBySpec!]!, " +
+        "$pagination: OffsetPaginationInput, $orderBy: [SaleGroupOrder!]) { " +
+        "saleGroups(groupBy: $groupBy, pagination: $pagination, orderBy: $orderBy) { " +
+        "totalCount results { key { createdAtMonth } count } " +
         "pageInfo { offset limit } } }",
     );
     expectValid(document);

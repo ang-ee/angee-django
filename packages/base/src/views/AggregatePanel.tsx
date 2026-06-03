@@ -1,6 +1,6 @@
 import * as React from "react";
 import {
-  useAggregateQuery,
+  useResourceAggregate,
   useResourceGroupBy,
   type AggregateBucket,
   type GroupByDimension,
@@ -54,7 +54,7 @@ export function AggregatePanel({
     dimensions,
     enabled: grouped,
   });
-  const ungrouped = useAggregateQuery(model, { enabled: !grouped });
+  const ungrouped = useResourceAggregate(model, { enabled: !grouped });
 
   const fetching = grouped ? group.fetching : ungrouped.fetching;
   const error = grouped ? group.error : ungrouped.error;

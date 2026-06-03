@@ -4,9 +4,7 @@ import { useBlocker } from "@tanstack/react-router";
 import {
   useResourceMutation,
   useResourceRecord,
-  useSlot,
   type Row,
-  type SlotContribution,
 } from "@angee/sdk";
 
 import { Button } from "../ui/button";
@@ -20,14 +18,12 @@ import {
   FieldRoot,
 } from "../ui/field";
 import {
-  FormActions,
-  FormFooter,
   FormGrid,
   FormSectionKicker,
 } from "../ui/form-layout";
 import { Input } from "../ui/input";
 import { Spinner } from "../ui/spinner";
-import { Tabs } from "../ui/tabs";
+import { ControlBand } from "../shell/ControlBand";
 import { cn } from "../lib/cn";
 import {
   useResolvedWidget,
@@ -55,12 +51,13 @@ export interface FormViewProps {
   onSaved?: (row: Row) => void;
   submitLabel?: React.ReactNode;
   headerActions?: React.ReactNode;
+  /** Navigation chrome (record pager, view switcher) the host renders into the
+   *  view toolbar alongside the dirty Save/Discard actions. */
+  toolbar?: React.ReactNode;
   className?: string;
 }
 
 type Values = Record<string, unknown>;
-
-export const FORM_VIEW_NOTEBOOK_SLOT = "form.notebook";
 
 const TITLE_TEXT_CLASS =
   "block w-full min-w-0 truncate text-28 font-semibold leading-9 text-fg";
@@ -88,10 +85,6 @@ const FIELD_LABEL_CLASS =
 const FIELD_CONTROL_CLASS = "min-w-0";
 const FULL_FIELD_CLASS = "col-span-full";
 
-export function formViewNotebookSlot(model: string): string {
-  return `${FORM_VIEW_NOTEBOOK_SLOT}:${model}`;
-}
-
 export function FormView({
   model,
   id,
@@ -102,6 +95,7 @@ export function FormView({
   onSaved,
   submitLabel,
   headerActions,
+  toolbar,
   className,
 }: FormViewProps): React.ReactElement {
   const resolvedFields = React.useMemo(
@@ -129,7 +123,7 @@ export function FormView({
     isCreate ? "create" : "update",
     { fields: selection },
   );
-  const defaultValues = React.useMemo(
+  const emptyValues = React.useMemo(
     () => emptyDraft(resolvedFields),
     [resolvedFields],
   );
@@ -137,10 +131,14 @@ export function FormView({
     () => resolvedFields.length > 0 && resolvedFields.every((field) => field.readOnly),
     [resolvedFields],
   );
-  const baselineValuesRef = React.useRef<Values>(defaultValues);
+  // `useForm` re-seeds an untouched form whenever `defaultValues` deep-changes.
+  // Source it from this stable baseline ref (reassigned only on record seed,
+  // post-save reset, and create reset) so a post-save re-render carrying new
+  // field-descriptor identities can't re-seed and blank the just-saved values.
+  const baselineValuesRef = React.useRef<Values>(emptyValues);
   const [saveError, setSaveError] = React.useState<string | null>(null);
   const form = useForm({
-    defaultValues,
+    defaultValues: baselineValuesRef.current,
     onSubmit: async ({ value }) => {
       setSaveError(null);
       const data = mutationData(value, resolvedFields, {
@@ -168,8 +166,6 @@ export function FormView({
     isDirty: formIsDirty,
     readOnly: formReadOnly,
   });
-  const globalNotebookSlot = useSlot(FORM_VIEW_NOTEBOOK_SLOT);
-  const modelNotebookSlot = useSlot(formViewNotebookSlot(model));
 
   const seededIdRef = React.useRef<string | null>(null);
   React.useEffect(() => {
@@ -180,8 +176,8 @@ export function FormView({
     if (isCreate) {
       if (seededIdRef.current !== null) {
         seededIdRef.current = null;
-        baselineValuesRef.current = defaultValues;
-        form.reset(defaultValues);
+        baselineValuesRef.current = emptyValues;
+        form.reset(emptyValues);
         setSaveError(null);
       }
       return;
@@ -194,7 +190,7 @@ export function FormView({
       form.reset(recordValues);
       setSaveError(null);
     }
-  }, [defaultValues, isCreate, record, resolvedFields, form]);
+  }, [emptyValues, isCreate, record, resolvedFields, form]);
 
   const titleField = titleFieldFor(resolvedFields);
   const statusField = resolvedFields.find((field) => field.widget === "statusbar");
@@ -232,10 +228,6 @@ export function FormView({
     () => recordSubtitleParts(record, id),
     [id, record],
   );
-  const notebookTabs = React.useMemo(
-    () => notebookTabsFromSlots([...globalNotebookSlot, ...modelNotebookSlot]),
-    [globalNotebookSlot, modelNotebookSlot],
-  );
 
   return (
     <form
@@ -245,6 +237,56 @@ export function FormView({
         void form.handleSubmit();
       }}
     >
+      <form.Subscribe
+        selector={(state) => ({
+          canSubmit: state.canSubmit,
+          isDirty: state.isDirty,
+          isSubmitting: state.isSubmitting,
+        })}
+      >
+        {(state) => {
+          const showActions = isCreate || state.isDirty;
+          if (!toolbar && !showActions) return null;
+          const isSaving = mutation.fetching || state.isSubmitting;
+          // Under a shell the band portals out of the <form>, so Save must
+          // submit via handleSubmit() rather than relying on native type="submit".
+          return (
+            <ControlBand className={state.isDirty ? "bg-brand-soft" : undefined}>
+              <div className="min-w-2 flex-1" />
+              {toolbar ? (
+                <div className="flex min-w-0 items-center gap-2">{toolbar}</div>
+              ) : null}
+              {showActions ? (
+                <div className="flex items-center gap-2">
+                  {state.isDirty ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={isSaving}
+                      onClick={() => form.reset()}
+                    >
+                      Discard
+                    </Button>
+                  ) : null}
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="sm"
+                    loading={isSaving}
+                    disabled={!state.canSubmit}
+                    onClick={() => {
+                      void form.handleSubmit();
+                    }}
+                  >
+                    {submitLabel ?? (isCreate ? "Create" : "Save")}
+                  </Button>
+                </div>
+              ) : null}
+            </ControlBand>
+          );
+        }}
+      </form.Subscribe>
       <div className="mx-auto flex w-full max-w-[1100px] flex-col gap-6 px-6 py-6 pb-12 sm:px-8">
         <header className="grid gap-4">
           <div className="flex items-start gap-4 max-[900px]:flex-col max-[900px]:items-stretch">
@@ -317,51 +359,6 @@ export function FormView({
             </div>
           </div>
 
-          <form.Subscribe
-            selector={(state) => ({
-              canSubmit: state.canSubmit,
-              isDirty: state.isDirty,
-              isSubmitting: state.isSubmitting,
-            })}
-          >
-            {(state) => {
-              if (!isCreate && !state.isDirty) return null;
-              const isSaving = mutation.fetching || state.isSubmitting;
-              return (
-                <FormFooter
-                  align="start"
-                  density="compact"
-                  border="top"
-                  note={null}
-                  noteClassName="hidden"
-                  className="border-b border-border-subtle py-2"
-                >
-                  <FormActions align="start" density="compact">
-                    {state.isDirty ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        disabled={isSaving}
-                        onClick={() => form.reset()}
-                      >
-                        Discard
-                      </Button>
-                    ) : null}
-                    <Button
-                      type="submit"
-                      variant="primary"
-                      size="sm"
-                      loading={isSaving}
-                      disabled={!state.canSubmit}
-                    >
-                      {submitLabel ?? (isCreate ? "Create" : "Save")}
-                    </Button>
-                  </FormActions>
-                </FormFooter>
-              );
-            }}
-          </form.Subscribe>
         </header>
 
         <ErrorBanner message={saveError} title="Save failed" />
@@ -387,22 +384,23 @@ export function FormView({
           ))}
         </div>
 
-        <Notebook
-          bodyField={bodyField}
-          tabs={notebookTabs}
-          renderBody={(field) => (
-            <form.Field name={field.name}>
+        {bodyField ? (
+          <section className="grid gap-2">
+            {bodyField.label ? (
+              <FormSectionKicker>{bodyField.label}</FormSectionKicker>
+            ) : null}
+            <form.Field name={bodyField.name}>
               {(api) => (
-                <NotebookField
-                  field={field}
+                <BodyFieldControl
+                  field={bodyField}
                   value={api.state.value}
                   errors={api.state.meta.errors}
                   onChange={(next) => api.handleChange(next)}
                 />
               )}
             </form.Field>
-          )}
-        />
+          </section>
+        ) : null}
       </div>
     </form>
   );
@@ -467,19 +465,6 @@ type FormSectionModel = {
   label?: React.ReactNode;
   columns?: number;
   fields: readonly FieldDescriptor[];
-};
-
-type NotebookTab = {
-  id: string;
-  label: React.ReactNode;
-  count?: React.ReactNode;
-  children: React.ReactNode;
-};
-
-type NotebookSlotContent = {
-  label?: React.ReactNode;
-  count?: React.ReactNode;
-  children?: React.ReactNode;
 };
 
 function RecordSubtitle({
@@ -582,53 +567,7 @@ function BoundFieldRow({
   );
 }
 
-function Notebook({
-  bodyField,
-  renderBody,
-  tabs,
-}: {
-  bodyField?: FieldDescriptor;
-  renderBody: (field: FieldDescriptor) => React.ReactNode;
-  tabs: readonly NotebookTab[];
-}): React.ReactElement | null {
-  const resolvedTabs = [
-    ...(bodyField
-      ? [
-          {
-            id: "description",
-            label: bodyField.label ?? "Description",
-            children: renderBody(bodyField),
-          },
-        ]
-      : []),
-    ...tabs,
-  ];
-  if (resolvedTabs.length === 0) return null;
-  return (
-    <Tabs
-      defaultValue={resolvedTabs[0]?.id}
-      variant="card"
-      className="pt-2"
-    >
-      <Tabs.List className="overflow-x-auto">
-        {resolvedTabs.map((tab) => (
-          <Tabs.Tab key={tab.id} value={tab.id}>
-            {tab.label}
-            {tab.count !== undefined ? <Tabs.Count>{tab.count}</Tabs.Count> : null}
-          </Tabs.Tab>
-        ))}
-        <Tabs.Indicator />
-      </Tabs.List>
-      {resolvedTabs.map((tab) => (
-        <Tabs.Panel key={tab.id} value={tab.id}>
-          {tab.children}
-        </Tabs.Panel>
-      ))}
-    </Tabs>
-  );
-}
-
-function NotebookField({
+function BodyFieldControl({
   field,
   value,
   errors,
@@ -900,65 +839,6 @@ function formatWordCount(value: unknown): string {
     return `${new Intl.NumberFormat().format(count)} words`;
   }
   return `${String(value)} words`;
-}
-
-function notebookTabsFromSlots(
-  entries: readonly SlotContribution[],
-): NotebookTab[] {
-  return entries.flatMap<NotebookTab>((entry) => {
-    const content = entry.content;
-    if (isNotebookSlotContent(content)) {
-      const nodes = slotNodes(content.children, entry.id);
-      if (nodes.length === 0) return [];
-      return [
-        {
-          id: `slot:${entry.id}`,
-          label: content.label ?? humanizeSlotId(entry.id),
-          count: content.count,
-          children: <>{nodes}</>,
-        },
-      ];
-    }
-    const nodes = slotNodes(content, entry.id);
-    if (nodes.length === 0) return [];
-    return [
-      {
-        id: `slot:${entry.id}`,
-        label: humanizeSlotId(entry.id),
-        children: <>{nodes}</>,
-      },
-    ];
-  });
-}
-
-function isNotebookSlotContent(value: unknown): value is NotebookSlotContent {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    !React.isValidElement(value) &&
-    ("children" in value || "label" in value || "count" in value)
-  );
-}
-
-function slotNodes(value: unknown, key: string): React.ReactNode[] {
-  if (value == null || typeof value === "boolean") return [];
-  if (typeof value === "string" || typeof value === "number") {
-    return [<span key={key}>{value}</span>];
-  }
-  if (React.isValidElement(value)) {
-    return [<React.Fragment key={key}>{value}</React.Fragment>];
-  }
-  if (Array.isArray(value)) {
-    return value.flatMap((item, index) => slotNodes(item, `${key}:${index}`));
-  }
-  return [];
-}
-
-function humanizeSlotId(id: string): string {
-  return id
-    .replace(/[-_.]+/g, " ")
-    .replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
 function normaliseFieldName(value: string): string {

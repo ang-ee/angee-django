@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -15,6 +16,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { AppRuntimeProvider, type Row } from "@angee/sdk";
+import { useMemo, useState, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ModalsHost } from "../feedback";
@@ -130,9 +132,60 @@ describe("FormView", () => {
       data: { title: "" },
     });
   });
+
+  test("keeps saved values after a parent re-render with new field descriptors", async () => {
+    function Harness(): ReactElement {
+      const [saveVersion, setSaveVersion] = useState(0);
+      const viewFields = useMemo(() => cloneFields(fields), [saveVersion]);
+
+      return (
+        <>
+          <span data-testid="save-version" hidden>
+            {saveVersion}
+          </span>
+          <FormView
+            model="notes.Note"
+            id="note-1"
+            fields={viewFields}
+            onSaved={() => setSaveVersion((current) => current + 1)}
+          />
+        </>
+      );
+    }
+
+    renderWithProviders(<Harness />);
+
+    const title = await screen.findByLabelText("Title");
+    await waitFor(() =>
+      expect((title as HTMLInputElement).value).toBe("First"),
+    );
+
+    fireEvent.change(title, { target: { value: "Renamed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByTestId("save-version").textContent).toBe("1"),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Save" })).toBeNull(),
+    );
+    await act(async () => {
+      await nextTask();
+    });
+
+    expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe(
+      "Renamed",
+    );
+    expect(screen.queryByRole("button", { name: "Discard" })).toBeNull();
+  });
 });
 
 function renderForm(id: string | null): void {
+  renderWithProviders(<FormView model="notes.Note" id={id} fields={fields} />);
+}
+
+function renderWithProviders(children: ReactElement): void {
   const rootRoute = createRootRoute();
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -148,9 +201,17 @@ function renderForm(id: string | null): void {
     <RouterContextProvider router={router}>
       <ModalsHost>
         <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-          <FormView model="notes.Note" id={id} fields={fields} />
+          {children}
         </AppRuntimeProvider>
       </ModalsHost>
     </RouterContextProvider>,
   );
+}
+
+function cloneFields(source: readonly FormField[]): FormField[] {
+  return source.map((field) => ({ ...field }));
+}
+
+function nextTask(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }

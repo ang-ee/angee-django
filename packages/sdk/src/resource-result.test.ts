@@ -1,6 +1,11 @@
 import { describe, expect, test } from "vitest";
 
-import { extractNode, extractPage, type PageInfo } from "./resource-result";
+import {
+  extractDeletePreview,
+  extractNode,
+  extractPage,
+  type PageInfo,
+} from "./resource-result";
 
 describe("extractNode", () => {
   test("returns the single root field's record", () => {
@@ -49,5 +54,64 @@ describe("extractPage", () => {
       },
     };
     expect(extractPage(data).pageInfo).toEqual({ offset: 0, limit: null });
+  });
+});
+
+describe("extractDeletePreview", () => {
+  test("returns the delete preview payload with a normalized tree", () => {
+    const data = {
+      deleteSale: {
+        totalDeletedCount: 2,
+        hasBlockers: false,
+        deleted: [{ label: "sales", count: 1 }],
+        updated: [],
+        blocked: [],
+        root: {
+          label: "sale",
+          objectLabel: "Sale A",
+          objectId: "1",
+          children: [
+            {
+              label: "line items",
+              objectLabel: "1 line item",
+              objectId: null,
+              children: [{ label: "line item", objectLabel: "Line 1", objectId: "7" }],
+            },
+          ],
+        },
+      },
+    };
+
+    expect(extractDeletePreview(data)).toEqual({
+      totalDeletedCount: 2,
+      hasBlockers: false,
+      deleted: [{ label: "sales", count: 1 }],
+      updated: [],
+      blocked: [],
+      root: {
+        label: "sale",
+        objectLabel: "Sale A",
+        objectId: "1",
+        children: [
+          {
+            label: "line items",
+            objectLabel: "1 line item",
+            objectId: null,
+            children: [
+              {
+                label: "line item",
+                objectLabel: "Line 1",
+                objectId: "7",
+                children: [],
+              },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
+  test("returns null for a malformed preview", () => {
+    expect(extractDeletePreview({ deleteSale: { totalDeletedCount: 1 } })).toBeNull();
   });
 });

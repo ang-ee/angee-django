@@ -34,7 +34,7 @@ import type {
 
 export interface DataToolbarProps {
   pager: PagerState;
-  view: DataViewKind;
+  view?: DataViewKind;
   group?: DataViewGroup | null;
   groupStack?: readonly DataViewGroup[];
   groupOptions?: readonly DataToolbarGroupOption[];
@@ -90,7 +90,7 @@ export function DataToolbar({
   view,
   group,
   groupStack,
-  groupOptions = [],
+  groupOptions,
   filterOptions = [],
   visibleFields = [],
   activeFilterIds = [],
@@ -108,10 +108,18 @@ export function DataToolbar({
   pagerTotalUnit,
   className,
 }: DataToolbarProps): ReactElement {
-  const groups = groupStack ?? (group ? [group] : []);
+  const groupControls =
+    groupOptions !== undefined
+    || groupStack !== undefined
+    || group !== undefined
+    || onGroupStackChange !== undefined
+    || onClearGroup !== undefined;
+  const toolbarGroupOptions = groupOptions ?? [];
+  const groups = groupControls ? groupStack ?? (group ? [group] : []) : [];
   const activeFilters = filterOptions.filter((option) =>
     activeFilterIds.includes(option.id),
   );
+  const currentView = view ?? "list";
 
   return (
     <section
@@ -129,7 +137,8 @@ export function DataToolbar({
       ) : null}
       <FilterPicker
         groups={groups}
-        groupOptions={groupOptions}
+        groupControls={groupControls}
+        groupOptions={toolbarGroupOptions}
         activeFilters={activeFilters}
         activeFilterIds={activeFilterIds}
         filterOptions={filterOptions}
@@ -146,13 +155,15 @@ export function DataToolbar({
         unit={pagerTotalUnit}
         onPageChange={onPageChange}
       />
-      {view === "list" && visibleFields.length > 0 ? (
+      {currentView === "list" && visibleFields.length > 0 ? (
         <VisibleFieldsMenu
           fields={visibleFields}
           onToggle={onVisibleFieldToggle}
         />
       ) : null}
-      <DataViewSwitcher view={view} onViewChange={onViewChange} />
+      {view && onViewChange ? (
+        <DataViewSwitcher view={view} onViewChange={onViewChange} />
+      ) : null}
     </section>
   );
 }
@@ -207,6 +218,7 @@ function VisibleFieldsMenu({
 
 function FilterPicker({
   groups,
+  groupControls,
   groupOptions,
   filterOptions,
   activeFilters,
@@ -218,6 +230,7 @@ function FilterPicker({
   onGroupStackChange,
 }: {
   groups: readonly DataViewGroup[];
+  groupControls: boolean;
   groupOptions: readonly DataToolbarGroupOption[];
   filterOptions: readonly DataToolbarFilterOption[];
   activeFilters: readonly DataToolbarFilterOption[];
@@ -264,14 +277,21 @@ function FilterPicker({
         />
         <PopoverTrigger
           className="grid size-6 shrink-0 place-content-center rounded text-fg-muted outline-none transition-colors hover:bg-sheet hover:text-fg focus-visible:focus-ring"
-          aria-label="Filter, group, favorites"
+          aria-label={
+            groupControls ? "Filter, group, favorites" : "Filter and favorites"
+          }
         >
           <ChevronDown className="size-3" aria-hidden />
         </PopoverTrigger>
       </div>
       <PopoverPortal>
         <PopoverPositioner sideOffset={6} align="start">
-          <PopoverContent className="grid w-[45rem] max-w-[calc(100vw-2rem)] grid-cols-3">
+          <PopoverContent
+            className={cn(
+              "grid max-w-[calc(100vw-2rem)]",
+              groupControls ? "w-[45rem] grid-cols-3" : "w-[30rem] grid-cols-2",
+            )}
+          >
             <PickerColumn icon={<Filter className="size-3.5" />} title="Filters">
               {filterOptions.length === 0 ? (
                 <PickerMuted>No filters</PickerMuted>
@@ -292,24 +312,26 @@ function FilterPicker({
                 Add custom filter
               </PickerButton>
             </PickerColumn>
-            <PickerColumn
-              icon={<SlidersHorizontal className="size-3.5" />}
-              title="Group by"
-            >
-              {groupOptions.map((option) => (
-                <GroupOptionButton
-                  key={option.id}
-                  option={option}
-                  groups={groups}
-                  onGroupStackChange={onGroupStackChange}
-                />
-              ))}
-              <PickerDivider />
-              <PickerButton muted>
-                <Plus className="size-3" aria-hidden />
-                Add custom group
-              </PickerButton>
-            </PickerColumn>
+            {groupControls ? (
+              <PickerColumn
+                icon={<SlidersHorizontal className="size-3.5" />}
+                title="Group by"
+              >
+                {groupOptions.map((option) => (
+                  <GroupOptionButton
+                    key={option.id}
+                    option={option}
+                    groups={groups}
+                    onGroupStackChange={onGroupStackChange}
+                  />
+                ))}
+                <PickerDivider />
+                <PickerButton muted>
+                  <Plus className="size-3" aria-hidden />
+                  Add custom group
+                </PickerButton>
+              </PickerColumn>
+            ) : null}
             <PickerColumn icon={<Star className="size-3.5" />} title="Favorites">
               <PickerButton muted>
                 <Plus className="size-3" aria-hidden />

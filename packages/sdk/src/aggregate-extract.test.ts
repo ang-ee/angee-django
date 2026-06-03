@@ -11,6 +11,22 @@ describe("autoExtractAggregate", () => {
     });
   });
 
+  test("reads ungrouped aggregate measures", () => {
+    const data = {
+      saleAggregate: {
+        count: 6,
+        sum: { amount: "120" },
+        avg: { amount: 20 },
+      },
+    };
+    expect(autoExtractAggregate(data, "saleAggregate")).toEqual({
+      key: null,
+      count: 6,
+      sum: { amount: "120" },
+      avg: { amount: 20 },
+    });
+  });
+
   test("returns null when the field is absent", () => {
     expect(autoExtractAggregate({}, "saleAggregate")).toBeNull();
   });
@@ -49,6 +65,28 @@ describe("autoExtractGroupBy", () => {
       key: { state: "OPEN" },
       count: 3,
       filter,
+    });
+  });
+
+  test("extracts grouped result row measures", () => {
+    const data = {
+      saleGroups: {
+        totalCount: 1,
+        results: [
+          {
+            count: 3,
+            key: { state: "OPEN" },
+            sum: { amount: "42" },
+            max: { amount: 30 },
+          },
+        ],
+      },
+    };
+    expect(autoExtractGroupBy(data, "saleGroups").buckets[0]).toEqual({
+      key: { state: "OPEN" },
+      count: 3,
+      sum: { amount: "42" },
+      max: { amount: 30 },
     });
   });
 

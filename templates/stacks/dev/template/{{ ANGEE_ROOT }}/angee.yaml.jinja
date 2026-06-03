@@ -6,9 +6,22 @@ template:
   active: stacks/dev
   answers_file: .copier-answers.yml
 
+# The operator daemon owns stack-secret management. The console bearer is a
+# generated secret shared by the daemon (--token) and Django (ANGEE_OPERATOR_TOKEN),
+# so neither side hardcodes it.
+secrets_backend:
+  type: env-file
+  path: .env
+
+secrets:
+  operator-token: { generated: true, length: 32 }
+
 ports:
   web: { value: {{ django_port }}, export_env: DJANGO_PORT }
   process_compose: { value: {{ process_compose_port }}, export_env: PROCESS_COMPOSE_PORT }
+  # The operator daemon's port — workspace-allocated (operator.port_pool.operator),
+  # never a hardcoded 9000. Services reference it as ${ports.operator}.
+  operator: { value: {{ operator_port }}, export_env: ANGEE_OPERATOR_PORT }
 
 sources:
   app:
@@ -38,7 +51,7 @@ jobs:
   makemigrations:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "python", "manage.py", "makemigrations", "base", "iam", "notes"]
+    command: ["uv", "run", "python", "manage.py", "makemigrations", "base", "iam", "notes", "operator"]
     env:
       DJANGO_SETTINGS_MODULE: {{ django_settings }}
     depends_on: [build]
@@ -54,10 +67,7 @@ jobs:
   permissions:
     runtime: local
     workdir: source://app
-    command:
-      - sh
-      - "-c"
-      - uv run python manage.py rebac sync --yes && uv run python manage.py rebac_roles sync
+    command: ["uv", "run", "python", "manage.py", "rebac", "sync", "--yes"]
     env:
       DJANGO_SETTINGS_MODULE: {{ django_settings }}
     depends_on: [migrate]
@@ -90,6 +100,27 @@ jobs:
     workdir: source://framework
     command: ["pnpm", "install"]
 
+  # Refresh the console's codegen SDL from the LIVE daemon (the daemon owns its
+  # schema; Django introspects it over the shared bearer). The command waits for
+  # daemon readiness and fails loudly if the contract can't be fetched, so a
+  # stale SDL never silently masks daemon drift.
+  operator-schema:
+    runtime: local
+    workdir: source://app
+    command: ["uv", "run", "python", "manage.py", "operator_schema"]
+    env:
+      DJANGO_SETTINGS_MODULE: {{ django_settings }}
+      ANGEE_OPERATOR_URL: "http://127.0.0.1:${ports.operator}"
+      ANGEE_OPERATOR_TOKEN: "${secret.operator-token}"
+    depends_on: [operator]
+
+  # Regenerate the console's TypeScript types from the (refreshed) SDL.
+  operator-codegen:
+    runtime: local
+    workdir: source://framework
+    command: ["pnpm", "--filter", "@angee/operator", "codegen"]
+    depends_on: [deps, operator-schema]
+
 services:
   # Daphne runserver: ASGI (HTTP + WebSocket) under Django's autoreloader.
   # Editing serving code restarts the worker; the fresh boot re-emits the
@@ -100,6 +131,13 @@ services:
     command: ["uv", "run", "python", "manage.py", "runserver", "127.0.0.1:{{ django_port }}"]
     env:
       DJANGO_SETTINGS_MODULE: {{ django_settings }}
+      # Django mints the browser's scoped connection token over the daemon's direct
+      # URL + the shared generated secret. The browser then opens the daemon GraphQL
+      # same-origin via /operator/graphql (the UI proxies /operator → the daemon, so
+      # no cross-origin). The operator daemon runs on the workspace-allocated port.
+      ANGEE_OPERATOR_GRAPHQL_ENDPOINT: "/operator/graphql"
+      ANGEE_OPERATOR_URL: "http://127.0.0.1:${ports.operator}"
+      ANGEE_OPERATOR_TOKEN: "${secret.operator-token}"
     after: [resources, schema]
 
   # Vite dev server for the SPA. It proxies /graphql/ and /auth/csrf/ to Django,
@@ -113,4 +151,20 @@ services:
     env:
       ANGEE_DJANGO_URL: http://127.0.0.1:{{ django_port }}
       ANGEE_UI_PORT: "{{ ui_port }}"
-    after: [deps, schema, web]
+      # The UI proxies /operator/* to the daemon (same-origin → no CORS), the same
+      # way it proxies /graphql/ to Django.
+      ANGEE_OPERATOR_URL: "http://127.0.0.1:${ports.operator}"
+    after: [deps, schema, web, operator, operator-codegen]
+
+  # The operator daemon for THIS stack: it serves the console's data (services,
+  # workspaces, sources, gitops, secrets) and is what runs the dev stack.
+  # `angee operator --root .` resolves the stack root by walking up to this stack's
+  # angee.yaml; binds loopback on the workspace-allocated operator port.
+  operator:
+    runtime: local
+    command:
+      - sh
+      - "-c"
+      - exec angee operator --root . --bind 127.0.0.1 --port ${ports.operator} --token "$ANGEE_OPERATOR_TOKEN"
+    env:
+      ANGEE_OPERATOR_TOKEN: "${secret.operator-token}"

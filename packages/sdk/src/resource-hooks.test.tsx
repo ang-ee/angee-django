@@ -154,4 +154,45 @@ describe("useResourceMutation", () => {
     expect(node).toEqual({ id: "9", title: "New" });
     expect(bodies[0]?.query).toContain("createSale(data:");
   });
+
+  test("delete passes confirm and resolves to the delete preview", async () => {
+    const { fetch, bodies } = mockTransport({
+      deleteSale: {
+        totalDeletedCount: 1,
+        hasBlockers: false,
+        deleted: [{ label: "sales", count: 1 }],
+        updated: [],
+        blocked: [],
+        root: {
+          label: "sale",
+          objectLabel: "Sale A",
+          objectId: "1",
+          children: [],
+        },
+      },
+    });
+    const { result } = renderHook(
+      () => useResourceMutation("Sale", "delete"),
+      { wrapper: wrapperWith(fetch) },
+    );
+    const [mutate] = result.current;
+    const preview = await mutate({ id: "1", confirm: false });
+
+    expect(preview).toEqual({
+      totalDeletedCount: 1,
+      hasBlockers: false,
+      deleted: [{ label: "sales", count: 1 }],
+      updated: [],
+      blocked: [],
+      root: {
+        label: "sale",
+        objectLabel: "Sale A",
+        objectId: "1",
+        children: [],
+      },
+    });
+    expect(bodies[0]?.query).toContain("$confirm: Boolean");
+    expect(bodies[0]?.query).toContain("confirm: $confirm");
+    expect(bodies[0]?.variables).toEqual({ id: "1", confirm: false });
+  });
 });

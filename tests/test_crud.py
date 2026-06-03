@@ -105,7 +105,7 @@ def test_crud_fields_merge_into_a_schema() -> None:
     sdl = strawberry.Schema(query=Query, mutation=surface, types=[GroupType]).as_str()
 
     assert "createGroup(data: GroupInput!): GroupType!" in sdl
-    assert "deleteGroup(id: ID!): DeletePreview!" in sdl
+    assert "deleteGroup(id: ID!, confirm: Boolean! = true): DeletePreview!" in sdl
     assert "type DeletePreview" in sdl
 
 

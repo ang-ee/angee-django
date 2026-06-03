@@ -1,16 +1,38 @@
 // Pure extractors that turn an aggregate response into the buckets the dashboard
 // widgets read. Kept free of React so they unit-test directly.
 //
-// The aggregate field is count-only: the ungrouped result carries the total
-// `count`. Grouped results are offset-paginated envelopes with `results`; older
-// schemas exposed grouped rows as `groups` beneath the aggregate field, so the
-// extractor accepts both shapes while the document builder emits the newer one.
+// Aggregate results carry a `count` plus optional measure maps such as
+// `sum { amount }`. Grouped results are offset-paginated envelopes with
+// `results`; older schemas exposed grouped rows as `groups` beneath the
+// aggregate field, so the extractor accepts both shapes while the document
+// builder emits the newer one.
 
-/** One aggregate row: an optional group key and a count. */
+export const AGGREGATE_MEASURE_OPERATORS = [
+  "sum",
+  "avg",
+  "min",
+  "max",
+] as const;
+
+export type AggregateMeasureOperator =
+  (typeof AGGREGATE_MEASURE_OPERATORS)[number];
+
+export interface AggregateMeasure {
+  op: AggregateMeasureOperator;
+  field: string;
+}
+
+export type AggregateMeasureValues = Record<string, unknown>;
+
+/** One aggregate row: an optional group key, count, and requested measures. */
 export interface AggregateBucket {
   key: Record<string, unknown> | null;
   count: number;
   filter?: Record<string, unknown> | null;
+  sum?: AggregateMeasureValues;
+  avg?: AggregateMeasureValues;
+  min?: AggregateMeasureValues;
+  max?: AggregateMeasureValues;
 }
 
 export interface GroupByResult {
@@ -29,6 +51,25 @@ function countOf(value: unknown): number {
   return typeof value === "number" ? value : 0;
 }
 
+function measureValuesOf(
+  value: unknown,
+): AggregateMeasureValues | undefined {
+  return isRecord(value) ? value : undefined;
+}
+
+function extractMeasures(
+  source: Record<string, unknown>,
+): Partial<Record<AggregateMeasureOperator, AggregateMeasureValues>> {
+  const measures: Partial<
+    Record<AggregateMeasureOperator, AggregateMeasureValues>
+  > = {};
+  for (const op of AGGREGATE_MEASURE_OPERATORS) {
+    const values = measureValuesOf(source[op]);
+    if (values !== undefined) measures[op] = values;
+  }
+  return measures;
+}
+
 /** A legacy group object becomes a bucket: its `count`, with the rest as key. */
 function toBucket(group: Record<string, unknown>): AggregateBucket {
   const { count, ...key } = group;
@@ -38,12 +79,16 @@ function toBucket(group: Record<string, unknown>): AggregateBucket {
 /** A grouped-result row carries its key under `key` and its row count. */
 function toGroupedResultBucket(group: Record<string, unknown>): AggregateBucket {
   const key = isRecord(group.key) ? group.key : {};
-  const bucket: AggregateBucket = { key, count: countOf(group.count) };
+  const bucket: AggregateBucket = {
+    key,
+    count: countOf(group.count),
+    ...extractMeasures(group),
+  };
   if (isRecord(group.filter)) bucket.filter = group.filter;
   return bucket;
 }
 
-/** Extract the ungrouped aggregate bucket at `field` (count only), or null. */
+/** Extract the ungrouped aggregate bucket at `field`, or null. */
 export function autoExtractAggregate(
   data: unknown,
   field: string,
@@ -51,7 +96,7 @@ export function autoExtractAggregate(
   if (!isRecord(data)) return null;
   const node = data[field];
   if (!isRecord(node)) return null;
-  return { key: null, count: countOf(node.count) };
+  return { key: null, count: countOf(node.count), ...extractMeasures(node) };
 }
 
 /** Extract the grouped buckets and the total count at `field`. */

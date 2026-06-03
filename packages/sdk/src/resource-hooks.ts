@@ -9,8 +9,10 @@ import {
 } from "./relay-invalidation";
 import { useStableArray } from "./stable-deps";
 import {
+  extractDeletePreview,
   extractNode,
   extractPage,
+  type DeletePreview,
   type PageInfo,
   type Row,
 } from "./resource-result";
@@ -29,6 +31,7 @@ import type {
 } from "./__generated__/resource-types";
 
 export type { PageInfo } from "./resource-result";
+export type { DeletePreview, DeletePreviewGroup, DeletePreviewNode } from "./resource-result";
 export type { MutationAction } from "./selection";
 
 /** A filter accepted as the model's generated input or any record. */
@@ -252,21 +255,26 @@ export interface ResourceMutationVariables {
   data?: Record<string, unknown>;
   /** For `delete`: the relay id to remove. */
   id?: string;
+  /** For `delete`: false previews the cascade without deleting. */
+  confirm?: boolean;
 }
 
-export type ResourceMutate = (
+export type ResourceMutationResult<TAction extends MutationAction = MutationAction> =
+  TAction extends "delete" ? DeletePreview | null : Row | null;
+
+export type ResourceMutate<TAction extends MutationAction = MutationAction> = (
   variables: ResourceMutationVariables,
-) => Promise<Row | null>;
+) => Promise<ResourceMutationResult<TAction>>;
 
 /**
  * Build a create / update / delete mutation. `create`/`update` resolve to the
  * mutated node; `delete` resolves to the cascade `DeletePreview`.
  */
-export function useResourceMutation(
+export function useResourceMutation<TAction extends MutationAction>(
   modelLabel: string,
-  action: MutationAction,
+  action: TAction,
   options: { fields?: readonly string[] } = {},
-): [ResourceMutate, { fetching: boolean; error: Error | null }] {
+): [ResourceMutate<TAction>, { fetching: boolean; error: Error | null }] {
   const fields = options.fields ?? [];
   const fieldsKey = fields.join(" ");
   const document = useMemo(
@@ -280,16 +288,20 @@ export function useResourceMutation(
 
   const [state, execute] = useUrqlMutation(document);
   const invalidateModels = useInvalidateModels();
-  const mutate = useCallback<ResourceMutate>(
+  const mutate = useCallback<ResourceMutate<TAction>>(
     async (variables) => {
       const result = await execute(variables);
       if (result.error) throw result.error;
       // create/delete change list membership the normalized cache can't infer;
       // update returns the same entity, so graphcache refreshes it in place.
-      if (action === "create" || action === "delete") {
+      if (action === "create" || (action === "delete" && variables.confirm !== false)) {
         invalidateModels([modelLabel]);
       }
-      return extractNode(result.data);
+      return (
+        action === "delete"
+          ? extractDeletePreview(result.data)
+          : extractNode(result.data)
+      ) as ResourceMutationResult<TAction>;
     },
     [execute, invalidateModels, action, modelLabel],
   );

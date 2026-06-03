@@ -1,0 +1,416 @@
+"""
+Directs the executor to defer this fragment when the `if` argument is true or undefined.
+"""
+directive @defer(
+  """Deferred when true or undefined."""
+  if: Boolean = true
+
+  """Unique name"""
+  label: String
+) on FRAGMENT_SPREAD | INLINE_FRAGMENT
+
+type CommitRef {
+  sha: String!
+  parents: [String!]!
+  refs: [String!]!
+  time: String!
+  summary: String!
+  author: String
+}
+
+type CompiledStack {
+  compose: JSON
+  processCompose: JSON
+  secretEnvVars: [KeyValue!]!
+}
+
+type ConnectionToken {
+  token: String!
+  actor: String!
+  expiresAt: String!
+}
+
+type DiffFile {
+  oldPath: String
+  newPath: String
+  mode: String
+  isBinary: Boolean!
+  isNew: Boolean!
+  isDeleted: Boolean!
+  isRename: Boolean!
+  hunks: [DiffHunk!]!
+}
+
+type DiffHunk {
+  oldStart: Int!
+  oldLines: Int!
+  newStart: Int!
+  newLines: Int!
+  header: String
+  body: String!
+}
+
+type GitOpResult {
+  ok: Boolean!
+  conflicted: Boolean!
+  conflictFiles: [String!]!
+  message: String!
+  source: WorkspaceSourceStatus
+}
+
+type GitOpsLink {
+  id: String!
+  source: String!
+  workspace: String!
+  slot: String!
+  kind: String!
+  mode: String
+  branch: String
+  ref: String
+  path: String!
+  exists: Boolean!
+  state: String!
+  currentRef: String
+  dirty: Boolean!
+  upstream: String
+  ahead: Int
+  behind: Int
+  pushed: Boolean!
+  unpushedReason: String
+  error: String
+}
+
+type GitOpsSummary {
+  sources: Int!
+  workspaces: Int!
+  worktrees: Int!
+  clean: Int!
+  dirty: Int!
+  ahead: Int!
+  behind: Int!
+  diverged: Int!
+  branchMismatch: Int!
+  missing: Int!
+  error: Int!
+  unpushed: Int!
+}
+
+type GitOpsTopology {
+  root: String!
+  name: String!
+  sources: [SourceState!]!
+  workspaces: [WorkspaceStatus!]!
+  links: [GitOpsLink!]!
+  summary: GitOpsSummary!
+}
+
+type IngressStatus {
+  type: String!
+  domain: String
+  routes: [RouteRef!]!
+}
+
+scalar JSON
+
+type JobState {
+  name: String!
+  runtime: String!
+}
+
+type KeyValue {
+  key: String!
+  value: String!
+}
+
+input KeyValueInput {
+  key: String!
+  value: String!
+}
+
+type Mutation {
+  stackInit(input: StackInitInput!): StackInitResult
+  stackUpdate: MutationResult
+  stackPrepare: CompiledStack
+  stackBuild(input: StackRuntimeInput): MutationResult
+  stackUp(input: StackRuntimeInput): MutationResult
+  stackDev(input: StackRuntimeInput): MutationResult
+  stackDown: MutationResult
+  stackDestroy(purge: Boolean): MutationResult
+  jobRun(name: String!, inputs: [KeyValueInput!]): String!
+  serviceInit(input: ServiceInput!): MutationResult
+  serviceCreate(input: ServiceCreateInput!): ServiceState
+  serviceUpdate(name: String!, input: ServiceInput!): MutationResult
+  serviceUp(name: String!): MutationResult
+  serviceStart(name: String!): MutationResult
+  serviceStop(name: String!): MutationResult
+  serviceRestart(name: String!): MutationResult
+  serviceDestroy(name: String!): MutationResult
+  sourceFetch(name: String!): SourceState
+  sourcePull(name: String!): SourceState
+  sourcePush(name: String!, ref: String): SourceState
+  workspaceCreate(input: WorkspaceCreateInput!): WorkspaceRef
+  workspaceUpdate(name: String!, input: WorkspaceUpdateInput!): WorkspaceRef
+  workspaceDestroy(name: String!, purge: Boolean): MutationResult
+  workspacePush(name: String!, ref: String): [SourceState!]!
+  workspaceSyncBase(name: String!, method: String): [SourceState!]!
+  workspaceSourceFetch(workspace: String!, slot: String!): WorkspaceSourceStatus
+  workspaceSourcePull(workspace: String!, slot: String!): WorkspaceSourceStatus
+  workspaceSourcePush(workspace: String!, slot: String!, ref: String): WorkspaceSourceStatus
+  workspaceCreatePreflight(input: WorkspaceCreateInput!): WorkspaceCreatePreflight!
+  mintConnectionToken(actor: String!, scope: [String!], ttl: String): ConnectionToken!
+  mintRouteToken(actor: String!, service: String!, ttl: String): ConnectionToken!
+  workspaceSourceMerge(workspace: String!, slot: String!, ref: String!): GitOpResult!
+  workspaceSourceRebase(workspace: String!, slot: String!, ref: String!): GitOpResult!
+  workspaceSourceMergeAbort(workspace: String!, slot: String!): GitOpResult!
+  workspaceSourceRebaseAbort(workspace: String!, slot: String!): GitOpResult!
+  workspaceSourceRebaseContinue(workspace: String!, slot: String!): GitOpResult!
+  workspaceSourcePublish(workspace: String!, slot: String!, remote: String, branch: String): GitOpResult!
+  secretSet(name: String!, value: String!): SecretRef!
+  secretDelete(name: String!): MutationResult!
+}
+
+type MutationResult {
+  status: String!
+  name: String
+  message: String
+}
+
+type PreflightFailure {
+  field: String!
+  reason: String!
+}
+
+type Query {
+  health: MutationResult
+  stackStatus: StackStatus
+  serviceEndpoint(name: String!): ServiceEndpoint
+  ingressStatus: IngressStatus
+  services: [ServiceState!]!
+  jobs: [JobState!]!
+  sources: [SourceState!]!
+  source(name: String!): SourceState
+  workspaces: [WorkspaceRef!]!
+  workspace(name: String!): WorkspaceRef
+  workspaceStatus(name: String!): WorkspaceStatus
+  workspaceGit(name: String!): [SourceState!]!
+  gitOpsTopology(withCommits: Int): GitOpsTopology
+  sourceDiff(name: String!, ref: String): [DiffFile!]!
+  workspaceSourceDiff(workspace: String!, slot: String!, ref: String): [DiffFile!]!
+  stackLogs(services: [String!], limit: Int): String!
+  serviceLogs(name: String!, limit: Int): String!
+  workspaceLogs(name: String!, limit: Int): String!
+  mcpDescriptor: JSON
+  templates: [TemplateDescriptor!]!
+  template(ref: String!): TemplateDescriptor
+  secrets: [SecretRef!]!
+  secret(name: String!): SecretRef
+  secretValue(name: String!): SecretValue
+}
+
+type RouteRef {
+  service: String!
+  url: String!
+}
+
+type SecretRef {
+  name: String!
+  declared: Boolean!
+  hasValue: Boolean!
+  required: Boolean
+  generated: Boolean
+  import: String
+  envVar: String
+}
+
+type SecretValue {
+  name: String!
+  value: String!
+}
+
+input ServiceCreateInput {
+  template: String!
+  workspace: String!
+  inputs: [KeyValueInput!]
+  name: String
+  start: Boolean
+}
+
+type ServiceEndpoint {
+  routed: Boolean!
+  url: String!
+  internalHost: String!
+  internalPort: Int!
+}
+
+input ServiceInput {
+  name: String
+  runtime: String
+  image: String
+  command: [String!]
+  mounts: [String!]
+  env: [KeyValueInput!]
+  ports: [String!]
+  workdir: String
+  start: Boolean
+}
+
+type ServiceState {
+  name: String!
+  runtime: String!
+  status: String!
+  health: String
+}
+
+type SourceState {
+  name: String!
+  slot: String
+  kind: String!
+  path: String!
+  exists: Boolean!
+  state: String
+  branch: String
+  ref: String
+  currentRef: String
+  dirty: Boolean
+  upstream: String
+  ahead: Int
+  behind: Int
+  pushed: Boolean
+  unpushedReason: String
+  error: String
+  commits: [CommitRef!]
+}
+
+input StackInitInput {
+  template: String!
+  path: String
+  inputs: [KeyValueInput!]
+  force: Boolean
+}
+
+type StackInitResult {
+  status: String!
+  template: String!
+  root: String!
+}
+
+input StackRuntimeInput {
+  services: [String!]
+  build: Boolean
+}
+
+type StackStatus {
+  root: String!
+  name: String!
+  services: [ServiceState!]!
+  jobs: [JobState!]!
+  workspaces: [WorkspaceRef!]!
+}
+
+type Subscription {
+  onGitOpsTopologyChange: GitOpsTopology!
+  onServiceLogs(name: String!): String!
+  onWorkspaceLogs(name: String!): String!
+  onWorkspaceStatusChange(name: String!): WorkspaceStatus!
+}
+
+type TemplateDescriptor {
+  ref: String!
+  kind: String!
+  name: String
+  path: String!
+  inputs: [TemplateInputDescriptor!]!
+}
+
+type TemplateInputDescriptor {
+  name: String!
+  type: String
+  required: Boolean!
+  immutable: Boolean!
+  generated: Boolean!
+  default: String
+}
+
+input WorkspaceCreateInput {
+  template: String!
+  name: String
+  inputs: [KeyValueInput!]
+  ttl: String
+}
+
+type WorkspaceCreatePreflight {
+  ok: Boolean!
+  template: String!
+  resolvedTemplate: String!
+  effectiveInputs: [KeyValue!]!
+  missingRequired: [String!]!
+  invalidInputs: [PreflightFailure!]!
+}
+
+type WorkspaceMountRef {
+  kind: String!
+  name: String!
+  field: String!
+  value: String!
+}
+
+type WorkspaceRef {
+  name: String!
+  path: String!
+  template: String!
+  processComposePort: Int
+  playwrightMcpName: String
+  playwrightMcpUrl: String
+  ttl: String
+  ttlExpiresAt: String
+}
+
+type WorkspaceSourceStatus {
+  slot: String!
+  source: String!
+  kind: String!
+  mode: String
+  branch: String
+  ref: String
+  subpath: String
+  path: String!
+  exists: Boolean!
+  state: String!
+  currentRef: String
+  dirty: Boolean!
+  upstream: String
+  ahead: Int
+  behind: Int
+  pushed: Boolean!
+  unpushedReason: String
+  error: String
+}
+
+type WorkspaceStatus {
+  name: String!
+  path: String!
+  exists: Boolean!
+  state: String!
+  error: String
+  template: String!
+  inputs: JSON
+  sources: [WorkspaceSourceStatus!]!
+  chain: [String!]!
+  chainRoot: String
+  allocations: JSON
+  processComposePort: Int
+  playwrightMcpName: String
+  playwrightMcpUrl: String
+  persistPaths: JSON
+  ttl: String
+  ttlExpiresAt: String
+  expired: Boolean!
+  mountedBy: [WorkspaceMountRef!]!
+  innerStack: StackStatus
+  innerError: String
+}
+
+input WorkspaceUpdateInput {
+  inputs: [KeyValueInput!]
+  ttl: String
+}

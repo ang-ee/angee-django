@@ -11,9 +11,11 @@ export {
   type ColumnAlign,
 } from "./ListView";
 export {
-  FORM_VIEW_NOTEBOOK_SLOT,
+  GroupListView,
+  type GroupListViewProps,
+} from "./group-list-view";
+export {
   FormView,
-  formViewNotebookSlot,
   type FormViewProps,
   type FormField,
   type FieldKind,
@@ -28,6 +30,18 @@ export {
   type AggregatePanelProps,
   type AggregateDimension,
 } from "./AggregatePanel";
+export {
+  DeletePreviewDialog,
+  type DeletePreviewDialogProps,
+} from "./DeletePreviewDialog";
+export {
+  DeletePreviewTree,
+  type DeletePreviewTreeProps,
+} from "./DeletePreviewTree";
+export {
+  useBulkDelete,
+  type UseBulkDeleteResult,
+} from "./useBulkDelete";
 export * from "./data-view-model";
 export * from "./data-view-context";
 export {

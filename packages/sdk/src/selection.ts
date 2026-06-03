@@ -5,6 +5,12 @@
 // query, detail, mutation, and aggregate documents the schema serves. `id` is
 // injected at every object level so the normalized cache always has a key.
 
+import {
+  AGGREGATE_MEASURE_OPERATORS,
+  type AggregateMeasure,
+  type AggregateMeasureOperator,
+} from "./aggregate-extract";
+
 /**
  * A node in a GraphQL selection set: a field name and, for a traversed path, an
  * ordered sub-selection. `children: undefined` marks a scalar/enum/id leaf.
@@ -139,8 +145,12 @@ export interface AssembleListDocumentOptions {
 export interface AssembleGroupByDocumentOptions {
   /** Select these fields from the grouped row's `key` object. */
   keyFields: readonly string[];
+  /** Select these aggregate measures from every grouped bucket. */
+  measures?: readonly AggregateMeasure[];
   /** Declare `$filter: <Type>Filter` and pass it to the grouped field. */
   withFilter?: boolean;
+  /** Declare `$orderBy: [<Type>GroupOrder!]` and pass it to the grouped field. */
+  withOrderBy?: boolean;
   /** Select the grouped row's echoed list filter when the backend exposes it. */
   withFilterEcho?: boolean;
 }
@@ -148,6 +158,8 @@ export interface AssembleGroupByDocumentOptions {
 export interface AssembleAggregateDocumentOptions {
   /** Declare `$filter: <Type>Filter` and pass it to the aggregate field. */
   withFilter?: boolean;
+  /** Select these aggregate measures from the ungrouped aggregate. */
+  measures?: readonly AggregateMeasure[];
 }
 
 /**
@@ -183,11 +195,14 @@ export function assembleListDocument(
 
 export type MutationAction = "create" | "update" | "delete";
 
-// The cascade summary a delete returns: counts grouped by model label, plus
-// whether anything blocked the delete.
+// The cascade summary a delete returns: counts grouped by model label, plus a
+// bounded tree of records the backend would delete.
 const DELETE_PREVIEW_SELECTION =
   "totalDeletedCount hasBlockers " +
-  "deleted { label count } updated { label count } blocked { label count }";
+  "deleted { label count } updated { label count } blocked { label count } " +
+  "root { label objectLabel objectId " +
+  "children { label objectLabel objectId " +
+  "children { label objectLabel objectId } } }";
 
 /**
  * Verb-first CRUD mutation. `create` takes a `<Type>Input`; `update` takes a
@@ -203,7 +218,10 @@ export function assembleMutationDocument(
   const typeName = typeNameForModel(modelLabel);
   const op = `${action}${typeName}`;
   if (action === "delete") {
-    return `mutation ${op}($id: ID!) { ${op}(id: $id) { ${DELETE_PREVIEW_SELECTION} } }`;
+    return (
+      `mutation ${op}($id: ID!, $confirm: Boolean) { ` +
+      `${op}(id: $id, confirm: $confirm) { ${DELETE_PREVIEW_SELECTION} } }`
+    );
   }
   const inputType = action === "create" ? `${typeName}Input` : `${typeName}Patch`;
   const selection = printSelection(buildSelection(fieldPaths));
@@ -222,17 +240,18 @@ export function groupByFieldName(modelLabel: string): string {
   return `${singularFieldName(modelLabel)}Groups`;
 }
 
-/** The ungrouped aggregate document selects the model total count. */
+/** The ungrouped aggregate document selects the model total count and measures. */
 export function assembleAggregateDocument(
   modelLabel: string,
   options: AssembleAggregateDocumentOptions = {},
 ): string {
   const typeName = typeNameForModel(modelLabel);
   const field = aggregateFieldName(modelLabel);
+  const selection = aggregateSelection(options.measures);
   if (!options.withFilter) {
-    return `query ${field} { ${field} { count } }`;
+    return `query ${field} { ${field} { ${selection} } }`;
   }
-  return `query ${field}($filter: ${typeName}Filter) { ${field}(filter: $filter) { count } }`;
+  return `query ${field}($filter: ${typeName}Filter) { ${field}(filter: $filter) { ${selection} } }`;
 }
 
 /**
@@ -248,6 +267,7 @@ export function assembleGroupByDocument(
   const field = groupByFieldName(modelLabel);
   const keyFields = [...new Set(options.keyFields.map(assertName))];
   const keySelection = keyFields.length > 0 ? keyFields.join(" ") : "__typename";
+  const measureSelection = aggregateMeasureSelection(options.measures);
   const declared = [
     `$groupBy: [${typeName}GroupBySpec!]!`,
     "$pagination: OffsetPaginationInput",
@@ -257,15 +277,44 @@ export function assembleGroupByDocument(
     declared.push(`$filter: ${typeName}Filter`);
     args.push("filter: $filter");
   }
-  const resultSelection = options.withFilterEcho
-    ? `key { ${keySelection} } count filter`
-    : `key { ${keySelection} } count`;
+  if (options.withOrderBy) {
+    declared.push(`$orderBy: [${typeName}GroupOrder!]`);
+    args.push("orderBy: $orderBy");
+  }
+  const resultSelection = [
+    `key { ${keySelection} }`,
+    "count",
+    ...(options.withFilterEcho ? ["filter"] : []),
+    ...(measureSelection ? [measureSelection] : []),
+  ].join(" ");
   return (
     `query ${field}(${declared.join(", ")}) { ` +
     `${field}(${args.join(", ")}) { ` +
     `totalCount results { ${resultSelection} } ` +
     `pageInfo { offset limit } } }`
   );
+}
+
+function aggregateSelection(measures: readonly AggregateMeasure[] | undefined): string {
+  const measureSelection = aggregateMeasureSelection(measures);
+  return measureSelection ? `count ${measureSelection}` : "count";
+}
+
+function aggregateMeasureSelection(
+  measures: readonly AggregateMeasure[] | undefined,
+): string {
+  if (!measures || measures.length === 0) return "";
+  const fieldsByOp = new Map<AggregateMeasureOperator, string[]>();
+  for (const measure of measures) {
+    const field = assertName(measure.field);
+    const fields = fieldsByOp.get(measure.op) ?? [];
+    if (!fields.includes(field)) fields.push(field);
+    fieldsByOp.set(measure.op, fields);
+  }
+  return AGGREGATE_MEASURE_OPERATORS.flatMap((op) => {
+    const fields = fieldsByOp.get(op);
+    return fields && fields.length > 0 ? [`${op} { ${fields.join(" ")} }`] : [];
+  }).join(" ");
 }
 
 export const MAX_PAGE_SIZE = 100;
