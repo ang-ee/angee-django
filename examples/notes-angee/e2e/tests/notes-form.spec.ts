@@ -8,24 +8,31 @@ import { NotesPage } from "../pages/notes-page";
 test.describe("notes form — dirty-save", () => {
   test.use({ storageState: roleStatePath("alice") });
 
-  test("a clean form shows no Save/Discard; editing surfaces both above the body", async ({ page }) => {
+  test("a clean form shows no Save/Discard; editing surfaces both in the view toolbar", async ({ page }) => {
     const notes = new NotesPage(page);
     await notes.gotoReady();
     await notes.openFirstNote();
 
-    // clean → dirty-only means no actions
+    // the view toolbar (control band) carries the record pager even when clean...
+    await expect(notes.controlBand).toContainText(/of\s[\d,]+/);
+    // ...while Save/Discard are dirty-only.
     await expect(notes.saveButton).toHaveCount(0);
     await expect(notes.discardButton).toHaveCount(0);
 
     await notes.editBody(" e2e-edit");
-    await expect(notes.saveButton).toBeVisible();
-    await expect(notes.discardButton).toBeVisible();
+    // Save/Discard surface in the control band (the view toolbar), not in the form.
+    await expect(
+      notes.controlBand.getByRole("button", { name: /^Save$/ }),
+    ).toBeVisible();
+    await expect(
+      notes.controlBand.getByRole("button", { name: /^Discard$/ }),
+    ).toBeVisible();
 
-    // the actions sit in the top control band, above the form body. Editing the
-    // body can scroll the band out of view, so bring it back before comparing.
+    // the band sits above the form body. Editing the body can scroll the band
+    // out of view, so bring it back before comparing.
     await notes.saveButton.scrollIntoViewIfNeeded();
     const saveBox = await notes.saveButton.boundingBox();
-    const bodyBox = await page.locator(".cm-content").first().boundingBox();
+    const bodyBox = await notes.bodyEditor.boundingBox();
     expect(saveBox).not.toBeNull();
     expect(bodyBox).not.toBeNull();
     expect(saveBox!.y).toBeLessThan(bodyBox!.y);
@@ -44,12 +51,10 @@ test.describe("notes form — dirty-save", () => {
     await expect(page.getByText("Something went wrong")).toHaveCount(0);
   });
 
-  // KNOWN BUG (framework, tracked in the plan): after save the form should show
-  // the saved values immediately. Today they revert to undefined until a manual
-  // reload — the SDK's post-mutation urql cache update is broken, and the fix
-  // must be seamless across all forms, views, and subscriptions. Enable when
-  // the SDK cache-update fix lands.
-  test.fixme("saving reflects the new values in-place (no reload)", async ({ page }) => {
+  // After save the form reflects the saved values in-place, no reload. (The
+  // earlier blanking was the form re-seeding to empty defaults on the post-save
+  // re-render; fixed by sourcing useForm's defaults from a stable baseline ref.)
+  test("saving reflects the new values in-place (no reload)", async ({ page }) => {
     const notes = new NotesPage(page);
     await notes.gotoReady();
     await notes.openFirstNote();
@@ -57,18 +62,18 @@ test.describe("notes form — dirty-save", () => {
     const stamp = " seamless-edit";
     await notes.editBody(stamp);
     await notes.saveButton.click();
-    await expect(notes.saveButton).toHaveCount(0); // baseline reset (works)
-    // BUG: without a reload, the body must still contain the saved text.
-    await expect(page.locator(".cm-content").first()).toContainText(stamp.trim());
+    await expect(notes.saveButton).toHaveCount(0); // baseline reset
+    // without a reload, the body still contains the saved text.
+    await expect(notes.bodyEditor).toContainText(stamp.trim());
   });
 });
 
 // The record-sheet chrome: inline title, status stepper, record actions, and the
-// notebook that hosts the body. These are the layout the form was rebuilt around.
+// inline body (no notebook tabs). These are the layout the form was rebuilt around.
 test.describe("notes form — sheet chrome", () => {
   test.use({ storageState: roleStatePath("alice") });
 
-  test("renders the inline title, status stepper, record actions, and body notebook", async ({ page }) => {
+  test("renders the inline title, status stepper, record actions, and inline body", async ({ page }) => {
     const notes = new NotesPage(page);
     await notes.gotoReady();
     await notes.openFirstNote();
@@ -77,7 +82,8 @@ test.describe("notes form — sheet chrome", () => {
     await expect(notes.statusStep("In Review").first()).toBeVisible(); // the stepper
     await expect(notes.starButton).toBeVisible();
     await expect(notes.shareButton).toBeVisible();
-    await expect(notes.notebookTab("Body")).toBeVisible();
+    await expect(notes.bodyEditor).toBeVisible(); // body renders inline, not in a tab
+    await expect(page.getByRole("tablist", { name: /notebook/i })).toHaveCount(0);
     await expect(page.getByText("Something went wrong")).toHaveCount(0);
   });
 
@@ -117,7 +123,7 @@ for (const role of ["admin", "alice", "bob"] as const) {
       await notes.openFirstNote();
       await expect(page).toHaveURL(/\/notes\/.+/);
       await expect(notes.titleInput).toBeVisible();
-      await expect(notes.notebookTab("Body")).toBeVisible();
+      await expect(notes.bodyEditor).toBeVisible();
       await expect(page.getByText("Something went wrong")).toHaveCount(0);
     });
   });

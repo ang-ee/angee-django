@@ -156,9 +156,14 @@ export class NotesPage extends PageObject {
   statusStep(label: string): Locator {
     return this.page.getByText(label, { exact: true });
   }
-  /** A notebook tab by name; the body field renders in the first ("Body") tab. */
-  notebookTab(name: string | RegExp): Locator {
-    return this.page.getByRole("tab", { name });
+  /** The record form's body editor (markdown), rendered inline in the sheet. */
+  get bodyEditor(): Locator {
+    return this.page.locator(".cm-content").first();
+  }
+  /** The view toolbar (shell control band) that hosts the dirty Save/Discard
+   *  plus the record pager + view switcher when a record is open. */
+  get controlBand(): Locator {
+    return this.page.locator(".area-control");
   }
 
   /** Edit the title input — a reliable way to mark the form dirty. */
