@@ -41,6 +41,8 @@ import type { ColumnDescriptor } from "./page";
 
 type ListFilter = UseResourceListOptions<ResourceTypeName>["filter"];
 
+export type StringIdRow = Row & { id: string };
+
 export interface ListViewState<TRow extends Row = Row> {
   rows: readonly TRow[];
   total: number | undefined;
@@ -65,7 +67,9 @@ export interface UseDataViewSurfaceProps<TRow extends Row = Row> {
   onListStateChange?: (state: ListViewState<TRow>) => void;
 }
 
-export interface UseRowsDataViewSurfaceProps<TRow extends Row = Row> {
+export interface UseRowsDataViewSurfaceProps<
+  TRow extends StringIdRow = StringIdRow,
+> {
   rows: readonly TRow[];
   columns: readonly ColumnDescriptor<TRow>[];
   pageSize?: number;
@@ -76,7 +80,7 @@ export interface UseRowsDataViewSurfaceProps<TRow extends Row = Row> {
   onListStateChange?: (state: ListViewState<TRow>) => void;
 }
 
-export interface RowsListState<TRow extends Row = Row>
+export interface RowsListState<TRow extends StringIdRow = StringIdRow>
   extends ListViewState<TRow> {
   error: Error | null;
 }
@@ -110,7 +114,7 @@ export interface DataViewSurface<TRow extends Row = Row>
   sortOrder: DataViewResourceOrder | undefined;
 }
 
-export interface RowsDataViewSurface<TRow extends Row = Row>
+export interface RowsDataViewSurface<TRow extends StringIdRow = StringIdRow>
   extends DataViewPresentationSurface<TRow> {
   list: RowsListState<TRow>;
   listState: RowsListState<TRow>;
@@ -191,6 +195,7 @@ export function useDataViewSurface<TRow extends Row = Row>({
     columns,
     dataView,
     groupStack,
+    getRowId: modelRowId,
   });
 
   return {
@@ -204,7 +209,9 @@ export function useDataViewSurface<TRow extends Row = Row>({
   };
 }
 
-export function useRowsDataViewSurface<TRow extends Row = Row>({
+export function useRowsDataViewSurface<
+  TRow extends StringIdRow = StringIdRow,
+>({
   rows,
   columns,
   pageSize,
@@ -277,6 +284,7 @@ export function useRowsDataViewSurface<TRow extends Row = Row>({
     columns,
     dataView,
     groupStack,
+    getRowId: stringRowId,
   });
 
   return {
@@ -293,11 +301,13 @@ function useDataViewPresentationSurface<TRow extends Row>({
   columns,
   dataView,
   groupStack,
+  getRowId,
 }: {
   rows: readonly TRow[];
   columns: readonly ColumnDescriptor<TRow>[];
   dataView: DataViewContextValue;
   groupStack?: readonly DataViewGroup[];
+  getRowId: (row: TRow, index: number) => string;
 }): DataViewPresentationSurface<TRow> {
   const tableColumns = React.useMemo(
     () => buildColumns(columns, dataView),
@@ -311,8 +321,7 @@ function useDataViewPresentationSurface<TRow extends Row>({
     state: { columnVisibility },
     onColumnVisibilityChange: setColumnVisibility,
     getCoreRowModel: getCoreRowModel(),
-    getRowId: (row, index) =>
-      typeof row.id === "string" ? row.id : String(index),
+    getRowId,
     // Pagination/sort/filter/grouping are owned by the data-view (URL) state, not the
     // table. Without this, TanStack Table auto-resets its own page index whenever the
     // `data` reference changes; that reset fires `onStateChange` → re-render → new
@@ -352,11 +361,8 @@ function useDataViewPresentationSurface<TRow extends Row>({
   // Memoize so the surface returns stable references — safe for a memoized
   // FlatListBody and so the freeze guard isn't the only thing absorbing churn.
   const pageIds = React.useMemo(
-    () =>
-      rows.flatMap((row, index) =>
-        typeof row.id === "string" ? [row.id] : [String(index)],
-      ),
-    [rows],
+    () => rows.map((row, index) => getRowId(row, index)),
+    [getRowId, rows],
   );
   const allPageSelected = React.useMemo(
     () => pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id)),
@@ -414,6 +420,14 @@ function useDataViewPresentationSurface<TRow extends Row>({
     tableScrollRef,
     rowVirtualizer,
   };
+}
+
+function modelRowId<TRow extends Row>(row: TRow, index: number): string {
+  return typeof row.id === "string" ? row.id : String(index);
+}
+
+function stringRowId<TRow extends StringIdRow>(row: TRow): string {
+  return row.id;
 }
 
 const ROWS_TEXT_FILTER_KEY = "q";

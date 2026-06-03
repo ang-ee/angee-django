@@ -1,5 +1,4 @@
 import * as React from "react";
-import type { Row } from "@angee/sdk";
 
 import {
   ControlBand,
@@ -26,6 +25,7 @@ import {
   rowTextFilterValue,
   useRowsDataViewSurface,
   type ListViewState,
+  type StringIdRow,
 } from "./data-view-surface";
 import { buildGroupOptions } from "./group-list-view";
 import {
@@ -39,7 +39,7 @@ import {
   nextFacetFilter,
 } from "./list-view-utils";
 
-export interface RowsListViewProps<TRow extends Row = Row> {
+export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   rows: readonly TRow[];
   columns: readonly ListColumn<TRow>[];
   groupOptions?: readonly DataToolbarGroupOption[];
@@ -55,7 +55,7 @@ export interface RowsListViewProps<TRow extends Row = Row> {
   selectable?: boolean;
 }
 
-export function RowsListView<TRow extends Row = Row>(
+export function RowsListView<TRow extends StringIdRow = StringIdRow>(
   props: RowsListViewProps<TRow>,
 ): React.ReactElement {
   const dataView = useDataViewMaybe();
@@ -73,13 +73,13 @@ export function RowsListView<TRow extends Row = Row>(
   );
 }
 
-function RowsListViewBound<TRow extends Row = Row>(
+function RowsListViewBound<TRow extends StringIdRow = StringIdRow>(
   props: RowsListViewProps<TRow>,
 ): React.ReactElement {
   return <RowsListViewBody {...props} dataView={useDataView()} />;
 }
 
-function RowsListViewBody<TRow extends Row = Row>({
+function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   rows,
   columns,
   groupOptions,

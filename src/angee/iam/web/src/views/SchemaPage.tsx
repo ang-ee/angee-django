@@ -9,25 +9,19 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
-import * as dagre from "@dagrejs/dagre";
-import {
-  Background,
-  Controls,
-  MarkerType,
-  Position,
-  ReactFlow,
-  type Edge,
-  type Node,
-} from "@xyflow/react";
-import "@xyflow/react/dist/style.css";
 
 import {
   Alert,
   Badge,
   Button,
   Code,
+  GraphView,
   SearchInput,
   Spinner,
+  type GraphViewEdge,
+  type GraphViewEdgeStyle,
+  type GraphViewNode,
+  type GraphViewNodeStyle,
 } from "@angee/base";
 import { useAuthoredQuery } from "@angee/sdk";
 
@@ -43,27 +37,50 @@ import { resourceLabel, titleLabel } from "../identity-labels";
 type SchemaNodeKind = "resource" | "relation" | "permission";
 type SchemaEdgeKind = "contains" | "computed";
 
-interface SchemaNodeData extends Record<string, unknown> {
-  code: string;
-  detail: ReactNode;
-  highlighted: boolean;
-  kind: SchemaNodeKind;
-  label: ReactNode;
+interface SchemaNodeMeta extends Record<string, unknown> {
   resourceType: string;
 }
 
-type SchemaGraphNode = Node<SchemaNodeData>;
-type SchemaGraphEdge = Edge<{ kind: SchemaEdgeKind }>;
+type SchemaGraphNode = GraphViewNode<SchemaNodeKind, SchemaNodeMeta>;
+type SchemaGraphEdge = GraphViewEdge<SchemaEdgeKind>;
 
 interface SchemaGraph {
   nodes: SchemaGraphNode[];
   edges: SchemaGraphEdge[];
 }
 
-const NODE_SIZE: Record<SchemaNodeKind, { width: number; height: number }> = {
-  resource: { width: 230, height: 78 },
-  relation: { width: 210, height: 76 },
-  permission: { width: 230, height: 86 },
+const SCHEMA_NODE_STYLES: Record<SchemaNodeKind, GraphViewNodeStyle> = {
+  resource: {
+    width: 230,
+    height: 78,
+    type: "input",
+    borderColor: "var(--brand)",
+    badgeVariant: "brand",
+  },
+  relation: {
+    width: 210,
+    height: 76,
+    borderColor: "var(--border-strong)",
+    badgeVariant: "info",
+  },
+  permission: {
+    width: 230,
+    height: 86,
+    type: "output",
+    borderColor: "var(--accent)",
+    badgeVariant: "accent",
+  },
+};
+
+const SCHEMA_EDGE_STYLES: Record<SchemaEdgeKind, GraphViewEdgeStyle> = {
+  contains: {
+    stroke: "var(--border-strong)",
+    labelColor: "var(--text-muted)",
+  },
+  computed: {
+    stroke: "var(--brand)",
+    labelColor: "var(--brand)",
+  },
 };
 
 export function SchemaPage(): ReactElement {
@@ -215,11 +232,6 @@ function ResourceTypeList({
         className="max-h-[34rem] overflow-auto p-2"
         role="listbox"
         aria-label="Resource types"
-        aria-activedescendant={
-          selectedResource
-            ? resourceOptionId(listboxId, selectedResource.resourceType)
-            : undefined
-        }
         onKeyDown={onKeyDown}
       >
         {resources.length > 0 ? (
@@ -312,21 +324,16 @@ function SchemaGraphCanvas({
           {graph.nodes.length} nodes
         </Badge>
       </header>
-      <div className="h-[34rem] min-h-0">
-        <ReactFlow
-          nodes={graph.nodes}
-          edges={graph.edges}
-          fitView
-          fitViewOptions={{ padding: 0.18 }}
-          nodesDraggable={false}
-          nodesConnectable={false}
-          elementsSelectable={false}
-          onNodeClick={(_, node) => onSelect(node.data.resourceType)}
-        >
-          <Background color="var(--border-subtle)" gap={20} />
-          <Controls showInteractive={false} />
-        </ReactFlow>
-      </div>
+      <GraphView
+        nodes={graph.nodes}
+        edges={graph.edges}
+        nodeStyles={SCHEMA_NODE_STYLES}
+        edgeStyles={SCHEMA_EDGE_STYLES}
+        className="h-[34rem]"
+        onNodeClick={(node) => {
+          if (node.meta?.resourceType) onSelect(node.meta.resourceType);
+        }}
+      />
     </section>
   );
 }
@@ -497,6 +504,15 @@ function buildSchemaGraph(
 ): SchemaGraph {
   const nodes: SchemaGraphNode[] = [];
   const edges: SchemaGraphEdge[] = [];
+  const computedEdges = new Map<
+    string,
+    {
+      id: string;
+      source: string;
+      target: string;
+      labels: string[];
+    }
+  >();
 
   for (const resource of resources) {
     const resourceId = resourceNodeId(resource.resourceType);
@@ -536,12 +552,8 @@ function buildSchemaGraph(
         id: `contains:${resource.resourceType}:${relation.name}`,
         source: resourceId,
         target: relationId,
-        type: "smoothstep",
-        data: { kind: "contains" },
+        kind: "contains",
         label: "contains",
-        markerEnd: { type: MarkerType.ArrowClosed },
-        style: { stroke: "var(--border-strong)" },
-        labelStyle: { fill: "var(--text-muted)", fontSize: 11 },
       });
     }
 
@@ -570,22 +582,33 @@ function buildSchemaGraph(
         if (!relationName) continue;
         const relationId = relationIds.get(relationName);
         if (!relationId) continue;
-        edges.push({
-          id: `computed:${resource.resourceType}:${relationName}:${permission.name}:${condition.name}`,
+        const edgeKey = `${relationId}\u0000${permissionId}`;
+        const existingEdge = computedEdges.get(edgeKey);
+        if (existingEdge) {
+          existingEdge.labels.push(condition.name);
+          continue;
+        }
+        computedEdges.set(edgeKey, {
+          id: `computed:${resource.resourceType}:${relationName}:${permission.name}`,
           source: relationId,
           target: permissionId,
-          type: "smoothstep",
-          data: { kind: "computed" },
-          label: condition.name,
-          markerEnd: { type: MarkerType.ArrowClosed },
-          style: { stroke: "var(--brand)" },
-          labelStyle: { fill: "var(--brand)", fontSize: 11 },
+          labels: [condition.name],
         });
       }
     }
   }
 
-  return layoutGraph(nodes, edges);
+  for (const edge of computedEdges.values()) {
+    edges.push({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      kind: "computed",
+      label: mergedConditionLabel(edge.labels),
+    });
+  }
+
+  return { nodes, edges };
 }
 
 function schemaNode({
@@ -605,108 +628,16 @@ function schemaNode({
   code: string;
   detail: ReactNode;
 }): SchemaGraphNode {
-  const size = NODE_SIZE[kind];
   return {
     id,
-    type: nodeType(kind),
-    position: { x: 0, y: 0 },
-    sourcePosition: Position.Bottom,
-    targetPosition: Position.Top,
-    data: {
-      code,
-      detail,
-      highlighted,
-      kind,
+    kind,
+    title,
+    code,
+    detail,
+    highlighted,
+    meta: {
       resourceType,
-      label: (
-        <GraphNodeLabel
-          code={code}
-          detail={detail}
-          kind={kind}
-          title={title}
-        />
-      ),
     },
-    style: {
-      width: size.width,
-      minHeight: size.height,
-      borderColor: highlighted ? "var(--brand)" : nodeBorder(kind),
-      borderWidth: highlighted ? 2 : 1,
-      background: highlighted
-        ? "var(--brand-soft)"
-        : "var(--surface-sheet)",
-      color: "var(--text-primary)",
-      padding: 0,
-    },
-  };
-}
-
-function GraphNodeLabel({
-  code,
-  detail,
-  kind,
-  title,
-}: {
-  code: string;
-  detail: ReactNode;
-  kind: SchemaNodeKind;
-  title: string;
-}): ReactElement {
-  return (
-    <div className="min-w-0 px-3 py-2 text-left">
-      <div className="mb-1 flex min-w-0 items-center justify-between gap-2">
-        <span className="truncate text-13 font-semibold text-fg">{title}</span>
-        <Badge density="compact" variant={nodeBadgeVariant(kind)}>
-          {kind}
-        </Badge>
-      </div>
-      <Code truncate variant="muted">
-        {code}
-      </Code>
-      <div className="mt-1 truncate text-2xs text-fg-muted">{detail}</div>
-    </div>
-  );
-}
-
-function layoutGraph(
-  nodes: readonly SchemaGraphNode[],
-  edges: readonly SchemaGraphEdge[],
-): SchemaGraph {
-  const graph = new dagre.graphlib.Graph({ directed: true, multigraph: true });
-  graph.setDefaultEdgeLabel(() => ({}));
-  graph.setGraph({
-    rankdir: "TB",
-    nodesep: 34,
-    ranksep: 76,
-    edgesep: 18,
-    marginx: 24,
-    marginy: 24,
-  });
-
-  for (const node of nodes) {
-    const kind = node.data.kind;
-    graph.setNode(node.id, NODE_SIZE[kind]);
-  }
-  for (const edge of edges) {
-    graph.setEdge(edge.source, edge.target, { weight: 1 }, edge.id);
-  }
-
-  dagre.layout(graph);
-
-  return {
-    nodes: nodes.map((node) => {
-      const position = graph.node(node.id);
-      const kind = node.data.kind;
-      const size = NODE_SIZE[kind];
-      return {
-        ...node,
-        position: {
-          x: position.x - size.width / 2,
-          y: position.y - size.height / 2,
-        },
-      };
-    }),
-    edges: [...edges],
   };
 }
 
@@ -721,24 +652,8 @@ function conditionRelationName(
   return relationIds.has(viaRelation) ? viaRelation : null;
 }
 
-function nodeType(kind: SchemaNodeKind): "default" | "input" | "output" {
-  if (kind === "resource") return "input";
-  if (kind === "permission") return "output";
-  return "default";
-}
-
-function nodeBorder(kind: SchemaNodeKind): string {
-  if (kind === "resource") return "var(--brand)";
-  if (kind === "permission") return "var(--accent)";
-  return "var(--border-strong)";
-}
-
-function nodeBadgeVariant(
-  kind: SchemaNodeKind,
-): "accent" | "brand" | "info" {
-  if (kind === "resource") return "brand";
-  if (kind === "permission") return "accent";
-  return "info";
+function mergedConditionLabel(labels: readonly string[]): string {
+  return [...new Set(labels)].join(", ");
 }
 
 function normalizeResources(

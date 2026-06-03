@@ -14,8 +14,6 @@
   "dependencies": {
     "@angee/base": "workspace:*",
     "@angee/sdk": "workspace:*",
-    "@dagrejs/dagre": "^1.1.8",
-    "@xyflow/react": "^12.10.2",
     "urql": "^5.0.0"
   },
   "peerDependencies": {

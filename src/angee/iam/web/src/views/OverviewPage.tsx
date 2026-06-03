@@ -167,6 +167,7 @@ export function OverviewPage(): ReactElement {
                 value={selectedRole}
                 options={roleOptions}
                 placeholder="Select role"
+                aria-label="Role"
                 onValueChange={(value) => setSelectedRole(value)}
               />
             </label>
