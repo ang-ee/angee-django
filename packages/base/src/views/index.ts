@@ -15,6 +15,10 @@ export {
   type GroupListViewProps,
 } from "./group-list-view";
 export {
+  RowsListView,
+  type RowsListViewProps,
+} from "./RowsListView";
+export {
   FormView,
   type FormViewProps,
   type FormField,

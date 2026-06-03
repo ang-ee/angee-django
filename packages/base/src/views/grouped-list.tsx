@@ -49,6 +49,7 @@ import {
   RecordRow,
   TABLE_SCROLL_STYLE,
   alignOf,
+  ariaSortForColumn,
   bucketValueLabels,
   formatMeasure,
   groupMeasuresFromColumns,
@@ -161,6 +162,7 @@ export function GroupedListBody<TRow extends Row>({
                     sticky
                     key={header.id}
                     className={ALIGN_CLASS[alignOf(header.column.columnDef)]}
+                    aria-sort={ariaSortForColumn(header.column, dataView)}
                   >
                     {flexRender(
                       header.column.columnDef.header,

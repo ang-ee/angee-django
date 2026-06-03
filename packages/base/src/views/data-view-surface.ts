@@ -65,13 +65,23 @@ export interface UseDataViewSurfaceProps<TRow extends Row = Row> {
   onListStateChange?: (state: ListViewState<TRow>) => void;
 }
 
-export interface DataViewSurface<TRow extends Row = Row> {
-  list: UseResourceListResult;
-  listState: ListViewState<TRow>;
+export interface UseRowsDataViewSurfaceProps<TRow extends Row = Row> {
   rows: readonly TRow[];
-  requestedFields: readonly string[];
-  mergedFilter: ListFilter;
-  sortOrder: DataViewResourceOrder | undefined;
+  columns: readonly ColumnDescriptor<TRow>[];
+  pageSize?: number;
+  dataView: DataViewContextValue;
+  groupStack?: readonly DataViewGroup[];
+  fetching?: boolean;
+  error?: Error | null;
+  onListStateChange?: (state: ListViewState<TRow>) => void;
+}
+
+export interface RowsListState<TRow extends Row = Row>
+  extends ListViewState<TRow> {
+  error: Error | null;
+}
+
+interface DataViewPresentationSurface<TRow extends Row = Row> {
   tableColumns: readonly ColumnDef<TRow>[];
   table: TableModel<TRow>;
   columnVisibility: VisibilityState;
@@ -88,6 +98,24 @@ export interface DataViewSurface<TRow extends Row = Row> {
   listItems: readonly ListRenderItem<TRow>[];
   tableScrollRef: React.RefObject<HTMLDivElement | null>;
   rowVirtualizer: Virtualizer<HTMLDivElement, Element>;
+}
+
+export interface DataViewSurface<TRow extends Row = Row>
+  extends DataViewPresentationSurface<TRow> {
+  list: UseResourceListResult;
+  listState: ListViewState<TRow>;
+  rows: readonly TRow[];
+  requestedFields: readonly string[];
+  mergedFilter: ListFilter;
+  sortOrder: DataViewResourceOrder | undefined;
+}
+
+export interface RowsDataViewSurface<TRow extends Row = Row>
+  extends DataViewPresentationSurface<TRow> {
+  list: RowsListState<TRow>;
+  listState: RowsListState<TRow>;
+  rows: readonly TRow[];
+  sourceRows: readonly TRow[];
 }
 
 export function useDataViewSurface<TRow extends Row = Row>({
@@ -131,12 +159,6 @@ export function useDataViewSurface<TRow extends Row = Row>({
     page: dataView.state.page,
     enabled,
   });
-  const tableColumns = React.useMemo(
-    () => buildColumns(columns, dataView),
-    [columns, dataView],
-  );
-  const [columnVisibility, setColumnVisibility] =
-    React.useState<VisibilityState>({});
   const rows = list.rows as readonly TRow[];
   const listState = React.useMemo<ListViewState<TRow>>(
     () => ({
@@ -164,6 +186,125 @@ export function useDataViewSurface<TRow extends Row = Row>({
     onListStateChange?.(listState);
   }, [listState, onListStateChange]);
 
+  const presentation = useDataViewPresentationSurface({
+    rows,
+    columns,
+    dataView,
+    groupStack,
+  });
+
+  return {
+    list,
+    listState,
+    rows,
+    requestedFields,
+    mergedFilter,
+    sortOrder,
+    ...presentation,
+  };
+}
+
+export function useRowsDataViewSurface<TRow extends Row = Row>({
+  rows,
+  columns,
+  pageSize,
+  dataView,
+  groupStack,
+  fetching = false,
+  error = null,
+  onListStateChange,
+}: UseRowsDataViewSurfaceProps<TRow>): RowsDataViewSurface<TRow> {
+  React.useEffect(() => {
+    if (pageSize && dataView.state.pageSize !== pageSize) {
+      dataView.setPageSize(pageSize);
+    }
+  }, [dataView.setPageSize, dataView.state.pageSize, pageSize]);
+
+  const filteredRows = React.useMemo(
+    () => applyClientFilter(rows, columns, dataView.state.filter),
+    [columns, dataView.state.filter, rows],
+  );
+  const sortedRows = React.useMemo(
+    () => sortClientRows(filteredRows, dataView.state.sort),
+    [dataView.state.sort, filteredRows],
+  );
+  const pageCount = Math.max(
+    1,
+    Math.ceil(sortedRows.length / dataView.state.pageSize),
+  );
+  const page = Math.min(dataView.state.page, pageCount);
+
+  React.useEffect(() => {
+    if (dataView.state.page > pageCount) dataView.setPage(pageCount);
+  }, [dataView.setPage, dataView.state.page, pageCount]);
+
+  const pageRows = React.useMemo(
+    () =>
+      sortedRows.slice(
+        (page - 1) * dataView.state.pageSize,
+        page * dataView.state.pageSize,
+      ),
+    [dataView.state.pageSize, page, sortedRows],
+  );
+  const listState = React.useMemo<RowsListState<TRow>>(
+    () => ({
+      rows: pageRows,
+      total: sortedRows.length,
+      page,
+      pageSize: dataView.state.pageSize,
+      pageCount,
+      hasNext: page < pageCount,
+      hasPrev: page > 1,
+      fetching,
+      error,
+    }),
+    [
+      dataView.state.pageSize,
+      error,
+      fetching,
+      page,
+      pageCount,
+      pageRows,
+      sortedRows.length,
+    ],
+  );
+  React.useEffect(() => {
+    onListStateChange?.(listState);
+  }, [listState, onListStateChange]);
+
+  const presentation = useDataViewPresentationSurface({
+    rows: pageRows,
+    columns,
+    dataView,
+    groupStack,
+  });
+
+  return {
+    list: listState,
+    listState,
+    rows: pageRows,
+    sourceRows: rows,
+    ...presentation,
+  };
+}
+
+function useDataViewPresentationSurface<TRow extends Row>({
+  rows,
+  columns,
+  dataView,
+  groupStack,
+}: {
+  rows: readonly TRow[];
+  columns: readonly ColumnDescriptor<TRow>[];
+  dataView: DataViewContextValue;
+  groupStack?: readonly DataViewGroup[];
+}): DataViewPresentationSurface<TRow> {
+  const tableColumns = React.useMemo(
+    () => buildColumns(columns, dataView),
+    [columns, dataView],
+  );
+  const [columnVisibility, setColumnVisibility] =
+    React.useState<VisibilityState>({});
   const table = useReactTable<TRow>({
     data: rows as TRow[],
     columns: tableColumns as ColumnDef<TRow>[],
@@ -256,12 +397,6 @@ export function useDataViewSurface<TRow extends Row = Row>({
   });
 
   return {
-    list,
-    listState,
-    rows,
-    requestedFields,
-    mergedFilter,
-    sortOrder,
     tableColumns,
     table,
     columnVisibility,
@@ -279,6 +414,94 @@ export function useDataViewSurface<TRow extends Row = Row>({
     tableScrollRef,
     rowVirtualizer,
   };
+}
+
+const ROWS_TEXT_FILTER_KEY = "q";
+
+function applyClientFilter<TRow extends Row>(
+  rows: readonly TRow[],
+  columns: readonly ColumnDescriptor<TRow>[],
+  filter: DataViewFilter,
+): readonly TRow[] {
+  const text = rowTextFilterValue(filter).trim().toLowerCase();
+  const filters = Object.entries(filter).filter(
+    ([field]) => field !== ROWS_TEXT_FILTER_KEY,
+  );
+  if (!text && filters.length === 0) return rows;
+  return rows.filter((row) => {
+    if (
+      text
+      && !columns.some((column) =>
+        String(readPath(row, column.field) ?? "")
+          .toLowerCase()
+          .includes(text),
+      )
+    ) {
+      return false;
+    }
+    return filters.every(([field, lookup]) =>
+      matchesClientLookup(readPath(row, field), lookup),
+    );
+  });
+}
+
+export function rowTextFilterValue(filter: DataViewFilter): string {
+  const value = filter[ROWS_TEXT_FILTER_KEY];
+  return typeof value === "string" ? value : "";
+}
+
+export function nextRowTextFilter(
+  filter: DataViewFilter,
+  value: string,
+): DataViewFilter {
+  const next = { ...filter };
+  const trimmed = value.trim();
+  if (trimmed) next[ROWS_TEXT_FILTER_KEY] = trimmed;
+  else delete next[ROWS_TEXT_FILTER_KEY];
+  return next;
+}
+
+function matchesClientLookup(value: unknown, lookup: unknown): boolean {
+  if (!lookup || typeof lookup !== "object" || Array.isArray(lookup)) {
+    return value === lookup;
+  }
+  const record = lookup as Record<string, unknown>;
+  if ("exact" in record) return value === record.exact;
+  if (Array.isArray(record.inList)) return record.inList.includes(value);
+  if (typeof record.iContains === "string") {
+    return String(value ?? "")
+      .toLowerCase()
+      .includes(record.iContains.toLowerCase());
+  }
+  return true;
+}
+
+function sortClientRows<TRow extends Row>(
+  rows: readonly TRow[],
+  sort: DataViewContextValue["state"]["sort"],
+): readonly TRow[] {
+  if (!sort) return rows;
+  const direction = sort.dir === "asc" ? 1 : -1;
+  return [...rows].sort((left, right) =>
+    compareClientValues(readPath(left, sort.field), readPath(right, sort.field))
+    * direction,
+  );
+}
+
+function compareClientValues(left: unknown, right: unknown): number {
+  if (left == null && right == null) return 0;
+  if (left == null) return -1;
+  if (right == null) return 1;
+  if (typeof left === "number" && typeof right === "number") {
+    return left - right;
+  }
+  if (typeof left === "boolean" && typeof right === "boolean") {
+    return Number(left) - Number(right);
+  }
+  return String(left).localeCompare(String(right), undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
 }
 
 function groupRows<TRow extends Row>(

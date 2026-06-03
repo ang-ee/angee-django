@@ -321,7 +321,7 @@ function GroupListViewBody<TRow extends Row = Row>({
   );
 }
 
-function buildGroupOptions<TRow extends Row>(
+export function buildGroupOptions<TRow extends Row>(
   columns: readonly ColumnDescriptor<TRow>[],
   defaultGroup: DataViewGroup | null | undefined,
 ): readonly DataToolbarGroupOption[] {

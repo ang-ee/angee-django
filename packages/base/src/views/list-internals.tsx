@@ -128,6 +128,7 @@ export interface FlatListBodyProps<TRow extends Row> {
   onPageSelectionChange: (checked: boolean) => void;
   dataView: DataViewContextValue;
   interactive: boolean;
+  selectable?: boolean;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
   emptyMessage: React.ReactNode;
@@ -147,12 +148,13 @@ export function FlatListBody<TRow extends Row>({
   onPageSelectionChange,
   dataView,
   interactive,
+  selectable = true,
   rowHref,
   onRowClick,
   emptyMessage,
   fetching,
 }: FlatListBodyProps<TRow>): React.ReactElement {
-  const colSpan = Math.max(1, visibleColumnCount + 1);
+  const colSpan = Math.max(1, visibleColumnCount + (selectable ? 1 : 0));
   const measures = React.useMemo(
     () => groupMeasuresFromColumns(columns),
     [columns],
@@ -180,20 +182,23 @@ export function FlatListBody<TRow extends Row>({
         <TableHeader>
           {table.getHeaderGroups().map((group) => (
             <TableRow key={group.id}>
-              <TableHead sticky className="w-8">
-                <Checkbox
-                  size="sm"
-                  aria-label="Select all rows on this page"
-                  checked={allPageSelected}
-                  indeterminate={!allPageSelected && somePageSelected}
-                  onCheckedChange={onPageSelectionChange}
-                />
-              </TableHead>
+              {selectable ? (
+                <TableHead sticky className="w-8">
+                  <Checkbox
+                    size="sm"
+                    aria-label="Select all rows on this page"
+                    checked={allPageSelected}
+                    indeterminate={!allPageSelected && somePageSelected}
+                    onCheckedChange={onPageSelectionChange}
+                  />
+                </TableHead>
+              ) : null}
               {group.headers.map((header) => (
                 <TableHead
                   sticky
                   key={header.id}
                   className={ALIGN_CLASS[alignOf(header.column.columnDef)]}
+                  aria-sort={ariaSortForColumn(header.column, dataView)}
                 >
                   {flexRender(
                     header.column.columnDef.header,
@@ -230,6 +235,7 @@ export function FlatListBody<TRow extends Row>({
                       colSpan,
                       dataView,
                       interactive,
+                      selectable,
                       rowHref,
                       onRowClick,
                       measures,
@@ -284,11 +290,12 @@ function SortHeader<TRow extends Row>({
   const sort = dataView.state.sort;
   const active = sort?.field === column.field;
   const Icon = !active ? ArrowUpDown : sort.dir === "asc" ? ArrowUp : ArrowDown;
+  const label = columnLabelText(column);
   return (
     <button
       type="button"
       className="inline-flex min-w-0 items-center gap-1 rounded text-left outline-none hover:text-fg focus-visible:focus-ring"
-      aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
+      aria-label={`Sort ${label} (${active ? `currently ${sort.dir === "asc" ? "ascending" : "descending"}` : "not sorted"})`}
       onClick={() => dataView.setSort(nextSort(sort, column.field))}
     >
       <span className="truncate">{children}</span>
@@ -301,12 +308,14 @@ export function RecordRow<TRow extends Row>({
   row,
   dataView,
   interactive,
+  selectable = true,
   rowHref,
   onRowClick,
 }: {
   row: TableRowModel<TRow>;
   dataView: DataViewContextValue;
   interactive: boolean;
+  selectable?: boolean;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
 }): React.ReactElement {
@@ -316,6 +325,7 @@ export function RecordRow<TRow extends Row>({
       <LinkedRecordRow
         row={row}
         dataView={dataView}
+        selectable={selectable}
         href={href}
       />
     );
@@ -325,6 +335,7 @@ export function RecordRow<TRow extends Row>({
       row={row}
       dataView={dataView}
       interactive={interactive}
+      selectable={selectable}
       onRowClick={onRowClick}
     />
   );
@@ -333,10 +344,12 @@ export function RecordRow<TRow extends Row>({
 function LinkedRecordRow<TRow extends Row>({
   row,
   dataView,
+  selectable,
   href,
 }: {
   row: TableRowModel<TRow>;
   dataView: DataViewContextValue;
+  selectable: boolean;
   href: string;
 }): React.ReactElement {
   const id = row.id;
@@ -369,17 +382,19 @@ function LinkedRecordRow<TRow extends Row>({
         void navigate({ to: href });
       }}
     >
-      <TableCell className="w-8">
-        <Checkbox
-          size="sm"
-          aria-label="Select row"
-          checked={selected}
-          onClick={(event) => event.stopPropagation()}
-          onCheckedChange={(checked) =>
-            dataView.toggleSelectedId(id, checked)
-          }
-        />
-      </TableCell>
+      {selectable ? (
+        <TableCell className="w-8">
+          <Checkbox
+            size="sm"
+            aria-label="Select row"
+            checked={selected}
+            onClick={(event) => event.stopPropagation()}
+            onCheckedChange={(checked) =>
+              dataView.toggleSelectedId(id, checked)
+            }
+          />
+        </TableCell>
+      ) : null}
       {row.getVisibleCells().map((cell) => (
         <TableCell
           key={cell.id}
@@ -396,11 +411,13 @@ function PlainRecordRow<TRow extends Row>({
   row,
   dataView,
   interactive,
+  selectable,
   onRowClick,
 }: {
   row: TableRowModel<TRow>;
   dataView: DataViewContextValue;
   interactive: boolean;
+  selectable: boolean;
   onRowClick?: (row: TRow) => void;
 }): React.ReactElement {
   const id = row.id;
@@ -411,17 +428,19 @@ function PlainRecordRow<TRow extends Row>({
       data-selected={selected ? "" : undefined}
       onClick={onRowClick ? () => onRowClick(row.original) : undefined}
     >
-      <TableCell className="w-8">
-        <Checkbox
-          size="sm"
-          aria-label="Select row"
-          checked={selected}
-          onClick={(event) => event.stopPropagation()}
-          onCheckedChange={(checked) =>
-            dataView.toggleSelectedId(id, checked)
-          }
-        />
-      </TableCell>
+      {selectable ? (
+        <TableCell className="w-8">
+          <Checkbox
+            size="sm"
+            aria-label="Select row"
+            checked={selected}
+            onClick={(event) => event.stopPropagation()}
+            onCheckedChange={(checked) =>
+              dataView.toggleSelectedId(id, checked)
+            }
+          />
+        </TableCell>
+      ) : null}
       {row.getVisibleCells().map((cell, index) => (
         <TableCell
           key={cell.id}
@@ -453,6 +472,7 @@ function renderListItem<TRow extends Row>({
   colSpan,
   dataView,
   interactive,
+  selectable,
   rowHref,
   onRowClick,
   measures,
@@ -461,6 +481,7 @@ function renderListItem<TRow extends Row>({
   colSpan: number;
   dataView: DataViewContextValue;
   interactive: boolean;
+  selectable: boolean;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
   measures: readonly GroupMeasure[];
@@ -483,6 +504,7 @@ function renderListItem<TRow extends Row>({
       row={item.row}
       dataView={dataView}
       interactive={interactive}
+      selectable={selectable}
       rowHref={rowHref}
       onRowClick={onRowClick}
     />
@@ -660,6 +682,15 @@ export function tableColumnLabel<TRow extends Row>(
   return columnMeta(column.columnDef).label ?? column.id;
 }
 
+export function ariaSortForColumn<TRow extends Row>(
+  column: TableColumn<TRow, unknown>,
+  dataView: DataViewContextValue,
+): React.AriaAttributes["aria-sort"] {
+  const field = columnMeta(column.columnDef).field ?? column.id;
+  if (dataView.state.sort?.field !== field) return "none";
+  return dataView.state.sort.dir === "asc" ? "ascending" : "descending";
+}
+
 function rowActionLabelForTableColumn<TRow extends Row>(
   column: TableColumn<TRow, unknown>,
   row: TRow,
@@ -722,6 +753,15 @@ function columnLabel<TRow extends Row>(column: ColumnDescriptor<TRow>): string {
   if (typeof header === "string") return header;
   if (typeof header === "number") return String(header);
   return titleCase(column.field);
+}
+
+function columnLabelText<TRow extends Row>(
+  column: ColumnDescriptor<TRow>,
+): string {
+  const header = column.header;
+  if (typeof header === "string") return header;
+  if (typeof header === "number") return String(header);
+  return groupFieldLabel(column.field);
 }
 
 function measureUnit(label: string): string {

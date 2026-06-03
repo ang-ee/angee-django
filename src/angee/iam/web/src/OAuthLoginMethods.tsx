@@ -1,6 +1,5 @@
-import { Alert, Button, Spinner } from "@angee/base";
+import { Alert, Button, Glyph, Spinner } from "@angee/base";
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/sdk";
-import { KeyRound } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import {
@@ -110,7 +109,7 @@ function ProviderMark({ label }: { label: string }): ReactNode {
       aria-hidden="true"
       className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border-subtle bg-sheet text-xs font-semibold text-fg-muted"
     >
-      {initial || <KeyRound className="size-4" />}
+      {initial || <Glyph name="auth" className="size-4" />}
     </span>
   );
 }

@@ -84,7 +84,8 @@ Dependency changes must update this file in the same change.
 | react-day-picker | Calendar | Date widgets |
 | react-resizable-panels | Split panes | Shell and inspector layouts |
 | CodeMirror 6 | Text and Markdown editor | Markdown widget |
-| @xyflow/react | Node and edge canvases | Graph and canvas views |
+| @xyflow/react | node/edge graph canvas | operator/iam schema graphs |
+| @dagrejs/dagre | directed-graph layout | graph node placement |
 | @dnd-kit | Drag and drop | Board and rail interactions |
 | react-dropzone | File drop boundary | Storage upload widgets |
 | react-json-view-lite + ansi-to-react | JSON and ANSI rendering | Debug and log panels |
