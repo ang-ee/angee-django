@@ -2,11 +2,13 @@ import { test, expect, roleStatePath } from "@angee/e2e";
 
 import { NotesPage } from "../pages/notes-page";
 
+const UPDATED_DAY_URL = "/notes?group=updatedAt:day";
+
 /**
  * The data-view features added this cycle: column sortability gated to orderable
  * fields, sorting the grouped field reordering the groups, per-group aggregate
  * sums plus a footer grand total, and the toolbar rendered as a flush control
- * band. The list groups by Updated·Day by default.
+ * band. Group-specific assertions opt into Updated·Day through the URL.
  */
 test.describe("notes views — sort, group order, aggregates, control band", () => {
   test.use({ storageState: roleStatePath("alice") });
@@ -50,7 +52,8 @@ test.describe("notes views — sort, group order, aggregates, control band", () 
 
   test("sorting the grouped field reorders the groups (oldest vs newest first)", async ({ page }) => {
     const notes = new NotesPage(page);
-    await notes.gotoReady();
+    await page.goto(UPDATED_DAY_URL);
+    await expect(notes.groupHeaders.first()).toBeVisible({ timeout: 25000 });
 
     const firstGroupLabel = async () =>
       (await notes.groupHeaders.first().innerText()).replace(/\s+/g, " ").trim();
@@ -75,10 +78,12 @@ test.describe("notes views — sort, group order, aggregates, control band", () 
 
   test("each group header carries a word-count sum and a footer grand total", async ({ page }) => {
     const notes = new NotesPage(page);
-    await notes.gotoReady();
+    await page.goto(UPDATED_DAY_URL);
 
     // a folded group header shows its measure rollup, e.g. "… 411 words"
-    await expect(notes.groupHeaders.first()).toContainText(/\d[\d,]*\s*words/i);
+    await expect(notes.groupHeaders.first()).toContainText(/\d[\d,]*\s*words/i, {
+      timeout: 25000,
+    });
     // the footer shows the whole-list grand total
     await expect(page.locator("tfoot")).toContainText(/[\d,]+\s*words/i);
   });
@@ -101,8 +106,10 @@ for (const role of ["admin", "alice", "bob"] as const) {
 
     test("group headers show a word-count rollup and the footer a grand total", async ({ page }) => {
       const notes = new NotesPage(page);
-      await notes.gotoReady();
-      await expect(notes.groupHeaders.first()).toContainText(/\d[\d,]*\s*words/i);
+      await page.goto(UPDATED_DAY_URL);
+      await expect(notes.groupHeaders.first()).toContainText(/\d[\d,]*\s*words/i, {
+        timeout: 25000,
+      });
       await expect(page.locator("tfoot")).toContainText(/[\d,]+\s*words/i);
     });
   });

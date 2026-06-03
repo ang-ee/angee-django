@@ -114,8 +114,8 @@ export class NotesPage extends PageObject {
     await this.page.getByText("Group by", { exact: false }).first().waitFor();
   }
 
-  /** Navigate to the first record's form. The list groups + folds by default,
-   *  so expand the first group to reveal records, then click a record row. */
+  /** Navigate to the first record's form. The list is flat by default (records
+   *  visible immediately); the group-expand is a fallback for grouped views. */
   async openFirstNote(): Promise<void> {
     if (!(await this.recordRows.first().isVisible().catch(() => false))) {
       await this.groupHeaders.first().click();

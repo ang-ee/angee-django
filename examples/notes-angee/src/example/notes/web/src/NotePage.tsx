@@ -159,6 +159,9 @@ export function NotePage({
   return (
     <div className="flex flex-col gap-4">
       <NoteChatter recordId={recordId} creating={creating} />
+      {/* Open flat, most-recent-first (order by updatedAt). A day-granularity
+          default group is unusable against the seed's multi-year span — one
+          folded group per day — so grouping is left to the toolbar control. */}
       <DataPage
         model={MODEL}
         columns={columns}
@@ -170,7 +173,7 @@ export function NotePage({
         placement="inline"
         list={GroupListView}
         pageSize={50}
-        defaultGroup={{ field: "updatedAt", granularity: "day" }}
+        order={{ updatedAt: "DESC" }}
         rowHref={(row) =>
           typeof row.id === "string" ? noteRecordPath(row.id) : NOTE_LIST_PATH}
         onSelect={handleSelect}
