@@ -12,6 +12,7 @@ from django.contrib.auth.base_user import AbstractBaseUser
 from django.db import models, transaction
 from rebac import system_context
 
+from angee.iam.models import AccountStatus
 from angee.iam.oidc import client as client_module
 from angee.iam.oidc import state
 from angee.iam.oidc.errors import IDENTITY_RESOLUTION_FAILED, INVALID_ID_TOKEN, INVALID_STATE, OidcFlowError
@@ -24,19 +25,26 @@ def resolve(client: Any, *, sub: str, email: str | None, claims: dict[str, Any])
     with system_context(reason="iam.oidc.resolve"), transaction.atomic():
         account = Account.objects.select_related("vendor").filter(vendor=client.vendor, external_id=sub).first()
         if account is not None:
+            # Honor the account lifecycle and is_active the way the password path does:
+            # a revoked/expired/disabled account or a deactivated user must not log in.
+            if account.status != AccountStatus.ACTIVE:
+                raise OidcFlowError(IDENTITY_RESOLUTION_FAILED, 403)
             owner = Account.objects.owner_for(account)
-            if owner is None:
+            if owner is None or not owner.is_active:
                 raise OidcFlowError(IDENTITY_RESOLUTION_FAILED, 403)
             return owner
 
         normalized_email = email or ""
+        # Linking an IdP identity to an existing local account by email is an
+        # account-takeover vector unless the IdP asserts the email is verified.
         if (
             getattr(client, "link_on_email_match", False)
             and normalized_email
+            and _email_verified(claims)
             and _domain_allowed(client, normalized_email)
         ):
             user = _find_user_by_email(normalized_email)
-            if user is not None:
+            if user is not None and user.is_active:
                 Account.objects.link(
                     client.vendor,
                     sub,
@@ -47,7 +55,13 @@ def resolve(client: Any, *, sub: str, email: str | None, claims: dict[str, Any])
                 )
                 return user
 
-        if getattr(client, "create_on_login", False) and _domain_allowed(client, normalized_email):
+        # Provisioning a user trusts the email only when verified (else create
+        # with no email rather than an attacker-chosen one).
+        if (
+            getattr(client, "create_on_login", False)
+            and _domain_allowed(client, normalized_email)
+            and (_email_verified(claims) or not normalized_email)
+        ):
             user = _create_user_for_identity(normalized_email, sub)
             Account.objects.link(
                 client.vendor,
@@ -184,6 +198,12 @@ def _domain_allowed(client: Any, email: str | None) -> bool:
     if not email or "@" not in email:
         return False
     return email.rsplit("@", 1)[1].lower() in allowed_domains
+
+
+def _email_verified(claims: dict[str, Any]) -> bool:
+    """Return whether the IdP asserted the email claim is verified."""
+
+    return claims.get("email_verified") is True
 
 
 def _find_user_by_email(email: str) -> AbstractBaseUser | None:

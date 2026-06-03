@@ -15,6 +15,7 @@ from django.db import connection
 from rebac import system_context
 
 from angee.iam import identity
+from angee.iam.models import AccountStatus
 from angee.iam.oidc import client as oidc_client
 from angee.iam.oidc import state as oidc_state
 from angee.iam.oidc.errors import (
@@ -157,6 +158,69 @@ def test_resolver_existing_external_account_returns_owner(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_resolver_blocks_non_active_account(oidc_tables: None) -> None:
+    """A revoked/expired/disabled external account must not log its owner in."""
+
+    user = get_user_model().objects.create_user(username="revoked-owner", email="rev@example.com")
+    vendor, client = _vendor_and_client()
+    ExternalAccount.objects.link(
+        vendor,
+        "sub-revoked",
+        owner=user,
+        email="rev@example.com",
+        status=AccountStatus.REVOKED,
+    )
+
+    with pytest.raises(OidcFlowError):
+        identity.resolve(client, sub="sub-revoked", email="rev@example.com", claims={"sub": "sub-revoked"})
+
+
+@pytest.mark.django_db(transaction=True)
+def test_resolver_blocks_inactive_user(oidc_tables: None) -> None:
+    """A deactivated owner must not authenticate via OIDC (parity with the password path)."""
+
+    user = get_user_model().objects.create_user(username="inactive-owner", email="ina@example.com")
+    user.is_active = False
+    user.save(update_fields=["is_active"])
+    vendor, client = _vendor_and_client()
+    ExternalAccount.objects.link(vendor, "sub-inactive", owner=user, email="ina@example.com")
+
+    with pytest.raises(OidcFlowError):
+        identity.resolve(client, sub="sub-inactive", email="ina@example.com", claims={"sub": "sub-inactive"})
+
+
+@pytest.mark.django_db(transaction=True)
+def test_resolver_rejects_unverified_email_link(oidc_tables: None) -> None:
+    """link_on_email_match must not link an UNVERIFIED email claim to an existing user."""
+
+    get_user_model().objects.create_user(username="verify-match", email="vm@example.com")
+    vendor, client = _vendor_and_client(link_on_email_match=True, allowed_email_domains=["example.com"])
+
+    with pytest.raises(OidcFlowError):
+        identity.resolve(
+            client,
+            sub="sub-unverified",
+            email="vm@example.com",
+            claims={"sub": "sub-unverified", "email": "vm@example.com"},  # no email_verified
+        )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_resolver_rejects_unverified_email_create(oidc_tables: None) -> None:
+    """create_on_login must not provision a user from an unverified email claim."""
+
+    vendor, client = _vendor_and_client(create_on_login=True, allowed_email_domains=["example.com"])
+
+    with pytest.raises(OidcFlowError):
+        identity.resolve(
+            client,
+            sub="sub-unverified-new",
+            email="new@example.com",
+            claims={"sub": "sub-unverified-new", "email": "new@example.com"},  # no email_verified
+        )
+
+
+@pytest.mark.django_db(transaction=True)
 def test_resolver_link_on_email_match_creates_external_account(
     oidc_tables: None,
 ) -> None:
@@ -169,7 +233,7 @@ def test_resolver_link_on_email_match_creates_external_account(
         client,
         sub="sub-email",
         email="match@example.com",
-        claims={"sub": "sub-email", "email": "match@example.com"},
+        claims={"sub": "sub-email", "email": "match@example.com", "email_verified": True},
     )
 
     assert resolved.pk == user.pk
@@ -190,7 +254,7 @@ def test_resolver_create_on_login_provisions_user_and_external_account(
         client,
         sub="sub-new",
         email="new@example.com",
-        claims={"sub": "sub-new", "email": "new@example.com", "name": "New User"},
+        claims={"sub": "sub-new", "email": "new@example.com", "name": "New User", "email_verified": True},
     )
 
     assert user.email == "new@example.com"
@@ -213,7 +277,7 @@ def test_async_resolver_create_on_login_provisions_user_and_external_account(
         client,
         sub="sub-async",
         email="async@example.com",
-        claims={"sub": "sub-async", "email": "async@example.com", "name": "Async User"},
+        claims={"sub": "sub-async", "email": "async@example.com", "name": "Async User", "email_verified": True},
     )
 
     assert user.email == "async@example.com"
