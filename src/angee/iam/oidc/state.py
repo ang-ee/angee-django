@@ -19,7 +19,7 @@ _CACHE_PREFIX = "angee.iam.oidc.state:"
 class StateRecord:
     """Cached data needed to complete one OIDC redirect."""
 
-    client_id: str
+    oauth_client_id: str
     redirect_uri: str
     nonce: str
     code_verifier: str | None
@@ -27,17 +27,21 @@ class StateRecord:
 
 
 def issue(
-    client: object,
+    oauth_client: object,
     redirect_uri: str,
 ) -> tuple[str, StateRecord]:
     """Create and cache one single-use OIDC state record."""
 
     state_token = secrets.token_urlsafe(32)
     record = StateRecord(
-        client_id=str(getattr(client, "sqid", getattr(client, "pk", ""))),
+        oauth_client_id=str(
+            getattr(oauth_client, "sqid", getattr(oauth_client, "pk", ""))
+        ),
         redirect_uri=redirect_uri,
         nonce=secrets.token_urlsafe(32),
-        code_verifier=secrets.token_urlsafe(64) if getattr(client, "supports_pkce", False) else None,
+        code_verifier=secrets.token_urlsafe(64)
+        if getattr(oauth_client, "supports_pkce", False)
+        else None,
         created_at=timezone.now(),
     )
     cache.set(_cache_key(state_token), record, timeout=STATE_TTL_SECONDS)

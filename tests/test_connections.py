@@ -15,7 +15,7 @@ from rebac.models import active_relationship_model
 
 from angee.iam.credentials import CredentialKind, StaticTokenCredentialHandler
 from angee.iam.models import AccountStatus
-from tests.conftest import Client, Credential, ExternalAccount, Vendor, _create_missing_tables
+from tests.conftest import Credential, ExternalAccount, OAuthClient, Vendor, _create_missing_tables
 
 
 @pytest.mark.django_db(transaction=True)
@@ -41,7 +41,7 @@ def test_connection_managers_are_idempotent_and_delegate_static_token_material()
                 display_name="Example",
                 website_url="https://example.com",
             )
-            client = Client.objects.create(
+            oauth_client = OAuthClient.objects.create(
                 vendor=vendor,
                 display_name="Example prod",
                 client_id="example-client",
@@ -74,7 +74,7 @@ def test_connection_managers_are_idempotent_and_delegate_static_token_material()
             expires_at = timezone.now() + timedelta(hours=1)
             first_credential = Credential.objects.upsert_for_user(
                 user,
-                client,
+                oauth_client,
                 CredentialKind.STATIC_TOKEN,
                 {"api_key": "first-key"},
                 external_account=second_account,
@@ -82,7 +82,7 @@ def test_connection_managers_are_idempotent_and_delegate_static_token_material()
             )
             second_credential = Credential.objects.upsert_for_user(
                 user,
-                client,
+                oauth_client,
                 CredentialKind.STATIC_TOKEN,
                 {"api_key": "second-key"},
             )
@@ -103,7 +103,7 @@ def test_connection_managers_are_idempotent_and_delegate_static_token_material()
             with pytest.raises(ValueError, match="owned by upsert_for_user: kind"):
                 Credential.objects.upsert_for_user(
                     user,
-                    client,
+                    oauth_client,
                     CredentialKind.STATIC_TOKEN,
                     {"api_key": "third-key"},
                     **{"kind": CredentialKind.OAUTH},
@@ -111,7 +111,7 @@ def test_connection_managers_are_idempotent_and_delegate_static_token_material()
             with pytest.raises(ValueError, match="owned by upsert_for_user: material"):
                 Credential.objects.upsert_for_user(
                     user,
-                    client,
+                    oauth_client,
                     CredentialKind.STATIC_TOKEN,
                     {"api_key": "third-key"},
                     **{"material": {"api_key": "override"}},
@@ -135,7 +135,7 @@ def test_connection_managers_authorize_their_own_writes() -> None:
         )
         with system_context(reason="test setup"):
             vendor = Vendor.objects.create(slug="selfsuff", display_name="SelfSuff")
-            client = Client.objects.create(
+            oauth_client = OAuthClient.objects.create(
                 vendor=vendor,
                 display_name="SelfSuff prod",
                 client_id="selfsuff-client",
@@ -148,7 +148,7 @@ def test_connection_managers_authorize_their_own_writes() -> None:
         )
         credential = Credential.objects.upsert_for_user(
             user,
-            client,
+            oauth_client,
             CredentialKind.STATIC_TOKEN,
             {"api_key": "k"},
             external_account=account,
@@ -166,15 +166,15 @@ def test_connection_managers_authorize_their_own_writes() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_client_manager_syncs_shape_and_secret_from_settings(settings: Any) -> None:
-    """Client seeds are settings-authored and keep secrets out of resource files."""
+def test_oauth_client_manager_syncs_shape_and_secret_from_settings(settings: Any) -> None:
+    """OAuthClient seeds are settings-authored and keep secrets out of resource files."""
 
     created_models = _create_missing_tables()
     try:
         with system_context(reason="test setup"):
             Vendor.objects.create(slug="google", display_name="Google")
 
-        settings.ANGEE_IAM_CLIENTS = (
+        settings.ANGEE_IAM_OAUTH_CLIENTS = (
             {
                 "vendor": "google",
                 "environment": "prod",
@@ -191,17 +191,17 @@ def test_client_manager_syncs_shape_and_secret_from_settings(settings: Any) -> N
             },
         )
 
-        synced = Client.objects.sync_from_settings()
+        synced = OAuthClient.objects.sync_from_settings()
 
         assert len(synced) == 1
         with system_context(reason="test assertions"):
-            client = Client.objects.get(vendor__slug="google", environment="prod")
-        assert client.display_name == "Google Login"
-        assert client.client_secret == "from-settings"
-        assert client.is_oidc is True
-        assert client.default_scopes == ["openid", "email"]
+            oauth_client = OAuthClient.objects.get(vendor__slug="google", environment="prod")
+        assert oauth_client.display_name == "Google Login"
+        assert oauth_client.client_secret == "from-settings"
+        assert oauth_client.is_oidc is True
+        assert oauth_client.default_scopes == ["openid", "email"]
 
-        settings.ANGEE_IAM_CLIENTS = (
+        settings.ANGEE_IAM_OAUTH_CLIENTS = (
             {
                 "vendor": "google",
                 "environment": "prod",
@@ -211,13 +211,13 @@ def test_client_manager_syncs_shape_and_secret_from_settings(settings: Any) -> N
             },
         )
 
-        Client.objects.sync_from_settings()
+        OAuthClient.objects.sync_from_settings()
 
-        client.refresh_from_db()
-        assert client.display_name == "Google Login Updated"
-        assert client.client_id == "google-client-updated"
-        assert client.client_secret == "from-settings"
-        assert client.is_enabled is False
+        oauth_client.refresh_from_db()
+        assert oauth_client.display_name == "Google Login Updated"
+        assert oauth_client.client_id == "google-client-updated"
+        assert oauth_client.client_secret == "from-settings"
+        assert oauth_client.is_enabled is False
     finally:
         if created_models:
             with connection.schema_editor() as schema_editor:

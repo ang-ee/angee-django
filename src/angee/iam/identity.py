@@ -15,15 +15,24 @@ from rebac import system_context
 from angee.iam.models import AccountStatus
 from angee.iam.oidc import client as client_module
 from angee.iam.oidc import state
-from angee.iam.oidc.errors import IDENTITY_RESOLUTION_FAILED, INVALID_ID_TOKEN, INVALID_STATE, OidcFlowError
+from angee.iam.oidc.errors import (
+    IDENTITY_RESOLUTION_FAILED,
+    INVALID_ID_TOKEN,
+    INVALID_STATE,
+    OidcFlowError,
+)
 
 
-def resolve(client: Any, *, sub: str, email: str | None, claims: dict[str, Any]) -> AbstractBaseUser:
+def resolve(oauth_client: Any, *, sub: str, email: str | None, claims: dict[str, Any]) -> AbstractBaseUser:
     """Resolve OIDC claims to an IAM user, linking or provisioning when policy allows."""
 
     Account = cast(Any, apps.get_model("iam", "ExternalAccount"))
     with system_context(reason="iam.oidc.resolve"), transaction.atomic():
-        account = Account.objects.select_related("vendor").filter(vendor=client.vendor, external_id=sub).first()
+        account = (
+            Account.objects.select_related("vendor")
+            .filter(vendor=oauth_client.vendor, external_id=sub)
+            .first()
+        )
         if account is not None:
             # Honor the account lifecycle and is_active the way the password path does:
             # a revoked/expired/disabled account or a deactivated user must not log in.
@@ -38,15 +47,15 @@ def resolve(client: Any, *, sub: str, email: str | None, claims: dict[str, Any])
         # Linking an IdP identity to an existing local account by email is an
         # account-takeover vector unless the IdP asserts the email is verified.
         if (
-            getattr(client, "link_on_email_match", False)
+            getattr(oauth_client, "link_on_email_match", False)
             and normalized_email
             and _email_verified(claims)
-            and _domain_allowed(client, normalized_email)
+            and _domain_allowed(oauth_client, normalized_email)
         ):
             user = _find_user_by_email(normalized_email)
             if user is not None and user.is_active:
                 Account.objects.link(
-                    client.vendor,
+                    oauth_client.vendor,
                     sub,
                     owner=user,
                     email=normalized_email,
@@ -58,13 +67,13 @@ def resolve(client: Any, *, sub: str, email: str | None, claims: dict[str, Any])
         # Provisioning a user trusts the email only when verified (else create
         # with no email rather than an attacker-chosen one).
         if (
-            getattr(client, "create_on_login", False)
-            and _domain_allowed(client, normalized_email)
+            getattr(oauth_client, "create_on_login", False)
+            and _domain_allowed(oauth_client, normalized_email)
             and (_email_verified(claims) or not normalized_email)
         ):
             user = _create_user_for_identity(normalized_email, sub)
             Account.objects.link(
-                client.vendor,
+                oauth_client.vendor,
                 sub,
                 owner=user,
                 email=normalized_email,
@@ -76,40 +85,56 @@ def resolve(client: Any, *, sub: str, email: str | None, claims: dict[str, Any])
     raise OidcFlowError(IDENTITY_RESOLUTION_FAILED, 403)
 
 
-async def aresolve(client: Any, *, sub: str, email: str | None, claims: dict[str, Any]) -> AbstractBaseUser:
+async def aresolve(oauth_client: Any, *, sub: str, email: str | None, claims: dict[str, Any]) -> AbstractBaseUser:
     """Async wrapper for ``resolve`` that keeps sync ORM work thread-sensitive."""
 
     return await sync_to_async(resolve, thread_sensitive=True)(
-        client,
+        oauth_client,
         sub=sub,
         email=email,
         claims=claims,
     )
 
 
-def complete_login(client: Any, *, code: str, state_token: str, redirect_uri: str) -> AbstractBaseUser:
+def complete_login(
+    oauth_client: Any,
+    *,
+    code: str,
+    state_token: str,
+    redirect_uri: str,
+) -> AbstractBaseUser:
     """Complete an OIDC login redirect and return the resolved IAM user."""
 
     record = state.consume(state_token)
-    _validate_state_record(client, record, redirect_uri)
+    _validate_state_record(oauth_client, record, redirect_uri)
     tokens = client_module.exchange_code(
-        client,
+        oauth_client,
         code=code,
         redirect_uri=redirect_uri,
         code_verifier=record.code_verifier,
     )
-    claims = client_module.verify_id_token(client, str(tokens.get("id_token", "")), nonce=record.nonce)
+    claims = client_module.verify_id_token(
+        oauth_client,
+        str(tokens.get("id_token", "")),
+        nonce=record.nonce,
+    )
     sub = claims.get("sub")
     if not sub:
         raise OidcFlowError(INVALID_ID_TOKEN, 400)
-    return resolve(client, sub=str(sub), email=_claim_email(claims), claims=claims)
+    return resolve(oauth_client, sub=str(sub), email=_claim_email(claims), claims=claims)
 
 
-async def acomplete_login(client: Any, *, code: str, state_token: str, redirect_uri: str) -> AbstractBaseUser:
+async def acomplete_login(
+    oauth_client: Any,
+    *,
+    code: str,
+    state_token: str,
+    redirect_uri: str,
+) -> AbstractBaseUser:
     """Async wrapper for ``complete_login`` that keeps sync ORM work thread-sensitive."""
 
     return await sync_to_async(complete_login, thread_sensitive=True)(
-        client,
+        oauth_client,
         code=code,
         state_token=state_token,
         redirect_uri=redirect_uri,
@@ -117,7 +142,7 @@ async def acomplete_login(client: Any, *, code: str, state_token: str, redirect_
 
 
 def complete_link(
-    client: Any,
+    oauth_client: Any,
     user: AbstractBaseUser,
     *,
     code: str,
@@ -127,14 +152,18 @@ def complete_link(
     """Complete an authenticated account-link redirect and return the external account."""
 
     record = state.consume(state_token)
-    _validate_state_record(client, record, redirect_uri)
+    _validate_state_record(oauth_client, record, redirect_uri)
     tokens = client_module.exchange_code(
-        client,
+        oauth_client,
         code=code,
         redirect_uri=redirect_uri,
         code_verifier=record.code_verifier,
     )
-    claims = client_module.verify_id_token(client, str(tokens.get("id_token", "")), nonce=record.nonce)
+    claims = client_module.verify_id_token(
+        oauth_client,
+        str(tokens.get("id_token", "")),
+        nonce=record.nonce,
+    )
     sub = claims.get("sub")
     if not sub:
         raise OidcFlowError(INVALID_ID_TOKEN, 400)
@@ -143,13 +172,13 @@ def complete_link(
     Credential = cast(Any, apps.get_model("iam", "Credential"))
     email = _claim_email(claims) or ""
     with system_context(reason="iam.oidc.link"), transaction.atomic():
-        account = Account.objects.filter(vendor=client.vendor, external_id=str(sub)).first()
+        account = Account.objects.filter(vendor=oauth_client.vendor, external_id=str(sub)).first()
         if account is not None:
             owner = Account.objects.owner_for(account)
             if owner is not None and owner.pk != user.pk:
                 raise OidcFlowError("account_already_linked", 409)
         account = Account.objects.link(
-            client.vendor,
+            oauth_client.vendor,
             str(sub),
             owner=user,
             email=email,
@@ -158,7 +187,7 @@ def complete_link(
         )
         Credential.objects.upsert_for_user(
             user,
-            client,
+            oauth_client,
             "oauth",
             tokens,
             external_account=account,
@@ -167,7 +196,7 @@ def complete_link(
 
 
 async def acomplete_link(
-    client: Any,
+    oauth_client: Any,
     user: AbstractBaseUser,
     *,
     code: str,
@@ -177,7 +206,7 @@ async def acomplete_link(
     """Async wrapper for ``complete_link`` that keeps sync ORM work thread-sensitive."""
 
     return await sync_to_async(complete_link, thread_sensitive=True)(
-        client,
+        oauth_client,
         user,
         code=code,
         state_token=state_token,
@@ -185,12 +214,12 @@ async def acomplete_link(
     )
 
 
-def _domain_allowed(client: Any, email: str | None) -> bool:
-    """Return whether ``email`` is allowed by the client's domain policy."""
+def _domain_allowed(oauth_client: Any, email: str | None) -> bool:
+    """Return whether ``email`` is allowed by the OAuth client's domain policy."""
 
     allowed_domains = {
         str(domain).strip().lower()
-        for domain in getattr(client, "allowed_email_domains", []) or []
+        for domain in getattr(oauth_client, "allowed_email_domains", []) or []
         if str(domain).strip()
     }
     if not allowed_domains:
@@ -261,9 +290,9 @@ def _claim_email(claims: dict[str, Any]) -> str | None:
     return str(value) if value else None
 
 
-def _validate_state_record(client: Any, record: state.StateRecord, redirect_uri: str) -> None:
+def _validate_state_record(oauth_client: Any, record: state.StateRecord, redirect_uri: str) -> None:
     """Fail closed when a consumed state record does not match this flow."""
 
-    client_id = str(getattr(client, "sqid", getattr(client, "pk", "")))
-    if record.client_id != client_id or record.redirect_uri != redirect_uri:
+    oauth_client_id = str(getattr(oauth_client, "sqid", getattr(oauth_client, "pk", "")))
+    if record.oauth_client_id != oauth_client_id or record.redirect_uri != redirect_uri:
         raise OidcFlowError(INVALID_STATE, 400)

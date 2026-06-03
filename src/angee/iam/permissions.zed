@@ -1,7 +1,7 @@
 // Authorization schema for the IAM addon.
 // @rebac_package: iam
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 2
+// @rebac_schema_revision: 3
 
 definition auth/user {
     // Const-backed universal admin: every user points at angee/role:admin
@@ -26,11 +26,11 @@ definition auth/vendor {
     permission delete = admin->member
 }
 
-definition auth/client {
+definition auth/oauth_client {
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
-    // Admin-only by design: Client holds OAuth secrets (projection-excluded).
+    // Admin-only by design: OAuthClient holds OAuth secrets (projection-excluded).
     // Permanent, not an S5-deferred decision like auth/vendor's read.
     permission read = admin->member
     permission write = admin->member

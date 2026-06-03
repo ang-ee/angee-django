@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from django.db import connection, models
 
-from angee.iam.models import Client as AbstractClient
 from angee.iam.models import Credential as AbstractCredential
 from angee.iam.models import ExternalAccount as AbstractExternalAccount
+from angee.iam.models import OAuthClient as AbstractOAuthClient
 from angee.iam.models import Vendor as AbstractVendor
 
 
@@ -36,16 +36,16 @@ class ExternalAccount(AbstractExternalAccount):
         rebac_id_attr = "sqid"
 
 
-class Client(AbstractClient):
-    """Concrete IAM client used by source-addon tests."""
+class OAuthClient(AbstractOAuthClient):
+    """Concrete IAM OAuth client used by source-addon tests."""
 
-    class Meta(AbstractClient.Meta):
-        """Django model options for the canonical test client."""
+    class Meta(AbstractOAuthClient.Meta):
+        """Django model options for the canonical test OAuth client."""
 
         abstract = False
         app_label = "iam"
-        db_table = "test_connections_client"
-        rebac_resource_type = "auth/client"
+        db_table = "test_connections_oauth_client"
+        rebac_resource_type = "auth/oauth_client"
         rebac_id_attr = "sqid"
 
 
@@ -66,7 +66,7 @@ def _create_missing_tables() -> list[type[models.Model]]:
     """Create canonical IAM connection test tables when pytest did not sync them."""
 
     existing_tables = set(connection.introspection.table_names())
-    test_models = [Vendor, ExternalAccount, Client, Credential]
+    test_models = [Vendor, ExternalAccount, OAuthClient, Credential]
     missing = [model for model in test_models if model._meta.db_table not in existing_tables]
     if not missing:
         return []

@@ -14,9 +14,9 @@ class IAMConfig(BaseAddonConfig):
     depends_on = ("base",)
     settings_defaults = {
         "AUTH_USER_MODEL": "iam.User",
-        "ANGEE_IAM_CLIENTS": (),
+        "ANGEE_IAM_OAUTH_CLIENTS": (),
     }
-    """IAM owns the user model and optional settings-sourced OAuth/OIDC clients."""
+    """IAM owns the user model and optional settings-sourced OAuth/OIDC client registrations."""
 
     resources = {
         "master": ({"path": "resources/master/010_iam.vendor.yaml", "adopt": "slug"},),

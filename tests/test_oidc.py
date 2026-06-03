@@ -24,14 +24,14 @@ from angee.iam.oidc.errors import (
     INVALID_STATE,
     OidcFlowError,
 )
-from tests.conftest import Client, ExternalAccount, Vendor, _create_missing_tables
+from tests.conftest import ExternalAccount, OAuthClient, Vendor, _create_missing_tables
 
 
 def test_discovery_fallback_fills_blank_authorize_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     """A blank authorization endpoint is loaded from discovery."""
 
     calls: list[str] = []
-    client = _stub_client(
+    oauth_client = _stub_oauth_client(
         authorize_endpoint="",
         discovery_url="https://issuer.example/.well-known/openid-configuration",
     )
@@ -44,7 +44,7 @@ def test_discovery_fallback_fills_blank_authorize_endpoint(monkeypatch: pytest.M
     monkeypatch.setattr(oidc_client, "_get_json", get_json)
 
     url = oidc_client.build_authorize_url(
-        client,
+        oauth_client,
         state="state-token",
         nonce="nonce-token",
         redirect_uri="https://app.example/callback",
@@ -52,17 +52,17 @@ def test_discovery_fallback_fills_blank_authorize_endpoint(monkeypatch: pytest.M
     )
 
     assert calls == ["https://issuer.example/.well-known/openid-configuration"]
-    assert client.authorize_endpoint == "https://issuer.example/oauth/authorize"
+    assert oauth_client.authorize_endpoint == "https://issuer.example/oauth/authorize"
     assert url.startswith("https://issuer.example/oauth/authorize?")
 
 
 def test_authorize_url_contains_state_nonce_and_pkce() -> None:
     """Authorize URL includes state, nonce, and PKCE parameters when supported."""
 
-    client = _stub_client(supports_pkce=True)
-    state_token, record = oidc_state.issue(client, "https://app.example/callback")
+    oauth_client = _stub_oauth_client(supports_pkce=True)
+    state_token, record = oidc_state.issue(oauth_client, "https://app.example/callback")
     url = oidc_client.build_authorize_url(
-        client,
+        oauth_client,
         state=state_token,
         nonce=record.nonce,
         redirect_uri="https://app.example/callback",
@@ -81,19 +81,19 @@ def test_authorize_url_contains_state_nonce_and_pkce() -> None:
 def test_verify_id_token_rejects_bad_issuer(monkeypatch: pytest.MonkeyPatch) -> None:
     """ID token verification rejects a mismatched issuer claim."""
 
-    client = _stub_client()
+    oauth_client = _stub_oauth_client()
     monkeypatch.setattr(
         oidc_client.jwt,
         "decode",
         lambda *args, **kwargs: {
             "iss": "https://wrong.example",
-            "aud": client.client_id,
+            "aud": oauth_client.client_id,
             "nonce": "nonce",
         },
     )
 
     with pytest.raises(OidcFlowError) as exc_info:
-        oidc_client.verify_id_token(client, "token", nonce="nonce", _jwks_client=_FakeJwksClient())
+        oidc_client.verify_id_token(oauth_client, "token", nonce="nonce", _jwks_client=_FakeJwksClient())
 
     assert exc_info.value.code == INVALID_ID_TOKEN
 
@@ -101,15 +101,15 @@ def test_verify_id_token_rejects_bad_issuer(monkeypatch: pytest.MonkeyPatch) -> 
 def test_verify_id_token_rejects_bad_audience(monkeypatch: pytest.MonkeyPatch) -> None:
     """ID token verification rejects a mismatched audience claim."""
 
-    client = _stub_client()
+    oauth_client = _stub_oauth_client()
     monkeypatch.setattr(
         oidc_client.jwt,
         "decode",
-        lambda *args, **kwargs: {"iss": client.issuer, "aud": "other-client", "nonce": "nonce"},
+        lambda *args, **kwargs: {"iss": oauth_client.issuer, "aud": "other-client", "nonce": "nonce"},
     )
 
     with pytest.raises(OidcFlowError) as exc_info:
-        oidc_client.verify_id_token(client, "token", nonce="nonce", _jwks_client=_FakeJwksClient())
+        oidc_client.verify_id_token(oauth_client, "token", nonce="nonce", _jwks_client=_FakeJwksClient())
 
     assert exc_info.value.code == INVALID_ID_TOKEN
 
@@ -117,15 +117,15 @@ def test_verify_id_token_rejects_bad_audience(monkeypatch: pytest.MonkeyPatch) -
 def test_verify_id_token_rejects_bad_nonce(monkeypatch: pytest.MonkeyPatch) -> None:
     """ID token verification rejects a mismatched nonce claim."""
 
-    client = _stub_client()
+    oauth_client = _stub_oauth_client()
     monkeypatch.setattr(
         oidc_client.jwt,
         "decode",
-        lambda *args, **kwargs: {"iss": client.issuer, "aud": client.client_id, "nonce": "wrong"},
+        lambda *args, **kwargs: {"iss": oauth_client.issuer, "aud": oauth_client.client_id, "nonce": "wrong"},
     )
 
     with pytest.raises(OidcFlowError) as exc_info:
-        oidc_client.verify_id_token(client, "token", nonce="nonce", _jwks_client=_FakeJwksClient())
+        oidc_client.verify_id_token(oauth_client, "token", nonce="nonce", _jwks_client=_FakeJwksClient())
 
     assert exc_info.value.code == INVALID_ID_TOKEN
 
@@ -137,7 +137,7 @@ def test_resolver_existing_external_account_returns_owner(
     """An existing external account resolves through its owner relationship."""
 
     user = get_user_model().objects.create_user(username="oidc-owner", email="owner@example.com")
-    vendor, client = _vendor_and_client()
+    vendor, oauth_client = _vendor_and_oauth_client()
     account = ExternalAccount.objects.link(
         vendor,
         "sub-existing",
@@ -147,7 +147,7 @@ def test_resolver_existing_external_account_returns_owner(
     )
 
     resolved = identity.resolve(
-        client,
+        oauth_client,
         sub="sub-existing",
         email="owner@example.com",
         claims={"sub": "sub-existing"},
@@ -162,7 +162,7 @@ def test_resolver_blocks_non_active_account(oidc_tables: None) -> None:
     """A revoked/expired/disabled external account must not log its owner in."""
 
     user = get_user_model().objects.create_user(username="revoked-owner", email="rev@example.com")
-    vendor, client = _vendor_and_client()
+    vendor, oauth_client = _vendor_and_oauth_client()
     ExternalAccount.objects.link(
         vendor,
         "sub-revoked",
@@ -172,7 +172,7 @@ def test_resolver_blocks_non_active_account(oidc_tables: None) -> None:
     )
 
     with pytest.raises(OidcFlowError):
-        identity.resolve(client, sub="sub-revoked", email="rev@example.com", claims={"sub": "sub-revoked"})
+        identity.resolve(oauth_client, sub="sub-revoked", email="rev@example.com", claims={"sub": "sub-revoked"})
 
 
 @pytest.mark.django_db(transaction=True)
@@ -182,11 +182,11 @@ def test_resolver_blocks_inactive_user(oidc_tables: None) -> None:
     user = get_user_model().objects.create_user(username="inactive-owner", email="ina@example.com")
     user.is_active = False
     user.save(update_fields=["is_active"])
-    vendor, client = _vendor_and_client()
+    vendor, oauth_client = _vendor_and_oauth_client()
     ExternalAccount.objects.link(vendor, "sub-inactive", owner=user, email="ina@example.com")
 
     with pytest.raises(OidcFlowError):
-        identity.resolve(client, sub="sub-inactive", email="ina@example.com", claims={"sub": "sub-inactive"})
+        identity.resolve(oauth_client, sub="sub-inactive", email="ina@example.com", claims={"sub": "sub-inactive"})
 
 
 @pytest.mark.django_db(transaction=True)
@@ -194,11 +194,11 @@ def test_resolver_rejects_unverified_email_link(oidc_tables: None) -> None:
     """link_on_email_match must not link an UNVERIFIED email claim to an existing user."""
 
     get_user_model().objects.create_user(username="verify-match", email="vm@example.com")
-    vendor, client = _vendor_and_client(link_on_email_match=True, allowed_email_domains=["example.com"])
+    _vendor, oauth_client = _vendor_and_oauth_client(link_on_email_match=True, allowed_email_domains=["example.com"])
 
     with pytest.raises(OidcFlowError):
         identity.resolve(
-            client,
+            oauth_client,
             sub="sub-unverified",
             email="vm@example.com",
             claims={"sub": "sub-unverified", "email": "vm@example.com"},  # no email_verified
@@ -209,11 +209,11 @@ def test_resolver_rejects_unverified_email_link(oidc_tables: None) -> None:
 def test_resolver_rejects_unverified_email_create(oidc_tables: None) -> None:
     """create_on_login must not provision a user from an unverified email claim."""
 
-    vendor, client = _vendor_and_client(create_on_login=True, allowed_email_domains=["example.com"])
+    _vendor, oauth_client = _vendor_and_oauth_client(create_on_login=True, allowed_email_domains=["example.com"])
 
     with pytest.raises(OidcFlowError):
         identity.resolve(
-            client,
+            oauth_client,
             sub="sub-unverified-new",
             email="new@example.com",
             claims={"sub": "sub-unverified-new", "email": "new@example.com"},  # no email_verified
@@ -227,10 +227,10 @@ def test_resolver_link_on_email_match_creates_external_account(
     """Email-match login links a new external account to an existing user."""
 
     user = get_user_model().objects.create_user(username="email-match", email="match@example.com")
-    vendor, client = _vendor_and_client(link_on_email_match=True, allowed_email_domains=["example.com"])
+    vendor, oauth_client = _vendor_and_oauth_client(link_on_email_match=True, allowed_email_domains=["example.com"])
 
     resolved = identity.resolve(
-        client,
+        oauth_client,
         sub="sub-email",
         email="match@example.com",
         claims={"sub": "sub-email", "email": "match@example.com", "email_verified": True},
@@ -248,10 +248,10 @@ def test_resolver_create_on_login_provisions_user_and_external_account(
 ) -> None:
     """Create-on-login provisions a non-superuser user and linked account."""
 
-    vendor, client = _vendor_and_client(create_on_login=True, allowed_email_domains=["example.com"])
+    vendor, oauth_client = _vendor_and_oauth_client(create_on_login=True, allowed_email_domains=["example.com"])
 
     user = identity.resolve(
-        client,
+        oauth_client,
         sub="sub-new",
         email="new@example.com",
         claims={"sub": "sub-new", "email": "new@example.com", "name": "New User", "email_verified": True},
@@ -271,10 +271,10 @@ def test_async_resolver_create_on_login_provisions_user_and_external_account(
 ) -> None:
     """The ASGI-facing resolver path provisions through thread-sensitive sync ORM."""
 
-    vendor, client = _vendor_and_client(create_on_login=True, allowed_email_domains=["example.com"])
+    vendor, oauth_client = _vendor_and_oauth_client(create_on_login=True, allowed_email_domains=["example.com"])
 
     user = async_to_sync(identity.aresolve)(
-        client,
+        oauth_client,
         sub="sub-async",
         email="async@example.com",
         claims={"sub": "sub-async", "email": "async@example.com", "name": "Async User", "email_verified": True},
@@ -294,7 +294,7 @@ def test_resolver_disallowed_domain_raises_403(
 ) -> None:
     """Domain policy blocks linking and provisioning."""
 
-    _vendor, client = _vendor_and_client(
+    _vendor, oauth_client = _vendor_and_oauth_client(
         link_on_email_match=True,
         create_on_login=True,
         allowed_email_domains=["allowed.example"],
@@ -302,7 +302,7 @@ def test_resolver_disallowed_domain_raises_403(
 
     with pytest.raises(OidcFlowError) as exc_info:
         identity.resolve(
-            client,
+            oauth_client,
             sub="sub-blocked",
             email="blocked@example.com",
             claims={"sub": "sub-blocked", "email": "blocked@example.com"},
@@ -321,7 +321,7 @@ def test_complete_link_rejects_account_owned_by_another_user(
 
     owner = get_user_model().objects.create_user(username="linked-owner", email="owner@example.com")
     other = get_user_model().objects.create_user(username="linked-other", email="other@example.com")
-    vendor, client = _vendor_and_client()
+    vendor, oauth_client = _vendor_and_oauth_client()
     ExternalAccount.objects.link(
         vendor,
         "sub-linked",
@@ -329,7 +329,7 @@ def test_complete_link_rejects_account_owned_by_another_user(
         email="owner@example.com",
         identity_claims={"sub": "sub-linked"},
     )
-    state_token, _record = oidc_state.issue(client, "https://app.example/callback")
+    state_token, _record = oidc_state.issue(oauth_client, "https://app.example/callback")
     monkeypatch.setattr(
         identity.client_module,
         "exchange_code",
@@ -343,7 +343,7 @@ def test_complete_link_rejects_account_owned_by_another_user(
 
     with pytest.raises(OidcFlowError) as exc_info:
         identity.complete_link(
-            client,
+            oauth_client,
             other,
             code="code",
             state_token=state_token,
@@ -357,8 +357,8 @@ def test_complete_link_rejects_account_owned_by_another_user(
 def test_state_records_are_single_use() -> None:
     """Consumed state records cannot be consumed again."""
 
-    client = SimpleNamespace(sqid="clt_test", pk=1, supports_pkce=False)
-    state_token, record = oidc_state.issue(client, "https://app.example/callback")
+    oauth_client = SimpleNamespace(sqid="clt_test", pk=1, supports_pkce=False)
+    state_token, record = oidc_state.issue(oauth_client, "https://app.example/callback")
 
     assert record.nonce != state_token
     assert oidc_state.consume(state_token) == record
@@ -384,8 +384,8 @@ def oidc_tables() -> Iterator[None]:
                     schema_editor.delete_model(model)
 
 
-def _vendor_and_client(**overrides: Any) -> tuple[Vendor, Client]:
-    """Create one enabled OIDC client for resolver tests."""
+def _vendor_and_oauth_client(**overrides: Any) -> tuple[Vendor, OAuthClient]:
+    """Create one enabled OIDC OAuth client for resolver tests."""
 
     defaults = {
         "display_name": "OIDC test",
@@ -406,12 +406,12 @@ def _vendor_and_client(**overrides: Any) -> tuple[Vendor, Client]:
     defaults.update(overrides)
     with system_context(reason="test oidc setup"):
         vendor = Vendor.objects.create(slug="oidc", display_name="OIDC")
-        client = Client.objects.create(vendor=vendor, **defaults)
-    return vendor, client
+        oauth_client = OAuthClient.objects.create(vendor=vendor, **defaults)
+    return vendor, oauth_client
 
 
-def _stub_client(**overrides: Any) -> SimpleNamespace:
-    """Return a client-like object for protocol-helper tests."""
+def _stub_oauth_client(**overrides: Any) -> SimpleNamespace:
+    """Return an OAuth-client-like object for protocol-helper tests."""
 
     defaults = {
         "client_id": "oidc-client",

@@ -390,8 +390,8 @@ class ExternalAccount(SqidMixin, AuditMixin, AngeeModel):
             )
 
 
-class ClientManager(RebacManager):
-    """Manager for settings-sourced OAuth/OIDC client configuration."""
+class OAuthClientManager(RebacManager):
+    """Manager for settings-sourced OAuth/OIDC client registration."""
 
     seed_fields = frozenset(
         {
@@ -424,14 +424,14 @@ class ClientManager(RebacManager):
         self,
         entries: Iterable[Mapping[str, Any]] | Mapping[str, Mapping[str, Any]] | None = None,
     ) -> tuple[Any, ...]:
-        """Create or update clients declared in ``settings.ANGEE_IAM_CLIENTS``.
+        """Create or update OAuth clients declared in ``settings.ANGEE_IAM_OAUTH_CLIENTS``.
 
         The host owns reading environment variables. IAM reads only Django
         settings and keeps secrets out of resource files.
         """
 
         synced: list[Any] = []
-        with system_context(reason="iam.clients.seed"), transaction.atomic():
+        with system_context(reason="iam.oauth_clients.seed"), transaction.atomic():
             for index, entry in enumerate(self._setting_entries(entries), start=1):
                 synced.append(self._sync_setting_entry(index, entry))
         return tuple(synced)
@@ -442,7 +442,7 @@ class ClientManager(RebacManager):
     ) -> tuple[Mapping[str, Any], ...]:
         """Return normalized setting entries from an explicit value or settings."""
 
-        raw_entries = getattr(settings, "ANGEE_IAM_CLIENTS", ()) if entries is None else entries
+        raw_entries = getattr(settings, "ANGEE_IAM_OAUTH_CLIENTS", ()) if entries is None else entries
         if not raw_entries:
             return ()
         if isinstance(raw_entries, Mapping):
@@ -450,14 +450,14 @@ class ClientManager(RebacManager):
         elif isinstance(raw_entries, Iterable) and not isinstance(raw_entries, str | bytes):
             values = tuple(raw_entries)
         else:
-            raise ValueError("ANGEE_IAM_CLIENTS must be a sequence or mapping of client entries.")
+            raise ValueError("ANGEE_IAM_OAUTH_CLIENTS must be a sequence or mapping of OAuth client entries.")
         for index, entry in enumerate(values, start=1):
             if not isinstance(entry, Mapping):
-                raise ValueError(f"ANGEE_IAM_CLIENTS entry {index} must be a mapping.")
+                raise ValueError(f"ANGEE_IAM_OAUTH_CLIENTS entry {index} must be a mapping.")
         return values
 
     def _sync_setting_entry(self, index: int, entry: Mapping[str, Any]) -> Any:
-        """Upsert one settings-authored client row."""
+        """Upsert one settings-authored OAuth client row."""
 
         self._validate_setting_entry(index, entry)
         vendor_slug = str(entry["vendor"])
@@ -467,34 +467,34 @@ class ClientManager(RebacManager):
             defaults["client_secret"] = str(entry.get("client_secret") or "")
         vendor_model = self.model._meta.get_field("vendor").remote_field.model
         vendor = vendor_model.objects.get(slug=vendor_slug)
-        client, _created = self.update_or_create(
+        oauth_client, _created = self.update_or_create(
             vendor=vendor,
             environment=environment,
             defaults=defaults,
         )
-        return client
+        return oauth_client
 
     def _validate_setting_entry(self, index: int, entry: Mapping[str, Any]) -> None:
-        """Raise a clear error for malformed client seed settings."""
+        """Raise a clear error for malformed OAuth client seed settings."""
 
         unknown = set(entry) - self.setting_fields
         if unknown:
             names = ", ".join(sorted(str(name) for name in unknown))
-            raise ValueError(f"ANGEE_IAM_CLIENTS entry {index} has unknown field(s): {names}")
+            raise ValueError(f"ANGEE_IAM_OAUTH_CLIENTS entry {index} has unknown field(s): {names}")
         missing = {field for field in self.required_setting_fields if not entry.get(field)}
         if missing:
             names = ", ".join(sorted(missing))
-            raise ValueError(f"ANGEE_IAM_CLIENTS entry {index} is missing required field(s): {names}")
+            raise ValueError(f"ANGEE_IAM_OAUTH_CLIENTS entry {index} is missing required field(s): {names}")
 
 
-class Client(SqidMixin, AuditMixin, AngeeModel):
-    """OAuth/OIDC client configuration and login policy for a vendor."""
+class OAuthClient(SqidMixin, AuditMixin, AngeeModel):
+    """OAuth/OIDC client registration and login policy for a vendor."""
 
     sqid = SqidsField(real_field_name="id", prefix="clt", min_length=8)
     vendor = models.ForeignKey(
         "iam.Vendor",
         on_delete=models.PROTECT,
-        related_name="clients",
+        related_name="oauth_clients",
     )
     environment = models.CharField(max_length=32, default="prod")
     display_name = models.CharField(max_length=128)
@@ -519,24 +519,24 @@ class Client(SqidMixin, AuditMixin, AngeeModel):
     create_on_login = models.BooleanField(default=False)
     allowed_email_domains = models.JSONField(default=list)
 
-    objects = ClientManager()
+    objects = OAuthClientManager()
 
     class Meta:
-        """Django model options for clients."""
+        """Django model options for OAuth clients."""
 
         abstract = True
         ordering = ("vendor__slug", "environment")
-        rebac_resource_type = "auth/client"
+        rebac_resource_type = "auth/oauth_client"
         rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
                 fields=("vendor", "environment"),
-                name="uniq_iam_client_vendor_environment",
+                name="uniq_iam_oauth_client_vendor_environment",
             ),
         )
 
     def __str__(self) -> str:
-        """Return the configured display name or vendor environment."""
+        """Return the configured OAuth client display name or vendor environment."""
 
         if self.display_name:
             return self.display_name
@@ -564,7 +564,7 @@ class CredentialManager(RebacManager):
     def upsert_for_user(
         self,
         user: Any,
-        client: Any,
+        oauth_client: Any,
         kind: str,
         material: dict[str, Any],
         /,
@@ -572,7 +572,7 @@ class CredentialManager(RebacManager):
         external_account: Any | None = None,
         **fields: Any,
     ) -> Any:
-        """Create or update one ``(user, client)`` credential."""
+        """Create or update one ``(user, oauth_client)`` credential."""
 
         reason = "iam.connections.credential"
         handler = handler_for(kind)
@@ -605,7 +605,7 @@ class CredentialManager(RebacManager):
         with system_context(reason=reason), transaction.atomic():
             instance, created = self.update_or_create(
                 user=user,
-                client=client,
+                oauth_client=oauth_client,
                 defaults={**operation_values, **update_values},
                 create_defaults=create_values,
             )
@@ -615,7 +615,7 @@ class CredentialManager(RebacManager):
 
 
 class Credential(SqidMixin, AuditMixin, AngeeModel):
-    """Per-user credential material for acting against a vendor client."""
+    """Per-user credential material for acting against a vendor OAuth client."""
 
     sqid = SqidsField(real_field_name="id", prefix="crd", min_length=8)
     user = models.ForeignKey(
@@ -623,10 +623,10 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
         on_delete=models.CASCADE,
         related_name="credentials",
     )
-    client = models.ForeignKey(
-        "iam.Client",
+    oauth_client = models.ForeignKey(
+        "iam.OAuthClient",
         on_delete=models.PROTECT,
-        related_name="credentials",
+        related_name="oauth_credentials",
     )
     external_account = models.ForeignKey(
         "iam.ExternalAccount",
@@ -653,8 +653,8 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
         rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
-                fields=("user", "client"),
-                name="uniq_iam_credential_user_client",
+                fields=("user", "oauth_client"),
+                name="uniq_iam_credential_user_oauth_client",
             ),
         )
 
@@ -719,4 +719,3 @@ def _validated_manager_values(
         names = ", ".join(sorted(unknown))
         raise ValueError(f"Unknown {model.__name__} field(s): {names}")
     return dict(values)
-

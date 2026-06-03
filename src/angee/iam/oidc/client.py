@@ -1,4 +1,4 @@
-"""Stateless OIDC protocol helpers for IAM client rows."""
+"""Stateless OIDC protocol helpers for IAM OAuth client rows."""
 
 from __future__ import annotations
 
@@ -43,10 +43,10 @@ _ALLOWED_JWT_ALGORITHMS = (
 )
 
 
-def fetch_discovery(client: object) -> dict[str, Any]:
-    """Fetch OIDC discovery and fill blank endpoint fields on ``client``."""
+def fetch_discovery(oauth_client: object) -> dict[str, Any]:
+    """Fetch OIDC discovery and fill blank endpoint fields on ``oauth_client``."""
 
-    discovery_url = str(getattr(client, "discovery_url", "") or "")
+    discovery_url = str(getattr(oauth_client, "discovery_url", "") or "")
     if not discovery_url:
         return {}
     try:
@@ -55,17 +55,17 @@ def fetch_discovery(client: object) -> dict[str, Any]:
         raise
     except Exception as exc:
         raise OidcFlowError(DISCOVERY_FAILED, 400) from exc
-    for client_field, discovery_field in _DISCOVERY_FIELDS.items():
-        if getattr(client, client_field, ""):
+    for oauth_client_field, discovery_field in _DISCOVERY_FIELDS.items():
+        if getattr(oauth_client, oauth_client_field, ""):
             continue
         value = discovery.get(discovery_field)
         if value:
-            setattr(client, client_field, str(value))
+            setattr(oauth_client, oauth_client_field, str(value))
     return discovery
 
 
 def build_authorize_url(
-    client: object,
+    oauth_client: object,
     *,
     state: str,
     nonce: str,
@@ -75,23 +75,23 @@ def build_authorize_url(
 ) -> str:
     """Return the provider authorization URL for one OIDC code flow."""
 
-    authorize_endpoint = _endpoint(client, "authorize_endpoint", "authorization_endpoint")
+    authorize_endpoint = _endpoint(oauth_client, "authorize_endpoint", "authorization_endpoint")
     query: dict[str, str] = {
-        "client_id": str(getattr(client, "client_id", "")),
+        "client_id": str(getattr(oauth_client, "client_id", "")),
         "nonce": nonce,
         "redirect_uri": redirect_uri,
         "response_type": "code",
         "scope": " ".join(scopes),
         "state": state,
     }
-    if getattr(client, "supports_pkce", False) and code_challenge:
+    if getattr(oauth_client, "supports_pkce", False) and code_challenge:
         query["code_challenge"] = code_challenge
         query["code_challenge_method"] = "S256"
     return _with_query(authorize_endpoint, query)
 
 
 def exchange_code(
-    client: object,
+    oauth_client: object,
     *,
     code: str,
     redirect_uri: str,
@@ -99,17 +99,17 @@ def exchange_code(
 ) -> dict[str, Any]:
     """Exchange an authorization code for token material."""
 
-    token_endpoint = _endpoint(client, "token_endpoint", "token_endpoint")
+    token_endpoint = _endpoint(oauth_client, "token_endpoint", "token_endpoint")
     payload = {
-        "client_id": str(getattr(client, "client_id", "")),
+        "client_id": str(getattr(oauth_client, "client_id", "")),
         "code": code,
         "grant_type": "authorization_code",
         "redirect_uri": redirect_uri,
     }
-    client_secret = str(getattr(client, "client_secret", "") or "")
+    client_secret = str(getattr(oauth_client, "client_secret", "") or "")
     if client_secret:
         payload["client_secret"] = client_secret
-    if getattr(client, "supports_pkce", False) and code_verifier:
+    if getattr(oauth_client, "supports_pkce", False) and code_verifier:
         payload["code_verifier"] = code_verifier
     try:
         response = _post_form(token_endpoint, payload)
@@ -128,7 +128,7 @@ def exchange_code(
 
 
 def verify_id_token(
-    client: object,
+    oauth_client: object,
     id_token: str,
     *,
     nonce: str | None = None,
@@ -138,12 +138,12 @@ def verify_id_token(
 
     if not id_token:
         raise OidcFlowError(INVALID_ID_TOKEN, 400)
-    issuer = str(getattr(client, "issuer", "") or "")
-    jwks_uri = str(getattr(client, "jwks_uri", "") or "")
+    issuer = str(getattr(oauth_client, "issuer", "") or "")
+    jwks_uri = str(getattr(oauth_client, "jwks_uri", "") or "")
     if not issuer or not jwks_uri:
-        fetch_discovery(client)
-        issuer = str(getattr(client, "issuer", "") or "")
-        jwks_uri = str(getattr(client, "jwks_uri", "") or "")
+        fetch_discovery(oauth_client)
+        issuer = str(getattr(oauth_client, "issuer", "") or "")
+        jwks_uri = str(getattr(oauth_client, "jwks_uri", "") or "")
     if not issuer or not jwks_uri:
         raise OidcFlowError(MISSING_ENDPOINT, 400)
     try:
@@ -153,7 +153,7 @@ def verify_id_token(
             id_token,
             signing_key.key,
             algorithms=_ALLOWED_JWT_ALGORITHMS,
-            audience=str(getattr(client, "client_id", "")),
+            audience=str(getattr(oauth_client, "client_id", "")),
             issuer=issuer,
             options={"require": ["exp", "iat"], "verify_exp": True},
         )
@@ -163,19 +163,19 @@ def verify_id_token(
         raise OidcFlowError(INVALID_ID_TOKEN, 400)
     if claims.get("iss") != issuer:
         raise OidcFlowError(INVALID_ID_TOKEN, 400)
-    if not _audience_matches(claims.get("aud"), str(getattr(client, "client_id", ""))):
+    if not _audience_matches(claims.get("aud"), str(getattr(oauth_client, "client_id", ""))):
         raise OidcFlowError(INVALID_ID_TOKEN, 400)
     if nonce is not None and claims.get("nonce") != nonce:
         raise OidcFlowError(INVALID_ID_TOKEN, 400)
     return claims
 
 
-def fetch_userinfo(client: object, access_token: str) -> dict[str, Any]:
+def fetch_userinfo(oauth_client: object, access_token: str) -> dict[str, Any]:
     """Fetch userinfo claims with one OAuth access token."""
 
     if not access_token:
         raise OidcFlowError(USERINFO_FAILED, 400)
-    userinfo_endpoint = _endpoint(client, "userinfo_endpoint", "userinfo_endpoint")
+    userinfo_endpoint = _endpoint(oauth_client, "userinfo_endpoint", "userinfo_endpoint")
     try:
         return _get_json(
             userinfo_endpoint,
@@ -188,14 +188,14 @@ def fetch_userinfo(client: object, access_token: str) -> dict[str, Any]:
         raise OidcFlowError(USERINFO_FAILED, 400) from exc
 
 
-def _endpoint(client: object, client_field: str, discovery_field: str) -> str:
-    """Return an endpoint value, loading discovery when the client field is blank."""
+def _endpoint(oauth_client: object, oauth_client_field: str, discovery_field: str) -> str:
+    """Return an endpoint value, loading discovery when the OAuth client field is blank."""
 
-    value = str(getattr(client, client_field, "") or "")
+    value = str(getattr(oauth_client, oauth_client_field, "") or "")
     if value:
         return value
-    discovery = fetch_discovery(client)
-    value = str(getattr(client, client_field, "") or discovery.get(discovery_field, "") or "")
+    discovery = fetch_discovery(oauth_client)
+    value = str(getattr(oauth_client, oauth_client_field, "") or discovery.get(discovery_field, "") or "")
     if not value:
         raise OidcFlowError(MISSING_ENDPOINT, 400)
     return value
