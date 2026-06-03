@@ -9,3 +9,4 @@ export {
   UsernamePasswordForm,
   type UsernamePasswordFormProps,
 } from "./UsernamePasswordForm";
+export { safeRedirectPath } from "./safe-redirect";

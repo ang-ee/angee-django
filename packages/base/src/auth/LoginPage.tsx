@@ -10,6 +10,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useSlot, type SlotContribution } from "@angee/sdk";
 
 import { PublicShell } from "../shell/PublicShell";
+import { safeRedirectPath } from "./safe-redirect";
 import { UsernamePasswordForm } from "./UsernamePasswordForm";
 
 export const AUTH_LOGIN_METHOD_SLOT = "auth.login.method";
@@ -41,7 +42,7 @@ export function LoginPage({
       typeof window === "undefined"
         ? null
         : new URLSearchParams(window.location.search).get("next");
-    const target = safeRedirect(next) ?? safeRedirect(redirectTo) ?? "/";
+    const target = safeRedirectPath(next) ?? safeRedirectPath(redirectTo) ?? "/";
     if (typeof window === "undefined") {
       void navigate({ to: target });
       return;
@@ -171,8 +172,3 @@ function slotEntriesHaveContent(entries: readonly SlotContribution[]): boolean {
   return entries.some((entry) => slotNode(entry.content, entry.id).length > 0);
 }
 
-function safeRedirect(value: string | null | undefined): string | null {
-  if (!value) return null;
-  if (!value.startsWith("/") || value.startsWith("//")) return null;
-  return value;
-}

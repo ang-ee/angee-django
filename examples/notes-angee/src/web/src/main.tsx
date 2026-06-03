@@ -7,6 +7,7 @@ import {
 } from "@angee/base";
 import { cacheConfigFromSDL } from "@angee/sdk";
 import notes from "@angee-example/notes-web";
+import iam from "@angee/iam";
 import operator from "@angee/operator";
 
 import publicSDL from "../../runtime/schemas/public.graphql?raw";
@@ -27,7 +28,7 @@ const authAddon: BaseAddon = {
 };
 
 createApp({
-  addons: [notes, authAddon, operator],
+  addons: [notes, authAddon, iam, operator],
   shells: {
     console: { chrome: ConsoleShell },
     public: { chrome: ({ children }) => children, requireAuth: false },
