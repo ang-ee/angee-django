@@ -172,6 +172,15 @@ export class NotesPage extends PageObject {
     await this.page.keyboard.type(text);
   }
 
+  /** The tag-input control (the tagInput widget). */
+  get tagInput(): Locator {
+    return this.page.getByRole("textbox", { name: "Tags" });
+  }
+  /** A chatter-rail tab by name (Angee / Comments / Activity). */
+  chatterTab(name: string): Locator {
+    return this.page.getByRole("tab", { name: new RegExp(name, "i") });
+  }
+
   // --- chrome ---
   get globalSearch(): Locator {
     return this.page.getByRole("search");
