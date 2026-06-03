@@ -29,6 +29,7 @@ class NoteType(AngeeNode):
     status: auto
     tags: auto
     is_starred: auto
+    reminder_at: auto
     created_at: auto
     updated_at: auto
     word_count: auto
@@ -76,6 +77,7 @@ class NoteInput:
     status: Note.Status = Note.Status.DRAFT
     tags: list[str] = strawberry.field(default_factory=list)
     is_starred: bool = False
+    reminder_at: datetime | None = None
 
 
 @strawberry.input
@@ -88,6 +90,7 @@ class NotePatch:
     status: Note.Status | None = strawberry.UNSET
     tags: list[str] | None = strawberry.UNSET
     is_starred: bool | None = strawberry.UNSET
+    reminder_at: datetime | None = strawberry.UNSET
 
 
 @strawberry_django.filter_type(Note, lookups=True)

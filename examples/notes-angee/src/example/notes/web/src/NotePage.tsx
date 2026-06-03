@@ -75,33 +75,15 @@ const tagsField = {
   label: "Tags",
   widget: "tagInput",
 } satisfies FormField;
-const wordCountField = {
-  name: "wordCount",
-  label: "Word Count",
-  readOnly: true,
+const reminderField = {
+  name: "reminderAt",
+  label: "Reminder",
+  widget: "datetime",
 } satisfies FormField;
-const createdByField = {
+const ownerField = {
   name: "createdBy",
-  label: "Created By",
+  label: "Owner",
   widget: "userRef",
-  readOnly: true,
-} satisfies FormField;
-const updatedByField = {
-  name: "updatedBy",
-  label: "Updated By",
-  widget: "userRef",
-  readOnly: true,
-} satisfies FormField;
-const createdAtField = {
-  name: "createdAt",
-  label: "Created At",
-  widget: "datetime",
-  readOnly: true,
-} satisfies FormField;
-const updatedAtField = {
-  name: "updatedAt",
-  label: "Updated At",
-  widget: "datetime",
   readOnly: true,
 } satisfies FormField;
 const bodyField = {
@@ -113,27 +95,24 @@ const formFields: readonly FormField[] = [
   titleField,
   statusField,
   tagsField,
-  wordCountField,
-  createdByField,
-  updatedByField,
-  createdAtField,
-  updatedAtField,
+  reminderField,
+  ownerField,
   bodyField,
+];
+
+// Created/updated timestamps + word count feed the record subtitle (id · created
+// · updated · words); they are queried but kept out of the field grid.
+const RECORD_SUBTITLE_FIELDS: readonly string[] = [
+  "createdAt",
+  "updatedAt",
+  "wordCount",
 ];
 
 const formGroups: readonly PageGroupDescriptor[] = [
   {
     label: "Details",
     columns: 2,
-    fields: [
-      titleField,
-      tagsField,
-      wordCountField,
-      createdByField,
-      updatedByField,
-      createdAtField,
-      updatedAtField,
-    ],
+    fields: [ownerField, reminderField, tagsField],
     actions: [],
   },
   {
@@ -185,6 +164,7 @@ export function NotePage({
         columns={columns}
         formFields={formFields}
         formGroups={formGroups}
+        returning={RECORD_SUBTITLE_FIELDS}
         recordId={recordId}
         creating={creating}
         placement="inline"

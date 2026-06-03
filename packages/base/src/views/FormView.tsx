@@ -252,10 +252,10 @@ export function FormView({
           // submit via handleSubmit() rather than relying on native type="submit".
           return (
             <ControlBand className={state.isDirty ? "bg-brand-soft" : undefined}>
+              <div className="min-w-2 flex-1" />
               {toolbar ? (
                 <div className="flex min-w-0 items-center gap-2">{toolbar}</div>
               ) : null}
-              <div className="min-w-2 flex-1" />
               {showActions ? (
                 <div className="flex items-center gap-2">
                   {state.isDirty ? (
