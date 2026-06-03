@@ -30,7 +30,7 @@ import type {
 } from "./types";
 
 const CONSOLE_SCHEMA = "console";
-const POLL_INTERVAL_MS = 2_000;
+const POLL_INTERVAL_MS = 5_000;
 // Daemon connection tokens are short-lived (the daemon mints with a ~30m TTL).
 // Refresh the bridge token well before then and rebuild the daemon client, so a
 // long-running console never degrades to a dead token.
@@ -225,13 +225,22 @@ export function useOperatorSnapshot(
   });
 
   const reexecuteRef = useRef(reexecute);
+  const fetchingRef = useRef(result.fetching);
   useEffect(() => {
     reexecuteRef.current = reexecute;
-  }, [reexecute]);
+    fetchingRef.current = result.fetching;
+  }, [reexecute, result.fetching]);
 
   useEffect(() => {
     const intervalId = globalThis.setInterval(() => {
-      reexecuteRef.current({ requestPolicy: "network-only" });
+      // Skip the tick while a request is already in flight. The daemon's
+      // git-backed resolvers (sources, gitOps) can take longer than the poll
+      // interval, and a network-only reexecute aborts the pending request — so
+      // an unconditional poll would cancel each fetch before it ever resolves
+      // and the snapshot would never settle.
+      if (!fetchingRef.current) {
+        reexecuteRef.current({ requestPolicy: "network-only" });
+      }
     }, POLL_INTERVAL_MS);
     return () => globalThis.clearInterval(intervalId);
   }, []);

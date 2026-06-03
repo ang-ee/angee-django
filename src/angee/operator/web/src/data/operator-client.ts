@@ -3,6 +3,7 @@ import { createClient as createWSClient } from "graphql-ws";
 import {
   cacheExchange,
   createClient,
+  fetchExchange,
   subscriptionExchange,
   type Client,
   type ExecutionResult,
@@ -15,12 +16,19 @@ export function createOperatorClient(connection: OperatorConnectionInfo): Client
   return createClient({
     url: connection.endpoint,
     preferGetMethod: false,
+    fetchOptions: () => ({
+      headers: { Authorization: `Bearer ${connection.token}` },
+    }),
+    // Canonical urql order (mirrors @angee/sdk's client): cache, then the
+    // subscription transport (which forwards queries/mutations downstream),
+    // then fetch. Today every operator operation is a query or mutation over
+    // HTTP; the subscription transport is reserved for future daemon streaming.
     exchanges: [
       cacheExchange,
       subscriptionExchange({
-        enableAllOperations: true,
         forwardSubscription: subscriptionForwarder(connection),
       }),
+      fetchExchange,
     ],
   });
 }

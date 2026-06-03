@@ -1,3 +1,4 @@
+/// <reference path="./css.d.ts" />
 import * as React from "react";
 import * as dagre from "@dagrejs/dagre";
 import {
