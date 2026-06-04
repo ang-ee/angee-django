@@ -18,11 +18,7 @@ from import_export.utils import get_related_model
 
 from angee.base.models import instance_from_public_id, public_id_of
 from angee.base.serialization import json_safe
-from angee.resources.entries import (
-    FROZEN_TIERS,
-    RESERVED_ROW_KEYS,
-    ResourceEntry,
-)
+from angee.resources.entries import FROZEN_TIERS, RESERVED_ROW_KEYS, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.widgets import (
     XrefForeignKeyWidget,
@@ -502,19 +498,3 @@ def build_resource(
             addon_aliases=addon_aliases,
         ),
     )
-
-
-def result_counts(rows: Sequence[RowResult]) -> tuple[int, int, int]:
-    """Return created, updated, and skipped counts from import rows."""
-
-    created = 0
-    updated = 0
-    skipped = 0
-    for row in rows:
-        if row.import_type == RowResult.IMPORT_TYPE_NEW:
-            created += 1
-        elif row.import_type == RowResult.IMPORT_TYPE_UPDATE:
-            updated += 1
-        elif row.import_type == RowResult.IMPORT_TYPE_SKIP:
-            skipped += 1
-    return created, updated, skipped

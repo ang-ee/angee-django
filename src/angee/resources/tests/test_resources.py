@@ -15,11 +15,10 @@ from django.db import IntegrityError, connection, models
 from rebac import system_context
 
 from angee.base.models import AngeeModel
-from angee.resources.entries import ResourceEntry
+from angee.resources.entries import EntryGraph, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.fetch import _PublicUrlRedirectHandler, fetch_url
 from angee.resources.models import Resource
-from angee.resources.ordering import order_entries
 from angee.resources.widgets import resolve_xref
 
 
@@ -143,7 +142,7 @@ def test_resource_entry_rejects_unsupported_formats(tmp_path: Path) -> None:
         entry(tmp_path, {"path": "resources/data.xlsx"}).read_resource_rows()
 
 
-def test_order_entries_respects_same_and_cross_addon_dependencies(
+def test_entry_graph_respects_same_and_cross_addon_dependencies(
     tmp_path: Path,
 ) -> None:
     """Dependency edges order resources across selected addons."""
@@ -170,26 +169,26 @@ def test_order_entries_respects_same_and_cross_addon_dependencies(
         {"path": "c.csv", "depends_on": ("b.csv",)},
     )
 
-    ordered = order_entries([third, second, first])
+    ordered = EntryGraph.from_entries([third, second, first]).ordered()
 
     assert [item.source for item in ordered] == ["a.csv", "b.csv", "c.csv"]
 
 
-def test_resource_entry_treats_string_depends_on_as_one_dependency(
+def test_resource_entry_uses_normalized_dependency_tuple(
     tmp_path: Path,
 ) -> None:
-    """A bare dependency string is one resource key."""
+    """Resource entries consume dependency tuples normalized by AppConfig."""
 
     resource_entry = ResourceEntry.from_declaration(
         addon(tmp_path),
         "master",
-        {"path": "b.csv", "depends_on": "a.csv"},
+        {"path": "b.csv", "depends_on": ("a.csv",)},
     )
 
     assert resource_entry.depends_on == ("a.csv",)
 
 
-def test_order_entries_detects_cycles(tmp_path: Path) -> None:
+def test_entry_graph_detects_cycles(tmp_path: Path) -> None:
     """Dependency cycles fail before any rows load."""
 
     owner = addon(tmp_path)
@@ -205,7 +204,7 @@ def test_order_entries_detects_cycles(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ResourceLoadError, match="cycle"):
-        order_entries([first, second])
+        EntryGraph.from_entries([first, second]).ordered()
 
 
 def test_fetch_url_rejects_non_http_urls() -> None:

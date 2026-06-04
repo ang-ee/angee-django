@@ -43,7 +43,7 @@ def _sort_addons(
     """Return addons sorted by dependency aliases with cycle detection."""
 
     by_name = {addon.name: addon for addon in addons}
-    aliases = _addon_aliases(addons)
+    aliases = addon_aliases(addons)
     ordered: list[BaseAddonConfig] = []
     visiting: set[str] = set()
     visited: set[str] = set()
@@ -71,7 +71,7 @@ def _sort_addons(
     return tuple(ordered)
 
 
-def _addon_aliases(addons: Iterable[BaseAddonConfig]) -> dict[str, str]:
+def addon_aliases(addons: Iterable[BaseAddonConfig]) -> dict[str, str]:
     """Return addon names and labels mapped to canonical addon names."""
 
     aliases: dict[str, str] = {}

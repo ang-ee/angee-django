@@ -32,6 +32,7 @@ SCHEMA_PART_KEYS: tuple[str, ...] = (
 )
 """GraphQL merge buckets accepted from addon ``schema.schemas``."""
 
+# Deliberate cross-layer copy of angee.resources.tiers.ResourceTier; base cannot import resources.
 RESOURCE_TIER_VALUES: tuple[str, ...] = ("master", "install", "demo")
 """Resource tier values accepted in addon manifests."""
 
@@ -308,7 +309,20 @@ class BaseAddonConfig(AppConfig):
             entry["path"] = self._relative_path(path)
         if "depends_on" in entry:
             entry["depends_on"] = _normalize_depends_on(entry["depends_on"])
+        if "adopt" in entry:
+            entry["adopt"] = self._resource_adopt_value(entry["adopt"])
+        if "model" in entry and entry["model"] is not None:
+            entry["model"] = str(entry["model"])
+        if "encoding" in entry:
+            entry["encoding"] = str(entry["encoding"] or "utf-8")
         return entry
+
+    def _resource_adopt_value(self, value: object) -> str | bool:
+        """Return the normalized adoption declaration for one resource entry."""
+
+        if isinstance(value, str):
+            return value
+        return bool(value)
 
     def _resource_tier_value(self, value: object) -> str:
         """Return one normalized resource tier value."""

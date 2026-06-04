@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from django.db import models
 
+from angee.base.fields import StateField
 from angee.base.models import AngeeModel
 from angee.resources.managers import ResourceManager
 from angee.resources.tiers import ResourceTier
@@ -21,7 +22,7 @@ class Resource(AngeeModel):
     source_path = models.CharField(max_length=300)
     """Resource path or URL that supplied the source row."""
 
-    tier = models.CharField(max_length=40, choices=ResourceTier.choices)
+    tier = StateField(choices_enum=ResourceTier)
     """Tier selected when the source row was loaded."""
 
     xref = models.CharField(max_length=160)

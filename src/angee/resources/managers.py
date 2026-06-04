@@ -11,8 +11,9 @@ from django.db import IntegrityError, models, transaction
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import system_context
 
-from angee.base.discovery import _addon_aliases
+from angee.base.discovery import addon_aliases
 from angee.resources.entries import (
+    EntryGraph,
     LoadResult,
     ResourceEntry,
     ResourceGroup,
@@ -24,9 +25,7 @@ from angee.resources.exceptions import ResourceLoadError
 from angee.resources.loader import (
     DryRunRollback,
     build_resource,
-    result_counts,
 )
-from angee.resources.ordering import order_entries
 
 
 class ResourceQuerySet(models.QuerySet[Any]):
@@ -46,7 +45,7 @@ class ResourceQuerySet(models.QuerySet[Any]):
         self._import_groups(
             groups,
             dry_run=True,
-            addon_aliases=_addon_aliases(selected_addons),
+            addon_aliases=addon_aliases(selected_addons),
         )
         return ValidationResult(
             checked_files=len(groups),
@@ -73,7 +72,7 @@ class ResourceQuerySet(models.QuerySet[Any]):
         return self._import_groups(
             groups,
             dry_run=dry_run,
-            addon_aliases=_addon_aliases(selected_addons),
+            addon_aliases=addon_aliases(selected_addons),
         )
 
     def _import_groups(
@@ -85,9 +84,7 @@ class ResourceQuerySet(models.QuerySet[Any]):
     ) -> LoadResult:
         """Import ``groups`` and optionally roll the transaction back."""
 
-        created = 0
-        updated = 0
-        skipped = 0
+        load_result = LoadResult(created=0, updated=0, skipped=0)
         try:
             reason = "resources.validate" if dry_run else "resources.load"
             with system_context(reason=reason), transaction.atomic():
@@ -108,16 +105,12 @@ class ResourceQuerySet(models.QuerySet[Any]):
                         )
                     except (IntegrityError, ResourceImportError) as error:
                         raise ResourceLoadError(f"{group.entry.display}: {error}") from error
-                    counts = result_counts(result.rows)
-                    group_created, group_updated, group_skipped = counts
-                    created += group_created
-                    updated += group_updated
-                    skipped += group_skipped
+                    load_result = LoadResult.from_rows(result.rows, initial=load_result)
                 if dry_run:
                     raise DryRunRollback()
         except DryRunRollback:
             pass
-        return LoadResult(created=created, updated=updated, skipped=skipped)
+        return load_result
 
     def diff_addons(
         self,
@@ -174,7 +167,7 @@ class ResourceQuerySet(models.QuerySet[Any]):
                             declaration,
                         )
                     )
-        return order_entries(entries)
+        return EntryGraph.from_entries(entries).ordered()
 
     def _normalize_tiers(
         self,

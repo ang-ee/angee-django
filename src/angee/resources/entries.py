@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -14,9 +15,11 @@ from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models.utils import make_model_tuple
+from import_export.results import RowResult
 
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.fetch import fetch_url
+from angee.resources.tiers import ResourceTier
 
 
 class _ResourceAddon(Protocol):
@@ -56,11 +59,14 @@ def resolve_model(label: str) -> type[models.Model]:
         raise ImproperlyConfigured(f"Unknown model {label!r}") from error
 
 
-ResourceDeclaration: TypeAlias = str | Path | Mapping[str, Any]
-"""One declared resource entry."""
+ResourceDeclaration: TypeAlias = Mapping[str, Any]
+"""One normalized resource entry declaration."""
 
 ResourceDeclarations: TypeAlias = ResourceDeclaration | Iterable[ResourceDeclaration] | None
 """A resource declaration or deterministic iterable of declarations."""
+
+EntryKey = tuple[str, str]
+"""Dependency graph key identifying one resource entry by addon and source."""
 
 RESERVED_ROW_KEYS = frozenset({"_xref", "xref", "model", "_meta"})
 """Row keys interpreted by the resource loader rather than model fields."""
@@ -77,7 +83,7 @@ TEXT_FORMATS = {
 STRUCTURED_FORMATS = frozenset({"json", "yaml"})
 """Text formats that can carry ``_meta`` and ``rows`` envelopes."""
 
-FROZEN_TIERS = frozenset({"install", "demo"})
+FROZEN_TIERS = frozenset(ResourceTier.from_value(tier) for tier in (ResourceTier.INSTALL, ResourceTier.DEMO))
 """Tiers whose loaded rows are not updated after ledger creation."""
 
 
@@ -123,26 +129,17 @@ class ResourceEntry:
         tier: str,
         declaration: ResourceDeclaration,
     ) -> ResourceEntry:
-        """Return an entry from a normalized or shorthand declaration."""
+        """Return an entry from a normalized addon resource declaration."""
 
-        if isinstance(declaration, str | Path):
-            raw: Mapping[str, Any] = {"path": str(declaration)}
-        else:
-            raw = declaration
-        depends_on = raw.get("depends_on", ())
-        if isinstance(depends_on, str):
-            depends_on = (depends_on,)
-        raw_adopt = raw.get("adopt", False)
-        adopt = raw_adopt if isinstance(raw_adopt, str) else bool(raw_adopt)
         return cls(
             addon=addon,
             tier=tier,
-            path=_optional_string(raw.get("path")),
-            url=_optional_string(raw.get("url")),
-            model=_optional_string(raw.get("model")),
-            encoding=str(raw.get("encoding") or "utf-8"),
-            depends_on=tuple(str(item) for item in depends_on),
-            adopt=adopt,
+            path=declaration.get("path"),
+            url=declaration.get("url"),
+            model=declaration.get("model"),
+            encoding=declaration.get("encoding", "utf-8"),
+            depends_on=declaration.get("depends_on", ()),
+            adopt=declaration.get("adopt", False),
         )
 
     @property
@@ -283,10 +280,19 @@ class ResourceEntry:
     def _check_model_conflict(self, file_model: str | None) -> None:
         """Raise when entry and file metadata declare different models."""
 
-        if self.model and file_model and _normalize_label(self.model) != _normalize_label(file_model):
+        if self.model and file_model and self._model_key(self.model) != self._model_key(file_model):
             raise ResourceLoadError(
                 f"{self.display}: model conflict; entry declares {self.model!r}, file declares {file_model!r}"
             )
+
+    def _model_key(self, label: str) -> tuple[str, str]:
+        """Return Django's identity tuple for one declared model label."""
+
+        try:
+            app_label, model_name = make_model_tuple(label)
+        except ValueError as error:
+            raise ImproperlyConfigured(f"Invalid model label {label!r}") from error
+        return app_label.lower(), model_name
 
     def _tablib_format(self, path: Path) -> str:
         """Return the tablib format name for ``path``."""
@@ -297,6 +303,97 @@ class ResourceEntry:
             expected = ", ".join(sorted(TEXT_FORMATS))
             raise ImproperlyConfigured(f"{self.display} has unsupported format {suffix!r}; expected one of {expected}")
         return file_format
+
+
+@dataclass(frozen=True, slots=True)
+class EntryGraph:
+    """Dependency graph for a selected set of resource entries."""
+
+    entries: tuple[ResourceEntry, ...]
+    """Entries selected for one resource operation."""
+
+    @classmethod
+    def from_entries(cls, entries: Iterable[ResourceEntry]) -> EntryGraph:
+        """Return a graph over ``entries`` in their selected order."""
+
+        return cls(tuple(entries))
+
+    def ordered(self) -> tuple[ResourceEntry, ...]:
+        """Return entries in dependency order, preserving independent order."""
+
+        by_key, position, addon_names = self._index_entries()
+        outgoing: dict[EntryKey, list[EntryKey]] = defaultdict(list)
+        indegree = {key: 0 for key in by_key}
+        for key, entry in by_key.items():
+            for dependency in entry.depends_on:
+                dependency_key = self._dependency_key(entry, dependency, addon_names)
+                if dependency_key not in by_key:
+                    raise ResourceLoadError(f"{entry.display}: depends_on target not selected: {dependency}")
+                outgoing[dependency_key].append(key)
+                indegree[key] += 1
+        return self._topological_order(by_key, position, outgoing, indegree)
+
+    def _index_entries(
+        self,
+    ) -> tuple[dict[EntryKey, ResourceEntry], dict[EntryKey, int], dict[str, str]]:
+        """Return graph indexes keyed by addon and source."""
+
+        by_key: dict[EntryKey, ResourceEntry] = {}
+        position: dict[EntryKey, int] = {}
+        addon_names: dict[str, str] = {}
+        for index, entry in enumerate(self.entries):
+            key = self._entry_key(entry)
+            if key in by_key:
+                raise ResourceLoadError(f"duplicate resource entry {entry.display}")
+            by_key[key] = entry
+            position[key] = index
+            addon_names[entry.addon.name] = entry.addon.name
+            addon_names[entry.addon.label] = entry.addon.name
+        return by_key, position, addon_names
+
+    def _topological_order(
+        self,
+        by_key: dict[EntryKey, ResourceEntry],
+        position: dict[EntryKey, int],
+        outgoing: dict[EntryKey, list[EntryKey]],
+        indegree: dict[EntryKey, int],
+    ) -> tuple[ResourceEntry, ...]:
+        """Return the dependency topological order for the indexed graph."""
+
+        ready = sorted(
+            (key for key, count in indegree.items() if count == 0),
+            key=position.__getitem__,
+        )
+        ordered: list[ResourceEntry] = []
+        while ready:
+            key = ready.pop(0)
+            ordered.append(by_key[key])
+            for child in sorted(outgoing[key], key=position.__getitem__):
+                indegree[child] -= 1
+                if indegree[child] == 0:
+                    ready.append(child)
+            ready.sort(key=position.__getitem__)
+        if len(ordered) != len(by_key):
+            raise ResourceLoadError("cycle detected in resource depends_on")
+        return tuple(ordered)
+
+    def _entry_key(self, entry: ResourceEntry) -> EntryKey:
+        """Return the dependency graph key for ``entry``."""
+
+        return (entry.addon.name, entry.source)
+
+    def _dependency_key(
+        self,
+        entry: ResourceEntry,
+        dependency: str,
+        addon_names: dict[str, str],
+    ) -> EntryKey:
+        """Return the entry key addressed by one ``depends_on`` value."""
+
+        if ":" in dependency:
+            addon_ref, source = dependency.split(":", 1)
+            return (addon_names.get(addon_ref, addon_ref), source)
+        return (entry.addon.name, dependency)
 
 
 @dataclass(slots=True)
@@ -422,22 +519,29 @@ class LoadResult:
     skipped: int
     """Rows skipped because the ledger already matched."""
 
+    @classmethod
+    def from_rows(
+        cls,
+        rows: Iterable[RowResult],
+        *,
+        initial: LoadResult | None = None,
+    ) -> LoadResult:
+        """Return load counts tallied from import-export row results."""
+
+        created = initial.created if initial is not None else 0
+        updated = initial.updated if initial is not None else 0
+        skipped = initial.skipped if initial is not None else 0
+        for row in rows:
+            if row.import_type == RowResult.IMPORT_TYPE_NEW:
+                created += 1
+            elif row.import_type == RowResult.IMPORT_TYPE_UPDATE:
+                updated += 1
+            elif row.import_type == RowResult.IMPORT_TYPE_SKIP:
+                skipped += 1
+        return cls(created=created, updated=updated, skipped=skipped)
+
     @property
     def loaded(self) -> int:
         """Return the number of created or updated rows."""
 
         return self.created + self.updated
-
-
-def _optional_string(value: object) -> str | None:
-    """Return ``value`` as a string when it is present."""
-
-    if value is None:
-        return None
-    return str(value)
-
-
-def _normalize_label(label: str) -> str:
-    """Return a case-insensitive compact model label."""
-
-    return label.replace(" ", "").lower()
