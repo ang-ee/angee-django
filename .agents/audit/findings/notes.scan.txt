@@ -1,0 +1,2 @@
+naming-multiword-module    examples/notes-angee/src/example/notes/management/commands/seed_lorem_notes.py:1  module 'seed_lorem_notes.py' is multi-word; prefer single-word + a dir
+ts-record-unknown          examples/notes-angee/src/example/notes/web/src/NotePage.tsx:41  Record<string, unknown> — usually a missing explicit type

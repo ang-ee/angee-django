@@ -1,0 +1,4 @@
+type-switch-isinstance     src/angee/integrate/models.py:77  isinstance switch (adjudicate vs polymorphism): self.last_used_status = str(status.value if isinstance(statu
+type-switch-isinstance     src/angee/integrate/models.py:120  isinstance switch (adjudicate vs polymorphism): self.last_sync_items = result if isinstance(result, int) and
+type-switch-isinstance     src/angee/integrate/models.py:258  isinstance switch (adjudicate vs polymorphism): if isinstance(exc, WebhookDeliveryError):
+type-switch-isinstance     src/angee/integrate/models.py:266  isinstance switch (adjudicate vs polymorphism): if isinstance(exc, ValidationError):

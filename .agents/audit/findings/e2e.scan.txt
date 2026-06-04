@@ -1,0 +1,1 @@
+ts-record-unknown          packages/e2e/src/graphql.ts:46  Record<string, unknown> — usually a missing explicit type

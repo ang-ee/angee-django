@@ -1,0 +1,20 @@
+type-switch-isinstance     src/angee/resources/entries.py:128  isinstance switch (adjudicate vs polymorphism): if isinstance(declaration, str | Path):
+type-switch-isinstance     src/angee/resources/entries.py:133  isinstance switch (adjudicate vs polymorphism): if isinstance(depends_on, str):
+type-switch-isinstance     src/angee/resources/entries.py:136  isinstance switch (adjudicate vs polymorphism): adopt = raw_adopt if isinstance(raw_adopt, str) else bool(ra
+type-switch-isinstance     src/angee/resources/entries.py:245  isinstance switch (adjudicate vs polymorphism): if isinstance(data, Mapping):
+type-switch-isinstance     src/angee/resources/entries.py:247  isinstance switch (adjudicate vs polymorphism): if isinstance(meta, Mapping) and isinstance(meta.get("model"
+type-switch-isinstance     src/angee/resources/entries.py:249  isinstance switch (adjudicate vs polymorphism): elif isinstance(data.get("model"), str):
+type-switch-isinstance     src/angee/resources/entries.py:256  isinstance switch (adjudicate vs polymorphism): if not isinstance(rows, list):
+type-switch-isinstance     src/angee/resources/entries.py:261  isinstance switch (adjudicate vs polymorphism): if not isinstance(row, Mapping):
+type-switch-isinstance     src/angee/resources/entries.py:332  isinstance switch (adjudicate vs polymorphism): if not isinstance(raw_xref, str) or not raw_xref.strip():
+type-switch-isinstance     src/angee/resources/entries.py:353  isinstance switch (adjudicate vs polymorphism): if not isinstance(fields_value, Mapping):
+type-switch-isinstance     src/angee/resources/loader.py:68  isinstance switch (adjudicate vs polymorphism): if isinstance(field.widget, XrefWidgetMixin):
+type-switch-isinstance     src/angee/resources/loader.py:236  isinstance switch (adjudicate vs polymorphism): if not isinstance(value, str) or not value.strip():
+type-switch-isinstance     src/angee/resources/loader.py:338  isinstance switch (adjudicate vs polymorphism): if isinstance(adopt, str):
+type-switch-isinstance     src/angee/resources/loader.py:389  isinstance switch (adjudicate vs polymorphism): if not isinstance(field, models.Field) or not self._is_adopt
+type-switch-isinstance     src/angee/resources/tiers.py:20  isinstance switch (adjudicate vs polymorphism): if isinstance(value, cls):
+type-switch-isinstance     src/angee/resources/widgets.py:39  isinstance switch (adjudicate vs polymorphism): if not isinstance(value, str):
+type-switch-isinstance     src/angee/resources/widgets.py:79  isinstance switch (adjudicate vs polymorphism): if isinstance(value, dict | list | bool | int | float):
+type-switch-isinstance     src/angee/resources/widgets.py:134  isinstance switch (adjudicate vs polymorphism): if isinstance(value, str):
+type-switch-isinstance     src/angee/resources/widgets.py:136  isinstance switch (adjudicate vs polymorphism): if isinstance(value, list | tuple):
+type-switch-isinstance     src/angee/resources/widgets.py:139  isinstance switch (adjudicate vs polymorphism): if not isinstance(item, str):

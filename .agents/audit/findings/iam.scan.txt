@@ -1,0 +1,23 @@
+deferred-import            src/angee/iam/apps.py:32  indented import (phase-1/TYPE_CHECKING only): from angee.iam import signals
+type-switch-isinstance     src/angee/iam/credentials.py:70  isinstance switch (adjudicate vs polymorphism): kind_value = kind.value if isinstance(kind, CredentialKind) 
+type-switch-isinstance     src/angee/iam/credentials.py:105  isinstance switch (adjudicate vs polymorphism): if isinstance(scope, str):
+naming-multiword-module    src/angee/iam/management/commands/iam_oauth_clients.py:1  module 'iam_oauth_clients.py' is multi-word; prefer single-word + a dir
+type-switch-isinstance     src/angee/iam/models.py:469  isinstance switch (adjudicate vs polymorphism): if isinstance(raw_entries, Mapping):
+type-switch-isinstance     src/angee/iam/models.py:471  isinstance switch (adjudicate vs polymorphism): elif isinstance(raw_entries, Iterable) and not isinstance(ra
+type-switch-isinstance     src/angee/iam/models.py:476  isinstance switch (adjudicate vs polymorphism): if not isinstance(entry, Mapping):
+scattered-function         src/angee/iam/models.py:750  top-level def in a model/manager module: def _capability_account_status(status: Any) -> AccountStatus:
+scattered-function         src/angee/iam/models.py:758  top-level def in a model/manager module: def _rollup_account_status(statuses: Iterable[Any]) -> AccountStatus:
+scattered-function         src/angee/iam/models.py:765  top-level def in a model/manager module: def _account_status_precedence(status: AccountStatus) -> int:
+scattered-function         src/angee/iam/models.py:769  top-level def in a model/manager module: def _account_status(status: Any) -> AccountStatus:
+scattered-function         src/angee/iam/models.py:777  top-level def in a model/manager module: def _choice_value(value: Any) -> str:
+scattered-function         src/angee/iam/models.py:781  top-level def in a model/manager module: def _validated_manager_values(
+type-switch-isinstance     src/angee/iam/oidc/client.py:56  isinstance switch (adjudicate vs polymorphism): if isinstance(cached, dict):
+type-switch-isinstance     src/angee/iam/oidc/client.py:177  isinstance switch (adjudicate vs polymorphism): if not isinstance(claims, dict):
+type-switch-isinstance     src/angee/iam/oidc/client.py:319  isinstance switch (adjudicate vs polymorphism): if not isinstance(decoded, dict):
+type-switch-isinstance     src/angee/iam/oidc/client.py:353  isinstance switch (adjudicate vs polymorphism): if isinstance(value, str):
+type-switch-isinstance     src/angee/iam/oidc/client.py:355  isinstance switch (adjudicate vs polymorphism): if isinstance(value, list):
+type-switch-isinstance     src/angee/iam/oidc/state.py:80  isinstance switch (adjudicate vs polymorphism): if not isinstance(record, StateRecord):
+type-switch-isinstance     src/angee/iam/schema.py:375  isinstance switch (adjudicate vs polymorphism): if isinstance(User._default_manager, RebacManager):
+type-switch-isinstance     src/angee/iam/schema.py:455  isinstance switch (adjudicate vs polymorphism): if isinstance(user, AnonymousUser) or not getattr(
+type-switch-isinstance     src/angee/iam/schema.py:811  isinstance switch (adjudicate vs polymorphism): return not isinstance(user, AnonymousUser) and bool(
+type-switch-isinstance     src/angee/iam/schema.py:919  isinstance switch (adjudicate vs polymorphism): if not isinstance(value, (list, tuple)):

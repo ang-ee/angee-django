@@ -29,7 +29,7 @@ Dependency changes must update this file in the same change.
 | Django 6.0+ | ORM, migrations, admin, auth contract, app registry | Abstract bases and build-time composition into runtime apps |
 | strawberry-django | GraphQL types, resolvers, dataloaders, schema printing | Merge addon schema parts into named schemas, `crud`/`changes` shortcuts, emit SDL, serve per name |
 | django-choices-field | Enum-backed model fields | `StateField` semantic wrapper |
-| strawberry-django-aggregates | Aggregation and group-by resolvers | Wiring to model metadata |
+| strawberry-django-aggregates | Aggregation and group-by resolvers | Addon-level `AggregateBuilder` wiring (per addon, e.g. notes) |
 | channels + daphne | ASGI and WebSocket transport | GraphQL subscription mounting |
 | django-zed-rebac | REBAC engine, actor scoping, relationship storage, local and SpiceDB-compatible backends | Per-addon schema merge, reserved roles, actor resolver |
 | django-sqids | Opaque external IDs | `SqidMixin` and GraphQL boundary scalar |
@@ -37,9 +37,7 @@ Dependency changes must update this file in the same change.
 | django-reversion | Versioned field snapshots and revert | `RevisionMixin` marker, `revisioned_fields` |
 | cryptography | Encryption primitives | `EncryptedField` (Fernet at rest, secret-by-type) |
 | django-import-export + tablib | Resource import/export resources, tabular formats, row cleaning, and row results | Tiered manifests, xref ledger, and frozen-tier policy |
-| django-ninja | Typed REST routing and Pydantic I/O | Rare sidecar mounting for callbacks, webhooks, health checks, and presigned upload flows |
-| pydantic | REST payload schemas | Nothing; used inside sidecars |
-| python-magic | MIME detection | Storage wiring |
+| pyyaml | YAML resource declaration parsing | Resource loader reads `.yaml`/`.yml` resource files |
 | pyjwt[crypto] | JWT and JOSE verification | OIDC discovery and exchange orchestration |
 | uv | Python dependency resolution and workspaces | Workspace layout |
 
@@ -79,15 +77,11 @@ Dependency changes must update this file in the same change.
 | react-markdown + remark-gfm | Markdown rendering (GitHub-flavored) | Markdown widget preview |
 | tailwind-variants | Variant recipes with slots | Component recipes |
 | tw-animate-css | Tailwind 4 animation utilities | Motion tokens |
-| simple-icons + @lobehub/icons | Brand and vendor SVGs | Icon registry entries |
 | cmdk | Command menu | Spotlight shell surface |
 | react-day-picker | Calendar | Date widgets |
 | react-resizable-panels | Split panes | Shell and inspector layouts |
 | CodeMirror 6 | Text and Markdown editor | Markdown widget |
-| @xyflow/react | Node and edge canvases | Graph and canvas views |
 | @dnd-kit | Drag and drop | Board and rail interactions |
-| react-dropzone | File drop boundary | Storage upload widgets |
-| react-json-view-lite + ansi-to-react | JSON and ANSI rendering | Debug and log panels |
 
 ## Tooling
 
@@ -115,6 +109,12 @@ Dependency changes must update this file in the same change.
 | Celery + django-celery-beat | Queues and schedules |
 | fastmcp | MCP tool surface |
 | pgvector / sqlite-vec / python-igraph / lightrag-hku | Vector search and graph RAG |
+| django-ninja + pydantic | Typed REST sidecars (callbacks, webhooks, health, presigned uploads) |
+| python-magic | MIME detection for storage uploads |
+| @xyflow/react | Graph and canvas (node/edge) views |
+| react-dropzone | Storage upload drop boundary |
+| react-json-view-lite + ansi-to-react | Debug/log JSON + ANSI panels |
+| simple-icons + @lobehub/icons | Brand and vendor SVG icon registry |
 
 ## Change Policy
 

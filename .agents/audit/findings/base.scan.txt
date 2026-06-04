@@ -1,0 +1,38 @@
+type-switch-isinstance     src/angee/base/access.py:65  isinstance switch (adjudicate vs polymorphism): if not self.gated_fields or not isinstance(fields, list):
+type-switch-isinstance     src/angee/base/access.py:82  isinstance switch (adjudicate vs polymorphism): if isinstance(values, Mapping):
+type-switch-isinstance     src/angee/base/apps.py:87  isinstance switch (adjudicate vs polymorphism): if not isinstance(schemas, Mapping):
+type-switch-isinstance     src/angee/base/apps.py:93  isinstance switch (adjudicate vs polymorphism): if not isinstance(raw_entry, Mapping):
+deferred-import            src/angee/base/apps.py:154  indented import (phase-1/TYPE_CHECKING only): import and breaks ``manage.py test``. ``schema.py`` is the
+deferred-import            src/angee/base/apps.py:168  indented import (phase-1/TYPE_CHECKING only): from angee.base.models import AngeeModel
+deferred-import            src/angee/base/apps.py:255  indented import (phase-1/TYPE_CHECKING only): from angee.base.models import AngeeModel
+type-switch-isinstance     src/angee/base/apps.py:272  isinstance switch (adjudicate vs polymorphism): if isinstance(value, set | frozenset):
+type-switch-isinstance     src/angee/base/apps.py:274  isinstance switch (adjudicate vs polymorphism): if isinstance(value, Sequence) and not isinstance(value, str
+type-switch-isinstance     src/angee/base/apps.py:286  isinstance switch (adjudicate vs polymorphism): if isinstance(declarations, str | Path | Mapping):
+type-switch-isinstance     src/angee/base/apps.py:288  isinstance switch (adjudicate vs polymorphism): if not isinstance(declarations, Iterable):
+type-switch-isinstance     src/angee/base/apps.py:295  isinstance switch (adjudicate vs polymorphism): if isinstance(declaration, str | Path):
+type-switch-isinstance     src/angee/base/apps.py:297  isinstance switch (adjudicate vs polymorphism): if not isinstance(declaration, Mapping):
+deferred-import            src/angee/base/apps.py:347  indented import (phase-1/TYPE_CHECKING only): from angee.base.signals import connect_audit_stamping, regis
+scattered-function         src/angee/base/apps.py:353  top-level def in a model/manager module: def _module_exists(dotted_path: str) -> bool:
+scattered-function         src/angee/base/apps.py:362  top-level def in a model/manager module: def _normalize_depends_on(value: object) -> tuple[str, ...]:
+type-switch-isinstance     src/angee/base/apps.py:365  isinstance switch (adjudicate vs polymorphism): if isinstance(value, str):
+type-switch-isinstance     src/angee/base/apps.py:367  isinstance switch (adjudicate vs polymorphism): if not isinstance(value, Iterable):
+type-switch-isinstance     src/angee/base/discovery.py:31  isinstance switch (adjudicate vs polymorphism): if not isinstance(app_config, BaseAddonConfig):
+type-switch-isinstance     src/angee/base/graphql/errors.py:29  isinstance switch (adjudicate vs polymorphism): if isinstance(original, MissingActorError):
+type-switch-isinstance     src/angee/base/graphql/errors.py:31  isinstance switch (adjudicate vs polymorphism): elif isinstance(original, PermissionDenied):
+type-switch-isinstance     src/angee/base/graphql/node.py:45  isinstance switch (adjudicate vs polymorphism): if isinstance(nodes, QuerySet) and not nodes.query.order_by 
+type-switch-isinstance     src/angee/base/graphql/schema.py:183  isinstance switch (adjudicate vs polymorphism): if not isinstance(model._default_manager, RebacManager):
+type-switch-isinstance     src/angee/base/graphql/subscriptions.py:82  isinstance switch (adjudicate vs polymorphism): if isinstance(filtered, ChangeEvent):
+type-switch-isinstance     src/angee/base/models.py:63  isinstance switch (adjudicate vs polymorphism): if not isinstance(target, str):
+scattered-function         src/angee/base/models.py:115  top-level def in a model/manager module: def instance_from_public_id(model: type[_ModelT], value: str) -> _Mode
+scattered-function         src/angee/base/models.py:128  top-level def in a model/manager module: def public_id_of(instance: models.Model) -> str:
+type-switch-isinstance     src/angee/base/models.py:131  isinstance switch (adjudicate vs polymorphism): if isinstance(instance, AngeeModel):
+scattered-function         src/angee/base/models.py:138  top-level def in a model/manager module: def _is_contributed_extension_base(value: type) -> bool:
+scattered-function         src/angee/base/models.py:150  top-level def in a model/manager module: def _has_model_field(model: type[models.Model], name: str) -> bool:
+scattered-function         src/angee/base/models.py:158  top-level def in a model/manager module: def _public_id_value(instance: models.Model) -> Any:
+type-switch-isinstance     src/angee/base/serialization.py:14  isinstance switch (adjudicate vs polymorphism): if value is None or isinstance(value, bool | int | float | s
+type-switch-isinstance     src/angee/base/serialization.py:16  isinstance switch (adjudicate vs polymorphism): if isinstance(value, datetime.datetime | datetime.date | dat
+type-switch-isinstance     src/angee/base/serialization.py:18  isinstance switch (adjudicate vs polymorphism): if isinstance(value, Decimal):
+type-switch-isinstance     src/angee/base/serialization.py:20  isinstance switch (adjudicate vs polymorphism): if isinstance(value, list | tuple):
+type-switch-isinstance     src/angee/base/serialization.py:22  isinstance switch (adjudicate vs polymorphism): if isinstance(value, Mapping):
+type-switch-isinstance     src/angee/base/settings.py:225  isinstance switch (adjudicate vs polymorphism): if not isinstance(app_config, BaseAddonConfig):
+type-switch-isinstance     src/angee/base/signals.py:55  isinstance switch (adjudicate vs polymorphism): if raw or not isinstance(instance, AuditMixin):

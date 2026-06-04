@@ -1,0 +1,17 @@
+type-switch-isinstance     src/angee/operator/daemon.py:78  isinstance switch (adjudicate vs polymorphism): return token if isinstance(token, str) and token else None
+deferred-import            src/angee/operator/daemon.py:92  indented import (phase-1/TYPE_CHECKING only): from graphql import build_client_schema, get_introspection_q
+type-switch-isinstance     src/angee/operator/daemon.py:103  isinstance switch (adjudicate vs polymorphism): if not isinstance(result, dict):
+naming-multiword-module    src/angee/operator/management/commands/operator_schema.py:1  module 'operator_schema.py' is multi-word; prefer single-word + a dir
+ts-record-unknown          src/angee/operator/web/src/data/transport.tsx:250  Record<string, unknown> — usually a missing explicit type
+ts-record-unknown          src/angee/operator/web/src/data/transport.tsx:258  Record<string, unknown> — usually a missing explicit type
+ts-record-unknown          src/angee/operator/web/src/data/transport.tsx:310  Record<string, unknown> — usually a missing explicit type
+ts-record-unknown          src/angee/operator/web/src/views/parts/run-action.ts:2  Record<string, unknown> — usually a missing explicit type
+ts-record-unknown          src/angee/operator/web/src/views/parts/run-action.ts:4  Record<string, unknown> — usually a missing explicit type
+ts-record-unknown          src/angee/operator/web/src/views/parts/run-action.ts:22  Record<string, unknown> — usually a missing explicit type
+ts-record-unknown          src/angee/operator/web/src/views/sections/OperationsSection.tsx:29  Record<string, unknown> — usually a missing explicit type
+ts-record-unknown          src/angee/operator/web/src/views/sections/OperationsSection.tsx:30  Record<string, unknown> — usually a missing explicit type
+ts-record-unknown          src/angee/operator/web/src/views/sections/SecretsSection.tsx:26  Record<string, unknown> — usually a missing explicit type
+ts-record-unknown          src/angee/operator/web/src/views/sections/SecretsSection.tsx:30  Record<string, unknown> — usually a missing explicit type
+ts-record-unknown          src/angee/operator/web/src/views/sections/ServicesSection.tsx:23  Record<string, unknown> — usually a missing explicit type
+ts-record-unknown          src/angee/operator/web/src/views/sections/SourcesSection.tsx:23  Record<string, unknown> — usually a missing explicit type
+ts-record-unknown          src/angee/operator/web/src/views/sections/WorkspacesSection.tsx:23  Record<string, unknown> — usually a missing explicit type
