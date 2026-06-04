@@ -1,122 +1,170 @@
-import type { BaseAddon, ChromeMenuItem } from "@angee/base";
+import type {
+  BaseAddon,
+  BaseAddonRoute,
+  BreadcrumbItem,
+  ChromeMenuItem,
+} from "@angee/base";
 import { Boxes } from "lucide-react";
+import { createElement, type ComponentType, type ReactNode } from "react";
 
-import { enOperatorBundle } from "./i18n";
+import { OperatorTransportProvider } from "./data/transport";
+import { enOperatorBundleForSections } from "./i18n";
 import {
-  OperatorGitOpsPage,
-  OperatorOperationsPage,
-  OperatorOverviewPage,
-  OperatorSecretsPage,
-  OperatorServicesPage,
-  OperatorSourcesPage,
-  OperatorTemplatesPage,
-  OperatorWorkspacesPage,
-} from "./views/pages";
+  GitOpsSection,
+} from "./views/sections/GitOpsSection";
+import {
+  OperationsSection,
+} from "./views/sections/OperationsSection";
+import {
+  OverviewSection,
+} from "./views/sections/OverviewSection";
+import {
+  SecretsSection,
+} from "./views/sections/SecretsSection";
+import {
+  ServicesSection,
+} from "./views/sections/ServicesSection";
+import {
+  SourcesSection,
+} from "./views/sections/SourcesSection";
+import {
+  TemplatesSection,
+} from "./views/sections/TemplatesSection";
+import {
+  WorkspacesSection,
+} from "./views/sections/WorkspacesSection";
+
+const OPERATOR_ID = "operator";
+const OPERATOR_TITLE = "Operator";
+const OPERATOR_ROOT_PATH = "/operator";
+
+export interface OperatorSection {
+  id: string;
+  path: string;
+  label: string;
+  icon: string;
+  breadcrumbs: readonly BreadcrumbItem[];
+  component: ComponentType;
+}
+
+function childBreadcrumb(label: string): readonly BreadcrumbItem[] {
+  return [{ label: OPERATOR_TITLE, to: OPERATOR_ROOT_PATH }, { label }];
+}
+
+export const operatorSections = [
+  {
+    id: "overview",
+    path: OPERATOR_ROOT_PATH,
+    label: "Overview",
+    icon: "home",
+    breadcrumbs: [{ label: OPERATOR_TITLE }],
+    component: OverviewSection,
+  },
+  {
+    id: "services",
+    path: "/operator/services",
+    label: "Services",
+    icon: "grid",
+    breadcrumbs: childBreadcrumb("Services"),
+    component: ServicesSection,
+  },
+  {
+    id: "workspaces",
+    path: "/operator/workspaces",
+    label: "Workspaces",
+    icon: "files",
+    breadcrumbs: childBreadcrumb("Workspaces"),
+    component: WorkspacesSection,
+  },
+  {
+    id: "sources",
+    path: "/operator/sources",
+    label: "Sources",
+    icon: "share",
+    breadcrumbs: childBreadcrumb("Sources"),
+    component: SourcesSection,
+  },
+  {
+    id: "gitops",
+    path: "/operator/gitops",
+    label: "GitOps",
+    icon: "activity",
+    breadcrumbs: childBreadcrumb("GitOps"),
+    component: GitOpsSection,
+  },
+  {
+    id: "operations",
+    path: "/operator/operations",
+    label: "Operations",
+    icon: "list",
+    breadcrumbs: childBreadcrumb("Operations"),
+    component: OperationsSection,
+  },
+  {
+    id: "templates",
+    path: "/operator/templates",
+    label: "Templates",
+    icon: "columns",
+    breadcrumbs: childBreadcrumb("Templates"),
+    component: TemplatesSection,
+  },
+  {
+    id: "secrets",
+    path: "/operator/secrets",
+    label: "Secrets",
+    icon: "auth",
+    breadcrumbs: childBreadcrumb("Secrets"),
+    component: SecretsSection,
+  },
+] satisfies readonly OperatorSection[];
+
+function sectionRouteName(section: OperatorSection): string {
+  return `${OPERATOR_ID}.${section.id}`;
+}
+
+function operatorSectionRoute(Section: ComponentType): ComponentType {
+  return function OperatorSectionRoute(): ReactNode {
+    return createElement(
+      OperatorTransportProvider,
+      null,
+      createElement(Section),
+    );
+  };
+}
+
+const operatorRoutes: readonly BaseAddonRoute[] = operatorSections.map((section) => ({
+  name: sectionRouteName(section),
+  path: section.path,
+  shell: "console",
+  title: OPERATOR_TITLE,
+  icon: OPERATOR_ID,
+  breadcrumbs: section.breadcrumbs,
+  component: operatorSectionRoute(section.component),
+}));
 
 // The framework renders a top-level menu item's `children` as the section
 // navigation (a `NavigationMenu` dropdown under "Operator") — so the sections live
 // in the chrome's own menu, not a hand-rolled tab bar inside the pages.
 const operatorMenu: readonly ChromeMenuItem[] = [
   {
-    id: "operator",
-    label: "Operator",
-    icon: "operator",
+    id: OPERATOR_ID,
+    label: OPERATOR_TITLE,
+    icon: OPERATOR_ID,
     group: "platform",
-    children: [
-      { id: "operator.overview", label: "Overview", to: "/operator", icon: "home" },
-      { id: "operator.services", label: "Services", to: "/operator/services", icon: "grid" },
-      { id: "operator.workspaces", label: "Workspaces", to: "/operator/workspaces", icon: "files" },
-      { id: "operator.sources", label: "Sources", to: "/operator/sources", icon: "share" },
-      { id: "operator.gitops", label: "GitOps", to: "/operator/gitops", icon: "activity" },
-      { id: "operator.operations", label: "Operations", to: "/operator/operations", icon: "list" },
-      { id: "operator.templates", label: "Templates", to: "/operator/templates", icon: "columns" },
-      { id: "operator.secrets", label: "Secrets", to: "/operator/secrets", icon: "auth" },
-    ],
+    children: operatorSections.map((section) => ({
+      id: sectionRouteName(section),
+      label: section.label,
+      to: section.path,
+      icon: section.icon,
+    })),
   },
 ];
 
-// TODO(G1/G2): add route `roles` + `hasRole` nav filtering once the shared
-// auth-roles primitives land. Until then the routes are UI-ungated; the server
-// REBAC gate (`operatorConnection` → null for non-admins) is the real boundary, and
-// the section panes simply show "not configured".
 const operator: BaseAddon = {
-  id: "operator",
-  routes: [
-    {
-      name: "operator.overview",
-      path: "/operator",
-      shell: "console",
-      title: "Operator",
-      icon: "operator",
-      breadcrumbs: [{ label: "Operator" }],
-      component: OperatorOverviewPage,
-    },
-    {
-      name: "operator.services",
-      path: "/operator/services",
-      shell: "console",
-      title: "Operator",
-      icon: "operator",
-      breadcrumbs: [{ label: "Operator", to: "/operator" }, { label: "Services" }],
-      component: OperatorServicesPage,
-    },
-    {
-      name: "operator.workspaces",
-      path: "/operator/workspaces",
-      shell: "console",
-      title: "Operator",
-      icon: "operator",
-      breadcrumbs: [{ label: "Operator", to: "/operator" }, { label: "Workspaces" }],
-      component: OperatorWorkspacesPage,
-    },
-    {
-      name: "operator.sources",
-      path: "/operator/sources",
-      shell: "console",
-      title: "Operator",
-      icon: "operator",
-      breadcrumbs: [{ label: "Operator", to: "/operator" }, { label: "Sources" }],
-      component: OperatorSourcesPage,
-    },
-    {
-      name: "operator.gitops",
-      path: "/operator/gitops",
-      shell: "console",
-      title: "Operator",
-      icon: "operator",
-      breadcrumbs: [{ label: "Operator", to: "/operator" }, { label: "GitOps" }],
-      component: OperatorGitOpsPage,
-    },
-    {
-      name: "operator.operations",
-      path: "/operator/operations",
-      shell: "console",
-      title: "Operator",
-      icon: "operator",
-      breadcrumbs: [{ label: "Operator", to: "/operator" }, { label: "Operations" }],
-      component: OperatorOperationsPage,
-    },
-    {
-      name: "operator.templates",
-      path: "/operator/templates",
-      shell: "console",
-      title: "Operator",
-      icon: "operator",
-      breadcrumbs: [{ label: "Operator", to: "/operator" }, { label: "Templates" }],
-      component: OperatorTemplatesPage,
-    },
-    {
-      name: "operator.secrets",
-      path: "/operator/secrets",
-      shell: "console",
-      title: "Operator",
-      icon: "operator",
-      breadcrumbs: [{ label: "Operator", to: "/operator" }, { label: "Secrets" }],
-      component: OperatorSecretsPage,
-    },
-  ],
+  id: OPERATOR_ID,
+  routes: operatorRoutes,
   menus: operatorMenu,
-  i18n: enOperatorBundle,
+  i18n: enOperatorBundleForSections(operatorSections),
   icons: { operator: Boxes },
 };
 

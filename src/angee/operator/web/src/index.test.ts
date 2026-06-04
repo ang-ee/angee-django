@@ -1,20 +1,11 @@
 import type { ChromeMenuItem } from "@angee/base";
 import { describe, expect, test } from "vitest";
 
-import operator from "./index";
+import operator, { operatorSections } from "./index";
 
 // The console's eight sections, in nav order. Routes and the menu sub-nav must
 // stay aligned to this list — a missing or extra entry is a wiring bug.
-const SECTION_PATHS = [
-  "/operator",
-  "/operator/services",
-  "/operator/workspaces",
-  "/operator/sources",
-  "/operator/gitops",
-  "/operator/operations",
-  "/operator/templates",
-  "/operator/secrets",
-];
+const SECTION_PATHS = operatorSections.map((section) => section.path);
 
 describe("operator addon manifest", () => {
   test("registers one console route per section, each with a component", () => {
