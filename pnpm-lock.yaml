@@ -39,6 +39,9 @@ importers:
       '@angee/sdk':
         specifier: workspace:*
         version: link:../../../../../../packages/sdk
+      date-fns:
+        specifier: ^4.1.0
+        version: 4.4.0
       lucide-react:
         specifier: ^1.17.0
         version: 1.17.0(react@19.2.6)

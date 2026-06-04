@@ -11,6 +11,7 @@ export { useBaseT, enBaseMessages } from "./i18n";
 // App composition root.
 export {
   createApp,
+  PassthroughChrome,
   type AngeeApp,
   type BaseAddon,
   type BaseAddonRoute,

@@ -133,76 +133,27 @@ const editableGroups = [
   },
 ] satisfies readonly PageGroupDescriptor[];
 
-const readOnlyTitleField = {
-  ...titleField,
+const readOnlyFields = editableFields.map((field) => ({
+  ...field,
   readOnly: true,
-} satisfies FormField;
-const readOnlyStatusField = {
-  ...statusField,
-  readOnly: true,
-} satisfies FormField;
-const readOnlyOwnerField = {
-  ...ownerField,
-  readOnly: true,
-} satisfies FormField;
-const readOnlyPriorityField = {
-  ...priorityField,
-  readOnly: true,
-} satisfies FormField;
-const readOnlyVisibilityField = {
-  ...visibilityField,
-  readOnly: true,
-} satisfies FormField;
-const readOnlyTagsField = {
-  ...tagsField,
-  readOnly: true,
-} satisfies FormField;
-const readOnlyCreatedAtField = {
-  ...createdAtField,
-  readOnly: true,
-} satisfies FormField;
-const readOnlyUpdatedAtField = {
-  ...updatedAtField,
-  readOnly: true,
-} satisfies FormField;
-const readOnlyWordsField = {
-  ...wordsField,
-  readOnly: true,
-} satisfies FormField;
-const readOnlyBodyField = {
-  ...bodyField,
-  readOnly: true,
-} satisfies FormField;
+})) satisfies readonly FormField[];
 
-const readOnlyFields = [
-  readOnlyTitleField,
-  readOnlyStatusField,
-  readOnlyOwnerField,
-  readOnlyPriorityField,
-  readOnlyVisibilityField,
-  readOnlyTagsField,
-  readOnlyCreatedAtField,
-  readOnlyUpdatedAtField,
-  readOnlyWordsField,
-  readOnlyBodyField,
-] satisfies readonly FormField[];
+const readOnlyFieldByName = new Map(
+  readOnlyFields.map((field) => [field.name, field]),
+);
 
-const readOnlyGroups = [
-  {
-    label: "Details",
-    columns: 2,
-    fields: [
-      readOnlyOwnerField,
-      readOnlyPriorityField,
-      readOnlyVisibilityField,
-      readOnlyCreatedAtField,
-      readOnlyUpdatedAtField,
-      readOnlyWordsField,
-      readOnlyTagsField,
-    ],
-    actions: [],
-  },
-] satisfies readonly PageGroupDescriptor[];
+const readOnlyGroups = editableGroups.map((group) => ({
+  ...group,
+  fields: group.fields.map(readOnlyFieldFor),
+})) satisfies readonly PageGroupDescriptor[];
+
+function readOnlyFieldFor(field: FormField): FormField {
+  const readOnlyField = readOnlyFieldByName.get(field.name);
+  if (!readOnlyField) {
+    throw new Error(`No read-only field derived for ${field.name}`);
+  }
+  return readOnlyField;
+}
 
 const storySchemas = {
   public: {

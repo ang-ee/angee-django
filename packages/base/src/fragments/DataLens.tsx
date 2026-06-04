@@ -8,8 +8,6 @@ import { InlineEmpty } from "./InlineEmpty";
 import { MetricStrip, type MetricTileValue } from "./MetricStrip";
 import { RailPanel } from "./RailPanel";
 
-// TODO: trim DataLens to the Storybook-rendered modes once that consumer is
-// visible in packages/base; keep the exported surface intact until then.
 type QueryStateSchema = Record<string, unknown>;
 type QueryStateValues<TSchema extends QueryStateSchema> = Partial<TSchema> &
   Record<string, unknown>;

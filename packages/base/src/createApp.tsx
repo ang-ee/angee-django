@@ -63,7 +63,7 @@ export interface ShellChromeProps {
 /** A shell registered with `createApp`: the chrome component + auth policy. */
 export interface ShellConfig {
   /** Chrome wrapping route bodies (e.g. `ConsoleShell`). */
-  chrome: ComponentType<ShellChromeProps>;
+  chrome?: ComponentType<ShellChromeProps>;
   /** Gate routes behind sign-in. Defaults to `true` for every shell but `public`. */
   requireAuth?: boolean;
 }
@@ -298,7 +298,7 @@ function FullPageStatus({ message }: { message: string }): ReactNode {
   );
 }
 
-function PassthroughChrome({ children }: { children: ReactNode }): ReactNode {
+export function PassthroughChrome({ children }: ShellChromeProps): ReactNode {
   return <>{children}</>;
 }
 

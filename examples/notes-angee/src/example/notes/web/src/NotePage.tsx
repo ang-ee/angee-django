@@ -11,6 +11,7 @@ import {
 } from "@angee/base";
 import { useAuthoredQuery } from "@angee/sdk";
 import { useNavigate, useParams } from "@tanstack/react-router";
+import { formatDistanceToNow } from "date-fns";
 
 import { NOTE_STATUS_OPTIONS, NOTE_STATUS_TONES } from "./note-status";
 
@@ -354,24 +355,7 @@ function RailEmptyState({
 function relativeTime(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
-  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
-  const units: readonly [Intl.RelativeTimeFormatUnit, number][] = [
-    ["year", 60 * 60 * 24 * 365],
-    ["month", 60 * 60 * 24 * 30],
-    ["week", 60 * 60 * 24 * 7],
-    ["day", 60 * 60 * 24],
-    ["hour", 60 * 60],
-    ["minute", 60],
-  ];
-  for (const [unit, seconds] of units) {
-    if (elapsedSeconds >= seconds) {
-      return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(
-        -Math.floor(elapsedSeconds / seconds),
-        unit,
-      );
-    }
-  }
-  return "just now";
+  return formatDistanceToNow(date, { addSuffix: true });
 }
 
 function excerpt(value: string): string {

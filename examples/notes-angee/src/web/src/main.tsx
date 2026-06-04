@@ -30,7 +30,7 @@ createApp({
   addons: [notes, authAddon, operator],
   shells: {
     console: { chrome: ConsoleShell },
-    public: { chrome: ({ children }) => children, requireAuth: false },
+    public: {},
   },
   schemas: {
     public: { url: "/graphql/public/", cache: cacheConfigFromSDL(publicSDL) },

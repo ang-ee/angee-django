@@ -121,7 +121,18 @@ const preview: Preview = {
     controls: { expanded: true, matchers: { color: /(background|color)$/i } },
     options: {
       storySort: {
-        order: ["Tokens", "Primitives", "Chrome", "Widgets", "Toolbars", "Shell", "Scenes", "Reference"],
+        order: [
+          "Primitives",
+          "Chrome",
+          "Shell",
+          "Layouts",
+          "Page",
+          "Views",
+          "Forms",
+          "Widgets",
+          "Fragments",
+          "Feedback",
+        ],
       },
     },
   },
