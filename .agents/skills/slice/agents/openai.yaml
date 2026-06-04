@@ -1,0 +1,6 @@
+interface:
+  display_name: "Slice"
+  short_description: "Land one change as a disciplined slice: diagnose, build, adversarial review, render-verify, record."
+  default_prompt: "Land this change as a disciplined slice — diagnose to root cause, delegate the build to codex, gate with adversarial review, prove it by rendering the live app, and defer what's the human's call."
+policy:
+  allow_implicit_invocation: false
