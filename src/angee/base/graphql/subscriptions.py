@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import strawberry
 from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 from django.db import models
-from rebac import SubjectRef, current_actor
+from rebac import current_actor
 
 from angee.base.access import ChangeReadGate
 from angee.base.graphql.events import ChangeEvent
@@ -33,11 +33,11 @@ def changes(model: type[models.Model], *, field: str) -> type:
         actor = current_actor()
         if actor is None:
             return
+        # The gate resolves this model+actor's authorization facts once; each
+        # payload is filtered (and redacted) through it in the sync thread.
+        gate = await sync_to_async(ChangeReadGate, thread_sensitive=True)(model, actor)
         async for payload in _subscribe(model):
-            event = await sync_to_async(
-                _gate_event,
-                thread_sensitive=True,
-            )(model, actor, payload)
+            event = await sync_to_async(gate.filter, thread_sensitive=True)(payload)
             if event is not None:
                 yield event
 
@@ -67,18 +67,3 @@ async def _subscribe(
                 yield payload
     finally:
         await layer.group_discard(group, channel)
-
-
-def _gate_event(
-    model: type[models.Model],
-    actor: SubjectRef,
-    payload: Mapping[str, Any],
-) -> ChangeEvent | None:
-    """Return a read-gated event for ``payload``."""
-
-    filtered = ChangeReadGate(model, actor).filter(payload)
-    if filtered is None:
-        return None
-    if isinstance(filtered, ChangeEvent):
-        return filtered
-    return ChangeEvent.from_payload(filtered)

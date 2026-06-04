@@ -45,10 +45,12 @@ class ComposeConfig(AppConfig):
         """
 
         super().import_models()
-        # Deferred: phase 2 runs after the registry is populated, so the
-        # abstract source models this introspects are safe to import now.
-        # ``from_settings`` owns the ANGEE_RUNTIME_DIR contract and raises if
-        # it is missing — no second guard here.
+        # Deferred (phase-1 AppConfig rule): importing AngeeRuntime at module top
+        # would transitively import model classes (angee.resources.models.Resource,
+        # AngeeModel) during phase-1 AppConfig load, before the registry is ready.
+        # By phase 2 the registry is populated, so this import — and the abstract
+        # source models it introspects — is safe. ``from_settings`` owns the
+        # ANGEE_RUNTIME_DIR contract and raises if it is missing.
         from angee.compose.runtime import AngeeRuntime
 
         AngeeRuntime.from_settings().emit_if_stale()

@@ -10,7 +10,7 @@ from django.db.models.utils import make_model_tuple
 from rebac import RebacMixin
 from rebac.managers import RebacManager, RebacQuerySet
 
-from angee.base.mixins import TimestampMixin
+from angee.base.mixins import SqidMixin, TimestampMixin
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
@@ -130,15 +130,9 @@ class AngeeModel(TimestampMixin, RebacMixin):
     def public_id_lookup(cls, value: str) -> dict[str, Any]:
         """Return the Django lookup for this model's public identifier."""
 
-        if _has_model_field(cls, "sqid"):
+        if issubclass(cls, SqidMixin):
             return {"sqid": value}
         return {cls._meta.pk.name: value}
-
-    @classmethod
-    def _public_id_lookup(cls, value: str) -> dict[str, Any]:
-        """Return the Django lookup for this model's public identifier."""
-
-        return cls.public_id_lookup(value)
 
 
 def instance_from_public_id(model: type[_ModelT], value: str) -> _ModelT | None:
@@ -176,17 +170,9 @@ def _is_contributed_extension_base(value: type) -> bool:
     return bool(meta.abstract)
 
 
-def _has_model_field(model: type[models.Model], name: str) -> bool:
-    """Return whether ``model`` exposes a concrete or private field."""
-
-    return any(
-        field.name == name or field.attname == name for field in (*model._meta.fields, *model._meta.private_fields)
-    )
-
-
 def _public_id_value(instance: models.Model) -> Any:
     """Return the raw public identifier value owned by ``instance``."""
 
-    if _has_model_field(type(instance), "sqid"):
-        return getattr(instance, "sqid")
+    if isinstance(instance, SqidMixin):
+        return instance.sqid
     return instance.pk

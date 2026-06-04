@@ -63,78 +63,6 @@ def test_changes_builds_a_named_subscription_field() -> None:
     assert Group in signals._connected
 
 
-def test_gate_event_passes_through_non_rebac_models(monkeypatch) -> None:
-    """A model without a REBAC resource type streams unfiltered."""
-
-    class Gate:
-        """Gate stub that returns the payload unchanged."""
-
-        def __init__(self, model: object, actor: object) -> None:
-            self.model = model
-            self.actor = actor
-
-        def filter(self, payload: dict[str, object]) -> ChangeEvent:
-            return ChangeEvent.from_payload(payload)
-
-    monkeypatch.setattr(subscriptions, "ChangeReadGate", Gate)
-
-    event = subscriptions._gate_event(Group, ANON, _payload())
-
-    assert isinstance(event, ChangeEvent)
-    assert event.action == "update"
-    assert event.changed_fields == ["name"]
-
-
-def test_gate_event_drops_unreadable_rows(monkeypatch) -> None:
-    """An event for a row the actor cannot read is suppressed."""
-
-    class Gate:
-        """Gate stub that drops every payload."""
-
-        def __init__(self, model: object, actor: object) -> None:
-            self.model = model
-            self.actor = actor
-
-        def filter(self, payload: dict[str, object]) -> None:
-            return None
-
-    monkeypatch.setattr(subscriptions, "ChangeReadGate", Gate)
-
-    assert subscriptions._gate_event(Group, ANON, _payload()) is None
-
-
-def test_gate_event_redacts_denied_fields(monkeypatch) -> None:
-    """Field-gated values the actor cannot read are removed from the event."""
-
-    class Gate:
-        """Gate stub that redacts the secret field."""
-
-        def __init__(self, model: object, actor: object) -> None:
-            self.model = model
-            self.actor = actor
-
-        def filter(self, payload: dict[str, object]) -> ChangeEvent:
-            redacted = dict(payload)
-            redacted["changed_fields"] = ["name"]
-            redacted["changed_values"] = {"name": "x"}
-            return ChangeEvent.from_payload(redacted)
-
-    monkeypatch.setattr(subscriptions, "ChangeReadGate", Gate)
-
-    event = subscriptions._gate_event(
-        Group,
-        ANON,
-        _payload(
-            changed_fields=["name", "secret"],
-            changed_values={"name": "x", "secret": "y"},
-        ),
-    )
-
-    assert event is not None
-    assert event.changed_fields == ["name"]
-    assert event.changed_values == {"name": "x"}
-
-
 def test_subscribe_yields_broadcast_payloads(monkeypatch) -> None:
     """A payload sent to the model group reaches an active subscriber."""
 
@@ -161,9 +89,9 @@ def test_subscribe_yields_broadcast_payloads(monkeypatch) -> None:
 def test_subscription_resolver_gates_events_through_sync_adapter(
     monkeypatch,
 ) -> None:
-    """Subscription gating runs through the sync adapter."""
+    """Gate construction and each filter are offloaded to the sync adapter."""
 
-    calls: list[bool] = []
+    thread_flags: list[bool] = []
 
     async def subscribe(model: type[Group]):
         """Yield one payload without touching the channel layer."""
@@ -171,41 +99,32 @@ def test_subscription_resolver_gates_events_through_sync_adapter(
         assert model is Group
         yield _payload(id="9")
 
-    def gate_event(
-        model: type[Group],
-        actor: object,
-        payload: dict[str, object],
-    ) -> ChangeEvent:
-        """Return a visible event."""
+    class Gate:
+        """Gate stub that returns a visible event for any payload."""
 
-        assert model is Group
-        assert actor == ANON
-        return ChangeEvent.from_payload(payload)
+        def __init__(self, model: type[Group], actor: object) -> None:
+            assert model is Group
+            assert actor == ANON
+
+        def filter(self, payload: dict[str, object]) -> ChangeEvent:
+            return ChangeEvent.from_payload(payload)
 
     def sync_adapter(
-        func: Callable[[type[Group], object, dict[str, object]], ChangeEvent],
+        func: Callable[..., object],
         *,
         thread_sensitive: bool,
-    ) -> Callable[
-        [type[Group], object, dict[str, object]],
-        Awaitable[object],
-    ]:
-        """Record that the resolver offloads the sync gate."""
+    ) -> Callable[..., Awaitable[object]]:
+        """Record each offloaded call's thread-sensitivity, then run it."""
 
-        assert func is gate_event
-        calls.append(thread_sensitive)
+        thread_flags.append(thread_sensitive)
 
-        async def wrapper(
-            model: type[Group],
-            actor: object,
-            payload: dict[str, object],
-        ) -> object:
-            return func(model, actor, payload)
+        async def wrapper(*args: object) -> object:
+            return func(*args)
 
         return wrapper
 
     monkeypatch.setattr(subscriptions, "_subscribe", subscribe)
-    monkeypatch.setattr(subscriptions, "_gate_event", gate_event)
+    monkeypatch.setattr(subscriptions, "ChangeReadGate", Gate)
     monkeypatch.setattr(
         subscriptions,
         "sync_to_async",
@@ -225,7 +144,8 @@ def test_subscription_resolver_gates_events_through_sync_adapter(
 
     events = asyncio.run(scenario())
 
-    assert calls == [True]
+    # One gate construction + one payload filter, both thread-sensitive.
+    assert thread_flags == [True, True]
     assert [event.id for event in events] == [strawberry.ID("9")]
 
 
@@ -240,19 +160,19 @@ def test_subscription_resolver_uses_current_actor(monkeypatch) -> None:
         assert model is Group
         yield _payload(id="10")
 
-    def gate_event(
-        model: type[Group],
-        actor: object,
-        payload: dict[str, object],
-    ) -> ChangeEvent:
-        """Record the actor used by the subscription gate."""
+    class Gate:
+        """Gate stub that records the actor it gates for."""
 
-        assert model is Group
-        seen.append((actor, current_actor()))
-        return ChangeEvent.from_payload(payload)
+        def __init__(self, model: type[Group], actor: object) -> None:
+            assert model is Group
+            self.actor = actor
+
+        def filter(self, payload: dict[str, object]) -> ChangeEvent:
+            seen.append((self.actor, current_actor()))
+            return ChangeEvent.from_payload(payload)
 
     monkeypatch.setattr(subscriptions, "_subscribe", subscribe)
-    monkeypatch.setattr(subscriptions, "_gate_event", gate_event)
+    monkeypatch.setattr(subscriptions, "ChangeReadGate", Gate)
     surface = changes(Group, field="groupChanged")
     resolver = _subscription_resolver(surface)
 
@@ -283,18 +203,18 @@ def test_subscription_resolver_denies_without_current_actor(
         assert model is Group
         yield _payload(id="11")
 
-    def gate_event(
-        model: type[Group],
-        actor: object,
-        payload: dict[str, object],
-    ) -> ChangeEvent:
-        """Fail if no-actor subscriptions reach row gating."""
+    class Gate:
+        """Gate stub that fails the test if no-actor subscriptions reach it."""
 
-        calls.append((model, actor, payload))
-        return ChangeEvent.from_payload(payload)
+        def __init__(self, model: type[Group], actor: object) -> None:
+            self.actor = actor
+
+        def filter(self, payload: dict[str, object]) -> ChangeEvent:
+            calls.append(payload)
+            return ChangeEvent.from_payload(payload)
 
     monkeypatch.setattr(subscriptions, "_subscribe", subscribe)
-    monkeypatch.setattr(subscriptions, "_gate_event", gate_event)
+    monkeypatch.setattr(subscriptions, "ChangeReadGate", Gate)
     surface = changes(Group, field="groupChanged")
     resolver = _subscription_resolver(surface)
 
