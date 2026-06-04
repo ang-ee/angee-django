@@ -13,7 +13,7 @@ not flagged.
   rule: backend/guidelines.md "Imports go at the top of the module ... Within `src/angee` these are the only function-local imports allowed — phase-1 deferrals and `TYPE_CHECKING` blocks."
   finding: `from graphql import ...` is deferred inside `introspect_sdl` with no marker; `graphql` is a hard dep (via `strawberry-graphql>=0.270`), so it is neither optional-at-runtime nor a phase-1 deferral.
   fix: Hoist `from graphql import build_client_schema, get_introspection_query, print_schema` to module top.
-  status: open
+  status: fixed
 
 - id: operator-002
   loc: src/angee/operator/web/src/roles.ts:1
@@ -22,7 +22,7 @@ not flagged.
   rule: AGENTS.md "Prefer deletion to abstraction"; guidelines.md "Avoid Red Flags / The code is bigger instead of smarter"; frontend/guidelines.md "Client-side gates are UX only. The server is the authorization boundary."
   finding: `roles.ts` (OPERATOR_ADMIN_ROLES et al.) is imported nowhere; it is speculative, TODO(G1/G2)-gated scaffolding for nav role-gating that does not exist yet, while the server REBAC gate is already the boundary.
   fix: Delete `roles.ts`; reintroduce the constants beside the role-filter primitive when G1/G2 actually lands.
-  status: open
+  status: fixed
 
 - id: operator-003
   loc: src/angee/operator/web/src/data/fixtures.ts:1
@@ -31,7 +31,7 @@ not flagged.
   rule: AGENTS.md "Prefer deletion to abstraction"; guidelines.md "Avoid Red Flags / The code is bigger instead of smarter."
   finding: `fixtures.ts` (~260 lines of sample snapshot/service/source/etc data) is imported by no story, test, or runtime module in the repo; there are no `*.stories.*` files in `operator/web`, so the fixtures it exists to feed do not exist.
   fix: Delete `fixtures.ts` until the Storybook stories that consume it are added in the same change; per docs the example/story is the documentation, but only when it is wired.
-  status: open
+  status: fixed
 
 - id: operator-004
   loc: src/angee/operator/web/src/index.ts:42
@@ -40,7 +40,7 @@ not flagged.
   rule: guidelines.md "Avoid Red Flags / The code is bigger instead of smarter" + "Don't Repeat Yourself"; AGENTS.md DRY "Same shape in three places: extract the smallest boring primitive."
   finding: The eight console sections are enumerated four times in parallel — `routes[]` (8 near-identical blocks differing only by name/path/breadcrumb), `menus.children[]`, the `enOperatorBundle` titles, and `index.test.ts` `SECTION_PATHS` — so adding a section means editing four hand-synced inventories.
   fix: Derive `routes` and `menus.children` from one ordered section table (id, path, label, icon) so the routes/menu pairing and breadcrumbs are computed once.
-  status: open
+  status: fixed
 
 - id: operator-005
   loc: src/angee/operator/web/src/views/pages.tsx:14
@@ -49,7 +49,7 @@ not flagged.
   rule: backend/guidelines.md "A wrapper must prove it adds a real new concept. If it only forwards ... delete it." (Django-Native Rule, applied as the cross-stack thin-wrapper principle); frontend/guidelines.md "Use shared page, view, form, table, widget, and shell primitives before adding new local state."
   finding: `pages.tsx` exists only to wrap each section in `OperatorSectionFrame`, and `OperatorSectionFrame` itself only forwards `children` into `OperatorTransportProvider` (operator-section-frame adds no state, nav, or layout). Two indirection layers stand between the route and the section for one provider wrap.
   fix: Have `index.ts` reference the section components directly and mount `OperatorTransportProvider` once at the console-shell level (or collapse `OperatorSectionFrame` into the route component), removing `pages.tsx`'s `framed()` factory and the empty frame.
-  status: open
+  status: fixed
 
 ## Adjudicated, NOT findings (recall-biased scanner candidates cleared)
 

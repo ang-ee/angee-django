@@ -21,7 +21,7 @@ rule-permitted phase-1 deferral, not a violation. Findings below are minor.
   rule: docs/backend/guidelines.md L104-117 "Mark such a deferral with a comment naming the reason" (phase-1 AppConfig deferral exception)
   finding: The phase-1 deferral of `from angee.compose.runtime import AngeeRuntime` is itself correct (hoisting pulls `angee.resources.models.Resource`, a model class, into the phase-1 import of the AppConfig module), but the comment names the wrong reason — it explains why introspection is safe in phase 2, not why importing AngeeRuntime must be deferred (its transitive model imports).
   fix: Reword the comment to state the actual deferral reason: importing AngeeRuntime at module top would transitively import model classes (`Resource`/`AngeeModel`) during phase-1 AppConfig load, before the registry is ready.
-  status: open
+  status: fixed
 
 - id: compose-002
   loc: src/angee/compose/runtime.py:389
@@ -30,7 +30,8 @@ rule-permitted phase-1 deferral, not a violation. Findings below are minor.
   rule: AGENTS.md "Keep one source of truth per fact"; docs/backend/guidelines.md L80-92 (find the owner)
   finding: `_ensure_cleanable` re-reads `settings.ANGEE_RUNTIME_DIR` to assert `self.runtime_dir` equals the configured dir, duplicating the settings read that `from_settings` (L78) already owns; an instance built via `from_addons`/`from_settings` already holds the authoritative `runtime_dir`, so the re-read is a second decode of the same fact rather than a property of the object.
   fix: Drop the re-read guard (or move the "is this the configured dir?" check to construction so the instance is trusted thereafter); keep one owner of the ANGEE_RUNTIME_DIR fact — `from_settings`.
-  status: open
+  status: adjudicated-keep
+  resolution: Keep. `_ensure_cleanable` gates the destructive `clean`/`reset`. AGENTS.md mandates "a clean/reset command may delete only the configured generated runtime directory, AND only after verifying Angee's generated sentinel." The settings re-read IS the "configured dir" half of that mandate, verified at the deletion gate — intentional defense-in-depth on an irreversible op, not a redundant decode. Dropping it would violate the higher clean/reset rule.
 
 - id: compose-003
   loc: src/angee/compose/runtime.py:496
@@ -39,4 +40,5 @@ rule-permitted phase-1 deferral, not a violation. Findings below are minor.
   rule: docs/backend/guidelines.md L82-92 "Put behavior on the object that owns the shape ... ask `model._meta` rather than re-decoding model shape"; find-the-owner
   finding: `_history_excluded_fields` inspects each field's `.concrete`/`.is_relation`/`.auto_created` shape from outside to decide what simple-history cannot mirror — a per-field decision the composer decodes rather than asks an owner. Borderline: there is no Django/model owner for "fields simple-history excludes," the predicate is narrow and documented, and emission must run before `models_ready`, so this may be the smaller native shape rather than a real violation.
   fix: If the rule ever applies to more than one field kind, hang the predicate on the field (or a small named classifier) so the composer asks the field instead of branching on its attributes; otherwise leave as-is and treat this as monitored, not actionable.
-  status: open
+  status: adjudicated-keep
+  resolution: Keep, per the finding's own hedge — there is no Django/model owner for "fields simple-history excludes," the predicate is narrow and runs before `models_ready`, so this is the smaller native shape. Monitored; revisit only if the rule grows to a second field kind.

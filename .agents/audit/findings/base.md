@@ -11,7 +11,7 @@ layering is clean: base imports neither `angee.compose` nor `angee.resources`.
   rule: docs/backend/guidelines.md "A wrapper must prove it adds a real new concept. If it only forwards, normalizes, or renames a Django object, delete it." + AGENTS.md "Prefer deletion to abstraction."
   finding: `ChangeReadGate.filter` is typed `ChangeEvent | None`, so in `_gate_event` the `isinstance(filtered, ChangeEvent)` is always true and the trailing `ChangeEvent.from_payload(filtered)` fallback is unreachable; the function then only forwards `filter()`.
   fix: Delete `_gate_event` and call `ChangeReadGate(model, actor).filter(payload)` directly inside the `changes()` resolver (drop the dead isinstance/fallback).
-  status: open
+  status: fixed
 
 - id: base-002
   loc: src/angee/base/deletion.py:142
@@ -19,7 +19,7 @@ layering is clean: base imports neither `angee.compose` nor `angee.resources`.
   rule: docs/backend/guidelines.md "A dataclass that only holds fields while a sibling module mutates and emits from it is a missing class." + "When several functions take the same object and read, transform, or emit from it, that object should be a class and those functions its methods."
   finding: `_PreviewRows` is a field-only dataclass whose state is read from outside by `_group_node`, and the node tree is built by loose `_root_node`/`_group_node`/`_leaf_node` that read instance/model shape and emit `DeletionPreviewNode` — node construction has no home on `DeletionPreviewNode`.
   fix: Give `DeletionPreviewNode` classmethod factories (`for_root`/`for_group`/`for_leaf`) and let `_PreviewRows` own the count/cap derivation it currently exposes for `_group_node`; keep only genuine `Collector` orchestration loose.
-  status: open
+  status: fixed
 
 - id: base-003
   loc: src/angee/base/models.py:110
@@ -27,7 +27,7 @@ layering is clean: base imports neither `angee.compose` nor `angee.resources`.
   rule: AGENTS.md "Keep one source of truth per fact." + docs/backend/guidelines.md "ask `model._meta` ... rather than re-decoding model shape" / Find the owner.
   finding: The "the public id lives on the `sqid` field" fact is encoded twice via `_has_model_field(cls, "sqid")` — once in `_public_id_lookup` (line 110) and once in `_public_id_value` (line 161) — re-decoding model shape from outside instead of asking the owner (`SqidMixin`).
   fix: Centralize the sqid-presence fact once (e.g. `isinstance(self, SqidMixin)` for the AngeeModel paths) and have lookup and value read that single source; keep one shared field-probe only for the non-AngeeModel loose adapters.
-  status: open
+  status: fixed
 
 ## Adjudicated scanner hits — not violations
 
