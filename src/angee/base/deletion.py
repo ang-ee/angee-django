@@ -49,6 +49,66 @@ class DeletionPreviewNode:
     children: tuple[DeletionPreviewNode, ...]
     """Child nodes below this preview node."""
 
+    @classmethod
+    def from_row(cls, instance: models.Model) -> DeletionPreviewNode:
+        """Return a childless leaf node for one deleted row."""
+
+        return cls(
+            label=str(instance._meta.verbose_name),
+            object_label=str(instance),
+            object_id=_object_id(instance),
+            children=(),
+        )
+
+    @classmethod
+    def from_group(cls, model: type[models.Model], rows: _PreviewRows) -> DeletionPreviewNode:
+        """Return a grouped child node summarizing deleted rows of one model."""
+
+        ordered_rows = sorted(rows.visible_rows, key=lambda row: row.pk)
+        plural = str(model._meta.verbose_name_plural)
+        leaves = tuple(cls.from_row(row) for row in ordered_rows[:_PREVIEW_LEAF_LIMIT])
+        hidden_count = max(0, rows.total_count - rows.visible_count)
+        capped_count = max(0, rows.visible_count - len(leaves))
+        if hidden_count:
+            overflow_label = f"{hidden_count + capped_count} more records"
+        elif capped_count:
+            overflow_label = f"… and {capped_count} more"
+        else:
+            overflow_label = ""
+        if overflow_label:
+            leaves = (*leaves, cls(label="", object_label=overflow_label, object_id=None, children=()))
+        return cls(
+            label=plural,
+            object_label=f"{rows.total_count} {plural}",
+            object_id=None,
+            children=leaves,
+        )
+
+    @classmethod
+    def from_target(
+        cls,
+        instance: models.Model,
+        collector: Collector,
+        fast_deletes: tuple[_FastDelete, ...],
+        actor: Any | None,
+    ) -> DeletionPreviewNode:
+        """Return the root node (the deletion target) with its grouped children."""
+
+        model = type(instance)
+        groups = _PreviewRows.by_model(instance, collector, fast_deletes, actor)
+        return cls(
+            label=str(model._meta.verbose_name),
+            object_label=str(instance),
+            object_id=_object_id(instance),
+            children=tuple(
+                cls.from_group(group_model, preview_rows)
+                for group_model, preview_rows in sorted(
+                    groups.items(),
+                    key=lambda item: (str(item[0]._meta.verbose_name_plural), item[0]._meta.label_lower),
+                )
+            ),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class DeletionPreview:
@@ -91,7 +151,12 @@ class DeletionPreview:
         fast_deletes: tuple[_FastDelete, ...] = tuple(
             (queryset, queryset.count()) for queryset in collector.fast_deletes
         )
-        root = _root_node(instance, collector, fast_deletes, actor if actor is not None else current_actor())
+        root = DeletionPreviewNode.from_target(
+            instance,
+            collector,
+            fast_deletes,
+            actor if actor is not None else current_actor(),
+        )
         deleted_counts: dict[type[models.Model], int] = {model: len(rows) for model, rows in collector.data.items()}
         for queryset, count in fast_deletes:
             deleted_counts[queryset.model] = deleted_counts.get(queryset.model, 0) + count
@@ -106,6 +171,107 @@ class DeletionPreview:
             updated=_groups(updated_counts),
             blocked=blocked,
             root=root,
+        )
+
+
+@dataclass(slots=True)
+class _PreviewRows:
+    """Access-scoped visible/count-only row state for one preview tree group."""
+
+    total_count: int = 0
+    visible_count: int = 0
+    visible_rows: list[models.Model] = field(default_factory=list)
+
+    def add(
+        self,
+        *,
+        total_count: int,
+        visible_count: int,
+        visible_rows: Iterable[models.Model],
+    ) -> None:
+        """Merge one collector source into this model group."""
+
+        self.total_count += total_count
+        self.visible_count += visible_count
+        self.visible_rows.extend(visible_rows)
+
+    @classmethod
+    def by_model(
+        cls,
+        root: models.Model,
+        collector: Collector,
+        fast_deletes: tuple[_FastDelete, ...],
+        actor: Any | None,
+    ) -> dict[type[models.Model], _PreviewRows]:
+        """Return deleted tree rows grouped by model, excluding ``root``."""
+
+        groups: dict[type[models.Model], _PreviewRows] = {}
+        for model, rows in collector.data.items():
+            preview = cls.from_collected(root, model, rows, actor)
+            if preview.total_count:
+                groups.setdefault(model, cls()).add(
+                    total_count=preview.total_count,
+                    visible_count=preview.visible_count,
+                    visible_rows=preview.visible_rows,
+                )
+        for queryset, total_count in fast_deletes:
+            preview = cls.from_fast_delete(queryset, total_count, actor)
+            if preview.total_count:
+                groups.setdefault(queryset.model, cls()).add(
+                    total_count=preview.total_count,
+                    visible_count=preview.visible_count,
+                    visible_rows=preview.visible_rows,
+                )
+        return {model: rows for model, rows in groups.items() if rows.total_count}
+
+    @classmethod
+    def from_collected(
+        cls,
+        root: models.Model,
+        model: type[models.Model],
+        rows: Iterable[models.Model],
+        actor: Any | None,
+    ) -> _PreviewRows:
+        """Return access-scoped preview rows from collector-materialized rows."""
+
+        collected = [row for row in rows if not _is_root(root, row)]
+        if not collected:
+            return cls()
+        scoped = _read_scoped_queryset(model, actor)
+        if scoped is None:
+            if _requires_read_scope(model):
+                return cls(total_count=len(collected), visible_count=0)
+            return cls(total_count=len(collected), visible_count=len(collected), visible_rows=collected)
+        visible_pks = set(scoped.filter(pk__in=[row.pk for row in collected]).values_list("pk", flat=True))
+        visible_rows = [row for row in collected if row.pk in visible_pks]
+        return cls(total_count=len(collected), visible_count=len(visible_pks), visible_rows=visible_rows)
+
+    @classmethod
+    def from_fast_delete(
+        cls,
+        queryset: models.QuerySet[models.Model],
+        total_count: int,
+        actor: Any | None,
+    ) -> _PreviewRows:
+        """Return access-scoped preview rows from one fast-delete queryset."""
+
+        if total_count == 0:
+            return cls()
+        scoped = _read_scoped_queryset(queryset.model, actor)
+        if scoped is None:
+            if _requires_read_scope(queryset.model):
+                return cls(total_count=total_count, visible_count=0)
+            return cls(
+                total_count=total_count,
+                visible_count=total_count,
+                visible_rows=list(_order_by_pk(queryset)[: _PREVIEW_LEAF_LIMIT + 1]),
+            )
+        visible_queryset = scoped.filter(pk__in=models.Subquery(queryset.order_by().values("pk")))
+        visible_count = visible_queryset.count()
+        return cls(
+            total_count=total_count,
+            visible_count=visible_count,
+            visible_rows=list(_order_by_pk(visible_queryset)[: _PREVIEW_LEAF_LIMIT + 1]),
         )
 
 
@@ -137,185 +303,6 @@ def _count_by_model(
         model = type(instance)
         counts[model] = counts.get(model, 0) + 1
     return counts
-
-
-@dataclass(slots=True)
-class _PreviewRows:
-    """Visible and count-only row state for one preview tree group."""
-
-    total_count: int = 0
-    visible_count: int = 0
-    visible_rows: list[models.Model] = field(default_factory=list)
-
-    def add(
-        self,
-        *,
-        total_count: int,
-        visible_count: int,
-        visible_rows: Iterable[models.Model],
-    ) -> None:
-        """Merge one collector source into this model group."""
-
-        self.total_count += total_count
-        self.visible_count += visible_count
-        self.visible_rows.extend(visible_rows)
-
-
-def _root_node(
-    instance: models.Model,
-    collector: Collector,
-    fast_deletes: tuple[_FastDelete, ...],
-    actor: Any | None,
-) -> DeletionPreviewNode:
-    """Return the root node for a collector-backed deletion preview."""
-
-    model = type(instance)
-    return DeletionPreviewNode(
-        label=str(model._meta.verbose_name),
-        object_label=str(instance),
-        object_id=_object_id(instance),
-        children=tuple(
-            _group_node(group_model, preview_rows)
-            for group_model, preview_rows in sorted(
-                _deleted_rows_by_model(instance, collector, fast_deletes, actor).items(),
-                key=lambda item: (str(item[0]._meta.verbose_name_plural), item[0]._meta.label_lower),
-            )
-        ),
-    )
-
-
-def _deleted_rows_by_model(
-    root: models.Model,
-    collector: Collector,
-    fast_deletes: tuple[_FastDelete, ...],
-    actor: Any | None,
-) -> dict[type[models.Model], _PreviewRows]:
-    """Return deleted tree rows grouped by model, excluding ``root``."""
-
-    groups: dict[type[models.Model], _PreviewRows] = {}
-    for model, rows in collector.data.items():
-        preview = _collector_preview_rows(root, model, rows, actor)
-        if preview.total_count:
-            groups.setdefault(model, _PreviewRows()).add(
-                total_count=preview.total_count,
-                visible_count=preview.visible_count,
-                visible_rows=preview.visible_rows,
-            )
-    for queryset, total_count in fast_deletes:
-        preview = _fast_delete_preview_rows(queryset, total_count, actor)
-        if preview.total_count:
-            groups.setdefault(queryset.model, _PreviewRows()).add(
-                total_count=preview.total_count,
-                visible_count=preview.visible_count,
-                visible_rows=preview.visible_rows,
-            )
-    return {model: rows for model, rows in groups.items() if rows.total_count}
-
-
-def _collector_preview_rows(
-    root: models.Model,
-    model: type[models.Model],
-    rows: Iterable[models.Model],
-    actor: Any | None,
-) -> _PreviewRows:
-    """Return access-scoped preview rows from collector materialized rows."""
-
-    collected = [row for row in rows if not _is_root(root, row)]
-    if not collected:
-        return _PreviewRows()
-    scoped = _read_scoped_queryset(model, actor)
-    if scoped is None:
-        if _requires_read_scope(model):
-            return _PreviewRows(total_count=len(collected), visible_count=0)
-        return _PreviewRows(
-            total_count=len(collected),
-            visible_count=len(collected),
-            visible_rows=collected,
-        )
-    visible_pks = set(scoped.filter(pk__in=[row.pk for row in collected]).values_list("pk", flat=True))
-    visible_rows = [row for row in collected if row.pk in visible_pks]
-    return _PreviewRows(
-        total_count=len(collected),
-        visible_count=len(visible_pks),
-        visible_rows=visible_rows,
-    )
-
-
-def _fast_delete_preview_rows(
-    queryset: models.QuerySet[models.Model],
-    total_count: int,
-    actor: Any | None,
-) -> _PreviewRows:
-    """Return access-scoped preview rows from one fast-delete queryset."""
-
-    if total_count == 0:
-        return _PreviewRows()
-    scoped = _read_scoped_queryset(queryset.model, actor)
-    if scoped is None:
-        if _requires_read_scope(queryset.model):
-            return _PreviewRows(total_count=total_count, visible_count=0)
-        return _PreviewRows(
-            total_count=total_count,
-            visible_count=total_count,
-            visible_rows=list(_order_by_pk(queryset)[: _PREVIEW_LEAF_LIMIT + 1]),
-        )
-    visible_queryset = scoped.filter(pk__in=models.Subquery(queryset.order_by().values("pk")))
-    visible_count = visible_queryset.count()
-    return _PreviewRows(
-        total_count=total_count,
-        visible_count=visible_count,
-        visible_rows=list(_order_by_pk(visible_queryset)[: _PREVIEW_LEAF_LIMIT + 1]),
-    )
-
-
-def _group_node(
-    model: type[models.Model],
-    rows: _PreviewRows,
-) -> DeletionPreviewNode:
-    """Return a grouped child node for deleted rows of one model."""
-
-    ordered_rows = sorted(rows.visible_rows, key=lambda row: row.pk)
-    plural = str(model._meta.verbose_name_plural)
-    leaves = tuple(_leaf_node(row) for row in ordered_rows[:_PREVIEW_LEAF_LIMIT])
-    hidden_count = max(0, rows.total_count - rows.visible_count)
-    capped_count = max(0, rows.visible_count - len(leaves))
-    if hidden_count:
-        leaves = (
-            *leaves,
-            DeletionPreviewNode(
-                label="",
-                object_label=f"{hidden_count + capped_count} more records",
-                object_id=None,
-                children=(),
-            ),
-        )
-    elif capped_count:
-        leaves = (
-            *leaves,
-            DeletionPreviewNode(
-                label="",
-                object_label=f"… and {capped_count} more",
-                object_id=None,
-                children=(),
-            ),
-        )
-    return DeletionPreviewNode(
-        label=plural,
-        object_label=f"{rows.total_count} {plural}",
-        object_id=None,
-        children=leaves,
-    )
-
-
-def _leaf_node(instance: models.Model) -> DeletionPreviewNode:
-    """Return a leaf node for one deleted row."""
-
-    return DeletionPreviewNode(
-        label=str(instance._meta.verbose_name),
-        object_label=str(instance),
-        object_id=_object_id(instance),
-        children=(),
-    )
 
 
 def _object_id(instance: models.Model) -> str | None:
