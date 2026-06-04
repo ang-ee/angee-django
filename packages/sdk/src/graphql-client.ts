@@ -70,6 +70,49 @@ export function createCsrfTokenProvider(
   };
 }
 
+/**
+ * Decorates a base fetch with one transport's auth — its headers and
+ * credentials. The single axis on which a same-origin app client and a
+ * cross-origin service client (e.g. the operator daemon) differ; everything else
+ * about the client is shared, so this is the only thing a caller swaps.
+ */
+export type AuthFetch = (baseFetch: FetchFn) => FetchFn;
+
+/**
+ * Session auth — the app default. Sends the Django session cookie and a lazily
+ * fetched, cached CSRF header. Each decorated fetch owns its CSRF provider, so
+ * rebuilding the client (a login/logout reset) discards the cached token.
+ */
+export function sessionAuth(options: CsrfTokenOptions = {}): AuthFetch {
+  return (baseFetch) => {
+    const csrf = createCsrfTokenProvider({
+      endpoint: options.endpoint,
+      fetch: options.fetch ?? baseFetch,
+    });
+    return async (input, init) => {
+      const headers = new Headers(init?.headers);
+      if (!headers.has("x-csrftoken")) {
+        const token = await csrf.token();
+        if (token) headers.set("x-csrftoken", token);
+      }
+      return baseFetch(input, { ...init, credentials: "include", headers });
+    };
+  };
+}
+
+/**
+ * Bearer auth — for a cross-origin service whose minted token is the credential
+ * (the operator daemon). Sends `Authorization: Bearer <token>` with no cookie or
+ * CSRF; rebuild the client to rotate the token.
+ */
+export function bearerAuth(token: string): AuthFetch {
+  return (baseFetch) => (input, init) => {
+    const headers = new Headers(init?.headers);
+    headers.set("Authorization", `Bearer ${token}`);
+    return baseFetch(input, { ...init, headers });
+  };
+}
+
 export interface AngeeUrqlClientOptions {
   /** HTTP GraphQL endpoint for this named schema. */
   url: string;
@@ -77,7 +120,12 @@ export interface AngeeUrqlClientOptions {
   wsEndpoint?: string;
   /** Schema-derived graphcache keying + relay resolvers. */
   cache?: CacheConfig;
-  /** CSRF token endpoint; defaults to `/auth/csrf/`. */
+  /**
+   * Transport auth strategy; defaults to {@link sessionAuth} (Django cookie +
+   * CSRF). Pass {@link bearerAuth} for a token-authenticated service.
+   */
+  auth?: AuthFetch;
+  /** CSRF token endpoint for the default session auth; defaults to `/auth/csrf/`. */
   csrfEndpoint?: string;
   /** Injected for tests; defaults to the global fetch. */
   fetch?: FetchFn;
@@ -91,31 +139,19 @@ export interface AngeeUrqlClientOptions {
 
 /**
  * Build the urql client for one named schema: a configured normalized cache, a
- * graphql-ws subscription transport, and an HTTP transport whose requests carry
- * the session cookie and CSRF header. The cache must be configured (keys +
- * relay resolvers) for normalized reads and pagination to work.
+ * graphql-ws subscription transport, and an HTTP transport authed by `auth`
+ * (the Django session cookie + CSRF header by default). The cache must be
+ * configured (keys + relay resolvers) for normalized reads and pagination to
+ * work.
  */
 export function createUrqlClient(options: AngeeUrqlClientOptions): Client {
   const baseFetch = options.fetch ?? globalThis.fetch;
-  const csrf = createCsrfTokenProvider({
-    endpoint: options.csrfEndpoint,
-    fetch: baseFetch,
-  });
-
-  const fetchWithSession: FetchFn = async (input, init) => {
-    const headers = new Headers(init?.headers);
-    if (!headers.has("x-csrftoken")) {
-      const token = await csrf.token();
-      if (token) headers.set("x-csrftoken", token);
-    }
-    return baseFetch(input, { ...init, credentials: "include", headers });
-  };
-
+  const auth = options.auth ?? sessionAuth({ endpoint: options.csrfEndpoint });
   const cache = options.cache ?? { keys: {}, resolvers: {} };
 
   return createClient({
     url: options.url,
-    fetch: fetchWithSession,
+    fetch: auth(baseFetch),
     // Always POST; the Django endpoint is CSRF-protected and reads operations
     // from the request body rather than the query string.
     preferGetMethod: false,

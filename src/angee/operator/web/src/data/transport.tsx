@@ -1,6 +1,8 @@
 import { Spinner } from "@angee/base";
-import { useSchemaClients } from "@angee/sdk";
+import { bearerAuth, createUrqlClient, useSchemaClients } from "@angee/sdk";
 import {
+  cacheExchange,
+  fetchExchange,
   Provider as UrqlProvider,
   useMutation,
   useQuery,
@@ -21,7 +23,6 @@ import {
 } from "react";
 
 import { OPERATOR_CONNECTION_QUERY, SNAPSHOT_QUERY } from "./documents";
-import { createOperatorClient } from "./operator-client";
 import type {
   OperatorConnectionInfo,
   OperatorSnapshot,
@@ -126,9 +127,16 @@ export function OperatorTransportProvider({
   const endpoint = state.kind === "ready" ? state.connection.endpoint : null;
   const token = state.kind === "ready" ? state.connection.token : null;
   // Rebuilt whenever the token rotates, so daemon requests carry the live bearer.
+  // The SDK client factory owns transport; the operator contributes only its
+  // bearer auth and a document-cache stack (the daemon polls in v1 — TODO(F5):
+  // wire its SSE/WS subscription transport when it lands).
   const daemonClient = useMemo(() => {
     if (!endpoint || !token) return null;
-    return createOperatorClient({ endpoint, token });
+    return createUrqlClient({
+      url: endpoint,
+      auth: bearerAuth(token),
+      exchanges: [cacheExchange, fetchExchange],
+    });
   }, [endpoint, token]);
 
   if (state.kind === "loading") {

@@ -2,6 +2,7 @@ import { fetchExchange } from "@urql/core";
 import { describe, expect, test, vi } from "vitest";
 
 import {
+  bearerAuth,
   createCsrfTokenProvider,
   createUrqlClient,
   graphQLWebSocketUrl,
@@ -89,5 +90,27 @@ describe("createUrqlClient", () => {
     expect(graphqlCall?.init.credentials).toBe("include");
     const headers = new Headers(graphqlCall?.init.headers);
     expect(headers.get("x-csrftoken")).toBe("CSRF123");
+  });
+
+  test("bearer auth sends Authorization and skips the CSRF round-trip", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetch = vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return jsonResponse({ data: { ping: true } });
+    });
+    const client = createUrqlClient({
+      url: "https://daemon.test/graphql",
+      fetch: fetch as unknown as typeof globalThis.fetch,
+      auth: bearerAuth("MINTED-TOKEN"),
+      exchanges: [fetchExchange],
+    });
+    const result = await client.query("{ ping }", {}).toPromise();
+    expect(result.error).toBeUndefined();
+
+    // Bearer auth fetches no CSRF token, so the GraphQL request is the only call.
+    expect(calls).toHaveLength(1);
+    const headers = new Headers(calls[0]?.init.headers);
+    expect(headers.get("authorization")).toBe("Bearer MINTED-TOKEN");
+    expect(calls[0]?.init.credentials).toBeUndefined();
   });
 });

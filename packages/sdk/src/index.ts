@@ -31,7 +31,10 @@ export {
   createUrqlClient,
   createCsrfTokenProvider,
   graphQLWebSocketUrl,
+  sessionAuth,
+  bearerAuth,
   type AngeeUrqlClientOptions,
+  type AuthFetch,
   type CsrfTokenProvider,
   type CsrfTokenOptions,
 } from "./graphql-client";
