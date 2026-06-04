@@ -1,0 +1,6 @@
+interface:
+  display_name: "Pull"
+  short_description: "Merge parent, workspace, or branch changes into this workspace."
+  default_prompt: "Pull changes into the current Angee workspace branch."
+policy:
+  allow_implicit_invocation: false

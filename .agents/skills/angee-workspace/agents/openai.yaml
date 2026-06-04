@@ -1,0 +1,4 @@
+interface:
+  display_name: "Angee Workspace"
+  short_description: "Operate Angee workspaces, parent refs, pulls, pushes, and GitOps state."
+  default_prompt: "Use Angee workspace rules for this workspace operation."

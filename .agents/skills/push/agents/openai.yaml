@@ -1,0 +1,6 @@
+interface:
+  display_name: "Push"
+  short_description: "Commit and publish the current Angee workspace branch."
+  default_prompt: "Commit reviewed changes and publish the current Angee workspace branch."
+policy:
+  allow_implicit_invocation: false

@@ -9,8 +9,13 @@ between sessions lives here and is committed; only genuinely throwaway scratch
 
 ## Layout
 
-- `commands/` — project slash commands (`/name` resolves to `commands/name.md`).
-  Surfaced to the harness via the `.claude/commands` symlink.
+- `commands/` — project slash commands for non-Codex harnesses
+  (`/name` resolves to `commands/name.md`). Surfaced via the
+  `.claude/commands` symlink; Codex app slash entries come from skills instead.
+- `skills/` — repo-scoped Codex skills. Codex scans `.agents/skills` from the
+  current working directory up to the repo root. Keep shared workflow logic in
+  one owner skill; small alias skills may exist only to make slash-list entries
+  discoverable.
 - `agents/` — subagent definitions. Surfaced via the `.claude/agents` symlink.
 - `plans/` — implementation plans, one file per effort.
 - `notes/` — durable memory and working notes meant to outlive a single session.
