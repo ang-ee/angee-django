@@ -878,6 +878,45 @@ describe("DataPage", () => {
     });
   });
 
+  test("expands same-field date group chains with nested filter conjunctions", async () => {
+    sdkMocks.groupByCalls.length = 0;
+    const dateFilter = encodeURIComponent(
+      JSON.stringify({ updatedAt: { gte: "2026-01-01T00:00:00.000Z" } }),
+    );
+    render(
+      <TestUrlState
+        searchParams={`?filter=${dateFilter}&group=updatedAt:year&then=updatedAt:day`}
+      >
+        <DataPage
+          model="notes.Note"
+          columns={[...columns, { field: "updatedAt", header: "Updated At" }]}
+          formFields={formFields}
+          list={GroupListView}
+        />
+      </TestUrlState>,
+    );
+
+    const yearGroups = await screen.findAllByRole("button", { name: /2026/ });
+    fireEvent.click(yearGroups[0]!);
+
+    await waitFor(() =>
+      expect(
+        sdkMocks.groupByCalls.some(
+          (call) => call.dimensions[0]?.granularity === "DAY",
+        ),
+      ).toBe(true),
+    );
+    const branchCall = sdkMocks.groupByCalls.find(
+      (call) => call.dimensions[0]?.granularity === "DAY",
+    );
+    const branchFilter = branchCall?.filter as Record<string, unknown>;
+    expect(Array.isArray(branchFilter.AND)).toBe(false);
+    expect(branchFilter).toMatchObject({
+      updatedAt: { gte: "2026-01-01T00:00:00.000Z" },
+      AND: { updatedAt: { exact: expect.any(String) } },
+    });
+  });
+
   test("lets the seeded default group granularity be changed", async () => {
     render(
       <TestUrlState>

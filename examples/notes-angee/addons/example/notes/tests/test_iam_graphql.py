@@ -212,6 +212,55 @@ class IAMGraphQLTests(TransactionTestCase):
             },
         )
 
+    def test_update_preserves_redacted_fields_for_validation(self) -> None:
+        with system_context(reason="test-setup"):
+            note = Note.objects.create(
+                title="Admin update target",
+                body="owner-only flag",
+                created_by=self.alice,
+                is_starred=True,
+            )
+            sqid = note.sqid
+
+        self.assertIsNone(Note.objects.as_user(self.admin).get(sqid=sqid).is_starred)
+        self.login(self.client, "admin")
+        notes = self.graphql(
+            """
+            query {
+              notes(pagination: { limit: 100 }) {
+                results { id title }
+              }
+            }
+            """
+        )["data"]["notes"]["results"]
+        target = next(node for node in notes if node["title"] == "Admin update target")
+
+        updated = self.graphql(
+            """
+            mutation UpdateNote($id: ID!) {
+              updateNote(
+                data: {id: $id, title: "Admin updated target"}
+              ) {
+                id
+                title
+              }
+            }
+            """,
+            {"id": target["id"]},
+        )
+
+        self.assertEqual(
+            updated["data"]["updateNote"],
+            {
+                "id": target["id"],
+                "title": "Admin updated target",
+            },
+        )
+        with system_context(reason="test"):
+            note = Note.objects.get(sqid=sqid)
+            self.assertEqual(note.title, "Admin updated target")
+            self.assertTrue(note.is_starred)
+
     def test_note_audit_labels_are_strings_without_user_projection(self) -> None:
         self.login(self.client, "admin")
         notes = self.graphql(

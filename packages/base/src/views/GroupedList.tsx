@@ -932,17 +932,32 @@ function combineFilters(
   const rightRecord = filterRecord(right);
   if (!leftRecord || Object.keys(leftRecord).length === 0) return rightRecord;
   if (!rightRecord || Object.keys(rightRecord).length === 0) return leftRecord;
-  for (const key of Object.keys(rightRecord)) {
-    if (Object.prototype.hasOwnProperty.call(leftRecord, key)) {
-      return { AND: [leftRecord, rightRecord] };
-    }
-  }
-  return { ...leftRecord, ...rightRecord };
+  return combineFilterRecords(leftRecord, rightRecord);
 }
 
-function filterRecord(
-  filter: ListFilter | AggregateBucket["filter"],
-): Record<string, unknown> | undefined {
+function combineFilterRecords(
+  left: Record<string, unknown>,
+  right: Record<string, unknown>,
+): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...left };
+  let andFilter: Record<string, unknown> | undefined;
+  for (const [key, value] of Object.entries(right)) {
+    if (!Object.prototype.hasOwnProperty.call(next, key)) {
+      next[key] = value;
+      continue;
+    }
+    if (stableSerialize(next[key]) === stableSerialize(value)) continue;
+    andFilter = { ...andFilter, [key]: value };
+  }
+  if (!andFilter) return next;
+  const existingAnd = filterRecord(next.AND);
+  next.AND = existingAnd
+    ? combineFilterRecords(existingAnd, andFilter)
+    : andFilter;
+  return next;
+}
+
+function filterRecord(filter: unknown): Record<string, unknown> | undefined {
   if (!filter || typeof filter !== "object" || Array.isArray(filter)) {
     return undefined;
   }

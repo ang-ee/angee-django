@@ -6,12 +6,20 @@ from typing import Any
 
 import strawberry
 import strawberry_django
+from strawberry.annotation import StrawberryAnnotation
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
 from rebac import system_context
-from strawberry import relay
+from strawberry import UNSET, relay
 from strawberry.extensions.field_extension import FieldExtension, SyncExtensionResolver
 from strawberry.types import Info
+from strawberry_django.mutations import resolvers as mutation_resolvers
+from strawberry_django.mutations.fields import (
+    DjangoUpdateMutation,
+    get_pk,
+    get_vdata,
+)
+from strawberry_django.permissions import filter_with_perms
 
 from angee.base.models import instance_from_public_id
 from angee.graphql.deletion import DeletePreview
@@ -89,7 +97,7 @@ def crud(
         add(
             "update",
             node,
-            strawberry_django.mutations.update(
+            _update_mutation(
                 update,
                 permission_classes=permission_classes,
                 extensions=write_extensions(),
@@ -111,6 +119,92 @@ def crud(
     type_name = f"{singular[:1].upper()}{singular[1:]}Mutation"
     surface = type(type_name, (), namespace)
     return strawberry.type(surface)
+
+
+class _AngeeUpdateMutation(DjangoUpdateMutation):
+    """Update mutation whose write target is loaded without field redaction."""
+
+    def instance_level_update(
+        self,
+        info: Info,
+        kwargs: dict[str, Any],
+        data: Any,
+    ) -> Any:
+        model = self.django_model
+        assert model is not None
+
+        vdata = get_vdata(data)
+        pk = get_pk(vdata, key_attr=self.key_attr)
+
+        if pk not in (None, UNSET):  # noqa: PLR6201
+            instance = _resolve_for_write(model, pk, key_attr=self.key_attr)
+        else:
+            instance = filter_with_perms(
+                self.get_queryset(
+                    queryset=_write_queryset(model),
+                    info=info,
+                    **kwargs,
+                ),
+                info,
+            )
+
+        return self.update(
+            info,
+            instance,
+            mutation_resolvers.parse_input(info, vdata, key_attr=self.key_attr),
+        )
+
+
+def _update_mutation(
+    input_type: type,
+    *,
+    permission_classes: list[type] | None,
+    extensions: list[FieldExtension] | None,
+) -> _AngeeUpdateMutation:
+    """Return Angee's Strawberry-Django update field."""
+
+    return _AngeeUpdateMutation(
+        input_type,
+        python_name=None,
+        django_name=None,
+        graphql_name=None,
+        type_annotation=StrawberryAnnotation.from_annotation(None),
+        permission_classes=permission_classes or [],
+        extensions=extensions or (),
+    )
+
+
+def _write_queryset(model: type[models.Model]) -> models.QuerySet[models.Model]:
+    """Return a write-target queryset that preserves row scope, not redaction."""
+
+    queryset = model._default_manager.all()
+    on_field_deny = getattr(queryset, "on_field_deny", None)
+    if callable(on_field_deny):
+        queryset = on_field_deny("allow")
+    return queryset
+
+
+def _resolve_for_write(
+    model: type[models.Model],
+    key: Any,
+    *,
+    key_attr: str | None,
+) -> models.Model:
+    """Return a write-ready instance addressed by mutation input."""
+
+    queryset = _write_queryset(model)
+    if isinstance(key, relay.GlobalID):
+        instance = instance_from_public_id(model, key.node_id, queryset=queryset)
+    elif key_attr in (None, "id"):
+        instance = instance_from_public_id(model, str(key), queryset=queryset)
+    else:
+        try:
+            instance = queryset.filter(**{key_attr: key}).first()
+        except (TypeError, ValueError):
+            instance = None
+    if instance is None:
+        raise ValueError(f"{model._meta.object_name} {key!r} was not found")
+    return instance
 
 
 def _delete_resolver(model: type[models.Model]) -> Any:
@@ -135,11 +229,7 @@ def _resolve_for_delete(
 ) -> models.Model:
     """Return the instance addressed by ``public_id`` or raise."""
 
-    queryset = model._default_manager.all()
-    on_field_deny = getattr(queryset, "on_field_deny", None)
-    if callable(on_field_deny):
-        queryset = on_field_deny("allow")
-    instance = instance_from_public_id(model, public_id, queryset=queryset)
+    instance = instance_from_public_id(model, public_id, queryset=_write_queryset(model))
     if instance is None:
         raise ValueError(f"{model._meta.object_name} {public_id!r} was not found")
     return instance
