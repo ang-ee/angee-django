@@ -153,7 +153,13 @@ class RevisionMixin(models.Model):
         return versions.select_related("revision")
 
     def revert_to(self, version: Any) -> None:
-        """Restore declared revisioned fields from ``version`` and save."""
+        """Restore declared revisioned fields from ``version`` and save.
+
+        Saves with ``update_fields`` so unrelated in-memory columns are not
+        flushed, but includes the model's ``auto_now`` timestamps so a revert
+        advances ``updated_at`` consistently with the audit ``updated_by`` stamp
+        (Django only refreshes ``auto_now`` fields named in ``update_fields``).
+        """
 
         data = version.field_dict
         reverted: list[str] = []
@@ -161,5 +167,7 @@ class RevisionMixin(models.Model):
             if name in data:
                 setattr(self, name, data[name])
                 reverted.append(name)
-        if reverted:
-            self.save(update_fields=reverted)
+        if not reverted:
+            return
+        auto_now = [field.name for field in self._meta.fields if getattr(field, "auto_now", False)]
+        self.save(update_fields=[*reverted, *auto_now])

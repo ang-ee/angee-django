@@ -25,7 +25,9 @@ import {
   LogOut,
   MessageCircle,
   Minus,
+  MoreVertical,
   PanelRight,
+  Paperclip,
   Plus,
   Search,
   Settings,
@@ -38,6 +40,7 @@ import {
   Users,
   X,
   Zap,
+  GitBranch,
 } from "lucide-react";
 
 import { AngeeMark } from "./AngeeMark";
@@ -79,8 +82,10 @@ export const baseIcons = {
   list: List,
   "log-out": LogOut,
   minus: Minus,
+  "more-vertical": MoreVertical,
   notes: FileText,
   "panel-right": PanelRight,
+  attachment: Paperclip,
   plus: Plus,
   reports: FileText,
   search: Search,
@@ -91,6 +96,7 @@ export const baseIcons = {
   "triangle-alert": TriangleAlert,
   user: User,
   users: Users,
+  versions: GitBranch,
   x: X,
 } satisfies Readonly<Record<string, IconComponent>>;
 

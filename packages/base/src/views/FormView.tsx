@@ -51,8 +51,9 @@ export interface FormViewProps {
   onSaved?: (row: Row) => void;
   submitLabel?: React.ReactNode;
   headerActions?: React.ReactNode;
-  /** Navigation chrome (record pager, view switcher) the host renders into the
-   *  view toolbar alongside the dirty Save/Discard actions. */
+  /** Left-side record commands the host renders before dirty Save/Discard actions. */
+  toolbarStart?: React.ReactNode;
+  /** Right-side record chrome the host renders after the toolbar spacer. */
   toolbar?: React.ReactNode;
   className?: string;
 }
@@ -95,6 +96,7 @@ export function FormView({
   onSaved,
   submitLabel,
   headerActions,
+  toolbarStart,
   toolbar,
   className,
 }: FormViewProps): React.ReactElement {
@@ -246,15 +248,16 @@ export function FormView({
       >
         {(state) => {
           const showActions = isCreate || state.isDirty;
-          if (!toolbar && !showActions) return null;
+          if (!toolbarStart && !toolbar && !showActions) return null;
           const isSaving = mutation.fetching || state.isSubmitting;
           // Under a shell the band portals out of the <form>, so Save must
           // submit via handleSubmit() rather than relying on native type="submit".
           return (
             <ControlBand className={state.isDirty ? "bg-brand-soft" : undefined}>
-              <div className="min-w-2 flex-1" />
-              {toolbar ? (
-                <div className="flex min-w-0 items-center gap-2">{toolbar}</div>
+              {toolbarStart ? (
+                <div className="flex min-w-0 items-center gap-2">
+                  {toolbarStart}
+                </div>
               ) : null}
               {showActions ? (
                 <div className="flex items-center gap-2">
@@ -282,6 +285,10 @@ export function FormView({
                     {submitLabel ?? (isCreate ? "Create" : "Save")}
                   </Button>
                 </div>
+              ) : null}
+              <div className="min-w-2 flex-1" />
+              {toolbar ? (
+                <div className="flex min-w-0 items-center gap-2">{toolbar}</div>
               ) : null}
             </ControlBand>
           );

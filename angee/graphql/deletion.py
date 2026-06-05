@@ -124,17 +124,14 @@ class DeletePreview:
     blocked: list[DeletePreviewGroup]
     """Rows whose ``on_delete`` behavior blocks deletion."""
 
+    has_blockers: bool
+    """Whether any related rows block deletion (i.e. ``blocked`` is non-empty)."""
+
     root: DeletePreviewNode = strawberry.field(
         default_factory=lambda: DeletePreviewNode(label="", object_label="", object_id=None, children=[]),
         description="Tree apex for the target row; deleted counts already include that row.",
     )
     """Rooted tree of rows Django would delete; deleted counts include this root row."""
-
-    @property
-    def has_blockers(self) -> bool:
-        """Return whether any related rows block deletion."""
-
-        return bool(self.blocked)
 
     @classmethod
     def from_instance(cls, instance: models.Model, actor: Any | None = None) -> DeletePreview:
@@ -174,6 +171,7 @@ class DeletePreview:
             deleted=_groups(deleted_counts),
             updated=_groups(updated_counts),
             blocked=blocked,
+            has_blockers=bool(blocked),
             root=root,
         )
 

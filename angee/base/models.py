@@ -8,7 +8,10 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models.utils import make_model_tuple
 from rebac import RebacMixin
+from rebac.actors import is_sudo
+from rebac.errors import MissingActorError
 from rebac.managers import RebacManager, RebacQuerySet
+from rebac.resources import model_resource_type
 
 from angee.base.mixins import TimestampMixin
 
@@ -23,6 +26,25 @@ class AngeeQuerySet(RebacQuerySet[_ModelT]):
 
         self._apply_scope_in_place()
         return self
+
+    def scoped_for_aggregate(self) -> Self:
+        """Return a row-scoped queryset safe for permission-naive aggregation.
+
+        Aggregate compilers run through ``.values()``/``.aggregate()`` shapes
+        whose dict rows field-read redaction cannot touch, so field redaction is
+        disabled and REBAC row scope is applied eagerly. It fails closed: a
+        REBAC-typed model that resolves to no actor returns an empty queryset
+        rather than leaking every row, independent of ``REBAC_STRICT_MODE``.
+        """
+
+        queryset = cast(Self, self.on_field_deny("allow"))
+        try:
+            actor = queryset._resolve_effective_actor()[0]
+        except MissingActorError:
+            return cast(Self, queryset.none())
+        if actor is None and not is_sudo() and model_resource_type(self.model):
+            return cast(Self, queryset.none())
+        return queryset.apply_ambient_scope()
 
 
 class AngeeManager(RebacManager.from_queryset(AngeeQuerySet)):  # type: ignore[misc]

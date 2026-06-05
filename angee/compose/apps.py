@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from django.apps import AppConfig
-from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured
 
 
 class ComposeConfig(AppConfig):
@@ -16,7 +14,16 @@ class ComposeConfig(AppConfig):
     depends_on = ("django_yamlconf",)
 
     def import_models(self) -> None:
-        """Cheap-check runtime files, then import generated models when present."""
+        """Emit the runtime if stale, then import the generated models.
+
+        Runs in app-populate phase 2. ``emit_if_stale`` is write-only and
+        idempotent, so a fresh or drifted runtime is healed file by file before
+        it is imported — the runtime is always freshly rendered from the
+        abstract sources before it is loaded. There is no build/run app-set
+        split, and a missing runtime never surfaces as a cryptic
+        ``AUTH_USER_MODEL`` resolution error: the swappable models exist by the
+        time Django resolves them.
+        """
 
         super().import_models()
         # Deferred (phase-1 AppConfig rule): importing Runtime at module top
@@ -28,13 +35,5 @@ class ComposeConfig(AppConfig):
         from angee.compose.runtime import Runtime
 
         runtime = Runtime.from_django()
-        try:
-            should_import = runtime.bootstrap_check(
-                strict=bool(getattr(settings, "ANGEE_RUNTIME_STRICT_BOOT", False)),
-            )
-        except RuntimeError as error:
-            raise ImproperlyConfigured(
-                f"{error}; run `angee build` to refresh generated runtime sources"
-            ) from error
-        if should_import:
-            runtime.import_generated_models()
+        runtime.emit_if_stale()
+        runtime.import_generated_models()

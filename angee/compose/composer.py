@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Iterable, MutableMapping
-from pathlib import Path
 from typing import Any
 
 from django.apps import AppConfig
@@ -54,7 +53,7 @@ class Composer:
         runtime_setting = self.namespace.get("ANGEE_RUNTIME_DIR")
         if runtime_setting is None:
             raise ImproperlyConfigured("settings must define ANGEE_RUNTIME_DIR")
-        runtime_dir = self._path_value(runtime_setting)
+        runtime_dir = resolve_path(runtime_setting)
 
         app_configs = AppGraph().resolve(root_apps)
         self.namespace["INSTALLED_APPS"] = list(app_configs)
@@ -70,16 +69,11 @@ class Composer:
         for app_config in app_configs:
             autoconfig.update_app(app_config)
 
-    def _path_value(self, value: object) -> Path:
-        """Return ``value`` as an absolute path."""
-
-        return resolve_path(value)
-
     def _set_composer_setting(self, key: str, value: object) -> None:
         """Assign a Composer-owned setting, rejecting conflicting project values."""
 
         if key in self.namespace:
-            current = self._path_value(self.namespace[key]) if key == "ANGEE_RUNTIME_DIR" else self.namespace[key]
+            current = resolve_path(self.namespace[key]) if key == "ANGEE_RUNTIME_DIR" else self.namespace[key]
             if current != value:
                 raise ImproperlyConfigured(f"Project settings define Composer-owned setting {key}")
         self.namespace[key] = value

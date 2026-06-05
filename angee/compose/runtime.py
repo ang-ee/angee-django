@@ -138,20 +138,23 @@ class Runtime:
         for label in self.labels:
             importlib.import_module(f"{self.runtime_module}.{label}.models")
 
-    def bootstrap_check(self, *, strict: bool = False) -> bool:
-        """Return whether app loading should import generated model modules.
+    def emit_if_stale(self) -> bool:
+        """Write the runtime when it drifts from the sources, on every boot.
 
-        Normal Django boot only needs to verify that the runtime package is
-        generated before importing it. Full render drift checks are owned by
-        ``angee build --check`` and opt-in strict boot environments.
+        Called from the composer's ``import_models`` in app-populate phase 2.
+        Write-only and idempotent: it never resets or cleans, so a present-but-
+        stale runtime is healed file by file and a corrupted or non-Angee
+        directory can never abort app population through the destructive
+        ``_ensure_cleanable`` gate. Orphaned files from a removed addon are
+        pruned by the explicit ``angee build`` (which calls ``emit``). Returning
+        early when current keeps boots fast and avoids churning files the running
+        process (and Django's autoreloader) already imported.
         """
 
-        if strict:
-            self.check()
-            return True
-        if not self._has_generated_sentinel():
+        if not self._drift():
             return False
-        return all((self.runtime_dir / label / "models.py").exists() for label in self.labels)
+        self._write_sources()
+        return True
 
     def configure_migration_modules(self) -> Runtime:
         """Redirect migrations for emitted runtime app labels."""
@@ -527,8 +530,7 @@ class Runtime:
         children = list(self.runtime_dir.iterdir())
         if not children:
             return
-        init_path = self.runtime_dir / "__init__.py"
-        if init_path.exists() and GENERATED_SENTINEL in init_path.read_text(encoding="utf-8"):
+        if self._has_generated_sentinel():
             return
         raise RuntimeError(f"{self.runtime_dir} is not an Angee runtime directory")
 
@@ -542,8 +544,6 @@ class Runtime:
         """Return whether ``path`` participates in source drift checks."""
 
         relative = path.relative_to(self.runtime_dir)
-        if relative in {Path("asgi.py"), Path("urls.py")}:
-            return False
         if relative.parts and relative.parts[0] == "schemas":
             return False
         if self._is_orphaned_migration_path(relative):

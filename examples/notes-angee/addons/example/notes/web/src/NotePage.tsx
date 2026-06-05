@@ -7,6 +7,7 @@ import {
   type FormField,
   type ListColumn,
   type PageGroupDescriptor,
+  type RecordSmartButtonDescriptor,
   useChatterContent,
 } from "@angee/base";
 import { useAuthoredQuery } from "@angee/sdk";
@@ -109,6 +110,13 @@ const RECORD_SUBTITLE_FIELDS: readonly string[] = [
   "wordCount",
 ];
 
+const recordSmartButtons = [
+  { id: "linked", icon: "plus", count: 7, label: "Linked notes" },
+  { id: "comments", icon: "comments", count: 12, label: "Comments" },
+  { id: "attachments", icon: "attachment", count: 4, label: "Attachments" },
+  { id: "versions", icon: "versions", count: 23, label: "Versions" },
+] satisfies readonly RecordSmartButtonDescriptor[];
+
 const formGroups: readonly PageGroupDescriptor[] = [
   {
     label: "Details",
@@ -169,6 +177,7 @@ export function NotePage({
         formFields={formFields}
         formGroups={formGroups}
         returning={RECORD_SUBTITLE_FIELDS}
+        recordSmartButtons={recordSmartButtons}
         recordId={recordId}
         creating={creating}
         placement="inline"

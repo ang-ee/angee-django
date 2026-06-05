@@ -1,45 +1,63 @@
-"""REBAC adapters for permission-naive aggregate builders."""
+"""REBAC-aware aggregate seam built on strawberry-django-aggregates."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, cast
 
-from django.db.models import QuerySet
-from rebac.errors import MissingActorError
+from django.core.exceptions import ImproperlyConfigured
+from django.db import models
+from rebac.field_visibility import gated_read_fields
+from strawberry_django_aggregates import AggregateBuilder
+
+from angee.base.models import AngeeQuerySet
+
+
+def rebac_aggregate_builder(
+    *,
+    model: type[models.Model],
+    group_by_fields: Sequence[str] = (),
+    queryset: AngeeQuerySet[Any] | None = None,
+    **kwargs: Any,
+) -> AggregateBuilder:
+    """Return an ``AggregateBuilder`` wired for REBAC row scope and safe axes.
+
+    Aggregate compilers emit ``.values()``/``.aggregate()`` shapes whose dict
+    rows field-read redaction cannot touch, so a field-gated read column used as
+    a ``group_by`` axis would leak owner-only values through bucket keys. Gated
+    axes are rejected here at construction time, and the builder's
+    ``get_queryset`` hook is the actor-scoped, fail-closed one below.
+    """
+
+    gated_axes = sorted(gated_read_fields(model) & set(group_by_fields))
+    if gated_axes:
+        raise ImproperlyConfigured(
+            f"{model._meta.label}: aggregate group_by axes {gated_axes} are field-gated "
+            f"reads; exposing them as bucket keys would leak gated values"
+        )
+    source = cast(
+        AngeeQuerySet[Any],
+        model._default_manager.all() if queryset is None else queryset,
+    )
+    return AggregateBuilder(
+        model=model,
+        group_by_fields=list(group_by_fields),
+        get_queryset=rebac_aggregate_get_queryset(source),
+        **kwargs,
+    )
 
 
 def rebac_aggregate_get_queryset(
-    queryset: QuerySet[Any],
-) -> Callable[[Any], QuerySet[Any]]:
-    """Return an ``AggregateBuilder.get_queryset`` hook for ``queryset``."""
+    queryset: AngeeQuerySet[Any],
+) -> Callable[[Any], models.QuerySet[Any]]:
+    """Return an ``AggregateBuilder.get_queryset`` hook for ``queryset``.
 
-    def get_queryset(info: Any) -> QuerySet[Any]:
-        del info
-        return rebac_aggregate_queryset(queryset.all())
-
-    return get_queryset
-
-
-def rebac_aggregate_queryset(queryset: QuerySet[Any]) -> QuerySet[Any]:
-    """Return ``queryset`` prepared for permission-naive aggregate compilers.
-
-    ``strawberry-django-aggregates`` compiles through ``.aggregate()`` and
-    ``.values().annotate()`` shapes, so row scope must be applied before the
-    compiler runs. Those shapes return dict rows, not model instances, so field
-    read redaction cannot run there; aggregate surfaces must expose only
-    non-gated group and measure fields.
+    The hook re-derives row scope per call so each aggregate request scopes to
+    the current actor; see ``AngeeQuerySet.scoped_for_aggregate``.
     """
 
-    on_field_deny = getattr(queryset, "on_field_deny", None)
-    if callable(on_field_deny):
-        queryset = cast(QuerySet[Any], on_field_deny("allow"))
+    def get_queryset(info: Any) -> models.QuerySet[Any]:
+        del info
+        return queryset.all().scoped_for_aggregate()
 
-    apply_ambient_scope = getattr(queryset, "apply_ambient_scope", None)
-    if not callable(apply_ambient_scope):
-        return queryset
-
-    try:
-        return cast(QuerySet[Any], apply_ambient_scope())
-    except MissingActorError:
-        return cast(QuerySet[Any], queryset.none())
+    return get_queryset

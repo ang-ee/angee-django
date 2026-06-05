@@ -49,7 +49,10 @@ class NotesVersioningTests(TransactionTestCase):
         self.assertEqual(self.note.body, "v1")
 
     def test_delete_returns_a_cascade_preview(self) -> None:
-        query = "mutation($id: ID!){ deleteNote(id: $id){ totalDeletedCount hasBlockers deleted { label count } } }"
+        query = (
+            "mutation($id: ID!){ deleteNote(id: $id, confirm: true)"
+            "{ totalDeletedCount hasBlockers deleted { label count } } }"
+        )
         with actor_context(to_subject_ref(self.user)):
             schema = GraphQLSchemas.from_discovery().build("console")
             result = schema.execute_sync(

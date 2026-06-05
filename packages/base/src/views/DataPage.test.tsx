@@ -377,6 +377,10 @@ describe("DataPage", () => {
             recordId={recordId}
             placement="inline"
             pageSize={2}
+            recordSmartButtons={[
+              { id: "linked", icon: "plus", count: 7, label: "Linked notes" },
+              { id: "comments", icon: "comments", count: 12, label: "Comments" },
+            ]}
             onSelect={(id) => {
               onSelect(id);
               setRecordId(id);
@@ -393,8 +397,17 @@ describe("DataPage", () => {
       name: "Record navigation",
     });
     expect(pager.textContent?.replace(/\s+/g, " ").trim()).toContain(
-      "2 of 4",
+      "2 / 4",
     );
+    expect(
+      screen.getByRole("button", { name: "7 Linked notes" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "12 Comments" }),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Delete" })).toBeTruthy();
 
     fireEvent.click(
       within(pager).getByRole("button", { name: "Next record" }),
@@ -406,7 +419,7 @@ describe("DataPage", () => {
           .getByRole("navigation", { name: "Record navigation" })
           .textContent?.replace(/\s+/g, " ")
           .trim(),
-      ).toContain("3 of 4"),
+      ).toContain("3 / 4"),
     );
 
     const switcher = screen.getByRole("group", {

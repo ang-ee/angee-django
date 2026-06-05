@@ -37,6 +37,7 @@ export {
   DataPage,
   type DataPageProps,
   type RecordPlacement,
+  type RecordSmartButtonDescriptor,
 } from "./DataPage";
 export {
   AggregatePanel,

@@ -135,12 +135,14 @@ def test_delete_resolver_preserves_blocked_and_removes_unblocked(
                 deleted=[],
                 updated=[],
                 blocked=[DeletePreviewGroup(label="groups", count=1)],
+                has_blockers=True,
             ),
             DeletePreview(
                 total_deleted_count=1,
                 deleted=[DeletePreviewGroup(label="groups", count=1)],
                 updated=[],
                 blocked=[],
+                has_blockers=False,
             ),
         )
     )
@@ -186,6 +188,7 @@ def test_delete_resolver_defaults_to_preview_without_deleting(
             deleted=[DeletePreviewGroup(label="groups", count=1)],
             updated=[],
             blocked=[],
+            has_blockers=False,
         )
 
     monkeypatch.setattr(
@@ -239,6 +242,7 @@ def test_delete_resolver_previews_and_deletes_inside_transaction(
             deleted=[DeletePreviewGroup(label="groups", count=1)],
             updated=[],
             blocked=[],
+            has_blockers=False,
         )
 
     monkeypatch.setattr(transaction, "atomic", atomic)

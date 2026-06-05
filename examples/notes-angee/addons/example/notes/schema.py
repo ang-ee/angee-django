@@ -12,10 +12,9 @@ from rebac import system_context
 from rebac.errors import MissingActorError
 from strawberry import auto, relay
 from strawberry_django.pagination import OffsetPaginated
-from strawberry_django_aggregates import AggregateBuilder
 
 from angee.base.models import public_id_of
-from angee.graphql.aggregates import rebac_aggregate_get_queryset
+from angee.graphql.aggregates import rebac_aggregate_builder
 from angee.graphql.crud import crud
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
@@ -149,13 +148,12 @@ class NoteOrder:
 # status axis is a choices column exposed as a GraphQL enum, so the echo must
 # emit the enum wire name (``DRAFT``) not the stored value (``draft``) —
 # resolved from the live filter type by the library (>=0.4.1).
-_note_aggregates = AggregateBuilder(
+_note_aggregates = rebac_aggregate_builder(
     model=Note,
     aggregate_fields=["id", "word_count"],
     group_by_fields=["status", "updated_at"],
     filter_type=NoteFilter,
     pagination_style="offset",
-    get_queryset=rebac_aggregate_get_queryset(Note.objects.all()),
     enable_filter_echo=True,
 ).build()
 

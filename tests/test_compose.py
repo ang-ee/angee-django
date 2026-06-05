@@ -256,42 +256,21 @@ def _compose_config() -> ComposeConfig:
     return config
 
 
-@pytest.mark.parametrize("should_import", [True, False])
-def test_compose_config_bootstrap_check_controls_generated_import(
+def test_compose_config_heals_stale_runtime_then_imports(
     monkeypatch: pytest.MonkeyPatch,
-    should_import: bool,
 ) -> None:
-    """App population imports generated models only when the cheap check passes."""
+    """App population emits a stale runtime, then imports generated models.
+
+    The hook is write-only and unconditional: it always heals drift before
+    importing, so a fresh or partially-deleted runtime is repaired in-process
+    rather than surfacing as a cryptic swappable-model resolution error.
+    """
 
     calls: list[str] = []
 
     class FakeRuntime:
-        def bootstrap_check(self, *, strict: bool = False) -> bool:
-            calls.append(f"bootstrap:{strict}")
-            return should_import
-
-        def import_generated_models(self) -> None:
-            calls.append("import")
-
-    monkeypatch.setattr(runtime_module.Runtime, "from_django", classmethod(lambda cls: FakeRuntime()))
-
-    _compose_config().import_models()
-
-    assert calls == ["bootstrap:False", *(["import"] if should_import else [])]
-
-
-def test_compose_config_strict_boot_runs_full_check(
-    monkeypatch: pytest.MonkeyPatch,
-    settings: Any,
-) -> None:
-    """Strict boot asks the runtime for a full drift check without argv sniffing."""
-
-    calls: list[str] = []
-    settings.ANGEE_RUNTIME_STRICT_BOOT = True
-
-    class FakeRuntime:
-        def bootstrap_check(self, *, strict: bool = False) -> bool:
-            calls.append(f"bootstrap:{strict}")
+        def emit_if_stale(self) -> bool:
+            calls.append("emit_if_stale")
             return True
 
         def import_generated_models(self) -> None:
@@ -301,7 +280,7 @@ def test_compose_config_strict_boot_runs_full_check(
 
     _compose_config().import_models()
 
-    assert calls == ["bootstrap:True", "import"]
+    assert calls == ["emit_if_stale", "import"]
 
 
 def test_build_check_reports_command_error_when_runtime_is_stale(

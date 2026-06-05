@@ -5,6 +5,7 @@ import {
 } from "@angee/sdk";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
+import { Glyph } from "../chrome/Glyph";
 import {
   useBreadcrumb,
   type BreadcrumbItem,
@@ -19,6 +20,8 @@ import {
   DialogPortal,
   DialogRoot,
 } from "../ui/dialog";
+import { DropdownMenu } from "../ui/dropdown-menu";
+import { DeletePreviewDialog } from "./DeletePreviewDialog";
 import {
   ListView,
   type ListColumn,
@@ -27,6 +30,7 @@ import {
 } from "./ListView";
 import { FormView, type FormField, type FormViewProps } from "./FormView";
 import { readPath } from "./ListInternals";
+import { useBulkDelete } from "./useBulkDelete";
 import {
   DataViewProvider,
   useDataView,
@@ -41,6 +45,15 @@ import type { GroupDescriptor } from "./page";
 
 /** Where the open record's form renders relative to the list. */
 export type RecordPlacement = "inline" | "drawer";
+
+export interface RecordSmartButtonDescriptor {
+  id: string;
+  label: React.ReactNode;
+  count: React.ReactNode;
+  icon?: string;
+  disabled?: boolean;
+  onClick?: () => void;
+}
 
 export interface DataPageProps<TRow extends Row = Row> {
   /** Model label, e.g. `"notes.Note"`, shared by the list and the form. */
@@ -72,6 +85,8 @@ export interface DataPageProps<TRow extends Row = Row> {
   >;
   /** Form options forwarded to `FormView`. */
   returning?: FormViewProps["returning"];
+  /** Host-owned record counters/actions rendered between form actions and views. */
+  recordSmartButtons?: readonly RecordSmartButtonDescriptor[];
   /** Hides the built-in "New" button when the host owns creation. */
   hideCreate?: boolean;
   rowHref?: (row: TRow) => string;
@@ -132,6 +147,7 @@ function DataPageBody<TRow extends Row = Row>({
     ListViewProps<TRow> & { defaultGroup?: DataViewGroup | null }
   >,
   returning,
+  recordSmartButtons = [],
   hideCreate = false,
   rowHref,
   className,
@@ -233,16 +249,47 @@ function DataPageBody<TRow extends Row = Row>({
     [creating, dataView.setPage, listState, onSelect, recordId],
   );
 
+  const recordDeleteIds = React.useMemo<ReadonlySet<string>>(
+    () =>
+      !creating && typeof recordId === "string"
+        ? new Set([recordId])
+        : EMPTY_RECORD_ID_SET,
+    [creating, recordId],
+  );
+  const handleRecordDeleted = React.useCallback(() => {
+    onClose?.();
+  }, [onClose]);
+  const recordDelete = useBulkDelete(model, recordDeleteIds, handleRecordDeleted);
+  const recordHeaderStart = open ? (
+    <RecordActions
+      canDelete={recordDeleteIds.size > 0}
+      isPending={recordDelete.isPending}
+      onDelete={recordDelete.deleteInitiate}
+    />
+  ) : null;
   const recordHeaderActions = open ? (
     <RecordHeaderActions
       view={dataView.state.view}
       navigation={recordNavigation}
+      smartButtons={recordSmartButtons}
       onViewChange={(view) => {
         dataView.setView(view);
         onClose?.();
       }}
     />
   ) : null;
+  const recordDeleteDialog =
+    recordDelete.isPreviewOpen && recordDelete.previewState ? (
+      <DeletePreviewDialog
+        preview={recordDelete.previewState}
+        recordCount={recordDelete.previewRecordCount}
+        blockedRecordCount={recordDelete.previewBlockedRecordCount}
+        overflowCount={recordDelete.previewOverflowCount}
+        isPending={recordDelete.isPending}
+        onConfirm={recordDelete.onConfirm}
+        onCancel={recordDelete.onCancel}
+      />
+    ) : null;
   const list = (
     <ListComponent
       model={model}
@@ -285,6 +332,7 @@ function DataPageBody<TRow extends Row = Row>({
       groups={formGroups}
       returning={returning}
       onSaved={handleSaved}
+      toolbarStart={recordHeaderStart}
       toolbar={recordHeaderActions}
     />
   ) : null;
@@ -306,6 +354,7 @@ function DataPageBody<TRow extends Row = Row>({
             </Dialog.Content>
           </DialogPortal>
         </DialogRoot>
+        {recordDeleteDialog}
       </div>
     );
   }
@@ -318,6 +367,7 @@ function DataPageBody<TRow extends Row = Row>({
           <div className="overflow-hidden rounded-md border border-border bg-sheet">
             {recordForm}
           </div>
+          {recordDeleteDialog}
         </>
       ) : (
         list
@@ -411,17 +461,59 @@ interface RecordNavigation {
   onNext?: () => void;
 }
 
+const EMPTY_RECORD_ID_SET: ReadonlySet<string> = new Set();
+
+function RecordActions({
+  canDelete,
+  isPending,
+  onDelete,
+}: {
+  canDelete: boolean;
+  isPending: boolean;
+  onDelete: () => void;
+}): React.ReactElement {
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger
+        render={
+          <Button type="button" variant="ghost" size="md">
+            <Glyph name="more-vertical" />
+            Actions
+          </Button>
+        }
+      />
+      <DropdownMenu.Portal>
+        <DropdownMenu.Positioner sideOffset={6} align="start">
+          <DropdownMenu.Content className="w-44">
+            <DropdownMenu.Item
+              variant="danger"
+              disabled={!canDelete || isPending}
+              onClick={onDelete}
+            >
+              <Glyph name="trash" />
+              Delete
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Positioner>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
 function RecordHeaderActions({
   view,
   navigation,
+  smartButtons,
   onViewChange,
 }: {
   view: DataViewKind;
   navigation: RecordNavigation | null;
+  smartButtons: readonly RecordSmartButtonDescriptor[];
   onViewChange: (view: DataViewKind) => void;
 }): React.ReactElement {
   return (
     <>
+      <RecordSmartButtons buttons={smartButtons} />
       {navigation ? <RecordPager navigation={navigation} /> : null}
       <DataViewSwitcher
         view={view}
@@ -429,6 +521,35 @@ function RecordHeaderActions({
         onViewChange={onViewChange}
       />
     </>
+  );
+}
+
+function RecordSmartButtons({
+  buttons,
+}: {
+  buttons: readonly RecordSmartButtonDescriptor[];
+}): React.ReactElement | null {
+  if (buttons.length === 0) return null;
+  return (
+    <div className="inline-flex h-btn-md items-stretch gap-px overflow-hidden rounded-md border border-border-subtle bg-border-subtle">
+      {buttons.map((button) => (
+        <button
+          key={button.id}
+          type="button"
+          disabled={button.disabled}
+          className="inline-flex items-center gap-1.5 bg-sheet px-3 text-xs leading-none text-fg outline-none transition-colors hover:bg-sheet-2 focus-visible:focus-ring disabled:cursor-not-allowed disabled:opacity-60 [&_.glyph]:size-[13px] [&_.glyph]:text-brand"
+          onClick={button.onClick}
+        >
+          <span className="inline-flex items-center gap-1 font-semibold leading-none">
+            {button.icon ? <Glyph name={button.icon} /> : null}
+            {button.count}
+          </span>
+          <span className="whitespace-nowrap font-medium text-fg-muted">
+            {button.label}
+          </span>
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -448,10 +569,10 @@ function RecordPager({
             <span className="font-medium text-fg">
               {navigation.current.toLocaleString()}
             </span>{" "}
-            of {navigation.total.toLocaleString()}
+            / {navigation.total.toLocaleString()}
           </>
         ) : (
-          <>of {navigation.total.toLocaleString()}</>
+          <>/ {navigation.total.toLocaleString()}</>
         )}
       </span>
       <div className="flex items-center gap-1">
