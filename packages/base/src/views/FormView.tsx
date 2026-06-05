@@ -717,9 +717,15 @@ function mutationData(
 }
 
 function emptyValue(field: FieldDescriptor): unknown {
+  if (isNullableScalarWidget(field)) return null;
   if (field.widget === "tagInput") return [];
   if (field.kind === "switch" || field.widget === "switch") return false;
   return "";
+}
+
+function isNullableScalarWidget(field: FieldDescriptor): boolean {
+  const id = widgetId(field);
+  return id === "date" || id === "datetime";
 }
 
 function hasOptionValue(field: FieldDescriptor): boolean {

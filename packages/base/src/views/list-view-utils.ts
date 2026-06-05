@@ -6,11 +6,13 @@ import type {
   DataToolbarCustomFilterChip,
   DataToolbarFilterField,
   DataToolbarFilterOption,
+  DataToolbarGroupOption,
 } from "../toolbars";
 import {
   DEFAULT_TEXT_FILTER_FIELD,
   Filter,
   type DataViewFilter,
+  type DataViewGroup,
   type DataViewLookup,
   type DataViewLookupOperator,
 } from "./data-view-model";
@@ -21,6 +23,50 @@ import {
   statusLabel,
 } from "./ListInternals";
 import type { ColumnDescriptor } from "./page";
+
+export function buildGroupOptions<TRow extends Row>(
+  columns: readonly ColumnDescriptor<TRow>[],
+  defaultGroup: DataViewGroup | null | undefined,
+): readonly DataToolbarGroupOption[] {
+  const options: DataToolbarGroupOption[] = [];
+  const seen = new Set<string>();
+  const addOption = (option: DataToolbarGroupOption) => {
+    if (seen.has(option.id)) return;
+    seen.add(option.id);
+    options.push(option);
+  };
+
+  if (defaultGroup) {
+    addOption({
+      id: defaultGroup.field,
+      label: groupFieldLabel(defaultGroup.field),
+      group: defaultGroup,
+      type: looksLikeDateField(defaultGroup.field) ? "date" : "value",
+    });
+  }
+
+  for (const column of columns) {
+    if (looksLikeDateField(column.field)) {
+      addOption({
+        id: column.field,
+        label: groupFieldLabel(column.field),
+        group: { field: column.field, granularity: "day" },
+        type: "date",
+      });
+      continue;
+    }
+    if (supportsChoiceFacet(column)) {
+      addOption({
+        id: column.field,
+        label: column.header ?? groupFieldLabel(column.field),
+        group: { field: column.field },
+        type: "value",
+      });
+    }
+  }
+
+  return options;
+}
 
 export function buildFilterOptions<TRow extends Row>(
   columns: readonly ColumnDescriptor<TRow>[],

@@ -31,16 +31,16 @@ import { DeletePreviewDialog } from "./DeletePreviewDialog";
 import { useDataViewSurface } from "./data-view-surface";
 import {
   GroupedListBody,
+} from "./GroupedList";
+import {
   groupPagerStatesEqual,
   type GroupPagerState,
-} from "./GroupedList";
+} from "./grouped-list-utils";
 import {
   FlatListBody,
   SelectionBar,
   dataViewGroupToAggregateDimension,
-  groupFieldLabel,
   groupMeasuresFromColumns,
-  looksLikeDateField,
   type FlatListBodyProps,
 } from "./ListInternals";
 import type { ListViewProps } from "./list-view-types";
@@ -49,6 +49,7 @@ import {
   addCustomFilter as addCustomFilterToFilter,
   buildFilterFields,
   buildFilterOptions,
+  buildGroupOptions,
   createLabelForModel,
   customFilterChipsFor,
   mergeFilterFields,
@@ -56,7 +57,6 @@ import {
   nextFacetFilter,
   nextTextFilter,
   removeCustomFilter,
-  supportsChoiceFacet,
   textFilterValue,
 } from "./list-view-utils";
 import type { ColumnDescriptor } from "./page";
@@ -457,50 +457,6 @@ function FlatListBodyWithAggregate<TRow extends Row>({
     enabled: Boolean(measures?.length),
   });
   return <FlatListBody {...props} footerAggregate={aggregate.aggregate} />;
-}
-
-export function buildGroupOptions<TRow extends Row>(
-  columns: readonly ColumnDescriptor<TRow>[],
-  defaultGroup: DataViewGroup | null | undefined,
-): readonly DataToolbarGroupOption[] {
-  const options: DataToolbarGroupOption[] = [];
-  const seen = new Set<string>();
-  const addOption = (option: DataToolbarGroupOption) => {
-    if (seen.has(option.id)) return;
-    seen.add(option.id);
-    options.push(option);
-  };
-
-  if (defaultGroup) {
-    addOption({
-      id: defaultGroup.field,
-      label: groupFieldLabel(defaultGroup.field),
-      group: defaultGroup,
-      type: looksLikeDateField(defaultGroup.field) ? "date" : "value",
-    });
-  }
-
-  for (const column of columns) {
-    if (looksLikeDateField(column.field)) {
-      addOption({
-        id: column.field,
-        label: groupFieldLabel(column.field),
-        group: { field: column.field, granularity: "day" },
-        type: "date",
-      });
-      continue;
-    }
-    if (supportsChoiceFacet(column)) {
-      addOption({
-        id: column.field,
-        label: column.header ?? groupFieldLabel(column.field),
-        group: { field: column.field },
-        type: "value",
-      });
-    }
-  }
-
-  return options;
 }
 
 function mergeGroupOptions(

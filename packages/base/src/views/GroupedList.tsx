@@ -45,6 +45,10 @@ import type {
   DataViewResourceOrder,
 } from "./data-view-model";
 import {
+  groupPagerStatesEqual,
+  type GroupPagerState,
+} from "./grouped-list-utils";
+import {
   ALIGN_CLASS,
   ListHeaderCell,
   RecordRow,
@@ -67,24 +71,6 @@ type ListFilter = UseResourceListOptions<ResourceTypeName>["filter"];
 
 function formatPagerNumber(value: number): string {
   return value.toLocaleString();
-}
-
-export interface GroupPagerState {
-  total: number;
-  fetching: boolean;
-  error: Error | null;
-}
-
-export function groupPagerStatesEqual(
-  left: GroupPagerState | null,
-  right: GroupPagerState,
-): boolean {
-  return (
-    left !== null &&
-    left.total === right.total &&
-    left.fetching === right.fetching &&
-    left.error === right.error
-  );
 }
 
 export interface GroupedListBodyProps<TRow extends Row> {

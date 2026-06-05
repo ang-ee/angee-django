@@ -29,7 +29,6 @@ import {
   type ListViewState,
   type StringIdRow,
 } from "./data-view-surface";
-import { buildGroupOptions } from "./ListView";
 import {
   FlatListBody,
   SelectionBar,
@@ -40,6 +39,7 @@ import {
   addCustomFilter as addCustomFilterToFilter,
   buildFilterFields,
   buildFilterOptions,
+  buildGroupOptions,
   customFilterChipsFor,
   mergeFilterFields,
   mergeFilterOptions,

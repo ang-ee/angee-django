@@ -60,6 +60,11 @@ const fields = [
     options: statusOptions,
   },
   {
+    name: "reminderAt",
+    label: "Reminder",
+    widget: "datetime",
+  },
+  {
     name: "createdAt",
     label: "Created At",
     widget: "datetime",
@@ -78,6 +83,7 @@ describe("FormView", () => {
       id: "note-1",
       title: "First",
       status: "ACTIVE",
+      reminderAt: null,
       createdAt: "2026-05-31T12:00:00Z",
       wordCount: 3,
     };
@@ -129,7 +135,7 @@ describe("FormView", () => {
 
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
     expect(sdkMocks.mutate).toHaveBeenCalledWith({
-      data: { title: "" },
+      data: { title: "", reminderAt: null },
     });
   });
 
