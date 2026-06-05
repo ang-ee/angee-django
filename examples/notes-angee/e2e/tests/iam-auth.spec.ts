@@ -47,7 +47,7 @@ test.describe("iam auth — OAuth sign-in", () => {
     ]);
     const url = request.url();
     expect(url).toContain("redirect_uri=");
-    expect(url).toContain(encodeURIComponent("/login/callback"));
+    expect(url).toContain(encodeURIComponent("/sso/callback"));
     expect(url).toContain("code_challenge="); // PKCE
   });
 });
@@ -58,7 +58,7 @@ test.describe("iam auth — OAuth callback", () => {
   test("reports an error and offers a way back when params are missing", async ({
     page,
   }) => {
-    await page.goto("/login/callback");
+    await page.goto("/sso/callback");
 
     await expect(page.getByText("Could not sign in")).toBeVisible({
       timeout: 15000,

@@ -157,12 +157,51 @@ export const IAM_OAUTH_CLIENTS_QUERY = `
       results {
         id
         displayName
+        vendor {
+          id
+          slug
+          displayName
+        }
         vendorLabel
         vendorSlug
         environment
+        clientId
+        clientSecret
+        issuer
+        authorizeEndpoint
+        tokenEndpoint
+        revokeEndpoint
+        userinfoEndpoint
+        jwksUri
+        discoveryUrl
+        isOidc
         isEnabled
         configurationState
+        supportsRefresh
+        refreshRotates
         supportsPkce
+        maxRefreshAgeSeconds
+        linkOnEmailMatch
+        createOnLogin
+        scopesCatalogue
+        defaultScopes
+        allowedEmailDomains
+      }
+    }
+  }
+`;
+
+export const IAM_VENDOR_OPTIONS_QUERY = `
+  query IamVendorOptions($pagination: OffsetPaginationInput) {
+    vendors(pagination: $pagination) {
+      totalCount
+      results {
+        id
+        slug
+        displayName
+        websiteUrl
+        icon
+        description
       }
     }
   }
@@ -176,17 +215,25 @@ export const IAM_CONNECTION_SUMMARY_QUERY = `
         id
         slug
         displayName
+        websiteUrl
+        icon
+        description
       }
     }
     externalAccounts(pagination: $pagination) {
       totalCount
       results {
         id
+        externalId
         email
         displayName
+        avatarUrl
         status
         credentialStatus
+        lastUsedAt
         vendor {
+          id
+          slug
           displayName
         }
       }
@@ -204,6 +251,105 @@ export const IAM_CONNECTION_SUMMARY_QUERY = `
         externalAccount {
           email
         }
+      }
+    }
+  }
+`;
+
+export const IAM_EXTERNAL_ACCOUNTS_QUERY = `
+  query IamExternalAccounts($pagination: OffsetPaginationInput) {
+    externalAccounts(pagination: $pagination) {
+      totalCount
+      results {
+        id
+        externalId
+        email
+        displayName
+        avatarUrl
+        status
+        credentialStatus
+        lastUsedAt
+        vendor {
+          id
+          slug
+          displayName
+        }
+      }
+    }
+  }
+`;
+
+export const IAM_CREATE_VENDOR_MUTATION = `
+  mutation IamCreateVendor($data: VendorInput!) {
+    createVendor(data: $data) {
+      id
+      slug
+      displayName
+      websiteUrl
+      icon
+      description
+    }
+  }
+`;
+
+export const IAM_UPDATE_VENDOR_MUTATION = `
+  mutation IamUpdateVendor($data: VendorPatch!) {
+    updateVendor(data: $data) {
+      id
+      slug
+      displayName
+      websiteUrl
+      icon
+      description
+    }
+  }
+`;
+
+export const IAM_CREATE_OAUTH_CLIENT_MUTATION = `
+  mutation IamCreateOAuthClient($data: OAuthClientInput!) {
+    createOauthClient(data: $data) {
+      id
+      displayName
+      vendorLabel
+      vendorSlug
+      environment
+      isEnabled
+      configurationState
+      supportsPkce
+    }
+  }
+`;
+
+export const IAM_UPDATE_OAUTH_CLIENT_MUTATION = `
+  mutation IamUpdateOAuthClient($data: OAuthClientPatch!) {
+    updateOauthClient(data: $data) {
+      id
+      displayName
+      vendorLabel
+      vendorSlug
+      environment
+      isEnabled
+      configurationState
+      supportsPkce
+    }
+  }
+`;
+
+export const IAM_CREATE_EXTERNAL_ACCOUNT_MUTATION = `
+  mutation IamCreateExternalAccount($data: ExternalAccountInput!) {
+    createExternalAccount(data: $data) {
+      id
+      externalId
+      email
+      displayName
+      avatarUrl
+      status
+      credentialStatus
+      lastUsedAt
+      vendor {
+        id
+        slug
+        displayName
       }
     }
   }
@@ -408,12 +554,31 @@ export interface IAMRebacSchemaData {
 export interface IAMOAuthClient extends Record<string, unknown> {
   id: string;
   displayName: string;
+  vendor: IAMVendorSummary;
   vendorLabel: string;
   vendorSlug: string;
   environment: string;
+  clientId: string;
+  clientSecret: string;
+  issuer: string;
+  authorizeEndpoint: string;
+  tokenEndpoint: string;
+  revokeEndpoint: string;
+  userinfoEndpoint: string;
+  jwksUri: string;
+  discoveryUrl: string;
+  isOidc: boolean;
   isEnabled: boolean;
   configurationState: string;
+  supportsRefresh: boolean;
+  refreshRotates: boolean;
   supportsPkce: boolean;
+  maxRefreshAgeSeconds: number | null;
+  linkOnEmailMatch: boolean;
+  createOnLogin: boolean;
+  scopesCatalogue: string[];
+  defaultScopes: string[];
+  allowedEmailDomains: string[];
 }
 
 /** Selection result for `IamOAuthClients`. */
@@ -425,6 +590,16 @@ export interface IAMOAuthClientsData {
 }
 
 export type IAMOAuthClientsVariables = IAMPaginationVariables;
+
+/** Selection result for `IamVendorOptions`. */
+export interface IAMVendorOptionsData {
+  vendors: {
+    totalCount: number;
+    results: IAMVendorSummary[];
+  };
+}
+
+export type IAMVendorOptionsVariables = IAMPaginationVariables;
 
 /** Selection result for `IamConnectionSummary`. */
 export interface IAMConnectionSummaryData {
@@ -444,21 +619,38 @@ export interface IAMConnectionSummaryData {
 
 export type IAMConnectionSummaryVariables = IAMPaginationVariables;
 
+export interface IAMExternalAccountsData {
+  externalAccounts: {
+    totalCount: number;
+    results: IAMExternalAccountSummary[];
+  };
+}
+
+export type IAMExternalAccountsVariables = IAMPaginationVariables;
+
 /** Selection result for SDL `VendorType` in `IamConnectionSummary`. */
 export interface IAMVendorSummary {
   id: string;
   slug: string;
   displayName: string;
+  websiteUrl: string;
+  icon: string;
+  description: string;
 }
 
 /** Selection result for SDL `ExternalAccountType` in `IamConnectionSummary`. */
-export interface IAMExternalAccountSummary {
+export interface IAMExternalAccountSummary extends Record<string, unknown> {
   id: string;
+  externalId: string;
   email: string;
   displayName: string;
+  avatarUrl: string;
   status: string;
   credentialStatus: string;
+  lastUsedAt: string | null;
   vendor: {
+    id: string;
+    slug: string;
     displayName: string;
   };
 }
@@ -495,4 +687,76 @@ export interface IAMGrantRoleData {
 export interface IAMGrantRoleVariables extends Record<string, unknown> {
   principalId: string;
   role: string;
+}
+
+export interface IAMCreateVendorData {
+  createVendor: IAMVendorSummary;
+}
+
+export interface IAMUpdateVendorData {
+  updateVendor: IAMVendorSummary;
+}
+
+export interface IAMVendorInputVariables extends Record<string, unknown> {
+  data: {
+    id?: string;
+    slug?: string;
+    displayName?: string;
+    websiteUrl?: string;
+    icon?: string;
+    description?: string;
+  };
+}
+
+export interface IAMCreateOAuthClientData {
+  createOauthClient: IAMOAuthClient;
+}
+
+export interface IAMUpdateOAuthClientData {
+  updateOauthClient: IAMOAuthClient;
+}
+
+export interface IAMOAuthClientInputVariables extends Record<string, unknown> {
+  data: {
+    id?: string;
+    vendor?: string;
+    displayName?: string;
+    clientId?: string;
+    clientSecret?: string;
+    environment?: string;
+    issuer?: string;
+    authorizeEndpoint?: string;
+    tokenEndpoint?: string;
+    revokeEndpoint?: string;
+    userinfoEndpoint?: string;
+    jwksUri?: string;
+    discoveryUrl?: string;
+    isOidc?: boolean;
+    isEnabled?: boolean;
+    scopesCatalogue?: string[];
+    defaultScopes?: string[];
+    supportsRefresh?: boolean;
+    refreshRotates?: boolean;
+    supportsPkce?: boolean;
+    maxRefreshAgeSeconds?: number | null;
+    linkOnEmailMatch?: boolean;
+    createOnLogin?: boolean;
+    allowedEmailDomains?: string[];
+  };
+}
+
+export interface IAMCreateExternalAccountData {
+  createExternalAccount: IAMExternalAccountSummary;
+}
+
+export interface IAMExternalAccountInputVariables extends Record<string, unknown> {
+  data: {
+    vendor: string;
+    externalId: string;
+    owner?: string | null;
+    email?: string;
+    displayName?: string;
+    avatarUrl?: string;
+    status?: string;
+  };
 }

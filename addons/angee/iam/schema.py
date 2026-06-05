@@ -48,6 +48,7 @@ from strawberry.permission import BasePermission
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
+from angee.base.models import instance_from_public_id
 from angee.graphql.crud import crud
 from angee.graphql.node import AngeeNode
 from angee.iam import identity
@@ -143,7 +144,7 @@ class VendorType(AngeeNode):
 
 @strawberry_django.type(OAuthClient)
 class OAuthClientType(AngeeNode):
-    """Admin GraphQL projection of non-secret IAM OAuth client registration."""
+    """Admin GraphQL projection of an IAM OAuth client registration."""
 
     display_name: auto
     vendor: VendorType
@@ -185,6 +186,12 @@ class OAuthClientType(AngeeNode):
 
         return cast(list[str], cast(Any, self).allowed_email_domain_values)
 
+    @strawberry_django.field(only=["client_secret"])
+    def client_secret(self) -> str:
+        """Return the decrypted client secret for the admin console."""
+
+        return str(cast(Any, self).client_secret or "")
+
     @strawberry_django.field
     def configuration_state(self) -> str:
         """Return this OAuth client's operator-facing configuration readiness."""
@@ -202,6 +209,17 @@ class OAuthClientType(AngeeNode):
         """Return the linked vendor slug."""
 
         return str(cast(Any, self).vendor_slug)
+
+
+@strawberry.type
+class CredentialOAuthClientType:
+    """Public-safe OAuth client projection for credential health rows."""
+
+    @strawberry.field
+    def display_name(self) -> str:
+        """Return the configured OAuth client display name."""
+
+        return str(cast(Any, self).display_name)
 
 
 @strawberry_django.type(ExternalAccount)
@@ -234,10 +252,15 @@ class CredentialType(AngeeNode):
     expires_at: auto
     last_refresh_at: auto
     last_refresh_status: auto
-    oauth_client: OAuthClientType
     external_account: ExternalAccountType | None
     created_at: auto
     updated_at: auto
+
+    @strawberry_django.field(only=["oauth_client"])
+    def oauth_client(self) -> CredentialOAuthClientType:
+        """Return a public-safe projection of the OAuth client."""
+
+        return cast(CredentialOAuthClientType, cast(Any, self).oauth_client)
 
 
 @strawberry.type
@@ -489,11 +512,12 @@ class VendorPatch:
 
 @strawberry.input
 class OAuthClientInput:
-    """Non-secret fields accepted when creating an OAuth client."""
+    """Admin-write fields accepted when creating an OAuth client."""
 
     vendor: relay.GlobalID
     display_name: str
     client_id: str
+    client_secret: str = ""
     environment: str = "prod"
     issuer: str = ""
     authorize_endpoint: str = ""
@@ -517,12 +541,13 @@ class OAuthClientInput:
 
 @strawberry.input
 class OAuthClientPatch:
-    """Non-secret fields accepted when updating an OAuth client."""
+    """Admin-write fields accepted when updating an OAuth client."""
 
     id: relay.GlobalID
     vendor: relay.GlobalID | None = strawberry.UNSET
     display_name: str | None = strawberry.UNSET
     client_id: str | None = strawberry.UNSET
+    client_secret: str | None = strawberry.UNSET
     environment: str | None = strawberry.UNSET
     issuer: str | None = strawberry.UNSET
     authorize_endpoint: str | None = strawberry.UNSET
@@ -542,6 +567,19 @@ class OAuthClientPatch:
     link_on_email_match: bool | None = strawberry.UNSET
     create_on_login: bool | None = strawberry.UNSET
     allowed_email_domains: list[str] | None = strawberry.UNSET
+
+
+@strawberry.input
+class ExternalAccountInput:
+    """Fields accepted when manually linking an external account."""
+
+    vendor: relay.GlobalID
+    external_id: str
+    owner: str | None = None
+    email: str = ""
+    display_name: str = ""
+    avatar_url: str = ""
+    status: str = "active"
 
 
 class PlatformAdminPermission(BasePermission):
@@ -880,10 +918,42 @@ def _user_principal(principal_id: str) -> Any:
     raise ValueError(f"User principal {principal_id!r} was not found.")
 
 
+def _vendor_from_id(vendor_id: relay.GlobalID) -> Any:
+    """Return the vendor addressed by one GraphQL global id."""
+
+    with system_context(reason="iam.graphql.external_account.vendor"):
+        vendor = instance_from_public_id(
+            Vendor,
+            vendor_id.node_id,
+            queryset=Vendor._default_manager.all(),
+        )
+    if vendor is None:
+        raise ValueError(f"Vendor {vendor_id!s} was not found.")
+    return vendor
+
+
 def _user_graphql_type_name() -> str:
     """Return the registered GraphQL type name for console user rows."""
 
     return str(cast(Any, UserType).__strawberry_definition__.name)
+
+
+def _session_backend(user: Any) -> str:
+    """Return the Django auth backend path to store in the login session.
+
+    Django requires an explicit backend when a user did not come from
+    ``authenticate()`` and multiple backends are installed. The backend string is
+    stored in the session; prefer the non-REBAC backend for normal session auth,
+    matching the P1 OIDC flow.
+    """
+
+    bound = getattr(user, "backend", None)
+    if bound:
+        return str(bound)
+    for path in getattr(settings, "AUTHENTICATION_BACKENDS", ()):
+        if "rebac" not in path.lower():
+            return str(path)
+    return "django.contrib.auth.backends.ModelBackend"
 
 
 @strawberry.type
@@ -1042,7 +1112,11 @@ class IAMMutation:
                 redirect_uri=redirect_uri,
             )
             with system_context(reason="iam.oidc.login"):
-                auth_login(request, result.user)
+                auth_login(
+                    request,
+                    result.user,
+                    backend=_session_backend(result.user),
+                )
         except OidcFlowError as error:
             return LoginCompletePayload(ok=False, error=str(error), error_code=error.code)
         return LoginCompletePayload(
@@ -1182,6 +1256,28 @@ _OAUTH_CLIENT_MUTATION = crud(
     write_context="iam.graphql.oauth_client",
 )
 """Admin OAuth-client CRUD: same elevated const-admin shape as the vendor surface."""
+
+
+@strawberry.type
+class IAMExternalAccountMutation:
+    """Admin mutations for manually linked external identities."""
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def create_external_account(self, data: ExternalAccountInput) -> ExternalAccountType:
+        """Create or update one external account via the account manager owner."""
+
+        vendor = _vendor_from_id(data.vendor)
+        owner = _user_principal(data.owner) if data.owner is not None else None
+        account = ExternalAccount.objects.link(
+            vendor,
+            data.external_id,
+            owner=owner,
+            email=data.email,
+            display_name=data.display_name,
+            avatar_url=data.avatar_url,
+            status=data.status,
+        )
+        return cast(ExternalAccountType, account)
 
 
 @strawberry.type
@@ -1345,7 +1441,7 @@ schemas = {
             UserType,
             CurrentUserType,
             VendorType,
-            OAuthClientType,
+            CredentialOAuthClientType,
             ExternalAccountType,
             CredentialType,
             AvailableConnection,
@@ -1362,6 +1458,7 @@ schemas = {
             IAMMutation,
             _VENDOR_MUTATION,
             _OAUTH_CLIENT_MUTATION,
+            IAMExternalAccountMutation,
             IAMPermissionHubMutation,
         ],
         "types": [
@@ -1369,6 +1466,7 @@ schemas = {
             CurrentUserType,
             VendorType,
             OAuthClientType,
+            CredentialOAuthClientType,
             ExternalAccountType,
             CredentialType,
             IAMRoleType,

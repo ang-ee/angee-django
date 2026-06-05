@@ -7,6 +7,7 @@ import { createElement } from "react";
 
 import { OAuthCallbackPage } from "./OAuthCallbackPage";
 import { OAuthLoginMethods } from "./OAuthLoginMethods";
+import { LEGACY_LOGIN_CALLBACK_PATH, LOGIN_CALLBACK_PATH } from "./redirects";
 import { ConnectionsPage } from "./views/ConnectionsPage";
 import { GrantsPage } from "./views/GrantsPage";
 import { OverviewPage } from "./views/OverviewPage";
@@ -48,7 +49,13 @@ const iam: BaseAddon = {
   routes: [
     {
       name: "iam.login.callback",
-      path: "/login/callback",
+      path: LOGIN_CALLBACK_PATH,
+      shell: "public",
+      component: OAuthCallbackPage,
+    },
+    {
+      name: "iam.login.callback.legacy",
+      path: LEGACY_LOGIN_CALLBACK_PATH,
       shell: "public",
       component: OAuthCallbackPage,
     },

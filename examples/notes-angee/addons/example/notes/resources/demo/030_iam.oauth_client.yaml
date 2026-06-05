@@ -12,6 +12,7 @@ rows:
       client_id: demo-oidc-client
       is_oidc: true
       is_enabled: true
+      discovery_url: https://accounts.google.com/.well-known/openid-configuration
       authorize_endpoint: https://accounts.google.com/o/oauth2/v2/auth
       token_endpoint: https://oauth2.googleapis.com/token
       default_scopes:

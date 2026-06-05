@@ -110,6 +110,37 @@ def test_fetch_discovery_caches_document_by_discovery_url(monkeypatch: pytest.Mo
     assert cache_sets[0][1] == 3600
 
 
+def test_oidc_http_helpers_send_browser_user_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cloudflare-fronted IdPs should not see urllib's default user agent."""
+
+    requests: list[Any] = []
+
+    class Response:
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'{"ok": true}'
+
+    def urlopen(req: Any, timeout: int) -> Response:
+        assert timeout == oidc_client.HTTP_TIMEOUT_SECONDS
+        requests.append(req)
+        return Response()
+
+    monkeypatch.setattr(oidc_client.request, "urlopen", urlopen)
+
+    oidc_client._get_json("https://idp.example/.well-known/openid-configuration")
+    oidc_client._post_form("https://idp.example/token", {"code": "abc"})
+
+    assert [req.get_header("User-agent") for req in requests] == [
+        oidc_client._BROWSER_USER_AGENT,
+        oidc_client._BROWSER_USER_AGENT,
+    ]
+
+
 def test_authorize_url_contains_state_nonce_and_pkce() -> None:
     """Authorize URL includes state, nonce, and PKCE parameters when supported."""
 
@@ -305,35 +336,45 @@ def test_resolver_blocks_inactive_user(oidc_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_resolver_rejects_unverified_email_link(oidc_tables: None) -> None:
-    """link_on_email_match must not link an UNVERIFIED email claim to an existing user."""
+def test_resolver_link_on_email_match_uses_signed_email_claim(
+    oidc_tables: None,
+) -> None:
+    """link_on_email_match follows the P1 policy without requiring email_verified."""
 
-    get_user_model().objects.create_user(username="verify-match", email="vm@example.com")
-    _vendor, oauth_client = _vendor_and_oauth_client(link_on_email_match=True, allowed_email_domains=["example.com"])
+    user = get_user_model().objects.create_user(username="verify-match", email="vm@example.com")
+    vendor, oauth_client = _vendor_and_oauth_client(link_on_email_match=True, allowed_email_domains=["example.com"])
 
-    with pytest.raises(OidcFlowError):
-        identity.resolve(
-            oauth_client,
-            sub="sub-unverified",
-            email="vm@example.com",
-            claims={"sub": "sub-unverified", "email": "vm@example.com"},  # no email_verified
-        )
+    resolved = identity.resolve(
+        oauth_client,
+        sub="sub-unverified",
+        email="vm@example.com",
+        claims={"sub": "sub-unverified", "email": "vm@example.com"},
+    )
 
+    assert resolved.pk == user.pk
+    with system_context(reason="test oidc assertions"):
+        account = ExternalAccount.objects.get(vendor=vendor, external_id="sub-unverified")
+    assert account.email == "vm@example.com"
 
 @pytest.mark.django_db(transaction=True)
-def test_resolver_rejects_unverified_email_create(oidc_tables: None) -> None:
-    """create_on_login must not provision a user from an unverified email claim."""
+def test_resolver_create_on_login_uses_signed_email_claim(
+    oidc_tables: None,
+) -> None:
+    """create_on_login follows the P1 policy without requiring email_verified."""
 
-    _vendor, oauth_client = _vendor_and_oauth_client(create_on_login=True, allowed_email_domains=["example.com"])
+    vendor, oauth_client = _vendor_and_oauth_client(create_on_login=True, allowed_email_domains=["example.com"])
 
-    with pytest.raises(OidcFlowError):
-        identity.resolve(
-            oauth_client,
-            sub="sub-unverified-new",
-            email="new@example.com",
-            claims={"sub": "sub-unverified-new", "email": "new@example.com"},  # no email_verified
-        )
+    user = identity.resolve(
+        oauth_client,
+        sub="sub-unverified-new",
+        email="new@example.com",
+        claims={"sub": "sub-unverified-new", "email": "new@example.com"},
+    )
 
+    assert user.email == "new@example.com"
+    with system_context(reason="test oidc assertions"):
+        account = ExternalAccount.objects.get(vendor=vendor, external_id="sub-unverified-new")
+    assert account.email == "new@example.com"
 
 @pytest.mark.django_db(transaction=True)
 def test_resolver_link_on_email_match_creates_external_account(

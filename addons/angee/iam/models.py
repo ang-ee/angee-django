@@ -384,7 +384,7 @@ class AccountManager(RebacManager.from_queryset(AccountQuerySet)):  # type: igno
                     subject_type=app_settings.REBAC_USER_TYPE,
                     optional_subject_relation="",
                 )
-                .order_by("subject_id")
+                .order_by(self._relationship_subject_id_ordering(Relationship))
                 .first()
             )
             if row is None:
@@ -396,6 +396,13 @@ class AccountManager(RebacManager.from_queryset(AccountQuerySet)):  # type: igno
                 return UserModel.objects.get(**{user_id_attr: row.subject_id})
             except UserModel.DoesNotExist:
                 return None
+
+    def _relationship_subject_id_ordering(self, relationship_model: type[Any]) -> str:
+        """Return the concrete ordering key for the active REBAC relationship store."""
+
+        if any(field.name == "subject_fk" for field in relationship_model._meta.fields):
+            return "subject_fk__resource_id"
+        return "subject_id"
 
 
 class ExternalAccount(SqidMixin, AuditMixin, AngeeModel):
@@ -527,7 +534,7 @@ class OAuthClientQuerySet(RebacQuerySet[Any]):
             self.system_context(reason="iam.graphql.available_connections")
             .filter(is_enabled=True, is_oidc=True)
             .exclude(client_id="")
-            .exclude(discovery_url="", authorize_endpoint="")
+            .exclude(discovery_url="")
             .annotate(
                 picker_vendor_slug=models.F("vendor__slug"),
                 picker_vendor_display_name=models.F("vendor__display_name"),

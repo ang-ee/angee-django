@@ -9,12 +9,12 @@ from typing import Any, cast
 
 import pytest
 from django.apps import AppConfig
-from django.contrib.auth import SESSION_KEY, get_user_model
+from django.contrib.auth import BACKEND_SESSION_KEY, SESSION_KEY, get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.management import call_command
 from django.db import connection
 from django.test import RequestFactory
-from django.test.utils import CaptureQueriesContext
+from django.test.utils import CaptureQueriesContext, override_settings
 from rebac import actor_context, app_settings, system_context
 from rebac.roles import grant
 
@@ -169,6 +169,12 @@ def test_login_start_returns_oidc_flow_error_payload(
     }
 
 
+@override_settings(
+    AUTHENTICATION_BACKENDS=(
+        "rebac.backends.auth.RebacBackend",
+        "django.contrib.auth.backends.ModelBackend",
+    )
+)
 def test_login_complete_provisions_and_logs_in(
     iam_connection_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -257,6 +263,7 @@ def test_login_complete_provisions_and_logs_in(
         "user": {"username": "oidc-user"},
     }
     assert request.session[SESSION_KEY] == str(user.pk)
+    assert request.session[BACKEND_SESSION_KEY] == "django.contrib.auth.backends.ModelBackend"
 
 
 def test_login_complete_returns_oidc_flow_error_payload(
@@ -463,6 +470,7 @@ def test_vendor_and_oauth_client_crud_are_admin_only(
                 vendor: $vendor,
                 displayName: "Console prod",
                 clientId: "console-client",
+                clientSecret: "console-secret",
                 isOidc: true,
                 isEnabled: true,
                 authorizeEndpoint: "https://issuer.example/authorize",
@@ -472,6 +480,7 @@ def test_vendor_and_oauth_client_crud_are_admin_only(
                 displayName
                 isOidc
                 configurationState
+                clientSecret
                 vendorLabel
                 vendorSlug
               }
@@ -484,20 +493,67 @@ def test_vendor_and_oauth_client_crud_are_admin_only(
     assert oauth_client["displayName"] == "Console prod"
     assert oauth_client["isOidc"] is True
     assert oauth_client["configurationState"] == "ready"
+    assert oauth_client["clientSecret"] == "console-secret"
     assert oauth_client["vendorLabel"] == "Console"
     assert oauth_client["vendorSlug"] == "console"
+    with system_context(reason="test.iam.oauth_client_secret"):
+        stored_client = OAuthClient.objects.get(client_id="console-client")
+    assert stored_client.client_secret == "console-secret"
+
+    external_account_mutation = """
+        mutation CreateExternalAccount($vendor: ID!, $owner: String!) {
+          createExternalAccount(data: {
+            vendor: $vendor,
+            owner: $owner,
+            externalId: "admin-sub",
+            email: "admin@example.com",
+            displayName: "Admin OIDC",
+            status: "active"
+          }) {
+            id
+            externalId
+            email
+            displayName
+            status
+            vendor { slug }
+          }
+        }
+    """
+    linked = _data(
+        _execute(
+            console_schema,
+            external_account_mutation,
+            {"vendor": vendor_id, "owner": str(admin.pk)},
+            user=admin,
+        )
+    )["createExternalAccount"]
+    assert linked["externalId"] == "admin-sub"
+    assert linked["email"] == "admin@example.com"
+    assert linked["vendor"]["slug"] == "console"
+    with system_context(reason="test.iam.external_account"):
+        account = ExternalAccount.objects.get(external_id="admin-sub")
+    assert ExternalAccount.objects.owner_for(account) == admin
+    assert _execute(
+        console_schema,
+        external_account_mutation,
+        {"vendor": vendor_id, "owner": str(admin.pk)},
+        user=user,
+    ).errors is not None
 
 
-def test_oauth_client_secret_never_appears_in_graphql_projection(
+def test_oauth_client_secret_is_console_readable_and_public_hidden(
     iam_connection_tables: None,
 ) -> None:
-    """Encrypted columns are absent from every IAM GraphQL schema."""
+    """OAuth client secrets are admin-readable while remaining absent publicly."""
 
     public_sdl = _schema("public").as_str()
     console_sdl = _schema("console").as_str()
 
+    assert "clientSecret" not in public_sdl
+    assert "clientSecret" in _sdl_block(console_sdl, "type OAuthClientType")
+    assert "clientSecret" in _sdl_block(console_sdl, "input OAuthClientInput")
+    assert "clientSecret" in _sdl_block(console_sdl, "input OAuthClientPatch")
     for sdl in (public_sdl, console_sdl):
-        assert "clientSecret" not in sdl
         assert "material" not in sdl
         assert "identityClaims" not in sdl
 
@@ -789,6 +845,15 @@ def _data(result: Any) -> dict[str, Any]:
     return cast(dict[str, Any], result.data)
 
 
+def _sdl_block(sdl: str, header: str) -> str:
+    """Return one SDL block by its header prefix."""
+
+    start = sdl.index(header)
+    body = sdl.index("{", start)
+    end = sdl.index("\n}", body)
+    return sdl[start:end]
+
+
 def _request(user: Any) -> Any:
     """Return a request object with a minimal mutable session."""
 
@@ -809,6 +874,7 @@ def _vendor_and_oauth_client(
         "client_id": f"{slug}-client",
         "client_secret": "secret",
         "issuer": "https://issuer.example",
+        "discovery_url": "https://issuer.example/.well-known/openid-configuration",
         "authorize_endpoint": "https://issuer.example/authorize",
         "token_endpoint": "https://issuer.example/token",
         "userinfo_endpoint": "https://issuer.example/userinfo",

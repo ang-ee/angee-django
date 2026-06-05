@@ -260,7 +260,11 @@ def _get_json(
 ) -> dict[str, Any]:
     """GET a JSON document using the standard library HTTP client."""
 
-    request_headers = {"Accept": "application/json", **dict(headers or {})}
+    request_headers = {
+        "Accept": "application/json",
+        "User-Agent": _BROWSER_USER_AGENT,
+        **dict(headers or {}),
+    }
     req = request.Request(url, headers=request_headers, method="GET")
     try:
         with request.urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as response:
@@ -279,6 +283,7 @@ def _post_form(url: str, fields: Mapping[str, str]) -> dict[str, Any]:
         headers={
             "Accept": "application/json",
             "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": _BROWSER_USER_AGENT,
         },
         method="POST",
     )

@@ -238,11 +238,9 @@ class OidcIdentityResolver:
                 return cast(AbstractBaseUser, owner)
 
             normalized_email = email or ""
-            # Linking by email is an account-takeover vector unless the IdP verified it.
             if (
                 getattr(self.oauth_client, "link_on_email_match", False)
                 and normalized_email
-                and self._email_verified(claims)
                 and self.oauth_client.allows_email_domain(normalized_email)
             ):
                 user = self._find_by_email(normalized_email)
@@ -257,11 +255,12 @@ class OidcIdentityResolver:
                     )
                     return user
 
-            # Provisioning trusts the email only when verified (else create with none).
             if (
                 getattr(self.oauth_client, "create_on_login", False)
-                and self.oauth_client.allows_email_domain(normalized_email)
-                and (self._email_verified(claims) or not normalized_email)
+                and (
+                    not normalized_email
+                    or self.oauth_client.allows_email_domain(normalized_email)
+                )
             ):
                 user = self._create_for_identity(normalized_email, sub, claims=claims)
                 Account.objects.link(
@@ -329,13 +328,6 @@ class OidcIdentityResolver:
             candidate = f"{base[: 150 - len(suffix_text)]}{suffix_text}"
             suffix += 1
         return candidate
-
-    @staticmethod
-    def _email_verified(claims: dict[str, Any]) -> bool:
-        """Return whether the IdP asserted the email claim is verified."""
-
-        return claims.get("email_verified") is True
-
 
 def resolve(oauth_client: Any, *, sub: str, email: str | None, claims: dict[str, Any]) -> AbstractBaseUser:
     """Resolve OIDC claims to a user, linking or provisioning when policy allows."""

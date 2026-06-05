@@ -9,16 +9,23 @@ import iam from "./index";
 describe("iam addon manifest", () => {
   test("registers the public login callback route", () => {
     const route = iam.routes?.find((item) => item.name === "iam.login.callback");
-    expect(iam.routes).toHaveLength(8);
+    const legacyRoute = iam.routes?.find(
+      (item) => item.name === "iam.login.callback.legacy",
+    );
+    expect(iam.routes).toHaveLength(9);
     expect(route?.name).toBe("iam.login.callback");
-    expect(route?.path).toBe("/login/callback");
+    expect(route?.path).toBe("/sso/callback");
     expect(route?.shell).toBe("public");
     expect(route?.component).toBeTypeOf("function");
+    expect(legacyRoute?.path).toBe("/login/callback");
+    expect(legacyRoute?.shell).toBe("public");
+    expect(legacyRoute?.component).toBe(route?.component);
   });
 
   test("registers the Identity console routes", () => {
     expect(iam.routes?.map((route) => route.name)).toEqual([
       "iam.login.callback",
+      "iam.login.callback.legacy",
       "iam.overview",
       "iam.users",
       "iam.roles",
@@ -27,7 +34,7 @@ describe("iam addon manifest", () => {
       "iam.schema",
       "iam.connections",
     ]);
-    expect(iam.routes?.slice(1).map((route) => route.shell)).toEqual([
+    expect(iam.routes?.slice(2).map((route) => route.shell)).toEqual([
       "console",
       "console",
       "console",

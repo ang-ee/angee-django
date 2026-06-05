@@ -9,6 +9,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.db import connection
+from django.test.utils import override_settings
 from django.utils import timezone
 from rebac import system_context, to_object_ref, to_subject_ref
 from rebac.models import active_relationship_model
@@ -160,6 +161,37 @@ def test_connection_managers_authorize_their_own_writes() -> None:
         assert _owner_tuple_exists(user, account)
         assert not _owner_tuple_exists(user, credential)
         assert Credential.objects.with_actor(user).filter(pk=credential.pk).exists()
+    finally:
+        if created_models:
+            with connection.schema_editor() as schema_editor:
+                for model in reversed(created_models):
+                    schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(REBAC_LOCAL_BACKEND_STORAGE="registry")
+def test_external_account_owner_lookup_uses_active_relationship_storage() -> None:
+    """owner_for() works with REBAC's registry-backed relationship model."""
+
+    created_models = _create_missing_tables()
+    try:
+        user = get_user_model().objects.create_user(
+            username="registry-owner",
+            email="registry@example.com",
+        )
+        call_command("rebac", "sync", verbosity=0)
+        with system_context(reason="test setup"):
+            vendor = Vendor.objects.create(slug="registry", display_name="Registry")
+
+        account = ExternalAccount.objects.link(
+            vendor,
+            "registry-sub",
+            owner=user,
+            email="registry@example.com",
+        )
+
+        assert _owner_tuple_exists(user, account)
+        assert ExternalAccount.objects.owner_for(account) == user
     finally:
         if created_models:
             with connection.schema_editor() as schema_editor:
