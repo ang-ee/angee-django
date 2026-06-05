@@ -13,12 +13,12 @@ from strawberry import relay
 from strawberry.extensions.field_extension import FieldExtension, SyncExtensionResolver
 from strawberry.types import Info
 
-from angee.base.models import instance_from_public_id
-from angee.graphql.deletion import (
+from angee.base.deletion import (
     DeletionPreview,
     DeletionPreviewGroup,
     DeletionPreviewNode,
 )
+from angee.base.models import instance_from_public_id
 from angee.graphql.introspection import django_model, surface_name
 
 

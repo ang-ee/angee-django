@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime
 from decimal import Decimal
 
-from angee.resources.serialization import json_safe
+from angee.base.serialization import json_safe
 
 
 def test_json_safe_normalizes_nested_values() -> None:

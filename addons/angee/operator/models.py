@@ -18,6 +18,8 @@ from angee.base.models import AngeeModel
 class OperatorConnection(AngeeModel):
     """Table-less REBAC type anchor for the operator daemon connection."""
 
+    runtime = True
+
     class Meta:
         abstract = True
         managed = False

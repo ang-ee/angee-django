@@ -118,8 +118,6 @@ After graph resolution, `Composer` writes the final settings:
 - `ASGI_APPLICATION = "angee.asgi.application"`
 - `ANGEE_RUNTIME_DIR` becomes the normalized runtime path
 - the runtime parent directory is prepended to `sys.path`
-- `MIGRATION_MODULES` redirects each runtime-emitting app label to
-  `<ANGEE_RUNTIME_MODULE>.<label>.migrations`
 
 Django accepts `AppConfig` instances in `INSTALLED_APPS`, so Django app loading
 uses the exact config objects the composer already resolved instead of resolving
@@ -131,12 +129,7 @@ them with conflicting values:
 - `ANGEE_RUNTIME_DIR`
 - `ASGI_APPLICATION`
 - `INSTALLED_APPS`
-- `MIGRATION_MODULES`
 - `ROOT_URLCONF`
-
-For `MIGRATION_MODULES`, unrelated project entries are preserved. If a project
-already defines a different migration module for an emitted runtime app, the
-composer fails fast.
 
 ## Autoconfig
 
@@ -199,12 +192,13 @@ model classes must live in importable modules with migration packages.
 `Runtime.from_django()` reads:
 
 - installed app configs from Django's app registry
-- only apps with `emits_runtime_models = True`
 - `ANGEE_RUNTIME_DIR`
 - `ANGEE_RUNTIME_MODULE`, defaulting to `runtime`
 
-`Runtime` groups abstract source models by app label, applies `extends`
-extension bases, rejects field collisions, renders concrete model source, emits
+`Runtime` imports installed model modules during Django's model import phase,
+groups abstract source models with `runtime = True` by app label, applies
+`extends` extension bases, rejects field collisions, redirects
+`MIGRATION_MODULES` for emitted labels, renders concrete model source, emits
 model decorators declared by composed bases, and imports generated model modules.
 
 Generated files live under `runtime/`:
@@ -244,8 +238,6 @@ Common attributes:
 
 - `depends_on`: app names, or labels already present in the resolved app graph,
   that must load before this app
-- `emits_runtime_models`: whether Angee should materialize abstract source
-  models for this app
 - `schemas`: GraphQL schema contribution declaration, owned by
   `angee.graphql`
 - `resources`: resource file declarations, owned by `angee.resources`
@@ -254,6 +246,8 @@ Common attributes:
 Conventions:
 
 - abstract source models live in `models.py`
+- source models that materialize declare `runtime = True`; extension models
+  declare `extends = "app.Model"`
 - GraphQL schema contributions usually live in `schema.py`
 - HTTP route contributions live in `urls.py` as iterable `urlpatterns`
 - WebSocket route contributions live in `asgi.py` as iterable
@@ -263,8 +257,8 @@ Conventions:
 - settings contributions live in optional `autoconfig.py`
 
 Route modules are read only from apps that declare a composition contract, such
-as `depends_on = ()` or `emits_runtime_models = True`, so plain Django
-dependencies do not leak URLs into the Angee root router.
+as `depends_on = ()`, so plain Django dependencies do not leak URLs into the
+Angee root router.
 
 The GraphQL addon is the routing example:
 
@@ -272,7 +266,6 @@ The GraphQL addon is the routing example:
 class GraphQLConfig(AppConfig):
     name = "angee.graphql"
     depends_on = ("angee.base", "channels", "daphne")
-    emits_runtime_models = False
     schemas = None
 ```
 
@@ -282,7 +275,6 @@ The IAM addon is the explicit declaration example:
 class IAMConfig(AppConfig):
     name = "angee.iam"
     depends_on = ("angee.resources", "angee.graphql", "django.contrib.auth")
-    emits_runtime_models = True
     schemas = "schema.schemas"
     permissions = "permissions.zed"
     resources = {
@@ -330,8 +322,9 @@ ANGEE_RUNTIME_DIR: "{BASE_DIR}/runtime"
 ANGEE_DATA_DIR: "{BASE_DIR}/../../.angee/data"
 ```
 
-The project does not declare `ROOT_URLCONF`, `ASGI_APPLICATION`, or
-`MIGRATION_MODULES` for emitted runtime apps. Those are composer-owned.
+The project does not declare `ROOT_URLCONF` or `ASGI_APPLICATION`; those are
+composer-owned. `Runtime` owns `MIGRATION_MODULES` for emitted runtime labels and
+preserves unrelated project entries.
 
 ## Invariants
 

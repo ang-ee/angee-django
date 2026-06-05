@@ -18,7 +18,6 @@ class IAMConfig(AppConfig):
         "django.contrib.auth",
         "django.contrib.sessions",
     )
-    emits_runtime_models = True
     schemas = "schema.schemas"
     permissions = "permissions.zed"
 

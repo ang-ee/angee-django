@@ -85,10 +85,10 @@ class Runtime:
                 "runtime directory."
             )
         return cls(
-            (app_config for app_config in apps.get_app_configs() if getattr(app_config, "emits_runtime_models", False)),
+            apps.get_app_configs(),
             runtime_dir=Path(runtime_dir),
             runtime_module=str(runtime_module),
-        )
+        ).configure_migration_modules()
 
     def render_sources(self) -> dict[Path, str]:
         """Return generated runtime source files keyed by relative path.
@@ -137,6 +137,19 @@ class Runtime:
 
         for label in self.labels:
             importlib.import_module(f"{self.runtime_module}.{label}.models")
+
+    def configure_migration_modules(self) -> Runtime:
+        """Redirect migrations for emitted runtime app labels."""
+
+        migration_modules = dict(getattr(settings, "MIGRATION_MODULES", {}))
+        for label in self.labels:
+            module = f"{self.runtime_module}.{label}.migrations"
+            configured = migration_modules.get(label)
+            if configured is not None and configured != module:
+                raise ImproperlyConfigured(f"Project settings define Runtime-owned MIGRATION_MODULES[{label!r}]")
+            migration_modules[label] = module
+        settings.MIGRATION_MODULES = migration_modules
+        return self
 
     def _write_sources(self) -> None:
         """Write every rendered source file, creating parents as needed."""
@@ -656,12 +669,17 @@ class Runtime:
             if not issubclass(value, AngeeModel) or value is AngeeModel:
                 continue
             model_class = cast(type[AngeeModel], value)
-            if not model_class._meta.abstract or not model_class.is_composer_emitted():
+            if not model_class._meta.abstract:
                 continue
             seen.add(value)
             if model_class.get_extension_target() is None:
-                models_owned.append(model_class)
+                if model_class.is_runtime_model():
+                    models_owned.append(model_class)
             else:
+                if model_class.is_runtime_model():
+                    raise ImproperlyConfigured(
+                        f"{model_class._meta.label} declares both runtime = True and extends"
+                    )
                 extensions.append(model_class)
         return (
             tuple(sorted(models_owned, key=lambda cls: cls._meta.object_name)),

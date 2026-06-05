@@ -12,8 +12,8 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from strawberry import auto, relay
 
+from angee.base.deletion import DeletionPreview, DeletionPreviewGroup
 from angee.graphql.crud import _delete_resolver, crud
-from angee.graphql.deletion import DeletionPreview, DeletionPreviewGroup
 
 
 @strawberry_django.type(Group)

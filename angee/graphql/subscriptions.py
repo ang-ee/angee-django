@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from typing import Any
 
 import strawberry
 from asgiref.sync import sync_to_async
@@ -12,7 +11,7 @@ from django.db import models
 from rebac import current_actor
 
 from angee.graphql.access import ChangeReadGate
-from angee.graphql.events import ChangeEvent
+from angee.graphql.events import ChangeEvent, ChangePayload
 from angee.graphql.publishing import change_group, connect_publishers
 
 
@@ -50,8 +49,8 @@ def changes(model: type[models.Model], *, field: str) -> type:
 
 async def _subscribe(
     model: type[models.Model],
-) -> AsyncGenerator[dict[str, Any], None]:
-    """Yield raw change payloads for ``model`` from the channel layer."""
+) -> AsyncGenerator[ChangePayload, None]:
+    """Yield change payloads for ``model`` from the channel layer."""
 
     layer = get_channel_layer()
     if layer is None:
@@ -64,6 +63,6 @@ async def _subscribe(
             message = await layer.receive(channel)
             payload = message.get("payload")
             if payload:
-                yield payload
+                yield ChangePayload.from_mapping(payload)
     finally:
         await layer.group_discard(group, channel)

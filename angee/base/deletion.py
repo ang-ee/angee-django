@@ -1,4 +1,4 @@
-"""Cascade deletion preview domain objects."""
+"""Cascade deletion preview domain objects for Django model instances."""
 
 from __future__ import annotations
 

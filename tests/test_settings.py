@@ -42,30 +42,6 @@ def _compose(tmp_path: Path) -> dict[str, Any]:
     return settings
 
 
-def test_resource_migrations_are_redirected_into_runtime(tmp_path: Path) -> None:
-    """The resource addon owns its emitted model migrations."""
-
-    settings = _compose(tmp_path)
-
-    migration_modules = settings["MIGRATION_MODULES"]
-    assert "base" not in migration_modules
-    assert migration_modules["resources"] == "runtime.resources.migrations"
-    assert migration_modules["notes"] == "runtime.notes.migrations"
-
-
-def test_runtime_migration_module_conflicts_fail_fast(tmp_path: Path) -> None:
-    """Projects cannot silently move migrations for emitted runtime apps."""
-
-    settings: dict[str, Any] = {
-        "INSTALLED_APPS": ("angee.resources",),
-        "ANGEE_RUNTIME_DIR": tmp_path / "runtime",
-        "MIGRATION_MODULES": {"resources": "custom.resources.migrations"},
-    }
-
-    with pytest.raises(ImproperlyConfigured, match=r"MIGRATION_MODULES\['resources'\]"):
-        Composer(settings).compose_settings()
-
-
 def test_base_is_installed_exactly_once(tmp_path: Path) -> None:
     """The model foundation is a normal installed Django app."""
 
@@ -106,7 +82,6 @@ def test_iam_user_is_the_default_auth_model(tmp_path: Path) -> None:
     assert "angee.resources.apps.ResourcesConfig" in installed
     assert settings["AUTH_USER_MODEL"] == "iam.User"
     assert "angee.iam.apps.IAMConfig" in installed
-    assert settings["MIGRATION_MODULES"]["iam"] == "runtime.iam.migrations"
 
 
 def test_addons_are_sorted_by_declared_dependencies(tmp_path: Path) -> None:

@@ -13,7 +13,6 @@ class NotesConfig(AppConfig):
     name = "example.notes"
     label = "notes"
     depends_on = ("angee.iam",)
-    emits_runtime_models = True
     schemas = "schema.schemas"
     permissions = "permissions.zed"
     resources = {

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
+from strawberry.types import get_object_definition
+from strawberry_django.utils.typing import get_django_definition
 
 
 def surface_name(surface: object) -> str:
@@ -15,7 +17,7 @@ def surface_name(surface: object) -> str:
 def surface_field_names(surface: object) -> tuple[str, ...]:
     """Return field names declared by a Strawberry type."""
 
-    definition = getattr(surface, "__strawberry_definition__", None)
+    definition = get_object_definition(surface)
     if definition is None:
         raise ImproperlyConfigured(f"{surface_name(surface)} is not a Strawberry type")
     return tuple(field.python_name for field in definition.fields)
@@ -24,7 +26,7 @@ def surface_field_names(surface: object) -> tuple[str, ...]:
 def django_model(node: type) -> type[models.Model]:
     """Return the Django model backing a strawberry-django type."""
 
-    definition = getattr(node, "__strawberry_django_definition__", None)
+    definition = get_django_definition(node)
     if definition is None:
         raise ImproperlyConfigured(f"{surface_name(node)} is not a strawberry_django type")
     return definition.model

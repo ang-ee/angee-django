@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 from django.apps import apps
+from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 
 import angee.compose as compose_package
@@ -22,9 +23,23 @@ from angee.compose.runtime import Runtime
 class DecoratedRevisionThing(RevisionMixin, AngeeModel):
     """Abstract model used to test composer-emitted model decorators."""
 
+    runtime = True
+
     revisioned_fields = ("body",)
 
     body = models.TextField()
+
+    class Meta:
+        """Django model options for the test source model."""
+
+        abstract = True
+        app_label = "tests"
+
+
+class SkippedRuntimeThing(AngeeModel):
+    """Abstract model used to test app-level runtime model selection."""
+
+    name = models.CharField(max_length=64)
 
     class Meta:
         """Django model options for the test source model."""
@@ -56,6 +71,29 @@ def test_runtime_renders_resource_sources(tmp_path: Path) -> None:
     assert 'app_label = "resources"' in sources[Path("resources/models.py")]
     assert ".angee-manifest.json" not in {str(path) for path in sources}
     assert Path("permissions.zed") not in sources
+
+
+def test_runtime_configures_migrations_for_runtime_labels(tmp_path: Path, settings: Any) -> None:
+    """Runtime owns migration redirects for labels it materializes."""
+
+    runtime = runtime_for(tmp_path)
+    settings.MIGRATION_MODULES = {"custom": "custom.migrations"}
+
+    returned = runtime.configure_migration_modules()
+
+    assert returned is runtime
+    assert settings.MIGRATION_MODULES["custom"] == "custom.migrations"
+    assert settings.MIGRATION_MODULES["resources"] == "runtime.resources.migrations"
+
+
+def test_runtime_migration_module_conflicts_fail_fast(tmp_path: Path, settings: Any) -> None:
+    """Projects cannot silently move migrations for emitted runtime apps."""
+
+    runtime = runtime_for(tmp_path)
+    settings.MIGRATION_MODULES = {"resources": "custom.resources.migrations"}
+
+    with pytest.raises(ImproperlyConfigured, match=r"MIGRATION_MODULES\['resources'\]"):
+        runtime.configure_migration_modules()
 
 
 def test_runtime_renders_iam_user_sources(tmp_path: Path) -> None:
@@ -92,6 +130,44 @@ def test_runtime_renders_model_decorators_from_mixins(tmp_path: Path) -> None:
     assert "import reversion" in source
     assert "@reversion.register(fields=('body',))" in source
     assert source.index("@reversion.register") < source.index("class DecoratedRevisionThing")
+
+
+def test_runtime_emits_only_models_marked_runtime(tmp_path: Path) -> None:
+    """Only abstract source models declaring ``runtime = True`` are emitted."""
+
+    app_config = SimpleNamespace(
+        label="selected",
+        name=__name__,
+        module=sys.modules[__name__],
+        models_module=sys.modules[__name__],
+    )
+
+    source = Runtime((app_config,), runtime_dir=tmp_path / "runtime").render_sources()[Path("selected/models.py")]
+
+    assert "class DecoratedRevisionThing" in source
+    assert "class SkippedRuntimeThing" not in source
+
+
+def test_runtime_rejects_materialized_extensions(tmp_path: Path) -> None:
+    """Extensions use ``extends`` and must not also declare ``runtime = True``."""
+
+    class BadExtension(AngeeModel):
+        runtime = True
+        extends = "tests.DecoratedRevisionThing"
+
+        class Meta:
+            abstract = True
+            app_label = "tests"
+
+    app_config = SimpleNamespace(
+        label="selected",
+        name=__name__,
+        module=sys.modules[__name__],
+        models_module=SimpleNamespace(BadExtension=BadExtension),
+    )
+
+    with pytest.raises(ImproperlyConfigured, match="runtime = True and extends"):
+        Runtime((app_config,), runtime_dir=tmp_path / "runtime")
 
 
 def test_runtime_emit_and_check_detect_drift(tmp_path: Path) -> None:

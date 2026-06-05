@@ -11,7 +11,7 @@ from rebac.backends import backend
 from rebac.field_visibility import check_field_access, gated_read_fields
 from rebac.resources import model_resource_type
 
-from angee.graphql.events import ChangeEvent
+from angee.graphql.events import ChangeEvent, ChangePayload
 
 
 class ChangeReadGate:
@@ -32,14 +32,15 @@ class ChangeReadGate:
 
     def filter(
         self,
-        payload: Mapping[str, Any],
+        payload: Mapping[str, Any] | ChangePayload,
     ) -> ChangeEvent | None:
         """Return a readable change event, or ``None`` when hidden."""
 
+        change = payload if isinstance(payload, ChangePayload) else ChangePayload.from_mapping(payload)
         if not self.resource_type:
-            return ChangeEvent.from_payload(payload)
+            return ChangeEvent.from_payload(change)
 
-        resource = ObjectRef(self.resource_type, str(payload.get("resource_id", payload["id"])))
+        resource = ObjectRef(self.resource_type, change.resource_identifier)
         allowed = check_field_access(
             self.active_backend,
             subject=self.actor,
@@ -48,40 +49,31 @@ class ChangeReadGate:
         )
         if not allowed.allowed:
             return None
-        return ChangeEvent.from_payload(self._redact(payload, resource))
+        return ChangeEvent.from_payload(self._redact(change, resource))
 
     def _redact(
         self,
-        payload: Mapping[str, Any],
+        payload: ChangePayload,
         resource: ObjectRef,
-    ) -> dict[str, Any]:
+    ) -> ChangePayload:
         """Return ``payload`` with unreadable field-gated values removed.
 
         Each gated field performs one backend check.
         """
 
-        fields = payload.get("changed_fields")
-        values = payload.get("changed_values")
-        if not self.gated_fields or not isinstance(fields, list):
-            return dict(payload)
+        if not self.gated_fields or payload.changed_fields is None:
+            return payload
 
         denied = {
             field
-            for field in fields
+            for field in payload.changed_fields
             if field in self.gated_fields
             and not self._can_read_field(
                 field,
                 resource,
             )
         }
-        if not denied:
-            return dict(payload)
-
-        redacted = dict(payload)
-        redacted["changed_fields"] = [field for field in fields if field not in denied]
-        if isinstance(values, Mapping):
-            redacted["changed_values"] = {field: value for field, value in values.items() if field not in denied}
-        return redacted
+        return payload.redacted(denied)
 
     def _can_read_field(self, field: str, resource: ObjectRef) -> bool:
         """Return whether the actor may read one gated field."""

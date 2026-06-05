@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, cast
 
 import strawberry
@@ -29,9 +30,6 @@ from angee.graphql.introspection import (
 DEFAULT_SCHEMA_NAME = "public"
 """Default GraphQL schema name served by Angee hosts."""
 
-SchemaParts = dict[str, tuple[object, ...]]
-"""GraphQL merge buckets for one schema name."""
-
 SCHEMA_PART_KEYS: tuple[str, ...] = (
     "query",
     "mutation",
@@ -46,6 +44,73 @@ _ROOT_TYPE_NAMES = {
     "mutation": "Mutation",
     "subscription": "Subscription",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class SchemaParts:
+    """Normalized GraphQL merge buckets for one schema name."""
+
+    query: tuple[object, ...] = ()
+    """Root query surfaces."""
+
+    mutation: tuple[object, ...] = ()
+    """Root mutation surfaces."""
+
+    subscription: tuple[object, ...] = ()
+    """Root subscription surfaces."""
+
+    types: tuple[object, ...] = ()
+    """Additional Strawberry types included in the schema."""
+
+    extensions: tuple[object, ...] = ()
+    """Additional Strawberry schema extensions."""
+
+    @classmethod
+    def from_mapping(
+        cls,
+        app_config: AppConfig,
+        name: str,
+        raw_entry: Mapping[object, object],
+    ) -> SchemaParts:
+        """Return normalized schema parts declared by one addon."""
+
+        unknown = set(raw_entry) - set(SCHEMA_PART_KEYS)
+        if unknown:
+            listed = ", ".join(sorted(str(key) for key in unknown))
+            raise ImproperlyConfigured(f"{app_config.name}.schemas[{name!r}] has unknown keys: {listed}")
+        return cls(
+            **{
+                key: _schema_part_values(app_config, name, key, raw_entry.get(key))
+                for key in SCHEMA_PART_KEYS
+            }
+        )
+
+    def merge(self, other: SchemaParts) -> SchemaParts:
+        """Return these parts folded with ``other`` and deduped by identity."""
+
+        return type(self)(
+            query=self._dedupe_by_identity(self.query + other.query),
+            mutation=self._dedupe_by_identity(self.mutation + other.mutation),
+            subscription=self._dedupe_by_identity(self.subscription + other.subscription),
+            types=self._dedupe_by_identity(self.types + other.types),
+            extensions=self._dedupe_by_identity(self.extensions + other.extensions),
+        )
+
+    @staticmethod
+    def _dedupe_by_identity(
+        values: tuple[object, ...],
+    ) -> tuple[object, ...]:
+        """Return values with duplicate identities removed."""
+
+        seen: set[int] = set()
+        deduped: list[object] = []
+        for value in values:
+            marker = id(value)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            deduped.append(value)
+        return tuple(deduped)
 
 
 class GraphQLSchemas:
@@ -78,12 +143,7 @@ class GraphQLSchemas:
         collected: dict[str, SchemaParts] = {}
         for addon in self.addons:
             for name, parts in schema_parts_for(addon).items():
-                bucket = collected.setdefault(
-                    name,
-                    {key: () for key in SCHEMA_PART_KEYS},
-                )
-                for key in SCHEMA_PART_KEYS:
-                    bucket[key] = self._dedupe_by_identity(bucket[key] + parts[key])
+                collected[name] = collected.get(name, SchemaParts()).merge(parts)
         return collected
 
     def names(self) -> tuple[str, ...]:
@@ -105,24 +165,24 @@ class GraphQLSchemas:
                 f"GraphQL schema {name!r} has no contributions; available schemas: {available}"
             ) from error
 
-        query = self._merge_root(name, "query", parts["query"])
+        query = self._merge_root(name, "query", parts.query)
         if query is None:
             raise ImproperlyConfigured(f"GraphQL schema {name!r} has no query root")
-        self._assert_rebac_managers(name, parts["types"])
+        self._assert_rebac_managers(name, parts.types)
         return AngeeSchema(
             query=query,
-            mutation=self._merge_root(name, "mutation", parts["mutation"]),
+            mutation=self._merge_root(name, "mutation", parts.mutation),
             subscription=self._merge_root(
                 name,
                 "subscription",
-                parts["subscription"],
+                parts.subscription,
             ),
-            types=cast(list[Any], list(parts["types"])),
+            types=cast(list[Any], list(parts.types)),
             extensions=cast(
                 list[Any],
                 [
                     RebacExtension,
-                    *parts["extensions"],
+                    *parts.extensions,
                     RebacDjangoOptimizerExtension,
                 ],
             ),
@@ -164,22 +224,6 @@ class GraphQLSchemas:
         definition = get_object_definition(root, strict=True)
         definition.fields = [copy.copy(field) for field in definition.fields]
         return root
-
-    def _dedupe_by_identity(
-        self,
-        values: tuple[object, ...],
-    ) -> tuple[object, ...]:
-        """Return values with duplicate identities removed."""
-
-        seen: set[int] = set()
-        deduped: list[object] = []
-        for value in values:
-            marker = id(value)
-            if marker in seen:
-                continue
-            seen.add(marker)
-            deduped.append(value)
-        return tuple(deduped)
 
     def _assert_rebac_managers(
         self,
@@ -223,11 +267,7 @@ def schema_parts_for(app_config: AppConfig) -> dict[str, SchemaParts]:
         name = str(raw_name)
         if not isinstance(raw_entry, Mapping):
             raise ImproperlyConfigured(f"{app_config.name}.schemas[{name!r}] must be a mapping")
-        unknown = set(raw_entry) - set(SCHEMA_PART_KEYS)
-        if unknown:
-            listed = ", ".join(sorted(str(key) for key in unknown))
-            raise ImproperlyConfigured(f"{app_config.name}.schemas[{name!r}] has unknown keys: {listed}")
-        parts[name] = {key: _schema_part_values(app_config, name, key, raw_entry.get(key)) for key in SCHEMA_PART_KEYS}
+        parts[name] = SchemaParts.from_mapping(app_config, name, raw_entry)
     return parts
 
 

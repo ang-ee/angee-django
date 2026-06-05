@@ -18,7 +18,6 @@ COMPOSER_OWNED_SETTINGS = frozenset(
         "ANGEE_RUNTIME_DIR",
         "ASGI_APPLICATION",
         "INSTALLED_APPS",
-        "MIGRATION_MODULES",
         "ROOT_URLCONF",
     }
 )
@@ -69,16 +68,6 @@ class Composer:
         autoconfig = AutoConfig(self.namespace, reserved_settings=COMPOSER_OWNED_SETTINGS)
         for app_config in app_configs:
             autoconfig.update_app(app_config)
-
-        runtime_module = str(self.namespace.get("ANGEE_RUNTIME_MODULE", "runtime"))
-        migration_modules = dict(self.namespace.get("MIGRATION_MODULES", {}))
-        for label in sorted(config.label for config in app_configs if getattr(config, "emits_runtime_models", False)):
-            module = f"{runtime_module}.{label}.migrations"
-            configured = migration_modules.get(label)
-            if configured is not None and configured != module:
-                raise ImproperlyConfigured(f"Project settings define Composer-owned MIGRATION_MODULES[{label!r}]")
-            migration_modules[label] = module
-        self.namespace["MIGRATION_MODULES"] = migration_modules
 
     def path_value(self, value: object) -> Path:
         """Return ``value`` as an absolute path."""

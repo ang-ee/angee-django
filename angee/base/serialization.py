@@ -1,4 +1,4 @@
-"""JSON-safe value coercion shared by runtime and resource code."""
+"""JSON-safe value coercion shared by Angee runtime subsystems."""
 
 from __future__ import annotations
 

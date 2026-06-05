@@ -24,6 +24,8 @@ class Note(SqidMixin, AuditMixin, AngeeModel, HistoryMixin, RevisionMixin):
     versioned through ``revisions`` so edits can be rolled back.
     """
 
+    runtime = True
+
     revisioned_fields = ("body",)
 
     class Status(models.TextChoices):

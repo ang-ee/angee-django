@@ -11,4 +11,3 @@ class ResourcesConfig(AppConfig):
     default = True
     name = "angee.resources"
     depends_on = ("angee.base",)
-    emits_runtime_models = True

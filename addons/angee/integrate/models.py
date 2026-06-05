@@ -41,12 +41,9 @@ class CapabilityStatus(models.TextChoices):
 class Capability(SqidMixin, AuditMixin, AngeeModel):
     """Abstract base for domain-owned capabilities.
 
-    The concrete domain subclass owns its ``rebac_resource_type``. A pure base:
-    ``_composer_emits = False`` keeps it out of runtime emission (the domain
-    subclass is what the composer emits).
+    The concrete domain subclass owns its ``rebac_resource_type``. This pure base
+    stays out of runtime emission by leaving ``runtime`` unset.
     """
-
-    _composer_emits = False
 
     account = models.ForeignKey("iam.ExternalAccount", on_delete=models.PROTECT, related_name="+")
     config = models.JSONField(default=dict)
@@ -84,11 +81,9 @@ class Capability(SqidMixin, AuditMixin, AngeeModel):
 class Bridge(Capability):
     """Abstract base for capabilities that synchronize or subscribe to vendor data.
 
-    Another pure base — ``_composer_emits`` is non-inherited, so this re-declares
-    the opt-out (``Capability``'s does not carry down).
+    Another pure base: a domain bridge that materializes declares
+    ``runtime = True`` on that class.
     """
-
-    _composer_emits = False
 
     cursor = models.JSONField(default=dict)
     poll_interval = models.PositiveIntegerField(default=300)
@@ -255,6 +250,8 @@ class WebhookSubscriptionManager(RebacManager):
 
 class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
     """Outbound webhook endpoint owned by one user."""
+
+    runtime = True
 
     sqid = SqidsField(real_field_name="id", prefix="whs", min_length=8)
     owner = models.ForeignKey(

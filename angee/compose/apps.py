@@ -14,7 +14,6 @@ class ComposeConfig(AppConfig):
     default = True
     name = "angee.compose"
     depends_on = ("django_yamlconf",)
-    emits_runtime_models = False
 
     def import_models(self) -> None:
         """Check runtime files, then import generated models."""

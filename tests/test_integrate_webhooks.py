@@ -147,13 +147,19 @@ def test_validate_public_url_accepts_public_dns(monkeypatch: pytest.MonkeyPatch)
     validate_public_url("https://hooks.example.test/events")
 
 
-def test_composer_emits_opt_out_is_per_class() -> None:
-    """``composer_emits=False`` keeps the abstract bases unemitted, non-inherited."""
+def test_runtime_marker_is_per_class() -> None:
+    """Pure abstract bases stay unmaterialized; subclasses opt in per class."""
 
-    assert Capability.is_composer_emitted() is False
-    assert Bridge.is_composer_emitted() is False
-    # A concrete subclass that never opts out still emits — the opt-out is per-class.
-    assert DispatchBridge.is_composer_emitted() is True
+    class RuntimeBridge(Bridge):
+        runtime = True
+
+        class Meta(Bridge.Meta):
+            abstract = True
+            app_label = "tests"
+
+    assert Capability.is_runtime_model() is False
+    assert Bridge.is_runtime_model() is False
+    assert RuntimeBridge.is_runtime_model() is True
 
 
 @pytest.mark.django_db(transaction=True)

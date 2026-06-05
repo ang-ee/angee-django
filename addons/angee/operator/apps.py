@@ -19,6 +19,5 @@ class OperatorConfig(AppConfig):
     name = "angee.operator"
     label = "operator"
     depends_on = ("angee.iam",)
-    emits_runtime_models = True
     schemas = "schema.schemas"
     permissions = "permissions.zed"

@@ -192,6 +192,8 @@ class UserManager(RebacManager, BaseUserManager):
 class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
     """Abstract swappable user model composed into Angee runtimes."""
 
+    runtime = True
+
     username_validator = UnicodeUsernameValidator()
 
     sqid = SqidsField(real_field_name="id", prefix="usr", min_length=8)
@@ -255,6 +257,8 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
 
 class Vendor(SqidMixin, AuditMixin, AngeeModel):
     """Admin-managed third-party vendor reference catalogue."""
+
+    runtime = True
 
     sqid = SqidsField(real_field_name="id", prefix="vnd", min_length=8)
     slug = models.SlugField(unique=True)
@@ -396,6 +400,8 @@ class AccountManager(RebacManager.from_queryset(AccountQuerySet)):  # type: igno
 
 class ExternalAccount(SqidMixin, AuditMixin, AngeeModel):
     """Vendor account identity shared by principals through REBAC grants."""
+
+    runtime = True
 
     sqid = SqidsField(real_field_name="id", prefix="eac", min_length=8)
     vendor = models.ForeignKey(
@@ -634,6 +640,8 @@ class OAuthClientManager(RebacManager.from_queryset(OAuthClientQuerySet)):  # ty
 
 class OAuthClient(SqidMixin, AuditMixin, AngeeModel):
     """OAuth/OIDC client registration and login policy for a vendor."""
+
+    runtime = True
 
     sqid = SqidsField(real_field_name="id", prefix="clt", min_length=8)
     vendor = models.ForeignKey(
@@ -887,6 +895,8 @@ class CredentialManager(RebacManager.from_queryset(CredentialQuerySet)):  # type
 
 class Credential(SqidMixin, AuditMixin, AngeeModel):
     """Per-user credential material for acting against a vendor OAuth client."""
+
+    runtime = True
 
     sqid = SqidsField(real_field_name="id", prefix="crd", min_length=8)
     user = models.ForeignKey(

@@ -109,8 +109,8 @@ def test_get_schema_parts_normalizes_scalars_and_buckets() -> None:
     config = _config_with_schemas({"public": {"query": sentinel}})
     parts = schema_parts_for(config)
 
-    assert parts["public"]["query"] == (sentinel,)
-    assert parts["public"]["mutation"] == ()
+    assert parts["public"].query == (sentinel,)
+    assert parts["public"].mutation == ()
 
 
 def test_get_schema_parts_rejects_unknown_keys() -> None:

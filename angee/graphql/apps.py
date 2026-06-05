@@ -11,5 +11,4 @@ class GraphQLConfig(AppConfig):
     default = True
     name = "angee.graphql"
     depends_on = ("angee.base", "channels", "daphne")
-    emits_runtime_models = False
     schemas = None

@@ -5,18 +5,19 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import strawberry
 from channels.layers import InMemoryChannelLayer
 from channels.testing import WebsocketCommunicator
 from django.contrib.auth.models import AnonymousUser, Group
+from django.db.models.signals import post_save
 from rebac import actor_context, anonymous_actor, current_actor
 from rebac.graphql.strawberry import RebacChannelsConsumerMixin
 
 from angee.graphql import publishing, subscriptions
 from angee.graphql.consumers import AngeeGraphQLWSConsumer
-from angee.graphql.events import ChangeEvent
+from angee.graphql.events import ChangeEvent, ChangePayload
 from angee.graphql.subscriptions import changes
 
 ANON = anonymous_actor()
@@ -46,6 +47,12 @@ def _subscription_resolver(surface: type) -> SubscriptionResolver:
     return cast(SubscriptionResolver, field.base_resolver.wrapped_func)
 
 
+def _receiver_count(signal: Any, dispatch_uid: str) -> int:
+    """Return receivers connected with ``dispatch_uid``."""
+
+    return sum(1 for receiver in signal.receivers if receiver[0][0] == dispatch_uid)
+
+
 def test_changes_builds_a_named_subscription_field() -> None:
     """``changes`` exposes one subscription field and wires publishers."""
 
@@ -59,7 +66,7 @@ def test_changes_builds_a_named_subscription_field() -> None:
 
     sdl = strawberry.Schema(query=Query, subscription=surface).as_str()
     assert "groupChanged: ChangeEvent!" in sdl
-    assert Group in publishing._connected
+    assert _receiver_count(post_save, "angee-changes-auth.Group-save") == 1
 
 
 def test_subscribe_yields_broadcast_payloads(monkeypatch) -> None:
@@ -68,7 +75,7 @@ def test_subscribe_yields_broadcast_payloads(monkeypatch) -> None:
     layer = InMemoryChannelLayer()
     monkeypatch.setattr(subscriptions, "get_channel_layer", lambda: layer)
 
-    async def scenario() -> dict[str, object]:
+    async def scenario() -> ChangePayload:
         stream = subscriptions._subscribe(Group)
         pending = asyncio.ensure_future(stream.__anext__())
         await asyncio.sleep(0.05)  # let the subscriber join the group
@@ -82,7 +89,7 @@ def test_subscribe_yields_broadcast_payloads(monkeypatch) -> None:
             await stream.aclose()
 
     payload = asyncio.run(scenario())
-    assert payload["id"] == "7"
+    assert payload.id == "7"
 
 
 def test_subscription_resolver_gates_events_through_sync_adapter(

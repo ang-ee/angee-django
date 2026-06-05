@@ -13,7 +13,7 @@ from django.utils.module_loading import module_has_submodule
 def _addon_urlpatterns(app_config: AppConfig) -> list[object]:
     """Return URL patterns from one addon's conventional ``urls.py`` module."""
 
-    if not hasattr(app_config, "depends_on") and not getattr(app_config, "emits_runtime_models", False):
+    if not hasattr(app_config, "depends_on"):
         return []
     if not module_has_submodule(app_config.module, "urls"):
         return []

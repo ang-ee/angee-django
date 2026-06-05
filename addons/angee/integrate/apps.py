@@ -13,5 +13,4 @@ class IntegrateConfig(AppConfig):
     name = "angee.integrate"
     label = "integrate"
     depends_on = ("angee.iam",)
-    emits_runtime_models = True
     permissions = "permissions.zed"

@@ -18,4 +18,3 @@ class BaseConfig(AppConfig):
         "reversion",
         "simple_history",
     )
-    emits_runtime_models = False

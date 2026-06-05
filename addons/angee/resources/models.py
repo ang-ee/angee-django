@@ -13,6 +13,8 @@ from angee.resources.tiers import ResourceTier
 class Resource(AngeeModel):
     """Ledger row linking source resource xrefs to imported targets."""
 
+    runtime = True
+
     Tier = ResourceTier
     """Tier enum used by resource declarations and ledger rows."""
 

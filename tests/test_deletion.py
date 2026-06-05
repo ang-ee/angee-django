@@ -9,7 +9,7 @@ from django.db.models.signals import post_delete, pre_delete
 from rebac import RebacMixin, SubjectRef, actor_context, system_context
 from rebac.signals import _rebac_cascade_resource, _rebac_pre_delete
 
-from angee.graphql.deletion import DeletionPreview, DeletionPreviewNode
+from angee.base.deletion import DeletionPreview, DeletionPreviewNode
 
 
 @pytest.mark.django_db(transaction=True)

@@ -158,7 +158,7 @@ def test_collect_folds_addons_in_order() -> None:
     schemas = GraphQLSchemas.from_addons([first, second])
     collected = schemas.parts
 
-    assert collected["public"]["query"] == (HelloQuery, WorldQuery)
+    assert collected["public"].query == (HelloQuery, WorldQuery)
     assert set(collected) == {"public", "console"}
     assert schemas.names() == ("console", "public")
 
@@ -173,7 +173,7 @@ def test_collect_dedupes_by_identity() -> None:
         ]
     ).parts
 
-    assert collected["public"]["query"] == (HelloQuery,)
+    assert collected["public"].query == (HelloQuery,)
 
 
 def test_build_schema_merges_query_surfaces() -> None:

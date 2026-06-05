@@ -2,20 +2,15 @@
 
 from __future__ import annotations
 
-import datetime
-from collections.abc import Iterable, Mapping
-from decimal import Decimal
+from collections.abc import Iterable
 from typing import Any
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.db import models, transaction
 from django.db.models.signals import post_delete, post_save
-from rebac import to_object_ref
 
-from angee.base.models import public_id_of
-
-_connected: set[type[models.Model]] = set()
+from angee.graphql.events import ChangePayload
 
 
 def change_group(model: type[models.Model]) -> str:
@@ -27,9 +22,6 @@ def change_group(model: type[models.Model]) -> str:
 def connect_publishers(model: type[models.Model]) -> None:
     """Connect save and delete publishers for ``model`` exactly once."""
 
-    if model in _connected:
-        return
-    _connected.add(model)
     dispatch_uid = f"angee-changes-{model._meta.label}"
     post_save.connect(
         _on_save,
@@ -83,24 +75,12 @@ def _publish(
     """Build and broadcast one change payload after commit."""
 
     model = type(instance)
-    changed_fields = sorted(str(field) for field in update_fields) if update_fields is not None else None
-    changed_values = (
-        {field: _json_safe(getattr(instance, field, None)) for field in changed_fields}
-        if changed_fields is not None
-        else None
+    payload = ChangePayload.from_instance(
+        instance,
+        action=action,
+        update_fields=update_fields,
     )
-    payload = {
-        "model": model._meta.label,
-        "id": public_id_of(instance),
-        "action": action,
-        "changed_fields": changed_fields,
-        "changed_values": changed_values,
-    }
-    try:
-        payload["resource_id"] = to_object_ref(instance).resource_id
-    except TypeError:
-        pass
-    transaction.on_commit(lambda: _broadcast(model, payload))
+    transaction.on_commit(lambda: _broadcast(model, payload.as_message()))
 
 
 def _broadcast(model: type[models.Model], payload: dict[str, Any]) -> None:
@@ -113,19 +93,3 @@ def _broadcast(model: type[models.Model], payload: dict[str, Any]) -> None:
         change_group(model),
         {"type": "angee.change", "payload": payload},
     )
-
-
-def _json_safe(value: Any) -> Any:
-    """Return a JSON-serializable representation of one changed field value."""
-
-    if value is None or isinstance(value, bool | int | float | str):
-        return value
-    if isinstance(value, datetime.datetime | datetime.date | datetime.time):
-        return value.isoformat()
-    if isinstance(value, Decimal):
-        return str(value)
-    if isinstance(value, list | tuple):
-        return [_json_safe(item) for item in value]
-    if isinstance(value, Mapping):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    return str(value)

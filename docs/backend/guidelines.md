@@ -67,7 +67,7 @@ Rules that follow from the layering:
   contract; each lifecycle step reads only the contract it owns:
   `graphql` reads `schemas`, `resources` reads `resources`, REBAC sync reads
   `permissions`, stable serving imports conventional `urls.py` / `asgi.py`,
-  runtime emission reads `emits_runtime_models`, and settings composition reads
+  runtime emission reads model-level `runtime = True`, and settings composition reads
   the addon's optional `autoconfig.py`.
 - **There is a single app set and a single boot.** `DJANGO_SETTINGS_MODULE`
   points at `angee.compose.settings`, which imports the project's settings

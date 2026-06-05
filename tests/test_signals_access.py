@@ -10,12 +10,13 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.db import connection, models
+from django.db.models.signals import post_save
 from rebac import actor_context, anonymous_actor
 
 from angee.base.mixins import AuditMixin
+from angee.base.serialization import json_safe
 from angee.graphql import access, publishing
 from angee.graphql.access import ChangeReadGate
-from angee.resources.serialization import json_safe
 
 
 class AuditStamped(AuditMixin, models.Model):
@@ -42,6 +43,12 @@ def payload(**overrides: object) -> dict[str, object]:
     }
     data.update(overrides)
     return data
+
+
+def _receiver_count(signal: Any, dispatch_uid: str) -> int:
+    """Return receivers connected with ``dispatch_uid``."""
+
+    return sum(1 for receiver in signal.receivers if receiver[0][0] == dispatch_uid)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -75,12 +82,10 @@ def test_audit_mixin_stamps_from_rebac_actor_inside_save() -> None:
 def test_connect_publishers_is_idempotent() -> None:
     """A model is connected to change publishers once."""
 
-    publishing._connected.discard(Group)
-
     publishing.connect_publishers(Group)
     publishing.connect_publishers(Group)
 
-    assert Group in publishing._connected
+    assert _receiver_count(post_save, "angee-changes-auth.Group-save") == 1
 
 
 def test_publish_uses_public_id_and_changed_values(
