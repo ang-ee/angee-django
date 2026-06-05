@@ -22,9 +22,9 @@ Composition has three phases.
    Django is importing.
 2. **App loading** — Django populates the resolved `INSTALLED_APPS`.
    When it reaches `angee.compose.apps.ComposeConfig.import_models()`, Angee
-   performs a cheap generated-runtime bootstrap check, then imports concrete
-   model modules when the generated package is present so Django registers them
-   under the source addon labels.
+   heals the generated runtime in place (`emit_if_stale`, write-only) and then
+   imports the concrete model modules so Django registers them under the source
+   addon labels — the runtime is always freshly rendered before it is loaded.
 3. **Serving and lifecycle commands** — stable framework entrypoints such as
    `angee.urls`, `angee.asgi`, `schema`, `resources`, and `rebac sync` read the
    finished Django app registry. URL/ASGI serving imports conventional
@@ -33,9 +33,9 @@ Composition has three phases.
    modules they own.
 
 Settings composition never imports source models. Runtime emission never decides
-settings. Normal Django startup imports generated runtime files when the
-generated sentinel is present; full render drift checks and writes belong to
-`angee build` / `angee build --check`.
+settings. Normal Django startup heals the runtime in place (`emit_if_stale`,
+write-only, never resetting or pruning) and then imports it; the destructive
+reset/prune of orphaned labels belongs to the explicit `angee build`.
 
 ## Settings Bootstrap
 
@@ -264,9 +264,9 @@ Conventions:
 - permission declarations usually live in `permissions.zed`
 - settings contributions live in optional `autoconfig.py`
 
-Route modules are read only from apps that declare a composition contract, such
-as `depends_on = ()`, so plain Django dependencies do not leak URLs into the
-Angee root router.
+Route modules are read only from apps that opt in with `angee_addon = True`
+(`angee.addons.is_angee_addon`), so third-party apps that happen to ship a
+`urls.py` / `asgi.py` do not leak routes into the Angee root router.
 
 The GraphQL addon is the routing example:
 
@@ -341,7 +341,7 @@ preserves unrelated project entries.
 - Settings are final before Django app loading starts.
 - Settings composition does not import source models.
 - Runtime emission does not decide settings.
-- Normal startup never writes generated runtime files.
+- Normal startup heals the runtime in place but never resets or prunes it.
 - Apps read `django.conf.settings`; process environment is normalized during
   settings composition.
 - Routes are discovered by conventional `urls.py` / `asgi.py`; other lifecycle

@@ -8,7 +8,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models.utils import make_model_tuple
 from rebac import RebacMixin
-from rebac.actors import is_sudo
+from rebac.actors import is_sudo as ambient_is_sudo
 from rebac.errors import MissingActorError
 from rebac.managers import RebacManager, RebacQuerySet
 from rebac.resources import model_resource_type
@@ -33,16 +33,21 @@ class AngeeQuerySet(RebacQuerySet[_ModelT]):
         Aggregate compilers run through ``.values()``/``.aggregate()`` shapes
         whose dict rows field-read redaction cannot touch, so field redaction is
         disabled and REBAC row scope is applied eagerly. It fails closed: a
-        REBAC-typed model that resolves to no actor returns an empty queryset
-        rather than leaking every row, independent of ``REBAC_STRICT_MODE``.
+        REBAC-typed model with no actor and no sudo bypass returns an empty
+        queryset rather than leaking every row, independent of
+        ``REBAC_STRICT_MODE``. An explicit sudo — per-queryset ``.sudo()`` or an
+        ambient ``system_context`` — aggregates across all rows, unscoped, by
+        design.
         """
 
         queryset = cast(Self, self.on_field_deny("allow"))
+        if queryset.is_sudo() or ambient_is_sudo():
+            return queryset
         try:
             actor = queryset._resolve_effective_actor()[0]
         except MissingActorError:
             return cast(Self, queryset.none())
-        if actor is None and not is_sudo() and model_resource_type(self.model):
+        if actor is None and model_resource_type(self.model):
             return cast(Self, queryset.none())
         return queryset.apply_ambient_scope()
 

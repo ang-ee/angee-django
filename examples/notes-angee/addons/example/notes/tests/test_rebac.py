@@ -10,7 +10,7 @@ from __future__ import annotations
 from django.apps import apps
 from django.contrib.auth import authenticate, get_user_model
 from django.core.management import call_command
-from django.test import TransactionTestCase
+from django.test import TransactionTestCase, override_settings
 from rebac import (
     ObjectRef,
     RelationshipTuple,
@@ -40,6 +40,28 @@ class NotesAuthorizationTests(TransactionTestCase):
 
     def test_note_is_a_rebac_resource(self) -> None:
         self.assertEqual(model_resource_type(Note), "notes/note")
+
+    def test_scoped_for_aggregate_is_actor_scoped_and_fails_closed(self) -> None:
+        # Aggregates compile through .values()/.aggregate() (no field redaction),
+        # so scope must be applied to rows: per-actor scoping, unscoped only under
+        # an explicit sudo, and empty (never the full table) with no actor.
+        with system_context(reason="test"):
+            total = Note.objects.count()
+        alice_total = len(list(Note.objects.as_user(self.alice)))
+        self.assertLess(alice_total, total)
+
+        # An actor's aggregate sees only that actor's rows.
+        self.assertEqual(Note.objects.as_user(self.alice).scoped_for_aggregate().count(), alice_total)
+
+        # Ambient system_context and per-queryset .sudo() both aggregate across all rows.
+        with system_context(reason="test"):
+            self.assertEqual(Note.objects.all().scoped_for_aggregate().count(), total)
+        self.assertEqual(Note.objects.all().sudo(reason="report").scoped_for_aggregate().count(), total)
+
+        # The leak scenario: no actor with REBAC_STRICT_MODE off must fail closed
+        # (empty), never the full table. Strict mode already raises (also closed).
+        with override_settings(REBAC_STRICT_MODE=False):
+            self.assertEqual(Note.objects.all().scoped_for_aggregate().count(), 0)
 
     def test_demo_load_uses_created_by_field_backed_ownership(self) -> None:
         # created_by drives the owner relation: a user reaches only their notes.
