@@ -19,7 +19,6 @@ import {
   type UseResourceListResult,
 } from "@angee/sdk";
 
-import type { DataToolbarVisibleField } from "../toolbars/DataToolbar";
 import type { DataViewContextValue } from "./data-view-context";
 import {
   type DataViewFilter,
@@ -35,6 +34,7 @@ import {
   tableColumnLabel,
   type ListRenderItem,
   type RowGroup,
+  type VisibleFieldOption,
 } from "./ListInternals";
 import type { ColumnDescriptor } from "./page";
 
@@ -89,7 +89,7 @@ interface DataViewPresentationSurface<TRow extends Row = Row> {
   table: TableModel<TRow>;
   columnVisibility: VisibilityState;
   visibleColumnCount: number;
-  visibleFields: readonly DataToolbarVisibleField[];
+  visibleFields: readonly VisibleFieldOption[];
   toggleVisibleField: (id: string, visible: boolean) => void;
   rowModels: readonly TableRowModel<TRow>[];
   selectedIds: ReadonlySet<string>;
@@ -330,7 +330,7 @@ function useDataViewPresentationSurface<TRow extends Row>({
     autoResetExpanded: false,
   });
   const visibleColumnCount = table.getVisibleLeafColumns().length;
-  const visibleFields = React.useMemo<readonly DataToolbarVisibleField[]>(
+  const visibleFields = React.useMemo<readonly VisibleFieldOption[]>(
     () => {
       const visibleCount = table.getVisibleLeafColumns().length;
       return table.getAllLeafColumns().map((column) => {

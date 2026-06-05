@@ -7,6 +7,7 @@ import {
   type Cell as TableCellModel,
   type Column as TableColumn,
   type ColumnDef,
+  type Header as TableHeaderModel,
   type Row as TableRowModel,
   type Table as TableModel,
 } from "@tanstack/react-table";
@@ -27,11 +28,13 @@ import {
   ArrowUpDown,
 } from "lucide-react";
 
+import { Glyph } from "../chrome/Glyph";
 import { titleCase } from "../lib/titleCase";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Chip } from "../ui/chip";
+import { DropdownMenu } from "../ui/dropdown-menu";
 import {
   Table,
   TableBody,
@@ -51,6 +54,13 @@ import type {
 
 export type ColumnAlign = PageColumnAlign;
 export type ListColumn<TRow extends Row = Row> = ColumnDescriptor<TRow>;
+
+export interface VisibleFieldOption {
+  id: string;
+  label: React.ReactNode;
+  visible: boolean;
+  disabled?: boolean;
+}
 
 export type RowGroup<TRow extends Row> = {
   key: string;
@@ -128,6 +138,8 @@ export interface FlatListBodyProps<TRow extends Row> {
   allPageSelected: boolean;
   somePageSelected: boolean;
   onPageSelectionChange: (checked: boolean) => void;
+  visibleFields?: readonly VisibleFieldOption[];
+  onVisibleFieldToggle?: (id: string, visible: boolean) => void;
   dataView: DataViewContextValue;
   interactive: boolean;
   selectable?: boolean;
@@ -148,6 +160,8 @@ export function FlatListBody<TRow extends Row>({
   allPageSelected,
   somePageSelected,
   onPageSelectionChange,
+  visibleFields = [],
+  onVisibleFieldToggle,
   dataView,
   interactive,
   selectable = true,
@@ -195,18 +209,15 @@ export function FlatListBody<TRow extends Row>({
                   />
                 </TableHead>
               ) : null}
-              {group.headers.map((header) => (
-                <TableHead
-                  sticky
+              {group.headers.map((header, index) => (
+                <ListHeaderCell
                   key={header.id}
-                  className={ALIGN_CLASS[alignOf(header.column.columnDef)]}
-                  aria-sort={ariaSortForColumn(header.column, dataView)}
-                >
-                  {flexRender(
-                    header.column.columnDef.header,
-                    header.getContext(),
-                  )}
-                </TableHead>
+                  header={header}
+                  dataView={dataView}
+                  visibleFields={visibleFields}
+                  onVisibleFieldToggle={onVisibleFieldToggle}
+                  withVisibleFields={index === group.headers.length - 1}
+                />
               ))}
             </TableRow>
           ))}
@@ -255,6 +266,93 @@ export function FlatListBody<TRow extends Row>({
         </TableBody>
       </Table>
     </div>
+  );
+}
+
+export function ListHeaderCell<TRow extends Row>({
+  header,
+  dataView,
+  visibleFields = [],
+  onVisibleFieldToggle,
+  withVisibleFields = false,
+}: {
+  header: TableHeaderModel<TRow, unknown>;
+  dataView: DataViewContextValue;
+  visibleFields?: readonly VisibleFieldOption[];
+  onVisibleFieldToggle?: (id: string, visible: boolean) => void;
+  withVisibleFields?: boolean;
+}): React.ReactElement {
+  const content = header.isPlaceholder
+    ? null
+    : flexRender(header.column.columnDef.header, header.getContext());
+  const showVisibleFields = withVisibleFields && visibleFields.length > 0;
+  return (
+    <TableHead
+      sticky
+      className={ALIGN_CLASS[alignOf(header.column.columnDef)]}
+      aria-sort={ariaSortForColumn(header.column, dataView)}
+    >
+      {showVisibleFields ? (
+        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
+          <span className="min-w-0 truncate">{content}</span>
+          <VisibleFieldsMenu
+            fields={visibleFields}
+            onToggle={onVisibleFieldToggle}
+          />
+        </div>
+      ) : (
+        content
+      )}
+    </TableHead>
+  );
+}
+
+export function VisibleFieldsMenu({
+  fields,
+  onToggle,
+}: {
+  fields: readonly VisibleFieldOption[];
+  onToggle?: (id: string, visible: boolean) => void;
+}): React.ReactElement {
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            size="iconSm"
+            aria-label="Visible fields"
+            className="justify-self-end"
+          >
+            <Glyph name="columns" />
+          </Button>
+        }
+      />
+      <DropdownMenu.Portal>
+        <DropdownMenu.Positioner sideOffset={6} align="end">
+          <DropdownMenu.Content className="w-56">
+            <DropdownMenu.Group>
+              <DropdownMenu.Label>Visible fields</DropdownMenu.Label>
+              {fields.map((field) => (
+                <DropdownMenu.CheckboxItem
+                  key={field.id}
+                  checked={field.visible}
+                  disabled={field.disabled}
+                  onCheckedChange={(checked) => {
+                    if (field.disabled && !checked) return;
+                    onToggle?.(field.id, checked);
+                  }}
+                >
+                  <DropdownMenu.CheckboxItemIndicator />
+                  <span className="min-w-0 truncate">{field.label}</span>
+                </DropdownMenu.CheckboxItem>
+              ))}
+            </DropdownMenu.Group>
+          </DropdownMenu.Content>
+        </DropdownMenu.Positioner>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   );
 }
 

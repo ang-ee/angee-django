@@ -4,7 +4,6 @@
 // must NOT import ListView (ListView depends on this module, not vice versa).
 import * as React from "react";
 import {
-  flexRender,
   getCoreRowModel,
   useReactTable,
   type ColumnDef,
@@ -47,10 +46,10 @@ import type {
 } from "./data-view-model";
 import {
   ALIGN_CLASS,
+  ListHeaderCell,
   RecordRow,
   TABLE_SCROLL_STYLE,
   alignOf,
-  ariaSortForColumn,
   bucketValueLabels,
   formatMeasure,
   groupMeasuresFromColumns,
@@ -58,6 +57,7 @@ import {
   groupFieldLabel,
   measureValue,
   type GroupMeasure,
+  type VisibleFieldOption,
 } from "./ListInternals";
 import type { ColumnDescriptor } from "./page";
 
@@ -94,6 +94,8 @@ export interface GroupedListBodyProps<TRow extends Row> {
   tableColumns: readonly ColumnDef<TRow>[];
   columnVisibility: VisibilityState;
   visibleColumnCount: number;
+  visibleFields?: readonly VisibleFieldOption[];
+  onVisibleFieldToggle?: (id: string, visible: boolean) => void;
   dataView: DataViewContextValue;
   groupDimensions: readonly GroupByDimension[];
   requestedFields: readonly string[];
@@ -114,6 +116,8 @@ export function GroupedListBody<TRow extends Row>({
   tableColumns,
   columnVisibility,
   visibleColumnCount,
+  visibleFields = [],
+  onVisibleFieldToggle,
   dataView,
   groupDimensions,
   requestedFields,
@@ -157,18 +161,15 @@ export function GroupedListBody<TRow extends Row>({
               <TableRow key={group.id}>
                 {/* Grouped mode omits page-level select-all; per-row selection still works. */}
                 <TableHead sticky className="w-8" />
-                {group.headers.map((header) => (
-                  <TableHead
-                    sticky
+                {group.headers.map((header, index) => (
+                  <ListHeaderCell
                     key={header.id}
-                    className={ALIGN_CLASS[alignOf(header.column.columnDef)]}
-                    aria-sort={ariaSortForColumn(header.column, dataView)}
-                  >
-                    {flexRender(
-                      header.column.columnDef.header,
-                      header.getContext(),
-                    )}
-                  </TableHead>
+                    header={header}
+                    dataView={dataView}
+                    visibleFields={visibleFields}
+                    onVisibleFieldToggle={onVisibleFieldToggle}
+                    withVisibleFields={index === group.headers.length - 1}
+                  />
                 ))}
               </TableRow>
             ))}

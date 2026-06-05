@@ -12,12 +12,10 @@ import {
   X,
 } from "lucide-react";
 
-import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
 import { titleCase } from "../lib/titleCase";
 import { Button } from "../ui/button";
 import { Chip } from "../ui/chip";
-import { DropdownMenu } from "../ui/dropdown-menu";
 import {
   PopoverContent,
   PopoverPortal,
@@ -40,7 +38,6 @@ export interface DataToolbarProps {
   groupStack?: readonly DataViewGroup[];
   groupOptions?: readonly DataToolbarGroupOption[];
   filterOptions?: readonly DataToolbarFilterOption[];
-  visibleFields?: readonly DataToolbarVisibleField[];
   activeFilterIds?: readonly string[];
   filterText?: string;
   createLabel?: ReactNode;
@@ -49,7 +46,6 @@ export interface DataToolbarProps {
   onFilterToggle?: (id: string) => void;
   onClearGroup?: () => void;
   onGroupStackChange?: (groups: readonly DataViewGroup[]) => void;
-  onVisibleFieldToggle?: (id: string, visible: boolean) => void;
   onPageChange?: (page: number) => void;
   onViewChange?: (view: DataViewKind) => void;
   pagerSubject?: string;
@@ -72,13 +68,6 @@ export interface DataToolbarGroupOption {
   granularities?: readonly DataViewGroupGranularity[];
 }
 
-export interface DataToolbarVisibleField {
-  id: string;
-  label: ReactNode;
-  visible: boolean;
-  disabled?: boolean;
-}
-
 export interface DataViewSwitcherProps {
   view: DataViewKind;
   onViewChange?: (view: DataViewKind) => void;
@@ -93,7 +82,6 @@ export function DataToolbar({
   groupStack,
   groupOptions,
   filterOptions = [],
-  visibleFields = [],
   activeFilterIds = [],
   filterText = "",
   createLabel = "New",
@@ -102,7 +90,6 @@ export function DataToolbar({
   onFilterTextChange,
   onClearGroup,
   onGroupStackChange,
-  onVisibleFieldToggle,
   onPageChange,
   onViewChange,
   pagerSubject = "Records",
@@ -120,8 +107,6 @@ export function DataToolbar({
   const activeFilters = filterOptions.filter((option) =>
     activeFilterIds.includes(option.id),
   );
-  const currentView = view ?? "list";
-
   return (
     <section
       aria-label="Data controls"
@@ -156,64 +141,10 @@ export function DataToolbar({
         unit={pagerTotalUnit}
         onPageChange={onPageChange}
       />
-      {currentView === "list" && visibleFields.length > 0 ? (
-        <VisibleFieldsMenu
-          fields={visibleFields}
-          onToggle={onVisibleFieldToggle}
-        />
-      ) : null}
       {view && onViewChange ? (
         <DataViewSwitcher view={view} onViewChange={onViewChange} />
       ) : null}
     </section>
-  );
-}
-
-function VisibleFieldsMenu({
-  fields,
-  onToggle,
-}: {
-  fields: readonly DataToolbarVisibleField[];
-  onToggle?: (id: string, visible: boolean) => void;
-}): ReactElement {
-  return (
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger
-        render={
-          <Button
-            type="button"
-            variant="ghost"
-            size="iconSm"
-            aria-label="Visible fields"
-          >
-            <Glyph name="columns" />
-          </Button>
-        }
-      />
-      <DropdownMenu.Portal>
-        <DropdownMenu.Positioner sideOffset={6} align="end">
-          <DropdownMenu.Content className="w-56">
-            <DropdownMenu.Group>
-              <DropdownMenu.Label>Visible fields</DropdownMenu.Label>
-              {fields.map((field) => (
-                <DropdownMenu.CheckboxItem
-                  key={field.id}
-                  checked={field.visible}
-                  disabled={field.disabled}
-                  onCheckedChange={(checked) => {
-                    if (field.disabled && !checked) return;
-                    onToggle?.(field.id, checked);
-                  }}
-                >
-                  <DropdownMenu.CheckboxItemIndicator />
-                  <span className="min-w-0 truncate">{field.label}</span>
-                </DropdownMenu.CheckboxItem>
-              ))}
-            </DropdownMenu.Group>
-          </DropdownMenu.Content>
-        </DropdownMenu.Positioner>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
   );
 }
 

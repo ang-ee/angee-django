@@ -347,6 +347,13 @@ describe("DataPage", () => {
     expect(await screen.findByText("First")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Board view" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Remove group" })).toBeNull();
+    const visibleFieldsButton = screen.getByRole("button", {
+      name: "Visible fields",
+    });
+    expect(visibleFieldsButton.closest("thead")).not.toBeNull();
+    expect(
+      visibleFieldsButton.closest('section[aria-label="Data controls"]'),
+    ).toBeNull();
 
     fireEvent.click(
       screen.getByRole("button", { name: "Filter and favorites" }),

@@ -165,12 +165,10 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
           groupStack={groupingEnabled ? dataView.state.groupStack : undefined}
           groupOptions={groupingEnabled ? toolbarGroupOptions : undefined}
           filterOptions={filterOptions}
-          visibleFields={surface.visibleFields}
           activeFilterIds={activeFilterIds}
           filterText={filterText}
           onClearGroup={groupingEnabled ? () => dataView.setGroupStack([]) : undefined}
           onGroupStackChange={groupingEnabled ? dataView.setGroupStack : undefined}
-          onVisibleFieldToggle={surface.toggleVisibleField}
           onPageChange={dataView.setPage}
           onFilterToggle={(id) =>
             dataView.setFilter(
@@ -212,6 +210,8 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
             allPageSelected={surface.allPageSelected}
             somePageSelected={surface.somePageSelected}
             onPageSelectionChange={surface.setPageSelection}
+            visibleFields={surface.visibleFields}
+            onVisibleFieldToggle={surface.toggleVisibleField}
             dataView={dataView}
             interactive={interactive}
             selectable={selectable}
