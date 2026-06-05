@@ -9,5 +9,6 @@ class ResourcesConfig(AppConfig):
     """Resource addon marker and command/model host."""
 
     default = True
+    angee_addon = True
     name = "angee.resources"
     depends_on = ("angee.base",)

@@ -106,10 +106,26 @@ def test_delete_note_dry_run_returns_tree_and_confirm_deletes() -> None:
         assert group["objectLabel"] == "52 note childs"
         assert group["children"][-1]["objectLabel"] == "… and 2 more"
 
-        confirmed = schema.execute_sync(
+        default_preview = schema.execute_sync(
             """
             mutation DeleteNote($id: ID!) {
               deleteNote(id: $id) {
+                root {
+                  objectId
+                }
+              }
+            }
+            """,
+            variable_values={"id": relay.to_base64("NoteType", note.pk)},
+        )
+
+        assert default_preview.errors is None
+        assert Note.objects.filter(pk=note.pk).exists()
+
+        confirmed = schema.execute_sync(
+            """
+            mutation DeleteNote($id: ID!) {
+              deleteNote(id: $id, confirm: true) {
                 root {
                   objectId
                 }

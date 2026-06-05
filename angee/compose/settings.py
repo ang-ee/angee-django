@@ -16,6 +16,7 @@ from django.core.exceptions import ImproperlyConfigured
 
 from angee.compose import autoconfig as _autoconfig
 from angee.compose.composer import Composer
+from angee.paths import resolve_path
 
 project_dir_env = "ANGEE_PROJECT_DIR"
 project_settings_env = "ANGEE_PROJECT_SETTINGS"
@@ -55,7 +56,7 @@ for setting in list(globals()):
 # 1. Find the project root and project settings module.
 project_settings_module = env.str(project_settings_env, default="settings")
 if configured_project_dir := env.str(project_dir_env, default=None):
-    project_dir = Path(configured_project_dir).expanduser().resolve()
+    project_dir = resolve_path(configured_project_dir)
 else:
     argv0 = Path(sys.argv[0]).resolve()
     if argv0.name == "manage.py":
@@ -127,7 +128,7 @@ project_yaml = (project_dir / "settings.yaml").resolve()
 if project_yaml.exists():
     allowed_yamlconf_sources.add(str(project_yaml))
 if final_conf := os.environ.get("YAMLCONF_CONFFILE"):
-    allowed_yamlconf_sources.add(str(Path(final_conf).expanduser().resolve()))
+    allowed_yamlconf_sources.add(str(resolve_path(final_conf)))
 
 for attribute in getattr(project_settings, _autoconfig.YAMLCONF_ATTRIBUTES, {}).values():
     sources = [attribute.get("source"), *(source for _value, source in attribute.get("history", ()))]
@@ -135,8 +136,8 @@ for attribute in getattr(project_settings, _autoconfig.YAMLCONF_ATTRIBUTES, {}).
         if source in allowed_yamlconf_sources:
             continue
         try:
-            source_path = str(Path(str(source)).expanduser().resolve())
-        except (OSError, TypeError, ValueError):
+            source_path = str(resolve_path(str(source)))
+        except (ImproperlyConfigured, OSError, TypeError, ValueError):
             source_path = str(source)
         if source_path not in allowed_yamlconf_sources:
             raise ImproperlyConfigured(f"Unexpected django-yamlconf source {source!r}")

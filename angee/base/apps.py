@@ -9,6 +9,7 @@ class BaseConfig(AppConfig):
     """Django app configuration for Angee's model foundation."""
 
     default = True
+    angee_addon = True
     name = "angee.base"
     label = "base"
     depends_on = (

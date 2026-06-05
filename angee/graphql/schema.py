@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import strawberry
 from django.apps import AppConfig, apps
@@ -13,19 +13,20 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.utils.functional import cached_property
 from django.utils.module_loading import import_string
-from rebac import RebacMixin
+from rebac import MissingActorError, PermissionDenied, RebacMixin
 from rebac.graphql.strawberry import RebacExtension
 from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
 from rebac.managers import RebacManager
 from strawberry.tools import merge_types
 from strawberry.types.base import get_object_definition
+from strawberry.types.execution import ExecutionContext
 
-from angee.graphql.errors import AngeeSchema
 from angee.graphql.introspection import (
     django_model,
     surface_field_names,
     surface_name,
 )
+from graphql import GraphQLError
 
 DEFAULT_SCHEMA_NAME = "public"
 """Default GraphQL schema name served by Angee hosts."""
@@ -40,10 +41,37 @@ SCHEMA_PART_KEYS: tuple[str, ...] = (
 """GraphQL merge buckets accepted from addon schema declarations."""
 
 _ROOT_TYPE_NAMES = {
-    "query": "Query",
-    "mutation": "Mutation",
-    "subscription": "Subscription",
+    key: key.title()
+    for key in SCHEMA_PART_KEYS
+    if key not in {"types", "extensions"}
 }
+
+
+class AngeeSchema(strawberry.Schema):
+    """Strawberry schema that exposes stable REBAC denial codes."""
+
+    def process_errors(
+        self,
+        errors: list[GraphQLError],
+        execution_context: ExecutionContext | None = None,
+    ) -> None:
+        """Attach GraphQL error codes before Strawberry logs errors."""
+
+        for error in errors:
+            self._apply_rebac_code(error)
+        super().process_errors(errors, execution_context)
+
+    def _apply_rebac_code(self, error: GraphQLError) -> None:
+        """Attach the code owned by a REBAC denial exception."""
+
+        original = error.original_error
+        if isinstance(original, MissingActorError):
+            code = "UNAUTHENTICATED"
+        elif isinstance(original, PermissionDenied):
+            code = "PERMISSION_DENIED"
+        else:
+            return
+        error.extensions = {**(error.extensions or {}), "code": code}
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,25 +144,21 @@ class SchemaParts:
 class GraphQLSchemas:
     """Collection owner for named GraphQL schema parts and builds."""
 
+    _discovered: ClassVar[GraphQLSchemas | None] = None
+
     def __init__(self, addons: Iterable[AppConfig]) -> None:
         """Store addon configs in deterministic discovery order."""
 
         self.addons = tuple(addons)
+        self._builds: dict[str, strawberry.Schema] = {}
 
     @classmethod
     def from_discovery(cls) -> GraphQLSchemas:
         """Return schemas built from installed addon discovery."""
 
-        return cls(apps.get_app_configs())
-
-    @classmethod
-    def from_addons(
-        cls,
-        addons: Iterable[AppConfig],
-    ) -> GraphQLSchemas:
-        """Return schemas built from explicit addon configs."""
-
-        return cls(addons)
+        if cls._discovered is None:
+            cls._discovered = cls(apps.get_app_configs())
+        return cls._discovered
 
     @cached_property
     def parts(self) -> dict[str, SchemaParts]:
@@ -156,6 +180,16 @@ class GraphQLSchemas:
         name: str = DEFAULT_SCHEMA_NAME,
     ) -> strawberry.Schema:
         """Return the merged live Strawberry schema named ``name``."""
+
+        if name not in self._builds:
+            self._builds[name] = self._build(name)
+        return self._builds[name]
+
+    def _build(
+        self,
+        name: str,
+    ) -> strawberry.Schema:
+        """Build the merged live Strawberry schema named ``name``."""
 
         try:
             parts = self.parts[name]

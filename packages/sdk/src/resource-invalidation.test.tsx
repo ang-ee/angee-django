@@ -105,9 +105,17 @@ describe("useResourceMutation invalidates membership-changing writes", () => {
   test("delete invalidates the model", async () => {
     const { result, spy } = runMutation("delete");
     await act(async () => {
-      await result.current[0]({ id: "1" });
+      await result.current[0]({ id: "1", confirm: true });
     });
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  test("delete without confirmation does not invalidate the model", async () => {
+    const { result, spy } = runMutation("delete");
+    await act(async () => {
+      await result.current[0]({ id: "1" });
+    });
+    expect(spy).not.toHaveBeenCalled();
   });
 
   test("delete dry-run does not invalidate the model", async () => {

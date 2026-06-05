@@ -9,11 +9,13 @@ from django.apps import AppConfig, apps
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import module_has_submodule
 
+from angee.addons import is_angee_addon
+
 
 def _addon_urlpatterns(app_config: AppConfig) -> list[object]:
     """Return URL patterns from one addon's conventional ``urls.py`` module."""
 
-    if not hasattr(app_config, "depends_on"):
+    if not is_angee_addon(app_config):
         return []
     if not module_has_submodule(app_config.module, "urls"):
         return []

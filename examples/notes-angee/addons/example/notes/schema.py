@@ -8,7 +8,6 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.db.models import QuerySet
 from rebac import system_context
 from rebac.errors import MissingActorError
 from strawberry import auto, relay
@@ -16,6 +15,7 @@ from strawberry_django.pagination import OffsetPaginated
 from strawberry_django_aggregates import AggregateBuilder
 
 from angee.base.models import public_id_of
+from angee.graphql.aggregates import rebac_aggregate_get_queryset
 from angee.graphql.crud import crud
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
@@ -136,46 +136,13 @@ class NoteOrder:
     word_count: auto
 
 
-def _rebac_scoped(info: strawberry.Info | None = None) -> QuerySet[Any]:
-    """Return notes with the ambient REBAC actor eagerly applied.
-
-    The aggregates library owns aggregation but expects a pre-scoped
-    queryset (its one host-agnostic seam); this hook is the only Angee
-    glue. Scope must be applied eagerly: ``compute_aggregation`` runs
-    ``.values().annotate()`` paths that bypass ``RebacQuerySet._fetch_all``,
-    where row scoping would otherwise fire. Let the queryset owner resolve the
-    ambient actor/sudo state so aggregate queries match the list query's
-    permission semantics. Under REBAC strict mode a request with no actor
-    raises ``MissingActorError``, so that case yields an empty result rather
-    than a leak.
-
-    ``on_field_deny("allow")`` relaxes field-read enforcement here because the
-    same ``.values().annotate()`` paths do not apply per-field redaction. That
-    is safe ONLY while every exposed group-by axis is a non-gated read field:
-    a field with a ``read__<field>`` gate (``is_starred``, ``reminder_at``)
-    must never be a ``group_by_fields`` axis, or its owner-only value leaks via
-    the bucket keys/counts.
-    """
-
-    queryset = Note.objects.all().on_field_deny("allow")
-    try:
-        queryset.apply_ambient_scope()
-    except MissingActorError:
-        return cast(QuerySet[Any], queryset.none())
-    return cast(QuerySet[Any], queryset)
-
-
 # Aggregation is owned by ``strawberry-django-aggregates``: it emits the
 # group-by surface (offset-paginated groups, multi-axis composite keys, the
-# full granularity track, having, and ordering). Angee contributes only the
-# REBAC-scoped queryset. Count is the M2 measure; ``word_count`` is the
-# summable numeric column exposed to grouped and ungrouped aggregates.
-#
-# Group-by axes are non-gated read fields only. ``is_starred`` and
-# ``reminder_at`` are owner-gated reads (``permissions.zed``: ``read__*``);
-# exposing either as an axis would leak the owner-only value through the bucket
-# keys/counts, because aggregation runs with field enforcement relaxed (see
-# ``_rebac_scoped``).
+# full granularity track, having, and ordering). Angee contributes the
+# REBAC-scoped queryset hook. Group-by axes are non-gated read fields only:
+# ``is_starred`` and ``reminder_at`` are owner-gated reads (``read__*``), so
+# exposing either as an axis would leak owner-only values through bucket keys.
+# Count is the M2 measure; ``word_count`` is the summable numeric column.
 # ``enable_filter_echo`` adds a ``filter: JSON!`` to each grouped bucket: a value
 # shaped like ``notes(filters:)`` that re-selects that bucket's rows, so a client
 # can lazily page a group's items through the existing scoped list query. The
@@ -188,7 +155,7 @@ _note_aggregates = AggregateBuilder(
     group_by_fields=["status", "updated_at"],
     filter_type=NoteFilter,
     pagination_style="offset",
-    get_queryset=_rebac_scoped,
+    get_queryset=rebac_aggregate_get_queryset(Note.objects.all()),
     enable_filter_echo=True,
 ).build()
 
@@ -226,7 +193,10 @@ _AGGREGATE_TYPES = [
 def _scoped_note_by_id(id: relay.GlobalID) -> Any | None:
     """Return the actor-visible note addressed by relay id, if any."""
 
-    return _rebac_scoped().filter(**Note.public_id_lookup(id.node_id)).first()
+    try:
+        return Note.objects.filter(**Note.public_id_lookup(id.node_id)).first()
+    except MissingActorError:
+        return None
 
 
 def _user_public_id(user_id: Any) -> strawberry.ID | None:
@@ -250,11 +220,7 @@ def _user_label(user_id: Any) -> str | None:
     if user_id is None:
         return None
     with system_context(reason="notes.graphql.user_label"):
-        user = (
-            User.objects.filter(pk=user_id)
-            .only("first_name", "last_name", "username")
-            .first()
-        )
+        user = User.objects.filter(pk=user_id).only("first_name", "last_name", "username").first()
     if user is None:
         return None
     return str(user.get_full_name() or user.username)

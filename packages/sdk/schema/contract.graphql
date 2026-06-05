@@ -294,7 +294,7 @@ type Mutation {
   logout: Boolean!
   createSale(data: SaleInput!): Sale!
   updateSale(data: SalePatch!): Sale!
-  deleteSale(id: ID!, confirm: Boolean! = true): DeletePreview!
+  deleteSale(id: ID!, confirm: Boolean! = false): DeletePreview!
 }
 
 type Subscription {

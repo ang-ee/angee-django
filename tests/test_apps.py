@@ -138,7 +138,7 @@ def test_get_schema_parts_missing_module_is_empty() -> None:
 
 
 def test_config_attributes_are_owned_by_consumers() -> None:
-    """Config attributes are declarations, not addon identity markers."""
+    """Config attributes are explicit declarations owned by consumers."""
 
     class ManifestOnlyConfig(AppConfig):
         name = "tests.manifest_only"
@@ -149,6 +149,7 @@ def test_config_attributes_are_owned_by_consumers() -> None:
     class DependencyNodeConfig(AppConfig):
         name = "tests.marked_addon"
         label = "marked_addon"
+        angee_addon = True
         depends_on = ()
 
     manifest_only = ManifestOnlyConfig(
@@ -159,4 +160,5 @@ def test_config_attributes_are_owned_by_consumers() -> None:
 
     assert manifest_only.schemas == {}
     assert manifest_only.resources == {}
+    assert dependency_node.angee_addon is True
     assert dependency_node.depends_on == ()

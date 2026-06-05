@@ -479,6 +479,7 @@ def test_resource_manager_loads_rows_and_resolves_xrefs(
             """Django model options for the test model."""
 
             app_label = "base"
+            rebac_resource_type = "base/import-user"
 
     class ImportNote(AngeeModel):
         """Note-like model referencing a resource-loaded user."""
@@ -491,6 +492,7 @@ def test_resource_manager_loads_rows_and_resolves_xrefs(
             """Django model options for the test model."""
 
             app_label = "base"
+            rebac_resource_type = "base/import-note"
 
     class ResourceLedger(Resource):
         """Concrete resource ledger for the test database."""

@@ -89,14 +89,11 @@ class DeletePreviewNode:
     def from_target(
         cls,
         instance: models.Model,
-        collector: Collector,
-        fast_deletes: tuple[_FastDelete, ...],
-        actor: Any | None,
+        groups: dict[type[models.Model], _PreviewRows],
     ) -> DeletePreviewNode:
         """Return the root node (the deletion target) with its grouped children."""
 
         model = type(instance)
-        groups = _PreviewRows.by_model(instance, collector, fast_deletes, actor)
         return cls(
             label=str(model._meta.verbose_name),
             object_label=str(instance),
@@ -141,7 +138,11 @@ class DeletePreview:
 
     @classmethod
     def from_instance(cls, instance: models.Model, actor: Any | None = None) -> DeletePreview:
-        """Return Django's cascade forecast for ``instance``."""
+        """Return Django's cascade forecast for ``instance``.
+
+        Callers should run previews inside the same transaction as the eventual
+        delete so fast-delete counts and visible rows share one database snapshot.
+        """
 
         collector = Collector(using=instance._state.db or "default")
         blocked: list[DeletePreviewGroup] = []
@@ -155,15 +156,14 @@ class DeletePreview:
         fast_deletes: tuple[_FastDelete, ...] = tuple(
             (queryset, queryset.count()) for queryset in collector.fast_deletes
         )
-        root = DeletePreviewNode.from_target(
+        groups = _PreviewRows.by_model(
             instance,
             collector,
             fast_deletes,
             actor if actor is not None else current_actor(),
         )
-        deleted_counts: dict[type[models.Model], int] = {model: len(rows) for model, rows in collector.data.items()}
-        for queryset, count in fast_deletes:
-            deleted_counts[queryset.model] = deleted_counts.get(queryset.model, 0) + count
+        root = DeletePreviewNode.from_target(instance, groups)
+        deleted_counts = _deleted_counts(instance, groups)
 
         updated_counts: dict[type[models.Model], int] = {}
         for (model_field, _value), object_groups in collector.field_updates.items():
@@ -295,6 +295,18 @@ def _groups(counts: dict[type[models.Model], int]) -> list[DeletePreviewGroup]:
     ]
 
 
+def _deleted_counts(
+    root: models.Model,
+    groups: dict[type[models.Model], _PreviewRows],
+) -> dict[type[models.Model], int]:
+    """Return deleted row counts from the preview row inventory."""
+
+    counts: dict[type[models.Model], int] = {type(root): 1}
+    for model, rows in groups.items():
+        counts[model] = counts.get(model, 0) + rows.total_count
+    return counts
+
+
 def _count_by_model(
     instances: Iterable[models.Model],
 ) -> dict[type[models.Model], int]:
@@ -322,6 +334,8 @@ def _read_scoped_queryset(
     if not _requires_read_scope(model) or actor is None:
         return None
     manager = model._default_manager
+    # Dynamic test models and third-party models may declare a REBAC resource
+    # type without installing the REBAC manager/queryset pair.
     with_actor = getattr(manager, "with_actor", None)
     if not callable(with_actor):
         return None

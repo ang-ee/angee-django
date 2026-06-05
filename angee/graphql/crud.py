@@ -116,7 +116,7 @@ def crud(
 def _delete_resolver(model: type[models.Model]) -> Any:
     """Return a mutation resolver that previews then deletes."""
 
-    def delete(id: relay.GlobalID, confirm: bool = True) -> DeletePreview:
+    def delete(id: relay.GlobalID, confirm: bool = False) -> DeletePreview:
         """Delete one model instance by global id when unblocked."""
 
         with transaction.atomic():

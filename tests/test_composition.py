@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import reversion
 from django.db import connection, models
-from rebac import RebacMixin, system_context
+from rebac import MissingActorError, RebacMixin, system_context
 
 from angee.base.mixins import RevisionMixin, SqidMixin
 from angee.base.models import (
@@ -24,6 +24,7 @@ class PublicIdThing(SqidMixin, AngeeModel):
         """Django model options for the test model."""
 
         app_label = "tests"
+        rebac_resource_type = "tests/public-id-thing"
 
 
 class PlainPublicIdThing(models.Model):
@@ -66,7 +67,8 @@ def test_public_id_helpers_support_angee_and_plain_django_models() -> None:
         schema_editor.create_model(PlainPublicIdThing)
 
     try:
-        angee_instance = PublicIdThing.objects.create(name="angee")
+        with system_context(reason="test public-id setup"):
+            angee_instance = PublicIdThing.objects.create(name="angee")
         plain_instance = PlainPublicIdThing.objects.create(name="plain")
 
         assert public_id_of(angee_instance) == angee_instance.sqid
@@ -77,6 +79,8 @@ def test_public_id_helpers_support_angee_and_plain_django_models() -> None:
         assert instance_from_public_id(PlainPublicIdThing, str(plain_instance.pk)) == plain_instance
         with system_context(reason="test missing public-id lookup"):
             assert instance_from_public_id(PublicIdThing, "missing") is None
+        with pytest.raises(MissingActorError):
+            PublicIdThing.from_public_id(angee_instance.public_id)
         assert instance_from_public_id(PlainPublicIdThing, "0") is None
     finally:
         with connection.schema_editor() as schema_editor:
@@ -105,6 +109,7 @@ def test_revision_mixin_restores_declared_fields_from_versions() -> None:
 
         assert instance.revisions.count() == 2
         assert instance.revisions.first().field_dict["body"] == "v2"
+        instance.title = "Unsaved stale title"
         instance.revert_to(instance.revisions.last())
         instance.refresh_from_db()
 

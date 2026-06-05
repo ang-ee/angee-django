@@ -84,6 +84,21 @@ def test_iam_user_is_the_default_auth_model(tmp_path: Path) -> None:
     assert "angee.iam.apps.IAMConfig" in installed
 
 
+def test_iam_installs_csrf_middleware_for_session_graphql(tmp_path: Path) -> None:
+    """IAM installs CSRF protection while bearer requests can opt out."""
+
+    settings = _compose(tmp_path)
+    middleware = settings["MIDDLEWARE"]
+
+    session_at = middleware.index("django.contrib.sessions.middleware.SessionMiddleware")
+    csrf_at = middleware.index("django.middleware.csrf.CsrfViewMiddleware")
+    auth_at = middleware.index("django.contrib.auth.middleware.AuthenticationMiddleware")
+    actor_at = middleware.index("rebac.middleware.ActorMiddleware")
+    bearer_at = middleware.index("angee.iam.middleware.BearerTokenCsrfExemptMiddleware")
+
+    assert session_at < csrf_at < auth_at < actor_at < bearer_at
+
+
 def test_addons_are_sorted_by_declared_dependencies(tmp_path: Path) -> None:
     """The host may list addons in any order; AppConfig depends_on orders them."""
 
@@ -971,6 +986,20 @@ def test_root_urlconf_ignores_plain_django_dependency_urls() -> None:
     from angee import urls as angee_urls
 
     auth_config = AuthConfig("django.contrib.auth", auth_module)
+
+    assert angee_urls._addon_urlpatterns(auth_config) == []
+
+
+def test_root_urlconf_requires_explicit_angee_addon_marker() -> None:
+    """A ``depends_on`` attribute alone does not opt an app into route mounting."""
+
+    import django.contrib.auth as auth_module
+    from django.contrib.auth.apps import AuthConfig
+
+    from angee import urls as angee_urls
+
+    auth_config = AuthConfig("django.contrib.auth", auth_module)
+    auth_config.depends_on = ()  # type: ignore[attr-defined]
 
     assert angee_urls._addon_urlpatterns(auth_config) == []
 

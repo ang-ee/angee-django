@@ -138,6 +138,21 @@ class Runtime:
         for label in self.labels:
             importlib.import_module(f"{self.runtime_module}.{label}.models")
 
+    def bootstrap_check(self, *, strict: bool = False) -> bool:
+        """Return whether app loading should import generated model modules.
+
+        Normal Django boot only needs to verify that the runtime package is
+        generated before importing it. Full render drift checks are owned by
+        ``angee build --check`` and opt-in strict boot environments.
+        """
+
+        if strict:
+            self.check()
+            return True
+        if not self._has_generated_sentinel():
+            return False
+        return all((self.runtime_dir / label / "models.py").exists() for label in self.labels)
+
     def configure_migration_modules(self) -> Runtime:
         """Redirect migrations for emitted runtime app labels."""
 
@@ -198,8 +213,11 @@ class Runtime:
         self._ensure_cleanable()
         if not self.runtime_dir.exists():
             return
+        keep_sentinel = self._has_preserved_migrations()
         for path in sorted(self.runtime_dir.rglob("*"), reverse=True):
             if self._is_preserved_migration_path(path):
+                continue
+            if keep_sentinel and path == self.runtime_dir / "__init__.py":
                 continue
             if path.is_file():
                 path.unlink()
@@ -280,7 +298,7 @@ class Runtime:
             base_names = [alias for _extension, alias in extension_aliases] + [source_alias]
             meta_lines = [
                 "        abstract = False",
-                f'        app_label = "{label}"',
+                f"        app_label = {label!r}",
             ]
             db_table = self._db_table_source(model_class)
             if db_table is not None:
@@ -512,10 +530,13 @@ class Runtime:
         init_path = self.runtime_dir / "__init__.py"
         if init_path.exists() and GENERATED_SENTINEL in init_path.read_text(encoding="utf-8"):
             return
-        remaining_files = [path for path in self.runtime_dir.rglob("*") if path.is_file()]
-        if remaining_files and all(self._is_preserved_migration_path(path) for path in remaining_files):
-            return
         raise RuntimeError(f"{self.runtime_dir} is not an Angee runtime directory")
+
+    def _has_generated_sentinel(self) -> bool:
+        """Return whether the runtime package carries Angee's sentinel."""
+
+        init_path = self.runtime_dir / "__init__.py"
+        return init_path.exists() and GENERATED_SENTINEL in init_path.read_text(encoding="utf-8")
 
     def _is_checked_source(self, path: Path) -> bool:
         """Return whether ``path`` participates in source drift checks."""
@@ -546,6 +567,14 @@ class Runtime:
         """Return whether cleanup must preserve ``path`` under migrations."""
 
         return "migrations" in path.relative_to(self.runtime_dir).parts
+
+    def _has_preserved_migrations(self) -> bool:
+        """Return whether cleanup will leave migration files behind."""
+
+        return any(
+            path.is_file() and self._is_preserved_migration_path(path)
+            for path in self.runtime_dir.rglob("*")
+        )
 
     def _write(self, path: Path, text: str) -> None:
         """Write ``text`` to ``path``, creating parents first."""
@@ -649,7 +678,11 @@ class Runtime:
         self,
         app_config: AppConfig,
     ) -> tuple[tuple[type[models.Model], ...], tuple[type[models.Model], ...]]:
-        """Return source models and extensions declared by one Django app config."""
+        """Return source models and extensions declared by one Django app config.
+
+        Runtime owns this scan because addons deliberately remain plain Django
+        ``AppConfig`` classes with no shared Angee base method to delegate to.
+        """
 
         models_owned: list[type[models.Model]] = []
         extensions: list[type[models.Model]] = []

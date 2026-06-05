@@ -104,7 +104,7 @@ def test_crud_fields_merge_into_a_schema() -> None:
     sdl = strawberry.Schema(query=Query, mutation=surface, types=[GroupType]).as_str()
 
     assert "createGroup(data: GroupInput!): GroupType!" in sdl
-    assert "deleteGroup(id: ID!, confirm: Boolean! = true): DeletePreview!" in sdl
+    assert "deleteGroup(id: ID!, confirm: Boolean! = false): DeletePreview!" in sdl
     assert "type DeletePreview" in sdl
 
 
@@ -159,13 +159,45 @@ def test_delete_resolver_preserves_blocked_and_removes_unblocked(
     )
     delete = _delete_resolver(Group)
 
-    blocked_preview = delete(relay.GlobalID(type_name="GroupType", node_id=str(blocked.pk)))
-    removable_preview = delete(relay.GlobalID(type_name="GroupType", node_id=str(removable.pk)))
+    blocked_preview = delete(relay.GlobalID(type_name="GroupType", node_id=str(blocked.pk)), confirm=True)
+    removable_preview = delete(relay.GlobalID(type_name="GroupType", node_id=str(removable.pk)), confirm=True)
 
     assert blocked_preview.has_blockers
     assert Group.objects.filter(pk=blocked.pk).exists()
     assert not removable_preview.has_blockers
     assert not Group.objects.filter(pk=removable.pk).exists()
+
+
+@pytest.mark.django_db
+def test_delete_resolver_defaults_to_preview_without_deleting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Omitting ``confirm`` previews the cascade but leaves the row intact."""
+
+    group = Group.objects.create(name="preview-only")
+
+    def preview_for(
+        cls: type[DeletePreview],
+        instance: Group,
+    ) -> DeletePreview:
+        del cls, instance
+        return DeletePreview(
+            total_deleted_count=1,
+            deleted=[DeletePreviewGroup(label="groups", count=1)],
+            updated=[],
+            blocked=[],
+        )
+
+    monkeypatch.setattr(
+        DeletePreview,
+        "from_instance",
+        classmethod(preview_for),
+    )
+
+    preview = _delete_resolver(Group)(relay.GlobalID(type_name="GroupType", node_id=str(group.pk)))
+
+    assert not preview.has_blockers
+    assert Group.objects.filter(pk=group.pk).exists()
 
 
 @pytest.mark.django_db
@@ -216,7 +248,7 @@ def test_delete_resolver_previews_and_deletes_inside_transaction(
         classmethod(preview_for),
     )
 
-    _delete_resolver(Group)(relay.GlobalID(type_name="GroupType", node_id=str(group.pk)))
+    _delete_resolver(Group)(relay.GlobalID(type_name="GroupType", node_id=str(group.pk)), confirm=True)
 
     assert entered
     assert not active

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
 from typing import Any
 
 from django.conf import settings
@@ -15,9 +14,8 @@ from strawberry.django.views import GraphQLView
 from angee.graphql.schema import GraphQLSchemas
 
 
-@lru_cache(maxsize=None)
 def _get_view(schema_name: str) -> Any:
-    """Return the cached Django view for one named GraphQL schema."""
+    """Return the Django view for one named GraphQL schema."""
 
     schema = GraphQLSchemas.from_discovery().build(schema_name)
     return GraphQLView.as_view(

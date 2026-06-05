@@ -7,8 +7,9 @@ from dataclasses import dataclass, replace
 from typing import Any, cast
 
 import strawberry
+from django.core.exceptions import FieldDoesNotExist
 from django.db import models
-from rebac import to_object_ref
+from rebac.resources import model_resource_id, model_resource_type
 from strawberry.scalars import JSON
 
 from angee.base.models import public_id_of
@@ -48,16 +49,10 @@ class ChangePayload:
         """Return the channel payload for a saved or deleted model instance."""
 
         changed_fields = tuple(sorted(str(field) for field in update_fields)) if update_fields is not None else None
-        changed_values = (
-            {field: json_safe(getattr(instance, field, None)) for field in changed_fields}
-            if changed_fields is not None
-            else None
-        )
+        changed_values = _changed_values(instance, changed_fields) if changed_fields is not None else None
         resource_id = None
-        try:
-            resource_id = to_object_ref(instance).resource_id
-        except TypeError:
-            pass
+        if model_resource_type(type(instance)):
+            resource_id = model_resource_id(instance)
         return cls(
             model=instance._meta.label,
             id=public_id_of(instance),
@@ -115,6 +110,37 @@ class ChangePayload:
             else None
         )
         return replace(self, changed_fields=changed_fields, changed_values=changed_values)
+
+
+def _changed_values(
+    instance: models.Model,
+    changed_fields: tuple[str, ...],
+) -> dict[str, Any]:
+    """Return JSON-safe values for concrete local fields without relation fetches."""
+
+    values: dict[str, Any] = {}
+    for name in changed_fields:
+        field = _concrete_local_field(instance, name)
+        if field is not None:
+            values[name] = json_safe(getattr(instance, field.attname, None))
+    return values
+
+
+def _concrete_local_field(
+    instance: models.Model,
+    name: str,
+) -> models.Field[Any, Any] | None:
+    """Return the concrete local field addressed by ``name`` or its attname."""
+
+    try:
+        field = instance._meta.get_field(name)
+    except FieldDoesNotExist:
+        field = next((item for item in instance._meta.local_fields if item.attname == name), None)
+    if not isinstance(field, models.Field) or not field.concrete:
+        return None
+    if field not in instance._meta.local_fields:
+        return None
+    return field
 
 
 @strawberry.type

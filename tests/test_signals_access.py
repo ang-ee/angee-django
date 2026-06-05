@@ -11,12 +11,14 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.db import connection, models
 from django.db.models.signals import post_save
+from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, anonymous_actor
 
 from angee.base.mixins import AuditMixin
 from angee.base.serialization import json_safe
 from angee.graphql import access, publishing
 from angee.graphql.access import ChangeReadGate
+from angee.graphql.events import ChangePayload
 
 
 class AuditStamped(AuditMixin, models.Model):
@@ -125,6 +127,44 @@ def test_publish_uses_public_id_and_changed_values(
             },
         )
     ]
+
+
+@pytest.mark.django_db
+def test_change_payload_reads_fk_ids_without_fetching_relations() -> None:
+    """Changed relation fields publish raw local ids without loading objects."""
+
+    class EventParent(models.Model):
+        """Parent model for relation payload tests."""
+
+        name = models.CharField(max_length=64)
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+
+    class EventChild(models.Model):
+        """Child model whose FK update should stay query-free."""
+
+        parent = models.ForeignKey(EventParent, on_delete=models.CASCADE)
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+
+    child = EventChild(id=1, parent_id=42)
+
+    with CaptureQueriesContext(connection) as captured:
+        payload = ChangePayload.from_instance(
+            child,
+            action="update",
+            update_fields=("parent",),
+        )
+
+    assert len(captured) == 0
+    assert payload.changed_fields == ("parent",)
+    assert payload.changed_values == {"parent": 42}
 
 
 def test_json_safe_normalizes_nested_values() -> None:

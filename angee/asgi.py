@@ -13,6 +13,9 @@ from django.core.asgi import get_asgi_application
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import module_has_submodule
 
+from angee.addons import is_angee_addon
+from angee.paths import resolve_path
+
 _PROJECT_DIR_ENV = "ANGEE_PROJECT_DIR"
 
 
@@ -21,7 +24,7 @@ def _project_dir() -> Path | None:
 
     configured = os.environ.get(_PROJECT_DIR_ENV)
     if configured:
-        return Path(configured).expanduser().resolve()
+        return resolve_path(configured)
     for parent in (Path.cwd().resolve(), *Path.cwd().resolve().parents):
         if (parent / "settings.yaml").exists() or (parent / "settings.py").exists():
             return parent
@@ -49,7 +52,7 @@ def _websocket_urlpatterns() -> list[object]:
 def _addon_websocket_urlpatterns(app_config: AppConfig) -> list[object]:
     """Return WebSocket URL patterns from one addon's conventional ``asgi.py``."""
 
-    if not hasattr(app_config, "depends_on"):
+    if not is_angee_addon(app_config):
         return []
     if not module_has_submodule(app_config.module, "asgi"):
         return []

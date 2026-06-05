@@ -9,6 +9,7 @@ class IntegrateConfig(AppConfig):
     """Source app manifest for Angee integration runtime primitives."""
 
     default = True
+    angee_addon = True
     default_auto_field = "django.db.models.BigAutoField"
     name = "angee.integrate"
     label = "integrate"

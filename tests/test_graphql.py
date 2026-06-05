@@ -155,7 +155,7 @@ def test_collect_folds_addons_in_order() -> None:
     first = addon(public={"query": [HelloQuery]})
     second = addon(public={"query": [WorldQuery]}, console={"query": [HelloQuery]})
 
-    schemas = GraphQLSchemas.from_addons([first, second])
+    schemas = GraphQLSchemas([first, second])
     collected = schemas.parts
 
     assert collected["public"].query == (HelloQuery, WorldQuery)
@@ -166,7 +166,7 @@ def test_collect_folds_addons_in_order() -> None:
 def test_collect_dedupes_by_identity() -> None:
     """A surface contributed twice is folded once."""
 
-    collected = GraphQLSchemas.from_addons(
+    collected = GraphQLSchemas(
         [
             addon(public={"query": [HelloQuery]}),
             addon(public={"query": [HelloQuery]}),
@@ -179,9 +179,9 @@ def test_collect_dedupes_by_identity() -> None:
 def test_build_schema_merges_query_surfaces() -> None:
     """Query surfaces from several addons merge into one root."""
 
-    from angee.graphql.errors import AngeeSchema
+    from angee.graphql.schema import AngeeSchema
 
-    schema = GraphQLSchemas.from_addons(
+    schema = GraphQLSchemas(
         [
             addon(public={"query": [HelloQuery]}),
             addon(public={"query": [WorldQuery]}),
@@ -198,7 +198,7 @@ def test_build_schema_merges_query_surfaces() -> None:
 def test_build_schema_installs_universal_rebac_extensions() -> None:
     """REBAC brackets every schema while addon extensions keep their slot."""
 
-    schema = GraphQLSchemas.from_addons(
+    schema = GraphQLSchemas(
         [
             addon(
                 public={
@@ -219,7 +219,7 @@ def test_build_schema_installs_universal_rebac_extensions() -> None:
 def test_denial_errors_get_graphql_codes() -> None:
     """REBAC denials surface with stable GraphQL error codes."""
 
-    schema = GraphQLSchemas.from_addons([addon(public={"query": [DenialQuery]})]).build("public")
+    schema = GraphQLSchemas([addon(public={"query": [DenialQuery]})]).build("public")
 
     missing_actor = schema.execute_sync("{ missingActor }")
     denied = schema.execute_sync("{ permissionDenied }")
@@ -250,7 +250,7 @@ def test_rebac_graphql_types_require_rebac_default_manager() -> None:
     """GraphQL-exposed REBAC models fail fast without the library manager."""
 
     assert isinstance(ManagedThing._default_manager, RebacManager)
-    GraphQLSchemas.from_addons(
+    GraphQLSchemas(
         [
             addon(
                 public={
@@ -262,7 +262,7 @@ def test_rebac_graphql_types_require_rebac_default_manager() -> None:
     ).build("public")
 
     with pytest.raises(ImproperlyConfigured, match="RebacManager"):
-        GraphQLSchemas.from_addons(
+        GraphQLSchemas(
             [
                 addon(
                     public={
@@ -277,7 +277,7 @@ def test_rebac_graphql_types_require_rebac_default_manager() -> None:
 def test_build_schema_includes_mutation_root() -> None:
     """A mutation bucket becomes the schema mutation root."""
 
-    schema = GraphQLSchemas.from_addons([addon(public={"query": [HelloQuery], "mutation": [PingMutation]})]).build(
+    schema = GraphQLSchemas([addon(public={"query": [HelloQuery], "mutation": [PingMutation]})]).build(
         "public"
     )
 
@@ -290,7 +290,7 @@ def test_build_schema_includes_mutation_root() -> None:
 def test_render_sdl_prints_each_schema() -> None:
     """Named schemas render to deterministic SDL strings."""
 
-    rendered = GraphQLSchemas.from_addons(
+    rendered = GraphQLSchemas(
         [
             addon(public={"query": [HelloQuery]}),
             addon(console={"query": [WorldQuery]}),
@@ -310,7 +310,7 @@ def test_relay_surface_shared_across_named_schemas_renders() -> None:
     the same field object to two builds.
     """
 
-    rendered = GraphQLSchemas.from_addons(
+    rendered = GraphQLSchemas(
         [addon(public={"query": [NodeQuery]}, console={"query": [NodeQuery]})]
     ).render_sdl()
 
@@ -322,14 +322,14 @@ def test_build_schema_unknown_name_lists_available() -> None:
     """An unknown schema name reports the names that do exist."""
 
     with pytest.raises(ImproperlyConfigured, match="available schemas"):
-        GraphQLSchemas.from_addons([addon(public={"query": [HelloQuery]})]).build("console")
+        GraphQLSchemas([addon(public={"query": [HelloQuery]})]).build("console")
 
 
 def test_build_schema_requires_query_root() -> None:
     """A schema without any query contribution fails fast."""
 
     with pytest.raises(ImproperlyConfigured, match="no query root"):
-        GraphQLSchemas.from_addons([addon(public={"mutation": [PingMutation]})]).build("public")
+        GraphQLSchemas([addon(public={"mutation": [PingMutation]})]).build("public")
 
 
 def test_merge_root_field_collision() -> None:
@@ -342,7 +342,7 @@ def test_merge_root_field_collision() -> None:
             return "shadow"
 
     with pytest.raises(ImproperlyConfigured, match="contributed by both"):
-        GraphQLSchemas.from_addons(
+        GraphQLSchemas(
             [
                 addon(public={"query": [HelloQuery]}),
                 addon(public={"query": [OtherHello]}),
@@ -360,6 +360,6 @@ def test_empty_addons_contribute_no_schemas() -> None:
     """No contributions means no names and no parts."""
 
     empty: list[Any] = []
-    schemas = GraphQLSchemas.from_addons(empty)
+    schemas = GraphQLSchemas(empty)
     assert schemas.parts == {}
     assert schemas.names() == ()

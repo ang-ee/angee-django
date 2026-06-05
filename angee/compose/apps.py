@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
-import sys
-
 from django.apps import AppConfig
+from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
 
 class ComposeConfig(AppConfig):
-    """Import composed runtime models during app population."""
+    """Bootstrap composed runtime models during app population."""
 
     default = True
+    angee_addon = True
     name = "angee.compose"
     depends_on = ("django_yamlconf",)
 
     def import_models(self) -> None:
-        """Check runtime files, then import generated models."""
+        """Cheap-check runtime files, then import generated models when present."""
 
         super().import_models()
         # Deferred (phase-1 AppConfig rule): importing Runtime at module top
@@ -29,13 +29,12 @@ class ComposeConfig(AppConfig):
 
         runtime = Runtime.from_django()
         try:
-            if sys.argv[1:3] in (["angee", "build"], ["angee", "clean"]) and not sys.argv[3:]:
-                if not runtime.is_current():
-                    runtime.emit()
-            else:
-                runtime.check()
+            should_import = runtime.bootstrap_check(
+                strict=bool(getattr(settings, "ANGEE_RUNTIME_STRICT_BOOT", False)),
+            )
         except RuntimeError as error:
             raise ImproperlyConfigured(
                 f"{error}; run `angee build` to refresh generated runtime sources"
             ) from error
-        runtime.import_generated_models()
+        if should_import:
+            runtime.import_generated_models()

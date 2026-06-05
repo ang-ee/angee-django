@@ -10,7 +10,7 @@ from django.db.models.utils import make_model_tuple
 from rebac import RebacMixin
 from rebac.managers import RebacManager, RebacQuerySet
 
-from angee.base.mixins import SqidMixin, TimestampMixin
+from angee.base.mixins import TimestampMixin
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
@@ -99,7 +99,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
     def public_id(self) -> str:
         """Return the stable public identifier for this model instance."""
 
-        value = _public_id_value(self)
+        value = self.public_id_value()
         if value in (None, ""):
             return ""
         return str(value)
@@ -122,9 +122,12 @@ class AngeeModel(TimestampMixin, RebacMixin):
     def public_id_lookup(cls, value: str) -> dict[str, Any]:
         """Return the Django lookup for this model's public identifier."""
 
-        if issubclass(cls, SqidMixin):
-            return {"sqid": value}
         return {cls._meta.pk.name: value}
+
+    def public_id_value(self) -> Any:
+        """Return the raw public identifier value owned by this instance."""
+
+        return self.pk
 
 
 def instance_from_public_id(model: type[_ModelT], value: str) -> _ModelT | None:
@@ -160,11 +163,3 @@ def _is_contributed_extension_base(value: type) -> bool:
     model = cast(type[models.Model], value)
     meta = model._meta
     return bool(meta.abstract)
-
-
-def _public_id_value(instance: models.Model) -> Any:
-    """Return the raw public identifier value owned by ``instance``."""
-
-    if isinstance(instance, SqidMixin):
-        return instance.sqid
-    return instance.pk

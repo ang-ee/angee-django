@@ -63,8 +63,9 @@ Rules that follow from the layering:
   app configs and reads only the declaration attributes it owns. Serving code
   never imports `angee.compose` just to list addons.
 - **An Angee addon is a plain Django app config with explicit attributes.**
-  Addons do not subclass an Angee base config. `depends_on` is only an ordering
-  contract; each lifecycle step reads only the contract it owns:
+  Addons do not subclass an Angee base config. `angee_addon = True` opts the app
+  into framework addon discovery for conventional routes, and `depends_on` is
+  only an ordering contract; each lifecycle step reads only the contract it owns:
   `graphql` reads `schemas`, `resources` reads `resources`, REBAC sync reads
   `permissions`, stable serving imports conventional `urls.py` / `asgi.py`,
   runtime emission reads model-level `runtime = True`, and settings composition reads

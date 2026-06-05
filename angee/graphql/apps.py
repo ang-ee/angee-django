@@ -9,6 +9,7 @@ class GraphQLConfig(AppConfig):
     """GraphQL runtime and schema command host."""
 
     default = True
+    angee_addon = True
     name = "angee.graphql"
     depends_on = ("angee.base", "channels", "daphne")
     schemas = None

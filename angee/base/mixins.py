@@ -49,6 +49,17 @@ class SqidMixin(models.Model):
 
         abstract = True
 
+    def public_id_value(self) -> Any:
+        """Return the raw public identifier value for this instance."""
+
+        return self.sqid
+
+    @classmethod
+    def public_id_lookup(cls, value: str) -> dict[str, Any]:
+        """Return the Django lookup for this model's public identifier."""
+
+        return {"sqid": value}
+
 
 class AuditMixin(models.Model):
     """Add conventional user-owned audit foreign keys to a model."""
@@ -145,7 +156,10 @@ class RevisionMixin(models.Model):
         """Restore declared revisioned fields from ``version`` and save."""
 
         data = version.field_dict
+        reverted: list[str] = []
         for name in self.revisioned_fields:
             if name in data:
                 setattr(self, name, data[name])
-        self.save()
+                reverted.append(name)
+        if reverted:
+            self.save(update_fields=reverted)

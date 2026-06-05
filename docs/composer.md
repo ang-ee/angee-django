@@ -22,8 +22,9 @@ Composition has three phases.
    Django is importing.
 2. **App loading** — Django populates the resolved `INSTALLED_APPS`.
    When it reaches `angee.compose.apps.ComposeConfig.import_models()`, Angee
-   checks or explicitly emits the generated runtime, then imports concrete model
-   modules so Django registers them under the source addon labels.
+   performs a cheap generated-runtime bootstrap check, then imports concrete
+   model modules when the generated package is present so Django registers them
+   under the source addon labels.
 3. **Serving and lifecycle commands** — stable framework entrypoints such as
    `angee.urls`, `angee.asgi`, `schema`, `resources`, and `rebac sync` read the
    finished Django app registry. URL/ASGI serving imports conventional
@@ -32,8 +33,9 @@ Composition has three phases.
    modules they own.
 
 Settings composition never imports source models. Runtime emission never decides
-settings. Normal Django startup checks generated runtime files and imports them;
-only `angee build` writes runtime source files.
+settings. Normal Django startup imports generated runtime files when the
+generated sentinel is present; full render drift checks and writes belong to
+`angee build` / `angee build --check`.
 
 ## Settings Bootstrap
 
@@ -214,18 +216,20 @@ migrations.
 
 `ComposeConfig.import_models()` is the Django app-loading hook:
 
-- For `manage.py angee build` and `manage.py angee clean`, it emits only when the
-  runtime is stale, then imports generated models so Django can finish app
-  loading before the command handler runs.
-- For normal startup and `angee build --check`, it checks drift and imports
-  generated models.
-- If the runtime is missing or stale, startup fails with a clear message telling
-  the user to run `angee build`.
+- On ordinary startup, it verifies the generated sentinel and imports generated
+  models when the runtime package is present. It does not render source for a
+  full drift comparison on every process boot.
+- With `ANGEE_RUNTIME_STRICT_BOOT = True`, it runs the full drift check before
+  importing generated models. This is an opt-in CI/deployment guard.
+- If the generated package is absent or incomplete, the hook skips generated
+  imports so `angee build` can run and repair the runtime.
 
-The `angee build` command runs after Django setup, emits only if stale, verifies
-with `runtime.check()`, and prints success. `angee build --check` verifies
-without source writes. `angee clean` deletes generated runtime sources behind
-the generated sentinel guard and preserves migrations.
+The `angee build` command runs after Django setup and emits only if stale.
+`angee build --check` performs the full render drift comparison without source
+writes and reports stale output as a `CommandError`. `angee clean` deletes
+generated runtime sources behind the generated sentinel guard and preserves
+migrations; when preserved migrations remain, the root generated sentinel stays
+as the cleanup authorization marker.
 
 ## Addon AppConfig Contract
 
@@ -236,6 +240,8 @@ explicit `AppConfig` declarations.
 
 Common attributes:
 
+- `angee_addon`: `True` opts the app into Angee addon discovery for conventional
+  URL and ASGI route modules
 - `depends_on`: app names, or labels already present in the resolved app graph,
   that must load before this app
 - `schemas`: GraphQL schema contribution declaration, owned by

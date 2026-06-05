@@ -466,7 +466,7 @@ def _schema(name: str) -> Any:
         key: tuple(entry.get(key, ()))
         for key in SCHEMA_PART_KEYS
     }
-    return GraphQLSchemas.from_addons([_Addon({name: parts})]).build(name)
+    return GraphQLSchemas([_Addon({name: parts})]).build(name)
 
 
 def _execute(

@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
+from django.core.management.base import CommandError
 from django.db import models
 
 import angee.compose as compose_package
@@ -17,6 +18,7 @@ import angee.compose.runtime as runtime_module
 from angee.base.mixins import RevisionMixin
 from angee.base.models import AngeeModel
 from angee.compose.apps import ComposeConfig
+from angee.compose.management.commands.angee import Command
 from angee.compose.runtime import Runtime
 
 
@@ -68,7 +70,7 @@ def test_runtime_renders_resource_sources(tmp_path: Path) -> None:
     assert "ANGEE GENERATED RUNTIME" in sources[Path("__init__.py")]
     assert "RUNTIME_APPS = ['resources']" in sources[Path("__init__.py")]
     assert "class Resource" in sources[Path("resources/models.py")]
-    assert 'app_label = "resources"' in sources[Path("resources/models.py")]
+    assert "app_label = 'resources'" in sources[Path("resources/models.py")]
     assert ".angee-manifest.json" not in {str(path) for path in sources}
     assert Path("permissions.zed") not in sources
 
@@ -109,7 +111,7 @@ def test_runtime_renders_iam_user_sources(tmp_path: Path) -> None:
     user_source = sources[Path("iam/models.py")]
 
     assert "class User" in user_source
-    assert 'app_label = "iam"' in user_source
+    assert "app_label = 'iam'" in user_source
     assert "rebac_resource_type = 'auth/user'" in user_source
     assert "swappable = 'AUTH_USER_MODEL'" in user_source
 
@@ -214,7 +216,7 @@ def test_runtime_clean_requires_generated_sentinel(tmp_path: Path) -> None:
 
 
 def test_clean_then_emit_is_idempotent(tmp_path: Path, settings: Any) -> None:
-    """A migrations-only runtime remainder can be emitted and cleaned again."""
+    """A cleaned runtime with preserved migrations keeps its cleanup sentinel."""
 
     runtime = runtime_for(tmp_path)
     settings.ANGEE_RUNTIME_DIR = runtime.runtime_dir
@@ -223,13 +225,27 @@ def test_clean_then_emit_is_idempotent(tmp_path: Path, settings: Any) -> None:
     migration_path.write_text("# migration\n", encoding="utf-8")
 
     runtime.clean()
+    assert "ANGEE GENERATED RUNTIME" in (runtime.runtime_dir / "__init__.py").read_text(encoding="utf-8")
     runtime.emit()
 
     assert "ANGEE GENERATED RUNTIME" in (runtime.runtime_dir / "__init__.py").read_text(encoding="utf-8")
     assert migration_path.read_text(encoding="utf-8") == "# migration\n"
     runtime.clean()
     assert migration_path.read_text(encoding="utf-8") == "# migration\n"
+    assert "ANGEE GENERATED RUNTIME" in (runtime.runtime_dir / "__init__.py").read_text(encoding="utf-8")
     runtime.clean()
+
+
+def test_runtime_clean_refuses_migrations_without_sentinel(tmp_path: Path) -> None:
+    """Migrations alone are not enough evidence that a directory is generated."""
+
+    runtime = runtime_for(tmp_path)
+    migration_path = runtime.runtime_dir / "resources" / "migrations" / "0001_initial.py"
+    migration_path.parent.mkdir(parents=True)
+    migration_path.write_text("# migration\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="not an Angee runtime directory"):
+        runtime.clean()
 
 
 def _compose_config() -> ComposeConfig:
@@ -240,29 +256,80 @@ def _compose_config() -> ComposeConfig:
     return config
 
 
-@pytest.mark.parametrize(
-    ("argv", "current", "expected"),
-    (
-        (["manage.py", "angee", "build"], False, ["current", "emit", "import"]),
-        (["manage.py", "angee", "clean"], False, ["current", "emit", "import"]),
-        (["manage.py", "angee", "build", "--check"], False, ["check", "import"]),
-        (["manage.py", "angee", "build", "--bad-option"], False, ["check", "import"]),
-    ),
-)
-def test_compose_config_runtime_commands_bootstrap_generated_models(
+@pytest.mark.parametrize("should_import", [True, False])
+def test_compose_config_bootstrap_check_controls_generated_import(
     monkeypatch: pytest.MonkeyPatch,
-    argv: list[str],
-    current: bool,
-    expected: list[str],
+    should_import: bool,
 ) -> None:
-    """Runtime commands import generated models without env-driven writes."""
+    """App population imports generated models only when the cheap check passes."""
+
+    calls: list[str] = []
+
+    class FakeRuntime:
+        def bootstrap_check(self, *, strict: bool = False) -> bool:
+            calls.append(f"bootstrap:{strict}")
+            return should_import
+
+        def import_generated_models(self) -> None:
+            calls.append("import")
+
+    monkeypatch.setattr(runtime_module.Runtime, "from_django", classmethod(lambda cls: FakeRuntime()))
+
+    _compose_config().import_models()
+
+    assert calls == ["bootstrap:False", *(["import"] if should_import else [])]
+
+
+def test_compose_config_strict_boot_runs_full_check(
+    monkeypatch: pytest.MonkeyPatch,
+    settings: Any,
+) -> None:
+    """Strict boot asks the runtime for a full drift check without argv sniffing."""
+
+    calls: list[str] = []
+    settings.ANGEE_RUNTIME_STRICT_BOOT = True
+
+    class FakeRuntime:
+        def bootstrap_check(self, *, strict: bool = False) -> bool:
+            calls.append(f"bootstrap:{strict}")
+            return True
+
+        def import_generated_models(self) -> None:
+            calls.append("import")
+
+    monkeypatch.setattr(runtime_module.Runtime, "from_django", classmethod(lambda cls: FakeRuntime()))
+
+    _compose_config().import_models()
+
+    assert calls == ["bootstrap:True", "import"]
+
+
+def test_build_check_reports_command_error_when_runtime_is_stale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``angee build --check`` converts runtime drift into a clean command error."""
+
+    class FakeRuntime:
+        def check(self) -> None:
+            raise RuntimeError("generated runtime is stale: resources/models.py")
+
+    monkeypatch.setattr(runtime_module.Runtime, "from_django", classmethod(lambda cls: FakeRuntime()))
+
+    with pytest.raises(CommandError, match="generated runtime is stale"):
+        Command()._handle_build({"check": True})
+
+
+def test_build_emit_does_not_recheck_after_writing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The build command leaves write integrity to the emit path."""
 
     calls: list[str] = []
 
     class FakeRuntime:
         def is_current(self) -> bool:
             calls.append("current")
-            return current
+            return False
 
         def emit(self) -> None:
             calls.append("emit")
@@ -270,38 +337,8 @@ def test_compose_config_runtime_commands_bootstrap_generated_models(
         def check(self) -> None:
             calls.append("check")
 
-        def import_generated_models(self) -> None:
-            calls.append("import")
-
-    monkeypatch.setattr(sys, "argv", argv)
     monkeypatch.setattr(runtime_module.Runtime, "from_django", classmethod(lambda cls: FakeRuntime()))
 
-    _compose_config().import_models()
+    Command()._handle_build({"check": False})
 
-    assert calls == expected
-
-
-def test_compose_config_default_action_checks_before_import(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Normal Django startup imports generated models only after drift check."""
-
-    calls: list[str] = []
-
-    class FakeRuntime:
-        def emit(self) -> None:
-            calls.append("emit")
-
-        def check(self) -> None:
-            calls.append("check")
-
-        def import_generated_models(self) -> None:
-            calls.append("import")
-
-    monkeypatch.setenv("ANGEE_RUNTIME_ACTION", "emit")
-    monkeypatch.setattr(sys, "argv", ["manage.py", "runserver"])
-    monkeypatch.setattr(runtime_module.Runtime, "from_django", classmethod(lambda cls: FakeRuntime()))
-
-    _compose_config().import_models()
-
-    assert calls == ["check", "import"]
+    assert calls == ["current", "emit"]

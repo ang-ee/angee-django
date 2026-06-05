@@ -291,7 +291,7 @@ export function useResourceMutation<TAction extends MutationAction>(
       if (result.error) throw result.error;
       // create/delete change list membership the normalized cache can't infer;
       // update returns the same entity, so graphcache refreshes it in place.
-      if (action === "create" || (action === "delete" && variables.confirm !== false)) {
+      if (action === "create" || (action === "delete" && variables.confirm === true)) {
         invalidateModels([modelLabel]);
       }
       return (

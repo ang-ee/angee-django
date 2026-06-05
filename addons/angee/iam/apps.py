@@ -9,6 +9,7 @@ class IAMConfig(AppConfig):
     """Source app manifest for Angee identity models."""
 
     default = True
+    angee_addon = True
     default_auto_field = "django.db.models.BigAutoField"
     name = "angee.iam"
     label = "iam"
