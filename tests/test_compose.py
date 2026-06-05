@@ -8,28 +8,30 @@ from typing import Any
 import pytest
 from django.apps import apps
 
-from angee.compose.runtime import AngeeRuntime
+from angee.compose.runtime import Runtime
 
 
-def runtime_for(tmp_path: Path) -> AngeeRuntime:
-    """Return a runtime that emits the installed base addon."""
+def runtime_for(tmp_path: Path) -> Runtime:
+    """Return a runtime that emits the installed resource addon."""
 
-    return AngeeRuntime.from_addons(
-        (apps.get_app_config("base"),),
+    return Runtime.from_addons(
+        (apps.get_app_config("resources"),),
         runtime_dir=tmp_path / "runtime",
     )
 
 
-def test_runtime_renders_base_resource_sources(tmp_path: Path) -> None:
-    """The runtime renders source files for the base Resource model."""
+def test_runtime_renders_resource_sources(tmp_path: Path) -> None:
+    """The runtime renders source files for the resource ledger model."""
 
     sources = runtime_for(tmp_path).render_sources()
 
     assert Path("__init__.py") in sources
+    assert Path("asgi.py") not in sources
+    assert Path("urls.py") not in sources
     assert "ANGEE GENERATED RUNTIME" in sources[Path("__init__.py")]
-    assert "RUNTIME_APPS = ['base']" in sources[Path("__init__.py")]
-    assert "class Resource" in sources[Path("base/models.py")]
-    assert 'app_label = "base"' in sources[Path("base/models.py")]
+    assert "RUNTIME_APPS = ['resources']" in sources[Path("__init__.py")]
+    assert "class Resource" in sources[Path("resources/models.py")]
+    assert 'app_label = "resources"' in sources[Path("resources/models.py")]
     assert ".angee-manifest.json" not in {str(path) for path in sources}
     assert Path("permissions.zed") not in sources
 
@@ -38,8 +40,8 @@ def test_runtime_renders_iam_user_sources(tmp_path: Path) -> None:
     """The IAM addon emits a concrete swappable user model."""
 
     iam_config = apps.get_app_config("iam")
-    runtime = AngeeRuntime.from_addons(
-        (apps.get_app_config("base"), iam_config),
+    runtime = Runtime.from_addons(
+        (apps.get_app_config("resources"), iam_config),
         runtime_dir=tmp_path / "runtime",
     )
 
@@ -59,7 +61,7 @@ def test_runtime_emit_and_check_detect_drift(tmp_path: Path) -> None:
     runtime.emit()
     runtime.check()
 
-    (tmp_path / "runtime" / "base" / "models.py").write_text(
+    (tmp_path / "runtime" / "resources" / "models.py").write_text(
         "# stale\n",
         encoding="utf-8",
     )
@@ -100,7 +102,7 @@ def test_clean_then_emit_is_idempotent(tmp_path: Path, settings: Any) -> None:
     runtime = runtime_for(tmp_path)
     settings.ANGEE_RUNTIME_DIR = runtime.runtime_dir
     runtime.emit()
-    migration_path = runtime.runtime_dir / "base" / "migrations" / "0001_initial.py"
+    migration_path = runtime.runtime_dir / "resources" / "migrations" / "0001_initial.py"
     migration_path.write_text("# migration\n", encoding="utf-8")
 
     runtime.clean()

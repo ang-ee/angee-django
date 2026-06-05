@@ -32,10 +32,10 @@ sources:
     path: {{ framework_path }}
 
 # The compose/build/serve lifecycle. JOBS run once in depends_on order; SERVICES
-# stay up. Every command boots the host settings, whose composer emits the
-# concrete runtime in app-populate phase 2 before the addons adopt it — so a
-# wiped runtime self-heals on the first job. The host owns DATA_DIR (and creates
-# it).
+# stay up. Every command boots angee.compose.settings, which reads the host's
+# project settings module and emits the concrete runtime in app-populate phase 2
+# before the addons adopt it — so a wiped runtime self-heals on the first job.
+# The host owns DATA_DIR (and creates it).
 jobs:
   # Explicit emit. A normal boot already self-heals the runtime in phase 2; this
   # is the legible, idempotent front of the graph.
@@ -44,6 +44,7 @@ jobs:
     workdir: source://app
     command: ["uv", "run", "python", "manage.py", "angee", "build"]
     env:
+      ANGEE_PROJECT_DIR: "."
       DJANGO_SETTINGS_MODULE: {{ django_settings }}
 
   # Generate migrations against the freshly emitted concrete models. Mandatory:
@@ -56,6 +57,7 @@ jobs:
     workdir: source://app
     command: ["uv", "run", "python", "manage.py", "makemigrations"]
     env:
+      ANGEE_PROJECT_DIR: "."
       DJANGO_SETTINGS_MODULE: {{ django_settings }}
     depends_on: [build]
 
@@ -64,6 +66,7 @@ jobs:
     workdir: source://app
     command: ["uv", "run", "python", "manage.py", "migrate", "--noinput"]
     env:
+      ANGEE_PROJECT_DIR: "."
       DJANGO_SETTINGS_MODULE: {{ django_settings }}
     depends_on: [makemigrations]
 
@@ -72,6 +75,7 @@ jobs:
     workdir: source://app
     command: ["uv", "run", "python", "manage.py", "rebac", "sync", "--yes"]
     env:
+      ANGEE_PROJECT_DIR: "."
       DJANGO_SETTINGS_MODULE: {{ django_settings }}
     depends_on: [migrate]
 
@@ -83,6 +87,7 @@ jobs:
       - "-c"
       - uv run python manage.py resources load master install && uv run python manage.py resources load demo
     env:
+      ANGEE_PROJECT_DIR: "."
       DJANGO_SETTINGS_MODULE: {{ django_settings }}
     depends_on: [permissions]
 
@@ -93,6 +98,7 @@ jobs:
     workdir: source://app
     command: ["uv", "run", "python", "manage.py", "schema"]
     env:
+      ANGEE_PROJECT_DIR: "."
       DJANGO_SETTINGS_MODULE: {{ django_settings }}
     depends_on: [build]
 
@@ -112,6 +118,7 @@ jobs:
     workdir: source://app
     command: ["uv", "run", "python", "manage.py", "operator_schema"]
     env:
+      ANGEE_PROJECT_DIR: "."
       DJANGO_SETTINGS_MODULE: {{ django_settings }}
       ANGEE_OPERATOR_URL: "http://127.0.0.1:${ports.operator}"
       ANGEE_OPERATOR_TOKEN: "${secret.operator-token}"
@@ -125,14 +132,15 @@ jobs:
     depends_on: [deps, operator-schema]
 
 services:
-  # Daphne runserver: ASGI (HTTP + WebSocket) under Django's autoreloader.
-  # Editing serving code restarts the worker; the fresh boot re-emits the
-  # runtime in phase 2, so model changes are picked up on that restart.
+  # Daphne imports the emitted runtime ASGI entrypoint directly. The build job
+  # owns creating runtime/asgi.py before the service starts; later Django setup
+  # still heals stale model files in app-populate phase 2.
   web:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "python", "manage.py", "runserver", "127.0.0.1:{{ django_port }}"]
+    command: ["uv", "run", "daphne", "-b", "127.0.0.1", "-p", "{{ django_port }}", "runtime.asgi:application"]
     env:
+      ANGEE_PROJECT_DIR: "."
       DJANGO_SETTINGS_MODULE: {{ django_settings }}
       # Django mints the browser's scoped connection token over the daemon's direct
       # URL + the shared generated secret. The browser then opens the daemon GraphQL

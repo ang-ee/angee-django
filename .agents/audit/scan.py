@@ -73,7 +73,12 @@ def scan_python(path: Path) -> None:
 
         # Dataclass near the model layer — candidate "should be a model/queryset/value-on-a-class".
         if stripped.startswith("@dataclass") and defines_model_layer:
-            _emit("wrong-primitive-dataclass", path, i, "@dataclass in a model-layer module — could be a model/queryset?")
+            _emit(
+                "wrong-primitive-dataclass",
+                path,
+                i,
+                "@dataclass in a model-layer module — could be a model/queryset?",
+            )
 
         # Type-switch / name-list heuristics (want polymorphism or a model-owned declaration).
         if re.search(r"\b__name__\s+in\s+[\{(\[]", line):

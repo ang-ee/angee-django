@@ -11,10 +11,11 @@ from typing import Any, Protocol, TypeAlias
 
 import tablib
 import yaml
-from django.apps import apps
-from django.core.exceptions import ImproperlyConfigured
+from django.apps import AppConfig, apps
+from django.core.exceptions import ImproperlyConfigured, SuspiciousFileOperation
 from django.db import models
 from django.db.models.utils import make_model_tuple
+from django.utils._os import safe_join
 from import_export.results import RowResult
 
 from angee.resources.exceptions import ResourceLoadError
@@ -37,12 +38,6 @@ class _ResourceAddon(Protocol):
     def path(self) -> str:
         """Return the filesystem path to the addon package root."""
 
-    @property
-    def resource_manifest(
-        self,
-    ) -> Mapping[str, tuple[Mapping[str, Any], ...]]:
-        """Return normalized resource declarations keyed by tier value."""
-
 
 def resolve_model(label: str) -> type[models.Model]:
     """Return the model class named by an ``app_label.ModelName`` label."""
@@ -61,9 +56,6 @@ def resolve_model(label: str) -> type[models.Model]:
 
 ResourceDeclaration: TypeAlias = Mapping[str, Any]
 """One normalized resource entry declaration."""
-
-ResourceDeclarations: TypeAlias = ResourceDeclaration | Iterable[ResourceDeclaration] | None
-"""A resource declaration or deterministic iterable of declarations."""
 
 EntryKey = tuple[str, str]
 """Dependency graph key identifying one resource entry by addon and source."""
@@ -85,6 +77,100 @@ STRUCTURED_FORMATS = frozenset({"json", "yaml"})
 
 FROZEN_TIERS = frozenset(ResourceTier.from_value(tier) for tier in (ResourceTier.INSTALL, ResourceTier.DEMO))
 """Tiers whose loaded rows are not updated after ledger creation."""
+
+
+def resource_manifest_for(app_config: AppConfig) -> dict[str, tuple[dict[str, Any], ...]]:
+    """Return normalized resource declarations keyed by tier for one addon."""
+
+    manifest: dict[str, tuple[dict[str, Any], ...]] = {tier: () for tier in ResourceTier.values}
+    for raw_tier, declarations in (getattr(app_config, "resources", {}) or {}).items():
+        tier = _resource_tier_value(raw_tier)
+        manifest[tier] = _resource_entries(app_config, declarations)
+    return manifest
+
+
+def _resource_entries(
+    app_config: AppConfig,
+    declarations: object,
+) -> tuple[dict[str, Any], ...]:
+    """Return normalized entry dictionaries for one resource tier."""
+
+    if declarations is None:
+        return ()
+    if isinstance(declarations, str | Path | Mapping):
+        return (_resource_entry(app_config, declarations),)
+    if not isinstance(declarations, Iterable):
+        raise ImproperlyConfigured(f"{declarations!r} is not a resource entry or iterable")
+    return tuple(_resource_entry(app_config, entry) for entry in declarations)
+
+
+def _resource_entry(app_config: AppConfig, declaration: object) -> dict[str, Any]:
+    """Return one normalized resource entry dictionary."""
+
+    if isinstance(declaration, str | Path):
+        return {"path": _relative_app_path(app_config, declaration)}
+    if not isinstance(declaration, Mapping):
+        raise ImproperlyConfigured(f"{declaration!r} is not a resource path or mapping")
+
+    entry: dict[str, Any] = {str(key): declaration[key] for key in declaration if key not in {"path", "url"}}
+    path = declaration.get("path")
+    url = declaration.get("url")
+    if (path is None) == (url is None):
+        raise ImproperlyConfigured(f"resource entry {dict(declaration)!r} must set exactly one of 'path' or 'url'")
+    if path is None:
+        entry["url"] = str(url)
+    else:
+        entry["path"] = _relative_app_path(app_config, path)
+    if "depends_on" in entry:
+        entry["depends_on"] = _normalize_depends_on(entry["depends_on"])
+    if "adopt" in entry:
+        entry["adopt"] = _resource_adopt_value(entry["adopt"])
+    if "model" in entry and entry["model"] is not None:
+        entry["model"] = str(entry["model"])
+    if "encoding" in entry:
+        entry["encoding"] = str(entry["encoding"] or "utf-8")
+    return entry
+
+
+def _resource_adopt_value(value: object) -> str | bool:
+    """Return the normalized adoption declaration for one resource entry."""
+
+    if isinstance(value, str):
+        return value
+    return bool(value)
+
+
+def _relative_app_path(app_config: AppConfig, value: object) -> str:
+    """Return one safe path relative to ``app_config.path``."""
+
+    raw = str(value)
+    if not raw:
+        raise ImproperlyConfigured("Manifest path must not be empty")
+    try:
+        safe_join(app_config.path, raw)
+    except SuspiciousFileOperation as error:
+        raise ImproperlyConfigured(f"Manifest path {raw!r} must be relative and stay inside the addon") from error
+    return raw
+
+
+def _resource_tier_value(value: object) -> str:
+    """Return one normalized resource tier value."""
+
+    raw = str(getattr(value, "value", value))
+    if raw not in ResourceTier.values:
+        expected = ", ".join(ResourceTier.values)
+        raise ImproperlyConfigured(f"Unknown resource tier {raw!r}; expected one of {expected}")
+    return raw
+
+
+def _normalize_depends_on(value: object) -> tuple[str, ...]:
+    """Return dependency keys, treating a bare string as a single key."""
+
+    if isinstance(value, str):
+        return (value,)
+    if not isinstance(value, Iterable):
+        raise ImproperlyConfigured("depends_on must be a string or iterable of strings")
+    return tuple(str(item) for item in value)
 
 
 @dataclass(slots=True)

@@ -85,10 +85,10 @@ the deliberate "lighter easy lift" tradeoff:
 - **Read-only assertions** run against the seeded demo data.
 - **Mutating specs** must clean up after themselves (create → assert → delete) or
   create uniquely-named data, so order does not matter.
-- **Concurrent writes are handled by the host, not the harness.** SQLite locks
+- **Concurrent writes are handled by project settings, not the harness.** SQLite locks
   the whole file on write, which surfaces as "database is locked" under parallel
-  access. The fix lives at the owner — the host's `DATABASES["OPTIONS"]`
-  (`examples/notes-angee/src/host/settings.py`) enables WAL, an `IMMEDIATE`
+  access. The fix lives at the owner — the project's `DATABASES["OPTIONS"]`
+  (`examples/notes-angee/settings.yaml` + `angee.compose.defaults`) enables WAL, an `IMMEDIATE`
   transaction mode, and a busy `timeout`, so concurrent readers and writers wait
   rather than fail. The harness adds no serialisation of its own.
 

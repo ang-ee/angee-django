@@ -126,7 +126,7 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
-  examples/notes-angee/src/example/notes/web:
+  examples/notes-angee/addons/example/notes/web:
     dependencies:
       '@angee/base':
         specifier: workspace:*
@@ -157,23 +157,23 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
-  examples/notes-angee/src/web:
+  examples/notes-angee/web:
     dependencies:
       '@angee-example/notes-web':
         specifier: workspace:*
-        version: link:../example/notes/web
+        version: link:../addons/example/notes/web
       '@angee/base':
         specifier: workspace:*
-        version: link:../../../../packages/base
+        version: link:../../../packages/base
       '@angee/iam':
         specifier: workspace:*
-        version: link:../../../../addons/angee/iam/web
+        version: link:../../../addons/angee/iam/web
       '@angee/operator':
         specifier: workspace:*
-        version: link:../../../../addons/angee/operator/web
+        version: link:../../../addons/angee/operator/web
       '@angee/sdk':
         specifier: workspace:*
-        version: link:../../../../packages/sdk
+        version: link:../../../packages/sdk
       '@tanstack/react-router':
         specifier: ^1.170.8
         version: 1.170.10(react-dom@19.2.6(react@19.2.6))(react@19.2.6)

@@ -11,7 +11,6 @@ from django.db import IntegrityError, models, transaction
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import system_context
 
-from angee.base.discovery import addon_aliases
 from angee.resources.entries import (
     EntryGraph,
     LoadResult,
@@ -20,6 +19,7 @@ from angee.resources.entries import (
     ResourceRow,
     ValidationResult,
     resolve_model,
+    resource_manifest_for,
 )
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.loader import (
@@ -45,7 +45,7 @@ class ResourceQuerySet(models.QuerySet[Any]):
         self._import_groups(
             groups,
             dry_run=True,
-            addon_aliases=addon_aliases(selected_addons),
+            addon_aliases=self._addon_aliases(selected_addons),
         )
         return ValidationResult(
             checked_files=len(groups),
@@ -72,7 +72,7 @@ class ResourceQuerySet(models.QuerySet[Any]):
         return self._import_groups(
             groups,
             dry_run=dry_run,
-            addon_aliases=addon_aliases(selected_addons),
+            addon_aliases=self._addon_aliases(selected_addons),
         )
 
     def _import_groups(
@@ -111,6 +111,17 @@ class ResourceQuerySet(models.QuerySet[Any]):
         except DryRunRollback:
             pass
         return load_result
+
+    def _addon_aliases(self, addons: Iterable[Any]) -> dict[str, str]:
+        """Return app names and labels mapped to canonical app names."""
+
+        aliases: dict[str, str] = {}
+        for addon in addons:
+            for alias in (addon.name, addon.label):
+                existing = aliases.setdefault(alias, addon.name)
+                if existing != addon.name:
+                    raise ImproperlyConfigured(f"Duplicate addon alias {alias!r}")
+        return aliases
 
     def diff_addons(
         self,
@@ -157,7 +168,7 @@ class ResourceQuerySet(models.QuerySet[Any]):
         active_tiers = self._normalize_tiers(tiers)
         entries: list[ResourceEntry] = []
         for addon in addons:
-            manifest = addon.resource_manifest
+            manifest = resource_manifest_for(addon)
             for tier in active_tiers:
                 for declaration in manifest.get(tier, ()):
                     entries.append(
@@ -173,14 +184,9 @@ class ResourceQuerySet(models.QuerySet[Any]):
         self,
         tiers: Iterable[object] | None,
     ) -> tuple[str, ...]:
-        """Return normalized unique tier values."""
+        """Return normalized tier values with prerequisite tiers included."""
 
-        if tiers is None:
-            return tuple(self.model.Tier.values)
-        seen: dict[str, None] = {}
-        for tier in tiers:
-            seen[self.model.Tier.from_value(tier)] = None
-        return tuple(seen)
+        return self.model.Tier.with_prerequisites(tiers)
 
     def _check_xref_collisions(
         self,

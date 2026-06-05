@@ -8,6 +8,7 @@ import reversion
 from django.conf import settings
 from django.db import models
 from django_sqids import SqidsField
+from rebac import app_settings, current_actor
 
 
 class TimestampMixin(models.Model):
@@ -63,21 +64,33 @@ class AuditMixin(models.Model):
 
         abstract = True
 
-    def stamp_audit_actor(self, user_id: Any, *, creating: bool) -> None:
-        """Stamp audit ids from the acting user without fetching the user.
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Persist the row after stamping user audit fields."""
 
-        On create both the creator and the updater default to the acting user;
-        on update only ``updated_by`` advances. Ids already set (for example,
-        loaded data) are left untouched.
-        """
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None:
+            update_fields = set(update_fields)
+            if not update_fields:
+                super().save(*args, **kwargs)
+                return
 
-        if creating:
-            if getattr(self, "created_by_id", None) is None:
-                setattr(self, "created_by_id", user_id)
-            if getattr(self, "updated_by_id", None) is None:
-                setattr(self, "updated_by_id", user_id)
-        else:
-            setattr(self, "updated_by_id", user_id)
+        actor = getattr(self, "_rebac_actor", None) or current_actor()
+        touched: set[str] = set()
+        if actor is not None and actor.subject_type == app_settings.REBAC_USER_TYPE:
+            if self._state.adding:
+                if getattr(self, "created_by_id", None) is None:
+                    self.created_by_id = actor.subject_id
+                    touched.add("created_by")
+                if getattr(self, "updated_by_id", None) is None:
+                    self.updated_by_id = actor.subject_id
+                    touched.add("updated_by")
+            else:
+                self.updated_by_id = actor.subject_id
+                touched.add("updated_by")
+
+        if touched and update_fields is not None:
+            kwargs["update_fields"] = update_fields | touched
+        super().save(*args, **kwargs)
 
 
 class HistoryMixin(models.Model):

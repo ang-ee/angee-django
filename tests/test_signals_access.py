@@ -8,14 +8,16 @@ from typing import Any
 
 import pytest
 import reversion
+from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
-from django.db import models
-from rebac import anonymous_actor
+from django.db import connection, models
+from rebac import actor_context, anonymous_actor
 
-from angee.base import access, signals
-from angee.base.access import ChangeReadGate
-from angee.base.mixins import RevisionMixin
-from angee.base.serialization import json_safe
+from angee.base import signals
+from angee.base.mixins import AuditMixin, RevisionMixin
+from angee.graphql import access, publishing
+from angee.graphql.access import ChangeReadGate
+from angee.resources.serialization import json_safe
 
 
 class RevisionRegistered(RevisionMixin, models.Model):
@@ -24,6 +26,18 @@ class RevisionRegistered(RevisionMixin, models.Model):
     revisioned_fields = ("body",)
 
     body = models.TextField()
+
+    class Meta:
+        """Django model options for the test model."""
+
+        app_label = "auth"
+
+
+class AuditStamped(AuditMixin, models.Model):
+    """Concrete audit model used to test model-owned stamping."""
+
+    id = models.CharField(max_length=32, primary_key=True)
+    name = models.CharField(max_length=64)
 
     class Meta:
         """Django model options for the test model."""
@@ -59,15 +73,43 @@ def test_register_revision_models_registers_declared_fields() -> None:
             reversion.unregister(RevisionRegistered)
 
 
+@pytest.mark.django_db(transaction=True)
+def test_audit_mixin_stamps_from_rebac_actor_inside_save() -> None:
+    """Audit fields are stamped by the model save chain, including partial saves."""
+
+    User = get_user_model()
+    creator = User.objects.create_user(username="audit-creator")
+    editor = User.objects.create_user(username="audit-editor")
+
+    with connection.schema_editor() as editor_schema:
+        editor_schema.create_model(AuditStamped)
+    try:
+        with actor_context(creator):
+            row = AuditStamped.objects.create(id="known", name="first")
+        row.refresh_from_db()
+        assert row.created_by_id == creator.pk
+        assert row.updated_by_id == creator.pk
+
+        with actor_context(editor):
+            row.name = "second"
+            row.save(update_fields={"name"})
+        row.refresh_from_db()
+        assert row.created_by_id == creator.pk
+        assert row.updated_by_id == editor.pk
+    finally:
+        with connection.schema_editor() as editor_schema:
+            editor_schema.delete_model(AuditStamped)
+
+
 def test_connect_publishers_is_idempotent() -> None:
     """A model is connected to change publishers once."""
 
-    signals._connected.discard(Group)
+    publishing._connected.discard(Group)
 
-    signals.connect_publishers(Group)
-    signals.connect_publishers(Group)
+    publishing.connect_publishers(Group)
+    publishing.connect_publishers(Group)
 
-    assert Group in signals._connected
+    assert Group in publishing._connected
 
 
 def test_publish_uses_public_id_and_changed_values(
@@ -85,15 +127,15 @@ def test_publish_uses_public_id_and_changed_values(
 
         sent.append((model, event))
 
-    monkeypatch.setattr(signals, "_broadcast", broadcast)
+    monkeypatch.setattr(publishing, "_broadcast", broadcast)
     monkeypatch.setattr(
-        signals.transaction,
+        publishing.transaction,
         "on_commit",
         lambda callback: callback(),
     )
     group = Group(id=7, name="editors")
 
-    signals._publish(group, action="update", update_fields=("name",))
+    publishing._publish(group, action="update", update_fields=("name",))
 
     assert sent == [
         (
@@ -131,6 +173,31 @@ def test_change_read_gate_passes_non_rebac_payloads(
     assert event is not None
     assert event.action == "update"
     assert event.changed_fields == ["name"]
+
+
+def test_change_read_gate_uses_payload_resource_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Subscription gating uses the REBAC id while exposing the public id."""
+
+    checked: list[str] = []
+
+    monkeypatch.setattr(access, "model_resource_type", lambda model: "group")
+    monkeypatch.setattr(access, "gated_read_fields", lambda model: frozenset())
+    monkeypatch.setattr(access, "backend", lambda: object())
+
+    def check(*args: object, **kwargs: object) -> SimpleNamespace:
+        checked.append(kwargs["resource"].resource_id)
+        return SimpleNamespace(allowed=True)
+
+    monkeypatch.setattr(access, "check_field_access", check)
+
+    gate = ChangeReadGate(Group, anonymous_actor())
+    event = gate.filter(payload(id="public-id", resource_id="rebac-id"))
+
+    assert event is not None
+    assert event.id == "public-id"
+    assert checked == ["rebac-id"]
 
 
 def test_change_read_gate_drops_unreadable_rows(

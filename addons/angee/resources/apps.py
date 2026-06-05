@@ -6,7 +6,9 @@ from django.apps import AppConfig
 
 
 class ResourcesConfig(AppConfig):
-    """Plain Django app config for the resource subsystem."""
+    """Resource addon marker and command/model host."""
 
-    default_auto_field = "django.db.models.BigAutoField"
+    default = True
     name = "angee.resources"
+    depends_on = ("angee.base",)
+    emits_runtime_models = True

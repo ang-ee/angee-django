@@ -11,7 +11,7 @@ from django.core.management.base import (
     CommandParser,
 )
 
-from angee.compose.runtime import AngeeRuntime
+from angee.compose.runtime import Runtime
 
 
 class Command(BaseCommand):
@@ -42,7 +42,7 @@ class Command(BaseCommand):
     def _handle_build(self, options: dict[str, Any]) -> None:
         """Emit or check runtime source files."""
 
-        runtime = AngeeRuntime.from_settings()
+        runtime = Runtime.from_django()
         try:
             if options["check"]:
                 runtime.check()
@@ -59,7 +59,7 @@ class Command(BaseCommand):
 
         del options
         try:
-            AngeeRuntime.from_settings().clean()
+            Runtime.from_django().clean()
         except RuntimeError as error:
             raise CommandError(str(error)) from error
         self.stdout.write(self.style.SUCCESS("angee clean: ok"))

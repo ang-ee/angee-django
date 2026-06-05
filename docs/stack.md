@@ -37,7 +37,9 @@ Dependency changes must update this file in the same change.
 | django-reversion | Versioned field snapshots and revert | `RevisionMixin` marker, `revisioned_fields` |
 | cryptography | Encryption primitives | `EncryptedField` (Fernet at rest, secret-by-type) |
 | django-import-export + tablib | Resource import/export resources, tabular formats, row cleaning, and row results | Tiered manifests, xref ledger, and frozen-tier policy |
-| pyyaml | YAML resource declaration parsing | Resource loader reads `.yaml`/`.yml` resource files |
+| pyyaml | YAML parsing substrate | Resource loader reads `.yaml`/`.yml` resource files; django-yamlconf consumes project settings YAML |
+| django-yamlconf | Django settings YAML overlays | `angee.compose.settings` loads `settings.yaml` beside `manage.py`; `Composer` applies addon `autoconfig.py` fragments |
+| django-environ | Typed boot environment access and URL parsers | `angee.compose.settings` reads Angee bootstrap env vars |
 | pyjwt[crypto] | JWT and JOSE verification | OIDC discovery and exchange orchestration |
 | uv | Python dependency resolution and workspaces | Workspace layout |
 

@@ -27,11 +27,13 @@ concrete Django apps, permission schema, and other `runtime/` artifacts.
 Composition happens at build time — nothing is monkey-patched or registered at
 runtime.
 
-**Host app (host)** — the application at the root of a project that composes the
-chosen addons into the running product. A project contains one host; the host
-composes addons.
+**Project settings** — the `settings.yaml` and optional Python settings module
+selected by `ANGEE_PROJECT_SETTINGS`. They declare root apps with Django
+`INSTALLED_APPS`, addon directories, and project-specific overrides. Angee's
+composed settings module turns that contract into the running Django settings.
 
-**Project** — a runnable product: a host app plus the addons it composes.
+**Project** — a runnable product: project settings, consumer addons, frontend
+entrypoints, and generated runtime output.
 
 **Addon contract** — what an addon declares for the composer to consume (source
 models, native Strawberry GraphQL classes, routes, slots, resources). Contracts
@@ -61,8 +63,8 @@ the owning library explicitly supports them, such as `rebac_resource_type`.
 
 **REBAC** — Relationship-Based Access Control (via `django-zed-rebac`).
 Authorization is structural: reads scope through the model manager, writes check
-the instance. Addons use the library's `rebac_schema` / `permissions.zed`
-contract; `django-zed-rebac` owns sync.
+the instance. Addons point their AppConfig `permissions` attribute at the owning
+`permissions.zed` contract; `django-zed-rebac` owns sync.
 
 **Resource** — tabular data owned by an addon and imported idempotently by tier
 (`master`, `install`, `demo`). Addons list resource files in their

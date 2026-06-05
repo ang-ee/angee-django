@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from angee.base.apps import BaseAddonConfig
+from django.apps import AppConfig
 
 
-class IntegrateConfig(BaseAddonConfig):
+class IntegrateConfig(AppConfig):
     """Source app manifest for Angee integration runtime primitives."""
 
     default = True
+    default_auto_field = "django.db.models.BigAutoField"
     name = "angee.integrate"
     label = "integrate"
-    depends_on = ("iam",)
-    rebac_schema = "permissions.zed"
+    depends_on = ("angee.iam",)
+    emits_runtime_models = True
+    permissions = "permissions.zed"

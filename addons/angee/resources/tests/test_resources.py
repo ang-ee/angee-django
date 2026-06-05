@@ -19,6 +19,7 @@ from angee.resources.entries import EntryGraph, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.fetch import _PublicUrlRedirectHandler, fetch_url
 from angee.resources.models import Resource
+from angee.resources.tiers import ResourceTier
 from angee.resources.widgets import resolve_xref
 
 
@@ -35,8 +36,8 @@ class Addon:
     path: str
     """Filesystem root for local resource files."""
 
-    resource_manifest: Mapping[str, tuple[Mapping[str, Any], ...]]
-    """Normalized resource manifest keyed by tier."""
+    resources: Mapping[str, tuple[Mapping[str, Any], ...]]
+    """Raw resource declarations keyed by tier."""
 
 
 def addon(
@@ -52,7 +53,7 @@ def addon(
         name=name,
         label=label,
         path=str(tmp_path),
-        resource_manifest=manifest or {"master": (), "install": (), "demo": ()},
+        resources=manifest or {"master": (), "install": (), "demo": ()},
     )
 
 
@@ -188,6 +189,15 @@ def test_resource_entry_uses_normalized_dependency_tuple(
     assert resource_entry.depends_on == ("a.csv",)
 
 
+def test_resource_tiers_include_prerequisites() -> None:
+    """Selecting a later tier also selects the earlier tiers it builds on."""
+
+    assert ResourceTier.with_prerequisites(["master"]) == ("master",)
+    assert ResourceTier.with_prerequisites(["install"]) == ("master", "install")
+    assert ResourceTier.with_prerequisites(["demo"]) == ("master", "install", "demo")
+    assert ResourceTier.with_prerequisites(["demo", "master"]) == ("master", "install", "demo")
+
+
 def test_entry_graph_detects_cycles(tmp_path: Path) -> None:
     """Dependency cycles fail before any rows load."""
 
@@ -293,7 +303,7 @@ def test_fetch_url_caches_by_full_url(
     monkeypatch.setattr("urllib.request.build_opener", build_opener)
     # The pre-flight SSRF guard resolves the host; pin it to a public address.
     monkeypatch.setattr(
-        "angee.base.net.socket.getaddrinfo",
+        "angee.integrate.net.socket.getaddrinfo",
         lambda *args, **kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))],
     )
 

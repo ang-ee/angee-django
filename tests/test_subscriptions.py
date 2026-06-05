@@ -14,11 +14,10 @@ from django.contrib.auth.models import AnonymousUser, Group
 from rebac import actor_context, anonymous_actor, current_actor
 from rebac.graphql.strawberry import RebacChannelsConsumerMixin
 
-from angee.base import signals
-from angee.base.consumers import AngeeGraphQLWSConsumer
-from angee.base.graphql import subscriptions
-from angee.base.graphql.events import ChangeEvent
-from angee.base.graphql.subscriptions import changes
+from angee.graphql import publishing, subscriptions
+from angee.graphql.consumers import AngeeGraphQLWSConsumer
+from angee.graphql.events import ChangeEvent
+from angee.graphql.subscriptions import changes
 
 ANON = anonymous_actor()
 SubscriptionResolver = Callable[
@@ -60,7 +59,7 @@ def test_changes_builds_a_named_subscription_field() -> None:
 
     sdl = strawberry.Schema(query=Query, subscription=surface).as_str()
     assert "groupChanged: ChangeEvent!" in sdl
-    assert Group in signals._connected
+    assert Group in publishing._connected
 
 
 def test_subscribe_yields_broadcast_payloads(monkeypatch) -> None:
@@ -74,7 +73,7 @@ def test_subscribe_yields_broadcast_payloads(monkeypatch) -> None:
         pending = asyncio.ensure_future(stream.__anext__())
         await asyncio.sleep(0.05)  # let the subscriber join the group
         await layer.group_send(
-            signals.change_group(Group),
+            publishing.change_group(Group),
             {"type": "angee.change", "payload": _payload(id="7")},
         )
         try:

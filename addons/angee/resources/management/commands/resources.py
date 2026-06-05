@@ -5,10 +5,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, cast
 
-from django.apps import apps
+from django.apps import AppConfig, apps
 from django.core.management.base import BaseCommand, CommandParser
 
-from angee.base.discovery import discover_addons
 from angee.resources.models import Resource
 
 DEFAULT_TIERS = ("master", "install")
@@ -63,7 +62,7 @@ class Command(BaseCommand):
 
         tiers = self._selected_tiers(options)
         result = self._resource_model().objects.validate_addons(
-            discover_addons(),
+            self._addons(),
             tiers=tiers,
         )
         self.stdout.write(
@@ -78,7 +77,7 @@ class Command(BaseCommand):
         tiers = self._selected_tiers(options)
         dry_run = bool(options.get("dry_run"))
         result = self._resource_model().objects.load_addons(
-            discover_addons(),
+            self._addons(),
             tiers=tiers,
             allow_non_dev=bool(options["allow_non_dev"]),
             dry_run=dry_run,
@@ -97,7 +96,7 @@ class Command(BaseCommand):
 
         tiers = self._selected_tiers(options)
         counts = self._resource_model().objects.diff_addons(
-            discover_addons(),
+            self._addons(),
             tiers=tiers,
         )
         lines = [f"tiers: {', '.join(tiers)}"]
@@ -105,15 +104,20 @@ class Command(BaseCommand):
         self.stdout.write("\n".join(lines))
 
     def _selected_tiers(self, options: dict[str, Any]) -> tuple[str, ...]:
-        """Return explicit tier or the default tier set."""
+        """Return explicit tier or default tiers with prerequisites."""
 
         tier = options.get("tier")
         tiers = [tier] if tier else list(DEFAULT_TIERS)
         if options.get("include_demo") and "demo" not in tiers:
             tiers.append("demo")
-        return tuple(tiers)
+        return Resource.Tier.with_prerequisites(tiers)
 
     def _resource_model(self) -> type[Resource]:
         """Return the concrete resource ledger model from the app registry."""
 
-        return cast(type[Resource], apps.get_model("base", "Resource"))
+        return cast(type[Resource], apps.get_model("resources", "Resource"))
+
+    def _addons(self) -> tuple[AppConfig, ...]:
+        """Return installed Django apps from the populated app registry."""
+
+        return tuple(apps.get_app_configs())

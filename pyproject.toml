@@ -26,6 +26,8 @@ dependencies = [
   "strawberry-graphql-django>=0.86",
   "tablib>=3",
   "django-choices-field>=4.0.0",
+  "django-yamlconf>=1.5.0",
+  "django-environ>=0.12",
 ]
 
 [dependency-groups]
@@ -35,6 +37,7 @@ dev = [
   "pytest>=8.0",
   "pytest-django>=4.8",
   "ruff>=0.15.12",
+  "vulture>=2.16",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -78,7 +81,7 @@ cache_dir = ".pytest_cache"
 DJANGO_SETTINGS_MODULE = "tests.settings"
 python_files = ["test_*.py"]
 testpaths = ["tests", "addons/angee/resources/tests"]
-pythonpath = [".", "addons", "examples/notes-angee/src"]
+pythonpath = [".", "addons", "examples/notes-angee/addons"]
 addopts = "-ra --strict-markers --import-mode=importlib"
 
 [tool.ruff]
@@ -87,7 +90,7 @@ target-version = "py314"
 cache-dir = ".ruff_cache"
 # First-party roots so isort classifies `angee.*` correctly across both source
 # roots (framework at ., base addons at addons/) and the example project.
-src = [".", "addons", "examples/notes-angee/src"]
+src = [".", "addons", "examples/notes-angee/addons"]
 exclude = [
   ".angee",
   ".git",
@@ -110,6 +113,17 @@ select = ["E", "F", "I"]
 python_version = "3.14"
 cache_dir = ".mypy_cache"
 explicit_package_bases = true
+files = ["angee", "addons/angee"]
 ignore_missing_imports = true
 mypy_path = [".", "addons"]
 warn_unused_ignores = true
+
+[tool.vulture]
+paths = ["angee", "addons/angee", "examples/notes-angee/addons", "tests"]
+exclude = [
+  "*/runtime/*",
+]
+ignore_names = [
+  "*_tables",
+]
+min_confidence = 80

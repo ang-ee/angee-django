@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 
@@ -25,3 +27,18 @@ class ResourceTier(models.TextChoices):
         except ValueError as error:
             expected = ", ".join(cls.values)
             raise ImproperlyConfigured(f"Unknown resource tier {raw!r}; expected one of {expected}") from error
+
+    @classmethod
+    def with_prerequisites(cls, tiers: Iterable[object] | None) -> tuple[str, ...]:
+        """Return selected tiers plus the earlier tiers they depend on."""
+
+        if tiers is None:
+            return tuple(cls.values)
+
+        selected: set[str] = set()
+        values = tuple(cls.values)
+        for tier in tiers:
+            value = cls.from_value(tier)
+            index = values.index(value)
+            selected.update(values[: index + 1])
+        return tuple(value for value in values if value in selected)

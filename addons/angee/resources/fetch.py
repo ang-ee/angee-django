@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from django.conf import settings
 from django.core.exceptions import ValidationError
 
-from angee.base.net import validate_public_url
+from angee.integrate.net import validate_public_url
 from angee.resources.exceptions import ResourceLoadError
 
 

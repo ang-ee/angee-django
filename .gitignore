@@ -18,6 +18,7 @@ htmlcov/
 
 # Node / pnpm
 node_modules/
+.vite/
 .pnpm-store/
 
 # Django
@@ -30,7 +31,7 @@ media/
 !.env.example
 
 # Angee runtime (generated — committed in production consumers, ignored in examples)
-examples/*/src/runtime/
+examples/*/runtime/
 
 # Angee workspace data (local dev state, never committed)
 .angee/

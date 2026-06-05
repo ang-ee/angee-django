@@ -5,12 +5,14 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from angee.base.apps import BaseAddonConfig
-
 ROOT = Path(__file__).resolve().parents[1]
-BASE = ROOT / "angee" / "base"
-COMPOSE = ROOT / "angee" / "compose"
+ANGEE = ROOT / "angee"
+BASE = ANGEE / "base"
+GRAPHQL = ANGEE / "graphql"
+COMPOSE = ANGEE / "compose"
 RESOURCES = ROOT / "addons" / "angee" / "resources"  # resources is a base addon
+
+_ADDON_PACKAGES = ("angee.iam", "angee.resources", "angee.integrate", "angee.operator")
 
 
 def _module_imports(path: Path) -> set[str]:
@@ -35,18 +37,18 @@ def _tree_imports(root: Path) -> set[str]:
     return names
 
 
-def test_base_does_not_import_sibling_packages() -> None:
-    """The runtime base package stays below compose and resources."""
+def test_base_is_the_model_layer_below_all_siblings() -> None:
+    """base (the model toolkit) imports no sibling subsystem or addon."""
 
     imports = _tree_imports(BASE)
-    assert not any(name.startswith("angee.compose") for name in imports)
-    assert not any(name.startswith("angee.resources") for name in imports)
+    forbidden = ("angee.compose", "angee.graphql", *_ADDON_PACKAGES)
+    assert not any(name.startswith(prefix) for name in imports for prefix in forbidden)
 
 
-def test_addons_use_conventional_model_sources_only() -> None:
-    """Addon source models come from the addon's own models module."""
+def test_no_shared_addon_config_base_module() -> None:
+    """Addons use plain Django AppConfig attributes, not an Angee subclass."""
 
-    assert not hasattr(BaseAddonConfig, "source_model_modules")
+    assert not (ANGEE / "apps.py").exists()
 
 
 def test_resources_does_not_import_compose() -> None:
@@ -56,23 +58,19 @@ def test_resources_does_not_import_compose() -> None:
     assert not any(name.startswith("angee.compose") for name in imports)
 
 
-def test_serving_does_not_import_compose() -> None:
-    """Serving modules do not import build-time compose code."""
+def test_graphql_does_not_import_compose() -> None:
+    """The GraphQL runtime does not import build-time compose code."""
 
-    imports = _module_imports(BASE / "asgi.py")
-    imports |= _module_imports(BASE / "urls.py")
-    imports |= _module_imports(BASE / "views.py")
-    imports |= _module_imports(BASE / "consumers.py")
-    imports |= _module_imports(BASE / "signals.py")
+    imports = _tree_imports(GRAPHQL)
     assert not any(name.startswith("angee.compose") for name in imports)
 
 
-def test_discovery_depends_only_on_apps() -> None:
-    """Addon discovery depends only on the AppConfig contract."""
+def test_stable_serving_entrypoints_do_not_import_compose() -> None:
+    """Serving entrypoints use Django's populated registry, not compose."""
 
-    imports = _module_imports(BASE / "discovery.py")
-    internal = {name for name in imports if name.startswith("angee.base")}
-    assert internal <= {"angee.base.apps"}
+    imports = _module_imports(ANGEE / "urls.py") | _module_imports(ANGEE / "asgi.py")
+    forbidden = ("angee.compose",)
+    assert not any(name.startswith(prefix) for name in imports for prefix in forbidden)
 
 
 def test_compose_has_no_rebac_permission_renderer() -> None:

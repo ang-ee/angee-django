@@ -9,8 +9,8 @@ for Python, and `package.json` + `pnpm-workspace.yaml` + `pnpm-lock.yaml` for
 TypeScript.
 
 The framework owns the seams, not the concerns. Product logic belongs in addons.
-The composer turns addon contracts into a runnable project. A project contains a
-host app; the host composes addons.
+The composer turns addon contracts and project settings into a runnable project.
+A project declares the root apps it composes through Django `INSTALLED_APPS`.
 
 ## Repository Role
 
@@ -63,11 +63,11 @@ on top.
 │   └── workspaces/dev/     # dev Workspace template (`angee ws create … --template dev`)
 ├── examples/notes-angee/   # the example project `angee dev` runs from the repo root
 │   ├── manage.py           # Django entrypoint (`uv run examples/notes-angee/manage.py …`)
-│   └── src/
-│       ├── host/           # the host app — composes the addons into the running project
-│       ├── example/notes/  # a consumer addon — product logic for the example
-│       ├── web/            # the project frontend (Vite + React)
-│       └── runtime/        # concrete apps + SDL emitted by the composer — output, not source
+│   ├── settings.yaml       # project composition facts and project overrides
+│   ├── addons/             # consumer addons for the example
+│   │   └── example/notes/  # product logic for the example
+│   ├── web/                # the project frontend (Vite + React)
+│   └── runtime/            # concrete apps + SDL emitted by the composer — output, not source
 ├── docs/                   # intent docs — glossary, stack, guidelines, and `docs/howto/`
 ├── tests/                  # framework tests (composition, GraphQL, IAM, CRUD, …)
 ├── .agents/                # durable agent bookkeeping — notes, plans, sub-agents (`.agents/README.md`)

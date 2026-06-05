@@ -46,9 +46,11 @@ from rebac.schema.ast import PermArrow, PermBinOp, PermNil, PermRef
 from strawberry import auto, relay
 from strawberry.permission import BasePermission
 from strawberry.scalars import JSON
+from strawberry_django.pagination import OffsetPaginated
 
-from angee.base.graphql import AngeeNode, OffsetPaginated, crud
 from angee.base.relations import revoke_owner
+from angee.graphql.crud import crud
+from angee.graphql.node import AngeeNode
 from angee.iam import identity
 from angee.iam.credentials import CredentialKind
 from angee.iam.oidc import client as client_module
@@ -667,20 +669,6 @@ def _validate_role(value: str) -> ObjectRef:
     return role
 
 
-def _role_membership_exists(row: Any) -> bool:
-    """Return whether the direct role membership represented by ``row`` exists."""
-
-    return active_relationship_model().objects.filter(
-        resource_type=row.resource_type,
-        resource_id=row.resource_id,
-        relation=ROLE_RELATION,
-        subject_type=row.subject_type,
-        subject_id=row.subject_id,
-        optional_subject_relation=row.optional_subject_relation,
-        caveat_name=row.caveat_name,
-    ).exists()
-
-
 def _relationship_rows() -> QuerySet[Any]:
     """Return active relationship rows in stable order."""
 
@@ -870,7 +858,7 @@ def _user_principal(principal_id: str) -> Any:
         or app_settings.REBAC_USER_ID_ATTR
     )
     lookups.append({subject_id_attr: resolved_id})
-    public_lookup = getattr(User, "_public_id_lookup", None)
+    public_lookup = getattr(User, "public_id_lookup", None)
     if callable(public_lookup):
         lookups.append(public_lookup(resolved_id))
     pk = User._meta.pk
@@ -1211,8 +1199,8 @@ class IAMPermissionHubMutation:
             system_context(reason="iam.graphql.permission_hub.grant_role"),
             transaction.atomic(),
         ):
-            row = rebac_grant(actor=principal, role=role_ref)
-            return _role_membership_exists(row)
+            rebac_grant(actor=principal, role=role_ref)
+            return True
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def revoke_role(self, principal_id: str, role: str) -> bool:

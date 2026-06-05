@@ -9,9 +9,10 @@ INSTALLED_APPS = [
     "rebac",
     "reversion",
     "simple_history",
-    "angee.base.apps.BaseConfig",
-    "angee.iam.apps.IAMConfig",
-    "angee.integrate.apps.IntegrateConfig",
+    "angee.base",
+    "angee.resources",
+    "angee.iam",
+    "angee.integrate",
 ]
 DATABASES = {
     "default": {

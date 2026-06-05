@@ -17,9 +17,9 @@ from import_export.results import RowResult
 from import_export.utils import get_related_model
 
 from angee.base.models import instance_from_public_id, public_id_of
-from angee.base.serialization import json_safe
 from angee.resources.entries import FROZEN_TIERS, RESERVED_ROW_KEYS, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
+from angee.resources.serialization import json_safe
 from angee.resources.widgets import (
     XrefForeignKeyWidget,
     XrefManyToManyWidget,

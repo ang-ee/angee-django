@@ -1,6 +1,6 @@
 """Build-time runtime source rendering and emission.
 
-``AngeeRuntime`` is the composer's emitter: it reads the discovered addons'
+``Runtime`` is the composer's emitter: it reads the discovered addons'
 abstract source models and renders the concrete Django apps under
 ``runtime/<label>/`` that each source addon then adopts (see
 ``angee.compose.apps`` and ``docs/composer.md``). ``render_sources`` is the
@@ -10,25 +10,26 @@ drift, clean); everything inside it is Angee's concrete emission.
 
 from __future__ import annotations
 
+import importlib
+import inspect
 from collections.abc import Iterable
 from pathlib import Path
 from typing import cast
 
+from django.apps import AppConfig, apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
+from django.utils.module_loading import module_has_submodule
 
-from angee.base.apps import BaseAddonConfig
-from angee.base.discovery import discover_addons
 from angee.base.mixins import HistoryMixin
 from angee.base.models import AngeeModel
-from angee.resources.models import Resource
 
 GENERATED_SENTINEL = "# ANGEE GENERATED RUNTIME - DO NOT EDIT"
 """Sentinel required before destructive runtime cleanup."""
 
 
-class AngeeRuntime:
+class Runtime:
     """Owner for Angee runtime rendering, emission, checks, and cleanup.
 
     One object owns the whole build-time lifecycle so the plan and the emit
@@ -51,52 +52,57 @@ class AngeeRuntime:
 
     def __init__(
         self,
-        addons: Iterable[BaseAddonConfig],
+        addons: Iterable[AppConfig],
         *,
         runtime_dir: Path,
+        runtime_module: str = "runtime",
     ) -> None:
         """Create a runtime renderer for ``addons`` and ``runtime_dir``."""
 
         self.addons = tuple(addons)
         self.runtime_dir = runtime_dir
+        self.runtime_module = runtime_module
         self.sources_by_label = self._sources_by_label()
         self.extensions = self._extensions_for()
         self._check_field_collisions()
         self.labels = tuple(sorted(self.sources_by_label))
 
     @classmethod
-    def from_settings(cls) -> AngeeRuntime:
-        """Return a runtime using discovered addons and Django settings.
+    def from_django(cls) -> Runtime:
+        """Return a runtime using installed addons and Django settings.
 
-        ``ANGEE_RUNTIME_DIR`` is the single owner of where the runtime lives;
-        ``compose_defaults`` always sets it. A host that installs the composer
-        without it is misconfigured, so fail loudly here rather than let a
-        caller silently skip emission and surface a cryptic missing-model
+        ``ANGEE_RUNTIME_DIR`` is the single owner of where the runtime lives.
+        ``angee.compose.settings`` always sets it. A host that installs the
+        composer without it is misconfigured, so fail loudly here rather than
+        let a caller silently skip emission and surface a cryptic missing-model
         error later in app population.
         """
 
         runtime_dir = getattr(settings, "ANGEE_RUNTIME_DIR", None)
+        runtime_module = getattr(settings, "ANGEE_RUNTIME_MODULE", "runtime")
         if not runtime_dir:
             raise ImproperlyConfigured(
-                "angee.compose requires ANGEE_RUNTIME_DIR; compose_defaults "
+                "angee.compose requires ANGEE_RUNTIME_DIR; angee.compose.settings "
                 "sets it. A host installing the composer must configure the "
                 "runtime directory."
             )
         return cls.from_addons(
-            discover_addons(),
+            (app_config for app_config in apps.get_app_configs() if getattr(app_config, "emits_runtime_models", False)),
             runtime_dir=Path(runtime_dir),
+            runtime_module=str(runtime_module),
         )
 
     @classmethod
     def from_addons(
         cls,
-        addons: Iterable[BaseAddonConfig],
+        addons: Iterable[AppConfig],
         *,
         runtime_dir: Path,
-    ) -> AngeeRuntime:
+        runtime_module: str = "runtime",
+    ) -> Runtime:
         """Return a runtime for explicit addon configs."""
 
-        return cls(addons, runtime_dir=runtime_dir)
+        return cls(addons, runtime_dir=runtime_dir, runtime_module=runtime_module)
 
     def render_sources(self) -> dict[Path, str]:
         """Return generated runtime source files keyed by relative path.
@@ -104,15 +110,20 @@ class AngeeRuntime:
         The composition seam. The returned map (path relative to
         ``runtime_dir`` → file text) is the single source of truth that
         ``emit`` writes and ``_drift`` compares against disk. It contains the
-        generated package ``__init__`` plus, per label, an empty
-        app/migrations ``__init__`` and a ``models.py``. Migrations themselves
-        are never rendered here — Django's ``makemigrations`` owns
+        generated package ``__init__`` plus, per label, an empty app/migrations
+        ``__init__`` and a ``models.py``.
+        Migrations themselves are never rendered here — Django's
+        ``makemigrations`` owns
         ``runtime/<label>/migrations/`` (redirected via
         ``MIGRATION_MODULES``), and cleanup preserves it.
         """
 
         sources: dict[Path, str] = {
-            Path("__init__.py"): self._runtime_init_source(),
+            Path("__init__.py"): (
+                f'"""Generated Angee runtime package."""\n'
+                f"{GENERATED_SENTINEL}\n\n"
+                f"RUNTIME_APPS = {list(self.labels)!r}\n"
+            ),
         }
         for label, source_models in self.sources_by_label.items():
             root = Path(label)
@@ -152,6 +163,19 @@ class AngeeRuntime:
             return False
         self._write_sources()
         return True
+
+    def materialize_models(self) -> bool:
+        """Write stale runtime sources, then import every emitted model module."""
+
+        wrote = self.emit_if_stale()
+        self.import_generated_models()
+        return wrote
+
+    def import_generated_models(self) -> None:
+        """Import generated concrete model modules for all emitted labels."""
+
+        for label in self.labels:
+            importlib.import_module(f"{self.runtime_module}.{label}.models")
 
     def _write_sources(self) -> None:
         """Write every rendered source file, creating parents as needed."""
@@ -222,9 +246,9 @@ class AngeeRuntime:
         source model it emits a concrete class that imports the abstract source
         (aliased ``Abstract<Name>``) and any ``extends`` extension bases, lists
         the extension bases ahead of the source in the MRO, and pins
-        ``Meta.abstract = False`` with ``app_label = label`` — so the generated
-        class registers under the source addon's label when that addon adopts
-        ``runtime.<label>.models``. Library-owned ``Meta`` facts ride along
+            ``Meta.abstract = False`` with ``app_label = label`` — so the generated
+            class registers under the source addon's label when the composer imports
+            ``runtime.<label>.models``. Library-owned ``Meta`` facts ride along
         (``db_table``, ``swappable``, REBAC options), and ``HistoryMixin``
         models gain a ``HistoricalRecords`` field. Field collisions across the
         composed bases are rejected at construction
@@ -246,7 +270,7 @@ class AngeeRuntime:
             ]
         ] = []
         for model_class in source_models:
-            source_alias = self._source_alias(model_class)
+            source_alias = f"Abstract{model_class.__name__}"
             imports.extend(self._class_import(model_class, source_alias))
             if issubclass(model_class, HistoryMixin):
                 imports.append("from simple_history.models import HistoricalRecords")
@@ -297,11 +321,6 @@ class AngeeRuntime:
             )
         return "\n".join(lines).rstrip() + "\n"
 
-    def _runtime_init_source(self) -> str:
-        """Return the generated runtime package source."""
-
-        return f'"""Generated Angee runtime package."""\n{GENERATED_SENTINEL}\n\nRUNTIME_APPS = {list(self.labels)!r}\n'
-
     def _history_source(
         self,
         label: str,
@@ -326,7 +345,7 @@ class AngeeRuntime:
             model.get_composition_label() for source_models in self.sources_by_label.values() for model in source_models
         }
         grouped: dict[str, list[type[AngeeModel]]] = {}
-        for extension in (extension for addon in self.addons for extension in addon.model_extensions):
+        for extension in (extension for addon in self.addons for extension in self.model_contributions(addon)[1]):
             extension_model = cast(type[AngeeModel], extension)
             target = extension_model.get_extension_target()
             if target is None:
@@ -368,8 +387,7 @@ class AngeeRuntime:
         grouped: dict[str, list[type[AngeeModel]]] = {}
         for addon in self.addons:
             models_for_label = grouped.setdefault(addon.label, [])
-            models_for_label.extend(cast(type[AngeeModel], model) for model in addon.model_classes)
-        grouped.setdefault("base", []).append(Resource)
+            models_for_label.extend(cast(type[AngeeModel], model) for model in self.model_contributions(addon)[0])
         return {label: tuple(source_models) for label, source_models in sorted(grouped.items()) if source_models}
 
     def _actual_source_paths(self) -> set[Path]:
@@ -408,23 +426,31 @@ class AngeeRuntime:
         """Return whether ``path`` participates in source drift checks."""
 
         relative = path.relative_to(self.runtime_dir)
+        if relative in {Path("asgi.py"), Path("urls.py")}:
+            return False
         if relative.parts and relative.parts[0] == "schemas":
+            return False
+        if self._is_orphaned_migration_path(relative):
             return False
         if "__pycache__" in path.parts:
             return False
-        if self._is_numbered_migration(path):
+        if path.parent.name == "migrations" and path.name[:4].isdigit() and path.suffix == ".py":
             return False
         return True
+
+    def _is_orphaned_migration_path(self, relative_path: Path) -> bool:
+        """Return whether ``relative_path`` is a preserved migration from an old label."""
+
+        return (
+            len(relative_path.parts) >= 2
+            and relative_path.parts[1] == "migrations"
+            and relative_path.parts[0] not in self.labels
+        )
 
     def _is_preserved_migration_path(self, path: Path) -> bool:
         """Return whether cleanup must preserve ``path`` under migrations."""
 
         return "migrations" in path.relative_to(self.runtime_dir).parts
-
-    def _is_numbered_migration(self, path: Path) -> bool:
-        """Return whether ``path`` is a Django numbered migration file."""
-
-        return path.parent.name == "migrations" and path.name[:4].isdigit() and path.suffix == ".py"
 
     def _write(self, path: Path, text: str) -> None:
         """Write ``text`` to ``path``, creating parents first."""
@@ -433,11 +459,6 @@ class AngeeRuntime:
         if path.exists() and path.read_text(encoding="utf-8") == text:
             return
         path.write_text(text, encoding="utf-8")
-
-    def _source_alias(self, model_class: type[models.Model]) -> str:
-        """Return the import alias for an abstract source model."""
-
-        return f"Abstract{model_class.__name__}"
 
     def _class_import(
         self,
@@ -528,3 +549,47 @@ class AngeeRuntime:
                 )
             )
         return tuple(sorted(local - inherited))
+
+    def model_contributions(
+        self,
+        app_config: AppConfig,
+    ) -> tuple[tuple[type[models.Model], ...], tuple[type[models.Model], ...]]:
+        """Return source models and extensions declared by one Django app config."""
+
+        models_owned: list[type[models.Model]] = []
+        extensions: list[type[models.Model]] = []
+        seen: set[type] = set()
+        source = app_config.models_module
+        if source is None and module_has_submodule(app_config.module, "models"):
+            source = importlib.import_module(f"{app_config.name}.models")
+        if source is None:
+            return (), ()
+        for _name, value in inspect.getmembers(source, inspect.isclass):
+            if value in seen:
+                continue
+            origin = value.__module__
+            package_prefix = f"{app_config.name}."
+            if origin != app_config.name and not origin.startswith(package_prefix):
+                continue
+            if not issubclass(value, AngeeModel) or value is AngeeModel:
+                continue
+            model_class = cast(type[AngeeModel], value)
+            if not model_class._meta.abstract or not model_class.is_composer_emitted():
+                continue
+            seen.add(value)
+            if model_class.get_extension_target() is None:
+                models_owned.append(model_class)
+            else:
+                extensions.append(model_class)
+        return (
+            tuple(sorted(models_owned, key=lambda cls: cls._meta.object_name)),
+            tuple(
+                sorted(
+                    extensions,
+                    key=lambda cls: (
+                        cast(type[AngeeModel], cls).get_extension_target() or "",
+                        cls._meta.object_name,
+                    ),
+                )
+            ),
+        )

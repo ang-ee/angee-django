@@ -29,7 +29,7 @@ ANGEE_ROOT:
 
 django_settings:
   type: str
-  default: host.settings
+  default: angee.compose.settings
 
 django_port:
   type: int

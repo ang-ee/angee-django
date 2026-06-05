@@ -22,9 +22,9 @@ from rebac.managers import RebacManager
 from angee.base.fields import EncryptedField, StateField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
-from angee.base.net import validate_public_url
 from angee.base.relations import grant_owner
 from angee.integrate.events import EventKind
+from angee.integrate.net import validate_public_url
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
 
 logger = logging.getLogger(__name__)

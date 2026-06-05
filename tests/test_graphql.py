@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from types import ModuleType
+from typing import Any
 
 import pytest
 import strawberry
+from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from rebac import MissingActorError, PermissionDenied, RebacMixin
@@ -14,9 +16,9 @@ from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
 from rebac.managers import RebacManager
 from strawberry.extensions import SchemaExtension
 
-from angee.base.apps import SCHEMA_PART_KEYS, BaseAddonConfig
-from angee.base.graphql.schema import (
+from angee.graphql.schema import (
     DEFAULT_SCHEMA_NAME,
+    SCHEMA_PART_KEYS,
     GraphQLSchemas,
 )
 
@@ -120,28 +122,31 @@ class UnmanagedThingType:
     )()
 
 
-class FakeAddon:
-    """Stand-in addon config exposing pre-normalized schema parts."""
-
-    def __init__(self, schemas: dict[str, dict[str, tuple]]) -> None:
-        self._schemas = schemas
-
-    @property
-    def schema_parts(self) -> dict[str, dict[str, tuple]]:
-        return self._schemas
+class FakeAddon(AppConfig):
+    """Stand-in addon config exposing raw schema declarations."""
 
 
 def _parts(**buckets: list) -> dict[str, tuple]:
-    """Normalize bucket lists like the AppConfig does."""
+    """Return a raw schema declaration with all known buckets."""
 
     return {key: tuple(buckets.get(key, ())) for key in SCHEMA_PART_KEYS}
 
 
-def addon(**name_to_parts: dict[str, list]) -> BaseAddonConfig:
+def _module(name: str) -> ModuleType:
+    """Return a synthetic module with a Django app filesystem path."""
+
+    module = ModuleType(name)
+    module.__file__ = __file__
+    return module
+
+
+def addon(**name_to_parts: dict[str, list]) -> AppConfig:
     """Build a fake addon contributing parts to one or more schema names."""
 
     schemas = {name: _parts(**parts) for name, parts in name_to_parts.items()}
-    return cast(BaseAddonConfig, FakeAddon(schemas))
+    config = FakeAddon("tests.fake_graphql", _module("tests.fake_graphql"))
+    config.schemas = schemas
+    return config
 
 
 def test_collect_folds_addons_in_order() -> None:
@@ -174,7 +179,7 @@ def test_collect_dedupes_by_identity() -> None:
 def test_build_schema_merges_query_surfaces() -> None:
     """Query surfaces from several addons merge into one root."""
 
-    from angee.base.graphql.errors import AngeeSchema
+    from angee.graphql.errors import AngeeSchema
 
     schema = GraphQLSchemas.from_addons(
         [
@@ -234,7 +239,8 @@ def test_graphql_identity_exports_relay_node_and_connection() -> None:
 
     from strawberry_django.relay import DjangoCursorConnection
 
-    from angee.base.graphql import AngeeNode, Connection
+    from angee.graphql.node import AngeeConnection as Connection
+    from angee.graphql.node import AngeeNode
 
     assert issubclass(AngeeNode, strawberry.relay.Node)
     assert issubclass(Connection, DjangoCursorConnection)

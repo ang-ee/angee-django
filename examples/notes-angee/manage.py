@@ -11,9 +11,8 @@ from pathlib import Path
 def main() -> None:
     """Run Django management."""
 
-    src_dir = Path(__file__).resolve().parent / "src"
-    sys.path.insert(0, str(src_dir))
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "host.settings")
+    os.environ.setdefault("ANGEE_PROJECT_DIR", str(Path(__file__).resolve().parent))
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "angee.compose.settings")
     from django.core.management import execute_from_command_line
 
     execute_from_command_line(sys.argv)

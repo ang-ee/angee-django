@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from angee.base.apps import BaseAddonConfig
+from django.apps import AppConfig
 
 
-class OperatorConfig(BaseAddonConfig):
+class OperatorConfig(AppConfig):
     """Source app manifest for the operator daemon bridge.
 
     The addon holds no Django state: it contributes one console GraphQL field
@@ -15,6 +15,10 @@ class OperatorConfig(BaseAddonConfig):
     """
 
     default = True
+    default_auto_field = "django.db.models.BigAutoField"
     name = "angee.operator"
     label = "operator"
-    depends_on = ("base", "iam")
+    depends_on = ("angee.iam",)
+    emits_runtime_models = True
+    schemas = "schema.schemas"
+    permissions = "permissions.zed"

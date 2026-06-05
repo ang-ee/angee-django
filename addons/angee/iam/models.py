@@ -17,6 +17,7 @@ from rebac import app_settings, system_context, to_object_ref
 from rebac.managers import RebacManager, RebacQuerySet
 from rebac.models import active_relationship_model
 from rebac.permissions_mixin import RebacPermissionsMixin
+from rebac.roles import grant, revoke
 
 from angee.base.fields import EncryptedField, StateField
 from angee.base.mixins import AuditMixin, SqidMixin
@@ -217,6 +218,22 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
 
         super().clean()
         self.email = type(self).objects.normalize_email(self.email)
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Persist the user and mirror superuser status to the admin role."""
+
+        update_fields = kwargs.get("update_fields")
+        sync_admin_role = update_fields is None or "is_superuser" in update_fields
+        super().save(*args, **kwargs)
+        if not sync_admin_role:
+            return
+        role = app_settings.REBAC_UNIVERSAL_ADMIN_ROLE
+        if not role:
+            return
+        if self.is_superuser:
+            grant(actor=self, role=role)
+        else:
+            revoke(actor=self, role=role)
 
     def get_full_name(self) -> str:
         """Return first and last name joined with a space."""

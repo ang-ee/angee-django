@@ -1,6 +1,6 @@
 """Shared REBAC relationship-write primitives for Angee addons.
 
-Kept free of ``angee.base.graphql`` imports so model modules can import it
+Kept free of ``angee.graphql`` imports so model modules can import it
 during app population without a circular import.
 """
 

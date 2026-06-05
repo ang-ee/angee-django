@@ -8,7 +8,7 @@ import strawberry_django
 from django.db import connection, models
 from strawberry import relay
 
-from angee.base.graphql import crud
+from angee.graphql.crud import crud
 
 
 @pytest.mark.django_db(transaction=True)

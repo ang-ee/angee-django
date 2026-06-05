@@ -1,9 +1,0 @@
-@import "tailwindcss";
-@import "@angee/base/styles.css";
-
-/* Scan the class sources so their utilities are generated into this build. */
-@source "../../../../../packages/base/src";
-@source "../../../../../src/angee/iam/web/src";
-@source "../../../../../src/angee/operator/web/src";
-@source "../../example/notes/web/src";
-@source "./";

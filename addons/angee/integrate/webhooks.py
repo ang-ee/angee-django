@@ -20,7 +20,7 @@ from urllib.parse import urlunsplit
 
 from django.core.exceptions import ValidationError
 
-from angee.base.net import is_unsafe_address, parse_http_url
+from angee.integrate.net import is_unsafe_address, parse_http_url
 
 HTTP_TIMEOUT_SECONDS = 10
 """Timeout used for outbound webhook POSTs."""

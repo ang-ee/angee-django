@@ -12,9 +12,8 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from strawberry import auto, relay
 
-from angee.base.deletion import DeletionPreview, DeletionPreviewGroup
-from angee.base.graphql import crud
-from angee.base.graphql.crud import _delete_resolver
+from angee.graphql.crud import _delete_resolver, crud
+from angee.graphql.deletion import DeletionPreview, DeletionPreviewGroup
 
 
 @strawberry_django.type(Group)
@@ -113,7 +112,7 @@ def test_crud_fields_merge_into_a_schema() -> None:
 def test_delete_preview_output_adapts_deletion_domain() -> None:
     """CRUD delete output serializes the deletion preview domain object."""
 
-    from angee.base.graphql.crud import DeletePreview
+    from angee.graphql.crud import DeletePreview
 
     group = Group.objects.create(name="reviewers")
     preview = DeletePreview.from_domain(DeletionPreview.from_instance(group))

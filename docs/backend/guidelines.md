@@ -40,41 +40,53 @@ normalizes, or renames a Django object, delete it.
 
 ## Package Layering
 
-The framework core is three packages with a one-way dependency rule that a test
+The framework core is four packages with a one-way dependency rule that a test
 enforces:
 
-- `angee.base` is the runtime foundation (models, mixins, graphql, serving,
-  settings helper). It must not import `angee.compose` or `angee.resources`.
+- `angee.base` is the model foundation (models, fields, mixins, managers,
+  querysets, relations, and model signals). It must not import `angee.compose`,
+  `angee.graphql`, or addon packages.
+- `angee.graphql` is the GraphQL runtime (schema assembly, Strawberry helpers,
+  serving, subscriptions, and SDL commands). It may import `angee.base`, never
+  `angee.compose`.
 - `angee.resources` is the resource subsystem. It may import `angee.base`, never
   `angee.compose`.
-- `angee.compose` is the build-time composer. It may import `angee.base` and may
-  read resource declarations during build-time composition, but no serving module
-  (`asgi`, `urls`, `views`, `consumers`, `signals`, `models`, `graphql`) may
-  import `angee.compose`.
+- `angee.compose` is the build-time composer. It may import `angee.base` and
+  discover plain Django addon configs, but no serving module (`asgi`, `urls`,
+  `views`, `consumers`, `signals`, `models`, `graphql`) may import
+  `angee.compose`.
 
 Rules that follow from the layering:
 
-- **Addon discovery is a runtime registry read**, not a build-only concern:
-  serving code (schema building, ASGI routing) enumerates installed addons too.
-  It lives in the lowest package that serves both runtime and build —
-  `angee.base` — so serving code never imports `angee.compose` just to list
-  addons; `angee.compose` imports it from `angee.base`.
-- **A management command must live in an installed Django app.** A non-addon
-  package that owns commands (the composer, the resource subsystem) provides a
-  plain `AppConfig` and is installed, and is excluded from `BaseAddonConfig`
-  discovery (discovery collects only `BaseAddonConfig` instances).
-- **Build and run use different `INSTALLED_APPS`.** The settings helper emits a
-  build app set (source addons + the composer command host) and a run app set
-  (runtime base + the resource command host + source addons). Build mode is the
-  explicit `ANGEE_BUILD` setting; `AppConfig.import_models()` uses it to skip
-  generated model adoption while `angee build` emits sources. `makemigrations`,
-  `migrate`, resource loading, and SDL rendering run later in a fresh
-  run-settings process that loads the freshly emitted concrete models normally.
-- **The resource ledger is contributed by the composer.** The composer imports
-  the resource ledger source model and emits it under the `base` label at build
-  time. `angee.base` must not import `angee.resources`.
+- **Addon discovery is a Django app-registry concern**, not a build-only
+  concern: serving code such as schema building enumerates Django's installed
+  app configs and reads only the declaration attributes it owns. Serving code
+  never imports `angee.compose` just to list addons.
+- **An Angee addon is a plain Django app config with explicit attributes.**
+  Addons do not subclass an Angee base config. `depends_on` is only an ordering
+  contract; each lifecycle step reads only the attributes it owns:
+  `graphql` reads `schemas`, `resources` reads `resources`, REBAC sync reads
+  `permissions`, stable serving reads `url_patterns` /
+  `asgi_websocket_urlpatterns`, runtime emission reads `emits_runtime_models`,
+  and settings composition reads the addon's optional `autoconfig.py`.
+- **There is a single app set and a single boot.** `DJANGO_SETTINGS_MODULE`
+  points at `angee.compose.settings`, which imports the project's settings
+  contract (`settings.yaml` or `settings.py` beside `manage.py`). YAML projects
+  declare `INSTALLED_APPS` and `ANGEE_RUNTIME_DIR`; Python projects may declare
+  those same facts directly. `angee.compose.settings` loads the project contract
+  and calls `Composer(globals()).compose_settings()`, which expands the addon
+  dependency closure and sorts the resulting app set, then gives Django the
+  resolved `AppConfig` instances in `INSTALLED_APPS`. Framework boot apps
+  (`angee.compose`, `angee.base`, `angee.graphql`) arrive through that same graph
+  rather than a parallel hardcoded list. In app-populate phase 2,
+  `ComposeConfig.import_models()` calls
+  `Runtime.from_django().materialize_models()` before normal app model imports
+  continue. No `ANGEE_BUILD` flag or build/run app-set split exists.
+- **The resource ledger is owned by the resource addon.** The composer discovers
+  `angee.resources.models.Resource` as a normal addon source model and emits it
+  under the `resources` label. `angee.base` must not import `angee.resources`.
 - **Refer to an emitted concrete model through the app registry**
-  (`apps.get_model("base", "Resource")`), never by importing the generated
+  (`apps.get_model("resources", "Resource")`), never by importing the generated
   `runtime/` tree.
 
 ## Rules
@@ -93,17 +105,15 @@ Rules that follow from the layering:
   and `deconstruct`-style methods to construct and serialize themselves. This is
   the backend application of **Find the owner** in `AGENTS.md` and the
   Django-Native Rule above.
-- Compose behavior onto the class that owns the data. When several functions
-  take the same object and read, transform, or emit from it, that object should
-  be a class and those functions its methods — the runtime build owns its own
-  plan/emit/check/reset (e.g. an `AngeeRuntime` object), not a module of loose
-  functions wrapped around a passive dataclass. Keep a module-level function only
-  for orchestration that genuinely has no owner, and prefer forming a cohesive
-  class even then. A dataclass that only holds fields while a sibling module
-  mutates and emits from it is a missing class. Organizing behavior into named
-  files and classes is what keeps the framework consistent and normalized: a
-  class is a fixed home that forces related behavior together and resists the
-  drift that loose, scattered functions invite.
+- Compose behavior onto the class that owns the data. Settings construction
+  belongs on `Composer`; runtime model materialization belongs on `Runtime`.
+  Keep a module-level function only for orchestration that genuinely has no
+  owner, and prefer forming a cohesive class even then. A dataclass that only
+  holds fields while a sibling module mutates and emits from it is a missing
+  class. Organizing behavior into named files and classes is what keeps the
+  framework consistent and normalized: a class is a fixed home that forces
+  related behavior together and resists the drift that loose, scattered
+  functions invite.
 - Imports go at the top of the module. A function-local or deferred import is a
   smell that a module boundary is wrong — an import cycle, or a layer reaching
   across a seam — so fix the seam (move the shared fact to its owning module, or
@@ -175,14 +185,24 @@ Before decomposing backend code, classify each fact by its Django owner:
   service, or composer function.
 - Compatibility facades exist only for an explicit compatibility promise.
 
-Settings helpers are pure functions of their arguments: they return plain
-Django setting mappings and do not read the environment. Do not pass `globals()`
-into framework code or let helpers mutate a settings module from the outside;
-the host may apply the returned mapping in one visible step. The host owns where
-runtime and data live — it resolves any `ANGEE_RUNTIME_DIR` / `ANGEE_DATA_DIR`
-override and passes explicit paths to the helper. Anchor host defaults to a
-fixed location via `__file__` (e.g. the repo-root control directory), never to
-the current working directory.
+The project settings contract declares project facts; Angee owns Django
+composition wiring. By default, keep `settings.yaml` beside `manage.py` and set
+only the deliberate composition facts there, especially `INSTALLED_APPS` and
+`ANGEE_ADDON_DIRS` / `ANGEE_RUNTIME_DIR`. `ANGEE_PROJECT_SETTINGS` may point at a
+project Python settings module when the project needs one. `angee.compose.settings`
+loads Python settings first, overlays `settings.yaml` with django-yamlconf,
+evaluates `angee.compose.defaults` as the base Django settings module, and asks
+`Composer(globals()).compose_settings()` to compose `INSTALLED_APPS`,
+`MIGRATION_MODULES`, import paths, and addon autoconfig.
+Addon autoconfig uses yamlconf-style `SETTINGS` keys: plain keys are defaults,
+`:append` / `:prepend` keys always merge, dotted keys update nested dictionaries,
+`:raw` protects literal braces, and `:jsonenv` is required for typed
+`YAMLCONF_*` environment overrides. Use `settings.py` only when the project
+truly needs Python-computed settings. Angee treats yamlconf errors as Django
+configuration failures and rejects implicit ancestor `settings.yaml` files; only
+the project file and an explicit `YAMLCONF_CONFFILE` may contribute file-backed
+settings.
+Anchor project defaults to `BASE_DIR`, never to the current working directory.
 
 Keep `angee` as a namespace package. Do not add an `__init__.py` at either
 namespace root (`angee/` for the framework, `addons/angee/` for the base
@@ -225,6 +245,7 @@ handoff:
 ```sh
 uv run ruff check . --no-cache
 uv run mypy angee addons
+uv run vulture
 uv run pytest
 uv run examples/notes-angee/manage.py angee build --check
 ```

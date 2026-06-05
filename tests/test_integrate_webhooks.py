@@ -15,9 +15,9 @@ from django.db import connection
 from rebac import system_context, to_object_ref, to_subject_ref
 from rebac.models import active_relationship_model
 
-from angee.base.net import validate_public_url
 from angee.integrate.events import EventKind
 from angee.integrate.models import Bridge, Capability
+from angee.integrate.net import validate_public_url
 from angee.integrate.webhooks import HTTP_TIMEOUT_SECONDS, SIGNATURE_HEADER
 from tests.conftest import ExternalAccount, Vendor, WebhookSubscription, _create_missing_tables
 

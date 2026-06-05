@@ -2,23 +2,25 @@
 
 from __future__ import annotations
 
-from angee.base.apps import BaseAddonConfig
+from django.apps import AppConfig
 
 
-class IAMConfig(BaseAddonConfig):
+class IAMConfig(AppConfig):
     """Source app manifest for Angee identity models."""
 
     default = True
+    default_auto_field = "django.db.models.BigAutoField"
     name = "angee.iam"
     label = "iam"
-    depends_on = ("base",)
-    settings_defaults = {
-        "AUTH_USER_MODEL": "iam.User",
-        "ANGEE_IAM_OAUTH_CLIENTS": (),
-        "ANGEE_IAM_OIDC_DISCOVERY_TTL": 3600,
-        "ANGEE_IAM_OIDC_STATE_TTL": 600,
-    }
-    """IAM owns the user model and optional settings-sourced OAuth/OIDC client registrations."""
+    depends_on = (
+        "angee.resources",
+        "angee.graphql",
+        "django.contrib.auth",
+        "django.contrib.sessions",
+    )
+    emits_runtime_models = True
+    schemas = "schema.schemas"
+    permissions = "permissions.zed"
 
     resources = {
         "master": ({"path": "resources/master/010_iam.vendor.yaml", "adopt": "slug"},),
@@ -29,7 +31,7 @@ class IAMConfig(BaseAddonConfig):
         """Wire IAM-owned REBAC relationships after app population."""
 
         super().ready()
-        # App population phase 1 imports AppConfig before IAM signal models are ready.
+        # App population phase 1 imports AppConfig before IAM cleanup wiring is ready.
         from angee.iam import signals
 
         signals.connect()

@@ -1,17 +1,16 @@
-"""Tests for base addon AppConfig contracts."""
+"""Tests for plain Django AppConfig based Angee contracts."""
 
 from __future__ import annotations
 
 from types import ModuleType
-from typing import ClassVar
 
 import pytest
-from django.apps import apps
+from django.apps import AppConfig, apps
 from django.core.exceptions import ImproperlyConfigured
 
-import angee.base
-from angee.base.apps import BaseAddonConfig, BaseConfig
-from angee.base.discovery import discover_addons
+from angee.base.apps import BaseConfig
+from angee.graphql.schema import schema_parts_for
+from angee.resources.entries import resource_manifest_for
 
 
 def _module(name: str) -> ModuleType:
@@ -22,19 +21,28 @@ def _module(name: str) -> ModuleType:
     return module
 
 
-def test_base_addon_declares_no_source_models() -> None:
-    """The base addon keeps source ownership outside its package."""
+def test_base_config_is_a_dependency_node() -> None:
+    """The model foundation participates in addon dependency ordering."""
 
-    assert apps.get_app_config("base").model_classes == ()
+    base = apps.get_app_config("base")
+
+    assert isinstance(base, BaseConfig)
+    assert base.depends_on == (
+        "angee.compose",
+        "django.contrib.contenttypes",
+        "rebac",
+        "reversion",
+        "simple_history",
+    )
 
 
 def test_resource_manifest_normalizes_tiers_and_entries() -> None:
-    """Resource declarations normalize at the owning app config."""
+    """Resource declarations normalize in the resource subsystem."""
 
-    class ResourceConfig(BaseAddonConfig):
+    class ResourceConfig(AppConfig):
         name = "tests.resources"
         label = "test_resources"
-        resources: ClassVar[dict[object, object]] = {
+        resources = {
             "install": (
                 "resources/users.csv",
                 {
@@ -51,9 +59,10 @@ def test_resource_manifest_normalizes_tiers_and_entries() -> None:
         }
 
     config = ResourceConfig("tests.resources", _module("tests.resources"))
+    manifest = resource_manifest_for(config)
 
-    assert config.resource_manifest["master"] == ()
-    assert config.resource_manifest["install"] == (
+    assert manifest["master"] == ()
+    assert manifest["install"] == (
         {"path": "resources/users.csv"},
         {
             "path": "resources/notes.yaml",
@@ -65,16 +74,16 @@ def test_resource_manifest_normalizes_tiers_and_entries() -> None:
             "depends_on": ("resources/notes.yaml",),
         },
     )
-    assert config.resource_manifest["demo"] == ({"url": "https://example.test/demo.csv"},)
+    assert manifest["demo"] == ({"url": "https://example.test/demo.csv"},)
 
 
 def test_resource_manifest_rejects_unknown_tiers() -> None:
-    """Only resource tiers owned by the framework are accepted."""
+    """Only resource tiers owned by the resource subsystem are accepted."""
 
-    class BrokenConfig(BaseAddonConfig):
+    class BrokenConfig(AppConfig):
         name = "tests.broken_resources"
         label = "broken_resources"
-        resources: ClassVar[dict[object, object]] = {"fixture": ("resources/fixture.csv",)}
+        resources = {"fixture": ("resources/fixture.csv",)}
 
     config = BrokenConfig(
         "tests.broken_resources",
@@ -82,16 +91,14 @@ def test_resource_manifest_rejects_unknown_tiers() -> None:
     )
 
     with pytest.raises(ImproperlyConfigured, match="Unknown resource tier"):
-        config.resource_manifest
+        resource_manifest_for(config)
 
 
-def _config_with_schemas(schemas: object) -> BaseConfig:
-    """Return a base config whose schema module exports ``schemas``."""
+def _config_with_schemas(schemas: object) -> AppConfig:
+    """Return an app config whose ``schemas`` attribute carries a declaration."""
 
-    config = BaseConfig("angee.base", angee.base)
-    module = ModuleType("fake.schema")
-    module.schemas = schemas  # type: ignore[attr-defined]
-    config.__dict__["schema_module"] = module
+    config = AppConfig("tests.graphql", _module("tests.graphql"))
+    config.schemas = schemas
     return config
 
 
@@ -100,7 +107,7 @@ def test_get_schema_parts_normalizes_scalars_and_buckets() -> None:
 
     sentinel = object()
     config = _config_with_schemas({"public": {"query": sentinel}})
-    parts = config.schema_parts
+    parts = schema_parts_for(config)
 
     assert parts["public"]["query"] == (sentinel,)
     assert parts["public"]["mutation"] == ()
@@ -111,7 +118,7 @@ def test_get_schema_parts_rejects_unknown_keys() -> None:
 
     config = _config_with_schemas({"public": {"queries": []}})
     with pytest.raises(ImproperlyConfigured, match="unknown keys: queries"):
-        config.schema_parts
+        schema_parts_for(config)
 
 
 def test_get_schema_parts_rejects_sets() -> None:
@@ -119,86 +126,39 @@ def test_get_schema_parts_rejects_sets() -> None:
 
     config = _config_with_schemas({"public": {"query": {object()}}})
     with pytest.raises(ImproperlyConfigured, match="not a set"):
-        config.schema_parts
+        schema_parts_for(config)
 
 
 def test_get_schema_parts_missing_module_is_empty() -> None:
     """An addon without a schema module contributes nothing."""
 
-    config = BaseConfig("angee.base", angee.base)
-    config.__dict__["schema_module"] = None
+    config = AppConfig("tests.no_schema", _module("tests.no_schema"))
 
-    assert config.schema_parts == {}
+    assert schema_parts_for(config) == {}
 
 
-def test_dependencies_treats_bare_string_as_one_addon() -> None:
-    """A bare-string ``depends_on`` names one dependency, not its chars."""
+def test_config_attributes_are_owned_by_consumers() -> None:
+    """Config attributes are declarations, not addon identity markers."""
 
-    class StringDependsConfig(BaseAddonConfig):
-        name = "tests.string_depends"
-        label = "string_depends"
-        depends_on = "base"
+    class ManifestOnlyConfig(AppConfig):
+        name = "tests.manifest_only"
+        label = "manifest_only"
+        schemas = {}
+        resources = {}
+        url_patterns = "urls.urlpatterns"
 
-    config = StringDependsConfig(
-        "tests.string_depends",
-        _module("tests.string_depends"),
+    class DependencyNodeConfig(AppConfig):
+        name = "tests.marked_addon"
+        label = "marked_addon"
+        depends_on = ()
+
+    manifest_only = ManifestOnlyConfig(
+        "tests.manifest_only",
+        _module("tests.manifest_only"),
     )
+    dependency_node = DependencyNodeConfig("tests.marked_addon", _module("tests.marked_addon"))
 
-    assert config.dependencies == ("base",)
-
-
-def test_discover_addons_orders_dependencies() -> None:
-    """Discovery returns addon configs after their dependencies."""
-
-    class FirstConfig(BaseAddonConfig):
-        name = "tests.first"
-        label = "first"
-
-    class SecondConfig(BaseAddonConfig):
-        name = "tests.second"
-        label = "second"
-        depends_on: ClassVar[tuple[str, ...]] = ("first",)
-
-    first = FirstConfig("tests.first", _module("tests.first"))
-    second = SecondConfig("tests.second", _module("tests.second"))
-
-    class Registry:
-        """Small registry exposing app configs for discovery."""
-
-        def get_app_configs(self) -> tuple[BaseAddonConfig, ...]:
-            """Return configs in intentionally unsorted order."""
-
-            return (second, first)
-
-    assert discover_addons(Registry()) == (first, second)
-
-
-def test_discover_addons_rejects_cycles() -> None:
-    """Dependency cycles fail through discovery."""
-
-    class FirstConfig(BaseAddonConfig):
-        name = "tests.cycle_first"
-        label = "cycle_first"
-        depends_on: ClassVar[tuple[str, ...]] = ("cycle_second",)
-
-    class SecondConfig(BaseAddonConfig):
-        name = "tests.cycle_second"
-        label = "cycle_second"
-        depends_on: ClassVar[tuple[str, ...]] = ("cycle_first",)
-
-    first = FirstConfig("tests.cycle_first", _module("tests.cycle_first"))
-    second = SecondConfig(
-        "tests.cycle_second",
-        _module("tests.cycle_second"),
-    )
-
-    class Registry:
-        """Small registry exposing app configs for discovery."""
-
-        def get_app_configs(self) -> tuple[BaseAddonConfig, ...]:
-            """Return cyclic configs."""
-
-            return (first, second)
-
-    with pytest.raises(ImproperlyConfigured, match="Cycle"):
-        discover_addons(Registry())
+    assert manifest_only.schemas == {}
+    assert manifest_only.resources == {}
+    assert manifest_only.url_patterns == "urls.urlpatterns"
+    assert dependency_node.depends_on == ()

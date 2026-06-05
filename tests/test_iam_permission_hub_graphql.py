@@ -4,24 +4,23 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Iterator
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from django.apps import AppConfig
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.management import call_command
 from django.db import connection
 from django.test import RequestFactory
-from rebac import ObjectRef, actor_context, system_context
+from rebac import ObjectRef, actor_context, app_settings, system_context
 from rebac.actors import to_subject_ref
 from rebac.models import active_relationship_model
 from rebac.roles import ROLE_RELATION, grant
 from strawberry import relay
 
-from angee.base.apps import SCHEMA_PART_KEYS
-from angee.base.graphql.schema import GraphQLSchemas
-from angee.iam.signals import PLATFORM_ADMIN_ROLE
+from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from tests.conftest import _create_missing_tables as _create_connection_tables
 
 User = get_user_model()
@@ -438,7 +437,7 @@ def _platform_admin(username: str) -> Any:
         email=f"{username}@example.com",
         password="admin",
     )
-    grant(actor=admin, role=PLATFORM_ADMIN_ROLE)
+    grant(actor=admin, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
     return admin
 
 
@@ -533,8 +532,11 @@ class _Session(dict[str, Any]):
         self.modified = True
 
 
-class _Addon:
-    """Small addon stand-in exposing normalized schema parts."""
+class _Addon(AppConfig):
+    """Small addon stand-in exposing raw schema declarations."""
 
-    def __init__(self, schema_parts: dict[str, dict[str, tuple[object, ...]]]) -> None:
-        self.schema_parts = schema_parts
+    def __init__(self, schemas: dict[str, dict[str, tuple[object, ...]]]) -> None:
+        module = ModuleType("tests.iam_permission_hub_addon")
+        module.__file__ = __file__
+        super().__init__("tests.iam_permission_hub_addon", module)
+        self.schemas = schemas

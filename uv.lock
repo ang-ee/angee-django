@@ -295,10 +295,12 @@ dependencies = [
     { name = "daphne" },
     { name = "django" },
     { name = "django-choices-field" },
+    { name = "django-environ" },
     { name = "django-import-export" },
     { name = "django-reversion" },
     { name = "django-simple-history" },
     { name = "django-sqids" },
+    { name = "django-yamlconf" },
     { name = "django-zed-rebac", extra = ["strawberry-django"] },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "pyyaml" },
@@ -315,6 +317,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-django" },
     { name = "ruff" },
+    { name = "vulture" },
 ]
 
 [package.metadata]
@@ -324,10 +327,12 @@ requires-dist = [
     { name = "daphne", specifier = ">=4.0" },
     { name = "django", specifier = ">=6.0" },
     { name = "django-choices-field", specifier = ">=4.0.0" },
+    { name = "django-environ", specifier = ">=0.12" },
     { name = "django-import-export", specifier = ">=4.3" },
     { name = "django-reversion", specifier = ">=5.1" },
     { name = "django-simple-history", specifier = ">=3.7" },
     { name = "django-sqids", specifier = ">=0.1" },
+    { name = "django-yamlconf", specifier = ">=1.5.0" },
     { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.10.0" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.12" },
     { name = "pyyaml", specifier = ">=6" },
@@ -344,6 +349,7 @@ dev = [
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-django", specifier = ">=4.8" },
     { name = "ruff", specifier = ">=0.15.12" },
+    { name = "vulture", specifier = ">=2.16" },
 ]
 
 [[package]]
@@ -357,6 +363,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/3e/23/54749b86f605aafeaab81dc8e023968d95a7cc44434eac4df330e8e7f0d8/django_choices_field-4.0.0.tar.gz", hash = "sha256:7b07aacb2ad2b3ee3c8be78be98302ebbcb606285d20547a4163287819364954", size = 6346, upload-time = "2025-12-27T11:53:50.986Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3d/fd/2e0bb952961ba108bdb82efbb10eaeae5bbb5a687b6bdaf8427af181ac5d/django_choices_field-4.0.0-py3-none-any.whl", hash = "sha256:dfa59033685af989f5bc49d95a586e8de692999d3179bf1cb14ef99879e6ff45", size = 7035, upload-time = "2025-12-27T11:53:50.229Z" },
+]
+
+[[package]]
+name = "django-environ"
+version = "0.13.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/18/3c/60983e6ec9b24a8d8588eecebfd21123cba980bce0a905807a27692f0860/django_environ-0.13.0.tar.gz", hash = "sha256:6c401e4c219442c2c4588c2116d5292b5484a6f69163ed09cd41f3943bfb645f", size = 63529, upload-time = "2026-02-18T01:08:08.791Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c4/00/3767393ece946084e1c6830a33ffb8e39d68642e27ad5ac7d4c8bd5de866/django_environ-0.13.0-py3-none-any.whl", hash = "sha256:37799d14cd78222c6fd8298e48bfe17965ff8e586091ad66a463e52e0e7b799e", size = 20682, upload-time = "2026-02-18T01:08:07.359Z" },
 ]
 
 [[package]]
@@ -407,6 +422,17 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/cd/86/f0be1a2882fc55839b61245101a32a6a6600a925e4ea3821d446bbeb9a53/django_sqids-0.2.2.tar.gz", hash = "sha256:853af6efef57644867f2e46fc1f01e814fb7c9b297163f143724a280dca738dd", size = 5371, upload-time = "2025-07-09T14:58:18.02Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d4/c9/3520ed5bad42f45c8ce5b7c31a7a87666cf05346fc53d825826fd86caf8d/django_sqids-0.2.2-py3-none-any.whl", hash = "sha256:ddec508a29e9b51474e3ef78a148d906151b4863e830f59d3f13fadf94e90a79", size = 6306, upload-time = "2025-07-09T14:58:16.742Z" },
+]
+
+[[package]]
+name = "django-yamlconf"
+version = "1.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyyaml" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/44/c7/086749bc062650c7513b6e97585c9f4d92204791ac0e68984c916901c40e/django_yamlconf-1.5.0-py3-none-any.whl", hash = "sha256:bb5f66df411391241e22424675ccf9b928dd3a3a1e59274312fea16a6a06f443", size = 27570, upload-time = "2025-11-13T03:53:39.011Z" },
 ]
 
 [[package]]
@@ -961,6 +987,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/ae/52/4d4a6e78290a5eef3f576f6d281e6355535db903a08483fd1bb393bf8cb9/ujson-5.12.1-cp314-cp314t-win32.whl", hash = "sha256:4e12ca368b397aed7fa1eec534ea1ba8d94977b376f9df3e93ae1acfd004ec40", size = 43243, upload-time = "2026-05-05T22:04:35.486Z" },
     { url = "https://files.pythonhosted.org/packages/3d/c8/849366785de52b513e5fc89d7aea0b531e71bb5641407cbdfdf47a99ede8/ujson-5.12.1-cp314-cp314t-win_amd64.whl", hash = "sha256:cec6b9b539539affc1f01a795c99574592a635ce22331b64f2b42e0af570659e", size = 47662, upload-time = "2026-05-05T22:04:37.07Z" },
     { url = "https://files.pythonhosted.org/packages/8a/46/36a67f5a531a15308124786f3e2b7b96414b9d23dbcdc2a182dd3ffa2e1d/ujson-5.12.1-cp314-cp314t-win_arm64.whl", hash = "sha256:696224d4cfb8883fa5c0285dff31e5ce924704dd9ccd38e9ea8b5bf4a42b12fc", size = 41680, upload-time = "2026-05-05T22:04:39.083Z" },
+]
+
+[[package]]
+name = "vulture"
+version = "2.16"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/66/3e/4d08c5903b2c0c70cad583c170cc4a663fc6a61e2ad00b711fcda61358cd/vulture-2.16.tar.gz", hash = "sha256:f8d9f6e2af03011664a3c6c240c9765b3f392917d3135fddca6d6a68d359f717", size = 52680, upload-time = "2026-03-25T14:41:27.141Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f5/be/f935130312330614811dae2ea9df3f395f6d63889eb6c2e68c14507152ee/vulture-2.16-py3-none-any.whl", hash = "sha256:6e0f1c312cef1c87856957e5c2ca9608834a7c794c2180477f30bf0e4cc58eee", size = 26993, upload-time = "2026-03-25T14:41:26.21Z" },
 ]
 
 [[package]]
