@@ -558,6 +558,18 @@ def test_oauth_client_secret_is_console_readable_and_public_hidden(
         assert "identityClaims" not in sdl
 
 
+def test_console_schema_exposes_user_change_subscription(
+    iam_connection_tables: None,
+) -> None:
+    """The IAM users view has a console change stream to subscribe to."""
+
+    public_sdl = _schema("public").as_str()
+    console_sdl = _schema("console").as_str()
+
+    assert "userChanged" not in public_sdl
+    assert "userChanged: ChangeEvent!" in _sdl_block(console_sdl, "type Subscription")
+
+
 def test_my_connected_accounts_are_scoped_to_session_user(
     iam_connection_tables: None,
 ) -> None:

@@ -51,6 +51,7 @@ from strawberry_django.pagination import OffsetPaginated
 from angee.base.models import instance_from_public_id
 from angee.graphql.crud import crud
 from angee.graphql.node import AngeeNode
+from angee.graphql.subscriptions import changes
 from angee.iam import identity
 from angee.iam.credentials import CredentialKind
 from angee.iam.oidc import client as client_module
@@ -1461,6 +1462,7 @@ schemas = {
             IAMExternalAccountMutation,
             IAMPermissionHubMutation,
         ],
+        "subscription": [changes(User, field="userChanged")],
         "types": [
             UserType,
             CurrentUserType,

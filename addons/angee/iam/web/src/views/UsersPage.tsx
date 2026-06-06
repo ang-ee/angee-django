@@ -5,7 +5,7 @@ import {
   RowsListView,
   type ListColumn,
 } from "@angee/base";
-import { useAuthoredQuery } from "@angee/sdk";
+import { useAuthoredQuery, useRegisterModelRefetch } from "@angee/sdk";
 
 import {
   IAM_USERS_QUERY,
@@ -62,6 +62,7 @@ export function UsersPage(): ReactElement {
     IAM_USERS_QUERY,
     variables,
   );
+  useRegisterModelRefetch("iam.User", query.refetch, true);
   const rows = useMemo(
     () => [...(query.data?.users.results ?? [])],
     [query.data],

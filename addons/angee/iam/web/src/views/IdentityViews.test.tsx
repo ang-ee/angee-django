@@ -71,6 +71,7 @@ const sdkMocks = vi.hoisted(() => ({
   createOauthClient: vi.fn(),
   updateOauthClient: vi.fn(),
   createExternalAccount: vi.fn(),
+  registerModelRefetch: vi.fn(),
   revokeState: {
     fetching: false,
     error: null as Error | null,
@@ -113,6 +114,7 @@ vi.mock("@angee/sdk", async (importOriginal) => {
       }
       return [sdkMocks.revokeRole, sdkMocks.revokeState];
     },
+    useRegisterModelRefetch: sdkMocks.registerModelRefetch,
   };
 });
 
@@ -154,6 +156,7 @@ describe("IAM identity views", () => {
     sdkMocks.createOauthClient.mockReset();
     sdkMocks.updateOauthClient.mockReset();
     sdkMocks.createExternalAccount.mockReset();
+    sdkMocks.registerModelRefetch.mockReset();
     sdkMocks.revokeState.fetching = false;
     sdkMocks.revokeState.error = null;
     sdkMocks.createState.fetching = false;
@@ -196,6 +199,24 @@ describe("IAM identity views", () => {
     expect(await screen.findByText("Role was not revoked")).toBeTruthy();
     expect(screen.getByText("Permission denied")).toBeTruthy();
     expect(sdkMocks.grants.refetch).not.toHaveBeenCalled();
+  });
+
+  test("registers the users list for live user invalidation", async () => {
+    sdkMocks.users.data = {
+      users: {
+        totalCount: 0,
+        results: [],
+      },
+    };
+
+    renderInRouter(<UsersPage />);
+
+    await screen.findByText("No records.");
+    expect(sdkMocks.registerModelRefetch).toHaveBeenCalledWith(
+      "iam.User",
+      sdkMocks.users.refetch,
+      true,
+    );
   });
 
   test("renders loading, empty, and error list branches", async () => {
