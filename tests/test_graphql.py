@@ -6,11 +6,12 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+import reversion
 import strawberry
 import strawberry_django
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
-from django.db import models
+from django.db import connection, models
 from django_choices_field import IntegerChoicesField
 from graphql import GraphQLEnumType, GraphQLObjectType, get_named_type
 from rebac import MissingActorError, PermissionDenied, RebacMixin
@@ -20,6 +21,8 @@ from rebac.managers import RebacManager
 from strawberry.extensions import SchemaExtension
 
 from angee.base.fields import StateField
+from angee.base.mixins import RevisionMixin
+from angee.graphql.revisions import revisions
 from angee.graphql.schema import (
     DEFAULT_SCHEMA_NAME,
     SCHEMA_PART_KEYS,
@@ -97,6 +100,20 @@ class WorkflowItem(models.Model):
         app_label = "tests"
 
 
+class RevisionEntry(RevisionMixin, models.Model):
+    """Concrete model exposing versioned body snapshots in GraphQL tests."""
+
+    revisioned_fields = ("body",)
+
+    title = models.CharField(max_length=32)
+    body = models.TextField(blank=True, default="")
+
+    class Meta:
+        """Django model options for the revision query test model."""
+
+        app_label = "tests"
+
+
 @strawberry.type
 class ThingNode(strawberry.relay.Node):
     """Relay node surface reused across named schemas."""
@@ -152,6 +169,14 @@ class WorkflowItemType:
 
     state: strawberry.auto
     priority: strawberry.auto
+
+
+@strawberry_django.type(RevisionEntry)
+class RevisionEntryType:
+    """GraphQL type exposing a revision-tracked model."""
+
+    title: strawberry.auto
+    body: strawberry.auto
 
 
 class FakeAddon(AppConfig):
@@ -330,6 +355,63 @@ def test_choice_enum_value_descriptions_come_from_django_labels() -> None:
     assert isinstance(priority_enum, GraphQLEnumType)
     assert priority_enum.values["LOW"].description == "Low"
     assert priority_enum.values["HIGH"].description == "High Priority"
+
+
+@pytest.mark.django_db
+def test_revisions_query_surface_exposes_revision_mixin_versions() -> None:
+    """A generated revision query replaces consumer-authored resolvers."""
+
+    surface = revisions(RevisionEntryType, name="revision_entry")
+    schema = GraphQLSchemas(
+        [
+            addon(
+                public={
+                    "query": [HelloQuery, surface],
+                    "types": [RevisionEntryType],
+                }
+            )
+        ]
+    ).build("public")
+
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(RevisionEntry)
+    reversion.register(RevisionEntry, fields=RevisionEntry.revisioned_fields)
+    try:
+        entry = RevisionEntry.objects.create(title="Draft", body="v0")
+        with reversion.create_revision():
+            entry.body = "v1"
+            entry.save()
+            reversion.set_comment("first body")
+        with reversion.create_revision():
+            entry.body = "v2"
+            entry.save()
+            reversion.set_comment("second body")
+
+        result = schema.execute_sync(
+            """
+            query RevisionEntryRevisions($id: ID!) {
+              revisionEntryRevisions(id: $id) {
+                id
+                createdAt
+                comment
+                body
+              }
+            }
+            """,
+            variable_values={"id": str(entry.pk)},
+        )
+    finally:
+        reversion.unregister(RevisionEntry)
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(RevisionEntry)
+
+    assert result.errors is None
+    assert result.data is not None
+    rows = result.data["revisionEntryRevisions"]
+    assert [row["body"] for row in rows] == ["v2", "v1"]
+    assert [row["comment"] for row in rows] == ["second body", "first body"]
+    assert all(row["id"] for row in rows)
+    assert all(row["createdAt"] for row in rows)
 
 
 def test_build_schema_includes_mutation_root() -> None:

@@ -3,7 +3,11 @@ import { useMutation as useUrqlMutation } from "urql";
 
 import { DISABLED_DOCUMENTS } from "./disabled-documents";
 import { useDocumentQuery } from "./document-query";
-import { useModelRootFields } from "./model-metadata";
+import {
+  useModelRootFields,
+  useSchemaFieldMetadata,
+  type SchemaFieldMetadata,
+} from "./model-metadata";
 import {
   useInvalidateModels,
   useRegisterModelRefetch,
@@ -13,17 +17,21 @@ import {
   extractDeletePreview,
   extractNode,
   extractPage,
+  extractRevisions,
   type DeletePreview,
   type PageInfo,
+  type ResourceRevision,
   type Row,
 } from "./resource-result";
 import {
   assembleDetailDocument,
   assembleListDocument,
   assembleMutationDocument,
+  assembleRevisionsDocument,
   clampPageSize,
   DEFAULT_PAGE_SIZE,
   type MutationAction,
+  typeNameForModel,
 } from "./selection";
 import type {
   ResourceFilter,
@@ -229,6 +237,18 @@ export interface UseResourceRecordResult {
   refetch: () => void;
 }
 
+export interface UseResourceRevisionsOptions {
+  enabled?: boolean;
+}
+
+export interface UseResourceRevisionsResult {
+  revisions: readonly ResourceRevision[];
+  count: number;
+  fetching: boolean;
+  error: Error | null;
+  refetch: () => void;
+}
+
 /** Read a single record by id, selecting exactly `fields`. */
 export function useResourceRecord(
   modelLabel: string,
@@ -258,6 +278,52 @@ export function useResourceRecord(
     error: run.error,
     refetch: run.refetch,
   };
+}
+
+/** Read newest-first django-reversion snapshots for one record. */
+export function useResourceRevisions(
+  modelLabel: string,
+  id: string | null | undefined,
+  options: UseResourceRevisionsOptions = {},
+): UseResourceRevisionsResult {
+  const { enabled = true } = options;
+  const metadata = useSchemaFieldMetadata();
+  const rootFields = useModelRootFields(modelLabel);
+  const revisionFields = useMemo(
+    () => revisionSelectionFields(modelLabel, metadata),
+    [modelLabel, metadata],
+  );
+  const active =
+    enabled && Boolean(modelLabel) && Boolean(id) && rootFields !== null;
+
+  const document = useMemo(
+    () =>
+      rootFields
+        ? assembleRevisionsDocument(modelLabel, revisionFields, rootFields)
+        : DISABLED_DOCUMENTS.query,
+    [modelLabel, revisionFields, rootFields],
+  );
+  const variables = useMemo(() => ({ id: id ?? "" }), [id]);
+
+  const run = useDocumentQuery(document, variables, active);
+  useRegisterModelRefetch(modelLabel, run.refetch, active);
+  const revisions = useMemo(() => extractRevisions(run.data), [run.data]);
+  return {
+    revisions,
+    count: revisions.length,
+    fetching: run.fetching,
+    error: run.error,
+    refetch: run.refetch,
+  };
+}
+
+function revisionSelectionFields(
+  modelLabel: string,
+  metadata: SchemaFieldMetadata,
+): readonly string[] {
+  const revisionType = metadata.types[`${typeNameForModel(modelLabel)}Revision`];
+  if (!revisionType) return ["createdAt", "comment"];
+  return Object.keys(revisionType.fields).filter((field) => field !== "id");
 }
 
 export interface ResourceMutationVariables {

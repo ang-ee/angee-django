@@ -4,6 +4,7 @@ import {
   extractDeletePreview,
   extractNode,
   extractPage,
+  extractRevisions,
   type PageInfo,
 } from "./resource-result";
 
@@ -54,6 +55,33 @@ describe("extractPage", () => {
       },
     };
     expect(extractPage(data).pageInfo).toEqual({ offset: 0, limit: null });
+  });
+});
+
+describe("extractRevisions", () => {
+  test("returns newest-first revision rows from the single root field", () => {
+    const data = {
+      saleRevisions: [
+        {
+          id: "v2",
+          createdAt: "2026-01-02T00:00:00Z",
+          comment: "second",
+          title: "Second",
+        },
+      ],
+    };
+    expect(extractRevisions(data)).toEqual([
+      {
+        id: "v2",
+        createdAt: "2026-01-02T00:00:00Z",
+        comment: "second",
+        title: "Second",
+      },
+    ]);
+  });
+
+  test("returns an empty list when the root field is absent", () => {
+    expect(extractRevisions({})).toEqual([]);
   });
 });
 

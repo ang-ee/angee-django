@@ -8,6 +8,7 @@ export {
   assembleDetailDocument,
   assembleListDocument,
   assembleMutationDocument,
+  assembleRevisionsDocument,
   assembleAggregateDocument,
   assembleGroupByDocument,
   typeNameForModel,
@@ -65,16 +66,20 @@ export {
 export {
   useResourceList,
   useResourceRecord,
+  useResourceRevisions,
   useResourceMutation,
   type UseResourceListOptions,
   type UseResourceListResult,
   type UseResourceRecordResult,
+  type UseResourceRevisionsOptions,
+  type UseResourceRevisionsResult,
   type ResourceMutate,
   type ResourceMutationVariables,
   type ResourceMutationResult,
 } from "./resource-hooks";
 export type {
   Row,
+  ResourceRevision,
   PageInfo,
   PageResult,
   DeletePreview,

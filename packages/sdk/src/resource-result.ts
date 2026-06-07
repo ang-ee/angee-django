@@ -37,6 +37,12 @@ export interface DeletePreview {
   root: DeletePreviewNode;
 }
 
+export interface ResourceRevision extends Row {
+  id: string;
+  createdAt: string;
+  comment: string | null;
+}
+
 function isRecord(value: unknown): value is Row {
   return typeof value === "object" && value !== null;
 }
@@ -66,6 +72,23 @@ export function extractPage(data: unknown): PageResult {
     total: typeof page.totalCount === "number" ? page.totalCount : undefined,
     pageInfo: toPageInfo(page.pageInfo),
   };
+}
+
+/** The newest-first revision rows a revisions document returns. */
+export function extractRevisions(data: unknown): ResourceRevision[] {
+  const value = rootValue(data);
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((row) => {
+    if (!isRecord(row) || typeof row.id !== "string") return [];
+    return [
+      {
+        ...row,
+        id: row.id,
+        createdAt: typeof row.createdAt === "string" ? row.createdAt : "",
+        comment: typeof row.comment === "string" ? row.comment : null,
+      },
+    ];
+  });
 }
 
 /** The cascade preview a delete mutation returns, or null. */

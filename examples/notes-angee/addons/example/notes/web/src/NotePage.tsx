@@ -1,49 +1,24 @@
 import * as React from "react";
 import {
   DataPage,
+  EmptyState,
   Form,
-  Glyph,
   GroupListView,
   List,
   Column,
   Field,
   Group,
   NEW_RECORD_ID,
-  Spinner,
+  RevisionsTab,
+  type ChatterTab,
   type DataViewDefaultGroups,
   type RecordSmartButtonDescriptor,
   useChatterContent,
 } from "@angee/base";
-import { useAuthoredQuery, useModelMetadata, useResourceRecord } from "@angee/sdk";
+import { useModelMetadata, useResourceRecord, useResourceRevisions } from "@angee/sdk";
 import { useParams } from "@tanstack/react-router";
-import { formatDistanceToNow } from "date-fns";
 
 const MODEL = "notes.Note";
-const NOTE_REVISIONS_QUERY = `
-  query NoteRevisions($id: ID!) {
-    noteRevisions(id: $id) {
-      id
-      createdAt
-      comment
-      body
-    }
-  }
-`;
-
-interface NoteRevision {
-  id: string;
-  createdAt: string;
-  comment: string | null;
-  body: string;
-}
-
-interface NoteRevisionsData {
-  noteRevisions: NoteRevision[];
-}
-
-type NoteRevisionsVariables = Record<string, unknown> & {
-  id: string;
-};
 
 const NOTE_DEFAULT_GROUPS = {
   list: { field: "updatedAt", granularity: "month" },
@@ -87,13 +62,6 @@ const noteForm = (
   </Form>
 );
 
-const recordSmartButtons = [
-  { id: "linked", icon: "plus", count: 7, label: "Linked notes" },
-  { id: "comments", icon: "comments", count: 12, label: "Comments" },
-  { id: "attachments", icon: "attachment", count: 4, label: "Attachments" },
-  { id: "versions", icon: "versions", count: 23, label: "Versions" },
-] satisfies readonly RecordSmartButtonDescriptor[];
-
 /** The record crumb for `/notes/$id` — resolves the note title from the cache. */
 export function NoteCrumb({ id }: { id: string }): React.ReactElement {
   const isNew = id === NEW_RECORD_ID;
@@ -119,10 +87,82 @@ export function NotePage(): React.ReactElement {
     "id" in params && typeof params.id === "string" ? params.id : undefined;
   const creating = routeId === NEW_RECORD_ID;
   const recordId = creating ? null : routeId;
+  const activeRecordId =
+    !creating && typeof recordId === "string" ? recordId : null;
+  const revisions = useResourceRevisions(MODEL, activeRecordId, {
+    enabled: activeRecordId !== null,
+  });
+  const revisionResult = React.useMemo(
+    () => revisions,
+    [
+      revisions.count,
+      revisions.error,
+      revisions.fetching,
+      revisions.refetch,
+      revisions.revisions,
+    ],
+  );
+  const tabs = React.useMemo(
+    () => [
+      {
+        id: "angee",
+        label: "Angee",
+        icon: "agent",
+        children: (
+          <EmptyState
+            icon="agent"
+            title="No agent yet"
+            description="Set up your assistant"
+            className="min-h-48 p-4"
+          />
+        ),
+      },
+      {
+        id: "comments",
+        label: "Comments",
+        icon: "comments",
+        children: (
+          <EmptyState
+            icon="comments"
+            title="No comments yet"
+            description="Comments will appear here."
+            className="min-h-48 p-4"
+          />
+        ),
+      },
+      {
+        id: "activity",
+        label: "Activity",
+        icon: "activity",
+        count: revisions.count,
+        children: (
+          <RevisionsTab
+            model={MODEL}
+            recordId={activeRecordId}
+            result={revisionResult}
+          />
+        ),
+      },
+    ] satisfies readonly ChatterTab[],
+    [activeRecordId, revisionResult],
+  );
+  const chatter = React.useMemo(() => ({ tabs }), [tabs]);
+  useChatterContent(chatter);
+  const recordSmartButtons = React.useMemo(
+    () =>
+      [
+        {
+          id: "versions",
+          icon: "versions",
+          count: revisions.count,
+          label: "Versions",
+        },
+      ] satisfies readonly RecordSmartButtonDescriptor[],
+    [revisions.count],
+  );
 
   return (
     <div className="flex flex-col gap-4">
-      <NoteChatter recordId={recordId} creating={creating} />
       {/* Open as a month-grouped list; board view switches to status lanes. */}
       <DataPage
         model={MODEL}
@@ -135,174 +175,4 @@ export function NotePage(): React.ReactElement {
       </DataPage>
     </div>
   );
-}
-
-function NoteChatter({
-  recordId,
-  creating,
-}: {
-  recordId: string | null | undefined;
-  creating: boolean;
-}): null {
-  const activeRecordId =
-    !creating && typeof recordId === "string" ? recordId : null;
-  const revisions = useAuthoredQuery<NoteRevisionsData, NoteRevisionsVariables>(
-    NOTE_REVISIONS_QUERY,
-    { id: activeRecordId ?? "" },
-    { enabled: activeRecordId !== null },
-  );
-  const tabs = React.useMemo(() => {
-    const revisionCount = revisions.data?.noteRevisions.length;
-    return [
-      {
-        id: "angee",
-        label: "Angee",
-        icon: "agent",
-        children: (
-          <RailEmptyState
-            icon="agent"
-            title="No agent yet"
-            body="Set up your assistant"
-          />
-        ),
-      },
-      {
-        id: "comments",
-        label: "Comments",
-        icon: "comments",
-        children: (
-          <RailEmptyState
-            icon="comments"
-            title="No comments yet"
-            body="Comments will appear here."
-          />
-        ),
-      },
-      {
-        id: "activity",
-        label: "Activity",
-        icon: "activity",
-        ...(revisionCount !== undefined ? { count: revisionCount } : {}),
-        children: (
-          <NoteActivityPanel
-            activeRecordId={activeRecordId}
-            revisions={revisions.data?.noteRevisions ?? []}
-            fetching={revisions.fetching}
-            error={revisions.error}
-          />
-        ),
-      },
-    ];
-  }, [
-    activeRecordId,
-    revisions.data?.noteRevisions,
-    revisions.error,
-    revisions.fetching,
-  ]);
-  const content = React.useMemo(() => ({ tabs }), [tabs]);
-  useChatterContent(content);
-  return null;
-}
-
-function NoteActivityPanel({
-  activeRecordId,
-  revisions,
-  fetching,
-  error,
-}: {
-  activeRecordId: string | null;
-  revisions: readonly NoteRevision[];
-  fetching: boolean;
-  error: Error | null;
-}): React.ReactElement {
-  if (!activeRecordId) {
-    return (
-      <RailEmptyState
-        icon="activity"
-        title="No record selected"
-        body="Open a note to view activity."
-      />
-    );
-  }
-  if (error) {
-    return (
-      <div role="alert" className="text-13 text-danger-text">
-        {error.message}
-      </div>
-    );
-  }
-  if (fetching) {
-    return (
-      <div className="flex items-center gap-2 text-13 text-fg-muted">
-        <Spinner size="sm" />
-        Loading activity...
-      </div>
-    );
-  }
-  if (revisions.length === 0) {
-    return (
-      <RailEmptyState
-        icon="activity"
-        title="No revisions yet"
-        body="Body changes will appear here."
-      />
-    );
-  }
-  return (
-    <ol className="flex flex-col gap-3">
-      {revisions.map((revision) => (
-        <li
-          key={revision.id}
-          className="rounded-md border border-border-subtle bg-sheet-2 p-3"
-        >
-          <div className="flex min-w-0 items-start justify-between gap-2">
-            <p className="truncate text-13 font-semibold text-fg">
-              {revision.comment ?? "Body updated"}
-            </p>
-            <time
-              dateTime={revision.createdAt}
-              className="shrink-0 text-2xs tabular-nums text-fg-muted"
-            >
-              {relativeTime(revision.createdAt)}
-            </time>
-          </div>
-          <p className="mt-2 line-clamp-3 text-13 leading-5 text-fg-2">
-            {excerpt(revision.body)}
-          </p>
-        </li>
-      ))}
-    </ol>
-  );
-}
-
-function RailEmptyState({
-  icon,
-  title,
-  body,
-}: {
-  icon: string;
-  title: React.ReactNode;
-  body: React.ReactNode;
-}): React.ReactElement {
-  return (
-    <div className="grid min-h-48 place-content-center gap-2 text-center">
-      <div className="mx-auto grid size-10 place-content-center rounded-md bg-accent-soft text-accent-soft-text [&_.glyph]:size-5">
-        <Glyph name={icon} />
-      </div>
-      <p className="text-sm font-semibold text-fg">{title}</p>
-      <p className="text-13 text-fg-muted">{body}</p>
-    </div>
-  );
-}
-
-function relativeTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return formatDistanceToNow(date, { addSuffix: true });
-}
-
-function excerpt(value: string): string {
-  const text = value.replace(/\s+/g, " ").trim();
-  if (!text) return "No body snapshot.";
-  return text.length > 160 ? `${text.slice(0, 157)}...` : text;
 }

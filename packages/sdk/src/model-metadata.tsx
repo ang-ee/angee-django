@@ -50,6 +50,8 @@ export interface ModelRootFieldMetadata {
   aggregate?: string;
   /** Query field returning grouped aggregate buckets. */
   groupBy?: string;
+  /** Query field returning newest-first field revisions for one record. */
+  revisions?: string;
   /** Mutation field creating one record. */
   create?: string;
   /** Mutation field updating one record. */
@@ -214,6 +216,9 @@ function rootFieldsForType(
       if (rootFields.groupBy === undefined && isGroupByField(field, type)) {
         rootFields.groupBy = name;
       }
+      if (rootFields.revisions === undefined && isRevisionsField(field, type)) {
+        rootFields.revisions = name;
+      }
     }
   }
   const mutation = schema.getMutationType();
@@ -274,6 +279,14 @@ function isGroupByField(
   if (!rowType) return false;
   const rowFields = rowType.getFields();
   return "key" in rowFields && "count" in rowFields;
+}
+
+function isRevisionsField(
+  field: GraphQLField<unknown, unknown>,
+  type: GraphQLObjectType,
+): boolean {
+  return hasArgument(field, "id")
+    && returnsCollectionOf(field.type, `${inputBaseName(type)}Revision`);
 }
 
 function returnsDirectObject(type: GraphQLOutputType, name: string): boolean {

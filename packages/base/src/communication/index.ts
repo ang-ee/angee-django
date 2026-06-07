@@ -1,4 +1,5 @@
 export { Chatter, type ChatterProps } from "./Chatter";
+export { RevisionsTab, type RevisionsTabProps } from "./RevisionsTab";
 export {
   CHATTER_DEFAULT_WIDTH,
   CHATTER_MAX_WIDTH,

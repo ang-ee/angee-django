@@ -390,9 +390,21 @@ ConnectionsPage 1430→387, FormView fixes, UsersPage/RolesPage) COMMITTED as
 timeout flake, passes on retry, NOT a D5 regression — verified the live
 availableConnections query returns the demo provider).
 
-NEXT: D5b — replace selection.ts field-name GUESSING (LEADING_ACRONYMS +
-pluralize + lowerCamel heuristics) with SDL-derived root field names. The
-schema's Query/Mutation root fields (note, notes, oauthClients, noteAggregate,
-…) are the owner; extend D4 metadata to capture them; delete the acronym list
-+ pluralize + casing guesses. Stays in sdk (per [[layering-sdk-ui-consumer]]).
-Architect chose: commit D5 bulk first, D5b second. THEN D6.
+D5b (SDL-derived root field names; acronym list + pluralize + casing guesses
+deleted; useModelRootFields inert without SDL / fail-loud when model missing)
+COMMITTED as ae41410 — gated (SDL regen + schema --check, typecheck, 284
+vitest, 71/71 data-driven e2e; iam-auth OAuth-button still the pre-existing
+timing flake). sdk→base boundary verified empty.
+
+NEXT (final): D6 — chatter revisions + fragments hygiene. Backend step:
+angee.graphql emits the revisions query for RevisionMixin models (delete the
+notes consumer resolver in examples/.../notes/schema.py:174). SDK
+useResourceRevisions; base RevisionsTab + TimelineEntry + RelativeTime
+(adopt at ListInternals inline date too); delete NoteChatter/
+NoteActivityPanel/RailEmptyState; smart buttons → only versions w/ real count
+(Q4); keep placeholder Angee/Comments tabs no fake counts (Q3). FRESH slice →
+LAUNCH COMMAND HANDED TO USER.
+
+Known flaky (not ours, pre-existing): iam-auth.spec.ts:34 OAuth-button waits
+15s for the availableConnections query to render under full-suite load; passes
+on isolation/retry. Candidate one-line hardening if it keeps interrupting.

@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, cast
+from typing import Any
 
 import strawberry
 import strawberry_django
 from django.apps import apps
 from rebac import system_context
-from rebac.errors import MissingActorError
 from strawberry import auto, relay
 from strawberry_django.pagination import OffsetPaginated
 
@@ -17,6 +16,7 @@ from angee.base.models import public_id_of
 from angee.graphql.aggregates import rebac_aggregate_builder
 from angee.graphql.crud import crud
 from angee.graphql.node import AngeeNode
+from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
 
 Note = apps.get_model("notes", "Note")
@@ -60,27 +60,6 @@ class NoteType(AngeeNode):
         """Return the updater's display label - no user object exposed."""
 
         return _user_label(self.updated_by_id)
-
-
-@strawberry.type
-class NoteRevision:
-    """Versioned body snapshot for one note revision."""
-
-    id: strawberry.ID
-    created_at: datetime
-    comment: str | None
-    body: str
-
-    @classmethod
-    def from_version(cls, version: Any) -> NoteRevision:
-        """Return GraphQL output for one django-reversion version."""
-
-        return cls(
-            id=strawberry.ID(str(version.pk)),
-            created_at=cast(datetime, version.revision.date_created),
-            comment=cast(str | None, version.revision.comment or None),
-            body=str(version.field_dict.get("body", "")),
-        )
 
 
 @strawberry.input
@@ -170,15 +149,6 @@ class NotesQuery:
     note_aggregate = _note_aggregates.aggregate_field
     note_groups = _note_aggregates.group_by_field
 
-    @strawberry.field
-    def note_revisions(self, id: relay.GlobalID) -> list[NoteRevision]:
-        """Return actor-visible body revisions for one note."""
-
-        note = _scoped_note_by_id(id)
-        if note is None:
-            return []
-        return [NoteRevision.from_version(version) for version in note.revisions]
-
 
 _AGGREGATE_TYPES = [
     _note_aggregates.aggregate_type,
@@ -186,15 +156,6 @@ _AGGREGATE_TYPES = [
     _note_aggregates.grouped_result_type,
     _note_aggregates.group_key_type,
 ]
-
-
-def _scoped_note_by_id(id: relay.GlobalID) -> Any | None:
-    """Return the actor-visible note addressed by relay id, if any."""
-
-    try:
-        return Note.objects.from_public_id(id.node_id)
-    except MissingActorError:
-        return None
 
 
 def _user_public_id(user_id: Any) -> strawberry.ID | None:
@@ -225,9 +186,9 @@ def _user_label(user_id: Any) -> str | None:
 
 
 _NOTE_SCHEMA_BUCKET = {
-    "query": [NotesQuery],
+    "query": [NotesQuery, revisions(NoteType)],
     "mutation": [crud(NoteType, create=NoteInput, update=NotePatch, delete=True)],
-    "types": [NoteType, NoteRevision, *_AGGREGATE_TYPES],
+    "types": [NoteType, *_AGGREGATE_TYPES],
 }
 
 

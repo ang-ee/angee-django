@@ -113,6 +113,13 @@ export const TEST_SCHEMA_SDL = /* GraphQL */ `
     sum: SaleSumFields
   }
 
+  type SaleRevision {
+    id: ID!
+    createdAt: DateTime!
+    comment: String
+    title: String!
+  }
+
   type SaleSumFields {
     amount: BigInt
   }
@@ -152,6 +159,7 @@ export const TEST_SCHEMA_SDL = /* GraphQL */ `
       filter: SaleFilter
       orderBy: [SaleGroupOrder!] = null
     ): SaleGroupedResult!
+    saleRevisions(id: ID!): [SaleRevision!]!
   }
 
   type Mutation {

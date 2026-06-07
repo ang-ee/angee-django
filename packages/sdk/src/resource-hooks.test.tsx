@@ -9,6 +9,7 @@ import {
   useResourceList,
   useResourceMutation,
   useResourceRecord,
+  useResourceRevisions,
 } from "./resource-hooks";
 import { TEST_SCHEMA_SDL } from "./test-schema";
 
@@ -147,6 +148,49 @@ describe("useResourceRecord", () => {
       { wrapper: wrapperWith(fetch) },
     );
     expect(result.current.record).toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("useResourceRevisions", () => {
+  test("requests the schema-declared revisions document by id", async () => {
+    const { fetch, bodies } = mockTransport({
+      saleRevisions: [
+        {
+          id: "v2",
+          createdAt: "2026-01-02T00:00:00Z",
+          comment: "second",
+          title: "Second",
+        },
+      ],
+    });
+    const { result } = renderHook(
+      () => useResourceRevisions("Sale", "1"),
+      { wrapper: wrapperWith(fetch) },
+    );
+    await waitFor(() => expect(result.current.fetching).toBe(false));
+    expect(result.current.revisions).toEqual([
+      {
+        id: "v2",
+        createdAt: "2026-01-02T00:00:00Z",
+        comment: "second",
+        title: "Second",
+      },
+    ]);
+    expect(result.current.count).toBe(1);
+    expect(bodies[0]?.query.replace(/\s+/g, " ").trim()).toBe(
+      "query saleRevisions($id: ID!) { saleRevisions(id: $id) { id createdAt comment title } }",
+    );
+    expect(bodies[0]?.variables).toEqual({ id: "1" });
+  });
+
+  test("does not fetch without an id", () => {
+    const { fetch } = mockTransport({});
+    const { result } = renderHook(
+      () => useResourceRevisions("Sale", null),
+      { wrapper: wrapperWith(fetch) },
+    );
+    expect(result.current.revisions).toEqual([]);
     expect(fetch).not.toHaveBeenCalled();
   });
 });

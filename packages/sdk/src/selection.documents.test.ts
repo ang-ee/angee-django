@@ -7,6 +7,7 @@ import {
   assembleGroupByDocument,
   assembleListDocument,
   assembleMutationDocument,
+  assembleRevisionsDocument,
 } from "./selection";
 import { changeSubscriptionDocument } from "./relay-invalidation";
 import {
@@ -130,6 +131,13 @@ const SDL = /* GraphQL */ `
     sum: SaleSumFields
   }
 
+  type SaleRevision {
+    id: ID!
+    createdAt: DateTime!
+    comment: String
+    title: String!
+  }
+
   type SaleSumFields {
     amount: BigInt
   }
@@ -208,6 +216,7 @@ const SDL = /* GraphQL */ `
       filter: SaleFilter
       orderBy: [SaleGroupOrder!] = null
     ): SaleGroupedResult!
+    saleRevisions(id: ID!): [SaleRevision!]!
     oauthClientRecord(id: ID!): OAuthClient
     identityClients(pagination: OffsetPaginationInput): OAuthClientOffsetPaginated!
     person(id: ID!): Person
@@ -250,6 +259,20 @@ describe("assembleDetailDocument", () => {
     const document = assembleDetailDocument("Sale", ["title", "state"], rootFields("Sale"));
     expect(document).toBe(
       "query saleLookup($id: ID!) { saleLookup(id: $id) { id title state } }",
+    );
+    expectValid(document);
+  });
+});
+
+describe("assembleRevisionsDocument", () => {
+  test("queries the schema-declared revisions field by relay id", () => {
+    const document = assembleRevisionsDocument(
+      "Sale",
+      ["createdAt", "comment", "title"],
+      rootFields("Sale"),
+    );
+    expect(document).toBe(
+      "query saleRevisions($id: ID!) { saleRevisions(id: $id) { id createdAt comment title } }",
     );
     expectValid(document);
   });

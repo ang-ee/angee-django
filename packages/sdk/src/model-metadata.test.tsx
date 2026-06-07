@@ -35,8 +35,16 @@ const SDL = /* GraphQL */ `
     isArchived: Boolean!
   }
 
+  type NoteRevision {
+    id: ID!
+    createdAt: DateTime!
+    comment: String
+    body: String!
+  }
+
   type Query {
     notes: [NoteType!]!
+    noteRevisions(id: ID!): [NoteRevision!]!
   }
 `;
 
@@ -92,6 +100,7 @@ describe("fieldMetadataFromSDL", () => {
   test("captures schema-declared root fields for model types", () => {
     expect(required(metadata.types.NoteType).rootFields).toEqual({
       list: "notes",
+      revisions: "noteRevisions",
     });
   });
 });

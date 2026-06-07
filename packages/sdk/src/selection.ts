@@ -121,6 +121,17 @@ export function assembleDetailDocument(
   return `query ${detail}($id: ID!) { ${detail}(id: $id) { ${selection} } }`;
 }
 
+/** Newest-first revision document using the schema-declared revisions root. */
+export function assembleRevisionsDocument(
+  modelLabel: string,
+  fieldPaths: readonly string[],
+  rootFields: ModelRootFieldMetadata,
+): string {
+  const revisions = requireRootField(modelLabel, rootFields, "revisions");
+  const selection = printSelection(buildSelection(fieldPaths));
+  return `query ${revisions}($id: ID!) { ${revisions}(id: $id) { ${selection} } }`;
+}
+
 export interface AssembleListDocumentOptions {
   /** Declare `$filters: <Type>Filter` and pass it to the connection. */
   withFilter?: boolean;

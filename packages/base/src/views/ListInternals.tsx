@@ -22,7 +22,7 @@ import type {
   ModelMetadata,
   Row,
 } from "@angee/sdk";
-import { format, formatDistanceToNow } from "date-fns";
+import { format } from "date-fns";
 import {
   ArrowDown,
   ArrowUp,
@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 
 import { Glyph } from "../chrome/Glyph";
+import { RelativeTime } from "../fragments/RelativeTime";
 import { titleCase } from "../lib/titleCase";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -886,7 +887,7 @@ export function cellContent<TRow extends Row>(
     );
   }
   const date = looksLikeDateField(column.field) ? parseDate(value) : null;
-  if (date) return formatDistanceToNow(date, { addSuffix: true });
+  if (date) return <RelativeTime value={date} />;
   return displayValue(value);
 }
 

@@ -111,6 +111,7 @@ export {
   type RecordHeaderProps,
   type RecordHeaderStatus,
 } from "./RecordHeader";
+export { RelativeTime, type RelativeTimeProps } from "./RelativeTime";
 export { RailPanel, type RailPanelProps } from "./RailPanel";
 export {
   SectionTabs,
@@ -123,3 +124,4 @@ export {
   surfaceHeaderVariants,
   type SurfaceHeaderProps,
 } from "./SurfaceHeader";
+export { TimelineEntry, type TimelineEntryProps } from "./TimelineEntry";
