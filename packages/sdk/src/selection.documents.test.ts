@@ -57,6 +57,14 @@ describe("assembleListDocument", () => {
     expect(document).toContain("order: $order");
     expectValid(document);
   });
+
+  test("lower-camelises acronym model roots without changing input type names", () => {
+    expect(assembleListDocument("OAuthClient", ["displayName"])).toBe(
+      "query oauthClients($pagination: OffsetPaginationInput) { " +
+        "oauthClients(pagination: $pagination) { " +
+        "totalCount results { id displayName } pageInfo { offset limit } } }",
+    );
+  });
 });
 
 describe("assembleMutationDocument", () => {
@@ -67,6 +75,13 @@ describe("assembleMutationDocument", () => {
         "createSale(data: $data) { id title } }",
     );
     expectValid(document);
+  });
+
+  test("uses the served verb field for acronym model mutations", () => {
+    expect(assembleMutationDocument("OAuthClient", "create", ["displayName"])).toBe(
+      "mutation createOauthClient($data: OAuthClientInput!) { " +
+        "createOauthClient(data: $data) { id displayName } }",
+    );
   });
 
   test("update takes a patch whose id travels inside the data", () => {

@@ -383,6 +383,10 @@ metadata + backend enum-descriptions) COMMITTED as 0168c72 — gated (SDL
 regenerated with enum descriptions + schema --check, typecheck, 282 vitest,
 72/72 e2e). Supervisor fixed the field-vs-group label split (titleCase for
 column/field/filter, groupFieldLabel kept for group options) + restored
-non-derivable form labels. Architecture + django reviews IN FLIGHT on 0168c72
-(fold via --resume if needed). NEXT: D5 — iam port (ConnectionsPage onto
-DialogForm/FormView/widgets). LAUNCH COMMAND HANDED TO USER (fresh slice).
+non-derivable form labels. D4 reviews folded as 6a30001 (native
+enum seam replaces schema mutation; aggregates branch deleted as frontend
+never reads the group-key enum; SDL parsed once; fieldLabel/groupLabel owners)
+— re-gated green (ruff/mypy, schema --check, typecheck, 282 vitest, 72/72
+e2e). NEXT: D5 — iam port (ConnectionsPage onto DialogForm/FormView/widgets;
+UsersPage onto useResourceList + booleanBadge). LAUNCH COMMAND HANDED TO USER
+(fresh slice).

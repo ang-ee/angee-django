@@ -73,7 +73,8 @@ describe("model naming", () => {
 
   test("singularFieldName lower-camelises the type", () => {
     expect(singularFieldName("Note")).toBe("note");
-    expect(singularFieldName("OAuthProvider")).toBe("oAuthProvider");
+    expect(singularFieldName("OAuthProvider")).toBe("oauthProvider");
+    expect(singularFieldName("URLMapping")).toBe("urlMapping");
   });
 
   test("pluralFieldName pluralises the singular field", () => {

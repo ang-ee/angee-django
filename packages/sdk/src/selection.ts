@@ -21,6 +21,20 @@ export interface SelectionField {
 }
 
 const GRAPHQL_NAME = /^[_A-Za-z][_0-9A-Za-z]*$/;
+const LEADING_ACRONYMS = [
+  "OAuth",
+  "OIDC",
+  "URL",
+  "URI",
+  "UUID",
+  "API",
+  "JSON",
+  "XML",
+  "HTTP",
+  "HTTPS",
+  "JWT",
+  "SQL",
+] as const;
 
 function assertName(name: string): string {
   if (!GRAPHQL_NAME.test(name)) {
@@ -97,8 +111,7 @@ export function typeNameForModel(modelLabel: string): string {
 
 /** Singular root field name (`Note` -> `note`), matching the schema default. */
 export function singularFieldName(modelLabel: string): string {
-  const name = typeNameForModel(modelLabel);
-  return name.charAt(0).toLowerCase() + name.slice(1);
+  return lowerCamelName(typeNameForModel(modelLabel));
 }
 
 /** Plural connection field name (`Note` -> `notes`, `Category` -> `categories`). */
@@ -219,7 +232,7 @@ export function assembleMutationDocument(
   fieldPaths: readonly string[],
 ): string {
   const typeName = typeNameForModel(modelLabel);
-  const op = `${action}${typeName}`;
+  const op = `${action}${pascalName(singularFieldName(modelLabel))}`;
   if (action === "delete") {
     return (
       `mutation ${op}($id: ID!, $confirm: Boolean) { ` +
@@ -231,6 +244,18 @@ export function assembleMutationDocument(
   return (
     `mutation ${op}($data: ${inputType}!) { ${op}(data: $data) { ${selection} } }`
   );
+}
+
+function lowerCamelName(name: string): string {
+  const known = LEADING_ACRONYMS.find((acronym) => name.startsWith(acronym));
+  if (known) return `${known.toLowerCase()}${name.slice(known.length)}`;
+  const acronym = name.match(/^[A-Z]+(?=[A-Z][a-z]|[0-9]|$)/)?.[0];
+  if (acronym) return `${acronym.toLowerCase()}${name.slice(acronym.length)}`;
+  return name.charAt(0).toLowerCase() + name.slice(1);
+}
+
+function pascalName(name: string): string {
+  return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 /** Aggregate field name (`Sale` -> `saleAggregate`). */

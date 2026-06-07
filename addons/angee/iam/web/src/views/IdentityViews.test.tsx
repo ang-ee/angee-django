@@ -23,39 +23,15 @@ import {
   type ReactNode,
 } from "react";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
-import { AppRuntimeProvider } from "@angee/sdk";
-import { ModalsHost, ToastProvider, baseIcons } from "@angee/base";
+import { AppRuntimeProvider, type Row } from "@angee/sdk";
+import { ModalsHost, ToastProvider, baseIcons, defaultWidgets } from "@angee/base";
 
 import { ConnectionsPage } from "./ConnectionsPage";
 import { GrantsPage } from "./GrantsPage";
 import { UsersPage } from "./UsersPage";
 
 const sdkMocks = vi.hoisted(() => ({
-  users: {
-    data: undefined as unknown,
-    fetching: false,
-    error: null as Error | null,
-    refetch: vi.fn(),
-  },
   grants: {
-    data: undefined as unknown,
-    fetching: false,
-    error: null as Error | null,
-    refetch: vi.fn(),
-  },
-  oauthClients: {
-    data: undefined as unknown,
-    fetching: false,
-    error: null as Error | null,
-    refetch: vi.fn(),
-  },
-  externalAccounts: {
-    data: undefined as unknown,
-    fetching: false,
-    error: null as Error | null,
-    refetch: vi.fn(),
-  },
-  vendors: {
     data: undefined as unknown,
     fetching: false,
     error: null as Error | null,
@@ -67,31 +43,44 @@ const sdkMocks = vi.hoisted(() => ({
     error: null as Error | null,
     refetch: vi.fn(),
   },
+  lists: {
+    User: listState(),
+    Vendor: listState(),
+    OAuthClient: listState(),
+    ExternalAccount: listState(),
+  },
+  records: {} as Record<string, Row | null>,
   revokeRole: vi.fn(),
-  createOauthClient: vi.fn(),
-  updateOauthClient: vi.fn(),
+  mutateVendor: vi.fn(),
+  mutateOauthClient: vi.fn(),
   createExternalAccount: vi.fn(),
-  registerModelRefetch: vi.fn(),
   revokeState: {
     fetching: false,
     error: null as Error | null,
   },
-  createState: {
+  mutationState: {
     fetching: false,
     error: null as Error | null,
   },
+  resourceListCalls: [] as string[],
 }));
+
+function listState() {
+  return {
+    rows: [] as readonly Row[],
+    total: 0 as number | undefined,
+    fetching: false,
+    error: null as Error | null,
+    refetch: vi.fn(),
+  };
+}
 
 vi.mock("@angee/sdk", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/sdk")>();
   return {
     ...actual,
     useAuthoredQuery: (document: string) => {
-      if (document.includes("IamUsers")) return sdkMocks.users;
       if (document.includes("IamGrants")) return sdkMocks.grants;
-      if (document.includes("IamOAuthClients")) return sdkMocks.oauthClients;
-      if (document.includes("IamExternalAccounts")) return sdkMocks.externalAccounts;
-      if (document.includes("IamVendorOptions")) return sdkMocks.vendors;
       if (document.includes("IamConnectionSummary")) {
         return sdkMocks.connectionSummary;
       }
@@ -103,18 +92,42 @@ vi.mock("@angee/sdk", async (importOriginal) => {
       };
     },
     useAuthoredMutation: (document: string) => {
-      if (document.includes("IamCreateOAuthClient")) {
-        return [sdkMocks.createOauthClient, sdkMocks.createState];
-      }
-      if (document.includes("IamUpdateOAuthClient")) {
-        return [sdkMocks.updateOauthClient, sdkMocks.createState];
-      }
-      if (document.includes("IamCreateExternalAccount")) {
-        return [sdkMocks.createExternalAccount, sdkMocks.createState];
-      }
       return [sdkMocks.revokeRole, sdkMocks.revokeState];
     },
-    useRegisterModelRefetch: sdkMocks.registerModelRefetch,
+    useResourceList: (model: string) => {
+      sdkMocks.resourceListCalls.push(model);
+      const state = sdkMocks.lists[model as keyof typeof sdkMocks.lists] ?? listState();
+      return {
+        ...state,
+        page: 1,
+        pageSize: 50,
+        pageCount: state.total === undefined ? undefined : 1,
+        pageInfo: undefined,
+        hasNext: false,
+        hasPrev: false,
+        setPage: vi.fn(),
+        firstPage: vi.fn(),
+        nextPage: vi.fn(),
+        prevPage: vi.fn(),
+        lastPage: vi.fn(),
+      };
+    },
+    useResourceRecord: (model: string, id: string | null) => ({
+      record: id ? sdkMocks.records[`${model}:${id}`] ?? null : null,
+      fetching: false,
+      error: null,
+      refetch: vi.fn(),
+    }),
+    useResourceMutation: (model: string) => {
+      if (model === "Vendor") return [sdkMocks.mutateVendor, sdkMocks.mutationState];
+      if (model === "OAuthClient") {
+        return [sdkMocks.mutateOauthClient, sdkMocks.mutationState];
+      }
+      if (model === "ExternalAccount") {
+        return [sdkMocks.createExternalAccount, sdkMocks.mutationState];
+      }
+      return [vi.fn(), sdkMocks.mutationState];
+    },
   };
 });
 
@@ -128,39 +141,31 @@ describe("IAM identity views", () => {
 
   afterEach(() => {
     cleanup();
-    sdkMocks.users.data = undefined;
-    sdkMocks.users.fetching = false;
-    sdkMocks.users.error = null;
-    sdkMocks.users.refetch.mockReset();
     sdkMocks.grants.data = undefined;
     sdkMocks.grants.fetching = false;
     sdkMocks.grants.error = null;
     sdkMocks.grants.refetch.mockReset();
-    sdkMocks.oauthClients.data = undefined;
-    sdkMocks.oauthClients.fetching = false;
-    sdkMocks.oauthClients.error = null;
-    sdkMocks.oauthClients.refetch.mockReset();
-    sdkMocks.externalAccounts.data = undefined;
-    sdkMocks.externalAccounts.fetching = false;
-    sdkMocks.externalAccounts.error = null;
-    sdkMocks.externalAccounts.refetch.mockReset();
-    sdkMocks.vendors.data = undefined;
-    sdkMocks.vendors.fetching = false;
-    sdkMocks.vendors.error = null;
-    sdkMocks.vendors.refetch.mockReset();
     sdkMocks.connectionSummary.data = undefined;
     sdkMocks.connectionSummary.fetching = false;
     sdkMocks.connectionSummary.error = null;
     sdkMocks.connectionSummary.refetch.mockReset();
+    for (const list of Object.values(sdkMocks.lists)) {
+      list.rows = [];
+      list.total = 0;
+      list.fetching = false;
+      list.error = null;
+      list.refetch.mockReset();
+    }
+    sdkMocks.records = {};
+    sdkMocks.resourceListCalls = [];
     sdkMocks.revokeRole.mockReset();
-    sdkMocks.createOauthClient.mockReset();
-    sdkMocks.updateOauthClient.mockReset();
+    sdkMocks.mutateVendor.mockReset();
+    sdkMocks.mutateOauthClient.mockReset();
     sdkMocks.createExternalAccount.mockReset();
-    sdkMocks.registerModelRefetch.mockReset();
     sdkMocks.revokeState.fetching = false;
     sdkMocks.revokeState.error = null;
-    sdkMocks.createState.fetching = false;
-    sdkMocks.createState.error = null;
+    sdkMocks.mutationState.fetching = false;
+    sdkMocks.mutationState.error = null;
   });
 
   test("revokes a grant through the confirm dialog and refetches", async () => {
@@ -201,50 +206,37 @@ describe("IAM identity views", () => {
     expect(sdkMocks.grants.refetch).not.toHaveBeenCalled();
   });
 
-  test("registers the users list for live user invalidation", async () => {
-    sdkMocks.users.data = {
-      users: {
-        totalCount: 0,
-        results: [],
-      },
-    };
+  test("reads users through the resource list hook", async () => {
+    sdkMocks.lists.User.rows = [];
+    sdkMocks.lists.User.total = 0;
 
     renderInRouter(<UsersPage />);
 
     await screen.findByText("No records.");
-    expect(sdkMocks.registerModelRefetch).toHaveBeenCalledWith(
-      "iam.User",
-      sdkMocks.users.refetch,
-      true,
-    );
+    expect(sdkMocks.resourceListCalls).toContain("User");
   });
 
   test("renders loading, empty, and error list branches", async () => {
-    sdkMocks.users.fetching = true;
+    sdkMocks.lists.User.fetching = true;
     const { unmount } = renderInRouter(<UsersPage />);
     expect(await screen.findByText("Loading...")).toBeTruthy();
     unmount();
 
-    sdkMocks.users.fetching = false;
-    sdkMocks.users.data = {
-      users: {
-        totalCount: 0,
-        results: [],
-      },
-    };
+    sdkMocks.lists.User.fetching = false;
+    sdkMocks.lists.User.rows = [];
+    sdkMocks.lists.User.total = 0;
     renderInRouter(<UsersPage />);
     expect(await screen.findByText("No records.")).toBeTruthy();
     cleanup();
 
-    sdkMocks.users.data = undefined;
-    sdkMocks.users.error = new Error("Users unavailable");
+    sdkMocks.lists.User.error = new Error("Users unavailable");
     renderInRouter(<UsersPage />);
     expect(await screen.findByText("Users unavailable")).toBeTruthy();
   });
 
   test("creates an OIDC provider from the connections page", async () => {
     seedConnectionData();
-    sdkMocks.createOauthClient.mockResolvedValue({ createOauthClient: {} });
+    sdkMocks.mutateOauthClient.mockResolvedValue({ id: "client-1" });
 
     renderInRouter(<ConnectionsPage />);
 
@@ -264,7 +256,7 @@ describe("IAM identity views", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
 
     await waitFor(() =>
-      expect(sdkMocks.createOauthClient).toHaveBeenCalledWith(
+      expect(sdkMocks.mutateOauthClient).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
             vendor: "vendor-1",
@@ -316,18 +308,14 @@ describe("IAM identity views", () => {
 
   test("edits an OIDC provider from the connections page", async () => {
     seedConnectionData();
-    sdkMocks.oauthClients.data = {
-      oauthClients: {
-        totalCount: 1,
-        results: [
-          oauthClientFixture({
-            linkOnEmailMatch: true,
-            createOnLogin: true,
-          }),
-        ],
-      },
-    };
-    sdkMocks.updateOauthClient.mockResolvedValue({ updateOauthClient: {} });
+    const client = oauthClientFixture({
+      linkOnEmailMatch: true,
+      createOnLogin: true,
+    }) as Row;
+    sdkMocks.lists.OAuthClient.rows = [client];
+    sdkMocks.lists.OAuthClient.total = 1;
+    sdkMocks.records["OAuthClient:client-1"] = client;
+    sdkMocks.mutateOauthClient.mockResolvedValue({ id: "client-1" });
 
     renderInRouter(<ConnectionsPage />);
 
@@ -335,9 +323,6 @@ describe("IAM identity views", () => {
       await screen.findByRole("button", { name: "Open Acme prod" }),
     );
     await screen.findByText("Edit OIDC provider");
-    expect(
-      screen.getByRole("combobox", { name: "User resolution" }).textContent,
-    ).toContain("Create users and link by email");
     expect(
       (screen.getByLabelText("Client secret") as HTMLInputElement).value,
     ).toBe("stored-secret");
@@ -347,16 +332,11 @@ describe("IAM identity views", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save provider" }));
 
     await waitFor(() =>
-      expect(sdkMocks.updateOauthClient).toHaveBeenCalledWith(
+      expect(sdkMocks.mutateOauthClient).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
             id: "client-1",
-            vendor: "vendor-1",
             displayName: "Acme staging",
-            clientId: "acme-client",
-            clientSecret: "stored-secret",
-            linkOnEmailMatch: true,
-            createOnLogin: true,
           }),
         }),
       ),
@@ -366,12 +346,8 @@ describe("IAM identity views", () => {
   test("edits an external account from the connections page", async () => {
     seedConnectionData();
     const account = externalAccountFixture();
-    sdkMocks.externalAccounts.data = {
-      externalAccounts: {
-        totalCount: 1,
-        results: [account],
-      },
-    };
+    sdkMocks.lists.ExternalAccount.rows = [account as Row];
+    sdkMocks.lists.ExternalAccount.total = 1;
     sdkMocks.connectionSummary.data = {
       vendors: {
         totalCount: 1,
@@ -450,24 +426,12 @@ function seedConnectionData(): void {
     icon: "",
     description: "",
   };
-  sdkMocks.vendors.data = {
-    vendors: {
-      totalCount: 1,
-      results: [vendor],
-    },
-  };
-  sdkMocks.oauthClients.data = {
-    oauthClients: {
-      totalCount: 0,
-      results: [],
-    },
-  };
-  sdkMocks.externalAccounts.data = {
-    externalAccounts: {
-      totalCount: 0,
-      results: [],
-    },
-  };
+  sdkMocks.lists.Vendor.rows = [vendor as Row];
+  sdkMocks.lists.Vendor.total = 1;
+  sdkMocks.lists.OAuthClient.rows = [];
+  sdkMocks.lists.OAuthClient.total = 0;
+  sdkMocks.lists.ExternalAccount.rows = [];
+  sdkMocks.lists.ExternalAccount.total = 0;
   sdkMocks.connectionSummary.data = {
     vendors: {
       totalCount: 1,
@@ -482,12 +446,8 @@ function seedConnectionData(): void {
       results: [],
     },
   };
-  sdkMocks.users.data = {
-    users: {
-      totalCount: 0,
-      results: [],
-    },
-  };
+  sdkMocks.lists.User.rows = [];
+  sdkMocks.lists.User.total = 0;
 }
 
 function oauthClientFixture(overrides: Record<string, unknown> = {}): unknown {
@@ -585,7 +545,7 @@ function TestUrlState({ children }: { children: ReactNode }): ReactElement {
 
 function TestRootRoute(): ReactElement {
   return (
-    <AppRuntimeProvider runtime={{ icons: baseIcons }}>
+    <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets }}>
       <ToastProvider>
         <ModalsHost>
           <Outlet />

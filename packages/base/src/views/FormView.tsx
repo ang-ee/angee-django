@@ -61,6 +61,8 @@ export interface FormViewProps {
   children?: React.ReactNode;
   /** Extra fields returned after save and selected while editing. */
   returning?: readonly string[];
+  /** Initial values merged into create forms after widget empty defaults. */
+  defaultValues?: Record<string, unknown>;
   /** Called after a successful save. */
   onSaved?: (row: Row) => void;
   /** Label used for the submit button. */
@@ -110,6 +112,7 @@ export function FormView({
   groups,
   children,
   returning,
+  defaultValues,
   onSaved,
   submitLabel,
   headerActions,
@@ -147,13 +150,17 @@ export function FormView({
       })),
     [declaredGroups, modelMetadata],
   );
+  const formFields = React.useMemo(
+    () => flattenedFormFields(resolvedFields, resolvedGroups),
+    [resolvedFields, resolvedGroups],
+  );
   const isCreate = id == null;
   const selection = React.useMemo(() => {
     const paths = new Set<string>(["id"]);
-    for (const field of resolvedFields) paths.add(field.name);
+    for (const field of formFields) addFieldSelection(paths, field);
     for (const extra of returning ?? []) paths.add(extra);
     return [...paths];
-  }, [resolvedFields, returning]);
+  }, [formFields, returning]);
 
   const { record, fetching: loading } = useResourceRecord(model, id ?? null, {
     fields: selection,
@@ -165,12 +172,12 @@ export function FormView({
     { fields: selection },
   );
   const emptyValues = React.useMemo(
-    () => emptyDraft(resolvedFields),
-    [resolvedFields],
+    () => emptyDraft(formFields, defaultValues),
+    [defaultValues, formFields],
   );
   const formReadOnly = React.useMemo(
-    () => resolvedFields.length > 0 && resolvedFields.every((field) => field.readOnly),
-    [resolvedFields],
+    () => formFields.length > 0 && formFields.every((field) => field.readOnly),
+    [formFields],
   );
   // `useForm` re-seeds an untouched form whenever `defaultValues` deep-changes.
   // Source it from this stable baseline ref (reassigned only on record seed,
@@ -182,7 +189,7 @@ export function FormView({
     defaultValues: baselineValuesRef.current,
     onSubmit: async ({ value }) => {
       setSaveError(null);
-      const data = mutationData(value, resolvedFields, {
+      const data = mutationData(value, formFields, {
         baseline: baselineValuesRef.current,
         id,
         isCreate,
@@ -190,7 +197,7 @@ export function FormView({
       try {
         const saved = await mutate({ data });
         if (saved) {
-          const savedValues = recordToValues(saved, resolvedFields);
+          const savedValues = recordToValues(saved, formFields);
           baselineValuesRef.current = savedValues;
           form.reset(savedValues);
           onSaved?.(saved);
@@ -226,18 +233,18 @@ export function FormView({
     const recordId = typeof record?.id === "string" ? record.id : null;
     if (record && recordId && seededIdRef.current !== recordId) {
       seededIdRef.current = recordId;
-      const recordValues = recordToValues(record, resolvedFields);
+      const recordValues = recordToValues(record, formFields);
       baselineValuesRef.current = recordValues;
       form.reset(recordValues);
       setSaveError(null);
     }
-  }, [emptyValues, isCreate, record, resolvedFields, form]);
+  }, [emptyValues, formFields, isCreate, record, form]);
 
-  const titleField = titleFieldFor(resolvedFields, modelMetadata);
-  const statusField = resolvedFields.find((field) => field.widget === "statusbar");
+  const titleField = titleFieldFor(formFields, modelMetadata);
+  const statusField = formFields.find((field) => field.widget === "statusbar");
   const bodyField = React.useMemo(
-    () => bodyFieldFor(resolvedFields, titleField, statusField),
-    [resolvedFields, statusField, titleField],
+    () => bodyFieldFor(formFields, titleField, statusField),
+    [formFields, statusField, titleField],
   );
   const gridFields = React.useMemo(
     () =>
@@ -738,18 +745,67 @@ function titleText(value: unknown): string {
   return text || "Untitled";
 }
 
-function emptyDraft(fields: readonly FieldDescriptor[]): Values {
+function addFieldSelection(
+  paths: Set<string>,
+  field: FieldDescriptor,
+): void {
+  if (isRelationIdField(field)) {
+    paths.add(`${field.name}.id`);
+    return;
+  }
+  paths.add(field.name);
+}
+
+function flattenedFormFields(
+  fields: readonly FieldDescriptor[],
+  groups: readonly GroupDescriptor[],
+): readonly FieldDescriptor[] {
+  const seen = new Set<string>();
+  const flattened: FieldDescriptor[] = [];
+  for (const field of fields) addFormField(flattened, seen, field);
+  for (const group of groups) {
+    for (const field of group.fields) addFormField(flattened, seen, field);
+  }
+  return flattened;
+}
+
+function addFormField(
+  fields: FieldDescriptor[],
+  seen: Set<string>,
+  field: FieldDescriptor,
+): void {
+  if (seen.has(field.name)) return;
+  seen.add(field.name);
+  fields.push(field);
+}
+
+function emptyDraft(
+  fields: readonly FieldDescriptor[],
+  defaultValues?: Record<string, unknown>,
+): Values {
   const draft: Values = {};
-  for (const field of fields) draft[field.name] = emptyValue(field);
+  for (const field of fields) {
+    draft[field.name] = Object.hasOwn(defaultValues ?? {}, field.name)
+      ? defaultValues?.[field.name]
+      : emptyValue(field);
+  }
   return draft;
 }
 
 function recordToValues(record: Row, fields: readonly FieldDescriptor[]): Values {
   const values: Values = {};
   for (const field of fields) {
-    values[field.name] = record[field.name] ?? emptyValue(field);
+    values[field.name] = recordFieldValue(record, field) ?? emptyValue(field);
   }
   return values;
+}
+
+function recordFieldValue(record: Row, field: FieldDescriptor): unknown {
+  const value = record[field.name];
+  if (!isRelationIdField(field)) return value;
+  if (typeof value === "string") return value;
+  if (isRecord(value) && typeof value.id === "string") return value.id;
+  return value;
 }
 
 function mutationData(
@@ -791,6 +847,7 @@ function hasOptionValue(field: FieldDescriptor): boolean {
   return Boolean(
     field.options &&
       (field.widget === "select" ||
+        field.widget === "many2one" ||
         field.widget === "statusbar" ||
         field.kind === "select" ||
         field.kind === "selection"),
@@ -813,6 +870,14 @@ function valuesEqual(left: unknown, right: unknown): boolean {
 function widgetId(field: FieldDescriptor): string {
   if (field.widget) return field.widget;
   return field.kind ?? "text";
+}
+
+function isRelationIdField(field: FieldDescriptor): boolean {
+  return widgetId(field) === "many2one";
+}
+
+function isRecord(value: unknown): value is Row {
+  return Boolean(value) && typeof value === "object";
 }
 
 function fieldAriaLabel(field: FieldDescriptor): string {

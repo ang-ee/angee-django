@@ -1,79 +1,68 @@
-import { useMemo, type ReactElement } from "react";
+import type { ReactElement } from "react";
 
 import {
-  Badge,
   RowsListView,
   type ListColumn,
 } from "@angee/base";
-import { useAuthoredQuery, useRegisterModelRefetch } from "@angee/sdk";
-
 import {
-  IAM_USERS_QUERY,
-  type IAMUser,
-  type IAMUsersData,
-  type IAMUsersVariables,
-} from "../documents";
+  useResourceList,
+  type Row,
+} from "@angee/sdk";
 
 const USER_LIMIT = 500;
+const USER_FIELDS = [
+  "username",
+  "email",
+  "fullName",
+  "isStaff",
+  "isActive",
+] as const;
 
-const userColumns: readonly ListColumn<IAMUser>[] = [
-  {
-    field: "username",
-    header: "Username",
-    render: (row) => (
-      <span className="font-medium text-fg">{row.username}</span>
-    ),
-  },
+interface UserRow extends Row {
+  id: string;
+  username: string;
+  email: string;
+  fullName: string;
+  isStaff: boolean;
+  isActive: boolean;
+}
+
+const userColumns: readonly ListColumn<UserRow>[] = [
+  { field: "username", header: "Username" },
   { field: "email", header: "Email" },
-  {
-    field: "firstName",
-    header: "Name",
-    render: (row) => {
-      const name = [row.firstName, row.lastName].filter(Boolean).join(" ");
-      return name || <span className="text-fg-muted">-</span>;
-    },
-  },
+  { field: "fullName", header: "Name" },
   {
     field: "isStaff",
     header: "Staff",
-    render: (row) => (
-      <Badge variant={row.isStaff ? "info" : "default"}>
-        {row.isStaff ? "Staff" : "Member"}
-      </Badge>
-    ),
+    widget: "booleanBadge",
+    options: [
+      { value: "true", label: "Staff" },
+      { value: "false", label: "Member" },
+    ],
   },
   {
     field: "isActive",
     header: "Active",
-    render: (row) => (
-      <Badge variant={row.isActive ? "success" : "danger"}>
-        {row.isActive ? "Active" : "Inactive"}
-      </Badge>
-    ),
+    widget: "booleanBadge",
+    options: [
+      { value: "true", label: "Active" },
+      { value: "false", label: "Inactive" },
+    ],
   },
 ];
 
 export function UsersPage(): ReactElement {
-  const variables = useMemo<IAMUsersVariables>(
-    () => ({ pagination: { offset: 0, limit: USER_LIMIT } }),
-    [],
-  );
-  const query = useAuthoredQuery<IAMUsersData, IAMUsersVariables>(
-    IAM_USERS_QUERY,
-    variables,
-  );
-  useRegisterModelRefetch("iam.User", query.refetch, true);
-  const rows = useMemo(
-    () => [...(query.data?.users.results ?? [])],
-    [query.data],
-  );
+  const users = useResourceList("User", {
+    fields: USER_FIELDS,
+    pageSize: USER_LIMIT,
+  });
 
   return (
     <RowsListView
-      rows={rows}
+      rows={users.rows as unknown as readonly UserRow[]}
       columns={userColumns}
-      fetching={query.fetching}
-      error={query.error}
+      fetching={users.fetching}
+      error={users.error}
       pageSize={50}
     />
   );

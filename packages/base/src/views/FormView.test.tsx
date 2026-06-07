@@ -199,6 +199,98 @@ describe("FormView", () => {
     });
   });
 
+  test("merges default values into create payloads", async () => {
+    renderWithProviders(
+      <FormView
+        model="notes.Note"
+        fields={fields}
+        defaultValues={{ status: "ACTIVE" }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: { title: "", status: "ACTIVE", reminderAt: null },
+    });
+  });
+
+  test("submits fields declared through the groups prop", async () => {
+    renderWithProviders(
+      <FormView
+        model="notes.Note"
+        groups={[
+          {
+            label: "Details",
+            actions: [],
+            fields: [{ name: "title", label: "Title", title: true }],
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Title"), {
+      target: { value: "Grouped" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: { title: "Grouped" },
+    });
+  });
+
+  test("reads many2one record ids and writes the flat relation field", async () => {
+    sdkMocks.record = {
+      id: "client-1",
+      displayName: "Acme",
+      vendor: { id: "vendor-1", displayName: "Vendor One" },
+    };
+    const relationFields = [
+      { name: "displayName", label: "Display Name", title: true },
+      {
+        name: "vendor",
+        label: "Vendor",
+        widget: "many2one",
+        options: [
+          { value: "vendor-1", label: "Vendor One" },
+          { value: "vendor-2", label: "Vendor Two" },
+        ],
+      },
+    ] satisfies readonly FormField[];
+
+    renderWithProviders(
+      <FormView
+        model="OAuthClient"
+        id="client-1"
+        fields={relationFields}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Vendor" }).textContent).toContain(
+        "Vendor One",
+      ),
+    );
+    cleanup();
+    sdkMocks.record = null;
+    sdkMocks.mutate.mockReset();
+    renderWithProviders(
+      <FormView
+        model="OAuthClient"
+        fields={relationFields}
+        defaultValues={{ vendor: "vendor-2" }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: { displayName: "", vendor: "vendor-2" },
+    });
+  });
+
   test("keeps saved values after a parent re-render with new field descriptors", async () => {
     function Harness(): ReactElement {
       const [saveVersion, setSaveVersion] = useState(0);

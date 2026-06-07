@@ -106,6 +106,12 @@ class UserType(AngeeNode):
     is_staff: auto
     is_active: auto
 
+    @strawberry_django.field
+    def full_name(self) -> str:
+        """Return the user's display name assembled by Django's auth contract."""
+
+        return str(cast(Any, self).get_full_name())
+
 
 @strawberry_django.type(User)
 class CurrentUserType(AngeeNode):
