@@ -6,7 +6,7 @@ import {
   type DialogPlacement,
   type DialogSize,
 } from "../ui/dialog";
-import { Form } from "../ui/form";
+import { FormRoot } from "../ui/form";
 import { FormActions, FormGrid } from "../ui/form-layout";
 
 export interface DialogFormProps {
@@ -37,7 +37,7 @@ export function DialogForm({
       <Dialog.Portal>
         <Dialog.Backdrop />
         <Dialog.Content placement={placement} size={size}>
-          <Form.Root layout="plain" onSubmit={onSubmit}>
+          <FormRoot layout="plain" onSubmit={onSubmit}>
             <Dialog.Header>
               <div className="flex items-start gap-3">
                 <div className="min-w-0 flex-1">
@@ -57,10 +57,9 @@ export function DialogForm({
                 <FormActions>{footer}</FormActions>
               </Dialog.Footer>
             ) : null}
-          </Form.Root>
+          </FormRoot>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
   );
 }
-

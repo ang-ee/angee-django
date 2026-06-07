@@ -32,12 +32,24 @@ import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../feedback";
 import { parseFlatSearch, stringifyFlatSearch } from "../createApp";
 import { DataPage } from "./DataPage";
+import { Form } from "./Form";
 import type { FormField } from "./FormView";
+import {
+  List,
+  type ListComponent,
+} from "./List";
 import {
   ListView,
   type ListColumn,
+  type ListViewProps,
 } from "./ListView";
 import { GroupListView } from "./GroupListView";
+import {
+  Action,
+  Column,
+  Field,
+  Group,
+} from "./page";
 import type {
   AggregateBucket,
   GroupByDimension,
@@ -356,6 +368,312 @@ describe("DataPage", () => {
     );
 
     expect(screen.queryByText("Group by")).toBeNull();
+  });
+
+  test("parses List child columns and forwards props into the list renderer", async () => {
+    const captured: { current: ListViewProps<Row> | null } = { current: null };
+    const CapturingList: ListComponent<Row> = (props) => {
+      captured.current = props;
+      return <div data-testid="captured-list" />;
+    };
+    const rowHref = (row: Row) =>
+      typeof row.id === "string" ? `/notes/${row.id}` : "/notes";
+
+    render(
+      <TestUrlState>
+        <DataPage
+          model="notes.Note"
+          formFields={formFields}
+          list={CapturingList}
+          rowHref={rowHref}
+        >
+          <List
+            createLabel="Add note"
+            emptyMessage="No matching notes."
+            filters={[{ id: "active", label: "Active", filter: {} }]}
+          >
+            <Column field="title" header="Title" />
+            <Column
+              field="wordCount"
+              header="Words"
+              align="right"
+              aggregate="sum"
+            />
+          </List>
+        </DataPage>
+      </TestUrlState>,
+    );
+
+    expect(await screen.findByTestId("captured-list")).toBeTruthy();
+    expect(captured.current?.model).toBe("notes.Note");
+    expect(captured.current?.columns).toEqual([
+      { field: "title", header: "Title" },
+      {
+        field: "wordCount",
+        header: "Words",
+        align: "right",
+        aggregate: "sum",
+      },
+    ]);
+    expect(captured.current?.filters).toEqual([
+      { id: "active", label: "Active", filter: {} },
+    ]);
+    expect(captured.current?.createLabel).toBe("Add note");
+    expect(captured.current?.emptyMessage).toBe("No matching notes.");
+    expect(captured.current?.rowHref).toBe(rowHref);
+  });
+
+  test("parses Form child fields and groups into DataPage form descriptors", async () => {
+    render(
+      <TestUrlState>
+        <DataPage
+          model="notes.Note"
+          columns={columns}
+          recordId="note-1"
+        >
+          <Form headerActions={<span>Form header action</span>}>
+            <Field name="title" label="Title" title />
+            <Group label="Details" columns={2}>
+              <Field name="priority" label="Priority" readOnly />
+            </Group>
+          </Form>
+        </DataPage>
+      </TestUrlState>,
+    );
+
+    await waitFor(() =>
+      expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe(
+        "First",
+      ),
+    );
+    expect(screen.getByText("Details")).toBeTruthy();
+    expect(screen.getByText("High")).toBeTruthy();
+    expect(screen.getByText("Form header action")).toBeTruthy();
+  });
+
+  test.each([
+    {
+      name: "formFields plus Form child",
+      element: (
+        <DataPage
+          model="notes.Note"
+          columns={columns}
+          formFields={formFields}
+        >
+          <Form>
+            <Field name="title" />
+          </Form>
+        </DataPage>
+      ),
+      message: /DataPage and its Form child both declare "formFields"/,
+    },
+    {
+      name: "formGroups plus Form child",
+      element: (
+        <DataPage
+          model="notes.Note"
+          columns={columns}
+          formGroups={[]}
+        >
+          <Form>
+            <Field name="title" />
+          </Form>
+        </DataPage>
+      ),
+      message: /DataPage and its Form child both declare "formGroups"/,
+    },
+    {
+      name: "columns plus List child",
+      element: (
+        <DataPage
+          model="notes.Note"
+          columns={columns}
+          formFields={formFields}
+        >
+          <List>
+            <Column field="title" />
+          </List>
+        </DataPage>
+      ),
+      message: /DataPage and its List child both declare "columns"/,
+    },
+    {
+      name: "duplicate List children",
+      element: (
+        <DataPage model="notes.Note" formFields={formFields}>
+          <List>
+            <Column field="title" />
+          </List>
+          <List>
+            <Column field="status" />
+          </List>
+        </DataPage>
+      ),
+      message: /only one List child/,
+    },
+    {
+      name: "duplicate Form children",
+      element: (
+        <DataPage model="notes.Note" columns={columns}>
+          <Form>
+            <Field name="title" />
+          </Form>
+          <Form>
+            <Field name="status" />
+          </Form>
+        </DataPage>
+      ),
+      message: /only one Form child/,
+    },
+    {
+      name: "List model mismatch",
+      element: (
+        <DataPage model="notes.Note" formFields={formFields}>
+          <List model="tasks.Task">
+            <Column field="title" />
+          </List>
+        </DataPage>
+      ),
+      message: /does not match DataPage model/,
+    },
+    {
+      name: "Form model mismatch",
+      element: (
+        <DataPage model="notes.Note" columns={columns}>
+          <Form model="tasks.Task">
+            <Field name="title" />
+          </Form>
+        </DataPage>
+      ),
+      message: /does not match DataPage model/,
+    },
+    {
+      name: "unknown element child",
+      element: (
+        <DataPage
+          model="notes.Note"
+          columns={columns}
+          formFields={formFields}
+        >
+          <Column field="title" />
+        </DataPage>
+      ),
+      message: /wrapper components hide the marker/,
+    },
+    {
+      name: "unknown text child",
+      element: (
+        <DataPage
+          model="notes.Note"
+          columns={columns}
+          formFields={formFields}
+        >
+          text
+        </DataPage>
+      ),
+      message: /DataPage child text "text"/,
+    },
+    {
+      name: "empty nested List",
+      element: (
+        <DataPage model="notes.Note" formFields={formFields}>
+          <List />
+        </DataPage>
+      ),
+      message: /requires at least one Column child/,
+    },
+    {
+      name: "forwarded prop overlap",
+      element: (
+        <DataPage
+          model="notes.Note"
+          formFields={formFields}
+          order={{ title: "ASC" }}
+        >
+          <List order={{ title: "DESC" }}>
+            <Column field="title" />
+          </List>
+        </DataPage>
+      ),
+      message: /DataPage and its List child both declare "order"/,
+    },
+    {
+      name: "DataPage-owned List wiring",
+      element: (
+        <DataPage model="notes.Note" formFields={formFields}>
+          <List onCreate={() => undefined}>
+            <Column field="title" />
+          </List>
+        </DataPage>
+      ),
+      message: /DataPage owns List child "onCreate" wiring/,
+    },
+    {
+      name: "DataPage-owned Form wiring",
+      element: (
+        <DataPage model="notes.Note" columns={columns}>
+          <Form id="note-1">
+            <Field name="title" />
+          </Form>
+        </DataPage>
+      ),
+      message: /DataPage owns Form child "id" wiring/,
+    },
+    {
+      name: "top-level Form action",
+      element: (
+        <DataPage model="notes.Note" columns={columns}>
+          <Form>
+            <Action id="archive" label="Archive" />
+          </Form>
+        </DataPage>
+      ),
+      message: /Form actions are not rendered yet/,
+    },
+  ])("rejects invalid DataPage declarations: $name", ({ element, message }) => {
+    expect(() => render(element)).toThrow(message);
+  });
+
+  test.each([
+    {
+      name: "List without model",
+      element: (
+        <List>
+          <Column field="title" />
+        </List>
+      ),
+      message: /List requires a model/,
+    },
+    {
+      name: "Form without model",
+      element: (
+        <Form>
+          <Field name="title" />
+        </Form>
+      ),
+      message: /Form requires a model/,
+    },
+    {
+      name: "standalone empty List",
+      element: <List model="notes.Note" />,
+      message: /requires at least one Column child/,
+    },
+  ])("rejects invalid standalone view declarations: $name", ({ element, message }) => {
+    expect(() => render(element)).toThrow(message);
+  });
+
+  test("renders standalone List from Column children", async () => {
+    render(
+      <TestUrlState>
+        <List model="notes.Note">
+          <Column field="title" header="Title" />
+          <Column field="status" header="Status" />
+        </List>
+      </TestUrlState>,
+    );
+
+    expect(await screen.findByText("First")).toBeTruthy();
+    expect(screen.getByText("Status")).toBeTruthy();
   });
 
   test("renders record navigation and reuses the view switcher in record chrome", async () => {

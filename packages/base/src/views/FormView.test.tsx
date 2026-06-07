@@ -21,7 +21,13 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ModalsHost } from "../feedback";
 import { defaultWidgets } from "../widgets";
+import { Form } from "./Form";
 import { FormView, type FormField } from "./FormView";
+import {
+  Action,
+  Field,
+  Group,
+} from "./page";
 
 const sdkMocks = vi.hoisted(() => ({
   record: null as Row | null,
@@ -92,6 +98,60 @@ describe("FormView", () => {
       ...sdkMocks.record,
       ...data,
     }));
+  });
+
+  test("throws when fields prop and field children are both declared", () => {
+    expect(() =>
+      renderWithProviders(
+        <FormView model="notes.Note" id="note-1" fields={fields}>
+          <Field name="title" />
+        </FormView>,
+      ),
+    ).toThrow(/cannot mix the fields\/groups props with element children/);
+  });
+
+  test("throws when groups prop and Group children are both declared", () => {
+    expect(() =>
+      renderWithProviders(
+        <FormView
+          model="notes.Note"
+          id="note-1"
+          groups={[{ label: "Details", fields: [], actions: [] }]}
+        >
+          <Group label="Details">
+            <Field name="title" />
+          </Group>
+        </FormView>,
+      ),
+    ).toThrow(/cannot mix the fields\/groups props with element children/);
+  });
+
+  test("throws when top-level actions are declared", () => {
+    expect(() =>
+      renderWithProviders(
+        <FormView model="notes.Note" id="note-1">
+          <Action id="archive" label="Archive" />
+        </FormView>,
+      ),
+    ).toThrow(/Form actions are not rendered yet/);
+  });
+
+  test("renders standalone Form from Field and Group children", async () => {
+    renderWithProviders(
+      <Form model="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+        <Group label="Details">
+          <Field name="wordCount" label="Word Count" readOnly />
+        </Group>
+      </Form>,
+    );
+
+    const title = await screen.findByLabelText("Title");
+    await waitFor(() =>
+      expect((title as HTMLInputElement).value).toBe("First"),
+    );
+    expect(screen.getByText("Details")).toBeTruthy();
+    expect(screen.getByText("3")).toBeTruthy();
   });
 
   test("submits only changed writable fields for an update", async () => {

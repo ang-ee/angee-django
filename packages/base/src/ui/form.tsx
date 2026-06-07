@@ -54,7 +54,7 @@ export type FormRootProps<
     validationMode?: FormValidationMode;
   };
 
-export const FormRoot = React.forwardRef<HTMLFormElement, FormRootProps>(
+const FormRootBase = React.forwardRef<HTMLFormElement, FormRootProps>(
   function FormRoot(
     {
       className,
@@ -76,7 +76,7 @@ export const FormRoot = React.forwardRef<HTMLFormElement, FormRootProps>(
     );
   },
 );
-FormRoot.displayName = "FormRoot";
+FormRootBase.displayName = "FormRoot";
 
 export type FormFieldProps = Omit<FieldRootProps, "children"> & {
   children: React.ReactNode;
@@ -136,8 +136,7 @@ const FormField = React.forwardRef<HTMLDivElement, FormFieldProps>(
 );
 FormField.displayName = "FormField";
 
-export const Form = Object.assign(FormRoot, {
-  Root: FormRoot,
+export const FormRoot = Object.assign(FormRootBase, {
   Field: FormField,
   FieldRoot,
   Label: FieldLabel,

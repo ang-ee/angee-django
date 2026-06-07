@@ -1,12 +1,17 @@
 import {
-  Children,
   Fragment,
   isValidElement,
   type ReactElement,
   type ReactNode,
 } from "react";
 
-export type PageElementKind = "column" | "field" | "group" | "action";
+export type PageElementKind =
+  | "column"
+  | "field"
+  | "group"
+  | "action"
+  | "list"
+  | "form";
 
 export const PAGE_ELEMENT_SLOT = Symbol.for("@angee/base.page.element");
 
@@ -20,13 +25,7 @@ export type PageElement<Props> = ReactElement<Props> & {
 
 export function pageChildren(children: ReactNode): ReactNode[] {
   const nodes: ReactNode[] = [];
-  for (const child of Children.toArray(children)) {
-    if (isFragmentElement(child)) {
-      nodes.push(...pageChildren(fragmentChildren(child)));
-    } else {
-      nodes.push(child);
-    }
-  }
+  appendPageChildren(nodes, children);
   return nodes;
 }
 
@@ -40,12 +39,30 @@ export function pageElementProps<Props>(
   return child.props as Props;
 }
 
-function pageElementKind(type: unknown): PageElementKind | null {
+export function pageElementKind(type: unknown): PageElementKind | null {
   if (!type || (typeof type !== "function" && typeof type !== "object")) {
     return null;
   }
   const marker = (type as PageElementType)[PAGE_ELEMENT_SLOT];
   return marker ?? null;
+}
+
+export function pageChildrenCacheKey(children: ReactNode): object | null {
+  if (isValidElement(children)) return children.props as object;
+  return Array.isArray(children) ? children : null;
+}
+
+function appendPageChildren(nodes: ReactNode[], child: ReactNode): void {
+  if (child == null || typeof child === "boolean") return;
+  if (Array.isArray(child)) {
+    for (const item of child) appendPageChildren(nodes, item);
+    return;
+  }
+  if (isFragmentElement(child)) {
+    appendPageChildren(nodes, fragmentChildren(child));
+    return;
+  }
+  nodes.push(child);
 }
 
 function isFragmentElement(child: ReactNode): child is ReactElement {

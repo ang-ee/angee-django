@@ -1,9 +1,9 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Button, Form, NumberField, RadioGroup } from "@angee/base";
+import { Button, FormRoot, NumberField, RadioGroup } from "@angee/base";
 
 const meta = {
   title: "Primitives/Form",
-  component: Form,
+  component: FormRoot,
   parameters: {
     layout: "centered",
   },
@@ -26,7 +26,7 @@ const meta = {
     layout: "stack",
     validationMode: "onSubmit",
   },
-} satisfies Meta<typeof Form>;
+} satisfies Meta<typeof FormRoot>;
 
 export default meta;
 
@@ -34,8 +34,8 @@ type Story = StoryObj<typeof meta>;
 
 export const Playground: Story = {
   render: (args) => (
-    <Form {...args} className="w-[420px] p-4">
-      <Form.Field
+    <FormRoot {...args} className="w-[420px] p-4">
+      <FormRoot.Field
         name="title"
         label="Title"
         required
@@ -45,15 +45,15 @@ export const Playground: Story = {
             : "Enter a title"
         }
       >
-        <Form.Control required placeholder="Q3 operating review" />
-      </Form.Field>
-      <Form.Field
+        <FormRoot.Control required placeholder="Q3 operating review" />
+      </FormRoot.Field>
+      <FormRoot.Field
         name="limit"
         label="Seat limit"
         description="Use a value from 1 to 250."
       >
         <NumberField min={1} max={250} defaultValue={25} />
-      </Form.Field>
+      </FormRoot.Field>
       <div className="flex justify-end gap-2">
         <Button type="reset" variant="ghost" size="sm">
           Reset
@@ -62,47 +62,47 @@ export const Playground: Story = {
           Save
         </Button>
       </div>
-    </Form>
+    </FormRoot>
   ),
 };
 
 export const ExternalErrors: Story = {
   render: () => (
-    <Form
+    <FormRoot
       className="w-[420px] p-4"
       errors={{
         title: "A project with this title already exists.",
         cadence: "Choose a notification cadence.",
       }}
     >
-      <Form.Field name="title" label="Title">
-        <Form.Control defaultValue="Launch plan" />
-      </Form.Field>
-      <Form.Field name="cadence" label="Cadence">
+      <FormRoot.Field name="title" label="Title">
+        <FormRoot.Control defaultValue="Launch plan" />
+      </FormRoot.Field>
+      <FormRoot.Field name="cadence" label="Cadence">
         <RadioGroup name="cadence">
           <RadioGroup.Item value="daily" label="Daily" />
           <RadioGroup.Item value="weekly" label="Weekly" />
           <RadioGroup.Item value="paused" label="Paused" />
         </RadioGroup>
-      </Form.Field>
+      </FormRoot.Field>
       <div className="flex justify-end">
         <Button type="submit" variant="primary" size="sm">
           Submit
         </Button>
       </div>
-    </Form>
+    </FormRoot>
   ),
 };
 
 export const Panel: Story = {
   render: () => (
-    <Form layout="panel" density="compact" className="w-[420px] p-4">
-      <Form.Field name="email" label="Email" description="Used for alerts.">
-        <Form.Control type="email" defaultValue="sofia@example.com" required />
-      </Form.Field>
-      <Form.Field name="threshold" label="Alert threshold">
+    <FormRoot layout="panel" density="compact" className="w-[420px] p-4">
+      <FormRoot.Field name="email" label="Email" description="Used for alerts.">
+        <FormRoot.Control type="email" defaultValue="sofia@example.com" required />
+      </FormRoot.Field>
+      <FormRoot.Field name="threshold" label="Alert threshold">
         <NumberField defaultValue={80} min={0} max={100} />
-      </Form.Field>
-    </Form>
+      </FormRoot.Field>
+    </FormRoot>
   ),
 };

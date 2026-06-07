@@ -378,7 +378,8 @@ the owning framework level inside this slice.
 5. Update the resume-state line below; commit each green slice on
    `ui-refactor-dry` (terse message, no AI attribution).
 
-**Resume state:** D1 shipped to working tree (incl. review fixes; uncommitted).
-e2e baseline repaired (fresh DB + lorem seed; spec reconciliation committed as
-33f3c00). NEXT: D1b (router pivot rework) — then commit D1+D1b together as the
-chrome slice, then D2.
+**Resume state:** chrome slice (D1+D1b+review fixes) COMMITTED as 050e087 —
+fully gated (typecheck, 245 vitest, both reviewers folded incl. 21-item round,
+69/69 e2e). e2e baseline repair committed as 33f3c00. NEXT: D2 — reusable
+`List`/`Form` view components + DataPage DSL (contract updated 2026-06-07 with
+the reusability requirement).

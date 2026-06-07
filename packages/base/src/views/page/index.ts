@@ -4,7 +4,11 @@ import type { ActionDescriptor, ActionProps } from "./Action";
 import type { ColumnDescriptor, ColumnProps } from "./Column";
 import type { FieldDescriptor, FieldProps } from "./Field";
 import type { GroupDescriptor, GroupProps } from "./Group";
-import { pageChildren, pageElementProps } from "./types";
+import {
+  pageChildren,
+  pageChildrenCacheKey,
+  pageElementProps,
+} from "./types";
 
 export { Action, ACTION_SLOT, type ActionConfirm } from "./Action";
 export {
@@ -17,6 +21,8 @@ export { Field, FIELD_SLOT, type PageFieldKind } from "./Field";
 export { Group, GROUP_SLOT } from "./Group";
 export {
   PAGE_ELEMENT_SLOT,
+  pageChildren,
+  pageElementProps,
   type PageElement,
   type PageElementKind,
 } from "./types";
@@ -34,50 +40,80 @@ export type {
 export function parsePageColumns<
   TRow extends object = Record<string, unknown>,
 >(children: ReactNode): ColumnDescriptor<TRow>[] {
-  const columns = pageChildren(children).flatMap((child) => {
-    const props = pageElementProps<ColumnProps<TRow>>(child, "column");
-    return props ? [columnDescriptor(props)] : [];
-  });
-  return assertUniqueDescriptor(
-    columns,
-    (column) => column.field,
-    "column field",
+  return cachedChildDescriptors(
+    columnListCache,
+    children,
+    () => {
+      const columns = pageChildren(children).flatMap((child) => {
+        const props = pageElementProps<ColumnProps<TRow>>(child, "column");
+        return props ? [columnDescriptor(props)] : [];
+      });
+      return assertUniqueDescriptor(
+        columns,
+        (column) => column.field,
+        "column field",
+      );
+    },
   );
 }
 
 export function parsePageFields(children: ReactNode): FieldDescriptor[] {
-  const fields: FieldDescriptor[] = [];
-  for (const child of pageChildren(children)) {
-    const field = pageElementProps<FieldProps>(child, "field");
-    if (field) {
-      fields.push(fieldDescriptor(field));
-      continue;
+  return cachedChildDescriptors(fieldListCache, children, () => {
+    const fields: FieldDescriptor[] = [];
+    for (const child of pageChildren(children)) {
+      const field = pageElementProps<FieldProps>(child, "field");
+      if (field) {
+        fields.push(fieldDescriptor(field));
+        continue;
+      }
+      const group = pageElementProps<GroupProps>(child, "group");
+      if (group) fields.push(...parsePageFields(group.children));
     }
-    const group = pageElementProps<GroupProps>(child, "group");
-    if (group) fields.push(...parsePageFields(group.children));
-  }
-  return assertUniqueDescriptor(fields, (field) => field.name, "field name");
+    return assertUniqueDescriptor(fields, (field) => field.name, "field name");
+  });
 }
 
 export function parsePageGroups(children: ReactNode): GroupDescriptor[] {
-  return pageChildren(children).flatMap((child) => {
-    const props = pageElementProps<GroupProps>(child, "group");
-    return props ? [groupDescriptor(props)] : [];
-  });
+  return cachedChildDescriptors(groupListCache, children, () =>
+    pageChildren(children).flatMap((child) => {
+      const props = pageElementProps<GroupProps>(child, "group");
+      return props ? [groupDescriptor(props)] : [];
+    }),
+  );
 }
 
 export function parsePageActions(children: ReactNode): ActionDescriptor[] {
-  const actions = pageChildren(children).flatMap((child) => {
-    const props = pageElementProps<ActionProps>(child, "action");
-    return props ? [actionDescriptor(props)] : [];
+  return cachedChildDescriptors(actionListCache, children, () => {
+    const actions = pageChildren(children).flatMap((child) => {
+      const props = pageElementProps<ActionProps>(child, "action");
+      return props ? [actionDescriptor(props)] : [];
+    });
+    return assertUniqueDescriptor(actions, (action) => action.id, "action id");
   });
-  return assertUniqueDescriptor(actions, (action) => action.id, "action id");
+}
+
+export function requirePageModel(
+  component: string,
+  model: string | undefined,
+): string {
+  if (model) return model;
+  throw new Error(`${component} requires a model when rendered standalone.`);
+}
+
+export function requirePageColumns<
+  TRow extends object = Record<string, unknown>,
+>(
+  component: string,
+  columns: readonly ColumnDescriptor<TRow>[],
+): readonly ColumnDescriptor<TRow>[] {
+  if (columns.length > 0) return columns;
+  throw new Error(`${component} requires at least one Column child.`);
 }
 
 function columnDescriptor<
   TRow extends object = Record<string, unknown>,
 >(props: ColumnProps<TRow>): ColumnDescriptor<TRow> {
-  return {
+  return cachedDescriptor(columnDescriptorCache, props, () => ({
     field: props.field,
     ...(props.header !== undefined ? { header: props.header } : {}),
     ...(props.widget !== undefined ? { widget: props.widget } : {}),
@@ -86,11 +122,11 @@ function columnDescriptor<
     ...(props.align !== undefined ? { align: props.align } : {}),
     ...(props.render !== undefined ? { render: props.render } : {}),
     ...(props.tone !== undefined ? { tone: props.tone } : {}),
-  };
+  }));
 }
 
 function fieldDescriptor(props: FieldProps): FieldDescriptor {
-  return {
+  return cachedDescriptor(fieldDescriptorCache, props, () => ({
     name: props.name,
     ...(props.label !== undefined ? { label: props.label } : {}),
     ...(props.widget !== undefined ? { widget: props.widget } : {}),
@@ -101,35 +137,37 @@ function fieldDescriptor(props: FieldProps): FieldDescriptor {
     ...(props.options !== undefined ? { options: props.options } : {}),
     ...(props.placeholder !== undefined ? { placeholder: props.placeholder } : {}),
     ...(props.description !== undefined ? { description: props.description } : {}),
-  };
+  }));
 }
 
 function actionDescriptor(props: ActionProps): ActionDescriptor {
-  return {
+  return cachedDescriptor(actionDescriptorCache, props, () => ({
     id: props.id,
     label: props.label,
     ...(props.disabled !== undefined ? { disabled: props.disabled } : {}),
     ...(props.danger !== undefined ? { danger: props.danger } : {}),
     ...(props.confirm !== undefined ? { confirm: props.confirm } : {}),
     ...(props.onClick !== undefined ? { onClick: props.onClick } : {}),
-  };
+  }));
 }
 
 function groupDescriptor(props: GroupProps): GroupDescriptor {
-  return {
+  return cachedDescriptor(groupDescriptorCache, props, () => ({
     ...(props.label !== undefined ? { label: props.label } : {}),
     ...(props.columns !== undefined ? { columns: props.columns } : {}),
     fields: parseDirectPageFields(props.children),
     actions: parsePageActions(props.children),
-  };
+  }));
 }
 
 function parseDirectPageFields(children: ReactNode): FieldDescriptor[] {
-  const fields = pageChildren(children).flatMap((child) => {
-    const props = pageElementProps<FieldProps>(child, "field");
-    return props ? [fieldDescriptor(props)] : [];
+  return cachedChildDescriptors(directFieldListCache, children, () => {
+    const fields = pageChildren(children).flatMap((child) => {
+      const props = pageElementProps<FieldProps>(child, "field");
+      return props ? [fieldDescriptor(props)] : [];
+    });
+    return assertUniqueDescriptor(fields, (field) => field.name, "field name");
   });
-  return assertUniqueDescriptor(fields, (field) => field.name, "field name");
 }
 
 function assertUniqueDescriptor<TDescriptor>(
@@ -147,3 +185,39 @@ function assertUniqueDescriptor<TDescriptor>(
   }
   return descriptors;
 }
+
+function cachedDescriptor<TProps extends object, TDescriptor>(
+  cache: WeakMap<object, unknown>,
+  props: TProps,
+  build: () => TDescriptor,
+): TDescriptor {
+  const cached = cache.get(props) as TDescriptor | undefined;
+  if (cached) return cached;
+  const descriptor = build();
+  cache.set(props, descriptor);
+  return descriptor;
+}
+
+function cachedChildDescriptors<TDescriptor>(
+  cache: WeakMap<object, unknown>,
+  children: ReactNode,
+  parse: () => TDescriptor[],
+): TDescriptor[] {
+  const key = pageChildrenCacheKey(children);
+  if (!key) return parse();
+  const cached = cache.get(key) as TDescriptor[] | undefined;
+  if (cached) return cached;
+  const descriptors = parse();
+  cache.set(key, descriptors);
+  return descriptors;
+}
+
+const columnDescriptorCache = new WeakMap<object, unknown>();
+const fieldDescriptorCache = new WeakMap<object, unknown>();
+const groupDescriptorCache = new WeakMap<object, unknown>();
+const actionDescriptorCache = new WeakMap<object, unknown>();
+const columnListCache = new WeakMap<object, unknown>();
+const fieldListCache = new WeakMap<object, unknown>();
+const groupListCache = new WeakMap<object, unknown>();
+const actionListCache = new WeakMap<object, unknown>();
+const directFieldListCache = new WeakMap<object, unknown>();

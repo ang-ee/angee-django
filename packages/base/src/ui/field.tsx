@@ -84,7 +84,7 @@ export type FieldRootProps = Omit<BaseFieldRootProps, "className"> &
     className?: string;
   };
 
-export const FieldRoot = React.forwardRef<HTMLDivElement, FieldRootProps>(
+const FieldRootBase = React.forwardRef<HTMLDivElement, FieldRootProps>(
   function FieldRoot(
     { className, invalid = false, layout = "stack", size = "md", ...props },
     ref,
@@ -101,7 +101,7 @@ export const FieldRoot = React.forwardRef<HTMLDivElement, FieldRootProps>(
     );
   },
 );
-FieldRoot.displayName = "FieldRoot";
+FieldRootBase.displayName = "FieldRoot";
 
 export type FieldLabelProps = Omit<BaseFieldLabelProps, "className"> &
   Pick<FieldRecipeProps, "size"> & {
@@ -258,8 +258,7 @@ export const FieldItem = React.forwardRef<HTMLDivElement, FieldItemProps>(
 );
 FieldItem.displayName = "FieldItem";
 
-export const Field = Object.assign(FieldRoot, {
-  Root: FieldRoot,
+export const FieldRoot = Object.assign(FieldRootBase, {
   Label: FieldLabel,
   Description: FieldDescription,
   Error: FieldError,

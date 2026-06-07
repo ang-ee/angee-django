@@ -10,7 +10,7 @@ import {
   baseIcons,
   defaultWidgets,
   type FormField,
-  type PageGroupDescriptor,
+  type GroupDescriptor,
 } from "@angee/base";
 
 const statusOptions = [
@@ -131,7 +131,7 @@ const editableGroups = [
     ],
     actions: [],
   },
-] satisfies readonly PageGroupDescriptor[];
+] satisfies readonly GroupDescriptor[];
 
 const readOnlyFields = editableFields.map((field) => ({
   ...field,
@@ -145,7 +145,7 @@ const readOnlyFieldByName = new Map(
 const readOnlyGroups = editableGroups.map((group) => ({
   ...group,
   fields: group.fields.map(readOnlyFieldFor),
-})) satisfies readonly PageGroupDescriptor[];
+})) satisfies readonly GroupDescriptor[];
 
 function readOnlyFieldFor(field: FormField): FormField {
   const readOnlyField = readOnlyFieldByName.get(field.name);
@@ -206,7 +206,7 @@ function FormViewFixture({
   groups,
 }: {
   fields: readonly FormField[];
-  groups: readonly PageGroupDescriptor[];
+  groups: readonly GroupDescriptor[];
 }) {
   return (
     <ModalsHost>

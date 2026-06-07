@@ -1,16 +1,18 @@
 import * as React from "react";
 import {
   DataPage,
+  Form,
   Glyph,
   GroupListView,
+  List,
+  Column,
+  Field,
+  Group,
   Spinner,
   type DataToolbarFilterField,
   type DataToolbarFilterOption,
   type DataToolbarGroupOption,
   type DataViewDefaultGroups,
-  type FormField,
-  type ListColumn,
-  type PageGroupDescriptor,
   type RecordSmartButtonDescriptor,
   useChatterContent,
 } from "@angee/base";
@@ -51,14 +53,6 @@ type NoteRevisionsVariables = Record<string, unknown> & {
 interface NoteRouteParams {
   id?: string;
 }
-
-const columns: readonly ListColumn[] = [
-  { field: "title", header: "Title" },
-  { field: "tags", header: "Tags", sortable: false },
-  { field: "status", header: "Status", tone: NOTE_STATUS_TONES },
-  { field: "wordCount", header: "Word Count", align: "right", aggregate: "sum" },
-  { field: "updatedAt", header: "Updated At" },
-];
 
 const NOTE_FILTERS: readonly DataToolbarFilterOption[] = NOTE_STATUS_OPTIONS.map(
   (option) => ({
@@ -112,48 +106,6 @@ const NOTE_DEFAULT_GROUPS = {
   board: { field: "status" },
 } satisfies DataViewDefaultGroups;
 
-const titleField = {
-  name: "title",
-  label: "Title",
-  widget: "text",
-  title: true,
-} satisfies FormField;
-const statusField = {
-  name: "status",
-  label: "Status",
-  widget: "statusbar",
-  options: NOTE_STATUS_OPTIONS,
-} satisfies FormField;
-const tagsField = {
-  name: "tags",
-  label: "Tags",
-  widget: "tagInput",
-} satisfies FormField;
-const reminderField = {
-  name: "reminderAt",
-  label: "Reminder",
-  widget: "datetime",
-} satisfies FormField;
-const ownerField = {
-  name: "createdByLabel",
-  label: "Owner",
-  widget: "userRef",
-  readOnly: true,
-} satisfies FormField;
-const bodyField = {
-  name: "body",
-  label: "Body",
-  widget: "markdown.editor",
-} satisfies FormField;
-const formFields: readonly FormField[] = [
-  titleField,
-  statusField,
-  tagsField,
-  reminderField,
-  ownerField,
-  bodyField,
-];
-
 // Created/updated timestamps + word count feed the record subtitle (id · created
 // · updated · words); they are queried but kept out of the field grid.
 const RECORD_SUBTITLE_FIELDS: readonly string[] = [
@@ -162,26 +114,61 @@ const RECORD_SUBTITLE_FIELDS: readonly string[] = [
   "wordCount",
 ];
 
+const noteList = (
+  <List
+    model={MODEL}
+    filters={NOTE_FILTERS}
+    filterFields={NOTE_FILTER_FIELDS}
+    groupOptions={NOTE_GROUPS}
+    list={GroupListView}
+    defaultGroups={NOTE_DEFAULT_GROUPS}
+    pageSize={50}
+    order={{ updatedAt: "DESC" }}
+  >
+    <Column field="title" header="Title" />
+    <Column field="tags" header="Tags" sortable={false} />
+    <Column field="status" header="Status" tone={NOTE_STATUS_TONES} />
+    <Column
+      field="wordCount"
+      header="Word Count"
+      align="right"
+      aggregate="sum"
+    />
+    <Column field="updatedAt" header="Updated At" />
+  </List>
+);
+
+const noteForm = (
+  <Form model={MODEL} returning={RECORD_SUBTITLE_FIELDS}>
+    <Field name="title" label="Title" widget="text" title />
+    <Field
+      name="status"
+      label="Status"
+      widget="statusbar"
+      options={NOTE_STATUS_OPTIONS}
+    />
+    <Group label="Details" columns={2}>
+      <Field
+        name="createdByLabel"
+        label="Owner"
+        widget="userRef"
+        readOnly
+      />
+      <Field name="reminderAt" label="Reminder" widget="datetime" />
+      <Field name="tags" label="Tags" widget="tagInput" />
+    </Group>
+    <Group label="Body">
+      <Field name="body" label="Body" widget="markdown.editor" />
+    </Group>
+  </Form>
+);
+
 const recordSmartButtons = [
   { id: "linked", icon: "plus", count: 7, label: "Linked notes" },
   { id: "comments", icon: "comments", count: 12, label: "Comments" },
   { id: "attachments", icon: "attachment", count: 4, label: "Attachments" },
   { id: "versions", icon: "versions", count: 23, label: "Versions" },
 ] satisfies readonly RecordSmartButtonDescriptor[];
-
-const formGroups: readonly PageGroupDescriptor[] = [
-  {
-    label: "Details",
-    columns: 2,
-    fields: [ownerField, reminderField, tagsField],
-    actions: [],
-  },
-  {
-    label: "Body",
-    fields: [bodyField],
-    actions: [],
-  },
-];
 
 /** The record crumb for `/notes/$id` — resolves the note title from the cache. */
 export function NoteCrumb({ id }: { id: string }): React.ReactElement {
@@ -226,26 +213,18 @@ export function NotePage(): React.ReactElement {
       {/* Open as a month-grouped list; board view switches to status lanes. */}
       <DataPage
         model={MODEL}
-        columns={columns}
-        filters={NOTE_FILTERS}
-        filterFields={NOTE_FILTER_FIELDS}
-        groupOptions={NOTE_GROUPS}
-        formFields={formFields}
-        formGroups={formGroups}
-        returning={RECORD_SUBTITLE_FIELDS}
         recordSmartButtons={recordSmartButtons}
         recordId={recordId}
         creating={creating}
         placement="inline"
-        list={GroupListView}
-        defaultGroups={NOTE_DEFAULT_GROUPS}
-        pageSize={50}
-        order={{ updatedAt: "DESC" }}
         rowHref={(row) =>
           typeof row.id === "string" ? noteRecordPath(row.id) : NOTE_LIST_PATH}
         onSelect={handleSelect}
         onClose={handleClose}
-      />
+      >
+        {noteList}
+        {noteForm}
+      </DataPage>
     </div>
   );
 }

@@ -1,8 +1,12 @@
-// Data-bound views over the @angee/sdk resource hooks: a paginated list, a
-// record form, the collection⇄record page that pairs them, and an aggregate
-// panel. Each is generic and prop-driven — the host configures the model,
-// fields, and columns.
+// Data-bound views over the @angee/sdk resource hooks: reusable declarative
+// list/form views, their collection⇄record page composition, and aggregate
+// panels. Hosts configure them with descriptors or with the page element DSL.
 
+export {
+  List,
+  type ListComponent,
+  type ListProps,
+} from "./List";
 export {
   ListView,
   type ListViewProps,
@@ -27,6 +31,10 @@ export {
   type GraphViewNodeStyle,
   type GraphViewProps,
 } from "./GraphView";
+export {
+  Form,
+  type FormProps,
+} from "./Form";
 export {
   FormView,
   type FormViewProps,
@@ -60,10 +68,12 @@ export * from "./data-view-model";
 export * from "./data-view-context";
 export type { StringIdRow } from "./data-view-surface";
 export {
-  Action as PageAction,
-  Column as PageColumn,
-  Field as PageField,
-  Group as PageGroup,
+  Action,
+  Column,
+  Field,
+  Group,
+  pageChildren,
+  pageElementProps,
   parsePageActions,
   parsePageColumns,
   parsePageFields,
@@ -71,16 +81,16 @@ export {
   PAGE_ELEMENT_SLOT,
 } from "./page";
 export type {
-  ActionConfirm as PageActionConfirm,
-  ActionDescriptor as PageActionDescriptor,
-  ActionProps as PageActionProps,
-  ColumnAggregate as PageColumnAggregate,
-  ColumnDescriptor as PageColumnDescriptor,
-  ColumnProps as PageColumnProps,
-  FieldDescriptor as PageFieldDescriptor,
-  FieldProps as PageFieldProps,
-  GroupDescriptor as PageGroupDescriptor,
-  GroupProps as PageGroupProps,
+  ActionConfirm,
+  ActionDescriptor,
+  ActionProps,
+  ColumnAggregate,
+  ColumnDescriptor,
+  ColumnProps,
+  FieldDescriptor,
+  FieldProps,
+  GroupDescriptor,
+  GroupProps,
   PageColumnAlign,
   PageElement,
   PageElementKind,

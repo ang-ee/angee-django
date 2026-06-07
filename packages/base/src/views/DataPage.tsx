@@ -24,6 +24,11 @@ import {
   type ListViewState,
 } from "./ListView";
 import { FormView, type FormField, type FormViewProps } from "./FormView";
+import type {
+  ListComponent,
+  ListProps,
+} from "./List";
+import type { FormProps } from "./Form";
 import { useBulkDelete } from "./useBulkDelete";
 import {
   DataViewProvider,
@@ -36,7 +41,15 @@ import {
   type DataViewGroup,
   type DataViewKind,
 } from "./data-view-model";
-import type { GroupDescriptor } from "./page";
+import {
+  parsePageColumns,
+  parsePageFields,
+  parsePageGroups,
+  pageChildren,
+  pageElementProps,
+  requirePageColumns,
+  type GroupDescriptor,
+} from "./page";
 
 /** Where the open record's form renders relative to the list. */
 export type RecordPlacement = "inline" | "drawer";
@@ -53,11 +66,21 @@ export interface RecordSmartButtonDescriptor {
 export interface DataPageProps<TRow extends Row = Row> {
   /** Model label, e.g. `"notes.Note"`, shared by the list and the form. */
   model: string;
-  /** Columns for the list. */
-  columns: readonly ListColumn<TRow>[];
-  /** Fields for the record form. */
-  formFields: readonly FormField[];
+  /** Columns for the list. Omit when declaring a `List` child. */
+  columns?: readonly ListColumn<TRow>[];
+  /** Fields for the record form. Omit when declaring a `Form` child. */
+  formFields?: readonly FormField[];
+  /** Grouped sections for the record form. Omit when declaring a `Form` child. */
   formGroups?: readonly GroupDescriptor[];
+  /**
+   * Optional `List` and `Form` element declarations parsed by `DataPage`.
+   *
+   * `model` is inherited by nested declarations when omitted, and an explicit
+   * nested model must match. Only one `List` and one `Form` declaration are
+   * accepted. Reuse element constants directly; wrapper components hide the
+   * marker from the parser.
+   */
+  children?: React.ReactNode;
   /** Currently open record id; `"new"` (or the `creating` flag) opens a blank form. */
   recordId?: string | null;
   /** True when creating a new record (an alternative to `recordId === null`). */
@@ -79,12 +102,7 @@ export interface DataPageProps<TRow extends Row = Row> {
   defaultGroups?: DataViewDefaultGroups;
   fields?: ListViewProps<TRow>["fields"];
   /** List component used for the collection surface. Defaults to the lean flat list. */
-  list?: React.ComponentType<
-    ListViewProps<TRow> & {
-      defaultGroup?: DataViewGroup | null;
-      defaultGroups?: DataViewDefaultGroups;
-    }
-  >;
+  list?: ListComponent<TRow>;
   /** Form options forwarded to `FormView`. */
   returning?: FormViewProps["returning"];
   /** Host-owned record counters/actions rendered between form actions and views. */
@@ -95,19 +113,47 @@ export interface DataPageProps<TRow extends Row = Row> {
   className?: string;
 }
 
+interface DataPageDeclarations<TRow extends Row = Row> {
+  list?: DataPageListDeclaration<TRow>;
+  form?: DataPageFormDeclaration;
+}
+
+interface DataPageListDeclaration<TRow extends Row = Row> {
+  props: ListProps<TRow>;
+  columns: readonly ListColumn<TRow>[];
+}
+
+interface DataPageFormDeclaration {
+  props: FormProps;
+  fields: readonly FormField[];
+  groups: readonly GroupDescriptor[];
+}
+
 /** A collection list with an open-record form for one model. */
 export function DataPage<TRow extends Row = Row>({
   pageSize,
   defaultGroup,
   defaultGroups,
+  children,
   ...props
 }: DataPageProps<TRow>): React.ReactElement {
+  const declarations = parseDataPageDeclarations<TRow>(children);
+  validateDataPageDeclarations(
+    {
+      ...props,
+      pageSize,
+      defaultGroup,
+      defaultGroups,
+    },
+    declarations,
+  );
+  const initialPageSize = declarations.list?.props.pageSize ?? pageSize;
   const dataView = useDataViewMaybe();
   const initialState = React.useMemo(
     () => ({
-      pageSize,
+      pageSize: initialPageSize,
     }),
-    [pageSize],
+    [initialPageSize],
   );
 
   if (dataView) {
@@ -117,6 +163,7 @@ export function DataPage<TRow extends Row = Row>({
         pageSize={pageSize}
         defaultGroup={defaultGroup}
         defaultGroups={defaultGroups}
+        declarations={declarations}
       />
     );
   }
@@ -128,9 +175,15 @@ export function DataPage<TRow extends Row = Row>({
         pageSize={pageSize}
         defaultGroup={defaultGroup}
         defaultGroups={defaultGroups}
+        declarations={declarations}
       />
     </DataViewProvider>
   );
+}
+
+interface DataPageBodyProps<TRow extends Row = Row>
+  extends DataPageProps<TRow> {
+  declarations: DataPageDeclarations<TRow>;
 }
 
 function DataPageBody<TRow extends Row = Row>({
@@ -138,6 +191,7 @@ function DataPageBody<TRow extends Row = Row>({
   columns,
   formFields,
   formGroups,
+  declarations,
   recordId,
   creating = false,
   onSelect,
@@ -152,18 +206,39 @@ function DataPageBody<TRow extends Row = Row>({
   defaultGroup,
   defaultGroups,
   fields,
-  list: ListComponent = ListView as React.ComponentType<
-    ListViewProps<TRow> & {
-      defaultGroup?: DataViewGroup | null;
-      defaultGroups?: DataViewDefaultGroups;
-    }
-  >,
+  list: ListRenderer = ListView as ListComponent<TRow>,
   returning,
   recordSmartButtons = [],
   hideCreate = false,
   rowHref,
   className,
-}: DataPageProps<TRow>): React.ReactElement {
+}: DataPageBodyProps<TRow>): React.ReactElement {
+  const resolvedColumns = declarations.list?.columns ?? requiredColumns(columns);
+  const resolvedFormFields =
+    declarations.form?.fields ?? requiredFormFields(formFields);
+  const resolvedFormGroups = declarations.form?.groups ?? formGroups;
+  const ResolvedListComponent = declarations.list?.props.list ?? ListRenderer;
+  const listRenderProps = {
+    fields,
+    filter,
+    filters,
+    filterFields,
+    groupOptions,
+    order,
+    pageSize,
+    defaultGroup,
+    defaultGroups,
+    rowHref,
+    ...(declarations.list
+      ? listElementRenderProps(declarations.list.props)
+      : {}),
+  };
+  const formRenderProps = {
+    returning,
+    ...(declarations.form
+      ? formElementRenderProps(declarations.form.props)
+      : {}),
+  };
   const dataView = useDataView();
   const [listState, setListState] =
     React.useState<ListViewState<TRow> | null>(null);
@@ -263,21 +338,12 @@ function DataPageBody<TRow extends Row = Row>({
       />
     ) : null;
   const list = (
-    <ListComponent
+    <ResolvedListComponent
       model={model}
-      columns={columns}
-      fields={fields}
-      filter={filter}
-      filters={filters}
-      filterFields={filterFields}
-      groupOptions={groupOptions}
-      order={order}
-      pageSize={pageSize}
-      defaultGroup={defaultGroup}
-      defaultGroups={defaultGroups}
+      columns={resolvedColumns}
+      {...listRenderProps}
       onCreate={!hideCreate && onSelect ? () => onSelect(null) : undefined}
       onListStateChange={handleListStateChange}
-      rowHref={rowHref}
       onRowClick={
         onSelect
           ? (row) => {
@@ -290,11 +356,11 @@ function DataPageBody<TRow extends Row = Row>({
   const listStateOnly = open ? (
     <ListStateProbe<TRow>
       model={model}
-      columns={columns}
-      fields={fields}
-      filter={filter}
-      order={order}
-      pageSize={pageSize}
+      columns={resolvedColumns}
+      fields={listRenderProps.fields}
+      filter={listRenderProps.filter}
+      order={listRenderProps.order}
+      pageSize={listRenderProps.pageSize}
       dataView={dataView}
       onListStateChange={handleListStateChange}
     />
@@ -304,12 +370,12 @@ function DataPageBody<TRow extends Row = Row>({
     <FormView
       model={model}
       id={editId}
-      fields={formFields}
-      groups={formGroups}
-      returning={returning}
+      fields={resolvedFormFields}
+      groups={resolvedFormGroups}
+      {...formRenderProps}
       onSaved={handleSaved}
-      toolbarStart={recordHeaderStart}
-      toolbar={recordHeaderActions}
+      toolbarStart={composeNodes(formRenderProps.toolbarStart, recordHeaderStart)}
+      toolbar={composeNodes(formRenderProps.toolbar, recordHeaderActions)}
     />
   ) : null;
 
@@ -351,6 +417,248 @@ function DataPageBody<TRow extends Row = Row>({
     </div>
   );
 }
+
+function parseDataPageDeclarations<TRow extends Row = Row>(
+  children: React.ReactNode,
+): DataPageDeclarations<TRow> {
+  let list: DataPageListDeclaration<TRow> | undefined;
+  let form: DataPageFormDeclaration | undefined;
+
+  for (const child of pageChildren(children)) {
+    if (!React.isValidElement(child)) {
+      throw new Error(unrecognizedDataPageChildMessage(child));
+    }
+
+    const listProps = pageElementProps<ListProps<TRow>>(child, "list");
+    if (listProps) {
+      if (list) throw new Error("DataPage accepts only one List child.");
+      list = dataPageListDeclaration(listProps);
+      continue;
+    }
+
+    const formProps = pageElementProps<FormProps>(child, "form");
+    if (formProps) {
+      if (form) throw new Error("DataPage accepts only one Form child.");
+      form = dataPageFormDeclaration(formProps);
+      continue;
+    }
+
+    throw new Error(unrecognizedDataPageChildMessage(child));
+  }
+
+  return {
+    ...(list ? { list } : {}),
+    ...(form ? { form } : {}),
+  };
+}
+
+function dataPageListDeclaration<TRow extends Row>(
+  props: ListProps<TRow>,
+): DataPageListDeclaration<TRow> {
+  const cached = listDeclarationCache.get(props) as
+    | DataPageListDeclaration<TRow>
+    | undefined;
+  if (cached) return cached;
+  const declaration = {
+    props,
+    columns: requirePageColumns("List", parsePageColumns<TRow>(props.children)),
+  };
+  listDeclarationCache.set(props, declaration);
+  return declaration;
+}
+
+function dataPageFormDeclaration(props: FormProps): DataPageFormDeclaration {
+  const cached = formDeclarationCache.get(props);
+  if (cached) return cached;
+  assertFormActionsNotRendered(props.children);
+  const declaration = {
+    props,
+    fields: parsePageFields(props.children),
+    groups: parsePageGroups(props.children),
+  };
+  formDeclarationCache.set(props, declaration);
+  return declaration;
+}
+
+function validateDataPageDeclarations<TRow extends Row>(
+  props: Omit<DataPageProps<TRow>, "children">,
+  declarations: DataPageDeclarations<TRow>,
+): void {
+  validateNestedModel("List", props.model, declarations.list?.props.model);
+  validateNestedModel("Form", props.model, declarations.form?.props.model);
+  if (declarations.list) {
+    validateNestedDeclaration({
+      owner: "List",
+      dataPageProps: props,
+      elementProps: declarations.list.props,
+      declarationKeys: ["columns"],
+      dataPageOwnedKeys: [
+        "onCreate",
+        "onRowClick",
+        "onListStateChange",
+      ],
+    });
+  }
+  if (declarations.form) {
+    validateNestedDeclaration({
+      owner: "Form",
+      dataPageProps: props,
+      elementProps: declarations.form.props,
+      declarationKeys: ["formFields", "formGroups"],
+      dataPageOwnedKeys: ["id", "onSaved"],
+    });
+  }
+}
+
+function validateNestedDeclaration<TRow extends Row>({
+  owner,
+  dataPageProps,
+  elementProps,
+  declarationKeys,
+  dataPageOwnedKeys,
+}: {
+  owner: "List" | "Form";
+  dataPageProps: Omit<DataPageProps<TRow>, "children">;
+  elementProps: object;
+  declarationKeys: readonly string[];
+  dataPageOwnedKeys: readonly string[];
+}): void {
+  const ownedKeys = new Set(dataPageOwnedKeys);
+  for (const key of dataPageOwnedKeys) {
+    if (hasOwnDefined(elementProps, key)) {
+      throw new Error(`DataPage owns ${owner} child "${key}" wiring.`);
+    }
+  }
+  for (const key of declarationKeys) {
+    if (hasOwnDefined(dataPageProps, key)) {
+      throw new Error(
+        `DataPage and its ${owner} child both declare "${key}".`,
+      );
+    }
+  }
+  for (const key of Object.keys(elementProps)) {
+    if (key === "children" || key === "model" || ownedKeys.has(key)) continue;
+    if (hasOwnDefined(dataPageProps, key)) {
+      throw new Error(
+        `DataPage and its ${owner} child both declare "${key}".`,
+      );
+    }
+  }
+}
+
+function validateNestedModel(
+  owner: string,
+  pageModel: string,
+  nestedModel: string | undefined,
+): void {
+  if (!nestedModel || nestedModel === pageModel) return;
+  throw new Error(
+    `${owner} model "${nestedModel}" does not match DataPage model "${pageModel}".`,
+  );
+}
+
+function requiredColumns<TRow extends Row>(
+  columns: readonly ListColumn<TRow>[] | undefined,
+): readonly ListColumn<TRow>[] {
+  if (columns) return columns;
+  throw new Error("DataPage requires columns or a List child.");
+}
+
+function requiredFormFields(
+  fields: readonly FormField[] | undefined,
+): readonly FormField[] {
+  if (fields) return fields;
+  throw new Error("DataPage requires formFields or a Form child.");
+}
+
+function listElementRenderProps<TRow extends Row>(
+  props: ListProps<TRow>,
+): Partial<ListViewProps<TRow> & {
+  defaultGroup?: DataViewGroup | null;
+  defaultGroups?: DataViewDefaultGroups;
+}> {
+  const {
+    children: _children,
+    list: _list,
+    model: _model,
+    onCreate: _onCreate,
+    onRowClick: _onRowClick,
+    onListStateChange: _onListStateChange,
+    ...forwarded
+  } = props;
+  return forwarded;
+}
+
+function formElementRenderProps(props: FormProps): Partial<FormViewProps> {
+  const {
+    children: _children,
+    id: _id,
+    model: _model,
+    onSaved: _onSaved,
+    ...forwarded
+  } = props;
+  return forwarded;
+}
+
+function assertFormActionsNotRendered(children: React.ReactNode): void {
+  if (
+    pageChildren(children).some((child) =>
+      Boolean(pageElementProps<unknown>(child, "action")),
+    )
+  ) {
+    throw new Error("Form actions are not rendered yet.");
+  }
+}
+
+function hasOwnDefined(object: object, key: string): boolean {
+  return (
+    Object.prototype.hasOwnProperty.call(object, key) &&
+    (object as Record<string, unknown>)[key] !== undefined
+  );
+}
+
+function composeNodes(
+  first: React.ReactNode,
+  second: React.ReactNode,
+): React.ReactNode {
+  if (first == null || first === false) return second ?? null;
+  if (second == null || second === false) return first;
+  return (
+    <>
+      {first}
+      {second}
+    </>
+  );
+}
+
+function unrecognizedDataPageChildMessage(child: React.ReactNode): string {
+  return (
+    `DataPage child ${dataPageChildName(child)} is not a List or Form ` +
+    "declaration; wrapper components hide the marker from the parser."
+  );
+}
+
+function dataPageChildName(child: React.ReactNode): string {
+  if (React.isValidElement(child)) return elementTypeName(child.type);
+  if (typeof child === "string") return `text "${child.trim()}"`;
+  return typeof child;
+}
+
+function elementTypeName(type: unknown): string {
+  if (typeof type === "string") return `<${type}>`;
+  if (typeof type === "function") {
+    const component = type as { displayName?: string; name?: string };
+    return component.displayName ?? component.name ?? "anonymous component";
+  }
+  if (typeof type === "object" && type !== null) {
+    const record = type as { displayName?: string };
+    return record.displayName ?? "component";
+  }
+  return "component";
+}
+
+const listDeclarationCache = new WeakMap<object, unknown>();
+const formDeclarationCache = new WeakMap<object, DataPageFormDeclaration>();
 
 interface PendingRecordNavigation {
   page: number;

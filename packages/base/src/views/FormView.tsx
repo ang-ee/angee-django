@@ -31,10 +31,14 @@ import {
   type WidgetField,
 } from "../widgets";
 import {
+  pageChildren,
+  pageElementProps,
   parsePageFields,
   parsePageGroups,
   type FieldDescriptor,
+  type FieldProps,
   type GroupDescriptor,
+  type GroupProps,
   type PageFieldKind,
 } from "./page";
 
@@ -42,19 +46,29 @@ export type FieldKind = PageFieldKind;
 export type FormField = FieldDescriptor;
 
 export interface FormViewProps {
+  /** Model label rendered by this form, e.g. `"notes.Note"`. */
   model: string;
+  /** Record id to edit; `null` or `undefined` renders a create form. */
   id?: string | null;
+  /** Fields rendered by the record form. */
   fields?: readonly FieldDescriptor[];
+  /** Grouped sections rendered by the record form. */
   groups?: readonly GroupDescriptor[];
+  /** Field and group element declarations parsed when `fields`/`groups` are omitted. */
   children?: React.ReactNode;
+  /** Extra fields returned after save and selected while editing. */
   returning?: readonly string[];
+  /** Called after a successful save. */
   onSaved?: (row: Row) => void;
+  /** Label used for the submit button. */
   submitLabel?: React.ReactNode;
+  /** Header actions rendered in the record header. */
   headerActions?: React.ReactNode;
   /** Left-side record commands the host renders before dirty Save/Discard actions. */
   toolbarStart?: React.ReactNode;
   /** Right-side record chrome the host renders after the toolbar spacer. */
   toolbar?: React.ReactNode;
+  /** Class name applied to the form root. */
   className?: string;
 }
 
@@ -100,14 +114,23 @@ export function FormView({
   toolbar,
   className,
 }: FormViewProps): React.ReactElement {
-  const resolvedFields = React.useMemo(
-    () => fields ?? parsePageFields(children),
-    [children, fields],
-  );
-  const resolvedGroups = React.useMemo(
-    () => groups ?? parsePageGroups(children),
-    [children, groups],
-  );
+  if (hasDirectPageElement(children, "action")) {
+    throw new Error("Form actions are not rendered yet.");
+  }
+  const hasFieldChildren = hasPageField(children);
+  const hasGroupChildren = hasDirectPageElement(children, "group");
+  if (
+    (fields !== undefined && hasFieldChildren) ||
+    (groups !== undefined && hasGroupChildren)
+  ) {
+    throw new Error(
+      "FormView cannot mix the fields/groups props with element children.",
+    );
+  }
+  const childFields = parsePageFields(children);
+  const childGroups = parsePageGroups(children);
+  const resolvedFields = fields ?? childFields;
+  const resolvedGroups = groups ?? childGroups;
   const isCreate = id == null;
   const selection = React.useMemo(() => {
     const paths = new Set<string>(["id"]);
@@ -411,6 +434,24 @@ export function FormView({
       </div>
     </form>
   );
+}
+
+function hasDirectPageElement(
+  children: React.ReactNode,
+  kind: "action" | "group",
+): boolean {
+  return pageChildren(children).some((child) =>
+    Boolean(pageElementProps<unknown>(child, kind)),
+  );
+}
+
+function hasPageField(children: React.ReactNode): boolean {
+  for (const child of pageChildren(children)) {
+    if (pageElementProps<FieldProps>(child, "field")) return true;
+    const group = pageElementProps<GroupProps>(child, "group");
+    if (group && hasPageField(group.children)) return true;
+  }
+  return false;
 }
 
 function useUnsavedChangesNavigationGuard({

@@ -128,6 +128,32 @@ describe("page element markers", () => {
     ).toEqual([{ id: "create", label: "New", onClick: create }]);
   });
 
+  test("preserve parsed descriptor identity for stable element constants", () => {
+    const listDeclaration = (
+      <>
+        <Column field="title" />
+        <Column field="updatedAt" />
+      </>
+    );
+    const firstColumns = parsePageColumns(listDeclaration);
+    const secondColumns = parsePageColumns(listDeclaration);
+
+    expect(secondColumns).toBe(firstColumns);
+    expect(secondColumns[0]).toBe(firstColumns[0]);
+
+    const formDeclaration = (
+      <Group label="Details">
+        <Field name="title" />
+      </Group>
+    );
+    const firstGroups = parsePageGroups(formDeclaration);
+    const secondGroups = parsePageGroups(formDeclaration);
+
+    expect(secondGroups).toBe(firstGroups);
+    expect(secondGroups[0]).toBe(firstGroups[0]);
+    expect(secondGroups[0]?.fields[0]).toBe(firstGroups[0]?.fields[0]);
+  });
+
   test("fail fast on duplicate descriptor owners", () => {
     expect(() =>
       parsePageColumns(
