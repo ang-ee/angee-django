@@ -57,6 +57,7 @@ export {
   type ModelFieldKind,
   type ModelFieldMetadata,
   type ModelMetadata,
+  type ModelRootFieldMetadata,
   type SchemaFieldMetadata,
 } from "./model-metadata";
 

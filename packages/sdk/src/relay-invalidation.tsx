@@ -14,7 +14,7 @@ import type { Client } from "@urql/core";
 import { useAuthoredSubscription } from "./authored-hooks";
 import { makeContext } from "./make-context";
 import { createRefetchRegistry, type RefetchRegistry } from "./relay-registry";
-import { singularFieldName, typeNameForModel } from "./selection";
+import { typeNameForModel } from "./selection";
 
 /**
  * The change subscription for one model: `subscription { <noun>Changed { … } }`,
@@ -22,7 +22,8 @@ import { singularFieldName, typeNameForModel } from "./selection";
  * it never drifts from the field naming (`Note` -> `noteChanged`).
  */
 export function changeSubscriptionDocument(typename: string): string {
-  const field = `${singularFieldName(typename)}Changed`;
+  const typeName = typeNameForModel(typename);
+  const field = `${typeName.charAt(0).toLowerCase()}${typeName.slice(1)}Changed`;
   return (
     `subscription angee${typename}Changed { ` +
     `${field} { model id action changedFields changedValues } }`

@@ -4,12 +4,13 @@ import { createElement, type ReactNode } from "react";
 import { fetchExchange } from "@urql/core";
 import { describe, expect, test, vi } from "vitest";
 
-import { createSchemaClients, GraphQLProvider } from "./graphql-provider";
+import { GraphQLClientProvider } from "./graphql-provider";
 import {
   useResourceList,
   useResourceMutation,
   useResourceRecord,
 } from "./resource-hooks";
+import { TEST_SCHEMA_SDL } from "./test-schema";
 
 /** A mock transport that answers any GraphQL POST with `payload`, recording bodies. */
 function mockTransport(payload: unknown) {
@@ -31,11 +32,19 @@ function mockTransport(payload: unknown) {
 }
 
 function wrapperWith(fetch: typeof globalThis.fetch) {
-  const clients = createSchemaClients({
-    public: { url: "/graphql/", fetch, exchanges: [fetchExchange] },
-  });
   return ({ children }: { children: ReactNode }) =>
-    createElement(GraphQLProvider, { clients, schema: "public", children });
+    createElement(GraphQLClientProvider, {
+      config: {
+        public: {
+          url: "/graphql/",
+          sdl: TEST_SCHEMA_SDL,
+          fetch,
+          exchanges: [fetchExchange],
+        },
+      },
+      schema: "public",
+      children,
+    });
 }
 
 describe("useResourceList", () => {

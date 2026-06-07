@@ -4,11 +4,12 @@ import { createElement, type ReactNode } from "react";
 import { fetchExchange } from "@urql/core";
 import { describe, expect, test, vi } from "vitest";
 
-import { createSchemaClients, GraphQLProvider } from "./graphql-provider";
+import { GraphQLClientProvider } from "./graphql-provider";
 import {
   useResourceAggregate,
   useResourceGroupBy,
 } from "./aggregates";
+import { TEST_SCHEMA_SDL } from "./test-schema";
 
 function mockTransport(payload: unknown) {
   const bodies: Array<{ query: string; variables: Record<string, unknown> }> = [];
@@ -29,11 +30,19 @@ function mockTransport(payload: unknown) {
 }
 
 function wrapperWith(fetch: typeof globalThis.fetch) {
-  const clients = createSchemaClients({
-    public: { url: "/graphql/", fetch, exchanges: [fetchExchange] },
-  });
   return ({ children }: { children: ReactNode }) =>
-    createElement(GraphQLProvider, { clients, schema: "public", children });
+    createElement(GraphQLClientProvider, {
+      config: {
+        public: {
+          url: "/graphql/",
+          sdl: TEST_SCHEMA_SDL,
+          fetch,
+          exchanges: [fetchExchange],
+        },
+      },
+      schema: "public",
+      children,
+    });
 }
 
 function compactGraphQL(query: string | undefined): string {

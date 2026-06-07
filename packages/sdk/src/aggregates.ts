@@ -6,17 +6,17 @@ import {
   type AggregateBucket,
   type AggregateMeasure,
 } from "./aggregate-extract";
+import { DISABLED_DOCUMENTS } from "./disabled-documents";
 import { useDocumentQuery } from "./document-query";
+import { useModelRootFields } from "./model-metadata";
 import {
   useStableArray,
   useStableMeasures,
   useStableVariables,
 } from "./stable-deps";
 import {
-  aggregateFieldName,
   assembleAggregateDocument,
   assembleGroupByDocument,
-  groupByFieldName,
 } from "./selection";
 import type {
   ResourceFilter,
@@ -48,24 +48,27 @@ export function useResourceAggregate<
   options: UseAggregateOptions<TName> = {},
 ): { aggregate: AggregateBucket | null; fetching: boolean; error: Error | null } {
   const { enabled = true, filter, measures } = options;
-  const active = enabled && Boolean(modelLabel);
   const withFilter = filter !== undefined;
   const stableMeasures = useStableMeasures(measures);
+  const rootFields = useModelRootFields(modelLabel);
+  const active = enabled && Boolean(modelLabel) && rootFields !== null;
 
   const document = useMemo(
     () =>
-      assembleAggregateDocument(modelLabel, {
-        withFilter,
-        measures: stableMeasures,
-      }),
-    [modelLabel, stableMeasures, withFilter],
+      rootFields
+        ? assembleAggregateDocument(modelLabel, rootFields, {
+            withFilter,
+            measures: stableMeasures,
+          })
+        : DISABLED_DOCUMENTS.query,
+    [modelLabel, rootFields, stableMeasures, withFilter],
   );
   const variables = useStableVariables(
     withFilter ? { filter: filter as Record<string, unknown> } : NO_VARIABLES,
   );
   const run = useDocumentQuery(document, variables, active);
   return {
-    aggregate: autoExtractAggregate(run.data, aggregateFieldName(modelLabel)),
+    aggregate: autoExtractAggregate(run.data, rootFields?.aggregate ?? ""),
     fetching: run.fetching,
     error: run.error,
   };
@@ -139,8 +142,10 @@ export function useResourceGroupBy<
     measures,
     withFilterEcho = false,
   } = options;
-  const active = enabled && Boolean(modelLabel) && dimensions.length > 0;
   const withFilter = filter !== undefined;
+  const rootFields = useModelRootFields(modelLabel);
+  const active =
+    enabled && Boolean(modelLabel) && dimensions.length > 0 && rootFields !== null;
   const keyFields = useStableArray(dimensions.map(dimensionKey));
   const stableMeasures = useStableMeasures(measures);
   const groupBy = useMemo(
@@ -166,15 +171,18 @@ export function useResourceGroupBy<
 
   const document = useMemo(
     () =>
-      assembleGroupByDocument(modelLabel, {
-        keyFields,
-        measures: stableMeasures,
-        withFilter,
-        withOrderBy,
-        withFilterEcho,
-      }),
+      rootFields
+        ? assembleGroupByDocument(modelLabel, rootFields, {
+            keyFields,
+            measures: stableMeasures,
+            withFilter,
+            withOrderBy,
+            withFilterEcho,
+          })
+        : DISABLED_DOCUMENTS.query,
     [
       modelLabel,
+      rootFields,
       keyFields,
       stableMeasures,
       withFilter,
@@ -184,7 +192,7 @@ export function useResourceGroupBy<
   );
 
   const run = useDocumentQuery(document, variables, active);
-  const result = autoExtractGroupBy(run.data, groupByFieldName(modelLabel));
+  const result = autoExtractGroupBy(run.data, rootFields?.groupBy ?? "");
   return {
     count: result.count,
     totalCount: result.totalCount,

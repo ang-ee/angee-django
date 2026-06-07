@@ -10,6 +10,7 @@ import {
   type AggregateMeasure,
   type AggregateMeasureOperator,
 } from "./aggregate-extract";
+import type { ModelRootFieldMetadata } from "./model-metadata";
 
 /**
  * A node in a GraphQL selection set: a field name and, for a traversed path, an
@@ -21,20 +22,6 @@ export interface SelectionField {
 }
 
 const GRAPHQL_NAME = /^[_A-Za-z][_0-9A-Za-z]*$/;
-const LEADING_ACRONYMS = [
-  "OAuth",
-  "OIDC",
-  "URL",
-  "URI",
-  "UUID",
-  "API",
-  "JSON",
-  "XML",
-  "HTTP",
-  "HTTPS",
-  "JWT",
-  "SQL",
-] as const;
 
 function assertName(name: string): string {
   if (!GRAPHQL_NAME.test(name)) {
@@ -109,46 +96,29 @@ export function typeNameForModel(modelLabel: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
-/** Singular root field name (`Note` -> `note`), matching the schema default. */
-export function singularFieldName(modelLabel: string): string {
-  return lowerCamelName(typeNameForModel(modelLabel));
-}
-
-/** Plural connection field name (`Note` -> `notes`, `Category` -> `categories`). */
-export function pluralFieldName(modelLabel: string): string {
-  return pluralize(singularFieldName(modelLabel));
-}
-
-// The runtime document builder receives a model label, not a loaded SDL
-// contract. Until codegen emits root field names, these helpers mirror the
-// backend defaults the schema declares.
-// Regular English pluralization, matching the schema's default field naming.
-// Irregular plurals (person -> people) are not derivable from a heuristic and
-// belong to the backend; a model whose plural is irregular needs its field name
-// emitted by the contract rather than guessed here.
-function pluralize(value: string): string {
-  const last = value.at(-1);
-  const prev = value.at(-2);
-  if (last === "y" && prev !== undefined && !"aeiou".includes(prev)) {
-    return `${value.slice(0, -1)}ies`;
+function requireRootField(
+  modelLabel: string,
+  rootFields: ModelRootFieldMetadata | null | undefined,
+  key: keyof ModelRootFieldMetadata,
+): string {
+  const field = rootFields?.[key];
+  if (!field) {
+    throw new Error(
+      `GraphQL schema metadata for model "${modelLabel}" does not expose a ${key} root field.`,
+    );
   }
-  // A single trailing `z` after a vowel doubles (quiz -> quizzes); `zz`
-  // (buzz) and a `z` after a consonant (waltz) just take `es`.
-  if (last === "z" && prev !== undefined && "aeiou".includes(prev)) {
-    return `${value}zes`;
-  }
-  if (last === "s" || last === "x" || last === "z") return `${value}es`;
-  return `${value}s`;
+  return assertName(field);
 }
 
-/** Relay detail document: `query <singular>($id: ID!){ <singular>(id:){…} }`. */
+/** Relay detail document using the schema-declared detail root field. */
 export function assembleDetailDocument(
   modelLabel: string,
   fieldPaths: readonly string[],
+  rootFields: ModelRootFieldMetadata,
 ): string {
-  const singular = singularFieldName(modelLabel);
+  const detail = requireRootField(modelLabel, rootFields, "detail");
   const selection = printSelection(buildSelection(fieldPaths));
-  return `query ${singular}($id: ID!) { ${singular}(id: $id) { ${selection} } }`;
+  return `query ${detail}($id: ID!) { ${detail}(id: $id) { ${selection} } }`;
 }
 
 export interface AssembleListDocumentOptions {
@@ -187,10 +157,11 @@ export interface AssembleAggregateDocumentOptions {
 export function assembleListDocument(
   modelLabel: string,
   fieldPaths: readonly string[],
+  rootFields: ModelRootFieldMetadata,
   options: AssembleListDocumentOptions = {},
 ): string {
   const typeName = typeNameForModel(modelLabel);
-  const plural = pluralFieldName(modelLabel);
+  const list = requireRootField(modelLabel, rootFields, "list");
   const selection = printSelection(buildSelection(fieldPaths));
   const declared = ["$pagination: OffsetPaginationInput"];
   const args = ["pagination: $pagination"];
@@ -203,8 +174,8 @@ export function assembleListDocument(
     args.push("order: $order");
   }
   return (
-    `query ${plural}(${declared.join(", ")}) { ` +
-    `${plural}(${args.join(", ")}) { ` +
+    `query ${list}(${declared.join(", ")}) { ` +
+    `${list}(${args.join(", ")}) { ` +
     `totalCount results { ${selection} } pageInfo { offset limit } } }`
   );
 }
@@ -221,18 +192,19 @@ const DELETE_PREVIEW_SELECTION =
   "children { label objectLabel objectId } } }";
 
 /**
- * Verb-first CRUD mutation. `create` takes a `<Type>Input`; `update` takes a
- * `<Type>Patch` carrying its own id, so it needs no separate id variable; both
- * return the mutated node's selection. `delete` takes an id and returns the
- * cascade `DeletePreview`.
+ * CRUD mutation using the schema-declared root field for the action. `create`
+ * takes a `<Type>Input`; `update` takes a `<Type>Patch` carrying its own id, so
+ * it needs no separate id variable; both return the mutated node's selection.
+ * `delete` takes an id and returns the cascade `DeletePreview`.
  */
 export function assembleMutationDocument(
   modelLabel: string,
   action: MutationAction,
   fieldPaths: readonly string[],
+  rootFields: ModelRootFieldMetadata,
 ): string {
   const typeName = typeNameForModel(modelLabel);
-  const op = `${action}${pascalName(singularFieldName(modelLabel))}`;
+  const op = requireRootField(modelLabel, rootFields, action);
   if (action === "delete") {
     return (
       `mutation ${op}($id: ID!, $confirm: Boolean) { ` +
@@ -246,35 +218,14 @@ export function assembleMutationDocument(
   );
 }
 
-function lowerCamelName(name: string): string {
-  const known = LEADING_ACRONYMS.find((acronym) => name.startsWith(acronym));
-  if (known) return `${known.toLowerCase()}${name.slice(known.length)}`;
-  const acronym = name.match(/^[A-Z]+(?=[A-Z][a-z]|[0-9]|$)/)?.[0];
-  if (acronym) return `${acronym.toLowerCase()}${name.slice(acronym.length)}`;
-  return name.charAt(0).toLowerCase() + name.slice(1);
-}
-
-function pascalName(name: string): string {
-  return name.charAt(0).toUpperCase() + name.slice(1);
-}
-
-/** Aggregate field name (`Sale` -> `saleAggregate`). */
-export function aggregateFieldName(modelLabel: string): string {
-  return `${singularFieldName(modelLabel)}Aggregate`;
-}
-
-/** Grouped-rows field name (`Sale` -> `saleGroups`). */
-export function groupByFieldName(modelLabel: string): string {
-  return `${singularFieldName(modelLabel)}Groups`;
-}
-
 /** The ungrouped aggregate document selects the model total count and measures. */
 export function assembleAggregateDocument(
   modelLabel: string,
+  rootFields: ModelRootFieldMetadata,
   options: AssembleAggregateDocumentOptions = {},
 ): string {
   const typeName = typeNameForModel(modelLabel);
-  const field = aggregateFieldName(modelLabel);
+  const field = requireRootField(modelLabel, rootFields, "aggregate");
   const selection = aggregateSelection(options.measures);
   if (!options.withFilter) {
     return `query ${field} { ${field} { ${selection} } }`;
@@ -289,10 +240,11 @@ export function assembleAggregateDocument(
  */
 export function assembleGroupByDocument(
   modelLabel: string,
+  rootFields: ModelRootFieldMetadata,
   options: AssembleGroupByDocumentOptions,
 ): string {
   const typeName = typeNameForModel(modelLabel);
-  const field = groupByFieldName(modelLabel);
+  const field = requireRootField(modelLabel, rootFields, "groupBy");
   const keyFields = [...new Set(options.keyFields.map(assertName))];
   const keySelection = keyFields.length > 0 ? keyFields.join(" ") : "__typename";
   const measureSelection = aggregateMeasureSelection(options.measures);

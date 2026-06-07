@@ -88,6 +88,12 @@ describe("fieldMetadataFromSDL", () => {
       metadata.types.NoteType,
     );
   });
+
+  test("captures schema-declared root fields for model types", () => {
+    expect(required(metadata.types.NoteType).rootFields).toEqual({
+      list: "notes",
+    });
+  });
 });
 
 function required<T>(value: T | undefined): T {

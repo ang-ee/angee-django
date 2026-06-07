@@ -3,6 +3,7 @@ import { useMutation as useUrqlMutation } from "urql";
 
 import { DISABLED_DOCUMENTS } from "./disabled-documents";
 import { useDocumentQuery } from "./document-query";
+import { useModelRootFields } from "./model-metadata";
 import {
   useInvalidateModels,
   useRegisterModelRefetch,
@@ -87,15 +88,22 @@ export function useResourceList<TName extends ResourceTypeName = ResourceTypeNam
     order,
     enabled = true,
   } = options;
-  const active = enabled && Boolean(modelLabel);
   const size = clampPageSize(pageSize);
   const stableFields = useStableArray(fields);
   const withFilter = filter !== undefined;
   const withOrder = order !== undefined;
+  const rootFields = useModelRootFields(modelLabel);
+  const active = enabled && Boolean(modelLabel) && rootFields !== null;
 
   const document = useMemo(
-    () => assembleListDocument(modelLabel, stableFields, { withFilter, withOrder }),
-    [modelLabel, stableFields, withFilter, withOrder],
+    () =>
+      rootFields
+        ? assembleListDocument(modelLabel, stableFields, rootFields, {
+            withFilter,
+            withOrder,
+          })
+        : DISABLED_DOCUMENTS.query,
+    [modelLabel, rootFields, stableFields, withFilter, withOrder],
   );
 
   const resetKey = useStableVariables({
@@ -228,12 +236,17 @@ export function useResourceRecord(
   options: { fields: readonly string[]; enabled?: boolean },
 ): UseResourceRecordResult {
   const { fields, enabled = true } = options;
-  const active = enabled && Boolean(modelLabel) && Boolean(id);
   const stableFields = useStableArray(fields);
+  const rootFields = useModelRootFields(modelLabel);
+  const active =
+    enabled && Boolean(modelLabel) && Boolean(id) && rootFields !== null;
 
   const document = useMemo(
-    () => assembleDetailDocument(modelLabel, stableFields),
-    [modelLabel, stableFields],
+    () =>
+      rootFields
+        ? assembleDetailDocument(modelLabel, stableFields, rootFields)
+        : DISABLED_DOCUMENTS.query,
+    [modelLabel, rootFields, stableFields],
   );
   const variables = useMemo(() => ({ id: id ?? "" }), [id]);
 
@@ -274,13 +287,14 @@ export function useResourceMutation<TAction extends MutationAction>(
 ): [ResourceMutate<TAction>, { fetching: boolean; error: Error | null }] {
   const fields = options.fields ?? [];
   const fieldsKey = fields.join(" ");
+  const rootFields = useModelRootFields(modelLabel);
   const document = useMemo(
     () =>
-      modelLabel
-        ? assembleMutationDocument(modelLabel, action, fields)
+      rootFields
+        ? assembleMutationDocument(modelLabel, action, fields, rootFields)
         : DISABLED_DOCUMENTS.mutation,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [modelLabel, action, fieldsKey],
+    [modelLabel, rootFields, action, fieldsKey],
   );
 
   const [state, execute] = useUrqlMutation(document);

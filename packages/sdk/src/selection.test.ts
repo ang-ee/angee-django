@@ -5,8 +5,6 @@ import {
   clampPageSize,
   MAX_PAGE_SIZE,
   printSelection,
-  pluralFieldName,
-  singularFieldName,
   typeNameForModel,
 } from "./selection";
 
@@ -71,24 +69,6 @@ describe("model naming", () => {
     expect(() => typeNameForModel("notes.")).toThrow();
   });
 
-  test("singularFieldName lower-camelises the type", () => {
-    expect(singularFieldName("Note")).toBe("note");
-    expect(singularFieldName("OAuthProvider")).toBe("oauthProvider");
-    expect(singularFieldName("URLMapping")).toBe("urlMapping");
-  });
-
-  test("pluralFieldName pluralises the singular field", () => {
-    expect(pluralFieldName("Note")).toBe("notes");
-    expect(pluralFieldName("Category")).toBe("categories");
-    expect(pluralFieldName("Class")).toBe("classes");
-    expect(pluralFieldName("Day")).toBe("days");
-  });
-
-  test("pluralFieldName doubles a trailing z only after a vowel", () => {
-    expect(pluralFieldName("Quiz")).toBe("quizzes");
-    expect(pluralFieldName("Buzz")).toBe("buzzes");
-    expect(pluralFieldName("Waltz")).toBe("waltzes");
-  });
 });
 
 describe("clampPageSize", () => {

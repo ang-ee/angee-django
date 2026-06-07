@@ -383,10 +383,16 @@ metadata + backend enum-descriptions) COMMITTED as 0168c72 — gated (SDL
 regenerated with enum descriptions + schema --check, typecheck, 282 vitest,
 72/72 e2e). Supervisor fixed the field-vs-group label split (titleCase for
 column/field/filter, groupFieldLabel kept for group options) + restored
-non-derivable form labels. D4 reviews folded as 6a30001 (native
-enum seam replaces schema mutation; aggregates branch deleted as frontend
-never reads the group-key enum; SDL parsed once; fieldLabel/groupLabel owners)
-— re-gated green (ruff/mypy, schema --check, typecheck, 282 vitest, 72/72
-e2e). NEXT: D5 — iam port (ConnectionsPage onto DialogForm/FormView/widgets;
-UsersPage onto useResourceList + booleanBadge). LAUNCH COMMAND HANDED TO USER
-(fresh slice).
+non-derivable form labels. D4 folded as 6a30001. D5 (iam port,
+ConnectionsPage 1430→387, FormView fixes, UsersPage/RolesPage) COMMITTED as
+18816a6 — gated (ruff/mypy, schema --check w/ UserType.fullName, typecheck,
+287 vitest, 72/72 e2e; iam-auth OAuth-button test is a pre-existing tight-
+timeout flake, passes on retry, NOT a D5 regression — verified the live
+availableConnections query returns the demo provider).
+
+NEXT: D5b — replace selection.ts field-name GUESSING (LEADING_ACRONYMS +
+pluralize + lowerCamel heuristics) with SDL-derived root field names. The
+schema's Query/Mutation root fields (note, notes, oauthClients, noteAggregate,
+…) are the owner; extend D4 metadata to capture them; delete the acronym list
++ pluralize + casing guesses. Stays in sdk (per [[layering-sdk-ui-consumer]]).
+Architect chose: commit D5 bulk first, D5b second. THEN D6.
