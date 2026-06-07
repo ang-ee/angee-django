@@ -82,6 +82,10 @@ test.describe("notes list — functions & buttons", () => {
   test("the pager advances to the next page", async ({ page }) => {
     const notes = new NotesPage(page);
     await notes.gotoReady();
+    // The list opens month-grouped (per-view grouping defaults) and every
+    // group fits one pager page; ungroup to page over records.
+    await page.getByRole("button", { name: /^Remove group$/ }).click();
+    await expect(notes.recordsLabel).toHaveAttribute("aria-label", /^Records /);
     const first = (await notes.recordsLabel.getAttribute("aria-label")) ?? "";
     await notes.nextPageButton.click();
     await expect

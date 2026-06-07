@@ -13,8 +13,9 @@ test.describe("notes form — dirty-save", () => {
     await notes.gotoReady();
     await notes.openFirstNote();
 
-    // the view toolbar (control band) carries the record pager even when clean...
-    await expect(notes.controlBand).toContainText(/of\s[\d,]+/);
+    // the view toolbar (control band) carries the record pager even when clean
+    // (the RecordPager reads "current / total", e.g. "1 / 10,052")...
+    await expect(notes.controlBand).toContainText(/\/\s[\d,]+/);
     // ...while Save/Discard are dirty-only.
     await expect(notes.saveButton).toHaveCount(0);
     await expect(notes.discardButton).toHaveCount(0);
