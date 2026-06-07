@@ -7,15 +7,19 @@ from typing import Any
 
 import pytest
 import strawberry
+import strawberry_django
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
+from django_choices_field import IntegerChoicesField
+from graphql import GraphQLEnumType, GraphQLObjectType, get_named_type
 from rebac import MissingActorError, PermissionDenied, RebacMixin
 from rebac.graphql.strawberry import RebacExtension
 from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
 from rebac.managers import RebacManager
 from strawberry.extensions import SchemaExtension
 
+from angee.base.fields import StateField
 from angee.graphql.schema import (
     DEFAULT_SCHEMA_NAME,
     SCHEMA_PART_KEYS,
@@ -73,6 +77,26 @@ class UnmanagedThing(RebacMixin):
         rebac_resource_type = "tests/unmanaged"
 
 
+class WorkflowItem(models.Model):
+    """Model exposing a choice enum through strawberry-django."""
+
+    class State(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        IN_REVIEW = "in_review", "In Review"
+
+    class Priority(models.IntegerChoices):
+        LOW = 1, "Low"
+        HIGH = 2, "High Priority"
+
+    state = StateField(choices_enum=State)
+    priority = IntegerChoicesField(choices_enum=Priority)
+
+    class Meta:
+        """Django model options for the enum-label test model."""
+
+        app_label = "tests"
+
+
 @strawberry.type
 class ThingNode(strawberry.relay.Node):
     """Relay node surface reused across named schemas."""
@@ -120,6 +144,14 @@ class UnmanagedThingType:
         (),
         {"model": UnmanagedThing},
     )()
+
+
+@strawberry_django.type(WorkflowItem)
+class WorkflowItemType:
+    """GraphQL type exposing workflow choice enums."""
+
+    state: strawberry.auto
+    priority: strawberry.auto
 
 
 class FakeAddon(AppConfig):
@@ -272,6 +304,32 @@ def test_rebac_graphql_types_require_rebac_default_manager() -> None:
                 )
             ]
         ).build("public")
+
+
+def test_choice_enum_value_descriptions_come_from_django_labels() -> None:
+    """Django choice labels are copied onto Strawberry enum values before build."""
+
+    schema = GraphQLSchemas(
+        [
+            addon(
+                public={
+                    "query": [HelloQuery],
+                    "types": [WorkflowItemType],
+                }
+            )
+        ]
+    ).build("public")
+
+    item_type = schema._schema.get_type("WorkflowItemType")
+    assert isinstance(item_type, GraphQLObjectType)
+    state_enum = get_named_type(item_type.fields["state"].type)
+    assert isinstance(state_enum, GraphQLEnumType)
+    assert state_enum.values["DRAFT"].description == "Draft"
+    assert state_enum.values["IN_REVIEW"].description == "In Review"
+    priority_enum = get_named_type(item_type.fields["priority"].type)
+    assert isinstance(priority_enum, GraphQLEnumType)
+    assert priority_enum.values["LOW"].description == "Low"
+    assert priority_enum.values["HIGH"].description == "High Priority"
 
 
 def test_build_schema_includes_mutation_root() -> None:

@@ -1,11 +1,12 @@
 import {
   buildSchema,
   getNamedType,
-  isObjectType,
   type GraphQLSchema,
 } from "graphql";
 import { relayPagination } from "@urql/exchange-graphcache/extras";
 import type { KeyingConfig, ResolverConfig } from "@urql/exchange-graphcache";
+
+import { schemaObjectTypes } from "./schema-object-types";
 
 /**
  * The graphcache keying + resolver configuration, derived from the schema so it
@@ -26,15 +27,7 @@ function hasIdField(fields: Record<string, unknown>): boolean {
 
 export function cacheConfigFromSchema(schema: GraphQLSchema): CacheConfig {
   const keys: KeyingConfig = {};
-  const operationTypes = new Set(
-    [schema.getQueryType(), schema.getMutationType(), schema.getSubscriptionType()]
-      .filter((type) => type != null)
-      .map((type) => type.name),
-  );
-
-  for (const type of Object.values(schema.getTypeMap())) {
-    if (!isObjectType(type)) continue;
-    if (type.name.startsWith("__") || operationTypes.has(type.name)) continue;
+  for (const type of schemaObjectTypes(schema)) {
     keys[type.name] = hasIdField(type.getFields())
       ? (data) => (typeof data.id === "string" ? data.id : null)
       : () => null;

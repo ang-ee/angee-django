@@ -6,11 +6,11 @@ from typing import Any
 
 import strawberry
 import strawberry_django
-from strawberry.annotation import StrawberryAnnotation
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
 from rebac import system_context
 from strawberry import UNSET, relay
+from strawberry.annotation import StrawberryAnnotation
 from strawberry.extensions.field_extension import FieldExtension, SyncExtensionResolver
 from strawberry.types import Info
 from strawberry_django.mutations import resolvers as mutation_resolvers
@@ -198,6 +198,7 @@ def _resolve_for_write(
     elif key_attr in (None, "id"):
         instance = instance_from_public_id(model, str(key), queryset=queryset)
     else:
+        assert key_attr is not None
         try:
             instance = queryset.filter(**{key_attr: key}).first()
         except (TypeError, ValueError):

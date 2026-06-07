@@ -824,7 +824,7 @@ export function groupKey(
 ): string {
   if (value == null) return "No value";
   const enumLabel = typeof value === "string"
-    ? enumValueLabel(metadata, group.field, value)
+    ? enumLabelFromMetadata(metadata, group.field, value)
     : null;
   if (enumLabel) return enumLabel;
   const date = parseDate(value);
@@ -843,7 +843,7 @@ export function groupKey(
   return format(date, "MMMM d, yyyy");
 }
 
-function enumValueLabel(
+function enumLabelFromMetadata(
   metadata: ModelMetadata | null,
   field: string,
   value: string,

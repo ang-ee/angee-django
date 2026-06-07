@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type {
   ModelFieldMetadata,
   ModelMetadata,
@@ -9,6 +10,7 @@ import type {
   FieldDescriptor,
 } from "./page";
 import { titleCase } from "../lib/titleCase";
+import { groupFieldLabel } from "./ListInternals";
 
 const ENUM_OPTION_WIDGETS = new Set([
   "select",
@@ -28,7 +30,7 @@ export function columnsWithMetadataDefaults<TRow extends object>(
     const options = enumOptions(field);
     return {
       ...column,
-      header: column.header ?? field?.label ?? titleCase(column.field),
+      header: fieldLabel(column.field, field, column.header),
       ...(column.options === undefined
         && isEnumOptionWidget(column.widget)
         && options.length > 0
@@ -48,7 +50,7 @@ export function fieldsWithMetadataDefaults(
     const options = enumOptions(fieldMetadata);
     return {
       ...field,
-      label: field.label ?? fieldMetadata?.label ?? titleCase(field.name),
+      label: fieldLabel(field.name, fieldMetadata, field.label),
       ...(field.options === undefined
         && isEnumOptionWidget(field.widget ?? field.kind)
         && options.length > 0
@@ -56,6 +58,23 @@ export function fieldsWithMetadataDefaults(
         : {}),
     };
   });
+}
+
+/** Resolve a field label from explicit props, SDL metadata, then title-case. */
+export function fieldLabel(
+  name: string,
+  metadata: ModelFieldMetadata | undefined,
+  explicit?: ReactNode,
+): ReactNode {
+  return explicit ?? metadata?.label ?? titleCase(name);
+}
+
+/** Resolve a group label from SDL metadata, then group-specific field text. */
+export function groupLabel(
+  name: string,
+  metadata: ModelFieldMetadata | undefined,
+): string {
+  return metadata?.label ?? groupFieldLabel(name);
 }
 
 /** Return enum widget options for a metadata field, or an empty list. */

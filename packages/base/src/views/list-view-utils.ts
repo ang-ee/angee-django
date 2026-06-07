@@ -22,9 +22,12 @@ import {
   readPath,
   statusLabel,
 } from "./ListInternals";
-import { titleCase } from "../lib/titleCase";
 import type { ColumnDescriptor } from "./page";
-import { enumOptions } from "./model-metadata-defaults";
+import {
+  enumOptions,
+  fieldLabel,
+  groupLabel,
+} from "./model-metadata-defaults";
 
 const DATE_GROUP_GRANULARITIES = ["year", "quarter", "month", "week", "day"] as const;
 
@@ -46,7 +49,7 @@ export function buildGroupOptions<TRow extends Row>(
     const type = dateGroupType(defaultGroup.field, field) ? "date" : "value";
     addOption({
       id: defaultGroup.field,
-      label: field?.label ?? groupFieldLabel(defaultGroup.field),
+      label: groupLabel(defaultGroup.field, field),
       group: defaultGroup,
       type,
       ...(type === "date" ? { granularities: DATE_GROUP_GRANULARITIES } : {}),
@@ -60,7 +63,7 @@ export function buildGroupOptions<TRow extends Row>(
         id: column.field,
         // Group labels are field-derived (groupFieldLabel trims a trailing
         // "At"), independent of the column's display header.
-        label: field?.label ?? groupFieldLabel(column.field),
+        label: groupLabel(column.field, field),
         group: { field: column.field, granularity: "day" },
         type: "date",
         granularities: DATE_GROUP_GRANULARITIES,
@@ -70,7 +73,7 @@ export function buildGroupOptions<TRow extends Row>(
     if (supportsChoiceFacet(column, metadata)) {
       addOption({
         id: column.field,
-        label: field?.label ?? groupFieldLabel(column.field),
+        label: groupLabel(column.field, field),
         group: { field: column.field },
         type: "value",
       });
@@ -134,13 +137,14 @@ export function buildFilterFields<TRow extends Row>(
     const filterType = filterFieldType(column, field);
     if (!filterType) continue;
     if (filterType === "selection") {
+      const options = enumOptions(field);
       fields.push({
         id: column.field,
         field: column.field,
-        label: column.header ?? field?.label ?? titleCase(column.field),
+        label: fieldLabel(column.field, field, column.header),
         type: "selection",
-        options: enumOptions(field).length > 0
-          ? enumOptions(field)
+        options: options.length > 0
+          ? options
           : statusValues(column, rows).map((value) => ({
               value,
               label: statusLabel(value),
@@ -151,7 +155,7 @@ export function buildFilterFields<TRow extends Row>(
     fields.push({
       id: column.field,
       field: column.field,
-      label: column.header ?? field?.label ?? titleCase(column.field),
+      label: fieldLabel(column.field, field, column.header),
       type: filterType,
     });
   }
@@ -190,6 +194,7 @@ export function supportsChoiceFacet<TRow extends Row>(
   if (field?.kind === "enum") return true;
   if (column.options && column.options.length > 0) return true;
   if (column.tone) return true;
+  // No-metadata escape hatch for RowsListView's built-in status facet.
   return column.field === "status";
 }
 
@@ -267,7 +272,7 @@ export function customFilterChipsFor(
       chips.push({
         id: customFilterId(field, operator),
         label: customFilterChipLabel({
-          fieldLabel: fieldLabels.get(field) ?? titleCase(field),
+          fieldLabel: fieldLabel(field, undefined, fieldLabels.get(field)),
           operator,
           value: operatorValue,
         }),

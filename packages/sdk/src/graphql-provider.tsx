@@ -1,13 +1,15 @@
 import { createElement, useCallback, useMemo, useState, type ReactNode } from "react";
+import { buildSchema, type GraphQLSchema } from "graphql";
 import { Provider as UrqlProvider } from "urql";
 import type { Client } from "@urql/core";
 
 import { createUrqlClient, type AngeeUrqlClientOptions } from "./graphql-client";
+import { cacheConfigFromSchema } from "./cache-config";
 import { makeContext } from "./make-context";
 import {
   EMPTY_SCHEMA_FIELD_METADATA,
   ModelMetadataProvider,
-  fieldMetadataFromSDL,
+  fieldMetadataFromSchema,
   type SchemaFieldMetadata,
 } from "./model-metadata";
 
@@ -17,19 +19,41 @@ export function createSchemaClients(
 ): Record<string, Client> {
   const clients: Record<string, Client> = {};
   for (const [name, options] of Object.entries(config)) {
-    clients[name] = createUrqlClient(options);
+    clients[name] = createUrqlClient(optionsWithSchemaDefaults(options));
   }
   return clients;
 }
 
-function createSchemaMetadata(
+interface SchemaRuntime {
+  clients: Record<string, Client>;
+  metadata: Record<string, SchemaFieldMetadata>;
+}
+
+function createSchemaRuntime(
   config: Record<string, AngeeUrqlClientOptions>,
-): Record<string, SchemaFieldMetadata> {
+): SchemaRuntime {
+  const clients: Record<string, Client> = {};
   const metadata: Record<string, SchemaFieldMetadata> = {};
   for (const [name, options] of Object.entries(config)) {
-    if (options.sdl) metadata[name] = fieldMetadataFromSDL(options.sdl);
+    const schema = options.sdl ? buildSchema(options.sdl) : null;
+    clients[name] = createUrqlClient(optionsWithSchemaDefaults(options, schema));
+    if (schema) metadata[name] = fieldMetadataFromSchema(schema);
   }
-  return metadata;
+  return { clients, metadata };
+}
+
+function optionsWithSchemaDefaults(
+  options: AngeeUrqlClientOptions,
+  schema: GraphQLSchema | null | undefined = undefined,
+): AngeeUrqlClientOptions {
+  const resolvedSchema = schema === undefined && options.sdl && !options.cache
+    ? buildSchema(options.sdl)
+    : schema;
+  if (!resolvedSchema || options.cache) return options;
+  return {
+    ...options,
+    cache: cacheConfigFromSchema(resolvedSchema),
+  };
 }
 
 /**
@@ -78,13 +102,13 @@ export function GraphQLClientProvider(props: {
 }): ReactNode {
   const { config } = props;
   const [generation, setGeneration] = useState(0);
-  const clients = useMemo(
-    () => createSchemaClients(config),
+  const runtime = useMemo(
+    () => createSchemaRuntime(config),
     // `generation` participates so a reset rebuilds the pool from scratch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [config, generation],
   );
-  const schemaMetadata = useMemo(() => createSchemaMetadata(config), [config]);
+  const { clients, metadata: schemaMetadata } = runtime;
   const reset = useCallback(() => setGeneration((current) => current + 1), []);
   return ResetContext.Provider({
     value: reset,

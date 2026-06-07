@@ -378,8 +378,11 @@ the owning framework level inside this slice.
 5. Update the resume-state line below; commit each green slice on
    `ui-refactor-dry` (terse message, no AI attribution).
 
-**Resume state:** chrome 050e087; D2 9502155; D3 (routed DataPage, both
-reviewers folded via --resume) COMMITTED as 18663e0 — gated (typecheck, 272
-vitest, 72/72 e2e incl. 3 deep-link pins). NEXT: D4 — SDL field metadata +
-backend enum-descriptions step (django-reviewer + angee build/migrate/schema
---check in the gate). LAUNCH COMMAND IS HANDED TO THE USER (fresh slice).
+**Resume state:** chrome 050e087; D2 9502155; D3 18663e0; D4 (SDL field
+metadata + backend enum-descriptions) COMMITTED as 0168c72 — gated (SDL
+regenerated with enum descriptions + schema --check, typecheck, 282 vitest,
+72/72 e2e). Supervisor fixed the field-vs-group label split (titleCase for
+column/field/filter, groupFieldLabel kept for group options) + restored
+non-derivable form labels. Architecture + django reviews IN FLIGHT on 0168c72
+(fold via --resume if needed). NEXT: D5 — iam port (ConnectionsPage onto
+DialogForm/FormView/widgets). LAUNCH COMMAND HANDED TO USER (fresh slice).

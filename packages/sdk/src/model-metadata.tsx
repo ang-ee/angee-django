@@ -9,12 +9,12 @@ import {
   isObjectType,
   isScalarType,
   type GraphQLNamedType,
-  type GraphQLObjectType,
   type GraphQLSchema,
   type GraphQLType,
 } from "graphql";
 
 import { makeContext } from "./make-context";
+import { schemaObjectTypes } from "./schema-object-types";
 import { typeNameForModel } from "./selection";
 
 /** Field shape classes the SDL can expose to rendered bindings. */
@@ -41,6 +41,10 @@ export interface ModelFieldMetadata {
 export interface ModelMetadata {
   typeName: string;
   fields: Readonly<Record<string, ModelFieldMetadata>>;
+  /**
+   * Inferred display field for records. Candidate order is title, name,
+   * displayName, label, username, email, slug, then the first String scalar.
+   */
   recordRepresentation?: string;
 }
 
@@ -104,16 +108,10 @@ export function modelMetadataForLabel(
   return metadata.types[`${typeName}Type`] ?? metadata.types[typeName] ?? null;
 }
 
-function fieldMetadataFromSchema(schema: GraphQLSchema): SchemaFieldMetadata {
-  const operationTypes = new Set(
-    [schema.getQueryType(), schema.getMutationType(), schema.getSubscriptionType()]
-      .filter((type): type is GraphQLObjectType => type != null)
-      .map((type) => type.name),
-  );
+/** Derive object-field metadata from a built GraphQL schema. */
+export function fieldMetadataFromSchema(schema: GraphQLSchema): SchemaFieldMetadata {
   const types: Record<string, ModelMetadata> = {};
-  for (const type of Object.values(schema.getTypeMap())) {
-    if (!isObjectType(type)) continue;
-    if (type.name.startsWith("__") || operationTypes.has(type.name)) continue;
+  for (const type of schemaObjectTypes(schema)) {
     const fields = Object.fromEntries(
       Object.values(type.getFields()).map((field) => [
         field.name,
@@ -192,6 +190,10 @@ function enumValueLabel(
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+/**
+ * Return the inferred display field for records. Candidate order is title,
+ * name, displayName, label, username, email, slug, then the first String scalar.
+ */
 function recordRepresentationFor(
   fields: Readonly<Record<string, ModelFieldMetadata>>,
 ): string | undefined {

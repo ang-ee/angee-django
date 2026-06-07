@@ -48,6 +48,7 @@ export {
 export {
   EMPTY_SCHEMA_FIELD_METADATA,
   ModelMetadataProvider,
+  fieldMetadataFromSchema,
   fieldMetadataFromSDL,
   modelMetadataForLabel,
   useModelMetadata,

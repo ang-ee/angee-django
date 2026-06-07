@@ -1,4 +1,5 @@
 import { cacheExchange } from "@urql/exchange-graphcache";
+import { buildSchema } from "graphql";
 import { createClient as createWSClient } from "graphql-ws";
 import {
   createClient,
@@ -10,7 +11,7 @@ import {
 } from "@urql/core";
 import type { FetchBody } from "@urql/core/internal";
 
-import { cacheConfigFromSDL, type CacheConfig } from "./cache-config";
+import { cacheConfigFromSchema, type CacheConfig } from "./cache-config";
 
 type FetchFn = typeof globalThis.fetch;
 
@@ -150,7 +151,7 @@ export function createUrqlClient(options: AngeeUrqlClientOptions): Client {
   const baseFetch = options.fetch ?? globalThis.fetch;
   const auth = options.auth ?? sessionAuth({ endpoint: options.csrfEndpoint });
   const cache = options.cache ?? (
-    options.sdl ? cacheConfigFromSDL(options.sdl) : { keys: {}, resolvers: {} }
+    options.sdl ? cacheConfigFromSchema(buildSchema(options.sdl)) : { keys: {}, resolvers: {} }
   );
 
   return createClient({
