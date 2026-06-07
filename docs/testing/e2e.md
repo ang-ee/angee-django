@@ -157,7 +157,7 @@ and upload the HTML report + traces as artifacts. Because the workspace gives th
 job its own database and ports, parallel CI runs do not collide.
 
 > **Operator job (pending live validation).** The intended one-command path is an
-> opt-in operator job that runs `playwright test` after the `web` and `frontend`
+> opt-in operator job that runs `playwright test` after the `django` and `frontend`
 > services report healthy, threading `playwright_port` and the persistent
 > `playwright_user_data_dir` the workspace already allocates. It is specified here
 > but not added to the default `angee dev` graph (dev boots must not run the

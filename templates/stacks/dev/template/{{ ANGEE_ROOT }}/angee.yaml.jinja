@@ -17,7 +17,7 @@ secrets:
   operator-token: { generated: true, length: 32 }
 
 ports:
-  web: { value: {{ django_port }}, export_env: DJANGO_PORT }
+  django: { value: {{ django_port }}, export_env: DJANGO_PORT }
   process_compose: { value: {{ process_compose_port }}, export_env: PROCESS_COMPOSE_PORT }
   # The operator daemon's port — workspace-allocated (operator.port_pool.operator),
   # never a hardcoded 9000. Services reference it as ${ports.operator}.
@@ -127,7 +127,7 @@ jobs:
 services:
   # Django's runserver is provided by Daphne when the daphne app is installed:
   # it serves the stable Angee ASGI entrypoint while keeping Django's autoreloader.
-  web:
+  django:
     runtime: local
     workdir: source://app
     command: ["uv", "run", "python", "manage.py", "runserver", "127.0.0.1:{{ django_port }}"]
@@ -156,7 +156,7 @@ services:
       # The UI proxies /operator/* to the daemon (same-origin → no CORS), the same
       # way it proxies /graphql/ to Django.
       ANGEE_OPERATOR_URL: "http://127.0.0.1:${ports.operator}"
-    after: [deps, schema, web, operator, operator-codegen]
+    after: [deps, schema, django, operator, operator-codegen]
 
   # The operator daemon for THIS stack: it serves the console's data (services,
   # workspaces, sources, gitops, secrets) and is what runs the dev stack.
