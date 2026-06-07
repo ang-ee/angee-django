@@ -378,8 +378,9 @@ the owning framework level inside this slice.
 5. Update the resume-state line below; commit each green slice on
    `ui-refactor-dry` (terse message, no AI attribution).
 
-**Resume state:** chrome slice (D1+D1b+review fixes) COMMITTED as 050e087 —
-fully gated (typecheck, 245 vitest, both reviewers folded incl. 21-item round,
-69/69 e2e). e2e baseline repair committed as 33f3c00. NEXT: D2 — reusable
-`List`/`Form` view components + DataPage DSL (contract updated 2026-06-07 with
-the reusability requirement).
+**Resume state:** chrome slice committed as 050e087; D2 (reusable List/Form +
+DataPage DSL, both reviewers folded incl. 13-item round, naming decision: DSL
+owns bare element names) COMMITTED as 9502155 — gated (typecheck, 270 vitest,
+69/69 e2e). NEXT: D3 — DataPage owns record-route navigation ("new" sentinel
+first, base path from matched route, routed/controlled collision; pin
+deep-link e2e cases before deleting NotePage's navigation glue).

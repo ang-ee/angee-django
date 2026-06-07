@@ -43,6 +43,7 @@ export {
 } from "./FormView";
 export {
   DataPage,
+  NEW_RECORD_ID,
   type DataPageProps,
   type RecordPlacement,
   type RecordSmartButtonDescriptor,

@@ -8,6 +8,7 @@ import {
   Column,
   Field,
   Group,
+  NEW_RECORD_ID,
   Spinner,
   type DataToolbarFilterField,
   type DataToolbarFilterOption,
@@ -17,13 +18,12 @@ import {
   useChatterContent,
 } from "@angee/base";
 import { useAuthoredQuery, useResourceRecord } from "@angee/sdk";
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { useParams } from "@tanstack/react-router";
 import { formatDistanceToNow } from "date-fns";
 
 import { NOTE_STATUS_OPTIONS, NOTE_STATUS_TONES } from "./note-status";
 
 const MODEL = "notes.Note";
-const NOTE_LIST_PATH = "/notes";
 const NOTE_REVISIONS_QUERY = `
   query NoteRevisions($id: ID!) {
     noteRevisions(id: $id) {
@@ -49,10 +49,6 @@ interface NoteRevisionsData {
 type NoteRevisionsVariables = Record<string, unknown> & {
   id: string;
 };
-
-interface NoteRouteParams {
-  id?: string;
-}
 
 const NOTE_FILTERS: readonly DataToolbarFilterOption[] = NOTE_STATUS_OPTIONS.map(
   (option) => ({
@@ -172,7 +168,7 @@ const recordSmartButtons = [
 
 /** The record crumb for `/notes/$id` — resolves the note title from the cache. */
 export function NoteCrumb({ id }: { id: string }): React.ReactElement {
-  const isNew = id === "new";
+  const isNew = id === NEW_RECORD_ID;
   const { fetching, record } = useResourceRecord(MODEL, isNew ? null : id, {
     enabled: !isNew && id !== "",
     fields: ["title"],
@@ -187,25 +183,11 @@ export function NoteCrumb({ id }: { id: string }): React.ReactElement {
 export function NotePage(): React.ReactElement {
   // The nested record route (`notes.record`) carries no component; this parent
   // surface reads its `$id` param directly.
-  const params = useParams({ strict: false }) as Partial<NoteRouteParams>;
-  const routeId = typeof params.id === "string" ? params.id : undefined;
-  const navigate = useNavigate();
-  const [locallyCreating, setLocallyCreating] = React.useState(false);
-  const creating = routeId === "new" || (routeId === undefined && locallyCreating);
+  const params = useParams({ strict: false });
+  const routeId =
+    "id" in params && typeof params.id === "string" ? params.id : undefined;
+  const creating = routeId === NEW_RECORD_ID;
   const recordId = creating ? null : routeId;
-  const handleSelect = React.useCallback(
-    (id: string | null) => {
-      setLocallyCreating(id === null);
-      if (typeof id === "string") {
-        void navigate({ to: noteRecordPath(id) });
-      }
-    },
-    [navigate],
-  );
-  const handleClose = React.useCallback(() => {
-    setLocallyCreating(false);
-    void navigate({ to: NOTE_LIST_PATH });
-  }, [navigate]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -214,23 +196,14 @@ export function NotePage(): React.ReactElement {
       <DataPage
         model={MODEL}
         recordSmartButtons={recordSmartButtons}
-        recordId={recordId}
-        creating={creating}
         placement="inline"
-        rowHref={(row) =>
-          typeof row.id === "string" ? noteRecordPath(row.id) : NOTE_LIST_PATH}
-        onSelect={handleSelect}
-        onClose={handleClose}
+        routed
       >
         {noteList}
         {noteForm}
       </DataPage>
     </div>
   );
-}
-
-function noteRecordPath(id: string): string {
-  return `${NOTE_LIST_PATH}/${encodeURIComponent(id)}`;
 }
 
 function NoteChatter({

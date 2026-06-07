@@ -29,6 +29,7 @@ import type {
   ListProps,
 } from "./List";
 import type { FormProps } from "./Form";
+import { RoutedRecordController } from "./DataPageRouted";
 import { useBulkDelete } from "./useBulkDelete";
 import {
   DataViewProvider,
@@ -53,6 +54,9 @@ import {
 
 /** Where the open record's form renders relative to the list. */
 export type RecordPlacement = "inline" | "drawer";
+
+/** Record id sentinel that tells `DataPage` to render a blank create form. */
+export const NEW_RECORD_ID = "new";
 
 export interface RecordSmartButtonDescriptor {
   id: string;
@@ -81,7 +85,10 @@ export interface DataPageProps<TRow extends Row = Row> {
    * marker from the parser.
    */
   children?: React.ReactNode;
-  /** Currently open record id; `"new"` (or the `creating` flag) opens a blank form. */
+  /**
+   * Currently open record id; `NEW_RECORD_ID` (or the `creating` flag) opens a
+   * blank form.
+   */
   recordId?: string | null;
   /** True when creating a new record (an alternative to `recordId === null`). */
   creating?: boolean;
@@ -89,6 +96,15 @@ export interface DataPageProps<TRow extends Row = Row> {
   onSelect?: (id: string | null) => void;
   /** Called to dismiss the open record. */
   onClose?: () => void;
+  /**
+   * Opt into TanStack Router-owned record navigation.
+   *
+   * In routed mode the collection route must own a nested trailing `$param`
+   * record route. `DataPage` derives the collection base from that child route,
+   * reads the active record id when the child is matched, and owns select,
+   * create, and close navigation. Do not mix with controlled record props.
+   */
+  routed?: boolean;
   /** Where the form shows: beside/below the list (`"inline"`) or in a modal. */
   placement?: RecordPlacement;
   /** List options forwarded to `ListView`. */
@@ -129,6 +145,15 @@ interface DataPageFormDeclaration {
   groups: readonly GroupDescriptor[];
 }
 
+/** Internal record-open state and commands resolved before `DataPageBody`. */
+export interface DataPageRecordController<TRow extends Row = Row> {
+  recordId?: string | null;
+  creating?: boolean;
+  onSelect?: (id: string | null) => void;
+  onClose?: () => void;
+  rowHref?: (row: TRow) => string;
+}
+
 /** A collection list with an open-record form for one model. */
 export function DataPage<TRow extends Row = Row>({
   pageSize,
@@ -155,35 +180,57 @@ export function DataPage<TRow extends Row = Row>({
     }),
     [initialPageSize],
   );
+  const content = props.routed ? (
+    <RoutedRecordController<TRow> newRecordId={NEW_RECORD_ID}>
+      {(recordController) => (
+        <DataPageBody
+          {...props}
+          pageSize={pageSize}
+          defaultGroup={defaultGroup}
+          defaultGroups={defaultGroups}
+          declarations={declarations}
+          recordController={recordController}
+        />
+      )}
+    </RoutedRecordController>
+  ) : (
+    <DataPageBody
+      {...props}
+      pageSize={pageSize}
+      defaultGroup={defaultGroup}
+      defaultGroups={defaultGroups}
+      declarations={declarations}
+      recordController={controlledRecordController(props)}
+    />
+  );
 
   if (dataView) {
-    return (
-      <DataPageBody
-        {...props}
-        pageSize={pageSize}
-        defaultGroup={defaultGroup}
-        defaultGroups={defaultGroups}
-        declarations={declarations}
-      />
-    );
+    return content;
   }
 
   return (
     <DataViewProvider initialState={initialState} resource={props.model}>
-      <DataPageBody
-        {...props}
-        pageSize={pageSize}
-        defaultGroup={defaultGroup}
-        defaultGroups={defaultGroups}
-        declarations={declarations}
-      />
+      {content}
     </DataViewProvider>
   );
+}
+
+function controlledRecordController<TRow extends Row>(
+  props: DataPageProps<TRow>,
+): DataPageRecordController<TRow> {
+  return {
+    recordId: props.recordId,
+    creating: props.creating,
+    onSelect: props.onSelect,
+    onClose: props.onClose,
+    rowHref: props.rowHref,
+  };
 }
 
 interface DataPageBodyProps<TRow extends Row = Row>
   extends DataPageProps<TRow> {
   declarations: DataPageDeclarations<TRow>;
+  recordController: DataPageRecordController<TRow>;
 }
 
 function DataPageBody<TRow extends Row = Row>({
@@ -192,10 +239,7 @@ function DataPageBody<TRow extends Row = Row>({
   formFields,
   formGroups,
   declarations,
-  recordId,
-  creating = false,
-  onSelect,
-  onClose,
+  recordController,
   placement = "inline",
   filter,
   filters,
@@ -210,9 +254,14 @@ function DataPageBody<TRow extends Row = Row>({
   returning,
   recordSmartButtons = [],
   hideCreate = false,
-  rowHref,
   className,
 }: DataPageBodyProps<TRow>): React.ReactElement {
+  const resolvedRecordId = recordController.recordId;
+  const resolvedCreating =
+    Boolean(recordController.creating) || resolvedRecordId === NEW_RECORD_ID;
+  const handleSelectRecord = recordController.onSelect;
+  const handleCloseRecord = recordController.onClose;
+  const resolvedRowHref = recordController.rowHref;
   const resolvedColumns = declarations.list?.columns ?? requiredColumns(columns);
   const resolvedFormFields =
     declarations.form?.fields ?? requiredFormFields(formFields);
@@ -228,7 +277,7 @@ function DataPageBody<TRow extends Row = Row>({
     pageSize,
     defaultGroup,
     defaultGroups,
-    rowHref,
+    rowHref: resolvedRowHref,
     ...(declarations.list
       ? listElementRenderProps(declarations.list.props)
       : {}),
@@ -246,8 +295,8 @@ function DataPageBody<TRow extends Row = Row>({
     React.useState<PendingRecordNavigation | null>(null);
 
   // A record is open when an id is selected or a create was requested.
-  const open = creating || recordId != null;
-  const editId = creating ? null : recordId ?? null;
+  const open = resolvedCreating || resolvedRecordId != null;
+  const editId = resolvedCreating ? null : resolvedRecordId ?? null;
   // Group defaults are forwarded to the list component; GroupListView is their
   // sole owner/seeder. The lean ListView ignores them.
   const handleListStateChange = React.useCallback(
@@ -261,9 +310,18 @@ function DataPageBody<TRow extends Row = Row>({
 
   const handleSaved = React.useCallback(
     (row: Row) => {
-      if (typeof row.id === "string") onSelect?.(row.id);
+      if (typeof row.id === "string") handleSelectRecord?.(row.id);
     },
-    [onSelect],
+    [handleSelectRecord],
+  );
+  const handleCreateRecord = React.useCallback(() => {
+    handleSelectRecord?.(null);
+  }, [handleSelectRecord]);
+  const handleRowClick = React.useCallback(
+    (row: TRow) => {
+      if (typeof row.id === "string") handleSelectRecord?.(row.id);
+    },
+    [handleSelectRecord],
   );
 
   React.useEffect(() => {
@@ -277,35 +335,41 @@ function DataPageBody<TRow extends Row = Row>({
     const targetId = rowId(target);
     if (targetId) {
       setPendingNavigation(null);
-      onSelect?.(targetId);
+      handleSelectRecord?.(targetId);
     } else if (listState.rows.length === 0) {
       setPendingNavigation(null);
     }
-  }, [listState, onSelect, pendingNavigation]);
+  }, [handleSelectRecord, listState, pendingNavigation]);
 
   const recordNavigation = React.useMemo(
     () =>
       buildRecordNavigation({
-        creating,
+        creating: resolvedCreating,
         listState,
-        recordId,
-        onSelect,
+        recordId: resolvedRecordId,
+        onSelect: handleSelectRecord,
         setPage: dataView.setPage,
         setPendingNavigation,
       }),
-    [creating, dataView.setPage, listState, onSelect, recordId],
+    [
+      dataView.setPage,
+      handleSelectRecord,
+      listState,
+      resolvedCreating,
+      resolvedRecordId,
+    ],
   );
 
   const recordDeleteIds = React.useMemo<ReadonlySet<string>>(
     () =>
-      !creating && typeof recordId === "string"
-        ? new Set([recordId])
+      !resolvedCreating && typeof resolvedRecordId === "string"
+        ? new Set([resolvedRecordId])
         : EMPTY_RECORD_ID_SET,
-    [creating, recordId],
+    [resolvedCreating, resolvedRecordId],
   );
   const handleRecordDeleted = React.useCallback(() => {
-    onClose?.();
-  }, [onClose]);
+    handleCloseRecord?.();
+  }, [handleCloseRecord]);
   const recordDelete = useBulkDelete(model, recordDeleteIds, handleRecordDeleted);
   const recordHeaderStart = open ? (
     <RecordActions
@@ -321,7 +385,7 @@ function DataPageBody<TRow extends Row = Row>({
       smartButtons={recordSmartButtons}
       onViewChange={(view) => {
         dataView.setView(view);
-        onClose?.();
+        handleCloseRecord?.();
       }}
     />
   ) : null;
@@ -342,15 +406,13 @@ function DataPageBody<TRow extends Row = Row>({
       model={model}
       columns={resolvedColumns}
       {...listRenderProps}
-      onCreate={!hideCreate && onSelect ? () => onSelect(null) : undefined}
-      onListStateChange={handleListStateChange}
-      onRowClick={
-        onSelect
-          ? (row) => {
-              if (typeof row.id === "string") onSelect(row.id);
-            }
+      onCreate={
+        !hideCreate && handleSelectRecord
+          ? handleCreateRecord
           : undefined
       }
+      onListStateChange={handleListStateChange}
+      onRowClick={handleSelectRecord ? handleRowClick : undefined}
     />
   );
   const listStateOnly = open ? (
@@ -386,7 +448,7 @@ function DataPageBody<TRow extends Row = Row>({
         <DialogRoot
           open={open}
           onOpenChange={(next) => {
-            if (!next) onClose?.();
+            if (!next) handleCloseRecord?.();
           }}
         >
           <DialogPortal>
@@ -484,6 +546,7 @@ function validateDataPageDeclarations<TRow extends Row>(
   props: Omit<DataPageProps<TRow>, "children">,
   declarations: DataPageDeclarations<TRow>,
 ): void {
+  validateDataPageRouting(props);
   validateNestedModel("List", props.model, declarations.list?.props.model);
   validateNestedModel("Form", props.model, declarations.form?.props.model);
   if (declarations.list) {
@@ -507,6 +570,21 @@ function validateDataPageDeclarations<TRow extends Row>(
       declarationKeys: ["formFields", "formGroups"],
       dataPageOwnedKeys: ["id", "onSaved"],
     });
+  }
+}
+
+function validateDataPageRouting<TRow extends Row>(
+  props: Omit<DataPageProps<TRow>, "children">,
+): void {
+  if (props.routed) {
+    const controlledKeys = ["recordId", "creating", "onSelect", "onClose"];
+    const mixed = controlledKeys.filter((key) => hasOwnDefined(props, key));
+    if (mixed.length > 0) {
+      throw new Error(
+        `DataPage routed mode cannot mix with controlled record props: ${mixed.join(", ")}.`,
+      );
+    }
+    return;
   }
 }
 
