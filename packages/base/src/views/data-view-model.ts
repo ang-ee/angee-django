@@ -63,6 +63,10 @@ export interface DataViewGroup {
   granularity?: DataViewGroupGranularity;
 }
 
+export type DataViewDefaultGroups = Partial<
+  Record<DataViewKind, DataViewGroup | null>
+>;
+
 export interface DataViewInitialState {
   page?: number;
   pageSize?: number;

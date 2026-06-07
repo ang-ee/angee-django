@@ -24,8 +24,11 @@ import {
   type DataViewContextValue,
 } from "./data-view-context";
 import {
+  DATA_VIEW_KINDS,
   dataViewGroupsEqual,
+  type DataViewDefaultGroups,
   type DataViewGroup,
+  type DataViewKind,
 } from "./data-view-model";
 import { DeletePreviewDialog } from "./DeletePreviewDialog";
 import { useDataViewSurface } from "./data-view-surface";
@@ -70,9 +73,10 @@ export type {
 export type { ListViewProps } from "./list-view-types";
 
 // GroupListView is a superset of the lean list: it owns the grouping-only
-// `defaultGroup` (seeded here, its sole owner — DataPage just forwards it).
+// defaults (seeded here, their sole owner — DataPage just forwards them).
 export type GroupListViewProps<TRow extends Row = Row> = ListViewProps<TRow> & {
   defaultGroup?: DataViewGroup | null;
+  defaultGroups?: DataViewDefaultGroups;
 };
 
 const EMPTY_GROUP_STACK = [] as const;
@@ -129,6 +133,7 @@ function ListViewBody<TRow extends Row = Row>({
   order,
   pageSize,
   defaultGroup,
+  defaultGroups,
   grouping,
   onCreate,
   createLabel,
@@ -141,24 +146,38 @@ function ListViewBody<TRow extends Row = Row>({
 }: ListViewShellProps<TRow> & {
   dataView: DataViewContextValue;
 }): React.ReactElement {
+  const activeDefaultGroup = defaultGroupForView(
+    defaultGroup,
+    defaultGroups,
+    dataView.state.view,
+  );
   const handledDefaultGroupRef = React.useRef<DataViewGroup | null>(null);
   React.useEffect(() => {
-    if (!grouping || !defaultGroup) {
+    if (!grouping || !activeDefaultGroup) {
       handledDefaultGroupRef.current = null;
       return;
     }
     if (
       handledDefaultGroupRef.current
-      && dataViewGroupsEqual(handledDefaultGroupRef.current, defaultGroup)
+      && dataViewGroupsEqual(handledDefaultGroupRef.current, activeDefaultGroup)
     ) {
       return;
     }
-    handledDefaultGroupRef.current = defaultGroup;
-    if (dataView.state.group === null) dataView.setGroup(defaultGroup);
+    const previousDefault = handledDefaultGroupRef.current;
+    if (
+      dataView.state.group === null
+      || (
+        previousDefault
+        && dataViewGroupsEqual(dataView.state.group, previousDefault)
+      )
+    ) {
+      handledDefaultGroupRef.current = activeDefaultGroup;
+      dataView.setGroup(activeDefaultGroup);
+    }
   }, [
+    activeDefaultGroup,
     dataView.setGroup,
     dataView.state.group,
-    defaultGroup,
     grouping,
   ]);
 
@@ -229,10 +248,13 @@ function ListViewBody<TRow extends Row = Row>({
       grouping
         ? mergeGroupOptions(
             explicitGroupOptions,
-            buildGroupOptions(columns, defaultGroup),
+            buildGroupOptions(
+              columns,
+              defaultGroupsForToolbar(defaultGroup, defaultGroups),
+            ),
           )
         : undefined,
-    [columns, defaultGroup, explicitGroupOptions, grouping],
+    [columns, defaultGroup, defaultGroups, explicitGroupOptions, grouping],
   );
   const inferredFilterOptions = React.useMemo(
     () => buildFilterOptions(columns, surface.rows),
@@ -457,6 +479,33 @@ function FlatListBodyWithAggregate<TRow extends Row>({
     enabled: Boolean(measures?.length),
   });
   return <FlatListBody {...props} footerAggregate={aggregate.aggregate} />;
+}
+
+function defaultGroupForView(
+  defaultGroup: DataViewGroup | null | undefined,
+  defaultGroups: DataViewDefaultGroups | undefined,
+  view: DataViewKind,
+): DataViewGroup | null {
+  if (
+    defaultGroups
+    && Object.prototype.hasOwnProperty.call(defaultGroups, view)
+  ) {
+    return defaultGroups[view] ?? null;
+  }
+  return defaultGroup ?? null;
+}
+
+function defaultGroupsForToolbar(
+  defaultGroup: DataViewGroup | null | undefined,
+  defaultGroups: DataViewDefaultGroups | undefined,
+): readonly DataViewGroup[] {
+  const groups: DataViewGroup[] = [];
+  if (defaultGroup) groups.push(defaultGroup);
+  for (const view of DATA_VIEW_KINDS) {
+    const group = defaultGroups?.[view];
+    if (group) groups.push(group);
+  }
+  return groups;
 }
 
 function mergeGroupOptions(

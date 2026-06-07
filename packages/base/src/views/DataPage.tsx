@@ -38,6 +38,7 @@ import {
 } from "./data-view-context";
 import {
   type DataViewFilter,
+  type DataViewDefaultGroups,
   type DataViewGroup,
   type DataViewKind,
 } from "./data-view-model";
@@ -81,10 +82,14 @@ export interface DataPageProps<TRow extends Row = Row> {
   order?: ListViewProps<TRow>["order"];
   pageSize?: number;
   defaultGroup?: DataViewGroup | null;
+  defaultGroups?: DataViewDefaultGroups;
   fields?: ListViewProps<TRow>["fields"];
   /** List component used for the collection surface. Defaults to the lean flat list. */
   list?: React.ComponentType<
-    ListViewProps<TRow> & { defaultGroup?: DataViewGroup | null }
+    ListViewProps<TRow> & {
+      defaultGroup?: DataViewGroup | null;
+      defaultGroups?: DataViewDefaultGroups;
+    }
   >;
   /** Form options forwarded to `FormView`. */
   returning?: FormViewProps["returning"];
@@ -100,6 +105,7 @@ export interface DataPageProps<TRow extends Row = Row> {
 export function DataPage<TRow extends Row = Row>({
   pageSize,
   defaultGroup,
+  defaultGroups,
   ...props
 }: DataPageProps<TRow>): React.ReactElement {
   const dataView = useDataViewMaybe();
@@ -116,6 +122,7 @@ export function DataPage<TRow extends Row = Row>({
         {...props}
         pageSize={pageSize}
         defaultGroup={defaultGroup}
+        defaultGroups={defaultGroups}
       />
     );
   }
@@ -126,6 +133,7 @@ export function DataPage<TRow extends Row = Row>({
         {...props}
         pageSize={pageSize}
         defaultGroup={defaultGroup}
+        defaultGroups={defaultGroups}
       />
     </DataViewProvider>
   );
@@ -148,9 +156,13 @@ function DataPageBody<TRow extends Row = Row>({
   order,
   pageSize,
   defaultGroup,
+  defaultGroups,
   fields,
   list: ListComponent = ListView as React.ComponentType<
-    ListViewProps<TRow> & { defaultGroup?: DataViewGroup | null }
+    ListViewProps<TRow> & {
+      defaultGroup?: DataViewGroup | null;
+      defaultGroups?: DataViewDefaultGroups;
+    }
   >,
   returning,
   recordSmartButtons = [],
@@ -175,9 +187,8 @@ function DataPageBody<TRow extends Row = Row>({
   // A record is open when an id is selected or a create was requested.
   const open = creating || recordId != null;
   const editId = creating ? null : recordId ?? null;
-  // `defaultGroup` is forwarded to the list component (below); GroupListView is
-  // its sole owner/seeder. The lean ListView ignores it, so a flat page never
-  // seeds group state.
+  // Group defaults are forwarded to the list component; GroupListView is their
+  // sole owner/seeder. The lean ListView ignores them.
   const recordBreadcrumb = React.useMemo(
     () =>
       recordBreadcrumbLabel({
@@ -308,6 +319,7 @@ function DataPageBody<TRow extends Row = Row>({
       order={order}
       pageSize={pageSize}
       defaultGroup={defaultGroup}
+      defaultGroups={defaultGroups}
       onCreate={!hideCreate && onSelect ? () => onSelect(null) : undefined}
       onListStateChange={handleListStateChange}
       rowHref={rowHref}

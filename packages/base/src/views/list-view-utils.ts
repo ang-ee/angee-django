@@ -26,7 +26,7 @@ import type { ColumnDescriptor } from "./page";
 
 export function buildGroupOptions<TRow extends Row>(
   columns: readonly ColumnDescriptor<TRow>[],
-  defaultGroup: DataViewGroup | null | undefined,
+  defaultGroups: DataViewGroup | readonly DataViewGroup[] | null | undefined,
 ): readonly DataToolbarGroupOption[] {
   const options: DataToolbarGroupOption[] = [];
   const seen = new Set<string>();
@@ -36,7 +36,7 @@ export function buildGroupOptions<TRow extends Row>(
     options.push(option);
   };
 
-  if (defaultGroup) {
+  for (const defaultGroup of defaultGroupList(defaultGroups)) {
     addOption({
       id: defaultGroup.field,
       label: groupFieldLabel(defaultGroup.field),
@@ -66,6 +66,19 @@ export function buildGroupOptions<TRow extends Row>(
   }
 
   return options;
+}
+
+function defaultGroupList(
+  defaultGroups: DataViewGroup | readonly DataViewGroup[] | null | undefined,
+): readonly DataViewGroup[] {
+  if (!defaultGroups) return [];
+  return isDataViewGroupList(defaultGroups) ? defaultGroups : [defaultGroups];
+}
+
+function isDataViewGroupList(
+  value: DataViewGroup | readonly DataViewGroup[],
+): value is readonly DataViewGroup[] {
+  return Array.isArray(value);
 }
 
 export function buildFilterOptions<TRow extends Row>(

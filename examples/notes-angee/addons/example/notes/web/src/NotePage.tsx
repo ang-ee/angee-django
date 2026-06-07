@@ -7,6 +7,7 @@ import {
   type DataToolbarFilterField,
   type DataToolbarFilterOption,
   type DataToolbarGroupOption,
+  type DataViewDefaultGroups,
   type FormField,
   type ListColumn,
   type PageGroupDescriptor,
@@ -109,6 +110,11 @@ const NOTE_GROUPS: readonly DataToolbarGroupOption[] = [
     type: "value",
   },
 ];
+
+const NOTE_DEFAULT_GROUPS = {
+  list: { field: "updatedAt", granularity: "month" },
+  board: { field: "status" },
+} satisfies DataViewDefaultGroups;
 
 const titleField = {
   name: "title",
@@ -218,9 +224,7 @@ export function NotePage({
   return (
     <div className="flex flex-col gap-4">
       <NoteChatter recordId={recordId} creating={creating} />
-      {/* Open flat, most-recent-first (order by updatedAt). A day-granularity
-          default group is unusable against the seed's multi-year span — one
-          folded group per day — so grouping is left to the toolbar control. */}
+      {/* Open as a month-grouped list; board view switches to status lanes. */}
       <DataPage
         model={MODEL}
         columns={columns}
@@ -235,6 +239,7 @@ export function NotePage({
         creating={creating}
         placement="inline"
         list={GroupListView}
+        defaultGroups={NOTE_DEFAULT_GROUPS}
         pageSize={50}
         order={{ updatedAt: "DESC" }}
         rowHref={(row) =>

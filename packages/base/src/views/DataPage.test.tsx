@@ -508,6 +508,63 @@ describe("DataPage", () => {
     });
   });
 
+  test("seeds different default groups for list and board views", async () => {
+    const onUrlUpdate = vi.fn();
+    const boardColumns = [
+      { field: "title", header: "Title" },
+      {
+        field: "status",
+        header: "Status",
+        tone: {
+          ACTIVE: "success",
+          DRAFT: "warning",
+          ARCHIVED: "default",
+        },
+      },
+      { field: "updatedAt", header: "Updated At" },
+    ] satisfies readonly ListColumn[];
+
+    render(
+      <TestUrlState onUrlUpdate={onUrlUpdate}>
+        <DataPage
+          model="notes.Note"
+          columns={boardColumns}
+          formFields={formFields}
+          list={GroupListView}
+          defaultGroups={{
+            list: { field: "updatedAt", granularity: "month" },
+            board: { field: "status" },
+          }}
+        />
+      </TestUrlState>,
+    );
+
+    await screen.findByText("Updated · Month");
+    await waitFor(() => {
+      const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
+      expect(latest?.searchParams.get("group")).toBe("updatedAt:month");
+      expect(latest?.searchParams.get("view")).toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Board view" }));
+
+    await screen.findByRole("region", { name: "Active" });
+    await waitFor(() => {
+      const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
+      expect(latest?.searchParams.get("group")).toBe("status");
+      expect(latest?.searchParams.get("view")).toBe("board");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "List view" }));
+
+    await screen.findByText("Updated · Month");
+    await waitFor(() => {
+      const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
+      expect(latest?.searchParams.get("group")).toBe("updatedAt:month");
+      expect(latest?.searchParams.get("view")).toBeNull();
+    });
+  });
+
   test("publishes persistent breadcrumbs for the selected record", async () => {
     render(
       <TestUrlState>
