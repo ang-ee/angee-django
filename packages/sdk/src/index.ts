@@ -154,6 +154,7 @@ export {
   type AddonManifest,
   type AddonRoute,
   type ComposedAddons,
+  type ComposedMenuItem,
   type ChatterContribution,
   type SlotContribution,
   type MenuItem,

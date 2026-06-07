@@ -29,10 +29,6 @@ import {
 } from "react";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
-import {
-  Breadcrumb,
-  BreadcrumbProvider,
-} from "../chrome/Breadcrumb";
 import { ModalsHost, ToastProvider } from "../feedback";
 import { parseFlatSearch, stringifyFlatSearch } from "../createApp";
 import { DataPage } from "./DataPage";
@@ -563,67 +559,6 @@ describe("DataPage", () => {
       expect(latest?.searchParams.get("group")).toBe("updatedAt:month");
       expect(latest?.searchParams.get("view")).toBeNull();
     });
-  });
-
-  test("publishes persistent breadcrumbs for the selected record", async () => {
-    render(
-      <TestUrlState>
-        <BreadcrumbProvider initialTrail={[{ label: "Notes" }]}>
-          <Breadcrumb />
-          <DataPage
-            model="notes.Note"
-            columns={columns}
-            formFields={formFields}
-            recordId="note-2"
-            placement="inline"
-            pageSize={2}
-          />
-        </BreadcrumbProvider>
-      </TestUrlState>,
-    );
-
-    const breadcrumb = await screen.findByRole("navigation", {
-      name: "Breadcrumb",
-    });
-    await waitFor(() =>
-      expect(within(breadcrumb).getByText("Second")).toBeTruthy(),
-    );
-    expect(within(breadcrumb).getByText("Second").getAttribute("aria-current"))
-      .toBe("page");
-  });
-
-  test("opens a selected row and keeps the record breadcrumb published", async () => {
-    function Harness(): ReactElement {
-      const [recordId, setRecordId] = useState<string | null | undefined>(
-        undefined,
-      );
-      return (
-        <TestUrlState>
-          <BreadcrumbProvider initialTrail={[{ label: "Notes" }]}>
-            <Breadcrumb />
-            <DataPage
-              model="notes.Note"
-              columns={columns}
-              formFields={formFields}
-              recordId={recordId}
-              placement="inline"
-              pageSize={2}
-              onSelect={setRecordId}
-            />
-          </BreadcrumbProvider>
-        </TestUrlState>
-      );
-    }
-
-    render(<Harness />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "Open First" }));
-    const breadcrumb = screen.getByRole("navigation", { name: "Breadcrumb" });
-    await waitFor(() =>
-      expect(within(breadcrumb).getByText("First")).toBeTruthy(),
-    );
-    expect(within(breadcrumb).getByText("First").getAttribute("aria-current"))
-      .toBe("page");
   });
 
   test("lets the seeded default group be cleared", async () => {

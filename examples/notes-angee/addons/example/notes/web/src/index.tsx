@@ -1,8 +1,10 @@
 import type { BaseAddon } from "@angee/base";
 
-import { NotePage, NoteRecordPage } from "./NotePage";
+import { NoteCrumb, NotePage } from "./NotePage";
 
-/** The notes addon: one console route and a menu entry pointing at it. */
+/** The notes addon: one console surface and a menu entry pointing at it. The
+ * record route nests under the list route — `NotePage` reads its `$id` param
+ * and the route's crumb resolves the note title. */
 const notes: BaseAddon = {
   id: "notes",
   routes: [
@@ -10,22 +12,19 @@ const notes: BaseAddon = {
       name: "notes.home",
       path: "/notes",
       shell: "console",
-      title: "Notes",
-      icon: "notes",
-      breadcrumbs: [{ label: "Notes" }],
       component: NotePage,
     },
     {
       name: "notes.record",
       path: "/notes/$id",
       shell: "console",
-      title: "Notes",
-      icon: "notes",
-      breadcrumbs: [{ label: "Notes", to: "/notes" }],
-      component: NoteRecordPage,
+      parent: "notes.home",
+      crumb: (match) => (
+        <NoteCrumb id={String((match.params as { id?: string }).id ?? "")} />
+      ),
     },
   ],
-  menus: [{ id: "notes", label: "Notes", to: "/notes", icon: "notes" }],
+  menus: [{ id: "notes", label: "Notes", route: "notes.home", icon: "notes" }],
 };
 
 export default notes;

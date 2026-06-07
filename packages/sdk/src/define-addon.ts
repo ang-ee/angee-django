@@ -12,16 +12,32 @@ export interface AddonRoute {
   name: string;
   /** Router path pattern (e.g. `/notes`, `/notes/$id`). */
   path: string;
+  /** Optional route name this route nests under in the rendered route tree. */
+  parent?: string;
   /** Which shell renders this route's chrome (`console`, `public`, …). */
   shell: string;
 }
 
 /** A navigation entry; many menu items may target one route. */
 export interface MenuItem {
-  id: string;
+  /** Stable menu id. Defaults to `route` when omitted. */
+  id?: string;
   label?: string;
+  children?: readonly MenuItem[];
+  /**
+   * Route name this item targets. The rendered binding resolves `to` from the
+   * route path and may derive route chrome from the item's root ancestor:
+   * root title/icon, linked ancestor crumbs, and a plain leaf crumb.
+   */
+  route?: string;
   to?: string;
   icon?: string;
+}
+
+/** A composed navigation entry with defaults applied. */
+export interface ComposedMenuItem extends Omit<MenuItem, "children" | "id"> {
+  id: string;
+  children?: readonly ComposedMenuItem[];
 }
 
 /** Field-widget registry: widget id -> renderer (opaque to the headless SDK). */
@@ -56,7 +72,7 @@ export interface AddonManifest {
 /** The merged runtime an app composes from its addon manifests. */
 export interface ComposedAddons {
   routes: readonly AddonRoute[];
-  menus: readonly MenuItem[];
+  menus: readonly ComposedMenuItem[];
   widgets: WidgetMap;
   i18n: I18nResources;
   icons: Readonly<Record<string, unknown>>;
@@ -119,11 +135,12 @@ function claim(
  */
 export function composeAddons(addons: readonly AddonManifest[]): ComposedAddons {
   const routes: AddonRoute[] = [];
-  const menus: MenuItem[] = [];
+  const menus: ComposedMenuItem[] = [];
   const widgets: WidgetMap = {};
   const i18n: Record<string, Record<string, string>> = {};
   const icons: Record<string, unknown> = {};
   const routeNames: Record<string, true> = {};
+  const menuIds: Record<string, true> = {};
 
   for (const addon of addons) {
     if (addon.routes) {
@@ -133,7 +150,9 @@ export function composeAddons(addons: readonly AddonManifest[]): ComposedAddons 
         routes.push(route);
       }
     }
-    if (addon.menus) menus.push(...addon.menus);
+    if (addon.menus) {
+      menus.push(...normalizeMenuItems(menuIds, addon.menus, addon.id));
+    }
     if (addon.widgets) {
       for (const [key, widget] of Object.entries(addon.widgets)) {
         claim(widgets, key, addon.id, "widget");
@@ -166,4 +185,38 @@ export function composeAddons(addons: readonly AddonManifest[]): ComposedAddons 
     chatter: mergeChatterContributions(...addons.map((a) => a.chatter ?? [])),
     slots: mergeSlotContributions(...addons.map((a) => a.slots ?? [])),
   };
+}
+
+function normalizeMenuItems(
+  registry: Record<string, unknown>,
+  items: readonly MenuItem[],
+  addonId: string,
+): ComposedMenuItem[] {
+  return items.map((item) => normalizeMenuItem(registry, item, addonId));
+}
+
+function normalizeMenuItem(
+  registry: Record<string, unknown>,
+  item: MenuItem,
+  addonId: string,
+): ComposedMenuItem {
+  const id = menuItemId(item, addonId);
+  claim(registry, id, addonId, "menu item id");
+  registry[id] = true;
+  const { id: _id, children, ...rest } = item;
+  return {
+    ...rest,
+    id,
+    ...(children
+      ? { children: normalizeMenuItems(registry, children, addonId) }
+      : {}),
+  };
+}
+
+function menuItemId(item: MenuItem, addonId: string): string {
+  if (item.id) return item.id;
+  if (item.route) return item.route;
+  throw new Error(
+    `Addon "${addonId}" declares a menu item without id or route; menu id defaults require one of them.`,
+  );
 }

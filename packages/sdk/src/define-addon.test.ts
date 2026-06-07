@@ -22,6 +22,52 @@ describe("composeAddons", () => {
     expect(() => composeAddons([a, b])).toThrow(/dup/);
   });
 
+  test("rejects duplicate menu item ids across nested menus", () => {
+    const a = defineAddon({
+      id: "a",
+      menus: [
+        {
+          id: "root",
+          label: "Root",
+          children: [{ id: "dup", label: "Dup" }],
+        },
+      ],
+    });
+    const b = defineAddon({ id: "b", menus: [{ id: "dup", label: "Dup" }] });
+
+    expect(() => composeAddons([a, b])).toThrow(/menu item id "dup"/);
+  });
+
+  test("defaults menu item id to route before claiming collisions", () => {
+    const composed = composeAddons([
+      defineAddon({
+        id: "notes",
+        menus: [
+          {
+            label: "Notes",
+            route: "notes.home",
+            children: [{ label: "Archive", route: "notes.archive" }],
+          },
+        ],
+      }),
+    ]);
+
+    expect(composed.menus[0]?.id).toBe("notes.home");
+    expect(composed.menus[0]?.children?.[0]?.id).toBe("notes.archive");
+    expect(() =>
+      composeAddons([
+        defineAddon({ id: "a", menus: [{ route: "shared.route" }] }),
+        defineAddon({ id: "b", menus: [{ id: "shared.route" }] }),
+      ]),
+    ).toThrow(/menu item id "shared.route"/);
+  });
+
+  test("requires a menu id when no route can own the default", () => {
+    expect(() =>
+      composeAddons([defineAddon({ id: "bad", menus: [{ label: "Bad" }] })]),
+    ).toThrow(/without id or route/);
+  });
+
   test("merges widget and i18n registries", () => {
     const a = defineAddon({
       id: "a",

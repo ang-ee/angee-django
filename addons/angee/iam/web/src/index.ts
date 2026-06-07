@@ -1,7 +1,7 @@
 import {
   AUTH_LOGIN_METHOD_SLOT,
   type BaseAddon,
-  type ChromeMenuItem,
+  type BaseMenuItem,
 } from "@angee/base";
 import { createElement } from "react";
 
@@ -16,28 +16,26 @@ import { RolesPage } from "./views/RolesPage";
 import { SchemaPage } from "./views/SchemaPage";
 import { UsersPage } from "./views/UsersPage";
 
-const identityMenu: readonly ChromeMenuItem[] = [
+const identityMenu: readonly BaseMenuItem[] = [
   {
     id: "iam",
     label: "Identity",
     icon: "auth",
     group: "platform",
     children: [
-      { id: "iam.overview", label: "Overview", to: "/iam", icon: "home" },
-      { id: "iam.users", label: "Users", to: "/iam/users", icon: "users" },
-      { id: "iam.roles", label: "Roles", to: "/iam/roles", icon: "auth" },
-      { id: "iam.grants", label: "Grants", to: "/iam/grants", icon: "check" },
+      { label: "Overview", route: "iam.overview", icon: "home" },
+      { label: "Users", route: "iam.users", icon: "users" },
+      { label: "Roles", route: "iam.roles", icon: "auth" },
+      { label: "Grants", route: "iam.grants", icon: "check" },
       {
-        id: "iam.relationships",
         label: "Relationships",
-        to: "/iam/relationships",
+        route: "iam.relationships",
         icon: "share",
       },
-      { id: "iam.schema", label: "Schema", to: "/iam/schema", icon: "columns" },
+      { label: "Schema", route: "iam.schema", icon: "columns" },
       {
-        id: "iam.connections",
         label: "Connections",
-        to: "/iam/connections",
+        route: "iam.connections",
         icon: "grid",
       },
     ],
@@ -63,63 +61,42 @@ const iam: BaseAddon = {
       name: "iam.overview",
       path: "/iam",
       shell: "console",
-      title: "Identity",
-      icon: "auth",
-      breadcrumbs: [{ label: "Identity" }, { label: "Overview" }],
       component: OverviewPage,
     },
     {
       name: "iam.users",
       path: "/iam/users",
       shell: "console",
-      title: "Identity",
-      icon: "auth",
-      breadcrumbs: [{ label: "Identity" }, { label: "Users" }],
       component: UsersPage,
     },
     {
       name: "iam.roles",
       path: "/iam/roles",
       shell: "console",
-      title: "Identity",
-      icon: "auth",
-      breadcrumbs: [{ label: "Identity" }, { label: "Roles" }],
       component: RolesPage,
     },
     {
       name: "iam.grants",
       path: "/iam/grants",
       shell: "console",
-      title: "Identity",
-      icon: "auth",
-      breadcrumbs: [{ label: "Identity" }, { label: "Grants" }],
       component: GrantsPage,
     },
     {
       name: "iam.relationships",
       path: "/iam/relationships",
       shell: "console",
-      title: "Identity",
-      icon: "auth",
-      breadcrumbs: [{ label: "Identity" }, { label: "Relationships" }],
       component: RelationshipsPage,
     },
     {
       name: "iam.schema",
       path: "/iam/schema",
       shell: "console",
-      title: "Identity",
-      icon: "auth",
-      breadcrumbs: [{ label: "Identity" }, { label: "Schema" }],
       component: SchemaPage,
     },
     {
       name: "iam.connections",
       path: "/iam/connections",
       shell: "console",
-      title: "Identity",
-      icon: "auth",
-      breadcrumbs: [{ label: "Identity" }, { label: "Connections" }],
       component: ConnectionsPage,
     },
   ],

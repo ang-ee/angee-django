@@ -2,7 +2,7 @@ import { useMemo } from "react";
 
 import type {
   ChatterContribution,
-  MenuItem,
+  ComposedMenuItem,
   SlotContribution,
   WidgetMap,
 } from "./define-addon";
@@ -17,7 +17,7 @@ import { makeContext } from "./make-context";
  */
 export interface AppRuntime {
   widgets: WidgetMap;
-  menus: readonly MenuItem[];
+  menus: readonly ComposedMenuItem[];
   i18n: I18nResources;
   icons: Readonly<Record<string, unknown>>;
   chatter: readonly ChatterContribution[];
@@ -59,7 +59,7 @@ export function useWidget(id: string): unknown {
 }
 
 /** The merged menu list. */
-export function useMenus(): readonly MenuItem[] {
+export function useMenus(): readonly ComposedMenuItem[] {
   return useAppRuntime().menus;
 }
 

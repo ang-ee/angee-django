@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Breadcrumb, BreadcrumbProvider } from "@angee/base";
+import { Breadcrumb } from "@angee/base";
 
 const meta = {
   title: "Chrome/Breadcrumb",
@@ -16,15 +16,13 @@ type Story = StoryObj<typeof meta>;
 export const Trail: Story = {
   render: () => (
     <div className="w-[42rem] overflow-hidden rounded-lg border border-border-subtle">
-      <BreadcrumbProvider
+      <Breadcrumb
         items={[
           { label: "Console", to: "/notes" },
           { label: "Notes", to: "/notes" },
           { label: "Quarterly planning" },
         ]}
-      >
-        <Breadcrumb />
-      </BreadcrumbProvider>
+      />
     </div>
   ),
 };

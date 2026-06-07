@@ -1,4 +1,4 @@
-import type { MenuItem } from "@angee/sdk";
+import type { ComposedMenuItem, MenuItem } from "@angee/sdk";
 
 import { titleCase } from "../lib/titleCase";
 
@@ -12,7 +12,18 @@ export type ChromeMenuTone =
   | "success"
   | "warning";
 
-export interface ChromeMenuItem extends MenuItem {
+export interface BaseMenuItem extends MenuItem {
+  children?: readonly BaseMenuItem[];
+  parent?: string;
+  parentId?: string;
+  description?: string;
+  group?: ChromeMenuGroup;
+  status?: ChromeMenuStatus;
+  tone?: ChromeMenuTone;
+  badge?: number;
+}
+
+export interface ChromeMenuItem extends ComposedMenuItem {
   children?: readonly ChromeMenuItem[];
   parent?: string;
   parentId?: string;
@@ -26,11 +37,13 @@ export interface ChromeMenuItem extends MenuItem {
 export class ChromeMenuNode implements ChromeMenuItem {
   id: string;
   label?: string;
+  route?: string;
   to?: string;
   icon?: string;
   children?: readonly ChromeMenuNode[];
   parent?: string;
   parentId?: string;
+  parentNode?: ChromeMenuNode;
   description?: string;
   group?: ChromeMenuGroup;
   status?: ChromeMenuStatus;
@@ -44,7 +57,7 @@ export class ChromeMenuNode implements ChromeMenuItem {
   }
 
   get target(): string | undefined {
-    return this.to ?? this.children?.find((child) => child.to)?.to;
+    return this.resolveTarget(new Set());
   }
 
   get displayLabel(): string {
@@ -70,7 +83,25 @@ export class ChromeMenuNode implements ChromeMenuItem {
   }
 
   appendChild(child: ChromeMenuNode): void {
+    child.parentNode = this;
     this.children = [...(this.children ?? []), child];
+  }
+
+  private resolveTarget(visited: Set<string>): string | undefined {
+    if (visited.has(this.id)) {
+      throw new Error(`Menu item "${this.id}" creates a target cycle.`);
+    }
+    visited.add(this.id);
+    try {
+      if (this.to) return this.to;
+      for (const child of this.children ?? []) {
+        const target = child.resolveTarget(visited);
+        if (target) return target;
+      }
+      return undefined;
+    } finally {
+      visited.delete(this.id);
+    }
   }
 }
 
@@ -130,6 +161,29 @@ export class MenuTree {
     }
     return best;
   }
+
+  /** Ancestor stack from root to `itemId`; throws if parent links cycle. */
+  trailFor(itemId: string): readonly ChromeMenuNode[] {
+    const item = this.byId.get(itemId);
+    if (!item) return [];
+    const trail: ChromeMenuNode[] = [];
+    const visited = new Set<string>();
+    let current: ChromeMenuNode | undefined = item;
+    while (current) {
+      if (visited.has(current.id)) {
+        throw new Error(`Menu item "${current.id}" creates a parent cycle.`);
+      }
+      visited.add(current.id);
+      trail.push(current);
+      current = current.parentNode;
+    }
+    return trail.reverse();
+  }
+
+  /** Menu nodes whose `route` ref points at `routeName`, in tree insertion order. */
+  itemsForRoute(routeName: string): readonly ChromeMenuNode[] {
+    return [...this.byId.values()].filter((item) => item.route === routeName);
+  }
 }
 
 const CHROME_MENU_PARENT_IDS = new Set(["systray", "user"]);
@@ -139,24 +193,25 @@ export function buildMenuTree(
 ): MenuTree {
   const byId = new Map<string, ChromeMenuNode>();
   const childIds = new Set<string>();
-  const ordered: ChromeMenuNode[] = [];
 
-  for (const item of items) {
+  function cloneMenuItem(
+    item: ChromeMenuItem,
+    parent?: ChromeMenuNode,
+  ): ChromeMenuNode {
     const clone = new ChromeMenuNode(item);
+    if (byId.has(clone.id)) {
+      throw new Error(`Menu item "${clone.id}" is declared more than once.`);
+    }
+    clone.parentNode = parent;
     byId.set(clone.id, clone);
-    ordered.push(clone);
+    if (parent) childIds.add(clone.id);
+    if (item.children?.length) {
+      clone.children = item.children.map((child) => cloneMenuItem(child, clone));
+    }
+    return clone;
   }
 
-  for (const item of items) {
-    const clone = byId.get(item.id);
-    if (!clone || !item.children?.length) continue;
-    clone.children = item.children.map((child) => {
-      const childClone = new ChromeMenuNode(child);
-      byId.set(childClone.id, childClone);
-      childIds.add(childClone.id);
-      return childClone;
-    });
-  }
+  const ordered = items.map((item) => cloneMenuItem(item));
 
   for (const item of ordered) {
     const parentId = item.parentKey;
@@ -167,11 +222,22 @@ export function buildMenuTree(
     childIds.add(item.id);
   }
 
-  return new MenuTree(
+  const tree = new MenuTree(
     ordered.filter((item) => {
       if (childIds.has(item.id)) return false;
       return !item.parentKey;
     }),
     byId,
   );
+
+  validateMenuTree(tree);
+
+  return tree;
+}
+
+function validateMenuTree(tree: MenuTree): void {
+  for (const item of tree.byId.values()) {
+    void tree.trailFor(item.id);
+    void item.target;
+  }
 }

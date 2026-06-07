@@ -22,7 +22,7 @@ export function TemplatesSection(): ReactNode {
 
   return (
     <div className="flex flex-col gap-4">
-      <h2 className="text-lg font-semibold text-fg">{t("section.templates.title")}</h2>
+      <h2 className="text-lg font-semibold text-fg">{t("section.operator.templates.title")}</h2>
 
       {templates.length === 0 ? (
         <SectionEmpty message="No templates." />

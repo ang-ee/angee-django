@@ -12,6 +12,10 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts"
     },
+    "./testing": {
+      "types": "./src/testing.tsx",
+      "import": "./src/testing.tsx"
+    },
     "./styles.css": "./src/styles/index.css"
   },
   "scripts": {
@@ -50,12 +54,19 @@
     "valibot": "^1.4.0"
   },
   "peerDependencies": {
+    "@testing-library/react": "^16.1.0",
     "@tanstack/react-router": "^1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
+  "peerDependenciesMeta": {
+    "@testing-library/react": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@tanstack/react-router": "^1.170.8",
+    "@tanstack/router-core": "^1.171.0",
     "@testing-library/react": "^16.1.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

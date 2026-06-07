@@ -68,6 +68,13 @@ function renderInRouter(children: ReactNode) {
   const notesRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/notes",
+    staticData: {
+      chrome: {
+        title: "Notes",
+        icon: "file",
+        breadcrumbs: [{ label: "Notes" }],
+      },
+    },
     component: () => <>{children}</>,
   });
   const archiveRoute = createRoute({

@@ -1,78 +1,44 @@
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactElement,
-  type ReactNode,
-} from "react";
 import { Link } from "@tanstack/react-router";
+import type { ReactElement } from "react";
 
 import { cn } from "../lib/cn";
+import {
+  useRouteBreadcrumbItems,
+  type BreadcrumbItem,
+} from "../route-static-data";
 
-export interface BreadcrumbItem {
-  label: ReactNode;
-  to?: string;
-}
-
-export interface BreadcrumbContextValue {
-  items: readonly BreadcrumbItem[];
-  setItems: (items: readonly BreadcrumbItem[]) => void;
-}
-
-export interface BreadcrumbProviderProps {
-  children: ReactNode;
-  initialTrail?: readonly BreadcrumbItem[];
-  items?: readonly BreadcrumbItem[];
-}
-
-const DEFAULT_ITEMS: readonly BreadcrumbItem[] = [{ label: "Console" }];
-const BreadcrumbContext = createContext<BreadcrumbContextValue>({
-  items: DEFAULT_ITEMS,
-  setItems: () => undefined,
-});
-
-export function BreadcrumbProvider({
-  children,
-  initialTrail,
-  items,
-}: BreadcrumbProviderProps): ReactElement {
-  const seed = items ?? initialTrail ?? DEFAULT_ITEMS;
-  const seedKey = useMemo(() => trailKey(seed), [seed]);
-  const seedKeyRef = useRef(seedKey);
-  const [trail, setTrail] = useState<readonly BreadcrumbItem[]>(seed);
-
-  useEffect(() => {
-    if (items !== undefined || seedKeyRef.current !== seedKey) {
-      seedKeyRef.current = seedKey;
-      setTrail(seed);
-    }
-  }, [items, seed, seedKey]);
-
-  const value = useMemo<BreadcrumbContextValue>(
-    () => ({ items: trail, setItems: setTrail }),
-    [trail],
-  );
-
-  return (
-    <BreadcrumbContext.Provider value={value}>
-      {children}
-    </BreadcrumbContext.Provider>
-  );
-}
-
-export function useBreadcrumb(): BreadcrumbContextValue {
-  return useContext(BreadcrumbContext);
-}
+export type { BreadcrumbItem } from "../route-static-data";
 
 export interface BreadcrumbProps {
   className?: string;
+  /** Controlled trail; bypasses match-derived items. */
+  items?: readonly BreadcrumbItem[];
 }
 
-export function Breadcrumb({ className }: BreadcrumbProps): ReactElement {
-  const { items } = useBreadcrumb();
+export function Breadcrumb({
+  className,
+  items,
+}: BreadcrumbProps): ReactElement {
+  if (items) return <BreadcrumbTrail className={className} items={items} />;
+  return <MatchedBreadcrumbTrail className={className} />;
+}
+
+function MatchedBreadcrumbTrail({
+  className,
+}: {
+  className?: string;
+}): ReactElement {
+  const items = useRouteBreadcrumbItems();
+  return <BreadcrumbTrail className={className} items={items} />;
+}
+
+function BreadcrumbTrail({
+  className,
+  items,
+}: {
+  className?: string;
+  items: readonly BreadcrumbItem[];
+}): ReactElement {
   return (
     <nav
       aria-label="Breadcrumb"
@@ -83,7 +49,7 @@ export function Breadcrumb({ className }: BreadcrumbProps): ReactElement {
     >
       {items.map((item, index) => {
         const current = index === items.length - 1;
-        const key = `${String(item.label)}:${index}`;
+        const key = `${itemKey(item.label)}:${index}`;
         return (
           <span key={key} className="contents">
             {index > 0 ? (
@@ -113,14 +79,7 @@ export function Breadcrumb({ className }: BreadcrumbProps): ReactElement {
   );
 }
 
-function trailKey(items: readonly BreadcrumbItem[]): string {
-  return items.map((item, index) => {
-    const label = itemLabelKey(item.label);
-    return `${index}:${item.to ?? ""}:${label}`;
-  }).join("|");
-}
-
-function itemLabelKey(label: ReactNode): string {
+function itemKey(label: BreadcrumbItem["label"]): string {
   if (typeof label === "string" || typeof label === "number") {
     return String(label);
   }

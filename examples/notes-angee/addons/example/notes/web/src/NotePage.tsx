@@ -14,7 +14,7 @@ import {
   type RecordSmartButtonDescriptor,
   useChatterContent,
 } from "@angee/base";
-import { useAuthoredQuery } from "@angee/sdk";
+import { useAuthoredQuery, useResourceRecord } from "@angee/sdk";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { formatDistanceToNow } from "date-fns";
 
@@ -50,10 +50,6 @@ type NoteRevisionsVariables = Record<string, unknown> & {
 
 interface NoteRouteParams {
   id?: string;
-}
-
-interface NotePageProps {
-  routeRecordId?: string;
 }
 
 const columns: readonly ListColumn[] = [
@@ -187,28 +183,32 @@ const formGroups: readonly PageGroupDescriptor[] = [
   },
 ];
 
-export function NoteRecordPage(): React.ReactElement {
-  const params = useParams({ strict: false }) as Partial<NoteRouteParams>;
-  return <NotePage routeRecordId={routeRecordId(params.id)} />;
+/** The record crumb for `/notes/$id` — resolves the note title from the cache. */
+export function NoteCrumb({ id }: { id: string }): React.ReactElement {
+  const isNew = id === "new";
+  const { fetching, record } = useResourceRecord(MODEL, isNew ? null : id, {
+    enabled: !isNew && id !== "",
+    fields: ["title"],
+  });
+  const title = typeof record?.title === "string" ? record.title.trim() : "";
+  if (isNew) return <>New</>;
+  if (fetching) return <>…</>;
+  return <>{title || "Note"}</>;
 }
 
 /** The notes console page: a count-by-status panel above the data table. */
-export function NotePage({
-  routeRecordId,
-}: NotePageProps = {}): React.ReactElement {
+export function NotePage(): React.ReactElement {
+  // The nested record route (`notes.record`) carries no component; this parent
+  // surface reads its `$id` param directly.
+  const params = useParams({ strict: false }) as Partial<NoteRouteParams>;
+  const routeId = typeof params.id === "string" ? params.id : undefined;
   const navigate = useNavigate();
-  const [recordId, setRecordId] = React.useState<string | null | undefined>(
-    routeRecordId,
-  );
-  const [creating, setCreating] = React.useState(false);
-  React.useEffect(() => {
-    setCreating(false);
-    setRecordId(routeRecordId);
-  }, [routeRecordId]);
+  const [locallyCreating, setLocallyCreating] = React.useState(false);
+  const creating = routeId === "new" || (routeId === undefined && locallyCreating);
+  const recordId = creating ? null : routeId;
   const handleSelect = React.useCallback(
     (id: string | null) => {
-      setCreating(id === null);
-      setRecordId(id);
+      setLocallyCreating(id === null);
       if (typeof id === "string") {
         void navigate({ to: noteRecordPath(id) });
       }
@@ -216,8 +216,7 @@ export function NotePage({
     [navigate],
   );
   const handleClose = React.useCallback(() => {
-    setCreating(false);
-    setRecordId(undefined);
+    setLocallyCreating(false);
     void navigate({ to: NOTE_LIST_PATH });
   }, [navigate]);
 
@@ -253,15 +252,6 @@ export function NotePage({
 
 function noteRecordPath(id: string): string {
   return `${NOTE_LIST_PATH}/${encodeURIComponent(id)}`;
-}
-
-function routeRecordId(id: string | undefined): string | undefined {
-  if (id === undefined) return undefined;
-  try {
-    return decodeURIComponent(id);
-  } catch {
-    return id;
-  }
 }
 
 function NoteChatter({

@@ -8,12 +8,8 @@ export {
 export { AppRail, type AppRailProps } from "./AppRail";
 export {
   Breadcrumb,
-  BreadcrumbProvider,
-  useBreadcrumb,
-  type BreadcrumbContextValue,
   type BreadcrumbItem,
   type BreadcrumbProps,
-  type BreadcrumbProviderProps,
 } from "./Breadcrumb";
 export { GlobalSearch, type GlobalSearchProps } from "./GlobalSearch";
 export { Glyph, type GlyphProps } from "./Glyph";
@@ -26,6 +22,7 @@ export {
 } from "./icon-registry";
 export {
   buildMenuTree,
+  type BaseMenuItem,
   type ChromeMenuGroup,
   type ChromeMenuItem,
   ChromeMenuNode,

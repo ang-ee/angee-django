@@ -1,11 +1,20 @@
-import type { ChromeMenuItem } from "@angee/base";
+import type { BaseMenuItem } from "@angee/base";
 import { describe, expect, test } from "vitest";
 
-import operator, { operatorSections } from "./index";
+import operator from "./index";
 
 // The console's eight sections, in nav order. Routes and the menu sub-nav must
 // stay aligned to this list — a missing or extra entry is a wiring bug.
-const SECTION_PATHS = operatorSections.map((section) => section.path);
+const SECTION_PATHS = [
+  "/operator",
+  "/operator/services",
+  "/operator/workspaces",
+  "/operator/sources",
+  "/operator/gitops",
+  "/operator/operations",
+  "/operator/templates",
+  "/operator/secrets",
+];
 
 describe("operator addon manifest", () => {
   test("registers one console route per section, each with a component", () => {
@@ -26,11 +35,17 @@ describe("operator addon manifest", () => {
 
   test("exposes a single Operator menu whose children mirror the routes", () => {
     expect(operator.menus).toHaveLength(1);
-    const menu = operator.menus?.[0] as ChromeMenuItem | undefined;
+    const menu = operator.menus?.[0] as BaseMenuItem | undefined;
     expect(menu?.id).toBe("operator");
     expect(menu?.icon).toBe("operator");
     expect(menu?.group).toBe("platform");
-    expect(menu?.children?.map((child) => child.to)).toEqual(SECTION_PATHS);
+    expect(menu?.route).toBe("operator.overview");
+    expect(menu?.children?.map((child) => child.route)).toEqual(
+      operator.routes?.map((route) => route.name),
+    );
+    expect(menu?.children?.map((child) => child.to)).toEqual(
+      SECTION_PATHS.map(() => undefined),
+    );
   });
 
   test("declares its menu icon and i18n bundle", () => {

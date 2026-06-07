@@ -1,14 +1,16 @@
 import {
   StrictMode,
   useEffect,
-  useMemo,
   type ComponentType,
   type ReactNode,
 } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import {
+  type AnyRoute,
+  type AnyRouter,
   Outlet,
   RouterProvider,
+  type StaticDataRouteOption,
   createMemoryHistory,
   createRootRoute,
   createRoute,
@@ -30,35 +32,53 @@ import {
   type AddonRoute,
   type AngeeUrqlClientOptions,
   type AppRuntime,
+  type ComposedMenuItem,
   type I18nResources,
   type SlotContribution,
 } from "@angee/sdk";
 
 import { ModalsHost, ToastProvider } from "./feedback";
-import type { BreadcrumbItem } from "./chrome/Breadcrumb";
 import { baseIcons } from "./chrome/icon-registry";
+import {
+  MenuTree,
+  type BaseMenuItem,
+  type ChromeMenuItem,
+  type ChromeMenuNode,
+} from "./chrome/menu-tree";
 import { enBaseBundle } from "./i18n";
+import {
+  useRouteChrome,
+  type BreadcrumbItem,
+  type RouteBreadcrumbFactory,
+  type RouteChromeStaticData,
+} from "./route-static-data";
 import { defaultWidgets } from "./widgets";
 
 /** A route that also carries the page component the chrome renders. */
 export interface BaseAddonRoute extends AddonRoute {
-  component: ComponentType;
+  component?: ComponentType;
+  /** Dynamic crumb factory for this route's match. */
+  crumb?: RouteBreadcrumbFactory;
+  /**
+   * Menu item id whose trail seeds chrome for routes outside the menu, or
+   * disambiguates chrome derivation when multiple menu items target this route.
+   */
+  menu?: string;
   title?: ReactNode;
   icon?: string;
   breadcrumbs?: readonly BreadcrumbItem[];
 }
 
 /** An addon manifest whose routes carry their page components. */
-export interface BaseAddon extends Omit<AddonManifest, "routes"> {
+export interface BaseAddon extends Omit<AddonManifest, "routes" | "menus"> {
   routes?: readonly BaseAddonRoute[];
+  menus?: readonly BaseMenuItem[];
 }
 
 /** Props passed from the active route into a shell chrome component. */
-export interface ShellChromeProps {
+export interface ShellChromeProps
+  extends Pick<RouteChromeStaticData, "icon" | "title"> {
   children: ReactNode;
-  title?: ReactNode;
-  icon?: string;
-  breadcrumbs?: readonly BreadcrumbItem[];
 }
 
 /** A shell registered with `createApp`: the chrome component + auth policy. */
@@ -91,41 +111,40 @@ export interface CreateAppInput {
 }
 
 export interface AngeeApp {
+  router: AnyRouter;
   mount(target: string | Element): Root;
 }
 
 /**
  * `createApp` — the single composition root. It merges the addon manifests into
- * one runtime (routes · menus · widgets · i18n · slots), owns the provider stack
- * (GraphQL clients · runtime · live invalidation · auth), builds the router, and
- * wraps every route in its shell's chrome. The host writes one
+ * one runtime (routes · route-resolved menus · derived route chrome · widgets ·
+ * i18n · slots), owns the provider stack (GraphQL clients · runtime · live
+ * invalidation · auth), builds the router, and mounts one persistent layout
+ * route per shell. The host writes one
  * `createApp({...}).mount(...)`.
  */
 export function createApp(input: CreateAppInput): AngeeApp {
   const composed = composeAddons([
     { id: "base", icons: baseIcons },
-    ...(input.addons as readonly AddonManifest[]),
+    ...input.addons,
   ]);
+  const routes = composed.routes as readonly BaseAddonRoute[];
+  const pathByName = new Map(
+    routes.map((route) => [route.name, route.path]),
+  );
+  const routesByName = new Map(routes.map((route) => [route.name, route]));
+  validateRoutes(routes, routesByName, input.shells);
+  const menus = resolveMenuRouteTargets(
+    composed.menus as readonly ChromeMenuItem[],
+    pathByName,
+  );
+  const menuTree = MenuTree.from(menus);
 
-  const pageByRoute = new Map<string, ComponentType>();
-  const chromePropsByRoute = new Map<
-    string,
-    Omit<ShellChromeProps, "children">
-  >();
-  for (const addon of input.addons) {
-    for (const route of addon.routes ?? []) {
-      pageByRoute.set(route.name, route.component);
-      chromePropsByRoute.set(route.name, {
-        title: route.title,
-        icon: route.icon,
-        breadcrumbs: route.breadcrumbs,
-      });
-    }
-  }
+  const routeChromeByName = routeChromeByNameFromMenu(routes, menuTree);
 
   const runtime: AppRuntime = {
     widgets: { ...defaultWidgets, ...composed.widgets },
-    menus: composed.menus,
+    menus,
     // Seed the base namespace under the merged addon bundles; an addon key wins.
     i18n: mergeI18n(enBaseBundle, composed.i18n),
     icons: composed.icons,
@@ -135,10 +154,9 @@ export function createApp(input: CreateAppInput): AngeeApp {
 
   const defaultSchema = input.defaultSchema ?? "public";
   const subscriptionSchema = input.subscriptionSchema ?? "console";
-  const pathByName = new Map(composed.routes.map((route) => [route.name, route.path]));
   const home =
     resolvePath(input.home, pathByName) ??
-    composed.routes.find((route) => route.shell !== "public")?.path ??
+    routes.find((route) => route.shell !== "public")?.path ??
     "/";
 
   const rootRoute = createRootRoute({ component: RootOutlet });
@@ -149,24 +167,26 @@ export function createApp(input: CreateAppInput): AngeeApp {
     component: () => <Redirect to={home} />,
   });
 
-  const routeNodes = composed.routes.map((route) =>
-    createRoute({
-      getParentRoute: () => rootRoute,
-      path: route.path,
-      component: () => (
-        <RouteScreen
-          route={route}
-          page={pageByRoute.get(route.name)}
-          chromeProps={chromePropsByRoute.get(route.name)}
-          shells={input.shells}
-          defaultSchema={defaultSchema}
-        />
-      ),
-    }),
-  );
+  const shellRoutes = createShellRoutes({
+    rootRoute,
+    shellNames: shellNamesForRoutes(input.shells),
+    shells: input.shells,
+    defaultSchema,
+  });
+  createAddonRouteNodes({
+    routes,
+    routesByName,
+    routeChromeByName,
+    shellRoutes,
+  });
 
   const router = createRouter({
-    routeTree: rootRoute.addChildren([indexRoute, ...routeNodes]),
+    routeTree: rootRoute.addChildren([
+      indexRoute,
+      ...[...shellRoutes.entries()]
+        .sort(([left], [right]) => compareCodePoint(left, right))
+        .map(([, route]) => route),
+    ]),
     history: typeof window === "undefined" ? createMemoryHistory() : undefined,
     parseSearch: parseFlatSearch,
     stringifySearch: stringifyFlatSearch,
@@ -174,6 +194,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
   });
 
   return {
+    router,
     mount(target: string | Element): Root {
       const element =
         typeof target === "string" ? document.querySelector(target) : target;
@@ -254,24 +275,25 @@ function RootOutlet(): ReactNode {
   );
 }
 
-function RouteScreen({
-  route,
-  page: Page,
-  chromeProps,
+function ShellLayoutRoute({
+  shellName,
   shells,
   defaultSchema,
 }: {
-  route: AddonRoute;
-  page: ComponentType | undefined;
-  chromeProps: Omit<ShellChromeProps, "children"> | undefined;
+  shellName: string;
   shells: Record<string, ShellConfig>;
   defaultSchema: string;
 }): ReactNode {
-  const shell = shells[route.shell];
+  const shell = shells[shellName];
   const clients = useSchemaClients();
   const Chrome = shell?.chrome ?? PassthroughChrome;
-  const requireAuth = shell?.requireAuth ?? route.shell !== "public";
-  const body = <Chrome {...chromeProps}>{Page ? <Page /> : null}</Chrome>;
+  const { icon, title } = useRouteChrome();
+  const requireAuth = shell?.requireAuth ?? shellName !== "public";
+  const body = (
+    <Chrome icon={icon} title={title}>
+      <Outlet />
+    </Chrome>
+  );
   const gated = requireAuth ? <RequireAuth>{body}</RequireAuth> : body;
   // Bind the route to its shell's schema client, so reads inside inherit it.
   return (
@@ -279,6 +301,136 @@ function RouteScreen({
       {gated}
     </GraphQLProvider>
   );
+}
+
+function createShellRoutes({
+  rootRoute,
+  shellNames,
+  shells,
+  defaultSchema,
+}: {
+  rootRoute: AnyRoute;
+  shellNames: readonly string[];
+  shells: Record<string, ShellConfig>;
+  defaultSchema: string;
+}): Map<string, AnyRoute> {
+  const shellRoutes = new Map<string, AnyRoute>();
+  for (const shellName of shellNames) {
+    shellRoutes.set(
+      shellName,
+      createRoute({
+        getParentRoute: () => rootRoute,
+        id: shellLayoutRouteId(shellName),
+        component: () => (
+          <ShellLayoutRoute
+            shellName={shellName}
+            shells={shells}
+            defaultSchema={defaultSchema}
+          />
+        ),
+      }),
+    );
+  }
+  return shellRoutes;
+}
+
+function createAddonRouteNodes({
+  routes,
+  routesByName,
+  routeChromeByName,
+  shellRoutes,
+}: {
+  routes: readonly BaseAddonRoute[];
+  routesByName: ReadonlyMap<string, BaseAddonRoute>;
+  routeChromeByName: ReadonlyMap<string, RouteChromeStaticData>;
+  shellRoutes: ReadonlyMap<string, AnyRoute>;
+}): void {
+  const routeNodes = new Map<string, AnyRoute>();
+  const childrenByParent = new Map<AnyRoute, Array<NamedRouteNode>>();
+
+  const buildRoute = (route: BaseAddonRoute): AnyRoute => {
+    const existing = routeNodes.get(route.name);
+    if (existing) return existing;
+    const parentManifestRoute = route.parent
+      ? routesByName.get(route.parent)
+      : undefined;
+    const parentNode = parentManifestRoute
+      ? buildRoute(parentManifestRoute)
+      : shellRoutes.get(route.shell)!;
+    const node = createAddonRouteNode(
+      route,
+      parentNode,
+      parentManifestRoute,
+      routeChromeByName.get(route.name),
+    );
+    routeNodes.set(route.name, node);
+    const children = childrenByParent.get(parentNode) ?? [];
+    children.push({ name: route.name, route: node });
+    childrenByParent.set(parentNode, children);
+    return node;
+  };
+
+  for (const route of [...routes].sort(compareRouteNames)) {
+    buildRoute(route);
+  }
+  for (const [parent, children] of childrenByParent) {
+    parent.addChildren(
+      children
+        .sort((a, b) => compareCodePoint(a.name, b.name))
+        .map((child) => child.route),
+    );
+  }
+}
+
+function createAddonRouteNode(
+  route: BaseAddonRoute,
+  parentNode: AnyRoute,
+  parentManifestRoute: BaseAddonRoute | undefined,
+  chrome: RouteChromeStaticData | undefined,
+): AnyRoute {
+  const Page = route.component;
+  return createRoute({
+    getParentRoute: () => parentNode,
+    path: routePathUnderParent(route, parentManifestRoute),
+    staticData: routeStaticData(route, chrome),
+    ...(Page ? { component: () => <Page /> } : {}),
+  });
+}
+
+interface NamedRouteNode {
+  name: string;
+  route: AnyRoute;
+}
+
+function routeStaticData(
+  route: BaseAddonRoute,
+  chrome: RouteChromeStaticData | undefined,
+): StaticDataRouteOption {
+  return {
+    ...(chrome ? { chrome } : {}),
+    ...(route.crumb ? { breadcrumb: route.crumb } : {}),
+  };
+}
+
+function shellNamesForRoutes(shells: Record<string, ShellConfig>): readonly string[] {
+  return Object.keys(shells).sort(compareCodePoint);
+}
+
+function shellLayoutRouteId(shellName: string): string {
+  return `_angee_shell_${shellName}`;
+}
+
+function compareRouteNames(
+  left: BaseAddonRoute,
+  right: BaseAddonRoute,
+): number {
+  return compareCodePoint(left.name, right.name);
+}
+
+function compareCodePoint(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
 /** Gate a subtree behind sign-in; bounce to `/login` while or after resolving. */
@@ -317,6 +469,204 @@ function FullPageStatus({ message }: { message: string }): ReactNode {
 
 export function PassthroughChrome({ children }: ShellChromeProps): ReactNode {
   return <>{children}</>;
+}
+
+function resolveMenuRouteTargets(
+  items: readonly ComposedMenuItem[],
+  pathByName: ReadonlyMap<string, string>,
+): readonly ComposedMenuItem[] {
+  return items.map((item) => resolveMenuRouteTarget(item, pathByName));
+}
+
+function resolveMenuRouteTarget(
+  item: ComposedMenuItem,
+  pathByName: ReadonlyMap<string, string>,
+): ComposedMenuItem {
+  const itemId = item.id;
+  if (item.route && item.to !== undefined) {
+    throw new Error(
+      `Menu item "${itemId}" declares both route and to; use exactly one target owner.`,
+    );
+  }
+  const routePath = item.route ? pathByName.get(item.route) : undefined;
+  if (item.route && !routePath) {
+    throw new Error(
+      `Menu item "${itemId}" references unknown route "${item.route}".`,
+    );
+  }
+  return {
+    ...item,
+    to: routePath ?? item.to,
+    children: item.children
+      ? resolveMenuRouteTargets(item.children, pathByName)
+      : item.children,
+  };
+}
+
+function routeChromeByNameFromMenu(
+  routes: readonly BaseAddonRoute[],
+  menuTree: MenuTree,
+): Map<string, RouteChromeStaticData> {
+  const routeChromeByName = new Map<string, RouteChromeStaticData>();
+  for (const route of routes) {
+    const refs = menuTree.itemsForRoute(route.name);
+    const fields = chromeFieldsNeedingDerivation(route);
+    const selected = selectedMenuItemForRoute(route, refs, menuTree, fields);
+    const derived = selected
+      ? chromePropsFromTrail(
+          menuTree.trailFor(selected.id),
+          selected.route !== route.name,
+        )
+      : {};
+    const chrome = materializeRouteChrome({
+      title: route.title ?? derived.title,
+      icon: route.icon ?? derived.icon,
+      breadcrumbs: route.breadcrumbs ?? derived.breadcrumbs,
+    });
+    if (hasRouteChrome(chrome)) routeChromeByName.set(route.name, chrome);
+  }
+  return routeChromeByName;
+}
+
+function selectedMenuItemForRoute(
+  route: BaseAddonRoute,
+  refs: readonly ChromeMenuNode[],
+  menuTree: MenuTree,
+  fields: readonly ChromeField[],
+): ChromeMenuNode | undefined {
+  if (route.menu) {
+    const selected = menuTree.byId.get(route.menu);
+    if (!selected) {
+      throw new Error(
+        `Route "${route.name}" references unknown menu item "${route.menu}".`,
+      );
+    }
+    if (refs.length > 0 && !refs.some((item) => item.id === selected.id)) {
+      throw new Error(
+        `Route "${route.name}" sets menu "${route.menu}", but that item does not reference the route.`,
+      );
+    }
+    return selected;
+  }
+  if (refs.length === 1) return refs[0];
+  if (refs.length > 1 && fields.length > 0) {
+    throw new Error(
+      `Route "${route.name}" is referenced by multiple menu items; declare route.menu or explicit chrome for ${fields.join(", ")}.`,
+    );
+  }
+  return undefined;
+}
+
+function chromePropsFromTrail(
+  trail: readonly ChromeMenuNode[],
+  linkLeaf: boolean,
+): RouteChromeStaticData {
+  const root = trail[0];
+  return {
+    title: root?.displayLabel,
+    icon: root?.iconName,
+    breadcrumbs: trail.map((item, index) => {
+      const leaf = index === trail.length - 1;
+      return {
+        label: item.displayLabel,
+        to: !leaf || linkLeaf ? item.target : undefined,
+      };
+    }),
+  };
+}
+
+function hasRouteChrome(chrome: RouteChromeStaticData): boolean {
+  return (
+    chrome.title !== undefined ||
+    chrome.icon !== undefined ||
+    chrome.breadcrumbs !== undefined
+  );
+}
+
+function materializeRouteChrome(
+  chrome: RouteChromeStaticData,
+): RouteChromeStaticData {
+  if (chrome.breadcrumbs !== undefined || chrome.title === undefined) {
+    return chrome;
+  }
+  return { ...chrome, breadcrumbs: [{ label: chrome.title }] };
+}
+
+type ChromeField = "title" | "icon" | "breadcrumbs";
+
+const DERIVED_CHROME_FIELDS: readonly ChromeField[] = [
+  "title",
+  "icon",
+  "breadcrumbs",
+];
+
+// Each chrome field has independent precedence: explicit route field first,
+// otherwise derive that field from the selected menu trail when one is needed.
+function chromeFieldsNeedingDerivation(
+  route: BaseAddonRoute,
+): readonly ChromeField[] {
+  return DERIVED_CHROME_FIELDS.filter((field) => route[field] === undefined);
+}
+
+function validateRoutes(
+  routes: readonly BaseAddonRoute[],
+  routesByName: ReadonlyMap<string, BaseAddonRoute>,
+  shells: Record<string, ShellConfig>,
+): void {
+  for (const route of routes) {
+    if (!Object.prototype.hasOwnProperty.call(shells, route.shell)) {
+      throw new Error(
+        `Route "${route.name}" references undeclared shell "${route.shell}".`,
+      );
+    }
+    if (!route.component && !route.parent) {
+      throw new Error(
+        `Route "${route.name}" must declare component unless it is nested under parent.`,
+      );
+    }
+    const parent = route.parent ? routesByName.get(route.parent) : undefined;
+    if (route.parent && !parent) {
+      throw new Error(
+        `Route "${route.name}" references unknown parent route "${route.parent}".`,
+      );
+    }
+    if (!parent) continue;
+    if (parent.shell !== route.shell) {
+      throw new Error(
+        `Route "${route.name}" parent "${parent.name}" must use the same shell.`,
+      );
+    }
+    if (!isProperPathPrefix(parent.path, route.path)) {
+      throw new Error(
+        `Route "${route.name}" path "${route.path}" must be nested under parent "${parent.name}" path "${parent.path}".`,
+      );
+    }
+  }
+}
+
+function routePathUnderParent(
+  route: BaseAddonRoute,
+  parent: BaseAddonRoute | undefined,
+): string {
+  if (!parent) return route.path;
+  const parentPath = normalizeRoutePath(parent.path);
+  const childPath = normalizeRoutePath(route.path);
+  if (parentPath === "/") return childPath.slice(1);
+  return childPath.slice(parentPath.length + 1);
+}
+
+function isProperPathPrefix(parentPath: string, childPath: string): boolean {
+  const parent = normalizeRoutePath(parentPath);
+  const child = normalizeRoutePath(childPath);
+  if (parent === child) return false;
+  if (parent === "/") return child.startsWith("/");
+  return child.startsWith(`${parent}/`);
+}
+
+function normalizeRoutePath(path: string): string {
+  if (path === "/") return "/";
+  const withLeadingSlash = path.startsWith("/") ? path : `/${path}`;
+  return withLeadingSlash.replace(/\/+$/, "");
 }
 
 function resolvePath(

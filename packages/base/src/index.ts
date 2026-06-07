@@ -18,6 +18,15 @@ export {
   type CreateAppInput,
   type ShellConfig,
 } from "./createApp";
+export {
+  breadcrumbItemsFromMatches,
+  routeChromeFromMatches,
+  useRouteBreadcrumbItems,
+  useRouteChrome,
+  type BreadcrumbItem,
+  type RouteBreadcrumbFactory,
+  type RouteChromeStaticData,
+} from "./route-static-data";
 
 // Data-bound views.
 export * from "./views";

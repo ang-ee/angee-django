@@ -48,7 +48,7 @@ export function GitOpsSection(): ReactNode {
   if (!gitOps) {
     return (
       <div className="flex flex-col gap-4">
-        <h2 className="text-lg font-semibold text-fg">{t("section.gitops.title")}</h2>
+        <h2 className="text-lg font-semibold text-fg">{t("section.operator.gitops.title")}</h2>
         <SectionError message="No GitOps topology." />
       </div>
     );
@@ -58,7 +58,7 @@ export function GitOpsSection(): ReactNode {
 
   return (
     <div className="flex flex-col gap-4">
-      <h2 className="text-lg font-semibold text-fg">{t("section.gitops.title")}</h2>
+      <h2 className="text-lg font-semibold text-fg">{t("section.operator.gitops.title")}</h2>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         {SUMMARY_TILES.map((tile) => (

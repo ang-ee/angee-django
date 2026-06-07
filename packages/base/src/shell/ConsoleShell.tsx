@@ -1,11 +1,7 @@
 import * as React from "react";
 
 import { AppRail } from "../chrome/AppRail";
-import {
-  Breadcrumb,
-  BreadcrumbProvider,
-  type BreadcrumbItem,
-} from "../chrome/Breadcrumb";
+import { Breadcrumb, type BreadcrumbItem } from "../chrome/Breadcrumb";
 import { TopBar, type TopBarProps } from "../chrome/TopBar";
 import { Chatter } from "../communication/Chatter";
 import { ChatterProvider } from "../communication/chatter-context";
@@ -24,8 +20,6 @@ export interface ConsoleShellProps {
 
 export function ConsoleShell({
   children,
-  title = "Console",
-  icon = "home",
   breadcrumbs,
   topMenu,
   showChatter = true,
@@ -33,37 +27,31 @@ export function ConsoleShell({
 }: ConsoleShellProps): React.ReactElement {
   const [controlHost, setControlHost] =
     React.useState<HTMLDivElement | null>(null);
-  const trail = React.useMemo<readonly BreadcrumbItem[]>(
-    () => breadcrumbs ?? [{ label: title }],
-    [breadcrumbs, title],
-  );
 
   return (
     <ChatterProvider>
-      <BreadcrumbProvider initialTrail={trail}>
-        <ControlBandProvider host={controlHost}>
-          <div
-            className={cn(
-              "console-grid h-screen w-screen bg-canvas text-fg",
-              className,
-            )}
-          >
-            <AppRail className="area-rail" />
-            <TopBar
-              className="area-topbar"
-              topMenu={topMenu}
-              showChatterToggle={showChatter}
-              showUserMenu
-            />
-            <Breadcrumb className="area-crumbs" />
-            <div ref={setControlHost} className="area-control" />
-            <main className="area-content min-h-0 min-w-0 overflow-auto bg-canvas">
-              {children}
-            </main>
-            {showChatter ? <Chatter className="area-chatter" /> : null}
-          </div>
-        </ControlBandProvider>
-      </BreadcrumbProvider>
+      <ControlBandProvider host={controlHost}>
+        <div
+          className={cn(
+            "console-grid h-screen w-screen bg-canvas text-fg",
+            className,
+          )}
+        >
+          <AppRail className="area-rail" />
+          <TopBar
+            className="area-topbar"
+            topMenu={topMenu}
+            showChatterToggle={showChatter}
+            showUserMenu
+          />
+          <Breadcrumb className="area-crumbs" items={breadcrumbs} />
+          <div ref={setControlHost} className="area-control" />
+          <main className="area-content min-h-0 min-w-0 overflow-auto bg-canvas">
+            {children}
+          </main>
+          {showChatter ? <Chatter className="area-chatter" /> : null}
+        </div>
+      </ControlBandProvider>
     </ChatterProvider>
   );
 }

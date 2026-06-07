@@ -33,15 +33,15 @@ export function OverviewSection(): ReactNode {
   const stack = snapshot?.stack ?? null;
   const health = snapshot?.health ?? null;
   const metrics: readonly MetricTile[] = [
-    { id: "services", label: t("section.services.title"), value: snapshot?.services.length ?? 0 },
-    { id: "workspaces", label: t("section.workspaces.title"), value: snapshot?.workspaces.length ?? 0 },
-    { id: "sources", label: t("section.sources.title"), value: snapshot?.sources.length ?? 0 },
-    { id: "secrets", label: t("section.secrets.title"), value: snapshot?.secrets.length ?? 0 },
+    { id: "services", label: t("section.operator.services.title"), value: snapshot?.services.length ?? 0 },
+    { id: "workspaces", label: t("section.operator.workspaces.title"), value: snapshot?.workspaces.length ?? 0 },
+    { id: "sources", label: t("section.operator.sources.title"), value: snapshot?.sources.length ?? 0 },
+    { id: "secrets", label: t("section.operator.secrets.title"), value: snapshot?.secrets.length ?? 0 },
   ];
 
   return (
     <div className="flex flex-col gap-4">
-      <h2 className="text-lg font-semibold text-fg">{t("section.overview.title")}</h2>
+      <h2 className="text-lg font-semibold text-fg">{t("section.operator.overview.title")}</h2>
 
       <div className="grid gap-3 sm:grid-cols-2">
         <Card>

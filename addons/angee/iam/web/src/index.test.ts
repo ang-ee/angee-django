@@ -1,6 +1,6 @@
 import {
   AUTH_LOGIN_METHOD_SLOT,
-  type ChromeMenuItem,
+  type BaseMenuItem,
 } from "@angee/base";
 import { describe, expect, test } from "vitest";
 
@@ -46,10 +46,10 @@ describe("iam addon manifest", () => {
   });
 
   test("contributes the Identity console menu", () => {
-    const menu = iam.menus?.[0] as ChromeMenuItem | undefined;
+    const menu = iam.menus?.[0] as BaseMenuItem | undefined;
     expect(menu?.id).toBe("iam");
     expect(menu?.label).toBe("Identity");
-    expect(menu?.children?.map((item) => item.id)).toEqual([
+    expect(menu?.children?.map((item) => item.route)).toEqual([
       "iam.overview",
       "iam.users",
       "iam.roles",
@@ -57,6 +57,15 @@ describe("iam addon manifest", () => {
       "iam.relationships",
       "iam.schema",
       "iam.connections",
+    ]);
+    expect(menu?.children?.map((item) => item.to)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
     ]);
   });
 
