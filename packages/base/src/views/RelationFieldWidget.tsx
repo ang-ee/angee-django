@@ -1,11 +1,6 @@
 import { useMemo, type ReactElement } from "react";
 
-import {
-  useModelMetadata,
-  useResourceList,
-  type ResourceTypeName,
-  type Row,
-} from "@angee/sdk";
+import { useModelMetadata, useResourceList, type Row } from "@angee/sdk";
 
 import {
   formFieldsFromMetadata,
@@ -41,7 +36,7 @@ export function RelationFieldWidget({
   placeholder,
   "aria-label": ariaLabel,
 }: RelationFieldWidgetProps): ReactElement {
-  const list = useResourceList(relation.model as ResourceTypeName, {
+  const list = useResourceList(relation.model, {
     fields: [relation.labelField],
     pageSize: RELATION_OPTION_LIMIT,
   });

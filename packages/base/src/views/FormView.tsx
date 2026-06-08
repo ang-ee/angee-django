@@ -648,10 +648,11 @@ function BoundFieldRow({
           readOnly ? READONLY_FIELD_CONTROL_CLASS : EDITABLE_FIELD_CONTROL_CLASS,
         )}
       >
-        {relation && !readOnly ? (
+        {relation ? (
           <RelationFieldWidget
             value={typeof value === "string" ? value : null}
             onChange={onChange}
+            readOnly={readOnly}
             relation={relation}
             aria-label={fieldAriaLabel(field)}
           />
@@ -886,7 +887,9 @@ function hasOptionValue(field: FieldDescriptor): boolean {
 }
 
 function isUnselectedOption(field: FieldDescriptor, value: unknown): boolean {
-  return value === "" && hasOptionValue(field);
+  // An empty relation id is also "unselected" — auto-wired relations carry no
+  // inline `options`, so `hasOptionValue` alone would let `""` through as a FK.
+  return value === "" && (hasOptionValue(field) || isRelationIdField(field));
 }
 
 function valuesEqual(left: unknown, right: unknown): boolean {
