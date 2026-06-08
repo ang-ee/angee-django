@@ -27,6 +27,7 @@ import re
 import secrets
 from datetime import datetime
 from typing import Any, BinaryIO, ClassVar, cast
+from urllib.parse import urlencode
 
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -40,6 +41,7 @@ from django.core.exceptions import (
 from django.core.files.base import File as DjangoFile
 from django.db import IntegrityError, models, transaction
 from django.db.models import Q
+from django.urls import reverse
 from django.utils import timezone
 from django.utils.module_loading import import_string
 from django.utils.text import get_valid_filename
@@ -60,6 +62,8 @@ from angee.storage.autoconfig import setting
 from angee.storage.backends import DOWNLOAD_URL_TTL_SECONDS, StorageBackend
 from angee.storage.signals import file_finalized
 from angee.storage.uploads import (
+    DOWNLOAD_TOKEN_MAX_AGE,
+    DOWNLOAD_TOKEN_SALT,
     FALLBACK_MIME,
     MIME_SNIFF_BYTES,
     UPLOAD_TOKEN_MAX_AGE,
@@ -555,6 +559,35 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         row._upload_nonce = nonce
         return row
 
+    def for_download_token(self, token: str) -> Any:
+        """Return the READY file a signed proxy download token addresses.
+
+        The mirror of :meth:`for_upload_token`. The token is a capability: it is
+        minted on the file's ``url`` field, which only resolves for an actor that
+        already read the row, so the download view re-validates the signature and
+        expiry alone (no second actor check). Trashed or unfinished rows have no
+        servable bytes, so they are excluded here.
+        """
+
+        try:
+            payload = signing.loads(token, salt=DOWNLOAD_TOKEN_SALT, max_age=DOWNLOAD_TOKEN_MAX_AGE)
+        except signing.SignatureExpired as error:
+            raise exceptions.UploadDenied("download token expired") from error
+        except signing.BadSignature as error:
+            raise exceptions.UploadDenied("invalid download token") from error
+        file_id = str(payload.get("file") or "")
+        if not file_id:
+            raise exceptions.UploadDenied("invalid download token")
+        row = (
+            self.system_context(reason="storage.download.proxy")
+            .select_related("mime_type")
+            .filter(sqid=file_id, upload_state=UploadState.READY, is_trashed=False)
+            .first()
+        )
+        if row is None:
+            raise exceptions.UploadTargetNotFound("file not found")
+        return row
+
     def _drive_for(self, *, drive_id: str, drive_slug: str) -> Any:
         """Return the actor-readable, unarchived drive a draft targets."""
 
@@ -689,11 +722,42 @@ class File(SqidMixin, AuditMixin, AngeeModel):
 
     @property
     def url(self) -> str:
-        """Return the download URL — presigned when the backend supports it."""
+        """Return the backend download URL — presigned when the backend supports it.
+
+        The GraphQL ``url`` field serves the token proxy URL instead (see
+        :meth:`download_url`); this is the raw backend address its fallback uses.
+        """
 
         storage = self.storage
         presigned = storage.presigned_get(self.storage_path, expires_in=DOWNLOAD_URL_TTL_SECONDS)
         return presigned or storage.url(self.storage_path)
+
+    def issue_download_token(self) -> str:
+        """Return a TTL-limited signed token authorizing a proxy download.
+
+        The mirror of :meth:`issue_upload_token`, minus the nonce — a download is
+        idempotent (re-fetchable, range-requestable) within the token's life, so
+        it is a reusable capability rather than one-shot. Expiry rides on the
+        signature (``DOWNLOAD_TOKEN_MAX_AGE``).
+        """
+
+        return signing.dumps({"file": str(self.sqid)}, salt=DOWNLOAD_TOKEN_SALT)
+
+    def download_url(self, request: Any | None = None) -> str:
+        """Return the token-authenticated proxy download URL for this file.
+
+        The filename rides in the path (so the browser saves under it and the URL
+        reads cleanly); the signed ``token`` identifies the row. Built absolute
+        against ``request`` when one is given, otherwise root-relative.
+        """
+
+        path = f"{reverse('storage_download', args=[self.filename])}?{urlencode({'token': self.issue_download_token()})}"
+        return request.build_absolute_uri(path) if request is not None else path
+
+    def open_stream(self) -> BinaryIO:
+        """Open this file's stored bytes for reading (the download view streams it)."""
+
+        return self.storage.open(self.storage_path, "rb")
 
     def issue_upload_token(self) -> str:
         """Return a one-shot signed token authorizing a proxy byte push.

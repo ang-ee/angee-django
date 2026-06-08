@@ -1,15 +1,19 @@
-"""HTTP view for the storage upload proxy."""
+"""HTTP views for the storage proxy: upload (PUT) and download (GET)."""
 
 from __future__ import annotations
 
 from django.apps import apps
-from django.http import HttpRequest, JsonResponse
+from django.http import FileResponse, HttpRequest, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from rebac import bearer_token
 
 from angee.storage import exceptions
-from angee.storage.uploads import UPLOAD_TOKEN_HEADER
+from angee.storage.uploads import (
+    DOWNLOAD_TOKEN_HEADER,
+    FALLBACK_MIME,
+    UPLOAD_TOKEN_HEADER,
+)
 
 
 @csrf_exempt
@@ -42,3 +46,30 @@ def upload(request: HttpRequest) -> JsonResponse:
     except exceptions.UploadError as error:
         return JsonResponse({"error": str(error), "code": error.code}, status=error.status_code)
     return JsonResponse({"id": str(row.sqid)})
+
+
+@require_http_methods(["GET"])
+def download(request: HttpRequest, filename: str) -> FileResponse | JsonResponse:
+    """Stream one READY file's bytes for a signed proxy download token.
+
+    The mirror of :func:`upload`: the token (``?token=``, the
+    ``X-Angee-Download-Token`` header, or ``Authorization: Bearer``) is the
+    capability — minted on the file's ``url`` field for a reader, unforgeable,
+    and TTL-bound — so no session is needed. The ``filename`` in the path is the
+    save-as name only; the authoritative name and content type come from the row.
+    """
+
+    del filename  # cosmetic save-as name; the token identifies the file
+    token = (
+        request.headers.get(DOWNLOAD_TOKEN_HEADER, "")
+        or str(request.GET.get("token") or "")
+        or bearer_token(request)
+    )
+    file_model = apps.get_model("storage", "File")
+    try:
+        row = file_model.objects.for_download_token(token)
+        stream = row.open_stream()
+    except exceptions.UploadError as error:
+        return JsonResponse({"error": str(error), "code": error.code}, status=error.status_code)
+    content_type = row.mime_type.mime_type if row.mime_type_id else FALLBACK_MIME
+    return FileResponse(stream, filename=row.filename, content_type=content_type)

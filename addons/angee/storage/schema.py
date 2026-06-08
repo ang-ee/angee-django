@@ -146,12 +146,17 @@ class FileType(AngeeNode):
 
     @strawberry_django.field
     def url(self) -> str:
-        """Return the download URL for READY rows, empty otherwise."""
+        """Return the token proxy download URL for READY rows, empty otherwise.
+
+        Minted here in actor scope — only a reader of the row resolves this
+        field — so the URL is a short-lived capability the download view honours
+        without a second access check (see :meth:`File.download_url`).
+        """
 
         row = cast(Any, self)
         if row.upload_state != UploadState.READY:
             return ""
-        return str(row.url)
+        return str(row.download_url())
 
 
 @strawberry_django.filter_type(File, lookups=True)

@@ -29,6 +29,15 @@ UPLOAD_TOKEN_SALT = "angee.storage.upload"
 UPLOAD_TOKEN_HEADER = "X-Angee-Upload-Token"
 """Request header carrying the proxy upload token."""
 
+DOWNLOAD_TOKEN_MAX_AGE = 900
+"""Seconds a proxy download token stays valid."""
+
+DOWNLOAD_TOKEN_SALT = "angee.storage.download"
+"""Signing salt namespacing proxy download tokens."""
+
+DOWNLOAD_TOKEN_HEADER = "X-Angee-Download-Token"
+"""Request header carrying the proxy download token."""
+
 PROXY_CHUNK_SIZE = 1 << 20
 """Bytes per read while streaming a proxied body into the backend."""
 
