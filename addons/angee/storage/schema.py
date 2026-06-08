@@ -202,6 +202,37 @@ class DriveFilter:
     is_archived: auto
 
 
+@strawberry_django.order_type(Drive)
+class DriveOrder:
+    """Orderings accepted by the drives list."""
+
+    slug: auto
+    name: auto
+    created_at: auto
+    updated_at: auto
+
+
+@strawberry_django.filter_type(Backend, lookups=True)
+class BackendFilter:
+    """Field lookups accepted when filtering the backends list."""
+
+    slug: auto
+    label: auto
+    backend_class: auto
+    is_default: auto
+    is_archived: auto
+
+
+@strawberry_django.order_type(Backend)
+class BackendOrder:
+    """Orderings accepted by the backends list."""
+
+    slug: auto
+    label: auto
+    created_at: auto
+    updated_at: auto
+
+
 @strawberry.input
 class FileUploadBeginInput:
     """Fields accepted when reserving an upload."""
@@ -359,7 +390,10 @@ _STORAGE_ADMIN_CLASSES: list[type[BasePermission]] = [StorageAdminPermission]
 class StorageQuery:
     """Storage queries shared by the public and console schemas."""
 
-    drives: OffsetPaginated[DriveType] = strawberry_django.offset_paginated(filters=DriveFilter)
+    drives: OffsetPaginated[DriveType] = strawberry_django.offset_paginated(
+        filters=DriveFilter, order=DriveOrder
+    )
+    drive: DriveType | None = strawberry_django.node()
     folders: OffsetPaginated[FolderType] = strawberry_django.offset_paginated(filters=FolderFilter)
     files: OffsetPaginated[FileType] = strawberry_django.offset_paginated(filters=FileFilter, order=FileOrder)
     file: FileType | None = strawberry_django.node()
@@ -371,6 +405,11 @@ class StorageConsoleQuery:
     """Admin-only storage queries."""
 
     backends: OffsetPaginated[BackendType] = strawberry_django.offset_paginated(
+        filters=BackendFilter,
+        order=BackendOrder,
+        permission_classes=_STORAGE_ADMIN_CLASSES,
+    )
+    backend: BackendType | None = strawberry_django.node(
         permission_classes=_STORAGE_ADMIN_CLASSES,
     )
 
