@@ -13,6 +13,7 @@ INSTALLED_APPS = [
     "angee.resources",
     "angee.iam",
     "angee.integrate",
+    "angee.storage",
 ]
 DATABASES = {
     "default": {

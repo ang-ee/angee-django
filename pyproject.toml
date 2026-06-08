@@ -28,6 +28,7 @@ dependencies = [
   "django-choices-field>=4.0.0",
   "django-yamlconf>=1.5.0",
   "django-environ>=0.12",
+  "python-magic>=0.4.27",
 ]
 
 [dependency-groups]

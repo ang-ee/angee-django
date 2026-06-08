@@ -1,0 +1,87 @@
+// Authorization schema for the storage addon.
+// @rebac_package: storage
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 1
+
+// Roles-as-namespace anchor, mirroring operator/role: `includes` lets one
+// storage role imply another, and resources gate on `effective_member` so
+// granted + implied members both resolve. Platform admins (angee/role:admin)
+// are implicit members of every storage role.
+definition storage/role {
+    relation member:   auth/user | auth/group#member | angee/role:admin#member
+    relation includes: storage/role#effective_member
+
+    permission effective_member = member + includes
+}
+
+// Backend rows are infrastructure: they carry backend credentials config and
+// are admin-only end to end. Drives deliberately do not inherit from their
+// backend — drive rows are the unit of user-facing access control.
+definition storage/backend {
+    relation admin:   angee/role // rebac:const=admin
+    relation manager: storage/role:storage_admin#effective_member
+
+    // Unsatisfiable for a table-backed insert (the sqid only exists
+    // post-insert); console creates run elevated behind the storage-admin
+    // permission gate in schema.py. Kept to document the intent.
+    permission create = admin->member + manager
+    permission read   = admin->member + manager
+    permission write  = admin->member + manager
+    permission delete = admin->member + manager
+}
+
+// `owner` is the creating user (field-backed by created_by). `editor` and
+// `viewer` are the per-drive grant surface; the wildcard subject lets one
+// stored tuple (e.g. editor@auth/user:*) open a drive to every user.
+definition storage/drive {
+    relation owner:   auth/user // rebac:field=created_by
+    relation editor:  auth/user | auth/group#member | auth/user:*
+    relation viewer:  auth/user | auth/group#member | auth/user:*
+    relation admin:   angee/role // rebac:const=admin
+    relation manager: storage/role:storage_admin#effective_member
+
+    permission read   = owner + editor + viewer + admin->member + manager
+    permission write  = owner + editor + admin->member + manager
+    permission delete = owner + admin->member + manager
+}
+
+// Real folders reach the actor through their drive (and parent); per-user
+// smart folders (Trash) have no drive and reach through `owner` only.
+// No `create` permission: folder creation is gated on drive write by the
+// mutation that owns the insert.
+definition storage/folder {
+    relation drive:  storage/drive // rebac:field=drive
+    relation parent: storage/folder // rebac:field=parent
+    relation owner:  auth/user // rebac:field=owner
+    relation admin:  angee/role // rebac:const=admin
+
+    permission read   = drive->read + parent->read + owner + admin->member
+    permission write  = drive->write + parent->write + owner + admin->member
+    permission delete = drive->write + owner + admin->member
+}
+
+// `owner` is the uploader (field-backed by created_by). No `create`
+// permission: rows enter through File.objects.draft, which gates on drive
+// write itself.
+definition storage/file {
+    relation drive:  storage/drive // rebac:field=drive
+    relation folder: storage/folder // rebac:field=folder
+    relation owner:  auth/user // rebac:field=created_by
+    relation admin:  angee/role // rebac:const=admin
+
+    permission read   = drive->read + folder->read + owner + admin->member
+    permission write  = drive->write + folder->write + owner + admin->member
+    permission delete = owner + drive->write + admin->member
+}
+
+// The attachment target is polymorphic (GenericForeignKey to any row), so no
+// single zed type can cover it; access rides entirely on the file parent.
+// Consumers needing target-side gating wrap their own attach call sites.
+definition storage/file_attachment {
+    relation file:  storage/file // rebac:field=file
+    relation admin: angee/role // rebac:const=admin
+
+    permission read   = file->read + admin->member
+    permission write  = file->write + admin->member
+    permission delete = file->write + admin->member
+}

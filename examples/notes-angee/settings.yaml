@@ -6,6 +6,7 @@ ALLOWED_HOSTS:
 INSTALLED_APPS:
   - angee.integrate
   - angee.operator
+  - angee.storage
   - example.notes
 
 ANGEE_ADDON_DIRS:

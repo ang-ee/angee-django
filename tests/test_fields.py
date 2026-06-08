@@ -9,7 +9,7 @@ from django.db import connection, models
 from django.db.models import F, Value
 from django.db.models.functions import Concat
 
-from angee.base.fields import EncryptedField, _derive_fernet
+from angee.base.fields import EncryptedField, SqidField, _derive_fernet
 
 
 @pytest.mark.django_db(transaction=True)
@@ -353,3 +353,38 @@ def test_encrypted_field_wraps_invalid_ciphertext_errors() -> None:
     finally:
         with connection.schema_editor() as schema_editor:
             schema_editor.delete_model(FieldInvalidCiphertext)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_sqid_field_passes_null_joins_through() -> None:
+    """A nullable-FK join selecting ``__sqid`` yields None instead of raising.
+
+    This is the exact query REBAC field-backed arrows run over optional
+    parents (e.g. ``// rebac:field=parent``), which the raw django-sqids
+    field crashes on.
+    """
+
+    class SqidNode(models.Model):
+        """Concrete self-referencing model used for sqid join tests."""
+
+        sqid = SqidField(real_field_name="id", prefix="tst", min_length=8)
+        parent = models.ForeignKey("self", on_delete=models.CASCADE, null=True)
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(SqidNode)
+    try:
+        root = SqidNode.objects.create()
+        child = SqidNode.objects.create(parent=root)
+
+        values = dict(SqidNode.objects.values_list("pk", "parent__sqid"))
+
+        assert values[root.pk] is None
+        assert values[child.pk] == root.sqid
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(SqidNode)

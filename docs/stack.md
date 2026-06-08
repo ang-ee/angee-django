@@ -41,6 +41,7 @@ Dependency changes must update this file in the same change.
 | django-yamlconf | Django settings YAML overlays | `angee.compose.settings` loads `settings.yaml` beside `manage.py`; `Composer` applies addon `autoconfig.py` fragments |
 | django-environ | Typed boot environment access and URL parsers | `angee.compose.settings` reads Angee bootstrap env vars |
 | pyjwt[crypto] | JWT and JOSE verification | OIDC discovery and exchange orchestration |
+| python-magic | MIME detection from file bytes | Storage finalize detection (requires the system libmagic) |
 | uv | Python dependency resolution and workspaces | Workspace layout |
 
 ## Frontend
@@ -113,8 +114,8 @@ Dependency changes must update this file in the same change.
 | Celery + django-celery-beat | Queues and schedules |
 | fastmcp | MCP tool surface |
 | pgvector / sqlite-vec / python-igraph / lightrag-hku | Vector search and graph RAG |
-| django-ninja + pydantic | Typed REST sidecars (callbacks, webhooks, health, presigned uploads) |
-| python-magic | MIME detection for storage uploads |
+| django-ninja + pydantic | Typed REST sidecars (callbacks, webhooks, health) |
+| boto3 | S3-compatible storage backend (S3 / R2 / MinIO presigned IO) |
 | @xyflow/react | Graph and canvas (node/edge) views |
 | react-dropzone | Storage upload drop boundary |
 | react-json-view-lite + ansi-to-react | Debug/log JSON + ANSI panels |

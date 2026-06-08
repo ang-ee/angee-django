@@ -9,6 +9,80 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## 2026-06-07 — Storage base addon (backend)
+
+`angee.storage` lands the file domain as a base addon: `Backend` (credentialed
+backend rows, env-ref config expansion, cached instance resolution), `Drive`
+(addressable volume + content-addressed `object_key`), `Folder` (real trees and
+per-user smart folders; Trash ships), `MimeType` (master-tier taxonomy seed),
+`File` (per-drive content-hash dedup, DRAFT → READY/FAILED lifecycle,
+soft-delete to Trash, `purge`), and `FileAttachment` (polymorphic edge).
+Verified end to end: 264 backend tests, mypy/ruff/vulture clean, `angee build
+--check` + `schema --check` green, and a live proxy upload through the composed
+HTTP stack. Durable decisions:
+
+- **Creating a File is not uploading — bytes are a pluggable source.** The
+  factory `File.objects.draft(...)` reserves a DRAFT targeting a backend key
+  (content-addressed `get_or_create`: a known hash returns the existing READY
+  row, restoring it if trashed). Bytes then arrive from a source and
+  `File.finalize(expected_hash=…, expected_size=…)` re-hashes, detects MIME,
+  dedups, and flips to READY — source-agnostic, with the expected values
+  asserted only when a source supplies them. Today the one source is a client
+  upload (`File.issue_upload_token` → one REST route `PUT /storage/upload`,
+  one-shot signed token = the CSRF property → `File.receive_bytes`); presigned
+  S3/GCS, server-side URL fetch, and adopting bytes already on the backend are
+  sibling sources that slot in at `finalize` with no spine change. The byte
+  lifecycle (`receive_bytes` / `finalize` / `restore` / `purge` / `_fail`)
+  lives on the row; only the factory and the token lookup are on the manager.
+- **REBAC stores no storage tuples.** Every relation is field-backed
+  (`// rebac:field=` over the FKs, owner = `created_by`) or const-backed
+  (`admin`), plus an `operator/role`-style `storage/role` namespace
+  (`storage_admin`). Per-drive `editor`/`viewer` (incl. the `auth/user:*`
+  wildcard) is the grant surface; no signal tuple sync exists at all.
+- **Creates are gated by their owner, not by zed.** A per-row REBAC `create`
+  cannot evaluate a not-yet-inserted row, so the create factories
+  `File.objects.draft` and `Folder.objects.create_in_drive` check
+  `drive.has_access("write")` themselves and insert via per-instance `sudo()`
+  while the ambient actor stamps `created_by`; the GraphQL mutations are thin
+  dispatchers. Console backend/drive CRUD uses `crud(...,
+  permission_classes=[StorageAdminPermission], write_context=…)`.
+- **`SqidField` (None-safe `SqidsField`) in `angee.base.fields`:**
+  `from_db_value` passes the `NULL` of nullable-FK joins through — the exact
+  query REBAC field-backed arrows run (`parent->read`). `SqidMixin` and every
+  model across iam/integrate/storage/notes now declare it; raw `SqidsField`
+  is gone from source models.
+- **python-magic promoted to the locked stack** for finalize MIME detection;
+  it is a hard requirement (needs the system libmagic), so detection is a
+  single `magic.from_buffer` call with no signature-sniff fallback.
+- **Server bookkeeping never rides client data.** The one-shot proxy-token
+  envelope and failure reason live in `File.upload_envelope`
+  (`editable=False`, not on the GraphQL type) — `metadata` stays purely
+  client-owned, so a file writer can never revive a consumed token.
+- **Tree and key-space invariants are database facts:** root folder names are
+  unique per drive (NULL-parent constraint arm), real folders require a drive
+  (check constraint), folder moves reject cycles in `clean()`, and
+  `(backend, prefix)` is unique so two drives never share a key space.
+  Dedup hits and finalize races against a *trashed* row restore it instead of
+  handing out a purge-doomed row or blocking the re-upload.
+- **`angee.graphql.users`** owns the audit-reference projections
+  (`user_public_id` / `user_label`); storage and the notes example share it
+  instead of carrying copies. `angee.base.mixins.actor_user_id` is the one
+  reading of "current actor as a user id" (used by `AuditMixin`, `File.delete`,
+  the proxy push gate). The layering test derives its addon list from
+  `addons/angee/` so new base addons are guarded automatically.
+- **The proxy upload view is covered and honest.** A view-level test pins
+  token extraction, the streamed PUT, one-shot reuse rejection, and the
+  anonymous-actor denial; the docstring states plainly that the token binds
+  the PUT (single-use/CSRF) while identity is the request actor (session), not
+  the token. `FileQuerySet.delete()` refuses bulk delete so soft-trash can't be
+  bypassed, and `for_upload_token` pins the validated nonce so the locked
+  consume binds to *that* token.
+- Deferred: S3 backend (`boto3` proposed row), drive-sharing UI (grant tuples
+  exist), `storage_prune` cron wiring, serving `/media/` in dev, multipart
+  upload, per-request batching for `FileType.url`/`created_by_label` on long
+  lists, Trash backfill for pre-addon users, the storage web addon (next
+  pass).
+
 ## 2026-06-05 — Framework core review fixes
 
 A six-reviewer pass over `angee/{base,graphql,compose}` (21 findings), executed

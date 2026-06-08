@@ -5,9 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from django.db import models
-from django_sqids import SqidsField
 
-from angee.base.fields import StateField
+from angee.base.fields import SqidField, StateField
 from angee.base.mixins import (
     AuditMixin,
     HistoryMixin,
@@ -36,7 +35,7 @@ class Note(SqidMixin, AuditMixin, AngeeModel, HistoryMixin, RevisionMixin):
         ACTIVE = "active", "Active"
         ARCHIVED = "archived", "Archived"
 
-    sqid = SqidsField(real_field_name="id", prefix="nte", min_length=8)
+    sqid = SqidField(real_field_name="id", prefix="nte", min_length=8)
     title = models.CharField(max_length=160)
     body = models.TextField(blank=True, default="")
     word_count = models.PositiveIntegerField(default=0, db_index=True)

@@ -12,7 +12,10 @@ GRAPHQL = ANGEE / "graphql"
 COMPOSE = ANGEE / "compose"
 RESOURCES = ROOT / "addons" / "angee" / "resources"  # resources is a base addon
 
-_ADDON_PACKAGES = ("angee.iam", "angee.resources", "angee.integrate", "angee.operator")
+# Derived from the directory so a new base addon is guarded automatically.
+_ADDON_PACKAGES = tuple(
+    f"angee.{path.name}" for path in sorted((ROOT / "addons" / "angee").iterdir()) if path.is_dir()
+)
 
 
 def _module_imports(path: Path) -> set[str]:

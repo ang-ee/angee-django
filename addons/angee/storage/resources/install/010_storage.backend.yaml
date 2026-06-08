@@ -1,0 +1,9 @@
+# Default storage backend (install tier, loaded once). The empty config
+# makes LocalBackend read its root and base URL from Django's MEDIA_ROOT /
+# MEDIA_URL, so the row stays portable across environments.
+- xref: local
+  slug: local
+  label: Local filesystem
+  backend_class: angee.storage.backends.LocalBackend
+  backend_config: {}
+  is_default: true

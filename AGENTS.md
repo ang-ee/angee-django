@@ -52,6 +52,7 @@ on top.
 ├── addons/angee/           # base addons shipped with Angee — same `angee.*` namespace, built on the core
 │   ├── iam/                # IAM base addon — identity, the swappable user model, connections, OIDC login
 │   ├── resources/          # resources base addon — tiered data import/export (`resources` command)
+│   ├── storage/            # storage base addon — drives, folders, content-addressed files, uploads
 │   ├── operator/           # operator base addon — bridge to the local operator daemon + admin console
 │   └── integrate/          # integration base addon — thin capability/bridge runtime seam
 │       └── …               # an addon may carry a co-located `web/` (e.g. `iam/web` = `@angee/iam`)

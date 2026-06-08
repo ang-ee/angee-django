@@ -55,7 +55,8 @@ enforces:
   `angee.compose`.
 
 The same one-way rule extends downward to the base addons under `addons/angee/`
-(`angee.resources`, `angee.iam`, `angee.integrate`, `angee.operator`): an addon
+(`angee.resources`, `angee.iam`, `angee.integrate`, `angee.operator`,
+`angee.storage`): an addon
 may import `angee.base` and `angee.graphql`, but never `angee.compose`. The
 resource subsystem (`angee.resources`) is itself a base addon, not part of the
 core — it owns the resource ledger described below.

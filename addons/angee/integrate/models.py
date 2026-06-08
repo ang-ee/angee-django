@@ -15,11 +15,10 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.utils import timezone
-from django_sqids import SqidsField
 from rebac import system_context
 from rebac.managers import RebacManager
 
-from angee.base.fields import EncryptedField, StateField
+from angee.base.fields import EncryptedField, SqidField, StateField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.integrate.events import EventKind
@@ -253,7 +252,7 @@ class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
 
     runtime = True
 
-    sqid = SqidsField(real_field_name="id", prefix="whs", min_length=8)
+    sqid = SqidField(real_field_name="id", prefix="whs", min_length=8)
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,

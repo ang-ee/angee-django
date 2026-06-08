@@ -8,7 +8,7 @@ library owns the behavior.
 from __future__ import annotations
 
 import base64
-from typing import Any
+from typing import Any, cast
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
@@ -17,6 +17,7 @@ from django.conf import settings
 from django.core.exceptions import FieldError, ImproperlyConfigured
 from django.db import models
 from django_choices_field import TextChoicesField
+from django_sqids import SqidsField
 
 
 def _derive_fernet(label: str) -> Fernet:
@@ -50,6 +51,25 @@ class StateField(TextChoicesField):
 
         kwargs.setdefault("db_index", True)
         super().__init__(**kwargs)
+
+
+class SqidField(SqidsField):
+    """A ``SqidsField`` whose database reads pass ``NULL`` through.
+
+    ``docs/stack.md`` names ``django-sqids`` the owner of opaque external
+    ids; this wrapper only fixes its ``from_db_value``, which encodes
+    unconditionally and raises on the ``NULL`` a nullable-FK join produces
+    (e.g. ``values_list("parent__sqid")`` — the exact query REBAC
+    field-backed arrows run). Use it for any model whose sqid can be
+    selected through a nullable join.
+    """
+
+    def from_db_value(self, value: Any, expression: Any, connection: Any, *args: Any) -> str | None:
+        """Encode a database value, passing ``NULL`` joins through."""
+
+        if value is None:
+            return None
+        return cast(str | None, super().from_db_value(value, expression, connection, *args))
 
 
 class EncryptedField(models.TextField):

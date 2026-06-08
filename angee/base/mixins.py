@@ -8,8 +8,21 @@ from typing import Any, ClassVar
 import reversion
 from django.conf import settings
 from django.db import models
-from django_sqids import SqidsField
 from rebac import app_settings, current_actor
+
+from angee.base.fields import SqidField
+
+
+def actor_user_id(actor: Any) -> Any | None:
+    """Return ``actor``'s user subject id, or ``None`` when it is not a user.
+
+    The one reading of "this REBAC actor, as a user id" — the value that backs
+    user-owned columns (``created_by`` / ``updated_by`` / ``trashed_by`` …).
+    """
+
+    if actor is not None and actor.subject_type == app_settings.REBAC_USER_TYPE and actor.subject_id:
+        return actor.subject_id
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +54,7 @@ class TimestampMixin(models.Model):
 class SqidMixin(models.Model):
     """Add an opaque public identifier backed by the model primary key."""
 
-    sqid = SqidsField(real_field_name="id")
+    sqid = SqidField(real_field_name="id")
     """Opaque public identifier encoded from the integer primary key."""
 
     class Meta:
@@ -97,18 +110,18 @@ class AuditMixin(models.Model):
                 super().save(*args, **kwargs)
                 return
 
-        actor = getattr(self, "_rebac_actor", None) or current_actor()
+        user_id = actor_user_id(getattr(self, "_rebac_actor", None) or current_actor())
         touched: set[str] = set()
-        if actor is not None and actor.subject_type == app_settings.REBAC_USER_TYPE:
+        if user_id is not None:
             if self._state.adding:
                 if getattr(self, "created_by_id", None) is None:
-                    self.created_by_id = actor.subject_id
+                    self.created_by_id = user_id
                     touched.add("created_by")
                 if getattr(self, "updated_by_id", None) is None:
-                    self.updated_by_id = actor.subject_id
+                    self.updated_by_id = user_id
                     touched.add("updated_by")
             else:
-                self.updated_by_id = actor.subject_id
+                self.updated_by_id = user_id
                 touched.add("updated_by")
 
         if touched and update_fields is not None:
