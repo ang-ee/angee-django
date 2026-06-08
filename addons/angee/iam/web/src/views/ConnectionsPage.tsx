@@ -157,10 +157,7 @@ export function ConnectionsPage(): ReactElement {
     [users.rows],
   );
   const firstVendorId = vendorOptions[0]?.value ?? "";
-  const providerGroups = useMemo(
-    () => providerFormGroups(vendorOptions),
-    [vendorOptions],
-  );
+  const providerGroups = useMemo(() => providerFormGroups(), []);
   const providerDefaults = useMemo(
     () => providerDefaultValues(firstVendorId),
     [firstVendorId],

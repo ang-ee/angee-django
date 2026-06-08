@@ -215,9 +215,7 @@ export function vendorFormFields(): readonly FormField[] {
   ];
 }
 
-export function providerFormGroups(
-  vendors: readonly WidgetOption[],
-): readonly GroupDescriptor[] {
+export function providerFormGroups(): readonly GroupDescriptor[] {
   return [
     {
       label: "Client",
@@ -225,7 +223,9 @@ export function providerFormGroups(
       actions: [],
       fields: [
         { name: "displayName", label: "Display name", title: true },
-        { name: "vendor", label: "Vendor", widget: "many2one", options: vendors },
+        // No options/widget: a nested object relation, so FormView auto-wires
+        // the searchable picker and the inline "Create vendor" affordance.
+        { name: "vendor", label: "Vendor" },
         { name: "environment", label: "Environment" },
         { name: "clientId", label: "Client ID" },
         { name: "clientSecret", label: "Client secret" },
