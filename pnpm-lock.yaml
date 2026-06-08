@@ -121,9 +121,6 @@ importers:
       lucide-react:
         specifier: ^1.17.0
         version: 1.17.0(react@19.2.6)
-      urql:
-        specifier: ^5.0.0
-        version: 5.0.2(@urql/core@6.0.1(graphql@16.14.0))(react@19.2.6)
     devDependencies:
       '@tanstack/react-router':
         specifier: ^1.170.8

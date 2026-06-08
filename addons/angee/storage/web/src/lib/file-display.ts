@@ -1,23 +1,13 @@
-import {
-  isImageMime,
-  isJsonMime,
-  isMarkdownMime,
-  isTextOrCodeMime,
-  type BadgeVariant,
-} from "@angee/base";
+import { isImageMime, type BadgeVariant } from "@angee/base";
 
 // Presentational mappings for file rows: a mime → glyph name, the upload-state
 // → stage badge, and a compact date. Byte sizes reuse `formatSize` from
 // `@angee/base` (the preview model owns it) — this module never re-coins it.
 
-/** Registry glyph for a file's mime; `image`/`folder` are registered by the addon. */
+/** Registry glyph for a file's mime — `image` (addon-registered) or the
+ * base `file` fallback. */
 export function fileIconName(mime: string | null | undefined): string {
-  if (!mime) return "file";
-  if (isImageMime(mime)) return "image";
-  if (isMarkdownMime(mime) || isJsonMime(mime) || isTextOrCodeMime(mime)) {
-    return "file";
-  }
-  return "file";
+  return mime && isImageMime(mime) ? "image" : "file";
 }
 
 export interface FileStage {

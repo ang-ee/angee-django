@@ -24,6 +24,7 @@ import {
 } from "../data/documents";
 import {
   ALL_SCOPE,
+  TRASH_SCOPE,
   fileById,
   fileRows,
   folderTreeRows,
@@ -77,9 +78,19 @@ export function StoragePage(): ReactElement {
     () => folderTreeRows(folders, driveId),
     [folders, driveId],
   );
+  // Clamp the scope to the active drive: if a folder scope no longer names a
+  // node in this drive's tree (e.g. the default drive shifted out from under an
+  // unpinned session), fall back to All files instead of an empty list with no
+  // highlighted node.
+  const effectiveScope =
+    scope === ALL_SCOPE ||
+    scope === TRASH_SCOPE ||
+    treeRows.some((row) => row.id === scope)
+      ? scope
+      : ALL_SCOPE;
   const rows = useMemo(
-    () => fileRows(files, { driveId, scope }),
-    [files, driveId, scope],
+    () => fileRows(files, { driveId, scope: effectiveScope }),
+    [files, driveId, effectiveScope],
   );
   const selectedFile = useMemo(
     () => fileById(files, selectedFileId),
@@ -106,6 +117,7 @@ export function StoragePage(): ReactElement {
   const navigator = (
     <div className="flex h-full flex-col gap-2 p-2">
       <Select
+        aria-label="Drive"
         value={driveId}
         options={driveOptions}
         placeholder="Select a drive"
@@ -121,7 +133,7 @@ export function StoragePage(): ReactElement {
         label="name"
         rowKey="id"
         icon="icon"
-        selectedId={scope}
+        selectedId={effectiveScope}
         onSelect={(row) => {
           setScope(row.id);
           setSelectedFileId(null);

@@ -55,21 +55,20 @@ export interface StorageFile {
 }
 
 export interface StorageDrivesData {
-  drives: { totalCount: number; results: StorageDrive[] };
+  drives: { results: StorageDrive[] };
 }
 
 export interface StorageFoldersData {
-  folders: { totalCount: number; results: StorageFolder[] };
+  folders: { results: StorageFolder[] };
 }
 
 export interface StorageFilesData {
-  files: { totalCount: number; results: StorageFile[] };
+  files: { results: StorageFile[] };
 }
 
 export const STORAGE_DRIVES_QUERY = `
   query StorageDrives($pagination: OffsetPaginationInput) {
     drives(pagination: $pagination) {
-      totalCount
       results {
         id
         slug
@@ -84,7 +83,6 @@ export const STORAGE_DRIVES_QUERY = `
 export const STORAGE_FOLDERS_QUERY = `
   query StorageFolders($pagination: OffsetPaginationInput) {
     folders(pagination: $pagination) {
-      totalCount
       results {
         id
         name
@@ -101,7 +99,6 @@ export const STORAGE_FOLDERS_QUERY = `
 export const STORAGE_FILES_QUERY = `
   query StorageFiles($pagination: OffsetPaginationInput) {
     files(pagination: $pagination) {
-      totalCount
       results {
         id
         filename
