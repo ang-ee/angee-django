@@ -6,7 +6,6 @@ import {
   LoadingPanel,
   PreviewPane,
   RelationPicker,
-  RowsListView,
   TreeView,
   type FieldDescriptor,
   type PreviewFile,
@@ -33,7 +32,8 @@ import {
   folderTreeRows,
   type StorageTreeRow,
 } from "../data/file-rows";
-import { fileColumns } from "./file-columns";
+import { useStorageUpload } from "../data/use-upload";
+import { FileBrowserContent } from "./FileBrowserContent";
 
 // One safety-capped read each of drives/folders/files; the browser scopes the
 // set client-side so the navigator, list, and preview share one fetch.
@@ -128,6 +128,20 @@ export function StoragePage(): ReactElement {
     () => fileById(files, selectedFileId),
     [files, selectedFileId],
   );
+  const uploads = useStorageUpload({ onUploaded: () => filesQuery.refetch() });
+  // Uploads land in the active drive, into the current folder (or its root); the
+  // Trash scope is not an upload target.
+  const canUpload = driveId !== "" && effectiveScope !== TRASH_SCOPE;
+  const uploadTarget = useMemo(
+    () => ({
+      driveId,
+      folderId:
+        effectiveScope === ALL_SCOPE || effectiveScope === TRASH_SCOPE
+          ? null
+          : effectiveScope,
+    }),
+    [driveId, effectiveScope],
+  );
 
   if (drivesQuery.fetching && drives.length === 0) {
     return <LoadingPanel message="Loading storage" />;
@@ -184,14 +198,14 @@ export function StoragePage(): ReactElement {
       navigator={navigator}
       aside={<FilePreview file={selectedFile} />}
     >
-      <RowsListView
+      <FileBrowserContent
         rows={rows}
-        columns={fileColumns}
         fetching={filesQuery.fetching}
         error={filesQuery.error}
         onRowClick={(row) => setSelectedFileId(row.id)}
-        emptyMessage="No files here yet."
-        pageSize={50}
+        uploads={uploads}
+        uploadTarget={uploadTarget}
+        canUpload={canUpload}
       />
     </Explorer>
   );

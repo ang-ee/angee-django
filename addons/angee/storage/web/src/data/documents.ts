@@ -9,6 +9,80 @@ export type OffsetPaginationVariables = {
   pagination: { offset: number; limit: number };
 };
 
+/** One step of the upload protocol's file projection. */
+export interface UploadedFile {
+  id: string;
+  filename: string;
+  uploadState: string;
+}
+
+export type FileUploadBeginInput = {
+  filename: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  drive?: string | null;
+  driveSlug?: string;
+  folder?: string | null;
+  contentHash?: string;
+};
+
+export type FileUploadBeginVariables = { input: FileUploadBeginInput };
+
+export interface FileUploadBeginData {
+  fileUploadBegin: {
+    /** `"proxy"` (PUT the bytes), `"deduped"` (already stored), or empty on error. */
+    method: string;
+    uploadUrl: string;
+    uploadToken: string;
+    error: string | null;
+    errorCode: string | null;
+    file: UploadedFile | null;
+  };
+}
+
+export type FileUploadFinalizeVariables = {
+  input: { file: string; contentHash: string; sizeBytes: number };
+};
+
+export interface FileUploadFinalizeData {
+  fileUploadFinalize: {
+    error: string | null;
+    errorCode: string | null;
+    file: UploadedFile | null;
+  };
+}
+
+export const FILE_UPLOAD_BEGIN_MUTATION = `
+  mutation StorageFileUploadBegin($input: FileUploadBeginInput!) {
+    fileUploadBegin(input: $input) {
+      method
+      uploadUrl
+      uploadToken
+      error
+      errorCode
+      file {
+        id
+        filename
+        uploadState
+      }
+    }
+  }
+`;
+
+export const FILE_UPLOAD_FINALIZE_MUTATION = `
+  mutation StorageFileUploadFinalize($input: FileUploadFinalizeInput!) {
+    fileUploadFinalize(input: $input) {
+      error
+      errorCode
+      file {
+        id
+        filename
+        uploadState
+      }
+    }
+  }
+`;
+
 /** One MIME taxonomy row, as projected on a file. */
 export interface StorageMimeType {
   mimeType: string;

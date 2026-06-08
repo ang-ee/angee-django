@@ -1,0 +1,174 @@
+import { useCallback, useState } from "react";
+
+import { useAuthoredMutation } from "@angee/sdk";
+
+import {
+  FILE_UPLOAD_BEGIN_MUTATION,
+  FILE_UPLOAD_FINALIZE_MUTATION,
+  type FileUploadBeginData,
+  type FileUploadBeginVariables,
+  type FileUploadFinalizeData,
+  type FileUploadFinalizeVariables,
+} from "./documents";
+
+const DEFAULT_MIME = "application/octet-stream";
+
+/**
+ * Lowercase SHA-256 hex of a file's bytes — the content address the begin step
+ * dedups on and finalize verifies. Reads the whole file into memory, which is
+ * fine for the sizes the proxy upload accepts.
+ */
+export async function sha256Hex(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  const digest = await crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+export type UploadStatus =
+  | "hashing"
+  | "uploading"
+  | "finalizing"
+  | "done"
+  | "deduped"
+  | "failed";
+
+export interface UploadTask {
+  id: string;
+  name: string;
+  status: UploadStatus;
+  error?: string;
+}
+
+export interface UploadTarget {
+  driveId: string;
+  folderId?: string | null;
+}
+
+const FINISHED: ReadonlySet<UploadStatus> = new Set(["done", "deduped", "failed"]);
+
+let taskSeq = 0;
+
+export interface StorageUpload {
+  tasks: readonly UploadTask[];
+  upload: (files: readonly File[], target: UploadTarget) => void;
+  clearFinished: () => void;
+}
+
+/**
+ * The upload protocol as a hook: per file, SHA-256 → `fileUploadBegin` →
+ * (proxy) `PUT` the bytes → `fileUploadFinalize`, with a dedup short-circuit.
+ * Each file is a `task` whose status drives the UI; `onUploaded` fires once the
+ * batch settles so the caller can refetch.
+ */
+export function useStorageUpload(
+  options: { onUploaded?: () => void } = {},
+): StorageUpload {
+  const { onUploaded } = options;
+  const [beginUpload] = useAuthoredMutation<
+    FileUploadBeginData,
+    FileUploadBeginVariables
+  >(FILE_UPLOAD_BEGIN_MUTATION);
+  const [finalizeUpload] = useAuthoredMutation<
+    FileUploadFinalizeData,
+    FileUploadFinalizeVariables
+  >(FILE_UPLOAD_FINALIZE_MUTATION);
+  const [tasks, setTasks] = useState<readonly UploadTask[]>([]);
+
+  const patch = useCallback((id: string, next: Partial<UploadTask>) => {
+    setTasks((current) =>
+      current.map((task) => (task.id === id ? { ...task, ...next } : task)),
+    );
+  }, []);
+
+  const runOne = useCallback(
+    async (taskId: string, file: File, target: UploadTarget): Promise<void> => {
+      try {
+        const contentHash = await sha256Hex(file);
+        const begun = await beginUpload({
+          input: {
+            filename: file.name,
+            mimeType: file.type || DEFAULT_MIME,
+            sizeBytes: file.size,
+            drive: target.driveId,
+            folder: target.folderId ?? null,
+            contentHash,
+          },
+        });
+        const payload = begun?.fileUploadBegin;
+        if (!payload || payload.error) {
+          patch(taskId, {
+            status: "failed",
+            error: payload?.error ?? "Upload could not start.",
+          });
+          return;
+        }
+        if (payload.method === "deduped") {
+          patch(taskId, { status: "deduped" });
+          return;
+        }
+        patch(taskId, { status: "uploading" });
+        const response = await fetch(payload.uploadUrl, {
+          method: "PUT",
+          body: file,
+          credentials: "include",
+        });
+        if (!response.ok) {
+          patch(taskId, {
+            status: "failed",
+            error: `Upload failed (${response.status}).`,
+          });
+          return;
+        }
+        patch(taskId, { status: "finalizing" });
+        const finalized = await finalizeUpload({
+          input: {
+            file: payload.file?.id ?? "",
+            contentHash,
+            sizeBytes: file.size,
+          },
+        });
+        const result = finalized?.fileUploadFinalize;
+        if (!result || result.error) {
+          patch(taskId, {
+            status: "failed",
+            error: result?.error ?? "Could not finalize upload.",
+          });
+          return;
+        }
+        patch(taskId, { status: "done" });
+      } catch (error) {
+        patch(taskId, {
+          status: "failed",
+          error: error instanceof Error ? error.message : "Upload failed.",
+        });
+      }
+    },
+    [beginUpload, finalizeUpload, patch],
+  );
+
+  const upload = useCallback(
+    (files: readonly File[], target: UploadTarget): void => {
+      const started = files.map((file) => ({
+        file,
+        task: {
+          id: `up-${(taskSeq += 1)}`,
+          name: file.name,
+          status: "hashing" as UploadStatus,
+        },
+      }));
+      setTasks((current) => [...current, ...started.map((entry) => entry.task)]);
+      void Promise.allSettled(
+        started.map((entry) => runOne(entry.task.id, entry.file, target)),
+      ).then(() => onUploaded?.());
+    },
+    [onUploaded, runOne],
+  );
+
+  const clearFinished = useCallback(() => {
+    setTasks((current) => current.filter((task) => !FINISHED.has(task.status)));
+  }, []);
+
+  return { tasks, upload, clearFinished };
+}
