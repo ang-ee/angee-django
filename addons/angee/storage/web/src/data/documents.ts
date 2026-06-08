@@ -83,6 +83,39 @@ export const FILE_UPLOAD_FINALIZE_MUTATION = `
   }
 `;
 
+/** Patch a file — used here for moves (`folder`: a folder GlobalID, or null for
+ * the drive root). Renames go through the record form's own resource mutation. */
+export type FileUpdateVariables = {
+  data: { id: string; folder?: string | null };
+};
+export interface FileUpdateData {
+  updateFile: { id: string };
+}
+
+export const FILE_UPDATE_MUTATION = `
+  mutation StorageUpdateFile($data: FilePatch!) {
+    updateFile(data: $data) {
+      id
+    }
+  }
+`;
+
+export type CreateFolderVariables = {
+  data: { drive: string; name: string; parent?: string | null };
+};
+export interface CreateFolderData {
+  createFolder: { id: string; name: string };
+}
+
+export const CREATE_FOLDER_MUTATION = `
+  mutation StorageCreateFolder($data: FolderInput!) {
+    createFolder(data: $data) {
+      id
+      name
+    }
+  }
+`;
+
 /** `id` for the trash/restore mutations; the relay GlobalID of the file. */
 export type FileIdVariables = { id: string };
 export interface FileDeleteData {

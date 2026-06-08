@@ -2,7 +2,7 @@ import { useRef, useState, type ReactElement, type ReactNode } from "react";
 
 import { Button, Glyph, RowsListView, cn } from "@angee/base";
 
-import type { StorageFileRow } from "../data/file-rows";
+import { fileDragPayload, type StorageFileRow } from "../data/file-rows";
 import type { StorageUpload, UploadStatus, UploadTarget, UploadTask } from "../data/use-upload";
 import { fileColumns, fileGalleryCard } from "./file-columns";
 
@@ -81,6 +81,7 @@ export function FileBrowserContent({
           rowHref={rowHref}
           selectable
           bulkActions={bulkActions}
+          draggableRow={fileDragPayload}
           gallery={{ renderCard: fileGalleryCard }}
           emptyMessage={canUpload ? "Drop files here or use Upload." : "No files here yet."}
           pageSize={50}

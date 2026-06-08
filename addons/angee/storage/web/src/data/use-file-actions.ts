@@ -5,9 +5,12 @@ import { useAuthoredMutation } from "@angee/sdk";
 import {
   FILE_DELETE_MUTATION,
   FILE_RESTORE_MUTATION,
+  FILE_UPDATE_MUTATION,
   type FileDeleteData,
   type FileIdVariables,
   type FileRestoreData,
+  type FileUpdateData,
+  type FileUpdateVariables,
 } from "./documents";
 
 export interface FileActions {
@@ -16,6 +19,8 @@ export interface FileActions {
   trash: (id: string) => Promise<void>;
   /** Pull a file back out of the Trash. */
   restore: (id: string) => Promise<void>;
+  /** Move a file into a folder (a folder GlobalID), or `null` for the root. */
+  move: (id: string, folder: string | null) => Promise<void>;
   /** Soft-delete many files in one pass, refetching once. */
   trashMany: (ids: Iterable<string>) => Promise<void>;
   /** Restore many files in one pass, refetching once. */
@@ -37,6 +42,9 @@ export function useFileActions(
   const [restoreFile] = useAuthoredMutation<FileRestoreData, FileIdVariables>(
     FILE_RESTORE_MUTATION,
   );
+  const [updateFile] = useAuthoredMutation<FileUpdateData, FileUpdateVariables>(
+    FILE_UPDATE_MUTATION,
+  );
   const [busy, setBusy] = useState(false);
 
   const run = useCallback(
@@ -56,6 +64,7 @@ export function useFileActions(
     busy,
     trash: (id) => run(() => deleteFile({ id })),
     restore: (id) => run(() => restoreFile({ id })),
+    move: (id, folder) => run(() => updateFile({ data: { id, folder } })),
     trashMany: (ids) =>
       run(async () => {
         for (const id of ids) await deleteFile({ id });

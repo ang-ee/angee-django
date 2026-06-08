@@ -29,17 +29,21 @@ import {
 } from "../data/documents";
 import {
   ALL_SCOPE,
+  STORAGE_FILE_DND,
   TRASH_SCOPE,
   fileById,
   fileRows,
   folderTreeRows,
+  type FileDragData,
   type StorageFileRow,
   type StorageTreeRow,
 } from "../data/file-rows";
 import { useFileActions } from "../data/use-file-actions";
+import { useFolderActions } from "../data/use-folder-actions";
 import { useStorageUpload } from "../data/use-upload";
 import { FileBrowserContent } from "./FileBrowserContent";
 import { FileDetail } from "./FileDetail";
+import { NewFolderControl } from "./NewFolderControl";
 
 /** Detail route for one file row — its relay id, percent-encoded into the path. */
 function fileDetailPath(id: string): string {
@@ -154,6 +158,31 @@ export function StoragePage(): ReactElement {
   );
   const uploads = useStorageUpload({ onUploaded: () => filesQuery.refetch() });
   const fileActions = useFileActions({ onChanged: () => filesQuery.refetch() });
+  const folderActions = useFolderActions({
+    onChanged: () => foldersQuery.refetch(),
+  });
+  // Dropping a file on a navigator node moves it: the Trash node trashes, All
+  // files moves to the drive root, any folder node moves into that folder.
+  const handleFileDrop = useCallback(
+    (nodeId: string, file: FileDragData) => {
+      if (nodeId === TRASH_SCOPE) void fileActions.trash(file.id);
+      else if (nodeId === ALL_SCOPE) void fileActions.move(file.id, null);
+      else void fileActions.move(file.id, nodeId);
+    },
+    [fileActions],
+  );
+  // New folders land under the active folder scope (or the drive root).
+  const handleNewFolder = useCallback(
+    (name: string) => {
+      if (!driveId) return;
+      const parent =
+        effectiveScope === ALL_SCOPE || effectiveScope === TRASH_SCOPE
+          ? null
+          : effectiveScope;
+      void folderActions.create({ drive: driveId, name, parent });
+    },
+    [driveId, effectiveScope, folderActions],
+  );
   // The selection bar's bulk verbs: Restore in the Trash scope, else Trash.
   const renderBulkActions = (ids: ReadonlySet<string>, clear: () => void) =>
     effectiveScope === TRASH_SCOPE ? (
@@ -233,8 +262,13 @@ export function StoragePage(): ReactElement {
           setScope(row.id);
           closeDetail();
         }}
+        dropAccept={STORAGE_FILE_DND}
+        onNodeDrop={(nodeId, payload) =>
+          handleFileDrop(nodeId, payload.data as FileDragData)
+        }
         className="min-h-0 flex-1 overflow-auto"
       />
+      <NewFolderControl busy={folderActions.busy} onCreate={handleNewFolder} />
     </div>
   );
 

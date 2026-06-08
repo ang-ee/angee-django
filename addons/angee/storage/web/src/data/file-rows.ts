@@ -1,3 +1,5 @@
+import type { DndPayload } from "@angee/base";
+
 import { fileIconName } from "../lib/file-display";
 import {
   DRIVE_TYPE,
@@ -6,6 +8,19 @@ import {
   toGlobalId,
 } from "../lib/global-id";
 import type { StorageFile, StorageFolder } from "./documents";
+
+/** Dnd payload kind for a dragged file; tree nodes accept it as a drop target. */
+export const STORAGE_FILE_DND = "storage.file";
+
+/** The body of a dragged-file payload — the file's relay GlobalID. */
+export interface FileDragData {
+  id: string;
+}
+
+/** Make a file row draggable: its move payload, keyed by the file's node id. */
+export function fileDragPayload(row: StorageFileRow): DndPayload<FileDragData> {
+  return { type: STORAGE_FILE_DND, data: { id: row.id } };
+}
 
 // The browser fetches every drive/folder/file once and scopes client-side, so
 // these transforms own the projection: files → list rows, folders → tree rows.
