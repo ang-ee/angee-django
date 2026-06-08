@@ -27,6 +27,7 @@ import type {
   IAMVendorSummary,
 } from "../documents";
 import { userLabel } from "../identity-labels";
+import { IAM_LIST_LIMIT } from "../list-config";
 import {
   ExternalAccountDialog,
   ResourceFormDialog,
@@ -43,7 +44,6 @@ import {
 } from "./ConnectionListColumns";
 import { ConnectionSummary } from "./ConnectionSummary";
 
-const MANAGEMENT_LIMIT = 500;
 const VENDOR_MODEL = "Vendor";
 const OAUTH_CLIENT_MODEL = "OAuthClient";
 const EXTERNAL_ACCOUNT_MODEL = "ExternalAccount";
@@ -112,19 +112,19 @@ export function ConnectionsPage(): ReactElement {
   const toast = useToast();
   const vendors = useResourceList(VENDOR_MODEL, {
     fields: VENDOR_FIELDS,
-    pageSize: MANAGEMENT_LIMIT,
+    pageSize: IAM_LIST_LIMIT,
   });
   const users = useResourceList(USER_MODEL, {
     fields: USER_OPTION_FIELDS,
-    pageSize: MANAGEMENT_LIMIT,
+    pageSize: IAM_LIST_LIMIT,
   });
   const oauthClients = useResourceList(OAUTH_CLIENT_MODEL, {
     fields: OAUTH_CLIENT_FIELDS,
-    pageSize: MANAGEMENT_LIMIT,
+    pageSize: IAM_LIST_LIMIT,
   });
   const externalAccounts = useResourceList(EXTERNAL_ACCOUNT_MODEL, {
     fields: EXTERNAL_ACCOUNT_FIELDS,
-    pageSize: MANAGEMENT_LIMIT,
+    pageSize: IAM_LIST_LIMIT,
   });
   const [createExternalAccount, createAccountState] = useResourceMutation(
     EXTERNAL_ACCOUNT_MODEL,
