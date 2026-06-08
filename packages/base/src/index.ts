@@ -51,6 +51,7 @@ export * from "./chrome";
 export * from "./communication";
 export * from "./shell";
 export * from "./auth";
+export * from "./preview";
 
 // UI primitives — embeddable, SDK-agnostic atoms on base-ui.
 export * from "./ui/button";
