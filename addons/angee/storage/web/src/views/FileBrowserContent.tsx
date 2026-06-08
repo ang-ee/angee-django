@@ -19,7 +19,8 @@ export interface FileBrowserContentProps {
   rows: readonly StorageFileRow[];
   fetching: boolean;
   error: Error | null;
-  onRowClick: (row: StorageFileRow) => void;
+  /** Detail route for a clicked row — the list renders each row as a link. */
+  rowHref: (row: StorageFileRow) => string;
   uploads: StorageUpload;
   uploadTarget: UploadTarget;
   canUpload: boolean;
@@ -34,7 +35,7 @@ export function FileBrowserContent({
   rows,
   fetching,
   error,
-  onRowClick,
+  rowHref,
   uploads,
   uploadTarget,
   canUpload,
@@ -74,7 +75,7 @@ export function FileBrowserContent({
           columns={fileColumns}
           fetching={fetching}
           error={error}
-          onRowClick={onRowClick}
+          rowHref={rowHref}
           emptyMessage={canUpload ? "Drop files here or use Upload." : "No files here yet."}
           pageSize={50}
           toolbarActions={

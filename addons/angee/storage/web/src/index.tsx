@@ -1,7 +1,8 @@
 import type { BaseAddon, BaseAddonRoute, BaseMenuItem } from "@angee/base";
-import { Folder, HardDrive, Image } from "lucide-react";
+import { ArchiveRestore, Download, Folder, HardDrive, Image } from "lucide-react";
 
 import { StoragePage } from "./views/StoragePage";
+import { FileCrumb } from "./views/FileDetail";
 
 const STORAGE_ID = "storage";
 
@@ -12,6 +13,18 @@ const storageRoutes: readonly BaseAddonRoute[] = [
     shell: "console",
     menu: STORAGE_ID,
     component: StoragePage,
+  },
+  {
+    // The file record nests under the list; `StoragePage` (the parent) reads the
+    // `$id` param and swaps its content to the detail form, so this route carries
+    // only the crumb.
+    name: "storage.file",
+    path: "/storage/$id",
+    shell: "console",
+    parent: "storage.files",
+    crumb: (match) => (
+      <FileCrumb id={String((match.params as { id?: string }).id ?? "")} />
+    ),
   },
 ];
 
@@ -31,7 +44,13 @@ const storage: BaseAddon = {
   id: STORAGE_ID,
   routes: storageRoutes,
   menus: storageMenu,
-  icons: { drive: HardDrive, folder: Folder, image: Image },
+  icons: {
+    drive: HardDrive,
+    folder: Folder,
+    image: Image,
+    download: Download,
+    restore: ArchiveRestore,
+  },
 };
 
 export default storage;

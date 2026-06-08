@@ -83,6 +83,32 @@ export const FILE_UPLOAD_FINALIZE_MUTATION = `
   }
 `;
 
+/** `id` for the trash/restore mutations; the relay GlobalID of the file. */
+export type FileIdVariables = { id: string };
+export interface FileDeleteData {
+  deleteFile: { totalDeletedCount: number; hasBlockers: boolean };
+}
+export interface FileRestoreData {
+  restoreFile: { id: string } | null;
+}
+
+export const FILE_DELETE_MUTATION = `
+  mutation StorageDeleteFile($id: ID!) {
+    deleteFile(id: $id, confirm: true) {
+      totalDeletedCount
+      hasBlockers
+    }
+  }
+`;
+
+export const FILE_RESTORE_MUTATION = `
+  mutation StorageRestoreFile($id: ID!) {
+    restoreFile(id: $id) {
+      id
+    }
+  }
+`;
+
 /** One MIME taxonomy row, as projected on a file. */
 export interface StorageMimeType {
   mimeType: string;

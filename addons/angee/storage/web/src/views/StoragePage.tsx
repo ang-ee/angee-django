@@ -1,4 +1,5 @@
-import { useMemo, useState, type ReactElement } from "react";
+import { useCallback, useMemo, useState, type ReactElement } from "react";
+import { useNavigate, useParams } from "@tanstack/react-router";
 
 import {
   EmptyState,
@@ -30,10 +31,17 @@ import {
   fileById,
   fileRows,
   folderTreeRows,
+  type StorageFileRow,
   type StorageTreeRow,
 } from "../data/file-rows";
 import { useStorageUpload } from "../data/use-upload";
 import { FileBrowserContent } from "./FileBrowserContent";
+import { FileDetail } from "./FileDetail";
+
+/** Detail route for one file row — its relay id, percent-encoded into the path. */
+function fileDetailPath(id: string): string {
+  return `/storage/${encodeURIComponent(id)}`;
+}
 
 // One safety-capped read each of drives/folders/files; the browser scopes the
 // set client-side so the navigator, list, and preview share one fetch.
@@ -72,9 +80,18 @@ export function StoragePage(): ReactElement {
   const files = filesQuery.data?.files.results ?? [];
   const backends = backendsQuery.data?.backends.results ?? [];
 
+  // The open file is route state: `/storage/$id` swaps the content to the detail
+  // form and the aside to that file's larger preview; `/storage` is the list.
+  const navigate = useNavigate();
+  const params = useParams({ strict: false });
+  const openFileId =
+    "id" in params && typeof params.id === "string" ? params.id : null;
+  const closeDetail = useCallback(() => {
+    void navigate({ to: "/storage" });
+  }, [navigate]);
+
   const [pinnedDriveId, setPinnedDriveId] = useState<string | null>(null);
   const [scope, setScope] = useState<string>(ALL_SCOPE);
-  const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
 
   // Default to the first drive until the user picks one.
   const driveId = pinnedDriveId ?? drives[0]?.id ?? "";
@@ -124,9 +141,13 @@ export function StoragePage(): ReactElement {
     () => fileRows(files, { driveId, scope: effectiveScope }),
     [files, driveId, effectiveScope],
   );
-  const selectedFile = useMemo(
-    () => fileById(files, selectedFileId),
-    [files, selectedFileId],
+  const openFile = useMemo(
+    () => fileById(files, openFileId),
+    [files, openFileId],
+  );
+  const rowHref = useCallback(
+    (row: StorageFileRow) => fileDetailPath(row.id),
+    [],
   );
   const uploads = useStorageUpload({ onUploaded: () => filesQuery.refetch() });
   // Uploads land in the active drive, into the current folder (or its root); the
@@ -171,7 +192,7 @@ export function StoragePage(): ReactElement {
         onChange={(value) => {
           setPinnedDriveId(value);
           setScope(ALL_SCOPE);
-          setSelectedFileId(null);
+          closeDetail();
         }}
         create={{ model: "Drive", fields: driveCreateFields }}
         onCreated={() => drivesQuery.refetch()}
@@ -185,7 +206,7 @@ export function StoragePage(): ReactElement {
         selectedId={effectiveScope}
         onSelect={(row) => {
           setScope(row.id);
-          setSelectedFileId(null);
+          closeDetail();
         }}
         className="min-h-0 flex-1 overflow-auto"
       />
@@ -196,17 +217,39 @@ export function StoragePage(): ReactElement {
     <Explorer
       autoSave="storage.browser"
       navigator={navigator}
-      aside={<FilePreview file={selectedFile} />}
+      aside={<FilePreview file={openFile} />}
     >
-      <FileBrowserContent
-        rows={rows}
-        fetching={filesQuery.fetching}
-        error={filesQuery.error}
-        onRowClick={(row) => setSelectedFileId(row.id)}
-        uploads={uploads}
-        uploadTarget={uploadTarget}
-        canUpload={canUpload}
-      />
+      {openFileId ? (
+        openFile ? (
+          <FileDetail
+            file={openFile}
+            onClose={closeDetail}
+            onChanged={() => filesQuery.refetch()}
+          />
+        ) : (
+          <div className="grid h-full place-content-center p-8">
+            {filesQuery.fetching ? (
+              <LoadingPanel message="Loading file" />
+            ) : (
+              <EmptyState
+                icon="file"
+                title="File not found"
+                description="This file is no longer available."
+              />
+            )}
+          </div>
+        )
+      ) : (
+        <FileBrowserContent
+          rows={rows}
+          fetching={filesQuery.fetching}
+          error={filesQuery.error}
+          rowHref={rowHref}
+          uploads={uploads}
+          uploadTarget={uploadTarget}
+          canUpload={canUpload}
+        />
+      )}
     </Explorer>
   );
 }

@@ -6,11 +6,21 @@ import storage from "./index";
 describe("storage addon manifest", () => {
   test("registers the files route on the console shell with a component", () => {
     const routes = storage.routes ?? [];
-    expect(routes).toHaveLength(1);
+    expect(routes).toHaveLength(2);
     expect(routes[0]?.name).toBe("storage.files");
     expect(routes[0]?.path).toBe("/storage");
     expect(routes[0]?.shell).toBe("console");
     expect(routes[0]?.component).toBeTypeOf("function");
+  });
+
+  test("nests the file record route under the list with a crumb", () => {
+    const record = (storage.routes ?? []).find(
+      (route) => route.name === "storage.file",
+    );
+    expect(record?.path).toBe("/storage/$id");
+    expect(record?.parent).toBe("storage.files");
+    expect(record?.component).toBeUndefined();
+    expect(record?.crumb).toBeTypeOf("function");
   });
 
   test("exposes a single Files menu targeting the files route", () => {
