@@ -2,6 +2,7 @@ import type { BaseAddon, BaseAddonRoute, BaseMenuItem } from "@angee/base";
 import { BookOpen, FileStack, FileText, Library, Link2 } from "lucide-react";
 
 import { KnowledgePage, PageCrumb } from "./views/KnowledgePage";
+import { KnowledgeSettingsPage } from "./views/KnowledgeSettingsPage";
 
 const KNOWLEDGE_ID = "knowledge";
 
@@ -12,6 +13,14 @@ const knowledgeRoutes: readonly BaseAddonRoute[] = [
     shell: "console",
     menu: KNOWLEDGE_ID,
     component: KnowledgePage,
+  },
+  {
+    // The vaults admin. A static `/knowledge/settings` outranks the
+    // `/knowledge/$id` page route, so it is a sibling, not a page id.
+    name: "knowledge.settings",
+    path: "/knowledge/settings",
+    shell: "console",
+    component: KnowledgeSettingsPage,
   },
   {
     // The page reader nests under the wiki; `KnowledgePage` (the parent) reads
@@ -33,6 +42,10 @@ const knowledgeMenu: readonly BaseMenuItem[] = [
     icon: "knowledge",
     group: "platform",
     route: "knowledge.home",
+    children: [
+      { id: "knowledge.home", label: "Wiki", icon: "knowledge", route: "knowledge.home" },
+      { id: "knowledge.settings", label: "Vaults", icon: "vault", route: "knowledge.settings" },
+    ],
   },
 ];
 

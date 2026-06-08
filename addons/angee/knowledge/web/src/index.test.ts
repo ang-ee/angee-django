@@ -6,11 +6,20 @@ import knowledge from "./index";
 describe("knowledge addon manifest", () => {
   test("registers the wiki route on the console shell with a component", () => {
     const routes = knowledge.routes ?? [];
-    expect(routes).toHaveLength(2);
+    expect(routes).toHaveLength(3);
     expect(routes[0]?.name).toBe("knowledge.home");
     expect(routes[0]?.path).toBe("/knowledge");
     expect(routes[0]?.shell).toBe("console");
     expect(routes[0]?.component).toBeTypeOf("function");
+  });
+
+  test("registers the vaults admin route as a static sibling", () => {
+    const settings = (knowledge.routes ?? []).find(
+      (route) => route.name === "knowledge.settings",
+    );
+    expect(settings?.path).toBe("/knowledge/settings");
+    expect(settings?.parent).toBeUndefined();
+    expect(settings?.component).toBeTypeOf("function");
   });
 
   test("nests the page reader route under the wiki with a crumb", () => {
@@ -23,12 +32,16 @@ describe("knowledge addon manifest", () => {
     expect(record?.crumb).toBeTypeOf("function");
   });
 
-  test("exposes a single Knowledge menu targeting the wiki", () => {
+  test("exposes a Knowledge menu with a Vaults child", () => {
     expect(knowledge.menus).toHaveLength(1);
     const menu = knowledge.menus?.[0] as BaseMenuItem | undefined;
     expect(menu?.id).toBe("knowledge");
     expect(menu?.route).toBe("knowledge.home");
     expect(menu?.group).toBe("platform");
+    expect(menu?.children?.map((child) => child.route)).toEqual([
+      "knowledge.home",
+      "knowledge.settings",
+    ]);
   });
 
   test("registers its vault/note glyphs", () => {
