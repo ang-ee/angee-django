@@ -12,6 +12,7 @@ import {
   LoadingPanel,
   RelationPicker,
   TreeView,
+  useConfirm,
 } from "@angee/base";
 import { useAuthoredQuery, useResourceRecord } from "@angee/sdk";
 
@@ -25,8 +26,18 @@ import {
   type OffsetPaginationVariables,
   type PageIdVariables,
 } from "../data/documents";
-import { pageTreeRows, type KnowledgeTreeRow } from "../data/page-rows";
+import {
+  KNOWLEDGE_PAGE_DND,
+  isSelfOrAncestor,
+  pageById,
+  pageDragPayload,
+  pageTreeRows,
+  type KnowledgeTreeRow,
+  type PageDragData,
+} from "../data/page-rows";
+import { usePageActions } from "../data/use-page-actions";
 import { BacklinksPanel } from "./BacklinksPanel";
+import { NewPageControl, type NewPageKind } from "./NewPageControl";
 import { PageEditor } from "./PageEditor";
 
 /** The Django model label backing the page crumb. */
@@ -88,10 +99,6 @@ export function KnowledgePage(): ReactElement {
     { enabled: openPageId !== null },
   );
   const detail = detailQuery.data?.page ?? null;
-  // A page write retitles its tree node; refetch the navigator set.
-  const handleSaved = useCallback(() => {
-    void pagesQuery.refetch();
-  }, [pagesQuery]);
 
   const [pinnedVaultId, setPinnedVaultId] = useState<string | null>(null);
   const vaultId = pinnedVaultId ?? vaults[0]?.id ?? "";
@@ -99,6 +106,47 @@ export function KnowledgePage(): ReactElement {
     () => vaults.map((vault) => ({ value: vault.id, label: vault.name })),
     [vaults],
   );
+
+  // A page write retitles its tree node; refetch the navigator set.
+  const handleSaved = useCallback(() => {
+    void pagesQuery.refetch();
+  }, [pagesQuery]);
+
+  const confirm = useConfirm();
+  const pageActions = usePageActions({ onChanged: handleSaved });
+  const activePage = pageById(pages, openPageId);
+  // New pages land inside the active scope when it is a folder, else at the root.
+  const handleNewPage = useCallback(
+    async (kind: NewPageKind, title: string) => {
+      if (!vaultId) return;
+      const parent = activePage?.kind === "folder" ? openPageId : null;
+      const id = await pageActions.createPage({ vault: vaultId, title, kind, parent });
+      if (id) openPage(id);
+    },
+    [vaultId, activePage, openPageId, pageActions, openPage],
+  );
+  // Drop a page onto another to reparent it; the guard blocks dropping a page
+  // onto itself or its own descendant (which would orphan the subtree).
+  const handlePageDrop = useCallback(
+    (targetId: string, dragged: PageDragData) => {
+      if (isSelfOrAncestor(pages, dragged.id, targetId)) return;
+      void pageActions.movePage(dragged.id, targetId);
+    },
+    [pages, pageActions],
+  );
+  const handleDeletePage = useCallback(async () => {
+    if (!activePage) return;
+    const ok = await confirm({
+      title: `Delete "${activePage.title}"?`,
+      body: "Deleting a folder removes the pages inside it too.",
+      confirm: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
+    await pageActions.deletePage(activePage.id);
+    closePage();
+  }, [activePage, confirm, pageActions, closePage]);
+
   const treeRows = useMemo(
     () => pageTreeRows(pages, vaultId),
     [pages, vaultId],
@@ -142,8 +190,14 @@ export function KnowledgePage(): ReactElement {
         icon="icon"
         selectedId={openPageId ?? undefined}
         onSelect={(row) => openPage(row.id)}
+        draggableRow={pageDragPayload}
+        dropAccept={KNOWLEDGE_PAGE_DND}
+        onNodeDrop={(nodeId, payload) =>
+          handlePageDrop(nodeId, payload.data as PageDragData)
+        }
         className="min-h-0 flex-1 overflow-auto"
       />
+      <NewPageControl busy={pageActions.busy} onCreate={handleNewPage} />
     </div>
   );
 
@@ -155,7 +209,12 @@ export function KnowledgePage(): ReactElement {
     >
       {openPageId ? (
         detail ? (
-          <PageEditor key={openPageId} detail={detail} onSaved={handleSaved} />
+          <PageEditor
+            key={openPageId}
+            detail={detail}
+            onSaved={handleSaved}
+            onDelete={handleDeletePage}
+          />
         ) : detailQuery.fetching ? (
           <LoadingPanel message="Loading page" />
         ) : (

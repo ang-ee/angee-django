@@ -45,10 +45,56 @@ export interface KnowledgePageDetail extends KnowledgePage {
   backlinks: readonly Backlink[];
 }
 
-export type UpdatePageVariables = { data: { id: string; title?: string } };
+export type UpdatePageVariables = {
+  data: { id: string; title?: string; parent?: string | null };
+};
 export interface UpdatePageData {
   updatePage: { id: string; title: string };
 }
+
+export type CreatePageVariables = {
+  data: { vault: string; title: string; kind?: string; parent?: string | null };
+};
+export interface CreatePageData {
+  createPage: { id: string; title: string };
+}
+
+export type CreateVaultVariables = { data: { name: string } };
+export interface CreateVaultData {
+  createVault: { id: string; name: string };
+}
+
+export type DeletePageVariables = { id: string };
+export interface DeletePageData {
+  deletePage: { totalDeletedCount: number; hasBlockers: boolean };
+}
+
+export const CREATE_PAGE_MUTATION = `
+  mutation KnowledgeCreatePage($data: PageInput!) {
+    createPage(data: $data) {
+      id
+      title
+    }
+  }
+`;
+
+export const CREATE_VAULT_MUTATION = `
+  mutation KnowledgeCreateVault($data: VaultInput!) {
+    createVault(data: $data) {
+      id
+      name
+    }
+  }
+`;
+
+export const DELETE_PAGE_MUTATION = `
+  mutation KnowledgeDeletePage($id: ID!) {
+    deletePage(id: $id, confirm: true) {
+      totalDeletedCount
+      hasBlockers
+    }
+  }
+`;
 
 export type UpdatePageBodyVariables = {
   page: string;

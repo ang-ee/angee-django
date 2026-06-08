@@ -1,6 +1,7 @@
 import { type ReactElement } from "react";
 
 import {
+  Button,
   EmptyState,
   Glyph,
   Spinner,
@@ -17,6 +18,8 @@ export interface PageEditorProps {
   detail: KnowledgePageDetail;
   /** A write landed — refetch the navigator (a rename retitles its tree node). */
   onSaved: () => void;
+  /** Delete this page (the page confirms first). */
+  onDelete: () => void;
 }
 
 /**
@@ -24,7 +27,11 @@ export interface PageEditorProps {
  * and the markdown body in the design-system CodeMirror widget, autosaved through
  * `updatePageBody` with its stale-hash guard. Folder pages carry no body.
  */
-export function PageEditor({ detail, onSaved }: PageEditorProps): ReactElement {
+export function PageEditor({
+  detail,
+  onSaved,
+  onDelete,
+}: PageEditorProps): ReactElement {
   const editor = usePageEditor(
     detail.id,
     {
@@ -55,6 +62,15 @@ export function PageEditor({ detail, onSaved }: PageEditorProps): ReactElement {
             onChange={(event) => editor.setTitle(event.currentTarget.value)}
             onBlur={editor.commitTitle}
           />
+          <Button
+            type="button"
+            size="iconMd"
+            variant="ghost"
+            aria-label="Delete page"
+            onClick={onDelete}
+          >
+            <Glyph name="trash" />
+          </Button>
         </div>
         <div className="flex items-center gap-2 pl-6 font-mono text-13 text-fg-muted">
           <span>{metaLine(detail)}</span>

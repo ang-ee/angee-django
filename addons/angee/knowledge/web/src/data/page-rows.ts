@@ -1,3 +1,5 @@
+import type { DndPayload } from "@angee/base";
+
 import { PAGE_TYPE, VAULT_TYPE, relationGlobalId, toGlobalId } from "../lib/global-id";
 import type { KnowledgePage } from "./documents";
 
@@ -11,6 +13,21 @@ export interface KnowledgeTreeRow extends Record<string, unknown> {
   title: string;
   parent: string;
   icon: string;
+}
+
+/** Dnd payload kind for a dragged page; tree nodes accept it to reparent. */
+export const KNOWLEDGE_PAGE_DND = "knowledge.page";
+
+/** The body of a dragged-page payload — the page's relay GlobalID. */
+export interface PageDragData {
+  id: string;
+}
+
+/** Make a tree node draggable: its move payload, keyed by the page's node id. */
+export function pageDragPayload(
+  row: KnowledgeTreeRow,
+): DndPayload<PageDragData> {
+  return { type: KNOWLEDGE_PAGE_DND, data: { id: row.id } };
 }
 
 /** Registry glyph for a page's kind. */
@@ -56,4 +73,27 @@ export function pageById(
 ): KnowledgePage | null {
   if (!id) return null;
   return pages.find((page) => page.id === id) ?? null;
+}
+
+/**
+ * Whether `ancestorId` is `nodeId` itself or one of its ancestors — the guard
+ * that stops a drag-move from reparenting a page under its own subtree.
+ */
+export function isSelfOrAncestor(
+  pages: readonly KnowledgePage[],
+  ancestorId: string,
+  nodeId: string,
+): boolean {
+  if (ancestorId === nodeId) return true;
+  const byId = new Map(pages.map((page) => [page.id, page]));
+  const seen = new Set<string>();
+  let current = byId.get(nodeId);
+  while (current) {
+    const parentId = relationGlobalId(PAGE_TYPE, current.parent);
+    if (!parentId || seen.has(parentId)) return false;
+    if (parentId === ancestorId) return true;
+    seen.add(parentId);
+    current = byId.get(parentId);
+  }
+  return false;
 }
