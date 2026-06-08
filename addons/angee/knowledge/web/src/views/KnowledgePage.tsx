@@ -12,7 +12,9 @@ import {
   LoadingPanel,
   RelationPicker,
   TreeView,
+  WikilinkProvider,
   useConfirm,
+  type WikilinkResolver,
 } from "@angee/base";
 import { useAuthoredQuery, useResourceRecord } from "@angee/sdk";
 
@@ -31,6 +33,7 @@ import {
   isSelfOrAncestor,
   pageById,
   pageDragPayload,
+  pageIdByTitle,
   pageTreeRows,
   type KnowledgeTreeRow,
   type PageDragData,
@@ -151,6 +154,17 @@ export function KnowledgePage(): ReactElement {
     () => pageTreeRows(pages, vaultId),
     [pages, vaultId],
   );
+  // A `[[wikilink]]` resolves to a page by title within the vault; clicking it
+  // opens that page, or renders broken when nothing matches.
+  const resolveWikilink = useCallback<WikilinkResolver>(
+    (target) => {
+      const id = pageIdByTitle(pages, vaultId, target);
+      return id
+        ? { broken: false, onActivate: () => openPage(id) }
+        : { broken: true };
+    },
+    [pages, vaultId, openPage],
+  );
 
   if (vaultsQuery.fetching && vaults.length === 0) {
     return <LoadingPanel message="Loading knowledge" />;
@@ -202,40 +216,42 @@ export function KnowledgePage(): ReactElement {
   );
 
   return (
-    <Explorer
-      autoSave="knowledge.browser"
-      navigator={navigator}
-      aside={<BacklinksPanel backlinks={detail?.backlinks ?? []} onOpen={openPage} />}
-    >
-      {openPageId ? (
-        detail ? (
-          <PageEditor
-            key={openPageId}
-            detail={detail}
-            onSaved={handleSaved}
-            onDelete={handleDeletePage}
-          />
-        ) : detailQuery.fetching ? (
-          <LoadingPanel message="Loading page" />
+    <WikilinkProvider resolve={resolveWikilink}>
+      <Explorer
+        autoSave="knowledge.browser"
+        navigator={navigator}
+        aside={<BacklinksPanel backlinks={detail?.backlinks ?? []} onOpen={openPage} />}
+      >
+        {openPageId ? (
+          detail && detail.id === openPageId ? (
+            <PageEditor
+              key={openPageId}
+              detail={detail}
+              onSaved={handleSaved}
+              onDelete={handleDeletePage}
+            />
+          ) : detailQuery.fetching || detail ? (
+            <LoadingPanel message="Loading page" />
+          ) : (
+            <div className="grid h-full place-content-center p-8">
+              <EmptyState
+                icon="note"
+                title="Page not found"
+                description="This page is no longer available."
+              />
+            </div>
+          )
         ) : (
           <div className="grid h-full place-content-center p-8">
             <EmptyState
               icon="note"
-              title="Page not found"
-              description="This page is no longer available."
+              title="Select a page"
+              description="Choose a page from the tree to read it."
             />
           </div>
-        )
-      ) : (
-        <div className="grid h-full place-content-center p-8">
-          <EmptyState
-            icon="note"
-            title="Select a page"
-            description="Choose a page from the tree to read it."
-          />
-        </div>
-      )}
-    </Explorer>
+        )}
+      </Explorer>
+    </WikilinkProvider>
   );
 }
 

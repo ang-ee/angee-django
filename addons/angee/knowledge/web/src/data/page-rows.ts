@@ -66,6 +66,22 @@ function comparePages(left: KnowledgePage, right: KnowledgePage): number {
   return left.title.localeCompare(right.title);
 }
 
+/** Resolve a `[[wikilink]]` title to a page id within a vault (case-insensitive),
+ * mirroring how the backend indexer resolves links against the vault. */
+export function pageIdByTitle(
+  pages: readonly KnowledgePage[],
+  vaultId: string,
+  title: string,
+): string | null {
+  const wanted = title.trim().toLowerCase();
+  const match = pages.find(
+    (page) =>
+      toGlobalId(VAULT_TYPE, page.vault) === vaultId &&
+      page.title.trim().toLowerCase() === wanted,
+  );
+  return match?.id ?? null;
+}
+
 /** The selected page's list record, by its node id. */
 export function pageById(
   pages: readonly KnowledgePage[],
