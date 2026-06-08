@@ -12,15 +12,34 @@ values and their own sidecar model with a one-to-one to
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Any, ClassVar, cast
 
 from django.conf import settings
 from django.db import IntegrityError, models, transaction
-from rebac import PermissionDenied, to_subject_ref
+from rebac import PermissionDenied, system_context, to_subject_ref
 
 from angee.base.fields import SqidField
 from angee.base.mixins import AuditMixin, HistoryMixin, RevisionMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel
+
+_WIKILINK_RE = re.compile(r"\[\[([^\[\]\n]+?)\]\]")
+
+
+def parse_wikilinks(body: str) -> dict[str, str]:
+    """Return ``{target_title: display_text}`` for each ``[[wikilink]]`` in ``body``.
+
+    The target is the text before ``|`` with any ``#fragment`` stripped; the
+    display text is the part after ``|``. First occurrence of a target wins.
+    """
+
+    found: dict[str, str] = {}
+    for raw in _WIKILINK_RE.findall(body):
+        target, _, display = raw.partition("|")
+        target = target.split("#", 1)[0].strip()
+        if target and target not in found:
+            found[target] = display.strip()
+    return found
 
 
 class VaultManager(AngeeManager):
@@ -278,3 +297,88 @@ class MarkdownPage(SqidMixin, AuditMixin, AngeeModel, RevisionMixin):
                 field_names |= {"body_hash", "word_count", "updated_at"}
                 kwargs["update_fields"] = field_names
         super().save(*args, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Backlink index
+# ---------------------------------------------------------------------------
+
+
+class LinkManager(AngeeManager):
+    """Owns the wikilink edge set derived from page bodies."""
+
+    def rebuild_for(self, markdown: Any) -> None:
+        """Replace the source page's outgoing links from its current body.
+
+        The indexer is the author: it resolves ``[[title]]`` targets against
+        the page's own vault and DELETE+INSERTs the edge set under
+        ``system_context``. There is no per-link gate — backlink reads
+        inherit the source page's permissions through the schema. A target
+        created after the link still resolves on the source page's next save.
+        """
+
+        page = markdown.page
+        wanted = parse_wikilinks(markdown.body)
+        pages = type(page)._base_manager
+        links = self.model._base_manager
+        with system_context(reason="knowledge.backlinks"), transaction.atomic():
+            resolved = dict(
+                pages.filter(vault_id=page.vault_id)
+                .exclude(pk=page.pk)
+                .values_list("title", "pk")
+            )
+            links.filter(source_page=page).delete()
+            links.bulk_create(
+                [
+                    self.model(
+                        source_page=page,
+                        target_page_id=resolved.get(target),
+                        target_text=target,
+                        display_text=display,
+                        is_resolved=target in resolved,
+                    )
+                    for target, display in wanted.items()
+                ]
+            )
+
+
+class Link(SqidMixin, AngeeModel):
+    """Wikilink edge from one page to another, derived from the source body.
+
+    Indexer-authored (see :class:`LinkManager`) — no user-facing mutation,
+    no audit author. REBAC read/write inherit through ``source_page``.
+    """
+
+    runtime = True
+
+    sqid = SqidField(real_field_name="id", prefix="lnk", min_length=8)
+    source_page = models.ForeignKey(
+        "knowledge.Page",
+        on_delete=models.CASCADE,
+        related_name="outgoing_links",
+    )
+    target_page = models.ForeignKey(
+        "knowledge.Page",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="incoming_links",
+    )
+    target_text = models.CharField(max_length=512)
+    display_text = models.CharField(max_length=512, blank=True, default="")
+    is_resolved = models.BooleanField(default=False, db_index=True)
+
+    objects = LinkManager()
+
+    class Meta:
+        """Django model options."""
+
+        abstract = True
+        ordering = ("target_text", "sqid")
+        rebac_resource_type = "knowledge/link"
+        rebac_id_attr = "sqid"
+
+    def __str__(self) -> str:
+        """Return the link target text for Django displays."""
+
+        return self.target_text

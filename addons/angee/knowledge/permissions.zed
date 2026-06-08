@@ -1,7 +1,7 @@
 // Authorization schema for the knowledge addon.
 // @rebac_package: knowledge
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 3
 
 // Role namespace for knowledge-wide grants. Membership in a role object
 // (knowledge/role:vault_viewer, :vault_editor, :vault_admin,
@@ -9,7 +9,7 @@
 // `rebac.roles.grant`; const-backed relations below point every vault at
 // these role objects, so one membership covers every vault.
 definition knowledge/role {
-    relation member: auth/user | auth/group#member
+    relation member: auth/user | auth/group#member | angee/role:admin#member
 }
 
 definition knowledge/vault {
@@ -70,4 +70,14 @@ definition knowledge/markdown_page {
     permission read   = page->read
     permission write  = page->write
     permission delete = page->write
+}
+
+// Wikilink edges are indexer-authored; a backlink is visible only when its
+// source page is, so reads inherit through `source_page`.
+definition knowledge/link {
+    relation source_page: knowledge/page // rebac:field=source_page
+
+    permission read   = source_page->read
+    permission write  = source_page->write
+    permission delete = source_page->write
 }

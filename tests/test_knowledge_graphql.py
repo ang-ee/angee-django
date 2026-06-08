@@ -9,6 +9,7 @@ from rebac import actor_context
 from strawberry import relay
 
 from tests.conftest import (
+    MarkdownPage,
     Page,
     Vault,
     addon_schema,
@@ -189,6 +190,31 @@ def test_update_page_body_reports_unsupported_kind(knowledge_tables: None) -> No
     )["updatePageBody"]
     assert payload["ok"] is False
     assert payload["errorCode"] == "UNSUPPORTED_KIND"
+
+
+def test_page_backlinks_list_resolved_sources(knowledge_tables: None) -> None:
+    """The page detail surface exposes resolved incoming wikilinks."""
+
+    alice = create_user("alice")
+    vault = vault_for(alice)
+    with actor_context(alice):
+        target = Page.objects.create_in(vault, title="Target")
+        linker = Page.objects.create_in(vault, title="Linker")
+        MarkdownPage.objects.write_body(linker, "ref [[Target|see target]]")
+
+    detail = result_data(
+        execute_schema(
+            _schema("public"),
+            """
+            query Backlinks($id: ID!) {
+              page(id: $id) { backlinks { title displayText } }
+            }
+            """,
+            {"id": _global_id("PageType", target)},
+            user=alice,
+        )
+    )["page"]
+    assert detail["backlinks"] == [{"title": "Linker", "displayText": "see target"}]
 
 
 def test_crud_update_is_row_scoped(knowledge_tables: None) -> None:

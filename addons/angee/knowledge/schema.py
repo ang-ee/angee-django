@@ -7,7 +7,7 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.db.models import Q
+from django.db.models import F, Q
 from rebac import system_context
 from strawberry import auto, relay
 from strawberry_django.pagination import OffsetPaginated
@@ -23,6 +23,7 @@ from angee.knowledge.models import StaleBodyError, UnsupportedPageKindError
 Vault = apps.get_model("knowledge", "Vault")
 Page = apps.get_model("knowledge", "Page")
 MarkdownPage = apps.get_model("knowledge", "MarkdownPage")
+Link = apps.get_model("knowledge", "Link")
 
 
 @strawberry_django.type(Vault)
@@ -70,6 +71,15 @@ class MarkdownPageType(AngeeNode):
         """Return the leading body characters used for list previews."""
 
         return cast(str, cast(Any, self).excerpt)
+
+
+@strawberry.type
+class BacklinkType:
+    """One resolved page that links to the page being viewed."""
+
+    page: strawberry.ID
+    title: str
+    display_text: str
 
 
 @strawberry_django.type(Page)
@@ -129,6 +139,33 @@ class PageType(AngeeNode):
             MarkdownPageType | None,
             MarkdownPage._default_manager.filter(page_id=cast(Any, self).pk).first(),
         )
+
+    @strawberry_django.field(only=["id"])
+    def backlinks(self) -> list[BacklinkType]:
+        """Return resolved pages linking here, scoped to readable sources.
+
+        The source title is annotated across the relation rather than
+        ``select_related``-ed: ``source_page`` is REBAC-guarded, so
+        materializing it inside an actor-scoped resolver would fail.
+        """
+
+        rows = (
+            Link._default_manager.filter(
+                target_page_id=cast(Any, self).pk,
+                is_resolved=True,
+            )
+            .apply_ambient_scope()
+            .annotate(source_title=F("source_page__title"))
+            .order_by("source_title", "sqid")
+        )
+        return [
+            BacklinkType(
+                page=strawberry.ID(public_id_of(Page(id=row.source_page_id))),
+                title=str(row.source_title),
+                display_text=row.display_text,
+            )
+            for row in rows
+        ]
 
 
 @strawberry.input
@@ -327,7 +364,7 @@ _KNOWLEDGE_SCHEMA_BUCKET = {
         crud(VaultType, update=VaultPatch, delete=True),
         crud(PageType, update=PagePatch, delete=True),
     ],
-    "types": [VaultType, PageType, MarkdownPageType, PageBodyPayload],
+    "types": [VaultType, PageType, MarkdownPageType, BacklinkType, PageBodyPayload],
 }
 
 

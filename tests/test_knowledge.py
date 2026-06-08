@@ -18,8 +18,8 @@ from rebac import (
 )
 from rebac.roles import grant
 
-from angee.knowledge.models import StaleBodyError, UnsupportedPageKindError
-from tests.conftest import MarkdownPage, Page, Vault, create_user, vault_for
+from angee.knowledge.models import StaleBodyError, UnsupportedPageKindError, parse_wikilinks
+from tests.conftest import Link, MarkdownPage, Page, Vault, create_user, vault_for
 
 
 def test_create_for_sets_owner_and_audit_stamps(knowledge_tables: None) -> None:
@@ -272,6 +272,62 @@ def test_excerpt_truncates_long_bodies(knowledge_tables: None) -> None:
     assert markdown.excerpt.endswith("…")
     assert len(markdown.excerpt) <= MarkdownPage.excerpt_chars + 1
     assert MarkdownPage(body="short").excerpt == "short"
+
+
+def test_parse_wikilinks_extracts_target_and_display() -> None:
+    """Wikilinks split on ``|`` for display and drop ``#fragment`` from targets."""
+
+    assert parse_wikilinks("see [[Target|the target]] and [[Other#heading]]") == {
+        "Target": "the target",
+        "Other": "",
+    }
+
+
+def test_body_save_builds_resolved_and_dangling_links(knowledge_tables: None) -> None:
+    """Saving a body indexes its wikilinks, resolved against same-vault titles."""
+
+    alice = create_user("alice")
+    vault = vault_for(alice)
+    with actor_context(alice):
+        target = Page.objects.create_in(vault, title="Target")
+        source = Page.objects.create_in(vault, title="Source")
+        MarkdownPage.objects.write_body(source, "see [[Target]] and [[Ghost]]")
+
+    links = {link.target_text: link for link in Link._base_manager.filter(source_page=source)}
+    assert links["Target"].is_resolved
+    assert links["Target"].target_page_id == target.pk
+    assert not links["Ghost"].is_resolved
+    assert links["Ghost"].target_page_id is None
+
+
+def test_editing_body_replaces_stale_links(knowledge_tables: None) -> None:
+    """A re-saved body fully replaces the page's previous link set."""
+
+    alice = create_user("alice")
+    vault = vault_for(alice)
+    with actor_context(alice):
+        page = Page.objects.create_in(vault, title="Source")
+        MarkdownPage.objects.write_body(page, "[[Alpha]]")
+        MarkdownPage.objects.write_body(page, "[[Beta]]")
+
+    assert [link.target_text for link in Link._base_manager.filter(source_page=page)] == ["Beta"]
+
+
+def test_backlinks_respect_source_page_read(knowledge_tables: None) -> None:
+    """A backlink is visible only to actors who can read its source page."""
+
+    alice = create_user("alice")
+    bob = create_user("bob")
+    vault = vault_for(alice)
+    with actor_context(alice):
+        target = Page.objects.create_in(vault, title="Target")
+        linker = Page.objects.create_in(vault, title="Linker")
+        MarkdownPage.objects.write_body(linker, "ref [[Target]]")
+
+    assert Link.objects.as_user(alice).filter(target_page=target).count() == 1
+
+    _grant(target, "viewer", bob)  # bob reads the target, not the linking source
+    assert list(Link.objects.as_user(bob).filter(target_page=target)) == []
 
 
 def _grant(resource: Any, relation: str, user: Any) -> None:

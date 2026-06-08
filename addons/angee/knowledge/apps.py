@@ -16,3 +16,11 @@ class KnowledgeConfig(AppConfig):
     depends_on = ("angee.iam",)
     schemas = "schema.schemas"
     permissions = "permissions.zed"
+
+    def ready(self) -> None:
+        """Register the backlink index signal after app population."""
+
+        super().ready()
+        # App-populate phase 1 imports this config before models are ready;
+        # importing signals here registers the post_save receiver.
+        from angee.knowledge import signals  # noqa: F401

@@ -22,6 +22,7 @@ from angee.iam.models import ExternalAccount as AbstractExternalAccount
 from angee.iam.models import OAuthClient as AbstractOAuthClient
 from angee.iam.models import Vendor as AbstractVendor
 from angee.integrate.models import WebhookSubscription as AbstractWebhookSubscription
+from angee.knowledge.models import Link as AbstractLink
 from angee.knowledge.models import MarkdownPage as AbstractMarkdownPage
 from angee.knowledge.models import Page as AbstractPage
 from angee.knowledge.models import Vault as AbstractVault
@@ -139,7 +140,20 @@ class MarkdownPage(AbstractMarkdownPage):
 IAM_CONNECTION_TEST_MODELS = (Vendor, ExternalAccount, OAuthClient, Credential)
 """Concrete IAM connection models created on demand by IAM test fixtures."""
 
-KNOWLEDGE_TEST_MODELS = (Vault, Page, MarkdownPage)
+class Link(AbstractLink):
+    """Concrete knowledge wikilink edge used by source-addon tests."""
+
+    class Meta(AbstractLink.Meta):
+        """Django model options for the canonical test link."""
+
+        abstract = False
+        app_label = "knowledge"
+        db_table = "test_knowledge_link"
+        rebac_resource_type = "knowledge/link"
+        rebac_id_attr = "sqid"
+
+
+KNOWLEDGE_TEST_MODELS = (Vault, Page, MarkdownPage, Link)
 """Concrete knowledge models created on demand by knowledge test fixtures."""
 
 
