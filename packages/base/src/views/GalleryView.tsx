@@ -23,6 +23,8 @@ export interface GalleryViewProps<TRow extends Row = Row> {
   rowKey?: keyof TRow & string;
   /** Override the card body. */
   renderCard?: (row: TRow) => ReactNode;
+  /** Navigation target for a card — renders it as a link (mirrors `rowHref`). */
+  cardHref?: (row: TRow) => string;
   onCardClick?: (row: TRow) => void;
   selectedIds?: ReadonlySet<string>;
   onToggleSelected?: (id: string, selected: boolean) => void;
@@ -36,6 +38,7 @@ export function GalleryView<TRow extends Row = Row>({
   subtitleField,
   rowKey = "id" as keyof TRow & string,
   renderCard,
+  cardHref,
   onCardClick,
   selectedIds,
   onToggleSelected,
@@ -54,6 +57,7 @@ export function GalleryView<TRow extends Row = Row>({
               titleField={titleField}
               subtitleField={subtitleField}
               renderCard={renderCard}
+              href={cardHref?.(row)}
               onClick={onCardClick}
               selected={selectedIds?.has(id) ?? false}
               onToggle={
@@ -75,6 +79,7 @@ function GalleryCard<TRow extends Row>({
   titleField,
   subtitleField,
   renderCard,
+  href,
   onClick,
   selected,
   onToggle,
@@ -84,10 +89,59 @@ function GalleryCard<TRow extends Row>({
   titleField?: keyof TRow & string;
   subtitleField?: keyof TRow & string;
   renderCard?: (row: TRow) => ReactNode;
+  href?: string;
   onClick?: (row: TRow) => void;
   selected: boolean;
   onToggle?: (next: boolean) => void;
 }): ReactElement {
+  const clickable = Boolean(href || onClick);
+  const cardClass = cn(
+    "group relative overflow-hidden p-0 outline-none",
+    clickable &&
+      "cursor-pointer hover:border-border-strong focus-visible:focus-ring",
+    selected && "border-brand",
+  );
+  const title = cardTitle(row, titleField);
+  // Card body (custom or default) plus the selection checkbox overlay — kept at
+  // card level so a custom `renderCard` still gets selection. The checkbox stops
+  // propagation, so ticking it never triggers the card's click/navigation.
+  const content = (
+    <>
+      {renderCard ? (
+        renderCard(row)
+      ) : (
+        <DefaultCardBody
+          row={row}
+          imageField={imageField}
+          title={title}
+          subtitleField={subtitleField}
+        />
+      )}
+      {onToggle ? (
+        <div
+          className="absolute left-2 top-2 z-10 opacity-0 transition-opacity group-hover:opacity-100 data-[selected=true]:opacity-100"
+          data-selected={selected || undefined}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <Checkbox
+            checked={selected}
+            onCheckedChange={(next) => onToggle(next)}
+            aria-label={`Select ${title || "item"}`}
+          />
+        </div>
+      ) : null}
+    </>
+  );
+
+  // A href makes the card a real link (mirrors the list's `rowHref`); otherwise
+  // an `onClick` makes it a button.
+  if (href) {
+    return (
+      <Card asChild density="sm" className={cardClass}>
+        <a href={href}>{content}</a>
+      </Card>
+    );
+  }
   const interactive = onClick
     ? {
         role: "button" as const,
@@ -101,32 +155,41 @@ function GalleryCard<TRow extends Row>({
         },
       }
     : {};
-  const cardClass = cn(
-    "group overflow-hidden p-0 outline-none",
-    onClick &&
-      "cursor-pointer hover:border-border-strong focus-visible:focus-ring",
-    selected && "border-brand",
+  return (
+    <Card {...interactive} density="sm" className={cardClass}>
+      {content}
+    </Card>
   );
+}
 
-  if (renderCard) {
-    return (
-      <Card {...interactive} density="sm" className={cardClass}>
-        {renderCard(row)}
-      </Card>
-    );
-  }
-
-  const titleKey =
+function cardTitle<TRow extends Row>(
+  row: TRow,
+  titleField?: keyof TRow & string,
+): string {
+  const key =
     titleField ??
     (("title" in row ? "title" : "name" in row ? "name" : undefined) as
       | (keyof TRow & string)
       | undefined);
+  return key ? String(row[key] ?? "") : "";
+}
+
+function DefaultCardBody<TRow extends Row>({
+  row,
+  imageField,
+  title,
+  subtitleField,
+}: {
+  row: TRow;
+  imageField?: keyof TRow & string;
+  title: string;
+  subtitleField?: keyof TRow & string;
+}): ReactElement {
   const image = imageField ? String(row[imageField] ?? "") : "";
-  const title = titleKey ? String(row[titleKey] ?? "") : "";
   const subtitle = subtitleField ? String(row[subtitleField] ?? "") : "";
 
   return (
-    <Card {...interactive} density="sm" className={cardClass}>
+    <>
       <div className="relative aspect-square overflow-hidden bg-inset">
         {image ? (
           <img
@@ -140,19 +203,6 @@ function GalleryCard<TRow extends Row>({
             {(title || "?").charAt(0).toUpperCase()}
           </div>
         )}
-        {onToggle ? (
-          <div
-            className="absolute left-2 top-2 opacity-0 transition-opacity group-hover:opacity-100 data-[selected=true]:opacity-100"
-            data-selected={selected || undefined}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <Checkbox
-              checked={selected}
-              onCheckedChange={(next) => onToggle(next)}
-              aria-label={`Select ${title}`}
-            />
-          </div>
-        ) : null}
       </div>
       <div className="p-2">
         <h3 className="truncate text-13 font-medium text-fg">{title}</h3>
@@ -160,6 +210,6 @@ function GalleryCard<TRow extends Row>({
           <p className="truncate text-2xs text-fg-muted">{subtitle}</p>
         ) : null}
       </div>
-    </Card>
+    </>
   );
 }

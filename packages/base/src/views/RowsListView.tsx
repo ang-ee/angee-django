@@ -1,5 +1,8 @@
 import * as React from "react";
+import { LayoutGrid, List } from "lucide-react";
 
+import { Button } from "../ui/button";
+import { GalleryView } from "./GalleryView";
 import {
   ControlBand,
   controlBandItemClassName,
@@ -65,7 +68,28 @@ export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   selectable?: boolean;
   /** Controls rendered in the toolbar's leading slot, beside the filter. */
   toolbarActions?: React.ReactNode;
+  /**
+   * Opt into a List/Grid switcher: when set, the toolbar gains a layout toggle
+   * and the Grid mode renders each row as a {@link GalleryView} card over the
+   * same filtered/paged surface. Navigation reuses `rowHref`/`onRowClick`.
+   */
+  gallery?: RowsGalleryConfig<TRow>;
+  /** Bulk actions rendered in the selection bar when rows are selected. */
+  bulkActions?: (
+    selectedIds: ReadonlySet<string>,
+    clear: () => void,
+  ) => React.ReactNode;
 }
+
+/** Card presentation for {@link RowsListViewProps.gallery}; mirrors GalleryView. */
+export interface RowsGalleryConfig<TRow extends StringIdRow = StringIdRow> {
+  image?: keyof TRow & string;
+  title?: keyof TRow & string;
+  subtitle?: keyof TRow & string;
+  renderCard?: (row: TRow) => React.ReactNode;
+}
+
+type RowLayout = "list" | "grid";
 
 export function RowsListView<TRow extends StringIdRow = StringIdRow>(
   props: RowsListViewProps<TRow>,
@@ -108,10 +132,13 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   className,
   selectable = false,
   toolbarActions,
+  gallery,
+  bulkActions,
   dataView,
 }: RowsListViewProps<TRow> & {
   dataView: DataViewContextValue;
 }): React.ReactElement {
+  const [layout, setLayout] = React.useState<RowLayout>("list");
   const handledDefaultGroupRef = React.useRef<DataViewGroup | null>(null);
   React.useEffect(() => {
     if (!defaultGroup) {
@@ -193,6 +220,11 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
         <DataToolbar
           className={controlBandItemClassName}
           actions={toolbarActions}
+          viewSwitcher={
+            gallery ? (
+              <RowLayoutSwitcher layout={layout} onLayoutChange={setLayout} />
+            ) : undefined
+          }
           pager={toolbarPager}
           group={groupingEnabled ? dataView.state.group : undefined}
           groupStack={groupingEnabled ? dataView.state.groupStack : undefined}
@@ -239,12 +271,30 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
           <SelectionBar
             count={surface.selectedIds.size}
             onClear={dataView.clearSelectedIds}
+            actions={bulkActions?.(
+              surface.selectedIds,
+              dataView.clearSelectedIds,
+            )}
           />
         ) : null}
         {error ? (
           <div className="px-3 py-6 text-13 text-danger-text">
             {error.message}
           </div>
+        ) : gallery && layout === "grid" ? (
+          <GalleryView<TRow>
+            rows={surface.rowModels.map((model) => model.original)}
+            imageField={gallery.image}
+            titleField={gallery.title}
+            subtitleField={gallery.subtitle}
+            renderCard={gallery.renderCard}
+            cardHref={rowHref}
+            onCardClick={onRowClick}
+            selectedIds={selectable ? surface.selectedIds : undefined}
+            onToggleSelected={
+              selectable ? dataView.toggleSelectedId : undefined
+            }
+          />
         ) : (
           <FlatListBody
             columns={columns}
@@ -276,5 +326,40 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
         ) : null}
       </div>
     </>
+  );
+}
+
+function RowLayoutSwitcher({
+  layout,
+  onLayoutChange,
+}: {
+  layout: RowLayout;
+  onLayoutChange: (layout: RowLayout) => void;
+}): React.ReactElement {
+  return (
+    <div className="flex items-center gap-1" role="group" aria-label="Layout">
+      <Button
+        type="button"
+        variant="ghost"
+        size="iconSm"
+        aria-label="List view"
+        aria-pressed={layout === "list"}
+        active={layout === "list"}
+        onClick={() => onLayoutChange("list")}
+      >
+        <List className="glyph" aria-hidden />
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="iconSm"
+        aria-label="Grid view"
+        aria-pressed={layout === "grid"}
+        active={layout === "grid"}
+        onClick={() => onLayoutChange("grid")}
+      >
+        <LayoutGrid className="glyph" aria-hidden />
+      </Button>
+    </div>
   );
 }

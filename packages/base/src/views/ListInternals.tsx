@@ -102,14 +102,18 @@ export function SelectionBar({
   onClear,
   onDelete,
   deletePending = false,
+  actions: extraActions,
 }: {
   count: number;
   onClear: () => void;
   onDelete?: () => void;
   deletePending?: boolean;
+  /** Caller-supplied bulk actions rendered before the built-in Delete/Clear. */
+  actions?: React.ReactNode;
 }): React.ReactElement {
   const actions = (
     <>
+      {extraActions}
       {onDelete ? (
         <SelectionBarPrimitive.Action
           surface="brand"

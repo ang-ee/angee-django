@@ -53,6 +53,8 @@ export interface DataToolbarProps {
   onCreate?: () => void;
   /** Extra controls rendered in the toolbar's leading slot, beside the filter. */
   actions?: ReactNode;
+  /** Trailing control rendered on the right (e.g. a List/Grid layout switcher). */
+  viewSwitcher?: ReactNode;
   onFilterTextChange?: (value: string) => void;
   onFilterToggle?: (id: string) => void;
   onClearGroup?: () => void;
@@ -144,6 +146,7 @@ export function DataToolbar({
   createLabel = "New",
   onCreate,
   actions,
+  viewSwitcher,
   onFilterToggle,
   onFilterTextChange,
   onClearGroup,
@@ -216,6 +219,7 @@ export function DataToolbar({
       {view && onViewChange ? (
         <DataViewSwitcher view={view} onViewChange={onViewChange} />
       ) : null}
+      {viewSwitcher}
     </section>
   );
 }
