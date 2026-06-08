@@ -18,8 +18,7 @@ import {
   relationshipRows,
   type IAMRelationshipRow,
 } from "../identity-rows";
-
-const RELATIONSHIP_LIMIT = 500;
+import { IAM_LIST_LIMIT } from "../list-config";
 
 const relationshipGroupOptions: readonly DataToolbarGroupOption[] =
   [
@@ -77,7 +76,7 @@ const relationshipColumns: readonly ListColumn<IAMRelationshipRow>[] = [
 
 export function RelationshipsPage(): ReactElement {
   const variables = useMemo<IAMRelationshipsVariables>(
-    () => ({ pagination: { offset: 0, limit: RELATIONSHIP_LIMIT } }),
+    () => ({ pagination: { offset: 0, limit: IAM_LIST_LIMIT } }),
     [],
   );
   const query = useAuthoredQuery<

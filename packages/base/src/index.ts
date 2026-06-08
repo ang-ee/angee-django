@@ -2,8 +2,21 @@
 // data-bound views, app shell, and the auth surface, composed onto base-ui +
 // tailwind-variants. The SDK stays headless; rendering lives here.
 
-// Styling foundation.
-export { cn, tv, ANGEE_TW_MERGE_CONFIG, type VariantProps } from "./lib";
+// Styling foundation + the drag-and-drop seam.
+export {
+  cn,
+  tv,
+  ANGEE_TW_MERGE_CONFIG,
+  type VariantProps,
+  DND_MIME,
+  writeDndPayload,
+  readDndPayload,
+  dragHasAcceptedType,
+  useDraggable,
+  useDropTarget,
+  type DndPayload,
+  type UseDropTargetOptions,
+} from "./lib";
 
 // i18n — the base namespace translator.
 export { useBaseT, enBaseMessages } from "./i18n";
@@ -51,6 +64,7 @@ export * from "./chrome";
 export * from "./communication";
 export * from "./shell";
 export * from "./auth";
+export * from "./preview";
 
 // UI primitives — embeddable, SDK-agnostic atoms on base-ui.
 export * from "./ui/button";

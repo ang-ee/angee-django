@@ -9,7 +9,8 @@ import {
   type Row,
 } from "@angee/sdk";
 
-const USER_LIMIT = 500;
+import { IAM_LIST_LIMIT } from "../list-config";
+
 const USER_FIELDS = [
   "username",
   "email",
@@ -54,7 +55,7 @@ const userColumns: readonly ListColumn<UserRow>[] = [
 export function UsersPage(): ReactElement {
   const users = useResourceList("User", {
     fields: USER_FIELDS,
-    pageSize: USER_LIMIT,
+    pageSize: IAM_LIST_LIMIT,
   });
 
   return (

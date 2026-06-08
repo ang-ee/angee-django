@@ -20,7 +20,7 @@ import { useState, type FormEvent, type ReactNode } from "react";
 import { SECRET_DELETE_MUTATION, SECRET_SET_MUTATION } from "../../data/documents";
 import { useOperatorAction, useOperatorSnapshot } from "../../data/transport";
 import type { SecretRef } from "../../data/types";
-import { SectionError, SectionLoading } from "../parts/SectionStatus";
+import { OperatorSection } from "../parts/OperatorSection";
 import { runDaemonAction, type DaemonActionData } from "../parts/run-action";
 
 interface SecretSetVars extends Record<string, unknown> {
@@ -43,13 +43,6 @@ export function SecretsSection(): ReactNode {
   const setSecret = useOperatorAction<DaemonActionData, SecretSetVars>(SECRET_SET_MUTATION);
   const deleteSecret = useOperatorAction<DaemonActionData, SecretDeleteVars>(SECRET_DELETE_MUTATION);
   const busy = setSecret.result.fetching || deleteSecret.result.fetching;
-
-  if (result.error && !snapshot) {
-    return <SectionError message={result.error.message} />;
-  }
-  if (result.fetching && !snapshot) {
-    return <SectionLoading label="Loading secrets" />;
-  }
 
   const secrets = snapshot?.secrets ?? [];
   const canSet = name.trim().length > 0 && value.length > 0 && !busy;
@@ -92,10 +85,13 @@ export function SecretsSection(): ReactNode {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <h2 className="text-lg font-semibold text-fg">{t("section.operator.secrets.title")}</h2>
-      {actionError ? <SectionError message={actionError} /> : null}
-
+    <OperatorSection
+      title={t("section.operator.secrets.title")}
+      loading={result.fetching && !snapshot}
+      error={result.error && !snapshot ? result.error : null}
+      loadingMessage="Loading secrets"
+      actionError={actionError}
+    >
       <Card>
         <CardHeader>
           <CardTitle>Set a secret</CardTitle>
@@ -199,6 +195,6 @@ export function SecretsSection(): ReactNode {
           )}
         </TableBody>
       </Table>
-    </div>
+    </OperatorSection>
   );
 }

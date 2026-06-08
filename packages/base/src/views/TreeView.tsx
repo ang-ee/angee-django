@@ -1,5 +1,11 @@
-import { useMemo, type ReactElement, type ReactNode } from "react";
+import { useMemo, useState, type ReactElement, type ReactNode } from "react";
 
+import {
+  dragHasAcceptedType,
+  readDndPayload,
+  writeDndPayload,
+  type DndPayload,
+} from "../lib/dnd";
 import { Tree, type TreeNode } from "../ui/tree";
 
 /**
@@ -25,6 +31,14 @@ export interface TreeViewProps<
   selectedId?: string;
   onSelect?: (row: TRow) => void;
   renderRow?: (row: TRow) => ReactNode;
+  /** Make a node draggable by returning a payload for its row, or `null`. */
+  draggableRow?: (row: TRow) => DndPayload | null;
+  /** Payload `type`s a node accepts on drop (drives the drag-over highlight). */
+  dropAccept?: string | readonly string[];
+  /** Node-level drop guard, judged on drag-over (e.g. a folder onto itself). */
+  canDropOnNode?: (nodeId: string, row: TRow) => boolean;
+  /** Called with the decoded payload when an accepted item drops on a node. */
+  onNodeDrop?: (nodeId: string, payload: DndPayload, row: TRow) => void;
   className?: string;
 }
 
@@ -38,6 +52,10 @@ export function TreeView<TRow extends Record<string, unknown>>({
   selectedId,
   onSelect,
   renderRow,
+  draggableRow,
+  dropAccept,
+  canDropOnNode,
+  onNodeDrop,
   className,
 }: TreeViewProps<TRow>): ReactElement {
   const rowsById = useMemo(
@@ -48,17 +66,68 @@ export function TreeView<TRow extends Record<string, unknown>>({
     () => buildTree(rows, { parent, label, badge, rowKey, icon, renderRow }),
     [rows, parent, label, badge, rowKey, icon, renderRow],
   );
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const droppable = onNodeDrop != null;
 
   return (
     <Tree
       nodes={nodes}
       selectedId={selectedId}
       className={className}
+      dropTargetId={dropTargetId}
       onSelect={
         onSelect
           ? (id) => {
               const row = rowsById.get(id);
               if (row) onSelect(row);
+            }
+          : undefined
+      }
+      getNodeDraggable={
+        draggableRow
+          ? (id) => {
+              const row = rowsById.get(id);
+              return row ? draggableRow(row) != null : false;
+            }
+          : undefined
+      }
+      onNodeDragStart={
+        draggableRow
+          ? (id, event) => {
+              const row = rowsById.get(id);
+              const payload = row ? draggableRow(row) : null;
+              if (payload) writeDndPayload(event.dataTransfer, payload);
+            }
+          : undefined
+      }
+      canDropOnNode={
+        droppable
+          ? (id, event) => {
+              if (!dragHasAcceptedType(event.dataTransfer, dropAccept)) {
+                return false;
+              }
+              const row = rowsById.get(id);
+              if (!row) return false;
+              return canDropOnNode ? canDropOnNode(id, row) : true;
+            }
+          : undefined
+      }
+      onNodeDragOver={droppable ? (id) => setDropTargetId(id) : undefined}
+      onNodeDragLeave={
+        droppable
+          ? (id) =>
+              setDropTargetId((current) => (current === id ? null : current))
+          : undefined
+      }
+      onNodeDrop={
+        droppable
+          ? (id, event) => {
+              setDropTargetId(null);
+              const row = rowsById.get(id);
+              const payload = readDndPayload(event.dataTransfer);
+              if (!row || !payload) return;
+              if (canDropOnNode && !canDropOnNode(id, row)) return;
+              onNodeDrop?.(id, payload, row);
             }
           : undefined
       }

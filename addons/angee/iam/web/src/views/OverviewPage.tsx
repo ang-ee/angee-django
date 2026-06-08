@@ -37,9 +37,9 @@ import {
 } from "../documents";
 import { titleLabel, userLabel } from "../identity-labels";
 import { grantRows, roleRef, roleRows, type IAMGrantRow } from "../identity-rows";
+import { IAM_LIST_LIMIT } from "../list-config";
 
 const OVERVIEW_COUNT_LIMIT = 1;
-const LIST_LIMIT = 500;
 const PEEK_LIMIT = 6;
 
 /**
@@ -54,7 +54,7 @@ export function OverviewPage(): ReactElement {
     [],
   );
   const listVars = useMemo<IAMUsersVariables & IAMGrantsVariables>(
-    () => ({ pagination: { offset: 0, limit: LIST_LIMIT } }),
+    () => ({ pagination: { offset: 0, limit: IAM_LIST_LIMIT } }),
     [],
   );
   const overview = useAuthoredQuery<IAMOverviewData, IAMOverviewVariables>(
@@ -97,7 +97,7 @@ export function OverviewPage(): ReactElement {
     [users],
   );
   const userTotalCount = usersQuery.data?.users.totalCount ?? 0;
-  const usersTruncated = userTotalCount > LIST_LIMIT;
+  const usersTruncated = userTotalCount > IAM_LIST_LIMIT;
 
   // Namespaces with their role + grant counts, sorted by namespace.
   const namespaces = useMemo(() => {
@@ -189,7 +189,7 @@ export function OverviewPage(): ReactElement {
                   />
                   {usersTruncated ? (
                     <span className="text-12 font-normal text-fg-muted">
-                      Showing first {LIST_LIMIT.toLocaleString()} of{" "}
+                      Showing first {IAM_LIST_LIMIT.toLocaleString()} of{" "}
                       {userTotalCount.toLocaleString()} users.
                     </span>
                   ) : null}

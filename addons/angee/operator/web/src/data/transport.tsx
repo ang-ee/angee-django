@@ -1,4 +1,4 @@
-import { Spinner } from "@angee/base";
+import { Alert, EmptyState, LoadingPanel } from "@angee/base";
 import { useSchemaClients } from "@angee/sdk";
 import {
   Provider as UrqlProvider,
@@ -132,31 +132,20 @@ export function OperatorTransportProvider({
   }, [endpoint, token]);
 
   if (state.kind === "loading") {
-    return (
-      <div
-        aria-live="polite"
-        className="flex min-h-48 items-center justify-center gap-3 text-sm text-fg-muted"
-        role="status"
-      >
-        <Spinner size="md" tone="brand" />
-        <span>Connecting to operator</span>
-      </div>
-    );
+    return <LoadingPanel message="Connecting to operator" />;
   }
 
   if (state.kind === "error") {
-    return (
-      <div className="rounded-md border border-danger/30 bg-danger-soft px-4 py-3 text-sm text-danger">
-        {state.message}
-      </div>
-    );
+    return <Alert intent="danger">{state.message}</Alert>;
   }
 
   if (state.kind === "not-configured" || !daemonClient) {
     return (
-      <div className="rounded-md border border-border bg-surface px-4 py-3 text-sm text-fg-muted">
-        Operator daemon is not configured for this user.
-      </div>
+      <EmptyState
+        icon="operator"
+        title="Operator daemon unavailable"
+        description="Operator daemon is not configured for this user."
+      />
     );
   }
 

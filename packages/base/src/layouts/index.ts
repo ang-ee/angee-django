@@ -1,4 +1,5 @@
 export { CanvasPage, type CanvasPageProps } from "./CanvasPage";
+export { Explorer, type ExplorerProps } from "./Explorer";
 export { HeroPage, type HeroPageProps } from "./HeroPage";
 export {
   RecordView,

@@ -1,16 +1,17 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@angee/base";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  MetricGrid,
+  type MetricGridTile,
+} from "@angee/base";
 import { useT } from "@angee/sdk";
 import type { ReactNode } from "react";
 
 import { useOperatorSnapshot } from "../../data/transport";
-import { SectionError, SectionLoading } from "../parts/SectionStatus";
+import { OperatorSection } from "../parts/OperatorSection";
 import { StateTag } from "../parts/StateTag";
-
-interface MetricTile {
-  id: string;
-  label: string;
-  value: number;
-}
 
 /** Overview pane: stack + health summary above per-resource count tiles. */
 export function OverviewSection(): ReactNode {
@@ -23,26 +24,22 @@ export function OverviewSection(): ReactNode {
     secrets: true,
   });
 
-  if (result.error && !snapshot) {
-    return <SectionError message={result.error.message} />;
-  }
-  if (result.fetching && !snapshot) {
-    return <SectionLoading label="Loading overview" />;
-  }
-
   const stack = snapshot?.stack ?? null;
   const health = snapshot?.health ?? null;
-  const metrics: readonly MetricTile[] = [
-    { id: "services", label: t("section.operator.services.title"), value: snapshot?.services.length ?? 0 },
-    { id: "workspaces", label: t("section.operator.workspaces.title"), value: snapshot?.workspaces.length ?? 0 },
-    { id: "sources", label: t("section.operator.sources.title"), value: snapshot?.sources.length ?? 0 },
-    { id: "secrets", label: t("section.operator.secrets.title"), value: snapshot?.secrets.length ?? 0 },
+  const metrics: readonly MetricGridTile[] = [
+    { label: t("section.operator.services.title"), value: snapshot?.services.length ?? 0 },
+    { label: t("section.operator.workspaces.title"), value: snapshot?.workspaces.length ?? 0 },
+    { label: t("section.operator.sources.title"), value: snapshot?.sources.length ?? 0 },
+    { label: t("section.operator.secrets.title"), value: snapshot?.secrets.length ?? 0 },
   ];
 
   return (
-    <div className="flex flex-col gap-4">
-      <h2 className="text-lg font-semibold text-fg">{t("section.operator.overview.title")}</h2>
-
+    <OperatorSection
+      title={t("section.operator.overview.title")}
+      loading={result.fetching && !snapshot}
+      error={result.error && !snapshot ? result.error : null}
+      loadingMessage="Loading overview"
+    >
       <div className="grid gap-3 sm:grid-cols-2">
         <Card>
           <CardHeader>
@@ -77,16 +74,7 @@ export function OverviewSection(): ReactNode {
         </Card>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {metrics.map((metric) => (
-          <Card key={metric.id}>
-            <CardContent className="flex flex-col gap-1 py-4">
-              <span className="text-2xl font-semibold tabular-nums text-fg">{metric.value}</span>
-              <span className="text-13 text-fg-muted">{metric.label}</span>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-    </div>
+      <MetricGrid className="grid-cols-2 sm:grid-cols-4" metrics={metrics} />
+    </OperatorSection>
   );
 }
