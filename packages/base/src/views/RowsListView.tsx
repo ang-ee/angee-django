@@ -63,6 +63,8 @@ export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   emptyMessage?: React.ReactNode;
   className?: string;
   selectable?: boolean;
+  /** Controls rendered in the toolbar's leading slot, beside the filter. */
+  toolbarActions?: React.ReactNode;
 }
 
 export function RowsListView<TRow extends StringIdRow = StringIdRow>(
@@ -105,6 +107,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   emptyMessage = "No records.",
   className,
   selectable = false,
+  toolbarActions,
   dataView,
 }: RowsListViewProps<TRow> & {
   dataView: DataViewContextValue;
@@ -189,6 +192,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
       <ControlBand>
         <DataToolbar
           className={controlBandItemClassName}
+          actions={toolbarActions}
           pager={toolbarPager}
           group={groupingEnabled ? dataView.state.group : undefined}
           groupStack={groupingEnabled ? dataView.state.groupStack : undefined}

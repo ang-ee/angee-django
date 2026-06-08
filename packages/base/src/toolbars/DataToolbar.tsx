@@ -51,6 +51,8 @@ export interface DataToolbarProps {
   filterText?: string;
   createLabel?: ReactNode;
   onCreate?: () => void;
+  /** Extra controls rendered in the toolbar's leading slot, beside the filter. */
+  actions?: ReactNode;
   onFilterTextChange?: (value: string) => void;
   onFilterToggle?: (id: string) => void;
   onClearGroup?: () => void;
@@ -141,6 +143,7 @@ export function DataToolbar({
   filterText = "",
   createLabel = "New",
   onCreate,
+  actions,
   onFilterToggle,
   onFilterTextChange,
   onClearGroup,
@@ -181,6 +184,7 @@ export function DataToolbar({
           {createLabel}
         </Button>
       ) : null}
+      {actions}
       <FilterPicker
         groups={groups}
         groupControls={groupControls}

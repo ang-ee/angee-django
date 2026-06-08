@@ -65,18 +65,6 @@ export function FileBrowserContent({
         startUpload(event.dataTransfer.files);
       }}
     >
-      <div className="flex items-center justify-end gap-2 border-b border-border-subtle px-3 py-2">
-        <Button
-          type="button"
-          size="sm"
-          variant="secondary"
-          disabled={!canUpload}
-          onClick={() => inputRef.current?.click()}
-        >
-          <Glyph name="plus" />
-          Upload
-        </Button>
-      </div>
       {uploads.tasks.length > 0 ? (
         <UploadStrip tasks={uploads.tasks} onClear={uploads.clearFinished} />
       ) : null}
@@ -89,6 +77,19 @@ export function FileBrowserContent({
           onRowClick={onRowClick}
           emptyMessage={canUpload ? "Drop files here or use Upload." : "No files here yet."}
           pageSize={50}
+          toolbarActions={
+            canUpload ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => inputRef.current?.click()}
+              >
+                <Glyph name="attachment" />
+                Upload
+              </Button>
+            ) : undefined
+          }
         />
       </div>
       {dragging ? (
