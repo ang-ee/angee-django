@@ -963,6 +963,26 @@ class FileAttachment(SqidMixin, AuditMixin, AngeeModel):
         return self.label or f"attachment:{self.file_id}"
 
 
+class StorageRole(AngeeModel):
+    """Table-less REBAC type anchor for the ``storage/role`` namespace.
+
+    The const-backed ``admin`` relation on ``storage/role`` (``permissions.zed``)
+    needs a model carrying its ``rebac_resource_type`` to satisfy the
+    ``rebac.E009`` system check — the same anchor operator's connection uses. The
+    row is never created or read; it exists only to register the type so a
+    platform admin resolves as an effective storage-admin through the const.
+    """
+
+    runtime = True
+
+    class Meta:
+        """Django model options for the storage role anchor."""
+
+        abstract = True
+        managed = False
+        rebac_resource_type = "storage/role"
+
+
 def _mime_row(file_model: type[Any], mime_type: str) -> Any | None:
     """Return the taxonomy row for one MIME string, if catalogued.
 

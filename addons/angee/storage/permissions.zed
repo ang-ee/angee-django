@@ -6,12 +6,16 @@
 // Roles-as-namespace anchor, mirroring operator/role: `includes` lets one
 // storage role imply another, and resources gate on `effective_member` so
 // granted + implied members both resolve. Platform admins (angee/role:admin)
-// are implicit members of every storage role.
+// reach every storage role through the const-backed `admin` relation —
+// synthetic, no per-object tuple, the same universal-admin path the resource
+// types below use — so the storage-admin gate in schema.py resolves a superuser
+// without a seeded role grant.
 definition storage/role {
     relation member:   auth/user | auth/group#member | angee/role:admin#member
     relation includes: storage/role#effective_member
+    relation admin:    angee/role // rebac:const=admin
 
-    permission effective_member = member + includes
+    permission effective_member = member + includes + admin->member
 }
 
 // Backend rows are infrastructure: they carry backend credentials config and
