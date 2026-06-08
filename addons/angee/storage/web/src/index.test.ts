@@ -44,8 +44,8 @@ describe("storage addon manifest", () => {
     ]);
   });
 
-  test("registers its drive/folder glyphs", () => {
+  test("registers its drive glyph", () => {
     expect(storage.icons?.drive).toBeDefined();
-    expect(storage.icons?.folder).toBeDefined();
+    expect(storage.icons?.image).toBeDefined();
   });
 });

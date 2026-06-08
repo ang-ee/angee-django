@@ -352,14 +352,24 @@ function ModeButton({
   );
 }
 
-function MarkdownRead({
+/** Render a markdown string as styled prose (GFM). The reusable read primitive
+ * behind the markdown widgets and any read-only markdown surface. */
+export function Markdown({
   value,
-}: WidgetRenderProps<string>): ReactElement {
+  className,
+}: {
+  value: string | null | undefined;
+  className?: string;
+}): ReactElement {
   return (
-    <div className={PROSE_CLASS}>
+    <div className={cn(PROSE_CLASS, className)}>
       <ReactMarkdown remarkPlugins={PREVIEW_PLUGINS}>{value ?? ""}</ReactMarkdown>
     </div>
   );
+}
+
+function MarkdownRead({ value }: WidgetRenderProps<string>): ReactElement {
+  return <Markdown value={value} />;
 }
 
 export const markdownEditorWidget = {

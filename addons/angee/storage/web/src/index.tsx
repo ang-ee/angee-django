@@ -1,12 +1,5 @@
 import type { BaseAddon, BaseAddonRoute, BaseMenuItem } from "@angee/base";
-import {
-  ArchiveRestore,
-  Download,
-  Folder,
-  HardDrive,
-  Image,
-  Pencil,
-} from "lucide-react";
+import { ArchiveRestore, Download, HardDrive, Image, Pencil } from "lucide-react";
 
 import { StoragePage } from "./views/StoragePage";
 import { FileCrumb } from "./views/FileDetail";
@@ -72,7 +65,6 @@ const storage: BaseAddon = {
   menus: storageMenu,
   icons: {
     drive: HardDrive,
-    folder: Folder,
     image: Image,
     download: Download,
     restore: ArchiveRestore,

@@ -25,6 +25,8 @@ import { themePickerWidget } from "./themePicker";
 import { userRefWidget } from "./userRef";
 import type { WidgetDefinition } from "./types";
 
+export { Markdown } from "./markdown";
+
 export type {
   WidgetDefinition,
   WidgetField,
