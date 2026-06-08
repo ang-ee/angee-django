@@ -30,8 +30,7 @@ import {
   grantRows,
   type IAMGrantRow,
 } from "../identity-rows";
-
-const GRANT_LIMIT = 500;
+import { IAM_LIST_LIMIT } from "../list-config";
 
 const grantGroupOptions: readonly DataToolbarGroupOption[] = [
   {
@@ -45,7 +44,7 @@ const grantGroupOptions: readonly DataToolbarGroupOption[] = [
 export function GrantsPage(): ReactElement {
   const confirm = useConfirm();
   const variables = useMemo<IAMGrantsVariables>(
-    () => ({ pagination: { offset: 0, limit: GRANT_LIMIT } }),
+    () => ({ pagination: { offset: 0, limit: IAM_LIST_LIMIT } }),
     [],
   );
   const query = useAuthoredQuery<IAMGrantsData, IAMGrantsVariables>(

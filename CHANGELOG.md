@@ -64,12 +64,12 @@ HTTP stack. Durable decisions:
   `(backend, prefix)` is unique so two drives never share a key space.
   Dedup hits and finalize races against a *trashed* row restore it instead of
   handing out a purge-doomed row or blocking the re-upload.
-- **`angee.graphql.users`** owns the audit-reference projections
-  (`user_public_id` / `user_label`); storage and the notes example share it
-  instead of carrying copies. `angee.base.mixins.actor_user_id` is the one
-  reading of "current actor as a user id" (used by `AuditMixin`, `File.delete`,
-  the proxy push gate). The layering test derives its addon list from
-  `addons/angee/` so new base addons are guarded automatically.
+- **Audit-reference projections are shared, not copied.** Storage reuses
+  `angee.iam.identity.user_public_id` / `user_display_label` (the home the
+  knowledge work established) instead of carrying its own. `angee.base.mixins.actor_user_id`
+  is the one reading of "current actor as a user id" (used by `AuditMixin`,
+  `File.delete`, the proxy push gate). The layering test derives its addon
+  list from `addons/angee/` so new base addons are guarded automatically.
 - **The proxy upload view is covered and honest.** A view-level test pins
   token extraction, the streamed PUT, one-shot reuse rejection, and the
   anonymous-actor denial; the docstring states plainly that the token binds

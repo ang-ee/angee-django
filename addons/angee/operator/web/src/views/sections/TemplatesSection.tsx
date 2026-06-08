@@ -1,31 +1,33 @@
-import { Badge, Card, CardContent, CardHeader, CardTitle } from "@angee/base";
+import {
+  Badge,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  EmptyState,
+} from "@angee/base";
 import { useT } from "@angee/sdk";
 import type { ReactNode } from "react";
 
 import { useOperatorSnapshot } from "../../data/transport";
 import type { TemplateDescriptor, TemplateInputDescriptor } from "../../data/types";
-import { SectionEmpty, SectionError, SectionLoading } from "../parts/SectionStatus";
+import { OperatorSection } from "../parts/OperatorSection";
 
 /** Templates pane: the addable template catalog + each template's input schema. */
 export function TemplatesSection(): ReactNode {
   const t = useT("operator");
   const { snapshot, result } = useOperatorSnapshot({ templates: true });
-
-  if (result.error && !snapshot) {
-    return <SectionError message={result.error.message} />;
-  }
-  if (result.fetching && !snapshot) {
-    return <SectionLoading label="Loading templates" />;
-  }
-
   const templates = snapshot?.templates ?? [];
 
   return (
-    <div className="flex flex-col gap-4">
-      <h2 className="text-lg font-semibold text-fg">{t("section.operator.templates.title")}</h2>
-
+    <OperatorSection
+      title={t("section.operator.templates.title")}
+      loading={result.fetching && !snapshot}
+      error={result.error && !snapshot ? result.error : null}
+      loadingMessage="Loading templates"
+    >
       {templates.length === 0 ? (
-        <SectionEmpty message="No templates." />
+        <EmptyState icon="columns" title="No templates" />
       ) : (
         <div className="flex flex-col gap-3">
           {templates.map((template) => (
@@ -33,7 +35,7 @@ export function TemplatesSection(): ReactNode {
           ))}
         </div>
       )}
-    </div>
+    </OperatorSection>
   );
 }
 

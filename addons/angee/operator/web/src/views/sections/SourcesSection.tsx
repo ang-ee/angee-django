@@ -16,7 +16,7 @@ import {
   SOURCE_PUSH_MUTATION,
 } from "../../data/documents";
 import { useOperatorAction, useOperatorSnapshot } from "../../data/transport";
-import { SectionError, SectionLoading } from "../parts/SectionStatus";
+import { OperatorSection } from "../parts/OperatorSection";
 import { StateTag } from "../parts/StateTag";
 import { runDaemonAction, type DaemonActionData } from "../parts/run-action";
 
@@ -41,13 +41,6 @@ export function SourcesSection(): ReactNode {
   const push = useOperatorAction<DaemonActionData, SourceActionVars>(SOURCE_PUSH_MUTATION);
   const busy = fetchSource.result.fetching || pull.result.fetching || push.result.fetching;
 
-  if (result.error && !snapshot) {
-    return <SectionError message={result.error.message} />;
-  }
-  if (result.fetching && !snapshot) {
-    return <SectionLoading label="Loading sources" />;
-  }
-
   const sources = snapshot?.sources ?? [];
   const actions: readonly SourceAction[] = [
     { field: "sourceFetch", label: "Fetch", variant: "secondary", run: fetchSource.run },
@@ -56,10 +49,13 @@ export function SourcesSection(): ReactNode {
   ];
 
   return (
-    <div className="flex flex-col gap-4">
-      <h2 className="text-lg font-semibold text-fg">{t("section.operator.sources.title")}</h2>
-      {actionError ? <SectionError message={actionError} /> : null}
-
+    <OperatorSection
+      title={t("section.operator.sources.title")}
+      loading={result.fetching && !snapshot}
+      error={result.error && !snapshot ? result.error : null}
+      loadingMessage="Loading sources"
+      actionError={actionError}
+    >
       <Table>
         <TableHeader>
           <TableRow>
@@ -123,6 +119,6 @@ export function SourcesSection(): ReactNode {
           )}
         </TableBody>
       </Table>
-    </div>
+    </OperatorSection>
   );
 }

@@ -97,6 +97,32 @@ own SDL). The wins are the shared section scaffold + RowsListView + DashboardVie
 metric grid + reusing EmptyState/LoadingPanel/ErrorBanner + statusBadge tones;
 the transport stays bespoke.
 
+## Full component lift (architect 2026-06-07: lift ALL p1 base components, then DRY operator)
+
+Accumulate on `ui-refactor-dry`. Reconstruct to local conventions (no copy/
+provenance); reuse local primitives; gate each (typecheck + vitest, render at
+its adopter); commit own files only (storage/knowledge backends land in
+parallel in the same tree). Source = `angee-django-p1/packages/base`.
+
+| Component | p1 source | Status |
+|---|---|---|
+| DashboardView + Metric | views/DashboardView, views/dashboard/Metric | ✅ 37c4401 |
+| Statusline slot (ConsoleShell) | shell StatusBar idea | ✅ 0b7583f |
+| Tree + TreeView (+ FolderTree) | ui/tree, views/TreeView | ✅ abbe8bb (DnD seam deferred) |
+| TimelineView | views/TimelineView (generalize local RevisionsTab/TimelineEntry) | ⏳ next |
+| GalleryView | views/GalleryView | ⏳ |
+| PreviewPane + file previewers | preview/PreviewPane, base-previews/* (Pdf/Image/Markdown/Code/Docx/Media/Html/Json) | ⏳ |
+| CalendarView (+ calendar) | views/CalendarView, ui/calendar | ⏳ |
+| GanttView | views/GanttView | ⏳ |
+| Notebook + Tab + record Elements (Header/Title/StatusBar/SmartButton/Relation) | views/Notebook, layouts.md form Elements | ⏳ |
+| Explorer (DataPage navigator slot) | ResourcePage navigator | ⏳ (after TreeView + PreviewPane) |
+| ConsoleAppShell sub-nav derivation | shell/ConsoleAppShell | ⏳ (reconcile with TopMenu) |
+| Chat (agents) | communication/Chat | ⏳ (later) |
+| Drag seam (lib/dnd) | lib/dnd | ⏳ (unblocks TreeView DnD + Board) |
+
+Then **DRY operator**: section scaffold + RowsListView + DashboardView +
+fragments + statusBadge (operator stays on daemon rows, never useResource*).
+
 ## Build plan (sequenced by cross-addon leverage)
 
 Each phase is a slice on the D1–D6 model: framework primitive first (in

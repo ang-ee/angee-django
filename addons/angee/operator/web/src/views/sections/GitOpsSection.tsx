@@ -1,19 +1,20 @@
 import {
-  Card,
-  CardContent,
+  EmptyState,
+  MetricGrid,
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeader,
   TableRow,
+  type MetricGridTile,
 } from "@angee/base";
 import { useT } from "@angee/sdk";
 import type { ReactNode } from "react";
 
 import { useOperatorSnapshot } from "../../data/transport";
-import type { GitOpsSummary } from "../../data/types";
-import { SectionError, SectionLoading } from "../parts/SectionStatus";
+import type { GitOpsLink, GitOpsSummary } from "../../data/types";
+import { OperatorSection } from "../parts/OperatorSection";
 import { StateTag } from "../parts/StateTag";
 
 interface SummaryTile {
@@ -35,43 +36,42 @@ const SUMMARY_TILES: readonly SummaryTile[] = [
 export function GitOpsSection(): ReactNode {
   const t = useT("operator");
   const { snapshot, result } = useOperatorSnapshot({ gitOps: true });
-
-  if (result.error && !snapshot) {
-    return <SectionError message={result.error.message} />;
-  }
-  if (result.fetching && !snapshot) {
-    return <SectionLoading label="Loading GitOps topology" />;
-  }
-
   const gitOps = snapshot?.gitOps ?? null;
 
-  if (!gitOps) {
-    return (
-      <div className="flex flex-col gap-4">
-        <h2 className="text-lg font-semibold text-fg">{t("section.operator.gitops.title")}</h2>
-        <SectionError message="No GitOps topology." />
-      </div>
-    );
-  }
+  return (
+    <OperatorSection
+      title={t("section.operator.gitops.title")}
+      loading={result.fetching && !snapshot}
+      error={result.error && !snapshot ? result.error : null}
+      loadingMessage="Loading GitOps topology"
+    >
+      {gitOps ? (
+        <GitOpsTopologyView summary={gitOps.summary} links={gitOps.links} />
+      ) : (
+        <EmptyState icon="activity" title="No GitOps topology" />
+      )}
+    </OperatorSection>
+  );
+}
 
-  const { summary, links } = gitOps;
+function GitOpsTopologyView({
+  summary,
+  links,
+}: {
+  summary: GitOpsSummary;
+  links: readonly GitOpsLink[];
+}): ReactNode {
+  const metrics: readonly MetricGridTile[] = SUMMARY_TILES.map((tile) => ({
+    label: tile.label,
+    value: summary[tile.id],
+  }));
 
   return (
-    <div className="flex flex-col gap-4">
-      <h2 className="text-lg font-semibold text-fg">{t("section.operator.gitops.title")}</h2>
-
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        {SUMMARY_TILES.map((tile) => (
-          <Card key={tile.id}>
-            <CardContent className="flex flex-col gap-1 py-4">
-              <span className="text-2xl font-semibold tabular-nums text-fg">
-                {summary[tile.id]}
-              </span>
-              <span className="text-13 text-fg-muted">{tile.label}</span>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+    <>
+      <MetricGrid
+        className="grid-cols-2 sm:grid-cols-3 lg:grid-cols-6"
+        metrics={metrics}
+      />
 
       <Table>
         <TableHeader>
@@ -113,6 +113,6 @@ export function GitOpsSection(): ReactNode {
           )}
         </TableBody>
       </Table>
-    </div>
+    </>
   );
 }

@@ -16,7 +16,15 @@ from rebac import actor_context, system_context
 
 from angee.storage import exceptions
 from angee.storage.models import FileManager, UploadState
-from tests.conftest import Backend, Drive, File, Folder, MimeType, _create_missing_tables
+from tests.conftest import (
+    STORAGE_TEST_MODELS,
+    Backend,
+    Drive,
+    File,
+    Folder,
+    MimeType,
+    _create_missing_tables,
+)
 
 # A real 1x1 PNG — libmagic classifies it as image/png; a fake signature would not.
 PNG_BYTES = bytes.fromhex(
@@ -44,7 +52,7 @@ def test_file_source_model_owns_the_upload_protocol() -> None:
 def storage_tables() -> Iterator[None]:
     """Provide the concrete storage tables for one test."""
 
-    created_models = _create_missing_tables([Backend, Drive, Folder, MimeType, File])
+    created_models = _create_missing_tables(STORAGE_TEST_MODELS)
     try:
         yield
     finally:

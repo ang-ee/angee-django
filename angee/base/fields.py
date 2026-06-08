@@ -8,7 +8,7 @@ library owns the behavior.
 from __future__ import annotations
 
 import base64
-from typing import Any, cast
+from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
@@ -35,6 +35,24 @@ def _derive_fernet(label: str) -> Fernet:
     return Fernet(base64.urlsafe_b64encode(key))
 
 
+class SqidField(SqidsField):
+    """Angee's opaque public id column, declared as ``django-sqids`` glue.
+
+    ``docs/stack.md`` names ``django-sqids`` the owner of opaque external ids;
+    this wrapper only makes the decoder total: ``from_db_value`` receives
+    ``None`` when the encoded column arrives through a nullable join — e.g.
+    ``values_list("parent__sqid")`` over a nullable self-FK, the shape REBAC
+    field-backed arrows query — and upstream encodes unconditionally there.
+    """
+
+    def from_db_value(self, value: Any, expression: Any, connection: Any, *args: Any) -> Any:
+        """Return the encoded public id, passing NULL columns through."""
+
+        if value is None:
+            return None
+        return super().from_db_value(value, expression, connection, *args)
+
+
 class StateField(TextChoicesField):
     """A finite-state column backed by a ``TextChoices`` enum.
 
@@ -51,25 +69,6 @@ class StateField(TextChoicesField):
 
         kwargs.setdefault("db_index", True)
         super().__init__(**kwargs)
-
-
-class SqidField(SqidsField):
-    """A ``SqidsField`` whose database reads pass ``NULL`` through.
-
-    ``docs/stack.md`` names ``django-sqids`` the owner of opaque external
-    ids; this wrapper only fixes its ``from_db_value``, which encodes
-    unconditionally and raises on the ``NULL`` a nullable-FK join produces
-    (e.g. ``values_list("parent__sqid")`` — the exact query REBAC
-    field-backed arrows run). Use it for any model whose sqid can be
-    selected through a nullable join.
-    """
-
-    def from_db_value(self, value: Any, expression: Any, connection: Any, *args: Any) -> str | None:
-        """Encode a database value, passing ``NULL`` joins through."""
-
-        if value is None:
-            return None
-        return cast(str | None, super().from_db_value(value, expression, connection, *args))
 
 
 class EncryptedField(models.TextField):

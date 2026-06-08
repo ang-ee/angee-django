@@ -23,7 +23,7 @@ import {
   STACK_UP_MUTATION,
 } from "../../data/documents";
 import { useOperatorAction, useOperatorSnapshot } from "../../data/transport";
-import { SectionError, SectionLoading } from "../parts/SectionStatus";
+import { OperatorSection } from "../parts/OperatorSection";
 import { runDaemonAction, type DaemonActionData } from "../parts/run-action";
 
 type StackVars = Record<string, unknown>;
@@ -58,13 +58,6 @@ export function OperationsSection(): ReactNode {
     down.result.fetching ||
     destroy.result.fetching ||
     jobRun.result.fetching;
-
-  if (result.error && !snapshot) {
-    return <SectionError message={result.error.message} />;
-  }
-  if (result.fetching && !snapshot) {
-    return <SectionLoading label="Loading operations" />;
-  }
 
   const jobs = snapshot?.jobs ?? [];
   const stackActions: readonly StackAction[] = [
@@ -104,10 +97,13 @@ export function OperationsSection(): ReactNode {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <h2 className="text-lg font-semibold text-fg">{t("section.operator.operations.title")}</h2>
-      {actionError ? <SectionError message={actionError} /> : null}
-
+    <OperatorSection
+      title={t("section.operator.operations.title")}
+      loading={result.fetching && !snapshot}
+      error={result.error && !snapshot ? result.error : null}
+      loadingMessage="Loading operations"
+      actionError={actionError}
+    >
       <Table>
         <TableHeader>
           <TableRow>
@@ -173,6 +169,6 @@ export function OperationsSection(): ReactNode {
           </div>
         </CardContent>
       </Card>
-    </div>
+    </OperatorSection>
   );
 }

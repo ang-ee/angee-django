@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import Any, Self, TypeVar, cast
 
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models.utils import make_model_tuple
-from rebac import RebacMixin
+from rebac import RebacMixin, SubjectRef, check_new, current_actor, to_object_ref
 from rebac.actors import is_sudo as ambient_is_sudo
-from rebac.errors import MissingActorError
+from rebac.errors import MissingActorError, PermissionDenied
 from rebac.managers import RebacManager, RebacQuerySet
 from rebac.resources import model_resource_type
 
@@ -64,6 +65,44 @@ class AngeeManager(RebacManager.from_queryset(AngeeQuerySet)):  # type: ignore[m
         """Return the base Angee queryset for this manager's model."""
 
         return cast(AngeeQuerySet[Any], super().get_queryset())
+
+    def check_create(
+        self,
+        relationships: Mapping[str, Sequence[Any]] | None = None,
+    ) -> SubjectRef:
+        """Authorize the ambient actor to create one not-yet-persisted row.
+
+        The REBAC pre-save signal cannot evaluate a per-row ``create`` gate
+        for a row that has no id yet, so manager factories preflight the
+        schema's ``create`` permission with the relations the row would
+        carry (``rebac.check_new``), run the insert under per-instance
+        sudo, and re-bind the verified actor on the saved row with
+        ``with_actor`` so the bypass ends with that one insert.
+
+        ``relationships`` values may be model instances or ``SubjectRef``s;
+        instances are resolved through their declared REBAC resource type.
+        Returns the verified actor; raises ``MissingActorError`` without an
+        ambient actor and ``PermissionDenied`` when the gate refuses.
+        """
+
+        actor = current_actor()
+        resource_type = model_resource_type(self.model)
+        if not resource_type:
+            raise ImproperlyConfigured(f"{self.model._meta.label} declares no rebac_resource_type")
+        if actor is None:
+            raise MissingActorError(f"Creating {resource_type} requires an actor.")
+        result = check_new(
+            subject=actor,
+            action="create",
+            resource_type=resource_type,
+            relationships={
+                relation: tuple(_relationship_subject(value) for value in values)
+                for relation, values in (relationships or {}).items()
+            },
+        )
+        if not result.allowed:
+            raise PermissionDenied(f"Denied: {actor} cannot create {resource_type}")
+        return actor
 
 
 class AngeeModel(TimestampMixin, RebacMixin):
@@ -179,6 +218,15 @@ def public_id_of(instance: models.Model) -> str:
     if instance.pk is None:
         return ""
     return str(instance.pk)
+
+
+def _relationship_subject(value: Any) -> SubjectRef:
+    """Return one preflight relationship value as a REBAC subject reference."""
+
+    if isinstance(value, SubjectRef):
+        return value
+    ref = to_object_ref(value)
+    return SubjectRef.of(ref.resource_type, ref.resource_id)
 
 
 def _instance_from_public_id_queryset(

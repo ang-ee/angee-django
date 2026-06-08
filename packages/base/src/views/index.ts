@@ -36,6 +36,31 @@ export {
   type DashboardViewProps,
 } from "./DashboardView";
 export {
+  TreeView,
+  type TreeViewProps,
+} from "./TreeView";
+export {
+  GalleryView,
+  type GalleryViewProps,
+} from "./GalleryView";
+export {
+  TimelineView,
+  type TimelineViewProps,
+} from "./TimelineView";
+export {
+  Notebook,
+  Tab,
+  type NotebookProps,
+  type TabProps,
+} from "./Notebook";
+export {
+  Tree,
+  FolderTree,
+  type TreeNode,
+  type TreeProps,
+  type FolderTreeProps,
+} from "../ui/tree";
+export {
   Metric,
   type MetricProps,
 } from "./dashboard/Metric";

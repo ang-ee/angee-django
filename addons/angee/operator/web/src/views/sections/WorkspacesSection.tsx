@@ -17,7 +17,7 @@ import {
 } from "../../data/documents";
 import { useOperatorAction, useOperatorSnapshot } from "../../data/transport";
 import type { WorkspaceRef } from "../../data/types";
-import { SectionError, SectionLoading } from "../parts/SectionStatus";
+import { OperatorSection } from "../parts/OperatorSection";
 import { runDaemonAction, type DaemonActionData } from "../parts/run-action";
 
 interface WorkspaceActionVars extends Record<string, unknown> {
@@ -42,13 +42,6 @@ export function WorkspacesSection(): ReactNode {
   const syncBase = useOperatorAction<DaemonActionData, WorkspaceActionVars>(WORKSPACE_SYNC_BASE_MUTATION);
   const destroy = useOperatorAction<DaemonActionData, WorkspaceActionVars>(WORKSPACE_DESTROY_MUTATION);
   const busy = syncBase.result.fetching || destroy.result.fetching;
-
-  if (result.error && !snapshot) {
-    return <SectionError message={result.error.message} />;
-  }
-  if (result.fetching && !snapshot) {
-    return <SectionLoading label="Loading workspaces" />;
-  }
 
   const workspaces = snapshot?.workspaces ?? [];
   const actions: readonly WorkspaceAction[] = [
@@ -82,10 +75,13 @@ export function WorkspacesSection(): ReactNode {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <h2 className="text-lg font-semibold text-fg">{t("section.operator.workspaces.title")}</h2>
-      {actionError ? <SectionError message={actionError} /> : null}
-
+    <OperatorSection
+      title={t("section.operator.workspaces.title")}
+      loading={result.fetching && !snapshot}
+      error={result.error && !snapshot ? result.error : null}
+      loadingMessage="Loading workspaces"
+      actionError={actionError}
+    >
       <Table>
         <TableHeader>
           <TableRow>
@@ -134,6 +130,6 @@ export function WorkspacesSection(): ReactNode {
           )}
         </TableBody>
       </Table>
-    </div>
+    </OperatorSection>
   );
 }

@@ -16,7 +16,7 @@ import {
   SERVICE_STOP_MUTATION,
 } from "../../data/documents";
 import { useOperatorAction, useOperatorSnapshot } from "../../data/transport";
-import { SectionError, SectionLoading } from "../parts/SectionStatus";
+import { OperatorSection } from "../parts/OperatorSection";
 import { StateTag } from "../parts/StateTag";
 import { runDaemonAction, type DaemonActionData } from "../parts/run-action";
 
@@ -41,13 +41,6 @@ export function ServicesSection(): ReactNode {
   const restart = useOperatorAction<DaemonActionData, ServiceActionVars>(SERVICE_RESTART_MUTATION);
   const busy = start.result.fetching || stop.result.fetching || restart.result.fetching;
 
-  if (result.error && !snapshot) {
-    return <SectionError message={result.error.message} />;
-  }
-  if (result.fetching && !snapshot) {
-    return <SectionLoading label="Loading services" />;
-  }
-
   const services = snapshot?.services ?? [];
   const actions: readonly ServiceAction[] = [
     { field: "serviceStart", label: "Start", variant: "secondary", run: start.run },
@@ -56,10 +49,13 @@ export function ServicesSection(): ReactNode {
   ];
 
   return (
-    <div className="flex flex-col gap-4">
-      <h2 className="text-lg font-semibold text-fg">{t("section.operator.services.title")}</h2>
-      {actionError ? <SectionError message={actionError} /> : null}
-
+    <OperatorSection
+      title={t("section.operator.services.title")}
+      loading={result.fetching && !snapshot}
+      error={result.error && !snapshot ? result.error : null}
+      loadingMessage="Loading services"
+      actionError={actionError}
+    >
       <Table>
         <TableHeader>
           <TableRow>
@@ -115,6 +111,6 @@ export function ServicesSection(): ReactNode {
           )}
         </TableBody>
       </Table>
-    </div>
+    </OperatorSection>
   );
 }

@@ -1,0 +1,83 @@
+// Authorization schema for the knowledge addon.
+// @rebac_package: knowledge
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 3
+
+// Role namespace for knowledge-wide grants. Membership in a role object
+// (knowledge/role:vault_viewer, :vault_editor, :vault_admin,
+// :knowledge_admin) is granted through the Permissions Hub or
+// `rebac.roles.grant`; const-backed relations below point every vault at
+// these role objects, so one membership covers every vault.
+definition knowledge/role {
+    relation member: auth/user | auth/group#member | angee/role:admin#member
+}
+
+definition knowledge/vault {
+    relation owner: auth/user // rebac:field=owner
+    relation editor: auth/user | auth/group#member
+    relation viewer: auth/user | auth/group#member
+
+    // Const-backed role reach (synthetic — no stored tuple, no column):
+    // `<role>->member` resolves the actor's membership in the role object.
+    relation vault_viewer: knowledge/role // rebac:const=vault_viewer
+    relation vault_editor: knowledge/role // rebac:const=vault_editor
+    relation vault_admin: knowledge/role // rebac:const=vault_admin
+    relation knowledge_admin: knowledge/role // rebac:const=knowledge_admin
+    relation admin: angee/role // rebac:const=admin
+
+    // Per-row create cannot gate an id-less insert; VaultManager.create_for
+    // preflights this expression with `check_new` before the elevated insert.
+    permission create = authenticated
+    permission read   = owner + editor + viewer
+                      + vault_viewer->member + vault_editor->member
+                      + vault_admin->member + knowledge_admin->member
+                      + admin->member
+    permission write  = owner + editor
+                      + vault_editor->member + vault_admin->member
+                      + knowledge_admin->member + admin->member
+    permission delete = owner
+                      + vault_admin->member + knowledge_admin->member
+                      + admin->member
+}
+
+// Pages inherit read/write from their vault and from their parent page
+// (folder trees cascade access), so role and admin reach arrives through
+// `vault->...` without per-page relations. `viewer` carries per-page
+// shares granted through the Permissions Hub.
+definition knowledge/page {
+    relation vault: knowledge/vault // rebac:field=vault
+    relation parent: knowledge/page // rebac:field=parent
+    relation owner: auth/user // rebac:field=created_by
+    relation viewer: auth/user | auth/group#member
+
+    // Preflighted by PageManager.create_in with the vault the row will carry.
+    permission create = vault->write
+    permission read   = owner + viewer + parent->read + vault->read
+    permission write  = owner + parent->write + vault->write
+    // `parent->delete` matches the FK CASCADE: deleting a folder must pass
+    // the gate on every cascaded child, so the right to delete the parent
+    // carries down the subtree.
+    permission delete = owner + parent->delete + vault->delete
+}
+
+// The body sidecar has no access surface of its own: everything delegates
+// to the owning page.
+definition knowledge/markdown_page {
+    relation page: knowledge/page // rebac:field=page
+
+    // Preflighted by MarkdownPageManager.write_body for first-write upserts.
+    permission create = page->write
+    permission read   = page->read
+    permission write  = page->write
+    permission delete = page->write
+}
+
+// Wikilink edges are indexer-authored; a backlink is visible only when its
+// source page is, so reads inherit through `source_page`.
+definition knowledge/link {
+    relation source_page: knowledge/page // rebac:field=source_page
+
+    permission read   = source_page->read
+    permission write  = source_page->write
+    permission delete = source_page->write
+}

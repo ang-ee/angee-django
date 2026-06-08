@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import cast
 
 import strawberry
 import strawberry_django
@@ -15,7 +16,7 @@ from angee.graphql.crud import crud
 from angee.graphql.node import AngeeNode
 from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
-from angee.graphql.users import user_label, user_public_id
+from angee.iam.identity import user_display_label, user_public_id
 
 Note = apps.get_model("notes", "Note")
 
@@ -38,25 +39,25 @@ class NoteType(AngeeNode):
     def created_by(self) -> strawberry.ID | None:
         """Return the creator's public id without exposing the user object."""
 
-        return user_public_id(self.created_by_id)
+        return cast("strawberry.ID | None", user_public_id(self.created_by_id))
 
     @strawberry_django.field(only=["created_by_id"])
     def created_by_label(self) -> str | None:
         """Return the creator's display label - no user object exposed."""
 
-        return user_label(self.created_by_id)
+        return user_display_label(self.created_by_id)
 
     @strawberry_django.field(only=["updated_by_id"])
     def updated_by(self) -> strawberry.ID | None:
         """Return the updater's public id without exposing the user object."""
 
-        return user_public_id(self.updated_by_id)
+        return cast("strawberry.ID | None", user_public_id(self.updated_by_id))
 
     @strawberry_django.field(only=["updated_by_id"])
     def updated_by_label(self) -> str | None:
         """Return the updater's display label - no user object exposed."""
 
-        return user_label(self.updated_by_id)
+        return user_display_label(self.updated_by_id)
 
 
 @strawberry.input
