@@ -17,6 +17,7 @@ from django.conf import settings
 from django.core.exceptions import FieldError, ImproperlyConfigured
 from django.db import models
 from django_choices_field import TextChoicesField
+from django_sqids import SqidsField
 
 
 def _derive_fernet(label: str) -> Fernet:
@@ -32,6 +33,24 @@ def _derive_fernet(label: str) -> Fernet:
         info=label.encode(),
     ).derive(secret_key.encode())
     return Fernet(base64.urlsafe_b64encode(key))
+
+
+class SqidField(SqidsField):
+    """Angee's opaque public id column, declared as ``django-sqids`` glue.
+
+    ``docs/stack.md`` names ``django-sqids`` the owner of opaque external ids;
+    this wrapper only makes the decoder total: ``from_db_value`` receives
+    ``None`` when the encoded column arrives through a nullable join — e.g.
+    ``values_list("parent__sqid")`` over a nullable self-FK, the shape REBAC
+    field-backed arrows query — and upstream encodes unconditionally there.
+    """
+
+    def from_db_value(self, value: Any, expression: Any, connection: Any, *args: Any) -> Any:
+        """Return the encoded public id, passing NULL columns through."""
+
+        if value is None:
+            return None
+        return super().from_db_value(value, expression, connection, *args)
 
 
 class StateField(TextChoicesField):

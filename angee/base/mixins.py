@@ -8,8 +8,9 @@ from typing import Any, ClassVar
 import reversion
 from django.conf import settings
 from django.db import models
-from django_sqids import SqidsField
 from rebac import app_settings, current_actor
+
+from angee.base.fields import SqidField
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +42,7 @@ class TimestampMixin(models.Model):
 class SqidMixin(models.Model):
     """Add an opaque public identifier backed by the model primary key."""
 
-    sqid = SqidsField(real_field_name="id")
+    sqid = SqidField(real_field_name="id")
     """Opaque public identifier encoded from the integer primary key."""
 
     class Meta:

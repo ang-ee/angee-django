@@ -5,6 +5,7 @@ ALLOWED_HOSTS:
 
 INSTALLED_APPS:
   - angee.integrate
+  - angee.knowledge
   - angee.operator
   - example.notes
 

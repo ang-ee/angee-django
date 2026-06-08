@@ -12,7 +12,6 @@ from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import UnicodeUsernameValidator
 from django.db import models, transaction
 from django.utils import timezone
-from django_sqids import SqidsField
 from rebac import (
     RelationshipTuple,
     app_settings,
@@ -27,7 +26,7 @@ from rebac.models import active_relationship_model
 from rebac.permissions_mixin import RebacPermissionsMixin
 from rebac.roles import grant, revoke
 
-from angee.base.fields import EncryptedField, StateField
+from angee.base.fields import EncryptedField, SqidField, StateField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.iam.credentials import CredentialKind, handler_for
@@ -196,7 +195,7 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
 
     username_validator = UnicodeUsernameValidator()
 
-    sqid = SqidsField(real_field_name="id", prefix="usr", min_length=8)
+    sqid = SqidField(real_field_name="id", prefix="usr", min_length=8)
     username = models.CharField(
         max_length=150,
         unique=True,
@@ -260,7 +259,7 @@ class Vendor(SqidMixin, AuditMixin, AngeeModel):
 
     runtime = True
 
-    sqid = SqidsField(real_field_name="id", prefix="vnd", min_length=8)
+    sqid = SqidField(real_field_name="id", prefix="vnd", min_length=8)
     slug = models.SlugField(unique=True)
     display_name = models.CharField(max_length=128)
     website_url = models.URLField(blank=True)
@@ -410,7 +409,7 @@ class ExternalAccount(SqidMixin, AuditMixin, AngeeModel):
 
     runtime = True
 
-    sqid = SqidsField(real_field_name="id", prefix="eac", min_length=8)
+    sqid = SqidField(real_field_name="id", prefix="eac", min_length=8)
     vendor = models.ForeignKey(
         "iam.Vendor",
         on_delete=models.PROTECT,
@@ -650,7 +649,7 @@ class OAuthClient(SqidMixin, AuditMixin, AngeeModel):
 
     runtime = True
 
-    sqid = SqidsField(real_field_name="id", prefix="clt", min_length=8)
+    sqid = SqidField(real_field_name="id", prefix="clt", min_length=8)
     vendor = models.ForeignKey(
         "iam.Vendor",
         on_delete=models.PROTECT,
@@ -905,7 +904,7 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
 
     runtime = True
 
-    sqid = SqidsField(real_field_name="id", prefix="crd", min_length=8)
+    sqid = SqidField(real_field_name="id", prefix="crd", min_length=8)
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,

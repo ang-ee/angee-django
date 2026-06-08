@@ -4,26 +4,24 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Iterator
-from types import ModuleType, SimpleNamespace
-from typing import Any, cast
+from typing import Any
 
 import pytest
-from django.apps import AppConfig
 from django.contrib.auth import BACKEND_SESSION_KEY, SESSION_KEY, get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.management import call_command
 from django.db import connection
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext, override_settings
-from rebac import actor_context, app_settings, system_context
+from rebac import app_settings, system_context
 from rebac.roles import grant
 
-from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.iam import identity
 from angee.iam.credentials import CredentialKind
 from angee.iam.oidc.errors import OidcFlowError
-from tests.conftest import Credential, ExternalAccount, OAuthClient, Vendor
+from tests.conftest import Credential, ExternalAccount, OAuthClient, Vendor, addon_schema, execute_schema
 from tests.conftest import _create_missing_tables as _create_connection_tables
+from tests.conftest import result_data as _data
 
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
@@ -821,12 +819,7 @@ def iam_connection_tables(transactional_db: Any) -> Iterator[None]:
 def _schema(name: str) -> Any:
     """Build one IAM-only GraphQL schema bucket."""
 
-    entry = iam_schema.schemas[name]
-    parts = {
-        key: tuple(entry.get(key, ()))
-        for key in SCHEMA_PART_KEYS
-    }
-    return GraphQLSchemas([_Addon({name: parts})]).build(name)
+    return addon_schema(iam_schema.schemas, name)
 
 
 def _execute(
@@ -837,24 +830,14 @@ def _execute(
     user: Any | None = None,
     request: Any | None = None,
 ) -> Any:
-    """Execute a GraphQL operation with a request-shaped context."""
+    """Execute a GraphQL operation with a session-bearing request context."""
 
-    request = request or _request(user or AnonymousUser())
-    actor = getattr(request, "user", AnonymousUser())
-    with actor_context(actor):
-        return schema.execute_sync(
-            query,
-            variable_values=variables or {},
-            context_value=SimpleNamespace(request=request),
-        )
-
-
-def _data(result: Any) -> dict[str, Any]:
-    """Return result data after asserting the operation succeeded."""
-
-    assert result.errors is None
-    assert result.data is not None
-    return cast(dict[str, Any], result.data)
+    return execute_schema(
+        schema,
+        query,
+        variables,
+        request=request or _request(user or AnonymousUser()),
+    )
 
 
 def _sdl_block(sdl: str, header: str) -> str:
@@ -922,13 +905,3 @@ class _Session(dict[str, Any]):
 
         self.clear()
         self.modified = True
-
-
-class _Addon(AppConfig):
-    """Small addon stand-in exposing raw schema declarations."""
-
-    def __init__(self, schemas: dict[str, dict[str, tuple[object, ...]]]) -> None:
-        module = ModuleType("tests.iam_graphql_addon")
-        module.__file__ = __file__
-        super().__init__("tests.iam_graphql_addon", module)
-        self.schemas = schemas
