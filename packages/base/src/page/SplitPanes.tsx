@@ -73,14 +73,32 @@ export type SplitPaneProps = Omit<ResizablePanelProps, "className"> & {
   className?: string;
 };
 
+// react-resizable-panels v4 reads a bare number as *pixels* and an
+// unsuffixed string as a *percentage*. The framework convention is the
+// pre-v4 one — a bare number is a percentage — so normalise numbers to
+// percent strings here; pass an explicit `"…px"` string for pixel sizing
+// (as `Chatter` does). One place owns the unit so every consumer is spared it.
+function asPercent(
+  size: number | string | undefined,
+): number | string | undefined {
+  return typeof size === "number" ? `${size}` : size;
+}
+
 export const SplitPane = React.forwardRef<HTMLDivElement, SplitPaneProps>(
-  function SplitPane({ className, ...props }, ref) {
+  function SplitPane(
+    { className, defaultSize, minSize, maxSize, collapsedSize, ...props },
+    ref,
+  ) {
     const styles = splitPanesVariants();
 
     return (
       <ResizablePanel
         elementRef={ref}
         className={styles.pane({ className })}
+        defaultSize={asPercent(defaultSize)}
+        minSize={asPercent(minSize)}
+        maxSize={asPercent(maxSize)}
+        collapsedSize={asPercent(collapsedSize)}
         {...props}
       />
     );
