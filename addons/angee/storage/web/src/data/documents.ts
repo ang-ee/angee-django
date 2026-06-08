@@ -54,8 +54,19 @@ export interface StorageFile {
   mimeType: StorageMimeType | null;
 }
 
+/** A storage backend — admin infrastructure a drive is created against. */
+export interface StorageBackend {
+  id: string;
+  slug: string;
+  label: string;
+}
+
 export interface StorageDrivesData {
   drives: { results: StorageDrive[] };
+}
+
+export interface StorageBackendsData {
+  backends: { results: StorageBackend[] };
 }
 
 export interface StorageFoldersData {
@@ -75,6 +86,21 @@ export const STORAGE_DRIVES_QUERY = `
         name
         description
         isArchived
+      }
+    }
+  }
+`;
+
+// Admin-only: the backend catalogue, for the inline drive-create form's backend
+// picker. Non-admins get a denied result and an empty list (drive create is
+// storage-admin-gated server-side anyway).
+export const STORAGE_BACKENDS_QUERY = `
+  query StorageBackends($pagination: OffsetPaginationInput) {
+    backends(pagination: $pagination) {
+      results {
+        id
+        slug
+        label
       }
     }
   }

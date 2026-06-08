@@ -5,18 +5,21 @@ import {
   Explorer,
   LoadingPanel,
   PreviewPane,
+  RelationPicker,
   RowsListView,
-  Select,
   TreeView,
+  type FieldDescriptor,
   type PreviewFile,
 } from "@angee/base";
 import { useAuthoredQuery } from "@angee/sdk";
 
 import {
+  STORAGE_BACKENDS_QUERY,
   STORAGE_DRIVES_QUERY,
   STORAGE_FILES_QUERY,
   STORAGE_FOLDERS_QUERY,
   type OffsetPaginationVariables,
+  type StorageBackendsData,
   type StorageDrivesData,
   type StorageFile,
   type StorageFilesData,
@@ -58,10 +61,16 @@ export function StoragePage(): ReactElement {
     STORAGE_FILES_QUERY,
     variables,
   );
+  // Admin-only catalogue for the inline drive-create form's backend picker.
+  const backendsQuery = useAuthoredQuery<StorageBackendsData, OffsetPaginationVariables>(
+    STORAGE_BACKENDS_QUERY,
+    variables,
+  );
 
   const drives = drivesQuery.data?.drives.results ?? [];
   const folders = foldersQuery.data?.folders.results ?? [];
   const files = filesQuery.data?.files.results ?? [];
+  const backends = backendsQuery.data?.backends.results ?? [];
 
   const [pinnedDriveId, setPinnedDriveId] = useState<string | null>(null);
   const [scope, setScope] = useState<string>(ALL_SCOPE);
@@ -73,6 +82,29 @@ export function StoragePage(): ReactElement {
   const driveOptions = useMemo(
     () => drives.map((drive) => ({ value: drive.id, label: drive.name || drive.slug })),
     [drives],
+  );
+  // The inline drive-create form. `name` is the record title (prefilled with the
+  // typed query); `backend` is the required FK, picked from the catalogue above.
+  const driveCreateFields = useMemo<readonly FieldDescriptor[]>(
+    () => [
+      { name: "name", label: "Name" },
+      { name: "slug", label: "Slug", placeholder: "assets" },
+      {
+        // A bare-ID FK (DriveType.backend is `ID`, not an object), so this is a
+        // plain `select` — `many2one` would make the form select `backend.id`,
+        // which the scalar field has no subfield for.
+        name: "backend",
+        label: "Backend",
+        widget: "select",
+        options: backends.map((backend) => ({
+          value: backend.id,
+          label: backend.label || backend.slug,
+        })),
+      },
+      { name: "prefix", label: "Prefix", placeholder: "optional key prefix" },
+      { name: "description", label: "Description", widget: "textarea" },
+    ],
+    [backends],
   );
   const treeRows = useMemo(
     () => folderTreeRows(folders, driveId),
@@ -116,16 +148,24 @@ export function StoragePage(): ReactElement {
 
   const navigator = (
     <div className="flex h-full flex-col gap-2 p-2">
-      <Select
+      <RelationPicker
         aria-label="Drive"
         value={driveId}
         options={driveOptions}
         placeholder="Select a drive"
-        onValueChange={(value) => {
+        searchPlaceholder="Search drives…"
+        onChange={(value) => {
           setPinnedDriveId(value);
           setScope(ALL_SCOPE);
           setSelectedFileId(null);
         }}
+        create={{
+          model: "Drive",
+          fields: driveCreateFields,
+          prefillField: "name",
+          title: "New drive",
+        }}
+        onCreated={() => drivesQuery.refetch()}
       />
       <TreeView<StorageTreeRow>
         rows={treeRows}
