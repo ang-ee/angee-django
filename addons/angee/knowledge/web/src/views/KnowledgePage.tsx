@@ -27,7 +27,7 @@ import {
 } from "../data/documents";
 import { pageTreeRows, type KnowledgeTreeRow } from "../data/page-rows";
 import { BacklinksPanel } from "./BacklinksPanel";
-import { PageReader } from "./PageReader";
+import { PageEditor } from "./PageEditor";
 
 /** The Django model label backing the page crumb. */
 const PAGE_MODEL = "knowledge.Page";
@@ -88,6 +88,10 @@ export function KnowledgePage(): ReactElement {
     { enabled: openPageId !== null },
   );
   const detail = detailQuery.data?.page ?? null;
+  // A page write retitles its tree node; refetch the navigator set.
+  const handleSaved = useCallback(() => {
+    void pagesQuery.refetch();
+  }, [pagesQuery]);
 
   const [pinnedVaultId, setPinnedVaultId] = useState<string | null>(null);
   const vaultId = pinnedVaultId ?? vaults[0]?.id ?? "";
@@ -150,7 +154,19 @@ export function KnowledgePage(): ReactElement {
       aside={<BacklinksPanel backlinks={detail?.backlinks ?? []} onOpen={openPage} />}
     >
       {openPageId ? (
-        <PageReader detail={detail} fetching={detailQuery.fetching} />
+        detail ? (
+          <PageEditor key={openPageId} detail={detail} onSaved={handleSaved} />
+        ) : detailQuery.fetching ? (
+          <LoadingPanel message="Loading page" />
+        ) : (
+          <div className="grid h-full place-content-center p-8">
+            <EmptyState
+              icon="note"
+              title="Page not found"
+              description="This page is no longer available."
+            />
+          </div>
+        )
       ) : (
         <div className="grid h-full place-content-center p-8">
           <EmptyState

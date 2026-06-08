@@ -41,9 +41,50 @@ export interface Backlink {
 
 /** The open page's full record — its markdown body and backlinks. */
 export interface KnowledgePageDetail extends KnowledgePage {
-  markdown: { body: string; wordCount: number } | null;
+  markdown: { body: string; bodyHash: string; wordCount: number } | null;
   backlinks: readonly Backlink[];
 }
+
+export type UpdatePageVariables = { data: { id: string; title?: string } };
+export interface UpdatePageData {
+  updatePage: { id: string; title: string };
+}
+
+export type UpdatePageBodyVariables = {
+  page: string;
+  body: string;
+  expectedHash?: string | null;
+};
+export interface UpdatePageBodyData {
+  updatePageBody: {
+    ok: boolean;
+    errorCode: string | null;
+    markdown: { body: string; bodyHash: string; wordCount: number } | null;
+  };
+}
+
+export const UPDATE_PAGE_MUTATION = `
+  mutation KnowledgeUpdatePage($data: PagePatch!) {
+    updatePage(data: $data) {
+      id
+      title
+    }
+  }
+`;
+
+export const UPDATE_PAGE_BODY_MUTATION = `
+  mutation KnowledgeUpdatePageBody($page: ID!, $body: String!, $expectedHash: String) {
+    updatePageBody(page: $page, body: $body, expectedHash: $expectedHash) {
+      ok
+      errorCode
+      markdown {
+        body
+        bodyHash
+        wordCount
+      }
+    }
+  }
+`;
 
 export interface KnowledgeVaultsData {
   vaults: { results: KnowledgeVault[] };
@@ -101,6 +142,7 @@ export const KNOWLEDGE_PAGE_QUERY = `
       createdByLabel
       markdown {
         body
+        bodyHash
         wordCount
       }
       backlinks {
