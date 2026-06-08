@@ -8,6 +8,7 @@ import {
 import notes from "@angee-example/notes-web";
 import iam from "@angee/iam";
 import operator from "@angee/operator";
+import storage from "@angee/storage";
 
 import publicSDL from "../../runtime/schemas/public.graphql?raw";
 import consoleSDL from "../../runtime/schemas/console.graphql?raw";
@@ -27,7 +28,7 @@ const authAddon: BaseAddon = {
 };
 
 createApp({
-  addons: [notes, authAddon, iam, operator],
+  addons: [notes, authAddon, iam, operator, storage],
   shells: {
     console: { chrome: ConsoleShell },
     // Chrome defaults to PassthroughChrome and a public-keyed shell is

@@ -15,6 +15,7 @@
     "@angee/sdk": "workspace:*",
     "@angee-example/notes-web": "workspace:*",
     "@angee/operator": "workspace:*",
+    "@angee/storage": "workspace:*",
     "@tanstack/react-router": "^1.170.8",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
