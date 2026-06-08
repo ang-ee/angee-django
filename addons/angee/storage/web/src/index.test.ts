@@ -6,11 +6,20 @@ import storage from "./index";
 describe("storage addon manifest", () => {
   test("registers the files route on the console shell with a component", () => {
     const routes = storage.routes ?? [];
-    expect(routes).toHaveLength(2);
+    expect(routes).toHaveLength(3);
     expect(routes[0]?.name).toBe("storage.files");
     expect(routes[0]?.path).toBe("/storage");
     expect(routes[0]?.shell).toBe("console");
     expect(routes[0]?.component).toBeTypeOf("function");
+  });
+
+  test("registers the settings admin route as a static sibling", () => {
+    const settings = (storage.routes ?? []).find(
+      (route) => route.name === "storage.settings",
+    );
+    expect(settings?.path).toBe("/storage/settings");
+    expect(settings?.parent).toBeUndefined();
+    expect(settings?.component).toBeTypeOf("function");
   });
 
   test("nests the file record route under the list with a crumb", () => {
@@ -23,12 +32,16 @@ describe("storage addon manifest", () => {
     expect(record?.crumb).toBeTypeOf("function");
   });
 
-  test("exposes a single Files menu targeting the files route", () => {
+  test("exposes a Files menu with a Settings child", () => {
     expect(storage.menus).toHaveLength(1);
     const menu = storage.menus?.[0] as BaseMenuItem | undefined;
     expect(menu?.id).toBe("storage");
     expect(menu?.route).toBe("storage.files");
     expect(menu?.group).toBe("platform");
+    expect(menu?.children?.map((child) => child.route)).toEqual([
+      "storage.files",
+      "storage.settings",
+    ]);
   });
 
   test("registers its drive/folder glyphs", () => {

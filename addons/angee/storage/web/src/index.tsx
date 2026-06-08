@@ -10,6 +10,7 @@ import {
 
 import { StoragePage } from "./views/StoragePage";
 import { FileCrumb } from "./views/FileDetail";
+import { StorageSettingsPage } from "./views/StorageSettingsPage";
 
 const STORAGE_ID = "storage";
 
@@ -33,6 +34,15 @@ const storageRoutes: readonly BaseAddonRoute[] = [
       <FileCrumb id={String((match.params as { id?: string }).id ?? "")} />
     ),
   },
+  {
+    // The drives/backends admin. A static `/storage/settings` outranks the
+    // `/storage/$id` file route, so it is a sibling, not a file id. Its chrome
+    // resolves from the menu child that references it.
+    name: "storage.settings",
+    path: "/storage/settings",
+    shell: "console",
+    component: StorageSettingsPage,
+  },
 ];
 
 const storageMenu: readonly BaseMenuItem[] = [
@@ -42,6 +52,15 @@ const storageMenu: readonly BaseMenuItem[] = [
     icon: "files",
     group: "platform",
     route: "storage.files",
+    children: [
+      { id: "storage.files", label: "Files", icon: "files", route: "storage.files" },
+      {
+        id: "storage.settings",
+        label: "Settings",
+        icon: "drive",
+        route: "storage.settings",
+      },
+    ],
   },
 ];
 
