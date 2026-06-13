@@ -50,7 +50,7 @@ class BackendType(AngeeNode):
 
     slug: auto
     label: auto
-    backend_class: auto
+    backend_class: str
     backend_config: JSON
     is_default: auto
     is_archived: auto
@@ -218,7 +218,7 @@ class BackendFilter:
 
     slug: auto
     label: auto
-    backend_class: auto
+    backend_class: str
     is_default: auto
     is_archived: auto
 

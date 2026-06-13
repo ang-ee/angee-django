@@ -9,8 +9,9 @@ is the follow-up that adds a ``presigned_put`` hook and the ``"presigned"``
 method arm beside it.
 
 Backend rows (``storage.Backend``) name a subclass of :class:`StorageBackend`
-by dotted path and carry its constructor config; resolution and caching live
-on the model that owns the row. This module stays ORM-free.
+by a key in ``ANGEE_STORAGE_BACKEND_CLASSES`` and carry its constructor config;
+resolution and caching live on the model that owns the row. This module stays
+ORM-free.
 """
 
 from __future__ import annotations

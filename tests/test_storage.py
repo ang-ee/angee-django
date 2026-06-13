@@ -73,7 +73,7 @@ def drive(tmp_path: Path, storage_tables: None) -> Any:
         backend = Backend._base_manager.create(
             slug="local",
             label="Local",
-            backend_class="angee.storage.backends.LocalBackend",
+            backend_class="local",
             backend_config={"root": str(tmp_path), "base_url": "/media/"},
         )
         MimeType._base_manager.create(mime_type="image/png", category="image", label="PNG image")

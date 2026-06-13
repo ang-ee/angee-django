@@ -158,10 +158,32 @@ Rules that follow from the layering:
   represented by a Django FK or one-to-one field. See the REBAC section below for
   this project's fail-closed posture and its traps.
 - For a vendor-backed capability, keep catalogue models pure metadata, put the
-  provider implementation choice on the connection as a dotted-path `impl_class`
-  string (never on the catalogue), give each host its own addon, name things in
-  the domain's own terms, and keep side-effecting work on the operator — Django
-  stays the catalogue.
+  provider implementation choice on the connection as an `ImplClassField` (see
+  the next rule; never on the catalogue), give each host its own addon, name
+  things in the domain's own terms, and keep side-effecting work on the operator
+  — Django stays the catalogue.
+- **Choosing how a row selects per-variant behaviour.** Classify by what varies:
+  - *Persisted fields differ per variant* → **subclass the model**; discover the
+    concrete subclasses through the app registry (e.g. `integrate.Capability`/
+    `Bridge`/`Source` + `integrate/registry.py`). Data and behaviour on the model.
+  - *Only behaviour differs, open set (addons contribute impls)* → **one concrete
+    model + `angee.base.fields.ImplClassField`** naming a non-model
+    strategy/client/backend class. One table (unified list/reconcile, no field
+    duplication); the impl is an **explicit per-row** choice, **never** derived
+    from a vendor slug (a vendor can have several impls/accounts).
+  - *Only behaviour differs, closed framework-known set* → a `StateField` + an
+    eager **handler registry** (`iam.credentials.register_handler`/`handler_for`).
+    The row stores the enum value; the kind projects as a GraphQL enum.
+- **A row-selected impl is stored as a registry key, never a dotted path.**
+  `ImplClassField(base_class=…, registry_setting=…)` stores a short key and
+  resolves it against a Django setting mapping keys to dotted import paths; an
+  addon contributes its impl into that setting through `autoconfig` (a yamlconf
+  dotted key, `"ANGEE_…_CLASSES.<key>": "<dotted.path>"`). So a writable column
+  never feeds `import_string` (the path comes from composed, trusted settings,
+  like an addon's `schemas` reference), the available impls are a composition
+  fact rather than a base-model import, a project can remap a key to its own
+  class, and `manage.py check` validates every configured path imports and
+  subclasses `base_class`.
 - Cross-addon dependencies are one-way (e.g. `integrate → iam`, never the
   reverse); reject a bridge/diamond addon that would couple both ways.
 - GraphQL authoring is native Strawberry. Addons expose a `schemas` mapping in
@@ -243,6 +265,12 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 - **After adding or moving an addon** run `pnpm install`, and delete any stale
   gitignored `runtime/*/migrations/*.py` that imports a moved module before
   `makemigrations`.
+- **An `ImplClassField` resolves a key through a *setting*, not row text** — the
+  key→path mapping lives in the `registry_setting` (e.g.
+  `ANGEE_STORAGE_BACKEND_CLASSES`), supplied by the owning addon's `autoconfig`.
+  A bare settings module that skips the composer (like `tests/settings.py`) must
+  declare the mapping itself or resolution raises "no impl for key". The column
+  stores the key (`local`), never the old dotted path.
 
 ## Framework Contracts
 

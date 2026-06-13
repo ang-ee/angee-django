@@ -34,7 +34,6 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core import signing
 from django.core.exceptions import (
-    ImproperlyConfigured,
     SuspiciousFileOperation,
     ValidationError,
 )
@@ -43,7 +42,6 @@ from django.db import IntegrityError, models, transaction
 from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.module_loading import import_string
 from django.utils.text import get_valid_filename
 from rebac import (
     PermissionDenied,
@@ -54,7 +52,7 @@ from rebac import (
 from rebac.backends import backend as rebac_backend
 from rebac.managers import RebacManager
 
-from angee.base.fields import SqidField, StateField
+from angee.base.fields import ImplClassField, SqidField, StateField
 from angee.base.mixins import AuditMixin, SqidMixin, actor_user_id
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
 from angee.storage import exceptions
@@ -98,9 +96,10 @@ class UploadState(models.TextChoices):
 class Backend(SqidMixin, AuditMixin, AngeeModel):
     """Credentialed storage backend instance.
 
-    One row names a :class:`~angee.storage.backends.StorageBackend` subclass
-    by dotted path and carries its constructor config. Many drives can share
-    one backend; credentials are written once, here, never on the drive.
+    One row names a :class:`~angee.storage.backends.StorageBackend` subclass by
+    a key in ``ANGEE_STORAGE_BACKEND_CLASSES`` and carries its constructor
+    config. Many drives can share one backend; credentials are written once,
+    here, never on the drive.
     """
 
     runtime = True
@@ -108,7 +107,7 @@ class Backend(SqidMixin, AuditMixin, AngeeModel):
     sqid = SqidField(real_field_name="id", prefix="bkd", min_length=8)
     slug = models.SlugField(unique=True)
     label = models.CharField(max_length=200)
-    backend_class = models.CharField(max_length=200)
+    backend_class = ImplClassField(base_class=StorageBackend, registry_setting="ANGEE_STORAGE_BACKEND_CLASSES")
     backend_config = models.JSONField(default=dict, blank=True)
     is_default = models.BooleanField(default=False)
     is_archived = models.BooleanField(default=False, db_index=True)
@@ -159,10 +158,8 @@ class Backend(SqidMixin, AuditMixin, AngeeModel):
         cached = self._storage_cache.get(key)
         if cached is not None:
             return cached
-        backend_class = import_string(self.backend_class)
-        if not (isinstance(backend_class, type) and issubclass(backend_class, StorageBackend)):
-            raise ImproperlyConfigured(f"{self.backend_class} is not an angee.storage.backends.StorageBackend")
-        instance = backend_class(backend_config=self.resolved_config())
+        field = cast(ImplClassField, type(self)._meta.get_field("backend_class"))
+        instance = cast(StorageBackend, field.resolve_class(self.backend_class)(backend_config=self.resolved_config()))
         self._storage_cache[key] = instance
         return instance
 

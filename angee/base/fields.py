@@ -8,14 +8,17 @@ library owns the behavior.
 from __future__ import annotations
 
 import base64
+from collections.abc import Mapping
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from django.conf import settings
-from django.core.exceptions import FieldError, ImproperlyConfigured
+from django.core import checks
+from django.core.exceptions import FieldError, ImproperlyConfigured, ValidationError
 from django.db import models
+from django.utils.module_loading import import_string
 from django_choices_field import TextChoicesField
 from django_sqids import SqidsField
 
@@ -157,3 +160,127 @@ class EncryptedField(models.TextField):
         if self._angee_fernet_label is None:
             raise ImproperlyConfigured("EncryptedField must be bound to a model before use.")
         return _derive_fernet(self._angee_fernet_label)
+
+
+class ImplClassField(models.CharField):
+    """A column naming a non-model implementation class by a short key.
+
+    The open-set tool from ``docs/backend/guidelines.md``: one concrete model
+    whose row selects a strategy/client/backend class that differs only in
+    behaviour (e.g. a ``storage.Backend`` row → a ``StorageBackend`` subclass).
+    The row stores a short key; ``registry_setting`` names the Django setting
+    that maps keys to dotted import paths
+    (``{"local": "angee.storage.backends.LocalBackend"}``). Addons contribute
+    their impls into that setting through ``autoconfig`` — the framework's
+    composition seam — so the available impls are a composition fact, not a
+    base-model import. The field resolves the row's key against that mapping and
+    ``import_string``s the **composed, trusted** path (never row text), checking
+    it is a ``base_class`` subclass; this is the shape Angee already uses to
+    resolve an addon's declared ``schemas`` reference. Parameterized like
+    ``StateField(choices_enum=...)``: ``ImplClassField(base_class=StorageBackend,
+    registry_setting="ANGEE_STORAGE_BACKEND_CLASSES")``. Resolution returns the
+    class; the owning model instantiates it, because the constructor contract —
+    what the impl receives — belongs with the row's config and identity.
+    """
+
+    def __init__(self, *, base_class: type | None = None, registry_setting: str = "", **kwargs: Any) -> None:
+        """Bind the implementation base and the setting mapping keys to dotted paths."""
+
+        if base_class is not None and not isinstance(base_class, type):
+            raise ImproperlyConfigured("ImplClassField base_class must be a type.")
+        self.base_class = base_class
+        self.registry_setting = registry_setting
+        kwargs.setdefault("max_length", 100)
+        super().__init__(**kwargs)
+
+    def check(self, **kwargs: Any) -> list[checks.CheckMessage]:
+        """Validate the declaration and every configured impl path.
+
+        ``base_class``/``registry_setting`` are not database facts, so they do
+        not ride through ``deconstruct``; migration-state copies carry the
+        defaults while the live model field (kept through ``deepcopy``
+        inheritance) is the one ``check`` runs against. Every dotted path in the
+        configured mapping is imported and checked against ``base_class`` here,
+        so a typo or a non-subclass fails ``manage.py check`` rather than a later
+        row resolution.
+        """
+
+        errors = super().check(**kwargs)
+        if not isinstance(self.base_class, type):
+            errors.append(
+                checks.Error(
+                    "ImplClassField requires a base_class type.",
+                    hint="Pass base_class=… naming the implementation base.",
+                    obj=self,
+                    id="angee.E001",
+                )
+            )
+        if not self.registry_setting:
+            errors.append(
+                checks.Error(
+                    "ImplClassField requires registry_setting naming the key→path mapping.",
+                    obj=self,
+                    id="angee.E002",
+                )
+            )
+        elif isinstance(self.base_class, type):
+            for key, dotted in self._registry().items():
+                try:
+                    impl = import_string(dotted)
+                except ImportError as error:
+                    errors.append(
+                        checks.Error(
+                            f"settings.{self.registry_setting}[{key!r}] = {dotted!r} does not import: {error}",
+                            obj=self,
+                            id="angee.E003",
+                        )
+                    )
+                    continue
+                if not (isinstance(impl, type) and issubclass(impl, self.base_class)):
+                    errors.append(
+                        checks.Error(
+                            f"settings.{self.registry_setting}[{key!r}] = {dotted!r} "
+                            f"is not a {self.base_class.__name__} subclass.",
+                            obj=self,
+                            id="angee.E004",
+                        )
+                    )
+        return errors
+
+    def validate(self, value: Any, model_instance: Any) -> None:
+        """Reject a stored key that resolves to no configured impl."""
+
+        super().validate(value, model_instance)
+        if not value:
+            return
+        try:
+            self.resolve_class(value)
+        except ImproperlyConfigured as error:
+            raise ValidationError(str(error), code="invalid_impl") from error
+
+    def resolve_class(self, key: str) -> type:
+        """Return the impl class the configured mapping binds to ``key``."""
+
+        registry = self._registry()
+        try:
+            dotted = registry[key]
+        except KeyError as error:
+            known = ", ".join(sorted(registry)) or "none configured"
+            raise ImproperlyConfigured(
+                f"No impl for key {key!r} in settings.{self.registry_setting} (known: {known})."
+            ) from error
+        impl = import_string(dotted)
+        if not (isinstance(self.base_class, type) and isinstance(impl, type) and issubclass(impl, self.base_class)):
+            base_name = getattr(self.base_class, "__name__", self.base_class)
+            raise ImproperlyConfigured(
+                f"settings.{self.registry_setting}[{key!r}] = {dotted!r} is not a {base_name}."
+            )
+        return impl
+
+    def _registry(self) -> dict[str, str]:
+        """Return the configured ``key → dotted path`` mapping for this field."""
+
+        mapping = getattr(settings, self.registry_setting, {}) if self.registry_setting else {}
+        if not isinstance(mapping, Mapping):
+            raise ImproperlyConfigured(f"settings.{self.registry_setting} must be a mapping of key to dotted path.")
+        return {str(key): str(value) for key, value in mapping.items()}
