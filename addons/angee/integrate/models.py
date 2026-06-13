@@ -2,9 +2,12 @@
 
 This addon owns the integration layer: the third-party ``Vendor`` catalogue, the
 first-class ``Integration`` an integration runs over, the abstract
-``Capability``/``Bridge`` runtime, and outbound ``WebhookSubscription``. It draws
-a ``Credential`` (and optionally an ``ExternalAccount``) from ``iam`` to
-authenticate; it never owns identity.
+``Capability``/``Bridge`` runtime, the host-agnostic VCS inventory
+(``VCSIntegration`` + ``Repository``/``Source``/``Template``), and outbound
+``WebhookSubscription``. It draws a ``Credential`` (and optionally an
+``ExternalAccount``) from ``iam`` to authenticate; it never owns identity.
+Host-specific VCS clients live in their own addons (``integrate_github``) and are
+named per ``VCSIntegration`` row by ``client_class``; this addon never imports them.
 """
 
 from __future__ import annotations
@@ -14,8 +17,9 @@ import logging
 import secrets
 from collections.abc import Iterable
 from datetime import datetime, timedelta
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
+from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
@@ -23,12 +27,17 @@ from django.utils import timezone
 from rebac import system_context
 from rebac.managers import RebacManager
 
-from angee.base.fields import EncryptedField, SqidField, StateField
+from angee.base.fields import EncryptedField, ImplClassField, SqidField, StateField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.integrate.events import EventKind
 from angee.integrate.net import validate_public_url
+from angee.integrate.vcs.client import VCSClient
+from angee.integrate.vcs.templates import parse_template_meta
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -234,7 +243,16 @@ class Capability(SqidMixin, AuditMixin, AngeeModel):
     stays out of runtime emission by leaving ``runtime`` unset.
     """
 
-    integration = models.ForeignKey("integrate.Integration", on_delete=models.PROTECT, related_name="capabilities")
+    # ``%(app_label)s_%(class)s``: every concrete Capability/Bridge subclass gets a
+    # distinct reverse accessor on ``Integration`` (a literal ``capabilities`` would
+    # collide once a second concrete subclass loads — e.g. ``VCSIntegration`` beside
+    # the scheduler test bridge). The accessor has no readers; the scheduler
+    # discovers bridges via ``registry.bridge_models()``.
+    integration = models.ForeignKey(
+        "integrate.Integration",
+        on_delete=models.PROTECT,
+        related_name="%(app_label)s_%(class)s",
+    )
     config = models.JSONField(default=dict)
     status = StateField(choices_enum=CapabilityStatus, default=CapabilityStatus.ACTIVE)
     last_used_at = models.DateTimeField(null=True, blank=True)
@@ -253,8 +271,9 @@ class Capability(SqidMixin, AuditMixin, AngeeModel):
         """Record local status telemetry and push this capability's integration contribution.
 
         The caller owns persistence for this capability row. ``Integration`` owns
-        its rollup write and tracks each capability by the reporting capability
-        primary key.
+        its rollup write and tracks each capability by a model-qualified key, so
+        concrete capability/bridge subclasses sharing one integration (their PK
+        sequences are independent) never collide in the rollup.
         """
 
         reported_at = timezone.now()
@@ -264,7 +283,13 @@ class Capability(SqidMixin, AuditMixin, AngeeModel):
         self.last_error = error
         self.last_error_at = reported_at if error else None
 
-        self.integration.note_capability_status(capability_key=str(self.pk), status=status, error=error)
+        self.integration.note_capability_status(capability_key=self._capability_key, status=status, error=error)
+
+    @property
+    def _capability_key(self) -> str:
+        """Return this capability's rollup key, qualified by concrete model label."""
+
+        return f"{self._meta.label_lower}:{self.pk}"
 
 
 class Bridge(Capability):
@@ -379,6 +404,350 @@ class Bridge(Capability):
         """Return the next polling timestamp from this bridge's interval."""
 
         return now + timedelta(seconds=int(self.poll_interval))
+
+
+class RepoVisibility(models.TextChoices):
+    """Visibility of a git remote on its host."""
+
+    PUBLIC = "public", "Public"
+    PRIVATE = "private", "Private"
+    INTERNAL = "internal", "Internal"
+
+
+class VCSIntegration(Bridge):
+    """The VCS capability over an ``Integration`` — one table for every git host.
+
+    A :class:`Bridge`: the scheduler refreshes its repositories' sources over the
+    host REST API and an inbound push webhook triggers the same refresh. The
+    host-specific wire format is a non-model :class:`~angee.integrate.vcs.client.
+    VCSClient` named per row by ``client_class`` (e.g. a GitHub client) — so
+    github/gitlab/bitbucket share this one table, differing only in behaviour.
+    Django keeps the inventory only; the operator performs every git operation,
+    consuming :meth:`Source.materialize_spec`.
+    """
+
+    runtime = True
+
+    sqid = SqidField(real_field_name="id", prefix="vcs", min_length=8)
+    client_class = ImplClassField(
+        base_class=VCSClient,
+        registry_setting="ANGEE_VCS_CLIENT_CLASSES",
+        default="none",
+    )
+    """The host client this integration resolves to — an explicit per-row key into
+    ``ANGEE_VCS_CLIENT_CLASSES`` (never derived from the vendor: one vendor can have
+    several accounts/clients). Defaults to the ``none`` null-object client."""
+    webhook_secret = EncryptedField(blank=True)
+    """Shared secret for verifying inbound push webhooks (per account, not per repo)."""
+
+    objects = RebacManager()
+
+    class Meta:
+        """Django model options for the VCS integration capability."""
+
+        abstract = True
+        rebac_resource_type = "integrate/vcs_integration"
+        rebac_id_attr = "sqid"
+
+    def __str__(self) -> str:
+        """Return a stable VCS-integration label."""
+
+        return f"vcs:{self.public_id}"
+
+    @property
+    def client(self) -> VCSClient:
+        """Return the host client bound to this integration's credential/config."""
+
+        field = cast(ImplClassField, type(self)._meta.get_field("client_class"))
+        return cast(VCSClient, field.resolve_class(self.client_class)(self.integration))
+
+    def repositories_by_org(self) -> dict[str, list[Any]]:
+        """Return every visible repository grouped and sorted by owning org."""
+
+        groups: dict[str, list[Any]] = {}
+        for descriptor in self.client.ls_repos():
+            groups.setdefault(descriptor.org, []).append(descriptor)
+        return {org: sorted(repos, key=lambda item: item.name) for org, repos in sorted(groups.items())}
+
+    def discover(self, source: Any, *, marker: str, parse: Callable[[bytes], dict[str, Any]]) -> list[dict[str, Any]]:
+        """Return one descriptor per directory under ``source`` bearing ``marker``.
+
+        The single enumeration walk shared by every source kind: list the source's
+        subtree, read each ``marker`` blob, parse it, record the bearing directory,
+        and return the descriptors in deterministic order. A source kind's output
+        manager supplies only its ``marker`` filename and ``parse`` function.
+        """
+
+        client = self.client
+        repository = source.repository
+        ref = source.ref or repository.default_branch
+        descriptors: list[dict[str, Any]] = []
+        for entry in client.ls_tree(repository, ref=ref, path=source.path, recursive=True):
+            if entry.type != "blob" or entry.name != marker:
+                continue
+            descriptor = dict(parse(client.cat_file(repository, ref=ref, path=entry.path)))
+            descriptor.setdefault("path", _parent_path(entry.path))
+            descriptors.append(descriptor)
+        return sorted(descriptors, key=_descriptor_key)
+
+    def sync(self) -> int:
+        """Refresh every inventoried repository's sources over REST (Bridge contract).
+
+        Repository discovery (creating rows from the account) is the explicit
+        ``discoverRepositories`` action; the scheduled/webhook ``sync`` refreshes the
+        content of already-inventoried repositories.
+        """
+
+        return sum(source.refresh() for repository in self.repositories.all() for source in repository.sources.all())
+
+    def handle_webhook(self, payload: Any) -> None:
+        """Re-sync this integration's inventory on an inbound push webhook."""
+
+        del payload
+        self.sync()
+
+    def verify_webhook(self, request: Any) -> bool:
+        """Return whether an inbound push webhook is authentic for this integration."""
+
+        return self.client.verify_webhook(self, request)
+
+
+class RepositoryManager(RebacManager):
+    """Manager owning the reconcile of repository rows from a host listing."""
+
+    def reconcile(self, vcs_integration: Any, descriptors: Iterable[Any]) -> int:
+        """Upsert one repository row per descriptor and prune rows that vanished."""
+
+        seen: set[Any] = set()
+        descriptor_list = list(descriptors)
+        with system_context(reason="integrate.repository.reconcile"), transaction.atomic():
+            for descriptor in descriptor_list:
+                repository, _created = self.update_or_create(
+                    vcs_integration=vcs_integration,
+                    name=descriptor.name,
+                    defaults={
+                        "org": descriptor.org,
+                        "remote": descriptor.remote,
+                        "ssh_remote": descriptor.ssh_remote,
+                        "remote_id": descriptor.remote_id,
+                        "default_branch": descriptor.default_branch,
+                        "visibility": descriptor.visibility,
+                        "web_url": descriptor.web_url,
+                        "archived": descriptor.archived,
+                    },
+                )
+                seen.add(repository.pk)
+            self.filter(vcs_integration=vcs_integration).exclude(pk__in=seen).delete()
+        return len(descriptor_list)
+
+
+class Repository(SqidMixin, AuditMixin, AngeeModel):
+    """Inventory of one git remote, reached through its ``VCSIntegration``.
+
+    A plain noun: Django records the remote; the operator clones it. ``org`` groups
+    the account's repositories in the browse list.
+    """
+
+    runtime = True
+
+    sqid = SqidField(real_field_name="id", prefix="repo", min_length=8)
+    vcs_integration = models.ForeignKey(
+        "integrate.VCSIntegration",
+        on_delete=models.CASCADE,
+        related_name="repositories",
+    )
+    org = models.CharField(max_length=255, db_index=True)
+    name = models.CharField(max_length=255)
+    """The repository's ``owner/repo`` path on its remote host."""
+    remote = models.CharField(max_length=512)
+    """The HTTPS remote URL the operator clones."""
+    ssh_remote = models.CharField(max_length=255, blank=True)
+    remote_id = models.CharField(max_length=128, blank=True)
+    default_branch = models.CharField(max_length=255, default="main")
+    visibility = StateField(choices_enum=RepoVisibility, default=RepoVisibility.PRIVATE)
+    web_url = models.URLField(blank=True)
+    archived = models.BooleanField(default=False)
+
+    objects = RepositoryManager()
+
+    class Meta:
+        """Django model options for repository inventory."""
+
+        abstract = True
+        ordering = ("org", "name")
+        rebac_resource_type = "integrate/repository"
+        rebac_id_attr = "sqid"
+        constraints = (
+            models.UniqueConstraint(
+                fields=("vcs_integration", "name"),
+                name="uniq_integrate_repository_name",
+            ),
+        )
+
+    def __str__(self) -> str:
+        """Return the repository's host path."""
+
+        return self.name
+
+
+class Source(SqidMixin, AuditMixin, AngeeModel):
+    """A pointer into a ``Repository`` at a ``ref`` and ``path``, with a ``kind``.
+
+    One noun for every source kind. ``kind`` binds the source to an output model
+    (``Template``/``Skill``) whose manager reconciles its rows; :meth:`refresh`
+    dispatches there. The operator materializes a source from
+    :meth:`materialize_spec`.
+    """
+
+    runtime = True
+
+    sqid = SqidField(real_field_name="id", prefix="src", min_length=8)
+    repository = models.ForeignKey("integrate.Repository", on_delete=models.CASCADE, related_name="sources")
+    kind = models.CharField(max_length=64)
+    """The source kind (e.g. ``template``, ``skill``); resolves to an output model."""
+    ref = models.CharField(max_length=255, blank=True)
+    """Branch, tag, or commit oid; blank resolves to the repository's default branch."""
+    path = models.CharField(max_length=1024, blank=True)
+    """Pathspec of the subtree this source points at within the repository."""
+    last_synced_at = models.DateTimeField(null=True, blank=True)
+
+    objects = RebacManager()
+
+    class Meta:
+        """Django model options for source inventory."""
+
+        abstract = True
+        ordering = ("kind", "path")
+        rebac_resource_type = "integrate/source"
+        rebac_id_attr = "sqid"
+
+    def __str__(self) -> str:
+        """Return a kind-qualified source label."""
+
+        return f"{self.kind}:{self.path or '/'}"
+
+    @classmethod
+    def kind_models(cls) -> tuple[type[models.Model], ...]:
+        """Return the output models that declare a ``source_kind`` (e.g. ``Template``).
+
+        ``Source`` owns "what a kind resolves to": an output model binds itself to a
+        kind with a ``source_kind`` class attribute, discovered through the app
+        registry so a new addon adds a kind without ``integrate`` changing.
+        """
+
+        return tuple(model for model in apps.get_models() if getattr(model, "source_kind", ""))
+
+    @classmethod
+    def available_kinds(cls) -> tuple[str, ...]:
+        """Return the source kinds any installed addon contributes an output model for."""
+
+        return tuple(sorted({str(model.source_kind) for model in cls.kind_models()}))
+
+    @classmethod
+    def target_for_kind(cls, kind: str) -> type[models.Model]:
+        """Return the output model bound to one source ``kind`` or raise."""
+
+        for model in cls.kind_models():
+            if model.source_kind == kind:
+                return model
+        known = ", ".join(cls.available_kinds()) or "none registered"
+        raise ValueError(f"No output model for source kind {kind!r} (known: {known}).")
+
+    def refresh(self) -> int:
+        """Re-enumerate over REST into the kind's output rows; return the row count."""
+
+        return int(type(self).target_for_kind(self.kind).objects.sync_from_source(self))
+
+    def materialize_spec(self) -> dict[str, str]:
+        """Return the operator handoff coordinates to clone and check out this source."""
+
+        repository = self.repository
+        return {
+            "remote": str(repository.remote),
+            "ssh_remote": str(repository.ssh_remote),
+            "ref": str(self.ref or repository.default_branch),
+            "path": str(self.path),
+        }
+
+
+class TemplateManager(RebacManager):
+    """Manager owning the reconcile of template rows from a template source."""
+
+    def sync_from_source(self, source: Any) -> int:
+        """Walk the source for ``copier.yml`` and upsert/prune ``Template`` rows."""
+
+        vcs_integration = source.repository.vcs_integration
+        descriptors = vcs_integration.discover(source, marker="copier.yml", parse=parse_template_meta)
+        seen: set[Any] = set()
+        with system_context(reason="integrate.template.sync"), transaction.atomic():
+            for descriptor in descriptors:
+                template, _created = self.update_or_create(
+                    source=source,
+                    path=str(descriptor.get("path", "")),
+                    defaults={
+                        "name": str(descriptor.get("name", "")),
+                        "kind": str(descriptor.get("kind", "")),
+                        "inputs": list(descriptor.get("inputs", [])),
+                    },
+                )
+                seen.add(template.pk)
+            self.filter(source=source).exclude(pk__in=seen).delete()
+            source.last_synced_at = timezone.now()
+            source.save(update_fields=["last_synced_at", "updated_at"])
+        return len(descriptors)
+
+
+class Template(SqidMixin, AuditMixin, AngeeModel):
+    """One Copier template discovered under a ``Source`` (``source_kind="template"``).
+
+    The operator renders these; the kind here is the *template* kind from the
+    manifest's ``_angee.kind`` (stack/workspace/service).
+    """
+
+    runtime = True
+    source_kind = "template"
+    """Binds the ``template`` source kind to this output model (see ``registry``)."""
+
+    sqid = SqidField(real_field_name="id", prefix="tpl", min_length=8)
+    source = models.ForeignKey("integrate.Source", on_delete=models.CASCADE, related_name="templates")
+    name = models.CharField(max_length=255, blank=True)
+    kind = models.CharField(max_length=64, blank=True)
+    """The template kind from ``_angee.kind`` (stack/workspace/service)."""
+    path = models.CharField(max_length=1024, blank=True)
+    inputs = models.JSONField(default=list, blank=True)
+
+    objects = TemplateManager()
+
+    class Meta:
+        """Django model options for discovered templates."""
+
+        abstract = True
+        ordering = ("kind", "name")
+        rebac_resource_type = "integrate/template"
+        rebac_id_attr = "sqid"
+        constraints = (
+            models.UniqueConstraint(
+                fields=("source", "path"),
+                name="uniq_integrate_template_path",
+            ),
+        )
+
+    def __str__(self) -> str:
+        """Return a kind-qualified template label."""
+
+        return f"{self.kind}:{self.name or self.path}"
+
+
+def _parent_path(path: str) -> str:
+    """Return the directory containing ``path`` (empty string at the root)."""
+
+    return path.rsplit("/", 1)[0] if "/" in path else ""
+
+
+def _descriptor_key(descriptor: dict[str, Any]) -> tuple[str, str]:
+    """Return a stable ``(kind, name|path)`` sort key for one discovered descriptor."""
+
+    return (str(descriptor.get("kind", "")), str(descriptor.get("name") or descriptor.get("path", "")))
 
 
 class WebhookSubscriptionManager(RebacManager):

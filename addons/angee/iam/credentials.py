@@ -21,6 +21,7 @@ class CredentialKind(models.TextChoices):
 
     OAUTH = "oauth", "OAuth"
     STATIC_TOKEN = "static_token", "Static Token"
+    SSH_KEY = "ssh_key", "SSH Key"
 
 
 class CredentialKindHandler:
@@ -136,5 +137,34 @@ class StaticTokenCredentialHandler(CredentialKindHandler):
         """Static tokens do not expire through a refresh flow."""
 
 
+class SshKeyCredentialHandler(CredentialKindHandler):
+    """Handler for SSH private-key material used to clone over git+ssh.
+
+    The key is stored encrypted at rest and revealed only for the operator, which
+    owns git transport — Django never opens a git connection, so this kind has no
+    HTTP ``auth_headers``. A connection that authenticates its REST inventory over
+    HTTP needs a token credential instead; an ssh-key credential serves the
+    operator's clone only.
+    """
+
+    kind = "ssh_key"
+
+    def validate(self, material: dict[str, Any]) -> None:
+        """Require the PEM private key used to authenticate git+ssh."""
+
+        if not material.get("private_key"):
+            raise ValueError("SSH key credential material requires private_key.")
+
+    def auth_headers(self, credential: Any) -> dict[str, str]:
+        """Return no HTTP headers: an SSH key authenticates git transport, not REST."""
+
+        del credential
+        return {}
+
+    def refresh(self, credential: Any) -> None:
+        """SSH keys do not expire through a refresh flow."""
+
+
 register_handler(OAuthCredentialHandler())
 register_handler(StaticTokenCredentialHandler())
+register_handler(SshKeyCredentialHandler())

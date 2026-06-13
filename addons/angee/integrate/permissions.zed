@@ -1,7 +1,7 @@
 // Authorization schema for the integrate addon.
 // @rebac_package: integrate
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 4
+// @rebac_schema_revision: 5
 
 definition integrate/vendor {
     relation admin: angee/role // rebac:const=admin
@@ -35,4 +35,45 @@ definition integrate/webhook_subscription {
     permission read = owner + admin->member
     permission write = owner + admin->member
     permission delete = owner + admin->member
+}
+
+definition integrate/vcs_integration {
+    relation integration: integrate/integration // rebac:field=integration
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    // VCS access derives from the parent integration; platform admins reach all.
+    permission read = integration->read + admin->member
+    permission write = integration->write + admin->member
+    permission delete = integration->write + admin->member
+}
+
+definition integrate/repository {
+    relation vcs_integration: integrate/vcs_integration // rebac:field=vcs_integration
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = vcs_integration->read + admin->member
+    permission write = vcs_integration->write + admin->member
+    permission delete = vcs_integration->write + admin->member
+}
+
+definition integrate/source {
+    relation repository: integrate/repository // rebac:field=repository
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = repository->read + admin->member
+    permission write = repository->write + admin->member
+    permission delete = repository->write + admin->member
+}
+
+definition integrate/template {
+    relation source: integrate/source // rebac:field=source
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = source->read + admin->member
+    permission write = source->write + admin->member
+    permission delete = source->write + admin->member
 }

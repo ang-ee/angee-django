@@ -5,6 +5,7 @@ ALLOWED_HOSTS:
 
 INSTALLED_APPS:
   - angee.integrate
+  - angee.integrate_github
   - angee.knowledge
   - angee.operator
   - angee.storage

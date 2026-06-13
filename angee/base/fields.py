@@ -9,14 +9,14 @@ from __future__ import annotations
 
 import base64
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from django.conf import settings
 from django.core import checks
-from django.core.exceptions import FieldError, ImproperlyConfigured, ValidationError
+from django.core.exceptions import FieldError, ImproperlyConfigured
 from django.db import models
 from django.utils.module_loading import import_string
 from django_choices_field import TextChoicesField
@@ -162,47 +162,66 @@ class EncryptedField(models.TextField):
         return _derive_fernet(self._angee_fernet_label)
 
 
-class ImplClassField(models.CharField):
+class ImplClassField(TextChoicesField):
     """A column naming a non-model implementation class by a short key.
 
     The open-set tool from ``docs/backend/guidelines.md``: one concrete model
     whose row selects a strategy/client/backend class that differs only in
     behaviour (e.g. a ``storage.Backend`` row → a ``StorageBackend`` subclass).
-    The row stores a short key; ``registry_setting`` names the Django setting
-    that maps keys to dotted import paths
-    (``{"local": "angee.storage.backends.LocalBackend"}``). Addons contribute
-    their impls into that setting through ``autoconfig`` — the framework's
-    composition seam — so the available impls are a composition fact, not a
-    base-model import. The field resolves the row's key against that mapping and
-    ``import_string``s the **composed, trusted** path (never row text), checking
-    it is a ``base_class`` subclass; this is the shape Angee already uses to
-    resolve an addon's declared ``schemas`` reference. Parameterized like
-    ``StateField(choices_enum=...)``: ``ImplClassField(base_class=StorageBackend,
+    ``registry_setting`` names the Django setting that maps keys to dotted import
+    paths (``{"local": "angee.storage.backends.LocalBackend"}``); addons
+    contribute their impls into it through ``autoconfig`` — the framework's
+    composition seam. Every addon has contributed by the time the schema is
+    produced, so the key set is closed: the column is a ``TextChoices`` enum built
+    from the registered keys, and ``strawberry-django`` renders the GraphQL enum
+    natively (this is a ``TextChoicesField``, exactly like ``StateField``). The
+    registry must be **non-empty** — an addon whose impl set could otherwise be
+    empty registers a noop/null-object default (storage's ``local``; a VCS noop
+    client) so a composition always has at least one selectable impl. The field
+    resolves a row's key against the mapping and ``import_string``s the
+    **composed, trusted** path (never row text), checking it is a ``base_class``
+    subclass — the shape Angee already uses to resolve an addon's declared
+    ``schemas`` reference; ``manage.py check`` validates every configured path up
+    front. Keys must be identifier-safe (they become enum members). Parameterized
+    like ``StateField``: ``ImplClassField(base_class=StorageBackend,
     registry_setting="ANGEE_STORAGE_BACKEND_CLASSES")``. Resolution returns the
     class; the owning model instantiates it, because the constructor contract —
     what the impl receives — belongs with the row's config and identity.
     """
 
     def __init__(self, *, base_class: type | None = None, registry_setting: str = "", **kwargs: Any) -> None:
-        """Bind the implementation base and the setting mapping keys to dotted paths."""
+        """Bind the implementation base and build the enum from the registry keys."""
 
         if base_class is not None and not isinstance(base_class, type):
             raise ImproperlyConfigured("ImplClassField base_class must be a type.")
         self.base_class = base_class
         self.registry_setting = registry_setting
         kwargs.setdefault("max_length", 100)
-        super().__init__(**kwargs)
+        super().__init__(choices_enum=self._build_enum(), **kwargs)
+
+    def deconstruct(self) -> tuple[str, str, list[Any], dict[str, Any]]:
+        """Emit a plain varchar column; rebuild the enum from the setting on reconstruct.
+
+        The enum is the set of installed impls — a runtime composition fact, not a
+        database fact — so the choices are dropped and only ``registry_setting``
+        (plus the fixed ``max_length``) rides through. Adding or removing an impl
+        therefore never churns a migration; ``base_class`` survives onto the live
+        model field through ``deepcopy`` inheritance.
+        """
+
+        name, path, args, kwargs = super().deconstruct()
+        kwargs.pop("choices", None)
+        kwargs["registry_setting"] = self.registry_setting
+        return name, path, args, kwargs
 
     def check(self, **kwargs: Any) -> list[checks.CheckMessage]:
         """Validate the declaration and every configured impl path.
 
-        ``base_class``/``registry_setting`` are not database facts, so they do
-        not ride through ``deconstruct``; migration-state copies carry the
-        defaults while the live model field (kept through ``deepcopy``
-        inheritance) is the one ``check`` runs against. Every dotted path in the
-        configured mapping is imported and checked against ``base_class`` here,
-        so a typo or a non-subclass fails ``manage.py check`` rather than a later
-        row resolution.
+        Imports each dotted path in the mapping and checks it against
+        ``base_class``, so a typo or a non-subclass fails ``manage.py check``
+        rather than a later row resolution. ``base_class`` is checked on the live
+        model field (kept through ``deepcopy`` inheritance), not on migration-state
+        copies.
         """
 
         errors = super().check(**kwargs)
@@ -247,35 +266,46 @@ class ImplClassField(models.CharField):
                     )
         return errors
 
-    def validate(self, value: Any, model_instance: Any) -> None:
-        """Reject a stored key that resolves to no configured impl."""
+    def resolve_class(self, key: Any) -> type:
+        """Return the impl class the configured mapping binds to ``key``.
 
-        super().validate(value, model_instance)
-        if not value:
-            return
-        try:
-            self.resolve_class(value)
-        except ImproperlyConfigured as error:
-            raise ValidationError(str(error), code="invalid_impl") from error
-
-    def resolve_class(self, key: str) -> type:
-        """Return the impl class the configured mapping binds to ``key``."""
+        ``key`` may be a plain string or the enum member this column reads back.
+        """
 
         registry = self._registry()
         try:
-            dotted = registry[key]
+            dotted = registry[str(key)]
         except KeyError as error:
             known = ", ".join(sorted(registry)) or "none configured"
             raise ImproperlyConfigured(
-                f"No impl for key {key!r} in settings.{self.registry_setting} (known: {known})."
+                f"No impl for key {str(key)!r} in settings.{self.registry_setting} (known: {known})."
             ) from error
         impl = import_string(dotted)
         if not (isinstance(self.base_class, type) and isinstance(impl, type) and issubclass(impl, self.base_class)):
             base_name = getattr(self.base_class, "__name__", self.base_class)
             raise ImproperlyConfigured(
-                f"settings.{self.registry_setting}[{key!r}] = {dotted!r} is not a {base_name}."
+                f"settings.{self.registry_setting}[{str(key)!r}] = {dotted!r} is not a {base_name}."
             )
         return impl
+
+    def _build_enum(self) -> type[models.TextChoices]:
+        """Return a ``TextChoices`` enum over the registered keys, in deterministic order."""
+
+        keys = sorted(self._registry())
+        if not keys:
+            raise ImproperlyConfigured(
+                f"ImplClassField registry settings.{self.registry_setting} is empty; an addon must "
+                "contribute at least one impl (e.g. a noop/null-object default) before the field is built."
+            )
+        members = [(key.upper(), (key, key)) for key in keys]
+        return cast("type[models.TextChoices]", models.TextChoices(self._enum_name(), members))
+
+    def _enum_name(self) -> str:
+        """Return a stable PascalCase GraphQL enum name derived from ``registry_setting``."""
+
+        core = self.registry_setting.removeprefix("ANGEE_").removesuffix("_CLASSES")
+        camel = "".join(part.capitalize() for part in core.split("_") if part)
+        return f"{camel or 'Impl'}Impl"
 
     def _registry(self) -> dict[str, str]:
         """Return the configured ``key → dotted path`` mapping for this field."""

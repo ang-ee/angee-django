@@ -183,7 +183,13 @@ Rules that follow from the layering:
   like an addon's `schemas` reference), the available impls are a composition
   fact rather than a base-model import, a project can remap a key to its own
   class, and `manage.py check` validates every configured path imports and
-  subclasses `base_class`.
+  subclasses `base_class`. Because every addon has contributed by schema-build
+  time the key set is closed, so the field is a `TextChoicesField` and
+  `strawberry-django` renders the GraphQL enum natively (like `StateField`). It
+  therefore requires a **non-empty** registry: an addon whose impl set could
+  otherwise be empty registers a noop/null-object default (storage's `local`;
+  integrate's `none` VCS client), so a composition always has one selectable
+  impl and the enum is never empty.
 - Cross-addon dependencies are one-way (e.g. `integrate → iam`, never the
   reverse); reject a bridge/diamond addon that would couple both ways.
 - GraphQL authoring is native Strawberry. Addons expose a `schemas` mapping in
@@ -265,12 +271,15 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 - **After adding or moving an addon** run `pnpm install`, and delete any stale
   gitignored `runtime/*/migrations/*.py` that imports a moved module before
   `makemigrations`.
-- **An `ImplClassField` resolves a key through a *setting*, not row text** — the
-  key→path mapping lives in the `registry_setting` (e.g.
-  `ANGEE_STORAGE_BACKEND_CLASSES`), supplied by the owning addon's `autoconfig`.
-  A bare settings module that skips the composer (like `tests/settings.py`) must
-  declare the mapping itself or resolution raises "no impl for key". The column
-  stores the key (`local`), never the old dotted path.
+- **An `ImplClassField` builds its enum at model-import time from its
+  `registry_setting`** — the key→path mapping (e.g. `ANGEE_STORAGE_BACKEND_CLASSES`)
+  is supplied by the owning addon's `autoconfig`, so every settings module that
+  installs the addon must carry a **non-empty** mapping, including a bare module
+  that skips the composer (`tests/settings.py` declares both
+  `ANGEE_STORAGE_BACKEND_CLASSES` and `ANGEE_VCS_CLIENT_CLASSES`). An empty
+  registry raises `ImproperlyConfigured` at import — give the addon a
+  noop/null-object default so the set is never empty. The column stores the key
+  (`local`), never a dotted path.
 
 ## Framework Contracts
 

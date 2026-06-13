@@ -25,6 +25,8 @@ DATABASES = {
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 USE_TZ = True
 ANGEE_RUNTIME_MODULE = "tests.runtime"
-# Bare test settings do not run the composer, so the storage backend registry
-# (normally supplied by angee.storage.autoconfig) is declared explicitly here.
+# Bare test settings do not run the composer, so the ImplClassField registries
+# (normally supplied by each addon's autoconfig) are declared explicitly here;
+# the enum field requires each to be non-empty at model-import time.
 ANGEE_STORAGE_BACKEND_CLASSES = {"local": "angee.storage.backends.LocalBackend"}
+ANGEE_VCS_CLIENT_CLASSES = {"none": "angee.integrate.vcs.client.NoopVCSClient"}

@@ -64,7 +64,7 @@ def test_report_status_records_telemetry_and_pushes_rollup() -> None:
     assert bridge.last_error == "boom"
     assert bridge.last_error_at is not None
     assert bridge.last_used_at is not None
-    assert calls == [("None", CapabilityStatus.ERROR, "boom")]
+    assert calls == [("tests.concretebridge:None", CapabilityStatus.ERROR, "boom")]
 
     # A bare-string status with no error clears the error timestamp.
     bridge.report_status(status="active")
@@ -84,5 +84,5 @@ def test_report_status_updates_unsaved_integration_rollup_in_memory() -> None:
 
     assert bridge.status == CapabilityStatus.ERROR
     assert bridge.integration.status == IntegrationStatus.ERROR
-    assert bridge.integration.capability_statuses == {"None": IntegrationStatus.ERROR.value}
+    assert bridge.integration.capability_statuses == {"tests.concretebridge:None": IntegrationStatus.ERROR.value}
     assert bridge.integration.last_error == "boom"
