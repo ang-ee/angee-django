@@ -13,6 +13,7 @@ INSTALLED_APPS = [
     "angee.resources",
     "angee.iam",
     "angee.integrate",
+    "angee.agents",
     "angee.knowledge",
     "angee.storage",
 ]
@@ -32,4 +33,8 @@ ANGEE_STORAGE_BACKEND_CLASSES = {"local": "angee.storage.backends.LocalBackend"}
 ANGEE_VCS_BACKEND_CLASSES = {
     "none": "angee.integrate.vcs.backend.NoopVCSBackend",
     "stub": "tests.conftest.StubVCSBackend",
+}
+ANGEE_INFERENCE_BACKEND_CLASSES = {
+    "manual": "angee.agents.backends.ManualInferenceBackend",
+    "stub": "tests.conftest.StubInferenceBackend",
 }

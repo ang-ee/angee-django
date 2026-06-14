@@ -16,6 +16,7 @@ from django.db import connection, models
 from django.test import RequestFactory
 from rebac import actor_context, system_context
 
+from angee.agents.backends import InferenceBackend, InferenceModelSpec
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.iam.credentials import CredentialKind
 from angee.iam.models import Credential as AbstractCredential
@@ -246,6 +247,21 @@ class StubVCSBackend(VCSBackend):
 
         del vcs_integration, request
         return True
+
+
+class StubInferenceBackend(InferenceBackend):
+    """In-memory inference backend for tests; canned models ride on ``provider.config``.
+
+    Registered as the ``stub`` key in the test ``ANGEE_INFERENCE_BACKEND_CLASSES`` so an
+    ``InferenceProvider(backend_class="stub")`` resolves to it. Each test injects
+    ``stub_models`` (a list of ``InferenceModelSpec`` kwargs) through the provider config.
+    """
+
+    def list_models(self) -> list[InferenceModelSpec]:
+        """Return the models configured on the provider's ``config``."""
+
+        return [InferenceModelSpec(**spec) for spec in self.provider.config.get("stub_models", [])]
+
 
 class Link(AbstractLink):
     """Concrete knowledge wikilink edge used by source-addon tests."""
