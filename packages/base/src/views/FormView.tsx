@@ -83,6 +83,17 @@ export interface FormViewProps {
   toolbarStart?: React.ReactNode;
   /** Right-side record chrome the host renders after the toolbar spacer. */
   toolbar?: React.ReactNode;
+  /**
+   * Custom content rendered below the form for a *saved* record (never on
+   * create). Receives the open record id and a `reload` that refetches the form
+   * — so a panel doing out-of-band writes (e.g. operator provisioning) can refresh
+   * the form's fields after. Rendered outside the `<form>`, so its own buttons
+   * never submit the edit form.
+   */
+  recordExtras?: (context: {
+    recordId: string;
+    reload: () => void;
+  }) => React.ReactNode;
   /** Class name applied to the form root. */
   className?: string;
 }
@@ -114,6 +125,9 @@ const FIELD_LABEL_CLASS =
   "mb-1 flex min-h-4 items-center justify-between gap-2 text-xs font-medium uppercase tracking-wide text-fg-muted";
 const FIELD_CONTROL_CLASS = "min-w-0";
 const FULL_FIELD_CLASS = "col-span-full";
+// The form's centered content column — shared by the form body and the
+// `recordExtras` panel below it so the column width lives in one place.
+const FORM_COLUMN_CLASS = "mx-auto w-full max-w-[1100px] px-6 sm:px-8";
 
 export function FormView({
   model,
@@ -128,6 +142,7 @@ export function FormView({
   submitLabel,
   toolbarStart,
   toolbar,
+  recordExtras,
   className,
 }: FormViewProps): React.ReactElement {
   const hasFieldChildren = hasPageField(children);
@@ -443,6 +458,7 @@ export function FormView({
   );
 
   return (
+    <>
     <form
       className={cn("min-h-full bg-sheet", className)}
       onSubmit={(event) => {
@@ -514,7 +530,7 @@ export function FormView({
           );
         }}
       </form.Subscribe>
-      <div className="mx-auto flex w-full max-w-[1100px] flex-col gap-6 px-6 py-6 pb-12 sm:px-8">
+      <div className={cn(FORM_COLUMN_CLASS, "flex flex-col gap-6 py-6 pb-12")}>
         <header className="grid gap-4">
           <div className="flex items-start gap-4 max-[900px]:flex-col max-[900px]:items-stretch">
             <div className="min-w-0 flex-1 self-start">
@@ -620,6 +636,12 @@ export function FormView({
         ) : null}
       </div>
     </form>
+    {!isCreate && id != null && recordExtras ? (
+      <div className={cn(FORM_COLUMN_CLASS, "pb-12")}>
+        {recordExtras({ recordId: id, reload })}
+      </div>
+    ) : null}
+    </>
   );
 }
 

@@ -128,6 +128,9 @@ export interface DataPageProps<TRow extends Row = Row> {
   /** Field values seeded into the create form (create only, not edit) — e.g. a
    * filtered list creating rows that match its filter. */
   createDefaults?: Record<string, unknown>;
+  /** Custom content rendered below the record form for a saved record (not on
+   * create) — e.g. an operator status/provisioning panel. See `FormView.recordExtras`. */
+  recordExtras?: FormViewProps["recordExtras"];
   rowHref?: (row: TRow) => string;
   className?: string;
 }
@@ -259,6 +262,7 @@ function DataPageBody<TRow extends Row = Row>({
   recordSmartButtons = [],
   hideCreate = false,
   createDefaults,
+  recordExtras,
   className,
 }: DataPageBodyProps<TRow>): React.ReactElement {
   const resolvedRecordId = recordController.recordId;
@@ -443,6 +447,7 @@ function DataPageBody<TRow extends Row = Row>({
       actions={resolvedFormActions}
       {...formRenderProps}
       defaultValues={resolvedCreating ? createDefaults : undefined}
+      recordExtras={resolvedCreating ? undefined : recordExtras}
       onSaved={handleSaved}
       toolbarStart={composeNodes(formRenderProps.toolbarStart, recordHeaderStart)}
       toolbar={composeNodes(formRenderProps.toolbar, recordHeaderActions)}

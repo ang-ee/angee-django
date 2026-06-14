@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@angee/base": "workspace:*",
+    "@angee/operator": "workspace:*",
     "@angee/sdk": "workspace:*",
     "lucide-react": "^1.17.0"
   },

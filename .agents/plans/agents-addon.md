@@ -157,6 +157,121 @@ Note: the full `pytest` suite has a pre-existing collection-order failure on `ma
 registers the concrete VCS models) — unrelated to this addon; integrate tests run
 per-file. The agents test module follows the same per-file concrete-model pattern.
 
+## Milestone 2 — operator provisioning (planned)
+
+Render an `Agent` into a running operator **workspace** + **service** from its
+`workspace_template`/`service_template` (+ typed `*_inputs`) and `instructions`,
+tracking the result in `service`/`workspace`/`status`/`last_error`.
+
+**Architecture — browser-orchestrated** (set 2026-06-14). The operator addon holds
+no Django state and the daemon owns all lifecycle (`operator/apps.py`); the browser
+reaches the daemon directly via `operatorConnection` (endpoint + per-actor minted
+token). So provisioning is driven from the agents console:
+
+1. The console reads the agent's workspace/service template refs + inputs + instructions.
+2. Over the existing `operatorConnection`, it calls the daemon's `workspaceCreate`
+   then `serviceCreate`.
+3. A thin admin-gated Django action persists the returned instance names + flips
+   `status`. Live workspace/service health is read straight from the daemon's
+   `workspaces()`/`services()` over GraphQL (real-time, no Django mirror).
+
+**Deferred (TODO): server-side provisioning via the operator REST API.** Browser
+orchestration requires the actor to hold an operator/platform-admin role (only they
+get an `operatorConnection` token). Some users won't be platform admins, yet the
+Django server should still provision an agent *for* them. That needs a server-side
+Django→daemon path — extend `OperatorDaemon` (it already POSTs to the daemon with the
+admin bearer for `mint_token`/`introspect_sdl`) with workspace/service create calls, a
+`provisionAgent(id)` server action, and async lifecycle tracking. It's a new seam
+against the addon's current "no Django state / browser reaches the daemon" design, so
+set it with the architect when we get there.
+
+### Build decomposition
+- **Agent-runtime Copier templates** under `templates/` (the substance; don't exist
+  yet): a workspace + service template taking `instructions` (+ skills/MCP/model) as
+  inputs and rendering `AGENTS.md`/`CLAUDE.md` + runtime wiring.
+- **Resolve the daemon template ref from the daemon, not Django.** The daemon owns
+  the `template: String!` ref format — it emits it in its own `templates` listing as
+  `TemplateDescriptor.ref`. The provision flow matches the agent's
+  `workspace_template`/`service_template` (`path` + `kind`) against
+  `useOperatorSnapshot({templates:true})` to get the ref, so the undocumented format
+  stays owned by the daemon instead of being hardcoded in a Django `operator_ref()`.
+- **Write-back action** (`provisionAgent` / `deprovisionAgent`) — admin-gated Django
+  mutation; the only server-side piece. Persists `service`/`workspace`/`status`/
+  `last_error` after the browser's daemon calls succeed (or fail). Django owns this
+  state; the live runtime health is read from the daemon, not mirrored here.
+- **Reuse + enhance the operator's daemon widgets — do NOT hand-roll in agents**
+  (architect directive, 2026-06-14). The operator addon already owns the daemon UI
+  (`WorkspacesSection`/`ServicesSection`, the `OperatorTransportProvider` +
+  `useOperatorSnapshot`/`useOperatorAction` data layer, `StateTag`,
+  `runDaemonAction`), but today `@angee/operator` exports only its `BaseAddon`
+  default. Work lands **in `@angee/operator`**, then agents consumes it:
+  - Export the reusable surface (transport provider + snapshot/action hooks + types +
+    a *parameterizable* workspace/service status widget that can render either the
+    full list or a single instance by name). Extract the presentational table from the
+    Sections so the Section (full list) and the agents embed (one agent's instance)
+    share it.
+  - Add the missing create flow **in the operator** (finish the `TODO(S6)` in
+    `TemplatesSection`): `workspaceCreate`/`serviceCreate` documents + a reusable
+    provision hook/widget. The operator's own Templates pane and the agents console
+    both call it.
+- **Console provision flow** in `@angee/agents` — a *thin* consumer: embed the
+  operator's reusable workspace/service status widget (filtered to the agent's
+  instance names), trigger provisioning via the operator's reusable provision hook,
+  then call the Django write-back. No bespoke daemon plumbing in agents.
+- **Skill/MCP/model membership editor** (the M1-deferred M2M widget) — needed for a
+  *useful* agent, but not for the first end-to-end provisioning slice (instructions +
+  templates alone provision); sequence it after the vertical slice works.
+
+### Progress (2026-06-14)
+- **Operator reusable surface — DONE.** `@angee/operator/runtime` subpath barrel
+  exposes the transport provider + `useOperatorSnapshot`/`useOperatorAction` +
+  `StateTag`/`OperatorSection` + daemon types; `WorkspacesSection`/`ServicesSection`
+  take an optional `names` filter + `title` so the same widget renders the full list
+  (operator console) or one agent's instance (agents console). Create capability
+  (`WORKSPACE_CREATE_MUTATION`/`SERVICE_CREATE_MUTATION` + input types) exported for
+  reuse via `useOperatorAction`. (operator typecheck + 13 tests green.)
+- **Backend write-back — DONE.** `Agent.mark_provisioned()`/`mark_deprovisioned()`
+  own the status/instance-name transition; `provisionAgent`/`deprovisionAgent`
+  admin-gated actions dispatch to them. Test + SDL regenerated. (mypy/ruff/build/
+  schema --check/11 agents tests green.)
+- **Framework `recordExtras` slot — DONE.** `@angee/base` `DataPage` → `FormView`
+  gained a `recordExtras({recordId, reload})` slot, rendered below the form (outside
+  `<form>`, so a panel's buttons never submit) for a saved record only. Reusable by
+  any addon. (base typecheck + 91 view tests green.)
+- **Agents consumer (Slice 4) — DONE.** `@angee/agents` depends on `@angee/operator`
+  (first cross-addon web dep). `AgentProvisioning.tsx` is a two-layer panel: the
+  outer (console urql context) owns the agent record read + `provisionAgent`/
+  `deprovisionAgent` write-backs; the inner (inside `OperatorTransportProvider`, whose
+  urql context is the daemon) resolves the daemon template ref from
+  `useOperatorSnapshot({templates})`, runs `workspaceCreate`→`serviceCreate`→destroy,
+  and embeds the reused `WorkspacesSection`/`ServicesSection` filtered to the agent's
+  instance. Wired into the Agents tab (not Templates) via `recordExtras`. (agents +
+  operator + base typecheck, 91 base tests, host build all green.)
+
+### Reviewer fixes + deferrals (2026-06-14)
+Applied from the arch/django/react review of the M2 diff: the daemon-shape decoders
+(`resolveTemplateRef`/`toAnswerList`) + typed create/destroy hooks moved into
+`@angee/operator/runtime` (`data/provision.ts`) so the daemon's owner decodes its own
+shape and agents is the thin consumer (closes directive #4; also gives the handlers a
+stable `.run`); provision records the workspace *before* the service so a service
+failure can't orphan an unrecoverable workspace; `mark_deprovisioned` clears
+`last_error`; the deprovision admin-gate is now tested; the form-column width is one
+constant in `FormView`. **Deferred:** extract a shared presentational instance table
+so the embed runs one daemon poller instead of three (arch); bound/guard
+`workspace`/`service` length so a malformed daemon name degrades cleanly on Postgres
+(django); re-indent the `<>`-wrapped `FormView` return (cosmetic).
+
+### Remaining for a working end-to-end render
+- **Agent-runtime Copier templates (the substance — not yet built).** The console
+  flow is complete, but Provision needs real operator templates: a `kind:workspace`
+  (+ optional `kind:service`) Copier template under `templates/` that takes
+  `instructions` (+ skills/MCP/model) as inputs and renders `AGENTS.md`/`CLAUDE.md` +
+  the runtime. Until they exist + are discovered as `integrate.Template`s the agent
+  references, Provision reports "no operator workspace template matches".
+- **Live smoke check** needs a dev-stack restart (new `@angee/operator` dep + the
+  `provisionAgent` SDL change). The `WorkspaceCreatePreflight` validator is still
+  worth wiring before create as a follow-up.
+
 ## Dropped from the reference prototype
 
 ACP chat runtime; FastMCP outbound server + decorator tool-registry; frozen `config`

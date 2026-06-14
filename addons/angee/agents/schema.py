@@ -445,6 +445,34 @@ class InferenceActionMutation:
         return ActionResult(ok=True, message=f"Synced {count} model(s).")
 
 
+@strawberry.type
+class AgentActionMutation:
+    """Provisioning write-backs for an agent.
+
+    The console renders the workspace/service against the operator daemon (the
+    daemon owns the lifecycle); these only persist the outcome on the agent row —
+    the one server-side step of the browser-orchestrated provision flow.
+    """
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def provision_agent(self, id: relay.GlobalID, workspace: str, service: str = "") -> ActionResult:
+        """Record the operator instance the console rendered and mark the agent running."""
+
+        agent = _resolve(Agent, id, reason="agents.graphql.provision_agent")
+        with system_context(reason="agents.graphql.provision_agent"):
+            agent.mark_provisioned(workspace=workspace, service=service)
+        return ActionResult(ok=True, message=f"Provisioned “{service or workspace}”.")
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def deprovision_agent(self, id: relay.GlobalID) -> ActionResult:
+        """Clear the agent's operator instance after the console tore it down."""
+
+        agent = _resolve(Agent, id, reason="agents.graphql.deprovision_agent")
+        with system_context(reason="agents.graphql.deprovision_agent"):
+            agent.mark_deprovisioned()
+        return ActionResult(ok=True, message="Deprovisioned.")
+
+
 # Explicit annotation widens a homogeneous AngeeNode list past mypy's invariance check
 # (see integrate.schema._CONSOLE_TYPES).
 _CONSOLE_TYPES: list[type] = [
@@ -467,6 +495,7 @@ schemas = {
             _MCP_TOOL_MUTATION,
             _SKILL_MUTATION,
             InferenceActionMutation,
+            AgentActionMutation,
         ],
         "subscription": [changes(Agent, field="agentChanged")],
         "types": _CONSOLE_TYPES,

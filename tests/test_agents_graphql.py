@@ -206,6 +206,44 @@ def test_create_mcp_server_keeps_defaults_for_omitted_optionals(agents_console_t
     assert created == {"name": "Local MCP", "placement": "EXTERNAL", "config": {}}
 
 
+def test_provision_agent_records_instance_and_is_admin_gated(agents_console_tables: None) -> None:
+    """`provisionAgent` persists the rendered instance + flips status; admin-gated.
+
+    The browser renders the workspace/service against the daemon; this write-back is
+    the only server-side step, so it must stay platform-admin gated like the rest of
+    the console.
+    """
+
+    admin = _platform_admin("agt-provision-admin")
+    plain = User.objects.create_user(username="agt-provision-plain", email="plain@example.com")
+    with system_context(reason="test.agents.provision.seed"):
+        agent = Agent.objects.create(name="Renderable", owner=admin)
+    agent_id = _gid("AgentType", agent.sqid)
+    provision = """
+        mutation Provision($id: ID!) {
+          provisionAgent(id: $id, workspace: "ws-renderable", service: "svc-renderable") { ok }
+        }
+    """
+
+    assert _execute(console := _schema(), provision, {"id": agent_id}, user=plain).errors is not None
+    assert _data(_execute(console, provision, {"id": agent_id}, user=admin))["provisionAgent"]["ok"] is True
+    with system_context(reason="test.agents.provision.verify"):
+        agent.refresh_from_db()
+        assert (agent.workspace, agent.service, str(agent.status)) == (
+            "ws-renderable",
+            "svc-renderable",
+            "running",
+        )
+
+    # Deprovision is admin-gated too, then clears the instance and stops the agent.
+    deprovision = "mutation($id: ID!){ deprovisionAgent(id: $id){ ok } }"
+    assert _execute(console, deprovision, {"id": agent_id}, user=plain).errors is not None
+    _data(_execute(console, deprovision, {"id": agent_id}, user=admin))
+    with system_context(reason="test.agents.provision.verify_cleared"):
+        agent.refresh_from_db()
+        assert (agent.workspace, agent.service, str(agent.status)) == ("", "", "stopped")
+
+
 def _seed_agent_and_skills(owner: Any) -> tuple[Any, Any, Any]:
     """Create a skill source with two skills and an owned agent (all elevated)."""
 

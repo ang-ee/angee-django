@@ -34,6 +34,42 @@ export interface RefreshSourceData {
   refreshSource: ActionResultData;
 }
 
+// Record the operator instance the console rendered for an agent (the only
+// server-side step of browser-orchestrated provisioning — the daemon calls run
+// over the operator connection).
+export const PROVISION_AGENT_MUTATION = `
+  mutation ProvisionAgent($id: ID!, $workspace: String!, $service: String!) {
+    provisionAgent(id: $id, workspace: $workspace, service: $service) {
+      ok
+      message
+    }
+  }
+`;
+
+export interface ProvisionAgentData {
+  provisionAgent: ActionResultData;
+}
+
+export interface ProvisionAgentVariables extends Record<string, unknown> {
+  id: string;
+  workspace: string;
+  service: string;
+}
+
+// Clear an agent's recorded operator instance after teardown.
+export const DEPROVISION_AGENT_MUTATION = `
+  mutation DeprovisionAgent($id: ID!) {
+    deprovisionAgent(id: $id) {
+      ok
+      message
+    }
+  }
+`;
+
+export interface DeprovisionAgentData {
+  deprovisionAgent: ActionResultData;
+}
+
 export interface IdVariables extends Record<string, unknown> {
   id: string;
 }

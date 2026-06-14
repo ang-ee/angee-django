@@ -402,3 +402,27 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         """Return the agent's name."""
 
         return self.name
+
+    def mark_provisioned(self, *, workspace: str, service: str = "") -> None:
+        """Record the operator instance the console rendered for this agent.
+
+        The daemon owns the workspace/service lifecycle; the console renders them
+        and calls this to persist the resulting instance names and flip the agent
+        to running. Clears any prior provisioning error. ``service`` is optional —
+        a workspace-only agent renders no service.
+        """
+
+        self.workspace = workspace
+        self.service = service
+        self.status = cast(AgentStatus, AgentStatus.RUNNING)
+        self.last_error = ""
+        self.save(update_fields=["workspace", "service", "status", "last_error", "updated_at"])
+
+    def mark_deprovisioned(self) -> None:
+        """Clear the operator instance after teardown and mark the agent stopped."""
+
+        self.workspace = ""
+        self.service = ""
+        self.status = cast(AgentStatus, AgentStatus.STOPPED)
+        self.last_error = ""
+        self.save(update_fields=["workspace", "service", "status", "last_error", "updated_at"])

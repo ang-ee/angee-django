@@ -1,11 +1,14 @@
 import * as React from "react";
 import { Column, DataPage, Field, Form, Group, List } from "@angee/base";
 
+import { AgentProvisioning } from "./AgentProvisioning";
+
 const MODEL = "agents.Agent";
 
 // One model, two list tabs: the server-side ``isTemplate`` filter is the only
 // difference between Agents and Templates, and a create on either tab defaults
-// ``isTemplate`` to match.
+// ``isTemplate`` to match. A real agent renders into the operator; a template is a
+// reusable blueprint, so only the Agents tab carries the provisioning panel.
 function agentDataPage(isTemplate: boolean): React.ReactElement {
   return (
     <DataPage
@@ -14,6 +17,13 @@ function agentDataPage(isTemplate: boolean): React.ReactElement {
       routed
       filter={{ isTemplate: { exact: isTemplate } }}
       createDefaults={{ isTemplate }}
+      recordExtras={
+        isTemplate
+          ? undefined
+          : ({ recordId, reload }) => (
+              <AgentProvisioning agentId={recordId} onChanged={reload} />
+            )
+      }
     >
       <List model={MODEL} pageSize={50}>
         <Column field="name" />
