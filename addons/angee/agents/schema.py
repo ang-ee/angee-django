@@ -11,6 +11,8 @@ this addon owns only the discovered :class:`Skill` rows.
 
 from __future__ import annotations
 
+import contextlib
+from dataclasses import dataclass
 from typing import Any
 
 import strawberry
@@ -30,6 +32,7 @@ from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.schema import CredentialType, UserType
 from angee.integrate.schema import IntegrationType, SourceType, TemplateType, VendorType
+from angee.operator.daemon import OperatorDaemon
 
 InferenceProvider = apps.get_model("agents", "InferenceProvider")
 InferenceModel = apps.get_model("agents", "InferenceModel")
@@ -445,30 +448,119 @@ class InferenceActionMutation:
         return ActionResult(ok=True, message=f"Synced {count} model(s).")
 
 
+@dataclass(frozen=True)
+class _RenderPlan:
+    """Everything the daemon render needs for one agent, gathered under elevation.
+
+    ``*_template`` are the agent template's ``(path, kind)`` — the daemon resolves its
+    own ref from them; ``secret_value`` is the credential token pushed before render.
+    """
+
+    workspace_inputs: dict[str, str]
+    service_inputs: dict[str, str]
+    secret_name: str
+    secret_value: str
+    workspace_template: tuple[str, str]
+    service_template: tuple[str, str] | None
+
+
+def _render_agent(plan: _RenderPlan) -> dict[str, str]:
+    """Drive the daemon render for one agent over its REST API; return the instance names.
+
+    The daemon owns the template ref format (resolve it from its own listing) and the
+    secret store; the credential value is pushed before the service renders so the
+    service's ``${secret.<name>}`` resolves. If the service render fails after the
+    workspace exists, the workspace is torn back down so a retry starts clean. Raises
+    on any step so the caller records the failure on the agent.
+    """
+
+    daemon = OperatorDaemon.from_settings()
+    workspace_ref = daemon.resolve_template_ref(
+        path=plan.workspace_template[0], kind=plan.workspace_template[1]
+    )
+    if not workspace_ref:
+        raise ValueError(f"No operator workspace template matches {plan.workspace_template[0]!r}.")
+    if plan.secret_value:
+        daemon.set_secret(plan.secret_name, plan.secret_value)
+    workspace = daemon.create_workspace(template=workspace_ref, inputs=plan.workspace_inputs)
+    if not workspace:
+        raise ValueError("The operator did not return a workspace.")
+    try:
+        service = _render_service(daemon, plan, workspace)
+    except Exception:
+        with contextlib.suppress(Exception):  # best-effort rollback; surface the original failure
+            daemon.destroy_workspace(workspace)
+        raise
+    return {"workspace": workspace, "service": service}
+
+
+def _render_service(daemon: OperatorDaemon, plan: _RenderPlan, workspace: str) -> str:
+    """Render the agent's service into ``workspace``; ``""`` for a workspace-only agent."""
+
+    if plan.service_template is None:
+        return ""
+    service_ref = daemon.resolve_template_ref(path=plan.service_template[0], kind=plan.service_template[1])
+    if not service_ref:
+        raise ValueError(f"No operator service template matches {plan.service_template[0]!r}.")
+    return daemon.create_service(template=service_ref, workspace=workspace, inputs=plan.service_inputs)
+
+
 @strawberry.type
 class AgentActionMutation:
-    """Provisioning write-backs for an agent.
+    """Server-side provisioning actions for an agent.
 
-    The console renders the workspace/service against the operator daemon (the
-    daemon owns the lifecycle); these only persist the outcome on the agent row —
-    the one server-side step of the browser-orchestrated provision flow.
+    Provisioning is one Django flow: it resolves the agent's template inputs +
+    credential, syncs the inference secret to the operator store, and drives the
+    daemon's workspace/service render over its REST API (admin bearer — the secret
+    never reaches the browser). The console only triggers these and watches live
+    runtime health straight from the daemon.
     """
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def provision_agent(self, id: relay.GlobalID, workspace: str, service: str = "") -> ActionResult:
-        """Record the operator instance the console rendered and mark the agent running."""
+    def provision_agent(self, id: relay.GlobalID) -> ActionResult:
+        """Render the agent into an operator workspace + service and record the instance."""
 
         agent = _resolve(Agent, id, reason="agents.graphql.provision_agent")
         with system_context(reason="agents.graphql.provision_agent"):
-            agent.mark_provisioned(workspace=workspace, service=service)
-        return ActionResult(ok=True, message=f"Provisioned “{service or workspace}”.")
+            if agent.workspace:
+                return ActionResult(ok=False, message="Agent is already provisioned — deprovision it first.")
+            workspace_template = agent.workspace_template
+            if workspace_template is None:
+                return ActionResult(ok=False, message="Set a workspace template on this agent first.")
+            service_template = agent.service_template
+            plan = _RenderPlan(
+                workspace_inputs=agent.provision_workspace_inputs(),
+                service_inputs=agent.provision_service_inputs(),
+                secret_name=agent.inference_secret_name(),
+                secret_value=agent.inference_secret(),
+                workspace_template=(workspace_template.path, workspace_template.kind),
+                service_template=(
+                    (service_template.path, service_template.kind) if service_template else None
+                ),
+            )
+        try:
+            result = _render_agent(plan)
+        except Exception as error:  # noqa: BLE001 — a render failure is the result, not a 500
+            with system_context(reason="agents.graphql.provision_agent.failed"):
+                agent.mark_provision_failed(str(error))
+            return ActionResult(ok=False, message=f"Provisioning failed: {error}")
+        with system_context(reason="agents.graphql.provision_agent.recorded"):
+            agent.mark_provisioned(workspace=result["workspace"], service=result["service"])
+        return ActionResult(ok=True, message=f"Provisioned “{result['service'] or result['workspace']}”.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def deprovision_agent(self, id: relay.GlobalID) -> ActionResult:
-        """Clear the agent's operator instance after the console tore it down."""
+        """Tear down the agent's operator workspace (and its services) and clear the record."""
 
         agent = _resolve(Agent, id, reason="agents.graphql.deprovision_agent")
         with system_context(reason="agents.graphql.deprovision_agent"):
+            workspace = agent.workspace
+        if workspace:
+            try:
+                OperatorDaemon.from_settings().destroy_workspace(workspace)
+            except Exception as error:  # noqa: BLE001 — teardown failure is the result, not a 500
+                return ActionResult(ok=False, message=f"Teardown failed: {error}")
+        with system_context(reason="agents.graphql.deprovision_agent.recorded"):
             agent.mark_deprovisioned()
         return ActionResult(ok=True, message="Deprovisioned.")
 

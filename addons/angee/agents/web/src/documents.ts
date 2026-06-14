@@ -34,12 +34,12 @@ export interface RefreshSourceData {
   refreshSource: ActionResultData;
 }
 
-// Record the operator instance the console rendered for an agent (the only
-// server-side step of browser-orchestrated provisioning — the daemon calls run
-// over the operator connection).
+// Provision an agent end-to-end, server-side: the Django flow resolves the agent's
+// template inputs + credential, syncs the inference secret to the operator, and drives
+// the daemon's workspace/service render over its REST API. The console only triggers it.
 export const PROVISION_AGENT_MUTATION = `
-  mutation ProvisionAgent($id: ID!, $workspace: String!, $service: String!) {
-    provisionAgent(id: $id, workspace: $workspace, service: $service) {
+  mutation ProvisionAgent($id: ID!) {
+    provisionAgent(id: $id) {
       ok
       message
     }
@@ -50,13 +50,7 @@ export interface ProvisionAgentData {
   provisionAgent: ActionResultData;
 }
 
-export interface ProvisionAgentVariables extends Record<string, unknown> {
-  id: string;
-  workspace: string;
-  service: string;
-}
-
-// Clear an agent's recorded operator instance after teardown.
+// Tear down the agent's operator workspace (and its services) and clear the record.
 export const DEPROVISION_AGENT_MUTATION = `
   mutation DeprovisionAgent($id: ID!) {
     deprovisionAgent(id: $id) {

@@ -166,14 +166,23 @@ INTEGRATE_TEST_MODELS = (Vendor, Integration)
 """Concrete integration catalogue/integration models created on demand by integrate fixtures."""
 
 
-def make_integration(slug: str) -> Any:
+def make_integration(
+    slug: str,
+    *,
+    kind: Any = CredentialKind.STATIC_TOKEN,
+    material: dict[str, Any] | None = None,
+) -> Any:
     """Create the iam credential chain and an integrate ``Integration`` for tests.
 
     Builds owner → OAuth client → credential → vendor → integration so a
-    capability/bridge fixture has an integration to run over. Requires the iam +
-    integrate test tables (see ``INTEGRATE_TEST_MODELS``).
+    capability/bridge fixture has an integration to run over. ``kind``/``material``
+    pick the credential kind (default a static token); pass
+    ``kind=CredentialKind.OAUTH`` for an OAuth-backed integration. Requires the iam
+    + integrate test tables (see ``INTEGRATE_TEST_MODELS``).
     """
 
+    if material is None:
+        material = {"access_token": "token"} if kind == CredentialKind.OAUTH else {"api_key": "x"}
     user_model = get_user_model()
     with system_context(reason="test integrate integration setup"):
         user = user_model.objects.create_user(username=f"{slug}-owner", email=f"{slug}@example.com")
@@ -182,12 +191,7 @@ def make_integration(slug: str) -> Any:
             display_name=slug.title(),
             client_id=f"{slug}-cid",
         )
-        credential = Credential.objects.upsert_for_user(
-            user,
-            oauth_client,
-            CredentialKind.STATIC_TOKEN,
-            {"api_key": "x"},
-        )
+        credential = Credential.objects.upsert_for_user(user, oauth_client, kind, material)
         vendor = Vendor.objects.create(slug=slug, display_name=slug.title())
         return Integration.objects.create(vendor=vendor, credential=credential, owner=user)
 

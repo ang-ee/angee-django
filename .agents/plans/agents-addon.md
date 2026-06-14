@@ -163,27 +163,47 @@ Render an `Agent` into a running operator **workspace** + **service** from its
 `workspace_template`/`service_template` (+ typed `*_inputs`) and `instructions`,
 tracking the result in `service`/`workspace`/`status`/`last_error`.
 
-**Architecture — browser-orchestrated** (set 2026-06-14). The operator addon holds
-no Django state and the daemon owns all lifecycle (`operator/apps.py`); the browser
-reaches the daemon directly via `operatorConnection` (endpoint + per-actor minted
-token). So provisioning is driven from the agents console:
+**Architecture — server-orchestrated** (pivoted 2026-06-14 from browser-orchestrated).
+`provisionAgent(id)` is one Django flow; the browser only triggers it and watches
+live status. This unlocks provisioning for non-admins (the server acts on their
+behalf) and keeps the credential value entirely server-side.
 
-1. The console reads the agent's workspace/service template refs + inputs + instructions.
-2. Over the existing `operatorConnection`, it calls the daemon's `workspaceCreate`
-   then `serviceCreate`.
-3. A thin admin-gated Django action persists the returned instance names + flips
-   `status`. Live workspace/service health is read straight from the daemon's
-   `workspaces()`/`services()` over GraphQL (real-time, no Django mirror).
+1. `provisionAgent` (admin-gated console mutation) resolves the agent's template
+   inputs + credential (`provision_*_inputs`), then drives the daemon over its **REST
+   API** via `OperatorDaemon` (admin bearer): `set_secret` → resolve template refs
+   from `GET /templates` → `POST /workspaces` → `POST /services/create` (start=true) →
+   `mark_provisioned`. Failure → `mark_provision_failed` (status=error). The daemon
+   has a REST API, so Django uses REST — **not** a GraphQL client.
+2. `deprovisionAgent` → `POST /workspaces/{name}/destroy?purge=true` + `mark_deprovisioned`.
+3. **Live status is browser-side** via the daemon: the reused operator
+   `WorkspacesSection`/`ServicesSection` (filtered to the agent's instance, wrapped in
+   `OperatorTransportProvider`). The daemon exposes `onWorkspaceStatusChange`/
+   `onServiceLogs`/`onWorkspaceLogs` subscriptions — switching the status widgets from
+   poll to subscription is the next polish step.
 
-**Deferred (TODO): server-side provisioning via the operator REST API.** Browser
-orchestration requires the actor to hold an operator/platform-admin role (only they
-get an `operatorConnection` token). Some users won't be platform admins, yet the
-Django server should still provision an agent *for* them. That needs a server-side
-Django→daemon path — extend `OperatorDaemon` (it already POSTs to the daemon with the
-admin bearer for `mint_token`/`introspect_sdl`) with workspace/service create calls, a
-`provisionAgent(id)` server action, and async lifecycle tracking. It's a new seam
-against the addon's current "no Django state / browser reaches the daemon" design, so
-set it with the architect when we get there.
+`OperatorDaemon` gained REST methods (`set_secret`, `resolve_template_ref`,
+`create_workspace`, `create_service`, `destroy_workspace`) on a shared `_request`.
+`@angee/agents` depends on `@angee/operator` (web, for the status widgets) and the
+agents AppConfig `depends_on` operator (backend, for the daemon bridge). The browser
+daemon-create hooks (`useWorkspaceCreate` etc.) stay in `@angee/operator/runtime` for
+the operator's own Templates pane, unused by agents now. Execution is **sync
+render+register** (create registers fast; the container build/start is the daemon's
+async job, surfaced via the status subscription) — no Django task runner needed.
+
+**Reviewer fixes applied (pivot review, 2026-06-14):** partial-failure compensation
+(`_render_agent` tears the workspace back down if the service render fails); an
+idempotency guard (refuse provisioning an agent that already holds a workspace);
+secret/auth predicate agreement (advertise `auth_mode`/`secret_name` only when a
+usable secret exists); find-the-owner (`InferenceProvider.credential`/
+`InferenceModel.credential` accessors — `Agent` no longer walks the
+model→provider→integration→credential chain); typed `_RenderPlan` dataclass (was a
+stringly-typed dict); dropped unearned daemon params (`name`/`purge`/explicit
+`start`); URL-encoded path segments; reconciled the `OperatorConfig`/`OperatorDaemon`/
+`mark_provisioned` docstrings to the server-orchestrated reality; failure-path test.
+**Deferred:** `select_for_update` for true concurrency (the workspace guard covers the
+common re-provision case); drive or drop the unused `AgentStatus.PROVISIONING` (the
+sync flow has no observable intermediate); `OperatorDaemon.is_configured` guard dedup;
+the `record as AgentProvisionRecord` projection cast (accepted, fields are optional).
 
 ### Build decomposition
 - **Agent-runtime Copier templates** under `templates/` (the substance; don't exist
@@ -276,12 +296,30 @@ templates carry **no** in-container caddy/verifier/HMAC the prototype hand-rolle
 - Validated: copier.yml YAML + `parse_template_meta` discovery (kind/name/inputs) +
   mcp_json default JSON. Jinja render is for the live test (jinja2 ships with Copier).
 
+### Agent fields → template inputs — RESOLVER DONE (2026-06-14)
+`Agent` owns the mapping (build on the merged `service_environment()` plumbing):
+- `provision_workspace_inputs()` → `agent_name` (name), `instructions`, `mcp_json`
+  (assembled from the agent's HTTP/SSE MCP servers via `mcp_config()`); structured
+  fields win over same-named `workspace_inputs` keys.
+- `provision_service_inputs()` → `model` (the handle) + **credential-driven auth**:
+  `auth_mode` = `oauth` when the model→provider→integration credential is
+  `CredentialKind.OAUTH`, else `api_key` (prefer OAuth); `secret_name` =
+  `inference_secret_name()` (agent-scoped, `agent-<sqid>-inference`). The secret
+  *value* is never here — only the name. `service_inputs` supplies template extras
+  (`permission_mode`, `provider`) and loses to the structured keys.
+- The **service template owns the name↔kind map**: claude-code renders
+  `CLAUDE_CODE_OAUTH_TOKEN` for `auth_mode=oauth`, `ANTHROPIC_API_KEY` for `api_key`
+  — so the resolver→template chain handles both auth modes end-to-end.
+- Tested (`make_integration` extended with a `kind=` param): workspace inputs from
+  fields, auth_mode from credential kind (static→api_key, oauth→oauth). ruff/mypy/14
+  agents tests/build/schema green.
+- **Next:** expose the resolver on `AgentType` (e.g. `provisioningInputs`) so the
+  console reads it instead of raw `*_inputs`; then the operator-bearer secret sync.
+
 ### Remaining to render end-to-end
-- **Map agent fields → template inputs.** The provision flow currently sends only the
-  raw `workspace_inputs`/`service_inputs` JSON. The templates need `agent_name`/
-  `instructions`/`mcp_json` (workspace) and `auth_mode`/`secret_name`/`model`/… (service)
-  assembled from the agent's structured fields (name, instructions, MCP servers, model).
-  Decide where that assembly lives (a Django "resolved inputs" projection vs the console).
+- **OAuth refresh deferred** (`OAuthCredentialHandler.refresh` is a stub — "wired in
+  S3"). The synced OAuth token is a point-in-time snapshot; re-sync to the operator
+  on refresh once iam implements it.
 - **Discover the templates as `integrate.Template`s** + make them available to the
   operator — register `templates/` as a template source so the agent's
   `service_template`/`workspace_template` FKs can point at them.

@@ -6,8 +6,8 @@ import json
 import logging
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from typing import Any, cast
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from django.conf import settings
 from graphql import build_client_schema, get_introspection_query, print_schema
@@ -23,6 +23,9 @@ _DEFAULT_TTL = "1h"
 _MINT_TIMEOUT = 5
 """Seconds to wait on the server-side mint before hiding the connection."""
 
+_PROVISION_TIMEOUT = 60
+"""Seconds to wait on a server-side render call (workspace/service create)."""
+
 
 @dataclass(frozen=True, slots=True)
 class OperatorDaemon:
@@ -31,7 +34,10 @@ class OperatorDaemon:
     ``endpoint`` is the browser-visible GraphQL URL handed to an authorized
     actor. ``server_base`` and ``admin_bearer`` are server-side only — the admin
     bearer never reaches the browser; it is the credential used to mint a
-    short-lived, scoped per-actor token via :meth:`mint_token`.
+    short-lived, scoped per-actor token via :meth:`mint_token`, and to drive the
+    daemon's lifecycle server-side over its REST API (:meth:`set_secret`,
+    :meth:`create_workspace`, :meth:`create_service`, :meth:`destroy_workspace`)
+    when Django provisions on a user's behalf.
     """
 
     endpoint: str
@@ -102,20 +108,87 @@ class OperatorDaemon:
             return None
         return print_schema(build_client_schema(result))  # type: ignore[arg-type]
 
-    def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
-        """POST ``payload`` as JSON with the admin bearer; return the decoded body."""
+    # --- Server-side provisioning over the daemon REST API (admin bearer) -------
+    # The daemon owns lifecycle; these let Django drive a render on a user's behalf
+    # (the secret value stays server-side, never reaching the browser). Each raises
+    # on an unconfigured/unreachable daemon so the caller surfaces a clean failure.
+
+    def set_secret(self, name: str, value: str) -> None:
+        """Set a secret value in the operator store (``POST /secrets/{name}``)."""
+
+        self._request("POST", f"{self._base()}/secrets/{quote(name, safe='')}", {"value": value})
+
+    def resolve_template_ref(self, *, path: str, kind: str) -> str | None:
+        """Return the daemon's template ref for ``path``/``kind`` from ``GET /templates``.
+
+        The daemon owns the ref format and emits it in its own listing, so match the
+        template's path (and kind) against the listing rather than constructing a ref.
+        """
+
+        descriptors = self._request("GET", f"{self._base()}/templates")
+        for descriptor in descriptors if isinstance(descriptors, list) else ():
+            if not isinstance(descriptor, dict):
+                continue
+            if descriptor.get("path") == path and (not kind or descriptor.get("kind") == kind):
+                ref = descriptor.get("ref")
+                return str(ref) if ref else None
+        return None
+
+    def create_workspace(self, *, template: str, inputs: dict[str, str]) -> str:
+        """Render a workspace from a daemon template ref; return the instance name."""
+
+        payload = {"template": template, "inputs": inputs}
+        data = self._request("POST", f"{self._base()}/workspaces", payload)
+        return str((data or {}).get("name") or "")
+
+    def create_service(self, *, template: str, workspace: str, inputs: dict[str, str], start: bool = True) -> str:
+        """Render a service into the stack mounting ``workspace``; return the instance name."""
+
+        payload = {"template": template, "workspace": workspace, "inputs": inputs, "start": start}
+        data = self._request("POST", f"{self._base()}/services/create", payload)
+        return str((data or {}).get("name") or "")
+
+    def destroy_workspace(self, name: str) -> None:
+        """Destroy a workspace and its services (``POST /workspaces/{name}/destroy``)."""
+
+        self._request("POST", f"{self._base()}/workspaces/{quote(name, safe='')}/destroy?purge=true", {})
+
+    def _base(self) -> str:
+        """Return the absolute daemon base, or raise when the daemon is unconfigured."""
+
+        if self.admin_bearer is None or self.server_base is None:
+            raise RuntimeError(
+                "operator daemon is not configured (ANGEE_OPERATOR_URL / ANGEE_OPERATOR_TOKEN unset).",
+            )
+        return self.server_base
+
+    def _request(
+        self,
+        method: str,
+        url: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        timeout: int = _PROVISION_TIMEOUT,
+    ) -> Any:
+        """Issue an authenticated daemon REST call; return the decoded JSON body (or ``None``)."""
 
         request = urllib.request.Request(
             url,
-            data=json.dumps(payload).encode(),
-            method="POST",
+            data=json.dumps(payload).encode() if payload is not None else None,
+            method=method,
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {self.admin_bearer}",
             },
         )
-        with urllib.request.urlopen(request, timeout=_MINT_TIMEOUT) as response:
-            return json.loads(response.read().decode())
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read().decode()
+        return json.loads(body) if body else None
+
+    def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """POST with the admin bearer on the short token/introspection budget."""
+
+        return cast(dict[str, Any], self._request("POST", url, payload, timeout=_MINT_TIMEOUT))
 
     @staticmethod
     def _setting(name: str) -> str | None:
