@@ -53,8 +53,18 @@ This handover is the orientation; the todo is the work.
 
 ## What remains (recommended order)
 
-Pick the smallest clean slice that delivers value; the todo has the full list. The
-big-ticket open items:
+**✅ COMPLETE (2026-06-15).** Every theme below LANDED — T17, the Phase 5 de-forks,
+the remaining T8, T2, T4, T10, Phase 7, and a final storybook/i18n/drift/docs pass —
+each gate-green + sub-agent-reviewed + committed (gate: typecheck + 399 tests + build).
+`main` was merged in (`0cf22ca3`, 11 conflicts resolved keep-both-intents; login
+redesign + OAuth + agents provisioning + VCS + operator changes integrated with the
+cleanup intact). The only non-done items are **by decision**: **T19** storybook
+fragments (KEEP), the leave-separate scopings (recorded per-line in the todo), and the
+**backend** dev-template operator-port note (out of scope for this React effort).
+Branch is still local — `/push` to publish. The list below is the historical plan;
+see `react-consistency-todo.md` for authoritative per-line status.
+
+(historical plan — all items now done or decided-leave-separate:)
 
 1. **T17 — forms onto the DSL** (largest): replace inline `<form><label>` in
    iam/operator with `Field`/`FormView`/a shared `LabeledInput`; register
