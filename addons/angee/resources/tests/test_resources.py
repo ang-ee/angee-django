@@ -833,6 +833,81 @@ def test_resource_adoption_uses_explicit_unique_field(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_resource_adoption_accepts_composite_unique_fields(tmp_path: Path) -> None:
+    """Resource adoption can match existing rows by a composite unique key."""
+
+    class CompositeClient(AngeeModel):
+        """Model whose public identity is a composite natural key."""
+
+        slug = models.SlugField()
+        environment = models.CharField(max_length=32, default="prod")
+        label = models.CharField(max_length=80, blank=True)
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "base"
+            constraints = (
+                models.UniqueConstraint(
+                    fields=("slug", "environment"),
+                    name="uniq_resource_composite_client",
+                ),
+            )
+
+    class CompositeLedger(Resource):
+        """Concrete resource ledger for composite adoption tests."""
+
+        class Meta(Resource.Meta):
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+            abstract = False
+
+    resource_dir = tmp_path / "resources"
+    resource_dir.mkdir()
+    (resource_dir / "010_base.compositeclient.csv").write_text(
+        "_xref,slug,environment,label\nanthropic,anthropic,prod,Seeded\n",
+        encoding="utf-8",
+    )
+    owner = addon(
+        tmp_path,
+        manifest={
+            "master": (),
+            "install": (
+                {
+                    "path": "resources/010_base.compositeclient.csv",
+                    "adopt": ["slug", "environment"],
+                },
+            ),
+            "demo": (),
+        },
+    )
+
+    models_to_create = (CompositeClient, CompositeLedger)
+    with connection.schema_editor() as schema_editor:
+        for model in models_to_create:
+            schema_editor.create_model(model)
+    try:
+        existing = CompositeClient.objects.create(slug="anthropic", environment="prod", label="Existing")
+
+        result = CompositeLedger.objects.load_addons(
+            (owner,),
+            tiers=[Resource.Tier.INSTALL],
+        )
+
+        assert result.created == 0
+        assert result.updated == 0
+        assert result.skipped == 1
+        existing.refresh_from_db()
+        assert existing.label == "Existing"
+        assert CompositeLedger.objects.get(xref="anthropic").target_id == existing.public_id
+    finally:
+        with connection.schema_editor() as schema_editor:
+            for model in reversed(models_to_create):
+                schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
 def test_resource_adoption_rejects_ambiguous_unique_fields(
     tmp_path: Path,
 ) -> None:

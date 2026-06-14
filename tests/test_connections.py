@@ -19,6 +19,48 @@ from angee.iam.models import AccountStatus
 from tests.conftest import Credential, ExternalAccount, OAuthClient, _create_missing_tables
 
 
+def test_oauth_client_blank_client_id_means_needs_client() -> None:
+    """Unconfigured public-provider placeholders validate without a client id."""
+
+    oauth_client = OAuthClient(
+        slug="anthropic",
+        display_name="Anthropic",
+        client_id="",
+        is_enabled=True,
+    )
+
+    oauth_client.full_clean(validate_unique=False, validate_constraints=False)
+
+    assert oauth_client.configuration_state == "needs_client"
+
+
+def test_oauth_client_claim_accessors_support_dotted_paths() -> None:
+    """Provider profile documents can expose identity claims below nested objects."""
+
+    oauth_client = OAuthClient(
+        slug="anthropic",
+        display_name="Anthropic",
+        client_id="anthropic-client",
+        external_id_claim="account.uuid",
+        email_claim="account.email_address",
+        display_name_claim="account.display_name",
+        avatar_url_claim="account.avatar_url",
+    )
+    claims = {
+        "account": {
+            "uuid": "acct_123",
+            "email_address": "claude@example.com",
+            "display_name": "Claude User",
+            "avatar_url": "https://avatar.example/claude.png",
+        },
+    }
+
+    assert oauth_client.external_id_from_claims(claims) == "acct_123"
+    assert oauth_client.email_from_claims(claims) == "claude@example.com"
+    assert oauth_client.display_name_from_claims(claims, "fallback@example.com") == "Claude User"
+    assert oauth_client.avatar_url_from_claims(claims) == "https://avatar.example/claude.png"
+
+
 @pytest.mark.django_db(transaction=True)
 def test_connection_managers_are_idempotent_and_delegate_static_token_material() -> None:
     """External account linking and credential upsert are idempotent."""
@@ -286,6 +328,7 @@ def test_oauth_client_manager_syncs_shape_and_secret_from_settings(settings: Any
                 "authorize_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
                 "token_endpoint": "https://oauth2.googleapis.com/token",
                 "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
+                "token_request_format": "json",
                 "is_oidc": True,
                 "default_scopes": ["openid", "email"],
                 "allowed_email_domains": ["example.com"],
@@ -301,6 +344,7 @@ def test_oauth_client_manager_syncs_shape_and_secret_from_settings(settings: Any
         assert oauth_client.client_secret == "from-settings"
         assert oauth_client.is_oidc is True
         assert oauth_client.default_scopes == ["openid", "email"]
+        assert oauth_client.token_request_format == "json"
 
         settings.ANGEE_IAM_OAUTH_CLIENTS = (
             {

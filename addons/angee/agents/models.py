@@ -133,6 +133,14 @@ class InferenceProvider(Capability):
         model = apps.get_model("agents", "InferenceModel")
         return int(model.objects.sync_from_provider(self))
 
+    def service_environment(self) -> dict[str, str]:
+        """Return credential-backed environment variables for rendered services."""
+
+        integration = getattr(self, "integration", None)
+        if integration is None:
+            return {}
+        return integration.credential_env_value()
+
 
 class InferenceModelManager(RebacManager):
     """Manager owning the upsert of model rows from a provider's catalogue."""
@@ -402,3 +410,12 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         """Return the agent's name."""
 
         return self.name
+
+    def service_environment(self) -> dict[str, str]:
+        """Return model-provider environment variables for rendered services."""
+
+        model = getattr(self, "model", None)
+        provider = getattr(model, "provider", None) if model is not None else None
+        if provider is None:
+            return {}
+        return cast(dict[str, str], provider.service_environment())

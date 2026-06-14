@@ -1,10 +1,9 @@
 _meta:
   model: iam.OAuthClient
 rows:
-  # A demo OIDC connection so the login page shows an OAuth sign-in button. The
-  # client id is a placeholder — the real authorize round-trip needs a deployment
-  # to configure its own credentials; this is enough to demonstrate and test the
-  # "Continue with <provider>" flow up to the provider redirect.
+  # A disabled demo OIDC connection. The client id is a placeholder — the real
+  # authorize round-trip needs a deployment to configure and enable its own
+  # credentials.
   - _xref: demo_google
     fields:
       slug: google
@@ -12,7 +11,7 @@ rows:
       display_name: Google (demo)
       client_id: demo-oidc-client
       is_oidc: true
-      is_enabled: true
+      is_enabled: false
       discovery_url: https://accounts.google.com/.well-known/openid-configuration
       authorize_endpoint: https://accounts.google.com/o/oauth2/v2/auth
       token_endpoint: https://oauth2.googleapis.com/token

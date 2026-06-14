@@ -52,7 +52,10 @@ import {
   relationFieldInfo,
   type RelationFieldInfo,
 } from "./model-metadata-defaults";
-import { RecordActionBar } from "./RecordActionBar";
+import {
+  RecordActionBar,
+  type RecordDeleteAction,
+} from "./RecordActionBar";
 import { RelationFieldWidget } from "./RelationFieldWidget";
 
 export type FieldKind = PageFieldKind;
@@ -83,6 +86,8 @@ export interface FormViewProps {
   toolbarStart?: React.ReactNode;
   /** Right-side record chrome the host renders after the toolbar spacer. */
   toolbar?: React.ReactNode;
+  /** Optional delete command folded into the record action menu. */
+  deleteAction?: RecordDeleteAction;
   /** Class name applied to the form root. */
   className?: string;
 }
@@ -128,6 +133,7 @@ export function FormView({
   submitLabel,
   toolbarStart,
   toolbar,
+  deleteAction,
   className,
 }: FormViewProps): React.ReactElement {
   const hasFieldChildren = hasPageField(children);
@@ -496,12 +502,13 @@ export function FormView({
                     </Button>
                   </div>
                 ) : null}
-                {declaredActions.length > 0 ? (
+                {declaredActions.length > 0 || deleteAction !== undefined ? (
                   <RecordActionBar
                     record={record ?? null}
                     actions={declaredActions}
                     applyPatch={applyPatch}
                     reload={reload}
+                    deleteAction={deleteAction}
                   />
                 ) : null}
               </div>

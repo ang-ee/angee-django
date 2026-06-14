@@ -12,10 +12,14 @@ import {
 import { useAuthoredMutation } from "@angee/sdk";
 
 import {
+  CONNECT_ACCOUNT_START_MUTATION,
   IAM_DISCOVER_OIDC_ENDPOINTS_MUTATION,
+  type ConnectAccountStartData,
+  type ConnectAccountStartVariables,
   type DiscoverOidcEndpointsData,
   type IamIdVariables,
 } from "../documents";
+import { connectCallbackRedirectUri } from "../redirects";
 
 const MODEL = "OAuthClient";
 
@@ -30,12 +34,29 @@ const providerList = (
   </List>
 );
 
+function canConnectAccount(record: Record<string, unknown>): boolean {
+  if (record.isEnabled !== true) return false;
+  if (!fieldString(record.clientId)) return false;
+  return Boolean(
+    fieldString(record.discoveryUrl) ||
+      (fieldString(record.authorizeEndpoint) && fieldString(record.tokenEndpoint)),
+  );
+}
+
+function fieldString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 /** OAuth/OIDC login providers (full CRUD plus enable/disable and discovery). */
 export function ProvidersPage(): React.ReactElement {
   const [discoverEndpoints] = useAuthoredMutation<
     DiscoverOidcEndpointsData,
     IamIdVariables
   >(IAM_DISCOVER_OIDC_ENDPOINTS_MUTATION);
+  const [connectAccountStart] = useAuthoredMutation<
+    ConnectAccountStartData,
+    ConnectAccountStartVariables
+  >(CONNECT_ACCOUNT_START_MUTATION);
 
   const discover = React.useCallback(
     async (ctx: ActionContext) => {
@@ -45,6 +66,26 @@ export function ProvidersPage(): React.ReactElement {
       return result?.discoverOidcEndpoints.message;
     },
     [discoverEndpoints],
+  );
+
+  const connect = React.useCallback(
+    async (ctx: ActionContext) => {
+      if (typeof window === "undefined" || typeof ctx.record?.id !== "string") {
+        return;
+      }
+      const result = await connectAccountStart({
+        id: ctx.record.id,
+        redirectUri: connectCallbackRedirectUri(),
+        next: "/iam/accounts",
+      });
+      const payload = result?.connectAccountStart;
+      if (payload?.authorizeUrl) {
+        window.location.assign(payload.authorizeUrl);
+        return "Redirecting...";
+      }
+      throw new Error(payload?.error ?? "Could not start account connection.");
+    },
+    [connectAccountStart],
   );
 
   return (
@@ -64,6 +105,7 @@ export function ProvidersPage(): React.ReactElement {
           <Field name="discoveryUrl" />
           <Field name="authorizeEndpoint" />
           <Field name="tokenEndpoint" />
+          <Field name="tokenRequestFormat" />
           <Field name="userinfoEndpoint" />
           <Field name="jwksUri" />
           <Field name="revokeEndpoint" />
@@ -79,6 +121,20 @@ export function ProvidersPage(): React.ReactElement {
           <Field name="scopesCatalogue" widget="tagInput" />
           <Field name="allowedEmailDomains" widget="tagInput" />
         </Group>
+        <Group label="OAuth metadata" columns={2}>
+          <Field name="authorizeParams" />
+          <Field name="tokenParams" />
+          <Field name="externalIdClaim" />
+          <Field name="emailClaim" />
+          <Field name="displayNameClaim" />
+          <Field name="avatarUrlClaim" />
+        </Group>
+        <Action
+          id="connect"
+          label="Connect account"
+          run={connect}
+          visibleWhen={canConnectAccount}
+        />
         <Action id="discover" label="Discover endpoints" run={discover} />
         <Action
           id="disable"

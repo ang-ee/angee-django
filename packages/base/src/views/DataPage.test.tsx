@@ -45,6 +45,7 @@ import {
 } from "./ListView";
 import { GroupListView } from "./GroupListView";
 import {
+  Action,
   Column,
   Field,
   Group,
@@ -734,6 +735,32 @@ describe("DataPage", () => {
     await waitFor(() =>
       expect(boardButton.getAttribute("aria-pressed")).toBe("true"),
     );
+  });
+
+  test("folds record actions into the Actions menu", async () => {
+    render(
+      <TestUrlState>
+        <DataPage
+          model="notes.Note"
+          columns={columns}
+          recordId="note-2"
+          placement="inline"
+        >
+          <Form>
+            <Field name="title" label="Title" title />
+            <Action id="archive" label="Archive" set={{ status: "ARCHIVED" }} />
+          </Form>
+        </DataPage>
+      </TestUrlState>,
+    );
+
+    await screen.findByLabelText("Title");
+    expect(screen.getAllByRole("button", { name: "Actions" })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Archive" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Delete" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Archive" })).toBeTruthy();
   });
 
   test("reads board state from Router search and writes view changes", async () => {

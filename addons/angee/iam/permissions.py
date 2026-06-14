@@ -14,6 +14,7 @@ import strawberry
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.http import HttpRequest
+from rebac import PermissionDenied
 from rebac.managers import RebacManager
 from strawberry.permission import BasePermission
 
@@ -28,6 +29,20 @@ def is_authenticated(user: Any) -> bool:
     """Return whether ``user`` is a real authenticated session user."""
 
     return not isinstance(user, AnonymousUser) and bool(getattr(user, "is_authenticated", False))
+
+
+def session_user(info: strawberry.Info) -> Any:
+    """Return the authenticated session user or raise a REBAC denial.
+
+    The shared "this resolver requires a signed-in user" gate; iam's resolvers
+    and downstream self-service mutations (e.g. ``integrate``) use it so the
+    anonymous-deny check lives in exactly one place.
+    """
+
+    user = getattr(request_from_info(info), "user", None)
+    if not is_authenticated(user):
+        raise PermissionDenied("Authentication required.")
+    return user
 
 
 class PlatformAdminPermission(BasePermission):

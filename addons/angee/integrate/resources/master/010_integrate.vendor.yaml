@@ -25,6 +25,14 @@
   slug: anthropic
   display_name: Anthropic
   website_url: https://www.anthropic.com
+- xref: gemini
+  slug: gemini
+  display_name: Google Gemini
+  website_url: https://gemini.google.com
+- xref: grok
+  slug: grok
+  display_name: Grok
+  website_url: https://x.ai/grok
 - xref: openai
   slug: openai
   display_name: OpenAI

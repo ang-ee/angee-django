@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Iterable, Mapping
 from typing import Any
 from urllib import error, parse, request
@@ -43,6 +44,7 @@ _ALLOWED_JWT_ALGORITHMS = (
     "ES256",
 )
 _DISCOVERY_CACHE_PREFIX = "angee.iam.oidc.discovery:"
+logger = logging.getLogger(__name__)
 
 
 def fetch_discovery(oauth_client: object) -> dict[str, Any]:
@@ -76,25 +78,32 @@ def build_authorize_url(
     oauth_client: object,
     *,
     state: str,
-    nonce: str,
     redirect_uri: str,
     scopes: Iterable[str],
+    nonce: str | None = None,
     code_challenge: str | None = None,
 ) -> str:
-    """Return the provider authorization URL for one OIDC code flow."""
+    """Return the provider authorization URL for one OAuth/OIDC code flow.
+
+    Passing ``nonce`` selects the OIDC variant — it adds the ``nonce`` parameter
+    and ensures the required ``openid`` scope; a plain OAuth account-connect flow
+    passes ``nonce=None`` and gets neither.
+    """
 
     authorize_endpoint = _endpoint(oauth_client, "authorize_endpoint", "authorization_endpoint")
     effective_scopes = list(scopes)
-    if "openid" not in effective_scopes:
+    if nonce is not None and "openid" not in effective_scopes:
         effective_scopes.insert(0, "openid")
     query: dict[str, str] = {
+        **_param_values(oauth_client, "authorize_param_values"),
         "client_id": str(getattr(oauth_client, "client_id", "")),
-        "nonce": nonce,
         "redirect_uri": redirect_uri,
         "response_type": "code",
         "scope": " ".join(effective_scopes),
         "state": state,
     }
+    if nonce is not None:
+        query["nonce"] = nonce
     if getattr(oauth_client, "supports_pkce", False) and code_challenge:
         query["code_challenge"] = code_challenge
         query["code_challenge_method"] = "S256"
@@ -107,11 +116,13 @@ def exchange_code(
     code: str,
     redirect_uri: str,
     code_verifier: str | None = None,
+    state: str | None = None,
 ) -> dict[str, Any]:
     """Exchange an authorization code for token material."""
 
     token_endpoint = _endpoint(oauth_client, "token_endpoint", "token_endpoint")
-    payload = {
+    payload: dict[str, Any] = {
+        **_param_values(oauth_client, "token_param_values"),
         "client_id": str(getattr(oauth_client, "client_id", "")),
         "code": code,
         "grant_type": "authorization_code",
@@ -120,11 +131,24 @@ def exchange_code(
     client_secret = str(getattr(oauth_client, "client_secret", "") or "")
     if client_secret:
         payload["client_secret"] = client_secret
+    if state is not None:
+        payload["state"] = state
     if getattr(oauth_client, "supports_pkce", False) and code_verifier:
         payload["code_verifier"] = code_verifier
     try:
-        response = _post_form(token_endpoint, payload)
-    except OidcFlowError:
+        # The OAuthClient model owns the normalization via token_request_format_value.
+        if getattr(oauth_client, "token_request_format_value", "form") == "json":
+            response = _post_json(token_endpoint, payload)
+        else:
+            response = _post_form(token_endpoint, payload)
+    except OidcFlowError as exc:
+        if exc.code == TOKEN_EXCHANGE_FAILED:
+            logger.warning(
+                "OAuth token exchange failed for %s: status=%s body=%r",
+                str(getattr(oauth_client, "slug", getattr(oauth_client, "client_id", "unknown")) or "unknown"),
+                exc.http_status,
+                _safe_error_body(exc.body),
+            )
         raise
     except Exception as exc:
         raise OidcFlowError(TOKEN_EXCHANGE_FAILED, 400) from exc
@@ -243,6 +267,15 @@ def _endpoint(oauth_client: object, oauth_client_field: str, discovery_field: st
     return value
 
 
+def _param_values(oauth_client: object, property_name: str) -> dict[str, str]:
+    """Return provider-specific params exposed by an OAuth client property."""
+
+    value = getattr(oauth_client, property_name, {})
+    if isinstance(value, Mapping):
+        return {str(key): str(item) for key, item in value.items() if item is not None}
+    return {}
+
+
 def _with_query(url: str, query: Mapping[str, str]) -> str:
     """Return ``url`` with ``query`` appended or merged."""
 
@@ -273,7 +306,7 @@ def _get_json(
         raise OidcFlowError(error_code, 400) from exc
 
 
-def _post_form(url: str, fields: Mapping[str, str]) -> dict[str, Any]:
+def _post_form(url: str, fields: Mapping[str, Any]) -> dict[str, Any]:
     """POST a form body and return the JSON response."""
 
     data = parse.urlencode(fields).encode("utf-8")
@@ -283,6 +316,33 @@ def _post_form(url: str, fields: Mapping[str, str]) -> dict[str, Any]:
         headers={
             "Accept": "application/json",
             "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": _BROWSER_USER_AGENT,
+        },
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as response:
+            return _loads_json(response.read(), error_code=TOKEN_EXCHANGE_FAILED)
+    except error.HTTPError as exc:
+        raise OidcFlowError(
+            TOKEN_EXCHANGE_FAILED,
+            exc.code,
+            body=_http_error_body(exc),
+        ) from exc
+    except (error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise OidcFlowError(TOKEN_EXCHANGE_FAILED, 400) from exc
+
+
+def _post_json(url: str, fields: Mapping[str, Any]) -> dict[str, Any]:
+    """POST a JSON body and return the JSON response."""
+
+    data = json.dumps(dict(fields)).encode("utf-8")
+    req = request.Request(
+        url,
+        data=data,
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
             "User-Agent": _BROWSER_USER_AGENT,
         },
         method="POST",
@@ -350,6 +410,30 @@ def _http_error_body(exc: error.HTTPError) -> Any:
         return json.loads(text)
     except json.JSONDecodeError:
         return text
+
+
+def _safe_error_body(value: Any) -> Any:
+    """Return a provider error body with obvious credential fields redacted."""
+
+    if isinstance(value, Mapping):
+        redacted_keys = {
+            "access_token",
+            "refresh_token",
+            "id_token",
+            "token",
+            "code",
+            "code_verifier",
+            "client_secret",
+        }
+        return {
+            str(key): "[redacted]"
+            if str(key).lower() in redacted_keys
+            else _safe_error_body(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_safe_error_body(item) for item in value]
+    return value
 
 
 def _audience_matches(value: object, expected: str) -> bool:

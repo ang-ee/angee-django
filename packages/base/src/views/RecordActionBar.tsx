@@ -2,9 +2,16 @@ import * as React from "react";
 import type { Row } from "@angee/sdk";
 
 import { Button } from "../ui/button";
+import { DropdownMenu } from "../ui/dropdown-menu";
 import { Glyph } from "../chrome/Glyph";
 import { useConfirm, usePrompt, useToast } from "../feedback";
 import type { ActionDescriptor } from "./page";
+
+export interface RecordDeleteAction {
+  canDelete: boolean;
+  isPending: boolean;
+  onDelete: () => void;
+}
 
 /**
  * Render a record's domain actions and run them against the open record.
@@ -21,11 +28,13 @@ export function RecordActionBar({
   actions,
   applyPatch,
   reload,
+  deleteAction,
 }: {
   record: Row | null;
   actions: readonly ActionDescriptor[];
   applyPatch: (patch: Record<string, unknown>) => Promise<Row | null>;
   reload: () => void;
+  deleteAction?: RecordDeleteAction;
 }): React.ReactElement | null {
   const confirm = useConfirm();
   const prompt = usePrompt();
@@ -97,29 +106,63 @@ export function RecordActionBar({
     (action) =>
       !action.visibleWhen || (record != null && action.visibleWhen(record)),
   );
-  if (visibleActions.length === 0) return null;
+  if (visibleActions.length === 0 && deleteAction === undefined) return null;
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      {visibleActions.map((action) => (
-        <Button
-          key={action.id}
-          type="button"
-          size="sm"
-          variant={action.danger ? "danger" : "secondary"}
-          // A declarative (`set`/`prompt`) action needs an open record id; a
-          // custom `run` may not, so leave it enabled.
-          disabled={
-            Boolean(action.disabled) || (recordId === null && !action.run)
-          }
-          loading={pendingId === action.id}
-          onClick={() => void runAction(action)}
-        >
-          {action.icon ? <Glyph name={action.icon} /> : null}
-          {action.label}
-        </Button>
-      ))}
-    </div>
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger
+        render={
+          // A DropdownMenu.Item closes the menu on click, so the item's
+          // pendingId-disabled state is never seen. Drive the affordance from the
+          // trigger instead: while any action runs it shows loading and is
+          // disabled, so a slow non-navigating action gives feedback and can't be
+          // re-fired from a reopened menu.
+          <Button
+            type="button"
+            variant="ghost"
+            size="md"
+            loading={pendingId !== null}
+          >
+            <Glyph name="more-vertical" />
+            Actions
+          </Button>
+        }
+      />
+      <DropdownMenu.Portal>
+        <DropdownMenu.Positioner sideOffset={6} align="start">
+          <DropdownMenu.Content className="w-52">
+            {deleteAction !== undefined ? (
+              <DropdownMenu.Item
+                variant="danger"
+                disabled={!deleteAction.canDelete || deleteAction.isPending}
+                onClick={deleteAction.onDelete}
+              >
+                <Glyph name="trash" />
+                Delete
+              </DropdownMenu.Item>
+            ) : null}
+            {deleteAction !== undefined && visibleActions.length > 0 ? (
+              <DropdownMenu.Separator />
+            ) : null}
+            {visibleActions.map((action) => (
+              <DropdownMenu.Item
+                key={action.id}
+                variant={action.danger ? "danger" : "default"}
+                disabled={
+                  Boolean(action.disabled) ||
+                  pendingId === action.id ||
+                  (recordId === null && !action.run)
+                }
+                onClick={() => void runAction(action)}
+              >
+                {action.icon ? <Glyph name={action.icon} /> : null}
+                {action.label}
+              </DropdownMenu.Item>
+            ))}
+          </DropdownMenu.Content>
+        </DropdownMenu.Positioner>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   );
 }
 

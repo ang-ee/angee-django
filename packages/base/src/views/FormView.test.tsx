@@ -140,7 +140,7 @@ describe("FormView", () => {
     ).toThrow(/cannot mix the fields\/groups props with element children/);
   });
 
-  test("renders declared record actions in the toolbar", async () => {
+  test("renders declared record actions in the action menu", async () => {
     renderWithProviders(
       <FormView model="notes.Note" id="note-1">
         <Field name="title" label="Title" title />
@@ -148,7 +148,8 @@ describe("FormView", () => {
       </FormView>,
     );
 
-    await screen.findByRole("button", { name: "Archive" });
+    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
+    await screen.findByRole("menuitem", { name: "Archive" });
   });
 
   test("runs a declarative set action through the update mutation", async () => {
@@ -159,7 +160,8 @@ describe("FormView", () => {
       </FormView>,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Archive" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Archive" }));
 
     await waitFor(() =>
       expect(sdkMocks.mutate).toHaveBeenCalledWith({
@@ -177,7 +179,8 @@ describe("FormView", () => {
       </FormView>,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Sync" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Sync" }));
 
     await waitFor(() => expect(run).toHaveBeenCalledTimes(1));
     expect(run.mock.calls[0]?.[0]).toMatchObject({ record: { id: "note-1" } });

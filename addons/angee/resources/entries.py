@@ -57,6 +57,9 @@ def resolve_model(label: str) -> type[models.Model]:
 ResourceDeclaration: TypeAlias = Mapping[str, Any]
 """One normalized resource entry declaration."""
 
+AdoptDeclaration: TypeAlias = str | bool | tuple[str, ...]
+"""Normalized resource adoption declaration."""
+
 EntryKey = tuple[str, str]
 """Dependency graph key identifying one resource entry by addon and source."""
 
@@ -132,11 +135,16 @@ def _resource_entry(app_config: AppConfig, declaration: object) -> dict[str, Any
     return entry
 
 
-def _resource_adopt_value(value: object) -> str | bool:
+def _resource_adopt_value(value: object) -> AdoptDeclaration:
     """Return the normalized adoption declaration for one resource entry."""
 
     if isinstance(value, str):
         return value
+    if isinstance(value, Iterable) and not isinstance(value, bytes | Mapping):
+        fields = tuple(str(item) for item in value)
+        if not fields:
+            raise ImproperlyConfigured("adopt must name at least one field")
+        return fields
     return bool(value)
 
 
@@ -198,8 +206,8 @@ class ResourceEntry:
     depends_on: tuple[str, ...] = ()
     """Resource source keys that must load before this entry."""
 
-    adopt: str | bool = False
-    """Unique field used for adoption; ``True`` infers one unique field."""
+    adopt: AdoptDeclaration = False
+    """Unique field(s) used for adoption; ``True`` infers one unique field."""
 
     _rows: tuple[ResourceRow, ...] | None = field(
         default=None,
@@ -225,7 +233,7 @@ class ResourceEntry:
             model=declaration.get("model"),
             encoding=declaration.get("encoding", "utf-8"),
             depends_on=declaration.get("depends_on", ()),
-            adopt=declaration.get("adopt", False),
+            adopt=_resource_adopt_value(declaration["adopt"]) if "adopt" in declaration else False,
         )
 
     @property

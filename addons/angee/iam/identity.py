@@ -19,6 +19,7 @@ from angee.iam.models import AccountStatus
 from angee.iam.oidc import client as client_module
 from angee.iam.oidc import state
 from angee.iam.oidc.errors import (
+    EXTERNAL_ACCOUNT_RESOLUTION_FAILED,
     IDENTITY_RESOLUTION_FAILED,
     INVALID_ID_TOKEN,
     INVALID_STATE,
@@ -40,6 +41,17 @@ class LinkCompletion:
     """Linked account, captured user, and verified claims from one OIDC link flow."""
 
     account: models.Model
+    user: AbstractBaseUser
+    claims: dict[str, Any]
+    next_path: str
+
+
+@dataclass(frozen=True, slots=True)
+class AccountConnectionCompletion:
+    """Connected account, captured credential, and verified provider claims."""
+
+    account: models.Model
+    credential: models.Model
     user: AbstractBaseUser
     claims: dict[str, Any]
     next_path: str
@@ -67,7 +79,7 @@ class OidcRedirectCompletion:
             redirect_uri,
             expected_flow=state.StateFlow.LOGIN,
         )
-        claims, _tokens = self._claims_from_code(code, redirect_uri, record)
+        claims, _tokens = self._claims_from_code(code, state_token, redirect_uri, record)
         sub = self._required_sub(claims)
         user = resolve(self.oauth_client, sub=sub, email=self._claim_email(claims), claims=claims)
         return LoginCompletion(user=user, claims=claims, next_path=self._record_next_path(record))
@@ -79,33 +91,72 @@ class OidcRedirectCompletion:
         state_token: str,
         redirect_uri: str,
     ) -> LinkCompletion:
-        """Complete an authenticated account-link redirect and return the linked account."""
+        """Complete an authenticated OIDC account-link redirect and return the linked account."""
+
+        result = self._complete_account_flow(
+            code=code,
+            state_token=state_token,
+            redirect_uri=redirect_uri,
+            expected_flow=state.StateFlow.LINK,
+        )
+        return LinkCompletion(
+            account=result.account,
+            user=result.user,
+            claims=result.claims,
+            next_path=result.next_path,
+        )
+
+    def complete_account_connect(
+        self,
+        *,
+        code: str,
+        state_token: str,
+        redirect_uri: str,
+    ) -> AccountConnectionCompletion:
+        """Complete an authenticated OAuth account-connect redirect."""
+
+        return self._complete_account_flow(
+            code=code,
+            state_token=state_token,
+            redirect_uri=redirect_uri,
+            expected_flow=state.StateFlow.CONNECT,
+        )
+
+    def _complete_account_flow(
+        self,
+        *,
+        code: str,
+        state_token: str,
+        redirect_uri: str,
+        expected_flow: state.StateFlow,
+    ) -> AccountConnectionCompletion:
+        """Link an external account and upsert its OAuth credential for a flow."""
 
         record = self._consume_state(
             state_token,
             redirect_uri,
-            expected_flow=state.StateFlow.LINK,
+            expected_flow=expected_flow,
         )
         link_user = self._link_state_user(record)
-        claims, tokens = self._claims_from_code(code, redirect_uri, record)
-        sub = self._required_sub(claims)
-
+        claims, tokens = self._account_claims_from_code(code, state_token, redirect_uri, record)
+        external_id = self._required_external_id(claims)
         Account = cast(Any, apps.get_model("iam", "ExternalAccount"))
         Credential = cast(Any, apps.get_model("iam", "Credential"))
         email = self._claim_email(claims) or ""
-        with system_context(reason="iam.oidc.link"), transaction.atomic():
-            account = Account.objects.filter(oauth_client=self.oauth_client, external_id=sub).first()
+        with system_context(reason="iam.oauth.connect"), transaction.atomic():
+            account = Account.objects.filter(oauth_client=self.oauth_client, external_id=external_id).first()
             if account is not None:
                 owner = Account.objects.owner_for(account)
                 if owner is not None and owner.pk != link_user.pk:
                     raise OidcFlowError("account_already_linked", 409)
             account = Account.objects.link(
                 self.oauth_client,
-                sub,
+                external_id,
                 owner=link_user,
                 email=email,
                 identity_claims=claims,
-                display_name=Account.display_name_from_claims(claims, email),
+                display_name=self.oauth_client.display_name_from_claims(claims, email),
+                avatar_url=self.oauth_client.avatar_url_from_claims(claims),
             )
             credential = Credential.objects.upsert_for_user(
                 link_user,
@@ -116,8 +167,9 @@ class OidcRedirectCompletion:
             )
             account.credential = credential
             account.save(update_fields=["credential", "updated_at"])
-        return LinkCompletion(
+        return AccountConnectionCompletion(
             account=cast(models.Model, account),
+            credential=cast(models.Model, credential),
             user=link_user,
             claims=claims,
             next_path=self._record_next_path(record),
@@ -126,6 +178,7 @@ class OidcRedirectCompletion:
     def _claims_from_code(
         self,
         code: str,
+        state_token: str,
         redirect_uri: str,
         record: state.StateRecord,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -136,6 +189,7 @@ class OidcRedirectCompletion:
             code=code,
             redirect_uri=redirect_uri,
             code_verifier=record.code_verifier,
+            state=state_token,
         )
         claims = client_module.verify_id_token(
             self.oauth_client,
@@ -149,6 +203,30 @@ class OidcRedirectCompletion:
         if not userinfo:
             return claims, tokens
         return {**userinfo, **claims}, tokens
+
+    def _account_claims_from_code(
+        self,
+        code: str,
+        state_token: str,
+        redirect_uri: str,
+        record: state.StateRecord,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Return account identity claims for either OIDC or plain OAuth clients."""
+
+        if getattr(self.oauth_client, "is_oidc", False):
+            return self._claims_from_code(code, state_token, redirect_uri, record)
+        tokens = client_module.exchange_code(
+            self.oauth_client,
+            code=code,
+            redirect_uri=redirect_uri,
+            code_verifier=record.code_verifier,
+            state=state_token,
+        )
+        claims = client_module.fetch_userinfo(
+            self.oauth_client,
+            str(tokens.get("access_token", "") or ""),
+        )
+        return claims, tokens
 
     def _consume_state(
         self,
@@ -193,11 +271,19 @@ class OidcRedirectCompletion:
             raise OidcFlowError(INVALID_ID_TOKEN, 400)
         return str(sub)
 
+    def _required_external_id(self, claims: dict[str, Any]) -> str:
+        """Return the provider account id or fail the account-connect completion."""
+
+        external_id = self.oauth_client.external_id_from_claims(claims)
+        if not external_id:
+            raise OidcFlowError(EXTERNAL_ACCOUNT_RESOLUTION_FAILED, 400)
+        return external_id
+
     def _claim_email(self, claims: dict[str, Any]) -> str | None:
         """Return the email claim when present."""
 
-        value = claims.get("email")
-        return str(value) if value else None
+        value = self.oauth_client.email_from_claims(claims)
+        return value or None
 
     def _record_next_path(self, record: state.StateRecord) -> str:
         """Return the stored post-flow redirect path with the public default."""
@@ -408,6 +494,39 @@ async def acomplete_link(
     return await sync_to_async(complete_link, thread_sensitive=True)(
         oauth_client,
         user,
+        code=code,
+        state_token=state_token,
+        redirect_uri=redirect_uri,
+    )
+
+
+def complete_account_connect(
+    oauth_client: Any,
+    *,
+    code: str,
+    state_token: str,
+    redirect_uri: str,
+) -> AccountConnectionCompletion:
+    """Complete an authenticated OAuth account-connect redirect."""
+
+    return OidcRedirectCompletion(oauth_client).complete_account_connect(
+        code=code,
+        state_token=state_token,
+        redirect_uri=redirect_uri,
+    )
+
+
+async def acomplete_account_connect(
+    oauth_client: Any,
+    *,
+    code: str,
+    state_token: str,
+    redirect_uri: str,
+) -> AccountConnectionCompletion:
+    """Async wrapper for ``complete_account_connect``."""
+
+    return await sync_to_async(complete_account_connect, thread_sensitive=True)(
+        oauth_client,
         code=code,
         state_token=state_token,
         redirect_uri=redirect_uri,

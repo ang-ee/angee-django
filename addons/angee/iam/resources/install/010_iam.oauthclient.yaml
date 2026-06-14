@@ -1,0 +1,105 @@
+# Public OAuth provider seeds (install tier). Public clients intentionally omit
+# client secrets; deployment-specific private clients still belong in settings.
+_meta:
+  model: iam.OAuthClient
+rows:
+  - _xref: anthropic
+    fields:
+      slug: anthropic
+      environment: prod
+      display_name: Anthropic
+      icon: anthropic
+      client_id: 9d1c250a-e61b-44d9-88ed-5944d1962f5e
+      authorize_endpoint: https://platform.claude.com/oauth/authorize
+      token_endpoint: https://platform.claude.com/v1/oauth/token
+      userinfo_endpoint: https://api.anthropic.com/api/oauth/profile
+      token_request_format: json
+      is_oidc: false
+      is_enabled: true
+      supports_pkce: true
+      supports_refresh: true
+      scopes_catalogue:
+        - user:profile
+        - user:inference
+        - org:create_api_key
+        - user:sessions:claude_code
+        - user:mcp_servers
+        - user:file_upload
+      default_scopes:
+        - user:profile
+        - user:inference
+        - org:create_api_key
+        - user:sessions:claude_code
+        - user:mcp_servers
+        - user:file_upload
+      authorize_params:
+        code: "true"
+      external_id_claim: account.uuid
+      email_claim: account.email_address
+      display_name_claim: account.display_name
+  - _xref: gemini
+    fields:
+      slug: gemini
+      environment: prod
+      display_name: Google Gemini
+      icon: google
+      client_id: 681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com
+      issuer: https://accounts.google.com
+      authorize_endpoint: https://accounts.google.com/o/oauth2/v2/auth
+      token_endpoint: https://oauth2.googleapis.com/token
+      userinfo_endpoint: https://www.googleapis.com/oauth2/v2/userinfo
+      jwks_uri: https://www.googleapis.com/oauth2/v3/certs
+      discovery_url: https://accounts.google.com/.well-known/openid-configuration
+      is_oidc: true
+      is_enabled: true
+      supports_pkce: true
+      supports_refresh: true
+      scopes_catalogue:
+        - https://www.googleapis.com/auth/cloud-platform
+        - https://www.googleapis.com/auth/userinfo.email
+        - https://www.googleapis.com/auth/userinfo.profile
+      default_scopes:
+        - https://www.googleapis.com/auth/cloud-platform
+        - https://www.googleapis.com/auth/userinfo.email
+        - https://www.googleapis.com/auth/userinfo.profile
+      authorize_params:
+        access_type: offline
+      external_id_claim: sub
+      email_claim: email
+      display_name_claim: name
+      avatar_url_claim: picture
+  - _xref: grok
+    fields:
+      slug: grok
+      environment: prod
+      display_name: Grok
+      icon: grok
+      client_id: b1a00492-073a-47ea-816f-4c329264a828
+      issuer: https://auth.x.ai
+      authorize_endpoint: https://auth.x.ai/oauth2/authorize
+      token_endpoint: https://auth.x.ai/oauth2/token
+      discovery_url: https://auth.x.ai/.well-known/openid-configuration
+      is_oidc: true
+      is_enabled: false
+      supports_pkce: true
+      supports_refresh: true
+      scopes_catalogue:
+        - openid
+        - profile
+        - email
+        - offline_access
+        - grok-cli:access
+        - api:access
+      default_scopes:
+        - openid
+        - profile
+        - email
+        - offline_access
+        - grok-cli:access
+        - api:access
+      authorize_params:
+        plan: generic
+      external_id_claim: sub
+      email_claim: email
+      display_name_claim: name
+      avatar_url_claim: picture

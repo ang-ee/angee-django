@@ -15,9 +15,9 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
-from rebac import system_context
+from rebac import PermissionDenied, system_context
 from strawberry import auto, relay
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
@@ -28,11 +28,13 @@ from angee.graphql.crud import crud
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
+from angee.iam.permissions import session_user as _session_user
 from angee.iam.schema import CredentialType, ExternalAccountType, UserType
 from angee.integrate.registry import bridge_models
 
 Vendor = apps.get_model("integrate", "Vendor")
 Integration = apps.get_model("integrate", "Integration")
+Credential = apps.get_model("iam", "Credential")
 WebhookSubscription = apps.get_model("integrate", "WebhookSubscription")
 VCSIntegration = apps.get_model("integrate", "VCSIntegration")
 Repository = apps.get_model("integrate", "Repository")
@@ -269,6 +271,63 @@ def _resolve(model: type[models.Model], gid: relay.GlobalID, *, reason: str) -> 
     if instance is None:
         raise ValueError(f"{model._meta.object_name} {gid.node_id!r} was not found.")
     return instance
+
+
+def _vendor_by_slug(slug: str) -> Any:
+    """Return a vendor catalogue row by slug, or raise."""
+
+    with system_context(reason="integrate.graphql.vendor_slug"):
+        vendor = Vendor.objects.filter(slug=slug).first()
+    if vendor is None:
+        raise ValueError(f"Vendor {slug!r} was not found.")
+    return vendor
+
+
+@strawberry.type
+class IntegrationCredentialMutation:
+    """Self-service integration creation from connected credentials."""
+
+    @strawberry.mutation
+    def create_integration_from_credential(
+        self,
+        info: strawberry.Info,
+        credential: relay.GlobalID,
+        vendor_slug: str,
+        credential_env: str = "",
+    ) -> IntegrationType:
+        """Create or update this user's integration from a connected credential.
+
+        Self-service, not platform-admin: the authorization is *ownership of the
+        credential*. ``_resolve`` reads the credential elevated, then the
+        ``user_id`` check below is the actual gate. This deliberately bypasses the
+        ``create = admin->member`` arm in ``integrate/permissions.zed`` (which
+        governs the admin-console Integration CRUD), so a credential owner can wire
+        up their own integration without an admin.
+        """
+
+        user = _session_user(info)
+        oauth_credential = _resolve(
+            Credential,
+            credential,
+            reason="integrate.graphql.integration_from_credential.credential",
+        )
+        if oauth_credential.user_id != user.pk:
+            raise PermissionDenied("Credential does not belong to the current user.")
+        vendor = _vendor_by_slug(vendor_slug)
+        with system_context(reason="integrate.graphql.integration_from_credential"), transaction.atomic():
+            # Race-safe upsert keyed by the (owner, vendor, credential) unique
+            # constraint: two concurrent submits converge on the one row instead
+            # of both missing a get-then-insert and creating duplicates.
+            integration, _created = Integration.objects.update_or_create(
+                owner=user,
+                vendor=vendor,
+                credential=oauth_credential,
+                defaults={"account": oauth_credential.external_account},
+            )
+            if credential_env:
+                integration.set_credential_env(credential_env)
+                integration.save(update_fields=["config", "updated_at"])
+        return cast(IntegrationType, integration)
 
 
 @strawberry.type
@@ -645,6 +704,16 @@ _CONSOLE_TYPES: list[type] = [
 ]
 
 schemas = {
+    "public": {
+        "mutation": [IntegrationCredentialMutation],
+        "types": [
+            VendorType,
+            IntegrationType,
+            CredentialType,
+            ExternalAccountType,
+            UserType,
+        ],
+    },
     "console": {
         "query": [IntegrateConsoleQuery, VCSConsoleQuery],
         "mutation": [
@@ -654,6 +723,7 @@ schemas = {
             _VCS_INTEGRATION_MUTATION,
             _SOURCE_MUTATION,
             _REPOSITORY_MUTATION,
+            IntegrationCredentialMutation,
             IntegrationActionMutation,
             WebhookActionMutation,
             VCSActionMutation,

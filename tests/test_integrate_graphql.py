@@ -31,18 +31,26 @@ from rebac.roles import grant
 from strawberry import relay
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.iam.credentials import CredentialKind
 from angee.integrate.events import EventKind
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,
+    Credential,
     Integration,
+    OAuthClient,
     SchemaAddon,
+    Vendor,
     WebhookSubscription,
     execute_schema,
     make_integration,
 )
-from tests.conftest import _create_missing_tables as _create_connection_tables
-from tests.conftest import result_data as _data
+from tests.conftest import (
+    _create_missing_tables as _create_connection_tables,
+)
+from tests.conftest import (
+    result_data as _data,
+)
 
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
@@ -281,6 +289,59 @@ def test_integration_action_mutations_are_admin_only(
     ]
     for query, variables in denied:
         assert _execute(console_schema, query, variables, user=plain).errors is not None
+
+
+def test_create_integration_from_credential_is_authenticated_user_owned(
+    integrate_console_tables: None,
+) -> None:
+    """A signed-in user can create an integration only from their own credential."""
+
+    console_schema = _schema()
+    owner = User.objects.create_user(username="credential-owner", email="owner@example.com")
+    other = User.objects.create_user(username="credential-other", email="other@example.com")
+    with system_context(reason="test.integrate.credential_handoff.seed"):
+        oauth_client = OAuthClient.objects.create(
+            slug="anthropic",
+            display_name="Anthropic",
+            client_id="public-client",
+        )
+        credential = Credential.objects.upsert_for_user(
+            owner,
+            oauth_client,
+            CredentialKind.OAUTH,
+            {"access_token": "oauth-token"},
+        )
+        Vendor.objects.create(slug="anthropic", display_name="Anthropic")
+    credential_id = relay.to_base64("CredentialType", credential.sqid)
+    mutation = """
+        mutation Connect($credential: ID!) {
+          createIntegrationFromCredential(
+            credential: $credential
+            vendorSlug: "anthropic"
+            credentialEnv: "ANTHROPIC_OAUTH_TOKEN"
+          ) {
+            vendor { slug }
+            owner { username }
+            credential { displayName }
+            config
+          }
+        }
+    """
+
+    assert _execute(console_schema, mutation, {"credential": credential_id}, user=other).errors is not None
+
+    created = _data(
+        _execute(console_schema, mutation, {"credential": credential_id}, user=owner)
+    )["createIntegrationFromCredential"]
+
+    assert created["vendor"] == {"slug": "anthropic"}
+    assert created["owner"] == {"username": "credential-owner"}
+    assert created["credential"]["displayName"] == "anthropic"
+    assert created["config"] == {"credential_env": "ANTHROPIC_OAUTH_TOKEN"}
+    with system_context(reason="test.integrate.credential_handoff.verify"):
+        integration = Integration.objects.get(owner=owner, credential=credential)
+        assert integration.vendor.slug == "anthropic"
+        assert integration.config["credential_env"] == "ANTHROPIC_OAUTH_TOKEN"
 
 
 def test_sync_integration_runs_for_an_admin(

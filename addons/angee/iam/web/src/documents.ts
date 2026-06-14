@@ -43,6 +43,38 @@ export const LOGIN_COMPLETE_MUTATION = `
   }
 `;
 
+export const CONNECT_ACCOUNT_START_MUTATION = `
+  mutation IamConnectAccountStart(
+    $id: ID!
+    $redirectUri: String!
+    $next: String!
+  ) {
+    connectAccountStart(
+      id: $id
+      redirectUri: $redirectUri
+      next: $next
+    ) {
+      authorizeUrl
+      error
+    }
+  }
+`;
+
+export const CONNECT_ACCOUNT_COMPLETE_MUTATION = `
+  mutation IamConnectAccountComplete(
+    $code: String!
+    $state: String!
+    $redirectUri: String!
+  ) {
+    connectAccountComplete(code: $code, state: $state, redirectUri: $redirectUri) {
+      next
+      error
+      account { id displayName providerSlug }
+      credential { id displayName status }
+    }
+  }
+`;
+
 export const IAM_ROLES_QUERY = `
   query IamRoles {
     roles {
@@ -229,6 +261,36 @@ export type LoginCompleteVariables = Record<string, unknown> & {
   redirectUri: string;
 };
 
+/** Selection result for `IamConnectAccountStart`. */
+export interface ConnectAccountStartData {
+  connectAccountStart: OidcStartPayload;
+}
+
+export type ConnectAccountStartVariables = Record<string, unknown> & {
+  id: string;
+  redirectUri: string;
+  next: string;
+};
+
+/** Selection result for SDL `ConnectAccountResult` in `IamConnectAccountComplete`. */
+export interface ConnectAccountCompletePayload {
+  next: string;
+  error: string | null;
+  account: { id: string; displayName: string; providerSlug: string } | null;
+  credential: { id: string; displayName: string; status: string } | null;
+}
+
+/** Selection result for `IamConnectAccountComplete`. */
+export interface ConnectAccountCompleteData {
+  connectAccountComplete: ConnectAccountCompletePayload;
+}
+
+export type ConnectAccountCompleteVariables = Record<string, unknown> & {
+  code: string;
+  state: string;
+  redirectUri: string;
+};
+
 export interface IAMPaginationVariables extends Record<string, unknown> {
   pagination: {
     offset: number;
@@ -377,4 +439,3 @@ export interface IAMGrantRoleVariables extends Record<string, unknown> {
   principalId: string;
   role: string;
 }
-

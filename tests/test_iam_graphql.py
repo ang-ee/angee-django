@@ -430,6 +430,90 @@ def test_link_account_complete_returns_account_claims_intent_and_coerced_next(
     }
 
 
+def test_connect_account_complete_surfaces_provider_error_message(
+    iam_connection_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Connect completion keeps the stable code but shows provider error text."""
+
+    user = User.objects.create_user(username="connect-rate-limited", email="connect@example.com")
+    oauth_client = _oauth_client("connect-anthropic", is_oidc=False)
+    public_schema = _schema("public")
+    request = _request(user)
+    oauth_client_id = relay.to_base64("OAuthClientType", oauth_client.sqid)
+    start = _data(
+        _execute(
+            public_schema,
+            """
+            mutation Start($id: ID!) {
+              connectAccountStart(
+                id: $id,
+                redirectUri: "https://app.example/callback"
+              ) {
+                state
+                error
+                errorCode
+              }
+            }
+            """,
+            {"id": oauth_client_id},
+            request=request,
+        )
+    )["connectAccountStart"]
+
+    def complete_account_connect(
+        selected_oauth_client: OAuthClient,
+        *,
+        code: str,
+        state_token: str,
+        redirect_uri: str,
+    ) -> Any:
+        del code, state_token, redirect_uri
+        assert selected_oauth_client.pk == oauth_client.pk
+        raise OidcFlowError(
+            "token_exchange_failed",
+            429,
+            body={
+                "error": {
+                    "type": "rate_limit_error",
+                    "message": "Rate limited. Please try again later.",
+                },
+            },
+        )
+
+    monkeypatch.setattr(iam_schema.identity, "complete_account_connect", complete_account_connect)
+
+    completed = _data(
+        _execute(
+            public_schema,
+            """
+            mutation Complete($state: String!) {
+              connectAccountComplete(
+                code: "code",
+                state: $state,
+                redirectUri: "https://app.example/callback"
+              ) {
+                account { externalId }
+                credential { displayName }
+                error
+                errorCode
+              }
+            }
+            """,
+            {"state": start["state"]},
+            request=request,
+        )
+    )
+
+    assert start["error"] is None
+    assert completed["connectAccountComplete"] == {
+        "account": None,
+        "credential": None,
+        "error": "Rate limited. Please try again later.",
+        "errorCode": "token_exchange_failed",
+    }
+
+
 def test_oauth_client_crud_are_admin_only(
     iam_connection_tables: None,
 ) -> None:
@@ -831,6 +915,28 @@ def test_oauth_client_secret_is_console_readable_and_public_hidden(
     for sdl in (public_sdl, console_sdl):
         assert "material" not in sdl
         assert "identityClaims" not in sdl
+
+
+def test_account_connect_schema_exposes_generic_flow_without_token_material(
+    iam_connection_tables: None,
+) -> None:
+    """IAM exposes account-connect mutations and OAuth metadata without token values."""
+
+    public_sdl = _schema("public").as_str()
+    console_sdl = _schema("console").as_str()
+
+    assert "connectAccountStart(" in _sdl_block(public_sdl, "type Mutation")
+    assert "connectAccountComplete(" in _sdl_block(public_sdl, "type Mutation")
+    assert "credential: CredentialType" in _sdl_block(public_sdl, "type ConnectAccountResult")
+    oauth_client_type = _sdl_block(console_sdl, "type OAuthClientType")
+    oauth_client_input = _sdl_block(console_sdl, "input OAuthClientInput")
+    oauth_client_patch = _sdl_block(console_sdl, "input OAuthClientPatch")
+    for field in ("authorizeParams", "tokenParams", "tokenRequestFormat", "externalIdClaim", "emailClaim"):
+        assert field in oauth_client_type
+        assert field in oauth_client_input
+        assert field in oauth_client_patch
+    assert "accessToken" not in public_sdl
+    assert "refreshToken" not in public_sdl
 
 
 def test_console_schema_exposes_user_change_subscription(

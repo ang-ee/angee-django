@@ -334,6 +334,14 @@ class AngeeResource(resources.ModelResource):
         if isinstance(adopt, str):
             candidate = self._adoption_candidate(row, adopt)
             candidates = [] if candidate is None else [candidate]
+        elif isinstance(adopt, tuple):
+            composite = self._composite_adoption_candidate(row, adopt)
+            if composite is None:
+                return None
+            matches = list(self._meta.model._default_manager.filter(**composite)[:2])
+            if len(matches) != 1:
+                return None
+            return matches[0]
         else:
             candidates = []
             for field in self._meta.model._meta.fields:
@@ -353,6 +361,27 @@ class AngeeResource(resources.ModelResource):
         if len(matches) != 1:
             return None
         return matches[0]
+
+    def _composite_adoption_candidate(
+        self,
+        row: Mapping[str, Any],
+        field_names: tuple[str, ...],
+    ) -> dict[str, Any] | None:
+        """Return row values for one configured composite adoption key."""
+
+        fields = self._unique_adoption_fields(field_names)
+        candidate: dict[str, Any] = {}
+        for field in fields:
+            resource_field = self.fields.get(field.name)
+            if resource_field is None:
+                raise ImproperlyConfigured(f"{self.entry.display}: adopt field {field.name!r} is not importable")
+            if resource_field.column_name not in row:
+                return None
+            value = row.get(resource_field.column_name)
+            if value in (None, ""):
+                return None
+            candidate[field.name] = value
+        return candidate
 
     def _adoption_candidate(
         self,
@@ -385,6 +414,57 @@ class AngeeResource(resources.ModelResource):
         if not isinstance(field, models.Field) or not self._is_adoptable_field(field):
             raise ImproperlyConfigured(f"{self.entry.display}: adopt field {field_name!r} must be a unique model field")
         return field
+
+    def _unique_adoption_fields(
+        self,
+        field_names: tuple[str, ...],
+    ) -> tuple[models.Field[Any, Any], ...]:
+        """Return model fields named by a composite adoption declaration."""
+
+        if not field_names:
+            raise ImproperlyConfigured(f"{self.entry.display}: adopt fields must not be empty")
+        if len(set(field_names)) != len(field_names):
+            raise ImproperlyConfigured(f"{self.entry.display}: adopt fields must not contain duplicates")
+        if len(field_names) == 1:
+            return (self._unique_adoption_field(field_names[0]),)
+
+        fields: list[models.Field[Any, Any]] = []
+        for field_name in field_names:
+            try:
+                field = self._meta.model._meta.get_field(field_name)
+            except FieldDoesNotExist as error:
+                raise ImproperlyConfigured(
+                    f"{self.entry.display}: adopt field {field_name!r} does not exist"
+                ) from error
+            if not isinstance(field, models.Field) or field.primary_key:
+                raise ImproperlyConfigured(
+                    f"{self.entry.display}: adopt field {field_name!r} must be a non-primary-key model field"
+                )
+            fields.append(field)
+        if not self._has_unique_field_set(field_names):
+            names = ", ".join(repr(name) for name in field_names)
+            raise ImproperlyConfigured(
+                f"{self.entry.display}: adopt fields ({names}) must match a unique model constraint"
+            )
+        return tuple(fields)
+
+    def _has_unique_field_set(self, field_names: tuple[str, ...]) -> bool:
+        """Return whether ``field_names`` identify an unconditional unique constraint."""
+
+        expected = frozenset(field_names)
+        for unique_together in self._meta.model._meta.unique_together:
+            if frozenset(unique_together) == expected:
+                return True
+        for constraint in self._meta.model._meta.constraints:
+            if not isinstance(constraint, models.UniqueConstraint):
+                continue
+            if getattr(constraint, "condition", None) is not None:
+                continue
+            if getattr(constraint, "expressions", ()):
+                continue
+            if frozenset(getattr(constraint, "fields", ())) == expected:
+                return True
+        return False
 
     def _is_adoptable_field(self, field: models.Field[Any, Any]) -> bool:
         """Return whether ``field`` can identify an adopted target."""

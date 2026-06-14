@@ -21,7 +21,6 @@ from django.http import HttpRequest
 from django.utils.http import url_has_allowed_host_and_scheme
 from rebac import (
     ObjectRef,
-    PermissionDenied,
     app_settings,
     system_context,
 )
@@ -56,10 +55,10 @@ from angee.iam import identity
 from angee.iam.credentials import CredentialKind, handler_for
 from angee.iam.oidc import client as client_module
 from angee.iam.oidc import state
-from angee.iam.oidc.errors import INVALID_STATE, OidcFlowError
+from angee.iam.oidc.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, OidcFlowError
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
-from angee.iam.permissions import is_authenticated as _is_authenticated
 from angee.iam.permissions import request_from_info as _request
+from angee.iam.permissions import session_user as _session_user
 
 
 def _has_module_spec(dotted_path: str) -> bool:
@@ -154,6 +153,7 @@ class OAuthClientType(AngeeNode):
     userinfo_endpoint: auto
     jwks_uri: auto
     discovery_url: auto
+    token_request_format: auto
     is_oidc: auto
     is_enabled: auto
     supports_refresh: auto
@@ -162,6 +162,10 @@ class OAuthClientType(AngeeNode):
     max_refresh_age_seconds: auto
     link_on_email_match: auto
     create_on_login: auto
+    external_id_claim: auto
+    email_claim: auto
+    display_name_claim: auto
+    avatar_url_claim: auto
     created_at: auto
     updated_at: auto
 
@@ -182,6 +186,18 @@ class OAuthClientType(AngeeNode):
         """Return the login domain allow-list."""
 
         return cast(list[str], cast(Any, self).allowed_email_domain_values)
+
+    @strawberry_django.field(only=["authorize_params"])
+    def authorize_params(self) -> JSON:
+        """Return provider-specific OAuth authorize parameters."""
+
+        return cast(JSON, cast(Any, self).authorize_params)
+
+    @strawberry_django.field(only=["token_params"])
+    def token_params(self) -> JSON:
+        """Return provider-specific OAuth token parameters."""
+
+        return cast(JSON, cast(Any, self).token_params)
 
     @strawberry_django.field(only=["client_secret"])
     def client_secret(self) -> str:
@@ -499,6 +515,20 @@ class LinkAccountResult:
 
 
 @strawberry.type
+class ConnectAccountResult:
+    """Result returned by OAuth account-connect completion."""
+
+    account: ExternalAccountType | None = None
+    credential: CredentialType | None = None
+    user: UserType | None = None
+    intent: str = "connect"
+    next: str = "/"
+    claims: JSON | None = None
+    error: str | None = None
+    error_code: str | None = None
+
+
+@strawberry.type
 class UnlinkAccountResult:
     """Result returned by account unlink mutation."""
 
@@ -524,6 +554,7 @@ class OAuthClientInput:
     userinfo_endpoint: str = ""
     jwks_uri: str = ""
     discovery_url: str = ""
+    token_request_format: str = "form"
     is_oidc: bool = False
     is_enabled: bool = True
     scopes_catalogue: list[str] = strawberry.field(default_factory=list)
@@ -535,6 +566,12 @@ class OAuthClientInput:
     link_on_email_match: bool = False
     create_on_login: bool = False
     allowed_email_domains: list[str] = strawberry.field(default_factory=list)
+    authorize_params: JSON = strawberry.field(default_factory=dict)
+    token_params: JSON = strawberry.field(default_factory=dict)
+    external_id_claim: str = "sub"
+    email_claim: str = "email"
+    display_name_claim: str = ""
+    avatar_url_claim: str = ""
 
 
 @strawberry.input
@@ -555,6 +592,7 @@ class OAuthClientPatch:
     userinfo_endpoint: str | None = strawberry.UNSET
     jwks_uri: str | None = strawberry.UNSET
     discovery_url: str | None = strawberry.UNSET
+    token_request_format: str | None = strawberry.UNSET
     is_oidc: bool | None = strawberry.UNSET
     is_enabled: bool | None = strawberry.UNSET
     scopes_catalogue: list[str] | None = strawberry.UNSET
@@ -566,6 +604,12 @@ class OAuthClientPatch:
     link_on_email_match: bool | None = strawberry.UNSET
     create_on_login: bool | None = strawberry.UNSET
     allowed_email_domains: list[str] | None = strawberry.UNSET
+    authorize_params: JSON | None = strawberry.UNSET
+    token_params: JSON | None = strawberry.UNSET
+    external_id_claim: str | None = strawberry.UNSET
+    email_claim: str | None = strawberry.UNSET
+    display_name_claim: str | None = strawberry.UNSET
+    avatar_url_claim: str | None = strawberry.UNSET
 
 
 @strawberry.input
@@ -1119,7 +1163,7 @@ class IAMMutation:
         request = _request(info)
         try:
             oauth_client = _enabled_oidc_oauth_client(oauth_client_sqid)
-            return _start_oidc_flow(
+            return _start_oauth_flow(
                 request,
                 oauth_client,
                 redirect_uri,
@@ -1154,7 +1198,7 @@ class IAMMutation:
                     backend=_session_backend(result.user),
                 )
         except OidcFlowError as error:
-            return LoginCompletePayload(ok=False, error=str(error), error_code=error.code)
+            return LoginCompletePayload(ok=False, error=_flow_error_message(error), error_code=error.code)
         return LoginCompletePayload(
             ok=True,
             user=cast(UserType, result.user),
@@ -1176,7 +1220,7 @@ class IAMMutation:
         request = _request(info)
         try:
             oauth_client = _enabled_oidc_oauth_client(oauth_client_sqid)
-            return _start_oidc_flow(
+            return _start_oauth_flow(
                 request,
                 oauth_client,
                 redirect_uri,
@@ -1208,11 +1252,79 @@ class IAMMutation:
                 redirect_uri=redirect_uri,
             )
         except OidcFlowError as error:
-            return LinkAccountResult(error=str(error), error_code=error.code)
+            return LinkAccountResult(error=_flow_error_message(error), error_code=error.code)
         return LinkAccountResult(
             account=cast(ExternalAccountType, result.account),
             user=cast(UserType, result.user),
             intent="link",
+            next=result.next_path,
+            claims=cast(JSON, result.claims),
+        )
+
+    @strawberry.mutation
+    def connect_account_start(
+        self,
+        info: strawberry.Info,
+        id: relay.GlobalID,
+        redirect_uri: str,
+        next: str = "/",
+    ) -> OidcStartPayload:
+        """Start an authenticated OAuth account-connect flow."""
+
+        user = _session_user(info)
+        request = _request(info)
+        try:
+            oauth_client = _enabled_oauth_client_from_id(id)
+            if oauth_client.configuration_state != "ready":
+                # Enabled but missing a client_id/endpoints would otherwise build
+                # an authorize URL the provider rejects opaquely; surface it as a
+                # typed start-flow error instead.
+                raise OidcFlowError(
+                    CLIENT_NOT_CONFIGURED,
+                    400,
+                    f"OAuth client is not fully configured ({oauth_client.configuration_state}).",
+                )
+            return _start_oauth_flow(
+                request,
+                oauth_client,
+                redirect_uri,
+                user_id=str(user.pk),
+                next_path=_coerce_next_path(next, request),
+                flow=state.StateFlow.CONNECT,
+            )
+        except OidcFlowError as error:
+            return _oidc_start_error(error)
+
+    @strawberry.mutation
+    def connect_account_complete(
+        self,
+        info: strawberry.Info,
+        code: str,
+        state: str,
+        redirect_uri: str,
+    ) -> ConnectAccountResult:
+        """Complete an authenticated OAuth account-connect flow."""
+
+        request = _request(info)
+        _session_user(info)
+        try:
+            oauth_client = _oauth_client_for_remembered_state(
+                request,
+                state,
+                oidc_only=False,
+            )
+            result = identity.complete_account_connect(
+                oauth_client,
+                code=code,
+                state_token=state,
+                redirect_uri=redirect_uri,
+            )
+        except OidcFlowError as error:
+            return ConnectAccountResult(error=_flow_error_message(error), error_code=error.code)
+        return ConnectAccountResult(
+            account=cast(ExternalAccountType, result.account),
+            credential=cast(CredentialType, result.credential),
+            user=cast(UserType, result.user),
             next=result.next_path,
             claims=cast(JSON, result.claims),
         )
@@ -1254,7 +1366,7 @@ class IAMMutation:
                 )
             return UnlinkAccountResult(ok=deleted > 0)
         except OidcFlowError as error:
-            return UnlinkAccountResult(ok=False, error=str(error), error_code=error.code)
+            return UnlinkAccountResult(ok=False, error=_flow_error_message(error), error_code=error.code)
 
 
 def _revoke_remote_oauth_token(credential: Any) -> None:
@@ -1525,29 +1637,41 @@ class OAuthClientActionMutation:
         return ActionResult(ok=True, message=f"Discovered endpoints for {issuer or 'provider'}.")
 
 
-def _session_user(info: strawberry.Info) -> Any:
-    """Return the authenticated session user or raise a REBAC denial."""
-
-    user = getattr(_request(info), "user", None)
-    if not _is_authenticated(user):
-        raise PermissionDenied("Authentication required.")
-    return user
-
-
 def _enabled_oidc_oauth_client(oauth_client_sqid: str) -> Any:
     """Return one enabled OIDC OAuth client addressed by sqid, or raise."""
 
-    oauth_client = (
-        OAuthClient.objects.system_context(reason="iam.graphql.oidc_oauth_client")
-        .filter(sqid=oauth_client_sqid)
-        .first()
-    )
-    if oauth_client is None or not oauth_client.is_enabled or not oauth_client.is_oidc:
+    try:
+        oauth_client = _enabled_oauth_client(oauth_client_sqid)
+    except ValueError as error:
+        raise ValueError("OAuth client is not enabled for OIDC.") from error
+    if not oauth_client.is_oidc:
         raise ValueError("OAuth client is not enabled for OIDC.")
     return oauth_client
 
 
-def _start_oidc_flow(
+def _enabled_oauth_client(oauth_client_sqid: str) -> Any:
+    """Return one enabled OAuth client addressed by sqid, or raise."""
+
+    oauth_client = (
+        OAuthClient.objects.system_context(reason="iam.graphql.oauth_client")
+        .filter(sqid=oauth_client_sqid)
+        .first()
+    )
+    if oauth_client is None or not oauth_client.is_enabled:
+        raise ValueError("OAuth client is not enabled.")
+    return oauth_client
+
+
+def _enabled_oauth_client_from_id(oauth_client_id: relay.GlobalID) -> Any:
+    """Return one enabled OAuth client addressed by a Relay id, or raise."""
+
+    oauth_client = _oauth_client_from_id(oauth_client_id)
+    if not oauth_client.is_enabled:
+        raise ValueError("OAuth client is not enabled.")
+    return oauth_client
+
+
+def _start_oauth_flow(
     request: HttpRequest,
     oauth_client: Any,
     redirect_uri: str,
@@ -1556,7 +1680,12 @@ def _start_oidc_flow(
     next_path: str = "/",
     flow: state.StateFlow = state.StateFlow.LOGIN,
 ) -> OidcStartPayload:
-    """Issue state, remember its OAuth client, and return the authorize URL."""
+    """Issue state, remember its OAuth client, and return the authorize URL.
+
+    One start path for login, link, and connect: OIDC clients add a ``nonce`` (and
+    the ``openid`` scope) to the authorize URL, plain OAuth clients do not — the
+    client owns that distinction via ``is_oidc``.
+    """
 
     state_token, record = state.issue(
         oauth_client,
@@ -1569,7 +1698,7 @@ def _start_oidc_flow(
     authorize_url = client_module.build_authorize_url(
         oauth_client,
         state=state_token,
-        nonce=record.nonce,
+        nonce=record.nonce if oauth_client.is_oidc else None,
         redirect_uri=redirect_uri,
         scopes=oauth_client.default_scope_values,
         code_challenge=_pkce_challenge(record.code_verifier),
@@ -1580,7 +1709,13 @@ def _start_oidc_flow(
 def _oidc_start_error(error: OidcFlowError) -> OidcStartPayload:
     """Return a typed start-flow error payload."""
 
-    return OidcStartPayload(error=str(error), error_code=error.code)
+    return OidcStartPayload(error=_flow_error_message(error), error_code=error.code)
+
+
+def _flow_error_message(error: OidcFlowError) -> str:
+    """Return the best safe human message for one OAuth flow error."""
+
+    return error.provider_message or str(error)
 
 
 def _coerce_next_path(value: str, request: HttpRequest) -> str:
@@ -1612,6 +1747,8 @@ def _remember_flow_oauth_client(
 def _oauth_client_for_remembered_state(
     request: HttpRequest,
     state_token: str,
+    *,
+    oidc_only: bool = True,
 ) -> Any:
     """Return the session-bound OAuth client for one pending OIDC state token."""
 
@@ -1621,7 +1758,9 @@ def _oauth_client_for_remembered_state(
     session.modified = True
     if not oauth_client_sqid:
         raise OidcFlowError(INVALID_STATE, 400)
-    return _enabled_oidc_oauth_client(str(oauth_client_sqid))
+    if oidc_only:
+        return _enabled_oidc_oauth_client(str(oauth_client_sqid))
+    return _enabled_oauth_client(str(oauth_client_sqid))
 
 
 def _pkce_challenge(code_verifier: str | None) -> str | None:
@@ -1647,6 +1786,7 @@ schemas = {
             OidcStartPayload,
             LoginCompletePayload,
             LinkAccountResult,
+            ConnectAccountResult,
             UnlinkAccountResult,
         ],
     },
@@ -1680,6 +1820,7 @@ schemas = {
             OidcStartPayload,
             LoginCompletePayload,
             LinkAccountResult,
+            ConnectAccountResult,
             UnlinkAccountResult,
         ],
     },

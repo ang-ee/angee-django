@@ -23,6 +23,7 @@ from angee.iam.models import AccountStatus, CredentialStatus
 from angee.iam.oidc import client as oidc_client
 from angee.iam.oidc import state as oidc_state
 from angee.iam.oidc.errors import (
+    EXTERNAL_ACCOUNT_RESOLUTION_FAILED,
     IDENTITY_RESOLUTION_FAILED,
     INVALID_ID_TOKEN,
     INVALID_STATE,
@@ -134,8 +135,10 @@ def test_oidc_http_helpers_send_browser_user_agent(monkeypatch: pytest.MonkeyPat
 
     oidc_client._get_json("https://idp.example/.well-known/openid-configuration")
     oidc_client._post_form("https://idp.example/token", {"code": "abc"})
+    oidc_client._post_json("https://idp.example/token", {"code": "abc"})
 
     assert [req.get_header("User-agent") for req in requests] == [
+        oidc_client._BROWSER_USER_AGENT,
         oidc_client._BROWSER_USER_AGENT,
         oidc_client._BROWSER_USER_AGENT,
     ]
@@ -176,6 +179,82 @@ def test_authorize_url_prepends_openid_when_scope_is_absent() -> None:
     query = parse.parse_qs(parse.urlsplit(url).query)
 
     assert query["scope"] == ["openid email profile"]
+
+
+def test_oauth_authorize_url_omits_oidc_nonce_and_honors_extra_params() -> None:
+    """Plain OAuth account-connect URLs do not add OIDC-only parameters."""
+
+    oauth_client = _stub_oauth_client(
+        supports_pkce=True,
+        authorize_param_values={"audience": "https://api.example"},
+    )
+    url = oidc_client.build_authorize_url(
+        oauth_client,
+        state="state-token",
+        redirect_uri="https://app.example/oauth/callback",
+        scopes=("offline", "email"),
+        code_challenge="challenge",
+    )
+    query = parse.parse_qs(parse.urlsplit(url).query)
+
+    assert "nonce" not in query
+    assert query["scope"] == ["offline email"]
+    assert query["audience"] == ["https://api.example"]
+    assert query["code_challenge"] == ["challenge"]
+    assert query["code_challenge_method"] == ["S256"]
+
+
+def test_exchange_code_posts_json_body_with_state_and_pkce(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OAuth clients can opt into JSON token exchanges."""
+
+    captured: dict[str, Any] = {}
+    oauth_client = _stub_oauth_client(
+        supports_pkce=True,
+        token_request_format="json",
+        token_param_values={"audience": "https://api.example"},
+    )
+
+    def post_json(url: str, fields: dict[str, Any]) -> dict[str, Any]:
+        captured["url"] = url
+        captured["fields"] = fields
+        return {
+            "access_token": "access-token",
+            "refresh_token": "refresh-token",
+            "ignored": "not-token-material",
+        }
+
+    monkeypatch.setattr(oidc_client, "_post_json", post_json)
+    monkeypatch.setattr(
+        oidc_client,
+        "_post_form",
+        lambda *args, **kwargs: pytest.fail("JSON clients must not post form bodies"),
+    )
+
+    tokens = oidc_client.exchange_code(
+        oauth_client,
+        code="auth-code",
+        redirect_uri="https://app.example/callback",
+        code_verifier="verifier",
+        state="state-token",
+    )
+
+    assert tokens == {
+        "access_token": "access-token",
+        "refresh_token": "refresh-token",
+    }
+    assert captured == {
+        "url": "https://issuer.example/oauth/token",
+        "fields": {
+            "audience": "https://api.example",
+            "client_id": "oidc-client",
+            "client_secret": "secret",
+            "code": "auth-code",
+            "code_verifier": "verifier",
+            "grant_type": "authorization_code",
+            "redirect_uri": "https://app.example/callback",
+            "state": "state-token",
+        },
+    }
 
 
 def test_verify_id_token_rejects_bad_issuer(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -548,6 +627,113 @@ def test_complete_link_populates_credential_token_fields(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_complete_account_connect_links_non_oidc_userinfo_claims_and_credential(
+    oidc_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A plain OAuth connect flow resolves identity from configured userinfo claims."""
+
+    link_user = get_user_model().objects.create_user(username="oauth-connect", email="connect@example.com")
+    oauth_client = _oauth_client(
+        slug="plain-oauth",
+        is_oidc=False,
+        external_id_claim="id",
+        display_name_claim="name",
+        avatar_url_claim="avatar_url",
+    )
+    state_token, _record = oidc_state.issue(
+        oauth_client,
+        "https://app.example/oauth/callback",
+        user_id=str(link_user.pk),
+        flow=oidc_state.StateFlow.CONNECT,
+    )
+    tokens = {
+        "access_token": "oauth-access",
+        "refresh_token": "oauth-refresh",
+        "scope": "offline email",
+    }
+    claims = {
+        "id": "acct_123",
+        "email": "connect@example.com",
+        "name": "Connected User",
+        "avatar_url": "https://avatar.example/u.png",
+    }
+
+    def exchange_code(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        del args
+        assert kwargs["state"] == state_token
+        return tokens
+
+    monkeypatch.setattr(identity.client_module, "exchange_code", exchange_code)
+    monkeypatch.setattr(identity.client_module, "fetch_userinfo", lambda *args, **kwargs: claims)
+    monkeypatch.setattr(
+        identity.client_module,
+        "verify_id_token",
+        lambda *args, **kwargs: pytest.fail("plain OAuth connect must not verify an ID token"),
+    )
+
+    result = identity.complete_account_connect(
+        oauth_client,
+        code="code",
+        state_token=state_token,
+        redirect_uri="https://app.example/oauth/callback",
+    )
+
+    account = result.account
+    credential = result.credential
+    account.refresh_from_db()
+    credential.refresh_from_db()
+    assert result.user.pk == link_user.pk
+    assert result.next_path == "/"
+    assert account.external_id == "acct_123"
+    assert account.email == "connect@example.com"
+    assert account.display_name == "Connected User"
+    assert account.avatar_url == "https://avatar.example/u.png"
+    assert account.credential_id == credential.pk
+    assert credential.user_id == link_user.pk
+    assert credential.external_account_id == account.pk
+    assert credential.reveal()["access_token"] == "oauth-access"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_complete_account_connect_rejects_missing_stable_external_id(
+    oidc_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Providers must return the configured stable account id claim."""
+
+    link_user = get_user_model().objects.create_user(username="oauth-missing-id", email="missing@example.com")
+    oauth_client = _oauth_client(slug="missing-id", is_oidc=False, external_id_claim="id")
+    state_token, _record = oidc_state.issue(
+        oauth_client,
+        "https://app.example/oauth/callback",
+        user_id=str(link_user.pk),
+        flow=oidc_state.StateFlow.CONNECT,
+    )
+    monkeypatch.setattr(
+        identity.client_module,
+        "exchange_code",
+        lambda *args, **kwargs: {"access_token": "oauth-access"},
+    )
+    monkeypatch.setattr(
+        identity.client_module,
+        "fetch_userinfo",
+        lambda *args, **kwargs: {"email": "missing@example.com"},
+    )
+
+    with pytest.raises(OidcFlowError) as exc_info:
+        identity.complete_account_connect(
+            oauth_client,
+            code="code",
+            state_token=state_token,
+            redirect_uri="https://app.example/oauth/callback",
+        )
+
+    assert exc_info.value.code == EXTERNAL_ACCOUNT_RESOLUTION_FAILED
+    assert exc_info.value.http_status == 400
+
+
+@pytest.mark.django_db(transaction=True)
 def test_credential_upsert_reasserts_active_status(
     oidc_tables: None,
 ) -> None:
@@ -848,8 +1034,15 @@ def _stub_oauth_client(**overrides: Any) -> SimpleNamespace:
         "jwks_uri": "https://issuer.example/oauth/jwks",
         "discovery_url": "",
         "supports_pkce": False,
+        "token_request_format": "form",
     }
     defaults.update(overrides)
+    # Mirror OAuthClient.token_request_format_value (the property exchange_code reads).
+    token_format = str(defaults["token_request_format"] or "form").strip().lower()
+    defaults.setdefault(
+        "token_request_format_value",
+        token_format if token_format in {"form", "json"} else "form",
+    )
     return SimpleNamespace(**defaults)
 
 

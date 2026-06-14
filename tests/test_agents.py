@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -20,13 +21,17 @@ from django.core.management import call_command
 from django.db import connection
 from rebac import system_context
 
+from angee.agents.models import Agent as AbstractAgent
 from angee.agents.models import InferenceModel as AbstractInferenceModel
 from angee.agents.models import InferenceProvider as AbstractInferenceProvider
 from angee.agents.models import Skill as AbstractSkill
 from angee.agents.skills import parse_skill_meta
+from angee.iam.credentials import CredentialKind
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,
+    Credential,
+    OAuthClient,
     _create_missing_tables,
     make_integration,
 )
@@ -216,3 +221,44 @@ def test_manual_backend_advertises_no_models(agents_tables: None) -> None:
     assert provider.refresh_models() == 0
     with system_context(reason="test read"):
         assert InferenceModel.objects.filter(provider=provider).count() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_inference_provider_service_environment_reads_integration_credential_env(
+    agents_tables: None,
+) -> None:
+    """Provider service env exposes only the integration-declared credential token."""
+
+    del agents_tables
+    integration = make_integration("anthropic-env")
+    with system_context(reason="test service env setup"):
+        oauth_client = OAuthClient.objects.create(
+            slug="anthropic-oauth",
+            display_name="Anthropic OAuth",
+            client_id="public-client",
+        )
+        credential = Credential.objects.upsert_for_user(
+            integration.owner,
+            oauth_client,
+            CredentialKind.OAUTH,
+            {"access_token": "oauth-token"},
+        )
+        integration.credential = credential
+        integration.config = {"credential_env": "ANTHROPIC_OAUTH_TOKEN"}
+        integration.save(update_fields=["credential", "config", "updated_at"])
+        provider = InferenceProvider.objects.create(
+            integration=integration,
+            name="Anthropic",
+            backend_class="manual",
+        )
+
+    assert provider.service_environment() == {"ANTHROPIC_OAUTH_TOKEN": "oauth-token"}
+    agent_like = SimpleNamespace(model=SimpleNamespace(provider=provider))
+    assert AbstractAgent.service_environment(agent_like) == {"ANTHROPIC_OAUTH_TOKEN": "oauth-token"}
+
+    with system_context(reason="test service env disabled"):
+        integration.config = {}
+        integration.save(update_fields=["config", "updated_at"])
+        provider.refresh_from_db()
+
+    assert provider.service_environment() == {}
