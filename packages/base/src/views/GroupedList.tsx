@@ -26,7 +26,6 @@ import { cn } from "../lib/cn";
 import { titleCase } from "../lib/titleCase";
 import { CountBadge } from "../ui/badge";
 import { Pager } from "../ui/pager";
-import { Spinner } from "../ui/spinner";
 import {
   Table,
   TableBody,
@@ -48,6 +47,8 @@ import {
 import {
   ALIGN_CLASS,
   ListHeaderCell,
+  ListLoadingFooter,
+  ListLoadingInline,
   RecordRow,
   TABLE_SCROLL_STYLE,
   alignOf,
@@ -193,10 +194,7 @@ export function GroupedListBody<TRow extends Row>({
         </Table>
       </div>
       {topPagerState?.fetching ? (
-        <div className="flex items-center justify-center gap-2 border-t border-border px-3 py-4 text-13 text-fg-muted">
-          <Spinner size="sm" />
-          Loading...
-        </div>
+        <ListLoadingFooter />
       ) : null}
     </>
   );
@@ -356,10 +354,7 @@ function GroupLevel<TRow extends Row>({
         depth={depth}
         className="py-4 text-fg-muted"
       >
-        <span className="inline-flex items-center gap-2">
-          <Spinner size="sm" />
-          Loading...
-        </span>
+        <ListLoadingInline />
       </GroupLevelStatusBody>
     );
   }
@@ -852,10 +847,7 @@ function LeafGroupSection<TRow extends Row>({
       ) : list.fetching ? (
         <TableRow>
           <TableCell colSpan={colSpan} className="py-4 text-fg-muted">
-            <span className="inline-flex items-center gap-2">
-              <Spinner size="sm" />
-              Loading...
-            </span>
+            <ListLoadingInline />
           </TableCell>
         </TableRow>
       ) : rowModels.length === 0 ? (

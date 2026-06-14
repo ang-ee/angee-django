@@ -115,8 +115,9 @@ visual-parity spot-check across both themes still recommended before release.
       thread `fetching`/`error`/`emptyMessage` through every collection renderer
       (`ListView`, `RowsListView`, `GroupedList`, `BoardView`, `GalleryView`,
       `TreeView`, `TimelineView`). Gallery/Timeline/Tree must render an empty state.
-- [ ] Extract the `Spinner + "Loading…"` footer (copied 5×) into one
-      `ListLoadingFooter`/`<LoadingRow>` in `ListInternals`.
+- [x] Extract the `Spinner + "Loading…"` blocks into `ListLoadingFooter` (footer
+      div, was ×3: ListView/RowsListView/GroupedList) + `ListLoadingInline` (span,
+      was ×2: GroupedList) in `ListInternals`; dropped 3 now-unused Spinner imports.
 - [ ] Delete `Chatter`'s local `EmptyState`; use the shared fragment (match
       `RevisionsTab`).
 - [ ] Add a centered/full-height variant to `EmptyState`; collapse the

@@ -16,7 +16,6 @@ import {
   type DataToolbarGroupOption,
 } from "../toolbars";
 import type { PagerState } from "../ui/pager";
-import { Spinner } from "../ui/spinner";
 import { BoardView } from "./BoardView";
 import {
   DataViewProvider,
@@ -42,6 +41,7 @@ import {
 } from "./grouped-list-utils";
 import {
   FlatListBody,
+  ListLoadingFooter,
   SelectionBar,
   dataViewGroupToAggregateDimension,
   groupMeasuresFromColumns,
@@ -459,10 +459,7 @@ function ListViewBody<TRow extends Row = Row>({
           />
         )}
         {!groupedListMode && surface.list.fetching ? (
-          <div className="flex items-center justify-center gap-2 border-t border-border px-3 py-4 text-13 text-fg-muted">
-            <Spinner size="sm" />
-            Loading...
-          </div>
+          <ListLoadingFooter />
         ) : null}
         {bulkDelete.isPreviewOpen && bulkDelete.previewState ? (
           <DeletePreviewDialog

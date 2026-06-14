@@ -15,7 +15,6 @@ import {
   type DataToolbarGroupOption,
 } from "../toolbars";
 import type { PagerState } from "../ui/pager";
-import { Spinner } from "../ui/spinner";
 import {
   DataViewProvider,
   useDataView,
@@ -35,6 +34,7 @@ import {
 } from "./data-view-surface";
 import {
   FlatListBody,
+  ListLoadingFooter,
   SelectionBar,
   type ListColumn,
 } from "./ListInternals";
@@ -325,10 +325,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
           />
         )}
         {fetching ? (
-          <div className="flex items-center justify-center gap-2 border-t border-border px-3 py-4 text-13 text-fg-muted">
-            <Spinner size="sm" />
-            Loading...
-          </div>
+          <ListLoadingFooter />
         ) : null}
       </div>
     </>

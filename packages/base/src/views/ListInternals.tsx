@@ -23,6 +23,7 @@ import type {
   Row,
 } from "@angee/sdk";
 import { format, isValid, parseISO } from "date-fns";
+import { Spinner } from "../ui/spinner";
 
 import { Glyph } from "../chrome/Glyph";
 import { RelativeTime } from "../fragments/RelativeTime";
@@ -1155,6 +1156,26 @@ export function groupFieldLabel(field: string): string {
 
 export function statusLabel(value: string): string {
   return titleCase(value.toLowerCase());
+}
+
+/** The flush "Loading…" footer shown under a list shell while a page fetches. */
+export function ListLoadingFooter(): React.ReactElement {
+  return (
+    <div className="flex items-center justify-center gap-2 border-t border-border px-3 py-4 text-13 text-fg-muted">
+      <Spinner size="sm" />
+      Loading...
+    </div>
+  );
+}
+
+/** Inline "Loading…" content (spinner + label) for a table-cell/status body. */
+export function ListLoadingInline(): React.ReactElement {
+  return (
+    <span className="inline-flex items-center gap-2">
+      <Spinner size="sm" />
+      Loading...
+    </span>
+  );
 }
 
 export function looksLikeDateField(field: string): boolean {
