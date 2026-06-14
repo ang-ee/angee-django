@@ -96,9 +96,23 @@ Frontend `@angee/agents` (`addons/angee/agents/web/`): menu groups
 - [x] register `angee.agents` in `examples/notes-angee/settings.yaml`
 - [x] `angee build` → `makemigrations base agents` → `migrate` → `rebac sync` → `schema --check` — all green
 - [x] ruff + mypy on `addons/angee/agents` — clean
-- [ ] frontend `@angee/agents` console + host registration
+- [x] frontend `@angee/agents` console + host registration (Agents/Templates, Skills [read-only], MCP Servers/Tools, Inference Providers/Models). Agents/Templates split via a server-side `AgentFilter`/`AgentOrder` on the `agents` query. Verified: agents package `tsc` clean + host `vite build` clean (host-wide `tsc` is blocked only by operator's pre-existing daemon-codegen debt).
 - [ ] agents test module (concrete-model pattern of `tests/test_integrate_vcs.py`): skill discovery + provider/model upsert + console CRUD + M2M membership actions
 - [ ] add `ANGEE_INFERENCE_BACKEND_CLASSES` to `tests/settings.py` + concrete agents models to `tests/conftest.py` when the test module lands
+
+### Frontend follow-ups (deferred)
+
+- **Live-render verification** — pages are typecheck+build verified only; bring up
+  `angee dev` and confirm the Agents/Templates filter, the read-only Skills page
+  (no create/update mutations exist for `Skill`), and enum selects (`backendClass`,
+  `modelUse`, `placement`, `transport`) render correctly.
+- **Skills → Sources tab** — deferred with the integrate VCS console frontend
+  handover; needs a `kind` filter on `integrate.Source` too.
+- **Agent skill/MCP membership editor** — backend `setAgentSkills`/`setAgentMcpServers`/
+  `setAgentMcpTools` exist; the console needs a multi-select relation widget to drive
+  them (none in `@angee/base` yet).
+- **Templates-tab create default** — creating on the Templates tab does not yet
+  default `is_template=true`; today it is an editable switch on the agent form.
 
 ## Review follow-ups (deferred, not yet actioned)
 
