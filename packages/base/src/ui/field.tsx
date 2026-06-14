@@ -9,6 +9,7 @@ import type {
 } from "@base-ui/react/field";
 
 import { tv, type VariantProps } from "../lib/variants";
+import { OptionalHint, RequiredMark } from "./label";
 
 export const fieldVariants = tv({
   slots: {
@@ -132,14 +133,12 @@ export const FieldLabel = React.forwardRef<HTMLLabelElement, FieldLabelProps>(
         {...props}
       >
         {children}
-        {required ? (
-          <span className="ml-1 text-danger-text" aria-hidden="true">
-            {requiredIndicator}
-          </span>
-        ) : null}
-        {optional ? (
-          <span className="ml-1 font-normal text-fg-muted">{optional}</span>
-        ) : null}
+        <RequiredMark
+          required={required}
+          indicator={requiredIndicator}
+          className="ml-1"
+        />
+        <OptionalHint optional={optional} className="ml-1" />
       </BaseField.Label>
     );
   },

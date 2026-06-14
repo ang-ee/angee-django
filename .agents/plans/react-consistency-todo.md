@@ -218,9 +218,15 @@ visual-parity spot-check across both themes still recommended before release.
       surface; one activation/card primitive (list/board/gallery) owning
       `href`/`onActivate`/keyboard/selection/DnD (BoardView reads
       `selectedIds`/`interactive`).
-- [ ] One field stack: `field.tsx` is owner; `FieldRow` composes it; shared
-      `RequiredMark`/`OptionalHint`; extend `widget-control` surface to
-      textarea/field/number-field/select.
+- [~] One field stack — DONE the genuine parts: extracted shared `RequiredMark`
+      (3 sites: `Label`, `FieldLabel`, `FieldRow`) + `OptionalHint` (2 sites:
+      `Label`, `FieldLabel`) into `ui/label.tsx` (the foundational label owner;
+      callers pass `className="ml-1"` where there's no parent gap). Behavior-
+      preserving. LEFT: `FieldRow` does NOT compose `Field` — their labels have
+      different treatments (eyebrow kicker vs `Field.Label`), so composing would
+      change rendering (different intent). `widget-control` surface is ALREADY
+      shared — textarea/number-field/select all consume `widgetControlSurface`
+      (nothing to extend).
 - [~] One tag primitive (`tones`-driven) — RESOLVED by T1 / LEAVE SEPARATE: the
       audit's core complaint (chip hard-coding soft tones) is fixed — `Badge` and
       `Chip` both route color through `toneClass(tone, variant)` now. Merging them

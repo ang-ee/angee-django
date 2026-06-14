@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 
 export const labelVariants = tv({
@@ -86,16 +87,54 @@ export const Label = React.forwardRef<HTMLLabelElement, LabelProps>(
         {...props}
       >
         <span className={truncate ? "truncate" : undefined}>{children}</span>
-        {required ? (
-          <span className="text-danger-text" aria-hidden="true">
-            {requiredIndicator}
-          </span>
-        ) : null}
-        {optional ? (
-          <span className="font-normal text-fg-muted">{optional}</span>
-        ) : null}
+        <RequiredMark required={required} indicator={requiredIndicator} />
+        <OptionalHint optional={optional} />
       </label>
     );
   },
 );
 Label.displayName = "Label";
+
+export interface RequiredMarkProps {
+  required?: boolean;
+  /** The mark glyph/text (defaults to `*`). */
+  indicator?: React.ReactNode;
+  /** Extra classes — pass `ml-1` where the parent has no gap. */
+  className?: string;
+}
+
+/**
+ * The decorative required-field mark — `aria-hidden`, since the accessible
+ * required state lives on the control, not the label. The one owner shared by
+ * `Label`, `FieldLabel`, and the form-layout `FieldRow`.
+ */
+export function RequiredMark({
+  required = false,
+  indicator = "*",
+  className,
+}: RequiredMarkProps): React.ReactElement | null {
+  if (!required) return null;
+  return (
+    <span className={cn("text-danger-text", className)} aria-hidden="true">
+      {indicator}
+    </span>
+  );
+}
+
+export interface OptionalHintProps {
+  /** The hint content (e.g. "optional"); nothing renders when absent. */
+  optional?: React.ReactNode;
+  /** Extra classes — pass `ml-1` where the parent has no gap. */
+  className?: string;
+}
+
+/** The muted hint shown after a label for an optional field. */
+export function OptionalHint({
+  optional,
+  className,
+}: OptionalHintProps): React.ReactElement | null {
+  if (!optional) return null;
+  return (
+    <span className={cn("font-normal text-fg-muted", className)}>{optional}</span>
+  );
+}

@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { tv, type VariantProps } from "../lib/variants";
+import { RequiredMark } from "./label";
 import { SectionEyebrow } from "./section-eyebrow";
 
 export const formLayoutVariants = tv({
@@ -228,11 +229,11 @@ export const FieldRow = React.forwardRef<HTMLLabelElement, FieldRowProps>(
             {label ? (
               <SectionEyebrow as="span" weight="medium">
                 {label}
-                {required ? (
-                  <span className="ml-1 text-danger-text" aria-hidden="true">
-                    {requiredIndicator}
-                  </span>
-                ) : null}
+                <RequiredMark
+                  required={required}
+                  indicator={requiredIndicator}
+                  className="ml-1"
+                />
               </SectionEyebrow>
             ) : null}
             {meta ? (
