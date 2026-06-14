@@ -5,17 +5,20 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
-import { AngeeLogo } from "@angee/logo-react";
 import { useNavigate } from "@tanstack/react-router";
+import { AngeeLogo, AngeeLogoCube } from "@angee/logo-react";
+import "@angee/logo-react/style.css";
 import { useSlot, type SlotContribution } from "@angee/sdk";
 
-import { PublicShell } from "../shell/PublicShell";
+import { cn } from "../lib/cn";
 import { safeRedirectPath } from "./safe-redirect";
 import { UsernamePasswordForm } from "./UsernamePasswordForm";
+import { Button } from "../ui/button";
 
 export const AUTH_LOGIN_METHOD_SLOT = "auth.login.method";
 export const AUTH_LOGIN_CARD_FOOTER_SLOT = "auth.login.card-footer";
 export const AUTH_LOGIN_PAGE_FOOTER_SLOT = "auth.login.page-footer";
+export const AUTH_LOGIN_PASSWORD_HELP_SLOT = "auth.login.password-help";
 
 export interface LoginPageProps {
   brand?: ReactNode;
@@ -23,6 +26,7 @@ export interface LoginPageProps {
   footer?: ReactNode;
   hero?: ReactNode | null;
   cardHeader?: ReactNode | null;
+  passwordHelp?: ReactNode | null;
   showAtmosphere?: boolean;
   backgroundImageUrl?: string;
 }
@@ -33,6 +37,7 @@ export function LoginPage({
   footer,
   hero,
   cardHeader,
+  passwordHelp,
   showAtmosphere,
   backgroundImageUrl,
 }: LoginPageProps): ReactNode {
@@ -52,6 +57,7 @@ export function LoginPage({
   const methodSlot = useSlot(AUTH_LOGIN_METHOD_SLOT);
   const cardFooterSlot = useSlot(AUTH_LOGIN_CARD_FOOTER_SLOT);
   const pageFooterSlot = useSlot(AUTH_LOGIN_PAGE_FOOTER_SLOT);
+  const passwordHelpSlot = useSlot(AUTH_LOGIN_PASSWORD_HELP_SLOT);
   const cardFooter = footer
     ?? (slotEntriesHaveContent(cardFooterSlot)
       ? <SlotOutlet entries={cardFooterSlot} />
@@ -59,81 +65,199 @@ export function LoginPage({
   const pageFooter = slotEntriesHaveContent(pageFooterSlot)
     ? <SlotOutlet entries={pageFooterSlot} />
     : null;
+  const formPasswordHelp = passwordHelp === null
+    ? null
+    : (passwordHelp
+      ?? (slotEntriesHaveContent(passwordHelpSlot)
+        ? <SlotOutlet entries={passwordHelpSlot} />
+        : <DefaultPasswordHelp />));
+  const loginMethods = slotEntriesHaveContent(methodSlot)
+    ? <SlotOutlet entries={methodSlot} />
+    : null;
+  const defaultHero = hero === undefined;
+  const defaultAtmosphere = showAtmosphere ?? true;
+  const resolvedHero =
+    defaultHero ? <LoginBrandPanel brand={brand} /> : hero;
+  const showHero = resolvedHero !== null;
 
   return (
-    <PublicShell
-      hero={hero === undefined ? <LoginHero /> : hero}
-      cardLead={<MobileBrandLead brand={brand} />}
-      footer={pageFooter}
-      showAtmosphere={showAtmosphere}
-      backgroundImageUrl={backgroundImageUrl}
-    >
-      {cardHeader === null ? null : (cardHeader ?? <DefaultCardHeader />)}
-      {cardHeader === null ? null : (
-        <div className="mb-7 mt-7 h-px bg-border" aria-hidden="true" />
+    <main
+      className={cn(
+        "relative min-h-screen overflow-hidden text-fg",
+        showHero
+          ? "grid lg:grid-cols-[minmax(0,1fr)_minmax(28rem,34rem)]"
+          : "grid place-items-center px-5 py-8",
+        showHero && defaultHero ? "bg-n-950" : "bg-canvas",
       )}
-      <SlotOutlet entries={methodSlot} />
-      <UsernamePasswordForm onSuccess={onSuccess} />
-      {cardFooter ? (
-        <div className="mt-6 rounded-md border border-border-subtle bg-inset px-4 py-3">
-          {cardFooter}
+    >
+      {showHero && defaultHero ? (
+        <LoginVisualBackdrop
+          imageUrl={backgroundImageUrl}
+          showAtmosphere={defaultAtmosphere}
+        />
+      ) : null}
+      {showHero && defaultHero && defaultAtmosphere ? <WanderingCube /> : null}
+      {showHero ? (
+        <div
+          className="relative z-10 hidden min-h-screen lg:block"
+          aria-hidden={defaultHero ? "true" : undefined}
+        >
+          {resolvedHero}
         </div>
       ) : null}
-    </PublicShell>
+      <section
+        className={cn(
+          "relative z-10 flex min-h-screen items-center justify-center px-5 py-8 sm:px-8",
+          showHero
+            ? "border-l border-n-0/20 bg-sheet/94 shadow-2xl shadow-n-950/20 backdrop-blur-xl"
+            : "bg-sheet",
+          !showHero && "min-h-0 w-full max-w-[30rem] rounded-lg border border-border shadow-lg",
+        )}
+      >
+        <div className="w-full max-w-[26rem]">
+          <div className={cn("mb-9 flex justify-center", showHero && "lg:hidden")}>
+            {brand ?? <AngeeIdentity />}
+          </div>
+          {cardHeader === null ? null : (
+            <div className="mb-8">{cardHeader ?? <DefaultCardHeader />}</div>
+          )}
+          {loginMethods ? (
+            <div className="mb-5">
+              {loginMethods}
+              <div className="mt-5 flex items-center gap-3 text-xs text-fg-muted">
+                <span className="h-px flex-1 bg-border-subtle" aria-hidden />
+                <span>or use password</span>
+                <span className="h-px flex-1 bg-border-subtle" aria-hidden />
+              </div>
+            </div>
+          ) : null}
+          <UsernamePasswordForm
+            onSuccess={onSuccess}
+            passwordHelp={formPasswordHelp}
+          />
+          {cardFooter ? (
+            <div className="mt-6 rounded-md border border-border-subtle bg-inset/70 px-4 py-3">
+              {cardFooter}
+            </div>
+          ) : null}
+          {pageFooter ? (
+            <div className="mt-8 text-center text-xs text-fg-muted">
+              {pageFooter}
+            </div>
+          ) : null}
+        </div>
+      </section>
+    </main>
   );
 }
 
-function LoginHero(): ReactNode {
+function LoginBrandPanel({
+  brand,
+}: {
+  brand?: ReactNode;
+}): ReactNode {
   return (
-    <section className="hidden min-h-screen flex-col justify-between px-8 py-10 text-n-0 lg:flex xl:px-12">
-      <div>
-        <BrandLockup />
-      </div>
-      <div className="max-w-2xl pb-16">
-        <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-n-0/20 bg-n-0/10 px-3 py-1 text-xs font-semibold uppercase text-n-0 shadow-lg shadow-n-950/20 backdrop-blur">
-          <span className="size-1.5 rounded-full bg-amber-300" aria-hidden />
-          Alpha
-          <span className="font-normal normal-case text-n-200">
-            Agent-native generative execution environment
-          </span>
+    <section className="relative flex min-h-screen flex-col overflow-hidden px-10 py-9 text-n-0 xl:px-12">
+      <div className="relative z-10">{brand ?? <AngeeIdentity tone="inverse" />}</div>
+      <div className="relative z-10 flex flex-1 items-center pb-16 pt-10">
+        <div className="w-full max-w-xl">
+          <p className="mb-5 text-xs font-semibold uppercase tracking-[0.18em] text-n-0/72">
+            From intent to interface
+          </p>
+          <h1 className="max-w-[11ch] text-5xl font-semibold leading-[1.02] text-n-0 xl:text-6xl">
+            Build what you can imagine.
+          </h1>
+          <p className="mt-5 max-w-md text-base leading-7 text-n-100/88">
+            Shape the idea. Watch it become a living product surface.
+          </p>
         </div>
-        <h1 className="max-w-[12ch] text-5xl font-semibold leading-[1.02] text-n-0 xl:text-6xl">
-          Define your vision.
-          <br />
-          <span className="bg-gradient-to-br from-brand-200 via-brand-300 to-brand-500 bg-clip-text text-transparent">
-            Agents build the reality.
-          </span>
-        </h1>
-        <p className="mt-6 max-w-xl text-base leading-7 text-n-200">
-          Compose Django, React, permissions, data views, and agent workflows
-          into one deterministic product surface.
-        </p>
       </div>
     </section>
   );
 }
 
-function MobileBrandLead({ brand }: { brand?: ReactNode }): ReactNode {
+function LoginVisualBackdrop({
+  imageUrl,
+  showAtmosphere,
+}: {
+  imageUrl?: string;
+  showAtmosphere: boolean;
+}): ReactNode {
   return (
-    <div className="lg:hidden">
-      <div className="mb-4 flex justify-center">{brand ?? <BrandLockup />}</div>
-      <p className="text-sm text-n-200">Sign in to continue.</p>
+    <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+      {imageUrl ? (
+        <div
+          className="absolute inset-0 bg-cover bg-center bg-no-repeat"
+          style={{ backgroundImage: `url("${imageUrl}")` }}
+        />
+      ) : (
+        <div className="absolute inset-0 bg-[linear-gradient(135deg,#07111f,#123129_46%,#08101d)]" />
+      )}
+      <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(4,9,18,0.82)_0%,rgba(4,9,18,0.34)_44%,rgba(4,9,18,0.9)_100%)]" />
+      <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(4,9,18,0.08)_0%,rgba(4,9,18,0.16)_48%,rgba(4,9,18,0.68)_100%)]" />
+      {showAtmosphere ? (
+        <>
+          <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.09)_1px,transparent_1px),linear-gradient(rgba(255,255,255,0.07)_1px,transparent_1px)] bg-[size:56px_56px] opacity-30 [mask-image:linear-gradient(90deg,black,transparent_72%)]" />
+          <div className="absolute inset-0 bg-[linear-gradient(118deg,rgba(45,212,191,0.2)_0%,transparent_42%),linear-gradient(318deg,rgba(252,211,77,0.16)_0%,transparent_36%)]" />
+          <div className="absolute inset-x-0 top-0 h-24 border-b border-n-0/10 bg-n-950/10 backdrop-blur-[1px]" />
+        </>
+      ) : null}
     </div>
   );
 }
 
-function BrandLockup(): ReactNode {
+function WanderingCube(): ReactNode {
   return (
-    <div className="inline-flex items-center gap-3 text-n-0">
-      <AngeeLogo
-        preset="gold"
-        geometry="cube"
-        bgColor={null}
-        size={36}
-        width={36}
-        height={36}
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute left-0 top-0 z-[1] hidden h-72 w-72 opacity-70 mix-blend-screen lg:block"
+    >
+      <AngeeLogoCube
+        size={68}
+        gap={2}
+        leftColor="#14b8a6"
+        rightColor="#fcd34d"
+        baseDark="#08111f"
+        animationSpeed={24}
+        animationType="rotate-slide"
+        wander
+        wanderSpeed={92}
       />
-      <span className="text-sm font-semibold tracking-wide">angee</span>
+    </div>
+  );
+}
+
+function AngeeIdentity({
+  tone = "default",
+}: {
+  tone?: "default" | "inverse";
+}): ReactNode {
+  return (
+    <div
+      className={cn(
+        "inline-flex items-center gap-3",
+        tone === "inverse" ? "text-n-0" : "text-fg",
+      )}
+    >
+      <span
+        className={cn(
+          "grid size-9 place-content-center rounded-md border",
+          tone === "inverse"
+            ? "border-n-0/15 bg-n-0/8"
+            : "border-border-subtle bg-sheet",
+        )}
+      >
+        <AngeeLogo
+          aria-hidden="true"
+          preset="gold"
+          geometry="full"
+          bgColor={null}
+          size={22}
+          width={22}
+          height={22}
+        />
+      </span>
+      <span className="text-xl font-semibold">Angee</span>
     </div>
   );
 }
@@ -141,9 +265,26 @@ function BrandLockup(): ReactNode {
 function DefaultCardHeader(): ReactNode {
   return (
     <div>
-      <h2 className="text-22 font-semibold text-fg">Welcome back</h2>
-      <p className="mt-1.5 text-sm text-fg-muted">Sign in to your account.</p>
+      <h1 className="text-28 font-semibold leading-tight text-fg">
+        Sign in
+      </h1>
+      <p className="mt-2 text-sm text-fg-muted">
+        Use your Angee account credentials.
+      </p>
     </div>
+  );
+}
+
+function DefaultPasswordHelp(): ReactNode {
+  return (
+    <Button
+      type="button"
+      variant="link"
+      size="sm"
+      className="!h-auto px-0 py-0 text-sm font-medium"
+    >
+      Forgot your password?
+    </Button>
   );
 }
 
@@ -171,4 +312,3 @@ function slotNode(value: unknown, key: string): ReactNode[] {
 function slotEntriesHaveContent(entries: readonly SlotContribution[]): boolean {
   return entries.some((entry) => slotNode(entry.content, entry.id).length > 0);
 }
-

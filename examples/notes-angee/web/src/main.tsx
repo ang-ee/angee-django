@@ -1,5 +1,4 @@
 import {
-  AUTH_LOGIN_CARD_FOOTER_SLOT,
   ConsoleShell,
   LoginPage,
   createApp,
@@ -13,9 +12,10 @@ import knowledge from "@angee/knowledge";
 import operator from "@angee/operator";
 import storage from "@angee/storage";
 
+import futureCityUrl from "../../../../assets/backgrounds/angee-future-city.png";
 import publicSDL from "../../runtime/schemas/public.graphql?raw";
 import consoleSDL from "../../runtime/schemas/console.graphql?raw";
-import { DemoCredentials } from "./demo-auth";
+import { DemoForgotPasswordHint } from "./demo-auth";
 import "./index.css";
 
 const authAddon: BaseAddon = {
@@ -25,7 +25,13 @@ const authAddon: BaseAddon = {
       name: "auth.login",
       path: "/login",
       shell: "public",
-      component: () => <LoginPage redirectTo="/notes" />,
+      component: () => (
+        <LoginPage
+          redirectTo="/notes"
+          backgroundImageUrl={futureCityUrl}
+          passwordHelp={<DemoForgotPasswordHint />}
+        />
+      ),
     },
   ],
 };
@@ -47,12 +53,5 @@ createApp({
   // The console is the primary surface, so it is the default schema; the public
   // login shell pins itself back to the public client above.
   defaultSchema: "console",
-  slots: [
-    {
-      slot: AUTH_LOGIN_CARD_FOOTER_SLOT,
-      id: "notes-demo-users",
-      content: <DemoCredentials />,
-    },
-  ],
   home: "/notes",
 }).mount("#root");

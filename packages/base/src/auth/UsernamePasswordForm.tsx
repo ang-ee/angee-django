@@ -7,6 +7,8 @@ import { FieldControl, FieldLabel, FieldRoot } from "../ui/field";
 export interface UsernamePasswordFormProps {
   /** Called after a successful sign-in; the page handles the redirect. */
   onSuccess?: () => void;
+  /** Optional help action rendered directly under the submit button. */
+  passwordHelp?: ReactNode;
 }
 
 /**
@@ -17,6 +19,7 @@ export interface UsernamePasswordFormProps {
  */
 export function UsernamePasswordForm({
   onSuccess,
+  passwordHelp,
 }: UsernamePasswordFormProps): ReactNode {
   const { login, fetching } = useLoginWithPassword();
   const usernameId = useId();
@@ -46,7 +49,7 @@ export function UsernamePasswordForm({
   const hasError = error !== null;
 
   return (
-    <form className="flex flex-col gap-5" onSubmit={onSubmit}>
+    <form className="flex flex-col gap-4" onSubmit={onSubmit}>
       <FieldRoot invalid={hasError} size="lg">
         <FieldLabel htmlFor={usernameId} required>
           Username
@@ -56,6 +59,7 @@ export function UsernamePasswordForm({
           name="username"
           type="text"
           autoComplete="username"
+          className="!h-11 bg-canvas"
           required
           disabled={fetching}
           value={username}
@@ -75,6 +79,7 @@ export function UsernamePasswordForm({
           name="password"
           type="password"
           autoComplete="current-password"
+          className="!h-11 bg-canvas"
           required
           disabled={fetching}
           value={password}
@@ -100,10 +105,16 @@ export function UsernamePasswordForm({
         variant="primary"
         size="lg"
         loading={fetching}
-        className="mt-1 w-full justify-center"
+        className="mt-2 !h-11 w-full justify-center"
       >
         {fetching ? "Signing in…" : "Sign in"}
       </Button>
+
+      {passwordHelp ? (
+        <div className="-mt-1 flex justify-center text-sm">
+          {passwordHelp}
+        </div>
+      ) : null}
     </form>
   );
 }
