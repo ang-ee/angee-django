@@ -24,6 +24,7 @@ import {
   GraphQLClientProvider,
   GraphQLProvider,
   RelayInvalidationProvider,
+  changeSubscriptionFields,
   composeAddons,
   mergeSlotContributions,
   useRuntimeAuthState,
@@ -154,6 +155,13 @@ export function createApp(input: CreateAppInput): AngeeApp {
 
   const defaultSchema = input.defaultSchema ?? "public";
   const subscriptionSchema = input.subscriptionSchema ?? "console";
+  // Only the models the subscription schema actually publishes a change event for
+  // get a live subscription; blind-subscribing an undefined `<model>Changed` errors
+  // server-side. Absent an SDL we keep the prior behaviour (subscribe to all).
+  const subscriptionSdl = input.schemas[subscriptionSchema]?.sdl;
+  const availableChangeFields = subscriptionSdl
+    ? changeSubscriptionFields(subscriptionSdl)
+    : undefined;
   const home =
     resolvePath(input.home, pathByName) ??
     routes.find((route) => route.shell !== "public")?.path ??
@@ -205,7 +213,11 @@ export function createApp(input: CreateAppInput): AngeeApp {
       root.render(
         <StrictMode>
           <GraphQLClientProvider config={input.schemas} schema={defaultSchema}>
-            <AppFrame runtime={runtime} subscriptionSchema={subscriptionSchema}>
+            <AppFrame
+              runtime={runtime}
+              subscriptionSchema={subscriptionSchema}
+              availableChangeFields={availableChangeFields}
+            >
               <RouterProvider router={router} />
             </AppFrame>
           </GraphQLClientProvider>
@@ -246,10 +258,12 @@ export function stringifyFlatSearch(search: Record<string, unknown>): string {
 function AppFrame({
   runtime,
   subscriptionSchema,
+  availableChangeFields,
   children,
 }: {
   runtime: AppRuntime;
   subscriptionSchema: string;
+  availableChangeFields?: ReadonlySet<string>;
   children: ReactNode;
 }): ReactNode {
   const { auth } = useRuntimeAuthState();
@@ -258,7 +272,10 @@ function AppFrame({
     <AppRuntimeProvider runtime={runtime}>
       <ModalsHost>
         <ToastProvider>
-          <RelayInvalidationProvider client={clients[subscriptionSchema]}>
+          <RelayInvalidationProvider
+            client={clients[subscriptionSchema]}
+            availableChangeFields={availableChangeFields}
+          >
             <AuthProvider auth={auth}>{children}</AuthProvider>
           </RelayInvalidationProvider>
         </ToastProvider>

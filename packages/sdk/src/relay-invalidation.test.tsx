@@ -4,6 +4,7 @@ import { createElement, type ReactNode } from "react";
 import { describe, expect, test, vi } from "vitest";
 
 import {
+  changeSubscriptionFields,
   RelayInvalidationProvider,
   useInvalidateModels,
   useModelInvalidation,
@@ -57,5 +58,23 @@ describe("relay invalidation wiring", () => {
     );
     act(() => result.current(["notes.Note"]));
     expect(refetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("change subscription gating", () => {
+  test("returns the change fields the schema's Subscription type defines", () => {
+    const fields = changeSubscriptionFields(`
+      type Query { ok: Boolean }
+      type ChangeEvent { model: String }
+      type Subscription { noteChanged: ChangeEvent fileChanged: ChangeEvent }
+    `);
+    expect(fields.has("noteChanged")).toBe(true);
+    expect(fields.has("fileChanged")).toBe(true);
+    // A model without a `changes()` field is not gated in — no blind subscription.
+    expect(fields.has("skillChanged")).toBe(false);
+  });
+
+  test("is empty when the schema declares no Subscription type", () => {
+    expect(changeSubscriptionFields(`type Query { ok: Boolean }`).size).toBe(0);
   });
 });

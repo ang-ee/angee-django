@@ -10,6 +10,7 @@ import {
 } from "react";
 import { Provider as UrqlProvider } from "urql";
 import type { Client } from "@urql/core";
+import { buildSchema } from "graphql";
 
 import { useAuthoredSubscription } from "./authored-hooks";
 import { makeContext } from "./make-context";
@@ -21,13 +22,30 @@ import { typeNameForModel } from "./selection";
  * the per-model event the schema publishes. Derived from the GraphQL typename so
  * it never drifts from the field naming (`Note` -> `noteChanged`).
  */
-export function changeSubscriptionDocument(typename: string): string {
+/** The `<noun>Changed` subscription field for a model typename (`Note` → `noteChanged`). */
+function changeFieldName(typename: string): string {
   const typeName = typeNameForModel(typename);
-  const field = `${typeName.charAt(0).toLowerCase()}${typeName.slice(1)}Changed`;
+  return `${typeName.charAt(0).toLowerCase()}${typeName.slice(1)}Changed`;
+}
+
+export function changeSubscriptionDocument(typename: string): string {
+  const field = changeFieldName(typename);
   return (
     `subscription angee${typename}Changed { ` +
     `${field} { model id action changedFields changedValues } }`
   );
+}
+
+/**
+ * The `<noun>Changed` fields an SDL's `Subscription` type defines. The live
+ * invalidator subscribes only to models the schema actually publishes a change
+ * event for; a model without a `changes()` field still invalidates on local
+ * writes through the registry, but is never blind-subscribed (which errors
+ * server-side as an unknown subscription field).
+ */
+export function changeSubscriptionFields(sdl: string): ReadonlySet<string> {
+  const subscription = buildSchema(sdl).getSubscriptionType();
+  return new Set(subscription ? Object.keys(subscription.getFields()) : []);
 }
 
 const RegistryContext = makeContext<RefetchRegistry>("RelayInvalidationProvider");
@@ -49,17 +67,23 @@ function ModelChangeListener(props: {
 function LiveInvalidation(props: {
   registry: RefetchRegistry;
   client: Client;
+  availableChangeFields?: ReadonlySet<string>;
 }): ReactNode {
-  const { registry, client } = props;
+  const { registry, client, availableChangeFields } = props;
   const typenames = useSyncExternalStore(
     registry.subscribe,
     registry.typenames,
     registry.typenames,
   );
+  // Subscribe only to models the schema publishes a change event for; the rest
+  // still invalidate on local writes through the registry.
+  const live = availableChangeFields
+    ? typenames.filter((typename) => availableChangeFields.has(changeFieldName(typename)))
+    : typenames;
   return createElement(
     UrqlProvider,
     { value: client },
-    typenames.map((typename) =>
+    live.map((typename) =>
       createElement(ModelChangeListener, { key: typename, typename, registry }),
     ),
   );
@@ -75,6 +99,7 @@ function LiveInvalidation(props: {
 export function RelayInvalidationProvider(props: {
   client?: Client;
   autoSubscribe?: boolean;
+  availableChangeFields?: ReadonlySet<string>;
   children: ReactNode;
 }): ReactNode {
   const [registry] = useState(createRefetchRegistry);
@@ -86,7 +111,11 @@ export function RelayInvalidationProvider(props: {
       Fragment,
       null,
       autoSubscribe && client
-        ? createElement(LiveInvalidation, { registry, client })
+        ? createElement(LiveInvalidation, {
+            registry,
+            client,
+            availableChangeFields: props.availableChangeFields,
+          })
         : null,
       props.children,
     ),

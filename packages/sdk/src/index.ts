@@ -127,6 +127,7 @@ export {
   useModelInvalidation,
   useInvalidateModels,
   changeSubscriptionDocument,
+  changeSubscriptionFields,
 } from "./relay-invalidation";
 
 // Cross-cutting context: runtime registry, auth, the context factory.
