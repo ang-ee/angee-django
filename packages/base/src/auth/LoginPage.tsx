@@ -33,6 +33,11 @@ const HERO_SLIDES = [
     headline: "Define your vision. Agents build the reality.",
     body: "The self-building SaaS platform where autonomous AI agents scaffold, wire, and extend production-ready software.",
   },
+  {
+    eyebrow: "Composable by design",
+    headline: "One surface for real product work.",
+    body: "Compose Django, React, permissions, data views, and agent workflows into a deterministic product surface that stays clear as it grows.",
+  },
 ] as const;
 
 export interface LoginPageProps {
