@@ -56,6 +56,25 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 - **A new web package needs `pnpm install` + a Vite restart** (Vite snapshots
   workspace packages at start) plus registration in the host `main.tsx` addons and
   `package.json`.
+- **`DataPage`/`ListView` require a `delete` root field and a form — even
+  read-only.** Both wire `useBulkDelete` eagerly (needs `delete<Model>`) and
+  resolve form fields eagerly (needs a `<Form>` child or `formFields`); there is no
+  read-only mode. A discovered/read-only model (one synced from a source, never
+  hand-created) still needs delete-only `crud(...)` (matching integrate's
+  `Repository`), and to stay view-only it must pass **no** `routed`/`onSelect` — then
+  records never open, so the `update`/`create` roots are never assembled.
+- **An addon contributes one rail (app) root** (`group:"platform"`); its children
+  are the top-bar menus, and a child that itself has children renders as a dropdown.
+  A route referenced by more than one menu item must set `route.menu` (the owning
+  item's id) or the chrome derivation throws "referenced by multiple menu items" —
+  or make the root route-less so it inherits its target through a descendant and the
+  leaf is the route's sole reference.
+- **Live cross-actor refresh requires a `changes()` subscription.** A list/picker
+  auto-invalidates from `<model>Changed` on the subscription schema, gated on the
+  schema actually declaring it — so a model without
+  `changes(Model, field="<model>Changed")` in its `schema.py` refreshes on local
+  writes only (no live push, no error). Add the subscription to opt a model into
+  live updates; omit it and you simply get local-write invalidation.
 
 ## Checks
 
