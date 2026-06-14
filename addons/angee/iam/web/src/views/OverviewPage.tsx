@@ -16,7 +16,7 @@ import {
   Select,
   SurfacePanel,
 } from "@angee/base";
-import { useAuthoredMutation, useAuthoredQuery } from "@angee/sdk";
+import { errorMessage, useAuthoredMutation, useAuthoredQuery } from "@angee/sdk";
 
 import {
   IAM_GRANTS_QUERY,
@@ -154,7 +154,7 @@ export function OverviewPage(): ReactElement {
       grantsQuery.refetch();
       overview.refetch();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not grant role.");
+      setError(errorMessage(caught, "Could not grant role."));
     }
   }
 

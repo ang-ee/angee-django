@@ -1,5 +1,5 @@
 import { Alert, EmptyState, LoadingPanel } from "@angee/base";
-import { useSchemaClients } from "@angee/sdk";
+import { errorMessage, useSchemaClients } from "@angee/sdk";
 import {
   Provider as UrqlProvider,
   useMutation,
@@ -104,7 +104,7 @@ export function OperatorTransportProvider({
         );
       } catch (error: unknown) {
         if (!signal.active) return;
-        setState({ kind: "error", message: messageFromUnknown(error) });
+        setState({ kind: "error", message: errorMessage(error, "Unknown operator error.") });
       }
     },
     [consoleClient],
@@ -307,8 +307,4 @@ function parseOperatorConnection(value: unknown): OperatorConnectionInfo | null 
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
-}
-
-function messageFromUnknown(error: unknown): string {
-  return error instanceof Error ? error.message : "Unknown operator error.";
 }

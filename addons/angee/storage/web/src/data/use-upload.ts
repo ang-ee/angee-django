@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 
-import { useAuthoredMutation } from "@angee/sdk";
+import { errorMessage, useAuthoredMutation } from "@angee/sdk";
 
 import {
   FILE_UPLOAD_BEGIN_MUTATION,
@@ -141,7 +141,7 @@ export function useStorageUpload(
       } catch (error) {
         patch(taskId, {
           status: "failed",
-          error: error instanceof Error ? error.message : "Upload failed.",
+          error: errorMessage(error, "Upload failed."),
         });
       }
     },

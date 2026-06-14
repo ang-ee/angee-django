@@ -1,5 +1,5 @@
 import { Alert, Button, Spinner, safeRedirectPath } from "@angee/base";
-import { useAuthoredMutation } from "@angee/sdk";
+import { errorMessage, useAuthoredMutation } from "@angee/sdk";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import {
@@ -155,8 +155,4 @@ function loginCompleteOnce(
   });
   completionRequests.set(key, request);
   return request;
-}
-
-function errorMessage(caught: unknown, fallback: string): string {
-  return caught instanceof Error ? caught.message : fallback;
 }

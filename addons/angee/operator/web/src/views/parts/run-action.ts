@@ -1,3 +1,5 @@
+import { errorMessage } from "@angee/sdk";
+
 /** A daemon mutation payload keyed by its single root field (shape varies by op). */
 export type DaemonActionData = Record<string, unknown>;
 
@@ -33,7 +35,7 @@ export async function runDaemonAction<V extends Record<string, unknown>>(
     }
   } catch (error) {
     succeeded = false;
-    setError(error instanceof Error ? error.message : `${label} failed.`);
+    setError(errorMessage(error, `${label} failed.`));
   } finally {
     refetch();
   }

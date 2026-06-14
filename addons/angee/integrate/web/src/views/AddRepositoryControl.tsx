@@ -11,6 +11,7 @@ import {
   type RelationOption,
 } from "@angee/base";
 import {
+  errorMessage,
   useAuthoredMutation,
   useAuthoredQuery,
   useModelInvalidation,
@@ -138,7 +139,7 @@ function AddRepositoryDialog({
         setAdded((prev) => new Set(prev).add(candidate.name));
         refreshRepositories();
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : "Could not add repository.");
+        setError(errorMessage(cause, "Could not add repository."));
       } finally {
         setAdding(null);
       }

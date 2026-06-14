@@ -128,7 +128,9 @@ now guards `ok` too. `runActionResult` exports only the function (the
       the rendered binding.
 
 ### T10 — lift no-owner plumbing to SDK/base lib
-- [ ] `unknown→message` error helper (×5) → `@angee/sdk`.
+- [x] `unknown→message` error helper → `@angee/sdk` `errorMessage`; routed 8
+      sites (3 local defs removed + 5 inline ternaries) across iam/operator/
+      integrate/storage. (validation-errors & useBulkDelete left — different intent.)
 - [ ] `run()` busy-wrapper hook (×3) → `useBusyAction`/`useAsyncAction`.
 - [x] relay `global-id` codec (×2) → `@angee/sdk` (`toRelayGlobalId`,
       `relationRelayGlobalId`); storage/knowledge re-export + keep `*_TYPE` consts.

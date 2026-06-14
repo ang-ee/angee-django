@@ -1,5 +1,5 @@
 import { Alert, Button, Glyph, Spinner } from "@angee/base";
-import { useAuthoredMutation, useAuthoredQuery } from "@angee/sdk";
+import { errorMessage, useAuthoredMutation, useAuthoredQuery } from "@angee/sdk";
 import { useState, type ReactNode } from "react";
 
 import {
@@ -120,8 +120,4 @@ function connectionLabel(connection: AvailableConnection): string {
     connection.oauthClientSlug.trim() ||
     "provider"
   );
-}
-
-function errorMessage(caught: unknown, fallback: string): string {
-  return caught instanceof Error ? caught.message : fallback;
 }

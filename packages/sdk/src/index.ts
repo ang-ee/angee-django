@@ -123,6 +123,7 @@ export {
 
 // Action-mutation result handling.
 export { runActionResult } from "./action-result";
+export { errorMessage } from "./error-message";
 
 // Live invalidation.
 export {

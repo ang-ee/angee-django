@@ -14,6 +14,7 @@ import {
   type ListColumn,
 } from "@angee/base";
 import {
+  errorMessage,
   useAuthoredMutation,
   useAuthoredQuery,
 } from "@angee/sdk";
@@ -83,9 +84,7 @@ export function GrantsPage(): ReactElement {
       }
       query.refetch();
     } catch (caught) {
-      setActionError(
-        caught instanceof Error ? caught.message : "Could not revoke role.",
-      );
+      setActionError(errorMessage(caught, "Could not revoke role."));
     } finally {
       setPendingGrantId(null);
     }
