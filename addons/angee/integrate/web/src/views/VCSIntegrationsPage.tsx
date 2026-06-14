@@ -11,6 +11,7 @@ import {
 } from "@angee/base";
 import { runActionResult, useAuthoredMutation, useModelMetadata } from "@angee/sdk";
 
+import { useIntegrateT } from "../i18n";
 import {
   DISCOVER_REPOSITORIES_MUTATION,
   SYNC_VCS_INTEGRATION_MUTATION,
@@ -37,6 +38,7 @@ const integrationList = (
  * class, then `discover`/`sync` populate and refresh the repository inventory.
  */
 export function VCSIntegrationsPage(): React.ReactElement {
+  const t = useIntegrateT();
   const [syncVcs] = useAuthoredMutation<SyncVcsIntegrationData, IdVariables>(
     SYNC_VCS_INTEGRATION_MUTATION,
   );
@@ -97,8 +99,8 @@ export function VCSIntegrationsPage(): React.ReactElement {
         <Field name="config" widget="json" />
         {/* Write-only signing secret — set on create, never read back. */}
         <Field name="webhookSecret" widget="text" kind="string" createOnly />
-        <Action id="sync" label="Sync now" icon="refresh" run={sync} />
-        <Action id="discover" label="Discover repositories" run={discoverAll} />
+        <Action id="sync" label={t("integrate.action.syncNow")} icon="refresh" run={sync} />
+        <Action id="discover" label={t("integrate.vcs.discover")} run={discoverAll} />
       </Form>
     </DataPage>
   );

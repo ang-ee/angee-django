@@ -1,4 +1,4 @@
-import { type ReactElement } from "react";
+import { useMemo, type ReactElement } from "react";
 
 import {
   Button,
@@ -8,11 +8,12 @@ import {
   useResolvedWidget,
   type WidgetField,
 } from "@angee/base";
-
+import { useKnowledgeT } from "../i18n";
 import type { KnowledgePageDetail } from "../data/documents";
 import { usePageEditor, type SaveStatus } from "../data/use-page-editor";
 
-const BODY_FIELD: WidgetField = { name: "body", label: "Write your page…" };
+/** Bound translator for the knowledge namespace. */
+type Translate = ReturnType<typeof useKnowledgeT>;
 
 export interface PageEditorProps {
   detail: KnowledgePageDetail;
@@ -32,6 +33,7 @@ export function PageEditor({
   onSaved,
   onDelete,
 }: PageEditorProps): ReactElement {
+  const t = useKnowledgeT();
   const editor = usePageEditor(
     detail.id,
     {
@@ -44,6 +46,10 @@ export function PageEditor({
   const markdown = useResolvedWidget("markdown.editor");
   const Body = markdown?.edit;
   const isNote = detail.kind !== "folder";
+  const bodyField = useMemo<WidgetField>(
+    () => ({ name: "body", label: t("knowledge.editor.bodyPlaceholder") }),
+    [t],
+  );
 
   return (
     <div className="mx-auto flex h-full w-full max-w-[820px] flex-col gap-4 overflow-auto px-8 py-8">
@@ -56,8 +62,8 @@ export function PageEditor({
           />
           <input
             value={editor.title}
-            placeholder="Untitled"
-            aria-label="Page title"
+            placeholder={t("knowledge.editor.titlePlaceholder")}
+            aria-label={t("knowledge.editor.titleLabel")}
             className="min-w-0 flex-1 border-0 bg-transparent text-28 font-semibold leading-9 text-fg outline-none placeholder:text-fg-subtle"
             onChange={(event) => editor.setTitle(event.currentTarget.value)}
             onBlur={editor.commitTitle}
@@ -66,30 +72,30 @@ export function PageEditor({
             type="button"
             size="iconMd"
             variant="ghost"
-            aria-label="Delete page"
+            aria-label={t("knowledge.editor.deleteLabel")}
             onClick={onDelete}
           >
             <Glyph name="trash" />
           </Button>
         </div>
         <div className="flex items-center gap-2 pl-6 font-mono text-13 text-fg-muted">
-          <span>{metaLine(detail)}</span>
-          <SaveBadge status={editor.status} />
+          <span>{metaLine(detail, t)}</span>
+          <SaveBadge status={editor.status} t={t} />
         </div>
       </header>
 
       {isNote && Body ? (
         <Body
           value={editor.body}
-          field={BODY_FIELD}
+          field={bodyField}
           onChange={(next) => editor.setBody(typeof next === "string" ? next : "")}
         />
       ) : (
         <div className="grid flex-1 place-content-center">
           <EmptyState
             icon="folder"
-            title="Folder"
-            description="A folder groups pages — open a note in the tree to edit it."
+            title={t("knowledge.editor.folderTitle")}
+            description={t("knowledge.editor.folderDescription")}
           />
         </div>
       )}
@@ -97,31 +103,43 @@ export function PageEditor({
   );
 }
 
-function SaveBadge({ status }: { status: SaveStatus }): ReactElement | null {
+function SaveBadge({
+  status,
+  t,
+}: {
+  status: SaveStatus;
+  t: Translate;
+}): ReactElement | null {
   if (status === "idle") return null;
   if (status === "saving") {
     return (
       <span className="inline-flex items-center gap-1 text-fg-muted">
         <Spinner size="sm" />
-        Saving…
+        {t("knowledge.editor.saving")}
       </span>
     );
   }
   if (status === "error") {
-    return <span className="text-danger-text">Save failed</span>;
+    return (
+      <span className="text-danger-text">{t("knowledge.editor.saveFailed")}</span>
+    );
   }
   return (
     <span className="inline-flex items-center gap-1 text-success-text">
       <Glyph decorative name="check" />
-      Saved
+      {t("knowledge.editor.saved")}
     </span>
   );
 }
 
-function metaLine(detail: KnowledgePageDetail): string {
+function metaLine(detail: KnowledgePageDetail, t: Translate): string {
   const parts = [detail.createdByLabel ?? "—", formatDate(detail.updatedAt)];
   if (detail.markdown) {
-    parts.push(`${detail.markdown.wordCount.toLocaleString()} words`);
+    parts.push(
+      t("knowledge.editor.wordCount", {
+        count: detail.markdown.wordCount.toLocaleString(),
+      }),
+    );
   }
   return parts.join(" · ");
 }

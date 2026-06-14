@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 
 import { errorMessage, useAuthoredMutation } from "@angee/sdk";
 
+import { useStorageT } from "../i18n";
 import {
   FILE_UPLOAD_BEGIN_MUTATION,
   FILE_UPLOAD_FINALIZE_MUTATION,
@@ -66,6 +67,7 @@ export function useStorageUpload(
   options: { onUploaded?: () => void } = {},
 ): StorageUpload {
   const { onUploaded } = options;
+  const t = useStorageT();
   const [beginUpload] = useAuthoredMutation<
     FileUploadBeginData,
     FileUploadBeginVariables
@@ -100,7 +102,7 @@ export function useStorageUpload(
         if (!payload || payload.error) {
           patch(taskId, {
             status: "failed",
-            error: payload?.error ?? "Upload could not start.",
+            error: payload?.error ?? t("storage.upload.error.cannotStart"),
           });
           return;
         }
@@ -117,7 +119,7 @@ export function useStorageUpload(
         if (!response.ok) {
           patch(taskId, {
             status: "failed",
-            error: `Upload failed (${response.status}).`,
+            error: t("storage.upload.error.transfer", { status: response.status }),
           });
           return;
         }
@@ -133,7 +135,7 @@ export function useStorageUpload(
         if (!result || result.error) {
           patch(taskId, {
             status: "failed",
-            error: result?.error ?? "Could not finalize upload.",
+            error: result?.error ?? t("storage.upload.error.cannotFinalize"),
           });
           return;
         }
@@ -141,11 +143,11 @@ export function useStorageUpload(
       } catch (error) {
         patch(taskId, {
           status: "failed",
-          error: errorMessage(error, "Upload failed."),
+          error: errorMessage(error, t("storage.upload.error.generic")),
         });
       }
     },
-    [beginUpload, finalizeUpload, patch],
+    [beginUpload, finalizeUpload, patch, t],
   );
 
   const upload = useCallback(

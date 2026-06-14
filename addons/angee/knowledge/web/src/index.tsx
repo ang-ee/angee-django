@@ -1,6 +1,7 @@
 import type { BaseAddon, BaseAddonRoute, BaseMenuItem } from "@angee/base";
 import { BookOpen, FileStack, FileText, Library, Link2 } from "lucide-react";
 
+import { enKnowledgeMessages } from "./i18n";
 import { KnowledgePage, PageCrumb } from "./views/KnowledgePage";
 import { KnowledgeSettingsPage } from "./views/KnowledgeSettingsPage";
 
@@ -54,6 +55,7 @@ const knowledge: BaseAddon = {
   id: KNOWLEDGE_ID,
   routes: knowledgeRoutes,
   menus: knowledgeMenu,
+  i18n: { knowledge: enKnowledgeMessages },
   icons: {
     knowledge: BookOpen,
     vault: Library,

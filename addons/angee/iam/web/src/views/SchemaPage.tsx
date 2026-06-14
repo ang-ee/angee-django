@@ -23,7 +23,7 @@ import {
   type GraphViewNode,
   type GraphViewNodeStyle,
 } from "@angee/base";
-import { useAuthoredQuery } from "@angee/sdk";
+import { useAuthoredQuery, type MessageVars } from "@angee/sdk";
 
 import {
   IAM_REBAC_SCHEMA_QUERY,
@@ -33,6 +33,7 @@ import {
   type IAMResourceSchema,
 } from "../documents";
 import { resourceLabel, titleLabel } from "../identity-labels";
+import { useIamT } from "../i18n";
 
 type SchemaNodeKind = "resource" | "relation" | "permission";
 type SchemaEdgeKind = "contains" | "computed";
@@ -83,7 +84,11 @@ const SCHEMA_EDGE_STYLES: Record<SchemaEdgeKind, GraphViewEdgeStyle> = {
   },
 };
 
+/** A translator bound to the `iam` namespace, threaded into non-component helpers. */
+type Translate = (key: string, vars?: MessageVars) => string;
+
 export function SchemaPage(): ReactElement {
+  const t = useIamT();
   const query = useAuthoredQuery<IAMRebacSchemaData>(IAM_REBAC_SCHEMA_QUERY);
   const [search, setSearch] = useState("");
   const resources = useMemo(
@@ -111,7 +116,7 @@ export function SchemaPage(): ReactElement {
 
   if (query.error) {
     return (
-      <Alert tone="danger" title="Schema unavailable">
+      <Alert tone="danger" title={t("iam.schema.unavailable")}>
         {query.error.message}
       </Alert>
     );
@@ -121,7 +126,7 @@ export function SchemaPage(): ReactElement {
     return (
       <div className="flex items-center gap-2 rounded-md border border-border-subtle bg-sheet px-4 py-3 text-13 text-fg-muted">
         <Spinner size="sm" />
-        Loading schema...
+        {t("iam.schema.loading")}
       </div>
     );
   }
@@ -217,12 +222,13 @@ function ResourceTypeList({
   onSearchChange: (value: string) => void;
   onSelect: (resourceType: string) => void;
 }): ReactElement {
+  const t = useIamT();
   return (
     <section className="min-w-0 rounded-md border border-border-subtle bg-sheet">
       <div className="border-b border-border-subtle p-3">
         <SearchInput
           value={search}
-          placeholder="Search schema"
+          placeholder={t("iam.schema.searchPlaceholder")}
           onChange={(event) => onSearchChange(event.currentTarget.value)}
           onClear={() => onSearchChange("")}
         />
@@ -231,7 +237,7 @@ function ResourceTypeList({
         id={listboxId}
         className="max-h-[34rem] overflow-auto p-2"
         role="listbox"
-        aria-label="Resource types"
+        aria-label={t("iam.schema.resourceTypesLabel")}
         onKeyDown={onKeyDown}
       >
         {resources.length > 0 ? (
@@ -277,7 +283,7 @@ function ResourceTypeList({
           ))
         ) : (
           <p className="m-0 px-3 py-6 text-center text-13 text-fg-muted">
-            No matching resource types.
+            {t("iam.schema.noMatches")}
           </p>
         )}
       </div>
@@ -294,15 +300,16 @@ function SchemaGraphCanvas({
   selectedResource: IAMResourceSchema | null;
   onSelect: (resourceType: string) => void;
 }): ReactElement {
+  const t = useIamT();
   const graph = useMemo(
-    () => buildSchemaGraph(resources, selectedResource?.resourceType ?? ""),
-    [resources, selectedResource?.resourceType],
+    () => buildSchemaGraph(resources, selectedResource?.resourceType ?? "", t),
+    [resources, selectedResource?.resourceType, t],
   );
 
   if (resources.length === 0) {
     return (
       <section className="min-h-[34rem] rounded-md border border-border-subtle bg-sheet p-6 text-13 text-fg-muted">
-        No matching resource types.
+        {t("iam.schema.noMatches")}
       </section>
     );
   }
@@ -312,7 +319,7 @@ function SchemaGraphCanvas({
       <header className="flex min-w-0 items-start justify-between gap-3 border-b border-border-subtle px-4 py-3">
         <div className="min-w-0">
           <h2 className="m-0 truncate text-sm font-semibold text-fg">
-            Permission Graph
+            {t("iam.schema.permissionGraph")}
           </h2>
           {selectedResource ? (
             <Code className="mt-1" truncate tone="muted">
@@ -321,7 +328,7 @@ function SchemaGraphCanvas({
           ) : null}
         </div>
         <Badge tone="info">
-          {graph.nodes.length} nodes
+          {t("iam.schema.nodeCount", { count: graph.nodes.length })}
         </Badge>
       </header>
       <GraphView
@@ -343,10 +350,11 @@ function SchemaInspector({
 }: {
   resource: IAMResourceSchema | null;
 }): ReactElement {
+  const t = useIamT();
   if (!resource) {
     return (
       <section className="rounded-md border border-border-subtle bg-sheet p-6 text-13 text-fg-muted">
-        No resource type selected.
+        {t("iam.schema.noneSelected")}
       </section>
     );
   }
@@ -374,8 +382,9 @@ function RelationList({
 }: {
   relations: readonly IAMRelationSchema[];
 }): ReactElement {
+  const t = useIamT();
   return (
-    <InspectorSection count={relations.length} title="Relations">
+    <InspectorSection count={relations.length} title={t("iam.schema.relations")}>
       {relations.length > 0 ? (
         relations.map((relation) => (
           <InspectorRow
@@ -385,12 +394,12 @@ function RelationList({
           >
             <ChipList
               values={relation.allowedSubjectTypes}
-              empty="No subjects"
+              empty={t("iam.schema.noSubjects")}
             />
           </InspectorRow>
         ))
       ) : (
-        <EmptyInspectorRow>No relations.</EmptyInspectorRow>
+        <EmptyInspectorRow>{t("iam.schema.noRelations")}</EmptyInspectorRow>
       )}
     </InspectorSection>
   );
@@ -401,8 +410,9 @@ function PermissionList({
 }: {
   permissions: readonly IAMPermissionSchema[];
 }): ReactElement {
+  const t = useIamT();
   return (
-    <InspectorSection count={permissions.length} title="Permissions">
+    <InspectorSection count={permissions.length} title={t("iam.schema.permissions")}>
       {permissions.length > 0 ? (
         permissions.map((permission) => (
           <InspectorRow
@@ -412,12 +422,12 @@ function PermissionList({
           >
             <ChipList
               values={permission.conditions.map((condition) => condition.name)}
-              empty="No conditions"
+              empty={t("iam.schema.noConditions")}
             />
           </InspectorRow>
         ))
       ) : (
-        <EmptyInspectorRow>No permissions.</EmptyInspectorRow>
+        <EmptyInspectorRow>{t("iam.schema.noPermissions")}</EmptyInspectorRow>
       )}
     </InspectorSection>
   );
@@ -501,6 +511,7 @@ function ChipList({
 function buildSchemaGraph(
   resources: readonly IAMResourceSchema[],
   selectedResourceType: string,
+  t: Translate,
 ): SchemaGraph {
   const nodes: SchemaGraphNode[] = [];
   const edges: SchemaGraphEdge[] = [];
@@ -527,7 +538,10 @@ function buildSchemaGraph(
         highlighted,
         title: resourceLabel(resource.resourceType),
         code: resource.resourceType,
-        detail: `${resource.relations.length} relations / ${resource.permissions.length} permissions`,
+        detail: t("iam.schema.resourceDetail", {
+          relations: resource.relations.length,
+          permissions: resource.permissions.length,
+        }),
       }),
     );
 
@@ -544,8 +558,8 @@ function buildSchemaGraph(
           code: relation.name,
           detail:
             relation.allowedSubjectTypes.length === 1
-              ? "1 subject"
-              : `${relation.allowedSubjectTypes.length} subjects`,
+              ? t("iam.schema.subjectCount.one", { count: relation.allowedSubjectTypes.length })
+              : t("iam.schema.subjectCount.other", { count: relation.allowedSubjectTypes.length }),
         }),
       );
       edges.push({
@@ -553,7 +567,7 @@ function buildSchemaGraph(
         source: resourceId,
         target: relationId,
         kind: "contains",
-        label: "contains",
+        label: t("iam.schema.edge.contains"),
       });
     }
 
@@ -572,8 +586,8 @@ function buildSchemaGraph(
           code: permission.name,
           detail:
             permission.conditions.length === 1
-              ? "1 condition"
-              : `${permission.conditions.length} conditions`,
+              ? t("iam.schema.conditionCount.one", { count: permission.conditions.length })
+              : t("iam.schema.conditionCount.other", { count: permission.conditions.length }),
         }),
       );
 

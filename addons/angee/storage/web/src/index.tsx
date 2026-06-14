@@ -1,6 +1,7 @@
 import type { BaseAddon, BaseAddonRoute, BaseMenuItem } from "@angee/base";
 import { ArchiveRestore, Download, HardDrive, Image, Pencil } from "lucide-react";
 
+import { enStorageMessages } from "./i18n";
 import { StoragePage } from "./views/StoragePage";
 import { FileCrumb } from "./views/FileDetail";
 import { StorageSettingsPage } from "./views/StorageSettingsPage";
@@ -63,6 +64,7 @@ const storage: BaseAddon = {
   id: STORAGE_ID,
   routes: storageRoutes,
   menus: storageMenu,
+  i18n: { storage: enStorageMessages },
   icons: {
     drive: HardDrive,
     image: Image,

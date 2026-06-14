@@ -3,6 +3,7 @@ import { type ReactElement } from "react";
 import { Button, Field, FormView, Glyph, Group, buttonVariants } from "@angee/base";
 import { useResourceRecord } from "@angee/sdk";
 
+import { useStorageT } from "../i18n";
 import type { StorageFile } from "../data/documents";
 import { useFileActions } from "../data/use-file-actions";
 
@@ -31,6 +32,7 @@ export function FileDetail({
   onClose,
   onChanged,
 }: FileDetailProps): ReactElement {
+  const t = useStorageT();
   const actions = useFileActions({ onChanged });
   const canDownload = !file.isTrashed && file.url !== "";
 
@@ -39,7 +41,7 @@ export function FileDetail({
       model={FILE_MODEL}
       id={file.id}
       returning={[...SUBTITLE_FIELDS]}
-      submitLabel="Rename"
+      submitLabel={t("storage.file.rename")}
       onSaved={onChanged}
       toolbar={
         <>
@@ -52,7 +54,7 @@ export function FileDetail({
               download={file.filename}
             >
               <Glyph name="download" />
-              Download
+              {t("storage.file.download")}
             </a>
           ) : null}
           {file.isTrashed ? (
@@ -64,7 +66,7 @@ export function FileDetail({
               onClick={() => void actions.restore(file.id)}
             >
               <Glyph name="restore" />
-              Restore
+              {t("storage.file.restore")}
             </Button>
           ) : (
             <Button
@@ -75,7 +77,7 @@ export function FileDetail({
               onClick={() => void actions.trash(file.id).then(onClose)}
             >
               <Glyph name="trash" />
-              Trash
+              {t("storage.file.trash")}
             </Button>
           )}
         </>
@@ -93,6 +95,7 @@ export function FileDetail({
 
 /** The record crumb for `/storage/$id` — the file's title (or stored filename). */
 export function FileCrumb({ id }: { id: string }): ReactElement {
+  const t = useStorageT();
   const { fetching, record } = useResourceRecord(FILE_MODEL, id || null, {
     enabled: id !== "",
     fields: ["title", "filename"],
@@ -100,5 +103,5 @@ export function FileCrumb({ id }: { id: string }): ReactElement {
   const title = typeof record?.title === "string" ? record.title.trim() : "";
   const filename = typeof record?.filename === "string" ? record.filename : "";
   if (fetching) return <>…</>;
-  return <>{title || filename || "File"}</>;
+  return <>{title || filename || t("storage.file.crumbFallback")}</>;
 }

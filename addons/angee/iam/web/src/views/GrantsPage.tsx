@@ -32,18 +32,22 @@ import {
   type IAMGrantRow,
 } from "../identity-rows";
 import { IAM_LIST_LIMIT } from "../list-config";
-
-const grantGroupOptions: readonly DataToolbarGroupOption[] = [
-  {
-    id: "namespace",
-    label: "Namespace",
-    group: { field: "namespace" },
-    type: "value",
-  },
-];
+import { useIamT } from "../i18n";
 
 export function GrantsPage(): ReactElement {
+  const t = useIamT();
   const confirm = useConfirm();
+  const grantGroupOptions = useMemo<readonly DataToolbarGroupOption[]>(
+    () => [
+      {
+        id: "namespace",
+        label: t("iam.grants.group.namespace"),
+        group: { field: "namespace" },
+        type: "value",
+      },
+    ],
+    [t],
+  );
   const variables = useMemo<IAMGrantsVariables>(
     () => ({ pagination: { offset: 0, limit: IAM_LIST_LIMIT } }),
     [],
@@ -65,10 +69,10 @@ export function GrantsPage(): ReactElement {
 
   async function revoke(row: IAMGrantRow): Promise<void> {
     const confirmed = await confirm({
-      title: "Revoke role?",
-      body: `Revoke ${row.role} from ${row.principalLabel}?`,
-      cancel: "Keep role",
-      confirm: "Revoke",
+      title: t("iam.grants.revoke.title"),
+      body: t("iam.grants.revoke.body", { role: row.role, principal: row.principalLabel }),
+      cancel: t("iam.grants.revoke.cancel"),
+      confirm: t("iam.revoke"),
       danger: true,
     });
     if (!confirmed) return;
@@ -80,11 +84,11 @@ export function GrantsPage(): ReactElement {
         role: row.role,
       });
       if (result?.revokeRole === false) {
-        throw new Error("Could not revoke role.");
+        throw new Error(t("iam.grants.revoke.error"));
       }
       query.refetch();
     } catch (caught) {
-      setActionError(errorMessage(caught, "Could not revoke role."));
+      setActionError(errorMessage(caught, t("iam.grants.revoke.error")));
     } finally {
       setPendingGrantId(null);
     }
@@ -94,7 +98,7 @@ export function GrantsPage(): ReactElement {
     () => [
       {
         field: "principalLabel",
-        header: "Principal",
+        header: t("iam.grants.column.principal"),
         render: (row) => (
           <span className="flex min-w-0 flex-col">
             <span className="truncate text-13 text-fg">{row.principalLabel}</span>
@@ -106,7 +110,7 @@ export function GrantsPage(): ReactElement {
       },
       {
         field: "role",
-        header: "Role",
+        header: t("iam.grants.column.role"),
         render: (row) => (
           <div className="min-w-0">
             <div className="truncate font-medium text-fg">{row.roleName}</div>
@@ -118,7 +122,7 @@ export function GrantsPage(): ReactElement {
       },
       {
         field: "namespace",
-        header: "Namespace",
+        header: t("iam.grants.column.namespace"),
         render: (row) => <Code truncate>{row.namespace}</Code>,
       },
       {
@@ -135,18 +139,18 @@ export function GrantsPage(): ReactElement {
             disabled={pendingGrantId !== null && pendingGrantId !== row.id}
             onClick={() => void revoke(row)}
           >
-            Revoke
+            {t("iam.revoke")}
           </Button>
         ),
       },
     ],
-    [pendingGrantId, revokeState.fetching],
+    [pendingGrantId, revokeState.fetching, t],
   );
 
   return (
     <div className="flex flex-col gap-3">
       {actionError ? (
-        <Alert tone="danger" title="Role was not revoked">
+        <Alert tone="danger" title={t("iam.grants.revoke.failedTitle")}>
           {actionError}
         </Alert>
       ) : null}

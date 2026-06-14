@@ -9,6 +9,7 @@ import {
   List,
   NEW_RECORD_ID,
 } from "@angee/base";
+import { useKnowledgeT } from "../i18n";
 
 const VAULT_MODEL = "knowledge.Vault";
 
@@ -19,13 +20,16 @@ const VAULT_MODEL = "knowledge.Vault";
  * fields, so the form is plain full CRUD.
  */
 export function KnowledgeSettingsPage(): ReactElement {
+  const t = useKnowledgeT();
   const [recordId, setRecordId] = useState<string | undefined>(undefined);
   return (
     <div className="mx-auto flex w-full max-w-[1100px] flex-col gap-6 px-6 py-6 sm:px-8">
       <header className="grid gap-0.5">
-        <h2 className="text-15 font-semibold text-fg">Vaults</h2>
+        <h2 className="text-15 font-semibold text-fg">
+          {t("knowledge.settings.title")}
+        </h2>
         <p className="text-13 text-fg-muted">
-          The access boundary a tree of pages lives in.
+          {t("knowledge.settings.description")}
         </p>
       </header>
       {/* Drawer form: its control band must render inline (in the dialog), not

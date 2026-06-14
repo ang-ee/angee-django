@@ -2,6 +2,7 @@ import { type ReactElement } from "react";
 
 import { EmptyState, Glyph } from "@angee/base";
 
+import { useKnowledgeT } from "../i18n";
 import type { Backlink } from "../data/documents";
 
 export interface BacklinksPanelProps {
@@ -19,13 +20,14 @@ export function BacklinksPanel({
   backlinks,
   onOpen,
 }: BacklinksPanelProps): ReactElement {
+  const t = useKnowledgeT();
   if (backlinks.length === 0) {
     return (
       <div className="grid h-full place-content-center p-6">
         <EmptyState
           icon="link"
-          title="No backlinks"
-          description="Pages that link to this one show up here."
+          title={t("knowledge.backlinks.emptyTitle")}
+          description={t("knowledge.backlinks.emptyDescription")}
         />
       </div>
     );
@@ -34,7 +36,7 @@ export function BacklinksPanel({
   return (
     <div className="flex h-full flex-col gap-1 overflow-auto p-3">
       <h3 className="px-1 pb-1 text-2xs font-semibold uppercase tracking-wide text-fg-muted">
-        Backlinks · {backlinks.length}
+        {t("knowledge.backlinks.heading")} · {backlinks.length}
       </h3>
       {backlinks.map((backlink) => (
         <button

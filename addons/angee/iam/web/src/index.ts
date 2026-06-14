@@ -6,6 +6,7 @@ import {
 } from "@angee/base";
 import { createElement } from "react";
 
+import { enIamMessages } from "./i18n";
 import { OAuthCallbackPage } from "./OAuthCallbackPage";
 import { OAuthLoginMethods } from "./OAuthLoginMethods";
 import { LEGACY_LOGIN_CALLBACK_PATH, LOGIN_CALLBACK_PATH } from "./redirects";
@@ -92,6 +93,7 @@ const iam: BaseAddon = {
     ...consolePage("iam.credentials", "/iam/credentials", CredentialsPage),
   ],
   menus: identityMenu,
+  i18n: { iam: enIamMessages },
   // The credential CRUD form: used by the Credentials page "New" and the
   // relation-picker inline create (e.g. an Integration's credential field).
   forms: {

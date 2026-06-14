@@ -9,6 +9,7 @@ import {
   Webhook,
 } from "lucide-react";
 
+import { enIntegrateMessages } from "./i18n";
 import { IntegrationsPage } from "./views/IntegrationsPage";
 import { RepositoriesPage } from "./views/RepositoriesPage";
 import { SourcesPage } from "./views/SourcesPage";
@@ -123,6 +124,7 @@ const integrate: BaseAddon = {
   id: INTEGRATE_ID,
   routes: integrateRoutes,
   menus: integrateMenu,
+  i18n: { integrate: enIntegrateMessages },
   icons: {
     integrate: Plug,
     integration: Link2,

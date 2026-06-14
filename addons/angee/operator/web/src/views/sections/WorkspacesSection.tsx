@@ -1,11 +1,11 @@
 import { useConfirm } from "@angee/base";
-import { useT } from "@angee/sdk";
 import { useState, type ReactNode } from "react";
 
 import {
   WORKSPACE_DESTROY_MUTATION,
   WORKSPACE_SYNC_BASE_MUTATION,
 } from "../../data/documents";
+import { useOperatorT } from "../../i18n";
 import { useOperatorAction, useOperatorSnapshot } from "../../data/transport";
 import type { WorkspaceRef } from "../../data/types";
 import { DaemonResourceTable, type DaemonResourceAction } from "../parts/DaemonResourceTable";
@@ -26,7 +26,7 @@ interface WorkspaceAction {
 
 /** Workspaces pane: the daemon's worktree workspaces with sync/destroy actions. */
 export function WorkspacesSection(): ReactNode {
-  const t = useT("operator");
+  const t = useOperatorT();
   const confirm = useConfirm();
   const { snapshot, result, refetch } = useOperatorSnapshot({ workspaces: true });
   const [actionError, setActionError] = useState<string | null>(null);
@@ -37,16 +37,16 @@ export function WorkspacesSection(): ReactNode {
 
   const workspaces = snapshot?.workspaces ?? [];
   const actions: readonly WorkspaceAction[] = [
-    { field: "workspaceSyncBase", label: "Sync base", variant: "secondary", run: syncBase.run },
-    { field: "workspaceDestroy", label: "Destroy", variant: "ghost", dangerous: true, run: destroy.run },
+    { field: "workspaceSyncBase", label: t("operator.workspaces.syncBase"), variant: "secondary", run: syncBase.run },
+    { field: "workspaceDestroy", label: t("operator.workspaces.destroy"), variant: "ghost", dangerous: true, run: destroy.run },
   ];
 
   function handle(action: WorkspaceAction, workspace: WorkspaceRef): void {
     void (async () => {
       if (action.dangerous) {
         const ok = await confirm({
-          title: "Destroy workspace?",
-          body: `“${workspace.name}” will be destroyed — its files are removed and this cannot be undone.`,
+          title: t("operator.workspaces.destroy.confirm.title"),
+          body: t("operator.workspaces.destroy.confirm.body", { name: workspace.name }),
           confirm: action.label,
           danger: true,
         });
@@ -71,7 +71,7 @@ export function WorkspacesSection(): ReactNode {
       title={t("section.operator.workspaces.title")}
       loading={result.fetching && !snapshot}
       error={result.error && !snapshot ? result.error : null}
-      loadingMessage="Loading workspaces"
+      loadingMessage={t("operator.workspaces.loading")}
       actionError={actionError}
     >
       <DaemonResourceTable
@@ -82,26 +82,27 @@ export function WorkspacesSection(): ReactNode {
             run: (workspace) => handle(action, workspace),
           }),
         )}
+        actionsLabel={t("operator.table.actions")}
         busy={busy}
         columns={[
           {
-            header: "Name",
+            header: t("operator.workspaces.column.name"),
             cell: (workspace) => <span className="font-medium text-fg">{workspace.name}</span>,
           },
           {
-            header: "Template",
+            header: t("operator.workspaces.column.template"),
             cell: (workspace) => (
               <span className="text-13 text-fg-muted">{workspace.template}</span>
             ),
           },
           {
-            header: "Path",
+            header: t("operator.workspaces.column.path"),
             cell: (workspace) => (
               <span className="font-mono text-13 text-fg-muted">{workspace.path}</span>
             ),
           },
           {
-            header: "Port",
+            header: t("operator.workspaces.column.port"),
             align: "end",
             cell: (workspace) => (
               <span className="text-13 tabular-nums text-fg-muted">
@@ -110,11 +111,11 @@ export function WorkspacesSection(): ReactNode {
             ),
           },
           {
-            header: "TTL",
+            header: t("operator.workspaces.column.ttl"),
             cell: (workspace) => <span className="text-13 text-fg-muted">{workspace.ttl ?? "—"}</span>,
           },
         ]}
-        emptyMessage="No workspaces."
+        emptyMessage={t("operator.workspaces.empty")}
         rowKey={(workspace) => workspace.name}
         rows={workspaces}
       />

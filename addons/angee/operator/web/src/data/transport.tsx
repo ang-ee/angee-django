@@ -20,6 +20,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { useOperatorT } from "../i18n";
 import { OPERATOR_CONNECTION_QUERY, SNAPSHOT_QUERY } from "./documents";
 import { createOperatorClient } from "./operator-client";
 import type {
@@ -70,6 +71,7 @@ export interface OperatorTransportProviderProps {
 export function OperatorTransportProvider({
   children,
 }: OperatorTransportProviderProps): ReactNode {
+  const t = useOperatorT();
   const clients = useSchemaClients();
   const consoleClient = clients[CONSOLE_SCHEMA];
   const [state, setState] = useState<ConnectionState>({ kind: "loading" });
@@ -81,7 +83,7 @@ export function OperatorTransportProvider({
       if (!consoleClient) {
         setState({
           kind: "error",
-          message: 'No "console" GraphQL client is configured.',
+          message: t("operator.transport.noConsoleClient"),
         });
         return;
       }
@@ -104,10 +106,10 @@ export function OperatorTransportProvider({
         );
       } catch (error: unknown) {
         if (!signal.active) return;
-        setState({ kind: "error", message: errorMessage(error, "Unknown operator error.") });
+        setState({ kind: "error", message: errorMessage(error, t("operator.transport.unknownError")) });
       }
     },
-    [consoleClient],
+    [consoleClient, t],
   );
 
   useEffect(() => {
@@ -132,7 +134,7 @@ export function OperatorTransportProvider({
   }, [endpoint, token]);
 
   if (state.kind === "loading") {
-    return <LoadingPanel message="Connecting to operator" />;
+    return <LoadingPanel message={t("operator.transport.connecting")} />;
   }
 
   if (state.kind === "error") {
@@ -143,8 +145,8 @@ export function OperatorTransportProvider({
     return (
       <EmptyState
         icon="operator"
-        title="Operator daemon unavailable"
-        description="Operator daemon is not configured for this user."
+        title={t("operator.transport.unavailable.title")}
+        description={t("operator.transport.unavailable.description")}
       />
     );
   }

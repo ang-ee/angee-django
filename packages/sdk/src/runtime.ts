@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 
 import type {
   ChatterContribution,
@@ -7,8 +7,8 @@ import type {
   SlotContribution,
   WidgetMap,
 } from "./define-addon";
-import type { I18nResources, MessageVars } from "./i18n";
-import { interpolateMessage } from "./i18n";
+import type { I18nResources, MessageResources, MessageVars } from "./i18n";
+import { interpolateMessage, translateWithFallback } from "./i18n";
 import { makeContext } from "./make-context";
 
 /**
@@ -86,4 +86,25 @@ export function useT(namespace: string): (key: string, vars?: MessageVars) => st
     return (key: string, vars: MessageVars = {}) =>
       interpolateMessage(messages[key] ?? key, vars);
   }, [i18n, namespace]);
+}
+
+/**
+ * A namespaced translator with a bundled-English `fallback`: resolves a key
+ * against the host runtime's merged i18n for `namespace`, then falls back to
+ * `fallback`, then the key. The one owner of the translate-with-fallback pattern
+ * — `@angee/base`'s `useBaseT` and each addon's `useXT` build on it — so a
+ * component renders its English even before its runtime bundle is mounted
+ * (unit tests, storybook, provider-less embeds). Stable identity (memoized on
+ * the namespace translator) for use in dependency arrays.
+ */
+export function useNamespaceT(
+  namespace: string,
+  fallback: MessageResources,
+): (key: string, vars?: MessageVars) => string {
+  const t = useT(namespace);
+  return useCallback(
+    (key: string, vars: MessageVars = {}) =>
+      translateWithFallback(t, fallback, key, vars),
+    [t, fallback],
+  );
 }

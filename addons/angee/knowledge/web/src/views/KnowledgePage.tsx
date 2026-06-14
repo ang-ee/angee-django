@@ -43,6 +43,7 @@ import { usePageActions } from "../data/use-page-actions";
 import { BacklinksPanel } from "./BacklinksPanel";
 import { NewPageControl, type NewPageKind } from "./NewPageControl";
 import { PageEditor } from "./PageEditor";
+import { useKnowledgeT } from "../i18n";
 
 /** The Django model label backing the page crumb. */
 const PAGE_MODEL = "knowledge.Page";
@@ -68,6 +69,7 @@ function pageDetailPath(id: string): string {
  * switcher and tree drive client-side scoping, and selecting a page reads it.
  */
 export function KnowledgePage(): ReactElement {
+  const t = useKnowledgeT();
   const variables = useMemo<OffsetPaginationVariables>(
     () => ({ pagination: { offset: 0, limit: KNOWLEDGE_LIST_LIMIT } }),
     [],
@@ -148,15 +150,15 @@ export function KnowledgePage(): ReactElement {
   const handleDeletePage = useCallback(async () => {
     if (!activePage) return;
     const ok = await confirm({
-      title: `Delete "${activePage.title}"?`,
-      body: "Deleting a folder removes the pages inside it too.",
-      confirm: "Delete",
+      title: t("knowledge.page.deleteConfirmTitle", { title: activePage.title }),
+      body: t("knowledge.page.deleteConfirmBody"),
+      confirm: t("knowledge.page.deleteConfirm"),
       danger: true,
     });
     if (!ok) return;
     await pageActions.deletePage(activePage.id);
     closePage();
-  }, [activePage, confirm, pageActions, closePage]);
+  }, [activePage, confirm, pageActions, closePage, t]);
 
   const treeRows = useMemo(
     () => pageTreeRows(pages, vaultId),
@@ -175,16 +177,20 @@ export function KnowledgePage(): ReactElement {
   );
 
   if (vaultsQuery.fetching && vaults.length === 0) {
-    return <LoadingPanel message="Loading knowledge" />;
+    return <LoadingPanel message={t("knowledge.loading")} />;
   }
   if (vaults.length === 0) {
     return (
       <div className="grid h-full place-content-center p-8">
         <EmptyState
           icon="vault"
-          title={vaultsQuery.error ? "Knowledge unavailable" : "No vaults"}
+          title={
+            vaultsQuery.error
+              ? t("knowledge.vaults.unavailableTitle")
+              : t("knowledge.vaults.emptyTitle")
+          }
           description={
-            vaultsQuery.error?.message ?? "No vaults are available to you."
+            vaultsQuery.error?.message ?? t("knowledge.vaults.emptyDescription")
           }
         />
       </div>
@@ -194,11 +200,11 @@ export function KnowledgePage(): ReactElement {
   const navigator = (
     <div className="flex h-full flex-col gap-2 p-2">
       <RelationPicker
-        aria-label="Vault"
+        aria-label={t("knowledge.vault.label")}
         value={vaultId}
         options={vaultOptions}
-        placeholder="Select a vault"
-        searchPlaceholder="Search vaults…"
+        placeholder={t("knowledge.vault.placeholder")}
+        searchPlaceholder={t("knowledge.vault.searchPlaceholder")}
         onChange={(value) => {
           setPinnedVaultId(value);
           closePage();
@@ -245,13 +251,13 @@ export function KnowledgePage(): ReactElement {
               onDelete={handleDeletePage}
             />
           ) : detailQuery.fetching || detail ? (
-            <LoadingPanel message="Loading page" />
+            <LoadingPanel message={t("knowledge.page.loading")} />
           ) : (
             <div className="grid h-full place-content-center p-8">
               <EmptyState
                 icon="note"
-                title="Page not found"
-                description="This page is no longer available."
+                title={t("knowledge.page.notFoundTitle")}
+                description={t("knowledge.page.notFoundDescription")}
               />
             </div>
           )
@@ -259,8 +265,8 @@ export function KnowledgePage(): ReactElement {
           <div className="grid h-full place-content-center p-8">
             <EmptyState
               icon="note"
-              title="Select a page"
-              description="Choose a page from the tree to read it."
+              title={t("knowledge.page.selectTitle")}
+              description={t("knowledge.page.selectDescription")}
             />
           </div>
         )}
@@ -271,11 +277,12 @@ export function KnowledgePage(): ReactElement {
 
 /** The record crumb for `/knowledge/$id` — the page's title. */
 export function PageCrumb({ id }: { id: string }): ReactElement {
+  const t = useKnowledgeT();
   const { fetching, record } = useResourceRecord(PAGE_MODEL, id || null, {
     enabled: id !== "",
     fields: ["title"],
   });
   const title = typeof record?.title === "string" ? record.title.trim() : "";
   if (fetching) return <>…</>;
-  return <>{title || "Page"}</>;
+  return <>{title || t("knowledge.page.crumbFallback")}</>;
 }

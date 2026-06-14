@@ -9,6 +9,7 @@ import {
   List,
   NEW_RECORD_ID,
 } from "@angee/base";
+import { useStorageT } from "../i18n";
 
 const DRIVE_MODEL = "storage.Drive";
 const BACKEND_MODEL = "storage.Backend";
@@ -21,11 +22,12 @@ const BACKEND_MODEL = "storage.Backend";
  * lives in the file browser's drive switcher; backends are full CRUD.
  */
 export function StorageSettingsPage(): ReactElement {
+  const t = useStorageT();
   return (
     <div className="mx-auto flex w-full max-w-[1100px] flex-col gap-10 px-6 py-6 sm:px-8">
       <Section
-        title="Drives"
-        description="The unit of access control and key namespace files live in."
+        title={t("storage.settings.drives.title")}
+        description={t("storage.settings.drives.description")}
       >
         <AdminTable model={DRIVE_MODEL} hideCreate>
           <List model={DRIVE_MODEL} order={{ name: "ASC" }}>
@@ -45,8 +47,8 @@ export function StorageSettingsPage(): ReactElement {
       </Section>
 
       <Section
-        title="Backends"
-        description="Storage infrastructure a drive is created against."
+        title={t("storage.settings.backends.title")}
+        description={t("storage.settings.backends.description")}
       >
         <AdminTable model={BACKEND_MODEL}>
           <List model={BACKEND_MODEL} order={{ label: "ASC" }}>

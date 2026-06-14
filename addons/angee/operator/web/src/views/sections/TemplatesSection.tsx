@@ -6,16 +6,16 @@ import {
   CardTitle,
   EmptyState,
 } from "@angee/base";
-import { useT } from "@angee/sdk";
 import type { ReactNode } from "react";
 
+import { useOperatorT } from "../../i18n";
 import { useOperatorSnapshot } from "../../data/transport";
 import type { TemplateDescriptor, TemplateInputDescriptor } from "../../data/types";
 import { OperatorSection } from "../parts/OperatorSection";
 
 /** Templates pane: the addable template catalog + each template's input schema. */
 export function TemplatesSection(): ReactNode {
-  const t = useT("operator");
+  const t = useOperatorT();
   const { snapshot, result } = useOperatorSnapshot({ templates: true });
   const templates = snapshot?.templates ?? [];
 
@@ -24,10 +24,10 @@ export function TemplatesSection(): ReactNode {
       title={t("section.operator.templates.title")}
       loading={result.fetching && !snapshot}
       error={result.error && !snapshot ? result.error : null}
-      loadingMessage="Loading templates"
+      loadingMessage={t("operator.templates.loading")}
     >
       {templates.length === 0 ? (
-        <EmptyState icon="columns" title="No templates" />
+        <EmptyState icon="columns" title={t("operator.templates.empty.title")} />
       ) : (
         <div className="flex flex-col gap-3">
           {templates.map((template) => (
@@ -40,6 +40,7 @@ export function TemplatesSection(): ReactNode {
 }
 
 function TemplateCard({ template }: { template: TemplateDescriptor }): ReactNode {
+  const t = useOperatorT();
   return (
     <Card>
       <CardHeader>
@@ -59,7 +60,7 @@ function TemplateCard({ template }: { template: TemplateDescriptor }): ReactNode
         {template.inputs.length > 0 ? (
           <div className="flex flex-col gap-1">
             <span className="text-2xs font-semibold uppercase tracking-wide text-fg-muted">
-              Inputs
+              {t("operator.templates.inputs")}
             </span>
             {template.inputs.map((input) => (
               <TemplateInputRow input={input} key={input.name} />
@@ -75,6 +76,7 @@ function TemplateCard({ template }: { template: TemplateDescriptor }): ReactNode
 }
 
 function TemplateInputRow({ input }: { input: TemplateInputDescriptor }): ReactNode {
+  const t = useOperatorT();
   return (
     <div className="flex flex-wrap items-center gap-2 text-13">
       <span className="font-mono text-fg-2">{input.name}</span>
@@ -82,16 +84,16 @@ function TemplateInputRow({ input }: { input: TemplateInputDescriptor }): ReactN
         {input.type ?? "—"}
       </Badge>
       <Badge density="compact" shape="pill" tone={input.required ? "warning" : "neutral"}>
-        {input.required ? "required" : "optional"}
+        {input.required ? t("operator.templates.input.required") : t("operator.templates.input.optional")}
       </Badge>
       {input.immutable ? (
         <Badge density="compact" shape="pill" tone="neutral">
-          immutable
+          {t("operator.templates.input.immutable")}
         </Badge>
       ) : null}
       {input.generated ? (
         <Badge density="compact" shape="pill" tone="neutral">
-          generated
+          {t("operator.templates.input.generated")}
         </Badge>
       ) : null}
       <span className="text-fg-muted">= {input.default ?? "—"}</span>

@@ -6,16 +6,16 @@ import {
   MetricGrid,
   type MetricGridTile,
 } from "@angee/base";
-import { useT } from "@angee/sdk";
 import type { ReactNode } from "react";
 
+import { useOperatorT } from "../../i18n";
 import { useOperatorSnapshot } from "../../data/transport";
 import { OperatorSection } from "../parts/OperatorSection";
 import { StateTag } from "../parts/StateTag";
 
 /** Overview pane: stack + health summary above per-resource count tiles. */
 export function OverviewSection(): ReactNode {
-  const t = useT("operator");
+  const t = useOperatorT();
   const { snapshot, result } = useOperatorSnapshot({
     overview: true,
     services: true,
@@ -38,12 +38,12 @@ export function OverviewSection(): ReactNode {
       title={t("section.operator.overview.title")}
       loading={result.fetching && !snapshot}
       error={result.error && !snapshot ? result.error : null}
-      loadingMessage="Loading overview"
+      loadingMessage={t("operator.overview.loading")}
     >
       <div className="grid gap-3 sm:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Stack</CardTitle>
+            <CardTitle>{t("operator.overview.stack.title")}</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-2 text-13 text-fg-2">
             {stack ? (
@@ -52,14 +52,14 @@ export function OverviewSection(): ReactNode {
                 <p className="text-fg-muted">{stack.root}</p>
               </>
             ) : (
-              <p className="text-fg-muted">No stack status.</p>
+              <p className="text-fg-muted">{t("operator.overview.stack.empty")}</p>
             )}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>Health</CardTitle>
+            <CardTitle>{t("operator.overview.health.title")}</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-2 text-13 text-fg-2">
             {health ? (
@@ -68,7 +68,7 @@ export function OverviewSection(): ReactNode {
                 {health.message ? <p>{health.message}</p> : null}
               </>
             ) : (
-              <p className="text-fg-muted">No health report.</p>
+              <p className="text-fg-muted">{t("operator.overview.health.empty")}</p>
             )}
           </CardContent>
         </Card>

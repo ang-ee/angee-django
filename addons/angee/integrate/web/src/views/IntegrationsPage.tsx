@@ -11,6 +11,7 @@ import {
 } from "@angee/base";
 import { runActionResult, useAuthoredMutation, type Row } from "@angee/sdk";
 
+import { useIntegrateT } from "../i18n";
 import {
   SYNC_INTEGRATION_MUTATION,
   TEST_CONNECTION_MUTATION,
@@ -34,6 +35,7 @@ const isActive = (record: Row): boolean =>
 
 /** Integrations landing: the first-class integrations, their health, and operations. */
 export function IntegrationsPage(): React.ReactElement {
+  const t = useIntegrateT();
   const [syncIntegration] = useAuthoredMutation<SyncIntegrationData, IdVariables>(
     SYNC_INTEGRATION_MUTATION,
   );
@@ -65,24 +67,24 @@ export function IntegrationsPage(): React.ReactElement {
       <Form model={MODEL}>
         <Field name="vendor" />
         <Field name="status" widget="statusbar" />
-        <Group label="Authentication" columns={2}>
+        <Group label={t("integrate.integrations.authentication")} columns={2}>
           <Field name="credential" />
           <Field name="account" />
           <Field name="owner" />
         </Group>
         <Field name="config" widget="json" />
-        <Action id="sync" label="Sync now" icon="refresh" run={sync} />
-        <Action id="test" label="Test connection" run={test} />
+        <Action id="sync" label={t("integrate.action.syncNow")} icon="refresh" run={sync} />
+        <Action id="test" label={t("integrate.integrations.testConnection")} run={test} />
         <Action
           id="disable"
-          label="Disable"
+          label={t("integrate.action.disable")}
           danger
           set={{ status: "disabled" }}
           visibleWhen={isActive}
         />
         <Action
           id="activate"
-          label="Activate"
+          label={t("integrate.integrations.activate")}
           set={{ status: "active" }}
           visibleWhen={(record: Row) => !isActive(record)}
         />

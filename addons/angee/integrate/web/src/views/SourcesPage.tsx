@@ -11,6 +11,7 @@ import {
 } from "@angee/base";
 import { runActionResult, useAuthoredMutation } from "@angee/sdk";
 
+import { useIntegrateT } from "../i18n";
 import {
   REFRESH_SOURCE_MUTATION,
   type IdVariables,
@@ -34,6 +35,7 @@ const sourceList = (
  * the host.
  */
 export function SourcesPage(): React.ReactElement {
+  const t = useIntegrateT();
   const [refreshSource] = useAuthoredMutation<RefreshSourceData, IdVariables>(
     REFRESH_SOURCE_MUTATION,
   );
@@ -53,13 +55,13 @@ export function SourcesPage(): React.ReactElement {
       <Form model={MODEL}>
         {/* The repository is fixed at create; the patch input omits it. */}
         <Field name="repository" createOnly />
-        <Group label="Pointer" columns={2}>
+        <Group label={t("integrate.sources.pointer")} columns={2}>
           <Field name="kind" />
           <Field name="ref" />
         </Group>
         <Field name="path" />
         <Field name="lastSyncedAt" readOnly />
-        <Action id="refresh" label="Refresh" icon="refresh" run={refresh} />
+        <Action id="refresh" label={t("integrate.action.refresh")} icon="refresh" run={refresh} />
       </Form>
     </DataPage>
   );

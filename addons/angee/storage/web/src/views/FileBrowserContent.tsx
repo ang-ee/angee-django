@@ -1,19 +1,19 @@
-import { useRef, useState, type ReactElement, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 
 import { Button, Glyph, RowsListView, cn } from "@angee/base";
 
+import { useStorageT } from "../i18n";
 import { fileDragPayload, type StorageFileRow } from "../data/file-rows";
 import type { StorageUpload, UploadStatus, UploadTarget, UploadTask } from "../data/use-upload";
 import { fileColumns, fileGalleryCard } from "./file-columns";
 
-const STATUS_LABEL: Readonly<Record<UploadStatus, string>> = {
-  hashing: "Preparing…",
-  uploading: "Uploading…",
-  finalizing: "Finalizing…",
-  done: "Uploaded",
-  deduped: "Already stored",
-  failed: "Failed",
-};
+type Translate = (key: string) => string;
+
+/** Upload-task status → its label. `t` is threaded in from the rendering
+ * component; this map is not a component and cannot call the hook itself. */
+function statusLabel(status: UploadStatus, t: Translate): string {
+  return t(`storage.upload.status.${status}`);
+}
 
 export interface FileBrowserContentProps {
   rows: readonly StorageFileRow[];
@@ -43,8 +43,10 @@ export function FileBrowserContent({
   uploadTarget,
   canUpload,
 }: FileBrowserContentProps): ReactElement {
+  const t = useStorageT();
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
+  const columns = useMemo(() => fileColumns(t), [t]);
 
   function startUpload(files: FileList | null): void {
     if (!canUpload || !files || files.length === 0) return;
@@ -70,12 +72,12 @@ export function FileBrowserContent({
       }}
     >
       {uploads.tasks.length > 0 ? (
-        <UploadStrip tasks={uploads.tasks} onClear={uploads.clearFinished} />
+        <UploadStrip tasks={uploads.tasks} onClear={uploads.clearFinished} t={t} />
       ) : null}
       <div className="min-h-0 flex-1">
         <RowsListView
           rows={rows}
-          columns={fileColumns}
+          columns={columns}
           fetching={fetching}
           error={error}
           rowHref={rowHref}
@@ -83,7 +85,9 @@ export function FileBrowserContent({
           bulkActions={bulkActions}
           draggableRow={fileDragPayload}
           gallery={{ renderCard: fileGalleryCard }}
-          emptyMessage={canUpload ? "Drop files here or use Upload." : "No files here yet."}
+          emptyMessage={
+            canUpload ? t("storage.list.emptyUpload") : t("storage.list.empty")
+          }
           pageSize={50}
           toolbarActions={
             canUpload ? (
@@ -94,7 +98,7 @@ export function FileBrowserContent({
                 onClick={() => inputRef.current?.click()}
               >
                 <Glyph name="attachment" />
-                Upload
+                {t("storage.upload.button")}
               </Button>
             ) : undefined
           }
@@ -102,7 +106,7 @@ export function FileBrowserContent({
       </div>
       {dragging ? (
         <div className="pointer-events-none absolute inset-0 grid place-content-center bg-brand-soft/50 text-15 font-medium text-brand-text">
-          Drop to upload
+          {t("storage.upload.dropOverlay")}
         </div>
       ) : null}
       <input
@@ -122,18 +126,20 @@ export function FileBrowserContent({
 function UploadStrip({
   tasks,
   onClear,
+  t,
 }: {
   tasks: readonly UploadTask[];
   onClear: () => void;
+  t: Translate;
 }): ReactElement {
   return (
     <div className="flex max-h-32 flex-col gap-1 overflow-auto border-b border-border-subtle bg-sheet-2 px-3 py-2">
       <div className="flex items-center justify-between">
         <span className="text-2xs font-semibold uppercase tracking-wide text-fg-muted">
-          Uploads
+          {t("storage.upload.heading")}
         </span>
         <Button type="button" size="sm" variant="ghost" onClick={onClear}>
-          Clear finished
+          {t("storage.upload.clearFinished")}
         </Button>
       </div>
       {tasks.map((task) => (
@@ -146,7 +152,7 @@ function UploadStrip({
             )}
             title={task.error}
           >
-            {STATUS_LABEL[task.status]}
+            {statusLabel(task.status, t)}
           </span>
         </div>
       ))}

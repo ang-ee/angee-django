@@ -1,10 +1,13 @@
 import * as React from "react";
 import { Column, DataPage, Field, Form, Group, List } from "@angee/base";
 
+import { useAgentsT } from "../i18n";
+
 const SERVER_MODEL = "agents.MCPServer";
 const TOOL_MODEL = "agents.MCPTool";
 
 export function McpServersPage(): React.ReactElement {
+  const t = useAgentsT();
   return (
     <DataPage model={SERVER_MODEL} placement="inline" routed>
       <List model={SERVER_MODEL}>
@@ -16,7 +19,7 @@ export function McpServersPage(): React.ReactElement {
       <Form model={SERVER_MODEL}>
         <Field name="name" title />
         <Field name="description" />
-        <Group label="Endpoint" columns={2}>
+        <Group label={t("agents.mcp.endpoint")} columns={2}>
           <Field name="placement" />
           <Field name="transport" />
           <Field name="url" />

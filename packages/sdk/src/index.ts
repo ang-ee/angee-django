@@ -150,6 +150,7 @@ export {
   useMenus,
   useSlot,
   useT,
+  useNamespaceT,
   type AppRuntime,
 } from "./runtime";
 export {

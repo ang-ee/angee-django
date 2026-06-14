@@ -8,9 +8,9 @@ import {
   Input,
   useConfirm,
 } from "@angee/base";
-import { useT } from "@angee/sdk";
 import { useState, type FormEvent, type ReactNode } from "react";
 
+import { useOperatorT } from "../../i18n";
 import { SECRET_DELETE_MUTATION, SECRET_SET_MUTATION } from "../../data/documents";
 import { useOperatorAction, useOperatorSnapshot } from "../../data/transport";
 import type { SecretRef } from "../../data/types";
@@ -28,7 +28,7 @@ interface SecretDeleteVars extends Record<string, unknown> {
 
 /** Secrets pane: declared secrets (presence only) + set/delete. */
 export function SecretsSection(): ReactNode {
-  const t = useT("operator");
+  const t = useOperatorT();
   const confirm = useConfirm();
   const { snapshot, result, refetch } = useOperatorSnapshot({ secrets: true });
   const [actionError, setActionError] = useState<string | null>(null);
@@ -49,7 +49,7 @@ export function SecretsSection(): ReactNode {
       run: setSecret.run,
       field: "secretSet",
       variables: { name: name.trim(), value },
-      label: "Set secret",
+      label: t("operator.secrets.set.label"),
       setError: setActionError,
       refetch,
     });
@@ -62,9 +62,9 @@ export function SecretsSection(): ReactNode {
   function handleDelete(secret: SecretRef): void {
     void (async () => {
       const ok = await confirm({
-        title: "Delete secret?",
-        body: `“${secret.name}” will be removed from the secrets backend.`,
-        confirm: "Delete",
+        title: t("operator.secrets.delete.confirm.title"),
+        body: t("operator.secrets.delete.confirm.body", { name: secret.name }),
+        confirm: t("operator.secrets.delete"),
         danger: true,
       });
       if (!ok) return;
@@ -72,7 +72,7 @@ export function SecretsSection(): ReactNode {
         run: deleteSecret.run,
         field: "secretDelete",
         variables: { name: secret.name },
-        label: "Delete secret",
+        label: t("operator.secrets.delete.label"),
         setError: setActionError,
         refetch,
       });
@@ -84,34 +84,34 @@ export function SecretsSection(): ReactNode {
       title={t("section.operator.secrets.title")}
       loading={result.fetching && !snapshot}
       error={result.error && !snapshot ? result.error : null}
-      loadingMessage="Loading secrets"
+      loadingMessage={t("operator.secrets.loading")}
       actionError={actionError}
     >
       <Card>
         <CardHeader>
-          <CardTitle>Set a secret</CardTitle>
+          <CardTitle>{t("operator.secrets.form.title")}</CardTitle>
         </CardHeader>
         <CardContent>
           <form className="flex flex-wrap items-end gap-2" onSubmit={(event) => void submitSet(event)}>
             <label className="flex flex-col gap-1 text-13 text-fg-muted">
-              Name
+              {t("operator.secrets.form.name")}
               <Input
                 onChange={(event) => setName(event.target.value)}
-                placeholder="SECRET_NAME"
+                placeholder={t("operator.secrets.form.namePlaceholder")}
                 value={name}
               />
             </label>
             <label className="flex flex-col gap-1 text-13 text-fg-muted">
-              Value
+              {t("operator.secrets.form.value")}
               <Input
                 onChange={(event) => setValue(event.target.value)}
-                placeholder="value"
+                placeholder={t("operator.secrets.form.valuePlaceholder")}
                 type="password"
                 value={value}
               />
             </label>
             <Button disabled={!canSet} size="sm" type="submit" variant="secondary">
-              Set
+              {t("operator.secrets.form.submit")}
             </Button>
           </form>
         </CardContent>
@@ -120,42 +120,44 @@ export function SecretsSection(): ReactNode {
       <DaemonResourceTable
         columns={[
           {
-            header: "Name",
+            header: t("operator.secrets.column.name"),
             cell: (secret) => <span className="font-medium text-fg">{secret.name}</span>,
           },
           {
-            header: "Declared",
+            header: t("operator.secrets.column.declared"),
             cell: (secret) => (
-              <span className="text-13 text-fg-muted">{secret.declared ? "yes" : "no"}</span>
+              <span className="text-13 text-fg-muted">
+                {secret.declared ? t("operator.secrets.yes") : t("operator.secrets.no")}
+              </span>
             ),
           },
           {
-            header: "Has value",
+            header: t("operator.secrets.column.hasValue"),
             cell: (secret) => (
               <Badge density="compact" shape="pill" tone={secret.hasValue ? "success" : "neutral"}>
-                {secret.hasValue ? "set" : "empty"}
+                {secret.hasValue ? t("operator.secrets.value.set") : t("operator.secrets.value.empty")}
               </Badge>
             ),
           },
           {
-            header: "Required",
+            header: t("operator.secrets.column.required"),
             cell: (secret) =>
               secret.required ? (
                 <Badge density="compact" shape="pill" tone="warning">
-                  yes
+                  {t("operator.secrets.yes")}
                 </Badge>
               ) : (
                 <span className="text-fg-muted">—</span>
               ),
           },
           {
-            header: "Env var",
+            header: t("operator.secrets.column.envVar"),
             cell: (secret) => (
               <span className="font-mono text-13 text-fg-muted">{secret.envVar ?? "—"}</span>
             ),
           },
           {
-            header: "Actions",
+            header: t("operator.secrets.column.actions"),
             align: "end",
             cell: (secret) =>
               secret.required || secret.generated ? (
@@ -164,9 +166,9 @@ export function SecretsSection(): ReactNode {
                 // deleting one can brick minting, so the console withholds it.
                 <span
                   className="text-13 text-fg-muted"
-                  title="Control-plane secret (required or generated) — cannot be deleted from the console."
+                  title={t("operator.secrets.protected.hint")}
                 >
-                  Protected
+                  {t("operator.secrets.protected")}
                 </span>
               ) : (
                 <Button
@@ -175,12 +177,12 @@ export function SecretsSection(): ReactNode {
                   size="sm"
                   variant="ghost"
                 >
-                  Delete
+                  {t("operator.secrets.delete")}
                 </Button>
               ),
           },
         ]}
-        emptyMessage="No declared secrets."
+        emptyMessage={t("operator.secrets.empty")}
         rowKey={(secret) => secret.name}
         rows={secrets}
       />

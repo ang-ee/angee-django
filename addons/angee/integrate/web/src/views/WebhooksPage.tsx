@@ -11,6 +11,7 @@ import {
 } from "@angee/base";
 import { runActionResult, useAuthoredMutation } from "@angee/sdk";
 
+import { useIntegrateT } from "../i18n";
 import {
   ROTATE_WEBHOOK_SECRET_MUTATION,
   TEST_WEBHOOK_DELIVERY_MUTATION,
@@ -31,6 +32,7 @@ const webhookList = (
 
 /** Outbound webhook subscriptions and their delivery operations. */
 export function WebhooksPage(): React.ReactElement {
+  const t = useIntegrateT();
   const [testDelivery] = useAuthoredMutation<TestWebhookDeliveryData, IdVariables>(
     TEST_WEBHOOK_DELIVERY_MUTATION,
   );
@@ -52,20 +54,26 @@ export function WebhooksPage(): React.ReactElement {
       if (typeof ctx.record?.id !== "string") return;
       const result = await rotateSecret({ id: ctx.record.id });
       const outcome = result?.rotateWebhookSecret;
-      if (outcome && !outcome.ok) throw new Error("Could not rotate the signing secret.");
+      if (outcome && !outcome.ok)
+        throw new Error(t("integrate.webhooks.rotateFailed"));
       const secret = outcome?.secret;
       if (secret) {
         await ctx.prompt({
-          title: "New signing secret",
-          body: "Copy this now — it is shown only once.",
+          title: t("integrate.webhooks.newSecretTitle"),
+          body: t("integrate.webhooks.newSecretBody"),
           fields: [
-            { name: "secret", label: "Signing secret", defaultValue: secret, readOnly: true },
+            {
+              name: "secret",
+              label: t("integrate.webhooks.signingSecret"),
+              defaultValue: secret,
+              readOnly: true,
+            },
           ],
         });
       }
-      return "Signing secret rotated.";
+      return t("integrate.webhooks.rotated");
     },
-    [rotateSecret],
+    [rotateSecret, t],
   );
 
   return (
@@ -74,25 +82,25 @@ export function WebhooksPage(): React.ReactElement {
       <Form model={MODEL}>
         <Field name="targetUrl" title />
         <Field name="enabled" />
-        <Group label="Filters" columns={2}>
+        <Group label={t("integrate.webhooks.filters")} columns={2}>
           <Field name="eventKinds" widget="tagInput" />
           <Field name="implAppFilter" widget="tagInput" />
           <Field name="integrationFilter" />
         </Group>
         {/* Write-only signing key — set on create, never read back from the server. */}
         <Field name="secret" widget="text" kind="string" createOnly />
-        <Action id="send-test" label="Send test event" run={sendTest} />
-        <Action id="rotate-secret" label="Rotate secret" run={rotate} />
+        <Action id="send-test" label={t("integrate.webhooks.sendTest")} run={sendTest} />
+        <Action id="rotate-secret" label={t("integrate.webhooks.rotateSecret")} run={rotate} />
         <Action
           id="disable"
-          label="Disable"
+          label={t("integrate.action.disable")}
           danger
           set={{ enabled: false }}
           visibleWhen={(record) => record.enabled === true}
         />
         <Action
           id="enable"
-          label="Enable"
+          label={t("integrate.webhooks.enable")}
           set={{ enabled: true }}
           visibleWhen={(record) => record.enabled === false}
         />

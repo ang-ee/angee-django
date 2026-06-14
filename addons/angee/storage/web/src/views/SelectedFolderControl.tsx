@@ -2,6 +2,8 @@ import { useState, type ReactElement } from "react";
 
 import { Button, Glyph, Input } from "@angee/base";
 
+import { useStorageT } from "../i18n";
+
 export interface SelectedFolderControlProps {
   name: string;
   busy: boolean;
@@ -22,6 +24,7 @@ export function SelectedFolderControl({
   onRename,
   onDelete,
 }: SelectedFolderControlProps): ReactElement {
+  const t = useStorageT();
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(name);
 
@@ -48,7 +51,7 @@ export function SelectedFolderControl({
           autoFocus
           size="sm"
           value={value}
-          aria-label="Folder name"
+          aria-label={t("storage.folder.nameLabel")}
           onChange={(event) => setValue(event.currentTarget.value)}
           onKeyDown={(event) => {
             if (event.key === "Escape") {
@@ -64,7 +67,7 @@ export function SelectedFolderControl({
           loading={busy}
           disabled={!value.trim()}
         >
-          Save
+          {t("storage.folder.save")}
         </Button>
       </form>
     );
@@ -79,7 +82,7 @@ export function SelectedFolderControl({
         type="button"
         size="iconSm"
         variant="ghost"
-        aria-label="Rename folder"
+        aria-label={t("storage.folder.rename")}
         onClick={() => {
           setValue(name);
           setEditing(true);
@@ -91,7 +94,7 @@ export function SelectedFolderControl({
         type="button"
         size="iconSm"
         variant="ghost"
-        aria-label="Delete folder"
+        aria-label={t("storage.folder.delete")}
         onClick={onDelete}
       >
         <Glyph name="trash" />

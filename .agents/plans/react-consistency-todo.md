@@ -266,8 +266,11 @@ visual-parity spot-check across both themes still recommended before release.
         `useBaseT` with `useCallback`). `TopMenu` `DEFAULT_TABS` left for T16.
       - [ ] base minor remainder: `toolbars/DataToolbar` copy, `ListInternals`
         `SelectionBar` wrapper (Clear/Delete) + row aria-labels, pager `subject`.
-      - [ ] per-addon namespace + bundle, route all copy through `t`: iam, operator
-        (expand beyond section titles), storage, knowledge, integrate, agents.
+      - [x] per-addon namespace + bundle, all copy routed: iam, operator, storage,
+        knowledge, integrate, agents (~280 keys, produced by 6 parallel agents).
+      - [x] unified translator owner: added `useNamespaceT(ns, fallback)` to
+        `@angee/sdk`; `useBaseT` + every addon's `use<Addon>T()` build on it (so a
+        component renders English provider-less — fixed iam's failing tests).
 - [ ] **T13** Previews via build-time composition: a `previews`/`widgets` map on
       `AddonManifest`, folded fail-fast by `composeAddons`, resolved through
       `AppRuntimeProvider`. Remove the module-global `Map`, the import side-effect,

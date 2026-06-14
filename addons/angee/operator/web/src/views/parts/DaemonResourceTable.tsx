@@ -29,8 +29,10 @@ export interface DaemonResourceTableProps<Row> {
   columns: readonly DaemonResourceColumn<Row>[];
   rows: readonly Row[];
   rowKey: (row: Row) => string;
-  /** When present, a trailing right-aligned "Actions" column of buttons per row. */
+  /** When present, a trailing right-aligned actions column of buttons per row. */
   actions?: readonly DaemonResourceAction<Row>[];
+  /** Header for the trailing actions column (translated by the section, required with `actions`). */
+  actionsLabel?: ReactNode;
   /** Disables every action button (an action is in flight). */
   busy?: boolean;
   /** Shown centered across all columns when `rows` is empty. */
@@ -49,6 +51,7 @@ export function DaemonResourceTable<Row>({
   rows,
   rowKey,
   actions,
+  actionsLabel,
   busy = false,
   emptyMessage,
 }: DaemonResourceTableProps<Row>): ReactNode {
@@ -63,7 +66,7 @@ export function DaemonResourceTable<Row>({
               {column.header}
             </TableHead>
           ))}
-          {actions ? <TableHead className="text-right">Actions</TableHead> : null}
+          {actions ? <TableHead className="text-right">{actionsLabel}</TableHead> : null}
         </TableRow>
       </TableHeader>
       <TableBody>

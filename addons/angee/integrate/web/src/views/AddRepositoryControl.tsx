@@ -17,6 +17,7 @@ import {
   useModelInvalidation,
 } from "@angee/sdk";
 
+import { useIntegrateT } from "../i18n";
 import {
   ADD_REPOSITORY_MUTATION,
   SEARCH_REPOSITORIES_QUERY,
@@ -45,12 +46,13 @@ const SEARCH_DEBOUNCE_MS = 250;
  * The dialog stays open so several repositories can be added in one sitting.
  */
 export function AddRepositoryControl(): React.ReactElement {
+  const t = useIntegrateT();
   const [open, setOpen] = React.useState(false);
   return (
     <ControlBand>
       <Button variant="primary" size="sm" onClick={() => setOpen(true)}>
         <Glyph decorative name="plus" />
-        Add repository
+        {t("integrate.addRepo.title")}
       </Button>
       <AddRepositoryDialog open={open} onOpenChange={setOpen} />
     </ControlBand>
@@ -68,6 +70,7 @@ function AddRepositoryDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }): React.ReactElement {
+  const t = useIntegrateT();
   const integrationsQuery = useAuthoredQuery<
     VcsIntegrationsData,
     VcsIntegrationsVariables
@@ -139,12 +142,12 @@ function AddRepositoryDialog({
         setAdded((prev) => new Set(prev).add(candidate.name));
         refreshRepositories();
       } catch (cause) {
-        setError(errorMessage(cause, "Could not add repository."));
+        setError(errorMessage(cause, t("integrate.addRepo.addFailed")));
       } finally {
         setAdding(null);
       }
     },
-    [addRepository, refreshRepositories, vcsIntegrationId],
+    [addRepository, refreshRepositories, t, vcsIntegrationId],
   );
 
   return (
@@ -155,10 +158,9 @@ function AddRepositoryDialog({
           <Dialog.Header>
             <div className="flex items-start gap-3">
               <div className="min-w-0 flex-1">
-                <Dialog.Title>Add repository</Dialog.Title>
+                <Dialog.Title>{t("integrate.addRepo.title")}</Dialog.Title>
                 <Dialog.Description>
-                  Pick a VCS integration, then type to find a repository to
-                  inventory.
+                  {t("integrate.addRepo.description")}
                 </Dialog.Description>
               </div>
               <Dialog.Close />
@@ -167,17 +169,17 @@ function AddRepositoryDialog({
           <Dialog.Body>
             <div className="flex flex-col gap-3">
               <RelationField
-                aria-label="VCS integration"
+                aria-label={t("integrate.addRepo.integrationLabel")}
                 value={vcsIntegrationId}
                 options={integrationOptions}
-                placeholder="Select an integration"
-                searchPlaceholder="Search integrations…"
+                placeholder={t("integrate.addRepo.integrationPlaceholder")}
+                searchPlaceholder={t("integrate.addRepo.integrationSearch")}
                 onChange={setPickedId}
               />
               <Input
                 type="search"
-                aria-label="Repository name"
-                placeholder="Type a repository name…"
+                aria-label={t("integrate.addRepo.nameLabel")}
+                placeholder={t("integrate.addRepo.namePlaceholder")}
                 value={query}
                 disabled={vcsIntegrationId === ""}
                 onChange={(event) => setQuery(event.currentTarget.value)}
@@ -221,22 +223,23 @@ function RepoCandidateList({
   added: ReadonlySet<string>;
   onAdd: (candidate: RepoCandidate) => void;
 }): React.ReactElement {
+  const t = useIntegrateT();
   if (!hasIntegration) {
-    return <ListHint>Select an integration to search its repositories.</ListHint>;
+    return <ListHint>{t("integrate.addRepo.selectIntegration")}</ListHint>;
   }
   if (!searching) {
-    return <ListHint>Type a repository name to search.</ListHint>;
+    return <ListHint>{t("integrate.addRepo.typeToSearch")}</ListHint>;
   }
   if (fetching && candidates.length === 0) {
     return (
       <div className="flex items-center gap-2 px-1 py-3 text-13 text-fg-muted">
         <Spinner size="sm" />
-        Searching…
+        {t("integrate.addRepo.searching")}
       </div>
     );
   }
   if (candidates.length === 0) {
-    return <ListHint>No matching repositories.</ListHint>;
+    return <ListHint>{t("integrate.addRepo.noMatches")}</ListHint>;
   }
   return (
     <ul className="flex max-h-72 flex-col gap-1 overflow-auto">
@@ -262,7 +265,7 @@ function RepoCandidateList({
               ) : isAdded ? (
                 <span className="flex items-center gap-1 text-12 text-fg-muted">
                   <Glyph decorative name="check" />
-                  Added
+                  {t("integrate.addRepo.added")}
                 </span>
               ) : (
                 <Glyph decorative name="plus" className="text-fg-muted" />

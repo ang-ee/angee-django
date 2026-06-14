@@ -1,4 +1,3 @@
-import { useT } from "@angee/sdk";
 import { useState, type ReactNode } from "react";
 
 import {
@@ -6,6 +5,7 @@ import {
   SOURCE_PULL_MUTATION,
   SOURCE_PUSH_MUTATION,
 } from "../../data/documents";
+import { useOperatorT } from "../../i18n";
 import { useOperatorAction, useOperatorSnapshot } from "../../data/transport";
 import type { SourceState } from "../../data/types";
 import { DaemonResourceTable, type DaemonResourceAction } from "../parts/DaemonResourceTable";
@@ -25,7 +25,7 @@ interface SourceAction {
 
 /** Sources pane: cached git/local sources with fetch/pull/push + drift readout. */
 export function SourcesSection(): ReactNode {
-  const t = useT("operator");
+  const t = useOperatorT();
   const { snapshot, result, refetch } = useOperatorSnapshot({ sources: true });
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -36,9 +36,9 @@ export function SourcesSection(): ReactNode {
 
   const sources = snapshot?.sources ?? [];
   const actionDefs: readonly SourceAction[] = [
-    { field: "sourceFetch", label: "Fetch", variant: "secondary", run: fetchSource.run },
-    { field: "sourcePull", label: "Pull", variant: "ghost", run: pull.run },
-    { field: "sourcePush", label: "Push", variant: "ghost", run: push.run },
+    { field: "sourceFetch", label: t("operator.sources.fetch"), variant: "secondary", run: fetchSource.run },
+    { field: "sourcePull", label: t("operator.sources.pull"), variant: "ghost", run: pull.run },
+    { field: "sourcePush", label: t("operator.sources.push"), variant: "ghost", run: push.run },
   ];
   const actions: readonly DaemonResourceAction<SourceState>[] = actionDefs.map((action) => ({
     label: action.label,
@@ -59,28 +59,29 @@ export function SourcesSection(): ReactNode {
       title={t("section.operator.sources.title")}
       loading={result.fetching && !snapshot}
       error={result.error && !snapshot ? result.error : null}
-      loadingMessage="Loading sources"
+      loadingMessage={t("operator.sources.loading")}
       actionError={actionError}
     >
       <DaemonResourceTable
         actions={actions}
+        actionsLabel={t("operator.table.actions")}
         busy={busy}
         columns={[
           {
-            header: "Name",
+            header: t("operator.sources.column.name"),
             cell: (source) => <span className="font-medium text-fg">{source.name}</span>,
           },
           {
-            header: "Kind",
+            header: t("operator.sources.column.kind"),
             cell: (source) => <span className="text-13 text-fg-muted">{source.kind}</span>,
           },
-          { header: "Status", cell: (source) => <StateTag state={source.state ?? "unknown"} /> },
+          { header: t("operator.sources.column.status"), cell: (source) => <StateTag state={source.state ?? "unknown"} /> },
           {
-            header: "Branch",
+            header: t("operator.sources.column.branch"),
             cell: (source) => <span className="text-13 text-fg-muted">{source.branch ?? "—"}</span>,
           },
           {
-            header: "Ahead/Behind",
+            header: t("operator.sources.column.aheadBehind"),
             align: "end",
             cell: (source) => (
               <span className="text-13 tabular-nums text-fg-muted">
@@ -89,13 +90,15 @@ export function SourcesSection(): ReactNode {
             ),
           },
           {
-            header: "Dirty",
+            header: t("operator.sources.column.dirty"),
             cell: (source) => (
-              <span className="text-13 text-fg-muted">{source.dirty ? "dirty" : "clean"}</span>
+              <span className="text-13 text-fg-muted">
+                {source.dirty ? t("operator.sources.dirty") : t("operator.sources.clean")}
+              </span>
             ),
           },
         ]}
-        emptyMessage="No sources."
+        emptyMessage={t("operator.sources.empty")}
         rowKey={(source) => source.name}
         rows={sources}
       />

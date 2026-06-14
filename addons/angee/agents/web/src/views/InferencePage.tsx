@@ -2,6 +2,7 @@ import * as React from "react";
 import { Action, type ActionContext, Column, DataPage, Field, Form, Group, List } from "@angee/base";
 import { runActionResult, useAuthoredMutation } from "@angee/sdk";
 
+import { useAgentsT } from "../i18n";
 import {
   REFRESH_PROVIDER_MODELS_MUTATION,
   type IdVariables,
@@ -12,6 +13,7 @@ const PROVIDER_MODEL = "agents.InferenceProvider";
 const MODEL_MODEL = "agents.InferenceModel";
 
 export function InferenceProvidersPage(): React.ReactElement {
+  const t = useAgentsT();
   const [refreshProviderModels] = useAuthoredMutation<RefreshProviderModelsData, IdVariables>(
     REFRESH_PROVIDER_MODELS_MUTATION,
   );
@@ -36,19 +38,20 @@ export function InferenceProvidersPage(): React.ReactElement {
       <Form model={PROVIDER_MODEL}>
         <Field name="name" title />
         <Field name="integration" createOnly />
-        <Group label="Backend" columns={2}>
+        <Group label={t("agents.inference.backend")} columns={2}>
           <Field name="backendClass" />
           <Field name="baseUrl" />
         </Group>
         <Field name="status" widget="statusbar" />
         <Field name="config" widget="json" />
-        <Action id="refresh-models" label="Refresh models" icon="refresh" run={refreshModels} />
+        <Action id="refresh-models" label={t("agents.inference.refreshModels")} icon="refresh" run={refreshModels} />
       </Form>
     </DataPage>
   );
 }
 
 export function InferenceModelsPage(): React.ReactElement {
+  const t = useAgentsT();
   return (
     <DataPage model={MODEL_MODEL} placement="inline" routed>
       <List model={MODEL_MODEL}>
@@ -60,7 +63,7 @@ export function InferenceModelsPage(): React.ReactElement {
       <Form model={MODEL_MODEL}>
         <Field name="name" title />
         <Field name="displayName" />
-        <Group label="Catalogue" columns={2}>
+        <Group label={t("agents.inference.catalogue")} columns={2}>
           <Field name="provider" createOnly />
           <Field name="publisher" />
           <Field name="modelUse" />

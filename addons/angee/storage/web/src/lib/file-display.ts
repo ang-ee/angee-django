@@ -16,17 +16,21 @@ export interface FileStage {
 }
 
 /** Map the byte-lifecycle state to a stage badge. Case-insensitive: the enum
- * may arrive as the member name or the stored value. */
-export function fileStage(uploadState: string): FileStage {
+ * may arrive as the member name or the stored value. `t` is threaded in from the
+ * rendering component (this module is not a component). */
+export function fileStage(
+  uploadState: string,
+  t: (key: string) => string,
+): FileStage {
   switch (uploadState.toLowerCase()) {
     case "ready":
-      return { label: "Ready", tone: "success" };
+      return { label: t("storage.stage.ready"), tone: "success" };
     case "draft":
-      return { label: "Uploading", tone: "warning" };
+      return { label: t("storage.stage.uploading"), tone: "warning" };
     case "failed":
-      return { label: "Failed", tone: "danger" };
+      return { label: t("storage.stage.failed"), tone: "danger" };
     default:
-      return { label: uploadState || "Unknown", tone: "neutral" };
+      return { label: uploadState || t("storage.stage.unknown"), tone: "neutral" };
   }
 }
 

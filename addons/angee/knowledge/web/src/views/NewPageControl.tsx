@@ -2,6 +2,8 @@ import { useState, type ReactElement } from "react";
 
 import { Button, Glyph, Input } from "@angee/base";
 
+import { useKnowledgeT } from "../i18n";
+
 export type NewPageKind = "note" | "folder";
 
 export interface NewPageControlProps {
@@ -19,6 +21,7 @@ export function NewPageControl({
   busy,
   onCreate,
 }: NewPageControlProps): ReactElement {
+  const t = useKnowledgeT();
   const [kind, setKind] = useState<NewPageKind | null>(null);
   const [title, setTitle] = useState("");
 
@@ -41,13 +44,13 @@ export function NewPageControl({
           onClick={() => setKind("note")}
         >
           <Glyph name="note" />
-          New note
+          {t("knowledge.newPage.newNote")}
         </Button>
         <Button
           type="button"
           size="iconSm"
           variant="ghost"
-          aria-label="New folder"
+          aria-label={t("knowledge.newPage.newFolder")}
           onClick={() => setKind("folder")}
         >
           <Glyph name="folder" />
@@ -68,8 +71,12 @@ export function NewPageControl({
         autoFocus
         size="sm"
         value={title}
-        placeholder={kind === "folder" ? "Folder name" : "Note title"}
-        aria-label="New page title"
+        placeholder={
+          kind === "folder"
+            ? t("knowledge.newPage.folderPlaceholder")
+            : t("knowledge.newPage.notePlaceholder")
+        }
+        aria-label={t("knowledge.newPage.titleLabel")}
         onChange={(event) => setTitle(event.currentTarget.value)}
         onBlur={() => {
           if (!title.trim()) setKind(null);
@@ -88,7 +95,7 @@ export function NewPageControl({
         loading={busy}
         disabled={!title.trim()}
       >
-        Create
+        {t("knowledge.newPage.create")}
       </Button>
     </form>
   );

@@ -7,10 +7,14 @@ import {
   type LoginCompleteData,
   type LoginCompleteVariables,
 } from "./documents";
+import { useIamT } from "./i18n";
 import { loginCallbackRedirectUri } from "./redirects";
 
+// Fixed failures carry a `messageKey` the component resolves through `useT`;
+// provider-supplied failures carry the raw `message` text verbatim.
 type CallbackParams =
   | { kind: "ready"; code: string; state: string }
+  | { kind: "error"; messageKey: string }
   | { kind: "error"; message: string };
 
 type CallbackState =
@@ -20,11 +24,15 @@ type CallbackState =
 const completionRequests = new Map<string, Promise<LoginCompleteData | undefined>>();
 
 export function OAuthCallbackPage(): ReactNode {
+  const t = useIamT();
   const params = useMemo(readCallbackParams, []);
   const [state, setState] = useState<CallbackState>(() =>
     params.kind === "ready"
       ? { kind: "pending" }
-      : { kind: "error", message: params.message },
+      : {
+          kind: "error",
+          message: "messageKey" in params ? t(params.messageKey) : params.message,
+        },
   );
   const [loginComplete] = useAuthoredMutation<
     LoginCompleteData,
@@ -53,21 +61,21 @@ export function OAuthCallbackPage(): ReactNode {
         }
         setState({
           kind: "error",
-          message: payload?.error ?? "Could not complete sign-in.",
+          message: payload?.error ?? t("iam.callback.completeError"),
         });
       })
       .catch((caught) => {
         if (!mounted) return;
         setState({
           kind: "error",
-          message: errorMessage(caught, "Could not complete sign-in."),
+          message: errorMessage(caught, t("iam.callback.completeError")),
         });
       });
 
     return () => {
       mounted = false;
     };
-  }, [loginComplete, params]);
+  }, [loginComplete, params, t]);
 
   if (state.kind === "pending") {
     return (
@@ -79,9 +87,9 @@ export function OAuthCallbackPage(): ReactNode {
         >
           <Spinner size="md" tone="brand" />
           <div>
-            <h1 className="text-base font-semibold text-fg">Completing sign-in...</h1>
+            <h1 className="text-base font-semibold text-fg">{t("iam.callback.completing")}</h1>
             <p className="mt-1 text-sm text-fg-muted">
-              Your session is being confirmed.
+              {t("iam.callback.confirming")}
             </p>
           </div>
         </div>
@@ -92,11 +100,11 @@ export function OAuthCallbackPage(): ReactNode {
   return (
     <CallbackFrame>
       <div className="flex flex-col gap-4">
-        <Alert tone="danger" title="Could not sign in">
+        <Alert tone="danger" title={t("iam.callback.signInFailed")}>
           {state.message}
         </Alert>
         <Button asChild className="w-full justify-center" size="lg" variant="secondary">
-          <a href="/login">Back to sign in</a>
+          <a href="/login">{t("iam.callback.backToSignIn")}</a>
         </Button>
       </div>
     </CallbackFrame>
@@ -115,10 +123,7 @@ function CallbackFrame({ children }: { children: ReactNode }): ReactNode {
 
 function readCallbackParams(): CallbackParams {
   if (typeof window === "undefined") {
-    return {
-      kind: "error",
-      message: "The sign-in callback can only be completed in a browser.",
-    };
+    return { kind: "error", messageKey: "iam.callback.browserOnly" };
   }
 
   const search = new URLSearchParams(window.location.search);
@@ -133,10 +138,7 @@ function readCallbackParams(): CallbackParams {
   const code = search.get("code");
   const state = search.get("state");
   if (!code || !state) {
-    return {
-      kind: "error",
-      message: "The sign-in callback is missing required information.",
-    };
+    return { kind: "error", messageKey: "iam.callback.missingInfo" };
   }
 
   return { kind: "ready", code, state };

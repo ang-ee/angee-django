@@ -2,6 +2,8 @@ import { useState, type ReactElement } from "react";
 
 import { Button, Glyph, Input } from "@angee/base";
 
+import { useStorageT } from "../i18n";
+
 export interface NewFolderControlProps {
   busy: boolean;
   /** Create a folder with the entered name (already trimmed, non-empty). */
@@ -17,6 +19,7 @@ export function NewFolderControl({
   busy,
   onCreate,
 }: NewFolderControlProps): ReactElement {
+  const t = useStorageT();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
 
@@ -38,7 +41,7 @@ export function NewFolderControl({
         onClick={() => setOpen(true)}
       >
         <Glyph name="folder" />
-        New folder
+        {t("storage.newFolder.button")}
       </Button>
     );
   }
@@ -55,8 +58,8 @@ export function NewFolderControl({
         autoFocus
         size="sm"
         value={name}
-        placeholder="Folder name"
-        aria-label="New folder name"
+        placeholder={t("storage.newFolder.placeholder")}
+        aria-label={t("storage.newFolder.nameLabel")}
         onChange={(event) => setName(event.currentTarget.value)}
         onBlur={() => {
           if (!name.trim()) setOpen(false);
@@ -75,7 +78,7 @@ export function NewFolderControl({
         loading={busy}
         disabled={!name.trim()}
       >
-        Create
+        {t("storage.newFolder.create")}
       </Button>
     </form>
   );
