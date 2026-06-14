@@ -5,6 +5,7 @@ import { cn } from "../lib/cn";
 import { dragSourceProps, type DndPayload } from "../lib/dnd";
 import { Card } from "../ui/card";
 import { Checkbox } from "../ui/checkbox";
+import { ListEmpty } from "./ListInternals";
 
 /**
  * The card-grid View — a frameless sibling of `ListView` that renders each row
@@ -54,9 +55,7 @@ export function GalleryView<TRow extends Row = Row>({
   return (
     <div className={cn("flex-1 overflow-y-auto bg-canvas p-4", className)}>
       {rows.length === 0 ? (
-        <div className="grid h-full place-content-center text-center text-13 text-fg-muted">
-          {emptyMessage}
-        </div>
+        <ListEmpty>{emptyMessage}</ListEmpty>
       ) : (
       <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-4">
         {rows.map((row) => {

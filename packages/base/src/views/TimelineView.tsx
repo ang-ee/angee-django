@@ -4,7 +4,7 @@ import type { Row } from "@angee/sdk";
 
 import { cn } from "../lib/cn";
 import { TimelineEntry } from "../fragments/TimelineEntry";
-import { parseRowDate } from "./ListInternals";
+import { ListEmpty, parseRowDate } from "./ListInternals";
 
 /**
  * The chronological View — rows bucketed by day (newest first), each rendered
@@ -63,9 +63,7 @@ export function TimelineView<TRow extends Row = Row>({
   return (
     <div className={cn("flex-1 overflow-y-auto bg-canvas p-6", className)}>
       {groups.length === 0 ? (
-        <div className="grid h-full place-content-center text-center text-13 text-fg-muted">
-          {emptyMessage}
-        </div>
+        <ListEmpty>{emptyMessage}</ListEmpty>
       ) : (
       <ol className="mx-auto flex max-w-3xl flex-col gap-6">
         {groups.map((group) => (

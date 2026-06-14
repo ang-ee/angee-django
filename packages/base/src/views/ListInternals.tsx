@@ -29,6 +29,7 @@ import { Spinner } from "../ui/spinner";
 import { Glyph } from "../chrome/Glyph";
 import { useBaseT } from "../i18n";
 import { RelativeTime } from "../fragments/RelativeTime";
+import { cn } from "../lib/cn";
 import { dragSourceProps, type DndPayload, type DragSourceProps } from "../lib/dnd";
 import { titleCase } from "../lib/titleCase";
 import { Badge } from "../ui/badge";
@@ -1190,6 +1191,27 @@ export function ListLoadingInline(): React.ReactElement {
       <Spinner size="sm" />
       {t("list.loading")}
     </span>
+  );
+}
+
+/** The centered, full-height empty body the non-table renderers (gallery,
+ *  timeline, tree) share — a single line of muted text in the middle of the pane. */
+export function ListEmpty({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className?: string;
+}): React.ReactElement {
+  return (
+    <div
+      className={cn(
+        "grid h-full place-content-center text-center text-13 text-fg-muted",
+        className,
+      )}
+    >
+      {children}
+    </div>
   );
 }
 

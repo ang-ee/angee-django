@@ -8,6 +8,7 @@ import {
   type DndPayload,
 } from "../lib/dnd";
 import { Tree, type TreeNode } from "../ui/tree";
+import { ListEmpty } from "./ListInternals";
 
 /**
  * The hierarchical View: flat `rows` carrying a self-referential `parent`
@@ -75,14 +76,7 @@ export function TreeView<TRow extends Record<string, unknown>>({
 
   if (nodes.length === 0) {
     return (
-      <div
-        className={cn(
-          "grid h-full min-h-0 place-content-center p-8 text-center text-13 text-fg-muted",
-          className,
-        )}
-      >
-        {emptyMessage}
-      </div>
+      <ListEmpty className={cn("min-h-0 p-8", className)}>{emptyMessage}</ListEmpty>
     );
   }
 

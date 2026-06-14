@@ -139,10 +139,18 @@ visual-parity spot-check across both themes still recommended before release.
 - [x] Gallery/Timeline/Tree now render an empty state (was blank): `emptyMessage`
       prop (default "No records.") + centered empty render on each; `RowsListView`
       threads `emptyMessage` into its grid-mode `GalleryView`.
-- [ ] (larger) A `CollectionStatus`/`DataViewFrame` abstraction threading
-      `fetching`/`error`/`emptyMessage` uniformly through every renderer — still
-      open (the empty-state gap above is the high-value piece; the full frame is a
-      bigger de-fork).
+- [~] `CollectionStatus`/`DataViewFrame` — did the high-value clean part,
+      LEFT the full frame SEPARATE. DONE: extracted `ListEmpty` (the centered
+      full-height muted-text empty body) in `ListInternals` — was byte-identical in
+      Gallery + Timeline, near-identical in Tree (Tree passes its `min-h-0 p-8`
+      via className); all three route through it now. LEAVE-SEPARATE: the full
+      `CollectionStatus`/`DataViewFrame` frame — the renderers' status/footer
+      contexts genuinely differ (flat virtualized table with a measure footer vs
+      grouped tristate with per-group loaders/pagers vs board lane-cell empty vs
+      card grid), so one frame would over-parameterize delicate code (cf. the prior
+      GroupedList close-read in Phase 5). `fetching`/`error`/`emptyMessage` are
+      already threaded through the renderer contracts; Board's lane-cell empty stays
+      its own (column context, not a full-pane center).
 - [x] Extract the `Spinner + "Loading…"` blocks into `ListLoadingFooter` (footer
       div, was ×3: ListView/RowsListView/GroupedList) + `ListLoadingInline` (span,
       was ×2: GroupedList) in `ListInternals`; dropped 3 now-unused Spinner imports.
