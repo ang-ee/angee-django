@@ -51,28 +51,64 @@ interface NormalisedConfirmOptions {
   danger: boolean;
 }
 
-interface ConfirmRequest {
-  id: number;
-  options: NormalisedConfirmOptions;
-  resolve: (confirmed: boolean) => void;
-}
-
 interface ConfirmContextValue {
   confirm: (options: ConfirmOptions) => Promise<boolean>;
-}
-
-interface PromptRequest {
-  id: number;
-  options: PromptOptions;
-  resolve: (values: Record<string, string> | null) => void;
 }
 
 interface PromptContextValue {
   prompt: (options: PromptOptions) => Promise<Record<string, string> | null>;
 }
 
-let nextConfirmId = 1;
-let nextPromptId = 1;
+/** A queued modal request: its options and the resolver for its result promise. */
+interface QueuedRequest<TOptions, TResult> {
+  id: number;
+  options: TOptions;
+  resolve: (result: TResult) => void;
+}
+
+interface QueuedDialog<TOptions, TResult> {
+  active: QueuedRequest<TOptions, TResult> | null;
+  enqueue: (options: TOptions) => Promise<TResult>;
+  resolveActive: (result: TResult) => void;
+}
+
+let nextQueuedId = 1;
+
+/**
+ * A FIFO queue of modal requests — the one owner of the confirm/prompt
+ * request-queue plumbing. Holds the pending list, exposes the head as `active`,
+ * and `enqueue` returns a promise that `resolveActive` settles (dropping the
+ * head). `enqueue`/`resolveActive` are stable; `active` updates as it drains.
+ */
+function useQueuedDialog<TOptions, TResult>(): QueuedDialog<TOptions, TResult> {
+  const [requests, setRequests] = useState<QueuedRequest<TOptions, TResult>[]>([]);
+  const active = requests[0] ?? null;
+  const activeRef = useRef(active);
+  useEffect(() => {
+    activeRef.current = active;
+  }, [active]);
+
+  const enqueue = useCallback((options: TOptions) => {
+    return new Promise<TResult>((resolve) => {
+      const request: QueuedRequest<TOptions, TResult> = {
+        id: nextQueuedId,
+        options,
+        resolve,
+      };
+      nextQueuedId += 1;
+      setRequests((current) => [...current, request]);
+    });
+  }, []);
+
+  const resolveActive = useCallback((result: TResult) => {
+    const request = activeRef.current;
+    if (!request) return;
+    request.resolve(result);
+    setRequests((current) => current.filter((item) => item.id !== request.id));
+  }, []);
+
+  return { active, enqueue, resolveActive };
+}
 
 const ConfirmContext = createContext<ConfirmContextValue | null>(null);
 const PromptContext = createContext<PromptContextValue | null>(null);
@@ -82,75 +118,35 @@ export function ModalsHost({
 }: {
   children?: ReactNode;
 }): ReactElement {
-  const [requests, setRequests] = useState<ConfirmRequest[]>([]);
-  const active = requests[0] ?? null;
-  const activeRef = useRef<ConfirmRequest | null>(active);
+  const confirmQueue = useQueuedDialog<NormalisedConfirmOptions, boolean>();
+  const promptQueue = useQueuedDialog<
+    PromptOptions,
+    Record<string, string> | null
+  >();
 
-  useEffect(() => {
-    activeRef.current = active;
-  }, [active]);
-
-  const confirm = useCallback((options: ConfirmOptions) => {
-    return new Promise<boolean>((resolve) => {
-      const request: ConfirmRequest = {
-        id: nextConfirmId,
-        options: normaliseConfirmOptions(options),
-        resolve,
-      };
-      nextConfirmId += 1;
-      setRequests((current) => [...current, request]);
-    });
-  }, []);
-
-  const resolveActive = useCallback((confirmed: boolean) => {
-    const request = activeRef.current;
-    if (!request) return;
-    request.resolve(confirmed);
-    setRequests((current) =>
-      current.filter((item) => item.id !== request.id),
-    );
-  }, []);
-
-  const [promptRequests, setPromptRequests] = useState<PromptRequest[]>([]);
-  const activePrompt = promptRequests[0] ?? null;
-  const activePromptRef = useRef<PromptRequest | null>(activePrompt);
-
-  useEffect(() => {
-    activePromptRef.current = activePrompt;
-  }, [activePrompt]);
-
-  const prompt = useCallback((options: PromptOptions) => {
-    return new Promise<Record<string, string> | null>((resolve) => {
-      const request: PromptRequest = { id: nextPromptId, options, resolve };
-      nextPromptId += 1;
-      setPromptRequests((current) => [...current, request]);
-    });
-  }, []);
-
-  const resolveActivePrompt = useCallback(
-    (values: Record<string, string> | null) => {
-      const request = activePromptRef.current;
-      if (!request) return;
-      request.resolve(values);
-      setPromptRequests((current) =>
-        current.filter((item) => item.id !== request.id),
-      );
-    },
-    [],
+  const confirm = useCallback(
+    (options: ConfirmOptions) =>
+      confirmQueue.enqueue(normaliseConfirmOptions(options)),
+    [confirmQueue.enqueue],
   );
-
   const context = useMemo<ConfirmContextValue>(() => ({ confirm }), [confirm]);
   const promptContext = useMemo<PromptContextValue>(
-    () => ({ prompt }),
-    [prompt],
+    () => ({ prompt: promptQueue.enqueue }),
+    [promptQueue.enqueue],
   );
 
   return (
     <ConfirmContext.Provider value={context}>
       <PromptContext.Provider value={promptContext}>
         {children}
-        <ConfirmDialog request={active} onResolve={resolveActive} />
-        <PromptDialog request={activePrompt} onResolve={resolveActivePrompt} />
+        <ConfirmDialog
+          request={confirmQueue.active}
+          onResolve={confirmQueue.resolveActive}
+        />
+        <PromptDialog
+          request={promptQueue.active}
+          onResolve={promptQueue.resolveActive}
+        />
       </PromptContext.Provider>
     </ConfirmContext.Provider>
   );
@@ -178,7 +174,7 @@ function ConfirmDialog({
   request,
   onResolve,
 }: {
-  request: ConfirmRequest | null;
+  request: QueuedRequest<NormalisedConfirmOptions, boolean> | null;
   onResolve: (confirmed: boolean) => void;
 }): ReactElement | null {
   const t = useBaseT();
@@ -234,7 +230,7 @@ function PromptDialog({
   request,
   onResolve,
 }: {
-  request: PromptRequest | null;
+  request: QueuedRequest<PromptOptions, Record<string, string> | null> | null;
   onResolve: (values: Record<string, string> | null) => void;
 }): ReactElement | null {
   if (!request) return null;
@@ -246,7 +242,7 @@ function PromptDialogForm({
   request,
   onResolve,
 }: {
-  request: PromptRequest;
+  request: QueuedRequest<PromptOptions, Record<string, string> | null>;
   onResolve: (values: Record<string, string> | null) => void;
 }): ReactElement {
   const t = useBaseT();

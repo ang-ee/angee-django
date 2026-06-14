@@ -181,8 +181,10 @@ visual-parity spot-check across both themes still recommended before release.
 - [x] ⌘K handler + `isTextEntryTarget` (×2) → resolved by the command-palette
       work: `GlobalSearch` (the second copy) is deleted, so the one remaining
       handler lives on `Spotlight`'s `useSpotlightShortcut` (now ref-stable).
-- [ ] confirm/prompt promise-queue → one `useQueuedDialog<TOptions,TResult>` in
-      `ModalsHost`.
+- [x] confirm/prompt promise-queue → one generic `useQueuedDialog<TOptions,TResult>`
+      in `ModalsHost` (the FIFO request-queue owner: list + `active` head + stable
+      `enqueue`/`resolveActive`). Confirm and prompt now each instantiate it;
+      ~50 lines of duplicated plumbing + the two module id counters removed.
 - [ ] SDK mutation hooks → one `useDocumentMutation`; collapse
       `useStableMeasures` into a generic `useStableValue`.
 
