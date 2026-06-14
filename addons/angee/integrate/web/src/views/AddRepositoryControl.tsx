@@ -7,6 +7,7 @@ import {
   Input,
   RelationField,
   Spinner,
+  useDebounce,
   type RelationOption,
 } from "@angee/base";
 import {
@@ -34,16 +35,6 @@ const REPOSITORY_MODEL = "integrate.Repository";
 const INTEGRATION_LIMIT = 200;
 // Debounce keystrokes before hitting the host search API.
 const SEARCH_DEBOUNCE_MS = 250;
-
-/** A value that lags `input` by `delay`, so a search fires once typing settles. */
-function useDebouncedValue<T>(input: T, delay: number): T {
-  const [value, setValue] = React.useState(input);
-  React.useEffect(() => {
-    const timer = setTimeout(() => setValue(input), delay);
-    return () => clearTimeout(timer);
-  }, [input, delay]);
-  return value;
-}
 
 /**
  * The "Add repository" affordance: a control-band button opening a dialog that
@@ -99,7 +90,7 @@ function AddRepositoryDialog({
   const vcsIntegrationId = pickedId ?? soleIntegration?.value ?? "";
 
   const [query, setQuery] = React.useState("");
-  const debouncedQuery = useDebouncedValue(query.trim(), SEARCH_DEBOUNCE_MS);
+  const [debouncedQuery] = useDebounce(query.trim(), SEARCH_DEBOUNCE_MS);
   const searchEnabled = open && vcsIntegrationId !== "" && debouncedQuery !== "";
   const searchVars = React.useMemo<SearchRepositoriesVariables>(
     () => ({ vcsIntegrationId, query: debouncedQuery }),

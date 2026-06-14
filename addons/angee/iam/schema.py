@@ -53,7 +53,7 @@ from angee.graphql.deletion import DeletePreview
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam import identity
-from angee.iam.credentials import CredentialKind
+from angee.iam.credentials import CredentialKind, handler_for
 from angee.iam.oidc import client as client_module
 from angee.iam.oidc import state
 from angee.iam.oidc.errors import INVALID_STATE, OidcFlowError
@@ -281,6 +281,9 @@ class CredentialType(AngeeNode):
 
         Credential has no natural string column; OAuth credentials read as
         ``provider: subject``, while provider-less ones read as their ``name``.
+        ``only`` lists the FK *id* columns, but this dereferences the related rows
+        — list resolvers must feed `console_credentials()`/`connected_for()`, which
+        `rebac_select_related("oauth_client", "external_account")` to avoid an N+1.
         """
 
         client = getattr(cast(Any, self), "oauth_client", None)
@@ -1414,13 +1417,16 @@ class IAMUserMutation:
 
 
 def _credential_material(data: CredentialInput) -> dict[str, str]:
-    """Assemble per-kind credential material from the discriminated input."""
+    """Read the secret the kind's handler names out of the discriminated input.
 
-    if data.kind == CredentialKind.STATIC_TOKEN:
-        return {"api_key": data.api_key}
-    if data.kind == CredentialKind.SSH_KEY:
-        return {"private_key": data.private_key}
-    raise ValueError(f"Cannot create a credential of kind {data.kind!r}.")
+    The kind→secret mapping is owned by the handler (`material_field`); a kind whose
+    secret field the create input does not carry (e.g. ``oauth``) is not creatable.
+    """
+
+    field = handler_for(data.kind).material_field
+    if not hasattr(data, field):
+        raise ValueError(f"Cannot create a credential of kind {data.kind!r}.")
+    return {field: getattr(data, field)}
 
 
 @strawberry.type

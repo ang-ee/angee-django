@@ -28,9 +28,18 @@ class CredentialKindHandler:
     """Base behavior contract for one credential material kind."""
 
     kind: ClassVar[str]
+    material_field: ClassVar[str]
+    """The single secret key this kind stores — also the `CredentialInput` field
+    that carries it (e.g. ``api_key``). This handler owns the kind↔secret mapping;
+    callers ask the handler rather than switching on ``kind`` themselves."""
 
     def validate(self, material: dict[str, Any]) -> None:
-        """Validate ``material`` before it is stored."""
+        """Require the kind's secret material before it is stored."""
+
+        if not material.get(self.material_field):
+            raise ValueError(
+                f"{self.kind} credential material requires {self.material_field}.",
+            )
 
     def upsert_fields(self, material: dict[str, Any]) -> dict[str, Any]:
         """Return common credential fields derived from ``material``."""
@@ -79,12 +88,7 @@ class OAuthCredentialHandler(CredentialKindHandler):
     """Handler for OAuth bearer-token material."""
 
     kind = "oauth"
-
-    def validate(self, material: dict[str, Any]) -> None:
-        """Require the access token used for bearer authentication."""
-
-        if not material.get("access_token"):
-            raise ValueError("OAuth credential material requires access_token.")
+    material_field = "access_token"
 
     def auth_headers(self, credential: Any) -> dict[str, str]:
         """Return OAuth bearer authorization headers."""
@@ -120,12 +124,7 @@ class StaticTokenCredentialHandler(CredentialKindHandler):
     """Handler for static API key material."""
 
     kind = "static_token"
-
-    def validate(self, material: dict[str, Any]) -> None:
-        """Require the API key used for bearer authentication."""
-
-        if not material.get("api_key"):
-            raise ValueError("Static token credential material requires api_key.")
+    material_field = "api_key"
 
     def auth_headers(self, credential: Any) -> dict[str, str]:
         """Return static-token bearer authorization headers."""
@@ -148,12 +147,7 @@ class SshKeyCredentialHandler(CredentialKindHandler):
     """
 
     kind = "ssh_key"
-
-    def validate(self, material: dict[str, Any]) -> None:
-        """Require the PEM private key used to authenticate git+ssh."""
-
-        if not material.get("private_key"):
-            raise ValueError("SSH key credential material requires private_key.")
+    material_field = "private_key"
 
     def auth_headers(self, credential: Any) -> dict[str, str]:
         """Return no HTTP headers: an SSH key authenticates git transport, not REST."""

@@ -386,7 +386,9 @@ export function FormView({
   }, [emptyValues, formFields, isCreate, record, form]);
 
   const titleField = titleFieldFor(formFields, modelMetadata);
-  const statusField = formFields.find((field) => field.widget === "statusbar");
+  const statusField = formFields.find(
+    (field) => field.widget === "statusbar" && !field.showWhen,
+  );
   const bodyField = React.useMemo(
     () => bodyFieldFor(formFields, titleField, statusField),
     [formFields, statusField, titleField],
@@ -909,9 +911,12 @@ function titleFieldFor(
   fields: readonly FieldDescriptor[],
   metadata: ModelMetadata | null,
 ): FieldDescriptor | undefined {
-  return fields.find((field) => field.title) ??
-    fields.find((field) => field.name === metadata?.recordRepresentation) ??
-    fields.find((field) => field.name === "title");
+  // Title/body/status render unconditionally outside the filtered grid; a
+  // `showWhen` field belongs in the grid so its predicate is honored.
+  const stable = fields.filter((field) => !field.showWhen);
+  return stable.find((field) => field.title) ??
+    stable.find((field) => field.name === metadata?.recordRepresentation) ??
+    stable.find((field) => field.name === "title");
 }
 
 function bodyFieldFor(
@@ -920,7 +925,10 @@ function bodyFieldFor(
   statusField: FieldDescriptor | undefined,
 ): FieldDescriptor | undefined {
   const candidates = fields.filter(
-    (field) => field.name !== titleField?.name && field.name !== statusField?.name,
+    (field) =>
+      !field.showWhen &&
+      field.name !== titleField?.name &&
+      field.name !== statusField?.name,
   );
   return candidates.find((field) => field.body) ??
     candidates.find(isNamedBodyField) ??

@@ -878,6 +878,13 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
                 condition=~Q(kind=CredentialKind.OAUTH) | Q(oauth_client__isnull=False),
                 name="iam_credential_oauth_requires_provider",
             ),
+            # The mirror of the unique arm above: a provider-less credential is
+            # identified by a non-blank name, so the DB (not just the factory) owns
+            # "every local credential is named".
+            models.CheckConstraint(
+                condition=Q(oauth_client__isnull=False) | ~Q(name=""),
+                name="iam_credential_local_requires_name",
+            ),
         )
 
     @property
