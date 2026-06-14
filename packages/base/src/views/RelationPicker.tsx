@@ -13,8 +13,13 @@ import type { FieldDescriptor } from "./page";
 export interface RelationCreateConfig {
   /** Related model label, e.g. `"Drive"`. */
   model: string;
-  /** Fields the inline create form renders. */
-  fields: readonly FieldDescriptor[];
+  /**
+   * Fields the inline create form renders. Optional: when the model registers a
+   * create form via `defineAddon`'s `forms:`, `FormView` resolves it by model
+   * name and these are unused — pass them only when the form is data-dependent
+   * (e.g. runtime-fetched options) and cannot be a static registration.
+   */
+  fields?: readonly FieldDescriptor[];
   /** Field prefilled with the typed query — the new record's name (default `"name"`). */
   prefillField?: string;
   /** Dialog title; defaults to `New <model>`. */

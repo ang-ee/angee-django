@@ -377,11 +377,21 @@ visual-parity spot-check across both themes still recommended before release.
       route's job (reads `?tab=`); **no in-repo consumer wires it yet** — the
       framework keeps only the strip + query state. Storybook fixture made generic.
       (Reviewer noted prefer-deletion is a live option if no consumer arrives.)
-- [ ] **T17** Forms onto the DSL/registry: replace inline `<form><label>`
-      (iam/operator) with `Field`/`FormView` or a shared `LabeledInput`; register
-      drive/vault relation-create via `defineAddon` `forms:`; `Notebook.Tab` onto
-      `PAGE_ELEMENT_SLOT`; make `FormView` Star/Share host-provided
-      (slot/action) and replace `text-amber-500` with a token.
+- [~] **T17** Forms onto the DSL/registry — in progress (per sub-item):
+      - [x] **drive/vault relation-create via `forms:`** — DONE for **Vault**:
+        extracted the inline `VAULT_CREATE_FIELDS` into `knowledge/web/.../views/
+        vault-form.tsx` (declarative `<Field>` override) + registered
+        `forms: { Vault }` in the manifest; `RelationCreateConfig.fields` made
+        optional (FormView's `useFormOverride` supersedes it on create); the wiki
+        picker now does `create={{ model: "Vault" }}`. **Drive = LEAVE-SEPARATE**:
+        its `backend` select options are runtime-fetched (admin catalogue), which a
+        static module-scope override can't carry — kept as a passed `fields` with a
+        comment noting why.
+      - [ ] replace inline `<form><label>` (iam/operator) with `Field`/`FormView`
+        or a shared `LabeledInput`.
+      - [ ] `Notebook.Tab` onto `PAGE_ELEMENT_SLOT`.
+      - [ ] make `FormView` Star/Share host-provided (slot/action) + replace
+        `text-amber-500` with a token.
 - [x] **T2b** DONE — `UserMenu` rebuilt on the `DropdownMenu` primitive: native
       `role="menu"`/`menuitem` + arrow-key nav (was a popover faking the roles on a
       plain button). Dropped the manual roles, the controlled-open state, and the

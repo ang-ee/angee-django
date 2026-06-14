@@ -14,7 +14,6 @@ import {
   TreeView,
   WikilinkProvider,
   useConfirm,
-  type FieldDescriptor,
   type WikilinkResolver,
 } from "@angee/base";
 import { useAuthoredQuery, useResourceRecord } from "@angee/sdk";
@@ -50,13 +49,6 @@ const PAGE_MODEL = "knowledge.Page";
 // One safety-capped read each of vaults/pages; the browser scopes the set
 // client-side so the navigator and reader share one fetch.
 const KNOWLEDGE_LIST_LIMIT = 500;
-
-// The inline vault-create form (prefilled with the typed query); creation is
-// gated server-side by `createVault`.
-const VAULT_CREATE_FIELDS: readonly FieldDescriptor[] = [
-  { name: "name", label: "Name" },
-  { name: "description", label: "Description", widget: "textarea" },
-];
 
 /** Reader route for one page — its relay id, percent-encoded into the path. */
 function pageDetailPath(id: string): string {
@@ -209,7 +201,7 @@ export function KnowledgePage(): ReactElement {
           setPinnedVaultId(value);
           closePage();
         }}
-        create={{ model: "Vault", fields: VAULT_CREATE_FIELDS }}
+        create={{ model: "Vault" }}
         onCreated={(id) => {
           void vaultsQuery.refetch();
           setPinnedVaultId(id);

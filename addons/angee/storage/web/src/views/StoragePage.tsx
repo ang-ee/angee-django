@@ -113,6 +113,9 @@ export function StoragePage(): ReactElement {
   );
   // The inline drive-create form. `name` is the record title (prefilled with the
   // typed query); `backend` is the required FK, picked from the catalogue above.
+  // This stays a passed `fields` (not a `forms:` registration) because its
+  // `backend` options are fetched at runtime — a static module-scope form override
+  // cannot carry them (cf. the static `Vault` form in the knowledge manifest).
   const driveCreateFields = useMemo<readonly FieldDescriptor[]>(
     () => [
       { name: "name", label: "Name" },
