@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useMutation as useUrqlMutation } from "urql";
 
 import { DISABLED_DOCUMENTS } from "./disabled-documents";
+import { useDocumentMutation } from "./document-mutation";
 import { useDocumentQuery } from "./document-query";
 import { useModelRootFields } from "./model-metadata";
 import {
@@ -351,12 +351,13 @@ export function useResourceMutation<TAction extends MutationAction>(
     [modelLabel, rootFields, action, fieldsKey],
   );
 
-  const [state, execute] = useUrqlMutation(document);
+  const { execute, fetching, error } = useDocumentMutation<unknown, ResourceMutationVariables>(
+    document,
+  );
   const invalidateModels = useInvalidateModels();
   const mutate = useCallback<ResourceMutate<TAction>>(
     async (variables) => {
-      const result = await execute(variables);
-      if (result.error) throw result.error;
+      const data = await execute(variables);
       // create/delete change list membership the normalized cache can't infer;
       // update returns the same entity, so graphcache refreshes it in place.
       if (action === "create" || (action === "delete" && variables.confirm === true)) {
@@ -364,12 +365,12 @@ export function useResourceMutation<TAction extends MutationAction>(
       }
       return (
         action === "delete"
-          ? extractDeletePreview(result.data)
-          : extractNode(result.data)
+          ? extractDeletePreview(data)
+          : extractNode(data)
       ) as ResourceMutationResult<TAction>;
     },
     [execute, invalidateModels, action, modelLabel],
   );
 
-  return [mutate, { fetching: state.fetching, error: state.error ?? null }];
+  return [mutate, { fetching, error }];
 }

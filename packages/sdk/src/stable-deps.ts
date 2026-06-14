@@ -18,20 +18,30 @@ export function useStableArray(items: readonly string[]): readonly string[] {
   return useMemo(() => items, [key]);
 }
 
+/**
+ * Stabilize any value by its serialized contents: hold the reference stable
+ * while the JSON of the value (coalesced to `fallback`) is unchanged. The owner
+ * of the structural-equality memo for objects/arrays passed to urql and the
+ * document builder — `useStableVariables`/`useStableMeasures` are thin defaults
+ * over it. (`useStableArray` keeps a cheaper join key for plain string lists.)
+ */
+export function useStableValue<T>(value: T | undefined, fallback: T): T {
+  const resolved = value ?? fallback;
+  const key = JSON.stringify(resolved);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return useMemo(() => resolved, [key]);
+}
+
 /** Stabilize a variables object by its serialized contents. */
 export function useStableVariables<T extends Record<string, unknown>>(
   variables: T | undefined,
 ): T {
-  const key = JSON.stringify(variables ?? {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  return useMemo(() => variables ?? ({} as T), [key]);
+  return useStableValue(variables, {} as T);
 }
 
 /** Stabilize aggregate measures by their serialized contents. */
 export function useStableMeasures(
   measures: readonly AggregateMeasure[] | undefined,
 ): readonly AggregateMeasure[] {
-  const key = JSON.stringify(measures ?? NO_MEASURES);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  return useMemo(() => measures ?? NO_MEASURES, [key]);
+  return useStableValue(measures, NO_MEASURES);
 }

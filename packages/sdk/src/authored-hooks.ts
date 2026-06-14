@@ -1,10 +1,8 @@
 import { useCallback } from "react";
-import {
-  useMutation as useUrqlMutation,
-  useSubscription as useUrqlSubscription,
-} from "urql";
+import { useSubscription as useUrqlSubscription } from "urql";
 
 import { DISABLED_DOCUMENTS } from "./disabled-documents";
+import { useDocumentMutation } from "./document-mutation";
 import { useDocumentQuery } from "./document-query";
 import { useStableVariables } from "./stable-deps";
 
@@ -45,16 +43,12 @@ export type AuthoredMutate<TData, TVariables> = (
 export function useAuthoredMutation<TData = Variables, TVariables extends Variables = Variables>(
   document: string,
 ): [AuthoredMutate<TData, TVariables>, { fetching: boolean; error: Error | null }] {
-  const [state, execute] = useUrqlMutation<TData, TVariables>(document);
+  const { execute, fetching, error } = useDocumentMutation<TData, TVariables>(document);
   const mutate = useCallback<AuthoredMutate<TData, TVariables>>(
-    async (variables) => {
-      const result = await execute((variables ?? {}) as TVariables);
-      if (result.error) throw result.error;
-      return result.data ?? undefined;
-    },
+    (variables) => execute((variables ?? {}) as TVariables),
     [execute],
   );
-  return [mutate, { fetching: state.fetching, error: state.error ?? null }];
+  return [mutate, { fetching, error }];
 }
 
 export interface AuthoredSubscriptionOptions<TData> {

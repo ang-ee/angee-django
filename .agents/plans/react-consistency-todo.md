@@ -299,8 +299,21 @@ visual-parity spot-check across both themes still recommended before release.
       in `ModalsHost` (the FIFO request-queue owner: list + `active` head + stable
       `enqueue`/`resolveActive`). Confirm and prompt now each instantiate it;
       ~50 lines of duplicated plumbing + the two module id counters removed.
-- [ ] SDK mutation hooks → one `useDocumentMutation`; collapse
-      `useStableMeasures` into a generic `useStableValue`.
+- [x] SDK mutation hooks → one `useDocumentMutation`; collapse
+      `useStableMeasures` into a generic `useStableValue`. DONE: new
+      `document-mutation.ts` `useDocumentMutation(document)` — the write counterpart
+      of the internal `useDocumentQuery` read seam — owns urql `useMutation` +
+      throw-on-GraphQL-error + the `{fetching, error}` shape and exposes a stable
+      `execute(variables)`; the 4 mutation hooks (`useAuthoredMutation`,
+      `useLoginWithPassword`, `useLogout`, `useResourceMutation`) route through it,
+      each keeping its own post-success effects (client reset / `invalidateModels`)
+      and data shaping on the caller. `stable-deps.ts` gained one generic
+      `useStableValue(value, fallback)` (the structural-equality memo owner);
+      `useStableVariables`/`useStableMeasures` are thin defaults over it.
+      `useStableArray` left separate (cheaper join key, different intent). Both new
+      seams stay internal (not exported), matching their siblings. Behavior-
+      preserving (react + arch review clean; +`useResourceMutation` data type
+      tightened `any`→`unknown`).
 
 ## Phase 4 — Date formatting (T7)
 

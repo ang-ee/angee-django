@@ -1,5 +1,4 @@
 import { useCallback, useMemo } from "react";
-import { useMutation as useUrqlMutation } from "urql";
 
 import {
   currentUserToAuthState,
@@ -7,6 +6,7 @@ import {
   type AuthState,
   type CurrentUserPayload,
 } from "./auth";
+import { useDocumentMutation } from "./document-mutation";
 import { useDocumentQuery } from "./document-query";
 import { useResetClient } from "./graphql-provider";
 
@@ -60,21 +60,21 @@ export function useLoginWithPassword(): {
   fetching: boolean;
   error: Error | null;
 } {
-  const [state, execute] = useUrqlMutation<{ login: LoginResult }, LoginCredentials>(
-    LOGIN_DOCUMENT,
-  );
+  const { execute, fetching, error } = useDocumentMutation<
+    { login: LoginResult },
+    LoginCredentials
+  >(LOGIN_DOCUMENT);
   const reset = useResetClient();
   const login = useCallback(
     async (credentials: LoginCredentials): Promise<LoginResult> => {
-      const result = await execute(credentials);
-      if (result.error) throw result.error;
-      const payload = result.data?.login ?? { ok: false };
+      const data = await execute(credentials);
+      const payload = data?.login ?? { ok: false };
       if (payload.ok) reset();
       return payload;
     },
     [execute, reset],
   );
-  return { login, fetching: state.fetching, error: state.error ?? null };
+  return { login, fetching, error };
 }
 
 /** Sign out. On success the client pool resets, discarding the actor's cache. */
@@ -83,14 +83,15 @@ export function useLogout(): {
   fetching: boolean;
   error: Error | null;
 } {
-  const [state, execute] = useUrqlMutation<{ logout: boolean }>(LOGOUT_DOCUMENT);
+  const { execute, fetching, error } = useDocumentMutation<{ logout: boolean }>(
+    LOGOUT_DOCUMENT,
+  );
   const reset = useResetClient();
   const logout = useCallback(async (): Promise<boolean> => {
-    const result = await execute({});
-    if (result.error) throw result.error;
-    const ok = Boolean(result.data?.logout);
+    const data = await execute({});
+    const ok = Boolean(data?.logout);
     if (ok) reset();
     return ok;
   }, [execute, reset]);
-  return { logout, fetching: state.fetching, error: state.error ?? null };
+  return { logout, fetching, error };
 }
