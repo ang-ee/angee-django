@@ -1,6 +1,8 @@
 import * as React from "react";
 import { Action, Column, DataPage, Field, Form, Group, List } from "@angee/base";
 
+import { useIamT } from "../i18n";
+
 const MODEL = "ExternalAccount";
 
 const accountList = (
@@ -14,38 +16,38 @@ const accountList = (
   </List>
 );
 
-// Identity (provider + externalId) is fixed at link time; the console edits the
-// scalar profile/status. Creation happens through the OAuth login flow, so the
-// Create button is hidden here.
-const accountForm = (
-  <Form model={MODEL}>
-    <Field name="displayName" title />
-    <Field name="status" widget="statusbar" />
-    <Group label="Identity" columns={2}>
-      <Field name="providerLabel" label="Provider" readOnly />
-      <Field name="externalId" readOnly />
-      <Field name="email" />
-      <Field name="avatarUrl" />
-    </Group>
-    <Action
-      id="revoke"
-      label="Revoke"
-      danger
-      set={{ status: "revoked" }}
-      confirm={{
-        title: "Revoke this account?",
-        body: "The linked identity can no longer be used to sign in.",
-        danger: true,
-      }}
-      visibleWhen={(record) =>
-        String(record.status ?? "").toUpperCase() !== "REVOKED"
-      }
-    />
-  </Form>
-);
-
 /** Linked external identities (list / edit / delete; created via OAuth login). */
 export function ExternalAccountsPage(): React.ReactElement {
+  const t = useIamT();
+  // Identity (provider + externalId) is fixed at link time; the console edits the
+  // scalar profile/status. Creation happens through the OAuth login flow, so the
+  // Create button is hidden here.
+  const accountForm = (
+    <Form model={MODEL}>
+      <Field name="displayName" title />
+      <Field name="status" widget="statusbar" />
+      <Group label={t("iam.externalAccounts.group.identity")} columns={2}>
+        <Field name="providerLabel" label={t("iam.externalAccounts.provider")} readOnly />
+        <Field name="externalId" readOnly />
+        <Field name="email" />
+        <Field name="avatarUrl" />
+      </Group>
+      <Action
+        id="revoke"
+        label={t("iam.revoke")}
+        danger
+        set={{ status: "revoked" }}
+        confirm={{
+          title: t("iam.externalAccounts.revoke.title"),
+          body: t("iam.externalAccounts.revoke.body"),
+          danger: true,
+        }}
+        visibleWhen={(record) =>
+          String(record.status ?? "").toUpperCase() !== "REVOKED"
+        }
+      />
+    </Form>
+  );
   return (
     <DataPage model={MODEL} placement="inline" routed hideCreate>
       {accountList}

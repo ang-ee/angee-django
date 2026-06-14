@@ -9,6 +9,23 @@ export const enIamMessages: Record<string, string> = {
   // Shared action labels.
   "iam.revoke": "Revoke",
 
+  // Users page — form-section labels and actions.
+  "iam.users.group.profile": "Profile",
+  "iam.users.group.access": "Access",
+  "iam.users.resetPassword": "Reset password",
+  "iam.users.resetPassword.title": "Reset password",
+  "iam.users.resetPassword.body": "Set a new password for this user.",
+  "iam.users.resetPassword.fieldLabel": "New password",
+  "iam.users.deactivate": "Deactivate",
+  "iam.users.activate": "Activate",
+
+  // External accounts page — form-section labels and revoke confirm.
+  "iam.externalAccounts.group.identity": "Identity",
+  "iam.externalAccounts.provider": "Provider",
+  "iam.externalAccounts.revoke.title": "Revoke this account?",
+  "iam.externalAccounts.revoke.body":
+    "The linked identity can no longer be used to sign in.",
+
   // OAuth login methods (the public sign-in slot).
   "iam.login.loadingOptions": "Loading sign-in options...",
   "iam.login.providersUnavailable": "Sign-in providers unavailable",

@@ -41,7 +41,7 @@ export function StorageSettingsPage(): ReactElement {
             <Field name="slug" createOnly />
             <Field name="prefix" />
             <Field name="description" widget="textarea" />
-            <Field name="isArchived" label="Archived" widget="switch" />
+            <Field name="isArchived" label={t("storage.settings.archived")} widget="switch" />
           </Form>
         </AdminTable>
       </Section>
@@ -61,10 +61,10 @@ export function StorageSettingsPage(): ReactElement {
           <Form model={BACKEND_MODEL}>
             <Field name="label" widget="text" title />
             <Field name="slug" createOnly />
-            <Field name="backendClass" label="Backend class" />
-            <Field name="backendConfig" label="Config" widget="json" />
-            <Field name="isDefault" label="Default" widget="switch" />
-            <Field name="isArchived" label="Archived" widget="switch" editOnly />
+            <Field name="backendClass" label={t("storage.settings.backendClass")} />
+            <Field name="backendConfig" label={t("storage.settings.config")} widget="json" />
+            <Field name="isDefault" label={t("storage.settings.default")} widget="switch" />
+            <Field name="isArchived" label={t("storage.settings.archived")} widget="switch" editOnly />
           </Form>
         </AdminTable>
       </Section>

@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactElement } from "react";
 
 import { Glyph } from "../chrome/Glyph";
+import { useBaseT } from "../i18n";
 import { cn } from "../lib/cn";
 import { Command } from "../ui/command";
 import {
@@ -49,12 +50,13 @@ export function RelationField({
   value,
   onChange,
   options,
-  placeholder = "Select…",
-  searchPlaceholder = "Search…",
+  placeholder,
+  searchPlaceholder,
   readOnly,
   "aria-label": ariaLabel,
   onCreate,
 }: RelationFieldProps): ReactElement {
+  const t = useBaseT();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
 
@@ -98,7 +100,7 @@ export function RelationField({
         aria-label={triggerLabel}
       >
         <span className={cn("min-w-0 flex-1 truncate", !selected && "text-fg-muted")}>
-          {selected ? selected.label : placeholder}
+          {selected ? selected.label : (placeholder ?? t("relation.placeholder"))}
         </span>
         <Glyph decorative name="chevron-down" className="shrink-0 text-fg-muted" />
       </PopoverTrigger>
@@ -111,7 +113,7 @@ export function RelationField({
                   autoFocus
                   value={query}
                   onValueChange={setQuery}
-                  placeholder={searchPlaceholder}
+                  placeholder={searchPlaceholder ?? t("relation.searchPlaceholder")}
                 />
               </Command.Search>
               <Command.List>
@@ -141,12 +143,12 @@ export function RelationField({
                   >
                     <Glyph decorative name="plus" />
                     <span className="min-w-0 flex-1 truncate">
-                      Create “{query.trim()}”
+                      {t("relation.create", { query: query.trim() })}
                     </span>
                   </Command.Item>
                 ) : null}
                 {filtered.length === 0 && !showCreate ? (
-                  <Command.Empty>No matches.</Command.Empty>
+                  <Command.Empty>{t("relation.noMatches")}</Command.Empty>
                 ) : null}
               </Command.List>
             </Command>

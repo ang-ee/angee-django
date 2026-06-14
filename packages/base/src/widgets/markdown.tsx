@@ -15,6 +15,7 @@ import ReactMarkdown, {
 import remarkGfm from "remark-gfm";
 
 import { Glyph } from "../chrome/Glyph";
+import { useBaseT } from "../i18n";
 import { cn } from "../lib/cn";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -70,6 +71,7 @@ function MarkdownEdit({
   field,
   readOnly,
 }: WidgetRenderProps<string>): ReactElement {
+  const t = useBaseT();
   const [mode, setMode] = useState<MarkdownMode>("source");
   const [linkDraft, setLinkDraft] = useState("");
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -77,7 +79,7 @@ function MarkdownEdit({
     value: value ?? "",
     onChange,
     readOnly,
-    placeholder: String(field?.label ?? "Markdown"),
+    placeholder: String(field?.label ?? t("markdown.placeholder")),
     extensions: MARKDOWN_EXTENSIONS,
   });
 
@@ -107,38 +109,38 @@ function MarkdownEdit({
       {!readOnly ? (
         <Toolbar surface="preview" className="min-h-11 flex-wrap gap-1">
           <ToolbarButton
-            label="Bold"
+            label={t("markdown.bold")}
             icon="bold"
             disabled={toolbarDisabled}
             onClick={() => runCommand(markdownBoldCommand)}
           />
           <ToolbarButton
-            label="Italic"
+            label={t("markdown.italic")}
             icon="italic"
             disabled={toolbarDisabled}
             onClick={() => runCommand(markdownItalicCommand)}
           />
           <ToolbarButton
-            label="Inline code"
+            label={t("markdown.inlineCode")}
             icon="code-xml"
             disabled={toolbarDisabled}
             onClick={() => runCommand(markdownInlineCodeCommand)}
           />
           <Toolbar.Separator orientation="vertical" />
           <ToolbarButton
-            label="Bulleted list"
+            label={t("markdown.bulletedList")}
             icon="list"
             disabled={toolbarDisabled}
             onClick={() => runCommand(markdownBulletListCommand)}
           />
           <ToolbarButton
-            label="Numbered list"
+            label={t("markdown.numberedList")}
             icon="list-ordered"
             disabled={toolbarDisabled}
             onClick={() => runCommand(markdownNumberedListCommand)}
           />
           <ToolbarButton
-            label="Quote"
+            label={t("markdown.quote")}
             icon="quote"
             disabled={toolbarDisabled}
             onClick={() => runCommand(markdownQuoteCommand)}
@@ -149,8 +151,8 @@ function MarkdownEdit({
               type="url"
               value={linkDraft}
               disabled={toolbarDisabled}
-              aria-label="Link URL"
-              placeholder="https://..."
+              aria-label={t("markdown.linkUrl")}
+              placeholder={t("markdown.linkUrlPlaceholder")}
               className="h-7"
               onChange={(event) => setLinkDraft(event.currentTarget.value)}
               onKeyDown={(event) => {
@@ -161,7 +163,7 @@ function MarkdownEdit({
               }}
             />
             <ToolbarButton
-              label="Link"
+              label={t("markdown.link")}
               icon="link"
               disabled={toolbarDisabled || linkDraft.trim() === ""}
               onClick={applyLink}
@@ -174,7 +176,7 @@ function MarkdownEdit({
       ) : null}
       <div
         ref={hostRef}
-        aria-label={String(field?.label ?? "Markdown")}
+        aria-label={String(field?.label ?? t("markdown.placeholder"))}
         className={mode === "preview" ? "hidden" : undefined}
       />
       {mode === "preview" ? (
@@ -220,9 +222,10 @@ function ModeButton({
   current: MarkdownMode;
   onSelect: (mode: MarkdownMode) => void;
 }): ReactElement {
+  const t = useBaseT();
   const active = mode === current;
   const iconName = mode === "source" ? "code-xml" : "eye";
-  const label = mode === "source" ? "Markdown source" : "Rendered preview";
+  const label = mode === "source" ? t("markdown.source") : t("markdown.preview");
   return (
     <Button
       type="button"

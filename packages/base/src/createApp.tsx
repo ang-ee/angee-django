@@ -46,7 +46,7 @@ import {
   type ChromeMenuItem,
   type ChromeMenuNode,
 } from "./chrome/menu-tree";
-import { enBaseBundle } from "./i18n";
+import { enBaseBundle, useBaseT } from "./i18n";
 import {
   useRouteChrome,
   type BreadcrumbItem,
@@ -467,6 +467,7 @@ function compareCodePoint(left: string, right: string): number {
 
 /** Gate a subtree behind sign-in; bounce to `/login` while or after resolving. */
 function RequireAuth({ children }: { children: ReactNode }): ReactNode {
+  const t = useBaseT();
   const { auth, fetching } = useRuntimeAuthState();
   const navigate = useNavigate();
   const signedOut = !fetching && !auth.user;
@@ -478,8 +479,8 @@ function RequireAuth({ children }: { children: ReactNode }): ReactNode {
         : "/";
     void navigate({ to: "/login", search: { next } });
   }, [signedOut, navigate]);
-  if (fetching && !auth.user) return <FullPageStatus message="Loading workspace…" />;
-  if (!auth.user) return <FullPageStatus message="Redirecting to sign in…" />;
+  if (fetching && !auth.user) return <FullPageStatus message={t("app.loadingWorkspace")} />;
+  if (!auth.user) return <FullPageStatus message={t("app.redirectingSignIn")} />;
   return <>{children}</>;
 }
 

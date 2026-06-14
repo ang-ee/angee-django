@@ -6,6 +6,7 @@ import {
   type GroupByDimension,
 } from "@angee/sdk";
 
+import { useBaseT } from "../i18n";
 import { CountBadge } from "../ui/badge";
 import { Spinner } from "../ui/spinner";
 
@@ -40,6 +41,7 @@ export function AggregatePanel({
   formatKey = defaultFormat,
   className,
 }: AggregatePanelProps): React.ReactElement {
+  const t = useBaseT();
   const grouped = dimensions.length > 0;
   const group = useResourceGroupBy(model, {
     dimensions,
@@ -79,10 +81,10 @@ export function AggregatePanel({
       ) : fetching ? (
         <div className="flex items-center gap-2 py-2 text-13 text-fg-muted">
           <Spinner size="sm" />
-          Loading…
+          {t("aggregate.loading")}
         </div>
       ) : !grouped ? null : group.buckets.length === 0 ? (
-        <p className="py-1 text-13 text-fg-muted">No data.</p>
+        <p className="py-1 text-13 text-fg-muted">{t("aggregate.noData")}</p>
       ) : (
         <ul className="flex flex-col gap-1.5">
           {group.buckets.map((bucket, index) => {

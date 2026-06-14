@@ -68,6 +68,12 @@ export const enStorageMessages: Record<string, string> = {
   "storage.file.trash": "Trash",
   "storage.file.crumbFallback": "File",
 
+  // File detail record form — section + field labels.
+  "storage.file.details": "Details",
+  "storage.file.filename": "Filename",
+  "storage.file.owner": "Owner",
+  "storage.file.stage": "Stage",
+
   // File-row stage badge.
   "storage.stage.ready": "Ready",
   "storage.stage.uploading": "Uploading",
@@ -89,6 +95,12 @@ export const enStorageMessages: Record<string, string> = {
   "storage.settings.backends.title": "Backends",
   "storage.settings.backends.description":
     "Storage infrastructure a drive is created against.",
+
+  // Settings admin console — drive/backend form field labels.
+  "storage.settings.archived": "Archived",
+  "storage.settings.backendClass": "Backend class",
+  "storage.settings.config": "Config",
+  "storage.settings.default": "Default",
 };
 
 // A translator bound to the `storage` namespace: resolves against the host

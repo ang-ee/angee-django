@@ -6,6 +6,7 @@ import type {
 } from "@angee/sdk";
 
 import { Glyph } from "../chrome/Glyph";
+import { useBaseT } from "../i18n";
 import { Button } from "../ui/button";
 import { Dialog } from "../ui/dialog";
 import { DeletePreviewTree } from "./DeletePreviewTree";
@@ -29,6 +30,7 @@ export function DeletePreviewDialog({
   onConfirm,
   onCancel,
 }: DeletePreviewDialogProps): React.ReactElement {
+  const t = useBaseT();
   const fullyBlocked = recordCount > 0 && blockedRecordCount >= recordCount;
   const treeNodes = treeNodesFor(preview.root);
   return (
@@ -42,18 +44,16 @@ export function DeletePreviewDialog({
         <Dialog.Backdrop />
         <Dialog.Content size="lg" placement="center">
           <Dialog.Header>
-            <Dialog.Title>Delete {recordCount} records?</Dialog.Title>
-            <Dialog.Description>
-              Review the cascade tree before deleting the selected records.
-            </Dialog.Description>
+            <Dialog.Title>{t("deletePreview.title", { count: recordCount })}</Dialog.Title>
+            <Dialog.Description>{t("deletePreview.description")}</Dialog.Description>
           </Dialog.Header>
           <Dialog.Body className="space-y-4">
             <DeleteSummary preview={preview} overflowCount={overflowCount} />
             {preview.hasBlockers ? (
               <div className="rounded-md border border-danger/35 bg-danger-soft px-3 py-2 text-13 text-danger-text">
                 {blockedRecordCount > 0
-                  ? `${blockedRecordCount} selected records have deletion blockers.`
-                  : "Some related records block deletion."}
+                  ? t("deletePreview.blockedCount", { count: blockedRecordCount })
+                  : t("deletePreview.blockedGeneric")}
               </div>
             ) : null}
             <DeletePreviewTree nodes={treeNodes} />
@@ -65,7 +65,7 @@ export function DeletePreviewDialog({
               disabled={isPending}
               onClick={onCancel}
             >
-              Cancel
+              {t("deletePreview.cancel")}
             </Button>
             <Button
               type="button"
@@ -75,7 +75,7 @@ export function DeletePreviewDialog({
               onClick={onConfirm}
             >
               <Glyph name="trash" />
-              Delete
+              {t("deletePreview.delete")}
             </Button>
           </Dialog.Footer>
         </Dialog.Content>
@@ -91,23 +91,26 @@ function DeleteSummary({
   preview: DeletePreview;
   overflowCount: number;
 }): React.ReactElement {
+  const t = useBaseT();
   return (
     <div className="grid gap-2 text-13 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
       <div className="rounded-md border border-border-subtle bg-sheet px-3 py-2">
         <div className="text-12 font-medium uppercase text-fg-muted">
-          Rows affected
+          {t("deletePreview.rowsAffected")}
         </div>
         <div className="mt-1 text-lg font-semibold text-fg">
           {preview.totalDeletedCount}
         </div>
         {overflowCount > 0 ? (
-          <div className="mt-1 text-12 text-fg-muted">+{overflowCount} more</div>
+          <div className="mt-1 text-12 text-fg-muted">
+            {t("deletePreview.more", { count: overflowCount })}
+          </div>
         ) : null}
       </div>
       <div className="grid gap-2 sm:grid-cols-3">
-        <GroupSummary title="Deleted" groups={preview.deleted} />
-        <GroupSummary title="Updated" groups={preview.updated} />
-        <GroupSummary title="Blocked" groups={preview.blocked} />
+        <GroupSummary title={t("deletePreview.deleted")} groups={preview.deleted} />
+        <GroupSummary title={t("deletePreview.updated")} groups={preview.updated} />
+        <GroupSummary title={t("deletePreview.blocked")} groups={preview.blocked} />
       </div>
     </div>
   );

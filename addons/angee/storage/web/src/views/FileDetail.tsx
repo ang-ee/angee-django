@@ -84,10 +84,10 @@ export function FileDetail({
       }
     >
       <Field name="title" widget="text" title placeholder={file.filename} />
-      <Group label="Details" columns={2}>
-        <Field name="filename" label="Filename" readOnly />
-        <Field name="createdByLabel" label="Owner" widget="userRef" readOnly />
-        <Field name="uploadState" label="Stage" readOnly />
+      <Group label={t("storage.file.details")} columns={2}>
+        <Field name="filename" label={t("storage.file.filename")} readOnly />
+        <Field name="createdByLabel" label={t("storage.file.owner")} widget="userRef" readOnly />
+        <Field name="uploadState" label={t("storage.file.stage")} readOnly />
       </Group>
     </FormView>
   );

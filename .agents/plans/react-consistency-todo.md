@@ -711,11 +711,25 @@ visual-parity spot-check across both themes still recommended before release.
       discriminants / value-bucket keys; (d) `stateToneFromValue` calls all pass
       `buckets`. Merged-in i18n gaps fixed: iam ProvidersPage/CredentialsPage/
       OAuthConnectCallbackPage, agents AgentProvisioning/SourcesPage (Area A.1). STILL
-      OPEN: pre-existing T6 stragglers (base combobox/createApp/DeletePreviewDialog/
-      markdown toolbar; iam UsersPage/ExternalAccountsPage/credential-form; storage
-      StorageSettingsPage/FileDetail) — same `<Group>/<Action>/placeholder` pattern,
-      tracked for the addon/base i18n straggler slice. DataLens copy LEAVE (T19
-      storybook-only).
+      DONE (straggler slice): the pre-existing T6 stragglers are now routed —
+      base (`useBaseT` + `enBaseMessages`): combobox (search/no-options/widget-label
+      fallbacks), select (widget-label fallback), createApp `RequireAuth`
+      (loading-workspace/redirecting), DeletePreviewDialog (title+count/blockers/
+      Cancel/Delete/Rows-affected/Deleted-Updated-Blocked), markdown editor toolbar
+      (bold/italic/code/lists/quote/link + source/preview mode + placeholder),
+      AggregatePanel (loading/no-data), ListInternals (Total + measure aria + the
+      two `Select row` checkbox aria-labels — review-driven), RelationField
+      (placeholder/searchPlaceholder undefined+coalesce, No-matches, Create-query).
+      iam (`useIamT`): UsersPage + ExternalAccountsPage (module-const forms moved
+      into component bodies; revoke reuses `iam.revoke`). storage (`useStorageT`):
+      StorageSettingsPage + FileDetail field/group labels. LEAVE-SEPARATE with
+      reason: (a) `credential-form.tsx` is a statically-parsed `forms:` registry
+      override (never rendered as a component → a hook can't reach its labels;
+      i18n'ing it needs a render-time form registry, an architecture change); (b)
+      addon menu/route `label:` declarations are a consistent plain-English boundary
+      — NO addon/base/example routes menu labels through `t()` (chrome-resolved
+      manifest data, not in-component copy); (c) DataLens/RailPanel/SurfaceHeader/
+      MetadataPanel copy = T19 storybook-only fragments. react-review clean.
 - [~] Encode the new rules in `docs/frontend/guidelines.md` — DONE for the landed
       owners: two-axis color (`tone`×`variant`), i18n-commit (`useBaseT`/`use<Addon>T`
       on `useNamespaceT`, prop-default coalesce), `defineBaseAddon`, build-time

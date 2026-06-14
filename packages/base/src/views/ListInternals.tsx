@@ -308,6 +308,7 @@ function FlatMeasureFooter<TRow extends Row>({
   aggregate: AggregateBucket;
   selectable: boolean;
 }): React.ReactElement {
+  const t = useBaseT();
   const byColumn = new Map(measures.map((measure) => [measure.columnId, measure]));
   return (
     <TableFooter>
@@ -325,14 +326,16 @@ function FlatMeasureFooter<TRow extends Row>({
               className={ALIGN_CLASS[alignOf(column.columnDef)]}
               aria-label={
                 measure
-                  ? `Total ${measure.label}${formatted ? `: ${formatted}` : ""}`
+                  ? formatted
+                    ? t("list.totalMeasureValue", { label: measure.label, value: formatted })
+                    : t("list.totalMeasure", { label: measure.label })
                   : undefined
               }
             >
               {measure ? (
                 formatted
               ) : index === 0 ? (
-                <span className="text-fg-muted">Total</span>
+                <span className="text-fg-muted">{t("list.total")}</span>
               ) : null}
             </TableCell>
           );
@@ -573,6 +576,7 @@ function LinkedRecordRow<TRow extends Row>({
   href: string;
   dragProps?: DragSourceProps;
 }): React.ReactElement {
+  const t = useBaseT();
   const id = row.id;
   const selected = dataView.state.selectedIds.has(id);
   const navigate = useNavigate();
@@ -608,7 +612,7 @@ function LinkedRecordRow<TRow extends Row>({
         <TableCell className="w-8">
           <Checkbox
             size="sm"
-            aria-label="Select row"
+            aria-label={t("list.selectRow")}
             checked={selected}
             onClick={(event) => event.stopPropagation()}
             onCheckedChange={(checked) =>
@@ -644,6 +648,7 @@ function PlainRecordRow<TRow extends Row>({
   onRowClick?: (row: TRow) => void;
   dragProps?: DragSourceProps;
 }): React.ReactElement {
+  const t = useBaseT();
   const id = row.id;
   const selected = dataView.state.selectedIds.has(id);
   return (
@@ -657,7 +662,7 @@ function PlainRecordRow<TRow extends Row>({
         <TableCell className="w-8">
           <Checkbox
             size="sm"
-            aria-label="Select row"
+            aria-label={t("list.selectRow")}
             checked={selected}
             onClick={(event) => event.stopPropagation()}
             onCheckedChange={(checked) =>
