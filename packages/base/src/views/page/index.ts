@@ -9,6 +9,7 @@ import type {
 import type { ColumnDescriptor, ColumnProps } from "./Column";
 import type { FieldDescriptor, FieldProps } from "./Field";
 import type { GroupDescriptor, GroupProps } from "./Group";
+import type { TabDescriptor, TabProps } from "./Tab";
 import {
   pageChildren,
   pageChildrenCacheKey,
@@ -24,6 +25,7 @@ export {
 } from "./Column";
 export { Field, FIELD_SLOT, type PageFieldKind } from "./Field";
 export { Group, GROUP_SLOT } from "./Group";
+export { Tab, TAB_SLOT } from "./Tab";
 export {
   PAGE_ELEMENT_SLOT,
   pageChildren,
@@ -42,6 +44,8 @@ export type {
   FieldProps,
   GroupDescriptor,
   GroupProps,
+  TabDescriptor,
+  TabProps,
 };
 
 export function parsePageColumns<
@@ -96,6 +100,16 @@ export function parsePageActions(children: ReactNode): ActionDescriptor[] {
       return props ? [actionDescriptor(props)] : [];
     });
     return assertUniqueDescriptor(actions, (action) => action.id, "action id");
+  });
+}
+
+export function parsePageTabs(children: ReactNode): TabDescriptor[] {
+  return cachedChildDescriptors(tabListCache, children, () => {
+    const tabs = pageChildren(children).flatMap((child) => {
+      const props = pageElementProps<TabProps>(child, "tab");
+      return props ? [tabDescriptor(props)] : [];
+    });
+    return assertUniqueDescriptor(tabs, (tab) => tab.id, "tab id");
   });
 }
 
@@ -175,6 +189,17 @@ function groupDescriptor(props: GroupProps): GroupDescriptor {
   }));
 }
 
+function tabDescriptor(props: TabProps): TabDescriptor {
+  return cachedDescriptor(tabDescriptorCache, props, () => ({
+    id: props.id,
+    label: props.label,
+    ...(props.icon !== undefined ? { icon: props.icon } : {}),
+    ...(props.badge !== undefined ? { badge: props.badge } : {}),
+    ...(props.hidden !== undefined ? { hidden: props.hidden } : {}),
+    ...(props.children !== undefined ? { children: props.children } : {}),
+  }));
+}
+
 function parseDirectPageFields(children: ReactNode): FieldDescriptor[] {
   return cachedChildDescriptors(directFieldListCache, children, () => {
     const fields = pageChildren(children).flatMap((child) => {
@@ -231,8 +256,10 @@ const columnDescriptorCache = new WeakMap<object, unknown>();
 const fieldDescriptorCache = new WeakMap<object, unknown>();
 const groupDescriptorCache = new WeakMap<object, unknown>();
 const actionDescriptorCache = new WeakMap<object, unknown>();
+const tabDescriptorCache = new WeakMap<object, unknown>();
 const columnListCache = new WeakMap<object, unknown>();
 const fieldListCache = new WeakMap<object, unknown>();
 const groupListCache = new WeakMap<object, unknown>();
 const actionListCache = new WeakMap<object, unknown>();
+const tabListCache = new WeakMap<object, unknown>();
 const directFieldListCache = new WeakMap<object, unknown>();

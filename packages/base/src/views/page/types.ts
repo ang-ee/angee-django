@@ -12,7 +12,8 @@ export type PageElementKind =
   | "action"
   | "list"
   | "form"
-  | "metric";
+  | "metric"
+  | "tab";
 
 export const PAGE_ELEMENT_SLOT = Symbol.for("@angee/base.page.element");
 

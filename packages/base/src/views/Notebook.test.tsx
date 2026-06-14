@@ -3,7 +3,8 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { Notebook, Tab } from "./Notebook";
+import { Notebook } from "./Notebook";
+import { Tab } from "./page";
 
 afterEach(cleanup);
 
@@ -23,6 +24,37 @@ describe("Notebook", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: "Security" }));
     expect(screen.getByText("security body")).toBeTruthy();
+  });
+
+  test("flattens fragment-wrapped tabs (composed via the page-element parser)", () => {
+    render(
+      <Notebook>
+        <>
+          <Tab id="one" label="One">
+            <p>one body</p>
+          </Tab>
+          <Tab id="two" label="Two">
+            <p>two body</p>
+          </Tab>
+        </>
+      </Notebook>,
+    );
+    expect(screen.getByRole("tab", { name: "One" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Two" })).toBeTruthy();
+    expect(screen.getByText("one body")).toBeTruthy();
+  });
+
+  test("throws on duplicate tab ids", () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(() =>
+      render(
+        <Notebook>
+          <Tab id="dup" label="First" />
+          <Tab id="dup" label="Second" />
+        </Notebook>,
+      ),
+    ).toThrow(/Duplicate page tab id: dup/);
+    consoleError.mockRestore();
   });
 
   test("hidden tabs are skipped; controlled value drives the active tab", () => {

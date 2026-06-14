@@ -1,38 +1,15 @@
-import {
-  Children,
-  isValidElement,
-  useMemo,
-  useState,
-  type ReactElement,
-  type ReactNode,
-} from "react";
+import { useMemo, useState, type ReactElement, type ReactNode } from "react";
 
 import { Tabs } from "../ui/tabs";
-
-/**
- * `Tab` — one section of a `Notebook`. Render-less marker: the `Notebook`
- * reads its props and renders the tab + panel. Compose `Group`/`Field`/any
- * content inside.
- */
-export interface TabProps {
-  id: string;
-  label: ReactNode;
-  icon?: ReactNode;
-  badge?: ReactNode;
-  hidden?: boolean;
-  children?: ReactNode;
-}
-
-export function Tab({ children }: TabProps): ReactElement {
-  return <>{children}</>;
-}
-Object.assign(Tab, { $$notebookTab: true });
+import { parsePageTabs } from "./page";
 
 /**
  * `Notebook` — the tabbed record-section container (the form `Notebook`/`Tab`
- * Element). Folds `<Tab>` children into one `Tabs` band of sections. Active tab
- * is uncontrolled by default (seeded from `defaultTab`/the first tab); pass
- * `value`/`onValueChange` to control it (e.g. URL-synced from the page).
+ * Element). Folds `<Tab>` page elements into one `Tabs` band of sections via
+ * `parsePageTabs` (the shared page-element parser — fragment-flattening, unique
+ * ids), so a tab composes like any other page element. Active tab is uncontrolled
+ * by default (seeded from `defaultTab`/the first tab); pass `value`/`onValueChange`
+ * to control it (e.g. URL-synced from the page).
  */
 export interface NotebookProps {
   children?: ReactNode;
@@ -50,16 +27,10 @@ export function Notebook({
   className,
 }: NotebookProps): ReactElement {
   const tabs = useMemo(
-    () =>
-      Children.toArray(children).filter(
-        (child): child is ReactElement<TabProps> =>
-          isValidElement(child) &&
-          (child.type as { $$notebookTab?: boolean }).$$notebookTab === true &&
-          !(child.props as TabProps).hidden,
-      ),
+    () => parsePageTabs(children).filter((tab) => !tab.hidden),
     [children],
   );
-  const firstTab = tabs[0]?.props.id ?? "";
+  const firstTab = tabs[0]?.id ?? "";
   const [internal, setInternal] = useState(defaultTab ?? firstTab);
   const active = value ?? internal;
 
@@ -75,18 +46,16 @@ export function Notebook({
     >
       <Tabs.List>
         {tabs.map((tab) => (
-          <Tabs.Tab key={tab.props.id} value={tab.props.id}>
-            {tab.props.icon}
-            {tab.props.label}
-            {tab.props.badge !== undefined ? (
-              <Tabs.Count>{tab.props.badge}</Tabs.Count>
-            ) : null}
+          <Tabs.Tab key={tab.id} value={tab.id}>
+            {tab.icon}
+            {tab.label}
+            {tab.badge !== undefined ? <Tabs.Count>{tab.badge}</Tabs.Count> : null}
           </Tabs.Tab>
         ))}
       </Tabs.List>
       {tabs.map((tab) => (
-        <Tabs.Panel key={tab.props.id} value={tab.props.id} className="pt-4">
-          {tab.props.children}
+        <Tabs.Panel key={tab.id} value={tab.id} className="pt-4">
+          {tab.children}
         </Tabs.Panel>
       ))}
     </Tabs>

@@ -54,9 +54,7 @@ export {
 } from "./TimelineView";
 export {
   Notebook,
-  Tab,
   type NotebookProps,
-  type TabProps,
 } from "./Notebook";
 export {
   Tree,
@@ -111,12 +109,14 @@ export {
   Column,
   Field,
   Group,
+  Tab,
   pageChildren,
   pageElementProps,
   parsePageActions,
   parsePageColumns,
   parsePageFields,
   parsePageGroups,
+  parsePageTabs,
   PAGE_ELEMENT_SLOT,
 } from "./page";
 export type {
@@ -136,4 +136,6 @@ export type {
   PageElement,
   PageElementKind,
   PageFieldKind,
+  TabDescriptor,
+  TabProps,
 } from "./page";

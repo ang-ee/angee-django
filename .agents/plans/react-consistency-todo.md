@@ -398,7 +398,20 @@ visual-parity spot-check across both themes still recommended before release.
         `SecretsSection`: Inputs via `FieldLabel htmlFor`/`Input id` (native-label
         idiom), muted label preserved via `className`. Accessible names preserved
         (vitest + e2e `getByLabel` still resolve).
-      - [ ] `Notebook.Tab` onto `PAGE_ELEMENT_SLOT`.
+      - [x] **`Notebook.Tab` onto `PAGE_ELEMENT_SLOT`** — DONE: `Tab` was a
+        bespoke `$$notebookTab` marker + `Children.toArray().filter()`. It now joins
+        the page-element family — new `views/page/Tab.tsx` (`[PAGE_ELEMENT_SLOT]:
+        "tab"`, mirroring `Group.tsx`), `parsePageTabs` in `views/page/index.ts`
+        (cached, fragment-flattening, unique-id assertion), and `Notebook` consumes
+        it. So an addon can export reusable `<Tab>` constants. Review-driven:
+        `TabDescriptor = TabProps` (alias, cf. `ActionDescriptor`); `Tab` sourced
+        from `./page` in the barrel (one home, with its siblings); +2 tests
+        (fragment-flatten, dup-id throw). Notebook still has no live consumer.
+        FOLLOW-UP (tracked, family-wide, out of T17 scope): the per-element
+        `*_SLOT` symbols (`FIELD_SLOT`/`GROUP_SLOT`/`ACTION_SLOT`/`COLUMN_SLOT`/new
+        `TAB_SLOT`) are write-only — assigned but never read (only
+        `PAGE_ELEMENT_SLOT` discriminates). `Tab` keeps `TAB_SLOT` for family
+        consistency; a separate slice should delete all five together.
       - [ ] make `FormView` Star/Share host-provided (slot/action) + replace
         `text-amber-500` with a token.
 - [x] **T2b** DONE — `UserMenu` rebuilt on the `DropdownMenu` primitive: native
@@ -417,6 +430,11 @@ visual-parity spot-check across both themes still recommended before release.
 - [x] Class-merge: `.filter(Boolean).join(" ")` → `cn()` in `DataPage`/`GraphView`
       (BrandButton's is an aria-id join, left alone).
 - [ ] Pick one primitive namespace-export convention (Select/Tooltip split).
+- [ ] Delete the write-only page-element `*_SLOT` symbols
+      (`FIELD_SLOT`/`GROUP_SLOT`/`ACTION_SLOT`/`COLUMN_SLOT`/`TAB_SLOT`): each is
+      assigned `[X_SLOT]: true` on its marker but never read — only
+      `PAGE_ELEMENT_SLOT` discriminates. Drop all five together (surfaced during
+      T17's Notebook→PAGE_ELEMENT_SLOT review).
 - [ ] Storybook: kill dead `args`/`argTypes` ignored by `render: () =>` (~30
       files); one `runtime-fixtures` owner (provider stack + `jsonResponse` + CSRF,
       reusing `@angee/base/testing`); drop redundant nested `ToastProvider`; fix
