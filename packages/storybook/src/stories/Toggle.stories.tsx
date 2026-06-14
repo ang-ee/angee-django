@@ -40,7 +40,7 @@ export const Variants: Story = {
       <Toggle variant="outline" defaultPressed>
         Outline
       </Toggle>
-      <Toggle size="icon" aria-label="Star">
+      <Toggle size="iconMd" aria-label="Star">
         <Glyph name="star" size={16} />
       </Toggle>
     </div>

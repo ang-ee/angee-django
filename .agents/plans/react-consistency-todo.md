@@ -571,9 +571,27 @@ visual-parity spot-check across both themes still recommended before release.
       (the old span tint was silently defeated by specificity; lucide glyphs stroke
       `currentColor`). +tree.test.tsx (tint + recipe). No `iconColor` consumers
       existed, so the prop swap is safe.
-- [ ] Standardize default `size` (switch/toggle-group `sm`→`md` or document);
+- [x] Standardize default `size` (switch/toggle-group `sm`→`md` or document);
       unify icon-size spelling (`iconSm/Md/Lg` vs `icon/icon-sm`); reconcile
-      `badge.shape` vs `chip.shape` defaults.
+      `badge.shape` vs `chip.shape` defaults. DONE (behavior-aware):
+      - **icon-size spelling** — DID align: `toggle`'s `icon`/`icon-sm` size keys
+        renamed to `iconMd`/`iconSm` to match the Button convention (`iconSm`/
+        `iconMd`/`iconLg`); the lone consumer (`Toggle.stories` `size="icon"`) →
+        `iconMd` (byte-equivalent: old `icon` = `size-icon-btn-md`). One spelling
+        now. typecheck base + storybook green.
+      - **switch/toggle-group default `sm` → md** — LEAVE-SEPARATE (document, a flip
+        regresses): a default change is a visual change. `Switch` default `sm` has 2
+        consumers, neither passes `size` — flipping enlarges every switch with no
+        requester; `sm` is the form-control size. `ToggleGroup` default `sm` is a
+        compact segmented control; `Toggle` default `md` is a standalone
+        button-like — different intents, the differing defaults are justified, not
+        drift.
+      - **`badge.shape:"rounded"` vs `chip.shape:"pill"`** — LEAVE-SEPARATE: badge
+        (status/count) and chip (removable token) are the established
+        different-intent pair (T9); the shape defaults follow that intent.
+      (NOTE for the docs agent: record the "icon-size keys are `iconSm`/`iconMd`/
+      `iconLg` across recipes" convention + the size-default rationale in
+      `docs/frontend/guidelines.md`.)
 - [x] Class-merge: `.filter(Boolean).join(" ")` → `cn()` in `DataPage`/`GraphView`
       (BrandButton's is an aria-id join, left alone).
 - [x] Pick one primitive namespace-export convention (Select/Tooltip split).

@@ -20,8 +20,9 @@ export const toggleVariants = tv({
     size: {
       sm: "h-7 px-2",
       md: "h-8 px-2.5",
-      icon: "size-icon-btn-md px-0",
-      "icon-sm": "size-icon-btn-sm px-0",
+      // Icon-only sizes follow the Button convention (`iconSm`/`iconMd`).
+      iconSm: "size-icon-btn-sm px-0",
+      iconMd: "size-icon-btn-md px-0",
     },
   },
   defaultVariants: {
