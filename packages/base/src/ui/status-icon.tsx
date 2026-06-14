@@ -2,7 +2,7 @@ import * as React from "react";
 
 import { Glyph } from "../chrome/Glyph";
 import type { IconComponent } from "../chrome/icon-registry";
-import { tones, type ToneName } from "../lib/tones";
+import { INTENT_GLYPHS, tones, type ToneName } from "../lib/tones";
 import { tv, type VariantProps } from "../lib/variants";
 
 const statusIntentClasses = {
@@ -63,14 +63,6 @@ export type StatusIconSize = NonNullable<StatusIconRecipeProps["size"]>;
 export type StatusDotTone = NonNullable<StatusDotRecipeProps["tone"]>;
 export type StatusDotSize = NonNullable<StatusDotRecipeProps["size"]>;
 
-const STATUS_ICON_NAMES: Record<StatusIconIntent, string> = {
-  info: "help",
-  success: "circle-check",
-  warning: "triangle-alert",
-  danger: "circle-x",
-  muted: "help",
-};
-
 export type StatusIconProps = Omit<
   React.HTMLAttributes<HTMLSpanElement>,
   "className" | "color"
@@ -87,7 +79,12 @@ export const StatusIcon = React.forwardRef<HTMLSpanElement, StatusIconProps>(
     ref,
   ) {
     const Icon = typeof icon === "function" ? icon : undefined;
-    const iconName = typeof icon === "string" ? icon : STATUS_ICON_NAMES[intent];
+    const iconName =
+      typeof icon === "string"
+        ? icon
+        : intent === "muted"
+          ? "help"
+          : INTENT_GLYPHS[intent];
 
     return (
       <span

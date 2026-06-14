@@ -13,17 +13,6 @@ import {
   type SchemaFieldMetadata,
 } from "./model-metadata";
 
-/** One client per named schema, built once from the per-schema endpoint config. */
-export function createSchemaClients(
-  config: Record<string, AngeeUrqlClientOptions>,
-): Record<string, Client> {
-  const clients: Record<string, Client> = {};
-  for (const [name, options] of Object.entries(config)) {
-    clients[name] = createUrqlClient(optionsWithSchemaDefaults(options));
-  }
-  return clients;
-}
-
 interface SchemaRuntime {
   clients: Record<string, Client>;
   metadata: Record<string, SchemaFieldMetadata>;

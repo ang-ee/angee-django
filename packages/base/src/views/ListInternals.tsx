@@ -23,11 +23,6 @@ import type {
   Row,
 } from "@angee/sdk";
 import { format } from "date-fns";
-import {
-  ArrowDown,
-  ArrowUp,
-  ArrowUpDown,
-} from "lucide-react";
 
 import { Glyph } from "../chrome/Glyph";
 import { RelativeTime } from "../fragments/RelativeTime";
@@ -489,7 +484,11 @@ function SortHeader<TRow extends Row>({
   if (column.sortable === false) return <>{children}</>;
   const sort = dataView.state.sort;
   const active = sort?.field === column.field;
-  const Icon = !active ? ArrowUpDown : sort.dir === "asc" ? ArrowUp : ArrowDown;
+  const iconName = !active
+    ? "arrow-up-down"
+    : sort.dir === "asc"
+      ? "arrow-up"
+      : "arrow-down";
   const label = columnLabelText(column);
   return (
     <button
@@ -499,7 +498,7 @@ function SortHeader<TRow extends Row>({
       onClick={() => dataView.setSort(nextSort(sort, column.field))}
     >
       <span className="truncate">{children}</span>
-      <Icon className="size-3 text-fg-subtle" aria-hidden />
+      <Glyph name={iconName} className="size-3 text-fg-subtle" />
     </button>
   );
 }

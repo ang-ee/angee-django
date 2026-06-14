@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { Glyph } from "../chrome/Glyph";
+import { INTENT_GLYPHS } from "../lib/tones";
 import { tv, type VariantProps } from "../lib/variants";
 
 export const alertVariants = tv({
@@ -57,13 +58,6 @@ type AlertRecipeProps = VariantProps<typeof alertVariants>;
 export type AlertIntent = NonNullable<AlertRecipeProps["intent"]>;
 export type AlertSurface = NonNullable<AlertRecipeProps["surface"]>;
 
-const ALERT_ICON_NAMES: Record<AlertIntent, string> = {
-  info: "help",
-  success: "circle-check",
-  warning: "triangle-alert",
-  danger: "circle-x",
-};
-
 export type AlertProps = Omit<
   React.HTMLAttributes<HTMLDivElement>,
   "className" | "color" | "title"
@@ -92,7 +86,7 @@ export const Alert = React.forwardRef<HTMLDivElement, AlertProps>(
   ) {
     const styles = alertVariants({ intent, surface });
     const resolvedIcon =
-      icon === false ? null : (icon ?? <Glyph decorative name={ALERT_ICON_NAMES[intent]} />);
+      icon === false ? null : (icon ?? <Glyph decorative name={INTENT_GLYPHS[intent]} />);
 
     return (
       <div

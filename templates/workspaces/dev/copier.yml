@@ -18,7 +18,7 @@ _angee:
       default: dev
     example:
       type: str
-      default: angee-notes
+      default: notes-angee
       help: Which example consumer dir under examples/ to mount as the inner stack.
     branch_prefix:
       type: str
@@ -69,13 +69,6 @@ _angee:
         process_compose_port: "${alloc.process_compose}"
         playwright_user_data_dir: "${workspace.path}/.angee/data/chrome"
         playwright_browser: "${inputs.playwright_browser}"
-  persist:
-    app-data:
-      subpath: .angee/data
-      scope: workspace
-    chrome-profile:
-      subpath: .angee/data/chrome
-      scope: workspace
 
 topic:
   type: str
@@ -83,7 +76,7 @@ topic:
 
 example:
   type: str
-  default: angee-notes
+  default: notes-angee
 
 branch_prefix:
   type: str

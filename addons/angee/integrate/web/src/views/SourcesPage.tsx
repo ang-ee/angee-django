@@ -9,7 +9,7 @@ import {
   List,
   type ActionContext,
 } from "@angee/base";
-import { useAuthoredMutation } from "@angee/sdk";
+import { runActionResult, useAuthoredMutation } from "@angee/sdk";
 
 import {
   REFRESH_SOURCE_MUTATION,
@@ -42,7 +42,7 @@ export function SourcesPage(): React.ReactElement {
       if (typeof ctx.record?.id !== "string") return;
       const result = await refreshSource({ id: ctx.record.id });
       ctx.refresh();
-      return result?.refreshSource.message;
+      return runActionResult(result?.refreshSource);
     },
     [refreshSource],
   );

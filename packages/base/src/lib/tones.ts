@@ -93,6 +93,21 @@ export const tones: Record<ToneName, ToneSlots> = {
   },
 };
 
+/** The feedback intents that carry a status glyph (a subset of the tones). */
+export type FeedbackIntent = "info" | "success" | "warning" | "danger";
+
+/**
+ * The canonical icon-registry glyph name for each feedback intent. One owner for
+ * "which glyph means this intent", shared by Alert, StatusIcon, and Toast so they
+ * cannot drift (they previously disagreed: info was "help" vs "info").
+ */
+export const INTENT_GLYPHS: Record<FeedbackIntent, string> = {
+  info: "info",
+  success: "circle-check",
+  warning: "triangle-alert",
+  danger: "circle-x",
+};
+
 export type ToneValueBuckets = Partial<Record<ToneName, readonly string[]>>;
 
 export const DEFAULT_STATE_TONE_VALUES: ToneValueBuckets = {

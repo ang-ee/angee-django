@@ -1,7 +1,7 @@
 import * as React from "react";
-import { LayoutGrid, List } from "lucide-react";
 
 import { Button } from "../ui/button";
+import { Glyph } from "../chrome/Glyph";
 import type { DndPayload } from "../lib/dnd";
 import { GalleryView } from "./GalleryView";
 import {
@@ -353,7 +353,7 @@ function RowLayoutSwitcher({
         active={layout === "list"}
         onClick={() => onLayoutChange("list")}
       >
-        <List className="glyph" aria-hidden />
+        <Glyph name="list" className="glyph" />
       </Button>
       <Button
         type="button"
@@ -364,7 +364,7 @@ function RowLayoutSwitcher({
         active={layout === "grid"}
         onClick={() => onLayoutChange("grid")}
       >
-        <LayoutGrid className="glyph" aria-hidden />
+        <Glyph name="layout-grid" className="glyph" />
       </Button>
     </div>
   );

@@ -5,6 +5,9 @@
 @source "../../../../packages/base/src";
 @source "../../../../addons/angee/agents/web/src";
 @source "../../../../addons/angee/iam/web/src";
+@source "../../../../addons/angee/integrate/web/src";
+@source "../../../../addons/angee/knowledge/web/src";
 @source "../../../../addons/angee/operator/web/src";
+@source "../../../../addons/angee/storage/web/src";
 @source "../../addons/example/notes/web/src";
 @source "./";

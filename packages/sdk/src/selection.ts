@@ -105,6 +105,25 @@ export function typeNameForModel(modelLabel: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
+/**
+ * Encode a bare public id as the relay GlobalID a node `id` carries
+ * (`btoa("DriveType:drv…")`). Relation fields (`file.drive`, `page.vault`, …)
+ * come back as the bare public sqid, so normalising them up to the GlobalID lets
+ * a client-side join match the related row's `id` — and keeps the value valid as
+ * a GlobalID mutation input. One relay boundary, owned here.
+ */
+export function toRelayGlobalId(typeName: string, id: string): string {
+  return btoa(`${typeName}:${id}`);
+}
+
+/** The relay GlobalID for a relation field's optional bare id, preserving null. */
+export function relationRelayGlobalId(
+  typeName: string,
+  id: string | null | undefined,
+): string | null {
+  return id ? toRelayGlobalId(typeName, id) : null;
+}
+
 function requireRootField(
   modelLabel: string,
   rootFields: ModelRootFieldMetadata | null | undefined,

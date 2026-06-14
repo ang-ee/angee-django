@@ -21,11 +21,7 @@ import {
   type Row,
   type UseResourceListOptions,
 } from "@angee/sdk";
-import {
-  ChevronDown,
-  ChevronRight,
-} from "lucide-react";
-
+import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
 import { titleCase } from "../lib/titleCase";
 import { CountBadge } from "../ui/badge";
@@ -588,9 +584,9 @@ function GroupSection<TRow extends Row>({
               }}
             >
               {expanded && expandable ? (
-                <ChevronDown className="size-3.5 shrink-0 text-fg-muted" aria-hidden />
+                <Glyph name="chevron-down" className="size-3.5 shrink-0 text-fg-muted" />
               ) : (
-                <ChevronRight className="size-3.5 shrink-0 text-fg-muted" aria-hidden />
+                <Glyph name="chevron-right" className="size-3.5 shrink-0 text-fg-muted" />
               )}
               <span className="min-w-0 flex-1 truncate font-semibold">
                 {label}

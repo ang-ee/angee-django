@@ -1,6 +1,5 @@
 import type { DndPayload } from "@angee/base";
 
-import { fileIconName } from "../lib/file-display";
 import {
   DRIVE_TYPE,
   FOLDER_TYPE,

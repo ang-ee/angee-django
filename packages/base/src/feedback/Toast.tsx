@@ -10,7 +10,7 @@ import type { ToastObject as BaseToastObject } from "@base-ui/react/toast";
 import { Glyph } from "../chrome/Glyph";
 import { useBaseT } from "../i18n";
 import { cn } from "../lib/cn";
-import { tones, type ToneName } from "../lib/tones";
+import { INTENT_GLYPHS, tones, type FeedbackIntent } from "../lib/tones";
 import { Button } from "../ui/button";
 
 export type ToastIntent = "info" | "success" | "warning" | "error";
@@ -56,18 +56,11 @@ const DEFAULT_TOAST_DURATIONS: Record<ToastIntent, number> = {
   error: 0,
 };
 
-const TOAST_TONES: Record<ToastIntent, ToneName> = {
+const TOAST_TONES: Record<ToastIntent, FeedbackIntent> = {
   info: "info",
   success: "success",
   warning: "warning",
   error: "danger",
-};
-
-const TOAST_ICONS: Record<ToastIntent, string> = {
-  info: "info",
-  success: "circle-check",
-  warning: "triangle-alert",
-  error: "circle-x",
 };
 
 /**
@@ -178,7 +171,7 @@ function ToastItem({
             tone.fg,
           )}
         >
-          <Glyph decorative name={TOAST_ICONS[intent]} />
+          <Glyph decorative name={INTENT_GLYPHS[TOAST_TONES[intent]]} />
         </span>
         <div className="min-w-0">
           <BaseToast.Title className="text-13 font-semibold leading-snug" />

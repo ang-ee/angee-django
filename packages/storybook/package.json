@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "NODE_OPTIONS=\"${NODE_OPTIONS:+$NODE_OPTIONS }--disable-warning=DEP0205\" storybook dev -p 6006",
+    "dev": "NODE_OPTIONS=\"${NODE_OPTIONS:+$NODE_OPTIONS }--disable-warning=DEP0205\" storybook dev -p \"${STORYBOOK_PORT:-6006}\"",
     "build": "NODE_OPTIONS=\"${NODE_OPTIONS:+$NODE_OPTIONS }--disable-warning=DEP0205\" storybook build -o storybook-static",
     "typecheck": "tsc --noEmit"
   },

@@ -9,7 +9,7 @@ import {
   List,
   type ActionContext,
 } from "@angee/base";
-import { useAuthoredMutation } from "@angee/sdk";
+import { runActionResult, useAuthoredMutation } from "@angee/sdk";
 
 import {
   ROTATE_WEBHOOK_SECRET_MUTATION,
@@ -43,7 +43,7 @@ export function WebhooksPage(): React.ReactElement {
       if (typeof ctx.record?.id !== "string") return;
       const result = await testDelivery({ id: ctx.record.id });
       ctx.refresh();
-      return result?.testWebhookDelivery.message;
+      return runActionResult(result?.testWebhookDelivery);
     },
     [testDelivery],
   );
@@ -51,7 +51,9 @@ export function WebhooksPage(): React.ReactElement {
     async (ctx: ActionContext) => {
       if (typeof ctx.record?.id !== "string") return;
       const result = await rotateSecret({ id: ctx.record.id });
-      const secret = result?.rotateWebhookSecret.secret;
+      const outcome = result?.rotateWebhookSecret;
+      if (outcome && !outcome.ok) throw new Error("Could not rotate the signing secret.");
+      const secret = outcome?.secret;
       if (secret) {
         await ctx.prompt({
           title: "New signing secret",

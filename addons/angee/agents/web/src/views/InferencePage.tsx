@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Action, type ActionContext, Column, DataPage, Field, Form, Group, List, useEnumOptions } from "@angee/base";
-import { useAuthoredMutation } from "@angee/sdk";
+import { runActionResult, useAuthoredMutation } from "@angee/sdk";
 
 import {
   REFRESH_PROVIDER_MODELS_MUTATION,
@@ -21,11 +21,7 @@ export function InferenceProvidersPage(): React.ReactElement {
       if (typeof ctx.record?.id !== "string") return;
       const result = await refreshProviderModels({ id: ctx.record.id });
       ctx.refresh();
-      const outcome = result?.refreshProviderModels;
-      // A business failure returns ok:false (not a thrown error); surface it as an
-      // error toast rather than a green success.
-      if (outcome && !outcome.ok) throw new Error(outcome.message);
-      return outcome?.message;
+      return runActionResult(result?.refreshProviderModels);
     },
     [refreshProviderModels],
   );

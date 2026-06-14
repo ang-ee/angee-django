@@ -12,7 +12,7 @@ _angee:
 
 project_name:
   type: str
-  default: angee-notes
+  default: notes-angee
 
 project_path:
   type: path
@@ -22,7 +22,7 @@ project_path:
 framework_path:
   type: path
   default: "."
-  help: Path to the angee-django monorepo root. Used to reach Storybook (lives under `packages/storybook-host`) and to run `pnpm install` at the workspace root. Default `.` assumes the repo-level layout (manifest at `<repo>/.angee/angee.yaml`); for downstream projects that consume angee-django as a sibling checkout, point at the sibling (e.g. `--input framework_path=../angee-django`).
+  help: Path to the angee-django monorepo root. Used to reach Storybook (the `@angee/storybook` package under `packages/storybook`) and to run `pnpm install` at the workspace root. Default `.` assumes the repo-level layout (manifest at `<repo>/.angee/angee.yaml`); for downstream projects that consume angee-django as a sibling checkout, point at the sibling (e.g. `--input framework_path=../angee-django`).
 
 ANGEE_ROOT:
   type: str

@@ -9,7 +9,7 @@ import {
   List,
   type ActionContext,
 } from "@angee/base";
-import { useAuthoredMutation, type Row } from "@angee/sdk";
+import { runActionResult, useAuthoredMutation, type Row } from "@angee/sdk";
 
 import {
   SYNC_INTEGRATION_MUTATION,
@@ -46,7 +46,7 @@ export function IntegrationsPage(): React.ReactElement {
       if (typeof ctx.record?.id !== "string") return;
       const result = await syncIntegration({ id: ctx.record.id });
       ctx.refresh();
-      return result?.syncIntegration.message;
+      return runActionResult(result?.syncIntegration);
     },
     [syncIntegration],
   );
@@ -54,7 +54,7 @@ export function IntegrationsPage(): React.ReactElement {
     async (ctx: ActionContext) => {
       if (typeof ctx.record?.id !== "string") return;
       const result = await testConnection({ id: ctx.record.id });
-      return result?.testConnection.message;
+      return runActionResult(result?.testConnection);
     },
     [testConnection],
   );

@@ -9,6 +9,7 @@ import {
 import { DISABLED_DOCUMENTS } from "./disabled-documents";
 import { useDocumentQuery } from "./document-query";
 import { useModelRootFields } from "./model-metadata";
+import { useRegisterModelRefetch } from "./relay-invalidation";
 import {
   useStableArray,
   useStableMeasures,
@@ -46,7 +47,12 @@ export function useResourceAggregate<
 >(
   modelLabel: string,
   options: UseAggregateOptions<TName> = {},
-): { aggregate: AggregateBucket | null; fetching: boolean; error: Error | null } {
+): {
+  aggregate: AggregateBucket | null;
+  fetching: boolean;
+  error: Error | null;
+  refetch: () => void;
+} {
   const { enabled = true, filter, measures } = options;
   const withFilter = filter !== undefined;
   const stableMeasures = useStableMeasures(measures);
@@ -67,22 +73,26 @@ export function useResourceAggregate<
     withFilter ? { filter: filter as Record<string, unknown> } : NO_VARIABLES,
   );
   const run = useDocumentQuery(document, variables, active);
+  // Register so a change event (and post-write invalidation) refresh this
+  // aggregate the same way the list beside it refreshes — the writes the
+  // normalized cache can't see on its own.
+  useRegisterModelRefetch(modelLabel, run.refetch, active);
   return {
     aggregate: autoExtractAggregate(run.data, rootFields?.aggregate ?? ""),
     fetching: run.fetching,
     error: run.error,
+    refetch: run.refetch,
   };
 }
 
 /**
  * A group-by dimension: `field` is the backend enum value to group on
  * (`"STATUS"`), and `key` is the field selected from the returned group key
- * (`"status"`). `by` is accepted for callers still passing the previous name.
+ * (`"status"`).
  */
 export interface GroupByDimension {
   field: string;
   key?: string;
-  by?: string;
   granularity?: string;
 }
 
@@ -102,7 +112,7 @@ export interface UseGroupByOptions<
 }
 
 function dimensionField(dimension: GroupByDimension): string {
-  return dimension.by ?? dimension.field;
+  return dimension.field;
 }
 
 function dimensionKey(dimension: GroupByDimension): string {
@@ -131,6 +141,7 @@ export function useResourceGroupBy<
   buckets: readonly AggregateBucket[];
   fetching: boolean;
   error: Error | null;
+  refetch: () => void;
 } {
   const {
     dimensions,
@@ -192,6 +203,7 @@ export function useResourceGroupBy<
   );
 
   const run = useDocumentQuery(document, variables, active);
+  useRegisterModelRefetch(modelLabel, run.refetch, active);
   const result = autoExtractGroupBy(run.data, rootFields?.groupBy ?? "");
   return {
     count: result.count,
@@ -199,5 +211,6 @@ export function useResourceGroupBy<
     buckets: result.buckets,
     fetching: run.fetching,
     error: run.error,
+    refetch: run.refetch,
   };
 }

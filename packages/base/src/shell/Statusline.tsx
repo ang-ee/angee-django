@@ -1,31 +1,23 @@
 import * as React from "react";
-import { createPortal } from "react-dom";
 
 import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
+import { createShellBand } from "./shell-band";
 
-// Host node for the shell's statusline row. Mirrors the control band:
-//   undefined   — no ConsoleShell above (standalone/test) → render inline.
-//   null        — shell present but the area-status host has not mounted yet.
-//   HTMLElement — portal the statusline into the host.
-const StatuslineContext =
-  React.createContext<HTMLElement | null | undefined>(undefined);
+const band = createShellBand(
+  "footer",
+  "flex h-7 items-center gap-4 border-t border-border-subtle bg-sheet px-3.5 text-2xs text-fg-muted",
+);
 
 export interface StatuslineProviderProps {
   children: React.ReactNode;
-  host: HTMLElement | null;
+  host: HTMLElement | null | undefined;
 }
 
-export function StatuslineProvider({
-  children,
-  host,
-}: StatuslineProviderProps): React.ReactElement {
-  return (
-    <StatuslineContext.Provider value={host}>
-      {children}
-    </StatuslineContext.Provider>
-  );
-}
+/** Provide the statusline host (`area-status`) for the bar rendered below. */
+export const StatuslineProvider: (
+  props: StatuslineProviderProps,
+) => React.ReactElement = band.Provider;
 
 export interface StatuslineProps {
   /** Segments shown left of the spacer; pair with `<StatuslineSpacer />`. */
@@ -40,25 +32,9 @@ export interface StatuslineProps {
  * collapsed. Under a `ConsoleShell` it portals into `area-status`; standalone
  * it renders inline. Use `<StatuslineSpacer />` to push trailing segments right.
  */
-export function Statusline({
-  children,
-  className,
-}: StatuslineProps): React.ReactElement | React.ReactPortal | null {
-  const host = React.useContext(StatuslineContext);
-  const bar = (
-    <footer
-      className={cn(
-        "flex h-7 items-center gap-4 border-t border-border-subtle bg-sheet px-3.5 text-2xs text-fg-muted",
-        className,
-      )}
-    >
-      {children}
-    </footer>
-  );
-
-  if (host) return createPortal(bar, host);
-  return host === undefined ? bar : null;
-}
+export const Statusline: (
+  props: StatuslineProps,
+) => React.ReactElement | React.ReactPortal | null = band.Band;
 
 export interface StatusSegmentProps {
   /** Icon registry name shown before the label. */

@@ -3,8 +3,6 @@ import {
   useResourceList,
   type Row,
 } from "@angee/sdk";
-import { ChevronLeft, ChevronRight } from "lucide-react";
-
 import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
 import { DataViewSwitcher } from "../toolbars";
@@ -947,7 +945,7 @@ function RecordPager({
           disabled={!navigation.onPrev}
           onClick={navigation.onPrev}
         >
-          <ChevronLeft className="glyph" aria-hidden />
+          <Glyph name="chevron-left" className="glyph" />
         </Button>
         <Button
           type="button"
@@ -957,7 +955,7 @@ function RecordPager({
           disabled={!navigation.onNext}
           onClick={navigation.onNext}
         >
-          <ChevronRight className="glyph" aria-hidden />
+          <Glyph name="chevron-right" className="glyph" />
         </Button>
       </div>
     </nav>

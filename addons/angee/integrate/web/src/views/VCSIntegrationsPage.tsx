@@ -9,7 +9,7 @@ import {
   type ActionContext,
   useEnumOptions,
 } from "@angee/base";
-import { useAuthoredMutation } from "@angee/sdk";
+import { runActionResult, useAuthoredMutation } from "@angee/sdk";
 
 import {
   DISCOVER_REPOSITORIES_MUTATION,
@@ -55,7 +55,7 @@ export function VCSIntegrationsPage(): React.ReactElement {
       if (typeof ctx.record?.id !== "string") return;
       const result = await syncVcs({ id: ctx.record.id });
       ctx.refresh();
-      return result?.syncVcsIntegration.message;
+      return runActionResult(result?.syncVcsIntegration);
     },
     [syncVcs],
   );
@@ -64,7 +64,7 @@ export function VCSIntegrationsPage(): React.ReactElement {
       if (typeof ctx.record?.id !== "string") return;
       const result = await discover({ vcsIntegrationId: ctx.record.id, org: "" });
       ctx.refresh();
-      return result?.discoverRepositories.message;
+      return runActionResult(result?.discoverRepositories);
     },
     [discover],
   );

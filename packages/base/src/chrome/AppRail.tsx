@@ -1,13 +1,11 @@
 import type { ReactElement } from "react";
 import { Link } from "@tanstack/react-router";
 import { useMenus } from "@angee/sdk";
-import { CircleHelp } from "lucide-react";
 
 import { cn } from "../lib/cn";
 import { Tooltip } from "../ui/tooltip";
 import { AppChooser } from "./AppChooser";
 import { Glyph } from "./Glyph";
-import { useIcon } from "./icon-registry";
 import {
   type ChromeMenuItem,
   type ChromeMenuNode,
@@ -63,23 +61,9 @@ function RailItem({ item }: { item: ChromeMenuNode }): ReactElement | null {
           className: RAIL_BUTTON_ACTIVE,
         }}
       >
-        <RailGlyph name={iconName} />
+        <Glyph name={iconName} fallbackName="help" size={16} />
         <span className="sr-only">{label}</span>
       </Link>
     </Tooltip>
-  );
-}
-
-function RailGlyph({ name }: { name: string }): ReactElement {
-  const Icon = useIcon(name);
-  if (Icon) return <Glyph name={name} size={16} />;
-  return (
-    <CircleHelp
-      aria-hidden
-      className="glyph"
-      focusable="false"
-      size={16}
-      style={{ width: 16, height: 16 }}
-    />
   );
 }

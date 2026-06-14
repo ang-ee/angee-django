@@ -1,18 +1,6 @@
 import * as React from "react";
 import type { ReactElement, ReactNode } from "react";
-import {
-  Calendar,
-  ChevronDown,
-  Filter,
-  Grid2X2,
-  List,
-  Plus,
-  Search,
-  SlidersHorizontal,
-  Star,
-  X,
-} from "lucide-react";
-
+import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
 import { titleCase } from "../lib/titleCase";
 import { Button } from "../ui/button";
@@ -183,7 +171,7 @@ export function DataToolbar({
     >
       {onCreate ? (
         <Button type="button" variant="primary" size="sm" onClick={onCreate}>
-          <Plus className="glyph" aria-hidden />
+          <Glyph name="plus" className="glyph" />
           {createLabel}
         </Button>
       ) : null}
@@ -321,7 +309,7 @@ function FilterPicker({
   return (
     <PopoverRoot>
       <div className="inline-flex h-8 min-w-0 max-w-xl flex-1 items-center gap-1 overflow-hidden rounded-md border border-transparent bg-inset pl-2 pr-1 text-13 text-fg focus-within:border-border-focus focus-within:bg-sheet focus-within:focus-ring">
-        <Search className="size-3.5 shrink-0 text-fg-muted" aria-hidden />
+        <Glyph name="search" className="size-3.5 shrink-0 text-fg-muted" />
         {groups.map((nextGroup, index) => (
           <FacetChip
             key={`${nextGroup.field}:${nextGroup.granularity ?? ""}`}
@@ -367,7 +355,7 @@ function FilterPicker({
             groupControls ? "Filter, group, favorites" : "Filter and favorites"
           }
         >
-          <ChevronDown className="size-3" aria-hidden />
+          <Glyph name="chevron-down" className="size-3" />
         </PopoverTrigger>
       </div>
       <PopoverPortal>
@@ -378,7 +366,7 @@ function FilterPicker({
               groupControls ? "w-[45rem] grid-cols-3" : "w-[30rem] grid-cols-2",
             )}
           >
-            <PickerColumn icon={<Filter className="size-3.5" />} title="Filters">
+            <PickerColumn icon={<Glyph name="filter" className="size-3.5" />} title="Filters">
               {filterOptions.length === 0 ? (
                 <PickerMuted>No filters</PickerMuted>
               ) : (
@@ -398,7 +386,7 @@ function FilterPicker({
                 muted={!customFilterOpen}
                 onClick={() => setCustomFilterOpen((value) => !value)}
               >
-                <Plus className="size-3" aria-hidden />
+                <Glyph name="plus" className="size-3" />
                 Add custom filter
               </PickerButton>
               {customFilterOpen ? (
@@ -423,7 +411,7 @@ function FilterPicker({
             </PickerColumn>
             {groupControls ? (
               <PickerColumn
-                icon={<SlidersHorizontal className="size-3.5" />}
+                icon={<Glyph name="sliders-horizontal" className="size-3.5" />}
                 title="Group by"
               >
                 {groupOptions.map((option) => (
@@ -440,7 +428,7 @@ function FilterPicker({
                   muted={!customGroupOpen}
                   onClick={() => setCustomGroupOpen((value) => !value)}
                 >
-                  <Plus className="size-3" aria-hidden />
+                  <Glyph name="plus" className="size-3" />
                   Add custom group
                 </PickerButton>
                 {customGroupOpen ? (
@@ -462,13 +450,13 @@ function FilterPicker({
                 ) : null}
               </PickerColumn>
             ) : null}
-            <PickerColumn icon={<Star className="size-3.5" />} title="Favorites">
+            <PickerColumn icon={<Glyph name="star" className="size-3.5" />} title="Favorites">
               <PickerButton
                 active={favoriteOpen}
                 muted={!favoriteOpen}
                 onClick={() => setFavoriteOpen((value) => !value)}
               >
-                <Plus className="size-3" aria-hidden />
+                <Glyph name="plus" className="size-3" />
                 Save current search
               </PickerButton>
               {favoriteOpen ? (
@@ -537,7 +525,7 @@ function FacetChip({
         className="ml-0.5 rounded-full text-brand-soft-text outline-none hover:bg-on-brand-soft-hover focus-visible:focus-ring"
         onClick={onRemove}
       >
-        <X className="size-3" aria-hidden />
+        <Glyph name="x" className="size-3" />
       </button>
     </Chip>
   );
@@ -782,7 +770,7 @@ function GroupOptionButton({
         }}
       >
         {option.type === "date" ? (
-          <Calendar className="size-3 text-fg-muted" aria-hidden />
+          <Glyph name="calendar" className="size-3 text-fg-muted" />
         ) : null}
         <span className="min-w-0 flex-1 truncate">{option.label}</span>
       </PickerButton>
@@ -848,7 +836,7 @@ export function DataViewSwitcher({
         active={view === "list"}
         onClick={() => onViewChange?.("list")}
       >
-        <List className="glyph" aria-hidden />
+        <Glyph name="list" className="glyph" />
       </Button>
       <Button
         type="button"
@@ -859,7 +847,7 @@ export function DataViewSwitcher({
         active={view === "board"}
         onClick={() => onViewChange?.("board")}
       >
-        <Grid2X2 className="glyph" aria-hidden />
+        <Glyph name="grid-2x2" className="glyph" />
       </Button>
     </div>
   );

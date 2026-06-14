@@ -5,6 +5,8 @@ import { useIcon } from "./icon-registry";
 
 export interface GlyphProps {
   name: string;
+  /** Rendered when `name` resolves to no registered icon (e.g. `"help"`). */
+  fallbackName?: string;
   size?: number | string;
   className?: string;
   decorative?: boolean;
@@ -13,12 +15,15 @@ export interface GlyphProps {
 
 export function Glyph({
   name,
+  fallbackName,
   size,
   className,
   decorative = true,
   label,
 }: GlyphProps): ReactElement | null {
-  const Icon = useIcon(name);
+  const primary = useIcon(name);
+  const fallback = useIcon(fallbackName ?? "");
+  const Icon = primary ?? fallback;
   if (!Icon) return null;
   const accessibleLabel = decorative ? undefined : (label ?? name);
   const sizeStyle = size === undefined ? undefined : { width: size, height: size };

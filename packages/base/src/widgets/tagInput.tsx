@@ -1,6 +1,6 @@
 import { useState, type KeyboardEvent, type ReactElement } from "react";
-import { X } from "lucide-react";
 
+import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
 import { Button } from "../ui/button";
 import { Chip } from "../ui/chip";
@@ -57,7 +57,7 @@ function TagInputEdit({
             aria-label={`Remove ${tag}`}
             onClick={() => remove(index)}
           >
-            <X className="glyph" aria-hidden />
+            <Glyph name="x" className="glyph" />
           </Button>
         </Chip>
       ))}
