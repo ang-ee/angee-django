@@ -91,13 +91,12 @@ export function PageEditor({
           onChange={(next) => editor.setBody(typeof next === "string" ? next : "")}
         />
       ) : (
-        <div className="grid flex-1 place-content-center">
-          <EmptyState
-            icon="folder"
-            title={t("knowledge.editor.folderTitle")}
-            description={t("knowledge.editor.folderDescription")}
-          />
-        </div>
+        <EmptyState
+          fill
+          icon="folder"
+          title={t("knowledge.editor.folderTitle")}
+          description={t("knowledge.editor.folderDescription")}
+        />
       )}
     </div>
   );

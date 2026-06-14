@@ -7,6 +7,7 @@ import {
 } from "react-resizable-panels";
 
 import { Glyph } from "../chrome/Glyph";
+import { EmptyState } from "../fragments/EmptyState";
 import { useBaseT, type BaseMessageVars } from "../i18n";
 import { cn } from "../lib/cn";
 import { ScrollArea } from "../ui/scroll-area";
@@ -128,7 +129,12 @@ function defaultTabs(
       label: "Angee",
       icon: "agent",
       children: children ?? (
-        <EmptyState title={t("chatter.noAgent")} body={t("chatter.agentHint")} />
+        <EmptyState
+          icon="agent"
+          title={t("chatter.noAgent")}
+          description={t("chatter.agentHint")}
+          className="min-h-48 p-4"
+        />
       ),
     },
     {
@@ -137,8 +143,10 @@ function defaultTabs(
       icon: "comments",
       children: (
         <EmptyState
+          icon="comments"
           title={t("chatter.noComments")}
-          body={t("chatter.commentsHint")}
+          description={t("chatter.commentsHint")}
+          className="min-h-48 p-4"
         />
       ),
     },
@@ -148,30 +156,14 @@ function defaultTabs(
       icon: "activity",
       children: (
         <EmptyState
+          icon="activity"
           title={t("chatter.noActivity")}
-          body={t("chatter.activityHint")}
+          description={t("chatter.activityHint")}
+          className="min-h-48 p-4"
         />
       ),
     },
   ];
-}
-
-function EmptyState({
-  title,
-  body,
-}: {
-  title: React.ReactNode;
-  body: React.ReactNode;
-}): React.ReactElement {
-  return (
-    <div className="grid min-h-48 place-content-center gap-2 text-center">
-      <div className="mx-auto grid size-10 place-content-center rounded-md bg-accent-soft text-accent-soft-text [&_.glyph]:size-5">
-        <Glyph name="agent" />
-      </div>
-      <p className="text-sm font-semibold text-fg">{title}</p>
-      <p className="text-13 text-fg-muted">{body}</p>
-    </div>
-  );
 }
 
 function updateWidth(

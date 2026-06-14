@@ -137,10 +137,22 @@ visual-parity spot-check across both themes still recommended before release.
 - [x] Extract the `Spinner + "Loading…"` blocks into `ListLoadingFooter` (footer
       div, was ×3: ListView/RowsListView/GroupedList) + `ListLoadingInline` (span,
       was ×2: GroupedList) in `ListInternals`; dropped 3 now-unused Spinner imports.
-- [ ] Delete `Chatter`'s local `EmptyState`; use the shared fragment (match
-      `RevisionsTab`).
-- [ ] Add a centered/full-height variant to `EmptyState`; collapse the
-      `grid place-content-center` wrapper (×7 storage/knowledge).
+- [x] Delete `Chatter`'s local `EmptyState`; use the shared fragment. DONE: the
+      file-local `EmptyState` (a bare `min-h-48` block that hardcoded the `agent`
+      icon for ALL 3 default tabs) is gone; `defaultTabs` routes to the shared
+      fragment with per-tab icons (agent/comments/activity — fixes the wrong-icon
+      bug) + `description` + `className="min-h-48 p-4"`, matching how the NotePage
+      example already builds its Chatter tabs.
+- [x] Add a centered/full-height variant to `EmptyState`; collapse the
+      `grid place-content-center` wrapper (×7 storage/knowledge). DONE: `fill?`
+      prop wraps the panel in `grid min-h-full w-full flex-1 place-content-center`
+      (`min-h-full` not `h-full`, so a flex-col sibling can't force overflow; the
+      Card keeps its `min-h-64` intrinsic size, so it's byte-equivalent to the old
+      host wrappers — a centered modest card, not a stretched one). Collapsed all 7
+      wrappers: StoragePage ×2, KnowledgePage ×3, PageEditor ×1, BacklinksPanel ×1.
+      +`Fill` story. FOLLOW-UP: StoragePage:334 + the KnowledgePage detail slot host
+      a mixed `LoadingPanel`-OR-`EmptyState` wrapper — they only collapse once
+      `LoadingPanel` also gains a `fill` prop (do in the prop-vocab slice).
 - [ ] Preview renderers: have `useFileText`/`<FileText>` own loading/error so each
       renderer describes only its happy path.
 

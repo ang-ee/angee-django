@@ -36,3 +36,19 @@ export const Full: Story = {
     </div>
   ),
 };
+
+export const Fill: Story = {
+  name: "Fill (centered in parent)",
+  render: () => (
+    // `fill` grows the panel to fill — and center within — its parent, replacing
+    // the `grid place-content-center` wrapper hosts used to hand-roll.
+    <div className="grid h-96 rounded-md border border-border-subtle">
+      <EmptyState
+        fill
+        icon="note"
+        title="Select a page"
+        description="Choose a page from the navigator to start reading."
+      />
+    </div>
+  ),
+};

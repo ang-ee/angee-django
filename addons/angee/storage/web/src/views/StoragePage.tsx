@@ -256,19 +256,18 @@ export function StoragePage(): ReactElement {
   }
   if (drives.length === 0) {
     return (
-      <div className="grid h-full place-content-center p-8">
-        <EmptyState
-          icon="drive"
-          title={
-            drivesQuery.error
-              ? t("storage.drives.unavailableTitle")
-              : t("storage.drives.emptyTitle")
-          }
-          description={
-            drivesQuery.error?.message ?? t("storage.drives.emptyDescription")
-          }
-        />
-      </div>
+      <EmptyState
+        fill
+        icon="drive"
+        title={
+          drivesQuery.error
+            ? t("storage.drives.unavailableTitle")
+            : t("storage.drives.emptyTitle")
+        }
+        description={
+          drivesQuery.error?.message ?? t("storage.drives.emptyDescription")
+        }
+      />
     );
   }
 
@@ -364,13 +363,12 @@ function FilePreview({ file }: { file: StorageFile | null }): ReactElement {
   const t = useStorageT();
   if (!file) {
     return (
-      <div className="grid h-full place-content-center p-6">
-        <EmptyState
-          icon="file"
-          title={t("storage.preview.emptyTitle")}
-          description={t("storage.preview.emptyDescription")}
-        />
-      </div>
+      <EmptyState
+        fill
+        icon="file"
+        title={t("storage.preview.emptyTitle")}
+        description={t("storage.preview.emptyDescription")}
+      />
     );
   }
   const previewFile: PreviewFile = {

@@ -23,13 +23,12 @@ export function BacklinksPanel({
   const t = useKnowledgeT();
   if (backlinks.length === 0) {
     return (
-      <div className="grid h-full place-content-center p-6">
-        <EmptyState
-          icon="link"
-          title={t("knowledge.backlinks.emptyTitle")}
-          description={t("knowledge.backlinks.emptyDescription")}
-        />
-      </div>
+      <EmptyState
+        fill
+        icon="link"
+        title={t("knowledge.backlinks.emptyTitle")}
+        description={t("knowledge.backlinks.emptyDescription")}
+      />
     );
   }
 

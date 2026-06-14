@@ -173,19 +173,18 @@ export function KnowledgePage(): ReactElement {
   }
   if (vaults.length === 0) {
     return (
-      <div className="grid h-full place-content-center p-8">
-        <EmptyState
-          icon="vault"
-          title={
-            vaultsQuery.error
-              ? t("knowledge.vaults.unavailableTitle")
-              : t("knowledge.vaults.emptyTitle")
-          }
-          description={
-            vaultsQuery.error?.message ?? t("knowledge.vaults.emptyDescription")
-          }
-        />
-      </div>
+      <EmptyState
+        fill
+        icon="vault"
+        title={
+          vaultsQuery.error
+            ? t("knowledge.vaults.unavailableTitle")
+            : t("knowledge.vaults.emptyTitle")
+        }
+        description={
+          vaultsQuery.error?.message ?? t("knowledge.vaults.emptyDescription")
+        }
+      />
     );
   }
 
@@ -245,22 +244,20 @@ export function KnowledgePage(): ReactElement {
           ) : detailQuery.fetching || detail ? (
             <LoadingPanel message={t("knowledge.page.loading")} />
           ) : (
-            <div className="grid h-full place-content-center p-8">
-              <EmptyState
-                icon="note"
-                title={t("knowledge.page.notFoundTitle")}
-                description={t("knowledge.page.notFoundDescription")}
-              />
-            </div>
+            <EmptyState
+              fill
+              icon="note"
+              title={t("knowledge.page.notFoundTitle")}
+              description={t("knowledge.page.notFoundDescription")}
+            />
           )
         ) : (
-          <div className="grid h-full place-content-center p-8">
-            <EmptyState
-              icon="note"
-              title={t("knowledge.page.selectTitle")}
-              description={t("knowledge.page.selectDescription")}
-            />
-          </div>
+          <EmptyState
+            fill
+            icon="note"
+            title={t("knowledge.page.selectTitle")}
+            description={t("knowledge.page.selectDescription")}
+          />
         )}
       </Explorer>
     </WikilinkProvider>
