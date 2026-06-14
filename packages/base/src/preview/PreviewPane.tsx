@@ -8,6 +8,7 @@ import { usePreviews } from "@angee/sdk";
 
 import { EmptyState } from "../fragments/EmptyState";
 import { LoadingPanel } from "../fragments/LoadingPanel";
+import { useBaseT } from "../i18n";
 import { builtinPreviewProviders } from "./builtins";
 import { displayMime } from "./model";
 import {
@@ -36,6 +37,7 @@ export function PreviewPane({
   mime,
   fallback,
 }: PreviewPaneProps): ReactElement {
+  const t = useBaseT();
   const resolvedMime = mime ?? displayMime(file);
   // Addon-contributed providers first so one can override a built-in at an equal
   // priority (resolve sorts stably); built-ins are always available. The SDK
@@ -46,7 +48,7 @@ export function PreviewPane({
     [...runtimePreviews, ...builtinPreviewProviders],
     resolvedMime,
   );
-  const empty = fallback ?? <EmptyState title="No preview available" />;
+  const empty = fallback ?? <EmptyState title={t("preview.unavailable")} />;
   if (!provider) return <>{empty}</>;
 
   const Renderer = provider.component;
@@ -55,7 +57,7 @@ export function PreviewPane({
       fallback={empty}
       resetKey={`${provider.id}:${file.url}`}
     >
-      <Suspense fallback={<LoadingPanel message="Loading preview…" />}>
+      <Suspense fallback={<LoadingPanel message={t("preview.loading")} />}>
         <Renderer file={file} mime={resolvedMime} />
       </Suspense>
     </PreviewErrorBoundary>

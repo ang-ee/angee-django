@@ -59,6 +59,7 @@ import {
   type RecordDeleteAction,
 } from "./RecordActionBar";
 import { RelationFieldWidget } from "./RelationFieldWidget";
+import { useBaseT } from "../i18n";
 
 export type FieldKind = PageFieldKind;
 export type FormField = FieldDescriptor;
@@ -162,6 +163,7 @@ export function FormView({
   deleteAction,
   className,
 }: FormViewProps): React.ReactElement {
+  const t = useBaseT();
   const hasFieldChildren = hasPageField(children);
   const hasGroupChildren = hasDirectPageElement(children, "group");
   if (
@@ -607,7 +609,7 @@ export function FormView({
 
         </header>
 
-        <ErrorBanner description={saveError} title="Save failed" />
+        <ErrorBanner description={saveError} title={t("form.saveFailed")} />
 
         <div className="grid gap-6">
           {hasConditionalFields ? (

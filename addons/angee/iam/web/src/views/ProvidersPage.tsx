@@ -22,6 +22,7 @@ import {
   type DiscoverOidcEndpointsData,
   type IamIdVariables,
 } from "../documents";
+import { useIamT } from "../i18n";
 import { connectCallbackRedirectUri } from "../redirects";
 
 const MODEL = "OAuthClient";
@@ -52,6 +53,7 @@ function fieldString(value: unknown): string {
 
 /** OAuth/OIDC login providers (full CRUD plus enable/disable and discovery). */
 export function ProvidersPage(): React.ReactElement {
+  const t = useIamT();
   const [discoverEndpoints] = useAuthoredMutation<
     DiscoverOidcEndpointsData,
     IamIdVariables
@@ -87,18 +89,18 @@ export function ProvidersPage(): React.ReactElement {
       });
       const payload = result?.connectAccountStart;
       if (!payload?.authorizeUrl) {
-        throw new Error(payload?.error ?? "Could not start account connection.");
+        throw new Error(payload?.error ?? t("iam.providers.connect.startError"));
       }
       if (payload.mode !== "manual") {
         // Redirect-back flow: the browser leaves and the callback page completes.
         window.location.assign(payload.authorizeUrl);
-        return "Redirecting...";
+        return t("iam.providers.connect.redirecting");
       }
       // Manual flow: the provider only displays the code (no redirect back), so keep
       // this tab/session alive and let the user paste the `code#state` it shows. The
       // link is a real user gesture, so it is never popup-blocked.
       const entered = await ctx.prompt({
-        title: "Connect account",
+        title: t("iam.providers.action.connect"),
         body: (
           <span>
             <a
@@ -107,13 +109,17 @@ export function ProvidersPage(): React.ReactElement {
               rel="noreferrer"
               className="underline"
             >
-              Open the authorization page
+              {t("iam.providers.connect.openAuthorize")}
             </a>
-            , approve, then paste the code it shows below.
+            {t("iam.providers.connect.instructions")}
           </span>
         ),
         fields: [
-          { name: "pasted", label: "Authorization code", placeholder: "code#state" },
+          {
+            name: "pasted",
+            label: t("iam.providers.connect.codeLabel"),
+            placeholder: t("iam.providers.connect.codePlaceholder"),
+          },
         ],
       });
       if (!entered) return;
@@ -124,13 +130,13 @@ export function ProvidersPage(): React.ReactElement {
       const code = hash > 0 ? pasted.slice(0, hash) : "";
       const pastedState = hash > 0 ? pasted.slice(hash + 1) : "";
       if (!code || !pastedState) {
-        throw new Error("That code looks incomplete — paste the full value the page showed.");
+        throw new Error(t("iam.providers.connect.codeIncomplete"));
       }
       if (payload.state && pastedState !== payload.state) {
-        throw new Error("That code is from a different attempt — start the connection again.");
+        throw new Error(t("iam.providers.connect.codeMismatch"));
       }
       if (!payload.redirectUri) {
-        throw new Error("Connection state is incomplete — start the connection again.");
+        throw new Error(t("iam.providers.connect.stateIncomplete"));
       }
       const completed = await connectAccountComplete({
         code,
@@ -142,9 +148,9 @@ export function ProvidersPage(): React.ReactElement {
         throw new Error(done.error);
       }
       ctx.refresh();
-      return "Account connected.";
+      return t("iam.providers.connect.connected");
     },
-    [connectAccountStart, connectAccountComplete],
+    [connectAccountStart, connectAccountComplete, t],
   );
 
   return (
@@ -152,14 +158,14 @@ export function ProvidersPage(): React.ReactElement {
       {providerList}
       <Form model={MODEL}>
         <Field name="displayName" title />
-        <Group label="Client" columns={2}>
+        <Group label={t("iam.providers.group.client")} columns={2}>
           <Field name="slug" />
           <Field name="icon" />
           <Field name="environment" />
           <Field name="clientId" />
           <Field name="clientSecret" />
         </Group>
-        <Group label="Endpoints" columns={2}>
+        <Group label={t("iam.providers.group.endpoints")} columns={2}>
           <Field name="issuer" />
           <Field name="discoveryUrl" />
           <Field name="authorizeEndpoint" />
@@ -170,18 +176,18 @@ export function ProvidersPage(): React.ReactElement {
           <Field name="revokeEndpoint" />
           <Field name="manualRedirectUri" />
         </Group>
-        <Group label="Login policy" columns={2}>
+        <Group label={t("iam.providers.group.loginPolicy")} columns={2}>
           <Field name="isOidc" />
           <Field name="isEnabled" />
           <Field name="linkOnEmailMatch" />
           <Field name="createOnLogin" />
         </Group>
-        <Group label="Scopes" columns={2}>
+        <Group label={t("iam.providers.group.scopes")} columns={2}>
           <Field name="defaultScopes" widget="tagInput" />
           <Field name="scopesCatalogue" widget="tagInput" />
           <Field name="allowedEmailDomains" widget="tagInput" />
         </Group>
-        <Group label="OAuth metadata" columns={2}>
+        <Group label={t("iam.providers.group.oauthMetadata")} columns={2}>
           <Field name="authorizeParams" />
           <Field name="tokenParams" />
           <Field name="externalIdClaim" />
@@ -191,21 +197,21 @@ export function ProvidersPage(): React.ReactElement {
         </Group>
         <Action
           id="connect"
-          label="Connect account"
+          label={t("iam.providers.action.connect")}
           run={connect}
           visibleWhen={canConnectAccount}
         />
-        <Action id="discover" label="Discover endpoints" run={discover} />
+        <Action id="discover" label={t("iam.providers.action.discover")} run={discover} />
         <Action
           id="disable"
-          label="Disable"
+          label={t("iam.providers.action.disable")}
           danger
           set={{ isEnabled: false }}
           visibleWhen={(record) => record.isEnabled === true}
         />
         <Action
           id="enable"
-          label="Enable"
+          label={t("iam.providers.action.enable")}
           set={{ isEnabled: true }}
           visibleWhen={(record) => record.isEnabled === false}
         />

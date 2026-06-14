@@ -16,6 +16,7 @@ import {
   type RevealCredentialData,
   type RevealCredentialVariables,
 } from "../documents";
+import { useIamT } from "../i18n";
 
 const MODEL = "Credential";
 
@@ -31,6 +32,7 @@ const credentialList = (
 
 /** Per-user credential health (list / status / revoke / reveal); create via the form override. */
 export function CredentialsPage(): React.ReactElement {
+  const t = useIamT();
   const [revealCredential] = useAuthoredMutation<
     RevealCredentialData,
     RevealCredentialVariables
@@ -44,16 +46,22 @@ export function CredentialsPage(): React.ReactElement {
       const result = await revealCredential({ id: ctx.record.id });
       const secret = result?.revealCredential.secret ?? "";
       if (!secret) {
-        throw new Error("This credential has no stored secret to reveal.");
+        throw new Error(t("iam.credentials.reveal.noSecret"));
       }
       await ctx.prompt({
-        title: "Credential secret",
-        body: "Copy it now — it is shown on request only and never kept in the form.",
-        fields: [{ name: "secret", label: "Secret", defaultValue: secret, readOnly: true }],
-        confirm: "Done",
+        title: t("iam.credentials.reveal.title"),
+        body: t("iam.credentials.reveal.body"),
+        fields: [
+          {
+            name: "secret",
+            label: t("iam.credentials.reveal.secretLabel"),
+            defaultValue: secret,
+            readOnly: true,
+          },
+        ],
       });
     },
-    [revealCredential],
+    [revealCredential, t],
   );
 
   // Create uses the addon-registered `Credential` form override (a kind dropdown
@@ -63,21 +71,21 @@ export function CredentialsPage(): React.ReactElement {
     <Form model={MODEL}>
       <Field name="displayName" title readOnly />
       <Field name="status" widget="statusbar" />
-      <Group label="Health" columns={2}>
+      <Group label={t("iam.credentials.group.health")} columns={2}>
         <Field name="kind" readOnly />
         <Field name="expiresAt" readOnly />
         <Field name="lastRefreshAt" readOnly />
         <Field name="lastRefreshStatus" readOnly />
       </Group>
-      <Action id="reveal" label="Reveal secret" icon="eye" run={reveal} />
+      <Action id="reveal" label={t("iam.credentials.action.reveal")} icon="eye" run={reveal} />
       <Action
         id="revoke"
-        label="Revoke"
+        label={t("iam.revoke")}
         danger
         set={{ status: "revoked" }}
         confirm={{
-          title: "Revoke this credential?",
-          body: "Anything using it to authenticate will stop working.",
+          title: t("iam.credentials.revoke.title"),
+          body: t("iam.credentials.revoke.body"),
           danger: true,
         }}
         visibleWhen={(record) =>

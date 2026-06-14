@@ -126,6 +126,11 @@ export const enBaseMessages: Record<string, string> = {
   "chrome.primaryNav": "Primary navigation",
   "chrome.collapseChatter": "Collapse chatter",
   "chrome.openChatter": "Open chatter",
+  "form.saveFailed": "Save failed",
+  "preview.loading": "Loading preview…",
+  "preview.loadError": "Could not load file",
+  "preview.noInline": "No inline preview.",
+  "preview.unavailable": "No preview available",
 };
 
 export const enBaseBundle = { base: enBaseMessages } as const;

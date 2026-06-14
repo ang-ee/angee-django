@@ -3,6 +3,7 @@ import { Action, type ActionContext, Column, DataPage, Field, Form, Group, List 
 import { useAuthoredMutation } from "@angee/sdk";
 
 import { REFRESH_SOURCE_MUTATION, type IdVariables, type RefreshSourceData } from "../documents";
+import { useAgentsT } from "../i18n";
 
 // Skill sources are `integrate.Source` rows of kind "skill". The repository and its
 // VCS integration are set up in the integrate console; here a source points at a
@@ -11,6 +12,7 @@ const MODEL = "integrate.Source";
 const SKILL_DEFAULTS = { kind: "skill" };
 
 export function SourcesPage(): React.ReactElement {
+  const t = useAgentsT();
   const [refreshSource] = useAuthoredMutation<RefreshSourceData, IdVariables>(REFRESH_SOURCE_MUTATION);
   const refresh = React.useCallback(
     async (ctx: ActionContext) => {
@@ -43,13 +45,13 @@ export function SourcesPage(): React.ReactElement {
             `readOnly`) so the `createDefaults` "skill" seed is actually submitted —
             `mutationData` drops readOnly fields — then locked read-only on edit. */}
         <Field name="repository" createOnly />
-        <Group label="Pointer" columns={2}>
+        <Group label={t("agents.sources.pointer")} columns={2}>
           <Field name="kind" createOnly />
           <Field name="ref" />
         </Group>
         <Field name="path" />
         <Field name="lastSyncedAt" readOnly />
-        <Action id="refresh" label="Refresh skills" icon="refresh" run={refresh} />
+        <Action id="refresh" label={t("agents.sources.refreshSkills")} icon="refresh" run={refresh} />
       </Form>
     </DataPage>
   );

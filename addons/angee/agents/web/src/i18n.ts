@@ -16,6 +16,28 @@ export const enAgentsMessages: Record<string, string> = {
   "agents.inference.refreshModels": "Refresh models",
   "agents.inference.backend": "Backend",
   "agents.inference.catalogue": "Catalogue",
+
+  // AgentProvisioning — the embedded provisioning panel.
+  "agents.provisioning.title": "Provisioning",
+  "agents.provisioning.loading": "Loading…",
+  "agents.provisioning.saveFirst": "Save the agent to provision it.",
+  "agents.provisioning.intro":
+    "Render this agent into an operator workspace and service from its templates.",
+  "agents.provisioning.provision": "Provision",
+  "agents.provisioning.deprovision": "Deprovision",
+  "agents.provisioning.needsTemplate": "Set a workspace template on this agent first.",
+  "agents.provisioning.workspace": "Workspace",
+  "agents.provisioning.service": "Service",
+  "agents.provisioning.actionFailed": "The action failed.",
+  "agents.provisioning.provisionFailed": "Provisioning failed.",
+  "agents.provisioning.deprovisionFailed": "Deprovisioning failed.",
+  "agents.provisioning.confirmTitle": "Deprovision agent?",
+  "agents.provisioning.confirmBody":
+    "The operator workspace and its services will be destroyed. This cannot be undone.",
+
+  // SourcesPage — skill-source form.
+  "agents.sources.pointer": "Pointer",
+  "agents.sources.refreshSkills": "Refresh skills",
 };
 
 // A translator bound to the `agents` namespace: resolves against the host

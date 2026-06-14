@@ -184,11 +184,12 @@ visual-parity spot-check across both themes still recommended before release.
       component (`<FileText url>{(text) => happyPath}</FileText>`) owns the
       `useFileText` fetch + the `LoadingPanel`/`EmptyState` guard (was byte-identical
       in TextPreview + MarkdownPreview); both renderers now describe only the happy
-      path. Behavior-preserving (review-confirmed clean). FOLLOW-UP (out of scope,
-      surface-wide): the preview surface (`builtins`/`PreviewPane`) is not i18n'd —
-      "Loading preview…"/"Could not load file"/"No inline preview." are hardcoded
-      English (a T6 gap predating this slice); route the whole surface through
-      `useBaseT()` in its own slice.
+      path. Behavior-preserving (review-confirmed clean). DONE (final pass): the
+      preview surface is now i18n'd — `builtins` (`FileText` loading/error,
+      `FallbackPreview` no-inline) + `PreviewPane` (no-preview empty + Suspense
+      loading; gained its first `useBaseT`) route through `preview.*` keys in
+      `enBaseMessages`. `FormView`'s "Save failed" ErrorBanner title also routed
+      (`form.saveFailed`, FormView gained `useBaseT`). react-review clean.
 
 ## Phase 3 — Find-the-owner (T8) + SDK/no-owner lifts (T10)
 
@@ -697,9 +698,24 @@ visual-parity spot-check across both themes still recommended before release.
       `FrameToolbar`, `SectionTabs`): **kept for now** per decision. Revisit per
       fragment on first real consumer — delete vs promote. Note added so they
       aren't mistaken for live API.
-- [ ] Full sweep for any remaining hard-coded copy / raw lucide / `cn` violations
+- [~] Full sweep for any remaining hard-coded copy / raw lucide / `cn` violations
       after Phases 1–7 land (drift check: `grep` for `from "lucide-react"` outside
       icon-registry, `toLocaleDateString`, `error` tone, `.join(" ")` class merges).
+      DONE (final pass): drift greps CLEAN — (a) `lucide-react` outside the registry:
+      the only hits are addon `index` files contributing the `icons:` manifest field
+      (the icon-registry mechanism for addons), not raw rendering — correct; (b)
+      `.filter(Boolean).join(" ")`/`.join(" ")`: no className merges — BrandButton's is
+      an aria-id join (already noted), the rest are GraphQL selection/CSS-grid-area/
+      error joins; (c) retired `error`/`default` tone: `Kbd tone="default"` is its own
+      key-surface vocabulary (false positive), all `"error"` hits are state
+      discriminants / value-bucket keys; (d) `stateToneFromValue` calls all pass
+      `buckets`. Merged-in i18n gaps fixed: iam ProvidersPage/CredentialsPage/
+      OAuthConnectCallbackPage, agents AgentProvisioning/SourcesPage (Area A.1). STILL
+      OPEN: pre-existing T6 stragglers (base combobox/createApp/DeletePreviewDialog/
+      markdown toolbar; iam UsersPage/ExternalAccountsPage/credential-form; storage
+      StorageSettingsPage/FileDetail) — same `<Group>/<Action>/placeholder` pattern,
+      tracked for the addon/base i18n straggler slice. DataLens copy LEAVE (T19
+      storybook-only).
 - [~] Encode the new rules in `docs/frontend/guidelines.md` — DONE for the landed
       owners: two-axis color (`tone`×`variant`), i18n-commit (`useBaseT`/`use<Addon>T`
       on `useNamespaceT`, prop-default coalesce), `defineBaseAddon`, build-time

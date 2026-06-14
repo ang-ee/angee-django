@@ -1,5 +1,5 @@
 import { useAuthoredMutation } from "@angee/sdk";
-import { useCallback, type ReactNode } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
 
 import {
   OAuthCallback,
@@ -11,21 +11,25 @@ import {
   type ConnectAccountCompleteData,
   type ConnectAccountCompleteVariables,
 } from "./documents";
+import { useIamT } from "./i18n";
 import { connectCallbackRedirectUri } from "./redirects";
-
-const COPY: OAuthCallbackCopy = {
-  pendingTitle: "Connecting account...",
-  pendingBody: "Your account connection is being confirmed.",
-  errorTitle: "Could not connect account",
-  backHref: "/iam/providers",
-  backLabel: "Back to providers",
-  serverError: "The account callback can only be completed in a browser.",
-  missingInfo: "The account callback is missing required information.",
-  failure: "Could not connect account.",
-};
 
 /** OAuth account-connect redirect handler: completes the connect code exchange. */
 export function OAuthConnectCallbackPage(): ReactNode {
+  const t = useIamT();
+  const copy = useMemo<OAuthCallbackCopy>(
+    () => ({
+      pendingTitle: t("iam.connectCallback.completing"),
+      pendingBody: t("iam.connectCallback.confirming"),
+      errorTitle: t("iam.connectCallback.failedTitle"),
+      backHref: "/iam/providers",
+      backLabel: t("iam.connectCallback.backToProviders"),
+      serverError: t("iam.connectCallback.browserOnly"),
+      missingInfo: t("iam.connectCallback.missingInfo"),
+      failure: t("iam.connectCallback.completeError"),
+    }),
+    [t],
+  );
   const [connectAccountComplete] = useAuthoredMutation<
     ConnectAccountCompleteData,
     ConnectAccountCompleteVariables
@@ -35,15 +39,15 @@ export function OAuthConnectCallbackPage(): ReactNode {
     async (args) => {
       const payload = (await connectAccountComplete(args))?.connectAccountComplete;
       if (payload && !payload.error) return { ok: true, next: payload.next };
-      return { ok: false, error: payload?.error ?? COPY.failure };
+      return { ok: false, error: payload?.error ?? copy.failure };
     },
-    [connectAccountComplete],
+    [connectAccountComplete, copy.failure],
   );
 
   return (
     <OAuthCallback
       complete={complete}
-      copy={COPY}
+      copy={copy}
       fallbackRedirect="/iam/accounts"
       redirectUri={connectCallbackRedirectUri()}
     />

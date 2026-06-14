@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 
 import { EmptyState } from "../fragments/EmptyState";
 import { LoadingPanel } from "../fragments/LoadingPanel";
+import { useBaseT } from "../i18n";
 import { cn } from "../lib/cn";
 import { formatSize, isJsonMime } from "./model";
 import {
@@ -60,9 +61,10 @@ function FileText({
   url: string;
   children: (text: string) => ReactElement;
 }): ReactElement {
+  const t = useBaseT();
   const { text, loading, error } = useFileText(url);
-  if (loading) return <LoadingPanel message="Loading preview…" />;
-  if (error) return <EmptyState title="Could not load file" description={error.message} />;
+  if (loading) return <LoadingPanel message={t("preview.loading")} />;
+  if (error) return <EmptyState title={t("preview.loadError")} description={error.message} />;
   return children(text);
 }
 
@@ -109,11 +111,12 @@ function MarkdownPreview({ file }: PreviewProviderProps): ReactElement {
 }
 
 function FallbackPreview({ file }: PreviewProviderProps): ReactElement {
+  const t = useBaseT();
   return (
     <EmptyState
       icon="files"
       title={file.name}
-      description={file.size != null ? formatSize(file.size) : "No inline preview."}
+      description={file.size != null ? formatSize(file.size) : t("preview.noInline")}
     />
   );
 }

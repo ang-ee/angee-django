@@ -20,6 +20,7 @@ import {
   type IdVariables,
   type ProvisionAgentData,
 } from "../documents";
+import { useAgentsT } from "../i18n";
 
 const AGENT_MODEL = "agents.Agent";
 
@@ -49,6 +50,7 @@ export function AgentProvisioning({
   agentId: string;
   onChanged: () => void;
 }): React.ReactElement {
+  const t = useAgentsT();
   const { record, fetching, refetch } = useResourceRecord(AGENT_MODEL, agentId, {
     fields: [...PROVISION_FIELDS],
   });
@@ -66,11 +68,11 @@ export function AgentProvisioning({
   // (the daemon render failed), and refresh the agent + form on success.
   const settle = React.useCallback(
     (result: ActionResultData | undefined): void => {
-      if (!result?.ok) throw new Error(result?.message ?? "The action failed.");
+      if (!result?.ok) throw new Error(result?.message ?? t("agents.provisioning.actionFailed"));
       refetch();
       onChanged();
     },
-    [onChanged, refetch],
+    [onChanged, refetch, t],
   );
 
   const handleProvision = React.useCallback(async () => {
@@ -78,15 +80,15 @@ export function AgentProvisioning({
     try {
       settle((await provisionAgent({ id: agentId }))?.provisionAgent);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Provisioning failed.");
+      setError(caught instanceof Error ? caught.message : t("agents.provisioning.provisionFailed"));
     }
-  }, [agentId, provisionAgent, settle]);
+  }, [agentId, provisionAgent, settle, t]);
 
   const handleDeprovision = React.useCallback(async () => {
     const confirmed = await confirm({
-      title: "Deprovision agent?",
-      body: "The operator workspace and its services will be destroyed. This cannot be undone.",
-      confirm: "Deprovision",
+      title: t("agents.provisioning.confirmTitle"),
+      body: t("agents.provisioning.confirmBody"),
+      confirm: t("agents.provisioning.deprovision"),
       danger: true,
     });
     if (!confirmed) return;
@@ -94,9 +96,9 @@ export function AgentProvisioning({
     try {
       settle((await deprovisionAgent({ id: agentId }))?.deprovisionAgent);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Deprovisioning failed.");
+      setError(caught instanceof Error ? caught.message : t("agents.provisioning.deprovisionFailed"));
     }
-  }, [agentId, confirm, deprovisionAgent, settle]);
+  }, [agentId, confirm, deprovisionAgent, settle, t]);
 
   const agent = record as AgentProvisionRecord | null;
   const provisioned = Boolean(agent?.workspace);
@@ -105,12 +107,12 @@ export function AgentProvisioning({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Provisioning</CardTitle>
+        <CardTitle>{t("agents.provisioning.title")}</CardTitle>
       </CardHeader>
       <CardContent>
         {!agent ? (
           <p className="text-13 text-fg-muted">
-            {fetching ? "Loading…" : "Save the agent to provision it."}
+            {fetching ? t("agents.provisioning.loading") : t("agents.provisioning.saveFirst")}
           </p>
         ) : (
           <div className="flex flex-col gap-4">
@@ -119,9 +121,17 @@ export function AgentProvisioning({
               <>
                 <OperatorTransportProvider>
                   {agent.workspace ? (
-                    <WorkspacesSection names={[agent.workspace]} title="Workspace" />
+                    <WorkspacesSection
+                      names={[agent.workspace]}
+                      title={t("agents.provisioning.workspace")}
+                    />
                   ) : null}
-                  {agent.service ? <ServicesSection names={[agent.service]} title="Service" /> : null}
+                  {agent.service ? (
+                    <ServicesSection
+                      names={[agent.service]}
+                      title={t("agents.provisioning.service")}
+                    />
+                  ) : null}
                 </OperatorTransportProvider>
                 <div className="flex justify-end">
                   <Button
@@ -132,15 +142,13 @@ export function AgentProvisioning({
                     onClick={() => void handleDeprovision()}
                   >
                     <Glyph name="trash" />
-                    Deprovision
+                    {t("agents.provisioning.deprovision")}
                   </Button>
                 </div>
               </>
             ) : (
               <div className="flex flex-col items-start gap-2">
-                <p className="text-13 text-fg-muted">
-                  Render this agent into an operator workspace and service from its templates.
-                </p>
+                <p className="text-13 text-fg-muted">{t("agents.provisioning.intro")}</p>
                 <Button
                   type="button"
                   variant="primary"
@@ -150,10 +158,10 @@ export function AgentProvisioning({
                   onClick={() => void handleProvision()}
                 >
                   <Glyph name="plus" />
-                  Provision
+                  {t("agents.provisioning.provision")}
                 </Button>
                 {!hasWorkspaceTemplate ? (
-                  <p className="text-13 text-fg-muted">Set a workspace template on this agent first.</p>
+                  <p className="text-13 text-fg-muted">{t("agents.provisioning.needsTemplate")}</p>
                 ) : null}
               </div>
             )}
