@@ -3,9 +3,11 @@ import { describe, expect, test } from "vitest";
 import {
   DND_MIME,
   dragHasAcceptedType,
+  dragSourceProps,
   readDndPayload,
   writeDndPayload,
 } from "./dnd";
+import type { DragEvent } from "react";
 
 /** A minimal DataTransfer stand-in (happy-dom's is incomplete for setData). */
 function fakeTransfer(): DataTransfer {
@@ -36,5 +38,15 @@ describe("dnd seam", () => {
 
   test("readDndPayload returns null for a foreign/empty transfer", () => {
     expect(readDndPayload(fakeTransfer())).toBeNull();
+  });
+
+  test("dragSourceProps writes the payload on drag, or stays inert when null", () => {
+    expect(dragSourceProps(null)).toBeUndefined();
+
+    const props = dragSourceProps({ type: "storage.file", data: { id: "f1" } });
+    expect(props?.draggable).toBe(true);
+    const dt = fakeTransfer();
+    props?.onDragStart({ dataTransfer: dt } as unknown as DragEvent);
+    expect(readDndPayload<{ id: string }>(dt)?.data.id).toBe("f1");
   });
 });

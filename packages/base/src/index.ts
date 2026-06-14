@@ -13,8 +13,10 @@ export {
   readDndPayload,
   dragHasAcceptedType,
   useDraggable,
+  dragSourceProps,
   useDropTarget,
   type DndPayload,
+  type DragSourceProps,
   type UseDropTargetOptions,
 } from "./lib";
 

@@ -108,6 +108,25 @@ export function useDraggable<TData = unknown>(
   };
 }
 
+export type DragSourceProps =
+  | { draggable: true; onDragStart: DragEventHandler }
+  | undefined;
+
+/**
+ * Native drag-source props for an element carrying a typed payload — spread the
+ * result onto the element. Returns `undefined` (no `draggable`) when the payload
+ * is null, so a non-draggable row/card stays inert. The non-hook companion to
+ * {@link useDraggable}, for per-item maps where a hook can't run (list rows,
+ * gallery cards).
+ */
+export function dragSourceProps(payload: DndPayload | null): DragSourceProps {
+  if (!payload) return undefined;
+  return {
+    draggable: true,
+    onDragStart: (event) => writeDndPayload(event.dataTransfer, payload),
+  };
+}
+
 export interface UseDropTargetOptions<TData = unknown> {
   /** Payload `type`s this target accepts. Omit to accept any angee payload. */
   accept?: string | readonly string[];

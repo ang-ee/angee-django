@@ -213,11 +213,27 @@ visual-parity spot-check across both themes still recommended before release.
 - [x] Floating overlay surface → consume `POPUP_BASE` (popover's exported content
       surface) in nav-menu (`popup` slot), select, dropdown, context. Tooltip left
       separate (uses `bg-tooltip`, a different surface).
-- [ ] One data-view shell over injected surface hooks (collapse `ListView`/
-      `RowsListView`); fold `GroupedList` table/fetch/status/footer into shared
-      surface; one activation/card primitive (list/board/gallery) owning
-      `href`/`onActivate`/keyboard/selection/DnD (BoardView reads
-      `selectedIds`/`interactive`).
+- [~] Data-view shell — the FOUNDATION already shipped pre-session
+      (`views/data-view-surface.ts` `useDataViewSurface`/`useRowsDataViewSurface`,
+      lean `ListView`, `GroupListView` re-export stub, shared `FlatListBody` in
+      `ListInternals`). Re-scoped the rest against the current code:
+      • **ListView/RowsListView — clean, LEAVE**: both lean, share `FlatListBody`
+        + the presentation surface; the only difference is the data source
+        (`useDataViewSurface` server-fetch vs `useRowsDataViewSurface` client-rows)
+        — a deliberate, not duplicated, fork.
+      • **activation/card primitive — DONE the genuine bit**: extracted
+        `dragSourceProps(payload)` into `lib/dnd.ts` (the non-hook companion to
+        `useDraggable`; +unit test), routed list rows (`rowDragProps` deleted) and
+        gallery cards through it. The broader `ActivatableCard` is LEAVE-SEPARATE:
+        list row (`<tr>`, must intercept click+Enter — no native anchor), gallery
+        card (`<a>`/button, native or Enter+Space), and board card (click-only, no
+        selection/DnD) have different DOM + interaction contracts; one primitive
+        would over-parameterize and risk core interactions.
+      • **fold `GroupedList` status/footer — STILL OPEN** (PARTIAL): its per-bucket
+        fetch+table is a necessary fork, but the loading/empty/error status and the
+        measure-footer + item-pager duplicate `FlatListBody`/`FlatMeasureFooter`.
+        The one remaining genuine data-view de-fork; medium value/risk (27k of
+        folded-group code).
 - [~] One field stack — DONE the genuine parts: extracted shared `RequiredMark`
       (3 sites: `Label`, `FieldLabel`, `FieldRow`) + `OptionalHint` (2 sites:
       `Label`, `FieldLabel`) into `ui/label.tsx` (the foundational label owner;

@@ -2,7 +2,7 @@ import type { ReactElement, ReactNode } from "react";
 import type { Row } from "@angee/sdk";
 
 import { cn } from "../lib/cn";
-import { writeDndPayload, type DndPayload } from "../lib/dnd";
+import { dragSourceProps, type DndPayload } from "../lib/dnd";
 import { Card } from "../ui/card";
 import { Checkbox } from "../ui/checkbox";
 
@@ -117,13 +117,7 @@ function GalleryCard<TRow extends Row>({
       "cursor-pointer hover:border-border-strong focus-visible:focus-ring",
     selected && "border-brand",
   );
-  const dragProps = dragPayload
-    ? {
-        draggable: true,
-        onDragStart: (event: React.DragEvent) =>
-          writeDndPayload(event.dataTransfer, dragPayload),
-      }
-    : undefined;
+  const dragProps = dragSourceProps(dragPayload ?? null);
   const title = cardTitle(row, titleField);
   // Card body (custom or default) plus the selection checkbox overlay — kept at
   // card level so a custom `renderCard` still gets selection. The checkbox stops

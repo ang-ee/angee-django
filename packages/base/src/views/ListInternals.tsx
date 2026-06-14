@@ -28,7 +28,7 @@ import { Spinner } from "../ui/spinner";
 import { Glyph } from "../chrome/Glyph";
 import { useBaseT } from "../i18n";
 import { RelativeTime } from "../fragments/RelativeTime";
-import { writeDndPayload, type DndPayload } from "../lib/dnd";
+import { dragSourceProps, type DndPayload, type DragSourceProps } from "../lib/dnd";
 import { titleCase } from "../lib/titleCase";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -531,7 +531,7 @@ export function RecordRow<TRow extends Row>({
   onRowClick?: (row: TRow) => void;
   draggableRow?: (row: TRow) => DndPayload | null;
 }): React.ReactElement {
-  const dragProps = rowDragProps(draggableRow?.(row.original) ?? null);
+  const dragProps = dragSourceProps(draggableRow?.(row.original) ?? null);
   const href = rowHref?.(row.original);
   if (href) {
     return (
@@ -556,19 +556,6 @@ export function RecordRow<TRow extends Row>({
   );
 }
 
-type RowDragProps =
-  | { draggable: true; onDragStart: React.DragEventHandler }
-  | undefined;
-
-/** Native-drag props for a row carrying a dnd payload (the wire format seam). */
-function rowDragProps(payload: DndPayload | null): RowDragProps {
-  if (!payload) return undefined;
-  return {
-    draggable: true,
-    onDragStart: (event) => writeDndPayload(event.dataTransfer, payload),
-  };
-}
-
 function LinkedRecordRow<TRow extends Row>({
   row,
   dataView,
@@ -580,7 +567,7 @@ function LinkedRecordRow<TRow extends Row>({
   dataView: DataViewContextValue;
   selectable: boolean;
   href: string;
-  dragProps?: RowDragProps;
+  dragProps?: DragSourceProps;
 }): React.ReactElement {
   const id = row.id;
   const selected = dataView.state.selectedIds.has(id);
@@ -651,7 +638,7 @@ function PlainRecordRow<TRow extends Row>({
   interactive: boolean;
   selectable: boolean;
   onRowClick?: (row: TRow) => void;
-  dragProps?: RowDragProps;
+  dragProps?: DragSourceProps;
 }): React.ReactElement {
   const id = row.id;
   const selected = dataView.state.selectedIds.has(id);
