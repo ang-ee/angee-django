@@ -446,7 +446,7 @@ function DataPageBody<TRow extends Row = Row>({
 
   if (placement === "drawer") {
     return (
-      <div className={["flex flex-col gap-3", className].filter(Boolean).join(" ")}>
+      <div className={cn("flex flex-col gap-3", className)}>
         {list}
         <DialogRoot
           open={open}

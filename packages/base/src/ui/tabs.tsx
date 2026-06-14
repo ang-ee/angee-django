@@ -8,6 +8,7 @@ import type {
   TabsTabProps as BaseTabsTabProps,
 } from "@base-ui/react/tabs";
 
+import { createVariantContext } from "../lib/variant-context";
 import { tv, type VariantProps } from "../lib/variants";
 
 export const tabsVariants = tv({
@@ -52,7 +53,8 @@ type TabsRecipeProps = VariantProps<typeof tabsVariants>;
 
 export type TabsVariant = NonNullable<TabsRecipeProps["variant"]>;
 
-const TabsVariantContext = React.createContext<TabsVariant>("card");
+const { Provider: TabsVariantProvider, useVariant: useTabsVariant } =
+  createVariantContext<TabsVariant>("card");
 
 export type TabsRootProps = Omit<BaseTabsRootProps, "className"> &
   Pick<TabsRecipeProps, "variant"> & {
@@ -63,14 +65,14 @@ export const TabsRoot = React.forwardRef<HTMLDivElement, TabsRootProps>(
   function TabsRoot({ className, variant = "card", ...props }, ref) {
     const styles = tabsVariants({ variant });
     return (
-      <TabsVariantContext.Provider value={variant}>
+      <TabsVariantProvider value={variant}>
         <BaseTabs.Root
           ref={ref}
           className={styles.root({ className })}
           data-variant={variant}
           {...props}
         />
-      </TabsVariantContext.Provider>
+      </TabsVariantProvider>
     );
   },
 );
@@ -186,8 +188,3 @@ export const Tabs = Object.assign(TabsRoot, {
   Panel: TabsPanel,
   Count: TabsCount,
 });
-
-function useTabsVariant(variant: TabsVariant | undefined): TabsVariant {
-  const contextVariant = React.useContext(TabsVariantContext);
-  return variant ?? contextVariant;
-}

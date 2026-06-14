@@ -9,6 +9,7 @@ import type {
 } from "@base-ui/react/accordion";
 
 import { Glyph } from "../chrome/Glyph";
+import { createVariantContext } from "../lib/variant-context";
 import { tv, type VariantProps } from "../lib/variants";
 
 export const accordionVariants = tv({
@@ -52,8 +53,8 @@ export const accordionVariants = tv({
 export type AccordionRecipeProps = VariantProps<typeof accordionVariants>;
 export type AccordionVariant = NonNullable<AccordionRecipeProps["variant"]>;
 
-const AccordionVariantContext =
-  React.createContext<AccordionVariant>("default");
+const { Provider: AccordionVariantProvider, useVariant: useAccordionVariant } =
+  createVariantContext<AccordionVariant>("default");
 
 export type AccordionRootProps<Value = any> = Omit<
   BaseAccordionRootProps<Value>,
@@ -69,14 +70,14 @@ export const AccordionRoot = React.forwardRef<
 >(function AccordionRoot({ className, variant = "default", ...props }, ref) {
   const styles = accordionVariants({ variant });
   return (
-    <AccordionVariantContext.Provider value={variant}>
+    <AccordionVariantProvider value={variant}>
       <BaseAccordion.Root
         ref={ref}
         className={styles.root({ className })}
         data-variant={variant}
         {...props}
       />
-    </AccordionVariantContext.Provider>
+    </AccordionVariantProvider>
   );
 });
 AccordionRoot.displayName = "AccordionRoot";
@@ -204,10 +205,3 @@ export const Accordion = Object.assign(AccordionRoot, {
   Icon: AccordionIcon,
   Panel: AccordionPanel,
 });
-
-function useAccordionVariant(
-  variant: AccordionVariant | undefined,
-): AccordionVariant {
-  const contextVariant = React.useContext(AccordionVariantContext);
-  return variant ?? contextVariant;
-}

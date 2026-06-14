@@ -13,6 +13,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
+import { cn } from "../lib/cn";
 import { type Tone } from "../lib/tones";
 import { Badge } from "../ui/badge";
 import { Code } from "../ui/code";
@@ -159,7 +160,7 @@ export function GraphView<
   );
 
   return (
-    <div className={["min-h-0", className].filter(Boolean).join(" ")}>
+    <div className={cn("min-h-0", className)}>
       <ReactFlow
         nodes={graph.nodes}
         edges={graph.edges}

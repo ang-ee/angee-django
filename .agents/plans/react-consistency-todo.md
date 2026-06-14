@@ -223,8 +223,10 @@ visual-parity spot-check across both themes still recommended before release.
       (tagInput/many2many).
 - [ ] One command palette: make `Spotlight`/`ui/command` the owner; delete/retire
       `GlobalSearch` (wire the real palette into `TopBar`).
-- [ ] `createVariantContext` → tabs/accordion/collapsible; `FormSectionKicker`
-      composes `SectionEyebrow`; shared `ControlRow` (switch/radio/field).
+- [x] `createVariantContext` (`lib/variant-context.tsx`) → tabs/accordion/
+      collapsible consume it (replaced 3 local `createContext + useXVariant`).
+- [ ] `FormSectionKicker` composes `SectionEyebrow`; shared `ControlRow`
+      (switch/radio/field). (Still open — separate from the variant-context dedup.)
 - [ ] `InlineNameField` (storage/knowledge ×3); `RefreshingBadge`;
       `SectionNav`/`SectionTabs` one routed section-nav owner; one metric
       `MetricTile`+`MetricCollection`.
@@ -259,7 +261,8 @@ visual-parity spot-check across both themes still recommended before release.
 - [ ] Standardize default `size` (switch/toggle-group `sm`→`md` or document);
       unify icon-size spelling (`iconSm/Md/Lg` vs `icon/icon-sm`); reconcile
       `badge.shape` vs `chip.shape` defaults.
-- [ ] Class-merge: replace `.filter(Boolean).join(" ")` with `cn()` in list views.
+- [x] Class-merge: `.filter(Boolean).join(" ")` → `cn()` in `DataPage`/`GraphView`
+      (BrandButton's is an aria-id join, left alone).
 - [ ] Pick one primitive namespace-export convention (Select/Tooltip split).
 - [ ] Storybook: kill dead `args`/`argTypes` ignored by `render: () =>` (~30
       files); one `runtime-fixtures` owner (provider stack + `jsonResponse` + CSRF,

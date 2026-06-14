@@ -7,6 +7,7 @@ import type {
 } from "@base-ui/react/collapsible";
 
 import { Glyph } from "../chrome/Glyph";
+import { createVariantContext } from "../lib/variant-context";
 import { tv, type VariantProps } from "../lib/variants";
 
 export const collapsibleVariants = tv({
@@ -52,8 +53,10 @@ export type CollapsibleRecipeProps = VariantProps<
 export type CollapsibleVariant =
   NonNullable<CollapsibleRecipeProps["variant"]>;
 
-const CollapsibleVariantContext =
-  React.createContext<CollapsibleVariant>("default");
+const {
+  Provider: CollapsibleVariantProvider,
+  useVariant: useCollapsibleVariant,
+} = createVariantContext<CollapsibleVariant>("default");
 
 export type CollapsibleRootProps = Omit<
   BaseCollapsibleRootProps,
@@ -72,14 +75,14 @@ export const CollapsibleRoot = React.forwardRef<
 ) {
   const styles = collapsibleVariants({ variant });
   return (
-    <CollapsibleVariantContext.Provider value={variant}>
+    <CollapsibleVariantProvider value={variant}>
       <BaseCollapsible.Root
         ref={ref}
         className={styles.root({ className })}
         data-variant={variant}
         {...props}
       />
-    </CollapsibleVariantContext.Provider>
+    </CollapsibleVariantProvider>
   );
 });
 CollapsibleRoot.displayName = "CollapsibleRoot";
@@ -157,10 +160,3 @@ export const Collapsible = Object.assign(CollapsibleRoot, {
   Icon: CollapsibleIcon,
   Panel: CollapsiblePanel,
 });
-
-function useCollapsibleVariant(
-  variant: CollapsibleVariant | undefined,
-): CollapsibleVariant {
-  const contextVariant = React.useContext(CollapsibleVariantContext);
-  return variant ?? contextVariant;
-}
