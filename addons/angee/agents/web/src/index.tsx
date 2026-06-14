@@ -9,9 +9,7 @@ import { SkillsPage } from "./views/SkillsPage";
 const AGENTS_ID = "agents";
 
 const agentsRoutes: readonly BaseAddonRoute[] = [
-  // The rail root and the dropdown leaf both target this route; `menu` picks the
-  // leaf as the chrome (title/icon/breadcrumb) owner.
-  { name: "agents.agents", path: "/agents", shell: "console", component: AgentsPage, menu: "agents.agents" },
+  { name: "agents.agents", path: "/agents", shell: "console", component: AgentsPage },
   { name: "agents.agent", path: "/agents/$id", shell: "console", parent: "agents.agents" },
   // Static segments outrank the `/agents/$id` param route.
   { name: "agents.templates", path: "/agents/templates", shell: "console", component: TemplatesPage },
@@ -31,11 +29,13 @@ const agentsRoutes: readonly BaseAddonRoute[] = [
 // child that itself has children renders as a dropdown (see chrome `TopMenu`).
 const agentsMenu: readonly BaseMenuItem[] = [
   {
+    // Route-less app root: the rail icon resolves its target through the first
+    // descendant with one (here `agents.agents` → `/agents`), so the route is
+    // referenced by a single menu item and needs no chrome disambiguation.
     id: AGENTS_ID,
     label: "Agents",
     icon: "agent",
     group: "platform",
-    route: "agents.agents",
     children: [
       {
         id: "agents.menu.agents",
