@@ -131,6 +131,31 @@ export class MenuTree {
   }
 
   /**
+   * Every navigable destination for the command palette: each leaf carrying its
+   * own resolved `target`, paired with its root ancestor (so the palette groups
+   * by app). Parents that only borrow a child's target are skipped — their
+   * leaves carry the real destinations — as are the chrome action menus
+   * (systray/user) and their entries. Build-order deterministic (`byId`).
+   */
+  navigableItems(): readonly {
+    item: ChromeMenuNode;
+    root: ChromeMenuNode;
+    target: string;
+  }[] {
+    const result: { item: ChromeMenuNode; root: ChromeMenuNode; target: string }[] = [];
+    for (const node of this.byId.values()) {
+      if (CHROME_MENU_PARENT_IDS.has(node.id)) continue;
+      const target = node.target;
+      if (!target || target === "#") continue;
+      if (node.targetedChildren.length) continue;
+      const root = this.trailFor(node.id)[0];
+      if (root && CHROME_MENU_PARENT_IDS.has(root.id)) continue;
+      result.push({ item: node, root: root ?? node, target });
+    }
+    return result;
+  }
+
+  /**
    * The active app's section links for the top bar: the children of the root
    * the current path belongs to, rendered flat. Apps live in the rail /
    * app-switcher; the top bar navigates *within* the active app, so a sibling

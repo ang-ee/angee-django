@@ -125,9 +125,9 @@ test.describe("notes list — functions & buttons", () => {
     await expect(signOut).toBeVisible();
   });
 
-  test("global search is present in the top chrome", async ({ page }) => {
+  test("the command palette is present in the top chrome", async ({ page }) => {
     const notes = new NotesPage(page);
     await notes.gotoReady();
-    await expect(notes.globalSearch).toBeVisible();
+    await expect(notes.commandPalette).toBeVisible();
   });
 });

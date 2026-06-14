@@ -125,7 +125,9 @@ describe("ConsoleShell", () => {
     expect(within(topBar).getByText("All notes")).toBeTruthy();
     expect(within(topBar).getByText("Archived")).toBeTruthy();
     expect(within(topBar).queryByText("Ops")).toBeNull();
-    expect(screen.getByRole("search", { name: "Global search" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Open command palette" }),
+    ).toBeTruthy();
 
     const breadcrumb = screen.getByRole("navigation", { name: "Breadcrumb" });
     expect(within(breadcrumb).getByText("Notes").getAttribute("aria-current"))

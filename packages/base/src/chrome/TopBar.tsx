@@ -5,7 +5,7 @@ import { cn } from "../lib/cn";
 import { useChatter } from "../communication/chatter-context";
 import { Button } from "../ui/button";
 import { Tooltip } from "../ui/tooltip";
-import { GlobalSearch } from "./GlobalSearch";
+import { CommandPalette } from "./CommandPalette";
 import { Glyph } from "./Glyph";
 import { Systray } from "./Systray";
 import { TopMenu, type TopMenuProps } from "./TopMenu";
@@ -62,7 +62,9 @@ export function TopBar({
       />
       <div className="min-w-2 flex-1" />
       {children}
-      {hideSearch ? null : <GlobalSearch placeholder={searchPlaceholder} />}
+      {hideSearch ? null : (
+        <CommandPalette triggerPlaceholder={searchPlaceholder} />
+      )}
       {hideSystray ? null : (
         <Systray onHelp={onHelp} onNotifications={onNotifications} />
       )}

@@ -181,8 +181,8 @@ export class NotesPage extends PageObject {
   }
 
   // --- chrome ---
-  get globalSearch(): Locator {
-    return this.page.getByRole("search");
+  get commandPalette(): Locator {
+    return this.page.getByRole("button", { name: /open command palette/i });
   }
   /** Open the user menu and return its sign-out item. */
   async openUserMenu(): Promise<Locator> {

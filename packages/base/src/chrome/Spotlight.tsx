@@ -1,6 +1,7 @@
 import {
   useEffect,
   useMemo,
+  useRef,
   type ReactElement,
   type ReactNode,
 } from "react";
@@ -16,7 +17,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Kbd } from "../ui/kbd";
-import { Glyph } from "./Glyph";
+import { renderGlyph } from "./Glyph";
 
 export interface SpotlightCommand {
   id: string;
@@ -36,6 +37,10 @@ export interface SpotlightProps {
 }
 
 export function useSpotlightShortcut(onToggle: () => void): void {
+  // Keep the latest callback in a ref so the global listener mounts once —
+  // callers can pass a fresh arrow each render without re-subscribing.
+  const onToggleRef = useRef(onToggle);
+  onToggleRef.current = onToggle;
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent): void {
       if (event.repeat || event.isComposing) return;
@@ -44,12 +49,12 @@ export function useSpotlightShortcut(onToggle: () => void): void {
       }
       if (isTextEntryTarget(event.target)) return;
       event.preventDefault();
-      onToggle();
+      onToggleRef.current();
     }
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onToggle]);
+  }, []);
 }
 
 export function Spotlight({
@@ -96,7 +101,7 @@ export function Spotlight({
                         value={commandValue(command)}
                         onSelect={() => runCommand(command)}
                       >
-                        {command.icon ? renderCommandIcon(command.icon) : null}
+                        {command.icon ? renderGlyph(command.icon) : null}
                         <span className="min-w-0 flex-1 truncate">
                           {command.title}
                         </span>
@@ -141,10 +146,6 @@ function groupCommands(
 function commandValue(command: SpotlightCommand): string {
   if (command.searchValue) return command.searchValue;
   return typeof command.title === "string" ? command.title : command.id;
-}
-
-function renderCommandIcon(icon: ReactNode | string): ReactNode {
-  return typeof icon === "string" ? <Glyph name={icon} /> : icon;
 }
 
 function isTextEntryTarget(target: EventTarget | null): boolean {

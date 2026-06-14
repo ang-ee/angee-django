@@ -57,6 +57,62 @@ describe("appSectionItems", () => {
   });
 });
 
+describe("navigableItems", () => {
+  test("returns navigable leaves paired with their root app, in build order", () => {
+    expect(
+      MenuTree.from(MENU)
+        .navigableItems()
+        .map(({ item, root, target }) => ({ id: item.id, root: root.id, target })),
+    ).toEqual([
+      { id: "notes.all", root: "notes", target: "/notes" },
+      { id: "notes.archive", root: "notes", target: "/notes/archive" },
+      { id: "operator.overview", root: "operator", target: "/operator" },
+      { id: "operator.services", root: "operator", target: "/operator/services" },
+      { id: "single", root: "single", target: "/single" },
+    ]);
+  });
+
+  test("excludes a parent that only borrows a child's target — the leaf carries it", () => {
+    const ids = MenuTree.from(MENU)
+      .navigableItems()
+      .map(({ item }) => item.id);
+    // `operator` resolves /operator from its first child; `notes` has its own
+    // `to` but also children — both are parents, so their leaves carry targets.
+    expect(ids).not.toContain("operator");
+    expect(ids).not.toContain("notes");
+  });
+
+  test("excludes the chrome action menus (systray/user) and their entries", () => {
+    const ids = MenuTree.from([
+      { id: "notes", label: "Notes", to: "/notes" },
+      {
+        id: "user",
+        label: "User",
+        children: [{ id: "user.profile", label: "Profile", to: "/profile" }],
+      },
+      {
+        id: "systray",
+        label: "Systray",
+        children: [{ id: "systray.help", label: "Help", to: "/help" }],
+      },
+    ])
+      .navigableItems()
+      .map(({ item }) => item.id);
+    expect(ids).toEqual(["notes"]);
+  });
+
+  test("skips entries with no target or a '#' placeholder", () => {
+    const ids = MenuTree.from([
+      { id: "real", label: "Real", to: "/real" },
+      { id: "placeholder", label: "Placeholder", to: "#" },
+      { id: "labelOnly", label: "Label only" },
+    ])
+      .navigableItems()
+      .map(({ item }) => item.id);
+    expect(ids).toEqual(["real"]);
+  });
+});
+
 describe("trailFor", () => {
   test("walks nested and parent-linked ancestors", () => {
     const tree = MenuTree.from([
