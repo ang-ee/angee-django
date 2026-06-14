@@ -1,6 +1,6 @@
 import type { BaseAddonRoute, BaseMenuItem } from "@angee/base";
 import { defineBaseAddon } from "@angee/base";
-import { BookOpen, FileStack, FileText, Library, Link2 } from "lucide-react";
+import { BookOpen, FileStack, FileText, Library } from "lucide-react";
 
 import { enKnowledgeMessages } from "./i18n";
 import { KnowledgePage, PageCrumb } from "./views/KnowledgePage";
@@ -62,7 +62,7 @@ const knowledge = defineBaseAddon({
     vault: Library,
     note: FileText,
     template: FileStack,
-    link: Link2,
+    // `link` now resolves from the base registry (added for the markdown toolbar).
   },
 });
 

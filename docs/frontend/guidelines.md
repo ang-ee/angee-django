@@ -95,7 +95,12 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 - **Add every new addon web package to the app CSS `@source`** — its unique
   arbitrary Tailwind classes silently fail to generate otherwise.
 - **Shared/generic icon glyphs live in the base `chrome/icon-registry.ts`** —
-  registration is fail-fast, so an addon cannot re-register another's glyph.
+  composition is fail-fast on id, so an addon cannot re-register another's glyph,
+  **and adding a name to `baseIcons` collides with any addon already contributing
+  it** (base composes first). This throws only at app boot — `typecheck`/`build`
+  miss it — so the full addon set is composed in
+  `examples/notes-angee/web/src/addon-composition.test.tsx`; run `pnpm run test`
+  (not just `tsc`) after touching `baseIcons` or an addon's `icons`.
 - **A new web package needs `pnpm install` + a Vite restart** (Vite snapshots
   workspace packages at start) plus registration in the host `main.tsx` addons and
   `package.json`.
