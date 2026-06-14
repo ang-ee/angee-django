@@ -230,8 +230,11 @@ visual-parity spot-check across both themes still recommended before release.
       (`muted`/`inherit`) — different intents (status/count pill vs removable
       token). Per DRY "different intent: leave separate." (`Tag` is already a thin
       `Badge` alias.)
-- [ ] One header (collapse `CollectionHeader`/`SurfaceHeader`/`RecordHeader` into
-      `PageHeader` + tone token + slots).
+- [~] One header (collapse `CollectionHeader`/`SurfaceHeader`/`RecordHeader` into
+      `PageHeader`) — LEAVE SEPARATE: all three are **storybook-only** (zero live
+      consumers outside `*.stories.*`) and each is already a thin semantic wrapper
+      over `page/PageHeader`. Per the T19 decision (keep storybook-only fragments)
+      there's no app-level consolidation to do; revisit on first real consumer.
 - [x] One `createShellBand` factory → `ControlBand` + `Statusline` are thin
       aliases; aligned `StatuslineProvider` host type to include `undefined`.
       (shell/shell-band.tsx; all exports + StatusSegment/Spacer preserved.)
@@ -247,8 +250,15 @@ visual-parity spot-check across both themes still recommended before release.
       SecretsSection's Protected/Delete is a column (action API can't render a
       withheld cell).
 - [ ] `ScopedTreeExplorer` primitive → storage + knowledge browsers.
-- [ ] Shared date popover helper (date/datetime); `ChipList`/`TokenList` primitive
-      (tagInput/many2many).
+- [x] Shared date popover helper — `widgets/date-popover.tsx` (`DatePopover` shell +
+      `dateFromValue`/`valueLabel`/`DateWidgetValue`); `date` and `datetime` consume
+      it, each keeping its own `onSelectDate` (format/close vs preserve-time/stay-open)
+      and `footer` (clear vs time-input). Behavior-preserving (review-confirmed).
+- [~] `ChipList`/`TokenList` primitive (tagInput/many2many) — LEAVE SEPARATE: the
+      chip-row shell matches, but the data contracts diverge (tagInput maps raw
+      strings; many2many resolves `optionLabel()` + truncates) and remove handlers
+      key differently (index vs value). A unified API would need both shapes —
+      extraction cost > savings. Both are widget-internal (no external consumers).
 - [x] DONE (wire live + delete): new `chrome/CommandPalette` composes `Spotlight`
       with menu-derived nav commands (`MenuTree.navigableItems()` — the new nav
       source on the owner) + `useNavigate`; wired into `TopBar`; dead `GlobalSearch`
@@ -262,9 +272,15 @@ visual-parity spot-check across both themes still recommended before release.
       collapsible consume it (replaced 3 local `createContext + useXVariant`).
 - [ ] `FormSectionKicker` composes `SectionEyebrow`; shared `ControlRow`
       (switch/radio/field). (Still open — separate from the variant-context dedup.)
-- [ ] `InlineNameField` (storage/knowledge ×3); `RefreshingBadge`;
-      `SectionNav`/`SectionTabs` one routed section-nav owner; one metric
-      `MetricTile`+`MetricCollection`.
+- [~] `InlineNameField`/`SectionNav`/`SectionTabs` — LEAVE SEPARATE (scoped):
+      the inline-title editors are only 2 (knowledge `PageEditor` autosave-on-blur
+      vs `NewPageControl` form-submit+cancel) with incompatible save/cancel
+      contracts (storage's mention is a comment, not a 3rd impl). `SectionNav`
+      (router-agnostic, external `active`) vs `SectionTabs` (a styled `Tabs`
+      wrapper owning its own selected state) have different props/state/render
+      models and are both storybook-only — unifying needs a `mode` bifurcation
+      (anti-DRY). Still OPEN: `RefreshingBadge`; one metric `MetricTile`+
+      `MetricCollection` (not yet scoped).
 
 ## Phase 6 — Architecture decisions (now locked)
 
