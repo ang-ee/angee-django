@@ -356,9 +356,12 @@ visual-parity spot-check across both themes still recommended before release.
 - [ ] Full sweep for any remaining hard-coded copy / raw lucide / `cn` violations
       after Phases 1–7 land (drift check: `grep` for `from "lucide-react"` outside
       icon-registry, `toLocaleDateString`, `error` tone, `.join(" ")` class merges).
-- [ ] Update `docs/frontend/guidelines.md` + `docs/stack.md` to encode the new
-      rules (two-axis color, i18n-commit, `defineBaseAddon`, icon-registry-only,
-      one state-surface API) once the owners land — so docs reference the code.
+- [~] Encode the new rules in `docs/frontend/guidelines.md` — DONE for the landed
+      owners: two-axis color (`tone`×`variant`), i18n-commit (`useBaseT`/`use<Addon>T`
+      on `useNamespaceT`, prop-default coalesce), `defineBaseAddon`, build-time
+      composition incl. previews, icon-registry-only (`<Glyph>`, no raw lucide).
+      Still to add when they land: one state-surface API (T4), forms-DSL specifics
+      (T17). `docs/stack.md` unchanged (no new libraries — these are Angee patterns).
 
 ## Infra note (out of band — flagged 2026-06-14)
 

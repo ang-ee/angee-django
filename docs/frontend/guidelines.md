@@ -18,11 +18,30 @@ hand-rolling a concern. TypeScript dependency setup belongs in `package.json`,
 
 - Python ships schema and operations. TypeScript ships UX.
 - React does not own business logic, permissions, models, or persistence.
-- Use `defineAddon` for addon contribution and `createApp` for the project's
-  host composition.
+- Use `defineAddon` (headless, `@angee/sdk`) or `defineBaseAddon` (rendered,
+  `@angee/base`, routes carry React components) to declare an addon, and
+  `createApp` for the project's host composition. One greppable seam per addon —
+  never annotate a bare `const x: BaseAddon = {…}`.
+- Compose addon capabilities at build time through the manifest + `composeAddons`
+  (widgets, i18n, icons, forms, slots, previews); never register or mutate a
+  module-global at runtime. `usePreviews`/`useWidget`/`useMenus`/`useSlot` read the
+  composed `AppRuntime`.
 - One component tree. Extend or register; do not fork.
 - Slots are additive extension points. Use them before copying a component.
 - Tokens beat color props and one-off variants. Theme by overriding tokens.
+- Color is two orthogonal axes (`lib/tones.ts` is the owner): `tone` (the palette
+  — `neutral`/`brand`/`info`/`success`/`warning`/`danger`) × `variant`/fill
+  (`solid`/`soft`/`surface`/`outline`/`ghost`). Drive recipe color through
+  `toneClass(tone, fill)`; never hand-type a soft/solid tone triple, and never use
+  the retired `default`/`error` names (they are `neutral`/`danger`).
+- Route every user-facing string through i18n: `useBaseT()` in `@angee/base`,
+  `use<Addon>T()` in an addon (both built on the SDK's `useNamespaceT(ns,
+  fallback)`), with the English in the namespace bundle. A prop whose default is a
+  label defaults to `undefined` and resolves `?? t("key")` in the body — never call
+  `t()` in a default parameter. No hardcoded copy in a component.
+- Every icon is a registered glyph rendered via `<Glyph name="…">` (or the
+  `renderGlyph(icon)` slot adapter). No raw `lucide-react` import outside
+  `chrome/icon-registry.ts`.
 - Use shared page, view, form, table, widget, and shell primitives before adding
   new local state.
 - Forms are declarative even when they branch: a `<Field showWhen={(values) => …}>`
