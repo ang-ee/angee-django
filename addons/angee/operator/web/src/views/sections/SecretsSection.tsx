@@ -5,10 +5,12 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  FieldLabel,
+  FieldRoot,
   Input,
   useConfirm,
 } from "@angee/base";
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useId, useState, type FormEvent, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
 import { SECRET_DELETE_MUTATION, SECRET_SET_MUTATION } from "../../data/documents";
@@ -34,6 +36,8 @@ export function SecretsSection(): ReactNode {
   const [actionError, setActionError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [value, setValue] = useState("");
+  const nameId = useId();
+  const valueId = useId();
 
   const setSecret = useOperatorAction<DaemonActionData, SecretSetVars>(SECRET_SET_MUTATION);
   const deleteSecret = useOperatorAction<DaemonActionData, SecretDeleteVars>(SECRET_DELETE_MUTATION);
@@ -93,23 +97,29 @@ export function SecretsSection(): ReactNode {
         </CardHeader>
         <CardContent>
           <form className="flex flex-wrap items-end gap-2" onSubmit={(event) => void submitSet(event)}>
-            <label className="flex flex-col gap-1 text-13 text-fg-muted">
-              {t("operator.secrets.form.name")}
+            <FieldRoot>
+              <FieldLabel htmlFor={nameId} className="text-fg-muted">
+                {t("operator.secrets.form.name")}
+              </FieldLabel>
               <Input
+                id={nameId}
                 onChange={(event) => setName(event.target.value)}
                 placeholder={t("operator.secrets.form.namePlaceholder")}
                 value={name}
               />
-            </label>
-            <label className="flex flex-col gap-1 text-13 text-fg-muted">
-              {t("operator.secrets.form.value")}
+            </FieldRoot>
+            <FieldRoot>
+              <FieldLabel htmlFor={valueId} className="text-fg-muted">
+                {t("operator.secrets.form.value")}
+              </FieldLabel>
               <Input
+                id={valueId}
                 onChange={(event) => setValue(event.target.value)}
                 placeholder={t("operator.secrets.form.valuePlaceholder")}
                 type="password"
                 value={value}
               />
-            </label>
+            </FieldRoot>
             <Button disabled={!canSet} size="sm" type="submit" variant="secondary">
               {t("operator.secrets.form.submit")}
             </Button>

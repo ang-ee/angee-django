@@ -387,8 +387,17 @@ visual-parity spot-check across both themes still recommended before release.
         its `backend` select options are runtime-fetched (admin catalogue), which a
         static module-scope override can't carry — kept as a passed `fields` with a
         comment noting why.
-      - [ ] replace inline `<form><label>` (iam/operator) with `Field`/`FormView`
-        or a shared `LabeledInput`.
+      - [x] **replace inline `<form><label>` (iam/operator)** — DONE: both
+        hand-rolled `<label className="grid/flex…">{text}<Control/></label>` blocks
+        now route through the existing base `FieldRoot`/`FieldLabel` primitive (the
+        owner of the stacked label-over-control shape; the same one
+        `UsernamePasswordForm` uses — no new `LabeledInput` needed). iam
+        `OverviewPage` grant composer: Selects label via `FieldLabel`
+        `nativeLabel={false} render={<span/>}` + `aria-labelledby` (button-trigger
+        idiom), the truncation hint via `FieldDescription`. operator
+        `SecretsSection`: Inputs via `FieldLabel htmlFor`/`Input id` (native-label
+        idiom), muted label preserved via `className`. Accessible names preserved
+        (vitest + e2e `getByLabel` still resolve).
       - [ ] `Notebook.Tab` onto `PAGE_ELEMENT_SLOT`.
       - [ ] make `FormView` Star/Share host-provided (slot/action) + replace
         `text-amber-500` with a token.

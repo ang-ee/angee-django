@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useMemo,
   useState,
   type FormEvent,
@@ -10,6 +11,9 @@ import {
   Alert,
   Button,
   DashboardView,
+  FieldDescription,
+  FieldLabel,
+  FieldRoot,
   InlineEmpty,
   Metric,
   MiniCard,
@@ -130,6 +134,8 @@ export function OverviewPage(): ReactElement {
   const [principalId, setPrincipalId] = useState("");
   const [role, setRole] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const principalLabelId = useId();
+  const roleLabelId = useId();
 
   useEffect(() => {
     if (!roleOptions.some((option) => option.value === role)) {
@@ -179,35 +185,41 @@ export function OverviewPage(): ReactElement {
                 className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(12rem,16rem)_auto]"
                 onSubmit={(event) => void handleGrant(event)}
               >
-                <label className="grid min-w-0 gap-1.5 text-13 font-medium text-fg">
-                  {t("iam.overview.grant.principal")}
+                <FieldRoot>
+                  {/* A Select trigger is a button, not a labelable control, so the
+                      label renders as a span and associates via aria-labelledby. */}
+                  <FieldLabel id={principalLabelId} nativeLabel={false} render={<span />}>
+                    {t("iam.overview.grant.principal")}
+                  </FieldLabel>
                   <Select
                     value={principalId}
                     options={principalOptions}
                     placeholder={usersQuery.fetching ? t("iam.overview.grant.loadingUsers") : t("iam.overview.grant.selectUser")}
-                    aria-label={t("iam.overview.grant.principal")}
+                    aria-labelledby={principalLabelId}
                     disabled={usersQuery.fetching || principalOptions.length === 0}
                     onValueChange={setPrincipalId}
                   />
                   {usersTruncated ? (
-                    <span className="text-12 font-normal text-fg-muted">
+                    <FieldDescription>
                       {t("iam.overview.grant.truncated", {
                         shown: IAM_LIST_LIMIT.toLocaleString(),
                         total: userTotalCount.toLocaleString(),
                       })}
-                    </span>
+                    </FieldDescription>
                   ) : null}
-                </label>
-                <label className="grid min-w-0 gap-1.5 text-13 font-medium text-fg">
-                  {t("iam.overview.grant.role")}
+                </FieldRoot>
+                <FieldRoot>
+                  <FieldLabel id={roleLabelId} nativeLabel={false} render={<span />}>
+                    {t("iam.overview.grant.role")}
+                  </FieldLabel>
                   <Select
                     value={role}
                     options={roleOptions}
                     placeholder={t("iam.overview.grant.selectRole")}
-                    aria-label={t("iam.overview.grant.role")}
+                    aria-labelledby={roleLabelId}
                     onValueChange={setRole}
                   />
-                </label>
+                </FieldRoot>
                 <div className="flex items-end">
                   <Button type="submit" variant="primary" pending={grantState.fetching} disabled={!principalId || !role}>
                     {t("iam.overview.grant.submit")}
