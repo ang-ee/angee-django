@@ -97,8 +97,10 @@ Frontend `@angee/agents` (`addons/angee/agents/web/`): menu groups
 - [x] `angee build` → `makemigrations base agents` → `migrate` → `rebac sync` → `schema --check` — all green
 - [x] ruff + mypy on `addons/angee/agents` — clean
 - [x] frontend `@angee/agents` console + host registration (Agents/Templates, Skills [read-only], MCP Servers/Tools, Inference Providers/Models). Agents/Templates split via a server-side `AgentFilter`/`AgentOrder` on the `agents` query. Verified: agents package `tsc` clean + host `vite build` clean (host-wide `tsc` is blocked only by operator's pre-existing daemon-codegen debt).
-- [ ] agents test module (concrete-model pattern of `tests/test_integrate_vcs.py`): skill discovery + provider/model upsert + console CRUD + M2M membership actions
-- [ ] add `ANGEE_INFERENCE_BACKEND_CLASSES` to `tests/settings.py` + concrete agents models to `tests/conftest.py` when the test module lands
+- [x] agents test module — `tests/test_agents.py` (6 tests): skill discovery via `sync_from_source`/`SKILL.md`, inference-model sync (stub + `manual` backend), `parse_skill_meta`; `ANGEE_INFERENCE_BACKEND_CLASSES` + `StubInferenceBackend` added to `tests/settings.py`/`conftest.py`. No regression (integrate/scheduler/compose + agents = 32 pass together).
+- [x] **Milestone 1 shipped + live-verified.** Console renders end-to-end via Playwright (admin login, all 8 tabs, zero console errors); enum create form (Backend Class select) and the Skills→Sources tab confirmed.
+
+GraphQL console CRUD/REBAC unit test is the remaining deferred test (needs all six concrete agents models + importing `agents.schema`); covered for now by the live render + `schema --check`.
 
 ### Frontend review outcomes (react-reviewer)
 
@@ -108,28 +110,22 @@ no icon collision). Fixed: SkillsPage list-only `DataPage` crash (added a read-o
 `ok:false` business failure instead of a green toast; immutable relation pickers
 (`integration`/`provider`/`server`) marked `createOnly`.
 
-**Open must-verify — enum write-casing (save path).** The auto enum→select submits
-the GraphQL enum NAME (`CHAT`, `EXTERNAL`, `HTTP`, `MANUAL`) because the SDL only
-exposes enum names, while the inputs are lowercase `String` (the repo convention —
-see the backend "status read/write-asymmetric" pitfall). `status` avoids it via
-`widget="statusbar"`; agents is the first console to write *non-status* enums
-(`backendClass`, `modelUse`, `placement`, `transport`) through the bare-`<Field>`
-select. Whether this actually fails depends on strawberry-django coercing name→value
-on the `String` input — must be checked live by saving an `InferenceModel`/`MCPServer`.
-If it fails, fix at the backend boundary (enum-typed inputs, or lowercase in the
-resolver) and add a `docs/frontend/guidelines.md` Pitfalls entry.
+**Enum write-casing — FIXED** (the merge brought the framework's documented fix).
+`backendClass`/`modelUse`/`placement`/`transport` now submit the lowercase write
+value via a shared `useEnumOptions` hook (SDL metadata → `value.toLowerCase()`) +
+`createOnly`. **Skills → Sources tab — DONE** (DataPage over `integrate.Source`
+filtered to `kind=skill` + a `SourceFilter` added to the integrate console).
 
 ### Frontend follow-ups (deferred)
 
-- **Live-render verification** — bring up `angee dev` and confirm the Agents/Templates
-  filter returns the right rows and the read-only Skills page renders.
-- **Skills → Sources tab** — deferred with the integrate VCS console frontend
-  handover; needs a `kind` filter on `integrate.Source` too.
 - **Agent skill/MCP membership editor** — backend `setAgentSkills`/`setAgentMcpServers`/
   `setAgentMcpTools` exist; the console needs a multi-select relation widget to drive
   them (none in `@angee/base` yet).
-- **Templates-tab create default** — creating on the Templates tab does not yet
-  default `is_template=true`; today it is an editable switch on the agent form.
+- **Per-tab create defaults** — neither the Templates tab (`is_template=true`) nor a
+  skill source (`kind="skill"`) is pre-filled on create, because `DataPage` has no
+  create-default prop. Today both are visible fields (a switch / a single-option
+  select). A small `DataPage` `createDefaults` prop wired to `FormView.initialValues`
+  (which already exists) would close both.
 
 ## Review follow-ups (deferred, not yet actioned)
 
