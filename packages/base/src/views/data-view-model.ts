@@ -36,6 +36,11 @@ export const DATA_VIEW_LOOKUP_OPERATORS = [
 ] as const;
 export type DataViewLookupOperator =
   (typeof DATA_VIEW_LOOKUP_OPERATORS)[number];
+
+/** Whether a string is one of the supported lookup operators. */
+export function isLookupOperator(value: string): value is DataViewLookupOperator {
+  return (DATA_VIEW_LOOKUP_OPERATORS as readonly string[]).includes(value);
+}
 export type DataViewFilterPrimitive = string | number | boolean | null;
 export type DataViewFilterValue =
   | DataViewFilterPrimitive

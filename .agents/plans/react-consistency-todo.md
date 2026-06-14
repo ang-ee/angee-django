@@ -148,8 +148,16 @@ visual-parity spot-check across both themes still recommended before release.
       statusBadge, many2many (its local copy deleted). Left separate (different
       intent): ownerCell (object value), RelationField (finds the option object),
       themePicker (local list + "System" fallback), booleanBadge (boolean match).
-- [ ] `matchesClientLookup`/`isLookupOperator` → export operator guards from
-      `data-view-model`; `Filter` owns text-filter target/predicate.
+- [x] `isLookupOperator` → exported from `data-view-model` (the owner of
+      `DATA_VIEW_LOOKUP_OPERATORS`); `list-view-utils` dropped its byte-identical
+      14-operator copy and imports the owner's guard (derived from the `as const`
+      array, so it can't drift). `Filter` ALREADY owns the text-filter
+      target/predicate (`textTerm`/`withTextTerm` default to
+      `DEFAULT_TEXT_FILTER_FIELD`; `list-view-utils` `textFilterValue`/
+      `nextTextFilter` delegate to it) — nothing to move. `matchesClientLookup`
+      (data-view-surface) LEFT SEPARATE: it is the client-side row-matching
+      *predicate* for `useRowsDataViewSurface` (a different concern from operator
+      membership), not a duplicate of the operator list.
 - [x] `AppChooser.itemMatchesPath` / `TopMenu` active logic → DONE: extracted
       `pathMatchesTarget(pathname, target)` (the one path-match predicate, was
       duplicated in `ChromeMenuNode.matchesPath` + `AppChooser.itemMatchesPath`)

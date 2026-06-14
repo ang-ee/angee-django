@@ -11,6 +11,7 @@ import type {
 import {
   DEFAULT_TEXT_FILTER_FIELD,
   Filter,
+  isLookupOperator,
   type DataViewFilter,
   type DataViewGroup,
   type DataViewLookup,
@@ -436,25 +437,6 @@ function parseCustomFilterId(
 
 function isLookup(value: unknown): value is DataViewLookup {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function isLookupOperator(value: string): value is DataViewLookupOperator {
-  return [
-    "exact",
-    "inList",
-    "isNull",
-    "iExact",
-    "contains",
-    "iContains",
-    "startsWith",
-    "iStartsWith",
-    "endsWith",
-    "iEndsWith",
-    "gt",
-    "gte",
-    "lt",
-    "lte",
-  ].includes(value);
 }
 
 function labelText(value: ReactNode): string | null {
