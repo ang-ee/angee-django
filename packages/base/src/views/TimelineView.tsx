@@ -24,6 +24,8 @@ export interface TimelineViewProps<TRow extends Row = Row> {
   rowKey?: keyof TRow & string;
   /** Override the entry body. */
   renderEntry?: (row: TRow) => ReactNode;
+  /** Shown centered when there are no dated rows. */
+  emptyMessage?: ReactNode;
   className?: string;
 }
 
@@ -40,6 +42,7 @@ export function TimelineView<TRow extends Row = Row>({
   bodyField,
   rowKey = "id" as keyof TRow & string,
   renderEntry,
+  emptyMessage = "No records.",
   className,
 }: TimelineViewProps<TRow>): ReactElement {
   const groups = useMemo<DayGroup<TRow>[]>(() => {
@@ -59,6 +62,11 @@ export function TimelineView<TRow extends Row = Row>({
 
   return (
     <div className={cn("flex-1 overflow-y-auto bg-canvas p-6", className)}>
+      {groups.length === 0 ? (
+        <div className="grid h-full place-content-center text-center text-13 text-fg-muted">
+          {emptyMessage}
+        </div>
+      ) : (
       <ol className="mx-auto flex max-w-3xl flex-col gap-6">
         {groups.map((group) => (
           <li key={group.key} className="space-y-3">
@@ -85,6 +93,7 @@ export function TimelineView<TRow extends Row = Row>({
           </li>
         ))}
       </ol>
+      )}
     </div>
   );
 }

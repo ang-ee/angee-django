@@ -1,5 +1,6 @@
 import { useMemo, useState, type ReactElement, type ReactNode } from "react";
 
+import { cn } from "../lib/cn";
 import {
   dragHasAcceptedType,
   readDndPayload,
@@ -39,6 +40,8 @@ export interface TreeViewProps<
   canDropOnNode?: (nodeId: string, row: TRow) => boolean;
   /** Called with the decoded payload when an accepted item drops on a node. */
   onNodeDrop?: (nodeId: string, payload: DndPayload, row: TRow) => void;
+  /** Shown centered when there are no nodes. */
+  emptyMessage?: ReactNode;
   className?: string;
 }
 
@@ -56,6 +59,7 @@ export function TreeView<TRow extends Record<string, unknown>>({
   dropAccept,
   canDropOnNode,
   onNodeDrop,
+  emptyMessage = "No records.",
   className,
 }: TreeViewProps<TRow>): ReactElement {
   const rowsById = useMemo(
@@ -68,6 +72,19 @@ export function TreeView<TRow extends Record<string, unknown>>({
   );
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const droppable = onNodeDrop != null;
+
+  if (nodes.length === 0) {
+    return (
+      <div
+        className={cn(
+          "grid h-full min-h-0 place-content-center p-8 text-center text-13 text-fg-muted",
+          className,
+        )}
+      >
+        {emptyMessage}
+      </div>
+    );
+  }
 
   return (
     <Tree

@@ -111,10 +111,13 @@ visual-parity spot-check across both themes still recommended before release.
 - [ ] Align prop vocab across `EmptyState`/`InlineEmpty`/`LoadingPanel`/
       `ErrorBanner` (one of `{title,description,icon,actions}`; deprecate
       `label`/`message` aliases or unify).
-- [ ] Add a `CollectionStatus` / `DataViewFrame` (table-row + block variants);
-      thread `fetching`/`error`/`emptyMessage` through every collection renderer
-      (`ListView`, `RowsListView`, `GroupedList`, `BoardView`, `GalleryView`,
-      `TreeView`, `TimelineView`). Gallery/Timeline/Tree must render an empty state.
+- [x] Gallery/Timeline/Tree now render an empty state (was blank): `emptyMessage`
+      prop (default "No records.") + centered empty render on each; `RowsListView`
+      threads `emptyMessage` into its grid-mode `GalleryView`.
+- [ ] (larger) A `CollectionStatus`/`DataViewFrame` abstraction threading
+      `fetching`/`error`/`emptyMessage` uniformly through every renderer — still
+      open (the empty-state gap above is the high-value piece; the full frame is a
+      bigger de-fork).
 - [x] Extract the `Spinner + "Loading…"` blocks into `ListLoadingFooter` (footer
       div, was ×3: ListView/RowsListView/GroupedList) + `ListLoadingInline` (span,
       was ×2: GroupedList) in `ListInternals`; dropped 3 now-unused Spinner imports.

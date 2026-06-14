@@ -31,6 +31,8 @@ export interface GalleryViewProps<TRow extends Row = Row> {
   draggableRow?: (row: TRow) => DndPayload | null;
   selectedIds?: ReadonlySet<string>;
   onToggleSelected?: (id: string, selected: boolean) => void;
+  /** Shown centered when `rows` is empty. */
+  emptyMessage?: ReactNode;
   className?: string;
 }
 
@@ -46,10 +48,16 @@ export function GalleryView<TRow extends Row = Row>({
   draggableRow,
   selectedIds,
   onToggleSelected,
+  emptyMessage = "No records.",
   className,
 }: GalleryViewProps<TRow>): ReactElement {
   return (
     <div className={cn("flex-1 overflow-y-auto bg-canvas p-4", className)}>
+      {rows.length === 0 ? (
+        <div className="grid h-full place-content-center text-center text-13 text-fg-muted">
+          {emptyMessage}
+        </div>
+      ) : (
       <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-4">
         {rows.map((row) => {
           const id = String(row[rowKey] ?? "");
@@ -74,6 +82,7 @@ export function GalleryView<TRow extends Row = Row>({
           );
         })}
       </div>
+      )}
     </div>
   );
 }

@@ -299,6 +299,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
             onToggleSelected={
               selectable ? dataView.toggleSelectedId : undefined
             }
+            emptyMessage={emptyMessage}
           />
         ) : (
           <FlatListBody
