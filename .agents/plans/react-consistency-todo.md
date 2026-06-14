@@ -127,7 +127,12 @@ visual-parity spot-check across both themes still recommended before release.
 ## Phase 3 — Find-the-owner (T8) + SDK/no-owner lifts (T10)
 
 ### T8 — move shape-sniffing onto its owner
-- [ ] `string|ReactNode` icon adapter → on `Glyph` (done with T5).
+- [ ] `string|ReactNode` icon adapter → on `Glyph`. STILL OPEN (T5 added
+      `fallbackName` only): 8 fragments hand-roll
+      `typeof icon === "string" ? <Glyph name={icon}/> : icon` (EmptyState,
+      InlineEmpty, MetricStrip, MetricGrid, MiniCard, SurfaceHeader,
+      RecordHeader, CollectionHeader). Give `Glyph.name` a `ReactNode` union or
+      export `renderGlyph(icon)`.
 - [ ] `recordSubtitleParts` (field-name sniffing + `atob` id decode),
       `AggregatePanel` `${field}Id` guess, `RevisionsTab.revisionSnapshot` →
       SDK/model metadata exposes subtitle parts / aggregate keys / changed fields.
@@ -157,8 +162,10 @@ visual-parity spot-check across both themes still recommended before release.
 - [x] `ActionResultData`/`IdVariables` per addon → SDK `ActionOutcome`/
       `ByIdVariables`; integrate + agents `documents.ts` alias them (named
       `ActionOutcome` to avoid colliding with base's `ActionResult` = Action.run).
-- [ ] `titleLabel`/`stateLabel` → reuse base `titleCase`.
-- [ ] `pageSize={50}` (×14) → drop, or import `DEFAULT_PAGE_SIZE`.
+- [ ] `titleLabel` (iam `identity-labels.ts`, used in Overview/SchemaPage) →
+      reuse base `titleCase` (mind the extra `/`,`:` separators). NOTE: `stateLabel`
+      already gone — T1 reworked operator `StateTag`.
+- [ ] `pageSize={50}` (×20, verified) → drop, or import `DEFAULT_PAGE_SIZE`.
 - [ ] ⌘K handler + `isTextEntryTarget` (×2) → one `useCommandShortcut` (folds T9
       palette work).
 - [ ] confirm/prompt promise-queue → one `useQueuedDialog<TOptions,TResult>` in
