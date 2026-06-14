@@ -127,6 +127,9 @@ export interface DataPageProps<TRow extends Row = Row> {
   recordSmartButtons?: readonly RecordSmartButtonDescriptor[];
   /** Hides the built-in "New" button when the host owns creation. */
   hideCreate?: boolean;
+  /** Field values seeded into the create form (create only, not edit) — e.g. a
+   * filtered list creating rows that match its filter. */
+  createDefaults?: Record<string, unknown>;
   rowHref?: (row: TRow) => string;
   className?: string;
 }
@@ -257,6 +260,7 @@ function DataPageBody<TRow extends Row = Row>({
   returning,
   recordSmartButtons = [],
   hideCreate = false,
+  createDefaults,
   className,
 }: DataPageBodyProps<TRow>): React.ReactElement {
   const resolvedRecordId = recordController.recordId;
@@ -440,6 +444,7 @@ function DataPageBody<TRow extends Row = Row>({
       groups={resolvedFormGroups}
       actions={resolvedFormActions}
       {...formRenderProps}
+      defaultValues={resolvedCreating ? createDefaults : undefined}
       onSaved={handleSaved}
       toolbarStart={composeNodes(formRenderProps.toolbarStart, recordHeaderStart)}
       toolbar={composeNodes(formRenderProps.toolbar, recordHeaderActions)}

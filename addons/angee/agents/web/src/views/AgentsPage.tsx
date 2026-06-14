@@ -4,10 +4,17 @@ import { Column, DataPage, Field, Form, Group, List } from "@angee/base";
 const MODEL = "agents.Agent";
 
 // One model, two list tabs: the server-side ``isTemplate`` filter is the only
-// difference between Agents and Templates.
+// difference between Agents and Templates, and a create on either tab defaults
+// ``isTemplate`` to match.
 function agentDataPage(isTemplate: boolean): React.ReactElement {
   return (
-    <DataPage model={MODEL} placement="inline" routed filter={{ isTemplate: { exact: isTemplate } }}>
+    <DataPage
+      model={MODEL}
+      placement="inline"
+      routed
+      filter={{ isTemplate: { exact: isTemplate } }}
+      createDefaults={{ isTemplate }}
+    >
       <List model={MODEL} pageSize={50}>
         <Column field="name" />
         <Column field="status" widget="statusBadge" />
