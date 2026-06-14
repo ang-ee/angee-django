@@ -8,8 +8,14 @@ import { createElement } from "react";
 
 import { enIamMessages } from "./i18n";
 import { OAuthCallbackPage } from "./OAuthCallbackPage";
+import { OAuthConnectCallbackPage } from "./OAuthConnectCallbackPage";
 import { OAuthLoginMethods } from "./OAuthLoginMethods";
-import { LEGACY_LOGIN_CALLBACK_PATH, LOGIN_CALLBACK_PATH } from "./redirects";
+import {
+  CONNECT_CALLBACK_PATH,
+  LEGACY_CONNECT_CALLBACK_PATH,
+  LEGACY_LOGIN_CALLBACK_PATH,
+  LOGIN_CALLBACK_PATH,
+} from "./redirects";
 import { credentialCreateForm } from "./views/credential-form";
 import { CredentialsPage } from "./views/CredentialsPage";
 import { ExternalAccountsPage } from "./views/ExternalAccountsPage";
@@ -81,6 +87,18 @@ const iam = defineBaseAddon({
       path: LEGACY_LOGIN_CALLBACK_PATH,
       shell: "public",
       component: OAuthCallbackPage,
+    },
+    {
+      name: "iam.connect.callback",
+      path: CONNECT_CALLBACK_PATH,
+      shell: "console",
+      component: OAuthConnectCallbackPage,
+    },
+    {
+      name: "iam.connect.callback.legacy",
+      path: LEGACY_CONNECT_CALLBACK_PATH,
+      shell: "console",
+      component: OAuthConnectCallbackPage,
     },
     { name: "iam.overview", path: "/iam", shell: "console", component: OverviewPage },
     ...consolePage("iam.users", "/iam/users", UsersPage),

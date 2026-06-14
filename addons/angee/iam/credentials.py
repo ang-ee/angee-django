@@ -51,6 +51,12 @@ class CredentialKindHandler:
 
         raise NotImplementedError
 
+    def secret_value(self, credential: Any) -> str:
+        """Return the credential's primary secret value."""
+
+        material = self.reveal(credential)
+        return str(material.get(self.material_field) or "")
+
     def refresh(self, credential: Any) -> None:
         """Refresh ``credential`` in place when the kind supports it."""
 
@@ -93,8 +99,7 @@ class OAuthCredentialHandler(CredentialKindHandler):
     def auth_headers(self, credential: Any) -> dict[str, str]:
         """Return OAuth bearer authorization headers."""
 
-        material = self.reveal(credential)
-        return {"Authorization": f"Bearer {material['access_token']}"}
+        return {"Authorization": f"Bearer {self.secret_value(credential)}"}
 
     def upsert_fields(self, material: dict[str, Any]) -> dict[str, Any]:
         """Return persisted credential metadata derived from an OAuth token response."""
@@ -129,8 +134,7 @@ class StaticTokenCredentialHandler(CredentialKindHandler):
     def auth_headers(self, credential: Any) -> dict[str, str]:
         """Return static-token bearer authorization headers."""
 
-        material = self.reveal(credential)
-        return {"Authorization": f"Bearer {material['api_key']}"}
+        return {"Authorization": f"Bearer {self.secret_value(credential)}"}
 
     def refresh(self, credential: Any) -> None:
         """Static tokens do not expire through a refresh flow."""

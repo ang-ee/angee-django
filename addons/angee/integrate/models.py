@@ -186,12 +186,61 @@ class Integration(SqidMixin, AuditMixin, AngeeModel):
         ordering = ("-updated_at",)
         rebac_resource_type = "integrate/integration"
         rebac_id_attr = "sqid"
+        constraints = (
+            # One integration per (owner, vendor, credential): lets the
+            # self-service ``create_integration_from_credential`` upsert be a
+            # race-safe ``update_or_create`` instead of a get-then-insert that
+            # two concurrent calls both miss.
+            models.UniqueConstraint(
+                fields=("owner", "vendor", "credential"),
+                name="uniq_integrate_integration_owner_vendor_credential",
+            ),
+        )
 
     def __str__(self) -> str:
         """Return a stable vendor-qualified integration label."""
 
         vendor_slug = getattr(getattr(self, "vendor", None), "slug", "?")
         return f"{vendor_slug}:{self.public_id}"
+
+    # ``config`` key the self-service credential handoff stores the env var name
+    # under; rendered-service consumers read it back via ``credential_env_value``.
+    CREDENTIAL_ENV_CONFIG_KEY = "credential_env"
+
+    def set_credential_env(self, env_name: str) -> None:
+        """Record (or clear) the env var name the credential secret is exposed under.
+
+        The integration owns this ``config`` key: callers pass the operator's
+        chosen name and persist the row, rather than poking ``config`` directly.
+        """
+
+        config = dict(self.config or {})
+        env_name = env_name.strip()
+        if env_name:
+            config[self.CREDENTIAL_ENV_CONFIG_KEY] = env_name
+        else:
+            config.pop(self.CREDENTIAL_ENV_CONFIG_KEY, None)
+        self.config = config
+
+    def credential_env_value(self) -> dict[str, str]:
+        """Return the ``{env_name: secret}`` this integration exposes to services, or ``{}``.
+
+        Owns the projection of its own ``config`` key and ``credential`` secret so
+        callers (e.g. ``agents.InferenceProvider.service_environment``) never decode
+        the config shape or read the credential from outside.
+        """
+
+        config = self.config if isinstance(self.config, dict) else {}
+        env_name = str(config.get(self.CREDENTIAL_ENV_CONFIG_KEY) or "").strip()
+        if not env_name:
+            return {}
+        credential = getattr(self, "credential", None)
+        if credential is None:
+            return {}
+        secret = str(credential.secret_value() or "")
+        if not secret:
+            return {}
+        return {env_name: secret}
 
     def note_capability_status(self, *, capability_key: Any, status: Any, error: str = "") -> None:
         """Record one capability contribution, recompute this integration, and persist.

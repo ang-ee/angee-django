@@ -1,0 +1,8 @@
+# The Anthropic integration the inference provider (092) runs over. Its `credential` is
+# what the agent's operator secret is minted from; swap it to your connected Anthropic
+# Personal OAuth credential for real subscription inference. `vendor` is the master-tier
+# anthropic catalogue row.
+- xref: integration_anthropic_demo
+  owner: notes.user_admin
+  vendor: integrate.anthropic
+  credential: notes.cred_anthropic_demo

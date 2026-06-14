@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Action, type ActionContext, Column, DataPage, Field, Form, Group, List } from "@angee/base";
+import { Action, type ActionContext, Column, DataPage, Field, Form, Group, List, useEnumOptions } from "@angee/base";
 import { runActionResult, useAuthoredMutation } from "@angee/sdk";
 
 import { useAgentsT } from "../i18n";
@@ -28,6 +28,8 @@ export function InferenceProvidersPage(): React.ReactElement {
     [refreshProviderModels],
   );
 
+  const backendClassOptions = useEnumOptions(PROVIDER_MODEL, "backendClass");
+
   return (
     <DataPage model={PROVIDER_MODEL} placement="inline" routed>
       <List model={PROVIDER_MODEL}>
@@ -39,7 +41,7 @@ export function InferenceProvidersPage(): React.ReactElement {
         <Field name="name" title />
         <Field name="integration" createOnly />
         <Group label={t("agents.inference.backend")} columns={2}>
-          <Field name="backendClass" />
+          <Field name="backendClass" widget="select" options={backendClassOptions} createOnly />
           <Field name="baseUrl" />
         </Group>
         <Field name="status" widget="statusbar" />
@@ -52,6 +54,7 @@ export function InferenceProvidersPage(): React.ReactElement {
 
 export function InferenceModelsPage(): React.ReactElement {
   const t = useAgentsT();
+  const modelUseOptions = useEnumOptions(MODEL_MODEL, "modelUse");
   return (
     <DataPage model={MODEL_MODEL} placement="inline" routed>
       <List model={MODEL_MODEL}>
@@ -66,7 +69,7 @@ export function InferenceModelsPage(): React.ReactElement {
         <Group label={t("agents.inference.catalogue")} columns={2}>
           <Field name="provider" createOnly />
           <Field name="publisher" />
-          <Field name="modelUse" />
+          <Field name="modelUse" widget="select" options={modelUseOptions} createOnly />
           <Field name="status" widget="statusbar" />
           <Field name="isDefault" />
           <Field name="contextWindow" />

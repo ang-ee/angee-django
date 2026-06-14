@@ -1,12 +1,13 @@
 import type { BaseAddonRoute, BaseMenuItem } from "@angee/base";
 import { defineBaseAddon } from "@angee/base";
-import { Box, Cpu, LayoutTemplate, Server, Sparkles, Wrench } from "lucide-react";
+import { Box, Cpu, GitBranch, LayoutTemplate, Server, Sparkles, Wrench } from "lucide-react";
 
 import { enAgentsMessages } from "./i18n";
 import { AgentsPage, TemplatesPage } from "./views/AgentsPage";
 import { InferenceModelsPage, InferenceProvidersPage } from "./views/InferencePage";
 import { McpServersPage, McpToolsPage } from "./views/McpPage";
 import { SkillsPage } from "./views/SkillsPage";
+import { SourcesPage } from "./views/SourcesPage";
 
 const AGENTS_ID = "agents";
 
@@ -17,6 +18,8 @@ const agentsRoutes: readonly BaseAddonRoute[] = [
   { name: "agents.templates", path: "/agents/templates", shell: "console", component: TemplatesPage },
   { name: "agents.template", path: "/agents/templates/$id", shell: "console", parent: "agents.templates" },
   { name: "agents.skills", path: "/agents/skills", shell: "console", component: SkillsPage },
+  { name: "agents.sources", path: "/agents/sources", shell: "console", component: SourcesPage },
+  { name: "agents.source", path: "/agents/sources/$id", shell: "console", parent: "agents.sources" },
   { name: "agents.mcp-servers", path: "/agents/mcp-servers", shell: "console", component: McpServersPage },
   { name: "agents.mcp-server", path: "/agents/mcp-servers/$id", shell: "console", parent: "agents.mcp-servers" },
   { name: "agents.mcp-tools", path: "/agents/mcp-tools", shell: "console", component: McpToolsPage },
@@ -48,7 +51,15 @@ const agentsMenu: readonly BaseMenuItem[] = [
           { id: "agents.templates", label: "Templates", icon: "agentTemplate", route: "agents.templates" },
         ],
       },
-      { id: "agents.skills", label: "Skills", icon: "skill", route: "agents.skills" },
+      {
+        id: "agents.menu.skills",
+        label: "Skills",
+        icon: "skill",
+        children: [
+          { id: "agents.skills", label: "Skills", icon: "skill", route: "agents.skills" },
+          { id: "agents.sources", label: "Sources", icon: "skillSource", route: "agents.sources" },
+        ],
+      },
       {
         id: "agents.menu.mcp",
         label: "MCP",
@@ -81,6 +92,7 @@ const agents = defineBaseAddon({
     // redefine it (the registry is fail-fast on re-registration).
     agentTemplate: LayoutTemplate,
     skill: Sparkles,
+    skillSource: GitBranch,
     mcpServer: Server,
     mcpTool: Wrench,
     inferenceProvider: Cpu,

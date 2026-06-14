@@ -19,6 +19,10 @@ definition integrate/integration {
     relation owner: auth/user // rebac:field=owner
     relation admin: angee/role // rebac:const=admin
 
+    // Governs the admin-console Integration CRUD only (run elevated behind
+    // PlatformAdminPermission). Self-service `createIntegrationFromCredential`
+    // also creates elevated but is gated by credential ownership in the resolver,
+    // not by this permission.
     permission create = admin->member
     // The owner manages their own integration; platform admins reach all.
     permission read = owner + admin->member

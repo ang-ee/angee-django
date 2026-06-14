@@ -52,7 +52,7 @@ export function OAuthLoginMethods(): ReactNode {
     return (
       <div
         aria-live="polite"
-        className="mb-6 flex items-center gap-3 rounded-md border border-border-subtle bg-inset px-4 py-3 text-sm text-fg-muted"
+        className="flex items-center gap-3 rounded-md border border-border-subtle bg-inset px-4 py-3 text-sm text-fg-muted"
         role="status"
       >
         <Spinner size="sm" tone="brand" />
@@ -72,7 +72,7 @@ export function OAuthLoginMethods(): ReactNode {
   if (connections.length === 0) return null;
 
   return (
-    <div className="mb-6 flex flex-col gap-3">
+    <div className="flex flex-col gap-3">
       <div className="flex flex-col gap-2">
         {connections.map((connection) => {
           const label = connectionLabel(connection);
@@ -81,7 +81,7 @@ export function OAuthLoginMethods(): ReactNode {
             <Button
               key={connection.oauthClientSqid}
               type="button"
-              className="w-full justify-start"
+              className="!h-11 w-full justify-start bg-sheet"
               disabled={startingSqid !== null}
               loading={active}
               loadingText={t("iam.login.continueWith", { provider: label })}
@@ -109,7 +109,7 @@ function ProviderMark({ label }: { label: string }): ReactNode {
   return (
     <span
       aria-hidden="true"
-      className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border-subtle bg-sheet text-xs font-semibold text-fg-muted"
+      className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border-subtle bg-accent-soft text-xs font-semibold text-accent-soft-text"
     >
       {initial || <Glyph name="auth" className="size-4" />}
     </span>

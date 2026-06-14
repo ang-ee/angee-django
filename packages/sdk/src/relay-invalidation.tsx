@@ -17,17 +17,17 @@ import { makeContext } from "./make-context";
 import { createRefetchRegistry, type RefetchRegistry } from "./relay-registry";
 import { typeNameForModel } from "./selection";
 
-/**
- * The change subscription for one model: `subscription { <noun>Changed { … } }`,
- * the per-model event the schema publishes. Derived from the GraphQL typename so
- * it never drifts from the field naming (`Note` -> `noteChanged`).
- */
 /** The `<noun>Changed` subscription field for a model typename (`Note` → `noteChanged`). */
 function changeFieldName(typename: string): string {
   const typeName = typeNameForModel(typename);
   return `${typeName.charAt(0).toLowerCase()}${typeName.slice(1)}Changed`;
 }
 
+/**
+ * The change subscription for one model: `subscription { <noun>Changed { … } }`,
+ * the per-model event the schema publishes. Derived from the GraphQL typename so
+ * it never drifts from the field naming (`Note` -> `noteChanged`).
+ */
 export function changeSubscriptionDocument(typename: string): string {
   const field = changeFieldName(typename);
   return (

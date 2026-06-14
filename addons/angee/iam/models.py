@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Mapping
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -439,6 +440,7 @@ class OAuthClientManager(RebacManager.from_queryset(OAuthClientQuerySet)):  # ty
             "userinfo_endpoint",
             "jwks_uri",
             "discovery_url",
+            "token_request_format",
             "is_oidc",
             "is_enabled",
             "scopes_catalogue",
@@ -450,6 +452,13 @@ class OAuthClientManager(RebacManager.from_queryset(OAuthClientQuerySet)):  # ty
             "link_on_email_match",
             "create_on_login",
             "allowed_email_domains",
+            "authorize_params",
+            "token_params",
+            "external_id_claim",
+            "email_claim",
+            "display_name_claim",
+            "avatar_url_claim",
+            "manual_redirect_uri",
         }
     )
     setting_fields = seed_fields | frozenset({"slug", "environment", "client_secret"})
@@ -537,7 +546,7 @@ class OAuthClient(SqidMixin, AuditMixin, AngeeModel):
     icon = models.CharField(max_length=128, blank=True)
     environment = models.CharField(max_length=32, default="prod")
     display_name = models.CharField(max_length=128)
-    client_id = models.CharField(max_length=255)
+    client_id = models.CharField(max_length=255, blank=True)
     client_secret = EncryptedField(blank=True)
     issuer = models.URLField(blank=True)
     authorize_endpoint = models.URLField(blank=True)
@@ -546,6 +555,7 @@ class OAuthClient(SqidMixin, AuditMixin, AngeeModel):
     userinfo_endpoint = models.URLField(blank=True)
     jwks_uri = models.URLField(blank=True)
     discovery_url = models.URLField(blank=True)
+    token_request_format = models.CharField(max_length=16, default="form", blank=True)
     is_oidc = models.BooleanField(default=False, db_index=True)
     is_enabled = models.BooleanField(default=True, db_index=True)
     scopes_catalogue = models.JSONField(default=list, blank=True)
@@ -557,6 +567,16 @@ class OAuthClient(SqidMixin, AuditMixin, AngeeModel):
     link_on_email_match = models.BooleanField(default=False)
     create_on_login = models.BooleanField(default=False)
     allowed_email_domains = models.JSONField(default=list, blank=True)
+    authorize_params = models.JSONField(default=dict, blank=True)
+    token_params = models.JSONField(default=dict, blank=True)
+    external_id_claim = models.CharField(max_length=128, default="sub", blank=True)
+    email_claim = models.CharField(max_length=128, default="email", blank=True)
+    display_name_claim = models.CharField(max_length=128, blank=True)
+    avatar_url_claim = models.CharField(max_length=128, blank=True)
+    # Fixed manual-paste callback for fixed public clients (e.g. Anthropic) whose
+    # allow-list we cannot extend. When set, connect uses a localhost loopback redirect
+    # when the console runs on localhost, else this manual page (see resolve_connect_redirect).
+    manual_redirect_uri = models.URLField(blank=True)
 
     objects = OAuthClientManager()
 
@@ -606,10 +626,72 @@ class OAuthClient(SqidMixin, AuditMixin, AngeeModel):
         return self._string_list(self.scopes_catalogue)
 
     @property
+    def authorize_param_values(self) -> dict[str, str]:
+        """Return configured provider-specific authorize parameters."""
+
+        return self._string_mapping(self.authorize_params)
+
+    @property
+    def token_param_values(self) -> dict[str, str]:
+        """Return configured provider-specific token-exchange parameters."""
+
+        return self._string_mapping(self.token_params)
+
+    def resolve_connect_redirect(self, proposed_redirect_uri: str) -> tuple[str, str]:
+        """Return the ``(redirect_uri, mode)`` this client uses to connect from a browser.
+
+        ``mode`` is ``"auto"`` (the provider redirects back to ``proposed_redirect_uri``)
+        or ``"manual"`` (the user copies the code the provider displays and pastes it
+        back). A client with no ``manual_redirect_uri`` always redirects back. A fixed
+        public client (``manual_redirect_uri`` set) can redirect back only to a
+        ``localhost`` loopback — its allow-list rejects other hosts and a cross-origin
+        callback would also drop the session — so off-localhost it falls back to manual.
+        """
+
+        if not self.manual_redirect_uri:
+            return proposed_redirect_uri, "auto"
+        host = (urlsplit(proposed_redirect_uri).hostname or "").lower()
+        if host == "localhost":
+            return proposed_redirect_uri, "auto"
+        return self.manual_redirect_uri, "manual"
+
+    @property
+    def token_request_format_value(self) -> str:
+        """Return the configured token request body format."""
+
+        value = str(self.token_request_format or "form").strip().lower()
+        if value in {"form", "json"}:
+            return value
+        return "form"
+
+    @property
     def allowed_email_domain_values(self) -> list[str]:
         """Return the login domain allow-list as strings."""
 
         return self._string_list(self.allowed_email_domains)
+
+    def external_id_from_claims(self, claims: Mapping[str, Any]) -> str:
+        """Return this provider account's stable external id from identity claims."""
+
+        return self._claim_string(claims, self.external_id_claim)
+
+    def email_from_claims(self, claims: Mapping[str, Any]) -> str:
+        """Return this provider account's email from identity claims."""
+
+        return self._claim_string(claims, self.email_claim)
+
+    def display_name_from_claims(self, claims: Mapping[str, Any], email: str) -> str:
+        """Return this provider account's display label from identity claims."""
+
+        configured = self._claim_string(claims, self.display_name_claim)
+        if configured:
+            return configured
+        return ExternalAccount.display_name_from_claims(claims, email)
+
+    def avatar_url_from_claims(self, claims: Mapping[str, Any]) -> str:
+        """Return this provider account's avatar URL from identity claims."""
+
+        return self._claim_string(claims, self.avatar_url_claim)
 
     def allows_email_domain(self, email: str | None) -> bool:
         """Return whether ``email`` is allowed by this client's domain policy."""
@@ -631,6 +713,39 @@ class OAuthClient(SqidMixin, AuditMixin, AngeeModel):
         if not isinstance(value, (list, tuple)):
             return []
         return [str(item) for item in value]
+
+    def _string_mapping(self, value: object) -> dict[str, str]:
+        """Return one JSON-backed column value as string query/form params."""
+
+        if not isinstance(value, Mapping):
+            return {}
+        return {str(key): str(item) for key, item in value.items() if item is not None}
+
+    def _claim_string(self, claims: Mapping[str, Any], claim_name: str | None) -> str:
+        """Return a flat or dotted-path claim value as a string."""
+
+        name = str(claim_name or "").strip()
+        if not name:
+            return ""
+        if name in claims:
+            return self._string_claim_value(claims.get(name))
+        value: Any = claims
+        for part in name.split("."):
+            if not isinstance(value, Mapping):
+                return ""
+            value = value.get(part)
+            if value in (None, ""):
+                return ""
+        return self._string_claim_value(value)
+
+    def _string_claim_value(self, value: Any) -> str:
+        """Return scalar identity claim values only."""
+
+        if value in (None, ""):
+            return ""
+        if isinstance(value, Mapping | list | tuple | set):
+            return ""
+        return str(value)
 
 
 class CredentialQuerySet(RebacQuerySet[Any]):
@@ -727,6 +842,10 @@ class CredentialManager(RebacManager.from_queryset(CredentialQuerySet)):  # type
             **operation_values,
             **update_values,
         }
+        # Give the credential a human label on create (OAuth rows carry no name of their
+        # own). Create-only so an admin rename, and token refreshes, are preserved.
+        if not str(create_values.get("name") or ""):
+            create_values["name"] = self._oauth_credential_name(oauth_client, external_account)
         with system_context(reason=self._REASON), transaction.atomic():
             instance, _created = self.update_or_create(
                 user=user,
@@ -735,6 +854,23 @@ class CredentialManager(RebacManager.from_queryset(CredentialQuerySet)):  # type
                 create_defaults=create_values,
             )
         return instance
+
+    @staticmethod
+    def _oauth_credential_name(oauth_client: Any, external_account: Any | None) -> str:
+        """Return a default label for an OAuth credential: the provider, plus its subject."""
+
+        label = str(
+            getattr(oauth_client, "display_name", "") or getattr(oauth_client, "slug", "") or "OAuth"
+        )
+        subject = ""
+        if external_account is not None:
+            subject = str(
+                getattr(external_account, "email", "")
+                or getattr(external_account, "display_name", "")
+                or getattr(external_account, "external_id", "")
+                or ""
+            )
+        return f"{label} ({subject})" if subject else label
 
     def create_local_credential(
         self,
@@ -902,6 +1038,11 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
         """Return authorization headers through the kind handler."""
 
         return self.handler.auth_headers(self)
+
+    def secret_value(self) -> str:
+        """Return the primary secret value through the kind handler."""
+
+        return str(self.handler.secret_value(self))
 
 
 def _validated_manager_values(

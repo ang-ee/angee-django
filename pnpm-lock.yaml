@@ -20,6 +20,9 @@ importers:
       '@angee/base':
         specifier: workspace:*
         version: link:../../../../packages/base
+      '@angee/operator':
+        specifier: workspace:*
+        version: link:../../operator/web
       '@angee/sdk':
         specifier: workspace:*
         version: link:../../../../packages/sdk

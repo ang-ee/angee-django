@@ -23,6 +23,19 @@ describe("iam addon manifest", () => {
     expect(legacyRoute?.component).toBe(route?.component);
   });
 
+  test("registers the console account-connect callback route", () => {
+    const route = iam.routes?.find((item) => item.name === "iam.connect.callback");
+    const legacyRoute = iam.routes?.find(
+      (item) => item.name === "iam.connect.callback.legacy",
+    );
+    expect(route?.path).toBe("/callback");
+    expect(route?.shell).toBe("console");
+    expect(route?.component).toBeTypeOf("function");
+    expect(legacyRoute?.path).toBe("/iam/oauth/callback");
+    expect(legacyRoute?.shell).toBe("console");
+    expect(legacyRoute?.component).toBe(route?.component);
+  });
+
   test("registers the console routes, with $id detail children for the DataPages", () => {
     const names = iam.routes?.map((route) => route.name) ?? [];
     // The federation/users DataPages each contribute a list + a `$id` record route.

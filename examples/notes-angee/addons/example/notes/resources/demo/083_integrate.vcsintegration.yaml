@@ -1,0 +1,5 @@
+# The VCS capability over the integration, using the `local` backend (reads the
+# working tree, no network).
+- xref: vcs_local_templates
+  integration: notes.integration_local_templates
+  backend_class: local

@@ -20,13 +20,14 @@ _CACHE_PREFIX = "angee.iam.oidc.state:"
 class StateFlow(StrEnum):
     """Which redirect mutation may consume one OIDC state token.
 
-    A token minted for a login must not complete a link (and vice versa);
+    A token minted for a login must not complete a link/connect (and vice versa);
     ``identity._validate_state_record`` fails closed when the flow does not
     match, so a leaked state cannot be replayed across flows.
     """
 
     LOGIN = "login"
     LINK = "link"
+    CONNECT = "connect"
 
 
 @dataclass(frozen=True, slots=True)

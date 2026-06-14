@@ -9,6 +9,7 @@ themselves).
 from __future__ import annotations
 
 from collections.abc import Iterator
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -20,6 +21,7 @@ from angee.integrate.models import Repository as AbstractRepository
 from angee.integrate.models import Source as AbstractSource
 from angee.integrate.models import Template as AbstractTemplate
 from angee.integrate.models import VCSIntegration as AbstractVCSIntegration
+from angee.integrate.vcs.backend import LocalVCSBackend
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,
@@ -124,14 +126,14 @@ def vcs_tables(transactional_db: Any) -> Iterator[None]:
                     schema_editor.delete_model(model)
 
 
-def _vcs_integration(slug: str, *, config: dict[str, Any]) -> Any:
-    """Create a stub-backed VCS integration whose host data rides on the config."""
+def _vcs_integration(slug: str, *, config: dict[str, Any], backend_class: str = "stub") -> Any:
+    """Create a VCS integration whose host (or local) data rides on the config."""
 
     integration = make_integration(slug)
     with system_context(reason="test vcs setup"):
         integration.config = config
         integration.save(update_fields=["config", "updated_at"])
-        return VCSIntegration.objects.create(integration=integration, backend_class="stub")
+        return VCSIntegration.objects.create(integration=integration, backend_class=backend_class)
 
 
 def _repo_names() -> set[str]:
@@ -211,3 +213,61 @@ def test_sync_refreshes_every_source(vcs_tables: None) -> None:
     with system_context(reason="test sync"):  # the scheduler / GraphQL action wrap sync() likewise
         assert vcs.sync() == 1
         assert Template.objects.count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_local_backend_materializes_templates_through_the_source_flow(vcs_tables: None, tmp_path: Any) -> None:
+    """A `local`-backed integration inventories a working tree into Template rows.
+
+    Drives the same ``discover → Source.refresh`` path the resource-seeded console
+    uses, proving the local backend wires through ``VCSIntegration → Source →
+    Template`` and that skip-dirs keep a stray ``copier.yml`` out of the inventory.
+    """
+
+    del vcs_tables
+    template_dir = tmp_path / "templates" / "workspaces" / "dev"
+    template_dir.mkdir(parents=True)
+    (template_dir / "copier.yml").write_text("_angee:\n  kind: workspace\n  name: Dev\n")
+    # A stray copier.yml inside a skip-dir under the source path must not be ingested.
+    stray = tmp_path / "templates" / "node_modules" / "pkg"
+    stray.mkdir(parents=True)
+    (stray / "copier.yml").write_text("_angee:\n  kind: workspace\n  name: Stray\n")
+
+    vcs = _vcs_integration(
+        "local",
+        config={"local_root": str(tmp_path), "local_name": "checkout"},
+        backend_class="local",
+    )
+
+    assert vcs.discover_repositories() == 1
+    assert _repo_names() == {"checkout"}
+    with system_context(reason="test"):
+        repository = Repository.objects.get(name="checkout")
+        source = Source.objects.create(repository=repository, kind="template", path="templates")
+
+    assert source.refresh() == 1
+    with system_context(reason="test read"):
+        template = Template.objects.get(source=source)
+        names = set(Template.objects.values_list("name", flat=True))
+    assert (template.kind, template.name, template.path) == ("workspace", "Dev", "templates/workspaces/dev")
+    assert "Stray" not in names
+
+
+def test_local_vcs_backend_walks_the_working_tree(tmp_path: Any) -> None:
+    """The local backend inventories a working tree — paths relative to root, `.git` skipped."""
+
+    template_dir = tmp_path / "templates" / "services" / "demo"
+    template_dir.mkdir(parents=True)
+    (template_dir / "copier.yml").write_text("_angee:\n  kind: service\n  name: demo\n")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "config").write_text("ignored")
+
+    backend = LocalVCSBackend(SimpleNamespace(config={"local_root": str(tmp_path), "local_name": "repo"}))
+
+    assert [repo.name for repo in backend.ls_repos()] == ["repo"]
+    entries = backend.ls_tree(None, ref="main", path="templates", recursive=True)
+    assert "templates/services/demo/copier.yml" in {e.path for e in entries if e.type == "blob"}
+    assert all(".git" not in entry.path for entry in entries)
+    assert backend.cat_file(None, ref="main", path="templates/services/demo/copier.yml").startswith(b"_angee")
+    with pytest.raises(FileNotFoundError):
+        backend.cat_file(None, ref="main", path="../escape")

@@ -13,6 +13,7 @@ class AgentsConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "angee.agents"
     label = "agents"
-    depends_on = ("angee.integrate",)
+    # operator: agent provisioning drives the daemon over its REST bridge server-side.
+    depends_on = ("angee.integrate", "angee.operator")
     schemas = "schema.schemas"
     permissions = "permissions.zed"

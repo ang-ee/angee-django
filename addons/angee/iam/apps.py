@@ -22,6 +22,11 @@ class IAMConfig(AppConfig):
     schemas = "schema.schemas"
     permissions = "permissions.zed"
 
+    resources = {
+        "install": ({"path": "resources/install/010_iam.oauthclient.yaml", "adopt": ["slug", "environment"]},),
+    }
+    """Public OAuth client catalogue seeded at install, adopted by slug/environment."""
+
     def ready(self) -> None:
         """Wire IAM-owned REBAC relationships after app population."""
 

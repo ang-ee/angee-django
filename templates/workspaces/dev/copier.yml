@@ -69,13 +69,6 @@ _angee:
         process_compose_port: "${alloc.process_compose}"
         playwright_user_data_dir: "${workspace.path}/.angee/data/chrome"
         playwright_browser: "${inputs.playwright_browser}"
-  persist:
-    app-data:
-      subpath: .angee/data
-      scope: workspace
-    chrome-profile:
-      subpath: .angee/data/chrome
-      scope: workspace
 
 topic:
   type: str

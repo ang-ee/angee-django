@@ -24,8 +24,15 @@ interface WorkspaceAction {
   run: (variables: WorkspaceActionVars) => Promise<DaemonActionData>;
 }
 
+export interface WorkspacesSectionProps {
+  /** Restrict the table to these workspace names; omit to show every workspace. */
+  names?: readonly string[];
+  /** Override the pane title (e.g. when embedded for one agent's workspace). */
+  title?: string;
+}
+
 /** Workspaces pane: the daemon's worktree workspaces with sync/destroy actions. */
-export function WorkspacesSection(): ReactNode {
+export function WorkspacesSection({ names, title }: WorkspacesSectionProps = {}): ReactNode {
   const t = useOperatorT();
   const confirm = useConfirm();
   const { snapshot, result, refetch } = useOperatorSnapshot({ workspaces: true });
@@ -35,7 +42,9 @@ export function WorkspacesSection(): ReactNode {
   const destroy = useOperatorAction<DaemonActionData, WorkspaceActionVars>(WORKSPACE_DESTROY_MUTATION);
   const busy = syncBase.result.fetching || destroy.result.fetching;
 
-  const workspaces = snapshot?.workspaces ?? [];
+  const workspaces = (snapshot?.workspaces ?? []).filter(
+    (workspace) => names === undefined || names.includes(workspace.name),
+  );
   const actions: readonly WorkspaceAction[] = [
     { field: "workspaceSyncBase", label: t("operator.workspaces.syncBase"), variant: "secondary", run: syncBase.run },
     { field: "workspaceDestroy", label: t("operator.workspaces.destroy"), variant: "ghost", dangerous: true, run: destroy.run },
@@ -68,7 +77,7 @@ export function WorkspacesSection(): ReactNode {
 
   return (
     <OperatorSection
-      title={t("section.operator.workspaces.title")}
+      title={title ?? t("section.operator.workspaces.title")}
       loading={result.fetching && !snapshot}
       error={result.error && !snapshot ? result.error : null}
       loadingMessage={t("operator.workspaces.loading")}

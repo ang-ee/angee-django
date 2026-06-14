@@ -18,6 +18,9 @@ export type {
   GitOpsSummary,
   CommitRef,
   MutationResult,
+  WorkspaceCreateInput,
+  ServiceCreateInput,
+  KeyValueInput,
 } from "../__generated__/operator";
 
 import type {

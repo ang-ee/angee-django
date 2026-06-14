@@ -10,6 +10,7 @@ and an :class:`InferenceProvider` (an ``integrate.Capability`` over an
 
 from __future__ import annotations
 
+import json
 from typing import Any, cast
 
 from django.apps import apps
@@ -24,6 +25,7 @@ from angee.agents.skills import parse_skill_meta
 from angee.base.fields import ImplClassField, SqidField, StateField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
+from angee.iam.credentials import CredentialKind
 from angee.integrate.models import Capability
 
 
@@ -133,6 +135,20 @@ class InferenceProvider(Capability):
         model = apps.get_model("agents", "InferenceModel")
         return int(model.objects.sync_from_provider(self))
 
+    def service_environment(self) -> dict[str, str]:
+        """Return credential-backed environment variables for rendered services."""
+
+        integration = getattr(self, "integration", None)
+        if integration is None:
+            return {}
+        return integration.credential_env_value()
+
+    @property
+    def credential(self) -> Any:
+        """Return the API credential backing this provider, drawn from its integration."""
+
+        return getattr(self.integration, "credential", None)
+
 
 class InferenceModelManager(RebacManager):
     """Manager owning the upsert of model rows from a provider's catalogue."""
@@ -199,6 +215,12 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
         """Return the model's display label."""
 
         return self.display_name or self.name
+
+    @property
+    def credential(self) -> Any:
+        """Return the API credential for this model, via its provider's integration."""
+
+        return self.provider.credential
 
 
 class SkillManager(RebacManager):
@@ -402,3 +424,130 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         """Return the agent's name."""
 
         return self.name
+
+    def mark_provisioned(self, *, workspace: str, service: str = "") -> None:
+        """Record the operator instance the provision flow rendered for this agent.
+
+        The daemon owns the workspace/service lifecycle; the server-side provision
+        flow renders them and calls this to persist the resulting instance names and
+        flip the agent to running. Clears any prior provisioning error. ``service``
+        is optional — a workspace-only agent renders no service.
+        """
+
+        self.workspace = workspace
+        self.service = service
+        self.status = cast(AgentStatus, AgentStatus.RUNNING)
+        self.last_error = ""
+        self.save(update_fields=["workspace", "service", "status", "last_error", "updated_at"])
+
+    def mark_deprovisioned(self) -> None:
+        """Clear the operator instance after teardown and mark the agent stopped."""
+
+        self.workspace = ""
+        self.service = ""
+        self.status = cast(AgentStatus, AgentStatus.STOPPED)
+        self.last_error = ""
+        self.save(update_fields=["workspace", "service", "status", "last_error", "updated_at"])
+
+    def mark_provision_failed(self, message: str) -> None:
+        """Record a provisioning failure: mark the agent errored, keeping the reason."""
+
+        self.status = cast(AgentStatus, AgentStatus.ERROR)
+        self.last_error = message[:2000]
+        self.save(update_fields=["status", "last_error", "updated_at"])
+
+    def service_environment(self) -> dict[str, str]:
+        """Return model-provider environment variables for rendered services."""
+
+        model = getattr(self, "model", None)
+        provider = getattr(model, "provider", None) if model is not None else None
+        if provider is None:
+            return {}
+        return cast(dict[str, str], provider.service_environment())
+
+    def provision_workspace_inputs(self) -> dict[str, str]:
+        """Resolve the ``agent-default`` workspace template inputs from this agent.
+
+        The structured fields (name, instructions, MCP servers) are the source of
+        truth, so they win over any same-named key in ``workspace_inputs`` (which
+        carries template-specific extras only). All values are stringified — Copier
+        and the daemon take string answers.
+        """
+
+        structured = {
+            "agent_name": self.name,
+            "instructions": self.instructions,
+            "mcp_json": json.dumps(self.mcp_config(), separators=(",", ":")),
+        }
+        merged = {**(self.workspace_inputs or {}), **structured}
+        return {key: str(value) for key, value in merged.items()}
+
+    def provision_service_inputs(self) -> dict[str, str]:
+        """Resolve the structured service-template inputs from this agent.
+
+        Carries the model handle and the credential-driven auth selection (prefer
+        OAuth: an OAuth credential renders the runtime's OAuth env var, a static key
+        the API-key env var — the service template owns the name↔kind map). The
+        secret *value* never appears here — only ``secret_name``; the operator-held
+        value is synced server-side. ``service_inputs`` supplies template-specific
+        extras (``permission_mode``, ``provider``) and loses to the structured keys.
+        """
+
+        structured: dict[str, str] = {}
+        model = getattr(self, "model", None)
+        if model is not None:
+            structured["model"] = model.name
+        # Advertise auth only when there is a usable secret to sync — otherwise the
+        # rendered service would reference a ${secret.<name>} the operator never gets
+        # (this must agree with the secret sync in the provision flow).
+        if self.inference_secret():
+            credential = self._inference_credential()
+            structured["auth_mode"] = (
+                "oauth" if credential.kind == CredentialKind.OAUTH else "api_key"
+            )
+            structured["secret_name"] = self.inference_secret_name()
+        merged = {**(self.service_inputs or {}), **structured}
+        return {key: str(value) for key, value in merged.items()}
+
+    def mcp_config(self) -> dict[str, Any]:
+        """Return the ``.mcp.json`` document for this agent's reachable MCP servers.
+
+        Only servers with a URL (HTTP/SSE) are addressable from the rendered
+        container; a stdio server is a local command with no URL and is skipped.
+        """
+
+        servers: dict[str, Any] = {}
+        for server in self.mcp_servers.all():
+            if not server.url:
+                continue
+            servers[server.name] = {"type": str(server.transport), "url": server.url}
+        return {"mcpServers": servers}
+
+    def inference_secret_name(self) -> str:
+        """Return the operator secret name holding this agent's inference token.
+
+        Stable and agent-scoped — the provision inputs reference it and the
+        (server-side) secret sync writes the credential value under it.
+        """
+
+        return f"agent-{self.sqid}-inference"
+
+    def inference_secret(self) -> str:
+        """Return the inference credential's secret value (API key or OAuth token), or ``""``.
+
+        Server-side only — the value is pushed to the operator secret store under
+        ``inference_secret_name()`` and never returned to the browser.
+        """
+
+        credential = self._inference_credential()
+        return str(credential.secret_value()) if credential is not None else ""
+
+    def _inference_credential(self) -> Any:
+        """Return the ``iam.Credential`` backing this agent's inference model, or ``None``.
+
+        Asks the model for its credential (the catalogue owns the
+        model→provider→integration→credential chain) rather than walking it here.
+        """
+
+        model = getattr(self, "model", None)
+        return model.credential if model is not None else None

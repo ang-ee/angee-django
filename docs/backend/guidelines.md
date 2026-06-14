@@ -280,6 +280,12 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 - **After adding or moving an addon** run `pnpm install`, and delete any stale
   gitignored `runtime/*/migrations/*.py` that imports a moved module before
   `makemigrations`.
+- **OAuth/OIDC outbound requests must send an honest, non-browser User-Agent.**
+  Anthropic's token-endpoint edge 429s spoofed browser/curl User-Agents with a
+  `rate_limit_error` (before any auth check) and 403s urllib's `Python-urllib`
+  default; an honest client UA passes. `angee.iam.oidc.client` owns the value
+  (`_USER_AGENT`); never reintroduce a browser spoof or fall back to urllib's
+  default.
 - **An `ImplClassField` builds its enum at model-import time from its
   `registry_setting`** — the key→path mapping (e.g. `ANGEE_STORAGE_BACKEND_CLASSES`)
   is supplied by the owning addon's `autoconfig`, so every settings module that

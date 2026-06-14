@@ -97,8 +97,10 @@ Frontend `@angee/agents` (`addons/angee/agents/web/`): menu groups
 - [x] `angee build` → `makemigrations base agents` → `migrate` → `rebac sync` → `schema --check` — all green
 - [x] ruff + mypy on `addons/angee/agents` — clean
 - [x] frontend `@angee/agents` console + host registration (Agents/Templates, Skills [read-only], MCP Servers/Tools, Inference Providers/Models). Agents/Templates split via a server-side `AgentFilter`/`AgentOrder` on the `agents` query. Verified: agents package `tsc` clean + host `vite build` clean (host-wide `tsc` is blocked only by operator's pre-existing daemon-codegen debt).
-- [ ] agents test module (concrete-model pattern of `tests/test_integrate_vcs.py`): skill discovery + provider/model upsert + console CRUD + M2M membership actions
-- [ ] add `ANGEE_INFERENCE_BACKEND_CLASSES` to `tests/settings.py` + concrete agents models to `tests/conftest.py` when the test module lands
+- [x] agents test module — `tests/test_agents.py` (6 tests): skill discovery via `sync_from_source`/`SKILL.md`, inference-model sync (stub + `manual` backend), `parse_skill_meta`; `ANGEE_INFERENCE_BACKEND_CLASSES` + `StubInferenceBackend` added to `tests/settings.py`/`conftest.py`. No regression (integrate/scheduler/compose + agents = 32 pass together).
+- [x] **Milestone 1 shipped + live-verified.** Console renders end-to-end via Playwright (admin login, all 8 tabs, zero console errors); enum create form (Backend Class select) and the Skills→Sources tab confirmed.
+
+GraphQL console CRUD/REBAC unit test is the remaining deferred test (needs all six concrete agents models + importing `agents.schema`); covered for now by the live render + `schema --check`.
 
 ### Frontend review outcomes (react-reviewer)
 
@@ -108,28 +110,33 @@ no icon collision). Fixed: SkillsPage list-only `DataPage` crash (added a read-o
 `ok:false` business failure instead of a green toast; immutable relation pickers
 (`integration`/`provider`/`server`) marked `createOnly`.
 
-**Open must-verify — enum write-casing (save path).** The auto enum→select submits
-the GraphQL enum NAME (`CHAT`, `EXTERNAL`, `HTTP`, `MANUAL`) because the SDL only
-exposes enum names, while the inputs are lowercase `String` (the repo convention —
-see the backend "status read/write-asymmetric" pitfall). `status` avoids it via
-`widget="statusbar"`; agents is the first console to write *non-status* enums
-(`backendClass`, `modelUse`, `placement`, `transport`) through the bare-`<Field>`
-select. Whether this actually fails depends on strawberry-django coercing name→value
-on the `String` input — must be checked live by saving an `InferenceModel`/`MCPServer`.
-If it fails, fix at the backend boundary (enum-typed inputs, or lowercase in the
-resolver) and add a `docs/frontend/guidelines.md` Pitfalls entry.
+**Enum write-casing — FIXED** (the merge brought the framework's documented fix).
+`backendClass`/`modelUse`/`placement`/`transport` now submit the lowercase write
+value via a shared `useEnumOptions` hook (SDL metadata → `value.toLowerCase()`) +
+`createOnly`. **Skills → Sources tab — DONE** (DataPage over `integrate.Source`
+filtered to `kind=skill` + a `SourceFilter` added to the integrate console).
+
+### Console-polish outcomes
+
+- **Per-tab create defaults — DONE.** Added `DataPage.createDefaults` (wired to
+  `FormView.defaultValues`, create-only) in `@angee/base`; the Templates tab seeds
+  `is_template=true` and the skill-sources tab seeds `kind="skill"`.
+- **Agent M2M membership (skills/MCP) — backend DONE.** `skills`/`mcpServers`/
+  `mcpTools` are now `[ID!]` on `AgentPatch`; strawberry-django's update resolver
+  `.set()`s them (verified by `tests/test_agents_graphql.py`), so the explicit
+  `setAgent*` actions were dropped. The agent is fully configurable via `updateAgent`.
+- **GraphQL console test — DONE.** `tests/test_agents_graphql.py` (3 tests): M2M
+  attach/clear via `updateAgent`, agent-update admin gating, `refreshProviderModels`
+  gating. (20 backend tests pass together with integrate VCS + scheduler.)
 
 ### Frontend follow-ups (deferred)
 
-- **Live-render verification** — bring up `angee dev` and confirm the Agents/Templates
-  filter returns the right rows and the read-only Skills page renders.
-- **Skills → Sources tab** — deferred with the integrate VCS console frontend
-  handover; needs a `kind` filter on `integrate.Source` too.
-- **Agent skill/MCP membership editor** — backend `setAgentSkills`/`setAgentMcpServers`/
-  `setAgentMcpTools` exist; the console needs a multi-select relation widget to drive
-  them (none in `@angee/base` yet).
-- **Templates-tab create default** — creating on the Templates tab does not yet
-  default `is_template=true`; today it is an editable switch on the agent form.
+- **Agent skill/MCP membership editor (UI widget).** The backend is clean
+  (`updateAgent` sets the M2M), but the `@angee/base` `many2many` widget reads a list
+  of *ids* while `AgentType.skills` reads as nested `SkillType` objects — a read-shape
+  impedance with no repo precedent. A clean editor needs either an ids projection on
+  `AgentType` or a framework M2M-form convention; best designed alongside Milestone 2
+  (when the selections actually render into a workspace).
 
 ## Review follow-ups (deferred, not yet actioned)
 
@@ -149,6 +156,197 @@ Note: the full `pytest` suite has a pre-existing collection-order failure on `ma
 (`test_integrate_graphql.py` imports `integrate.schema` before `test_integrate_vcs.py`
 registers the concrete VCS models) — unrelated to this addon; integrate tests run
 per-file. The agents test module follows the same per-file concrete-model pattern.
+
+## Milestone 2 — operator provisioning (planned)
+
+Render an `Agent` into a running operator **workspace** + **service** from its
+`workspace_template`/`service_template` (+ typed `*_inputs`) and `instructions`,
+tracking the result in `service`/`workspace`/`status`/`last_error`.
+
+**Architecture — server-orchestrated** (pivoted 2026-06-14 from browser-orchestrated).
+`provisionAgent(id)` is one Django flow; the browser only triggers it and watches
+live status. This unlocks provisioning for non-admins (the server acts on their
+behalf) and keeps the credential value entirely server-side.
+
+1. `provisionAgent` (admin-gated console mutation) resolves the agent's template
+   inputs + credential (`provision_*_inputs`), then drives the daemon over its **REST
+   API** via `OperatorDaemon` (admin bearer): `set_secret` → resolve template refs
+   from `GET /templates` → `POST /workspaces` → `POST /services/create` (start=true) →
+   `mark_provisioned`. Failure → `mark_provision_failed` (status=error). The daemon
+   has a REST API, so Django uses REST — **not** a GraphQL client.
+2. `deprovisionAgent` → `POST /workspaces/{name}/destroy?purge=true` + `mark_deprovisioned`.
+3. **Live status is browser-side** via the daemon: the reused operator
+   `WorkspacesSection`/`ServicesSection` (filtered to the agent's instance, wrapped in
+   `OperatorTransportProvider`). The daemon exposes `onWorkspaceStatusChange`/
+   `onServiceLogs`/`onWorkspaceLogs` subscriptions — switching the status widgets from
+   poll to subscription is the next polish step.
+
+`OperatorDaemon` gained REST methods (`set_secret`, `resolve_template_ref`,
+`create_workspace`, `create_service`, `destroy_workspace`) on a shared `_request`.
+`@angee/agents` depends on `@angee/operator` (web, for the status widgets) and the
+agents AppConfig `depends_on` operator (backend, for the daemon bridge). The browser
+daemon-create hooks (`useWorkspaceCreate` etc.) stay in `@angee/operator/runtime` for
+the operator's own Templates pane, unused by agents now. Execution is **sync
+render+register** (create registers fast; the container build/start is the daemon's
+async job, surfaced via the status subscription) — no Django task runner needed.
+
+**Reviewer fixes applied (pivot review, 2026-06-14):** partial-failure compensation
+(`_render_agent` tears the workspace back down if the service render fails); an
+idempotency guard (refuse provisioning an agent that already holds a workspace);
+secret/auth predicate agreement (advertise `auth_mode`/`secret_name` only when a
+usable secret exists); find-the-owner (`InferenceProvider.credential`/
+`InferenceModel.credential` accessors — `Agent` no longer walks the
+model→provider→integration→credential chain); typed `_RenderPlan` dataclass (was a
+stringly-typed dict); dropped unearned daemon params (`name`/`purge`/explicit
+`start`); URL-encoded path segments; reconciled the `OperatorConfig`/`OperatorDaemon`/
+`mark_provisioned` docstrings to the server-orchestrated reality; failure-path test.
+**Deferred:** `select_for_update` for true concurrency (the workspace guard covers the
+common re-provision case); drive or drop the unused `AgentStatus.PROVISIONING` (the
+sync flow has no observable intermediate); `OperatorDaemon.is_configured` guard dedup;
+the `record as AgentProvisionRecord` projection cast (accepted, fields are optional).
+
+### Build decomposition
+- **Agent-runtime Copier templates** under `templates/` (the substance; don't exist
+  yet): a workspace + service template taking `instructions` (+ skills/MCP/model) as
+  inputs and rendering `AGENTS.md`/`CLAUDE.md` + runtime wiring.
+- **Resolve the daemon template ref from the daemon, not Django.** The daemon owns
+  the `template: String!` ref format — it emits it in its own `templates` listing as
+  `TemplateDescriptor.ref`. The provision flow matches the agent's
+  `workspace_template`/`service_template` (`path` + `kind`) against
+  `useOperatorSnapshot({templates:true})` to get the ref, so the undocumented format
+  stays owned by the daemon instead of being hardcoded in a Django `operator_ref()`.
+- **Write-back action** (`provisionAgent` / `deprovisionAgent`) — admin-gated Django
+  mutation; the only server-side piece. Persists `service`/`workspace`/`status`/
+  `last_error` after the browser's daemon calls succeed (or fail). Django owns this
+  state; the live runtime health is read from the daemon, not mirrored here.
+- **Reuse + enhance the operator's daemon widgets — do NOT hand-roll in agents**
+  (architect directive, 2026-06-14). The operator addon already owns the daemon UI
+  (`WorkspacesSection`/`ServicesSection`, the `OperatorTransportProvider` +
+  `useOperatorSnapshot`/`useOperatorAction` data layer, `StateTag`,
+  `runDaemonAction`), but today `@angee/operator` exports only its `BaseAddon`
+  default. Work lands **in `@angee/operator`**, then agents consumes it:
+  - Export the reusable surface (transport provider + snapshot/action hooks + types +
+    a *parameterizable* workspace/service status widget that can render either the
+    full list or a single instance by name). Extract the presentational table from the
+    Sections so the Section (full list) and the agents embed (one agent's instance)
+    share it.
+  - Add the missing create flow **in the operator** (finish the `TODO(S6)` in
+    `TemplatesSection`): `workspaceCreate`/`serviceCreate` documents + a reusable
+    provision hook/widget. The operator's own Templates pane and the agents console
+    both call it.
+- **Console provision flow** in `@angee/agents` — a *thin* consumer: embed the
+  operator's reusable workspace/service status widget (filtered to the agent's
+  instance names), trigger provisioning via the operator's reusable provision hook,
+  then call the Django write-back. No bespoke daemon plumbing in agents.
+- **Skill/MCP/model membership editor** (the M1-deferred M2M widget) — needed for a
+  *useful* agent, but not for the first end-to-end provisioning slice (instructions +
+  templates alone provision); sequence it after the vertical slice works.
+
+### Progress (2026-06-14)
+- **Operator reusable surface — DONE.** `@angee/operator/runtime` subpath barrel
+  exposes the transport provider + `useOperatorSnapshot`/`useOperatorAction` +
+  `StateTag`/`OperatorSection` + daemon types; `WorkspacesSection`/`ServicesSection`
+  take an optional `names` filter + `title` so the same widget renders the full list
+  (operator console) or one agent's instance (agents console). Create capability
+  (`WORKSPACE_CREATE_MUTATION`/`SERVICE_CREATE_MUTATION` + input types) exported for
+  reuse via `useOperatorAction`. (operator typecheck + 13 tests green.)
+- **Backend write-back — DONE.** `Agent.mark_provisioned()`/`mark_deprovisioned()`
+  own the status/instance-name transition; `provisionAgent`/`deprovisionAgent`
+  admin-gated actions dispatch to them. Test + SDL regenerated. (mypy/ruff/build/
+  schema --check/11 agents tests green.)
+- **Framework `recordExtras` slot — DONE.** `@angee/base` `DataPage` → `FormView`
+  gained a `recordExtras({recordId, reload})` slot, rendered below the form (outside
+  `<form>`, so a panel's buttons never submit) for a saved record only. Reusable by
+  any addon. (base typecheck + 91 view tests green.)
+- **Agents consumer (Slice 4) — DONE.** `@angee/agents` depends on `@angee/operator`
+  (first cross-addon web dep). `AgentProvisioning.tsx` is a two-layer panel: the
+  outer (console urql context) owns the agent record read + `provisionAgent`/
+  `deprovisionAgent` write-backs; the inner (inside `OperatorTransportProvider`, whose
+  urql context is the daemon) resolves the daemon template ref from
+  `useOperatorSnapshot({templates})`, runs `workspaceCreate`→`serviceCreate`→destroy,
+  and embeds the reused `WorkspacesSection`/`ServicesSection` filtered to the agent's
+  instance. Wired into the Agents tab (not Templates) via `recordExtras`. (agents +
+  operator + base typecheck, 91 base tests, host build all green.)
+
+### Reviewer fixes + deferrals (2026-06-14)
+Applied from the arch/django/react review of the M2 diff: the daemon-shape decoders
+(`resolveTemplateRef`/`toAnswerList`) + typed create/destroy hooks moved into
+`@angee/operator/runtime` (`data/provision.ts`) so the daemon's owner decodes its own
+shape and agents is the thin consumer (closes directive #4; also gives the handlers a
+stable `.run`); provision records the workspace *before* the service so a service
+failure can't orphan an unrecoverable workspace; `mark_deprovisioned` clears
+`last_error`; the deprovision admin-gate is now tested; the form-column width is one
+constant in `FormView`. **Deferred:** extract a shared presentational instance table
+so the embed runs one daemon poller instead of three (arch); bound/guard
+`workspace`/`service` length so a malformed daemon name degrades cleanly on Postgres
+(django); re-indent the `<>`-wrapped `FormView` return (cosmetic).
+
+### Agent-runtime Copier templates — AUTHORED (2026-06-14)
+Built against the operator's real contract (studied `angee-operator/`): the operator
+owns ingress via a service `route: {port, auth: forward}` block (replaces `ports:`,
+publishes nothing, central Caddy forward-auths each upgrade with operator-minted route
+tokens) and secrets via `${secret.<name>}` + admin-bearer `secretSet`. So the
+templates carry **no** in-container caddy/verifier/HMAC the prototype hand-rolled.
+- `templates/workspaces/agent-default/` (`kind:workspace`) — renders `AGENTS.md`
+  (from `instructions`), `CLAUDE.md`→`AGENTS.md` symlink, `.mcp.json` (from `mcp_json`).
+  Inputs: `agent_name`, `instructions`, `mcp_json`.
+- `templates/services/claude-code/` + `templates/services/opencode/` (`kind:service`)
+  — one container service, `route: {port:3007, auth:forward}`, `workspace://` mount,
+  API key via `${secret.<name>}`; single-process `stdio-to-ws` Dockerfile.
+- Validated: copier.yml YAML + `parse_template_meta` discovery (kind/name/inputs) +
+  mcp_json default JSON. Jinja render is for the live test (jinja2 ships with Copier).
+
+### Agent fields → template inputs — RESOLVER DONE (2026-06-14)
+`Agent` owns the mapping (build on the merged `service_environment()` plumbing):
+- `provision_workspace_inputs()` → `agent_name` (name), `instructions`, `mcp_json`
+  (assembled from the agent's HTTP/SSE MCP servers via `mcp_config()`); structured
+  fields win over same-named `workspace_inputs` keys.
+- `provision_service_inputs()` → `model` (the handle) + **credential-driven auth**:
+  `auth_mode` = `oauth` when the model→provider→integration credential is
+  `CredentialKind.OAUTH`, else `api_key` (prefer OAuth); `secret_name` =
+  `inference_secret_name()` (agent-scoped, `agent-<sqid>-inference`). The secret
+  *value* is never here — only the name. `service_inputs` supplies template extras
+  (`permission_mode`, `provider`) and loses to the structured keys.
+- The **service template owns the name↔kind map**: claude-code renders
+  `CLAUDE_CODE_OAUTH_TOKEN` for `auth_mode=oauth`, `ANTHROPIC_API_KEY` for `api_key`
+  — so the resolver→template chain handles both auth modes end-to-end.
+- Tested (`make_integration` extended with a `kind=` param): workspace inputs from
+  fields, auth_mode from credential kind (static→api_key, oauth→oauth). ruff/mypy/14
+  agents tests/build/schema green.
+- **Next:** expose the resolver on `AgentType` (e.g. `provisioningInputs`) so the
+  console reads it instead of raw `*_inputs`; then the operator-bearer secret sync.
+
+### Live daemon validation + local template discovery (2026-06-14)
+Smoke-tested the daemon render path via the `angee` CLI against the running stack —
+the daemon REST contract `OperatorDaemon` targets is **validated** (workspace + service
+render correctly). Found + fixed three bugs the unit tests (mocked daemon) missed:
+- **`resolve_template_ref` matched the wrong field** — the daemon descriptor's `path`
+  is an absolute filesystem path; fixed to match `(name, kind) → ref`.
+- **`.mcp.json`/`AGENTS.md` HTML-escaped** (`&quot;`) — the renderer autoescapes; fixed
+  with `| safe`.
+- **Service `build.context: ./docker`** rejected — the operator installs the rendered
+  `docker/` at `.angee/services/<name>/docker`; fixed the context to point there.
+
+The rendered service is exactly right: `route:{port:3007,auth:forward}` (central caddy),
+`mounts: workspace://<ws>:/workspace`, `env.ANTHROPIC_API_KEY: ${secret.<name>}`.
+
+**Template discovery — solved with a `local` VCS backend** (per the architect): the
+templates are in VCS, so `integrate.vcs.backend.LocalVCSBackend` (registered as `local`
+in `ANGEE_VCS_BACKEND_CLASSES`) inventories a working tree from
+`integration.config["local_root"]` — Django discovers the agent templates through the
+exact `VCSIntegration(local) → Source(kind=template) → TemplateManager.sync_from_source
+→ Template` flow, no network. Unit-tested.
+
+### Remaining to render end-to-end (Django → daemon)
+- **Stack restart** to load the new Django code (the `local` backend + the
+  `resolve_template_ref` fix + the `LOCAL` enum). The template fixes are already live
+  (the daemon reads `templates/` from the symlink).
+- **Seed the local template source**: a `VCSIntegration(backend_class="local",
+  config={"local_root": <repo>})` + `discoverRepositories` + a `kind=template` Source +
+  `refreshSource` → `Template` rows (via the console/CLI, or a resources fixture for the
+  example). Then an agent's `workspace_template`/`service_template` FKs point at them.
+- **OAuth refresh deferred** (`OAuthCredentialHandler.refresh` stub — "wired in S3").
+- `WorkspaceCreatePreflight` is worth wiring before create.
 
 ## Dropped from the reference prototype
 

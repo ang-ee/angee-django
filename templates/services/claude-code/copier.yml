@@ -1,0 +1,53 @@
+_min_copier_version: "9.0"
+_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+
+_angee:
+  schema: 1
+  kind: service
+  name: claude-code
+  description: >-
+    Claude Code agent (ACP over a WebSocket) as a container service. Mounts an
+    agent workspace at /workspace and joins the operator's central Caddy edge;
+    the operator mints short-lived route tokens and forward-auths every upgrade,
+    so the service carries no in-container Caddy, token verifier, or auth secret.
+  name_pattern: "agent-${workspace.name}"
+  inputs:
+    auth_mode:
+      type: str
+      default: api_key
+      help: api_key (ANTHROPIC_API_KEY) or oauth (CLAUDE_CODE_OAUTH_TOKEN).
+    secret_name:
+      type: str
+      default: anthropic-api-key
+      help: >-
+        Name of the operator secret holding the Anthropic API key (or OAuth
+        token). The operator injects the value at compose-render; it never
+        transits the browser.
+    model:
+      type: str
+      default: ""
+      help: Optional Claude model override (CLAUDE_MODEL).
+    permission_mode:
+      type: str
+      default: acceptEdits
+      help: Claude Code permission mode (default | acceptEdits | plan | bypassPermissions).
+
+auth_mode:
+  type: str
+  default: api_key
+  choices: [api_key, oauth]
+
+secret_name:
+  type: str
+  default: anthropic-api-key
+
+model:
+  type: str
+  default: ""
+
+permission_mode:
+  type: str
+  default: acceptEdits
+  choices: [default, acceptEdits, plan, bypassPermissions]

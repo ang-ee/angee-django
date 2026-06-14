@@ -1,0 +1,6 @@
+# One model in the provider catalogue. `name` is what the agent passes to the rendered
+# container as CLAUDE_MODEL — change it to any model your plan serves.
+- xref: model_claude_demo
+  provider: notes.provider_anthropic_demo
+  name: claude-sonnet-4-6
+  display_name: Claude Sonnet 4.6

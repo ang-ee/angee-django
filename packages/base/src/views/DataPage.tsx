@@ -13,7 +13,6 @@ import {
   DialogPortal,
   DialogRoot,
 } from "../ui/dialog";
-import { DropdownMenu } from "../ui/dropdown-menu";
 import { DeletePreviewDialog } from "./DeletePreviewDialog";
 import {
   ListView,
@@ -125,6 +124,12 @@ export interface DataPageProps<TRow extends Row = Row> {
   recordSmartButtons?: readonly RecordSmartButtonDescriptor[];
   /** Hides the built-in "New" button when the host owns creation. */
   hideCreate?: boolean;
+  /** Field values seeded into the create form (create only, not edit) — e.g. a
+   * filtered list creating rows that match its filter. */
+  createDefaults?: Record<string, unknown>;
+  /** Custom content rendered below the record form for a saved record (not on
+   * create) — e.g. an operator status/provisioning panel. See `FormView.recordExtras`. */
+  recordExtras?: FormViewProps["recordExtras"];
   rowHref?: (row: TRow) => string;
   className?: string;
 }
@@ -255,6 +260,8 @@ function DataPageBody<TRow extends Row = Row>({
   returning,
   recordSmartButtons = [],
   hideCreate = false,
+  createDefaults,
+  recordExtras,
   className,
 }: DataPageBodyProps<TRow>): React.ReactElement {
   const resolvedRecordId = recordController.recordId;
@@ -373,13 +380,13 @@ function DataPageBody<TRow extends Row = Row>({
     handleCloseRecord?.();
   }, [handleCloseRecord]);
   const recordDelete = useBulkDelete(model, recordDeleteIds, handleRecordDeleted);
-  const recordHeaderStart = open ? (
-    <RecordActions
-      canDelete={recordDeleteIds.size > 0}
-      isPending={recordDelete.isPending}
-      onDelete={recordDelete.deleteInitiate}
-    />
-  ) : null;
+  const recordDeleteAction = open
+    ? {
+        canDelete: recordDeleteIds.size > 0,
+        isPending: recordDelete.isPending,
+        onDelete: recordDelete.deleteInitiate,
+      }
+    : undefined;
   const recordHeaderActions = open ? (
     <RecordHeaderActions
       view={dataView.state.view}
@@ -438,9 +445,12 @@ function DataPageBody<TRow extends Row = Row>({
       groups={resolvedFormGroups}
       actions={resolvedFormActions}
       {...formRenderProps}
+      defaultValues={resolvedCreating ? createDefaults : undefined}
+      recordExtras={resolvedCreating ? undefined : recordExtras}
       onSaved={handleSaved}
-      toolbarStart={composeNodes(formRenderProps.toolbarStart, recordHeaderStart)}
+      toolbarStart={formRenderProps.toolbarStart}
       toolbar={composeNodes(formRenderProps.toolbar, recordHeaderActions)}
+      deleteAction={recordDeleteAction}
     />
   ) : null;
 
@@ -818,43 +828,6 @@ interface RecordNavigation {
 
 const EMPTY_RECORD_ID_SET: ReadonlySet<string> = new Set();
 const EMPTY_ACTIONS: readonly ActionDescriptor[] = [];
-
-function RecordActions({
-  canDelete,
-  isPending,
-  onDelete,
-}: {
-  canDelete: boolean;
-  isPending: boolean;
-  onDelete: () => void;
-}): React.ReactElement {
-  return (
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger
-        render={
-          <Button type="button" variant="ghost" size="md">
-            <Glyph name="more-vertical" />
-            Actions
-          </Button>
-        }
-      />
-      <DropdownMenu.Portal>
-        <DropdownMenu.Positioner sideOffset={6} align="start">
-          <DropdownMenu.Content className="w-44">
-            <DropdownMenu.Item
-              variant="danger"
-              disabled={!canDelete || isPending}
-              onClick={onDelete}
-            >
-              <Glyph name="trash" />
-              Delete
-            </DropdownMenu.Item>
-          </DropdownMenu.Content>
-        </DropdownMenu.Positioner>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
-  );
-}
 
 function RecordHeaderActions({
   view,

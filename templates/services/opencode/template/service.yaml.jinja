@@ -1,0 +1,29 @@
+# One service entry appended to the outer stack by `service create`. Routed through
+# the operator's central Caddy (see claude-code/service.yaml.jinja) — `route:` replaces
+# `ports:`, the operator owns edge auth, and the API key is an operator-held secret.
+{%- set key_secret = secret_name if secret_name else provider ~ "-api-key" %}
+services:
+  {{ service_name }}:
+    runtime: container
+    build:
+      # The operator installs the rendered docker/ at .angee/services/<name>/docker
+      # and requires the build context to resolve there.
+      context: ./.angee/services/{{ service_name }}/docker
+    mounts:
+      - "workspace://{{ workspace_name }}:/workspace"
+    env:
+{%- if provider == "openai" %}
+      OPENAI_API_KEY: "${secret.{{ key_secret }}}"
+{%- elif provider == "openrouter" %}
+      OPENROUTER_API_KEY: "${secret.{{ key_secret }}}"
+{%- elif provider == "groq" %}
+      GROQ_API_KEY: "${secret.{{ key_secret }}}"
+{%- else %}
+      ANTHROPIC_API_KEY: "${secret.{{ key_secret }}}"
+{%- endif %}
+{%- if model %}
+      OPENCODE_MODEL: "{{ model }}"
+{%- endif %}
+    route:
+      port: 3007
+      auth: forward

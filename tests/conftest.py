@@ -16,6 +16,7 @@ from django.db import connection, models
 from django.test import RequestFactory
 from rebac import actor_context, system_context
 
+from angee.agents.backends import InferenceBackend, InferenceModelSpec
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.iam.credentials import CredentialKind
 from angee.iam.models import Credential as AbstractCredential
@@ -165,14 +166,23 @@ INTEGRATE_TEST_MODELS = (Vendor, Integration)
 """Concrete integration catalogue/integration models created on demand by integrate fixtures."""
 
 
-def make_integration(slug: str) -> Any:
+def make_integration(
+    slug: str,
+    *,
+    kind: Any = CredentialKind.STATIC_TOKEN,
+    material: dict[str, Any] | None = None,
+) -> Any:
     """Create the iam credential chain and an integrate ``Integration`` for tests.
 
     Builds owner → OAuth client → credential → vendor → integration so a
-    capability/bridge fixture has an integration to run over. Requires the iam +
-    integrate test tables (see ``INTEGRATE_TEST_MODELS``).
+    capability/bridge fixture has an integration to run over. ``kind``/``material``
+    pick the credential kind (default a static token); pass
+    ``kind=CredentialKind.OAUTH`` for an OAuth-backed integration. Requires the iam
+    + integrate test tables (see ``INTEGRATE_TEST_MODELS``).
     """
 
+    if material is None:
+        material = {"access_token": "token"} if kind == CredentialKind.OAUTH else {"api_key": "x"}
     user_model = get_user_model()
     with system_context(reason="test integrate integration setup"):
         user = user_model.objects.create_user(username=f"{slug}-owner", email=f"{slug}@example.com")
@@ -181,12 +191,7 @@ def make_integration(slug: str) -> Any:
             display_name=slug.title(),
             client_id=f"{slug}-cid",
         )
-        credential = Credential.objects.upsert_for_user(
-            user,
-            oauth_client,
-            CredentialKind.STATIC_TOKEN,
-            {"api_key": "x"},
-        )
+        credential = Credential.objects.upsert_for_user(user, oauth_client, kind, material)
         vendor = Vendor.objects.create(slug=slug, display_name=slug.title())
         return Integration.objects.create(vendor=vendor, credential=credential, owner=user)
 
@@ -246,6 +251,21 @@ class StubVCSBackend(VCSBackend):
 
         del vcs_integration, request
         return True
+
+
+class StubInferenceBackend(InferenceBackend):
+    """In-memory inference backend for tests; canned models ride on ``provider.config``.
+
+    Registered as the ``stub`` key in the test ``ANGEE_INFERENCE_BACKEND_CLASSES`` so an
+    ``InferenceProvider(backend_class="stub")`` resolves to it. Each test injects
+    ``stub_models`` (a list of ``InferenceModelSpec`` kwargs) through the provider config.
+    """
+
+    def list_models(self) -> list[InferenceModelSpec]:
+        """Return the models configured on the provider's ``config``."""
+
+        return [InferenceModelSpec(**spec) for spec in self.provider.config.get("stub_models", [])]
+
 
 class Link(AbstractLink):
     """Concrete knowledge wikilink edge used by source-addon tests."""

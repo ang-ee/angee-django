@@ -144,6 +144,12 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   `changes(Model, field="<model>Changed")` in its `schema.py` refreshes on local
   writes only (no live push, no error). Add the subscription to opt a model into
   live updates; omit it and you simply get local-write invalidation.
+- **`createDefaults` needs a submittable field, never `readOnly`.** `DataPage`'s
+  `createDefaults` seeds the create form, but `FormView.mutationData` drops every
+  `readOnly` field from the payload — so a `readOnly` field pinned by `createDefaults`
+  is silently *not* sent, failing a required create input. Use `createOnly` (editable
+  on create carrying the seed, locked on edit) or a plain field; reserve `readOnly`
+  for values the create input does not accept.
 
 ## Checks
 

@@ -19,6 +19,69 @@ from angee.iam.models import AccountStatus
 from tests.conftest import Credential, ExternalAccount, OAuthClient, _create_missing_tables
 
 
+def test_oauth_client_blank_client_id_means_needs_client() -> None:
+    """Unconfigured public-provider placeholders validate without a client id."""
+
+    oauth_client = OAuthClient(
+        slug="anthropic",
+        display_name="Anthropic",
+        client_id="",
+        is_enabled=True,
+    )
+
+    oauth_client.full_clean(validate_unique=False, validate_constraints=False)
+
+    assert oauth_client.configuration_state == "needs_client"
+
+
+def test_resolve_connect_redirect_picks_auto_or_manual() -> None:
+    """A fixed public client redirects back only on localhost; elsewhere it pastes."""
+
+    plain = OAuthClient(slug="google", client_id="g")
+    assert plain.resolve_connect_redirect("https://app.example/callback") == (
+        "https://app.example/callback",
+        "auto",
+    )
+
+    manual = "https://platform.claude.com/oauth/code/callback"
+    fixed = OAuthClient(slug="anthropic", client_id="a", manual_redirect_uri=manual)
+    assert fixed.resolve_connect_redirect("http://localhost:5177/callback") == (
+        "http://localhost:5177/callback",
+        "auto",
+    )
+    # 127.0.0.1 is not the allow-listed loopback host, and a remote origin can't round-trip
+    # the session — both fall back to the manual paste callback.
+    assert fixed.resolve_connect_redirect("http://127.0.0.1:5177/callback") == (manual, "manual")
+    assert fixed.resolve_connect_redirect("https://console.example/callback") == (manual, "manual")
+
+
+def test_oauth_client_claim_accessors_support_dotted_paths() -> None:
+    """Provider profile documents can expose identity claims below nested objects."""
+
+    oauth_client = OAuthClient(
+        slug="anthropic",
+        display_name="Anthropic",
+        client_id="anthropic-client",
+        external_id_claim="account.uuid",
+        email_claim="account.email_address",
+        display_name_claim="account.display_name",
+        avatar_url_claim="account.avatar_url",
+    )
+    claims = {
+        "account": {
+            "uuid": "acct_123",
+            "email_address": "claude@example.com",
+            "display_name": "Claude User",
+            "avatar_url": "https://avatar.example/claude.png",
+        },
+    }
+
+    assert oauth_client.external_id_from_claims(claims) == "acct_123"
+    assert oauth_client.email_from_claims(claims) == "claude@example.com"
+    assert oauth_client.display_name_from_claims(claims, "fallback@example.com") == "Claude User"
+    assert oauth_client.avatar_url_from_claims(claims) == "https://avatar.example/claude.png"
+
+
 @pytest.mark.django_db(transaction=True)
 def test_connection_managers_are_idempotent_and_delegate_static_token_material() -> None:
     """External account linking and credential upsert are idempotent."""
@@ -163,6 +226,53 @@ def test_connection_managers_authorize_their_own_writes() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_upsert_for_user_labels_the_credential_from_provider_and_subject() -> None:
+    """A provider credential is named on create from its provider + subject, create-only.
+
+    The relation-picker representation reads the ``name`` column, so an OAuth row (which
+    carries no name of its own) needs one to be pickable.
+    """
+
+    created_models = _create_missing_tables()
+    try:
+        user = get_user_model().objects.create_user(username="namer", email="namer@example.com")
+        call_command("rebac", "sync", verbosity=0)
+        with system_context(reason="test name"):
+            oauth_client = OAuthClient.objects.create(
+                slug="example", display_name="Example prod", client_id="example-client"
+            )
+            account = ExternalAccount.objects.link(
+                oauth_client, "ext-name", owner=user, email="picker@example.com"
+            )
+            credential = Credential.objects.upsert_for_user(
+                user,
+                oauth_client,
+                CredentialKind.STATIC_TOKEN,
+                {"api_key": "k"},
+                external_account=account,
+            )
+            assert credential.name == "Example prod (picker@example.com)"
+
+            # Create-only: a rename survives a later upsert (token refresh / reconnect).
+            credential.name = "Renamed"
+            credential.save(update_fields=["name", "updated_at"])
+            again = Credential.objects.upsert_for_user(
+                user,
+                oauth_client,
+                CredentialKind.STATIC_TOKEN,
+                {"api_key": "k2"},
+                external_account=account,
+            )
+            assert again.pk == credential.pk
+            assert again.name == "Renamed"
+    finally:
+        if created_models:
+            with connection.schema_editor() as schema_editor:
+                for model in reversed(created_models):
+                    schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
 def test_create_local_credential_needs_no_provider_and_keys_by_name() -> None:
     """A static-token credential is minted with no provider, identified by ``name``."""
 
@@ -286,6 +396,7 @@ def test_oauth_client_manager_syncs_shape_and_secret_from_settings(settings: Any
                 "authorize_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
                 "token_endpoint": "https://oauth2.googleapis.com/token",
                 "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
+                "token_request_format": "json",
                 "is_oidc": True,
                 "default_scopes": ["openid", "email"],
                 "allowed_email_domains": ["example.com"],
@@ -301,6 +412,7 @@ def test_oauth_client_manager_syncs_shape_and_secret_from_settings(settings: Any
         assert oauth_client.client_secret == "from-settings"
         assert oauth_client.is_oidc is True
         assert oauth_client.default_scopes == ["openid", "email"]
+        assert oauth_client.token_request_format == "json"
 
         settings.ANGEE_IAM_OAUTH_CLIENTS = (
             {

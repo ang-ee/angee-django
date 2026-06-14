@@ -1,0 +1,43 @@
+_min_copier_version: "9.0"
+_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+_preserve_symlinks: true
+
+_angee:
+  schema: 1
+  kind: workspace
+  name: agent-default
+  description: >-
+    Identity for an Angee agent — renders AGENTS.md/CLAUDE.md from the agent's
+    instructions and .mcp.json from its MCP servers. An agent-runtime service
+    template (claude-code, opencode) mounts this workspace at /workspace.
+  instance_naming:
+    pattern: "${inputs.agent_name | slug | truncate(48)}"
+    fallback: agent
+    max_length: 48
+  inputs:
+    agent_name:
+      type: str
+      default: angee-agent
+      help: Display name for the agent; also seeds the workspace instance name.
+    instructions:
+      type: str
+      default: ""
+      help: The agent's system instructions, written verbatim to AGENTS.md (CLAUDE.md links to it).
+    mcp_json:
+      type: str
+      default: '{"mcpServers": {}}'
+      help: The agent's MCP server config as a JSON document, written to .mcp.json. The console assembles it from the agent's MCP servers.
+
+agent_name:
+  type: str
+  default: angee-agent
+
+instructions:
+  type: str
+  default: ""
+
+mcp_json:
+  type: str
+  default: '{"mcpServers": {}}'

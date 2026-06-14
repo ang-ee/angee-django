@@ -1,12 +1,13 @@
 // @vitest-environment happy-dom
 
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, type AppRuntime } from "@angee/sdk";
 
 import {
   AUTH_LOGIN_CARD_FOOTER_SLOT,
+  AUTH_LOGIN_PASSWORD_HELP_SLOT,
   LoginPage,
 } from "./LoginPage";
 
@@ -14,6 +15,7 @@ vi.mock("@angee/logo-react", () => ({
   AngeeLogo: (props: { width?: number; height?: number }) => (
     <svg aria-label="Angee" width={props.width} height={props.height} />
   ),
+  AngeeLogoCube: () => <div data-testid="angee-logo-cube" />,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -30,6 +32,8 @@ vi.mock("@angee/sdk", async (importOriginal) => {
     }),
   };
 });
+
+afterEach(cleanup);
 
 function wrapperFor(runtime: Partial<AppRuntime>) {
   return ({ children }: { children: ReactNode }) =>
@@ -54,7 +58,29 @@ describe("LoginPage", () => {
       </Wrapper>,
     );
 
-    expect(screen.getByRole("heading", { name: "Welcome back" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Sign in" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Forgot your password?" })).toBeTruthy();
     expect(screen.getByText("Demo users")).toBeTruthy();
+  });
+
+  test("replaces the default password help from the login slot", () => {
+    const Wrapper = wrapperFor({
+      slots: [
+        {
+          slot: AUTH_LOGIN_PASSWORD_HELP_SLOT,
+          id: "recover-access",
+          content: <button type="button">Recover access</button>,
+        },
+      ],
+    });
+
+    render(
+      <Wrapper>
+        <LoginPage />
+      </Wrapper>,
+    );
+
+    expect(screen.getByRole("button", { name: "Recover access" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Forgot your password?" })).toBeNull();
   });
 });
