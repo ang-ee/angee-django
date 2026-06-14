@@ -11,7 +11,6 @@ export {
   toneFill,
   toneClass,
   INTENT_GLYPHS,
-  DEFAULT_STATE_TONE_VALUES,
   stateToneFromValue,
   type Tone,
   type Fill,

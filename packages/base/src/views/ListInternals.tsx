@@ -470,6 +470,7 @@ export function ListCellContent<TRow extends Row>({
           name: column.field,
           label: column.header,
           options: column.options,
+          tone: column.tone,
         }}
         readOnly
       />

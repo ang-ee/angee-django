@@ -78,8 +78,22 @@ visual-parity spot-check across both themes still recommended before release.
 - [x] Route `chip`/`alert`/`alert-dialog`/`AppChooser.toneClass` through `tones`
       (no hand-typed soft-tone triples). (Done with the T1 recipe pass — also
       `DataLens` dots and `code`-block soft now route through the matrix.)
-- [ ] Move `DEFAULT_STATE_TONE_VALUES` / `stateToneFromValue` business semantics
-      OUT of base → model/field metadata or explicit caller mapping.
+- [x] Move `DEFAULT_STATE_TONE_VALUES` / `stateToneFromValue` business semantics
+      OUT of base → explicit caller mapping (SDL metadata carries no tone). DONE:
+      `stateToneFromValue(value, buckets)` is now a pure mechanism (`buckets`
+      required, no baked product default; iterates `TONES` so it can't return a
+      non-`Tone` key). The status vocabulary moved ONTO the `statusBadge` widget
+      as `STATUS_BADGE_TONES` (the object whose job is "show a colored status"),
+      overridable per-caller via `<Column tone>` threaded through
+      `ColumnDescriptor.tone` → `WidgetField.tone`. The widget's override lookup is
+      exact-case (matching the existing `cellContent`/`BoardView` `column.tone`
+      readers), then layers its convention. Behavior-preserving for all 8 live
+      consumers (none pass a tone map → identical colors). +5 widget tests.
+      FOLLOW-UP (Phase 7, surfaced by review): `column.tone[label] ?? "neutral"` is
+      now spelled in 2 plain-cell readers (`ListInternals.cellContent`,
+      `BoardView.laneDotTone`) — a one-owner `columnTone(value, map)` helper could
+      converge them, but the widget can't import `views/page` (dep direction), so a
+      cross-layer move is its own slice.
 
 ### T3 — Intent→glyph duplication ✅ done (commit)
 - [x] One exported `INTENT_GLYPHS` + `FeedbackIntent` in `lib/tones.ts`; consumed

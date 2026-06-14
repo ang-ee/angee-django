@@ -40,6 +40,7 @@ export type {
   WidgetRenderProps,
 } from "./types";
 export { widgetLabel } from "./label";
+export { STATUS_BADGE_TONES } from "./statusBadge";
 export {
   RelationField,
   type RelationFieldProps,

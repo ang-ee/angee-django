@@ -139,26 +139,30 @@ export const INTENT_GLYPHS: Record<FeedbackIntent, string> = {
   danger: "circle-x",
 };
 
+/**
+ * A `tone → values` map: which status-string values render in which tone. This is
+ * the pure data shape; the vocabulary itself is a caller fact (the status names a
+ * product uses), not a framework color fact — `tones.ts` owns the color mechanism,
+ * never the domain values. See `statusBadge`'s `STATUS_BADGE_TONES` for the widget
+ * convention, or pass an explicit `<Column tone>` map.
+ */
 export type ToneValueBuckets = Partial<Record<Tone, readonly string[]>>;
 
-export const DEFAULT_STATE_TONE_VALUES: ToneValueBuckets = {
-  success: ["active", "published", "approved", "live", "open", "done"],
-  warning: ["draft", "review", "pending", "in_review"],
-  danger: ["error", "failed", "denied", "lost"],
-  neutral: ["archived", "deleted", "rejected", "blocked"],
-};
-
+/**
+ * Resolve a status-string `value` to a tone via a caller-supplied `buckets` map:
+ * the bucket whose list contains `value.toLowerCase()` (so bucket entries must be
+ * lowercase), else `brand`, and `neutral` for an empty value. A pure mechanism —
+ * `buckets` carries the product vocabulary, so the framework holds no domain
+ * status names.
+ */
 export function stateToneFromValue(
   value: string | undefined,
-  buckets: ToneValueBuckets = DEFAULT_STATE_TONE_VALUES,
+  buckets: ToneValueBuckets,
 ): Tone {
   if (!value) return "neutral";
   const normalized = value.toLowerCase();
-  for (const [tone, values] of Object.entries(buckets) as [
-    Tone,
-    readonly string[],
-  ][]) {
-    if (values.includes(normalized)) return tone;
+  for (const tone of TONES) {
+    if (buckets[tone]?.includes(normalized)) return tone;
   }
   return "brand";
 }

@@ -1,5 +1,7 @@
 import type { ComponentType, ReactNode } from "react";
 
+import type { Tone } from "../lib/tones";
+
 export interface WidgetOption {
   value: string;
   label: ReactNode;
@@ -23,6 +25,8 @@ export interface WidgetField {
   name?: string;
   label?: ReactNode;
   options?: readonly WidgetOption[];
+  /** Explicit `value → Tone` map (from `<Column tone>`) for status widgets. */
+  tone?: Record<string, Tone>;
 }
 
 export interface WidgetRenderProps<TValue = unknown, TRow = unknown> {
