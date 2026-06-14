@@ -25,43 +25,44 @@ const agentsRoutes: readonly BaseAddonRoute[] = [
   { name: "agents.model", path: "/agents/models/$id", shell: "console", parent: "agents.models" },
 ];
 
+// One rail (app) icon for the addon; its children are the top-bar menus, and a
+// child that itself has children renders as a dropdown (see chrome `TopMenu`).
 const agentsMenu: readonly BaseMenuItem[] = [
   {
-    // Route-less group root: the rail icon inherits its target from the first child.
     id: AGENTS_ID,
     label: "Agents",
     icon: "agent",
     group: "platform",
+    route: "agents.agents",
     children: [
-      { id: "agents.agents", label: "Agents", icon: "agent", route: "agents.agents" },
-      { id: "agents.templates", label: "Templates", icon: "agentTemplate", route: "agents.templates" },
-    ],
-  },
-  {
-    id: "agents.skills.group",
-    label: "Skills",
-    icon: "skill",
-    group: "platform",
-    children: [{ id: "agents.skills", label: "Skills", icon: "skill", route: "agents.skills" }],
-  },
-  {
-    id: "agents.mcp",
-    label: "MCP",
-    icon: "mcpServer",
-    group: "platform",
-    children: [
-      { id: "agents.mcp-servers", label: "Servers", icon: "mcpServer", route: "agents.mcp-servers" },
-      { id: "agents.mcp-tools", label: "Tools", icon: "mcpTool", route: "agents.mcp-tools" },
-    ],
-  },
-  {
-    id: "agents.inference",
-    label: "Inference",
-    icon: "inferenceProvider",
-    group: "platform",
-    children: [
-      { id: "agents.providers", label: "Providers", icon: "inferenceProvider", route: "agents.providers" },
-      { id: "agents.models", label: "Models", icon: "inferenceModel", route: "agents.models" },
+      {
+        id: "agents.menu.agents",
+        label: "Agents",
+        icon: "agent",
+        children: [
+          { id: "agents.agents", label: "Agents", icon: "agent", route: "agents.agents" },
+          { id: "agents.templates", label: "Templates", icon: "agentTemplate", route: "agents.templates" },
+        ],
+      },
+      { id: "agents.skills", label: "Skills", icon: "skill", route: "agents.skills" },
+      {
+        id: "agents.menu.mcp",
+        label: "MCP",
+        icon: "mcpServer",
+        children: [
+          { id: "agents.mcp-servers", label: "Servers", icon: "mcpServer", route: "agents.mcp-servers" },
+          { id: "agents.mcp-tools", label: "Tools", icon: "mcpTool", route: "agents.mcp-tools" },
+        ],
+      },
+      {
+        id: "agents.menu.inference",
+        label: "Inference",
+        icon: "inferenceProvider",
+        children: [
+          { id: "agents.providers", label: "Providers", icon: "inferenceProvider", route: "agents.providers" },
+          { id: "agents.models", label: "Models", icon: "inferenceModel", route: "agents.models" },
+        ],
+      },
     ],
   },
 ];
