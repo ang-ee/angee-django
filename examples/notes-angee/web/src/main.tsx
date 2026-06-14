@@ -6,6 +6,7 @@ import {
   type BaseAddon,
 } from "@angee/base";
 import notes from "@angee-example/notes-web";
+import agents from "@angee/agents";
 import iam from "@angee/iam";
 import integrate from "@angee/integrate";
 import knowledge from "@angee/knowledge";
@@ -30,7 +31,7 @@ const authAddon: BaseAddon = {
 };
 
 createApp({
-  addons: [notes, authAddon, iam, integrate, operator, storage, knowledge],
+  addons: [notes, authAddon, iam, integrate, agents, operator, storage, knowledge],
   shells: {
     console: { chrome: ConsoleShell },
     // Chrome defaults to PassthroughChrome and a public-keyed shell is

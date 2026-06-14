@@ -15,6 +15,46 @@ importers:
         specifier: ^4.1.7
         version: 4.1.7(@types/node@25.9.1)(happy-dom@20.9.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.27.7)(jiti@2.7.0)(yaml@2.9.0))
 
+  addons/angee/agents/web:
+    dependencies:
+      '@angee/base':
+        specifier: workspace:*
+        version: link:../../../../packages/base
+      '@angee/sdk':
+        specifier: workspace:*
+        version: link:../../../../packages/sdk
+      lucide-react:
+        specifier: ^1.17.0
+        version: 1.17.0(react@19.2.6)
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.8
+        version: 1.170.10(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.15))(@types/react@19.2.15)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      '@types/react':
+        specifier: ^19
+        version: 19.2.15
+      '@types/react-dom':
+        specifier: ^19
+        version: 19.2.3(@types/react@19.2.15)
+      happy-dom:
+        specifier: ^20.9.0
+        version: 20.9.0
+      react:
+        specifier: ^19
+        version: 19.2.6
+      react-dom:
+        specifier: ^19
+        version: 19.2.6(react@19.2.6)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.7
+        version: 4.1.7(@types/node@25.9.1)(happy-dom@20.9.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.27.7)(jiti@2.7.0)(yaml@2.9.0))
+
   addons/angee/iam/web:
     dependencies:
       '@angee/base':
@@ -282,6 +322,9 @@ importers:
       '@angee-example/notes-web':
         specifier: workspace:*
         version: link:../addons/example/notes/web
+      '@angee/agents':
+        specifier: workspace:*
+        version: link:../../../addons/angee/agents/web
       '@angee/base':
         specifier: workspace:*
         version: link:../../../packages/base

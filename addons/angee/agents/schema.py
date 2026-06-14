@@ -286,11 +286,34 @@ class AgentPatch:
     status: str | None = strawberry.UNSET
 
 
+@strawberry_django.filter_type(Agent, lookups=True)
+class AgentFilter:
+    """Field lookups accepted when filtering the agents list.
+
+    ``is_template`` drives the Agents-vs-Templates split — one model, two list tabs.
+    """
+
+    name: auto
+    is_template: auto
+    status: auto
+
+
+@strawberry_django.order_type(Agent)
+class AgentOrder:
+    """Orderings accepted by the agents list."""
+
+    name: auto
+    status: auto
+    updated_at: auto
+
+
 @strawberry.type
 class AgentsConsoleQuery:
     """Admin agent-catalogue queries."""
 
     agents: OffsetPaginated[AgentType] = strawberry_django.offset_paginated(
+        filters=AgentFilter,
+        order=AgentOrder,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
     agent: AgentType | None = strawberry_django.node(permission_classes=_ADMIN_PERMISSION_CLASSES)
