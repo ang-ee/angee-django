@@ -2,6 +2,8 @@ import {
   Fragment,
   isValidElement,
   useCallback,
+  useEffect,
+  useState,
   type ReactElement,
   type ReactNode,
 } from "react";
@@ -19,6 +21,19 @@ export const AUTH_LOGIN_METHOD_SLOT = "auth.login.method";
 export const AUTH_LOGIN_CARD_FOOTER_SLOT = "auth.login.card-footer";
 export const AUTH_LOGIN_PAGE_FOOTER_SLOT = "auth.login.page-footer";
 export const AUTH_LOGIN_PASSWORD_HELP_SLOT = "auth.login.password-help";
+
+const HERO_SLIDES = [
+  {
+    eyebrow: "From intent to interface",
+    headline: "Build what you can imagine.",
+    body: "Shape the idea. Watch it become a living product surface.",
+  },
+  {
+    eyebrow: "Agent-Native Generative Execution Environment",
+    headline: "Define your vision. Agents build the reality.",
+    body: "The self-building SaaS platform where autonomous AI agents scaffold, wire, and extend production-ready software.",
+  },
+] as const;
 
 export interface LoginPageProps {
   brand?: ReactNode;
@@ -171,24 +186,84 @@ function LoginBrandPanel({
 }: {
   brand?: ReactNode;
 }): ReactNode {
+  const { isSwitching, slide } = useHeroSlide();
+
   return (
     <section className="relative flex h-full min-h-[32rem] flex-col justify-end text-n-0">
       {brand ? <div className="absolute left-0 top-0 z-10">{brand}</div> : null}
       <div className="relative z-10 pb-6">
         <div className="w-full max-w-xl">
-          <p className="mb-5 text-xs font-semibold uppercase tracking-[0.18em] text-n-0/72">
-            From intent to interface
-          </p>
-          <h1 className="max-w-[11ch] text-5xl font-semibold leading-[1.02] text-n-0 xl:text-6xl">
-            Build what you can imagine.
-          </h1>
-          <p className="mt-5 max-w-md text-base leading-7 text-n-100/88">
-            Shape the idea. Watch it become a living product surface.
-          </p>
+          <div
+            className={cn(
+              "min-h-[17rem] transition-all duration-500 ease-out motion-reduce:transform-none motion-reduce:opacity-100 motion-reduce:transition-none",
+              isSwitching
+                ? "translate-y-3 opacity-0 blur-[2px]"
+                : "translate-y-0 opacity-100 blur-0",
+            )}
+          >
+            <p className="mb-5 text-xs font-semibold uppercase tracking-[0.18em] text-n-0/72">
+              {slide.eyebrow}
+            </p>
+            <h1 className="max-w-[13ch] text-5xl font-semibold leading-[1.02] text-n-0 xl:text-6xl">
+              {slide.headline}
+            </h1>
+            <p className="mt-5 max-w-lg text-base leading-7 text-n-100/88">
+              {slide.body}
+            </p>
+          </div>
+          <div className="mt-7 flex gap-2" aria-hidden="true">
+            {HERO_SLIDES.map((candidate) => (
+              <span
+                key={candidate.headline}
+                className={cn(
+                  "h-1.5 rounded-full transition-all duration-500 motion-reduce:transition-none",
+                  candidate === slide
+                    ? "w-8 bg-n-0/78"
+                    : "w-1.5 bg-n-0/32",
+                )}
+              />
+            ))}
+          </div>
         </div>
       </div>
     </section>
   );
+}
+
+function useHeroSlide(): {
+  isSwitching: boolean;
+  slide: (typeof HERO_SLIDES)[number];
+} {
+  const [index, setIndex] = useState(0);
+  const [isSwitching, setIsSwitching] = useState(false);
+
+  useEffect(() => {
+    if (HERO_SLIDES.length < 2 || prefersReducedMotion()) return undefined;
+
+    let timeout: number | undefined;
+    const interval = window.setInterval(() => {
+      setIsSwitching(true);
+      timeout = window.setTimeout(() => {
+        setIndex((current) => (current + 1) % HERO_SLIDES.length);
+        setIsSwitching(false);
+      }, 320);
+    }, 5600);
+
+    return () => {
+      window.clearInterval(interval);
+      if (timeout !== undefined) window.clearTimeout(timeout);
+    };
+  }, []);
+
+  return {
+    isSwitching,
+    slide: HERO_SLIDES[index] ?? HERO_SLIDES[0],
+  };
+}
+
+function prefersReducedMotion(): boolean {
+  return typeof window !== "undefined"
+    && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
 function LoginVisualBackdrop({
