@@ -115,6 +115,24 @@ def test_resource_entry_rejects_reserved_keys_in_structured_fields(
         ).read_resource_rows()
 
 
+def test_resource_entry_allows_model_field_in_structured_fields(
+    tmp_path: Path,
+) -> None:
+    """`model` is a real field name under an explicit `fields:` (label lives in `_meta`)."""
+
+    resource_dir = tmp_path / "resources"
+    resource_dir.mkdir()
+    (resource_dir / "agents.yaml").write_text(
+        "_meta:\n  model: base.ImportNote\nrows:\n  - _xref: a1\n    fields:\n      model: notes.model_x\n",
+        encoding="utf-8",
+    )
+
+    rows = entry(tmp_path, {"path": "resources/agents.yaml"}).read_resource_rows()
+
+    assert rows[0].model_label == "base.ImportNote"
+    assert rows[0].dataset_row == {"_xref": "a1", "model": "notes.model_x"}
+
+
 def test_resource_entry_rejects_model_conflicts(tmp_path: Path) -> None:
     """File metadata cannot disagree with the entry model."""
 

@@ -543,7 +543,10 @@ class ResourceRow:
             fields_value = payload["fields"]
             if not isinstance(fields_value, Mapping):
                 raise ImproperlyConfigured("resource row fields must map names")
-            reserved = RESERVED_ROW_KEYS & set(fields_value)
+            # The nested form carries the model label in `_meta`, so `model` under an
+            # explicit `fields:` map is a real field name (e.g. ``agents.Agent.model``);
+            # only the truly-structural row keys are rejected here.
+            reserved = (RESERVED_ROW_KEYS - {"model"}) & set(fields_value)
             if reserved:
                 raise ImproperlyConfigured(
                     f"resource row fields cannot contain reserved keys: {', '.join(sorted(reserved))}"
