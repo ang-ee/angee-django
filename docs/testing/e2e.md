@@ -108,7 +108,7 @@ present, two users' scopes are disjoint, an anonymous write is denied with
 
 ```sh
 # 1. Materialise an isolated, seeded stack (unique DB + ports + browser profile).
-angee ws create e2e --template dev --input base_ref=<branch> --input example=angee-notes
+angee ws create e2e --template dev --input base_ref=<branch> --input example=notes-angee
 cd .angee/workspaces/e2e
 angee dev                      # brings the seeded stack up; note the allocated ui port
 

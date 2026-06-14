@@ -18,7 +18,7 @@ _angee:
       default: dev
     example:
       type: str
-      default: angee-notes
+      default: notes-angee
       help: Which example consumer dir under examples/ to mount as the inner stack.
     branch_prefix:
       type: str
@@ -83,7 +83,7 @@ topic:
 
 example:
   type: str
-  default: angee-notes
+  default: notes-angee
 
 branch_prefix:
   type: str

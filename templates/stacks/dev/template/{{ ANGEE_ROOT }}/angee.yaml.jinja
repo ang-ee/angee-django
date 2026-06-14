@@ -158,6 +158,18 @@ services:
       ANGEE_OPERATOR_URL: "http://127.0.0.1:${ports.operator}"
     after: [deps, schema, django, operator, operator-codegen]
 
+  # Storybook component workshop (@angee/storybook), served alongside the SPA. It
+  # renders @angee/base against mocked SDK fixtures, so it needs only the JS
+  # workspace installed — no Django, schema, or operator dependency. The port is
+  # the workspace's storybook allocation, so each workspace serves its own.
+  storybook:
+    runtime: local
+    workdir: source://framework
+    command: ["pnpm", "--filter", "@angee/storybook", "dev"]
+    env:
+      STORYBOOK_PORT: "{{ storybook_port }}"
+    after: [deps]
+
   # The operator daemon for THIS stack: it serves the console's data (services,
   # workspaces, sources, gitops, secrets) and is what runs the dev stack.
   # `angee operator --root .` resolves the stack root by walking up to this stack's
