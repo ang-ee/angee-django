@@ -20,8 +20,8 @@ export const Panel: Story = {
         subtitle="notes/q3-review-brief"
         badges={
           <>
-            <Badge variant="warning">Draft</Badge>
-            <Tag variant="info">Internal</Tag>
+            <Badge tone="warning">Draft</Badge>
+            <Tag tone="info">Internal</Tag>
           </>
         }
         sections={[

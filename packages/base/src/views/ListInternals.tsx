@@ -906,8 +906,8 @@ export function cellContent<TRow extends Row>(
   const value = readPath(row, column.field);
   if (column.tone) {
     const label = value == null ? "" : String(value);
-    const tone = column.tone[label] ?? "default";
-    return <Badge variant={tone}>{label ? statusLabel(label) : "-"}</Badge>;
+    const tone = column.tone[label] ?? "neutral";
+    return <Badge tone={tone}>{label ? statusLabel(label) : "-"}</Badge>;
   }
   if (Array.isArray(value)) {
     return (

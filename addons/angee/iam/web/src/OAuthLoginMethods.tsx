@@ -61,7 +61,7 @@ export function OAuthLoginMethods(): ReactNode {
 
   if (queryError && connections.length === 0) {
     return (
-      <Alert className="mb-6" intent="danger" title="Sign-in providers unavailable">
+      <Alert className="mb-6" tone="danger" title="Sign-in providers unavailable">
         Username and password sign-in is still available.
       </Alert>
     );
@@ -94,7 +94,7 @@ export function OAuthLoginMethods(): ReactNode {
         })}
       </div>
       {startError ? (
-        <Alert intent="danger" title="Sign-in could not start">
+        <Alert tone="danger" title="Sign-in could not start">
           {startError}
         </Alert>
       ) : null}

@@ -18,6 +18,7 @@ import {
   TableHeader,
   TableRow,
   Toolbar,
+  stateToneFromValue,
   type SectionNavItem,
 } from "@angee/base";
 
@@ -118,11 +119,7 @@ export const Frame: Story = {
                   <TableRow key={title} interactive>
                     <TableCell className="font-medium">{title}</TableCell>
                     <TableCell>
-                      <Badge
-                        variant={status === "Active" ? "success" : status === "Draft" ? "warning" : "default"}
-                      >
-                        {status}
-                      </Badge>
+                      <Badge tone={stateToneFromValue(status)}>{status}</Badge>
                     </TableCell>
                     <TableCell>{owner}</TableCell>
                     <TableCell className="text-right tabular-nums">
@@ -196,17 +193,7 @@ export const InContentRegion: Story = {
                 <TableRow key={title} interactive>
                   <TableCell className="font-medium">{title}</TableCell>
                   <TableCell>
-                    <Badge
-                      variant={
-                        status === "Active"
-                          ? "success"
-                          : status === "Draft"
-                            ? "warning"
-                            : "default"
-                      }
-                    >
-                      {status}
-                    </Badge>
+                    <Badge tone={stateToneFromValue(status)}>{status}</Badge>
                   </TableCell>
                   <TableCell>{owner}</TableCell>
                   <TableCell className="text-right tabular-nums">

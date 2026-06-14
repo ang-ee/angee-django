@@ -10,10 +10,11 @@ import type { ToastObject as BaseToastObject } from "@base-ui/react/toast";
 import { Glyph } from "../chrome/Glyph";
 import { useBaseT } from "../i18n";
 import { cn } from "../lib/cn";
-import { INTENT_GLYPHS, tones, type FeedbackIntent } from "../lib/tones";
+import { INTENT_GLYPHS, toneClass, type FeedbackIntent } from "../lib/tones";
 import { Button } from "../ui/button";
 
-export type ToastIntent = "info" | "success" | "warning" | "error";
+/** Toasts speak in the feedback tones (negative state is `danger`, not `error`). */
+export type ToastTone = FeedbackIntent;
 
 export interface ToastAction {
   label: ReactNode;
@@ -21,21 +22,21 @@ export interface ToastAction {
 }
 
 export interface ToastOptions {
-  intent?: ToastIntent;
+  tone?: ToastTone;
   title: ReactNode;
   description?: ReactNode;
   duration?: number;
   action?: ToastAction;
 }
 
-export type ToastShortcutOptions = Omit<ToastOptions, "intent">;
+export type ToastShortcutOptions = Omit<ToastOptions, "tone">;
 
 export interface ToastApi {
   (options: ToastOptions): string;
   info: (options: ToastShortcutOptions) => string;
   success: (options: ToastShortcutOptions) => string;
   warning: (options: ToastShortcutOptions) => string;
-  error: (options: ToastShortcutOptions) => string;
+  danger: (options: ToastShortcutOptions) => string;
 }
 
 export interface ToastProviderProps {
@@ -43,24 +44,17 @@ export interface ToastProviderProps {
 }
 
 interface ToastData {
-  intent: ToastIntent;
+  tone: ToastTone;
   action?: ToastAction;
 }
 
 const DEFAULT_TOAST_LIMIT = 4;
 
-const DEFAULT_TOAST_DURATIONS: Record<ToastIntent, number> = {
+const DEFAULT_TOAST_DURATIONS: Record<ToastTone, number> = {
   info: 5000,
   success: 4000,
   warning: 7000,
-  error: 0,
-};
-
-const TOAST_TONES: Record<ToastIntent, FeedbackIntent> = {
-  info: "info",
-  success: "success",
-  warning: "warning",
-  error: "danger",
+  danger: 0,
 };
 
 /**
@@ -84,14 +78,14 @@ export function useToast(): ToastApi {
 
   const addToast = useCallback(
     (options: ToastOptions): string => {
-      const intent = options.intent ?? "info";
+      const tone = options.tone ?? "info";
       const toastId = add({
         title: options.title,
         description: options.description,
-        type: intent,
-        priority: intent === "error" ? "high" : "low",
-        timeout: toastTimeout(intent, options.duration),
-        data: { intent, action: options.action },
+        type: tone,
+        priority: tone === "danger" ? "high" : "low",
+        timeout: toastTimeout(tone, options.duration),
+        data: { tone, action: options.action },
         actionProps: options.action
           ? {
               children: options.action.label,
@@ -107,13 +101,13 @@ export function useToast(): ToastApi {
     const toast = (options: ToastOptions) => addToast(options);
     return Object.assign(toast, {
       info: (options: ToastShortcutOptions) =>
-        addToast({ ...options, intent: "info" }),
+        addToast({ ...options, tone: "info" }),
       success: (options: ToastShortcutOptions) =>
-        addToast({ ...options, intent: "success" }),
+        addToast({ ...options, tone: "success" }),
       warning: (options: ToastShortcutOptions) =>
-        addToast({ ...options, intent: "warning" }),
-      error: (options: ToastShortcutOptions) =>
-        addToast({ ...options, intent: "error" }),
+        addToast({ ...options, tone: "warning" }),
+      danger: (options: ToastShortcutOptions) =>
+        addToast({ ...options, tone: "danger" }),
     });
   }, [addToast]);
 }
@@ -144,8 +138,7 @@ function ToastItem({
 }): ReactElement {
   const { close } = BaseToast.useToastManager<ToastData>();
   const t = useBaseT();
-  const intent = toast.data?.intent ?? "info";
-  const tone = tones[TOAST_TONES[intent]];
+  const tone = toast.data?.tone ?? "info";
   const action = toast.data?.action;
 
   return (
@@ -159,19 +152,12 @@ function ToastItem({
         "scale-[calc(1-(var(--toast-index)*0.04))] [z-index:calc(20-var(--toast-index))]",
         "data-[expanded]:translate-y-[calc((var(--toast-offset-y)*-1)+var(--toast-swipe-movement-y))] data-[expanded]:scale-100",
         "data-[ending-style]:opacity-0 data-[limited]:opacity-0 data-[starting-style]:opacity-0",
-        tone.bg,
-        tone.border,
-        tone.fg,
+        toneClass(tone, "soft"),
       )}
     >
       <BaseToast.Content className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-3 gap-y-2">
-        <span
-          className={cn(
-            "mt-0.5 grid size-5 place-content-center [&_.glyph]:size-4",
-            tone.fg,
-          )}
-        >
-          <Glyph decorative name={INTENT_GLYPHS[TOAST_TONES[intent]]} />
+        <span className="mt-0.5 grid size-5 place-content-center [&_.glyph]:size-4">
+          <Glyph decorative name={INTENT_GLYPHS[tone]} />
         </span>
         <div className="min-w-0">
           <BaseToast.Title className="text-13 font-semibold leading-snug" />
@@ -205,7 +191,7 @@ function ToastItem({
   );
 }
 
-function toastTimeout(intent: ToastIntent, duration: number | undefined): number {
-  const resolved = duration ?? DEFAULT_TOAST_DURATIONS[intent];
+function toastTimeout(tone: ToastTone, duration: number | undefined): number {
+  const resolved = duration ?? DEFAULT_TOAST_DURATIONS[tone];
   return resolved === Infinity ? 0 : resolved;
 }

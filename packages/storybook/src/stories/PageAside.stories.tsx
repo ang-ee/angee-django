@@ -56,8 +56,8 @@ export const Inspector: Story = {
               <p className="mt-1 text-13 text-fg-muted">MRN 481029</p>
             </section>
             <div className="flex flex-wrap gap-1.5">
-              <Badge variant="danger">Allergy</Badge>
-              <Badge variant="warning">Review due</Badge>
+              <Badge tone="danger">Allergy</Badge>
+              <Badge tone="warning">Review due</Badge>
               <Chip tone="info">BlueCross PPO</Chip>
             </div>
             <SectionNav orientation="vertical" items={navItems} />

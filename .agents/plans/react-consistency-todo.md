@@ -40,26 +40,44 @@ now guards `ok` too. `runActionResult` exports only the function (the
 
 ## Phase 1 — Design-system spine (biggest UX lever)
 
-### T1 — Two orthogonal color axes (`tone` × `variant`)
-- [ ] Define the canonical palette enum (`tone`/`color`: brand, neutral, info,
-      success, warning, danger, accent?) and the fill enum (`variant`: solid,
-      soft, surface, outline, ghost) as exported constants in `@angee/base`.
-- [ ] Make `lib/tones.ts` the **(palette × fill) → class** matrix owner; export
-      `tones`, `ToneName`, fill variants, and the option constants from
-      `lib/index.ts` (barrel currently omits `tones`/`slot`).
-- [ ] Rename/restructure recipes to the two-axis model: `badge` (its `variant`
-      becomes `tone`+`variant`), `chip`, `alert`, `alert-dialog`, `code`,
-      `status-icon`/`status-dot`, `slider`, `kbd`, `section-eyebrow`,
-      `selection-bar`, `avatar` (drop numeric `color`), `metric-grid`, chrome menu
-      tones, `BrandButton`, `DataLens`, `MarketingHero`, `PageAside`.
-- [ ] Retire `error` → `danger` everywhere (Toast `ToastIntent`/`TOAST_TONES`).
-- [ ] Update Storybook `argTypes` to consume the shared option constants; remove
-      inline `status→tone` maps (`Page.stories`, `SplitView.stories`).
-- [ ] Codemod/replace consumer usages of the old prop names across base + addons.
+### T1 — Two orthogonal color axes (`tone` × `variant`) ✅ done (commit)
+Decisions executed: **(1) full token matrix** (added `--P` solid / `--on-P` /
+`--P-line` / `--P-tint` surface for every palette in both themes) · **(2)
+`default` → `neutral`** as the canonical neutral tone. Verified repo-wide:
+`typecheck` + `test` + `build` all green; the new `bg-*`/`text-on-*`/`*-line`/
+`*-tint` utilities confirmed present in the built CSS; drift greps clean. Manual
+visual-parity spot-check across both themes still recommended before release.
+- [x] `TONES`/`Tone` + `FILLS`/`Fill` exported as constants from `@angee/base`
+      (`lib/tones.ts` → `lib/index.ts` → package index).
+- [x] `lib/tones.ts` is the **(tone × fill) → class** matrix owner (`toneFill`
+      45 literal entries + `toneClass(tone, fill)`); barrel now also re-exports
+      `slot`. Token layer + Tailwind-merge groups (driven from `TONES`) extended
+      so `cn()` de-dupes the new utilities.
+- [x] Recipes restructured: `badge` (split `variant`→`tone`+`variant`), `chip`
+      (+ `muted`/`inherit` local rows; `outline` bool → `variant:"outline"`),
+      `alert` (`intent`→`tone`; `surface`→`format`), `alert-dialog`
+      (`intent`→`tone`), `code` (`variant`→`tone`; bg `surface`→`box`),
+      `status-icon`/`status-dot`, `slider`, `metric-grid`, `DataLens` (dots via
+      `StatusDot`), `DirtyPill`, chrome menu tones (`AppChooser.toneClass` routed
+      through the matrix; `ChromeMenuTone` `muted`→`neutral`), `avatar` (numeric
+      `color` prop dropped). **Out of the palette axis (kept their own
+      vocabulary):** `Kbd.tone` (key-surface), `BrandButton.tone` (social),
+      `MarketingHero`/`AnnouncementChip` (inverse), `SelectionBar` (surface),
+      `SectionEyebrow` (curated text set). `PageAside` — todo over-listed it; it
+      has no color axis (nothing to do). `TopMenu`'s fixed `bg-brand-soft` active
+      style left inline (a constant brand treatment, not a per-tone bypass).
+- [x] Retired `error` → `danger` (Toast: `ToastIntent`→`ToastTone`, `intent`→
+      `tone`, `toast.error()`→`toast.danger()`; `TOAST_TONES` collapsed).
+- [x] Storybook `argTypes` consume `TONES`/`FILLS`; inline `status→tone` maps in
+      `Page.stories`/`SplitView.stories` replaced with `stateToneFromValue`.
+- [x] Consumers codemodded across base, storybook, all six addons + the notes
+      example. Operator `StateTag.tsx` `TODO(S2)` workaround maps deleted (the
+      palette now exposes `neutral`).
 
 ### T2 — `lib/tones.ts` bypassed + overloaded
-- [ ] Route `chip`/`alert`/`alert-dialog`/`AppChooser.toneClass` through `tones`
-      (no hand-typed soft-tone triples). (Folds into the T1 recipe pass.)
+- [x] Route `chip`/`alert`/`alert-dialog`/`AppChooser.toneClass` through `tones`
+      (no hand-typed soft-tone triples). (Done with the T1 recipe pass — also
+      `DataLens` dots and `code`-block soft now route through the matrix.)
 - [ ] Move `DEFAULT_STATE_TONE_VALUES` / `stateToneFromValue` business semantics
       OUT of base → model/field metadata or explicit caller mapping.
 

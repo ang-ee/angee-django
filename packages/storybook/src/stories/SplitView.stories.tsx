@@ -10,6 +10,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
+  stateToneFromValue,
 } from "@angee/base";
 
 const records = [
@@ -48,17 +49,7 @@ export const ListDetail: Story = {
                     <TableRow key={title} interactive>
                       <TableCell className="font-medium">{title}</TableCell>
                       <TableCell>
-                        <Badge
-                          variant={
-                            status === "Active"
-                              ? "success"
-                              : status === "Draft"
-                                ? "warning"
-                                : "default"
-                          }
-                        >
-                          {status}
-                        </Badge>
+                        <Badge tone={stateToneFromValue(status)}>{status}</Badge>
                       </TableCell>
                     </TableRow>
                   ))}

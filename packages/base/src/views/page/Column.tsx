@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { BadgeVariant } from "../../ui/badge";
+import type { Tone } from "../../lib/tones";
 import type { WidgetOption } from "../../widgets/types";
 
 import { PAGE_ELEMENT_SLOT } from "./types";
@@ -27,7 +27,7 @@ export interface ColumnProps<
   aggregate?: ColumnAggregate;
   align?: PageColumnAlign;
   render?: (row: TRow) => ReactNode;
-  tone?: Record<string, BadgeVariant>;
+  tone?: Record<string, Tone>;
 }
 
 export interface ColumnDescriptor<
@@ -42,7 +42,7 @@ export interface ColumnDescriptor<
   aggregate?: ColumnAggregate;
   align?: PageColumnAlign;
   render?: (row: TRow) => ReactNode;
-  tone?: Record<string, BadgeVariant>;
+  tone?: Record<string, Tone>;
 }
 
 function ColumnMarker<

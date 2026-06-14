@@ -98,7 +98,7 @@ export function GrantsPage(): ReactElement {
         render: (row) => (
           <span className="flex min-w-0 flex-col">
             <span className="truncate text-13 text-fg">{row.principalLabel}</span>
-            <Code truncate variant="muted" className="text-2xs">
+            <Code truncate tone="muted" className="text-2xs">
               {row.principalRef}
             </Code>
           </span>
@@ -110,7 +110,7 @@ export function GrantsPage(): ReactElement {
         render: (row) => (
           <div className="min-w-0">
             <div className="truncate font-medium text-fg">{row.roleName}</div>
-            <Code truncate variant="muted">
+            <Code truncate tone="muted">
               {row.role}
             </Code>
           </div>
@@ -146,7 +146,7 @@ export function GrantsPage(): ReactElement {
   return (
     <div className="flex flex-col gap-3">
       {actionError ? (
-        <Alert intent="danger" title="Role was not revoked">
+        <Alert tone="danger" title="Role was not revoked">
           {actionError}
         </Alert>
       ) : null}

@@ -13,7 +13,8 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import { Badge, type BadgeVariant } from "../ui/badge";
+import { type Tone } from "../lib/tones";
+import { Badge } from "../ui/badge";
 import { Code } from "../ui/code";
 
 export interface GraphViewNode<
@@ -49,7 +50,7 @@ export interface GraphViewNodeStyle {
   background?: string;
   highlightedBackground?: string;
   color?: string;
-  badgeVariant?: BadgeVariant;
+  badgeTone?: Tone;
   type?: "default" | "input" | "output";
 }
 
@@ -253,12 +254,12 @@ function GraphNodeLabel<TKind extends string>({
         <span className="truncate text-13 font-semibold text-fg">
           {node.title}
         </span>
-        <Badge density="compact" variant={style.badgeVariant ?? "default"}>
+        <Badge density="compact" tone={style.badgeTone ?? "neutral"}>
           {node.kind}
         </Badge>
       </div>
       {node.code ? (
-        <Code truncate variant="muted">
+        <Code truncate tone="muted">
           {node.code}
         </Code>
       ) : null}

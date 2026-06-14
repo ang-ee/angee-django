@@ -102,8 +102,8 @@ export function BrandButton({
           className={styles.error()}
           icon={false}
           id={errorId}
-          intent="danger"
-          surface="alert"
+          tone="danger"
+          format="alert"
         >
           {error}
         </Banner>

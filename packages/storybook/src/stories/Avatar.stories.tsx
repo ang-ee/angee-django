@@ -8,10 +8,6 @@ const meta = {
     layout: "centered",
   },
   argTypes: {
-    color: {
-      control: "select",
-      options: [1, 2, 3, 4, 5, 6, 7, 8],
-    },
     size: {
       control: "select",
       options: ["sm", "md", "lg", "xl", "xxl"],
@@ -44,12 +40,8 @@ export const Sizes: Story = {
 export const ColorSlots: Story = {
   render: () => (
     <div className="flex items-center gap-2">
-      {[1, 2, 3, 4, 5, 6, 7, 8].map((color) => (
-        <Avatar
-          key={color}
-          color={color as 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8}
-          initials={`A${color}`}
-        />
+      {["SM", "AK", "JR", "TL", "MN", "BC", "DP", "EG"].map((initials) => (
+        <Avatar key={initials} initials={initials} />
       ))}
     </div>
   ),
@@ -57,7 +49,7 @@ export const ColorSlots: Story = {
 
 export const WithGlyph: Story = {
   render: () => (
-    <Avatar color={2} size="lg" aria-label="Workspace">
+    <Avatar size="lg" aria-label="Workspace">
       <Glyph name="layout-dashboard" size={16} />
     </Avatar>
   ),
@@ -69,7 +61,7 @@ export const Stack: Story = {
       <Avatar initials="SM" />
       <Avatar initials="AK" />
       <Avatar initials="JR" />
-      <Avatar initials="+3" color={8} />
+      <Avatar initials="+3" />
     </AvatarStack>
   ),
 };

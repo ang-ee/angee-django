@@ -23,7 +23,7 @@ export const fileColumns: readonly ListColumn<StorageFileRow>[] = [
     header: "Stage",
     render: (row) => {
       const stage = fileStage(row.uploadState);
-      return <Badge variant={stage.variant}>{stage.label}</Badge>;
+      return <Badge tone={stage.tone}>{stage.label}</Badge>;
     },
   },
   {

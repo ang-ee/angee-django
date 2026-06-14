@@ -32,7 +32,7 @@ export function RailPanel({
           <div className="flex min-w-0 items-center gap-2">
             <h3 className="truncate text-sm font-semibold text-fg">{title}</h3>
             {count !== undefined ? <Badge>{count}</Badge> : null}
-            {fetching ? <Badge variant="info">Refreshing</Badge> : null}
+            {fetching ? <Badge tone="info">Refreshing</Badge> : null}
           </div>
           {actions ? (
             <div className="flex shrink-0 items-center gap-1">{actions}</div>

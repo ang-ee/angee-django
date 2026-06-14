@@ -1,8 +1,18 @@
 import type { extendTailwindMerge } from "tailwind-merge";
 
+import { TONES } from "./tones";
+
 type TailwindMergeConfig = Parameters<typeof extendTailwindMerge>[0];
 
 const FONT_SIZE_TOKENS = ["2xs", "13", "15", "22", "28", "34"];
+
+// The two-axis fill matrix (lib/tones.ts) emits, per vivid palette: `bg-P`
+// (solid) / `bg-P-tint` (surface), `border-P` (solid) / `border-P-soft` /
+// `border-P-line`, and `text-on-P` (solid). Derive the merge-group members from
+// the same TONES constant so this inventory can't drift from the matrix. (This
+// file is plain runtime config — NOT Tailwind-scanned — so interpolation is
+// safe here, unlike the literal matrix in lib/tones.ts.)
+const VIVID_TONES = TONES.filter((tone) => tone !== "neutral");
 
 const FG_COLOR_TOKENS = [
   "fg",
@@ -24,6 +34,7 @@ const FG_COLOR_TOKENS = [
   "info-text",
   "purple-soft-text",
   "pink-soft-text",
+  ...VIVID_TONES.map((tone) => `on-${tone}`),
 ];
 
 const BG_COLOR_TOKENS = [
@@ -52,6 +63,8 @@ const BG_COLOR_TOKENS = [
   "info-soft",
   "purple-soft",
   "pink-soft",
+  ...VIVID_TONES,
+  ...VIVID_TONES.map((tone) => `${tone}-tint`),
 ];
 
 const BORDER_COLOR_TOKENS = [
@@ -71,6 +84,9 @@ const BORDER_COLOR_TOKENS = [
   "info-soft",
   "success-soft",
   "warning-soft",
+  ...VIVID_TONES,
+  ...VIVID_TONES.map((tone) => `${tone}-soft`),
+  ...VIVID_TONES.map((tone) => `${tone}-line`),
 ];
 
 const RADIUS_TOKENS = ["2", "4", "6", "8", "10", "12"];

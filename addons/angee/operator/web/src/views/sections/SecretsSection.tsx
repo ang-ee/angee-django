@@ -151,14 +151,14 @@ export function SecretsSection(): ReactNode {
                   <Badge
                     density="compact"
                     shape="pill"
-                    variant={secret.hasValue ? "success" : "default"}
+                    tone={secret.hasValue ? "success" : "neutral"}
                   >
                     {secret.hasValue ? "set" : "empty"}
                   </Badge>
                 </TableCell>
                 <TableCell>
                   {secret.required ? (
-                    <Badge density="compact" shape="pill" variant="warning">
+                    <Badge density="compact" shape="pill" tone="warning">
                       yes
                     </Badge>
                   ) : (

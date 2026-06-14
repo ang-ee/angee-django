@@ -1,30 +1,12 @@
 import * as React from "react";
 
 import { cn } from "../lib/cn";
-import { tones, type ToneName } from "../lib/tones";
+import { toneClass, toneFill, type Fill, type Tone } from "../lib/tones";
 import { tv, type VariantProps } from "../lib/variants";
 
-const tagVariantClasses: Record<ToneName, string> = {
-  default: tones.default.badge,
-  brand: tones.brand.badge,
-  accent: tones.accent.badge,
-  success: tones.success.badge,
-  warning: tones.warning.badge,
-  danger: tones.danger.badge,
-  info: tones.info.badge,
-  purple: tones.purple.badge,
-  pink: tones.pink.badge,
-};
-
-export type TagVariant = ToneName;
-export type BadgeVariant = TagVariant;
-
-export const TAG_VARIANT_CLASSES: Record<TagVariant, string> = tagVariantClasses;
-
 export const badgeVariants = tv({
-  base: "inline-flex min-w-0 items-center gap-1 whitespace-nowrap font-medium leading-none",
+  base: "inline-flex min-w-0 items-center gap-1 whitespace-nowrap border font-medium leading-none",
   variants: {
-    variant: TAG_VARIANT_CLASSES,
     shape: {
       rounded: "rounded",
       pill: "rounded-full",
@@ -41,32 +23,35 @@ export const badgeVariants = tv({
     },
   },
   defaultVariants: {
-    variant: "default",
     shape: "rounded",
     density: "default",
     block: false,
   },
 });
 
+// Count pills keep two neutral treatments tuned for counters (`neutral`/`muted`)
+// and reuse the shared soft matrix for the palette tones — one source of truth.
+const COUNT_BADGE_TONES = {
+  neutral: "border-border bg-inset text-fg-muted",
+  muted: "border-border-subtle bg-sheet text-fg-subtle",
+  brand: toneFill.brand.soft,
+  info: toneFill.info.soft,
+  success: toneFill.success.soft,
+  warning: toneFill.warning.soft,
+  danger: toneFill.danger.soft,
+} as const;
+
 export const countBadgeVariants = tv({
   base: "inline-flex min-w-4 items-center justify-center rounded-full border px-1.5 text-2xs font-semibold leading-none tabular-nums",
   variants: {
-    tone: {
-      default: "border-border bg-inset text-fg-muted",
-      muted: "border-border-subtle bg-sheet text-fg-subtle",
-      brand: "border-brand-soft bg-brand-soft text-brand-soft-text",
-      info: "border-info-soft bg-info-soft text-info-text",
-      success: "border-success-soft bg-success-soft text-success-text",
-      warning: "border-warning-soft bg-warning-soft text-warning-text",
-      danger: "border-danger-soft bg-danger-soft text-danger-text",
-    },
+    tone: COUNT_BADGE_TONES,
     size: {
       sm: "h-4",
       md: "h-tag-h",
     },
   },
   defaultVariants: {
-    tone: "default",
+    tone: "neutral",
     size: "sm",
   },
 });
@@ -85,11 +70,14 @@ export type BadgeProps = Omit<
 > &
   BadgeRecipeProps & {
     className?: string;
+    tone?: Tone;
+    variant?: Fill;
   };
 
 export const Badge = React.forwardRef<HTMLSpanElement, BadgeProps>(function Badge(
   {
-    variant = "default",
+    tone = "neutral",
+    variant = "soft",
     shape = "rounded",
     density = "default",
     block = false,
@@ -102,7 +90,11 @@ export const Badge = React.forwardRef<HTMLSpanElement, BadgeProps>(function Badg
   return (
     <span
       ref={ref}
-      className={cn(badgeVariants({ variant, shape, density, block }), className)}
+      className={cn(
+        badgeVariants({ shape, density, block }),
+        toneClass(tone, variant),
+        className,
+      )}
       {...props}
     >
       {children}
@@ -140,7 +132,7 @@ function formatCount(value: number | string | undefined, max: number | undefined
 export const CountBadge = React.forwardRef<HTMLSpanElement, CountBadgeProps>(
   function CountBadge(
     {
-      tone = "default",
+      tone = "neutral",
       size = "sm",
       className,
       children,

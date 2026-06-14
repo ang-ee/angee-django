@@ -18,6 +18,21 @@ export {
   type UseDropTargetOptions,
 } from "./lib";
 
+// The semantic-color vocabulary: one tone (palette) × variant (fill) model.
+export {
+  TONES,
+  FILLS,
+  toneFill,
+  toneClass,
+  INTENT_GLYPHS,
+  DEFAULT_STATE_TONE_VALUES,
+  stateToneFromValue,
+  type Tone,
+  type Fill,
+  type FeedbackIntent,
+  type ToneValueBuckets,
+} from "./lib";
+
 // The stack's debounce owner (docs/stack.md), re-exported so addons reuse it
 // without re-declaring the dependency.
 export { useDebounce, useDebouncedCallback } from "use-debounce";

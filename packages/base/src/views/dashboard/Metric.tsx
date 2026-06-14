@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import type { BadgeVariant } from "../../ui/badge";
+import type { Tone } from "../../lib/tones";
 import { PAGE_ELEMENT_SLOT } from "../page/types";
 
 /** One headline statistic in a `DashboardView` — a label, a value, an optional
@@ -13,7 +13,7 @@ export interface MetricProps {
   /** Icon registry name or a node. */
   icon?: ReactNode;
   /** Semantic tone for the tile label. */
-  variant?: BadgeVariant;
+  tone?: Tone;
   /** Secondary line under the value (e.g. "3 critical"). */
   detail?: ReactNode;
 }

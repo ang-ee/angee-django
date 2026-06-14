@@ -12,20 +12,20 @@ const meta = {
       control: "select",
       options: ["sm", "md"],
     },
-    surface: {
+    box: {
       control: "select",
       options: ["none", "inset", "sheet"],
     },
-    variant: {
+    tone: {
       control: "select",
-      options: ["default", "muted", "success", "warning", "danger", "info"],
+      options: ["neutral", "muted", "success", "warning", "danger", "info"],
     },
   },
   args: {
     children: "record.externalId",
     size: "sm",
-    surface: "inset",
-    variant: "default",
+    box: "inset",
+    tone: "neutral",
   },
 } satisfies Meta<typeof Code>;
 
@@ -38,12 +38,12 @@ export const Playground: Story = {};
 export const InlineVariants: Story = {
   render: () => (
     <div className="flex flex-wrap items-center gap-2 text-13">
-      <Code surface="inset">default</Code>
-      <Code surface="inset" variant="muted">muted</Code>
-      <Code surface="inset" variant="success">success</Code>
-      <Code surface="inset" variant="warning">warning</Code>
-      <Code surface="inset" variant="danger">danger</Code>
-      <Code surface="inset" variant="info">info</Code>
+      <Code box="inset">neutral</Code>
+      <Code box="inset" tone="muted">muted</Code>
+      <Code box="inset" tone="success">success</Code>
+      <Code box="inset" tone="warning">warning</Code>
+      <Code box="inset" tone="danger">danger</Code>
+      <Code box="inset" tone="info">info</Code>
     </div>
   ),
 };

@@ -58,7 +58,7 @@ const relationshipColumns: readonly ListColumn<IAMRelationshipRow>[] = [
   {
     field: "relation",
     header: "Relation",
-    render: (row) => <Badge variant="info">{row.relation}</Badge>,
+    render: (row) => <Badge tone="info">{row.relation}</Badge>,
   },
   { field: "subjectType", header: "Subject Type" },
   { field: "subjectId", header: "Subject ID" },
@@ -67,7 +67,7 @@ const relationshipColumns: readonly ListColumn<IAMRelationshipRow>[] = [
     header: "Caveat",
     render: (row) =>
       row.caveatName ? (
-        <Badge variant="warning">{row.caveatName}</Badge>
+        <Badge tone="warning">{row.caveatName}</Badge>
       ) : (
         <span className="text-fg-muted">-</span>
       ),

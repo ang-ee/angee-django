@@ -8,7 +8,7 @@ export type ChromeMenuTone =
   | "brand"
   | "danger"
   | "info"
-  | "muted"
+  | "neutral"
   | "success"
   | "warning";
 

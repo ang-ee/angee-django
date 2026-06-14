@@ -1,7 +1,8 @@
 import * as React from "react";
 
 import { Glyph } from "../chrome/Glyph";
-import { INTENT_GLYPHS } from "../lib/tones";
+import { cn } from "../lib/cn";
+import { INTENT_GLYPHS, toneClass, type FeedbackIntent, type Fill } from "../lib/tones";
 import { tv, type VariantProps } from "../lib/variants";
 
 export const alertVariants = tv({
@@ -16,57 +17,35 @@ export const alertVariants = tv({
       "inline-flex size-icon-btn-sm items-center justify-center rounded text-current outline-none hover:bg-inset/50 focus-visible:focus-ring [&_.glyph]:size-3.5",
   },
   variants: {
-    intent: {
-      info: {
-        root: "border-info-soft bg-info-soft text-info-text",
-        icon: "text-info-text",
-        title: "text-info-text",
-        description: "text-info-text",
-      },
-      success: {
-        root: "border-success-soft bg-success-soft text-success-text",
-        icon: "text-success-text",
-        title: "text-success-text",
-        description: "text-success-text",
-      },
-      warning: {
-        root: "border-warning-soft bg-warning-soft text-warning-text",
-        icon: "text-warning-text",
-        title: "text-warning-text",
-        description: "text-warning-text",
-      },
-      danger: {
-        root: "border-danger-soft bg-danger-soft text-danger-text",
-        icon: "text-danger-text",
-        title: "text-danger-text",
-        description: "text-danger-text",
-      },
-    },
-    surface: {
+    // `format` is the layout axis (full card vs edge-to-edge banner); the color
+    // fill is the orthogonal `variant` applied via the tone matrix.
+    format: {
       alert: { root: "rounded-md px-4 py-3" },
       banner: { root: "rounded-none border-x-0 border-t-0 px-6 py-2" },
     },
   },
   defaultVariants: {
-    intent: "info",
-    surface: "alert",
+    format: "alert",
   },
 });
 
 type AlertRecipeProps = VariantProps<typeof alertVariants>;
 
-export type AlertIntent = NonNullable<AlertRecipeProps["intent"]>;
-export type AlertSurface = NonNullable<AlertRecipeProps["surface"]>;
+/** Alerts speak in feedback tones (a subset of the palette) so they carry a glyph. */
+export type AlertTone = FeedbackIntent;
+export type AlertFormat = NonNullable<AlertRecipeProps["format"]>;
 
 export type AlertProps = Omit<
   React.HTMLAttributes<HTMLDivElement>,
   "className" | "color" | "title"
-> &
-  AlertRecipeProps & {
+> & {
     actions?: React.ReactNode;
     className?: string;
+    format?: AlertFormat;
     icon?: React.ReactNode | false;
     title?: React.ReactNode;
+    tone?: AlertTone;
+    variant?: Fill;
   };
 
 export const Alert = React.forwardRef<HTMLDivElement, AlertProps>(
@@ -75,24 +54,25 @@ export const Alert = React.forwardRef<HTMLDivElement, AlertProps>(
       actions,
       children,
       className,
+      format = "alert",
       icon,
-      intent = "info",
       role,
-      surface = "alert",
       title,
+      tone = "info",
+      variant = "soft",
       ...props
     },
     ref,
   ) {
-    const styles = alertVariants({ intent, surface });
+    const styles = alertVariants({ format });
     const resolvedIcon =
-      icon === false ? null : (icon ?? <Glyph decorative name={INTENT_GLYPHS[intent]} />);
+      icon === false ? null : (icon ?? <Glyph decorative name={INTENT_GLYPHS[tone]} />);
 
     return (
       <div
         ref={ref}
-        role={role ?? (intent === "danger" ? "alert" : "status")}
-        className={styles.root({ className })}
+        role={role ?? (tone === "danger" ? "alert" : "status")}
+        className={cn(styles.root(), toneClass(tone, variant), className)}
         {...props}
       >
         {resolvedIcon ? <span className={styles.icon()}>{resolvedIcon}</span> : null}
@@ -110,14 +90,13 @@ Alert.displayName = "Alert";
 export type AlertTitleProps = Omit<
   React.HTMLAttributes<HTMLDivElement>,
   "className" | "color"
-> &
-  Pick<AlertRecipeProps, "intent"> & {
+> & {
     className?: string;
   };
 
 export const AlertTitle = React.forwardRef<HTMLDivElement, AlertTitleProps>(
-  function AlertTitle({ className, intent = "info", ...props }, ref) {
-    const styles = alertVariants({ intent });
+  function AlertTitle({ className, ...props }, ref) {
+    const styles = alertVariants();
     return <div ref={ref} className={styles.title({ className })} {...props} />;
   },
 );
@@ -126,16 +105,15 @@ AlertTitle.displayName = "AlertTitle";
 export type AlertDescriptionProps = Omit<
   React.HTMLAttributes<HTMLDivElement>,
   "className" | "color"
-> &
-  Pick<AlertRecipeProps, "intent"> & {
+> & {
     className?: string;
   };
 
 export const AlertDescription = React.forwardRef<
   HTMLDivElement,
   AlertDescriptionProps
->(function AlertDescription({ className, intent = "info", ...props }, ref) {
-  const styles = alertVariants({ intent });
+>(function AlertDescription({ className, ...props }, ref) {
+  const styles = alertVariants();
   return (
     <div ref={ref} className={styles.description({ className })} {...props} />
   );
@@ -151,13 +129,10 @@ export function Banner({
   actions,
   dismissLabel = "Dismiss",
   onDismiss,
-  surface = "banner",
+  format = "banner",
   ...props
 }: BannerProps): React.ReactElement {
-  const styles = alertVariants({
-    intent: props.intent ?? "info",
-    surface,
-  });
+  const styles = alertVariants({ format });
   const dismissAction = onDismiss ? (
     <button
       type="button"
@@ -179,7 +154,7 @@ export function Banner({
           </>
         ) : undefined
       }
-      surface={surface}
+      format={format}
       {...props}
     />
   );

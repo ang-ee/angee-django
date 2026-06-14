@@ -1,8 +1,8 @@
 import * as React from "react";
 
-import { cn } from "../lib/cn";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { StatusDot } from "../ui/status-icon";
 import { SegmentedControl } from "../ui/toggle-group";
 import { InlineEmpty } from "./InlineEmpty";
 import { MetricStrip, type MetricTileValue } from "./MetricStrip";
@@ -19,7 +19,7 @@ export interface DataLensNode {
   label: React.ReactNode;
   value?: number;
   parentId?: string | null;
-  tone?: "default" | "info" | "success" | "warning" | "danger";
+  tone?: "brand" | "info" | "success" | "warning" | "danger";
 }
 
 export interface DataLensProjection {
@@ -178,7 +178,7 @@ function NodeList({
           >
             <span className="truncate">{node.label}</span>
             {node.value !== undefined ? (
-              <Badge variant={node.tone ?? "default"}>{node.value}</Badge>
+              <Badge tone={node.tone ?? "brand"}>{node.value}</Badge>
             ) : null}
           </Button>
         ))}
@@ -244,17 +244,7 @@ function TreeProjection({
           onClick={() => onSelect(node)}
           type="button"
         >
-          <span
-            aria-hidden="true"
-            className={cn(
-              "size-1.5 rounded-full",
-              node.tone === "success" && "bg-success",
-              node.tone === "warning" && "bg-warning",
-              node.tone === "danger" && "bg-danger",
-              node.tone === "info" && "bg-info",
-              (!node.tone || node.tone === "default") && "bg-brand",
-            )}
-          />
+          <StatusDot tone={node.tone ?? "brand"} size="sm" />
           <span className="min-w-0 flex-1 truncate text-fg">{node.label}</span>
           {node.parentId ? <Badge>{node.parentId}</Badge> : null}
         </button>

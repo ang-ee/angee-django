@@ -33,7 +33,7 @@ export function DashboardView({
         label: metric.label,
         value: metric.value,
         icon: metric.icon,
-        variant: metric.variant,
+        tone: metric.tone,
         detail: metric.detail,
       });
     } else {

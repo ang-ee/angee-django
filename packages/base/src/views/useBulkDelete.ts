@@ -79,7 +79,7 @@ export function useBulkDelete(
           (entry): entry is PreviewEntry => entry !== null,
         );
         if (previews.length === 0) {
-          toast.error({
+          toast.danger({
             title: "Delete preview failed",
             description: "No preview was returned for the selected records.",
           });
@@ -96,7 +96,7 @@ export function useBulkDelete(
         });
       })
       .catch((error: unknown) => {
-        toast.error({
+        toast.danger({
           title: "Delete preview failed",
           description: errorMessage(error),
         });

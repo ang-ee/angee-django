@@ -26,7 +26,7 @@ export const Dense: Story = {
       <PageHeader
         density="compact"
         crumbs="Health / Patients / PT-1842"
-        eyebrow={<Badge variant="info">Open chart</Badge>}
+        eyebrow={<Badge tone="info">Open chart</Badge>}
         title="Jordan Ellis"
         description="68 yo M - MRN 481029 - primary care panel"
         actions={

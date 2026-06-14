@@ -33,19 +33,19 @@ export const List: Story = {
           </Button>
         }
         meta="12,408 rows"
-        status={{ label: "Complete", variant: "success" }}
-        tags={<Tag variant="brand">Resources</Tag>}
+        status={{ label: "Complete", tone: "success" }}
+        tags={<Tag tone="brand">Resources</Tag>}
         title="Contacts CSV"
       />
       <ListItem
         meta="884 rows"
-        status={{ label: "Running", variant: "info" }}
+        status={{ label: "Running", tone: "info" }}
         tags={<Tag>Delta</Tag>}
         title="Notes backfill"
       />
       <ListItem
         meta="2 failed rows"
-        status={{ label: "Needs review", variant: "warning" }}
+        status={{ label: "Needs review", tone: "warning" }}
         title="File attachments"
       />
     </ListPanel>

@@ -73,7 +73,7 @@ export const Detail: Story = {
                 <div className="flex justify-between">
                   <dt className="text-fg-muted">Status</dt>
                   <dd>
-                    <Badge variant="success">Active</Badge>
+                    <Badge tone="success">Active</Badge>
                   </dd>
                 </div>
                 <div className="flex justify-between">

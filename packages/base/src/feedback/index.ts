@@ -11,7 +11,7 @@ export {
   useToast,
   type ToastAction,
   type ToastApi,
-  type ToastIntent,
+  type ToastTone,
   type ToastOptions,
   type ToastProviderProps,
   type ToastShortcutOptions,

@@ -1,19 +1,24 @@
 import * as React from "react";
 
+import { toneFill } from "../lib/tones";
 import { tv, type VariantProps } from "../lib/variants";
 
+// Inline code is text-only, so its `tone` is a small local text-color map (not
+// the bundled fill matrix, which would add a background). `box` is the
+// orthogonal surface axis (renamed from `surface` so the word stays reserved
+// for the `variant="surface"` fill elsewhere).
 export const codeVariants = tv({
   base: "inline-flex max-w-full items-center rounded font-mono leading-none",
   variants: {
-    variant: {
-      default: "text-fg",
+    tone: {
+      neutral: "text-fg",
       muted: "text-fg-muted",
       success: "text-success-text",
       warning: "text-warning-text",
       danger: "text-danger-text",
       info: "text-info-text",
     },
-    surface: {
+    box: {
       none: "",
       inset: "bg-inset px-1.5 py-1",
       sheet: "bg-sheet px-1.5 py-1",
@@ -28,8 +33,8 @@ export const codeVariants = tv({
     },
   },
   defaultVariants: {
-    variant: "default",
-    surface: "none",
+    tone: "neutral",
+    box: "none",
     size: "sm",
     truncate: false,
   },
@@ -43,24 +48,24 @@ export const codeBlockVariants = tv({
       false: "whitespace-pre",
     },
     tone: {
-      default: "",
+      neutral: "",
       muted: "text-fg-muted",
-      danger: "border-danger-soft bg-danger-soft text-danger-text",
-      success: "border-success-soft bg-success-soft text-success-text",
-      warning: "border-warning-soft bg-warning-soft text-warning-text",
+      danger: toneFill.danger.soft,
+      success: toneFill.success.soft,
+      warning: toneFill.warning.soft,
     },
   },
   defaultVariants: {
     wrap: false,
-    tone: "default",
+    tone: "neutral",
   },
 });
 
 type CodeRecipeProps = VariantProps<typeof codeVariants>;
 type CodeBlockRecipeProps = VariantProps<typeof codeBlockVariants>;
 
-export type CodeVariant = NonNullable<CodeRecipeProps["variant"]>;
-export type CodeSurface = NonNullable<CodeRecipeProps["surface"]>;
+export type CodeTone = NonNullable<CodeRecipeProps["tone"]>;
+export type CodeBox = NonNullable<CodeRecipeProps["box"]>;
 export type CodeSize = NonNullable<CodeRecipeProps["size"]>;
 export type CodeBlockTone = NonNullable<CodeBlockRecipeProps["tone"]>;
 
@@ -75,10 +80,10 @@ export type CodeProps = Omit<
 export const Code = React.forwardRef<HTMLElement, CodeProps>(function Code(
   {
     className,
+    box = "none",
     size = "sm",
-    surface = "none",
     truncate = false,
-    variant = "default",
+    tone = "neutral",
     ...props
   },
   ref,
@@ -86,7 +91,7 @@ export const Code = React.forwardRef<HTMLElement, CodeProps>(function Code(
   return (
     <code
       ref={ref}
-      className={codeVariants({ className, size, surface, truncate, variant })}
+      className={codeVariants({ className, box, size, truncate, tone })}
       {...props}
     />
   );
@@ -103,7 +108,7 @@ export type CodeBlockProps = Omit<
 
 export const CodeBlock = React.forwardRef<HTMLPreElement, CodeBlockProps>(
   function CodeBlock(
-    { children, className, tone = "default", wrap = false, ...props },
+    { children, className, tone = "neutral", wrap = false, ...props },
     ref,
   ) {
     return (

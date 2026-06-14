@@ -53,7 +53,7 @@ const columns = [
     tone: {
       ACTIVE: "success",
       DRAFT: "warning",
-      ARCHIVED: "default",
+      ARCHIVED: "neutral",
     },
   },
   { field: "owner", header: "Owner" },

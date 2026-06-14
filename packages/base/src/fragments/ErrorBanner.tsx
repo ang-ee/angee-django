@@ -5,7 +5,7 @@ import { Alert, alertVariants, type BannerProps } from "../ui/alert";
 
 export type ErrorBannerProps = Omit<
   BannerProps,
-  "children" | "intent" | "surface" | "title"
+  "children" | "tone" | "format" | "title"
 > & {
   message: React.ReactNode | null;
   title?: React.ReactNode;
@@ -25,7 +25,7 @@ export const ErrorBanner = React.forwardRef<HTMLDivElement, ErrorBannerProps>(
     ref,
   ) {
     if (!message) return null;
-    const styles = alertVariants({ intent: "danger", surface: "banner" });
+    const styles = alertVariants({ format: "banner" });
     const dismissAction = onDismiss ? (
       <button
         type="button"
@@ -49,8 +49,8 @@ export const ErrorBanner = React.forwardRef<HTMLDivElement, ErrorBannerProps>(
           ) : undefined
         }
         className={className}
-        intent="danger"
-        surface="banner"
+        tone="danger"
+        format="banner"
         title={title}
         {...props}
       >

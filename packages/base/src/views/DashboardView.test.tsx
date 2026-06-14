@@ -13,7 +13,7 @@ describe("DashboardView", () => {
     render(
       <DashboardView>
         <Metric label="Users" value={128} />
-        <Metric label="Roles" value={7} variant="brand" />
+        <Metric label="Roles" value={7} tone="brand" />
         <section aria-label="panel">below the band</section>
       </DashboardView>,
     );

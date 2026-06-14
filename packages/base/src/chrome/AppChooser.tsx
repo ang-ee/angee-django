@@ -8,6 +8,7 @@ import { Link, useRouterState } from "@tanstack/react-router";
 import { useMenus } from "@angee/sdk";
 
 import { cn } from "../lib/cn";
+import { toneClass as toneFillClass } from "../lib/tones";
 import { Button } from "../ui/button";
 import {
   PopoverClose,
@@ -315,20 +316,22 @@ function itemMatchesPath(item: AppChooserItem, pathname: string): boolean {
   return pathname === target || pathname.startsWith(`${target}/`);
 }
 
+// The primary app tile is a solid brand fill; the rest are soft. Both route
+// through the shared (tone × fill) matrix so they can't drift from the palette.
 function toneClass(tone: ChromeMenuTone | undefined): string {
   switch (tone ?? "brand") {
+    case "neutral":
+      return toneFillClass("neutral", "soft");
     case "danger":
-      return "bg-danger-soft text-danger-text";
+      return toneFillClass("danger", "soft");
     case "info":
-      return "bg-info-soft text-info-text";
-    case "muted":
-      return "bg-inset text-fg-muted";
+      return toneFillClass("info", "soft");
     case "success":
-      return "bg-success-soft text-success-text";
+      return toneFillClass("success", "soft");
     case "warning":
-      return "bg-warning-soft text-warning-text";
+      return toneFillClass("warning", "soft");
     case "brand":
     default:
-      return "bg-brand text-on-brand";
+      return toneFillClass("brand", "solid");
   }
 }

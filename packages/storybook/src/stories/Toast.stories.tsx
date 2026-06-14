@@ -24,7 +24,7 @@ export const Info: Story = {
     <ToastCanvas>
       <SeedToast
         options={{
-          intent: "info",
+          tone: "info",
           title: "Import queued",
           description: "Resource sync will start shortly.",
           duration: 0,
@@ -39,7 +39,7 @@ export const Success: Story = {
     <ToastCanvas>
       <SeedToast
         options={{
-          intent: "success",
+          tone: "success",
           title: "Saved",
           description: "The record is ready for the next step.",
           duration: 0,
@@ -54,7 +54,7 @@ export const Warning: Story = {
     <ToastCanvas>
       <SeedToast
         options={{
-          intent: "warning",
+          tone: "warning",
           title: "Review needed",
           description: "Two imported rows need field confirmation.",
           duration: 0,
@@ -69,7 +69,7 @@ export const Error: Story = {
     <ToastCanvas>
       <SeedToast
         options={{
-          intent: "error",
+          tone: "danger",
           title: "Import failed",
           description: "The source returned an invalid response.",
         }}
@@ -83,7 +83,7 @@ export const WithAction: Story = {
     <ToastCanvas>
       <SeedToast
         options={{
-          intent: "warning",
+          tone: "warning",
           title: "Draft changes",
           description: "Review the pending edits before publishing.",
           duration: 0,
@@ -102,7 +102,7 @@ export const PersistentError: Story = {
     <ToastCanvas>
       <SeedToast
         options={{
-          intent: "error",
+          tone: "danger",
           title: "Connection lost",
           description: "Retry after the workspace connection is restored.",
           duration: Infinity,

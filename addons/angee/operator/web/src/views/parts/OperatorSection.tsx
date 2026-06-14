@@ -35,12 +35,12 @@ export function OperatorSection({
     <div className="flex flex-col gap-4">
       <h2 className="text-lg font-semibold text-fg">{title}</h2>
       {error ? (
-        <Alert intent="danger">{error.message}</Alert>
+        <Alert tone="danger">{error.message}</Alert>
       ) : loading ? (
         <LoadingPanel message={loadingMessage} />
       ) : (
         <>
-          {actionError ? <Alert intent="danger">{actionError}</Alert> : null}
+          {actionError ? <Alert tone="danger">{actionError}</Alert> : null}
           {children}
         </>
       )}

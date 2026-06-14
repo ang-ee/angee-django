@@ -43,7 +43,7 @@ export const ScrollRegion: Story = {
                 <TableCell>Record update {index + 1}</TableCell>
                 <TableCell className="text-fg-muted">System</TableCell>
                 <TableCell>
-                  <Badge variant={index % 3 === 0 ? "success" : "default"}>
+                  <Badge tone={index % 3 === 0 ? "success" : "neutral"}>
                     {index % 3 === 0 ? "Complete" : "Queued"}
                   </Badge>
                 </TableCell>

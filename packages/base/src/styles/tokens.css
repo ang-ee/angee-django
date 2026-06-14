@@ -166,6 +166,48 @@
   --pink-soft:         var(--pink-100);
   --pink-soft-text:    var(--pink-700);
 
+  /* ---------------------------------------------------------------------------
+     Two-axis fill matrix (tone × variant). `soft` (above) and the brand/danger
+     solids already exist; these complete the palette so lib/tones.ts can map
+     every (tone × fill) combo. Per palette: `--P` solid fill, `--on-P` text on
+     it, `--P-line` the outline/surface border, `--P-tint` the faint surface bg.
+     Names follow the ramp primitives — no raw hex.
+     --------------------------------------------------------------------------- */
+  /* Solid fills (brand/danger/accent already defined above) */
+  --info:          var(--blue-500);
+  --success:       var(--green-500);
+  --warning:       var(--amber-500);
+  --purple:        var(--purple-500);
+  --pink:          var(--pink-500);
+
+  /* Text on the solid fill (on-brand/on-danger already defined above) */
+  --on-accent:     var(--n-0);
+  --on-info:       var(--n-0);
+  --on-success:    var(--n-0);
+  --on-warning:    var(--n-900);   /* dark text — amber-500 fails white-on-amber */
+  --on-purple:     var(--n-0);
+  --on-pink:       var(--n-0);
+
+  /* Outline / surface border (ramp-300) */
+  --brand-line:    var(--b-300);
+  --accent-line:   var(--t-300);
+  --info-line:     var(--blue-300);
+  --success-line:  var(--green-300);
+  --warning-line:  var(--amber-300);
+  --danger-line:   var(--red-300);
+  --purple-line:   var(--purple-300);
+  --pink-line:     var(--pink-300);
+
+  /* Faint panel tint for the `surface` fill (palette over the sheet) */
+  --brand-tint:    color-mix(in oklab, var(--b-500) 6%, var(--surface-sheet));
+  --accent-tint:   color-mix(in oklab, var(--t-500) 6%, var(--surface-sheet));
+  --info-tint:     color-mix(in oklab, var(--blue-500) 6%, var(--surface-sheet));
+  --success-tint:  color-mix(in oklab, var(--green-500) 6%, var(--surface-sheet));
+  --warning-tint:  color-mix(in oklab, var(--amber-500) 6%, var(--surface-sheet));
+  --danger-tint:   color-mix(in oklab, var(--red-500) 6%, var(--surface-sheet));
+  --purple-tint:   color-mix(in oklab, var(--purple-500) 6%, var(--surface-sheet));
+  --pink-tint:     color-mix(in oklab, var(--pink-500) 6%, var(--surface-sheet));
+
   /* Focus ring */
   --ring:              0 0 0 3px color-mix(in oklab, var(--brand) 30%, transparent);
   --ring-danger:       0 0 0 3px color-mix(in oklab, var(--red-500) 30%, transparent);
@@ -309,6 +351,27 @@
   --purple-soft-text:  var(--purple-300);
   --pink-soft:         color-mix(in oklab, var(--pink-500) 18%, transparent);
   --pink-soft-text:    var(--pink-300);
+
+  /* Two-axis fills — dark overrides. Solids keep their vivid ramp-500 (like
+     --danger); only the outline/surface border and the surface tint need a
+     theme-aware, translucent value over the darker sheet. */
+  --brand-line:    color-mix(in oklab, var(--b-400) 40%, transparent);
+  --accent-line:   color-mix(in oklab, var(--t-500) 40%, transparent);
+  --info-line:     color-mix(in oklab, var(--blue-500) 40%, transparent);
+  --success-line:  color-mix(in oklab, var(--green-500) 40%, transparent);
+  --warning-line:  color-mix(in oklab, var(--amber-500) 40%, transparent);
+  --danger-line:   color-mix(in oklab, var(--red-500) 40%, transparent);
+  --purple-line:   color-mix(in oklab, var(--purple-500) 40%, transparent);
+  --pink-line:     color-mix(in oklab, var(--pink-500) 40%, transparent);
+
+  --brand-tint:    color-mix(in oklab, var(--b-400) 12%, var(--surface-sheet));
+  --accent-tint:   color-mix(in oklab, var(--t-500) 12%, var(--surface-sheet));
+  --info-tint:     color-mix(in oklab, var(--blue-500) 12%, var(--surface-sheet));
+  --success-tint:  color-mix(in oklab, var(--green-500) 12%, var(--surface-sheet));
+  --warning-tint:  color-mix(in oklab, var(--amber-500) 12%, var(--surface-sheet));
+  --danger-tint:   color-mix(in oklab, var(--red-500) 12%, var(--surface-sheet));
+  --purple-tint:   color-mix(in oklab, var(--purple-500) 12%, var(--surface-sheet));
+  --pink-tint:     color-mix(in oklab, var(--pink-500) 12%, var(--surface-sheet));
 
   --elevation-xs:         0 1px 1px rgb(from var(--black) r g b / 0.30);
   --elevation-sm:         0 1px 2px rgb(from var(--black) r g b / 0.40),

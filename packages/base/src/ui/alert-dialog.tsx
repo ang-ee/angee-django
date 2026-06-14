@@ -5,7 +5,8 @@ import type {
 } from "@base-ui/react/alert-dialog";
 
 import { cn } from "../lib/cn";
-import { tv, type VariantProps } from "../lib/variants";
+import { toneClass } from "../lib/tones";
+import { tv } from "../lib/variants";
 import {
   Button,
   buttonVariants,
@@ -38,27 +39,10 @@ export const alertDialogVariants = tv({
     cancel: "",
     action: "",
   },
-  variants: {
-    intent: {
-      default: {
-        icon: "bg-info-soft text-info-text",
-      },
-      warning: {
-        icon: "bg-warning-soft text-warning-text",
-      },
-      danger: {
-        icon: "bg-danger-soft text-danger-text",
-      },
-    },
-  },
-  defaultVariants: {
-    intent: "danger",
-  },
 });
 
-type AlertDialogRecipeProps = VariantProps<typeof alertDialogVariants>;
-
-export type AlertDialogIntent = NonNullable<AlertDialogRecipeProps["intent"]>;
+/** Confirm dialogs speak in three feedback tones; the icon takes its soft fill. */
+export type AlertDialogTone = "info" | "warning" | "danger";
 export type AlertDialogRootProps<Payload = unknown> =
   BaseAlertDialogRootProps<Payload>;
 
@@ -83,23 +67,23 @@ export type AlertDialogFooterProps = DialogFooterProps;
 export type AlertDialogTitleProps = DialogTitleProps;
 export type AlertDialogDescriptionProps = DialogDescriptionProps;
 
-export type AlertDialogContentProps = DialogContentProps &
-  Pick<AlertDialogRecipeProps, "intent"> & {
+export type AlertDialogContentProps = DialogContentProps & {
     className?: string;
+    tone?: AlertDialogTone;
   };
 
 export const AlertDialogContent = React.forwardRef<
   HTMLDivElement,
   AlertDialogContentProps
 >(function AlertDialogContent(
-  { className, intent = "danger", placement = "prompt", size = "sm", ...props },
+  { className, tone = "danger", placement = "prompt", size = "sm", ...props },
   ref,
 ) {
-  const styles = alertDialogVariants({ intent });
+  const styles = alertDialogVariants();
   return (
     <DialogContent
       ref={ref}
-      data-intent={intent}
+      data-tone={tone}
       placement={placement}
       size={size}
       className={styles.content({ className })}
@@ -109,17 +93,23 @@ export const AlertDialogContent = React.forwardRef<
 });
 AlertDialogContent.displayName = "AlertDialogContent";
 
-export type AlertDialogIconProps = React.HTMLAttributes<HTMLDivElement> &
-  Pick<AlertDialogRecipeProps, "intent"> & {
+export type AlertDialogIconProps = React.HTMLAttributes<HTMLDivElement> & {
     className?: string;
+    tone?: AlertDialogTone;
   };
 
 export const AlertDialogIcon = React.forwardRef<
   HTMLDivElement,
   AlertDialogIconProps
->(function AlertDialogIcon({ className, intent = "danger", ...props }, ref) {
-  const styles = alertDialogVariants({ intent });
-  return <div ref={ref} className={styles.icon({ className })} {...props} />;
+>(function AlertDialogIcon({ className, tone = "danger", ...props }, ref) {
+  const styles = alertDialogVariants();
+  return (
+    <div
+      ref={ref}
+      className={cn(styles.icon(), toneClass(tone, "soft"), className)}
+      {...props}
+    />
+  );
 });
 AlertDialogIcon.displayName = "AlertDialogIcon";
 
@@ -156,11 +146,11 @@ AlertDialogCancel.displayName = "AlertDialogCancel";
 export type AlertDialogActionProps = Omit<
   React.ButtonHTMLAttributes<HTMLButtonElement>,
   "className" | "color"
-> &
-  Pick<AlertDialogRecipeProps, "intent"> & {
+> & {
     className?: string;
     loading?: boolean;
     size?: ButtonSize;
+    tone?: AlertDialogTone;
     variant?: ButtonVariant;
   };
 
@@ -168,12 +158,12 @@ export const AlertDialogAction = React.forwardRef<
   HTMLElement,
   AlertDialogActionProps
 >(function AlertDialogAction(
-  { className, intent = "danger", variant, ...props },
+  { className, tone = "danger", variant, ...props },
   ref,
 ) {
-  const styles = alertDialogVariants({ intent });
+  const styles = alertDialogVariants();
   const resolvedVariant =
-    variant ?? (intent === "danger" ? "danger" : "primary");
+    variant ?? (tone === "danger" ? "danger" : "primary");
   return (
     <Button
       ref={ref}

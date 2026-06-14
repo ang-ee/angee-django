@@ -1,19 +1,19 @@
 import * as React from "react";
 
+import { type Tone } from "../lib/tones";
 import {
   Badge,
   type BadgeDensity,
   type BadgeShape,
-  type TagVariant,
 } from "../ui/badge";
 import { Spinner } from "../ui/spinner";
 
 export type DirtyPillState = "dirty" | "saving" | "saved";
 
-const dirtyPillVariants: Record<DirtyPillState, TagVariant> = {
+const dirtyPillTones: Record<DirtyPillState, Tone> = {
   dirty: "warning",
   saved: "success",
-  saving: "default",
+  saving: "neutral",
 };
 
 const dirtyPillLabels: Record<DirtyPillState, React.ReactNode> = {
@@ -50,7 +50,7 @@ export const DirtyPill = React.forwardRef<HTMLSpanElement, DirtyPillProps>(
         className={className}
         density={density}
         shape={shape}
-        variant={dirtyPillVariants[state]}
+        tone={dirtyPillTones[state]}
       >
         {state === "saving" ? <Spinner aria-hidden="true" size="sm" /> : null}
         {label}

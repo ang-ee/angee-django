@@ -136,6 +136,42 @@
   --color-pink-soft:        var(--pink-soft);
   --color-pink-soft-text:   var(--pink-soft-text);
 
+  /* Two-axis fill matrix (tone × variant). Completes the palette so
+     lib/tones.ts can map every (tone × fill) combo. Emits bg-info / bg-success
+     / … (solid), text-on-success / … (on-fill), border-success-line / …
+     (outline + surface border), bg-success-tint / … (surface bg). The
+     brand/danger/accent solids and on-brand/on-danger already bridge above. */
+  --color-info:         var(--info);
+  --color-success:      var(--success);
+  --color-warning:      var(--warning);
+  --color-purple:       var(--purple);
+  --color-pink:         var(--pink);
+
+  --color-on-accent:    var(--on-accent);
+  --color-on-info:      var(--on-info);
+  --color-on-success:   var(--on-success);
+  --color-on-warning:   var(--on-warning);
+  --color-on-purple:    var(--on-purple);
+  --color-on-pink:      var(--on-pink);
+
+  --color-brand-line:   var(--brand-line);
+  --color-accent-line:  var(--accent-line);
+  --color-info-line:    var(--info-line);
+  --color-success-line: var(--success-line);
+  --color-warning-line: var(--warning-line);
+  --color-danger-line:  var(--danger-line);
+  --color-purple-line:  var(--purple-line);
+  --color-pink-line:    var(--pink-line);
+
+  --color-brand-tint:   var(--brand-tint);
+  --color-accent-tint:  var(--accent-tint);
+  --color-info-tint:    var(--info-tint);
+  --color-success-tint: var(--success-tint);
+  --color-warning-tint: var(--warning-tint);
+  --color-danger-tint:  var(--danger-tint);
+  --color-purple-tint:  var(--purple-tint);
+  --color-pink-tint:    var(--pink-tint);
+
   /* Status palette — raw 100/500/700 for literal fills (dots, charts,
      hard-coded `red-500` button danger variants). Reuse the primitive ramp. */
   --color-green-100:  var(--green-100);

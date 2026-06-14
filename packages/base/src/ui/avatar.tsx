@@ -86,7 +86,6 @@ export type AvatarProps = Omit<
     alt?: string;
     children?: React.ReactNode;
     className?: string;
-    color?: AvatarColorSlot;
     fallbackClassName?: string;
     fallbackDelay?: number;
     imageClassName?: string;
@@ -108,7 +107,6 @@ export const Avatar = React.forwardRef<HTMLSpanElement, AvatarProps>(
       alt,
       children,
       className,
-      color,
       fallbackClassName,
       fallbackDelay,
       imageClassName,
@@ -121,7 +119,7 @@ export const Avatar = React.forwardRef<HTMLSpanElement, AvatarProps>(
     ref,
   ) {
     const styles = avatarVariants({ size });
-    const slot = color ?? (initials ? hashAvatarColor(initials) : undefined);
+    const slot = initials ? hashAvatarColor(initials) : undefined;
     const background = slot ? { background: `var(--avatar-grad-${slot})` } : {};
 
     return (

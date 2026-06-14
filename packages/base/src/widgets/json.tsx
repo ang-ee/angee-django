@@ -107,7 +107,7 @@ function JsonRead({ value }: WidgetRenderProps<JsonValue>): ReactElement {
 
 function JsonCell({ value }: WidgetRenderProps<JsonValue>): ReactElement {
   return (
-    <Code surface="inset" truncate className="max-w-full">
+    <Code box="inset" truncate className="max-w-full">
       {compactJson(value)}
     </Code>
   );

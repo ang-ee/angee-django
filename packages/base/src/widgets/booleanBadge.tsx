@@ -10,7 +10,7 @@ function BooleanBadgeRead({
   const active = booleanValue(value);
   return (
     <Badge
-      variant={active ? "success" : "default"}
+      tone={active ? "success" : "neutral"}
       density="compact"
       shape="pill"
     >

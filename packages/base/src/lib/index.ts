@@ -6,6 +6,24 @@ export { titleCase } from "./titleCase";
 export { tv, type VariantProps } from "./variants";
 export { ANGEE_TW_MERGE_CONFIG } from "./tailwind-merge-config";
 export {
+  TONES,
+  FILLS,
+  toneFill,
+  toneClass,
+  INTENT_GLYPHS,
+  DEFAULT_STATE_TONE_VALUES,
+  stateToneFromValue,
+  type Tone,
+  type Fill,
+  type FeedbackIntent,
+  type ToneValueBuckets,
+} from "./tones";
+export { useRender } from "./slot";
+export type {
+  UseRenderComponentProps,
+  UseRenderRenderProp,
+} from "./slot";
+export {
   DND_MIME,
   writeDndPayload,
   readDndPayload,

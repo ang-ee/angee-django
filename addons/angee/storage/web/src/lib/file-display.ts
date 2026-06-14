@@ -1,4 +1,4 @@
-import { isImageMime, type BadgeVariant } from "@angee/base";
+import { isImageMime, type Tone } from "@angee/base";
 
 // Presentational mappings for file rows: a mime → glyph name, the upload-state
 // → stage badge, and a compact date. Byte sizes reuse `formatSize` from
@@ -12,7 +12,7 @@ export function fileIconName(mime: string | null | undefined): string {
 
 export interface FileStage {
   label: string;
-  variant: BadgeVariant;
+  tone: Tone;
 }
 
 /** Map the byte-lifecycle state to a stage badge. Case-insensitive: the enum
@@ -20,13 +20,13 @@ export interface FileStage {
 export function fileStage(uploadState: string): FileStage {
   switch (uploadState.toLowerCase()) {
     case "ready":
-      return { label: "Ready", variant: "success" };
+      return { label: "Ready", tone: "success" };
     case "draft":
-      return { label: "Uploading", variant: "warning" };
+      return { label: "Uploading", tone: "warning" };
     case "failed":
-      return { label: "Failed", variant: "danger" };
+      return { label: "Failed", tone: "danger" };
     default:
-      return { label: uploadState || "Unknown", variant: "default" };
+      return { label: uploadState || "Unknown", tone: "neutral" };
   }
 }
 

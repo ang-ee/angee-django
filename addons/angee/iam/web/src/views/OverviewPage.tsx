@@ -163,11 +163,11 @@ export function OverviewPage(): ReactElement {
   return (
     <DashboardView className="p-1">
       <Metric label="Users" value={count(overview.data?.users.totalCount, loading)} icon="users" />
-      <Metric label="Roles" value={count(roles.length, loading)} icon="auth" variant="brand" />
-      <Metric label="Grants" value={count(overview.data?.grants.totalCount, loading)} icon="check" variant="success" />
-      <Metric label="Relationships" value={count(overview.data?.relationships.totalCount, loading)} icon="share" variant="info" />
-      <Metric label="Privileged" value={count(privileged.length, loading)} icon="auth" variant="warning" detail="admin-tier grants" />
-      <Metric label="Unassigned" value={count(unassigned.length, loading)} icon="users" variant="danger" detail="no direct roles" />
+      <Metric label="Roles" value={count(roles.length, loading)} icon="auth" tone="brand" />
+      <Metric label="Grants" value={count(overview.data?.grants.totalCount, loading)} icon="check" tone="success" />
+      <Metric label="Relationships" value={count(overview.data?.relationships.totalCount, loading)} icon="share" tone="info" />
+      <Metric label="Privileged" value={count(privileged.length, loading)} icon="auth" tone="warning" detail="admin-tier grants" />
+      <Metric label="Unassigned" value={count(unassigned.length, loading)} icon="users" tone="danger" detail="no direct roles" />
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_400px]">
         <div className="space-y-6">
@@ -211,7 +211,7 @@ export function OverviewPage(): ReactElement {
                 </div>
               </form>
               {error ? (
-                <Alert className="mt-3" intent="danger" title="Role was not granted">{error}</Alert>
+                <Alert className="mt-3" tone="danger" title="Role was not granted">{error}</Alert>
               ) : null}
             </div>
           </SurfacePanel>
@@ -247,7 +247,7 @@ export function OverviewPage(): ReactElement {
                   meta={`${counts.roles.toLocaleString()} ${counts.roles === 1 ? "role" : "roles"}`}
                   primaryTag={{
                     label: `${counts.grants.toLocaleString()} grants`,
-                    variant: counts.grants > 0 ? "brand" : "default",
+                    tone: counts.grants > 0 ? "brand" : "neutral",
                   }}
                 />
               ))}

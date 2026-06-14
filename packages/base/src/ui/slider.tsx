@@ -9,7 +9,7 @@ import type {
   SliderValueProps as BaseSliderValueProps,
 } from "@base-ui/react/slider";
 
-import { tones } from "../lib/tones";
+import { toneSolidBg } from "../lib/tones";
 import { tv, type VariantProps } from "../lib/variants";
 
 export const sliderVariants = tv({
@@ -42,10 +42,10 @@ export const sliderVariants = tv({
       },
     },
     tone: {
-      brand: { indicator: tones.brand.barFg },
-      success: { indicator: tones.success.barFg },
-      warning: { indicator: tones.warning.barFg },
-      danger: { indicator: tones.danger.barFg },
+      brand: { indicator: toneSolidBg("brand") },
+      success: { indicator: toneSolidBg("success") },
+      warning: { indicator: toneSolidBg("warning") },
+      danger: { indicator: toneSolidBg("danger") },
     },
     orientation: {
       horizontal: "",

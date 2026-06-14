@@ -1,20 +1,12 @@
 import * as React from "react";
 
+import { cn } from "../lib/cn";
+import { toneClass, type Fill, type Tone } from "../lib/tones";
 import { tv, type VariantProps } from "../lib/variants";
 
 export const chipVariants = tv({
   base: "inline-flex max-w-full shrink-0 items-center gap-1 truncate whitespace-nowrap border font-medium leading-none",
   variants: {
-    tone: {
-      default: "border-transparent bg-inset text-fg-2",
-      muted: "border-transparent bg-sheet text-fg-muted",
-      inherit: "border-current/20 bg-transparent text-current",
-      brand: "border-transparent bg-brand-soft text-brand-soft-text",
-      info: "border-transparent bg-info-soft text-info-text",
-      success: "border-transparent bg-success-soft text-success-text",
-      warning: "border-transparent bg-warning-soft text-warning-text",
-      danger: "border-transparent bg-danger-soft text-danger-text",
-    },
     shape: {
       rounded: "rounded",
       pill: "rounded-full",
@@ -28,25 +20,32 @@ export const chipVariants = tv({
       true: "font-mono",
       false: "",
     },
-    outline: {
-      true: "border-current/20",
-      false: "",
-    },
   },
   defaultVariants: {
-    tone: "default",
     shape: "pill",
     size: "micro",
     mono: false,
-    outline: false,
   },
 });
 
 export type ChipRecipeProps = VariantProps<typeof chipVariants>;
 
-export type ChipTone = NonNullable<ChipRecipeProps["tone"]>;
 export type ChipShape = NonNullable<ChipRecipeProps["shape"]>;
 export type ChipSize = NonNullable<ChipRecipeProps["size"]>;
+
+/** Chip-local tones outside the semantic palette: `muted` (quiet) and `inherit`
+ *  (adopts the surrounding text color). Palette tones route through the matrix. */
+export type ChipTone = Tone | "muted" | "inherit";
+
+const CHIP_LOCAL_TONES = {
+  muted: "border-transparent bg-sheet text-fg-muted",
+  inherit: "border-current/20 bg-transparent text-current",
+} as const;
+
+function chipToneClass(tone: ChipTone, variant: Fill): string {
+  if (tone === "muted" || tone === "inherit") return CHIP_LOCAL_TONES[tone];
+  return toneClass(tone, variant);
+}
 
 export type ChipProps = Omit<
   React.HTMLAttributes<HTMLSpanElement>,
@@ -54,6 +53,8 @@ export type ChipProps = Omit<
 > &
   ChipRecipeProps & {
     className?: string;
+    tone?: ChipTone;
+    variant?: Fill;
   };
 
 export const Chip = React.forwardRef<HTMLSpanElement, ChipProps>(
@@ -61,10 +62,10 @@ export const Chip = React.forwardRef<HTMLSpanElement, ChipProps>(
     {
       className,
       mono = false,
-      outline = false,
       shape = "pill",
       size = "micro",
-      tone = "default",
+      tone = "neutral",
+      variant = "soft",
       ...props
     },
     ref,
@@ -72,14 +73,11 @@ export const Chip = React.forwardRef<HTMLSpanElement, ChipProps>(
     return (
       <span
         ref={ref}
-        className={chipVariants({
+        className={cn(
+          chipVariants({ mono, shape, size }),
+          chipToneClass(tone, variant),
           className,
-          mono,
-          outline,
-          shape,
-          size,
-          tone,
-        })}
+        )}
         {...props}
       />
     );

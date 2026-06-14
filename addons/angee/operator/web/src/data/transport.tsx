@@ -136,7 +136,7 @@ export function OperatorTransportProvider({
   }
 
   if (state.kind === "error") {
-    return <Alert intent="danger">{state.message}</Alert>;
+    return <Alert tone="danger">{state.message}</Alert>;
   }
 
   if (state.kind === "not-configured" || !daemonClient) {

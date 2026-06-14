@@ -55,20 +55,20 @@ const SCHEMA_NODE_STYLES: Record<SchemaNodeKind, GraphViewNodeStyle> = {
     height: 78,
     type: "input",
     borderColor: "var(--brand)",
-    badgeVariant: "brand",
+    badgeTone: "brand",
   },
   relation: {
     width: 210,
     height: 76,
     borderColor: "var(--border-strong)",
-    badgeVariant: "info",
+    badgeTone: "info",
   },
   permission: {
     width: 230,
     height: 86,
     type: "output",
     borderColor: "var(--accent)",
-    badgeVariant: "accent",
+    badgeTone: "accent",
   },
 };
 
@@ -111,7 +111,7 @@ export function SchemaPage(): ReactElement {
 
   if (query.error) {
     return (
-      <Alert intent="danger" title="Schema unavailable">
+      <Alert tone="danger" title="Schema unavailable">
         {query.error.message}
       </Alert>
     );
@@ -266,7 +266,7 @@ function ResourceTypeList({
                 <span className="block truncate text-13 font-medium">
                   {resourceLabel(resource.resourceType)}
                 </span>
-                <Code truncate variant="muted">
+                <Code truncate tone="muted">
                   {resource.resourceType}
                 </Code>
               </span>
@@ -315,12 +315,12 @@ function SchemaGraphCanvas({
             Permission Graph
           </h2>
           {selectedResource ? (
-            <Code className="mt-1" truncate variant="muted">
+            <Code className="mt-1" truncate tone="muted">
               {selectedResource.resourceType}
             </Code>
           ) : null}
         </div>
-        <Badge variant="info">
+        <Badge tone="info">
           {graph.nodes.length} nodes
         </Badge>
       </header>
@@ -357,7 +357,7 @@ function SchemaInspector({
         <h2 className="m-0 truncate text-sm font-semibold text-fg">
           {resourceLabel(resource.resourceType)}
         </h2>
-        <Code className="mt-1" truncate variant="muted">
+        <Code className="mt-1" truncate tone="muted">
           {resource.resourceType}
         </Code>
       </header>
@@ -456,7 +456,7 @@ function InspectorRow({
     <div className="min-w-0 rounded-md border border-border-subtle bg-sheet-2 p-3">
       <div className="mb-2 min-w-0">
         <div className="truncate text-13 font-medium text-fg">{title}</div>
-        <Code truncate variant="muted">
+        <Code truncate tone="muted">
           {code}
         </Code>
       </div>
@@ -490,7 +490,7 @@ function ChipList({
   return (
     <div className="flex min-w-0 flex-wrap gap-1">
       {values.map((value) => (
-        <Badge key={value} variant="default">
+        <Badge key={value} tone="neutral">
           {value}
         </Badge>
       ))}

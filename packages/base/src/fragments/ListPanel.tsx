@@ -1,7 +1,8 @@
 import * as React from "react";
 
 import { cn } from "../lib/cn";
-import { Badge, type BadgeVariant } from "../ui/badge";
+import { type Tone } from "../lib/tones";
+import { Badge } from "../ui/badge";
 import { Card } from "../ui/card";
 
 export interface ListPanelProps {
@@ -15,7 +16,7 @@ export interface ListPanelProps {
 
 export interface ListItemStatus {
   label: React.ReactNode;
-  variant?: BadgeVariant;
+  tone?: Tone;
 }
 
 export interface ListItemProps {
@@ -81,7 +82,7 @@ export function ListItem({
             {title}
           </span>
           {status ? (
-            <Badge variant={status.variant ?? "default"}>{status.label}</Badge>
+            <Badge tone={status.tone ?? "neutral"}>{status.label}</Badge>
           ) : null}
         </div>
         {meta ? (

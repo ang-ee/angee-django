@@ -2,8 +2,9 @@ import * as React from "react";
 
 import { Glyph } from "../chrome/Glyph";
 import { tv, type VariantProps } from "../lib/variants";
+import { type Tone } from "../lib/tones";
 import { PageHeader, type PageHeaderProps } from "../page";
-import { Badge, type BadgeVariant } from "../ui/badge";
+import { Badge } from "../ui/badge";
 
 export const recordHeaderVariants = tv({
   slots: {
@@ -25,7 +26,7 @@ type RecordHeaderHeadingTag = `h${RecordHeaderHeadingLevel}`;
 
 export interface RecordHeaderStatus {
   label: React.ReactNode;
-  variant?: BadgeVariant;
+  tone?: Tone;
 }
 
 export type RecordHeaderProps = Omit<
@@ -82,7 +83,7 @@ export const RecordHeader = React.forwardRef<HTMLElement, RecordHeaderProps>(
             <Heading className={styles.title()}>{title}</Heading>
             {type ? <Badge>{type}</Badge> : null}
             {status ? (
-              <Badge variant={status.variant ?? "default"}>{status.label}</Badge>
+              <Badge tone={status.tone ?? "neutral"}>{status.label}</Badge>
             ) : null}
           </div>
           {meta ? <div className={styles.meta()}>{meta}</div> : null}

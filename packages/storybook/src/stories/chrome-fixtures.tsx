@@ -43,7 +43,7 @@ export const chromeMenuItems: readonly ChromeMenuItem[] = [
         icon: "auth",
         description: "Users, groups, and access policy.",
         group: "platform",
-        tone: "muted",
+        tone: "neutral",
       },
       {
         id: "resources",
@@ -89,7 +89,7 @@ export const appChooserItems: readonly AppChooserItem[] = [
     to: "/activity",
     icon: "activity",
     description: "Recent workspace changes",
-    tone: "muted",
+    tone: "neutral",
     badge: 3,
   },
   {
@@ -99,7 +99,7 @@ export const appChooserItems: readonly AppChooserItem[] = [
     icon: "auth",
     description: "Identity and permissions",
     group: "platform",
-    tone: "muted",
+    tone: "neutral",
   },
   {
     id: "resources",
@@ -117,7 +117,7 @@ export const appChooserItems: readonly AppChooserItem[] = [
     icon: "calendar",
     description: "Scheduling surfaces",
     status: "future",
-    tone: "muted",
+    tone: "neutral",
   },
 ];
 

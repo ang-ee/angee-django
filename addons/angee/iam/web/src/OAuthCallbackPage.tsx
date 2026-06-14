@@ -92,7 +92,7 @@ export function OAuthCallbackPage(): ReactNode {
   return (
     <CallbackFrame>
       <div className="flex flex-col gap-4">
-        <Alert intent="danger" title="Could not sign in">
+        <Alert tone="danger" title="Could not sign in">
           {state.message}
         </Alert>
         <Button asChild className="w-full justify-center" size="lg" variant="secondary">

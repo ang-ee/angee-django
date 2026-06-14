@@ -79,7 +79,7 @@ export function RecordActionBar({
           await applyPatch({ ...(action.set ?? {}), ...values });
         }
       } catch (error) {
-        toast.error({
+        toast.danger({
           title: actionLabelText(action),
           description:
             error instanceof Error ? error.message : "The action failed.",

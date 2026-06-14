@@ -50,7 +50,7 @@ function TemplateCard({ template }: { template: TemplateDescriptor }): ReactNode
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-2 text-13 text-fg-muted">
-          <Badge density="compact" shape="pill" variant="default">
+          <Badge density="compact" shape="pill" tone="neutral">
             {template.kind}
           </Badge>
           <span className="font-mono">{template.path}</span>
@@ -78,19 +78,19 @@ function TemplateInputRow({ input }: { input: TemplateInputDescriptor }): ReactN
   return (
     <div className="flex flex-wrap items-center gap-2 text-13">
       <span className="font-mono text-fg-2">{input.name}</span>
-      <Badge density="compact" shape="pill" variant="default">
+      <Badge density="compact" shape="pill" tone="neutral">
         {input.type ?? "—"}
       </Badge>
-      <Badge density="compact" shape="pill" variant={input.required ? "warning" : "default"}>
+      <Badge density="compact" shape="pill" tone={input.required ? "warning" : "neutral"}>
         {input.required ? "required" : "optional"}
       </Badge>
       {input.immutable ? (
-        <Badge density="compact" shape="pill" variant="default">
+        <Badge density="compact" shape="pill" tone="neutral">
           immutable
         </Badge>
       ) : null}
       {input.generated ? (
-        <Badge density="compact" shape="pill" variant="default">
+        <Badge density="compact" shape="pill" tone="neutral">
           generated
         </Badge>
       ) : null}

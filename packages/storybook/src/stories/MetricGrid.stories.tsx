@@ -19,10 +19,10 @@ export const Grid: Story = {
     <MetricGrid
       className="max-w-5xl"
       metrics={[
-        { label: "Published", value: "184", icon: "circle-check", variant: "success" },
-        { label: "Drafts", value: "27", icon: "file", variant: "warning" },
-        { label: "Alerts", value: "5", icon: "triangle-alert", variant: "danger" },
-        { label: "Comments", value: "62", icon: "comments", variant: "info" },
+        { label: "Published", value: "184", icon: "circle-check", tone: "success" },
+        { label: "Drafts", value: "27", icon: "file", tone: "warning" },
+        { label: "Alerts", value: "5", icon: "triangle-alert", tone: "danger" },
+        { label: "Comments", value: "62", icon: "comments", tone: "info" },
       ]}
     />
   ),

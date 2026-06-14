@@ -35,7 +35,7 @@ function StatusBadgeRead({
     "";
   return (
     <Badge
-      variant={stateToneFromValue(value ?? undefined)}
+      tone={stateToneFromValue(value ?? undefined)}
       density="compact"
       shape="pill"
     >

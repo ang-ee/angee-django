@@ -29,12 +29,12 @@ export const Section: Story = {
         <div className="grid gap-2">
           <MiniCard
             meta="Synced 4 minutes ago"
-            primaryTag={{ label: "Live", variant: "success" }}
+            primaryTag={{ label: "Live", tone: "success" }}
             title="Production API"
           />
           <MiniCard
             meta="Manual import"
-            tags={<Tag variant="info">CSV</Tag>}
+            tags={<Tag tone="info">CSV</Tag>}
             title="Partner export"
           />
         </div>

@@ -189,7 +189,7 @@ function ConfirmDialog({
     >
       <AlertDialog.Portal>
         <AlertDialog.Backdrop />
-        <AlertDialog.Content intent={options.danger ? "danger" : "default"}>
+        <AlertDialog.Content tone={options.danger ? "danger" : "info"}>
           <AlertDialog.Body className="space-y-3 p-5">
             <AlertDialog.Title>{options.title}</AlertDialog.Title>
             {options.body ? (
@@ -202,7 +202,7 @@ function ConfirmDialog({
             </AlertDialog.Cancel>
             <AlertDialog.Action
               type="button"
-              intent={options.danger ? "danger" : "default"}
+              tone={options.danger ? "danger" : "info"}
               onClick={() => onResolve(true)}
             >
               {options.confirm}
@@ -266,7 +266,7 @@ function PromptDialogForm({
     >
       <AlertDialog.Portal>
         <AlertDialog.Backdrop />
-        <AlertDialog.Content intent="default">
+        <AlertDialog.Content tone="info">
           <AlertDialog.Body className="space-y-3 p-5">
             <AlertDialog.Title>{options.title}</AlertDialog.Title>
             {options.body ? (
@@ -312,7 +312,7 @@ function PromptDialogForm({
                 {options.cancel ?? "Cancel"}
               </AlertDialog.Cancel>
             )}
-            <AlertDialog.Action type="button" intent="default" onClick={submit}>
+            <AlertDialog.Action type="button" tone="info" onClick={submit}>
               {options.confirm ?? (readOnly ? "Done" : "Confirm")}
             </AlertDialog.Action>
           </AlertDialog.Footer>

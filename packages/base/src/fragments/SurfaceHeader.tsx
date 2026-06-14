@@ -67,7 +67,7 @@ export const SurfaceHeader = React.forwardRef<HTMLElement, SurfaceHeaderProps>(
               <span className={styles.icon()}>{renderSurfaceIcon(icon)}</span>
             ) : null}
             <Heading className={styles.title()}>{title}</Heading>
-            {fetching ? <Tag variant="info">Refreshing</Tag> : null}
+            {fetching ? <Tag tone="info">Refreshing</Tag> : null}
           </div>
           {subtitle ? <p className={styles.subtitle()}>{subtitle}</p> : null}
         </div>

@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { StatusDot, StatusIcon } from "@angee/base";
+import { StatusDot, StatusIcon, TONES } from "@angee/base";
 
 const meta = {
   title: "Primitives/StatusIcon",
@@ -8,7 +8,7 @@ const meta = {
     layout: "centered",
   },
   argTypes: {
-    intent: {
+    tone: {
       control: "select",
       options: ["info", "success", "warning", "danger", "muted"],
     },
@@ -18,7 +18,7 @@ const meta = {
     },
   },
   args: {
-    intent: "info",
+    tone: "info",
     size: "sm",
   },
 } satisfies Meta<typeof StatusIcon>;
@@ -32,8 +32,8 @@ export const Playground: Story = {};
 export const Icons: Story = {
   render: () => (
     <div className="flex items-center gap-4">
-      {(["info", "success", "warning", "danger", "muted"] as const).map((intent) => (
-        <StatusIcon key={intent} intent={intent} label={intent} size="md" />
+      {(["info", "success", "warning", "danger", "muted"] as const).map((tone) => (
+        <StatusIcon key={tone} tone={tone} label={tone} size="md" />
       ))}
     </div>
   ),
@@ -42,11 +42,9 @@ export const Icons: Story = {
 export const Dots: Story = {
   render: () => (
     <div className="flex items-center gap-4">
-      {(["default", "brand", "accent", "info", "success", "warning", "danger"] as const).map(
-        (tone) => (
-          <StatusDot key={tone} tone={tone} label={tone} />
-        ),
-      )}
+      {TONES.map((tone) => (
+        <StatusDot key={tone} tone={tone} label={tone} />
+      ))}
     </div>
   ),
 };
