@@ -178,10 +178,17 @@ visual-parity spot-check across both themes still recommended before release.
 
 ## Phase 4 — Date formatting (T7)
 
-- [ ] Export the date-fns-backed `RelativeTime`/datetime widget for addon use.
-- [ ] Delete local `formatDate`/`toLocaleDateString`/`Intl` (views-record
-      subtitle, `storage/file-display`, `knowledge/PageEditor`).
-- [ ] One `parseRowDate` (date-fns) shared by `ListInternals` + `TimelineView`.
+- [x] One `parseRowDate` (date-fns) in `ListInternals`, consumed by `TimelineView`
+      (both had their own `parseDate`; list strings now ISO-parse like the
+      timeline — the intended consistency fix).
+- [x] Addon `formatDate`/`toLocaleDateString` — already gone (no occurrences in
+      `addons/*/web/src`; removed by earlier work). Moot.
+- [~] Remaining date usage is `FormView` record-subtitle `Intl.DateTimeFormat`
+      (`FormView.tsx:1241`) — folded into **T8** (SDK exposes subtitle parts;
+      formatting moves to the date-fns owner there). Base `toLocaleString()` calls
+      are NUMBER formatting (counts), not dates — out of T7 scope.
+- [~] "Export `RelativeTime` for addon use" — moot for now (no addon `formatDate`
+      consumer remains); revisit if a custom addon list needs it.
 
 ## Phase 5 — De-fork components (T9)
 

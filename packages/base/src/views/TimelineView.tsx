@@ -1,9 +1,10 @@
 import { useMemo, type ReactElement, type ReactNode } from "react";
-import { format, isValid, parseISO } from "date-fns";
+import { format } from "date-fns";
 import type { Row } from "@angee/sdk";
 
 import { cn } from "../lib/cn";
 import { TimelineEntry } from "../fragments/TimelineEntry";
+import { parseRowDate } from "./ListInternals";
 
 /**
  * The chronological View — rows bucketed by day (newest first), each rendered
@@ -43,7 +44,7 @@ export function TimelineView<TRow extends Row = Row>({
 }: TimelineViewProps<TRow>): ReactElement {
   const groups = useMemo<DayGroup<TRow>[]>(() => {
     const dated = rows
-      .map((row) => ({ row, date: parseDate(row[dateField]) }))
+      .map((row) => ({ row, date: parseRowDate(row[dateField]) }))
       .filter((entry): entry is { row: TRow; date: Date } => entry.date !== null)
       .sort((a, b) => b.date.getTime() - a.date.getTime());
     const buckets = new Map<string, DayGroup<TRow>>();
@@ -75,7 +76,7 @@ export function TimelineView<TRow extends Row = Row>({
                   <TimelineEntry
                     key={id}
                     title={titleField ? String(row[titleField] ?? "") : ""}
-                    timestamp={parseDate(row[dateField])}
+                    timestamp={parseRowDate(row[dateField])}
                     body={bodyField ? row[bodyField] : undefined}
                   />
                 );
@@ -86,11 +87,4 @@ export function TimelineView<TRow extends Row = Row>({
       </ol>
     </div>
   );
-}
-
-function parseDate(value: unknown): Date | null {
-  if (value instanceof Date) return isValid(value) ? value : null;
-  if (typeof value !== "string") return null;
-  const date = parseISO(value);
-  return isValid(date) ? date : null;
 }
