@@ -52,7 +52,20 @@ hand-rolling a concern. TypeScript dependency setup belongs in `package.json`,
   `forms: { Model: <…Field/Group children…> }`; the standard renderer uses it
   wherever that model is created, including the relation-picker inline create. Use
   it when the create input diverges from the read projection (write-only secrets,
-  scalar-id pickers, a kind discriminator).
+  scalar-id pickers, a kind discriminator). With a registered form,
+  `RelationPicker`'s `create` needs only `{ model }` (the override supersedes any
+  passed `fields` on create); pass inline `fields` only for a data-dependent form
+  whose options are fetched at runtime and so cannot be a static registration.
+- A labeled control is a page element or a `FieldRoot`. Reach for `FieldRoot` /
+  `FieldLabel` (the stacked label-over-control owner, e.g. for an ephemeral
+  composer not bound to a model record) before hand-rolling a `<label>` wrapper.
+  A native input pairs `FieldLabel htmlFor` with the control `id`; a button-trigger
+  control (a `Select`) labels via `FieldLabel nativeLabel={false} render={<span/>}`
+  + the control's `aria-labelledby`.
+- Base exposes seams for product chrome; it does not hardcode product affordances.
+  Record-level chrome (star/share/follow) is host-contributed into
+  `FORM_VIEW_RECORD_CHROME_SLOT` via the manifest `slots:`; render contributions
+  with the shared `SlotOutlet`.
 - Client-side gates are UX only. The server is the authorization boundary.
 - No Python view DSL, no frontend metadata hidden in backend decorators.
 

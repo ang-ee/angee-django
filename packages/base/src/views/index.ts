@@ -73,6 +73,7 @@ export {
 } from "./Form";
 export {
   FormView,
+  FORM_VIEW_RECORD_CHROME_SLOT,
   type FormViewProps,
   type FormField,
   type FieldKind,

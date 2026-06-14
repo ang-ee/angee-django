@@ -1,15 +1,13 @@
 import {
-  Fragment,
-  isValidElement,
   useCallback,
-  type ReactElement,
   type ReactNode,
 } from "react";
 import { AngeeLogo } from "@angee/logo-react";
 import { useNavigate } from "@tanstack/react-router";
-import { useSlot, type SlotContribution } from "@angee/sdk";
+import { useSlot } from "@angee/sdk";
 
 import { useBaseT } from "../i18n";
+import { SlotOutlet, slotEntriesHaveContent } from "../lib/slot-outlet";
 import { PublicShell } from "../shell/PublicShell";
 import { safeRedirectPath } from "./safe-redirect";
 import { UsernamePasswordForm } from "./UsernamePasswordForm";
@@ -148,30 +146,5 @@ function DefaultCardHeader(): ReactNode {
       <p className="mt-1.5 text-sm text-fg-muted">{t("auth.welcomeSubtext")}</p>
     </div>
   );
-}
-
-function SlotOutlet({
-  entries,
-}: {
-  entries: readonly SlotContribution[];
-}): ReactElement | null {
-  const nodes = entries.flatMap((entry) => slotNode(entry.content, entry.id));
-  return nodes.length > 0 ? <>{nodes}</> : null;
-}
-
-function slotNode(value: unknown, key: string): ReactNode[] {
-  if (value == null || typeof value === "boolean") return [];
-  if (typeof value === "string" || typeof value === "number") {
-    return [<span key={key}>{value}</span>];
-  }
-  if (isValidElement(value)) return [<Fragment key={key}>{value}</Fragment>];
-  if (Array.isArray(value)) {
-    return value.flatMap((item, index) => slotNode(item, `${key}:${index}`));
-  }
-  return [];
-}
-
-function slotEntriesHaveContent(entries: readonly SlotContribution[]): boolean {
-  return entries.some((entry) => slotNode(entry.content, entry.id).length > 0);
 }
 

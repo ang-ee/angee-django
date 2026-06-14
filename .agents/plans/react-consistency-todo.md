@@ -377,7 +377,7 @@ visual-parity spot-check across both themes still recommended before release.
       route's job (reads `?tab=`); **no in-repo consumer wires it yet** — the
       framework keeps only the strip + query state. Storybook fixture made generic.
       (Reviewer noted prefer-deletion is a live option if no consumer arrives.)
-- [~] **T17** Forms onto the DSL/registry — in progress (per sub-item):
+- [x] **T17** Forms onto the DSL/registry — DONE (all 4 sub-items below):
       - [x] **drive/vault relation-create via `forms:`** — DONE for **Vault**:
         extracted the inline `VAULT_CREATE_FIELDS` into `knowledge/web/.../views/
         vault-form.tsx` (declarative `<Field>` override) + registered
@@ -412,8 +412,18 @@ visual-parity spot-check across both themes still recommended before release.
         `TAB_SLOT`) are write-only — assigned but never read (only
         `PAGE_ELEMENT_SLOT` discriminates). `Tab` keeps `TAB_SLOT` for family
         consistency; a separate slice should delete all five together.
-      - [ ] make `FormView` Star/Share host-provided (slot/action) + replace
-        `text-amber-500` with a token.
+      - [x] **make `FormView` Star/Share host-provided + token** — DONE: deleted
+        the hardcoded `RecordChromeButtons` stub (with its `text-amber-500`) from
+        base. Base now exposes `FORM_VIEW_RECORD_CHROME_SLOT` (a named slot, the
+        AUTH_LOGIN_*_SLOT pattern) rendered via a promoted shared `SlotOutlet`
+        (`lib/slot-outlet.tsx` — `SlotOutlet`/`slotEntriesHaveContent`/`slotNode`
+        lifted out of `LoginPage`, which now consumes the owner). The notes example
+        addon contributes the star/share at build time via `slots: [{ slot:
+        FORM_VIEW_RECORD_CHROME_SLOT, … }]` (presentational seam demo), with the
+        star on the `text-warning-text` token (two-axis), so the notes e2e
+        star/share still resolve. Review-driven: base slot docstring made value-
+        neutral (no product styling); RecordChrome docstring made honest about
+        being an unwired seam demo.
 - [x] **T2b** DONE — `UserMenu` rebuilt on the `DropdownMenu` primitive: native
       `role="menu"`/`menuitem` + arrow-key nav (was a popover faking the roles on a
       plain button). Dropped the manual roles, the controlled-open state, and the
@@ -458,9 +468,13 @@ visual-parity spot-check across both themes still recommended before release.
 - [~] Encode the new rules in `docs/frontend/guidelines.md` — DONE for the landed
       owners: two-axis color (`tone`×`variant`), i18n-commit (`useBaseT`/`use<Addon>T`
       on `useNamespaceT`, prop-default coalesce), `defineBaseAddon`, build-time
-      composition incl. previews, icon-registry-only (`<Glyph>`, no raw lucide).
-      Still to add when they land: one state-surface API (T4), forms-DSL specifics
-      (T17). `docs/stack.md` unchanged (no new libraries — these are Angee patterns).
+      composition incl. previews, icon-registry-only (`<Glyph>`, no raw lucide),
+      and **forms-DSL specifics (T17)**: `forms:` makes `RelationPicker.create`
+      `{model}`-only; `FieldRoot`/`FieldLabel` is the labeled-control owner (native
+      `htmlFor`/`id` vs button-trigger `nativeLabel={false}`+`aria-labelledby`);
+      base exposes `FORM_VIEW_RECORD_CHROME_SLOT` for host-provided record chrome.
+      Still to add when it lands: one state-surface API (T4). `docs/stack.md`
+      unchanged (no new libraries — these are Angee patterns).
 
 ## Infra note (out of band — flagged 2026-06-14)
 

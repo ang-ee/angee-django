@@ -7,13 +7,13 @@ import {
   useResourceRecord,
   useModelMetadata,
   useSchemaFieldMetadata,
+  useSlot,
   validationErrorsFromError,
   type ModelMetadata,
   type Row,
 } from "@angee/sdk";
 
 import { Button } from "../ui/button";
-import { Glyph } from "../chrome/Glyph";
 import { ErrorBanner } from "../fragments/ErrorBanner";
 import { useConfirm } from "../feedback";
 import {
@@ -27,6 +27,7 @@ import { Input } from "../ui/input";
 import { Spinner } from "../ui/spinner";
 import { ControlBand } from "../shell/ControlBand";
 import { cn } from "../lib/cn";
+import { SlotOutlet } from "../lib/slot-outlet";
 import {
   useResolvedWidget,
   type WidgetDefinition,
@@ -84,6 +85,15 @@ export interface FormViewProps {
   /** Class name applied to the form root. */
   className?: string;
 }
+
+/**
+ * Slot for record-level chrome (e.g. star/share/follow) rendered in the form
+ * toolbar of a saved record. Base ships no product affordances here — a host or
+ * addon contributes them at build time via `slots: [{ slot:
+ * FORM_VIEW_RECORD_CHROME_SLOT, id, content }]`. Contributions render in their
+ * merged order on a saved record only (not while creating).
+ */
+export const FORM_VIEW_RECORD_CHROME_SLOT = "form-view.record-chrome";
 
 type Values = Record<string, unknown>;
 
@@ -144,6 +154,8 @@ export function FormView({
   const modelMetadata = useModelMetadata(model);
   const schemaMetadata = useSchemaFieldMetadata();
   const formOverride = useFormOverride(model);
+  // Host/addon-contributed record chrome (star/share/…); base ships none.
+  const recordChrome = useSlot(FORM_VIEW_RECORD_CHROME_SLOT);
   const isCreate = id == null;
   // An addon may register a declarative create form for a model (composed into the
   // runtime). On create it replaces the declared/metadata fields, so DataPage "New"
@@ -505,7 +517,7 @@ export function FormView({
               </div>
               <div className="min-w-2 flex-1" />
               <div className="flex min-w-0 items-center gap-2">
-                {!isCreate ? <RecordChromeButtons /> : null}
+                {!isCreate ? <SlotOutlet entries={recordChrome} /> : null}
                 {toolbar}
               </div>
             </ControlBand>
@@ -618,26 +630,6 @@ export function FormView({
         ) : null}
       </div>
     </form>
-  );
-}
-
-/** Presentational record chrome (star/share) rendered in the toolbar; wiring pending. */
-function RecordChromeButtons(): React.ReactElement {
-  return (
-    <div className="flex items-center gap-1">
-      <Button
-        type="button"
-        variant="icon"
-        size="iconMd"
-        aria-label="Star"
-        className="text-amber-500 hover:text-amber-500"
-      >
-        <Glyph name="star" className="fill-current" />
-      </Button>
-      <Button type="button" variant="icon" size="iconMd" aria-label="Share">
-        <Glyph name="share" />
-      </Button>
-    </div>
   );
 }
 
