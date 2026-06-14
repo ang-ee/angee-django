@@ -315,8 +315,11 @@ visual-parity spot-check across both themes still recommended before release.
       drive/vault relation-create via `defineAddon` `forms:`; `Notebook.Tab` onto
       `PAGE_ELEMENT_SLOT`; make `FormView` Star/Share host-provided
       (slot/action) and replace `text-amber-500` with a token.
-- [ ] **T2b** `UserMenu` onto the menu primitive (stop faking `role="menu"` on a
-      popover).
+- [x] **T2b** DONE — `UserMenu` rebuilt on the `DropdownMenu` primitive: native
+      `role="menu"`/`menuitem` + arrow-key nav (was a popover faking the roles on a
+      plain button). Dropped the manual roles, the controlled-open state, and the
+      hand-rolled menuitem styling; the menu auto-closes on select. E2e locators
+      (user-menu button, sign-out menuitem) unchanged and now hit native roles.
 
 ## Phase 7 — Polish (Tier 4)
 
