@@ -9,6 +9,7 @@ themselves).
 from __future__ import annotations
 
 from collections.abc import Iterator
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -20,6 +21,7 @@ from angee.integrate.models import Repository as AbstractRepository
 from angee.integrate.models import Source as AbstractSource
 from angee.integrate.models import Template as AbstractTemplate
 from angee.integrate.models import VCSIntegration as AbstractVCSIntegration
+from angee.integrate.vcs.backend import LocalVCSBackend
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,
@@ -211,3 +213,23 @@ def test_sync_refreshes_every_source(vcs_tables: None) -> None:
     with system_context(reason="test sync"):  # the scheduler / GraphQL action wrap sync() likewise
         assert vcs.sync() == 1
         assert Template.objects.count() == 1
+
+
+def test_local_vcs_backend_walks_the_working_tree(tmp_path: Any) -> None:
+    """The local backend inventories a working tree — paths relative to root, `.git` skipped."""
+
+    template_dir = tmp_path / "templates" / "services" / "demo"
+    template_dir.mkdir(parents=True)
+    (template_dir / "copier.yml").write_text("_angee:\n  kind: service\n  name: demo\n")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "config").write_text("ignored")
+
+    backend = LocalVCSBackend(SimpleNamespace(config={"local_root": str(tmp_path), "local_name": "repo"}))
+
+    assert [repo.name for repo in backend.ls_repos()] == ["repo"]
+    entries = backend.ls_tree(None, ref="main", path="templates", recursive=True)
+    assert "templates/services/demo/copier.yml" in {e.path for e in entries if e.type == "blob"}
+    assert all(".git" not in entry.path for entry in entries)
+    assert backend.cat_file(None, ref="main", path="templates/services/demo/copier.yml").startswith(b"_angee")
+    with pytest.raises(FileNotFoundError):
+        backend.cat_file(None, ref="main", path="../escape")

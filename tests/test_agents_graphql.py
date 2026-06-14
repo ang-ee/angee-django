@@ -255,8 +255,8 @@ def test_provision_agent_renders_via_daemon_and_is_admin_gated(
         def from_settings(cls) -> _FakeDaemon:
             return cls()
 
-        def resolve_template_ref(self, *, path: str, kind: str) -> str:
-            return f"ref:{path}"
+        def resolve_template_ref(self, *, name: str, kind: str) -> str:
+            return f"ref:{name}"
 
         def set_secret(self, name: str, value: str) -> None:
             calls.append(("secret", name, value))
@@ -286,8 +286,8 @@ def test_provision_agent_renders_via_daemon_and_is_admin_gated(
 
     assert [call[0] for call in calls] == ["secret", "workspace", "service"]
     assert calls[0] == ("secret", f"agent-{agent.sqid}-inference", "x")
-    assert calls[1][1] == "ref:workspaces/agent-default" and calls[1][2]["agent_name"] == "Bot"
-    assert calls[2][1] == "ref:services/claude-code"
+    assert calls[1][1] == "ref:agent-default" and calls[1][2]["agent_name"] == "Bot"
+    assert calls[2][1] == "ref:claude-code"
     assert calls[2][2] == "ws-bot" and calls[2][3]["auth_mode"] == "api_key"
 
     # Deprovision tears down the workspace via the daemon and clears the record.
@@ -330,8 +330,8 @@ def test_provision_agent_failure_tears_down_workspace_and_records_error(
         def from_settings(cls) -> _FailingDaemon:
             return cls()
 
-        def resolve_template_ref(self, *, path: str, kind: str) -> str:
-            return f"ref:{path}"
+        def resolve_template_ref(self, *, name: str, kind: str) -> str:
+            return f"ref:{name}"
 
         def create_workspace(self, *, template: str, inputs: dict[str, str]) -> str:
             return "ws-doomed"

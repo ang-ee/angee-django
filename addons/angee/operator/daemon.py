@@ -118,18 +118,20 @@ class OperatorDaemon:
 
         self._request("POST", f"{self._base()}/secrets/{quote(name, safe='')}", {"value": value})
 
-    def resolve_template_ref(self, *, path: str, kind: str) -> str | None:
-        """Return the daemon's template ref for ``path``/``kind`` from ``GET /templates``.
+    def resolve_template_ref(self, *, name: str, kind: str) -> str | None:
+        """Return the daemon's template ref for a template ``name`` + ``kind``.
 
-        The daemon owns the ref format and emits it in its own listing, so match the
-        template's path (and kind) against the listing rather than constructing a ref.
+        The daemon owns the ref format and emits it in its own ``GET /templates``
+        listing (its ``path`` there is an absolute filesystem path, not the template
+        ref), so match the manifest ``name`` (and ``kind``) — both sides parse it from
+        the template's ``_angee`` block — and return the daemon's ``ref``.
         """
 
         descriptors = self._request("GET", f"{self._base()}/templates")
         for descriptor in descriptors if isinstance(descriptors, list) else ():
             if not isinstance(descriptor, dict):
                 continue
-            if descriptor.get("path") == path and (not kind or descriptor.get("kind") == kind):
+            if descriptor.get("name") == name and (not kind or descriptor.get("kind") == kind):
                 ref = descriptor.get("ref")
                 return str(ref) if ref else None
         return None

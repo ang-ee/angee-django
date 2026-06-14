@@ -174,7 +174,9 @@ def test_run_due_bridges_records_errors_and_rolls_up_integration_status(schedule
     assert bridge.last_error_at is not None
     assert bridge.next_sync_at == now + timedelta(seconds=17)
     assert integration.status == IntegrationStatus.ERROR
-    assert integration.capability_statuses == {f"{SchedulerBridge._meta.label_lower}:{bridge.pk}": IntegrationStatus.ERROR.value}
+    assert integration.capability_statuses == {
+        f"{SchedulerBridge._meta.label_lower}:{bridge.pk}": IntegrationStatus.ERROR.value
+    }
     assert integration.last_error == "RuntimeError: vendor unavailable"
     assert integration.last_error_at is not None
     assert integration.last_used_at is not None
@@ -221,7 +223,9 @@ def test_run_due_bridges_success_recovers_bridge_and_integration_status(schedule
     assert bridge.last_sync_items == 5
     assert bridge.next_sync_at == second_now + timedelta(seconds=23)
     assert integration.status == IntegrationStatus.ACTIVE
-    assert integration.capability_statuses == {f"{SchedulerBridge._meta.label_lower}:{bridge.pk}": IntegrationStatus.ACTIVE.value}
+    assert integration.capability_statuses == {
+        f"{SchedulerBridge._meta.label_lower}:{bridge.pk}": IntegrationStatus.ACTIVE.value
+    }
     assert integration.last_error == ""
     assert integration.last_error_at is None
 

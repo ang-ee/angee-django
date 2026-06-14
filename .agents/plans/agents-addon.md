@@ -316,18 +316,37 @@ templates carry **no** in-container caddy/verifier/HMAC the prototype hand-rolle
 - **Next:** expose the resolver on `AgentType` (e.g. `provisioningInputs`) so the
   console reads it instead of raw `*_inputs`; then the operator-bearer secret sync.
 
-### Remaining to render end-to-end
-- **OAuth refresh deferred** (`OAuthCredentialHandler.refresh` is a stub — "wired in
-  S3"). The synced OAuth token is a point-in-time snapshot; re-sync to the operator
-  on refresh once iam implements it.
-- **Discover the templates as `integrate.Template`s** + make them available to the
-  operator — register `templates/` as a template source so the agent's
-  `service_template`/`workspace_template` FKs can point at them.
-- **Operator-held secret sync** — Django pushes the agent's `iam.Credential` value to
-  the operator store via `secretSet` (admin bearer, server-side) so `${secret.<name>}`
-  resolves; the browser never carries the key.
-- **Live smoke check** needs a dev-stack restart (new `@angee/operator` dep + the
-  `provisionAgent` SDL change). `WorkspaceCreatePreflight` is worth wiring before create.
+### Live daemon validation + local template discovery (2026-06-14)
+Smoke-tested the daemon render path via the `angee` CLI against the running stack —
+the daemon REST contract `OperatorDaemon` targets is **validated** (workspace + service
+render correctly). Found + fixed three bugs the unit tests (mocked daemon) missed:
+- **`resolve_template_ref` matched the wrong field** — the daemon descriptor's `path`
+  is an absolute filesystem path; fixed to match `(name, kind) → ref`.
+- **`.mcp.json`/`AGENTS.md` HTML-escaped** (`&quot;`) — the renderer autoescapes; fixed
+  with `| safe`.
+- **Service `build.context: ./docker`** rejected — the operator installs the rendered
+  `docker/` at `.angee/services/<name>/docker`; fixed the context to point there.
+
+The rendered service is exactly right: `route:{port:3007,auth:forward}` (central caddy),
+`mounts: workspace://<ws>:/workspace`, `env.ANTHROPIC_API_KEY: ${secret.<name>}`.
+
+**Template discovery — solved with a `local` VCS backend** (per the architect): the
+templates are in VCS, so `integrate.vcs.backend.LocalVCSBackend` (registered as `local`
+in `ANGEE_VCS_BACKEND_CLASSES`) inventories a working tree from
+`integration.config["local_root"]` — Django discovers the agent templates through the
+exact `VCSIntegration(local) → Source(kind=template) → TemplateManager.sync_from_source
+→ Template` flow, no network. Unit-tested.
+
+### Remaining to render end-to-end (Django → daemon)
+- **Stack restart** to load the new Django code (the `local` backend + the
+  `resolve_template_ref` fix + the `LOCAL` enum). The template fixes are already live
+  (the daemon reads `templates/` from the symlink).
+- **Seed the local template source**: a `VCSIntegration(backend_class="local",
+  config={"local_root": <repo>})` + `discoverRepositories` + a `kind=template` Source +
+  `refreshSource` → `Template` rows (via the console/CLI, or a resources fixture for the
+  example). Then an agent's `workspace_template`/`service_template` FKs point at them.
+- **OAuth refresh deferred** (`OAuthCredentialHandler.refresh` stub — "wired in S3").
+- `WorkspaceCreatePreflight` is worth wiring before create.
 
 ## Dropped from the reference prototype
 

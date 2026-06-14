@@ -1,5 +1,5 @@
 {% if instructions -%}
-{{ instructions }}
+{{ instructions | safe }}
 {%- else -%}
 # {{ agent_name }}
 

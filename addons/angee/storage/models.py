@@ -748,7 +748,8 @@ class File(SqidMixin, AuditMixin, AngeeModel):
         against ``request`` when one is given, otherwise root-relative.
         """
 
-        path = f"{reverse('storage_download', args=[self.filename])}?{urlencode({'token': self.issue_download_token()})}"
+        query = urlencode({"token": self.issue_download_token()})
+        path = f"{reverse('storage_download', args=[self.filename])}?{query}"
         return request.build_absolute_uri(path) if request is not None else path
 
     def open_stream(self) -> BinaryIO:

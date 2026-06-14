@@ -10,6 +10,7 @@ module imports no models, so it breaks no import cycle.
 
 from __future__ import annotations
 
+import pathlib
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -154,3 +155,106 @@ class NoopVCSBackend(VCSBackend):
         """Raise: a noop backend resolves no repository."""
 
         raise FileNotFoundError(name)
+
+
+class LocalVCSBackend(VCSBackend):
+    """Reads a repository straight from a local working tree — for dev/offline inventory.
+
+    Where a host backend reads a remote over REST, this walks the filesystem under
+    ``integration.config["local_root"]``, so templates (or skills) committed in the
+    local checkout are inventoried through the same ``VCSIntegration → Source →
+    Template`` flow as a hosted remote, with no network. It reads the *working tree*;
+    ``ref`` is informational — there is one repo and no commit to resolve.
+    """
+
+    def ls_repos(self, *, org: str = "") -> list[RepoDescriptor]:
+        """Return the single configured local repository."""
+
+        del org
+        return [self._descriptor()]
+
+    def ls_tree(self, repository: Any, *, ref: str, path: str, recursive: bool = False) -> list[TreeEntry]:
+        """Walk the working tree under ``path``; entry paths are relative to the repo root."""
+
+        del repository, ref
+        base = self._safe_join(path)
+        if not base.is_dir():
+            return []
+        children = sorted(base.rglob("*") if recursive else base.iterdir())
+        entries: list[TreeEntry] = []
+        for child in children:
+            relative = child.relative_to(self._root)
+            if ".git" in relative.parts:
+                continue
+            entries.append(TreeEntry(path=relative.as_posix(), type="tree" if child.is_dir() else "blob"))
+        return entries
+
+    def cat_file(self, repository: Any, *, ref: str, path: str) -> bytes:
+        """Return one working-tree file's bytes; raise if absent or a directory."""
+
+        del repository, ref
+        target = self._safe_join(path)
+        if target.is_dir():
+            raise IsADirectoryError(path)
+        try:
+            return target.read_bytes()
+        except FileNotFoundError:
+            raise FileNotFoundError(path) from None
+
+    def rev_parse(self, repository: Any, ref: str) -> str:
+        """Return ``ref`` unchanged — a local working tree resolves no commit oid."""
+
+        del repository
+        return ref
+
+    def search_repos(self, query: str, *, org: str = "") -> list[RepoDescriptor]:
+        """Return the local repository when ``query`` matches its name (typeahead)."""
+
+        del org
+        descriptor = self._descriptor()
+        return [descriptor] if query.lower() in descriptor.name.lower() else []
+
+    def get_repo(self, name: str) -> RepoDescriptor:
+        """Return the local repository; raise ``FileNotFoundError`` on a name mismatch."""
+
+        descriptor = self._descriptor()
+        if name and name != descriptor.name:
+            raise FileNotFoundError(name)
+        return descriptor
+
+    def verify_webhook(self, vcs_integration: Any, request: Any) -> bool:
+        """Reject inbound webhooks: a local working tree has no host to authenticate."""
+
+        del vcs_integration, request
+        return False
+
+    @property
+    def _root(self) -> pathlib.Path:
+        """Return the configured working-tree root (resolved), or raise when unset."""
+
+        root = str(self.integration.config.get("local_root") or "").strip()
+        if not root:
+            raise FileNotFoundError("LocalVCSBackend requires integration.config['local_root'].")
+        return pathlib.Path(root).resolve()
+
+    def _descriptor(self) -> RepoDescriptor:
+        """Project the configured local checkout into a :class:`RepoDescriptor`."""
+
+        root = self._root
+        config = self.integration.config
+        return RepoDescriptor(
+            name=str(config.get("local_name") or root.name),
+            org=str(config.get("local_org") or "local"),
+            remote=root.as_uri(),
+            default_branch=str(config.get("local_default_branch") or "main"),
+            visibility="private",
+        )
+
+    def _safe_join(self, path: str) -> pathlib.Path:
+        """Join ``path`` under the root, rejecting traversal outside it."""
+
+        root = self._root
+        target = (root / path.strip("/")).resolve()
+        if target != root and root not in target.parents:
+            raise FileNotFoundError(path)
+        return target

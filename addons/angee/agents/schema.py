@@ -452,7 +452,7 @@ class InferenceActionMutation:
 class _RenderPlan:
     """Everything the daemon render needs for one agent, gathered under elevation.
 
-    ``*_template`` are the agent template's ``(path, kind)`` — the daemon resolves its
+    ``*_template`` are the agent template's ``(name, kind)`` — the daemon resolves its
     own ref from them; ``secret_value`` is the credential token pushed before render.
     """
 
@@ -476,7 +476,7 @@ def _render_agent(plan: _RenderPlan) -> dict[str, str]:
 
     daemon = OperatorDaemon.from_settings()
     workspace_ref = daemon.resolve_template_ref(
-        path=plan.workspace_template[0], kind=plan.workspace_template[1]
+        name=plan.workspace_template[0], kind=plan.workspace_template[1]
     )
     if not workspace_ref:
         raise ValueError(f"No operator workspace template matches {plan.workspace_template[0]!r}.")
@@ -499,7 +499,7 @@ def _render_service(daemon: OperatorDaemon, plan: _RenderPlan, workspace: str) -
 
     if plan.service_template is None:
         return ""
-    service_ref = daemon.resolve_template_ref(path=plan.service_template[0], kind=plan.service_template[1])
+    service_ref = daemon.resolve_template_ref(name=plan.service_template[0], kind=plan.service_template[1])
     if not service_ref:
         raise ValueError(f"No operator service template matches {plan.service_template[0]!r}.")
     return daemon.create_service(template=service_ref, workspace=workspace, inputs=plan.service_inputs)
@@ -533,9 +533,9 @@ class AgentActionMutation:
                 service_inputs=agent.provision_service_inputs(),
                 secret_name=agent.inference_secret_name(),
                 secret_value=agent.inference_secret(),
-                workspace_template=(workspace_template.path, workspace_template.kind),
+                workspace_template=(workspace_template.name, workspace_template.kind),
                 service_template=(
-                    (service_template.path, service_template.kind) if service_template else None
+                    (service_template.name, service_template.kind) if service_template else None
                 ),
             )
         try:
