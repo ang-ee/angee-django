@@ -139,6 +139,12 @@ Set by the user on 2026-06-14:
   This is the established headless→rendered seam; mirror it.
 - **Build-time composition only** — never reintroduce a runtime registry/side-effect
   (T13 removed the last one). Contribute via the manifest + `composeAddons`.
+- **`composeAddons` is fail-fast on id (icon/route/menu/i18n/widget/form/preview)
+  and only runs at app boot — `typecheck`/`build` miss collisions.** Adding a name
+  to base `baseIcons` collides with any addon already contributing it (this bit the
+  T5 markdown work: base `link` vs knowledge's `link`). After touching `baseIcons`
+  or an addon's `icons`, run `pnpm run test` — `examples/notes-angee/web/src/
+  addon-composition.test.tsx` composes the full host addon set as the guard.
 - **Workspace rules**: never `git checkout`/`switch` inside the workspace (make a new
   workspace for a different branch); don't edit generated `runtime/`; scratch only in
   gitignored locations; no secrets in `.agents/`.
@@ -150,7 +156,9 @@ Set by the user on 2026-06-14:
 
 ## Commit range
 
-This session: 13 commits, `572cb641` (T5 primitives) .. `c477f5e1` (docs).
+This session: `572cb641` (T5 primitives) .. `HEAD`. Includes the 13 theme commits,
+this handover, and a follow-up fix `6d535d65` (base/knowledge `link` icon
+collision found by `angee dev` + a full-addon-composition test guard).
 `git log --oneline main..HEAD` shows the full branch — it also includes the
 earlier work (T1 color, T4 empties, all-addon i18n, etc.), all already reflected
 as `[x]` in the todo.
