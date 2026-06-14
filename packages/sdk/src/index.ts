@@ -14,6 +14,7 @@ export {
   typeNameForModel,
   toRelayGlobalId,
   relationRelayGlobalId,
+  relayGlobalIdSuffix,
   clampPageSize,
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
@@ -91,9 +92,11 @@ export type {
   DeletePreviewGroup,
   DeletePreviewNode,
 } from "./resource-result";
+export { revisionSnapshot } from "./resource-result";
 
 // Aggregates.
 export {
+  bucketKey,
   useResourceAggregate,
   useResourceGroupBy,
   type GroupByDimension,

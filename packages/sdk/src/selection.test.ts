@@ -5,6 +5,8 @@ import {
   clampPageSize,
   MAX_PAGE_SIZE,
   printSelection,
+  relayGlobalIdSuffix,
+  toRelayGlobalId,
   typeNameForModel,
 } from "./selection";
 
@@ -69,6 +71,20 @@ describe("model naming", () => {
     expect(() => typeNameForModel("notes.")).toThrow();
   });
 
+});
+
+describe("relay global id", () => {
+  test("relayGlobalIdSuffix decodes the public id encoded by toRelayGlobalId", () => {
+    expect(relayGlobalIdSuffix(toRelayGlobalId("DriveType", "drv_123"))).toBe(
+      "drv_123",
+    );
+  });
+
+  test("relayGlobalIdSuffix returns null for a non-global-id value", () => {
+    expect(relayGlobalIdSuffix("plain-id")).toBeNull();
+    expect(relayGlobalIdSuffix(btoa("nocolon"))).toBeNull();
+    expect(relayGlobalIdSuffix(btoa("9Type:x"))).toBeNull();
+  });
 });
 
 describe("clampPageSize", () => {

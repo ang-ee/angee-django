@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useResourceRevisions, type ResourceRevision } from "@angee/sdk";
+import { revisionSnapshot, useResourceRevisions } from "@angee/sdk";
 
 import { useBaseT } from "../i18n";
 import { EmptyState } from "../fragments/EmptyState";
@@ -12,8 +12,6 @@ export interface RevisionsTabProps {
   recordId: string | null | undefined;
   enabled?: boolean;
 }
-
-const REVISION_META_FIELDS = new Set(["id", "createdAt", "comment", "__typename"]);
 
 export function RevisionsTab({
   enabled = true,
@@ -72,11 +70,4 @@ export function RevisionsTab({
       ))}
     </ol>
   );
-}
-
-function revisionSnapshot(revision: ResourceRevision): unknown {
-  for (const [field, value] of Object.entries(revision)) {
-    if (!REVISION_META_FIELDS.has(field) && value != null) return value;
-  }
-  return "";
 }

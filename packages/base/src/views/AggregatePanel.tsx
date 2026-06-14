@@ -1,8 +1,8 @@
 import * as React from "react";
 import {
+  bucketKey,
   useResourceAggregate,
   useResourceGroupBy,
-  type AggregateBucket,
   type GroupByDimension,
 } from "@angee/sdk";
 
@@ -25,15 +25,6 @@ export interface AggregatePanelProps {
   /** Turns a raw group key into a display label. */
   formatKey?: (key: unknown) => React.ReactNode;
   className?: string;
-}
-
-/** The group key value a bucket carries for the given dimension. */
-function keyValue(bucket: AggregateBucket, field: string): unknown {
-  if (!bucket.key) return null;
-  if (field in bucket.key) return bucket.key[field];
-  const fkKey = `${field}Id`;
-  if (fkKey in bucket.key) return bucket.key[fkKey];
-  return null;
 }
 
 function defaultFormat(key: unknown): React.ReactNode {
@@ -95,7 +86,7 @@ export function AggregatePanel({
       ) : (
         <ul className="flex flex-col gap-1.5">
           {group.buckets.map((bucket, index) => {
-            const key = primaryKey ? keyValue(bucket, primaryKey) : null;
+            const key = primary ? bucketKey(bucket, primary) : null;
             const width = maxCount > 0 ? (bucket.count / maxCount) * 100 : 0;
             return (
               <li key={`${String(key)}#${index}`} className="flex flex-col gap-1">

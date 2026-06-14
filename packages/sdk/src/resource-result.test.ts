@@ -5,6 +5,7 @@ import {
   extractNode,
   extractPage,
   extractRevisions,
+  revisionSnapshot,
   type PageInfo,
 } from "./resource-result";
 
@@ -82,6 +83,26 @@ describe("extractRevisions", () => {
 
   test("returns an empty list when the root field is absent", () => {
     expect(extractRevisions({})).toEqual([]);
+  });
+});
+
+describe("revisionSnapshot", () => {
+  test("returns the first non-envelope, non-null field value", () => {
+    expect(
+      revisionSnapshot({
+        id: "v2",
+        createdAt: "2026-01-02T00:00:00Z",
+        comment: "second",
+        __typename: "NoteRevision",
+        title: "Second",
+      }),
+    ).toBe("Second");
+  });
+
+  test("returns an empty string when only envelope fields are present", () => {
+    expect(
+      revisionSnapshot({ id: "v1", createdAt: "", comment: null }),
+    ).toBe("");
   });
 });
 

@@ -119,6 +119,18 @@ function dimensionKey(dimension: GroupByDimension): string {
   return dimension.key ?? dimension.field;
 }
 
+/**
+ * The group-key value a bucket carries for one dimension. The grouped document
+ * selects `key { <dimensionKey> }`, so the bucket stores each value under that
+ * exact key — the aggregates layer owns that field-name mapping, not the view.
+ */
+export function bucketKey(
+  bucket: AggregateBucket,
+  dimension: GroupByDimension,
+): unknown {
+  return bucket.key?.[dimensionKey(dimension)] ?? null;
+}
+
 function paginationVariables(
   page: number | undefined,
   pageSize: number | undefined,

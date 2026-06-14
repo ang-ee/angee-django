@@ -37,11 +37,38 @@ export interface DeletePreview {
   root: DeletePreviewNode;
 }
 
+/**
+ * The typed envelope every revision row carries — its identity, timestamp, and
+ * authoring note. Everything a revision selects beyond these (plus the GraphQL
+ * `__typename`) is its changed-field snapshot (see `revisionSnapshot`). The one
+ * declaration of these names that both the coercion and the snapshot read.
+ */
+const REVISION_ENVELOPE_FIELDS = ["id", "createdAt", "comment"] as const;
+
 /** One newest-first field snapshot returned for a record revision. */
 export interface ResourceRevision extends Row {
   id: string;
   createdAt: string;
   comment: string | null;
+}
+
+// Envelope keys plus the GraphQL-universal `__typename`; the rest is the snapshot.
+const REVISION_META_FIELDS = new Set<string>([
+  ...REVISION_ENVELOPE_FIELDS,
+  "__typename",
+]);
+
+/**
+ * The snapshotted value a revision carries: the first non-envelope, non-null
+ * field. The revision projection selects the envelope (`id`/`createdAt`/
+ * `comment`) plus the changed field(s), so the snapshot is whatever lies beyond
+ * the envelope — the SDK owns that distinction, not the rendered binding.
+ */
+export function revisionSnapshot(revision: ResourceRevision): unknown {
+  for (const [field, value] of Object.entries(revision)) {
+    if (!REVISION_META_FIELDS.has(field) && value != null) return value;
+  }
+  return "";
 }
 
 function isRecord(value: unknown): value is Row {

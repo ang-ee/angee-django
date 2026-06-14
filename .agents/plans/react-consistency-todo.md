@@ -137,9 +137,23 @@ visual-parity spot-check across both themes still recommended before release.
       removed the 8 byte-identical local `render<X>Icon` helpers (EmptyState,
       InlineEmpty, MetricStrip, MetricGrid, MiniCard, SurfaceHeader, RecordHeader,
       CollectionHeader) and dropped their now-unused `Glyph` imports.
-- [ ] `recordSubtitleParts` (field-name sniffing + `atob` id decode),
-      `AggregatePanel` `${field}Id` guess, `RevisionsTab.revisionSnapshot` →
-      SDK/model metadata exposes subtitle parts / aggregate keys / changed fields.
+- [x] PARTIAL — moved the genuine structural reads onto their SDK owners:
+      • `RevisionsTab.revisionSnapshot` → `revisionSnapshot(revision)` in
+        `resource-result.ts` beside `ResourceRevision` (the revision-row owner);
+        the hardcoded meta set is now derived from one `REVISION_ENVELOPE_FIELDS`
+        declaration (review fix: was stated 3× in the file).
+      • `AggregatePanel` `${field}Id` guess → `bucketKey(bucket, dimension)` in
+        `aggregates.ts` beside `dimensionKey`. The `${field}Id` fallback was dead
+        (the document selects `key { <dimensionKey> }`, so a bucket only ever
+        carries the value under the dimension's key) — deleted, not carried over.
+      • `recordSubtitleParts`' relay-id `atob` decode → `relayGlobalIdSuffix(value)`
+        in `selection.ts` beside `toRelayGlobalId` (one relay boundary, both
+        directions owned). +unit tests for all three.
+      LEAVE-SEPARATE: `recordSubtitleParts`' `createdAt`/`updatedAt`/`wordCount`
+      field-name sniffing + Intl date/word-count formatting stays in base FormView
+      — it is presentation/humanization (the SDK stays structural), `wordCount` is
+      product-flavored, and metadata does not classify created/updated/words
+      semantics, so moving the names would not cleanly help.
 - [ ] `FormView` field-behavior decoders (`widgetId`, `isRelationIdField`,
       `hasOptionValue`, `emptyValue`) → widget/field resolver owns selection path /
       empty value / submit normalization / layout role.

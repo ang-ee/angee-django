@@ -124,6 +124,26 @@ export function relationRelayGlobalId(
   return id ? toRelayGlobalId(typeName, id) : null;
 }
 
+/**
+ * The bare public id encoded inside a relay GlobalID, or `null` when the value
+ * is not one. The inverse of `toRelayGlobalId`: decode `btoa("DriveType:drv…")`
+ * back to the `drv…` suffix. The same relay boundary owns both directions, so a
+ * client showing the human-facing id never re-implements the `atob` decode.
+ */
+export function relayGlobalIdSuffix(value: string): string | null {
+  let decoded: string;
+  try {
+    decoded = typeof atob === "function" ? atob(value.trim()) : "";
+  } catch {
+    return null;
+  }
+  const separator = decoded.indexOf(":");
+  if (separator <= 0) return null;
+  if (!/^[A-Za-z][A-Za-z0-9]*$/.test(decoded.slice(0, separator))) return null;
+  const suffix = decoded.slice(separator + 1).trim();
+  return suffix === "" ? null : suffix;
+}
+
 function requireRootField(
   modelLabel: string,
   rootFields: ModelRootFieldMetadata | null | undefined,

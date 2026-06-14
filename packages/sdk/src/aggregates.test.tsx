@@ -6,10 +6,27 @@ import { describe, expect, test, vi } from "vitest";
 
 import { GraphQLClientProvider } from "./graphql-provider";
 import {
+  bucketKey,
   useResourceAggregate,
   useResourceGroupBy,
 } from "./aggregates";
+import type { AggregateBucket } from "./aggregate-extract";
 import { TEST_SCHEMA_SDL } from "./test-schema";
+
+describe("bucketKey", () => {
+  const bucket: AggregateBucket = { key: { status: "open" }, count: 3 };
+
+  test("reads the value under the dimension's key (key ?? field)", () => {
+    expect(bucketKey(bucket, { field: "STATUS", key: "status" })).toBe("open");
+    expect(bucketKey({ key: { STATUS: "x" }, count: 1 }, { field: "STATUS" }))
+      .toBe("x");
+  });
+
+  test("returns null when the key is missing or absent", () => {
+    expect(bucketKey(bucket, { field: "OWNER", key: "owner" })).toBeNull();
+    expect(bucketKey({ key: null, count: 0 }, { field: "STATUS" })).toBeNull();
+  });
+});
 
 function mockTransport(payload: unknown) {
   const bodies: Array<{ query: string; variables: Record<string, unknown> }> = [];
