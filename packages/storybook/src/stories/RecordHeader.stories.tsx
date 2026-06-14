@@ -5,14 +5,11 @@ const meta = {
   title: "Fragments/RecordHeader",
   component: RecordHeader,
   parameters: { layout: "padded" },
-  args: {
-    title: "Q3 review brief",
-  },
 } satisfies Meta<typeof RecordHeader>;
 
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
 export const DetailRecord: Story = {
   render: () => (

@@ -5,14 +5,11 @@ const meta = {
   title: "Fragments/SurfaceHeader",
   component: SurfaceHeader,
   parameters: { layout: "padded" },
-  args: {
-    title: "Workspace overview",
-  },
 } satisfies Meta<typeof SurfaceHeader>;
 
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
 export const Surface: Story = {
   render: () => (

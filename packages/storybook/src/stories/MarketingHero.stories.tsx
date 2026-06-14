@@ -11,14 +11,11 @@ const meta = {
   title: "Fragments/MarketingHero",
   component: MarketingHero,
   parameters: { layout: "fullscreen" },
-  args: {
-    headline: "Build Django and React products from addon contracts.",
-  },
 } satisfies Meta<typeof MarketingHero>;
 
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
 export const PublicHero: Story = {
   render: () => (
@@ -30,7 +27,7 @@ export const PublicHero: Story = {
               <Glyph name="plus" />
               Start a project
             </Button>
-            <Button className="border-white/30 bg-white/10 text-white hover:bg-white/15" variant="secondary">
+            <Button className="border-n-0/30 bg-n-0/10 text-n-0 hover:bg-n-0/15" variant="secondary">
               Read the guide
             </Button>
           </>

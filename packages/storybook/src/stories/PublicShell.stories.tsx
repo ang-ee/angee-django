@@ -11,30 +11,27 @@ const meta = {
 
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
 export const SignIn: Story = {
-  args: {
-    children: null,
-  },
   render: () => (
     <div className="-m-6 min-h-screen">
       <PublicShell
         brand={
-          <div className="flex items-center gap-3 text-white">
-            <span className="grid size-9 place-content-center rounded-md bg-white/10">
+          <div className="flex items-center gap-3 text-n-0">
+            <span className="grid size-9 place-content-center rounded-md bg-n-0/10">
               <Glyph name="angee" />
             </span>
             <span className="text-2xl font-bold">Angee</span>
           </div>
         }
         hero={
-          <section className="flex min-h-screen flex-col justify-end px-8 pb-12 text-white">
+          <section className="flex min-h-screen flex-col justify-end px-8 pb-12 text-n-0">
             <div className="max-w-xl">
               <div className="text-34 font-semibold leading-tight">
                 Deterministic application composition.
               </div>
-              <p className="mt-3 text-sm leading-6 text-white/75">
+              <p className="mt-3 text-sm leading-6 text-n-0/75">
                 A public shell surface for login and account recovery flows.
               </p>
             </div>

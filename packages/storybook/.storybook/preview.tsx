@@ -121,17 +121,20 @@ const preview: Preview = {
     controls: { expanded: true, matchers: { color: /(background|color)$/i } },
     options: {
       storySort: {
+        // Page (the composition parts) before Layouts (the full-page
+        // compositions built on them); Toast is folded into Primitives beside
+        // Alert, so there is no longer a one-member Feedback group.
         order: [
+          "Foundations",
           "Primitives",
           "Chrome",
           "Shell",
-          "Layouts",
           "Page",
+          "Layouts",
           "Views",
           "Forms",
           "Widgets",
           "Fragments",
-          "Feedback",
         ],
       },
     },

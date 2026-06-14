@@ -18,14 +18,11 @@ const meta = {
   title: "Fragments/DataLens",
   component: DataLens,
   parameters: { layout: "padded" },
-  args: {
-    visual: "graph",
-  },
 } satisfies Meta<typeof DataLens>;
 
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
 export const Lens: Story = {
   render: () => (

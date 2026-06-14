@@ -11,14 +11,11 @@ const meta = {
   title: "Fragments/HeroPanel",
   component: HeroPanel,
   parameters: { layout: "padded" },
-  args: {
-    headline: "Compose addons into one deterministic surface.",
-  },
 } satisfies Meta<typeof HeroPanel>;
 
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
 export const Feature: Story = {
   render: () => (

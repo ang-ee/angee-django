@@ -5,14 +5,11 @@ const meta = {
   title: "Fragments/InlineEmpty",
   component: InlineEmpty,
   parameters: { layout: "padded" },
-  args: {
-    label: "No activity for this record.",
-  },
 } satisfies Meta<typeof InlineEmpty>;
 
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
 export const Compact: Story = {
   render: () => (

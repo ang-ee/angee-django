@@ -12,17 +12,11 @@ const meta = {
   title: "Fragments/DialogForm",
   component: DialogForm,
   parameters: { layout: "centered" },
-  args: {
-    children: null,
-    onOpenChange: () => undefined,
-    open: true,
-    title: "Create source",
-  },
 } satisfies Meta<typeof DialogForm>;
 
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
 function DialogFormDemo(): React.ReactElement {
   const [open, setOpen] = React.useState(true);

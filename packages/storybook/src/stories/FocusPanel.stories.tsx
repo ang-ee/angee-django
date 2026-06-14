@@ -5,15 +5,11 @@ const meta = {
   title: "Fragments/FocusPanel",
   component: FocusPanel,
   parameters: { layout: "padded" },
-  args: {
-    children: null,
-    title: "Workspace setup",
-  },
 } satisfies Meta<typeof FocusPanel>;
 
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
 export const Centered: Story = {
   render: () => (

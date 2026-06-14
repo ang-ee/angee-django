@@ -12,14 +12,11 @@ const meta = {
   title: "Fragments/SectionTabs",
   component: SectionTabs,
   parameters: { layout: "padded" },
-  args: {
-    items,
-  },
 } satisfies Meta<typeof SectionTabs>;
 
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
 export const PillTabs: Story = {
   render: () => (

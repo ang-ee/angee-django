@@ -1,16 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import {
-  AppRuntimeProvider,
-  GraphQLClientProvider,
-  type AngeeUrqlClientOptions,
-} from "@angee/sdk";
-import {
-  ListView,
-  ModalsHost,
-  baseIcons,
-  defaultWidgets,
-  type ListColumn,
-} from "@angee/base";
+import { ListView, type ListColumn } from "@angee/base";
+
+import { RuntimeFixture, jsonResponse, storySchema } from "./runtime-fixtures";
 
 const rows = [
   {
@@ -61,25 +52,17 @@ const columns = [
   { field: "updatedAt", header: "Updated" },
 ] satisfies readonly ListColumn<StoryRow>[];
 
-const storySchemas = {
-  public: {
-    url: "/graphql/public/",
-    fetch: async (input: RequestInfo | URL) => {
-      if (String(input).includes("/auth/csrf/")) {
-        return jsonResponse({ token: "storybook" });
-      }
-      return jsonResponse({
-        data: {
-          notes: {
-            totalCount: rows.length,
-            results: rows,
-            pageInfo: { offset: 0, limit: 50 },
-          },
-        },
-      });
+const storySchemas = storySchema(async () =>
+  jsonResponse({
+    data: {
+      notes: {
+        totalCount: rows.length,
+        results: rows,
+        pageInfo: { offset: 0, limit: 50 },
+      },
     },
-  },
-} satisfies Record<string, AngeeUrqlClientOptions>;
+  }),
+);
 
 const meta = {
   title: "Views/ListView",
@@ -96,31 +79,15 @@ export const VisibleFieldsChooser: Story = {
 
 function ListFixture() {
   return (
-    <ModalsHost>
-      <GraphQLClientProvider config={storySchemas} schema="public">
-        <AppRuntimeProvider
-          runtime={{
-            icons: baseIcons,
-            slots: [],
-            widgets: defaultWidgets,
-          }}
-        >
-          <div className="max-w-5xl">
-            <ListView
-              model="notes.Note"
-              columns={columns}
-              createLabel="New note"
-              onCreate={() => undefined}
-            />
-          </div>
-        </AppRuntimeProvider>
-      </GraphQLClientProvider>
-    </ModalsHost>
+    <RuntimeFixture schemas={storySchemas}>
+      <div className="max-w-5xl">
+        <ListView
+          model="notes.Note"
+          columns={columns}
+          createLabel="New note"
+          onCreate={() => undefined}
+        />
+      </div>
+    </RuntimeFixture>
   );
-}
-
-function jsonResponse(data: unknown): Response {
-  return new Response(JSON.stringify(data), {
-    headers: { "content-type": "application/json" },
-  });
 }

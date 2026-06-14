@@ -650,11 +650,35 @@ visual-parity spot-check across both themes still recommended before release.
       the 5 `Symbol.for(...)` declarations, the 5 marker assignments, and the 5
       barrel re-exports together; not re-exported above the page barrel, so no
       external break. typecheck + test green.
-- [ ] Storybook: kill dead `args`/`argTypes` ignored by `render: () =>` (~30
-      files); one `runtime-fixtures` owner (provider stack + `jsonResponse` + CSRF,
-      reusing `@angee/base/testing`); drop redundant nested `ToastProvider`; fix
-      group taxonomy (`Feedback` 1-member; `Page` vs `Layouts`); replace
-      hex/`white` hero literals with inverse tokens.
+- [x] Storybook cleanup DONE (Phase 7 final pass; react+arch review clean):
+      • **Dead `args`/`argTypes`** removed from 21 meta-level + 3 story-level stories
+        where every story self-renders (`render: () =>`). The agent caught 5 FALSE
+        POSITIVES (Accordion/Collapsible/Drawer/SelectionBar/ToggleGroup have
+        `render: ({…args}) =>` consumers — kept). Where removing meta args broke the
+        type (component has a required prop → `StoryObj<typeof meta>` still demands
+        it), the self-render stories were typed as bare `StoryObj` (kept `component:`
+        for autodocs). New convention recorded in guidelines Pitfalls.
+      • **`runtime-fixtures` owner** (`stories/runtime-fixtures.tsx`, mirroring
+        `chrome-fixtures.tsx`): `jsonResponse` + `storySchema(fetch)` (CSRF probe
+        uniform) + `<RuntimeFixture>` (ModalsHost→GraphQLClientProvider→
+        AppRuntimeProvider{icons,slots,widgets}); ListView + FormView consume it
+        (local copies deleted). `jsonResponse` NOT lifted to `@angee/base/testing`
+        (arch-review: that module's hermetic fixed responders are a different intent).
+        ScalarWidgets LEFT separate (only needs `AppRuntimeProvider{icons}`, no fetch).
+      • **Redundant nested `ToastProvider`** dropped from Toast.stories (global
+        preview decorator already provides it; `ToastCanvas` is now a layout div).
+      • **Taxonomy**: `Feedback/Toast` → `Primitives/Toast` (beside Alert), so no
+        1-member Feedback group; `preview.tsx` storySort dropped Feedback, added the
+        existing Foundations, reordered Page (parts) before Layouts (compositions).
+        Page-vs-Layouts split KEPT (semantically real: parts vs full-page comps).
+        Forms/Foundations/Widgets 1-member groups LEFT (deliberate top-level pages,
+        not called out).
+      • **Hero color literals**: MarketingHero + PublicShell stories `text-white`/
+        `bg-white/X`/`border-white/X` → `n-0` token utilities (matching real
+        LoginPage/PublicShell). The bespoke `bg-[linear-gradient(…#hex)]` hero
+        backdrops LEFT (real LoginPage uses the same; no token for an art gradient).
+      • Main's touched stories verified consistent post-merge (StatusIcon/Toast/
+        SurfacePanel/chrome-fixtures).
 - [x] `useOperatorSnapshot` `want*` flags → one `SECTION_KEYS` table; principled
       List/Form declaration placement in agents; collapse two translators
       (`useT`/`translateWithFallback`). (All three sub-items resolved below:

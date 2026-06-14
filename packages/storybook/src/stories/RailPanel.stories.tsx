@@ -5,14 +5,11 @@ const meta = {
   title: "Fragments/RailPanel",
   component: RailPanel,
   parameters: { layout: "padded" },
-  args: {
-    title: "Active sources",
-  },
 } satisfies Meta<typeof RailPanel>;
 
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
 export const Section: Story = {
   render: () => (

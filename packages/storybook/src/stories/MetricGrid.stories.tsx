@@ -5,14 +5,11 @@ const meta = {
   title: "Fragments/MetricGrid",
   component: MetricGrid,
   parameters: { layout: "padded" },
-  args: {
-    metrics: [{ label: "Published", value: "184" }],
-  },
 } satisfies Meta<typeof MetricGrid>;
 
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
 export const Grid: Story = {
   render: () => (

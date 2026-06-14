@@ -1,19 +1,13 @@
 import * as React from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import {
-  Button,
-  ToastProvider,
-  useToast,
-  type ToastOptions,
-} from "@angee/base";
+import { Button, useToast, type ToastOptions } from "@angee/base";
 
 const meta = {
-  title: "Feedback/Toast",
-  component: ToastProvider,
+  title: "Primitives/Toast",
   parameters: {
     layout: "padded",
   },
-} satisfies Meta<typeof ToastProvider>;
+} satisfies Meta;
 
 export default meta;
 
@@ -120,16 +114,14 @@ export const Interactive: Story = {
   ),
 };
 
+// The global preview decorator already provides the `ToastProvider`; this is just
+// the canvas the seeded toasts render against.
 function ToastCanvas({
   children,
 }: {
   children?: React.ReactNode;
 }): React.ReactElement {
-  return (
-    <ToastProvider>
-      <div className="flex min-h-80 items-start">{children}</div>
-    </ToastProvider>
-  );
+  return <div className="flex min-h-80 items-start">{children}</div>;
 }
 
 function SeedToast({ options }: { options: ToastOptions }): null {

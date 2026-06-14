@@ -5,14 +5,11 @@ const meta = {
   title: "Fragments/EditorHeaderBar",
   component: EditorHeaderBar,
   parameters: { layout: "padded" },
-  args: {
-    title: "Edit source",
-  },
 } satisfies Meta<typeof EditorHeaderBar>;
 
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
 export const Header: Story = {
   render: () => (

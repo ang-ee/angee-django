@@ -5,14 +5,11 @@ const meta = {
   title: "Fragments/MetaGrid",
   component: MetaGrid,
   parameters: { layout: "padded" },
-  args: {
-    rows: [["Owner", "Platform"]],
-  },
 } satisfies Meta<typeof MetaGrid>;
 
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
 export const Grid: Story = {
   render: () => (

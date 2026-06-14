@@ -5,14 +5,11 @@ const meta = {
   title: "Fragments/InfoRow",
   component: InfoRow,
   parameters: { layout: "padded" },
-  args: {
-    label: "Slug",
-  },
 } satisfies Meta<typeof InfoRow>;
 
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
 export const Row: Story = {
   render: () => (

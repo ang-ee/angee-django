@@ -1,17 +1,11 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import {
-  AppRuntimeProvider,
-  GraphQLClientProvider,
-  type AngeeUrqlClientOptions,
-} from "@angee/sdk";
-import {
   FormView,
-  ModalsHost,
-  baseIcons,
-  defaultWidgets,
   type FormField,
   type GroupDescriptor,
 } from "@angee/base";
+
+import { RuntimeFixture, jsonResponse, storySchema } from "./runtime-fixtures";
 
 const statusOptions = [
   { value: "DRAFT", label: "Draft" },
@@ -155,30 +149,20 @@ function readOnlyFieldFor(field: FormField): FormField {
   return readOnlyField;
 }
 
-const storySchemas = {
-  public: {
-    url: "/graphql/public/",
-    fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input).includes("/auth/csrf/")) {
-        return jsonResponse({ token: "storybook" });
-      }
-      const payload = requestPayload(init);
-      const patch = isRecord(payload.variables.data)
-        ? payload.variables.data
-        : {};
+const storySchemas = storySchema(async (_input, init) => {
+  const payload = requestPayload(init);
+  const patch = isRecord(payload.variables.data) ? payload.variables.data : {};
 
-      if (payload.query.includes("mutation updateNote")) {
-        return jsonResponse({ data: { updateNote: { ...storyRecord, ...patch } } });
-      }
-      if (payload.query.includes("mutation createNote")) {
-        return jsonResponse({
-          data: { createNote: { ...storyRecord, id: "note-new", ...patch } },
-        });
-      }
-      return jsonResponse({ data: { note: storyRecord } });
-    },
-  },
-} satisfies Record<string, AngeeUrqlClientOptions>;
+  if (payload.query.includes("mutation updateNote")) {
+    return jsonResponse({ data: { updateNote: { ...storyRecord, ...patch } } });
+  }
+  if (payload.query.includes("mutation createNote")) {
+    return jsonResponse({
+      data: { createNote: { ...storyRecord, id: "note-new", ...patch } },
+    });
+  }
+  return jsonResponse({ data: { note: storyRecord } });
+});
 
 const meta = {
   title: "Views/FormView",
@@ -209,34 +193,24 @@ function FormViewFixture({
   groups: readonly GroupDescriptor[];
 }) {
   return (
-    <ModalsHost>
-      <GraphQLClientProvider config={storySchemas} schema="public">
-        <AppRuntimeProvider
-          runtime={{
-            icons: baseIcons,
-            slots: [],
-            widgets: defaultWidgets,
-          }}
-        >
-          <FormView
-            model="notes.Note"
-            id={storyRecord.id}
-            fields={fields}
-            groups={groups}
-            returning={[
-              "owner",
-              "priority",
-              "visibility",
-              "tags",
-              "createdAt",
-              "updatedAt",
-              "words",
-              "body",
-            ]}
-          />
-        </AppRuntimeProvider>
-      </GraphQLClientProvider>
-    </ModalsHost>
+    <RuntimeFixture schemas={storySchemas}>
+      <FormView
+        model="notes.Note"
+        id={storyRecord.id}
+        fields={fields}
+        groups={groups}
+        returning={[
+          "owner",
+          "priority",
+          "visibility",
+          "tags",
+          "createdAt",
+          "updatedAt",
+          "words",
+          "body",
+        ]}
+      />
+    </RuntimeFixture>
   );
 }
 
@@ -251,12 +225,6 @@ function requestPayload(init?: RequestInit): {
     query: typeof parsed.query === "string" ? parsed.query : "",
     variables: isRecord(parsed.variables) ? parsed.variables : {},
   };
-}
-
-function jsonResponse(data: unknown): Response {
-  return new Response(JSON.stringify(data), {
-    headers: { "content-type": "application/json" },
-  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

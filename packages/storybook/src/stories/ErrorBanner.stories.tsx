@@ -5,14 +5,11 @@ const meta = {
   title: "Fragments/ErrorBanner",
   component: ErrorBanner,
   parameters: { layout: "padded" },
-  args: {
-    description: "The import could not be completed.",
-  },
 } satisfies Meta<typeof ErrorBanner>;
 
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
 export const Banner: Story = {
   render: () => (

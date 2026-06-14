@@ -5,14 +5,11 @@ const meta = {
   title: "Fragments/ListPanel",
   component: ListPanel,
   parameters: { layout: "padded" },
-  args: {
-    title: "Imports",
-  },
 } satisfies Meta<typeof ListPanel>;
 
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
 export const List: Story = {
   render: () => (

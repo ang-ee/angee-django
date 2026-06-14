@@ -5,14 +5,11 @@ const meta = {
   title: "Fragments/EmptyState",
   component: EmptyState,
   parameters: { layout: "padded" },
-  args: {
-    title: "No records",
-  },
 } satisfies Meta<typeof EmptyState>;
 
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
 export const Full: Story = {
   render: () => (

@@ -5,14 +5,11 @@ const meta = {
   title: "Fragments/CollectionHeader",
   component: CollectionHeader,
   parameters: { layout: "padded" },
-  args: {
-    title: "Notes",
-  },
 } satisfies Meta<typeof CollectionHeader>;
 
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
 export const Collection: Story = {
   render: () => (

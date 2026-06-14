@@ -5,14 +5,11 @@ const meta = {
   title: "Fragments/BrandButton",
   component: BrandButton,
   parameters: { layout: "centered" },
-  args: {
-    label: "Continue with Angee",
-  },
 } satisfies Meta<typeof BrandButton>;
 
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
 export const Button: Story = {
   render: () => (

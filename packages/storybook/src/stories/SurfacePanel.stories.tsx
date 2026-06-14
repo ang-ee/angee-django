@@ -5,15 +5,11 @@ const meta = {
   title: "Fragments/SurfacePanel",
   component: SurfacePanel,
   parameters: { layout: "padded" },
-  args: {
-    children: <div />,
-    title: "Release queue",
-  },
 } satisfies Meta<typeof SurfacePanel>;
 
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
 export const Panel: Story = {
   render: () => (
