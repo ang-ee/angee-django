@@ -23,6 +23,17 @@ ports:
   # never a hardcoded 9000. Services reference it as ${ports.operator}.
   operator: { value: {{ operator_port }}, export_env: ANGEE_OPERATOR_PORT }
 
+# Local state angee owns and must guarantee exists before any job runs. Subpaths
+# are relative to the stack dir (the parent of {{ ANGEE_ROOT }}); the operator
+# materializes them on every bring-up (StackPrepare), so a fresh stack/workspace
+# has them before makemigrations/migrate open the database. ANGEE_DATA_DIR
+# (settings.yaml) resolves to this same {{ ANGEE_ROOT }}/data — SQLite never
+# creates its file's parent directory, so without this the first migrate fails
+# with "unable to open database file".
+persist:
+  app-data: { subpath: {{ ANGEE_ROOT }}/data, scope: stack }
+  chrome-profile: { subpath: {{ ANGEE_ROOT }}/data/chrome, scope: stack }
+
 sources:
   app:
     kind: local
