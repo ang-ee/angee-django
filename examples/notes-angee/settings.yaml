@@ -4,6 +4,7 @@ ALLOWED_HOSTS:
   - "*"
 
 INSTALLED_APPS:
+  - angee.agents
   - angee.integrate
   - angee.integrate_github
   - angee.knowledge

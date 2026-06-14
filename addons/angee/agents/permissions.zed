@@ -1,0 +1,66 @@
+// Authorization schema for the agents addon.
+// @rebac_package: agents
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 1
+
+definition agents/agent {
+    relation owner: auth/user // rebac:field=owner
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    // The owner manages their own agent; platform admins reach all.
+    permission read = owner + admin->member
+    permission write = owner + admin->member
+    permission delete = owner + admin->member
+}
+
+definition agents/inference_provider {
+    relation integration: integrate/integration // rebac:field=integration
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    // Provider access derives from the parent integration; platform admins reach all.
+    permission read = integration->read + admin->member
+    permission write = integration->write + admin->member
+    permission delete = integration->write + admin->member
+}
+
+definition agents/inference_model {
+    relation provider: agents/inference_provider // rebac:field=provider
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = provider->read + admin->member
+    permission write = provider->write + admin->member
+    permission delete = provider->write + admin->member
+}
+
+definition agents/skill {
+    relation source: integrate/source // rebac:field=source
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    // Skills are discovered under a source; access derives from it.
+    permission read = source->read + admin->member
+    permission write = source->write + admin->member
+    permission delete = source->write + admin->member
+}
+
+definition agents/mcp_server {
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = admin->member
+    permission write = admin->member
+    permission delete = admin->member
+}
+
+definition agents/mcp_tool {
+    relation server: agents/mcp_server // rebac:field=server
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = server->read + admin->member
+    permission write = server->write + admin->member
+    permission delete = server->write + admin->member
+}
