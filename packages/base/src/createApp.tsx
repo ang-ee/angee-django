@@ -163,6 +163,9 @@ export function createApp(input: CreateAppInput): AngeeApp {
     forms: composed.forms,
     chatter: composed.chatter,
     slots: mergeSlotContributions(composed.slots, input.slots ?? []),
+    // Built-in renderers are universal (PreviewPane always includes them); the
+    // runtime carries only addon-contributed providers.
+    previews: composed.previews,
   };
 
   const defaultSchema = input.defaultSchema ?? "public";

@@ -1,4 +1,5 @@
 import type { ComponentType } from "react";
+import type { PreviewContribution } from "@angee/sdk";
 
 import { normaliseMime } from "./model";
 
@@ -6,9 +7,9 @@ import { normaliseMime } from "./model";
  * The preview contract. A `PreviewFile` is a file reduced to what any renderer
  * needs (a URL + name + optional mime/size); addons adapt their domain model
  * (e.g. storage's `File`) into this shape before handing it to `PreviewPane`.
- * Renderers register against a mime pattern; `PreviewPane` resolves the
- * highest-priority match. The registry ships here (the contract); heavy
- * renderers register against it from their own module.
+ * Renderers declare a mime pattern; `PreviewPane` resolves the highest-priority
+ * match from the built-ins plus any addon-contributed providers (composed at
+ * build time onto the runtime via the manifest `previews` field).
  */
 export interface PreviewFile {
   /** Resolved display/fetch URL. */
@@ -40,48 +41,30 @@ export type PreviewMimeMatcher =
   | RegExp
   | ((mime: string) => boolean);
 
-export interface PreviewProvider {
-  id: string;
+export interface PreviewProvider extends PreviewContribution {
   mime: PreviewMimeMatcher;
   component: PreviewProviderComponent;
   /** Higher wins when several providers match; defaults to 0. */
   priority?: number;
 }
 
-const providers = new Map<string, PreviewProvider>();
-
 /**
- * Register-or-replace by id, gated by priority: a higher-priority registration
- * replaces a lower one with the same id; equal/lower is skipped. One slot per
- * id keeps HMR re-registrations from stacking.
+ * The highest-priority provider whose matcher accepts `mime`, or null. Pure over
+ * the passed list — `PreviewPane` calls it with the built-ins plus the runtime's
+ * addon-contributed providers. Sort is stable, so on a priority tie an earlier
+ * entry wins (callers list runtime providers before the built-ins to let an
+ * addon override a built-in at equal priority).
  */
-export function registerPreviewProvider(provider: PreviewProvider): void {
-  const current = providers.get(provider.id);
-  if (!current || (provider.priority ?? 0) >= (current.priority ?? 0)) {
-    providers.set(provider.id, provider);
-  }
-}
-
 export function resolvePreviewProvider(
+  providers: readonly PreviewProvider[],
   mime: string | null | undefined,
 ): PreviewProvider | null {
   const normalized = normaliseMime(mime);
   return (
-    [...providers.values()]
+    providers
       .filter((provider) => matchesMime(provider.mime, normalized))
       .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))[0] ?? null
   );
-}
-
-export function previewProviders(): readonly PreviewProvider[] {
-  return [...providers.values()].sort(
-    (a, b) => (b.priority ?? 0) - (a.priority ?? 0),
-  );
-}
-
-/** Reset the registry; for tests only. */
-export function clearPreviewProvidersForTest(): void {
-  providers.clear();
 }
 
 function matchesMime(pattern: PreviewMimeMatcher, mime: string): boolean {

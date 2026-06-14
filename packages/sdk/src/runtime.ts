@@ -4,6 +4,7 @@ import type {
   ChatterContribution,
   ComposedMenuItem,
   FormOverrideMap,
+  PreviewContribution,
   SlotContribution,
   WidgetMap,
 } from "./define-addon";
@@ -24,6 +25,7 @@ export interface AppRuntime {
   forms: FormOverrideMap;
   chatter: readonly ChatterContribution[];
   slots: readonly SlotContribution[];
+  previews: readonly PreviewContribution[];
 }
 
 const EMPTY_RUNTIME: AppRuntime = {
@@ -34,6 +36,7 @@ const EMPTY_RUNTIME: AppRuntime = {
   forms: {},
   chatter: [],
   slots: [],
+  previews: [],
 };
 
 const RuntimeContext = makeContext<AppRuntime>("AppRuntime");
@@ -76,6 +79,11 @@ export function useMenus(): readonly ComposedMenuItem[] {
 export function useSlot(slot: string): readonly SlotContribution[] {
   const { slots } = useAppRuntime();
   return useMemo(() => slots.filter((entry) => entry.slot === slot), [slots, slot]);
+}
+
+/** The addon-contributed file-preview renderers, in composed order. */
+export function usePreviews(): readonly PreviewContribution[] {
+  return useAppRuntime().previews;
 }
 
 /** A translator bound to one namespace; resolves keys against merged i18n. */

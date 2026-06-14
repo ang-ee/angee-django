@@ -65,6 +65,16 @@ export interface SlotContribution {
   content?: unknown;
 }
 
+/**
+ * A file-preview renderer contributed at build time; merges by `id` (fail-fast
+ * on collision, like widgets). The headless SDK only needs the `id` to detect
+ * collisions — the rendered binding owns the mime matcher, component, and
+ * priority and reads the rest as its own `PreviewProvider`.
+ */
+export interface PreviewContribution {
+  id: string;
+}
+
 /** One addon's self-describing manifest. */
 export interface AddonManifest {
   id: string;
@@ -76,6 +86,7 @@ export interface AddonManifest {
   forms?: FormOverrideMap;
   chatter?: readonly ChatterContribution[];
   slots?: readonly SlotContribution[];
+  previews?: readonly PreviewContribution[];
 }
 
 /** The merged runtime an app composes from its addon manifests. */
@@ -88,6 +99,7 @@ export interface ComposedAddons {
   forms: FormOverrideMap;
   chatter: readonly ChatterContribution[];
   slots: readonly SlotContribution[];
+  previews: readonly PreviewContribution[];
 }
 
 /** Brand an object as an addon manifest, giving one greppable declaration site. */
@@ -150,8 +162,10 @@ export function composeAddons(addons: readonly AddonManifest[]): ComposedAddons 
   const i18n: Record<string, Record<string, string>> = {};
   const icons: Record<string, unknown> = {};
   const forms: Record<string, unknown> = {};
+  const previews: PreviewContribution[] = [];
   const routeNames: Record<string, true> = {};
   const menuIds: Record<string, true> = {};
+  const previewIds: Record<string, true> = {};
 
   for (const addon of addons) {
     if (addon.routes) {
@@ -191,6 +205,12 @@ export function composeAddons(addons: readonly AddonManifest[]): ComposedAddons 
         }
       }
     }
+    if (addon.previews) {
+      for (const preview of addon.previews) {
+        claim(previewIds, preview.id, addon.id, "preview");
+        previews.push(preview);
+      }
+    }
   }
 
   return {
@@ -202,6 +222,7 @@ export function composeAddons(addons: readonly AddonManifest[]): ComposedAddons 
     forms,
     chatter: mergeChatterContributions(...addons.map((a) => a.chatter ?? [])),
     slots: mergeSlotContributions(...addons.map((a) => a.slots ?? [])),
+    previews,
   };
 }
 

@@ -7,7 +7,7 @@ import { LoadingPanel } from "../fragments/LoadingPanel";
 import { cn } from "../lib/cn";
 import { formatSize, isJsonMime } from "./model";
 import {
-  registerPreviewProvider,
+  type PreviewProvider,
   type PreviewProviderProps,
 } from "./registry";
 
@@ -108,34 +108,22 @@ function prettyJson(text: string): string {
   }
 }
 
-let registered = false;
-
 /**
- * Register the lightweight built-in renderers (image, markdown, json, text/
- * code, and a generic fallback) — all on dependencies already in the stack.
- * Idempotent. Heavy renderers (pdf, docx, media, syntax highlighting) register
- * from their own lazy module against the same registry.
+ * The lightweight built-in renderers (image, markdown, json, text/code, and a
+ * generic fallback) — all on dependencies already in the stack. `PreviewPane`
+ * always resolves against these (plus any addon-contributed providers from the
+ * runtime), so they need no registration. An addon adds more renderers — or
+ * overrides one of these at a higher priority — through its manifest `previews`.
  */
-export function registerBuiltinPreviewProviders(): void {
-  if (registered) return;
-  registered = true;
-  registerPreviewProvider({ id: "base.image", mime: "image/*", component: ImagePreview });
-  registerPreviewProvider({
+export const builtinPreviewProviders: readonly PreviewProvider[] = [
+  { id: "base.image", mime: "image/*", component: ImagePreview },
+  {
     id: "base.markdown",
     mime: (mime) => mime === "text/markdown" || mime === "text/x-markdown",
     component: MarkdownPreview,
     priority: 10,
-  });
-  registerPreviewProvider({
-    id: "base.json",
-    mime: isJsonMime,
-    component: TextPreview,
-    priority: 10,
-  });
-  registerPreviewProvider({
-    id: "base.text",
-    mime: (mime) => mime.startsWith("text/"),
-    component: TextPreview,
-  });
-  registerPreviewProvider({ id: "base.fallback", mime: "*/*", component: FallbackPreview, priority: -10 });
-}
+  },
+  { id: "base.json", mime: isJsonMime, component: TextPreview, priority: 10 },
+  { id: "base.text", mime: (mime) => mime.startsWith("text/"), component: TextPreview },
+  { id: "base.fallback", mime: "*/*", component: FallbackPreview, priority: -10 },
+];

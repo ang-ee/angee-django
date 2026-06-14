@@ -285,10 +285,18 @@ visual-parity spot-check across both themes still recommended before release.
       - [x] unified translator owner: added `useNamespaceT(ns, fallback)` to
         `@angee/sdk`; `useBaseT` + every addon's `use<Addon>T()` build on it (so a
         component renders English provider-less — fixed iam's failing tests).
-- [ ] **T13** Previews via build-time composition: a `previews`/`widgets` map on
-      `AddonManifest`, folded fail-fast by `composeAddons`, resolved through
-      `AppRuntimeProvider`. Remove the module-global `Map`, the import side-effect,
-      and `clearPreviewProvidersForTest`.
+- [x] **T13** DONE — previews via build-time composition. Deleted the module-global
+      `Map`, `registerPreviewProvider`, `previewProviders()`,
+      `clearPreviewProvidersForTest`, and the `preview/index.ts` import side-effect.
+      `resolvePreviewProvider(providers, mime)` is now pure; built-ins are a static
+      `builtinPreviewProviders` const (universal — `PreviewPane` always includes
+      them). Addons contribute via a new `previews?` field on `AddonManifest`
+      (`PreviewContribution` `{id}`), merged fail-fast by `composeAddons` (mirrors
+      widgets/icons), seeded onto `AppRuntime.previews`, read by `usePreviews()`.
+      `PreviewPane` resolves `[...usePreviews(), ...builtins]` (runtime first →
+      addon overrides a built-in at equal priority via stable sort). No addon
+      contributes previews yet — the field is the replacement seam for the deleted
+      runtime registration. Reviewed (arch + react); doc honesty fixes applied.
 - [x] **T15 (yes)** DONE — `defineBaseAddon(addon): BaseAddon` exported from
       `@angee/base` (the rendered analog of the SDK's `defineAddon`, type-checks the
       literal). Migrated all 8 manifests off `const x: BaseAddon = {…}` →

@@ -1,18 +1,14 @@
 // @vitest-environment happy-dom
 
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { AppRuntimeProvider } from "@angee/sdk";
+import { afterEach, describe, expect, test } from "vitest";
 
 import { displayMime, normaliseMime } from "./model";
 import { PreviewPane } from "./PreviewPane";
-import {
-  clearPreviewProvidersForTest,
-  registerPreviewProvider,
-  resolvePreviewProvider,
-} from "./registry";
+import { resolvePreviewProvider, type PreviewProvider } from "./registry";
 
 afterEach(cleanup);
-beforeEach(clearPreviewProvidersForTest);
 
 describe("preview model", () => {
   test("displayMime falls back to the extension then octet-stream", () => {
@@ -24,30 +20,65 @@ describe("preview model", () => {
   });
 });
 
-describe("preview registry", () => {
+describe("resolvePreviewProvider", () => {
+  const Img: PreviewProvider["component"] = () => <span>img</span>;
+  const Any: PreviewProvider["component"] = () => <span>any</span>;
+  const providers: readonly PreviewProvider[] = [
+    { id: "img", mime: "image/*", component: Img },
+    { id: "any", mime: "*/*", component: Any, priority: -10 },
+  ];
+
   test("resolves by glob and priority; */* is the lowest fallback", () => {
-    const Img = () => <span>img</span>;
-    const Any = () => <span>any</span>;
-    registerPreviewProvider({ id: "img", mime: "image/*", component: Img });
-    registerPreviewProvider({ id: "any", mime: "*/*", component: Any, priority: -10 });
-    expect(resolvePreviewProvider("image/png")?.id).toBe("img");
-    expect(resolvePreviewProvider("application/zip")?.id).toBe("any");
+    expect(resolvePreviewProvider(providers, "image/png")?.id).toBe("img");
+    expect(resolvePreviewProvider(providers, "application/zip")?.id).toBe("any");
+  });
+
+  test("returns null when nothing matches", () => {
+    expect(resolvePreviewProvider([providers[0]!], "application/zip")).toBeNull();
+  });
+
+  test("an earlier entry wins an equal-priority tie (addon overrides built-in)", () => {
+    const Override: PreviewProvider["component"] = () => <span>override</span>;
+    // Same (default) priority: the addon is listed first, stable sort keeps it.
+    const list: readonly PreviewProvider[] = [
+      { id: "addon.image", mime: "image/*", component: Override },
+      { id: "base.image", mime: "image/*", component: Img },
+    ];
+    expect(resolvePreviewProvider(list, "image/png")?.id).toBe("addon.image");
   });
 });
 
 describe("PreviewPane", () => {
-  test("renders the resolved provider", () => {
-    registerPreviewProvider({
-      id: "img",
-      mime: "image/*",
-      component: ({ file }) => <span>shown: {file.name}</span>,
-    });
-    render(<PreviewPane file={{ url: "/x.png", name: "x.png", mime: "image/png" }} />);
-    expect(screen.getByText("shown: x.png")).toBeTruthy();
+  test("renders a built-in renderer for a known mime (no runtime needed)", () => {
+    render(
+      <PreviewPane file={{ url: "/x.png", name: "x.png", mime: "image/png" }} />,
+    );
+    // The built-in image renderer shows an <img> with the file name as alt text.
+    expect(screen.getByRole("img", { name: "x.png" })).toBeTruthy();
   });
 
-  test("falls back when no provider matches", () => {
-    render(<PreviewPane file={{ url: "/x.bin", name: "x.bin", mime: "application/zip" }} />);
-    expect(screen.getByText("No preview available")).toBeTruthy();
+  test("an addon-contributed runtime provider overrides the built-in", () => {
+    const addonImage: PreviewProvider = {
+      id: "addon.image",
+      mime: "image/*",
+      component: ({ file }) => <span>addon: {file.name}</span>,
+      priority: 5,
+    };
+    render(
+      <AppRuntimeProvider runtime={{ previews: [addonImage] }}>
+        <PreviewPane file={{ url: "/x.png", name: "x.png", mime: "image/png" }} />
+      </AppRuntimeProvider>,
+    );
+    expect(screen.getByText("addon: x.png")).toBeTruthy();
+  });
+
+  test("the generic built-in fallback handles an unknown binary mime", () => {
+    render(
+      <PreviewPane
+        file={{ url: "/x.bin", name: "x.bin", mime: "application/zip" }}
+      />,
+    );
+    // base.fallback renders an EmptyState titled with the file name.
+    expect(screen.getByText("x.bin")).toBeTruthy();
   });
 });

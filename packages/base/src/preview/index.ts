@@ -1,18 +1,13 @@
-// The framework preview surface: a mime → renderer registry, the pure mime
-// model, and `PreviewPane`. Importing this module registers the lightweight
-// built-in renderers (image, markdown, json, text); heavy renderers (pdf,
-// docx, media) register from their own lazy module against the same registry.
-
-import { registerBuiltinPreviewProviders } from "./builtins";
-
-registerBuiltinPreviewProviders();
+// The framework preview surface: the pure mime → renderer resolver, the mime
+// model, the built-in renderers, and `PreviewPane`. `PreviewPane` resolves a
+// file's renderer from the built-ins plus any addon-contributed providers
+// (composed at build time onto the runtime via the manifest `previews` field) —
+// no module-global registry, no import side-effect.
 
 export { PreviewPane, type PreviewPaneProps } from "./PreviewPane";
+export { builtinPreviewProviders } from "./builtins";
 export {
-  registerPreviewProvider,
   resolvePreviewProvider,
-  previewProviders,
-  clearPreviewProvidersForTest,
   type PreviewFile,
   type PreviewProvider,
   type PreviewProviderProps,
@@ -29,4 +24,3 @@ export {
   isJsonMime,
   isTextOrCodeMime,
 } from "./model";
-export { registerBuiltinPreviewProviders } from "./builtins";
