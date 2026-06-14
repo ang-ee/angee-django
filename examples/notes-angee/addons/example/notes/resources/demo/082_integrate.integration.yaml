@@ -1,0 +1,10 @@
+# The integration the local-template VCS capability runs over. `config.local_root` is
+# resolved against BASE_DIR by LocalVCSBackend — "../.." is the repo root, where
+# templates/ lives.
+- xref: integration_local_templates
+  owner: notes.user_admin
+  vendor: notes.vendor_local
+  credential: notes.cred_local_templates
+  config:
+    local_root: "../.."
+    local_name: angee-django

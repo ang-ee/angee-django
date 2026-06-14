@@ -12,8 +12,11 @@ import {
 import { useAuthoredMutation } from "@angee/sdk";
 
 import {
+  CONNECT_ACCOUNT_COMPLETE_MUTATION,
   CONNECT_ACCOUNT_START_MUTATION,
   IAM_DISCOVER_OIDC_ENDPOINTS_MUTATION,
+  type ConnectAccountCompleteData,
+  type ConnectAccountCompleteVariables,
   type ConnectAccountStartData,
   type ConnectAccountStartVariables,
   type DiscoverOidcEndpointsData,
@@ -57,6 +60,10 @@ export function ProvidersPage(): React.ReactElement {
     ConnectAccountStartData,
     ConnectAccountStartVariables
   >(CONNECT_ACCOUNT_START_MUTATION);
+  const [connectAccountComplete] = useAuthoredMutation<
+    ConnectAccountCompleteData,
+    ConnectAccountCompleteVariables
+  >(CONNECT_ACCOUNT_COMPLETE_MUTATION);
 
   const discover = React.useCallback(
     async (ctx: ActionContext) => {
@@ -79,13 +86,65 @@ export function ProvidersPage(): React.ReactElement {
         next: "/iam/accounts",
       });
       const payload = result?.connectAccountStart;
-      if (payload?.authorizeUrl) {
+      if (!payload?.authorizeUrl) {
+        throw new Error(payload?.error ?? "Could not start account connection.");
+      }
+      if (payload.mode !== "manual") {
+        // Redirect-back flow: the browser leaves and the callback page completes.
         window.location.assign(payload.authorizeUrl);
         return "Redirecting...";
       }
-      throw new Error(payload?.error ?? "Could not start account connection.");
+      // Manual flow: the provider only displays the code (no redirect back), so keep
+      // this tab/session alive and let the user paste the `code#state` it shows. The
+      // link is a real user gesture, so it is never popup-blocked.
+      const entered = await ctx.prompt({
+        title: "Connect account",
+        body: (
+          <span>
+            <a
+              href={payload.authorizeUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="underline"
+            >
+              Open the authorization page
+            </a>
+            , approve, then paste the code it shows below.
+          </span>
+        ),
+        fields: [
+          { name: "pasted", label: "Authorization code", placeholder: "code#state" },
+        ],
+      });
+      if (!entered) return;
+      // Split on the LAST "#": the state tail is a urlsafe token (no "#"), but an
+      // opaque authorization code may contain one — anchoring on the end keeps it whole.
+      const pasted = (entered.pasted ?? "").trim();
+      const hash = pasted.lastIndexOf("#");
+      const code = hash > 0 ? pasted.slice(0, hash) : "";
+      const pastedState = hash > 0 ? pasted.slice(hash + 1) : "";
+      if (!code || !pastedState) {
+        throw new Error("That code looks incomplete — paste the full value the page showed.");
+      }
+      if (payload.state && pastedState !== payload.state) {
+        throw new Error("That code is from a different attempt — start the connection again.");
+      }
+      if (!payload.redirectUri) {
+        throw new Error("Connection state is incomplete — start the connection again.");
+      }
+      const completed = await connectAccountComplete({
+        code,
+        state: pastedState,
+        redirectUri: payload.redirectUri,
+      });
+      const done = completed?.connectAccountComplete;
+      if (done?.error) {
+        throw new Error(done.error);
+      }
+      ctx.refresh();
+      return "Account connected.";
     },
-    [connectAccountStart],
+    [connectAccountStart, connectAccountComplete],
   );
 
   return (
@@ -109,6 +168,7 @@ export function ProvidersPage(): React.ReactElement {
           <Field name="userinfoEndpoint" />
           <Field name="jwksUri" />
           <Field name="revokeEndpoint" />
+          <Field name="manualRedirectUri" />
         </Group>
         <Group label="Login policy" columns={2}>
           <Field name="isOidc" />

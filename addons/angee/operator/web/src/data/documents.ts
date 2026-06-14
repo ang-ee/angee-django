@@ -177,6 +177,35 @@ export const SERVICE_UP_MUTATION = `
   }
 `;
 
+// Render a service template into an existing workspace. `input.template` is the
+// daemon's own template ref (from the `templates` listing) — the daemon owns its
+// format, so resolve it from there rather than constructing it.
+export const SERVICE_CREATE_MUTATION = `
+  mutation OperatorServiceCreate($input: ServiceCreateInput!) {
+    serviceCreate(input: $input) {
+      name
+      runtime
+      status
+      health
+    }
+  }
+`;
+
+// Render a workspace template into a new worktree workspace. `input.template` is
+// the daemon's own template ref (see SERVICE_CREATE_MUTATION).
+export const WORKSPACE_CREATE_MUTATION = `
+  mutation OperatorWorkspaceCreate($input: WorkspaceCreateInput!) {
+    workspaceCreate(input: $input) {
+      name
+      path
+      template
+      processComposePort
+      ttl
+      ttlExpiresAt
+    }
+  }
+`;
+
 export const WORKSPACE_DESTROY_MUTATION = `
   mutation OperatorWorkspaceDestroy($name: String!, $purge: Boolean) {
     workspaceDestroy(name: $name, purge: $purge) ${MUTATION_RESULT}

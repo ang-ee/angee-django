@@ -1,0 +1,7 @@
+# The local checkout as an inventoried repository. The local backend reads from
+# Integration.config.local_root, not `remote` (a placeholder here).
+- xref: repo_local_templates
+  vcs_integration: notes.vcs_local_templates
+  org: local
+  name: angee-django
+  remote: "file:///"

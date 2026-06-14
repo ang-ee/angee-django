@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+import urllib.error
 from types import SimpleNamespace
 
 import pytest
@@ -9,10 +11,23 @@ import strawberry
 from rebac import SubjectRef
 
 from angee.operator import schema as operator_schema
-from angee.operator.daemon import OperatorDaemon
+from angee.operator.daemon import OperatorDaemon, _daemon_error
 
 _CONNECTION_QUERY = "{ operatorConnection { endpoint token } }"
 _ACTOR = SubjectRef.of("auth/user", "abc")
+
+
+def test_daemon_error_surfaces_the_response_body() -> None:
+    """A daemon HTTP error reports its body (JSON ``error`` field, else text), not a bare status."""
+
+    def err(code: int, body: bytes) -> urllib.error.HTTPError:
+        return urllib.error.HTTPError("http://op/x", code, "err", {}, io.BytesIO(body))  # type: ignore[arg-type]
+
+    assert _daemon_error(err(500, b'{"error": "secret \\"x\\" is not resolved"}')) == (
+        'HTTP 500: secret "x" is not resolved'
+    )
+    assert _daemon_error(err(409, b'{"reason": "already exists"}')) == "HTTP 409: already exists"
+    assert _daemon_error(err(503, b"upstream down")) == "HTTP 503: upstream down"
 
 
 # --- endpoint resolution ------------------------------------------------------

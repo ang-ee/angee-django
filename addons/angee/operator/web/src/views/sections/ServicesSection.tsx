@@ -30,8 +30,15 @@ interface ServiceAction {
   run: (variables: ServiceActionVars) => Promise<DaemonActionData>;
 }
 
+export interface ServicesSectionProps {
+  /** Restrict the table to these service names; omit to show every service. */
+  names?: readonly string[];
+  /** Override the pane title (e.g. when embedded for one agent's service). */
+  title?: string;
+}
+
 /** Services pane: a daemon service table with lifecycle actions. */
-export function ServicesSection(): ReactNode {
+export function ServicesSection({ names, title }: ServicesSectionProps = {}): ReactNode {
   const t = useT("operator");
   const { snapshot, result, refetch } = useOperatorSnapshot({ services: true });
   const [actionError, setActionError] = useState<string | null>(null);
@@ -41,7 +48,9 @@ export function ServicesSection(): ReactNode {
   const restart = useOperatorAction<DaemonActionData, ServiceActionVars>(SERVICE_RESTART_MUTATION);
   const busy = start.result.fetching || stop.result.fetching || restart.result.fetching;
 
-  const services = snapshot?.services ?? [];
+  const services = (snapshot?.services ?? []).filter(
+    (service) => names === undefined || names.includes(service.name),
+  );
   const actions: readonly ServiceAction[] = [
     { field: "serviceStart", label: "Start", variant: "secondary", run: start.run },
     { field: "serviceRestart", label: "Restart", variant: "ghost", run: restart.run },
@@ -50,7 +59,7 @@ export function ServicesSection(): ReactNode {
 
   return (
     <OperatorSection
-      title={t("section.operator.services.title")}
+      title={title ?? t("section.operator.services.title")}
       loading={result.fetching && !snapshot}
       error={result.error && !snapshot ? result.error : null}
       loadingMessage="Loading services"

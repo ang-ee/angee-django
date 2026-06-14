@@ -34,6 +34,27 @@ def test_oauth_client_blank_client_id_means_needs_client() -> None:
     assert oauth_client.configuration_state == "needs_client"
 
 
+def test_resolve_connect_redirect_picks_auto_or_manual() -> None:
+    """A fixed public client redirects back only on localhost; elsewhere it pastes."""
+
+    plain = OAuthClient(slug="google", client_id="g")
+    assert plain.resolve_connect_redirect("https://app.example/callback") == (
+        "https://app.example/callback",
+        "auto",
+    )
+
+    manual = "https://platform.claude.com/oauth/code/callback"
+    fixed = OAuthClient(slug="anthropic", client_id="a", manual_redirect_uri=manual)
+    assert fixed.resolve_connect_redirect("http://localhost:5177/callback") == (
+        "http://localhost:5177/callback",
+        "auto",
+    )
+    # 127.0.0.1 is not the allow-listed loopback host, and a remote origin can't round-trip
+    # the session — both fall back to the manual paste callback.
+    assert fixed.resolve_connect_redirect("http://127.0.0.1:5177/callback") == (manual, "manual")
+    assert fixed.resolve_connect_redirect("https://console.example/callback") == (manual, "manual")
+
+
 def test_oauth_client_claim_accessors_support_dotted_paths() -> None:
     """Provider profile documents can expose identity claims below nested objects."""
 
@@ -197,6 +218,53 @@ def test_connection_managers_authorize_their_own_writes() -> None:
         assert _owner_tuple_exists(user, account)
         assert not _owner_tuple_exists(user, credential)
         assert Credential.objects.with_actor(user).filter(pk=credential.pk).exists()
+    finally:
+        if created_models:
+            with connection.schema_editor() as schema_editor:
+                for model in reversed(created_models):
+                    schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_upsert_for_user_labels_the_credential_from_provider_and_subject() -> None:
+    """A provider credential is named on create from its provider + subject, create-only.
+
+    The relation-picker representation reads the ``name`` column, so an OAuth row (which
+    carries no name of its own) needs one to be pickable.
+    """
+
+    created_models = _create_missing_tables()
+    try:
+        user = get_user_model().objects.create_user(username="namer", email="namer@example.com")
+        call_command("rebac", "sync", verbosity=0)
+        with system_context(reason="test name"):
+            oauth_client = OAuthClient.objects.create(
+                slug="example", display_name="Example prod", client_id="example-client"
+            )
+            account = ExternalAccount.objects.link(
+                oauth_client, "ext-name", owner=user, email="picker@example.com"
+            )
+            credential = Credential.objects.upsert_for_user(
+                user,
+                oauth_client,
+                CredentialKind.STATIC_TOKEN,
+                {"api_key": "k"},
+                external_account=account,
+            )
+            assert credential.name == "Example prod (picker@example.com)"
+
+            # Create-only: a rename survives a later upsert (token refresh / reconnect).
+            credential.name = "Renamed"
+            credential.save(update_fields=["name", "updated_at"])
+            again = Credential.objects.upsert_for_user(
+                user,
+                oauth_client,
+                CredentialKind.STATIC_TOKEN,
+                {"api_key": "k2"},
+                external_account=account,
+            )
+            assert again.pk == credential.pk
+            assert again.name == "Renamed"
     finally:
         if created_models:
             with connection.schema_editor() as schema_editor:

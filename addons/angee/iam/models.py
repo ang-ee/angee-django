@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Mapping
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -457,6 +458,7 @@ class OAuthClientManager(RebacManager.from_queryset(OAuthClientQuerySet)):  # ty
             "email_claim",
             "display_name_claim",
             "avatar_url_claim",
+            "manual_redirect_uri",
         }
     )
     setting_fields = seed_fields | frozenset({"slug", "environment", "client_secret"})
@@ -571,6 +573,10 @@ class OAuthClient(SqidMixin, AuditMixin, AngeeModel):
     email_claim = models.CharField(max_length=128, default="email", blank=True)
     display_name_claim = models.CharField(max_length=128, blank=True)
     avatar_url_claim = models.CharField(max_length=128, blank=True)
+    # Fixed manual-paste callback for fixed public clients (e.g. Anthropic) whose
+    # allow-list we cannot extend. When set, connect uses a localhost loopback redirect
+    # when the console runs on localhost, else this manual page (see resolve_connect_redirect).
+    manual_redirect_uri = models.URLField(blank=True)
 
     objects = OAuthClientManager()
 
@@ -630,6 +636,24 @@ class OAuthClient(SqidMixin, AuditMixin, AngeeModel):
         """Return configured provider-specific token-exchange parameters."""
 
         return self._string_mapping(self.token_params)
+
+    def resolve_connect_redirect(self, proposed_redirect_uri: str) -> tuple[str, str]:
+        """Return the ``(redirect_uri, mode)`` this client uses to connect from a browser.
+
+        ``mode`` is ``"auto"`` (the provider redirects back to ``proposed_redirect_uri``)
+        or ``"manual"`` (the user copies the code the provider displays and pastes it
+        back). A client with no ``manual_redirect_uri`` always redirects back. A fixed
+        public client (``manual_redirect_uri`` set) can redirect back only to a
+        ``localhost`` loopback — its allow-list rejects other hosts and a cross-origin
+        callback would also drop the session — so off-localhost it falls back to manual.
+        """
+
+        if not self.manual_redirect_uri:
+            return proposed_redirect_uri, "auto"
+        host = (urlsplit(proposed_redirect_uri).hostname or "").lower()
+        if host == "localhost":
+            return proposed_redirect_uri, "auto"
+        return self.manual_redirect_uri, "manual"
 
     @property
     def token_request_format_value(self) -> str:
@@ -818,6 +842,10 @@ class CredentialManager(RebacManager.from_queryset(CredentialQuerySet)):  # type
             **operation_values,
             **update_values,
         }
+        # Give the credential a human label on create (OAuth rows carry no name of their
+        # own). Create-only so an admin rename, and token refreshes, are preserved.
+        if not str(create_values.get("name") or ""):
+            create_values["name"] = self._oauth_credential_name(oauth_client, external_account)
         with system_context(reason=self._REASON), transaction.atomic():
             instance, _created = self.update_or_create(
                 user=user,
@@ -826,6 +854,23 @@ class CredentialManager(RebacManager.from_queryset(CredentialQuerySet)):  # type
                 create_defaults=create_values,
             )
         return instance
+
+    @staticmethod
+    def _oauth_credential_name(oauth_client: Any, external_account: Any | None) -> str:
+        """Return a default label for an OAuth credential: the provider, plus its subject."""
+
+        label = str(
+            getattr(oauth_client, "display_name", "") or getattr(oauth_client, "slug", "") or "OAuth"
+        )
+        subject = ""
+        if external_account is not None:
+            subject = str(
+                getattr(external_account, "email", "")
+                or getattr(external_account, "display_name", "")
+                or getattr(external_account, "external_id", "")
+                or ""
+            )
+        return f"{label} ({subject})" if subject else label
 
     def create_local_credential(
         self,

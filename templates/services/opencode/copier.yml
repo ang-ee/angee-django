@@ -1,0 +1,43 @@
+_min_copier_version: "9.0"
+_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+
+_angee:
+  schema: 1
+  kind: service
+  name: opencode
+  description: >-
+    OpenCode agent (ACP over a WebSocket) as a container service. Provider-agnostic
+    (anthropic, openai, openrouter, groq). Mounts an agent workspace at /workspace
+    and joins the operator's central Caddy edge; the operator mints route tokens and
+    forward-auths each upgrade, so the service carries no auth machinery.
+  name_pattern: "agent-${workspace.name}"
+  inputs:
+    provider:
+      type: str
+      default: anthropic
+      help: LLM provider (anthropic | openai | openrouter | groq) — selects the API-key env var.
+    secret_name:
+      type: str
+      default: ""
+      help: >-
+        Name of the operator secret holding the provider API key. Defaults to
+        "<provider>-api-key". The operator injects the value; it never transits the browser.
+    model:
+      type: str
+      default: ""
+      help: Optional model override (OPENCODE_MODEL).
+
+provider:
+  type: str
+  default: anthropic
+  choices: [anthropic, openai, openrouter, groq]
+
+secret_name:
+  type: str
+  default: ""
+
+model:
+  type: str
+  default: ""

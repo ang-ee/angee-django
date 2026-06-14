@@ -111,8 +111,12 @@ def test_fetch_discovery_caches_document_by_discovery_url(monkeypatch: pytest.Mo
     assert cache_sets[0][1] == 3600
 
 
-def test_oidc_http_helpers_send_browser_user_agent(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Cloudflare-fronted IdPs should not see urllib's default user agent."""
+def test_oidc_http_helpers_send_honest_user_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Outbound requests send an honest, non-browser User-Agent.
+
+    Not urllib's ``Python-urllib`` default (Anthropic's edge 403s it) and not a spoofed
+    browser/curl UA (Anthropic 429s those) — an honest client UA passes the filter.
+    """
 
     requests: list[Any] = []
 
@@ -137,11 +141,11 @@ def test_oidc_http_helpers_send_browser_user_agent(monkeypatch: pytest.MonkeyPat
     oidc_client._post_form("https://idp.example/token", {"code": "abc"})
     oidc_client._post_json("https://idp.example/token", {"code": "abc"})
 
-    assert [req.get_header("User-agent") for req in requests] == [
-        oidc_client._BROWSER_USER_AGENT,
-        oidc_client._BROWSER_USER_AGENT,
-        oidc_client._BROWSER_USER_AGENT,
-    ]
+    user_agents = [req.get_header("User-agent") for req in requests]
+    assert user_agents == [oidc_client._USER_AGENT] * 3
+    # Lock in the pitfall: never a urllib-default or a spoofed browser/curl UA.
+    sent = oidc_client._USER_AGENT.lower()
+    assert not any(token in sent for token in ("python-urllib", "mozilla", "chrome", "curl"))
 
 
 def test_authorize_url_contains_state_nonce_and_pkce() -> None:

@@ -153,6 +153,7 @@ class OAuthClientType(AngeeNode):
     userinfo_endpoint: auto
     jwks_uri: auto
     discovery_url: auto
+    manual_redirect_uri: auto
     token_request_format: auto
     is_oidc: auto
     is_enabled: auto
@@ -293,22 +294,26 @@ class CredentialType(AngeeNode):
 
     @strawberry_django.field(only=["oauth_client", "external_account", "name"])
     def display_name(self) -> str:
-        """Return a human label for relation pickers.
+        """Return a human label for the list, form title, and relation pickers.
 
-        Credential has no natural string column; OAuth credentials read as
-        ``provider: subject``, while provider-less ones read as their ``name``.
-        ``only`` lists the FK *id* columns, but this dereferences the related rows
-        — list resolvers must feed `console_credentials()`/`connected_for()`, which
-        `rebac_select_related("oauth_client", "external_account")` to avoid an N+1.
+        The stored ``name`` is the label (OAuth rows are named on create from their
+        provider + subject; see ``CredentialManager._oauth_credential_name``). It is the
+        ``name`` column the relation-picker representation reads, so preferring it keeps
+        the picker, list, and form consistent without dereferencing related rows. A
+        legacy unnamed OAuth row falls back to ``provider: subject`` (``only`` lists the
+        FK id columns, so that path needs a `console_credentials()`-style select_related).
         """
 
+        name = str(cast(Any, self).name or "")
+        if name:
+            return name
         client = getattr(cast(Any, self), "oauth_client", None)
         if client is not None:
             provider = str(getattr(client, "slug", "") or getattr(client, "display_name", "") or "credential")
             account = getattr(cast(Any, self), "external_account", None)
             subject = str(getattr(account, "external_id", "") or "") if account else ""
             return f"{provider}: {subject}" if subject else provider
-        return str(cast(Any, self).name or "credential")
+        return "credential"
 
 
 @strawberry.type
@@ -478,6 +483,10 @@ class OidcStartPayload:
     state: str = ""
     error: str | None = None
     error_code: str | None = None
+    mode: str = "auto"
+    """``"auto"`` to redirect the browser back, or ``"manual"`` to paste the code."""
+    redirect_uri: str = ""
+    """The effective redirect URI the flow used (resent verbatim at completion)."""
 
 
 @strawberry.type
@@ -554,6 +563,7 @@ class OAuthClientInput:
     userinfo_endpoint: str = ""
     jwks_uri: str = ""
     discovery_url: str = ""
+    manual_redirect_uri: str = ""
     token_request_format: str = "form"
     is_oidc: bool = False
     is_enabled: bool = True
@@ -592,6 +602,7 @@ class OAuthClientPatch:
     userinfo_endpoint: str | None = strawberry.UNSET
     jwks_uri: str | None = strawberry.UNSET
     discovery_url: str | None = strawberry.UNSET
+    manual_redirect_uri: str | None = strawberry.UNSET
     token_request_format: str | None = strawberry.UNSET
     is_oidc: bool | None = strawberry.UNSET
     is_enabled: bool | None = strawberry.UNSET
@@ -1542,8 +1553,37 @@ def _credential_material(data: CredentialInput) -> dict[str, str]:
 
 
 @strawberry.type
+class RevealedCredentialSecret:
+    """One credential's decrypted secret, returned only on explicit admin request.
+
+    The secret is never part of :class:`CredentialType` (the normal read projection);
+    it is disclosed solely by the audited ``reveal_credential`` mutation.
+    """
+
+    secret: str = ""
+
+
+@strawberry.type
 class IAMCredentialMutation:
     """Admin CRUD for credentials; create mints provider-less kinds (OAuth arrives via login)."""
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def reveal_credential(self, id: relay.GlobalID) -> RevealedCredentialSecret:
+        """Return one credential's decrypted secret for an admin to copy.
+
+        Admin-gated. The disclosure is recorded under a ``system_context`` reason that
+        names the target credential; the acting admin is captured by the request actor
+        layer. The owning :class:`Credential` decrypts its own material via
+        ``secret_value()`` — this never decodes the stored shape from outside.
+        """
+
+        with system_context(reason=f"iam.graphql.credential.reveal:{id.node_id}"):
+            credential = instance_from_public_id(
+                Credential, id.node_id, queryset=Credential._default_manager.all()
+            )
+            if credential is None:
+                raise ValueError(f"Credential {id!s} was not found")
+            return RevealedCredentialSecret(secret=str(credential.secret_value() or ""))
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def create_credential(self, info: strawberry.Info, data: CredentialInput) -> CredentialType:
@@ -1687,9 +1727,12 @@ def _start_oauth_flow(
     client owns that distinction via ``is_oidc``.
     """
 
+    # The client (e.g. Anthropic) owns whether the browser-proposed redirect works or a
+    # manual paste is needed; the effective redirect is what we issue, sign, and exchange.
+    effective_redirect_uri, mode = oauth_client.resolve_connect_redirect(redirect_uri)
     state_token, record = state.issue(
         oauth_client,
-        redirect_uri,
+        effective_redirect_uri,
         user_id=user_id,
         next_path=next_path,
         flow=flow,
@@ -1699,11 +1742,16 @@ def _start_oauth_flow(
         oauth_client,
         state=state_token,
         nonce=record.nonce if oauth_client.is_oidc else None,
-        redirect_uri=redirect_uri,
+        redirect_uri=effective_redirect_uri,
         scopes=oauth_client.default_scope_values,
         code_challenge=_pkce_challenge(record.code_verifier),
     )
-    return OidcStartPayload(authorize_url=authorize_url, state=state_token)
+    return OidcStartPayload(
+        authorize_url=authorize_url,
+        state=state_token,
+        mode=mode,
+        redirect_uri=effective_redirect_uri,
+    )
 
 
 def _oidc_start_error(error: OidcFlowError) -> OidcStartPayload:

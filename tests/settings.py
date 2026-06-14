@@ -32,6 +32,7 @@ ANGEE_RUNTIME_MODULE = "tests.runtime"
 ANGEE_STORAGE_BACKEND_CLASSES = {"local": "angee.storage.backends.LocalBackend"}
 ANGEE_VCS_BACKEND_CLASSES = {
     "none": "angee.integrate.vcs.backend.NoopVCSBackend",
+    "local": "angee.integrate.vcs.backend.LocalVCSBackend",
     "stub": "tests.conftest.StubVCSBackend",
 }
 ANGEE_INFERENCE_BACKEND_CLASSES = {

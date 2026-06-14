@@ -56,6 +56,9 @@ export const CONNECT_ACCOUNT_START_MUTATION = `
     ) {
       authorizeUrl
       error
+      mode
+      state
+      redirectUri
     }
   }
 `;
@@ -71,6 +74,14 @@ export const CONNECT_ACCOUNT_COMPLETE_MUTATION = `
       error
       account { id displayName providerSlug }
       credential { id displayName status }
+    }
+  }
+`;
+
+export const REVEAL_CREDENTIAL_MUTATION = `
+  mutation IamRevealCredential($id: ID!) {
+    revealCredential(id: $id) {
+      secret
     }
   }
 `;
@@ -230,6 +241,12 @@ export interface AvailableConnectionsData {
 export interface OidcStartPayload {
   authorizeUrl: string;
   error: string | null;
+  /** Connect-start only: "auto" (redirect back) or "manual" (paste the code). */
+  mode?: string;
+  /** Connect-start only: the state token, resent at manual completion. */
+  state?: string;
+  /** Connect-start only: the effective redirect URI, resent at completion. */
+  redirectUri?: string;
 }
 
 /** Selection result for `IamLoginStart`. */
@@ -289,6 +306,15 @@ export type ConnectAccountCompleteVariables = Record<string, unknown> & {
   code: string;
   state: string;
   redirectUri: string;
+};
+
+/** Selection result for `IamRevealCredential`. */
+export interface RevealCredentialData {
+  revealCredential: { secret: string };
+}
+
+export type RevealCredentialVariables = Record<string, unknown> & {
+  id: string;
 };
 
 export interface IAMPaginationVariables extends Record<string, unknown> {

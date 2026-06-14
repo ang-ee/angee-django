@@ -1,0 +1,7 @@
+# The inference provider over the Anthropic integration (091). The `manual` backend is a
+# hand-curated catalogue (the demo seeds one model in 093; refreshProviderModels lists
+# nothing for `manual`).
+- xref: provider_anthropic_demo
+  integration: notes.integration_anthropic_demo
+  name: Anthropic
+  backend_class: manual

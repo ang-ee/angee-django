@@ -26,11 +26,11 @@ from angee.iam.oidc.errors import (
 
 HTTP_TIMEOUT_SECONDS = 10
 _DEFAULT_DISCOVERY_TTL_SECONDS = 3600
-_BROWSER_USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/125.0.0.0 Safari/537.36"
-)
+# An honest, non-browser User-Agent for all outbound OIDC requests. Must NOT spoof a
+# browser: Anthropic's edge denylists browser/curl User-Agents with a 429
+# ``rate_limit_error`` (and blocks urllib's ``Python-urllib`` default with a 403),
+# while an honest client UA passes. See docs/backend/guidelines.md (Pitfalls).
+_USER_AGENT = "Angee-IAM/1.0"
 _DISCOVERY_FIELDS = {
     "issuer": "issuer",
     "authorize_endpoint": "authorization_endpoint",
@@ -184,7 +184,7 @@ def verify_id_token(
     try:
         jwks_client = _jwks_client or PyJWKClient(
             jwks_uri,
-            headers={"User-Agent": _BROWSER_USER_AGENT},
+            headers={"User-Agent": _USER_AGENT},
             timeout=HTTP_TIMEOUT_SECONDS,
         )
         signing_key = jwks_client.get_signing_key_from_jwt(id_token)
@@ -295,7 +295,7 @@ def _get_json(
 
     request_headers = {
         "Accept": "application/json",
-        "User-Agent": _BROWSER_USER_AGENT,
+        "User-Agent": _USER_AGENT,
         **dict(headers or {}),
     }
     req = request.Request(url, headers=request_headers, method="GET")
@@ -316,7 +316,7 @@ def _post_form(url: str, fields: Mapping[str, Any]) -> dict[str, Any]:
         headers={
             "Accept": "application/json",
             "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": _BROWSER_USER_AGENT,
+            "User-Agent": _USER_AGENT,
         },
         method="POST",
     )
@@ -343,7 +343,7 @@ def _post_json(url: str, fields: Mapping[str, Any]) -> dict[str, Any]:
         headers={
             "Accept": "application/json",
             "Content-Type": "application/json",
-            "User-Agent": _BROWSER_USER_AGENT,
+            "User-Agent": _USER_AGENT,
         },
         method="POST",
     )
@@ -369,7 +369,7 @@ def _post_form_no_response(url: str, fields: Mapping[str, str]) -> None:
         data=data,
         headers={
             "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": _BROWSER_USER_AGENT,
+            "User-Agent": _USER_AGENT,
         },
         method="POST",
     )

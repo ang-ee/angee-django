@@ -1,0 +1,21 @@
+# A ready-to-provision demo agent, wired to the Anthropic provider/model (092/093) and the
+# agent-default workspace + claude-code service templates (094). After a fresh seed:
+#   1. connect "Anthropic Personal Plans" (Providers page) to mint a real OAuth credential,
+#   2. point integration 091 at that credential (the placeholder 090 cannot infer),
+#   3. click Provision on this agent (Agents page) and watch the workspace + service come up.
+#
+# Uses the nested `_meta`/`rows` form because Agent has a `model` field, which collides
+# with the flat format's reserved `model` (Django-model) key.
+_meta:
+  model: agents.Agent
+rows:
+  - _xref: agent_demo
+    fields:
+      name: Demo Agent
+      owner: notes.user_admin
+      instructions: |
+        You are a helpful coding agent working in /workspace. Keep changes small and
+        explain what you did.
+      model: notes.model_claude_demo
+      workspace_template: notes.tpl_agent_default
+      service_template: notes.tpl_claude_code

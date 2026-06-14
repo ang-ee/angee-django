@@ -609,6 +609,32 @@ def test_oauth_client_crud_are_admin_only(
     ).errors is not None
 
 
+def test_reveal_credential_returns_the_secret_and_is_admin_only(
+    iam_connection_tables: None,
+) -> None:
+    """Reveal decrypts the stored secret for an admin only; the read type never carries it."""
+
+    plain = User.objects.create_user(username="reveal-plain", email="plain@example.com")
+    admin = _platform_admin("reveal-admin")
+    console_schema = _schema("console")
+
+    create_credential = """
+        mutation CreateCredential {
+          createCredential(data: {name: "GitHub PAT", kind: "static_token", apiKey: "ghp_secret_value"}) {
+            id
+          }
+        }
+    """
+    credential_id = _data(_execute(console_schema, create_credential, user=admin))["createCredential"]["id"]
+
+    reveal = "mutation Reveal($id: ID!) { revealCredential(id: $id) { secret } }"
+    revealed = _data(_execute(console_schema, reveal, {"id": credential_id}, user=admin))["revealCredential"]
+    assert revealed["secret"] == "ghp_secret_value"
+
+    # A non-admin cannot reveal another principal's secret.
+    assert _execute(console_schema, reveal, {"id": credential_id}, user=plain).errors is not None
+
+
 def test_user_crud_create_update_delete_are_admin_only(
     iam_connection_tables: None,
 ) -> None:

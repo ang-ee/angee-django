@@ -12,6 +12,7 @@ imported) *before* that module is imported: `Skill`/`InferenceProvider`/
 from __future__ import annotations
 
 import importlib
+import json
 from collections.abc import Iterator
 from typing import Any
 
@@ -29,6 +30,7 @@ from angee.agents.models import Agent as AbstractAgent
 from angee.agents.models import MCPServer as AbstractMCPServer
 from angee.agents.models import MCPTool as AbstractMCPTool
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.iam.credentials import CredentialKind
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,
@@ -39,7 +41,7 @@ from tests.conftest import (
 from tests.conftest import _create_missing_tables as _create_tables
 from tests.conftest import result_data as _data
 from tests.test_agents import InferenceModel, InferenceProvider, Skill
-from tests.test_integrate_vcs import REPOS, VCS_TEST_MODELS, Repository, Source, _vcs_integration
+from tests.test_integrate_vcs import REPOS, VCS_TEST_MODELS, Repository, Source, Template, _vcs_integration
 
 User = get_user_model()
 
@@ -204,6 +206,209 @@ def test_create_mcp_server_keeps_defaults_for_omitted_optionals(agents_console_t
         )
     )["createMcpServer"]
     assert created == {"name": "Local MCP", "placement": "EXTERNAL", "config": {}}
+
+
+def test_provision_agent_renders_via_daemon_and_is_admin_gated(
+    agents_console_tables: None, monkeypatch: Any
+) -> None:
+    """`provisionAgent` is one server-side flow: sync secret + drive the daemon render.
+
+    The daemon is mocked. Asserts the credential secret is synced, the workspace and
+    service are rendered from the resolved refs (the service mounts the created
+    workspace), the agent records the daemon-returned instance, and it's admin-gated.
+    """
+
+    admin = _platform_admin("agt-render-admin")
+    plain = User.objects.create_user(username="agt-render-plain", email="render@example.com")
+    integration = make_integration("agt-render")
+    vcs = _vcs_integration("agt-render-tpl", config={"stub_repos": REPOS})
+    vcs.discover_repositories()
+    with system_context(reason="test.agents.render.seed"):
+        repository = Repository.objects.get(name="acme/widgets")
+        source = Source.objects.create(repository=repository, kind="template", path="templates")
+        workspace_template = Template.objects.create(
+            source=source, kind="workspace", name="agent-default", path="workspaces/agent-default"
+        )
+        service_template = Template.objects.create(
+            source=source, kind="service", name="claude-code", path="services/claude-code"
+        )
+        model = InferenceModel.objects.create(
+            provider=InferenceProvider.objects.create(
+                integration=integration, name="P", backend_class="manual"
+            ),
+            name="claude-opus-4-8",
+        )
+        agent = Agent.objects.create(
+            name="Bot",
+            owner=admin,
+            instructions="Hi.",
+            model=model,
+            workspace_template=workspace_template,
+            service_template=service_template,
+        )
+    agent_id = _gid("AgentType", agent.sqid)
+
+    calls: list[tuple[Any, ...]] = []
+
+    class _FakeDaemon:
+        @classmethod
+        def from_settings(cls) -> _FakeDaemon:
+            return cls()
+
+        def resolve_template_ref(self, *, name: str, kind: str) -> str:
+            return f"ref:{name}"
+
+        def set_secret(self, name: str, value: str) -> None:
+            calls.append(("secret", name, value))
+
+        def create_workspace(self, *, template: str, inputs: dict[str, str], name: str = "") -> str:
+            calls.append(("workspace", template, inputs))
+            return "ws-bot"
+
+        def create_service(
+            self, *, template: str, workspace: str, inputs: dict[str, str], start: bool = True, name: str = ""
+        ) -> str:
+            calls.append(("service", template, workspace, inputs))
+            return "svc-bot"
+
+        def destroy_workspace(self, name: str, *, purge: bool = True) -> None:
+            calls.append(("destroy", name))
+
+    monkeypatch.setattr(agents_schema, "OperatorDaemon", _FakeDaemon)
+
+    provision = "mutation($id: ID!){ provisionAgent(id: $id){ ok message } }"
+    assert _execute(console := _schema(), provision, {"id": agent_id}, user=plain).errors is not None
+    assert _data(_execute(console, provision, {"id": agent_id}, user=admin))["provisionAgent"]["ok"] is True
+
+    with system_context(reason="test.agents.render.verify"):
+        agent.refresh_from_db()
+        assert (agent.workspace, agent.service, str(agent.status)) == ("ws-bot", "svc-bot", "running")
+
+    assert [call[0] for call in calls] == ["secret", "workspace", "service"]
+    assert calls[0] == ("secret", f"agent-{agent.sqid}-inference", "x")
+    assert calls[1][1] == "ref:agent-default" and calls[1][2]["agent_name"] == "Bot"
+    assert calls[2][1] == "ref:claude-code"
+    assert calls[2][2] == "ws-bot" and calls[2][3]["auth_mode"] == "api_key"
+
+    # Deprovision tears down the workspace via the daemon and clears the record.
+    deprovision = "mutation($id: ID!){ deprovisionAgent(id: $id){ ok } }"
+    assert _execute(console, deprovision, {"id": agent_id}, user=plain).errors is not None
+    _data(_execute(console, deprovision, {"id": agent_id}, user=admin))
+    with system_context(reason="test.agents.render.verify_cleared"):
+        agent.refresh_from_db()
+        assert (agent.workspace, agent.service, str(agent.status)) == ("", "", "stopped")
+    assert ("destroy", "ws-bot") in calls
+
+
+def test_provision_agent_failure_tears_down_workspace_and_records_error(
+    agents_console_tables: None, monkeypatch: Any
+) -> None:
+    """A service-render failure tears the orphaned workspace back down and marks error."""
+
+    admin = _platform_admin("agt-fail-admin")
+    vcs = _vcs_integration("agt-fail-tpl", config={"stub_repos": REPOS})
+    vcs.discover_repositories()
+    with system_context(reason="test.agents.fail.seed"):
+        repository = Repository.objects.get(name="acme/widgets")
+        source = Source.objects.create(repository=repository, kind="template", path="templates")
+        agent = Agent.objects.create(
+            name="Doomed",
+            owner=admin,
+            workspace_template=Template.objects.create(
+                source=source, kind="workspace", name="agent-default", path="workspaces/agent-default"
+            ),
+            service_template=Template.objects.create(
+                source=source, kind="service", name="claude-code", path="services/claude-code"
+            ),
+        )
+    agent_id = _gid("AgentType", agent.sqid)
+
+    destroyed: list[str] = []
+
+    class _FailingDaemon:
+        @classmethod
+        def from_settings(cls) -> _FailingDaemon:
+            return cls()
+
+        def resolve_template_ref(self, *, name: str, kind: str) -> str:
+            return f"ref:{name}"
+
+        def create_workspace(self, *, template: str, inputs: dict[str, str]) -> str:
+            return "ws-doomed"
+
+        def create_service(self, *, template: str, workspace: str, inputs: dict[str, str]) -> str:
+            raise RuntimeError("image build failed")
+
+        def destroy_workspace(self, name: str) -> None:
+            destroyed.append(name)
+
+    monkeypatch.setattr(agents_schema, "OperatorDaemon", _FailingDaemon)
+
+    result = _data(
+        _execute(
+            _schema(),
+            "mutation($id: ID!){ provisionAgent(id: $id){ ok message } }",
+            {"id": agent_id},
+            user=admin,
+        )
+    )["provisionAgent"]
+    assert result["ok"] is False and "image build failed" in result["message"]
+    assert destroyed == ["ws-doomed"]  # the orphaned workspace was torn back down
+    with system_context(reason="test.agents.fail.verify"):
+        agent.refresh_from_db()
+        assert str(agent.status) == "error"
+        assert (agent.workspace, "image build failed" in agent.last_error) == ("", True)
+
+
+def test_provision_workspace_inputs_from_agent_fields(agents_console_tables: None) -> None:
+    """The workspace inputs come from the agent's structured fields (not raw JSON)."""
+
+    owner = User.objects.create_user(username="agt-wsi-owner", email="wsi@example.com")
+    with system_context(reason="test.agents.provision_inputs.workspace"):
+        agent = Agent.objects.create(name="Helper Bot", owner=owner, instructions="Be terse.")
+        server = MCPServer.objects.create(name="angee", url="http://host.docker.internal:8101/mcp/")
+        agent.mcp_servers.add(server)
+        inputs = agent.provision_workspace_inputs()
+
+    assert inputs["agent_name"] == "Helper Bot"
+    assert inputs["instructions"] == "Be terse."
+    assert json.loads(inputs["mcp_json"]) == {
+        "mcpServers": {"angee": {"type": "http", "url": "http://host.docker.internal:8101/mcp/"}},
+    }
+
+
+def test_provision_service_inputs_credential_drives_auth_mode(agents_console_tables: None) -> None:
+    """The credential kind picks the auth mode (prefer OAuth) and the model rides along."""
+
+    owner = User.objects.create_user(username="agt-svci-owner", email="svci@example.com")
+    static_integration = make_integration("agt-svc-static")
+    oauth_integration = make_integration("agt-svc-oauth", kind=CredentialKind.OAUTH)
+    with system_context(reason="test.agents.provision_inputs.service"):
+        static_model = InferenceModel.objects.create(
+            provider=InferenceProvider.objects.create(
+                integration=static_integration, name="S", backend_class="manual"
+            ),
+            name="claude-3",
+        )
+        static_agent = Agent.objects.create(name="Static", owner=owner, model=static_model)
+        static_inputs = static_agent.provision_service_inputs()
+
+        oauth_model = InferenceModel.objects.create(
+            provider=InferenceProvider.objects.create(
+                integration=oauth_integration, name="O", backend_class="manual"
+            ),
+            name="claude-opus-4-8",
+        )
+        oauth_agent = Agent.objects.create(name="OAuth", owner=owner, model=oauth_model)
+        oauth_inputs = oauth_agent.provision_service_inputs()
+
+    assert static_inputs == {
+        "auth_mode": "api_key",
+        "model": "claude-3",
+        "secret_name": f"agent-{static_agent.sqid}-inference",
+    }
+    assert oauth_inputs["auth_mode"] == "oauth"
+    assert oauth_inputs["model"] == "claude-opus-4-8"
 
 
 def _seed_agent_and_skills(owner: Any) -> tuple[Any, Any, Any]:

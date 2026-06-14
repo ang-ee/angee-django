@@ -3,16 +3,57 @@
 _meta:
   model: iam.OAuthClient
 rows:
-  - _xref: anthropic
+  # Anthropic ships two distinct OAuth surfaces on one public client id. They differ
+  # only by authorize host + scopes and which account the consent screen offers, so
+  # they are modelled as two providers; both mint tokens at platform.claude.com.
+  #
+  # 1) Anthropic Platform — the Developer Platform / Console. Org-scoped: the consent
+  #    creates an API key billed to the platform account. Does NOT surface the personal
+  #    Claude.ai (Pro/Max) account.
+  - _xref: anthropic_platform
     fields:
-      slug: anthropic
+      slug: anthropic-platform
       environment: prod
-      display_name: Anthropic
+      display_name: Anthropic Platform
       icon: anthropic
       client_id: 9d1c250a-e61b-44d9-88ed-5944d1962f5e
       authorize_endpoint: https://platform.claude.com/oauth/authorize
       token_endpoint: https://platform.claude.com/v1/oauth/token
       userinfo_endpoint: https://api.anthropic.com/api/oauth/profile
+      # Fixed manual-paste callback for off-localhost connect (the public client only
+      # allows a localhost loopback or this page, which shows the code as code#state).
+      manual_redirect_uri: https://platform.claude.com/oauth/code/callback
+      token_request_format: json
+      is_oidc: false
+      is_enabled: true
+      supports_pkce: true
+      supports_refresh: true
+      scopes_catalogue:
+        - org:create_api_key
+        - user:profile
+      default_scopes:
+        - org:create_api_key
+        - user:profile
+      authorize_params:
+        code: "true"
+      external_id_claim: account.uuid
+      email_claim: account.email_address
+      display_name_claim: account.display_name
+  # 2) Anthropic Personal Plans — Claude.ai Pro/Max subscription. User-scoped inference
+  #    on the subscriber's plan. claude.com/cai 307s to claude.ai/oauth/authorize (the
+  #    consent that lets the subscriber pick their personal account); hitting claude.ai
+  #    directly is edge-blocked, so the authorize host must be the cai bounce.
+  - _xref: anthropic_personal
+    fields:
+      slug: anthropic-personal
+      environment: prod
+      display_name: Anthropic Personal Plans
+      icon: anthropic
+      client_id: 9d1c250a-e61b-44d9-88ed-5944d1962f5e
+      authorize_endpoint: https://claude.com/cai/oauth/authorize
+      token_endpoint: https://platform.claude.com/v1/oauth/token
+      userinfo_endpoint: https://api.anthropic.com/api/oauth/profile
+      manual_redirect_uri: https://platform.claude.com/oauth/code/callback
       token_request_format: json
       is_oidc: false
       is_enabled: true
@@ -21,14 +62,12 @@ rows:
       scopes_catalogue:
         - user:profile
         - user:inference
-        - org:create_api_key
         - user:sessions:claude_code
         - user:mcp_servers
         - user:file_upload
       default_scopes:
         - user:profile
         - user:inference
-        - org:create_api_key
         - user:sessions:claude_code
         - user:mcp_servers
         - user:file_upload
