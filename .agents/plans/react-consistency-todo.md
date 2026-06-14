@@ -153,8 +153,16 @@ visual-parity spot-check across both themes still recommended before release.
       +`Fill` story. FOLLOW-UP: StoragePage:334 + the KnowledgePage detail slot host
       a mixed `LoadingPanel`-OR-`EmptyState` wrapper — they only collapse once
       `LoadingPanel` also gains a `fill` prop (do in the prop-vocab slice).
-- [ ] Preview renderers: have `useFileText`/`<FileText>` own loading/error so each
-      renderer describes only its happy path.
+- [x] Preview renderers: have `useFileText`/`<FileText>` own loading/error so each
+      renderer describes only its happy path. DONE: new `FileText` render-prop
+      component (`<FileText url>{(text) => happyPath}</FileText>`) owns the
+      `useFileText` fetch + the `LoadingPanel`/`EmptyState` guard (was byte-identical
+      in TextPreview + MarkdownPreview); both renderers now describe only the happy
+      path. Behavior-preserving (review-confirmed clean). FOLLOW-UP (out of scope,
+      surface-wide): the preview surface (`builtins`/`PreviewPane`) is not i18n'd —
+      "Loading preview…"/"Could not load file"/"No inline preview." are hardcoded
+      English (a T6 gap predating this slice); route the whole surface through
+      `useBaseT()` in its own slice.
 
 ## Phase 3 — Find-the-owner (T8) + SDK/no-owner lifts (T10)
 

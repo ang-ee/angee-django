@@ -49,6 +49,23 @@ function useFileText(url: string): {
   return state;
 }
 
+/**
+ * Fetch a text file and own its loading/error surfaces, so a text-based renderer
+ * only describes its happy path: it receives the resolved body via the render prop.
+ */
+function FileText({
+  url,
+  children,
+}: {
+  url: string;
+  children: (text: string) => ReactElement;
+}): ReactElement {
+  const { text, loading, error } = useFileText(url);
+  if (loading) return <LoadingPanel message="Loading preview…" />;
+  if (error) return <EmptyState title="Could not load file" description={error.message} />;
+  return children(text);
+}
+
 function ImagePreview({ file }: PreviewProviderProps): ReactElement {
   return (
     <div className="grid h-full place-content-center overflow-auto bg-inset p-4">
@@ -62,31 +79,32 @@ function ImagePreview({ file }: PreviewProviderProps): ReactElement {
 }
 
 function TextPreview({ file, mime }: PreviewProviderProps): ReactElement {
-  const { text, loading, error } = useFileText(file.url);
-  if (loading) return <LoadingPanel message="Loading preview…" />;
-  if (error) return <EmptyState title="Could not load file" description={error.message} />;
-  const body = isJsonMime(mime) ? prettyJson(text) : text;
   return (
-    <pre className="h-full overflow-auto bg-sheet p-4 font-mono text-13 leading-relaxed text-fg-2">
-      {body}
-    </pre>
+    <FileText url={file.url}>
+      {(text) => (
+        <pre className="h-full overflow-auto bg-sheet p-4 font-mono text-13 leading-relaxed text-fg-2">
+          {isJsonMime(mime) ? prettyJson(text) : text}
+        </pre>
+      )}
+    </FileText>
   );
 }
 
 function MarkdownPreview({ file }: PreviewProviderProps): ReactElement {
-  const { text, loading, error } = useFileText(file.url);
-  if (loading) return <LoadingPanel message="Loading preview…" />;
-  if (error) return <EmptyState title="Could not load file" description={error.message} />;
   return (
-    <div
-      className={cn(
-        "prose-angee h-full overflow-auto bg-sheet p-6 text-fg-2",
-        "[&_h1]:mb-2 [&_h1]:text-2xl [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:mt-5 [&_h2]:text-lg [&_h2]:font-semibold",
-        "[&_p]:my-2 [&_code]:rounded [&_code]:bg-inset [&_code]:px-1 [&_a]:text-link [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6",
+    <FileText url={file.url}>
+      {(text) => (
+        <div
+          className={cn(
+            "prose-angee h-full overflow-auto bg-sheet p-6 text-fg-2",
+            "[&_h1]:mb-2 [&_h1]:text-2xl [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:mt-5 [&_h2]:text-lg [&_h2]:font-semibold",
+            "[&_p]:my-2 [&_code]:rounded [&_code]:bg-inset [&_code]:px-1 [&_a]:text-link [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6",
+          )}
+        >
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+        </div>
       )}
-    >
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
-    </div>
+    </FileText>
   );
 }
 
