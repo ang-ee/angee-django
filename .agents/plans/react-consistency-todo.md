@@ -229,11 +229,16 @@ visual-parity spot-check across both themes still recommended before release.
         card (`<a>`/button, native or Enter+Space), and board card (click-only, no
         selection/DnD) have different DOM + interaction contracts; one primitive
         would over-parameterize and risk core interactions.
-      • **fold `GroupedList` status/footer — STILL OPEN** (PARTIAL): its per-bucket
-        fetch+table is a necessary fork, but the loading/empty/error status and the
-        measure-footer + item-pager duplicate `FlatListBody`/`FlatMeasureFooter`.
-        The one remaining genuine data-view de-fork; medium value/risk (27k of
-        folded-group code).
+      • **fold `GroupedList` status/footer — LEAVE SEPARATE** (close-read): a folded
+        group is a different rendering context than a flat list, so the pieces
+        genuinely diverge — status is tristate with group messages + a per-group
+        inline loader (vs `FlatListBody`'s empty-only), the footer puts "Total" in
+        the select cell with a nullable aggregate (vs `FlatMeasureFooter`'s "Total"
+        in the first data column + `selectable`), and each group has its own inline
+        `Pager` (flat has none). The only shared bit is the per-column measure-cell
+        loop, embedded in divergent footer wrappers — extracting it would
+        over-parameterize delicate folded-group/freeze-guard code. Phase 5 data-view
+        is complete: the genuine consolidations landed, the rest are different-intent.
 - [~] One field stack — DONE the genuine parts: extracted shared `RequiredMark`
       (3 sites: `Label`, `FieldLabel`, `FieldRow`) + `OptionalHint` (2 sites:
       `Label`, `FieldLabel`) into `ui/label.tsx` (the foundational label owner;
