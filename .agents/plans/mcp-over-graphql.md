@@ -100,27 +100,31 @@ Concrete edits to shipped files:
 
 ### One declaration, two kinds of tool, four levers
 
-The `mcp_tools` manifest becomes a **declarative list of specs** (introspectable →
-catalogue rows, deterministic, fail-fast), not imperative `register(server)` calls:
+The `mcp_tools` manifest is a dotted ref to a `register(server: FastMCP) -> None`
+callable (same shape as `schemas`, resolved by `resolve_addon_reference`). The
+**declarative `GraphQLTool` specs** carry the levers (introspectable → catalogue rows,
+deterministic, fail-fast via `_validate`); the callable iterates them through
+`register_graphql_tools`, and is also the escape hatch for a custom (non-GraphQL) tool —
+just add it to the server directly, so no separate `CustomTool` type is needed:
 
 ```python
 # notes/apps.py
-mcp_tools = "mcp_tools.TOOLS"   # dotted ref, same shape as `schemas`
+mcp_tools = "mcp_tools.register"   # dotted ref, same shape as `schemas`
 
 # notes/mcp_tools.py
-TOOLS = [
-    GraphQLTool("notes", name="list_notes",
-                fields=["sqid", "title", "status", "word_count"],   # output projection limit
-                description="List the caller's notes, newest first. Call before create_note to avoid dupes."),
-    GraphQLTool("note", name="read_note",
-                description="Fetch one note in full by sqid. Call before update_note to preserve untouched fields."),
-    GraphQLTool("createNote", name="create_note", flatten="input",  # lift NoteInput fields to flat args
-                args=["title", "body", "tags"], fixed={"status": "draft"},  # arg allow-list + pinned value
-                arg_docs={"tags": "Lowercase single-word topic tags."},
-                description="Create a draft note owned by the caller. Always set a descriptive title."),
-    CustomTool(handler=summarize_notes, name="summarize_notes",     # escape hatch (not a GraphQL op)
-               description="Summarize the caller's notes into a digest."),
-]
+def register(server: FastMCP) -> None:
+    register_graphql_tools(server, [
+        GraphQLTool("notes", name="list_notes", limit_arg="limit",
+                    fields=["sqid", "title", "status", "word_count"],   # output projection limit
+                    description="List the caller's notes, newest first. Call before create_note to avoid dupes."),
+        GraphQLTool("note", name="read_note", id_arg="id",
+                    description="Fetch one note in full by sqid. Call before update_note to preserve untouched fields."),
+        GraphQLTool("createNote", name="create_note", flatten="data",   # lift NoteInput fields to flat args
+                    fixed={"status": "draft"},                          # pinned/injected value
+                    description="Create a draft note owned by the caller. Always set a descriptive title."),
+    ])
+    # A custom (non-GraphQL) tool is registered on `server` directly here — the callable
+    # seam is the escape hatch, e.g. `@server.tool` def summarize_notes(...): ...
 ```
 
 Levers — each answers a "beyond the schema" need the GraphQL types can't:

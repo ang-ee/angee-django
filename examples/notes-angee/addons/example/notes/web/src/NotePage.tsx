@@ -18,10 +18,13 @@ import {
   type RecordSmartButtonDescriptor,
   useChatterContent,
 } from "@angee/base";
+import { AgentChatterPane } from "@angee/agents";
 import { useModelMetadata, useResourceRecord, useResourceRevisions } from "@angee/sdk";
 import { useParams } from "@tanstack/react-router";
 
 const MODEL = "notes.Note";
+// The rebac resource type the agent's view envelope + notes MCP tools key on.
+const NOTE_RESOURCE_TYPE = "notes/note";
 
 const NOTE_DEFAULT_GROUPS = {
   list: { field: "updatedAt", granularity: "month" },
@@ -101,11 +104,9 @@ export function NotePage(): React.ReactElement {
         label: "Angee",
         icon: "agent",
         children: (
-          <EmptyState
-            icon="agent"
-            title="No agent yet"
-            description="Set up your assistant"
-            className="min-h-48 p-4"
+          <AgentChatterPane
+            model={NOTE_RESOURCE_TYPE}
+            recordId={activeRecordId ?? undefined}
           />
         ),
       },

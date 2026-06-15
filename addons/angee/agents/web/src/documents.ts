@@ -135,3 +135,32 @@ export interface RenderAgentPromptVariables extends Record<string, unknown> {
   id: string;
   view: AgentChatView;
 }
+
+// Resolve which agent serves the user's current view (the side chatter). Returns the
+// agent identity only — the client then mints its chat endpoint with `agentChatEndpoint`;
+// `null` means the user has no running agent (the chatter shows a call-to-action).
+export const RESOLVE_SESSION_FOR_VIEW_MUTATION = `
+  mutation ResolveSessionForView($view: JSON!) {
+    resolveSessionForView(view: $view) {
+      agentId
+      agentName
+      status
+      modelHandle
+    }
+  }
+`;
+
+export interface AgentSession {
+  agentId: string;
+  agentName: string;
+  status: string;
+  modelHandle: string;
+}
+
+export interface AgentSessionData {
+  resolveSessionForView: AgentSession | null;
+}
+
+export interface ResolveSessionVariables extends Record<string, unknown> {
+  view: AgentChatView;
+}

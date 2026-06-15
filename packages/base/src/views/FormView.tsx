@@ -86,6 +86,13 @@ export interface RecordTabDescriptor {
   icon?: React.ReactNode;
   /** Panel content rendered outside the `<form>`. */
   render: (context: RecordPanelContext) => React.ReactNode;
+  /**
+   * Keep the panel mounted while another tab is active. Off by default so a panel that
+   * does eager work on mount — a socket/subscription, its own fetch, a token mint (e.g.
+   * the agent Chat tab opens an ACP WebSocket) — stays inert until its tab is first
+   * selected. Opt in only for a panel whose internal state must survive tab switches.
+   */
+  keepMounted?: boolean;
 }
 
 /** Value of the form body's leading tab, shown when `recordTabs` is set. */
@@ -758,7 +765,7 @@ export function FormView({
         <Tabs.Panel
           key={tab.id}
           value={tab.id}
-          keepMounted
+          keepMounted={tab.keepMounted}
           className={cn(FORM_COLUMN_CLASS, "pb-12")}
         >
           {recordPanelContext ? tab.render(recordPanelContext) : null}

@@ -82,6 +82,10 @@ const agentsMenu: readonly BaseMenuItem[] = [
   },
 ];
 
+// The side-chatter entry a host (e.g. the notes app) mounts in its chatter "agent" tab,
+// bound to the open record, to chat with the user's agent about what they're viewing.
+export { AgentChatterPane } from "./views/AgentChatterPane";
+
 const agents = defineBaseAddon({
   id: AGENTS_ID,
   routes: agentsRoutes,

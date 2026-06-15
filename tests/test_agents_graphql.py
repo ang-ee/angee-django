@@ -437,6 +437,40 @@ def test_agent_chat_endpoint_errors_when_agent_not_running(agents_console_tables
     assert "not running" in str(result.errors[0])
 
 
+def test_resolve_session_for_view_resolves_the_actors_running_agent(
+    agents_console_tables: None,
+) -> None:
+    """`resolveSessionForView` resolves the actor's running agent for the side chatter.
+
+    The chatter knows the view, not the agent; this returns the agent identity (the client
+    mints the endpoint separately with `agentChatEndpoint`), picking the actor's RUNNING
+    service-backed agent and returning null when the user has no running agent (so the
+    chatter shows a call-to-action rather than erroring).
+    """
+
+    admin = _platform_admin("agt-session-admin")
+    with system_context(reason="test.agents.session.seed"):
+        Agent.objects.create(name="Sidekick", owner=admin, service="svc-side", status="running")
+        # A draft agent for the same owner is not eligible (not running).
+        Agent.objects.create(name="Draft", owner=admin)
+
+    mutation = """
+        mutation Session($view: JSON!) {
+          resolveSessionForView(view: $view) { agentName status modelHandle }
+        }
+    """
+    view = {"kind": "record", "type": "notes/note", "sqid": "nte_x"}
+    session = _data(_execute(console := _schema(), mutation, {"view": view}, user=admin))["resolveSessionForView"]
+
+    assert session["agentName"] == "Sidekick"
+    assert session["status"] == "running"
+
+    # A platform admin with no running agent gets null, not an error.
+    other = _platform_admin("agt-session-none")
+    none_session = _data(_execute(console, mutation, {"view": view}, user=other))["resolveSessionForView"]
+    assert none_session is None
+
+
 def test_provision_workspace_inputs_from_agent_fields(agents_console_tables: None) -> None:
     """The workspace inputs come from the agent's structured fields (not raw JSON)."""
 
@@ -518,10 +552,12 @@ def test_render_view_context_never_previews_encrypted_secret(agents_console_tabl
 def test_mcp_config_emits_secret_ref_auth_header_for_credentialed_server(
     agents_console_tables: None,
 ) -> None:
-    """A credentialed MCP server renders a ``${secret.<name>}`` Authorization header.
+    """A credentialed MCP server renders a ``${<env>}`` Authorization header.
 
     The bearer rides through the operator secret store, never the rendered file: the
-    header references the secret name and :meth:`Agent.mcp_secrets` carries the value
+    header references the container env var (:meth:`Agent.mcp_bearer_env`), which the
+    service env sets from the operator secret (the operator resolves ``${secret.<name>}``
+    in a service's env, not in file content); :meth:`Agent.mcp_secrets` carries the value
     for the provision flow to sync.
     """
 
@@ -539,20 +575,23 @@ def test_mcp_config_emits_secret_ref_auth_header_for_credentialed_server(
         config = agent.mcp_config()
         secrets = agent.mcp_secrets()
         secret_name = agent.mcp_secret_name(secured)
+        service_inputs = agent.provision_service_inputs()
 
     servers = config["mcpServers"]
     assert "headers" not in servers["public"]  # no credential → no auth header
-    assert servers["notes"]["headers"] == {"Authorization": f"Bearer ${{secret.{secret_name}}}"}
+    assert servers["notes"]["headers"] == {"Authorization": f"Bearer ${{{agent.mcp_bearer_env(secured)}}}"}
     assert secret_name == f"agent-{agent.sqid}-mcp-{credential.sqid}"
+    # The bearer reaches the container via the service env, set from the operator secret.
+    assert f'{agent.mcp_bearer_env(secured)}: "${{secret.{secret_name}}}"' in service_inputs["mcp_env"]
     assert secrets == {secret_name: "tok-notes"}  # synced server-side, never in the file
 
 
-def test_mcp_actor_verifier_resolves_bearer_to_agent_actor(agents_console_tables: None) -> None:
-    """The agents bearer verifier maps an MCP-server credential to a distinct agent actor.
+def test_mcp_actor_verifier_resolves_bearer_to_the_credential_owner(agents_console_tables: None) -> None:
+    """The agents bearer verifier maps an MCP-server credential to its owning user.
 
-    A bearer matching a server's credential resolves to a non-user ``agents/agent``
-    subject (the placeholder agent identity); an unknown bearer resolves to nothing,
-    so the runtime denies it with no admin fallback.
+    Interim model (option A): an agent acts with the identity of the user who owns the
+    credential it presents, so it gets that user's notes CRUD with correct attribution.
+    An unknown bearer resolves to nothing, so the runtime denies it with no fallback.
     """
 
     owner = User.objects.create_user(username="agt-verify-owner", email="verify@example.com")
@@ -564,8 +603,8 @@ def test_mcp_actor_verifier_resolves_bearer_to_agent_actor(agents_console_tables
 
     actor = resolve_actor("tok-secret")
     assert actor is not None
-    assert actor.subject_type == "agents/agent"
-    assert actor.subject_id == str(credential.sqid)  # per-credential placeholder, not the user
+    assert actor.subject_type == "auth/user"
+    assert actor.subject_id == str(owner.pk)  # the agent runs as the credential's owner
     assert resolve_actor("wrong-token") is None
     assert resolve_actor("") is None
 

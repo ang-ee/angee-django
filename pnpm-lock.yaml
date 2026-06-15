@@ -290,6 +290,9 @@ importers:
 
   examples/notes-angee/addons/example/notes/web:
     dependencies:
+      '@angee/agents':
+        specifier: workspace:*
+        version: link:../../../../../../addons/angee/agents/web
       '@angee/base':
         specifier: workspace:*
         version: link:../../../../../../packages/base
