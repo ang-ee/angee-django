@@ -75,7 +75,7 @@ class NotesMCPServerTests(TransactionTestCase):
         app = mcp_app()
         async with app.router.lifespan_context(app):
             tools = {tool["name"] for tool in (await self._rpc("tools/list", {}))["tools"]}
-            self.assertEqual(tools, {"list_notes", "read_note", "create_note", "update_note"})
+            self.assertEqual(tools, {"list_notes", "read_note", "create_note", "update_note", "delete_note"})
 
             # list_notes is scoped to the actor (no admin fallback): every row is
             # one alice owns, and the page is non-empty.
@@ -95,6 +95,27 @@ class NotesMCPServerTests(TransactionTestCase):
             self.assertEqual(read["sqid"], created["sqid"])
             self.assertEqual(read["body"], "one two three")
             self.assertEqual(read["tags"], ["a", "b"])
+
+            # update_note exercises the flatten + sqid→GlobalID write path: change the
+            # title/tags on the note alice owns, then confirm the change persisted.
+            updated = await self._tool(
+                "update_note", {"sqid": created["sqid"], "title": "Renamed via MCP", "tags": ["x"]}
+            )
+            self.assertEqual(updated["sqid"], created["sqid"])
+            self.assertEqual(updated["title"], "Renamed via MCP")
+            self.assertEqual(updated["tags"], ["x"])
+
+            reread = await self._tool("read_note", {"sqid": created["sqid"]})
+            self.assertEqual(reread["title"], "Renamed via MCP")
+            self.assertEqual(reread["tags"], ["x"])
+            self.assertEqual(reread["body"], "one two three")
+
+            # delete_note exercises the fixed-arg (confirm=true) + DeletePreview path; the
+            # note is then gone, so a follow-up read returns a tool error.
+            deleted = await self._tool("delete_note", {"sqid": created["sqid"]})
+            self.assertGreaterEqual(deleted["total_deleted_count"], 1)
+            gone = await self._rpc("tools/call", {"name": "read_note", "arguments": {"sqid": created["sqid"]}})
+            self.assertTrue(gone.get("isError"), gone)
 
     async def _unauthorized(self) -> None:
         """A bearer-less request is rejected with ``401`` before any tool runs."""

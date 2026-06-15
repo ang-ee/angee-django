@@ -19,3 +19,5 @@ rows:
       model: notes.model_claude_demo
       workspace_template: notes.tpl_agent_default
       service_template: notes.tpl_claude_code
+      mcp_servers:
+        - notes.mcp_angee

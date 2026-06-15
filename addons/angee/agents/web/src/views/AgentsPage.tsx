@@ -1,5 +1,15 @@
 import * as React from "react";
-import { Column, DataPage, Field, Form, Group, List } from "@angee/base";
+import {
+  Card,
+  CardContent,
+  Column,
+  DataPage,
+  Field,
+  Form,
+  Group,
+  List,
+  type RecordTabDescriptor,
+} from "@angee/base";
 import { fromRelayGlobalId, useResourceRecord, type Row } from "@angee/sdk";
 
 import { useAgentsT } from "../i18n";
@@ -21,26 +31,70 @@ function stringField(record: Row | null, key: string): string {
 }
 
 /**
- * The agent detail's chat panel, shown only once the agent is RUNNING and has a
- * rendered `service` (the routed WebSocket the browser connects to). The view envelope
- * tells the agent the user is looking at this agent record.
+ * The agent detail's Chat tab. Once the agent is RUNNING and has a rendered
+ * `service` (the routed WebSocket the browser connects to) it shows the live ACP
+ * chat; otherwise a hint to provision first. The view envelope tells the agent the
+ * user is looking at this agent record.
  */
-function AgentChatPanel({ agentId }: { agentId: string }): React.ReactElement | null {
+function AgentChatPanel({ agentId }: { agentId: string }): React.ReactElement {
+  const t = useAgentsT();
   const { record } = useResourceRecord(MODEL, agentId, { fields: [...CHAT_FIELDS] });
-  if (stringField(record, "status") !== "RUNNING" || stringField(record, "service") === "") {
-    return null;
+  const running =
+    stringField(record, "status") === "RUNNING" && stringField(record, "service") !== "";
+  if (!running) {
+    return (
+      <Card>
+        <CardContent>
+          <p className="text-13 text-fg-muted">{t("agents.agent.chatUnavailable")}</p>
+        </CardContent>
+      </Card>
+    );
   }
   const view: AgentChatView = { kind: "record", type: "agents/agent", sqid: fromRelayGlobalId(agentId) };
   return <AgentChat agentId={agentId} view={view} />;
 }
 
+// Translated copy resolved at a component's render top level (where hooks belong)
+// and threaded into the plain `agentDataPage` builder below.
+interface AgentLabels {
+  modelTemplates: string;
+  provisioningInputs: string;
+  tabProvision: string;
+  tabChat: string;
+}
+
+function useAgentLabels(): AgentLabels {
+  const t = useAgentsT();
+  return {
+    modelTemplates: t("agents.agent.modelTemplates"),
+    provisioningInputs: t("agents.agent.provisioningInputs"),
+    tabProvision: t("agents.agent.tabProvision"),
+    tabChat: t("agents.agent.tabChat"),
+  };
+}
+
 // One model, two list tabs: the server-side ``isTemplate`` filter is the only
 // difference between Agents and Templates, and a create on either tab defaults
 // ``isTemplate`` to match. A real agent renders into the operator; a template is a
-// reusable blueprint, so only the Agents tab carries the provisioning panel. The
-// translated group label is passed in because `useAgentsT` must be called at a
-// component's render top level.
-function agentDataPage(isTemplate: boolean, modelTemplatesLabel: string): React.ReactElement {
+// reusable blueprint, so only the Agents detail carries the Provision/Chat record
+// tabs beside the Overview form.
+function agentDataPage(isTemplate: boolean, labels: AgentLabels): React.ReactElement {
+  const recordTabs: readonly RecordTabDescriptor[] | undefined = isTemplate
+    ? undefined
+    : [
+        {
+          id: "provision",
+          label: labels.tabProvision,
+          render: ({ recordId, reload }) => (
+            <AgentProvisioning agentId={recordId} onChanged={reload} />
+          ),
+        },
+        {
+          id: "chat",
+          label: labels.tabChat,
+          render: ({ recordId }) => <AgentChatPanel agentId={recordId} />,
+        },
+      ];
   return (
     <DataPage
       model={MODEL}
@@ -48,16 +102,7 @@ function agentDataPage(isTemplate: boolean, modelTemplatesLabel: string): React.
       routed
       filter={{ isTemplate: { exact: isTemplate } }}
       createDefaults={{ isTemplate }}
-      recordExtras={
-        isTemplate
-          ? undefined
-          : ({ recordId, reload }) => (
-              <>
-                <AgentProvisioning agentId={recordId} onChanged={reload} />
-                <AgentChatPanel agentId={recordId} />
-              </>
-            )
-      }
+      recordTabs={recordTabs}
     >
       <List model={MODEL} pageSize={50}>
         <Column field="name" />
@@ -66,29 +111,38 @@ function agentDataPage(isTemplate: boolean, modelTemplatesLabel: string): React.
       </List>
       <Form model={MODEL}>
         <Field name="name" title />
-        <Field name="description" />
-        <Field name="instructions" />
-        <Field name="isTemplate" />
-        <Group label={modelTemplatesLabel} columns={2}>
+        <Field name="status" widget="statusbar" />
+        {/* Description then instructions lead the Overview tab as full-width
+            textareas; `body={false}` keeps `description` a normal field rather than
+            the form's auto-detected body. */}
+        <Group columns={1}>
+          <Field name="description" widget="textarea" body={false} />
+        </Group>
+        <Group columns={1}>
+          <Field name="instructions" widget="textarea" body={false} />
+        </Group>
+        <Group label={labels.modelTemplates} columns={2}>
           <Field name="model" />
           <Field name="owner" createOnly />
           <Field name="serviceTemplate" />
           <Field name="workspaceTemplate" />
         </Group>
-        <Field name="serviceInputs" widget="json" />
-        <Field name="workspaceInputs" widget="json" />
-        <Field name="status" widget="statusbar" />
+        <Group label={labels.provisioningInputs} columns={2}>
+          <Field name="serviceInputs" widget="json" />
+          <Field name="workspaceInputs" widget="json" />
+        </Group>
+        <Group columns={1}>
+          <Field name="isTemplate" />
+        </Group>
       </Form>
     </DataPage>
   );
 }
 
 export function AgentsPage(): React.ReactElement {
-  const t = useAgentsT();
-  return agentDataPage(false, t("agents.agent.modelTemplates"));
+  return agentDataPage(false, useAgentLabels());
 }
 
 export function TemplatesPage(): React.ReactElement {
-  const t = useAgentsT();
-  return agentDataPage(true, t("agents.agent.modelTemplates"));
+  return agentDataPage(true, useAgentLabels());
 }

@@ -1,9 +1,9 @@
 // The ACP chat runtime: opens a forward-authed WebSocket to a running agent, drives
 // the ACP session (initialize → newSession → prompt/cancel), folds `session/update`
-// chunks into an assistant-ui external store, and renders the result through
+// notifications into an assistant-ui external store, and renders the result through
 // `AssistantRuntimeProvider`. The browser speaks ACP to the agent through the
 // operator's central Caddy; the route token is short-lived, so the endpoint is
-// re-queried and the socket reconnected when the token nears expiry.
+// re-minted and the socket reconnected when the token nears expiry.
 
 import * as React from "react";
 import {
@@ -20,11 +20,11 @@ import {
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionNotification,
-  type ToolCallStatus,
 } from "@zed-industries/agent-client-protocol";
 import * as v from "valibot";
 import { useAuthoredMutation } from "@angee/sdk";
 
+import { foldIntoLog, type ChatMessage } from "./acp-log";
 import { openAcpTransport, type AcpTransport } from "./acp-transport";
 import {
   AGENT_CHAT_ENDPOINT_MUTATION,
@@ -46,24 +46,18 @@ const TOKEN_REFRESH_MARGIN_MS = 60_000;
 /** The chat connection lifecycle, surfaced to the view's status header. */
 export type AcpStatus = "idle" | "connecting" | "ready" | "error" | "closed";
 
-/** A chat message held in the external store: role, text body, and tool-call blocks. */
-interface ChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  text: string;
-  toolCalls: ToolCallBlock[];
-}
-
-interface ToolCallBlock {
-  id: string;
-  title: string;
-  status: ToolCallStatus;
-}
-
 export interface AcpRuntime {
   runtime: ReturnType<typeof useExternalStoreRuntime>;
   status: AcpStatus;
   error: string | null;
+  /** Tear the socket down and open a fresh session (resets the transcript). */
+  reconnect: () => void;
+  /** Clear the transcript without dropping the session. */
+  clear: () => void;
+  /** The agent's advertised MCP servers, for the session info panel. */
+  mcpServers: Record<string, McpServerConfig>;
+  /** Render the `<system_context>` for the current view, for the session info panel. */
+  renderContext: () => Promise<string>;
 }
 
 /**
@@ -71,14 +65,17 @@ export interface AcpRuntime {
  * about the user's open `view`.
  *
  * Holds the message log as immutable React state: each `session/update` replaces the
- * in-flight assistant message with a fresh object, so assistant-ui's identity-keyed
- * message cache re-renders the streamed text.
+ * in-flight assistant message with a fresh object (with fresh parts), so assistant-ui's
+ * identity-keyed message cache re-renders the streamed text/reasoning/tool calls.
  */
 export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime {
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [status, setStatus] = React.useState<AcpStatus>("idle");
   const [error, setError] = React.useState<string | null>(null);
   const [isRunning, setIsRunning] = React.useState(false);
+  const [mcpServers, setMcpServers] = React.useState<Record<string, McpServerConfig>>({});
+  // Bumping this re-runs the connect effect — the `reconnect()` control.
+  const [reconnectNonce, setReconnectNonce] = React.useState(0);
 
   const connectionRef = React.useRef<Agent | null>(null);
   const transportRef = React.useRef<AcpTransport | null>(null);
@@ -101,21 +98,20 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
   }, []);
   // The connect effect builds the ACP client once; it reads `onUpdate` through a ref so a
   // callback-identity change never tears down and reconnects the socket (which tracks
-  // `agentId` alone).
+  // `agentId`/`reconnectNonce` alone).
   const onUpdateRef = React.useRef(onUpdate);
   onUpdateRef.current = onUpdate;
 
-  // Connect on mount; reconnect before the route token expires; tear the socket down on
-  // unmount or agent change. A per-effect `active` flag gates every state update and the
-  // post-await continuations, so an in-flight connect for a stale agent never clobbers
-  // the live one (it resolves after cleanup set `active = false`).
+  // Connect on mount; reconnect before the route token expires or when `reconnect()` is
+  // called; tear the socket down on unmount or agent change. A per-effect `active` flag
+  // gates every state update and the post-await continuations, so an in-flight connect for
+  // a stale agent never clobbers the live one (it resolves after cleanup set `active = false`).
   React.useEffect(() => {
     let active = true;
     let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 
-    // A new agent starts from an empty transcript. The effect re-runs on `agentId`, so this
-    // clears the previous agent's messages; an in-effect token-refresh reconnect does not
-    // re-run it, so it keeps the live conversation.
+    // A new agent (or an explicit reconnect) starts from an empty transcript; an in-effect
+    // token-refresh reconnect does not re-run the effect, so it keeps the live conversation.
     setMessages([]);
     setIsRunning(false);
 
@@ -135,6 +131,7 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
         const endpoint = await mintEndpoint({ id: agentId });
         if (!active) return;
         const validated = parseEndpoint(endpoint);
+        setMcpServers(validated.mcpServers);
         const transport = openAcpTransport(validated.url, validated.token);
         transportRef.current = transport;
         const connection = new ClientSideConnection(() => makeClient(onUpdateRef), transport.stream);
@@ -189,7 +186,7 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
       if (refreshTimer !== undefined) clearTimeout(refreshTimer);
       tearDown();
     };
-  }, [agentId, mintEndpoint]);
+  }, [agentId, mintEndpoint, reconnectNonce]);
 
   const onNew = React.useCallback(
     async (message: AppendMessage): Promise<void> => {
@@ -200,11 +197,11 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
 
       setMessages((log) => [
         ...log,
-        { id: `user-${log.length}`, role: "user", text: userText, toolCalls: [] },
+        { id: `user-${log.length}`, role: "user", parts: [{ kind: "text", text: userText }] },
       ]);
       setIsRunning(true);
       try {
-        const context = await renderContext(renderPrompt, agentId, viewRef.current);
+        const context = await fetchSystemContext(renderPrompt, agentId, viewRef.current);
         await connection.prompt({
           sessionId,
           prompt: [{ type: "text", text: context === "" ? userText : `${context}\n\n${userText}` }],
@@ -225,6 +222,13 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
     setIsRunning(false);
   }, []);
 
+  const reconnect = React.useCallback((): void => setReconnectNonce((nonce) => nonce + 1), []);
+  const clear = React.useCallback((): void => setMessages([]), []);
+  const renderContext = React.useCallback(
+    (): Promise<string> => fetchSystemContext(renderPrompt, agentId, viewRef.current),
+    [agentId, renderPrompt],
+  );
+
   const runtime = useExternalStoreRuntime({
     isRunning,
     messages,
@@ -233,22 +237,33 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
     convertMessage,
   });
 
-  return { runtime, status, error };
+  return { runtime, status, error, reconnect, clear, mcpServers, renderContext };
 }
 
-/** Convert a stored chat message to the assistant-ui thread shape. */
+/** Convert a stored chat message to the assistant-ui thread shape: each part maps to the
+ *  matching assistant-ui content part. Tool input/status/result/isError ride the tool
+ *  part's `args` bag (its typed JSON input slot), which the view's `ToolPart` reads. */
 function convertMessage(message: ChatMessage): ThreadMessageLike {
-  // The ACP execution status rides in the tool-call part's `args` (its typed JSON input
-  // bag) — `result` is reserved for the tool's actual output — and `ToolBlock` renders it.
-  const toolParts = message.toolCalls.map((call) => ({
-    type: "tool-call" as const,
-    toolCallId: call.id,
-    toolName: call.title,
-    args: { status: call.status },
-    argsText: "",
-  }));
-  const textParts = message.text === "" ? [] : [{ type: "text" as const, text: message.text }];
-  return { id: message.id, role: message.role, content: [...textParts, ...toolParts] };
+  const content = message.parts.map((part) => {
+    if (part.kind === "text") return { type: "text" as const, text: part.text };
+    if (part.kind === "reasoning") return { type: "reasoning" as const, text: part.text };
+    return {
+      type: "tool-call" as const,
+      toolCallId: part.id,
+      toolName: part.toolName,
+      args: {
+        status: part.status,
+        input: part.input ?? null,
+        result: part.result ?? null,
+        isError: part.isError ?? false,
+      },
+      argsText: "",
+    };
+  });
+  // The parts map cleanly onto assistant-ui text/reasoning/tool-call content; cast at this
+  // boundary because the tool `args` bag carries `unknown` input/result that the JSON-typed
+  // content part can't infer.
+  return { id: message.id, role: message.role, content: content as ThreadMessageLike["content"] };
 }
 
 /** Build the ACP `Client` handler: stream updates, auto-approve permission prompts. */
@@ -286,15 +301,19 @@ function parseEndpoint(data: AgentChatEndpointData | undefined): AgentChatEndpoi
 }
 
 /** Render the `<system_context>` block for the current view, or "" on failure. */
-async function renderContext(
+async function fetchSystemContext(
   renderPrompt: (
     variables: RenderAgentPromptVariables,
   ) => Promise<RenderAgentPromptData | undefined>,
   agentId: string,
   view: AgentChatView,
 ): Promise<string> {
-  const data = await renderPrompt({ id: agentId, view });
-  return data?.renderAgentPrompt ?? "";
+  try {
+    const data = await renderPrompt({ id: agentId, view });
+    return data?.renderAgentPrompt ?? "";
+  } catch {
+    return "";
+  }
 }
 
 /** Convert the endpoint's MCP server map to the ACP `newSession` array form. */
@@ -305,61 +324,6 @@ function toMcpServers(servers: Record<string, McpServerConfig>): McpServer[] {
     url: config.url,
     headers: Object.entries(config.headers ?? {}).map(([key, value]) => ({ name: key, value })),
   }));
-}
-
-/**
- * Fold one session update into `log`, returning a NEW array whose trailing assistant
- * message is a fresh object (new identity), so assistant-ui re-renders the stream. An
- * update that changes nothing returns `log` unchanged, avoiding a needless re-render.
- */
-function foldIntoLog(log: ChatMessage[], note: SessionNotification): ChatMessage[] {
-  const last = log[log.length - 1];
-  const isAssistant = last !== undefined && last.role === "assistant";
-  const base: ChatMessage = isAssistant
-    ? last
-    : { id: `assistant-${log.length}`, role: "assistant", text: "", toolCalls: [] };
-  const next = applyUpdate(base, note);
-  if (next === base) return log;
-  return isAssistant ? [...log.slice(0, -1), next] : [...log, next];
-}
-
-/**
- * Apply one session update to `assistant`, returning a new message — text chunks append,
- * tool calls upsert, all immutably — or the same reference when the update is not rendered.
- */
-function applyUpdate(assistant: ChatMessage, note: SessionNotification): ChatMessage {
-  const update = note.update;
-  switch (update.sessionUpdate) {
-    case "agent_message_chunk":
-    case "agent_thought_chunk":
-      return update.content.type === "text"
-        ? { ...assistant, text: assistant.text + update.content.text }
-        : assistant;
-    case "tool_call":
-      return {
-        ...assistant,
-        toolCalls: [
-          ...assistant.toolCalls,
-          { id: update.toolCallId, title: update.title, status: update.status ?? "pending" },
-        ],
-      };
-    case "tool_call_update": {
-      const block = assistant.toolCalls.find((call) => call.id === update.toolCallId);
-      if (block === undefined) return assistant;
-      const toolCalls = assistant.toolCalls.map((call) =>
-        call.id === update.toolCallId
-          ? {
-              ...call,
-              title: typeof update.title === "string" ? update.title : call.title,
-              status: update.status ?? call.status,
-            }
-          : call,
-      );
-      return { ...assistant, toolCalls };
-    }
-    default:
-      return assistant;
-  }
 }
 
 /** Extract the plain text of a composer message. */

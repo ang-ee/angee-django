@@ -26,6 +26,7 @@ import { FormGrid } from "../ui/form-layout";
 import { SectionEyebrow } from "../ui/section-eyebrow";
 import { Input } from "../ui/input";
 import { Spinner } from "../ui/spinner";
+import { Tabs } from "../ui/tabs";
 import { ControlBand } from "../shell/ControlBand";
 import { cn } from "../lib/cn";
 import { SlotOutlet } from "../lib/slot-outlet";
@@ -64,6 +65,32 @@ import { useBaseT } from "../i18n";
 export type FieldKind = PageFieldKind;
 export type FormField = FieldDescriptor;
 
+/**
+ * The context a saved-record panel renders against: the open record id and a
+ * `reload` that refetches the form. Shared by `recordExtras` (below the form) and
+ * each `recordTabs` panel (beside the "Overview" tab) so a panel doing out-of-band
+ * writes can refresh the form's fields after.
+ */
+export interface RecordPanelContext {
+  recordId: string;
+  reload: () => void;
+}
+
+/** One tab beside the form's leading "Overview" tab, for a saved record. */
+export interface RecordTabDescriptor {
+  /** Stable tab id, also used as the panel value. */
+  id: string;
+  /** Tab label. */
+  label: React.ReactNode;
+  /** Optional leading icon. */
+  icon?: React.ReactNode;
+  /** Panel content rendered outside the `<form>`. */
+  render: (context: RecordPanelContext) => React.ReactNode;
+}
+
+/** Value of the form body's leading tab, shown when `recordTabs` is set. */
+const OVERVIEW_TAB_ID = "overview";
+
 export interface FormViewProps {
   /** Model label rendered by this form, e.g. `"notes.Note"`. */
   model: string;
@@ -96,10 +123,15 @@ export interface FormViewProps {
    * the form's fields after. Rendered outside the `<form>`, so its own buttons
    * never submit the edit form.
    */
-  recordExtras?: (context: {
-    recordId: string;
-    reload: () => void;
-  }) => React.ReactNode;
+  recordExtras?: (context: RecordPanelContext) => React.ReactNode;
+  /**
+   * Tabs for a *saved* record (never on create). When set, the form body (field
+   * sections + body field) becomes the leading "Overview" tab and each descriptor
+   * adds a sibling panel — rendered outside the `<form>` with the same
+   * `{ recordId, reload }` context as `recordExtras`, so a panel's own buttons
+   * never submit the edit form. Omitted/empty renders the plain form.
+   */
+  recordTabs?: readonly RecordTabDescriptor[];
   /** Optional delete command folded into the record action menu. */
   deleteAction?: RecordDeleteAction;
   /** Class name applied to the form root. */
@@ -143,7 +175,7 @@ const FIELD_LABEL_CLASS =
 const FIELD_CONTROL_CLASS = "min-w-0";
 const FULL_FIELD_CLASS = "col-span-full";
 // The form's centered content column — shared by the form body and the
-// `recordExtras` panel below it so the column width lives in one place.
+// `recordExtras`/`recordTabs` panels around it so the column width lives in one place.
 const FORM_COLUMN_CLASS = "mx-auto w-full max-w-[1100px] px-6 sm:px-8";
 
 export function FormView({
@@ -160,10 +192,12 @@ export function FormView({
   toolbarStart,
   toolbar,
   recordExtras,
+  recordTabs,
   deleteAction,
   className,
 }: FormViewProps): React.ReactElement {
   const t = useBaseT();
+  const [activeRecordTab, setActiveRecordTab] = React.useState(OVERVIEW_TAB_ID);
   const hasFieldChildren = hasPageField(children);
   const hasGroupChildren = hasDirectPageElement(children, "group");
   if (
@@ -389,6 +423,7 @@ export function FormView({
   React.useEffect(() => {
     setSaveError(null);
     setServerFieldErrors({});
+    setActiveRecordTab(OVERVIEW_TAB_ID);
   }, [model, id]);
 
   React.useEffect(() => {
@@ -478,8 +513,73 @@ export function FormView({
     </form.Field>
   );
 
-  return (
+  const recordPanelContext: RecordPanelContext | null =
+    !isCreate && id != null ? { recordId: id, reload } : null;
+  const recordTabList = recordTabs ?? [];
+  const tabbed = recordPanelContext != null && recordTabList.length > 0;
+
+  // The form body: field sections then the prominent body field. Shown inline on a
+  // plain form, or wrapped as the leading "Overview" tab when `recordTabs` is set.
+  const overviewBody = (
     <>
+      <div className="grid gap-6">
+        {hasConditionalFields ? (
+          <form.Subscribe selector={(state) => state.values}>
+            {(values) =>
+              visibleSections(sections, values as Values).map((section) => (
+                <FormSection
+                  key={section.key}
+                  section={section}
+                  renderField={renderField}
+                />
+              ))
+            }
+          </form.Subscribe>
+        ) : (
+          sections.map((section) => (
+            <FormSection
+              key={section.key}
+              section={section}
+              renderField={renderField}
+            />
+          ))
+        )}
+      </div>
+
+      {bodyField ? (
+        <section className="grid gap-2">
+          {bodyField.label ? (
+            <SectionEyebrow as="span">{bodyField.label}</SectionEyebrow>
+          ) : null}
+          <form.Field name={bodyField.name}>
+            {(api) => (
+              <BodyFieldControl
+                field={bodyField}
+                value={api.state.value}
+                errors={api.state.meta.errors}
+                serverMessages={serverFieldErrors[bodyField.name]}
+                onChange={(next) => {
+                  clearServerFieldError(bodyField.name);
+                  api.handleChange(next);
+                }}
+              />
+            )}
+          </form.Field>
+        </section>
+      ) : null}
+    </>
+  );
+
+  // Stacked below the form (no tabs). Rendered outside the `<form>` so its buttons
+  // never submit; same context as a tab panel.
+  const recordExtrasPanel =
+    recordPanelContext && recordExtras ? (
+      <div className={cn(FORM_COLUMN_CLASS, "pb-12")}>
+        {recordExtras(recordPanelContext)}
+      </div>
+    ) : null;
+
+  const formElement = (
     <form
       className={cn("min-h-full bg-sheet", className)}
       onSubmit={(event) => {
@@ -552,7 +652,15 @@ export function FormView({
           );
         }}
       </form.Subscribe>
-      <div className={cn(FORM_COLUMN_CLASS, "flex flex-col gap-6 py-6 pb-12")}>
+      <div
+        className={cn(
+          FORM_COLUMN_CLASS,
+          "flex flex-col gap-6 pt-6",
+          // On a non-Overview tab the body is hidden, so drop the tall bottom
+          // padding — the active tab panel below owns its own spacing.
+          tabbed && activeRecordTab !== OVERVIEW_TAB_ID ? "pb-4" : "pb-12",
+        )}
+      >
         <header className="grid gap-4">
           <div className="flex items-start gap-4 max-[900px]:flex-col max-[900px]:items-stretch">
             <div className="min-w-0 flex-1 self-start">
@@ -611,59 +719,53 @@ export function FormView({
 
         <ErrorBanner description={saveError} title={t("form.saveFailed")} />
 
-        <div className="grid gap-6">
-          {hasConditionalFields ? (
-            <form.Subscribe selector={(state) => state.values}>
-              {(values) =>
-                visibleSections(sections, values as Values).map((section) => (
-                  <FormSection
-                    key={section.key}
-                    section={section}
-                    renderField={renderField}
-                  />
-                ))
-              }
-            </form.Subscribe>
-          ) : (
-            sections.map((section) => (
-              <FormSection
-                key={section.key}
-                section={section}
-                renderField={renderField}
-              />
-            ))
-          )}
-        </div>
-
-        {bodyField ? (
-          <section className="grid gap-2">
-            {bodyField.label ? (
-              <SectionEyebrow as="span">{bodyField.label}</SectionEyebrow>
-            ) : null}
-            <form.Field name={bodyField.name}>
-              {(api) => (
-                <BodyFieldControl
-                  field={bodyField}
-                  value={api.state.value}
-                  errors={api.state.meta.errors}
-                  serverMessages={serverFieldErrors[bodyField.name]}
-                  onChange={(next) => {
-                    clearServerFieldError(bodyField.name);
-                    api.handleChange(next);
-                  }}
-                />
-              )}
-            </form.Field>
-          </section>
-        ) : null}
+        {tabbed ? (
+          <>
+            <Tabs.List>
+              <Tabs.Tab value={OVERVIEW_TAB_ID}>{t("form.tabOverview")}</Tabs.Tab>
+              {recordTabList.map((tab) => (
+                <Tabs.Tab key={tab.id} value={tab.id} icon={tab.icon}>
+                  {tab.label}
+                </Tabs.Tab>
+              ))}
+            </Tabs.List>
+            <Tabs.Panel value={OVERVIEW_TAB_ID} keepMounted className="grid gap-6 pt-0">
+              {overviewBody}
+            </Tabs.Panel>
+          </>
+        ) : (
+          overviewBody
+        )}
       </div>
     </form>
-    {!isCreate && id != null && recordExtras ? (
-      <div className={cn(FORM_COLUMN_CLASS, "pb-12")}>
-        {recordExtras({ recordId: id, reload })}
-      </div>
-    ) : null}
-    </>
+  );
+
+  if (!tabbed) {
+    return (
+      <>
+        {formElement}
+        {recordExtrasPanel}
+      </>
+    );
+  }
+
+  // Tabs span the form (Overview) and the sibling panels rendered outside it; the
+  // shared root wires them through context regardless of DOM nesting.
+  return (
+    <Tabs value={activeRecordTab} onValueChange={setActiveRecordTab} variant="card">
+      {formElement}
+      {recordTabList.map((tab) => (
+        <Tabs.Panel
+          key={tab.id}
+          value={tab.id}
+          keepMounted
+          className={cn(FORM_COLUMN_CLASS, "pb-12")}
+        >
+          {recordPanelContext ? tab.render(recordPanelContext) : null}
+        </Tabs.Panel>
+      ))}
+      {recordExtrasPanel}
+    </Tabs>
   );
 }
 
@@ -950,6 +1052,9 @@ function bodyFieldFor(
 ): FieldDescriptor | undefined {
   const candidates = fields.filter(
     (field) =>
+      // `body={false}` opts a field out of the body slot — e.g. a `description`
+      // field that should render as a normal field, not the prominent body.
+      field.body !== false &&
       !field.showWhen &&
       field.name !== titleField?.name &&
       field.name !== statusField?.name,

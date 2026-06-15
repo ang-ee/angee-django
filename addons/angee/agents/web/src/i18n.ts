@@ -6,8 +6,13 @@
 import { useNamespaceT, type MessageVars } from "@angee/sdk";
 
 export const enAgentsMessages: Record<string, string> = {
-  // AgentsPage — bespoke form-section labels.
+  // AgentsPage — bespoke form-section labels and record tabs.
   "agents.agent.modelTemplates": "Model & operator templates",
+  "agents.agent.provisioningInputs": "Provisioning inputs",
+  "agents.agent.tabProvision": "Provision",
+  "agents.agent.tabChat": "Chat",
+  "agents.agent.chatUnavailable":
+    "The agent isn't running yet — provision it to start chatting.",
 
   // McpPage — bespoke form-section labels.
   "agents.mcp.endpoint": "Endpoint",

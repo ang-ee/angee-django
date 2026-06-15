@@ -46,6 +46,7 @@ class NotesConfig(AppConfig):
             "resources/demo/092_agents.inferenceprovider.yaml",
             "resources/demo/093_agents.inferencemodel.yaml",
             "resources/demo/094_integrate.template.yaml",
+            "resources/demo/0945_agents.mcpserver.yaml",
             "resources/demo/095_agents.agent.yaml",
         ),
     }

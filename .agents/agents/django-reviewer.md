@@ -14,7 +14,7 @@ Encode no repo-specific facts. Read `docs/stack.md` (which library owns which
 concern), `docs/backend/guidelines.md` (the Django-Native Rule + Checks), and the
 code each time, and review against **this stack** — not Django features it does not
 use. This is a GraphQL/API backend: GraphQL via strawberry-django, ASGI/WebSockets
-via channels/daphne, authorization via the REBAC library, tabular import/export via
+via channels (served by uvicorn), authorization via the REBAC library, tabular import/export via
 django-import-export, plus the enum/sqid/history/revision libraries in the stack.
 Do **not** review for Django forms, templates, the admin, DRF, htmx, or Celery
 unless the code actually uses them.

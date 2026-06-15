@@ -1,134 +1,67 @@
-"""Notes tools for the MCP server.
+"""Notes tools for the MCP server — curated GraphQL operations over the public bucket.
 
-``read_note``/``update_note``/``create_note`` gate on a REBAC permission through
-rebac's ``rebac_mcp_tool`` decorator — the authenticated actor (resolved off
-FastMCP's auth context via ``REBAC_MCP_ACTOR_RESOLVER``) is checked against the
-note (read/write) or the ``create`` permission before the body runs, and the body
-executes inside that actor's context. ``list_notes`` has no single target
-resource, so it binds the actor itself and filters by queryset scoping. The agents
-addon owns mounting and bearer→actor authentication; this module owns only the
-notes shape. The bodies run directly on the event loop using rebac's row-scoped
-async ORM (``async for`` / ``afrom_public_id`` / ``acreate`` / ``asave``) — no
-thread hop.
+Each tool runs the same actor-scoped GraphQL operation a browser would (notes/note CRUD
+on the ``public`` schema bucket), so strawberry's ``RebacManager`` scoping and the crud
+create/write gates do the authorization — no hand-rolled ORM access or projection. The
+:mod:`angee.mcp.graphql` engine derives each tool's input schema, response projection,
+and operation document from the schema; this module only declares which operations to
+expose and how to project them. ids are the public ``sqid``; fields are snake_case.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from fastmcp import FastMCP
 
-from django.apps import apps
-from mcp.server.fastmcp import Context, FastMCP
-from rebac import actor_context, current_actor
-from rebac.mcp import rebac_mcp_tool
+from angee.mcp.graphql import GraphQLTool, register_graphql_tools
 
-from angee.base.mixins import actor_user_id
-from angee.mcp.actors import request_actor
+# ``is_starred`` / ``reminder_at`` are owner-gated (``read__is_starred = owner``): an agent
+# acting as a non-owner (e.g. a platform admin editing another user's note) gets them
+# redacted to null, which the non-nullable GraphQL fields reject. Project only ungated fields.
+_SUMMARY = ("sqid", "title", "status", "word_count")
+_DETAIL = (*_SUMMARY, "body", "tags")
 
 
 def register(server: FastMCP) -> None:
-    """Register the notes tools on the MCP server."""
+    """Register the notes tools (GraphQL-backed) on the MCP server."""
 
-    @server.tool()
-    async def list_notes(ctx: Context, limit: int = 20) -> list[dict[str, Any]]:
-        """List the caller's most recently updated notes (up to ``limit``)."""
-
-        note = apps.get_model("notes", "Note")
-        with actor_context(request_actor()):
-            return [_summary(row) async for row in note.objects.all()[: max(1, min(limit, 100))]]
-
-    @server.tool()
-    @rebac_mcp_tool(resource_type="notes/note", action="read", id_arg="sqid")
-    async def read_note(ctx: Context, sqid: str) -> dict[str, Any]:
-        """Return one note in full by its public id (read-gated for the caller)."""
-
-        note = apps.get_model("notes", "Note")
-        row = await note.objects.afrom_public_id(sqid)
-        if row is None:
-            raise ValueError(f"Note {sqid!r} was not found.")
-        return _detail(row)
-
-    @server.tool()
-    @rebac_mcp_tool(resource_type="notes/note", action="write", id_arg="sqid")
-    async def update_note(
-        ctx: Context,
-        sqid: str,
-        title: str | None = None,
-        body: str | None = None,
-        status: str | None = None,
-        tags: list[str] | None = None,
-        is_starred: bool | None = None,
-    ) -> dict[str, Any]:
-        """Update the given fields of a note the caller may write, and return it."""
-
-        note = apps.get_model("notes", "Note")
-        applied = {
-            field: value
-            for field, value in (
-                ("title", title),
-                ("body", body),
-                ("status", status),
-                ("tags", tags),
-                ("is_starred", is_starred),
-            )
-            if value is not None
-        }
-        row = await note.objects.afrom_public_id(sqid)
-        if row is None:
-            raise ValueError(f"Note {sqid!r} was not found.")
-        for field, value in applied.items():
-            setattr(row, field, value)
-        row.updated_by_id = actor_user_id(current_actor())
-        await row.asave(update_fields=[*applied, "updated_by", "updated_at"])
-        return _detail(row)
-
-    @server.tool()
-    @rebac_mcp_tool(resource_type="notes/note", action="create")
-    async def create_note(
-        ctx: Context,
-        title: str,
-        body: str = "",
-        status: str = "draft",
-        tags: list[str] | None = None,
-        is_starred: bool = False,
-    ) -> dict[str, Any]:
-        """Create a note attributed to the calling user and return it.
-
-        Gated by ``create = authenticated`` (the decorator preflights it, and rebac's
-        ``pre_save`` create gate authorises it too — both via the built-in actor
-        term), so the insert runs scoped, with no elevation. The row is owned by its
-        creator via the ``created_by``-backed owner relation, so they read it
-        straight back; a non-user actor (a bare agent without a user grant) is
-        rejected here so the row is always attributable.
-        """
-
-        note = apps.get_model("notes", "Note")
-        user_id = actor_user_id(current_actor())
-        if user_id is None:
-            raise PermissionError("Only a user actor may create notes.")
-        row = await note.objects.acreate(
-            title=title,
-            body=body,
-            status=status,
-            tags=list(tags or []),
-            is_starred=is_starred,
-            created_by_id=user_id,
-        )
-        return _detail(row)
-
-
-def _summary(row: Any) -> dict[str, Any]:
-    """Return the list projection of a note (no body)."""
-
-    return {
-        "sqid": str(row.sqid),
-        "title": row.title,
-        "status": str(row.status),
-        "word_count": row.word_count,
-        "is_starred": row.is_starred,
-    }
-
-
-def _detail(row: Any) -> dict[str, Any]:
-    """Return the full projection of a note."""
-
-    return {**_summary(row), "body": row.body, "tags": list(row.tags or [])}
+    register_graphql_tools(
+        server,
+        [
+            GraphQLTool(
+                operation="notes",
+                name="list_notes",
+                fields=_SUMMARY,
+                limit_arg="limit",
+                description="List the caller's notes, most-recently-updated first.",
+            ),
+            GraphQLTool(
+                operation="note",
+                name="read_note",
+                fields=_DETAIL,
+                id_arg="id",
+                description="Return one note in full by its public id (sqid).",
+            ),
+            GraphQLTool(
+                operation="createNote",
+                name="create_note",
+                fields=_DETAIL,
+                flatten="data",
+                description="Create a note owned by the caller and return it.",
+            ),
+            GraphQLTool(
+                operation="updateNote",
+                name="update_note",
+                fields=_DETAIL,
+                flatten="data",
+                description="Update fields of a note the caller may write, and return it.",
+            ),
+            GraphQLTool(
+                operation="deleteNote",
+                name="delete_note",
+                fields=("total_deleted_count",),
+                id_arg="id",
+                fixed={"confirm": True},
+                description="Delete a note the caller may delete, by its public id (sqid).",
+            ),
+        ],
+    )

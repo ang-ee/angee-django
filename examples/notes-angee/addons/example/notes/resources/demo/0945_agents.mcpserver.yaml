@@ -1,0 +1,17 @@
+# The platform's own MCP server, exposing its `/mcp` tools (notes CRUD) to provisioned
+# agents. `placement: internal` + a container-reachable URL: a provisioned agent runs in
+# a container, so it reaches the local django app via `host.docker.internal:<DJANGO_PORT>`
+# (the same convention the operator's Caddy `verify` uses). The bearer rides the
+# credential (0945 below references 090); at provision time `mcp_secrets()` syncs it to the
+# operator store and the agent's `.mcp.json` carries it as the `Authorization` header.
+# Attached to the demo agent in 095. Loaded before 095 so the agent's M2M can resolve it.
+#
+# NOTE: the URL's port is this dev stack's `DJANGO_PORT` (see `.angee/angee.yaml`
+# `ports.django`); a setting-driven, port-portable URL is a follow-up.
+- xref: mcp_angee
+  name: angee-demo
+  description: The Angee platform's own MCP tools (notes).
+  placement: internal
+  transport: http
+  url: http://host.docker.internal:8103/mcp
+  credential: notes.cred_mcp_angee

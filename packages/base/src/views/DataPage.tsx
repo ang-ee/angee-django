@@ -130,6 +130,9 @@ export interface DataPageProps<TRow extends Row = Row> {
   /** Custom content rendered below the record form for a saved record (not on
    * create) — e.g. an operator status/provisioning panel. See `FormView.recordExtras`. */
   recordExtras?: FormViewProps["recordExtras"];
+  /** Tabs rendered for a saved record beside the form's "Overview" tab (not on
+   * create) — e.g. provisioning and chat panels. See `FormView.recordTabs`. */
+  recordTabs?: FormViewProps["recordTabs"];
   rowHref?: (row: TRow) => string;
   className?: string;
 }
@@ -262,6 +265,7 @@ function DataPageBody<TRow extends Row = Row>({
   hideCreate = false,
   createDefaults,
   recordExtras,
+  recordTabs,
   className,
 }: DataPageBodyProps<TRow>): React.ReactElement {
   const resolvedRecordId = recordController.recordId;
@@ -447,6 +451,7 @@ function DataPageBody<TRow extends Row = Row>({
       {...formRenderProps}
       defaultValues={resolvedCreating ? createDefaults : undefined}
       recordExtras={resolvedCreating ? undefined : recordExtras}
+      recordTabs={resolvedCreating ? undefined : recordTabs}
       onSaved={handleSaved}
       toolbarStart={formRenderProps.toolbarStart}
       toolbar={composeNodes(formRenderProps.toolbar, recordHeaderActions)}

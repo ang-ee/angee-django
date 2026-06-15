@@ -79,6 +79,8 @@ export {
   type FormViewProps,
   type FormField,
   type FieldKind,
+  type RecordPanelContext,
+  type RecordTabDescriptor,
 } from "./FormView";
 export {
   DataPage,

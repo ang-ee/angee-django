@@ -130,6 +130,7 @@ export const enBaseMessages: Record<string, string> = {
   "app.loadingWorkspace": "Loading workspace…",
   "app.redirectingSignIn": "Redirecting to sign in…",
   "form.saveFailed": "Save failed",
+  "form.tabOverview": "Overview",
   "select.label": "Select",
   "combobox.label": "Combobox",
   "combobox.selectOption": "Select option",
