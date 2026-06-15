@@ -27,7 +27,7 @@ from angee.graphql.introspection import (
     surface_field_names,
     surface_name,
 )
-from graphql import GraphQLError
+from graphql import GraphQLError, GraphQLSchema
 
 DEFAULT_SCHEMA_NAME = "public"
 """Default GraphQL schema name served by Angee hosts."""
@@ -41,11 +41,7 @@ SCHEMA_PART_KEYS: tuple[str, ...] = (
 )
 """GraphQL merge buckets accepted from addon schema declarations."""
 
-_ROOT_TYPE_NAMES = {
-    key: key.title()
-    for key in SCHEMA_PART_KEYS
-    if key not in {"types", "extensions"}
-}
+_ROOT_TYPE_NAMES = {key: key.title() for key in SCHEMA_PART_KEYS if key not in {"types", "extensions"}}
 
 
 def _unwrap_validation_error(exc: BaseException | None) -> ValidationError | None:
@@ -150,12 +146,7 @@ class SchemaParts:
         if unknown:
             listed = ", ".join(sorted(str(key) for key in unknown))
             raise ImproperlyConfigured(f"{app_config.name}.schemas[{name!r}] has unknown keys: {listed}")
-        return cls(
-            **{
-                key: _schema_part_values(app_config, name, key, raw_entry.get(key))
-                for key in SCHEMA_PART_KEYS
-            }
-        )
+        return cls(**{key: _schema_part_values(app_config, name, key, raw_entry.get(key)) for key in SCHEMA_PART_KEYS})
 
     def merge(self, other: SchemaParts) -> SchemaParts:
         """Return these parts folded with ``other`` and deduped by identity."""
@@ -228,6 +219,16 @@ class GraphQLSchemas:
         if name not in self._builds:
             self._builds[name] = self._build(name)
         return self._builds[name]
+
+    def graphql_schema(self, name: str = DEFAULT_SCHEMA_NAME) -> GraphQLSchema:
+        """Return the introspectable graphql-core schema for the named bucket.
+
+        The public accessor for callers (e.g. the MCP tool layer) that walk the schema's
+        types/fields/args. Owns the one reach into Strawberry's underlying graphql-core
+        schema so siblings don't couple to that private attribute.
+        """
+
+        return self.build(name)._schema
 
     def _build(
         self,

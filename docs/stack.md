@@ -30,7 +30,7 @@ Dependency changes must update this file in the same change.
 | strawberry-django | GraphQL types, resolvers, dataloaders, schema printing | Merge addon schema parts into named schemas, `crud`/`changes` shortcuts, emit SDL, serve per name |
 | django-choices-field | Enum-backed model fields | `StateField` semantic wrapper |
 | strawberry-django-aggregates | Aggregation and group-by resolvers | Addon-level `AggregateBuilder` wiring (per addon, e.g. notes) |
-| channels + uvicorn | ASGI/WebSocket transport and serving | GraphQL subscription mounting; uvicorn serves the composed ASGI app and sends the lifespan that runs the MCP mount's session manager (`angee.asgi`) |
+| channels + uvicorn | ASGI/WebSocket transport and serving | GraphQL subscription mounting; uvicorn serves the composed ASGI app and sends the lifespan that enters the MCP mount's `http_app` lifespan (`angee.asgi`) |
 | django-zed-rebac | REBAC engine, actor scoping, relationship storage, local and SpiceDB-compatible backends | Per-addon schema merge, reserved roles, actor resolver |
 | django-sqids | Opaque external IDs | `SqidMixin`, `SqidField` (NULL-safe decode on joins), GraphQL boundary scalar |
 | django-simple-history | Shadow history tables and revert | `HistoryMixin` marker |
@@ -41,7 +41,7 @@ Dependency changes must update this file in the same change.
 | django-yamlconf | Django settings YAML overlays | `angee.compose.settings` loads `settings.yaml` beside `manage.py`; `Composer` applies addon `autoconfig.py` fragments |
 | django-environ | Typed boot environment access and URL parsers | `angee.compose.settings` reads Angee bootstrap env vars |
 | pyjwt[crypto] | JWT and JOSE verification | OIDC discovery and exchange orchestration |
-| mcp (FastMCP) | MCP server — tool registration, JSON-RPC, StreamableHTTP ASGI app, bearer auth (`TokenVerifier`) | Mounts one StreamableHTTP app at `/mcp` via the `asgi.py` `http_mounts` seam (its session-manager lifespan run by `angee.asgi` at server startup), authenticates the bearer to a REBAC actor with a `TokenVerifier`, registers addon-declared tools; rebac authorizes each tool |
+| mcp (jlowin FastMCP v2) | MCP server — tool registration, JSON-RPC, StreamableHTTP ASGI app, bearer auth (`TokenVerifier`), per-call middleware | Mounts one StreamableHTTP app at `/mcp` via the `asgi.py` `http_mounts` seam (its `http_app` lifespan entered by `angee.asgi` via `router.lifespan_context`), authenticates the bearer to a REBAC actor with a `fastmcp.server.auth.TokenVerifier` and brackets each tool call in that actor; addon tools — incl. `GraphQLTool` operations executed under the actor (`angee.mcp.graphql`) — run scoped, and rebac authorizes |
 | python-magic | MIME detection from file bytes | Storage finalize detection (requires the system libmagic) |
 | uv | Python dependency resolution and workspaces | Workspace layout |
 

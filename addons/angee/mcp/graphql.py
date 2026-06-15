@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
+from fastmcp.exceptions import ToolError
 from fastmcp.tools.tool import Tool, ToolResult
 from graphql import (
     GraphQLEnumType,
@@ -34,6 +35,7 @@ from graphql import (
     Undefined,
 )
 from strawberry.relay import from_base64, to_base64
+from strawberry.utils.str_converters import to_camel_case, to_snake_case
 
 from angee.graphql.schema import GraphQLSchemas
 from mcp.types import ToolAnnotations
@@ -66,8 +68,27 @@ async def execute_under_actor(schema: str, document: str, variables: dict[str, A
         context_value=SimpleNamespace(request=None),
     )
     if result.errors:
-        raise result.errors[0]
+        raise _tool_error(result.errors[0])
     return dict(result.data or {})
+
+
+def _tool_error(error: Any) -> ToolError:
+    """Translate a GraphQL error into an agent-safe ``ToolError`` (no internals leaked).
+
+    ``AngeeSchema.process_errors`` has already classified rebac denials and Django
+    validation onto ``error.extensions``; reuse that instead of forwarding the raw
+    message, which can carry ORM/model internals. FastMCP masks every *other* exception
+    (``mask_error_details``), so only this curated text reaches the agent.
+    """
+
+    extensions = error.extensions or {}
+    if extensions.get("code") == "PERMISSION_DENIED":
+        return ToolError("You do not have permission to perform this operation.")
+    if extensions.get("code") == "UNAUTHENTICATED":
+        return ToolError("This operation requires an authenticated actor.")
+    if extensions.get("validationErrors"):
+        return ToolError(f"Invalid input: {extensions['validationErrors']}.")
+    return ToolError("The operation could not be completed.")
 
 
 @dataclass(frozen=True)
@@ -133,17 +154,16 @@ class _CompiledTool(Tool):
         """Map agent args to GraphQL variables: limit→pagination, sqid→GlobalID, flatten."""
 
         args = dict(arguments)
+        sqid = args.pop("sqid", None)
         variables: dict[str, Any] = {}
         if self.limit_arg and self.limit_arg in args:
             variables["pagination"] = {"limit": args.pop(self.limit_arg)}
-        if self.id_arg and "sqid" in args:
-            variables[self.id_arg] = to_base64(self.node_type, str(args.pop("sqid")))
+        if self.id_arg and sqid is not None:
+            variables[self.id_arg] = to_base64(self.node_type, str(sqid))
         if self.flatten_arg:
-            obj: dict[str, Any] = {}
-            if "sqid" in args:
-                obj["id"] = to_base64(self.node_type, str(args.pop("sqid")))
-            for key, value in args.items():
-                obj[_camel(key)] = value
+            obj: dict[str, Any] = {to_camel_case(key): value for key, value in args.items()}
+            if sqid is not None:
+                obj["id"] = to_base64(self.node_type, str(sqid))
             variables[self.flatten_arg] = obj
         return variables
 
@@ -162,10 +182,10 @@ class _CompiledTool(Tool):
 def _compile(spec: GraphQLTool) -> _CompiledTool:
     """Introspect the schema bucket and build the runnable tool for ``spec``."""
 
-    gc = GraphQLSchemas.from_discovery().build(spec.schema)._schema
+    gc = GraphQLSchemas.from_discovery().graphql_schema(spec.schema)
     op_type, field = _root_field(gc, spec.operation)
     node, is_list = _return_node(field.type)
-    leaves = [("sqid", "id", True) if name == "sqid" else (name, _camel(name), False) for name in spec.fields]
+    leaves = [("sqid", "id", True) if name == "sqid" else (name, to_camel_case(name), False) for name in spec.fields]
     parameters = _input_schema(field, spec)
     document = _document(op_type, spec, field, leaves, is_list)
     return _CompiledTool(
@@ -226,9 +246,9 @@ def _input_schema(field: Any, spec: GraphQLTool) -> dict[str, Any]:
                 required.append("sqid")
                 continue
             schema, non_null = _json_type(input_field.type)
-            properties[_snake(name)] = schema
+            properties[to_snake_case(name)] = schema
             if non_null and input_field.default_value is Undefined:
-                required.append(_snake(name))
+                required.append(to_snake_case(name))
     return {"type": "object", "properties": properties, "required": required, "additionalProperties": False}
 
 
@@ -285,16 +305,3 @@ def _unwrap(gql_type: Any) -> Any:
     while isinstance(gql_type, GraphQLNonNull | GraphQLList):
         gql_type = gql_type.of_type
     return gql_type
-
-
-def _camel(name: str) -> str:
-    """``snake_case`` → ``camelCase`` (the GraphQL wire name)."""
-
-    head, *tail = name.split("_")
-    return head + "".join(part[:1].upper() + part[1:] for part in tail)
-
-
-def _snake(name: str) -> str:
-    """``camelCase`` → ``snake_case`` (the agent-facing name)."""
-
-    return "".join(f"_{ch.lower()}" if ch.isupper() else ch for ch in name)

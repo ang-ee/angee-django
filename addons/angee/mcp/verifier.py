@@ -42,10 +42,10 @@ class RebacTokenVerifier(TokenVerifier):
         if actor is None:
             return None
         subject = str(actor)
-        # The actor rides ``subject`` (read back by ``ActorMiddleware``) and ``claims`` (the
-        # forward-compatible carrier). ``client_id`` mirrors it because this bearer model has
-        # no separate OAuth client identity, and FastMCP requires the field to be non-empty.
-        return AccessToken(token=token, client_id=subject, scopes=[], subject=subject, claims={"subject": subject})
+        # The actor rides ``subject`` (read back by ``ActorMiddleware``). ``client_id``
+        # mirrors it because this bearer model has no separate OAuth client identity, and
+        # FastMCP requires the field to be non-empty.
+        return AccessToken(token=token, client_id=subject, scopes=[], subject=subject)
 
 
 def _verifier() -> MCPActorVerifier | None:

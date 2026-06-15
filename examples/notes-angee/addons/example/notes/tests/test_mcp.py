@@ -96,6 +96,20 @@ class NotesMCPServerTests(TransactionTestCase):
             self.assertEqual(read["body"], "one two three")
             self.assertEqual(read["tags"], ["a", "b"])
 
+            # update_note exercises the flatten + sqid→GlobalID write path: change the
+            # title/tags on the note alice owns, then confirm the change persisted.
+            updated = await self._tool(
+                "update_note", {"sqid": created["sqid"], "title": "Renamed via MCP", "tags": ["x"]}
+            )
+            self.assertEqual(updated["sqid"], created["sqid"])
+            self.assertEqual(updated["title"], "Renamed via MCP")
+            self.assertEqual(updated["tags"], ["x"])
+
+            reread = await self._tool("read_note", {"sqid": created["sqid"]})
+            self.assertEqual(reread["title"], "Renamed via MCP")
+            self.assertEqual(reread["tags"], ["x"])
+            self.assertEqual(reread["body"], "one two three")
+
     async def _unauthorized(self) -> None:
         """A bearer-less request is rejected with ``401`` before any tool runs."""
 

@@ -46,7 +46,12 @@ MOUNT_PATH = "/mcp"
 def mcp_server() -> FastMCP:
     """Return the process-wide FastMCP server, built and tool-registered once."""
 
-    server = FastMCP(name="angee", auth=RebacTokenVerifier(), middleware=[ActorMiddleware()])
+    server = FastMCP(
+        name="angee",
+        auth=RebacTokenVerifier(),
+        middleware=[ActorMiddleware()],
+        mask_error_details=True,
+    )
     for registrar in _registrars():
         registrar(server)
     return server

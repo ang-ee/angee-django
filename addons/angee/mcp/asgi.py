@@ -1,9 +1,10 @@
 """ASGI mount contribution: the StreamableHTTP app at ``/mcp``.
 
 :mod:`angee.asgi` discovers this addon's ``http_mounts``, mounts the app at
-``/mcp``, and runs its StreamableHTTP lifespan (``session_manager.run()``) once
-for the process from the server's ASGI lifespan. Contributes nothing when no
-installed addon declares ``mcp_tools``.
+``/mcp``, and enters its StreamableHTTP lifespan (the ``http_app``'s
+``router.lifespan_context``, which owns FastMCP v2's session manager) once for the
+process from the server's ASGI lifespan. Contributes nothing when no installed addon
+declares ``mcp_tools``.
 """
 
 from __future__ import annotations
