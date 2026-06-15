@@ -6,6 +6,26 @@ template:
   active: stacks/dev
   answers_file: .copier-answers.yml
 
+# Edge ingress. The operator's central Caddy fronts every service that declares a
+# `route:` block (e.g. the agent chat WebSocket) and forward-auths each upgrade
+# against the operator's /edge/verify. Without an `ingress.type: caddy` stack the
+# operator treats routed services as unrouted (ServiceEndpoint.routed = false) and
+# `agentChatEndpoint` can't hand the browser a reachable URL.
+#
+# Dev uses `routing: path` + `tls: off`: one shared host with a `/<service>/` prefix
+# per agent (no per-agent subdomain/DNS), and plain ws (no local-CA cert to trust).
+# `localhost` always resolves, so a freshly provisioned agent is reachable at
+# ws://localhost/<service>/ with zero DNS or cert setup. Prod flips to the defaults
+# (`routing: host`, `tls: auto` → wss://<service>.<domain>/ with a wildcard cert).
+ingress:
+  type: caddy
+  routing: path
+  tls: "off"   # quoted: bare YAML `off` is boolean false; the operator wants the string
+  domain: localhost
+  # The edge runs as a container; this dev stack's operator is `runtime: local`, so
+  # forward_auth must reach it on the host instead of the default `operator:9000`.
+  verify: host.docker.internal:{{ operator_port }}
+
 # The operator daemon owns stack-secret management. The console bearer is a
 # generated secret shared by the daemon (--token) and Django
 # (ANGEE_OPERATOR_TOKEN setting), so neither side hardcodes it.
@@ -136,12 +156,24 @@ jobs:
     depends_on: [deps, operator-schema]
 
 services:
-  # Django's runserver is provided by Daphne when the daphne app is installed:
-  # it serves the stable Angee ASGI entrypoint while keeping Django's autoreloader.
+  # uvicorn serves the stable Angee ASGI entrypoint. Unlike Daphne's runserver it
+  # sends the ASGI lifespan that starts the MCP mount's session manager (see
+  # angee.asgi). --reload watches the workdir (the project source). When the
+  # project lives *under* the framework checkout (the monorepo layout), we also
+  # watch the framework's `angee`/`addons` so editing framework source hot-reloads
+  # too: both paths are manifest-relative, so the hop from the app workdir up to the
+  # framework root is `../` per project segment below it (e.g. project
+  # `examples/notes-angee` → `../../`). A consumer whose project is not under the
+  # framework gets plain workdir watching. (uvicorn ignores the cwd once any
+  # --reload-dir is given, so the app dir `.` is listed explicitly.)
+  {%- set _proj = project_path.split('/') %}
+  {%- set _fw = framework_path.split('/') %}
+  {%- set _under = _proj | length > _fw | length and _proj[:_fw | length] == _fw %}
+  {%- set _up = '../' * (_proj | length - _fw | length) %}
   django:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "python", "manage.py", "runserver", "127.0.0.1:{{ django_port }}"]
+    command: ["uv", "run", "uvicorn", "angee.asgi:application", "--host", "127.0.0.1", "--port", "{{ django_port }}", "--reload"{% if _under %}, "--reload-dir", ".", "--reload-dir", "{{ _up }}angee", "--reload-dir", "{{ _up }}addons"{% endif %}]
     env:
       ANGEE_PROJECT_DIR: "."
       # Django mints the browser's scoped connection token over the daemon's direct
@@ -190,6 +222,9 @@ services:
     command:
       - sh
       - "-c"
-      - exec angee operator --root . --bind 127.0.0.1 --port ${ports.operator} --token "$ANGEE_OPERATOR_TOKEN"
+      # Bind 0.0.0.0 (not just loopback): the Caddy edge runs in a container and
+      # reaches the operator's /edge/verify via host.docker.internal, which lands on
+      # the host gateway, not 127.0.0.1. 0.0.0.0 still serves Django on loopback.
+      - exec angee operator --root . --bind 0.0.0.0 --port ${ports.operator} --token "$ANGEE_OPERATOR_TOKEN"
     env:
       ANGEE_OPERATOR_TOKEN: "${secret.operator-token}"

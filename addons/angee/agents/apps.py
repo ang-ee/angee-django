@@ -14,6 +14,7 @@ class AgentsConfig(AppConfig):
     name = "angee.agents"
     label = "agents"
     # operator: agent provisioning drives the daemon over its REST bridge server-side.
-    depends_on = ("angee.integrate", "angee.operator")
+    # mcp: the agents addon owns the MCP catalogue and supplies the bearer→actor verifier.
+    depends_on = ("angee.integrate", "angee.operator", "angee.mcp")
     schemas = "schema.schemas"
     permissions = "permissions.zed"

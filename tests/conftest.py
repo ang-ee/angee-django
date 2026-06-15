@@ -23,6 +23,10 @@ from angee.iam.models import Credential as AbstractCredential
 from angee.iam.models import ExternalAccount as AbstractExternalAccount
 from angee.iam.models import OAuthClient as AbstractOAuthClient
 from angee.integrate.models import Integration as AbstractIntegration
+from angee.integrate.models import Repository as AbstractRepository
+from angee.integrate.models import Source as AbstractSource
+from angee.integrate.models import Template as AbstractTemplate
+from angee.integrate.models import VCSIntegration as AbstractVCSIntegration
 from angee.integrate.models import Vendor as AbstractVendor
 from angee.integrate.models import WebhookSubscription as AbstractWebhookSubscription
 from angee.integrate.vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
@@ -164,6 +168,70 @@ IAM_CONNECTION_TEST_MODELS = (OAuthClient, ExternalAccount, Credential)
 
 INTEGRATE_TEST_MODELS = (Vendor, Integration)
 """Concrete integration catalogue/integration models created on demand by integrate fixtures."""
+
+
+class VCSIntegration(AbstractVCSIntegration):
+    """Concrete VCS integration used by source-addon tests.
+
+    ``angee.integrate.schema`` binds the VCS console types at import time via
+    ``apps.get_model``, so the concrete models live here (imported before any test
+    module) rather than in a single test file — otherwise importing the schema from
+    one test depends on another test having been collected first.
+    """
+
+    class Meta(AbstractVCSIntegration.Meta):
+        """Django model options for the canonical test VCS integration."""
+
+        abstract = False
+        app_label = "integrate"
+        db_table = "test_integrate_vcs_integration"
+        rebac_resource_type = "integrate/vcs_integration"
+        rebac_id_attr = "sqid"
+
+
+class Repository(AbstractRepository):
+    """Concrete repository used by source-addon tests."""
+
+    class Meta(AbstractRepository.Meta):
+        """Django model options for the canonical test repository."""
+
+        abstract = False
+        app_label = "integrate"
+        db_table = "test_integrate_repository"
+        rebac_resource_type = "integrate/repository"
+        rebac_id_attr = "sqid"
+
+
+class Source(AbstractSource):
+    """Concrete source used by source-addon tests."""
+
+    class Meta(AbstractSource.Meta):
+        """Django model options for the canonical test source."""
+
+        abstract = False
+        app_label = "integrate"
+        db_table = "test_integrate_source"
+        rebac_resource_type = "integrate/source"
+        rebac_id_attr = "sqid"
+
+
+class Template(AbstractTemplate):
+    """Concrete template used by source-addon tests."""
+
+    source_kind = "template"
+
+    class Meta(AbstractTemplate.Meta):
+        """Django model options for the canonical test template."""
+
+        abstract = False
+        app_label = "integrate"
+        db_table = "test_integrate_template"
+        rebac_resource_type = "integrate/template"
+        rebac_id_attr = "sqid"
+
+
+VCS_TEST_MODELS = (VCSIntegration, Repository, Source, Template)
+"""Concrete VCS inventory models created on demand by VCS test fixtures."""
 
 
 def make_integration(

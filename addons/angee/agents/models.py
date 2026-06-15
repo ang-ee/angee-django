@@ -11,6 +11,7 @@ and an :class:`InferenceProvider` (an ``integrate.Capability`` over an
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from typing import Any, cast
 
 from django.apps import apps
@@ -326,6 +327,30 @@ class MCPServer(SqidMixin, AuditMixin, AngeeModel):
 
         return self.name
 
+    @property
+    def is_addressable(self) -> bool:
+        """Whether a rendered container can reach this server — i.e. it has a URL.
+
+        A stdio server is a local command with no URL and isn't rendered into an
+        agent's ``.mcp.json``.
+        """
+
+        return bool(self.url)
+
+    def config_entry(self, secret_ref: str | None) -> dict[str, Any]:
+        """Return this server's ``.mcp.json`` entry, given an optional secret reference.
+
+        A credentialed server carries an ``Authorization: Bearer`` header whose value
+        is the operator ``${secret.<name>}`` reference named by ``secret_ref`` — not
+        the literal token, which rides the operator store, never the file or browser.
+        Pass ``None`` for an uncredentialed server.
+        """
+
+        entry: dict[str, Any] = {"type": str(self.transport), "url": self.url}
+        if secret_ref is not None:
+            entry["headers"] = {"Authorization": f"Bearer ${{secret.{secret_ref}}}"}
+        return entry
+
 
 class MCPTool(SqidMixin, AuditMixin, AngeeModel):
     """One tool an MCP server exposes; agents select the tools they may call."""
@@ -512,16 +537,57 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
     def mcp_config(self) -> dict[str, Any]:
         """Return the ``.mcp.json`` document for this agent's reachable MCP servers.
 
-        Only servers with a URL (HTTP/SSE) are addressable from the rendered
-        container; a stdio server is a local command with no URL and is skipped.
+        Each server renders its own entry (:meth:`MCPServer.config_entry`); this
+        supplies the agent-scoped secret reference (:meth:`mcp_secret_name`) for a
+        credentialed server and skips servers that aren't addressable. The secret
+        value rides the operator store (synced server-side, like the inference
+        token), never the file or the browser. See :meth:`mcp_secrets`.
         """
 
-        servers: dict[str, Any] = {}
-        for server in self.mcp_servers.all():
-            if not server.url:
-                continue
-            servers[server.name] = {"type": str(server.transport), "url": server.url}
+        servers = {
+            server.name: server.config_entry(secret_name or None)
+            for server, secret_name in self._addressable_mcp_servers()
+        }
         return {"mcpServers": servers}
+
+    def _addressable_mcp_servers(self) -> Iterator[tuple[MCPServer, str]]:
+        """Yield ``(server, secret_name)`` for each addressable MCP server, in row order.
+
+        The single owner of "which servers this agent exposes, and the operator secret
+        name each credentialed one uses" — so the rendered ``.mcp.json`` header
+        (:meth:`mcp_config`) and the value synced under it (:meth:`mcp_secrets`) can't
+        drift. ``secret_name`` is ``""`` for an uncredentialed server.
+        """
+
+        for server in self.mcp_servers.select_related("credential"):
+            if not server.is_addressable:
+                continue
+            yield server, (self.mcp_secret_name(server) if server.credential_id else "")
+
+    def mcp_secret_name(self, server: MCPServer) -> str:
+        """Return the operator secret name holding one MCP server's bearer for this agent.
+
+        Stable and scoped to the agent + server credential: the rendered
+        ``.mcp.json`` references it and the provision flow syncs the credential value
+        under it (the value never appears in the file or the browser).
+        """
+
+        return f"agent-{self.sqid}-mcp-{server.credential.sqid}"
+
+    def mcp_secrets(self) -> dict[str, str]:
+        """Return ``{secret_name: bearer_value}`` for every credentialed MCP server.
+
+        Server-side only — the provision flow pushes these to the operator secret
+        store so each server's ``${secret.<name>}`` header resolves in the container.
+        """
+
+        secrets: dict[str, str] = {}
+        for server, secret_name in self._addressable_mcp_servers():
+            if not secret_name:
+                continue
+            server.credential.ensure_fresh()
+            secrets[secret_name] = str(server.credential.secret_value())
+        return secrets
 
     def inference_secret_name(self) -> str:
         """Return the operator secret name holding this agent's inference token.
@@ -536,11 +602,16 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         """Return the inference credential's secret value (API key or OAuth token), or ``""``.
 
         Server-side only — the value is pushed to the operator secret store under
-        ``inference_secret_name()`` and never returned to the browser.
+        ``inference_secret_name()`` and never returned to the browser. An OAuth token
+        near expiry is renewed first (:meth:`iam.Credential.ensure_fresh`) so the value
+        frozen into the provisioned service has its full lifetime ahead of it.
         """
 
         credential = self._inference_credential()
-        return str(credential.secret_value()) if credential is not None else ""
+        if credential is None:
+            return ""
+        credential.ensure_fresh()
+        return str(credential.secret_value())
 
     def _inference_credential(self) -> Any:
         """Return the ``iam.Credential`` backing this agent's inference model, or ``None``.

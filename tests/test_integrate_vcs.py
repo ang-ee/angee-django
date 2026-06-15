@@ -17,74 +17,18 @@ from django.core.management import call_command
 from django.db import connection
 from rebac import system_context
 
-from angee.integrate.models import Repository as AbstractRepository
-from angee.integrate.models import Source as AbstractSource
-from angee.integrate.models import Template as AbstractTemplate
-from angee.integrate.models import VCSIntegration as AbstractVCSIntegration
 from angee.integrate.vcs.backend import LocalVCSBackend
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,
+    VCS_TEST_MODELS,
+    Repository,
+    Source,
+    Template,
+    VCSIntegration,
     _create_missing_tables,
     make_integration,
 )
-
-
-class VCSIntegration(AbstractVCSIntegration):
-    """Concrete VCS integration used by the inventory-flow tests."""
-
-    class Meta(AbstractVCSIntegration.Meta):
-        """Django model options for the canonical test VCS integration."""
-
-        abstract = False
-        app_label = "integrate"
-        db_table = "test_integrate_vcs_integration"
-        rebac_resource_type = "integrate/vcs_integration"
-        rebac_id_attr = "sqid"
-
-
-class Repository(AbstractRepository):
-    """Concrete repository used by the inventory-flow tests."""
-
-    class Meta(AbstractRepository.Meta):
-        """Django model options for the canonical test repository."""
-
-        abstract = False
-        app_label = "integrate"
-        db_table = "test_integrate_repository"
-        rebac_resource_type = "integrate/repository"
-        rebac_id_attr = "sqid"
-
-
-class Source(AbstractSource):
-    """Concrete source used by the inventory-flow tests."""
-
-    class Meta(AbstractSource.Meta):
-        """Django model options for the canonical test source."""
-
-        abstract = False
-        app_label = "integrate"
-        db_table = "test_integrate_source"
-        rebac_resource_type = "integrate/source"
-        rebac_id_attr = "sqid"
-
-
-class Template(AbstractTemplate):
-    """Concrete template used by the inventory-flow tests."""
-
-    source_kind = "template"
-
-    class Meta(AbstractTemplate.Meta):
-        """Django model options for the canonical test template."""
-
-        abstract = False
-        app_label = "integrate"
-        db_table = "test_integrate_template"
-        rebac_resource_type = "integrate/template"
-        rebac_id_attr = "sqid"
-
-
-VCS_TEST_MODELS = (VCSIntegration, Repository, Source, Template)
 
 REPOS = [
     {

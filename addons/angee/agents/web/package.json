@@ -15,7 +15,11 @@
     "@angee/base": "workspace:*",
     "@angee/operator": "workspace:*",
     "@angee/sdk": "workspace:*",
-    "lucide-react": "^1.17.0"
+    "@assistant-ui/react": "^0.12.0",
+    "@zed-industries/agent-client-protocol": "^0.4.5",
+    "lucide-react": "^1.17.0",
+    "streamdown": "^1.5.0",
+    "valibot": "^1.4.0"
   },
   "peerDependencies": {
     "@tanstack/react-router": "^1",

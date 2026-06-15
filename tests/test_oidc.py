@@ -261,6 +261,36 @@ def test_exchange_code_posts_json_body_with_state_and_pkce(monkeypatch: pytest.M
     }
 
 
+def test_refresh_token_posts_refresh_grant(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`refresh_token` posts a ``refresh_token`` grant and returns the renewed material."""
+
+    captured: dict[str, Any] = {}
+    oauth_client = _stub_oauth_client(token_request_format="json")
+
+    def post_json(url: str, fields: dict[str, Any]) -> dict[str, Any]:
+        captured["url"] = url
+        captured["fields"] = fields
+        return {"access_token": "new-access", "refresh_token": "rotated", "expires_in": 7200}
+
+    monkeypatch.setattr(oidc_client, "_post_json", post_json)
+    monkeypatch.setattr(
+        oidc_client,
+        "_post_form",
+        lambda *args, **kwargs: pytest.fail("JSON clients must not post form bodies"),
+    )
+
+    tokens = oidc_client.refresh_token(oauth_client, refresh_token="stored-refresh")
+
+    assert tokens == {"access_token": "new-access", "refresh_token": "rotated", "expires_in": 7200}
+    assert captured["url"] == "https://issuer.example/oauth/token"
+    assert captured["fields"] == {
+        "client_id": "oidc-client",
+        "client_secret": "secret",
+        "grant_type": "refresh_token",
+        "refresh_token": "stored-refresh",
+    }
+
+
 def test_verify_id_token_rejects_bad_issuer(monkeypatch: pytest.MonkeyPatch) -> None:
     """ID token verification rejects a mismatched issuer claim."""
 

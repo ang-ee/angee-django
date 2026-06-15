@@ -43,7 +43,7 @@ reset/prune of orphaned labels belongs to the explicit `angee build`.
 
 1. Resolve the project root.
    `ANGEE_PROJECT_DIR` wins. Otherwise a `manage.py` invocation uses the
-   directory containing `manage.py`. For direct imports, such as `daphne
+   directory containing `manage.py`. For direct imports, such as `uvicorn
    angee.asgi:application`, the current working directory is accepted when it
    contains `settings.yaml` or `settings.py`.
 2. Resolve the project settings module.
@@ -273,7 +273,7 @@ The GraphQL addon is the routing example:
 ```python
 class GraphQLConfig(AppConfig):
     name = "angee.graphql"
-    depends_on = ("angee.base", "channels", "daphne")
+    depends_on = ("angee.base", "channels")
     schemas = None
 ```
 

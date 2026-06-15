@@ -27,6 +27,11 @@ class AngeeQuerySet(RebacQuerySet[_ModelT]):
 
         return _instance_from_public_id_queryset(self, value)
 
+    async def afrom_public_id(self, value: str) -> _ModelT | None:
+        """Async :meth:`from_public_id` — resolves on the event loop, row-scoped."""
+
+        return await _ainstance_from_public_id_queryset(self, value)
+
     def apply_ambient_scope(self) -> Self:
         """Eagerly apply REBAC row scope using the queryset or ambient actor."""
 
@@ -240,6 +245,21 @@ def _instance_from_public_id_queryset(
 
     try:
         instance = queryset.filter(**_public_id_lookup(queryset.model, value)).first()
+    except (TypeError, ValueError):
+        return None
+    return cast(_ModelT | None, instance)
+
+
+async def _ainstance_from_public_id_queryset(
+    queryset: models.QuerySet[_ModelT],
+    value: str,
+) -> _ModelT | None:
+    """Async mirror of :func:`_instance_from_public_id_queryset`."""
+
+    if value == "":
+        return None
+    try:
+        instance = await queryset.filter(**_public_id_lookup(queryset.model, value)).afirst()
     except (TypeError, ValueError):
         return None
     return cast(_ModelT | None, instance)

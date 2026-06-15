@@ -9,11 +9,13 @@ columns and delegates kind-specific behavior here.
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, ClassVar
 
 from django.db import models
 from django.utils import timezone
+
+from angee.iam.oidc import client as oidc_client
 
 
 class CredentialKind(models.TextChoices):
@@ -56,6 +58,12 @@ class CredentialKindHandler:
 
         material = self.reveal(credential)
         return str(material.get(self.material_field) or "")
+
+    def can_refresh(self, credential: Any) -> bool:
+        """Return whether this credential can renew its own secret without the user."""
+
+        del credential
+        return False
 
     def refresh(self, credential: Any) -> None:
         """Refresh ``credential`` in place when the kind supports it."""
@@ -106,23 +114,68 @@ class OAuthCredentialHandler(CredentialKindHandler):
 
         fields: dict[str, Any] = {}
         now = timezone.now()
-        if "expires_in" in material:
-            try:
-                fields["expires_at"] = now + timedelta(seconds=int(material["expires_in"]))
-            except (TypeError, ValueError):
-                pass
+        if material.get("access_token"):
+            # A token's declared lifetime sets the refresh deadline. A response that omits
+            # ``expires_in`` carries no known expiry, so clear ``expires_at`` rather than
+            # leave a stale past timestamp that would force a refresh on every use.
+            fields["expires_at"] = self._expires_at(material, now)
+            fields["last_refresh_at"] = now
+            fields["last_refresh_status"] = "ok"
         scope = material.get("scope")
         if isinstance(scope, str):
             fields["granted_scopes"] = scope.split()
-        if material.get("access_token"):
-            fields["last_refresh_at"] = now
-            fields["last_refresh_status"] = "ok"
         return fields
 
-    def refresh(self, credential: Any) -> None:
-        """Refresh OAuth tokens."""
+    @staticmethod
+    def _expires_at(material: dict[str, Any], now: datetime) -> datetime | None:
+        """Return the access-token expiry from ``expires_in`` seconds, or ``None``."""
 
-        raise NotImplementedError("OAuth token refresh wired in S3")
+        try:
+            return now + timedelta(seconds=int(material["expires_in"]))
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def can_refresh(self, credential: Any) -> bool:
+        """Return whether a refresh-capable provider and a stored refresh token exist."""
+
+        oauth_client = getattr(credential, "oauth_client", None)
+        if oauth_client is None or not getattr(oauth_client, "supports_refresh", False):
+            return False
+        return bool(self.reveal(credential).get("refresh_token"))
+
+    def refresh(self, credential: Any) -> None:
+        """Exchange the stored refresh token for fresh material, persisted in place.
+
+        Renews this OAuth credential through the provider's refresh grant and writes the
+        new tokens back under its ``(user, provider)`` identity — the same upsert the
+        login flow uses, so ``expires_at`` and the refresh metadata are recomputed once.
+        The provider may rotate the refresh token; a returned one replaces the stored one
+        (otherwise the existing one is kept). ``credential`` is reloaded from the persisted
+        row so a caller reading :meth:`secret_value` next sees the fresh token. Does not
+        lock or re-check freshness — :meth:`iam.Credential.ensure_fresh` serializes
+        concurrent refreshes; raises (``OidcFlowError``/``ValueError``) when the grant is
+        rejected or no refresh token is stored.
+        """
+
+        material = self.reveal(credential)
+        refresh_value = str(material.get("refresh_token") or "")
+        oauth_client = getattr(credential, "oauth_client", None)
+        if oauth_client is None or not refresh_value:
+            raise ValueError("OAuth credential has no refresh token to renew from.")
+        tokens = oidc_client.refresh_token(oauth_client, refresh_token=refresh_value)
+        # The response fully describes the new token; only carry the refresh token forward
+        # when the provider didn't rotate it (so a one-time token isn't dropped) — never the
+        # old token's ``expires_in``/``scope``, which describe the token being replaced.
+        renewed_material = dict(tokens)
+        renewed_material.setdefault("refresh_token", refresh_value)
+        type(credential).objects.upsert_for_user(
+            credential.user,
+            oauth_client,
+            self.kind,
+            renewed_material,
+            external_account=credential.external_account,
+        )
+        credential.refresh_from_db()
 
 
 class StaticTokenCredentialHandler(CredentialKindHandler):

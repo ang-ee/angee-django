@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterable, Mapping
+from datetime import timedelta
 from typing import Any, cast
 from urllib.parse import urlsplit
 
@@ -32,6 +34,13 @@ from angee.base.fields import EncryptedField, SqidField, StateField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.iam.credentials import CredentialKind, handler_for
+from angee.iam.oidc.errors import OidcFlowError
+
+logger = logging.getLogger(__name__)
+
+# Renew an OAuth access token this far ahead of its expiry, so a consumer about to use
+# it (e.g. provisioning) gets a token with life left rather than one about to lapse.
+_OAUTH_REFRESH_MARGIN = timedelta(minutes=5)
 
 
 class AccountStatus(models.TextChoices):
@@ -1043,6 +1052,63 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
         """Return the primary secret value through the kind handler."""
 
         return str(self.handler.secret_value(self))
+
+    def ensure_fresh(self) -> None:
+        """Renew this credential's token in place when it is near expiry and can refresh.
+
+        A best-effort freshening hook for a server-side consumer about to *use* the secret
+        (e.g. syncing it into a provisioned agent): an OAuth credential whose access token
+        is near expiry is renewed through its provider refresh grant; every other case — a
+        non-expiring local token, a still-valid token, or a credential with no refresh
+        grant — is a no-op. The refresh is serialized and re-checked under a row lock
+        (:meth:`_refresh_locked`), so racing consumers issue at most one network refresh.
+        A provider rejecting the refresh is recorded (``last_refresh_status="failed"``) and
+        logged, not raised, so it never blocks the consumer (the stale token then fails
+        downstream as it would have anyway); unexpected errors propagate.
+        """
+
+        if self.expires_at is None or self.expires_at > timezone.now() + _OAUTH_REFRESH_MARGIN:
+            return
+        if not self.handler.can_refresh(self):
+            return
+        try:
+            self._refresh_locked()
+        except (OidcFlowError, ValueError):
+            logger.warning("Credential %s refresh failed; using the existing token.", self.pk, exc_info=True)
+            self._record_refresh_failure()
+
+    def _refresh_locked(self) -> None:
+        """Refresh under a row lock, skipping the network when a concurrent consumer won.
+
+        Locks the credential row, re-reads its expiry, and performs the provider refresh
+        only while it is *still* stale — so two consumers racing to refresh the same
+        credential (concurrent provisions, or one plan's inference + MCP reads) issue at
+        most one network refresh and never replay a rotated refresh token. The in-memory
+        instance is reloaded from the persisted row either way, so it adopts whichever
+        consumer's tokens won.
+        """
+
+        with transaction.atomic():
+            locked = (
+                type(self)
+                .objects.sudo(reason="iam.credential.refresh")
+                .select_for_update()
+                .get(pk=self.pk)
+            )
+            still_stale = (
+                locked.expires_at is not None
+                and locked.expires_at <= timezone.now() + _OAUTH_REFRESH_MARGIN
+            )
+            if still_stale:
+                self.handler.refresh(locked)
+        self.refresh_from_db()
+
+    def _record_refresh_failure(self) -> None:
+        """Persist a failed-refresh marker so the console can prompt re-authorization."""
+
+        self.last_refresh_status = "failed"
+        with system_context(reason="iam.credential.refresh.failed"):
+            self.save(update_fields=["last_refresh_status", "updated_at"])
 
 
 def _validated_manager_values(

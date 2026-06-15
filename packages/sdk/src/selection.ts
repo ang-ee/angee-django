@@ -116,6 +116,19 @@ export function toRelayGlobalId(typeName: string, id: string): string {
   return btoa(`${typeName}:${id}`);
 }
 
+/**
+ * Decode a relay GlobalID back to the bare public id (sqid) it wraps — the inverse
+ * of {@link toRelayGlobalId}. The node `id` is the only public id a GraphQL type
+ * exposes (the raw sqid is not a field), so a caller that needs the sqid (e.g. a
+ * rebac resource id for a view envelope) recovers it here rather than selecting a
+ * non-existent `sqid` field. Same relay boundary, owned here.
+ */
+export function fromRelayGlobalId(globalId: string): string {
+  const decoded = atob(globalId);
+  const separator = decoded.indexOf(":");
+  return separator === -1 ? decoded : decoded.slice(separator + 1);
+}
+
 /** The relay GlobalID for a relation field's optional bare id, preserving null. */
 export function relationRelayGlobalId(
   typeName: string,

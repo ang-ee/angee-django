@@ -90,29 +90,45 @@ def test_iam_config_installs_public_oauth_provider_resources() -> None:
     entry = ResourceEntry.from_declaration(config, "install", manifest["install"][0])
     rows = entry.read_resource_rows()
 
-    assert {row.xref for row in rows} == {"anthropic", "gemini", "grok"}
+    # Anthropic ships two distinct OAuth surfaces on one public client id (Developer
+    # Platform vs. personal Claude.ai plans), modelled as two providers.
+    assert {row.xref for row in rows} == {"anthropic_platform", "anthropic_personal", "gemini", "grok"}
     assert {row.model_label for row in rows} == {"iam.OAuthClient"}
-    assert {row.values["slug"] for row in rows} == {"anthropic", "gemini", "grok"}
+    assert {row.values["slug"] for row in rows} == {"anthropic-platform", "anthropic-personal", "gemini", "grok"}
     rows_by_xref = {row.xref: row for row in rows}
-    anthropic = rows_by_xref["anthropic"].values
-    assert anthropic["environment"] == "prod"
-    assert anthropic["client_id"] == "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-    assert anthropic["authorize_endpoint"] == "https://platform.claude.com/oauth/authorize"
-    assert anthropic["token_endpoint"] == "https://platform.claude.com/v1/oauth/token"
-    assert anthropic["userinfo_endpoint"] == "https://api.anthropic.com/api/oauth/profile"
-    assert anthropic["token_request_format"] == "json"
-    assert anthropic["authorize_params"] == {"code": "true"}
-    assert anthropic["default_scopes"] == [
+    platform = rows_by_xref["anthropic_platform"].values
+    assert platform["slug"] == "anthropic-platform"
+    assert platform["environment"] == "prod"
+    assert platform["client_id"] == "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+    assert platform["authorize_endpoint"] == "https://platform.claude.com/oauth/authorize"
+    assert platform["token_endpoint"] == "https://platform.claude.com/v1/oauth/token"
+    assert platform["userinfo_endpoint"] == "https://api.anthropic.com/api/oauth/profile"
+    assert platform["token_request_format"] == "json"
+    assert platform["authorize_params"] == {"code": "true"}
+    assert platform["default_scopes"] == ["org:create_api_key", "user:profile"]
+    assert platform["external_id_claim"] == "account.uuid"
+    assert platform["email_claim"] == "account.email_address"
+    assert "client_secret" not in platform
+    personal = rows_by_xref["anthropic_personal"].values
+    assert personal["slug"] == "anthropic-personal"
+    assert personal["environment"] == "prod"
+    assert personal["client_id"] == "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+    # Both Anthropic surfaces share the public client id but differ by authorize host.
+    assert personal["authorize_endpoint"] == "https://claude.com/cai/oauth/authorize"
+    assert personal["token_endpoint"] == "https://platform.claude.com/v1/oauth/token"
+    assert personal["userinfo_endpoint"] == "https://api.anthropic.com/api/oauth/profile"
+    assert personal["token_request_format"] == "json"
+    assert personal["authorize_params"] == {"code": "true"}
+    assert personal["default_scopes"] == [
         "user:profile",
         "user:inference",
-        "org:create_api_key",
         "user:sessions:claude_code",
         "user:mcp_servers",
         "user:file_upload",
     ]
-    assert anthropic["external_id_claim"] == "account.uuid"
-    assert anthropic["email_claim"] == "account.email_address"
-    assert "client_secret" not in anthropic
+    assert personal["external_id_claim"] == "account.uuid"
+    assert personal["email_claim"] == "account.email_address"
+    assert "client_secret" not in personal
     gemini = rows_by_xref["gemini"].values
     assert gemini["environment"] == "prod"
     assert gemini["client_id"] == "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"

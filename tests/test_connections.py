@@ -16,6 +16,7 @@ from rebac.models import active_relationship_model
 
 from angee.iam.credentials import CredentialKind, StaticTokenCredentialHandler
 from angee.iam.models import AccountStatus
+from angee.iam.oidc.errors import TOKEN_EXCHANGE_FAILED, OidcFlowError
 from tests.conftest import Credential, ExternalAccount, OAuthClient, _create_missing_tables
 
 
@@ -466,6 +467,159 @@ def test_oauth_clients_command_runs_the_settings_sync(settings: Any) -> None:
             with connection.schema_editor() as schema_editor:
                 for model in reversed(created_models):
                     schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ensure_fresh_renews_an_expiring_oauth_credential(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`ensure_fresh` renews an expiring OAuth token through the provider refresh grant."""
+
+    created_models = _create_missing_tables()
+    try:
+        user = get_user_model().objects.create_user(username="refresh-alice", email="ra@example.com")
+        call_command("rebac", "sync", verbosity=0)
+        credential = _expiring_oauth_credential(
+            user,
+            slug="refreshprov",
+            material={"access_token": "old-access", "refresh_token": "old-refresh", "expires_in": 3600},
+        )
+
+        def fake_refresh(oauth_client: Any, *, refresh_token: str) -> dict[str, Any]:
+            assert refresh_token == "old-refresh"
+            return {"access_token": "new-access", "refresh_token": "new-refresh", "expires_in": 7200}
+
+        monkeypatch.setattr("angee.iam.oidc.client.refresh_token", fake_refresh)
+
+        with system_context(reason="test refresh run"):
+            credential.ensure_fresh()
+
+        assert credential.secret_value() == "new-access"
+        assert credential.reveal()["refresh_token"] == "new-refresh"
+        assert credential.last_refresh_status == "ok"
+        assert credential.expires_at is not None and credential.expires_at > timezone.now()
+        reloaded = Credential.objects.sudo(reason="test reload").get(pk=credential.pk)
+        assert reloaded.reveal()["access_token"] == "new-access"  # persisted, not just in-memory
+    finally:
+        _drop_models(created_models)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ensure_fresh_is_a_noop_for_a_valid_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`ensure_fresh` does not call the provider when the token is comfortably in date."""
+
+    created_models = _create_missing_tables()
+    try:
+        user = get_user_model().objects.create_user(username="refresh-val", email="rv@example.com")
+        call_command("rebac", "sync", verbosity=0)
+        with system_context(reason="test valid setup"):
+            oauth_client = OAuthClient.objects.create(
+                slug="validprov",
+                display_name="Valid prod",
+                client_id="validprov-client",
+                token_endpoint="https://idp.example/token",
+                supports_refresh=True,
+            )
+            credential = Credential.objects.upsert_for_user(
+                user,
+                oauth_client,
+                CredentialKind.OAUTH,
+                {"access_token": "valid-access", "refresh_token": "r", "expires_in": 3600},
+            )
+
+        monkeypatch.setattr(
+            "angee.iam.oidc.client.refresh_token",
+            lambda *args, **kwargs: pytest.fail("must not refresh a still-valid token"),
+        )
+        with system_context(reason="test valid run"):
+            credential.ensure_fresh()
+
+        assert credential.secret_value() == "valid-access"
+    finally:
+        _drop_models(created_models)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ensure_fresh_records_failure_without_raising(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A provider rejecting the refresh is recorded (``last_refresh_status``), not raised."""
+
+    created_models = _create_missing_tables()
+    try:
+        user = get_user_model().objects.create_user(username="refresh-fail", email="rf@example.com")
+        call_command("rebac", "sync", verbosity=0)
+        credential = _expiring_oauth_credential(
+            user,
+            slug="failprov",
+            material={"access_token": "stale-access", "refresh_token": "revoked", "expires_in": 3600},
+        )
+
+        def boom(oauth_client: Any, *, refresh_token: str) -> dict[str, Any]:
+            raise OidcFlowError(TOKEN_EXCHANGE_FAILED, 400)
+
+        monkeypatch.setattr("angee.iam.oidc.client.refresh_token", boom)
+
+        with system_context(reason="test fail run"):
+            credential.ensure_fresh()  # must not raise
+
+        assert credential.last_refresh_status == "failed"
+        assert credential.secret_value() == "stale-access"  # the old token is retained
+        reloaded = Credential.objects.sudo(reason="test reload").get(pk=credential.pk)
+        assert reloaded.last_refresh_status == "failed"
+        assert reloaded.reveal()["access_token"] == "stale-access"
+    finally:
+        _drop_models(created_models)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_oauth_refresh_without_expires_in_clears_expiry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A refresh response with no ``expires_in`` clears ``expires_at`` (no permanent-expired loop)."""
+
+    created_models = _create_missing_tables()
+    try:
+        user = get_user_model().objects.create_user(username="refresh-noexp", email="rn@example.com")
+        call_command("rebac", "sync", verbosity=0)
+        credential = _expiring_oauth_credential(
+            user,
+            slug="noexpprov",
+            material={"access_token": "old", "refresh_token": "old-refresh", "expires_in": 3600},
+        )
+        monkeypatch.setattr(
+            "angee.iam.oidc.client.refresh_token",
+            lambda *args, **kwargs: {"access_token": "fresh-access", "refresh_token": "fresh-refresh"},
+        )
+        with system_context(reason="test noexp run"):
+            credential.ensure_fresh()
+
+        assert credential.secret_value() == "fresh-access"
+        assert credential.expires_at is None
+    finally:
+        _drop_models(created_models)
+
+
+def _expiring_oauth_credential(user: Any, *, slug: str, material: dict[str, Any]) -> Any:
+    """Create a refresh-capable OAuth provider + an already-expired credential for ``user``."""
+
+    with system_context(reason="test refresh setup"):
+        oauth_client = OAuthClient.objects.create(
+            slug=slug,
+            display_name=f"{slug} prod",
+            client_id=f"{slug}-client",
+            token_endpoint="https://idp.example/token",
+            supports_refresh=True,
+        )
+        credential = Credential.objects.upsert_for_user(user, oauth_client, CredentialKind.OAUTH, material)
+        Credential.objects.sudo(reason="test expire").filter(pk=credential.pk).update(
+            expires_at=timezone.now() - timedelta(minutes=1)
+        )
+        credential.refresh_from_db()
+    return credential
+
+
+def _drop_models(created_models: list[Any]) -> None:
+    """Drop the per-test concrete tables created by ``_create_missing_tables``."""
+
+    if created_models:
+        with connection.schema_editor() as schema_editor:
+            for model in reversed(created_models):
+                schema_editor.delete_model(model)
 
 
 def _owner_tuple_exists(owner: Any, resource: Any) -> bool:

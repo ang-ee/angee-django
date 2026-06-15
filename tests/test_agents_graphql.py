@@ -26,6 +26,8 @@ from rebac import app_settings, system_context
 from rebac.roles import grant
 from strawberry import relay
 
+from angee.agents.context import render_view_context
+from angee.agents.mcp_verifier import resolve_actor
 from angee.agents.models import Agent as AbstractAgent
 from angee.agents.models import MCPServer as AbstractMCPServer
 from angee.agents.models import MCPTool as AbstractMCPTool
@@ -34,6 +36,7 @@ from angee.iam.credentials import CredentialKind
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,
+    Credential,
     SchemaAddon,
     execute_schema,
     make_integration,
@@ -271,6 +274,9 @@ def test_provision_agent_renders_via_daemon_and_is_admin_gated(
             calls.append(("service", template, workspace, inputs))
             return "svc-bot"
 
+        def destroy_service(self, name: str) -> None:
+            calls.append(("destroy_service", name))
+
         def destroy_workspace(self, name: str, *, purge: bool = True) -> None:
             calls.append(("destroy", name))
 
@@ -360,6 +366,77 @@ def test_provision_agent_failure_tears_down_workspace_and_records_error(
         assert (agent.workspace, "image build failed" in agent.last_error) == ("", True)
 
 
+def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(
+    agents_console_tables: None, monkeypatch: Any
+) -> None:
+    """`agentChatEndpoint` returns the routed url + per-actor route token + mcpServers.
+
+    The daemon is mocked. Asserts the resolver looks the agent's `service` up, mints a
+    route token scoped to that service, returns the routed url/token plus the agent's
+    rendered `mcpServers`, and is platform-admin gated.
+    """
+
+    admin = _platform_admin("agt-chat-admin")
+    plain = User.objects.create_user(username="agt-chat-plain", email="chat@example.com")
+    with system_context(reason="test.agents.chat.seed"):
+        agent = Agent.objects.create(name="Chatty", owner=admin, service="svc-chat")
+        server = MCPServer.objects.create(name="notes", url="http://host.docker.internal:8101/mcp/notes/")
+        agent.mcp_servers.add(server)
+    agent_id = _gid("AgentType", agent.sqid)
+
+    minted: list[tuple[str, str, str]] = []
+
+    class _FakeDaemon:
+        @classmethod
+        def from_settings(cls) -> _FakeDaemon:
+            return cls()
+
+        def service_endpoint(self, name: str) -> dict[str, Any]:
+            return {"routed": True, "url": f"wss://{name}.example.test/"}
+
+        def mint_route_token(self, actor: str, service: str, ttl: str = "1h") -> dict[str, Any]:
+            minted.append((actor, service, ttl))
+            return {"token": "jwt-route", "expires_at": "2026-06-15T00:00:00Z"}
+
+    monkeypatch.setattr(agents_schema, "OperatorDaemon", _FakeDaemon)
+
+    query = """
+        mutation Chat($id: ID!) {
+          agentChatEndpoint(id: $id) { url token expiresAt mcpServers }
+        }
+    """
+    assert _execute(console := _schema(), query, {"id": agent_id}, user=plain).errors is not None
+    endpoint = _data(_execute(console, query, {"id": agent_id}, user=admin))["agentChatEndpoint"]
+
+    assert endpoint["url"] == "wss://svc-chat.example.test/"
+    assert endpoint["token"] == "jwt-route"
+    assert endpoint["expiresAt"] == "2026-06-15T00:00:00Z"
+    assert endpoint["mcpServers"] == {
+        "notes": {"type": "http", "url": "http://host.docker.internal:8101/mcp/notes/"},
+    }
+    # The token is minted per actor (the session user, `auth/user:<id>`), scoped to the
+    # agent's routed service, on the chat TTL — never as the operator admin bearer.
+    assert len(minted) == 1
+    actor, service, ttl = minted[0]
+    assert actor.startswith("auth/user:") and service == "svc-chat" and ttl == "2h"
+
+
+def test_agent_chat_endpoint_errors_when_agent_not_running(agents_console_tables: None) -> None:
+    """`agentChatEndpoint` errors when the agent has no rendered `service`."""
+
+    admin = _platform_admin("agt-chat-stopped-admin")
+    with system_context(reason="test.agents.chat.stopped.seed"):
+        agent = Agent.objects.create(name="Idle", owner=admin)
+    result = _execute(
+        _schema(),
+        "mutation($id: ID!){ agentChatEndpoint(id: $id){ url } }",
+        {"id": _gid("AgentType", agent.sqid)},
+        user=admin,
+    )
+    assert result.errors is not None
+    assert "not running" in str(result.errors[0])
+
+
 def test_provision_workspace_inputs_from_agent_fields(agents_console_tables: None) -> None:
     """The workspace inputs come from the agent's structured fields (not raw JSON)."""
 
@@ -375,6 +452,122 @@ def test_provision_workspace_inputs_from_agent_fields(agents_console_tables: Non
     assert json.loads(inputs["mcp_json"]) == {
         "mcpServers": {"angee": {"type": "http", "url": "http://host.docker.internal:8101/mcp/"}},
     }
+
+
+def test_render_agent_prompt_builds_system_context_and_is_admin_gated(
+    agents_console_tables: None,
+) -> None:
+    """`renderAgentPrompt` returns a ``<system_context>`` block for the open view.
+
+    Model-generic: a record view of ``agents/mcp_server`` previews the selected row
+    from its public fields and points at the MCP tools, after resolving the agent
+    (admin-gated).
+    """
+
+    admin = _platform_admin("agt-prompt-admin")
+    plain = User.objects.create_user(username="agt-prompt-plain", email="prompt@example.com")
+    with system_context(reason="test.agents.prompt.seed"):
+        agent = Agent.objects.create(name="Prompted", owner=admin)
+        server = MCPServer.objects.create(name="Local Notes", url="http://x/mcp/notes/")
+    agent_id = _gid("AgentType", agent.sqid)
+    mutation = """
+        mutation Prompt($id: ID!, $view: JSON!) { renderAgentPrompt(id: $id, view: $view) }
+    """
+    view = {"kind": "record", "type": "agents/mcp_server", "sqid": str(server.sqid)}
+
+    assert _execute(console := _schema(), mutation, {"id": agent_id, "view": view}, user=plain).errors is not None
+    rendered = _data(_execute(console, mutation, {"id": agent_id, "view": view}, user=admin))["renderAgentPrompt"]
+
+    assert rendered.startswith("<system_context>") and rendered.endswith("</system_context>")
+    assert "record of agents/mcp_server" in rendered
+    assert str(server.sqid) in rendered and "Local Notes" in rendered
+    assert "MCP tool" in rendered
+
+    # An empty envelope adds nothing.
+    empty = _data(
+        _execute(console, mutation, {"id": agent_id, "view": {}}, user=admin)
+    )["renderAgentPrompt"]
+    assert empty == ""
+
+
+def test_render_view_context_never_previews_encrypted_secret(agents_console_tables: None) -> None:
+    """A view of a secret-bearing model previews the row but never its EncryptedField.
+
+    The block is sent to a third-party LLM, so a column whose Python value decrypts to a
+    secret (here ``Credential.material``) must not appear even when the row itself is
+    previewed — the regression guard for the field-enumeration leak.
+    """
+
+    owner = User.objects.create_user(username="ctx-secret-owner", email="ctxsecret@example.com")
+    with system_context(reason="test.ctx.secret"):
+        credential = Credential.objects.create_local_credential(
+            owner,
+            kind=CredentialKind.STATIC_TOKEN,
+            name="leaky-cred",
+            material={"api_key": "SUPER-SECRET-XYZ"},
+        )
+        view = {"kind": "record", "type": "auth/credential", "sqid": str(credential.sqid)}
+        rendered = render_view_context(view)
+
+    assert str(credential.sqid) in rendered  # the row IS previewed (name, kind, …)
+    assert "leaky-cred" in rendered
+    assert "SUPER-SECRET-XYZ" not in rendered  # …but the secret material is NOT
+    assert "material" not in rendered
+
+
+def test_mcp_config_emits_secret_ref_auth_header_for_credentialed_server(
+    agents_console_tables: None,
+) -> None:
+    """A credentialed MCP server renders a ``${secret.<name>}`` Authorization header.
+
+    The bearer rides through the operator secret store, never the rendered file: the
+    header references the secret name and :meth:`Agent.mcp_secrets` carries the value
+    for the provision flow to sync.
+    """
+
+    owner = User.objects.create_user(username="agt-mcpcfg-owner", email="mcpcfg@example.com")
+    with system_context(reason="test.agents.mcp_config"):
+        credential = Credential.objects.create_local_credential(
+            owner, kind=CredentialKind.STATIC_TOKEN, name="notes-bearer", material={"api_key": "tok-notes"}
+        )
+        agent = Agent.objects.create(name="Cfg", owner=owner)
+        plain = MCPServer.objects.create(name="public", url="http://host.docker.internal:8101/mcp/public/")
+        secured = MCPServer.objects.create(
+            name="notes", url="http://host.docker.internal:8101/mcp/notes/", credential=credential
+        )
+        agent.mcp_servers.add(plain, secured)
+        config = agent.mcp_config()
+        secrets = agent.mcp_secrets()
+        secret_name = agent.mcp_secret_name(secured)
+
+    servers = config["mcpServers"]
+    assert "headers" not in servers["public"]  # no credential → no auth header
+    assert servers["notes"]["headers"] == {"Authorization": f"Bearer ${{secret.{secret_name}}}"}
+    assert secret_name == f"agent-{agent.sqid}-mcp-{credential.sqid}"
+    assert secrets == {secret_name: "tok-notes"}  # synced server-side, never in the file
+
+
+def test_mcp_actor_verifier_resolves_bearer_to_agent_actor(agents_console_tables: None) -> None:
+    """The agents bearer verifier maps an MCP-server credential to a distinct agent actor.
+
+    A bearer matching a server's credential resolves to a non-user ``agents/agent``
+    subject (the placeholder agent identity); an unknown bearer resolves to nothing,
+    so the runtime denies it with no admin fallback.
+    """
+
+    owner = User.objects.create_user(username="agt-verify-owner", email="verify@example.com")
+    with system_context(reason="test.agents.mcp_verify"):
+        credential = Credential.objects.create_local_credential(
+            owner, kind=CredentialKind.STATIC_TOKEN, name="mcp-bearer", material={"api_key": "tok-secret"}
+        )
+        MCPServer.objects.create(name="notes", url="http://x/mcp/notes/", credential=credential)
+
+    actor = resolve_actor("tok-secret")
+    assert actor is not None
+    assert actor.subject_type == "agents/agent"
+    assert actor.subject_id == str(credential.sqid)  # per-credential placeholder, not the user
+    assert resolve_actor("wrong-token") is None
+    assert resolve_actor("") is None
 
 
 def test_provision_service_inputs_credential_drives_auth_mode(agents_console_tables: None) -> None:

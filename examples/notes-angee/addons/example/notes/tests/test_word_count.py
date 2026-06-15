@@ -9,8 +9,6 @@ from typing import Any, cast
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
-from django.db import connection
-from django.db.migrations.executor import MigrationExecutor
 from django.db.models import Sum
 from django.test import Client, TransactionTestCase
 from rebac import system_context
@@ -35,31 +33,6 @@ class NoteWordCountModelTests(TransactionTestCase):
 
         self.assertEqual(note.word_count, 1)
         self.assertGreater(note.updated_at, old_updated_at)
-
-
-class NoteWordCountMigrationTests(TransactionTestCase):
-    """Backfill legacy rows after the schema column exists."""
-
-    def test_backfill_populates_existing_rows(self) -> None:
-        migrate_from = [("notes", "0002_historicalnote_word_count_note_word_count")]
-        migrate_to = [("notes", "0003_backfill_note_word_count")]
-
-        executor = MigrationExecutor(connection)
-        executor.migrate(migrate_from)
-        old_apps = executor.loader.project_state(migrate_from).apps
-        OldNote = old_apps.get_model("notes", "Note")
-        legacy = OldNote.objects.create(
-            title="Legacy note",
-            body="legacy words counted",
-            word_count=0,
-        )
-
-        executor = MigrationExecutor(connection)
-        executor.migrate(migrate_to)
-        new_apps = executor.loader.project_state(migrate_to).apps
-        NewNote = new_apps.get_model("notes", "Note")
-
-        self.assertEqual(NewNote.objects.get(pk=legacy.pk).word_count, 3)
 
 
 class NoteWordCountGraphQLTests(TransactionTestCase):

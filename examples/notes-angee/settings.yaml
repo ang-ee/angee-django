@@ -8,6 +8,7 @@ INSTALLED_APPS:
   - angee.integrate
   - angee.integrate_github
   - angee.knowledge
+  - angee.mcp
   - angee.operator
   - angee.storage
   - example.notes

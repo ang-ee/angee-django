@@ -295,6 +295,13 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   registry raises `ImproperlyConfigured` at import — give the addon a
   noop/null-object default so the set is never empty. The column stores the key
   (`local`), never a dotted path.
+- **Never name an addon module after a third-party top-level package it imports.**
+  `unittest` discovery inserts the discovery-root directory onto `sys.path`, so an
+  addon's `mcp.py` that does `from mcp.server… import …` becomes an importable
+  top-level `mcp` that shadows the real package — `ModuleNotFoundError: 'mcp' is not
+  a package` during a test run, while a single-module run and `manage.py check` pass.
+  Name such a module for its role, not the library (the MCP tool seam discovers a
+  `mcp_tools` manifest attribute → `mcp_tools.py`, not `mcp.py`).
 
 ## Framework Contracts
 

@@ -11,5 +11,5 @@ class GraphQLConfig(AppConfig):
     default = True
     angee_addon = True
     name = "angee.graphql"
-    depends_on = ("angee.base", "channels", "daphne")
+    depends_on = ("angee.base", "channels")
     schemas = None

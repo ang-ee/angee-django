@@ -171,6 +171,15 @@ export const SERVICE_RESTART_MUTATION = `
   }
 `;
 
+// `serviceDestroy` stops and removes a service from the stack, leaving the
+// workspace it mounts intact — the escape hatch for an orphaned service entry
+// (a later `serviceCreate` over the same name 409s until it is destroyed).
+export const SERVICE_DESTROY_MUTATION = `
+  mutation OperatorServiceDestroy($name: String!) {
+    serviceDestroy(name: $name) ${MUTATION_RESULT}
+  }
+`;
+
 export const SERVICE_UP_MUTATION = `
   mutation OperatorServiceUp($name: String!) {
     serviceUp(name: $name) ${MUTATION_RESULT}

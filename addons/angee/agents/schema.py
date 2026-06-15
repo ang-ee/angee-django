@@ -18,12 +18,14 @@ from typing import Any
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.conf import settings
 from django.db import models
-from rebac import system_context
+from rebac import current_actor, system_context
 from strawberry import auto, relay
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
+from angee.agents.context import render_view_context
 from angee.base.models import instance_from_public_id
 from angee.graphql.actions import ActionResult
 from angee.graphql.crud import crud
@@ -140,6 +142,22 @@ class AgentType(AngeeNode):
     last_error: auto
     created_at: auto
     updated_at: auto
+
+
+@strawberry.type
+class AgentChatEndpoint:
+    """Browser-reachable chat endpoint for a running agent.
+
+    ``url`` is the agent's routed WebSocket URL (no token); the browser appends
+    ``token`` as a query parameter, which the central Caddy forward-auths against
+    the operator. ``mcp_servers`` is the agent's rendered ``.mcp.json`` server map,
+    so the chat session can advertise the same MCP servers the agent runs with.
+    """
+
+    url: str
+    token: str
+    expires_at: str
+    mcp_servers: JSON
 
 
 @strawberry.input
@@ -421,14 +439,33 @@ _SKILL_MUTATION = crud(
 (re-discovered on the next source sync). No create/update — the source owns the data."""
 
 
-def _resolve(model: type[models.Model], gid: relay.GlobalID, *, reason: str) -> Any:
-    """Return the elevated instance addressed by ``gid`` for an action write."""
+def _resolve(
+    model: type[models.Model],
+    gid: relay.GlobalID,
+    *,
+    reason: str,
+    select_related: tuple[str, ...] = (),
+) -> Any:
+    """Return the elevated instance addressed by ``gid`` for an action write.
 
+    ``select_related`` joins related rows the caller is about to walk (e.g. an agent's
+    inference-credential chain for provisioning) so the action runs in one query.
+    """
+
+    queryset = model._default_manager.all()
+    if select_related:
+        queryset = queryset.select_related(*select_related)
     with system_context(reason=reason):
-        instance = instance_from_public_id(model, gid.node_id, queryset=model._default_manager.all())
+        instance = instance_from_public_id(model, gid.node_id, queryset=queryset)
     if instance is None:
         raise ValueError(f"{model._meta.object_name} {gid.node_id!r} was not found.")
     return instance
+
+
+# The inference-credential chain ``_render_plan`` walks (``Agent.inference_secret`` →
+# model → provider → integration → credential); joined up front so provisioning reads
+# it in one query instead of four lazy FK fetches.
+_PROVISION_CHAIN = ("model__provider__integration__credential",)
 
 
 @strawberry.type
@@ -460,6 +497,7 @@ class _RenderPlan:
     service_inputs: dict[str, str]
     secret_name: str
     secret_value: str
+    mcp_secrets: dict[str, str]
     workspace_template: tuple[str, str]
     service_template: tuple[str, str] | None
 
@@ -480,8 +518,7 @@ def _render_agent(plan: _RenderPlan) -> dict[str, str]:
     )
     if not workspace_ref:
         raise ValueError(f"No operator workspace template matches {plan.workspace_template[0]!r}.")
-    if plan.secret_value:
-        daemon.set_secret(plan.secret_name, plan.secret_value)
+    _sync_secrets(daemon, plan)
     workspace = daemon.create_workspace(template=workspace_ref, inputs=plan.workspace_inputs)
     if not workspace:
         raise ValueError("The operator did not return a workspace.")
@@ -505,6 +542,47 @@ def _render_service(daemon: OperatorDaemon, plan: _RenderPlan, workspace: str) -
     return daemon.create_service(template=service_ref, workspace=workspace, inputs=plan.service_inputs)
 
 
+def _render_plan(agent: Any) -> _RenderPlan:
+    """Build the operator render plan from an agent's templates, inputs, and secrets.
+
+    Reads the credential, so call inside ``system_context``. ``workspace_template``
+    falls back to empty when unset — a service-only recreate (existing workspace)
+    never reads it.
+    """
+
+    workspace_template = agent.workspace_template
+    service_template = agent.service_template
+    return _RenderPlan(
+        workspace_inputs=agent.provision_workspace_inputs(),
+        service_inputs=agent.provision_service_inputs(),
+        secret_name=agent.inference_secret_name(),
+        secret_value=agent.inference_secret(),
+        mcp_secrets=agent.mcp_secrets(),
+        workspace_template=(
+            (workspace_template.name, workspace_template.kind) if workspace_template else ("", "")
+        ),
+        service_template=(
+            (service_template.name, service_template.kind) if service_template else None
+        ),
+    )
+
+
+def _sync_secrets(daemon: OperatorDaemon, plan: _RenderPlan) -> None:
+    """Push the agent's inference + MCP secret values to the operator store.
+
+    A service resolves its ``${secret.<name>}`` env at create time, so the values
+    must be current before the service renders — recreating the service after a
+    credential change is what lands the new value (a restart reuses the old env).
+    """
+
+    if plan.secret_value:
+        daemon.set_secret(plan.secret_name, plan.secret_value)
+    # Each credentialed MCP server's bearer rides through the operator secret store too,
+    # so its ${secret.<name>} header in the rendered .mcp.json resolves in the container.
+    for name, value in sorted(plan.mcp_secrets.items()):
+        daemon.set_secret(name, value)
+
+
 @strawberry.type
 class AgentActionMutation:
     """Server-side provisioning actions for an agent.
@@ -520,24 +598,13 @@ class AgentActionMutation:
     def provision_agent(self, id: relay.GlobalID) -> ActionResult:
         """Render the agent into an operator workspace + service and record the instance."""
 
-        agent = _resolve(Agent, id, reason="agents.graphql.provision_agent")
+        agent = _resolve(Agent, id, reason="agents.graphql.provision_agent", select_related=_PROVISION_CHAIN)
         with system_context(reason="agents.graphql.provision_agent"):
             if agent.workspace:
                 return ActionResult(ok=False, message="Agent is already provisioned — deprovision it first.")
-            workspace_template = agent.workspace_template
-            if workspace_template is None:
+            if agent.workspace_template is None:
                 return ActionResult(ok=False, message="Set a workspace template on this agent first.")
-            service_template = agent.service_template
-            plan = _RenderPlan(
-                workspace_inputs=agent.provision_workspace_inputs(),
-                service_inputs=agent.provision_service_inputs(),
-                secret_name=agent.inference_secret_name(),
-                secret_value=agent.inference_secret(),
-                workspace_template=(workspace_template.name, workspace_template.kind),
-                service_template=(
-                    (service_template.name, service_template.kind) if service_template else None
-                ),
-            )
+            plan = _render_plan(agent)
         try:
             result = _render_agent(plan)
         except Exception as error:  # noqa: BLE001 — a render failure is the result, not a 500
@@ -549,17 +616,105 @@ class AgentActionMutation:
         return ActionResult(ok=True, message=f"Provisioned “{result['service'] or result['workspace']}”.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def reprovision_agent(self, id: relay.GlobalID) -> ActionResult:
+        """Recreate the agent's service over its existing workspace, re-syncing secrets.
+
+        Use after changing the agent's credential or config: a service resolves its
+        ``${secret.<name>}`` env at create time, so a new value lands only on a fresh
+        service — destroy + create over the same workspace, not a restart. The
+        workspace (and its files) is preserved.
+        """
+
+        agent = _resolve(Agent, id, reason="agents.graphql.reprovision_agent", select_related=_PROVISION_CHAIN)
+        with system_context(reason="agents.graphql.reprovision_agent"):
+            workspace = agent.workspace
+            service = agent.service
+            if not workspace:
+                return ActionResult(ok=False, message="Agent isn't provisioned — provision it first.")
+            if agent.service_template is None:
+                return ActionResult(ok=False, message="Set a service template on this agent first.")
+            plan = _render_plan(agent)
+        daemon = OperatorDaemon.from_settings()
+        try:
+            _sync_secrets(daemon, plan)
+            if service:
+                daemon.destroy_service(service)
+            new_service = _render_service(daemon, plan, workspace)
+        except Exception as error:  # noqa: BLE001 — a render failure is the result, not a 500
+            with system_context(reason="agents.graphql.reprovision_agent.failed"):
+                agent.mark_provision_failed(str(error))
+            return ActionResult(ok=False, message=f"Reprovisioning failed: {error}")
+        with system_context(reason="agents.graphql.reprovision_agent.recorded"):
+            agent.mark_provisioned(workspace=workspace, service=new_service)
+        return ActionResult(ok=True, message=f"Recreated service “{new_service}”.")
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def agent_chat_endpoint(self, id: relay.GlobalID) -> AgentChatEndpoint:
+        """Mint the chat WebSocket endpoint + route token for a running agent.
+
+        A mutation, not a query: each call mints a fresh, short-lived per-actor route
+        token (the operator admin bearer never reaches the browser). The browser speaks
+        ACP to the agent's routed WebSocket through the central Caddy, forward-authed
+        with that token. Errors when the agent is not running (no rendered ``service``)
+        or its service is not routed. The actor is the same identity
+        ``operatorConnection`` mints with — the session user.
+        """
+
+        agent = _resolve(Agent, id, reason="agents.graphql.agent_chat_endpoint")
+        with system_context(reason="agents.graphql.agent_chat_endpoint"):
+            service = agent.service
+            mcp_servers = agent.mcp_config().get("mcpServers", {})
+        if not service:
+            raise ValueError("Agent is not running — provision it first.")
+        actor = current_actor()
+        if actor is None:
+            raise ValueError("No actor in context.")
+        daemon = OperatorDaemon.from_settings()
+        endpoint = daemon.service_endpoint(service)
+        if not endpoint.get("routed"):
+            raise ValueError("Agent service is not reachable over a routed endpoint.")
+        ttl = getattr(settings, "ANGEE_AGENT_CHAT_TOKEN_TTL", "2h")
+        token = daemon.mint_route_token(str(actor.object), service, ttl=ttl)
+        return AgentChatEndpoint(
+            url=str(endpoint.get("url", "")),
+            token=str(token.get("token", "")),
+            expires_at=str(token.get("expires_at", "")),
+            mcp_servers=mcp_servers,
+        )
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def render_agent_prompt(self, id: relay.GlobalID, view: JSON) -> str:
+        """Render the ``<system_context>`` block for an agent and the user's open view.
+
+        ``view`` is the view envelope ``{kind, type: "<app>/<model>", sqid?, sqids?,
+        params?}``. The chat client calls this each send and prefixes the result, so
+        the agent reads what the user is looking at. Resolving the agent (admin-gated)
+        confirms the caller may drive it; the model-generic rendering lives in
+        ``agents.context``.
+        """
+
+        _resolve(Agent, id, reason="agents.graphql.render_agent_prompt")
+        return render_view_context(dict(view) if isinstance(view, dict) else {})
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def deprovision_agent(self, id: relay.GlobalID) -> ActionResult:
         """Tear down the agent's operator workspace (and its services) and clear the record."""
 
         agent = _resolve(Agent, id, reason="agents.graphql.deprovision_agent")
         with system_context(reason="agents.graphql.deprovision_agent"):
             workspace = agent.workspace
-        if workspace:
-            try:
-                OperatorDaemon.from_settings().destroy_workspace(workspace)
-            except Exception as error:  # noqa: BLE001 — teardown failure is the result, not a 500
-                return ActionResult(ok=False, message=f"Teardown failed: {error}")
+            service = agent.service
+        daemon = OperatorDaemon.from_settings()
+        try:
+            # The service is a stack entry distinct from the workspace it mounts, so
+            # destroy it explicitly — destroying only the workspace leaves the service
+            # behind and the next provision 409s. Service first, then its workspace.
+            if service:
+                daemon.destroy_service(service)
+            if workspace:
+                daemon.destroy_workspace(workspace)
+        except Exception as error:  # noqa: BLE001 — teardown failure is the result, not a 500
+            return ActionResult(ok=False, message=f"Teardown failed: {error}")
         with system_context(reason="agents.graphql.deprovision_agent.recorded"):
             agent.mark_deprovisioned()
         return ActionResult(ok=True, message="Deprovisioned.")
@@ -574,6 +729,7 @@ _CONSOLE_TYPES: list[type] = [
     MCPServerType,
     MCPToolType,
     AgentType,
+    AgentChatEndpoint,
 ]
 
 schemas = {

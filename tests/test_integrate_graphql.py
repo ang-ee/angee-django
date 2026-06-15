@@ -89,7 +89,10 @@ def test_integration_node_resolves_nested_relations(
     assert resolved == {
         "status": "ACTIVE",
         "vendor": {"slug": "conn-node"},
-        "credential": {"displayName": "conn-node"},
+        # ``make_integration`` builds the OAuth client with ``display_name=slug.title()``,
+        # and an OAuth credential's label is its provider's display name (set on create by
+        # ``CredentialManager._oauth_credential_name``).
+        "credential": {"displayName": "Conn-Node"},
         "owner": {"username": "conn-node-owner"},
         "account": None,
     }
@@ -336,7 +339,9 @@ def test_create_integration_from_credential_is_authenticated_user_owned(
 
     assert created["vendor"] == {"slug": "anthropic"}
     assert created["owner"] == {"username": "credential-owner"}
-    assert created["credential"]["displayName"] == "anthropic"
+    # The OAuth credential is labelled from its provider's display name on create
+    # (``CredentialManager._oauth_credential_name``).
+    assert created["credential"]["displayName"] == "Anthropic"
     assert created["config"] == {"credential_env": "ANTHROPIC_OAUTH_TOKEN"}
     with system_context(reason="test.integrate.credential_handoff.verify"):
         integration = Integration.objects.get(owner=owner, credential=credential)

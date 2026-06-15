@@ -49,7 +49,7 @@ actually unique to your product.
   reads scope through the manager, writes check the instance; each addon ships a
   `permissions.zed` fragment the composer merges and `rebac sync` loads.
 - **GraphQL API** — auto-CRUD, search, and aggregates from model `Meta`;
-  real-time subscriptions (channels + daphne); persisted operations and
+  real-time subscriptions (channels + uvicorn); persisted operations and
   typed-codegen output for the client.
 - **UX framework** — headless `@angee/sdk` (contracts, hooks, urql wiring) + the
   single rendered binding `@angee/base`: shells, page presets

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import importlib
 import os
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, MutableMapping
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any, cast
 
@@ -70,23 +71,151 @@ def _addon_websocket_urlpatterns(app_config: AppConfig) -> list[object]:
     return list(patterns)
 
 
+def _http_mounts() -> list[tuple[str, Any]]:
+    """Return the ``(path_prefix, ASGI app)`` HTTP mounts contributed by addons."""
+
+    mounts: list[tuple[str, Any]] = []
+    for app_config in apps.get_app_configs():
+        mounts.extend(_addon_http_mounts(app_config))
+    return mounts
+
+
+def _addon_http_mounts(app_config: AppConfig) -> list[tuple[str, Any]]:
+    """Return HTTP-mount contributions from one addon's conventional ``asgi.py``.
+
+    The mirror of :func:`_addon_websocket_urlpatterns` for HTTP sub-apps: an addon
+    exposes ``http_mounts()`` (or ``http_mounts``) returning ``(prefix, app)`` pairs
+    — e.g. the MCP addon's StreamableHTTP app at ``/mcp``.
+    """
+
+    if not is_angee_addon(app_config):
+        return []
+    if not module_has_submodule(app_config.module, "asgi"):
+        return []
+    module_path = f"{app_config.name}.asgi"
+    try:
+        module = importlib.import_module(module_path)
+    except ImportError as error:
+        raise ImproperlyConfigured(f"{module_path} failed to import") from error
+    contribution = getattr(module, "http_mounts", None)
+    if contribution is None:
+        return []
+    mounts = cast(Callable[[], object], contribution)() if callable(contribution) else contribution
+    if not isinstance(mounts, Iterable):
+        raise ImproperlyConfigured(f"{module_path}.http_mounts must be iterable or callable")
+    return [(str(prefix), app) for prefix, app in mounts]
+
+
+Scope = MutableMapping[str, Any]
+Receive = Callable[[], Awaitable[MutableMapping[str, Any]]]
+Send = Callable[[MutableMapping[str, Any]], Awaitable[None]]
+ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
+
+
 def _application() -> Any:
-    """Build the ASGI application after settings and apps are ready."""
+    """Build the ASGI application after settings and apps are ready.
+
+    With no WebSocket or HTTP-mount contributions the bare Django app is returned
+    (the common, non-MCP case). Otherwise a :class:`~channels.routing.ProtocolTypeRouter`
+    owns the scope-type switch: ``http`` to the mounted sub-apps or Django,
+    ``websocket`` to the channels stack, and ``lifespan`` to :class:`_Lifespan`,
+    which runs each mount's own ASGI lifespan (the FastMCP session manager's task
+    group) at server startup. The serving ASGI server must send the lifespan
+    protocol — Angee serves with uvicorn (see ``docs/stack.md``).
+    """
 
     django_asgi_app = get_asgi_application()
     websocket_patterns = _websocket_urlpatterns()
-    if not websocket_patterns:
+    http_mounts = _http_mounts()
+    if not websocket_patterns and not http_mounts:
         return django_asgi_app
 
-    from channels.auth import AuthMiddlewareStack
-    from channels.routing import ProtocolTypeRouter, URLRouter
+    from channels.routing import ProtocolTypeRouter
 
-    return ProtocolTypeRouter(
-        {
-            "http": django_asgi_app,
-            "websocket": AuthMiddlewareStack(URLRouter(websocket_patterns)),
-        }
-    )
+    mapping: dict[str, ASGIApp] = {
+        "http": _http_app(django_asgi_app, http_mounts),
+        "lifespan": _Lifespan([app for _prefix, app in http_mounts]),
+    }
+    if websocket_patterns:
+        from channels.auth import AuthMiddlewareStack
+        from channels.routing import URLRouter
+
+        mapping["websocket"] = AuthMiddlewareStack(URLRouter(websocket_patterns))
+    return ProtocolTypeRouter(mapping)
+
+
+def _http_app(django_app: ASGIApp, http_mounts: list[tuple[str, ASGIApp]]) -> ASGIApp:
+    """Return the HTTP app: mounted sub-apps by path prefix, else Django.
+
+    With no mounts this is just the Django app. Otherwise mounts are matched
+    longest-prefix-first (so a nested mount wins over its parent) and the matched
+    app receives the unchanged scope — its own route sits at the mount prefix, so
+    no path stripping is needed. Any unmatched path falls through to Django.
+    """
+
+    if not http_mounts:
+        return django_app
+    mounts = tuple(sorted(http_mounts, key=lambda mount: len(mount[0]), reverse=True))
+
+    async def http_app(scope: Scope, receive: Receive, send: Send) -> None:
+        path = str(scope.get("path", ""))
+        for prefix, app in mounts:
+            if path == prefix or path.startswith(f"{prefix}/"):
+                await app(scope, receive, send)
+                return
+        await django_app(scope, receive, send)
+
+    return http_app
+
+
+def _mount_lifespan(app: Any) -> Any:
+    """Return a mounted Starlette app's lifespan context manager, or ``None``.
+
+    A StreamableHTTP app (FastMCP) carries ``session_manager.run()`` as its
+    Starlette lifespan; entering it opens the manager's task group before any
+    request. ``None`` for a mount with no lifespan.
+    """
+
+    router = getattr(app, "router", None)
+    lifespan_context = getattr(router, "lifespan_context", None)
+    return lifespan_context(app) if lifespan_context is not None else None
+
+
+class _Lifespan:
+    """Run the mounted sub-apps' ASGI lifespans for the life of the process.
+
+    A FastMCP StreamableHTTP app must have its session manager running before it
+    serves a request. This drives the ASGI lifespan protocol the serving server
+    (uvicorn) sends: it enters every mount's lifespan at ``startup`` and holds the
+    task groups open via a retained ``AsyncExitStack`` until ``shutdown``. A
+    startup failure is reported to the server, never swallowed.
+    """
+
+    def __init__(self, mounts: list[Any]) -> None:
+        self._mounts = mounts
+        self._exit_stack: AsyncExitStack | None = None
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        while True:
+            message = await receive()
+            if message["type"] == "lifespan.startup":
+                try:
+                    stack = AsyncExitStack()
+                    for app in self._mounts:
+                        lifespan = _mount_lifespan(app)
+                        if lifespan is not None:
+                            await stack.enter_async_context(lifespan)
+                    self._exit_stack = stack
+                except Exception as error:  # reported to the server, not swallowed
+                    await send({"type": "lifespan.startup.failed", "message": str(error)})
+                    return
+                await send({"type": "lifespan.startup.complete"})
+            elif message["type"] == "lifespan.shutdown":
+                if self._exit_stack is not None:
+                    await self._exit_stack.aclose()
+                    self._exit_stack = None
+                await send({"type": "lifespan.shutdown.complete"})
+                return
 
 
 _bootstrap()

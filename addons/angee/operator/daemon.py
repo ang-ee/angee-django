@@ -152,9 +152,45 @@ class OperatorDaemon:
         return str((data or {}).get("name") or "")
 
     def destroy_workspace(self, name: str) -> None:
-        """Destroy a workspace and its services (``POST /workspaces/{name}/destroy``)."""
+        """Destroy a workspace and its files (``POST /workspaces/{name}/destroy``)."""
 
         self._request("POST", f"{self._base()}/workspaces/{quote(name, safe='')}/destroy?purge=true", {})
+
+    def destroy_service(self, name: str) -> None:
+        """Destroy (stop + remove) a stack service (``POST /services/{name}/destroy``).
+
+        A service is a stack entry distinct from the workspace it mounts, so it has
+        its own lifecycle: tearing down the workspace leaves the service behind (a
+        later ``create_service`` then 409s), and a secret change needs the service
+        *recreated* — ``destroy_service`` then ``create_service`` over the same
+        workspace — to re-resolve its ``${secret.<name>}`` env, not just restarted.
+        """
+
+        self._request("POST", f"{self._base()}/services/{quote(name, safe='')}/destroy", {})
+
+    def service_endpoint(self, name: str) -> dict[str, Any]:
+        """Return a routed service's reachable endpoint (``GET /services/{name}/endpoint``).
+
+        The daemon owns routing: for a service fronted by the central Caddy it
+        returns ``{"routed": true, "url": "wss://<service>.<domain>/", …}`` — a
+        browser-reachable WebSocket URL carrying no token. The browser appends an
+        operator-minted route token (:meth:`mint_route_token`) as a query parameter,
+        which the central Caddy forward-auths against the daemon.
+        """
+
+        return cast(dict[str, Any], self._request("GET", f"{self._base()}/services/{quote(name, safe='')}/endpoint"))
+
+    def mint_route_token(self, actor: str, service: str, ttl: str = _DEFAULT_TTL) -> dict[str, Any]:
+        """Mint a route token scoping ``actor`` to a routed ``service`` (``POST /tokens/route``).
+
+        Distinct from :meth:`mint_token` (the ``aud=operator`` GraphQL token): this is
+        the ``aud=svc:<service>`` token the central Caddy forward-auths on a routed
+        service's upgrade, so a browser that holds it can open the service WebSocket
+        and nothing else. Short-lived and per-actor; the daemon caps the TTL at 24h.
+        """
+
+        payload = {"actor": actor, "service": service, "ttl": ttl}
+        return cast(dict[str, Any], self._request("POST", f"{self._base()}/tokens/route", payload))
 
     def _base(self) -> str:
         """Return the absolute daemon base, or raise when the daemon is unconfigured."""

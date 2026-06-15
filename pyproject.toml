@@ -12,12 +12,13 @@ requires-python = ">=3.14"
 dependencies = [
   "channels>=4.0",
   "cryptography>=44",
-  "daphne>=4.0",
   "django-import-export>=4.3",
   "django-reversion>=5.1",
   "django-simple-history>=3.7",
   "django-sqids>=0.1",
-  "django-zed-rebac[strawberry-django]>=0.10.0",
+  "django-zed-rebac[strawberry-django]>=0.11",
+  # NOTE: developing against the local checkout (see [tool.uv.sources]) while a
+  # rebac fix lands; switch back to the published pin once it ships.
   "django>=6.0",
   "pyjwt[crypto]>=2.12",
   "pyyaml>=6",
@@ -29,10 +30,18 @@ dependencies = [
   "django-yamlconf>=1.5.0",
   "django-environ>=0.12",
   "python-magic>=0.4.27",
+  "mcp>=1.2",
+  # ASGI server: serves the composed app (Django + channels WebSocket + the MCP
+  # StreamableHTTP mount). uvicorn sends the ASGI lifespan that runs the mount's
+  # session manager; [standard] adds WebSocket and --reload support for dev.
+  "uvicorn[standard]>=0.30",
 ]
 
 [dependency-groups]
 dev = [
+  # Test-only: channels.testing imports daphne (ChannelsLiveServerTestCase). It is
+  # not a runtime dependency — Angee serves with uvicorn (see [project.dependencies]).
+  "daphne>=4.0",
   "faker>=30.0",
   "mypy>=1.10",
   "pytest>=8.0",
@@ -40,6 +49,11 @@ dev = [
   "ruff>=0.15.12",
   "vulture>=2.16",
 ]
+
+[tool.uv.sources]
+# Developing against the local django-zed-rebac checkout while a create-gating fix
+# lands; switch back to the published pin once it ships.
+django-zed-rebac = { path = "/Users/alexis/Work/angee/django-zed-rebac", editable = true }
 
 [tool.hatch.build.targets.wheel]
 # Two source roots merge into the one `angee` PEP 420 namespace: the framework

@@ -120,23 +120,49 @@ def exchange_code(
 ) -> dict[str, Any]:
     """Exchange an authorization code for token material."""
 
-    token_endpoint = _endpoint(oauth_client, "token_endpoint", "token_endpoint")
-    payload: dict[str, Any] = {
-        **_param_values(oauth_client, "token_param_values"),
-        "client_id": str(getattr(oauth_client, "client_id", "")),
+    grant: dict[str, Any] = {
         "code": code,
         "grant_type": "authorization_code",
         "redirect_uri": redirect_uri,
     }
+    if state is not None:
+        grant["state"] = state
+    if getattr(oauth_client, "supports_pkce", False) and code_verifier:
+        grant["code_verifier"] = code_verifier
+    return _token_request(oauth_client, grant)
+
+
+def refresh_token(oauth_client: object, *, refresh_token: str) -> dict[str, Any]:
+    """Exchange a stored refresh token for fresh token material (RFC 6749 §6).
+
+    The provider may rotate the refresh token; when it returns a new one the caller
+    persists it. Raises ``OidcFlowError`` when the grant is rejected (e.g. revoked).
+    """
+
+    return _token_request(
+        oauth_client,
+        {"grant_type": "refresh_token", "refresh_token": refresh_token},
+    )
+
+
+def _token_request(oauth_client: object, grant: Mapping[str, Any]) -> dict[str, Any]:
+    """POST one grant to the token endpoint and return validated token material.
+
+    The grant-specific fields (``code``/``refresh_token``/…) ride ``grant``; the client
+    id, optional secret, and provider ``token_param_values`` are common to every grant.
+    The ``OAuthClient`` row owns the body format via ``token_request_format_value``.
+    """
+
+    token_endpoint = _endpoint(oauth_client, "token_endpoint", "token_endpoint")
+    payload: dict[str, Any] = {
+        **_param_values(oauth_client, "token_param_values"),
+        "client_id": str(getattr(oauth_client, "client_id", "")),
+        **grant,
+    }
     client_secret = str(getattr(oauth_client, "client_secret", "") or "")
     if client_secret:
         payload["client_secret"] = client_secret
-    if state is not None:
-        payload["state"] = state
-    if getattr(oauth_client, "supports_pkce", False) and code_verifier:
-        payload["code_verifier"] = code_verifier
     try:
-        # The OAuthClient model owns the normalization via token_request_format_value.
         if getattr(oauth_client, "token_request_format_value", "form") == "json":
             response = _post_json(token_endpoint, payload)
         else:
@@ -144,7 +170,7 @@ def exchange_code(
     except OidcFlowError as exc:
         if exc.code == TOKEN_EXCHANGE_FAILED:
             logger.warning(
-                "OAuth token exchange failed for %s: status=%s body=%r",
+                "OAuth token request failed for %s: status=%s body=%r",
                 str(getattr(oauth_client, "slug", getattr(oauth_client, "client_id", "unknown")) or "unknown"),
                 exc.http_status,
                 _safe_error_body(exc.body),

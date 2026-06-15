@@ -132,13 +132,15 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "simple_history",
         "angee.base.apps.BaseConfig",
         "channels.apps.ChannelsConfig",
-        "daphne.apps.DaphneConfig",
         "angee.graphql.apps.GraphQLConfig",
         "angee.resources.apps.ResourcesConfig",
         "django.contrib.auth.apps.AuthConfig",
         "django.contrib.sessions.apps.SessionsConfig",
         "angee.iam.apps.IAMConfig",
         "angee.integrate.apps.IntegrateConfig",
+        "angee.mcp.apps.McpConfig",
+        "angee.operator.apps.OperatorConfig",
+        "angee.agents.apps.AgentsConfig",
         "example.notes.apps.NotesConfig",
     ]
 
@@ -704,7 +706,7 @@ def test_compose_settings_module_uses_project_dir_for_non_manage_entrypoints(
         "path",
         [path for path in sys.path if path not in {str(tmp_path), str(tmp_path / "addons")}],
     )
-    monkeypatch.setattr(sys, "argv", ["daphne", "angee.asgi:application"])
+    monkeypatch.setattr(sys, "argv", ["uvicorn", "angee.asgi:application"])
     monkeypatch.setenv("ANGEE_PROJECT_DIR", str(tmp_path))
 
     import angee.compose.settings as compose_settings
@@ -728,7 +730,7 @@ def test_compose_settings_rejects_cwd_without_project_contract(
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("ANGEE_PROJECT_DIR", raising=False)
     monkeypatch.delitem(sys.modules, "settings", raising=False)
-    monkeypatch.setattr(sys, "argv", ["daphne", "angee.asgi:application"])
+    monkeypatch.setattr(sys, "argv", ["uvicorn", "angee.asgi:application"])
 
     compose_settings = sys.modules.get("angee.compose.settings")
     with pytest.raises(ImproperlyConfigured, match="ANGEE_PROJECT_DIR"):

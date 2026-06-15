@@ -6,16 +6,19 @@ import {
   TableHead,
   TableHeader,
   TableRow,
+  useConfirm,
 } from "@angee/base";
 import { useT } from "@angee/sdk";
 import { useState, type ReactNode } from "react";
 
 import {
+  SERVICE_DESTROY_MUTATION,
   SERVICE_RESTART_MUTATION,
   SERVICE_START_MUTATION,
   SERVICE_STOP_MUTATION,
 } from "../../data/documents";
 import { useOperatorAction, useOperatorSnapshot } from "../../data/transport";
+import type { ServiceState } from "../../data/types";
 import { OperatorSection } from "../parts/OperatorSection";
 import { StateTag } from "../parts/StateTag";
 import { runDaemonAction, type DaemonActionData } from "../parts/run-action";
@@ -27,6 +30,8 @@ interface ServiceAction {
   field: string;
   label: string;
   variant: "secondary" | "ghost";
+  /** Destructive — require a styled confirmation naming the service first. */
+  dangerous?: boolean;
   run: (variables: ServiceActionVars) => Promise<DaemonActionData>;
 }
 
@@ -40,13 +45,19 @@ export interface ServicesSectionProps {
 /** Services pane: a daemon service table with lifecycle actions. */
 export function ServicesSection({ names, title }: ServicesSectionProps = {}): ReactNode {
   const t = useT("operator");
+  const confirm = useConfirm();
   const { snapshot, result, refetch } = useOperatorSnapshot({ services: true });
   const [actionError, setActionError] = useState<string | null>(null);
 
   const start = useOperatorAction<DaemonActionData, ServiceActionVars>(SERVICE_START_MUTATION);
   const stop = useOperatorAction<DaemonActionData, ServiceActionVars>(SERVICE_STOP_MUTATION);
   const restart = useOperatorAction<DaemonActionData, ServiceActionVars>(SERVICE_RESTART_MUTATION);
-  const busy = start.result.fetching || stop.result.fetching || restart.result.fetching;
+  const destroy = useOperatorAction<DaemonActionData, ServiceActionVars>(SERVICE_DESTROY_MUTATION);
+  const busy =
+    start.result.fetching ||
+    stop.result.fetching ||
+    restart.result.fetching ||
+    destroy.result.fetching;
 
   const services = (snapshot?.services ?? []).filter(
     (service) => names === undefined || names.includes(service.name),
@@ -55,7 +66,30 @@ export function ServicesSection({ names, title }: ServicesSectionProps = {}): Re
     { field: "serviceStart", label: "Start", variant: "secondary", run: start.run },
     { field: "serviceRestart", label: "Restart", variant: "ghost", run: restart.run },
     { field: "serviceStop", label: "Stop", variant: "ghost", run: stop.run },
+    { field: "serviceDestroy", label: "Destroy", variant: "ghost", dangerous: true, run: destroy.run },
   ];
+
+  function handle(action: ServiceAction, service: ServiceState): void {
+    void (async () => {
+      if (action.dangerous) {
+        const ok = await confirm({
+          title: "Destroy service?",
+          body: `“${service.name}” will be stopped and removed from the stack — the workspace it mounts is left intact.`,
+          confirm: action.label,
+          danger: true,
+        });
+        if (!ok) return;
+      }
+      await runDaemonAction({
+        run: action.run,
+        field: action.field,
+        variables: { name: service.name },
+        label: action.label,
+        setError: setActionError,
+        refetch,
+      });
+    })();
+  }
 
   return (
     <OperatorSection
@@ -97,16 +131,7 @@ export function ServicesSection({ names, title }: ServicesSectionProps = {}): Re
                       <Button
                         disabled={busy}
                         key={action.field}
-                        onClick={() =>
-                          void runDaemonAction({
-                            run: action.run,
-                            field: action.field,
-                            variables: { name: service.name },
-                            label: action.label,
-                            setError: setActionError,
-                            refetch,
-                          })
-                        }
+                        onClick={() => handle(action, service)}
                         size="sm"
                         variant={action.variant}
                       >

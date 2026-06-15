@@ -12,7 +12,6 @@ from django.apps import AppConfig, apps
 from django.core.exceptions import NON_FIELD_ERRORS, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.utils.functional import cached_property
-from django.utils.module_loading import import_string
 from rebac import MissingActorError, PermissionDenied, RebacMixin
 from rebac.graphql.strawberry import RebacExtension
 from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
@@ -22,6 +21,7 @@ from strawberry.types.base import get_object_definition
 from strawberry.types.execution import ExecutionContext
 from strawberry.utils.str_converters import to_camel_case
 
+from angee.addons import resolve_addon_reference
 from angee.graphql.introspection import (
     django_model,
     surface_field_names,
@@ -390,11 +390,7 @@ def _raw_schemas(app_config: AppConfig) -> object:
         return declaration
     if not isinstance(declaration, str):
         raise ImproperlyConfigured(f"{app_config.name}.schemas must be a mapping or dotted reference")
-    dotted_path = declaration if declaration.startswith(f"{app_config.name}.") else f"{app_config.name}.{declaration}"
-    try:
-        return import_string(dotted_path)
-    except ImportError as error:
-        raise ImproperlyConfigured(f"{app_config.name}.schemas references {dotted_path!r}") from error
+    return resolve_addon_reference(app_config, declaration, attr="schemas")
 
 
 def _schema_part_values(

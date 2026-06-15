@@ -13,9 +13,15 @@ class NotesConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "example.notes"
     label = "notes"
-    depends_on = ("angee.iam", "angee.integrate", "angee.agents")
+    depends_on = ("angee.iam", "angee.integrate", "angee.agents", "angee.mcp")
     schemas = "schema.schemas"
     permissions = "permissions.zed"
+    mcp_tools = "mcp_tools.register"
+    """Mount a ``notes`` MCP server whose tools read/write notes for the request actor.
+
+    The module is ``mcp_tools`` (not ``mcp``) so it never shadows the third-party
+    ``mcp`` package when a test runner adds the addon directory to ``sys.path``.
+    """
     resources = {
         "install": ("resources/install/010_integrate.vendor.yaml",),
         "demo": (

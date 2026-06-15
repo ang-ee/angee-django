@@ -15,6 +15,7 @@ INSTALLED_APPS = [
     "angee.integrate",
     "angee.agents",
     "angee.knowledge",
+    "angee.mcp",
     "angee.storage",
 ]
 DATABASES = {
@@ -39,3 +40,8 @@ ANGEE_INFERENCE_BACKEND_CLASSES = {
     "manual": "angee.agents.backends.ManualInferenceBackend",
     "stub": "tests.conftest.StubInferenceBackend",
 }
+# The MCP runtime's actor resolver + the agents-supplied bearer→actor verifier are
+# composer autoconfig (angee.mcp / angee.agents); a bare test settings module that
+# skips the composer declares them so the resolver chain and verifier are wired.
+REBAC_MCP_ACTOR_RESOLVER = "angee.mcp.actors.actor_from_request"
+ANGEE_MCP_ACTOR_VERIFIER = "angee.agents.mcp_verifier.resolve_actor"
