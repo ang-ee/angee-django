@@ -40,8 +40,9 @@ ANGEE_INFERENCE_BACKEND_CLASSES = {
     "manual": "angee.agents.backends.ManualInferenceBackend",
     "stub": "tests.conftest.StubInferenceBackend",
 }
-# The MCP runtime's actor resolver + the agents-supplied bearer→actor verifier are
-# composer autoconfig (angee.mcp / angee.agents); a bare test settings module that
-# skips the composer declares them so the resolver chain and verifier are wired.
-REBAC_MCP_ACTOR_RESOLVER = "angee.mcp.actors.actor_from_request"
+# The agents-supplied bearer→actor verifier is composer autoconfig (angee.agents); a
+# bare test settings module that skips the composer declares it so the verifier is
+# wired. The MCP actor is bracketed around each tool call by
+# angee.mcp.middleware.ActorMiddleware and read via rebac's ambient current_actor
+# (no REBAC_MCP_ACTOR_RESOLVER override needed).
 ANGEE_MCP_ACTOR_VERIFIER = "angee.agents.mcp_verifier.resolve_actor"

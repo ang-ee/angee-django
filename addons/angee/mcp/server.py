@@ -5,15 +5,17 @@ attribute on its ``AppConfig`` — a ``"<module>.<attr>"`` dotted reference to a
 ``register(server: FastMCP) -> None`` callable (the same declaration shape the
 GraphQL ``schemas`` seam uses, resolved by the shared
 :func:`angee.addons.resolve_addon_reference`). The server authenticates the inbound
-bearer with :class:`~angee.mcp.verifier.RebacTokenVerifier` and is mounted as a
-StreamableHTTP ASGI app by :mod:`angee.mcp.asgi`; :mod:`angee.asgi` owns its
-lifespan, so the server holds no per-request lifecycle of its own.
+bearer with :class:`~angee.mcp.verifier.RebacTokenVerifier` and brackets every tool
+call in the authenticated REBAC actor with :class:`~angee.mcp.middleware.ActorMiddleware`.
+It is mounted as a StreamableHTTP ASGI app by :mod:`angee.mcp.asgi`; :mod:`angee.asgi`
+owns its lifespan, so the server holds no per-request lifecycle of its own.
 
-DNS-rebinding protection is off because Django's ``ALLOWED_HOSTS`` already
+``stateless_http`` keeps each call independent and ``json_response`` returns a
+buffered JSON body the agent's HTTP client folds without an SSE reader (both passed
+to :meth:`~fastmcp.FastMCP.http_app`). DNS-rebinding protection is off by default
+(FastMCP passes no transport-security settings); Django's ``ALLOWED_HOSTS`` already
 terminates the request and the bearer + REBAC actor resolution is the real
-authorization boundary; ``stateless_http`` keeps each call independent and
-``json_response`` returns a buffered JSON body the agent's HTTP client folds
-without an SSE reader.
+authorization boundary.
 """
 
 from __future__ import annotations
@@ -23,14 +25,12 @@ from functools import cache
 from typing import TYPE_CHECKING
 
 from django.apps import apps
-from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from fastmcp import FastMCP
 
 from angee.addons import is_angee_addon, resolve_addon_reference
+from angee.mcp.middleware import ActorMiddleware
 from angee.mcp.verifier import RebacTokenVerifier
-from mcp.server.auth.settings import AuthSettings
-from mcp.server.fastmcp import FastMCP
-from mcp.server.transport_security import TransportSecuritySettings
 
 if TYPE_CHECKING:  # pragma: no cover
     from starlette.applications import Starlette
@@ -46,19 +46,7 @@ MOUNT_PATH = "/mcp"
 def mcp_server() -> FastMCP:
     """Return the process-wide FastMCP server, built and tool-registered once."""
 
-    server = FastMCP(
-        name="angee",
-        stateless_http=True,
-        json_response=True,
-        streamable_http_path=MOUNT_PATH,
-        auth=AuthSettings(
-            issuer_url=settings.ANGEE_MCP_ISSUER_URL,
-            resource_server_url=settings.ANGEE_MCP_ISSUER_URL,
-            required_scopes=[],
-        ),
-        token_verifier=RebacTokenVerifier(),
-        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
-    )
+    server = FastMCP(name="angee", auth=RebacTokenVerifier(), middleware=[ActorMiddleware()])
     for registrar in _registrars():
         registrar(server)
     return server
@@ -68,7 +56,7 @@ def mcp_server() -> FastMCP:
 def mcp_app() -> Starlette:
     """Return the server's StreamableHTTP ASGI app (built once, lifespan owned by the entrypoint)."""
 
-    return mcp_server().streamable_http_app()
+    return mcp_server().http_app(path=MOUNT_PATH, stateless_http=True, json_response=True)
 
 
 def has_tools() -> bool:

@@ -197,6 +197,14 @@ call.
 
 1. **A — replatform** to FastMCP v2 (5 edits above) + `on_call_tool` actor middleware.
    Keep the existing notes tools working through it. Proves mount/auth/lifespan on v2.
+   **✅ DONE (2026-06-15):** verifier rebased onto `fastmcp.server.auth.TokenVerifier`
+   (actor on `subject` + `claims`); `ActorMiddleware.on_call_tool` brackets each call in
+   `actor_context`; `server.py` on `fastmcp.FastMCP` + `http_app(path, stateless_http,
+   json_response)`; `actors.py`/`tools.py` + the `REBAC_MCP_ACTOR_RESOLVER` setting
+   deleted (rebac's default resolver + ambient `current_actor()` cover it); notes tools
+   drop `ctx`/`request_actor` and read the ambient actor. `angee/asgi.py` unchanged — its
+   `_Lifespan` already drives each mount's `router.lifespan_context`. Notes MCP round-trip
+   + 401 green; `test_asgi.py` green; ruff + mypy clean.
 2. **B1** — `angee.mcp.graphql`: `GraphQLTool`/`CustomTool` specs, the graphql-core→JSON
    mapper, `execute_under_actor`, build-time validation. Convert notes (deletes
    hand-rolled `mcp_tools.py`); add `createVault`/`createPage` + one `CustomTool` to
@@ -216,6 +224,10 @@ call.
   registration; provide a faithful request shim or don't expose.
 - **Union/interface returns** — defer (raise "not MCP-exposable yet") rather than emit a
   silently-wrong projection.
+- **Dependency weight (follow-up)** — the top-level ``fastmcp`` pulled a heavy transitive
+  set (``redis``, ``pydocket``, ``opentelemetry``, …). Trim to ``fastmcp-slim`` + only the
+  needed extras to shrink the runtime install. (The ``authlib.jose`` deprecation warning at
+  import is fastmcp's own, benign.)
 
 ## Files
 

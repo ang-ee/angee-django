@@ -1,15 +1,15 @@
 """Notes tools for the MCP server.
 
 ``read_note``/``update_note``/``create_note`` gate on a REBAC permission through
-rebac's ``rebac_mcp_tool`` decorator — the authenticated actor (resolved off
-FastMCP's auth context via ``REBAC_MCP_ACTOR_RESOLVER``) is checked against the
-note (read/write) or the ``create`` permission before the body runs, and the body
-executes inside that actor's context. ``list_notes`` has no single target
-resource, so it binds the actor itself and filters by queryset scoping. The agents
-addon owns mounting and bearer→actor authentication; this module owns only the
-notes shape. The bodies run directly on the event loop using rebac's row-scoped
-async ORM (``async for`` / ``afrom_public_id`` / ``acreate`` / ``asave``) — no
-thread hop.
+rebac's ``rebac_mcp_tool`` decorator — the authenticated actor (bracketed around the
+call by ``angee.mcp.middleware.ActorMiddleware`` and read through rebac's ambient
+``current_actor``) is checked against the note (read/write) or the ``create``
+permission before the body runs, and the body executes inside that actor's context.
+``list_notes`` has no single target resource, so it runs under the same ambient actor
+and filters by queryset scoping. The agents addon owns mounting and bearer→actor
+authentication; this module owns only the notes shape. The bodies run directly on the
+event loop using rebac's row-scoped async ORM (``async for`` / ``afrom_public_id`` /
+``acreate`` / ``asave``) — no thread hop.
 """
 
 from __future__ import annotations
@@ -17,28 +17,26 @@ from __future__ import annotations
 from typing import Any
 
 from django.apps import apps
-from mcp.server.fastmcp import Context, FastMCP
-from rebac import actor_context, current_actor
+from fastmcp import FastMCP
+from rebac import current_actor
 from rebac.mcp import rebac_mcp_tool
 
 from angee.base.mixins import actor_user_id
-from angee.mcp.actors import request_actor
 
 
 def register(server: FastMCP) -> None:
     """Register the notes tools on the MCP server."""
 
     @server.tool()
-    async def list_notes(ctx: Context, limit: int = 20) -> list[dict[str, Any]]:
+    async def list_notes(limit: int = 20) -> list[dict[str, Any]]:
         """List the caller's most recently updated notes (up to ``limit``)."""
 
         note = apps.get_model("notes", "Note")
-        with actor_context(request_actor()):
-            return [_summary(row) async for row in note.objects.all()[: max(1, min(limit, 100))]]
+        return [_summary(row) async for row in note.objects.all()[: max(1, min(limit, 100))]]
 
     @server.tool()
     @rebac_mcp_tool(resource_type="notes/note", action="read", id_arg="sqid")
-    async def read_note(ctx: Context, sqid: str) -> dict[str, Any]:
+    async def read_note(sqid: str) -> dict[str, Any]:
         """Return one note in full by its public id (read-gated for the caller)."""
 
         note = apps.get_model("notes", "Note")
@@ -50,7 +48,6 @@ def register(server: FastMCP) -> None:
     @server.tool()
     @rebac_mcp_tool(resource_type="notes/note", action="write", id_arg="sqid")
     async def update_note(
-        ctx: Context,
         sqid: str,
         title: str | None = None,
         body: str | None = None,
@@ -84,7 +81,6 @@ def register(server: FastMCP) -> None:
     @server.tool()
     @rebac_mcp_tool(resource_type="notes/note", action="create")
     async def create_note(
-        ctx: Context,
         title: str,
         body: str = "",
         status: str = "draft",

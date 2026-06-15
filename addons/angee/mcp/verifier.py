@@ -3,10 +3,11 @@
 Authentication is the transport's job (rebac proposal 0004), so it lives here, not
 in rebac. The bearer→actor map belongs to whichever addon owns the MCP catalogue;
 it is named by ``ANGEE_MCP_ACTOR_VERIFIER`` and this wraps it as a FastMCP
-:class:`~mcp.server.auth.provider.TokenVerifier`. FastMCP then gates every call
-(``401`` on a bad bearer) and carries the resolved actor on the request, where
-:func:`angee.mcp.actors.actor_from_request` reads it back as the canonical subject
-string on the token's ``subject`` field.
+:class:`~fastmcp.server.auth.TokenVerifier`. FastMCP then gates every call (``401``
+on a bad bearer) and carries the resolved actor on the request; the per-call
+:class:`~angee.mcp.middleware.ActorMiddleware` reads it back off
+:func:`~fastmcp.server.dependencies.get_access_token` and brackets the tool body in
+``rebac.actor_context`` so the body scopes to that actor.
 """
 
 from __future__ import annotations
@@ -16,9 +17,8 @@ from collections.abc import Callable
 from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.utils.module_loading import import_string
+from fastmcp.server.auth import AccessToken, TokenVerifier
 from rebac import SubjectRef
-
-from mcp.server.auth.provider import AccessToken, TokenVerifier
 
 MCPActorVerifier = Callable[[str], SubjectRef | None]
 """A ``verify(bearer) -> SubjectRef | None`` callable named by ``ANGEE_MCP_ACTOR_VERIFIER``."""
@@ -42,10 +42,10 @@ class RebacTokenVerifier(TokenVerifier):
         if actor is None:
             return None
         subject = str(actor)
-        # ``subject`` carries the actor (read back by ``actor_from_request``); ``client_id``
-        # mirrors it because this bearer model has no separate OAuth client identity, and
-        # FastMCP requires the field to be non-empty.
-        return AccessToken(token=token, client_id=subject, scopes=[], subject=subject)
+        # The actor rides ``subject`` (read back by ``ActorMiddleware``) and ``claims`` (the
+        # forward-compatible carrier). ``client_id`` mirrors it because this bearer model has
+        # no separate OAuth client identity, and FastMCP requires the field to be non-empty.
+        return AccessToken(token=token, client_id=subject, scopes=[], subject=subject, claims={"subject": subject})
 
 
 def _verifier() -> MCPActorVerifier | None:
