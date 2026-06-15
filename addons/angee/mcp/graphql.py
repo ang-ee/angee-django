@@ -25,6 +25,8 @@ from types import SimpleNamespace
 from typing import Any
 
 from asgiref.sync import sync_to_async
+from django.core.exceptions import ImproperlyConfigured
+from django.db import close_old_connections
 from fastmcp.exceptions import ToolError
 from fastmcp.tools.tool import Tool, ToolResult
 from graphql import (
@@ -67,14 +69,32 @@ async def execute_under_actor(schema: str, document: str, variables: dict[str, A
     """
 
     built = GraphQLSchemas.from_discovery().build(schema)
-    result = await sync_to_async(built.execute_sync)(
-        document,
-        variable_values=dict(variables or {}),
-        context_value=SimpleNamespace(request=None),
-    )
+    result = await sync_to_async(_execute_sync)(built, document, variables)
     if result.errors:
         raise _tool_error(result.errors[0])
     return dict(result.data or {})
+
+
+def _execute_sync(built: Any, document: str, variables: dict[str, Any] | None) -> Any:
+    """Run the GraphQL operation synchronously, recycling stale DB connections.
+
+    The MCP path has no Django request, so the ``request_started``/``request_finished``
+    signals that close old connections never fire. Bracket the execution with
+    ``close_old_connections()`` so the long-lived ``sync_to_async`` worker thread honours
+    ``CONN_MAX_AGE``/``CONN_HEALTH_CHECKS`` like a request does — otherwise a DB restart or
+    idle timeout surfaces as a stale-connection error on the next call instead of a
+    transparent reconnect.
+    """
+
+    close_old_connections()
+    try:
+        return built.execute_sync(
+            document,
+            variable_values=dict(variables or {}),
+            context_value=SimpleNamespace(request=None),
+        )
+    finally:
+        close_old_connections()
 
 
 def _tool_error(error: Any) -> ToolError:
@@ -195,6 +215,7 @@ def _compile(spec: GraphQLTool) -> _CompiledTool:
     op_type, field = _root_field(gc, spec.operation)
     node, is_list = _return_node(field.type)
     leaves = [("sqid", "id", True) if name == "sqid" else (name, to_camel_case(name), False) for name in spec.fields]
+    _validate(spec, field, node, leaves)
     parameters = _input_schema(field, spec)
     document = _document(op_type, spec, field, leaves, is_list)
     return _CompiledTool(
@@ -237,6 +258,27 @@ def _return_node(rtype: Any) -> tuple[Any, bool]:
             element = element.of_type
         return element, True
     return node, False
+
+
+def _validate(spec: GraphQLTool, field: Any, node: Any, leaves: list[tuple[str, str, bool]]) -> None:
+    """Fail fast with a clear message when a spec names a field or arg the schema lacks.
+
+    ``_output_schema``/``_document`` index ``node.fields[wire]`` and ``field.args[arg]``
+    directly, so an unknown name would otherwise surface as a bare ``KeyError`` deep in
+    introspection. Validate here so a bad :class:`GraphQLTool` breaks ``angee dev`` startup
+    naming the operation and the offending name (matching ``_root_field``'s fail-fast).
+    """
+
+    unknown_fields = [wire for _key, wire, is_id in leaves if not is_id and wire not in node.fields]
+    if unknown_fields:
+        raise ImproperlyConfigured(
+            f"MCP tool {spec.name!r}: {node.name} has no field(s) {unknown_fields} (projected by {spec.operation})."
+        )
+    driven = [arg for arg in (("pagination" if spec.limit_arg else None), spec.id_arg, spec.flatten) if arg]
+    driven += list(spec.fixed)
+    unknown_args = [arg for arg in driven if arg not in field.args]
+    if unknown_args:
+        raise ImproperlyConfigured(f"MCP tool {spec.name!r}: {spec.operation} takes no argument(s) {unknown_args}.")
 
 
 def _input_schema(field: Any, spec: GraphQLTool) -> dict[str, Any]:

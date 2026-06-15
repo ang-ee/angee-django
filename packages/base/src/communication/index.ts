@@ -13,3 +13,23 @@ export {
   type ChatterTab,
   type ChatterTabId,
 } from "./chatter-context";
+export {
+  ChatBubble,
+  ChatComposer,
+  ChatComposerHint,
+  ChatHeader,
+  ChatHeaderAction,
+  ContextBlock,
+  MessageReasoningFrame,
+  ToolFallback,
+  chatComposerInputClassName,
+  type ChatBubbleProps,
+  type ChatBubbleRole,
+  type ChatComposerHintProps,
+  type ChatComposerProps,
+  type ChatHeaderActionProps,
+  type ChatHeaderProps,
+  type ContextBlockProps,
+  type MessageReasoningFrameProps,
+  type ToolFallbackProps,
+} from "./chat";

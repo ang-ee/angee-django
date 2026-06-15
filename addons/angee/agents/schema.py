@@ -25,7 +25,10 @@ from strawberry import auto, relay
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
+from angee.agents.autoconfig import SETTINGS as _AGENTS_SETTINGS
 from angee.agents.context import render_view_context
+from angee.agents.models import AgentStatus
+from angee.base.mixins import actor_user_id
 from angee.base.models import instance_from_public_id
 from angee.graphql.actions import ActionResult
 from angee.graphql.crud import crud
@@ -158,6 +161,22 @@ class AgentChatEndpoint:
     token: str
     expires_at: str
     mcp_servers: JSON
+
+
+@strawberry.type
+class AgentSession:
+    """The agent that serves the user's current view, for the side chatter.
+
+    The view-driven counterpart to :class:`AgentChatEndpoint`: the chatter knows the
+    *view*, not the agent, so this resolves *which* agent (identity only — name, status,
+    model). The client then mints the chat endpoint for ``agent_id`` with
+    ``agentChatEndpoint``. A ``None`` result means the user has no running agent.
+    """
+
+    agent_id: relay.GlobalID
+    agent_name: str
+    status: str
+    model_handle: str
 
 
 @strawberry.input
@@ -468,6 +487,61 @@ def _resolve(
 _PROVISION_CHAIN = ("model__provider__integration__credential",)
 
 
+def _mint_session(agent: Any) -> dict[str, Any]:
+    """Mint the chat WebSocket endpoint + per-actor route token for a running ``agent``.
+
+    The one owner of "open a chat session against this agent": ``agentChatEndpoint``
+    (caller knows the agent) and ``resolveSessionForView`` (caller knows the view) both
+    call it, so the token/endpoint logic lives once. Raises when there is no actor, the
+    agent isn't running (no rendered ``service``), or its service isn't routed.
+    """
+
+    actor = current_actor()
+    if actor is None:
+        raise ValueError("No actor in context.")
+    with system_context(reason="agents.graphql.mint_session"):
+        service = agent.service
+        mcp_servers = agent.mcp_config().get("mcpServers", {})
+    if not service:
+        raise ValueError("Agent is not running — provision it first.")
+    daemon = OperatorDaemon.from_settings()
+    endpoint = daemon.service_endpoint(service)
+    if not endpoint.get("routed"):
+        raise ValueError("Agent service is not reachable over a routed endpoint.")
+    # The agents autoconfig owns the TTL default; source the fallback from it (not a
+    # restated literal) so a bare settings module without the composed value still resolves.
+    ttl = str(getattr(settings, "ANGEE_AGENT_CHAT_TOKEN_TTL", _AGENTS_SETTINGS["ANGEE_AGENT_CHAT_TOKEN_TTL"]))
+    token = daemon.mint_route_token(str(actor.object), service, ttl=ttl)
+    return {
+        "url": str(endpoint.get("url", "")),
+        "token": str(token.get("token", "")),
+        "expires_at": str(token.get("expires_at", "")),
+        "mcp_servers": mcp_servers,
+    }
+
+
+def _agent_for_view(view: dict[str, Any]) -> Any:
+    """Return the running agent that serves ``view`` for the current actor, or ``None``.
+
+    v1 routes every view to the **actor's own** running, service-backed agent (the most
+    recently updated). ``view["type"]`` is the routing seam — a later slice dispatches on
+    it to pick a view-specialised agent — so it is read here even though v1 ignores it.
+    """
+
+    del view  # routing seam: a later slice dispatches on ``view["type"]``; v1 ignores it
+    actor = current_actor()
+    user_id = actor_user_id(actor) if actor is not None else None
+    if user_id is None:
+        return None
+    with system_context(reason="agents.graphql.agent_for_view"):
+        return (
+            Agent.objects.filter(owner_id=user_id, is_template=False, status=AgentStatus.RUNNING)
+            .exclude(service="")
+            .order_by("-updated_at")
+            .first()
+        )
+
+
 @strawberry.type
 class InferenceActionMutation:
     """Operational actions on an inference provider."""
@@ -661,25 +735,33 @@ class AgentActionMutation:
         """
 
         agent = _resolve(Agent, id, reason="agents.graphql.agent_chat_endpoint")
-        with system_context(reason="agents.graphql.agent_chat_endpoint"):
-            service = agent.service
-            mcp_servers = agent.mcp_config().get("mcpServers", {})
-        if not service:
-            raise ValueError("Agent is not running — provision it first.")
-        actor = current_actor()
-        if actor is None:
-            raise ValueError("No actor in context.")
-        daemon = OperatorDaemon.from_settings()
-        endpoint = daemon.service_endpoint(service)
-        if not endpoint.get("routed"):
-            raise ValueError("Agent service is not reachable over a routed endpoint.")
-        ttl = getattr(settings, "ANGEE_AGENT_CHAT_TOKEN_TTL", "2h")
-        token = daemon.mint_route_token(str(actor.object), service, ttl=ttl)
+        session = _mint_session(agent)
         return AgentChatEndpoint(
-            url=str(endpoint.get("url", "")),
-            token=str(token.get("token", "")),
-            expires_at=str(token.get("expires_at", "")),
-            mcp_servers=mcp_servers,
+            url=session["url"],
+            token=session["token"],
+            expires_at=session["expires_at"],
+            mcp_servers=session["mcp_servers"],
+        )
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def resolve_session_for_view(self, view: JSON) -> AgentSession | None:
+        """Resolve the agent that serves the user's current view, for the side chatter.
+
+        The chatter knows the *view*, not the agent: this picks the actor's running agent
+        (``view["type"]`` is the routing seam for a later view-specialised agent) so the
+        client can mint its chat endpoint (``agentChatEndpoint``). Returns ``None`` when the
+        user has no running agent, so the chatter shows a call-to-action instead of erroring.
+        """
+
+        agent = _agent_for_view(dict(view) if isinstance(view, dict) else {})
+        if agent is None:
+            return None
+        model = getattr(agent, "model", None)
+        return AgentSession(
+            agent_id=relay.GlobalID(type_name="AgentType", node_id=str(agent.sqid)),
+            agent_name=str(agent.name),
+            status=str(agent.status),
+            model_handle=str(model) if model is not None else "",
         )
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)

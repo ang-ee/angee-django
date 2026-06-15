@@ -33,6 +33,12 @@ _angee:
       type: str
       default: acceptEdits
       help: Claude Code permission mode (default | acceptEdits | plan | bypassPermissions).
+    mcp_env:
+      type: str
+      default: ""
+      help: >-
+        Pre-rendered YAML env lines (one per credentialed MCP server) setting each
+        server's bearer from its operator secret; .mcp.json reads them via ${VAR}.
 
 auth_mode:
   type: str
@@ -51,3 +57,7 @@ permission_mode:
   type: str
   default: acceptEdits
   choices: [default, acceptEdits, plan, bypassPermissions]
+
+mcp_env:
+  type: str
+  default: ""

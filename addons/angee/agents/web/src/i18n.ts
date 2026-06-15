@@ -14,6 +14,25 @@ export const enAgentsMessages: Record<string, string> = {
   "agents.agent.chatUnavailable":
     "The agent isn't running yet — provision it to start chatting.",
 
+  // AgentChat — the live ACP chat surface (header, composer, settings cog).
+  "agents.chat.title": "Agent",
+  "agents.chat.resolving": "Connecting to your agent…",
+  "agents.chat.empty": "Ask the agent about what you're looking at — it has the notes tools.",
+  "agents.chat.placeholder": "Message the agent…",
+  "agents.chat.send": "Send",
+  "agents.chat.clear": "Clear",
+  "agents.chat.reconnect": "Reconnect",
+  "agents.chat.settings": "Session settings",
+  "agents.chat.model": "Model",
+  "agents.chat.viewLabel": "View",
+  "agents.chat.mcpServers": "MCP servers",
+  "agents.chat.context": "System context",
+  "agents.chat.status.idle": "Idle",
+  "agents.chat.status.connecting": "Connecting…",
+  "agents.chat.status.ready": "Ready",
+  "agents.chat.status.error": "Error",
+  "agents.chat.status.closed": "Disconnected",
+
   // McpPage — bespoke form-section labels.
   "agents.mcp.endpoint": "Endpoint",
 

@@ -18,6 +18,9 @@ services:
 {%- else %}
       ANTHROPIC_API_KEY: "${secret.{{ secret_name }}}"
 {%- endif %}
+{%- if mcp_env %}
+{{ mcp_env | safe }}
+{%- endif %}
       CLAUDE_PERMISSION_MODE: "{{ permission_mode }}"
 {%- if model %}
       CLAUDE_MODEL: "{{ model }}"

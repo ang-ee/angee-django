@@ -303,6 +303,11 @@ class MCPServer(SqidMixin, AuditMixin, AngeeModel):
     placement = StateField(choices_enum=MCPPlacement, default=MCPPlacement.EXTERNAL)
     transport = StateField(choices_enum=MCPTransport, default=MCPTransport.HTTP)
     url = models.URLField(blank=True)
+    # Expected to be a non-rotating credential (e.g. a static token). The provisioned
+    # bearer is a *frozen* snapshot of ``secret_value()`` (see ``Agent.mcp_secrets``);
+    # for a rotating credential (OAuth) a later refresh would drift the live secret from
+    # the frozen bearer, so the verifier stops matching and the agent's MCP calls 401
+    # until reprovisioned. Constrain to static credentials at the catalogue level.
     credential = models.ForeignKey(
         "iam.Credential",
         on_delete=models.SET_NULL,
@@ -337,18 +342,20 @@ class MCPServer(SqidMixin, AuditMixin, AngeeModel):
 
         return bool(self.url)
 
-    def config_entry(self, secret_ref: str | None) -> dict[str, Any]:
-        """Return this server's ``.mcp.json`` entry, given an optional secret reference.
+    def config_entry(self, bearer_env: str | None) -> dict[str, Any]:
+        """Return this server's ``.mcp.json`` entry, given an optional bearer env var.
 
-        A credentialed server carries an ``Authorization: Bearer`` header whose value
-        is the operator ``${secret.<name>}`` reference named by ``secret_ref`` — not
-        the literal token, which rides the operator store, never the file or browser.
-        Pass ``None`` for an uncredentialed server.
+        A credentialed server carries an ``Authorization: Bearer`` header whose value is
+        the agent runtime's ``${<bearer_env>}`` expansion — the bearer rides the *container
+        env* (set from the operator secret in the service env, like the inference token),
+        never the file or browser. The operator only resolves ``${secret.<name>}`` in a
+        service's env, not in file content, so a bearer placed literally in ``.mcp.json``
+        would never resolve. Pass ``None`` for an uncredentialed server.
         """
 
         entry: dict[str, Any] = {"type": str(self.transport), "url": self.url}
-        if secret_ref is not None:
-            entry["headers"] = {"Authorization": f"Bearer ${{secret.{secret_ref}}}"}
+        if bearer_env is not None:
+            entry["headers"] = {"Authorization": f"Bearer ${{{bearer_env}}}"}
         return entry
 
 
@@ -531,21 +538,36 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
                 "oauth" if credential.kind == CredentialKind.OAUTH else "api_key"
             )
             structured["secret_name"] = self.inference_secret_name()
+        # The MCP bearers ride the container env too: one ``${secret.<name>}`` env line per
+        # credentialed server (the operator resolves it), which the service template renders
+        # under the service env and ``.mcp.json`` reads via ``${ANGEE_MCP_BEARER_<…>}``.
+        # The provision answer channel is string-only — every input is ``str()``-ed at the
+        # return below and the daemon takes string answers — so this renders the per-server
+        # env lines as text here rather than passing a structured list for the template to
+        # loop; the template splices them verbatim with ``| safe`` (their indentation must
+        # match its ``env:`` block).
+        mcp_env = "\n".join(
+            f'      {self.mcp_bearer_env(server)}: "${{secret.{secret_name}}}"'
+            for server, secret_name in self._addressable_mcp_servers()
+            if secret_name
+        )
+        if mcp_env:
+            structured["mcp_env"] = mcp_env
         merged = {**(self.service_inputs or {}), **structured}
         return {key: str(value) for key, value in merged.items()}
 
     def mcp_config(self) -> dict[str, Any]:
         """Return the ``.mcp.json`` document for this agent's reachable MCP servers.
 
-        Each server renders its own entry (:meth:`MCPServer.config_entry`); this
-        supplies the agent-scoped secret reference (:meth:`mcp_secret_name`) for a
-        credentialed server and skips servers that aren't addressable. The secret
-        value rides the operator store (synced server-side, like the inference
-        token), never the file or the browser. See :meth:`mcp_secrets`.
+        Each server renders its own entry (:meth:`MCPServer.config_entry`); this supplies
+        the bearer env var (:meth:`mcp_bearer_env`) for a credentialed server and skips
+        servers that aren't addressable. The header expands that env var, which the service
+        env sets from the operator secret (:meth:`provision_service_inputs`) — the value
+        rides the container env, never the file or the browser. See :meth:`mcp_secrets`.
         """
 
         servers = {
-            server.name: server.config_entry(secret_name or None)
+            server.name: server.config_entry(self.mcp_bearer_env(server) if secret_name else None)
             for server, secret_name in self._addressable_mcp_servers()
         }
         return {"mcpServers": servers}
@@ -567,12 +589,25 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
     def mcp_secret_name(self, server: MCPServer) -> str:
         """Return the operator secret name holding one MCP server's bearer for this agent.
 
-        Stable and scoped to the agent + server credential: the rendered
-        ``.mcp.json`` references it and the provision flow syncs the credential value
-        under it (the value never appears in the file or the browser).
+        Stable and scoped to the agent + server credential: the service env references it
+        (``${secret.<name>}`` → the bearer env var) and the provision flow syncs the
+        credential value under it (the value never appears in the file or the browser).
         """
 
         return f"agent-{self.sqid}-mcp-{server.credential.sqid}"
+
+    def mcp_bearer_env(self, server: MCPServer) -> str:
+        """Return the container env var carrying one MCP server's bearer for this agent.
+
+        The rendered ``.mcp.json`` header reads it via the agent runtime's ``${VAR}``
+        expansion; the service env sets it from the operator secret (:meth:`mcp_secret_name`),
+        which the operator resolves into the container env. Keyed by the server credential so
+        the env name and the ``.mcp.json`` reference can't drift, and unique per server in the
+        agent's container. The sqid segment is upper-cased so the env name is portable across
+        container runtimes/shells that reject or fold lowercase env names.
+        """
+
+        return f"ANGEE_MCP_BEARER_{server.credential.sqid.upper()}"
 
     def mcp_secrets(self) -> dict[str, str]:
         """Return ``{secret_name: bearer_value}`` for every credentialed MCP server.

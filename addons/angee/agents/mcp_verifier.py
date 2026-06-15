@@ -13,7 +13,7 @@ import hmac
 from typing import Any
 
 from django.apps import apps
-from rebac import SubjectRef, system_context
+from rebac import SubjectRef, system_context, to_subject_ref
 
 
 def resolve_actor(bearer: str) -> SubjectRef | None:
@@ -30,27 +30,32 @@ def resolve_actor(bearer: str) -> SubjectRef | None:
         return None
     mcp_server = apps.get_model("agents", "MCPServer")
     with system_context(reason="agents.mcp.verify_bearer"):
-        for server in mcp_server.objects.exclude(credential__isnull=True).select_related("credential"):
+        for server in mcp_server.objects.exclude(credential__isnull=True).select_related(
+            "credential", "credential__user"
+        ):
             if hmac.compare_digest(str(server.credential.secret_value()), bearer):
-                return _agent_actor(server)
+                return _run_as_user(server)
     return None
 
 
-def _agent_actor(server: Any) -> SubjectRef:
-    """Return the agent-scoped actor an accepted MCP bearer resolves to.
+def _run_as_user(server: Any) -> SubjectRef | None:
+    """Return the user the agent runs as: the owner of the server's credential.
 
-    A real, non-admin ``agents/agent`` subject — scoped per server credential so
-    distinct servers map to distinct actors, and reaching only the rows that subject
-    is granted (never the owning user's full scope, never elevated).
+    Interim model (option A): the agent acts with the identity of the user who owns the
+    credential it presents, so it gets that user's full notes CRUD (read / create /
+    update / delete) with correct attribution — ``created_by`` / ``owner`` are user FKs
+    and the row scoping is user-relation based. ``None`` (a credential with no user)
+    denies, since there is no one to attribute the call to.
+
+    TODO(agent-identity, option B — deferred): a distinct ``agents/agent`` subject that
+    is *granted* a role / user / resource for authz while attributing writes to a
+    designated user — preserving a distinct agent identity through CRUD. It needs the
+    resource schemas to accept ``agents/agent`` subjects, an agent-aware ``created_by``
+    author, and per-agent grants. Until then the agent borrows its credential owner's
+    identity.
+    TODO(mcp-authz): no per-tool authz yet — any holder of the server's credential
+    reaches every registered tool.
     """
 
-    # TODO(agent-actor): the bearer must identify the *agent* actor, not the owning
-    # user. Full agent-actor identity — an ``agents/agent`` subject minted per
-    # provisioned agent, with the REBAC reach the agent is granted over the resources
-    # it may touch — is deferred. For now the credential's own sqid is the placeholder
-    # agent id, so the actor is a stable, distinct, non-user subject the tool reads
-    # scope to (it sees only what it is granted, not the owner's notes).
-    # TODO(mcp-authz): the resolver/authz must also check that the *agent* selecting
-    # this server is permitted to use it and which of its tools — deferred to the next
-    # slice. Today any holder of the server's credential reaches every registered tool.
-    return SubjectRef.of("agents/agent", str(server.credential.sqid))
+    user = getattr(server.credential, "user", None)
+    return to_subject_ref(user) if user is not None else None
