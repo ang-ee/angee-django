@@ -56,10 +56,10 @@ import {
   User,
   Users,
   X,
-  Zap,
   GitBranch,
 } from "lucide-react";
 
+import { AgentGlyph } from "./AgentGlyph";
 import { AngeeMark } from "./AngeeMark";
 
 export type IconProps = SVGProps<SVGSVGElement> & {
@@ -71,7 +71,7 @@ export type IconComponent = ComponentType<IconProps>;
 
 export const baseIcons = {
   activity: Activity,
-  agent: Zap,
+  agent: AgentGlyph,
   angee: AngeeMark,
   "angee-cube": AngeeMark,
   archive: Archive,
