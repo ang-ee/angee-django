@@ -13,6 +13,7 @@ INSTALLED_APPS = [
     "angee.resources",
     "angee.iam",
     "angee.integrate",
+    "angee.iam_integrate_oidc",
     "angee.agents",
     "angee.knowledge",
     "angee.mcp",

@@ -41,7 +41,7 @@ describe("OAuthConnectCallbackPage", () => {
     window.history.replaceState(null, "", "/callback?code=connect-ok&state=s1");
     mocks.mutate.mockResolvedValue({
       connectAccountComplete: {
-        next: "/iam/accounts",
+        next: "/integrate/accounts",
         error: null,
         account: null,
         credential: null,
@@ -54,7 +54,7 @@ describe("OAuthConnectCallbackPage", () => {
       </Runtime>,
     );
 
-    await waitFor(() => expect(vi.mocked(window.location.assign)).toHaveBeenCalledWith("/iam/accounts"));
+    await waitFor(() => expect(vi.mocked(window.location.assign)).toHaveBeenCalledWith("/integrate/accounts"));
     expect(mocks.mutate).toHaveBeenCalledWith(
       expect.objectContaining({ code: "connect-ok", state: "s1" }),
     );

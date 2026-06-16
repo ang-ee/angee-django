@@ -50,11 +50,12 @@ on top.
 │   ├── graphql/            # the GraphQL runtime — schema buckets, auto-CRUD, subscriptions, SDL (`manage.py schema`)
 │   └── compose/            # the composer — emits the concrete runtime (`manage.py angee build`)
 ├── addons/angee/           # base addons shipped with Angee — same `angee.*` namespace, built on the core
-│   ├── iam/                # IAM base addon — identity, the swappable user model, connections, OIDC login
+│   ├── iam/                # IAM base addon — identity, the swappable user model, the REBAC permission hub
 │   ├── resources/          # resources base addon — tiered data import/export (`resources` command)
 │   ├── storage/            # storage base addon — drives, folders, content-addressed files, uploads
 │   ├── operator/           # operator base addon — bridge to the local operator daemon + admin console
-│   └── integrate/          # integration base addon — thin capability/bridge runtime seam
+│   ├── integrate/          # integration base addon — the OAuth connection substrate + capability/bridge runtime seam
+│   └── iam_integrate_oidc/ # OIDC login addon — extends integrate's OAuth + composes iam (the OidcClient refinement + login flow)
 │       └── …               # an addon may carry a co-located `web/` (e.g. `iam/web` = `@angee/iam`)
 ├── packages/               # frontend workspace (pnpm) — the shared React layer (`angee-react`)
 │   ├── sdk/                # `@angee/sdk` — headless bindings

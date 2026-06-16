@@ -26,7 +26,7 @@ from angee.agents.models import InferenceModel as AbstractInferenceModel
 from angee.agents.models import InferenceProvider as AbstractInferenceProvider
 from angee.agents.models import Skill as AbstractSkill
 from angee.agents.skills import parse_skill_meta
-from angee.iam.credentials import CredentialKind
+from angee.integrate.credentials import CredentialKind
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,

@@ -24,6 +24,7 @@ from tests.conftest import result_data as _data
 
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
+integrate_schema = importlib.import_module("angee.integrate.schema")
 
 
 def test_permission_hub_queries_are_admin_only(
@@ -339,7 +340,7 @@ def test_grant_role_ignores_non_user_relay_global_id(
         """,
         {
             "principalId": relay.to_base64(
-                iam_schema.OAuthClientType,
+                integrate_schema.OAuthClientType,
                 str(getattr(target, "sqid", target.pk)),
             ),
             "role": role,

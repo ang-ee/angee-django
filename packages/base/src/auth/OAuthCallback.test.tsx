@@ -2,10 +2,10 @@
 
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { AppRuntimeProvider } from "@angee/sdk";
-import { baseIcons } from "@angee/base";
 import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
+import { baseIcons } from "../chrome";
 import {
   OAuthCallback,
   type CallbackExchange,
@@ -71,11 +71,11 @@ describe("OAuthCallback", () => {
     window.history.replaceState(null, "", "/cb?code=ok-code&state=ok-state");
     const complete = vi
       .fn<CallbackExchange>()
-      .mockResolvedValue({ ok: true, next: "/iam/accounts" });
+      .mockResolvedValue({ ok: true, next: "/integrate/accounts" });
 
     renderCallback(complete);
 
-    await waitFor(() => expect(vi.mocked(window.location.assign)).toHaveBeenCalledWith("/iam/accounts"));
+    await waitFor(() => expect(vi.mocked(window.location.assign)).toHaveBeenCalledWith("/integrate/accounts"));
     expect(complete).toHaveBeenCalledWith({
       code: "ok-code",
       state: "ok-state",

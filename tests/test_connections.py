@@ -1,4 +1,4 @@
-"""Tests for IAM connection model managers."""
+"""Tests for the integration connection model managers."""
 
 from __future__ import annotations
 
@@ -14,9 +14,10 @@ from django.utils import timezone
 from rebac import system_context, to_object_ref, to_subject_ref
 from rebac.models import active_relationship_model
 
-from angee.iam.credentials import CredentialKind, StaticTokenCredentialHandler
-from angee.iam.models import AccountStatus
-from angee.iam.oidc.errors import TOKEN_EXCHANGE_FAILED, OidcFlowError
+from angee.integrate.credentials import CredentialKind, StaticTokenCredentialHandler
+from angee.integrate.models import AccountStatus
+from angee.integrate.oauth.client import OAuthClientProtocol
+from angee.integrate.oauth.errors import TOKEN_EXCHANGE_FAILED, OAuthFlowError
 from tests.conftest import Credential, ExternalAccount, OAuthClient, _create_missing_tables
 
 
@@ -386,21 +387,17 @@ def test_oauth_client_manager_syncs_shape_and_secret_from_settings(settings: Any
 
     created_models = _create_missing_tables()
     try:
-        settings.ANGEE_IAM_OAUTH_CLIENTS = (
+        settings.ANGEE_INTEGRATE_OAUTH_CLIENTS = (
             {
                 "slug": "google",
                 "environment": "prod",
                 "display_name": "Google Login",
                 "client_id": "google-client",
                 "client_secret": "from-settings",
-                "issuer": "https://accounts.google.com",
                 "authorize_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
                 "token_endpoint": "https://oauth2.googleapis.com/token",
-                "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
                 "token_request_format": "json",
-                "is_oidc": True,
                 "default_scopes": ["openid", "email"],
-                "allowed_email_domains": ["example.com"],
             },
         )
 
@@ -411,11 +408,12 @@ def test_oauth_client_manager_syncs_shape_and_secret_from_settings(settings: Any
             oauth_client = OAuthClient.objects.get(slug="google", environment="prod")
         assert oauth_client.display_name == "Google Login"
         assert oauth_client.client_secret == "from-settings"
-        assert oauth_client.is_oidc is True
         assert oauth_client.default_scopes == ["openid", "email"]
         assert oauth_client.token_request_format == "json"
+        # Integrate's settings sync is OAuth-only; the OIDC refinement that marks a
+        # login provider is seeded by the iam_integrate_oidc addon, not from here.
 
-        settings.ANGEE_IAM_OAUTH_CLIENTS = (
+        settings.ANGEE_INTEGRATE_OAUTH_CLIENTS = (
             {
                 "slug": "google",
                 "environment": "prod",
@@ -445,13 +443,12 @@ def test_oauth_clients_command_runs_the_settings_sync(settings: Any) -> None:
 
     created_models = _create_missing_tables()
     try:
-        settings.ANGEE_IAM_OAUTH_CLIENTS = (
+        settings.ANGEE_INTEGRATE_OAUTH_CLIENTS = (
             {
                 "slug": "github",
                 "display_name": "GitHub Login",
                 "client_id": "gh-client",
                 "client_secret": "gh-secret",
-                "is_oidc": True,
             },
         )
 
@@ -483,11 +480,11 @@ def test_ensure_fresh_renews_an_expiring_oauth_credential(monkeypatch: pytest.Mo
             material={"access_token": "old-access", "refresh_token": "old-refresh", "expires_in": 3600},
         )
 
-        def fake_refresh(oauth_client: Any, *, refresh_token: str) -> dict[str, Any]:
+        def fake_refresh(self: Any, *, refresh_token: str) -> dict[str, Any]:
             assert refresh_token == "old-refresh"
             return {"access_token": "new-access", "refresh_token": "new-refresh", "expires_in": 7200}
 
-        monkeypatch.setattr("angee.iam.oidc.client.refresh_token", fake_refresh)
+        monkeypatch.setattr(OAuthClientProtocol, "refresh_token", fake_refresh)
 
         with system_context(reason="test refresh run"):
             credential.ensure_fresh()
@@ -526,7 +523,8 @@ def test_ensure_fresh_is_a_noop_for_a_valid_token(monkeypatch: pytest.MonkeyPatc
             )
 
         monkeypatch.setattr(
-            "angee.iam.oidc.client.refresh_token",
+            OAuthClientProtocol,
+            "refresh_token",
             lambda *args, **kwargs: pytest.fail("must not refresh a still-valid token"),
         )
         with system_context(reason="test valid run"):
@@ -551,10 +549,10 @@ def test_ensure_fresh_records_failure_without_raising(monkeypatch: pytest.Monkey
             material={"access_token": "stale-access", "refresh_token": "revoked", "expires_in": 3600},
         )
 
-        def boom(oauth_client: Any, *, refresh_token: str) -> dict[str, Any]:
-            raise OidcFlowError(TOKEN_EXCHANGE_FAILED, 400)
+        def boom(self: Any, *, refresh_token: str) -> dict[str, Any]:
+            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400)
 
-        monkeypatch.setattr("angee.iam.oidc.client.refresh_token", boom)
+        monkeypatch.setattr(OAuthClientProtocol, "refresh_token", boom)
 
         with system_context(reason="test fail run"):
             credential.ensure_fresh()  # must not raise
@@ -582,7 +580,8 @@ def test_oauth_refresh_without_expires_in_clears_expiry(monkeypatch: pytest.Monk
             material={"access_token": "old", "refresh_token": "old-refresh", "expires_in": 3600},
         )
         monkeypatch.setattr(
-            "angee.iam.oidc.client.refresh_token",
+            OAuthClientProtocol,
+            "refresh_token",
             lambda *args, **kwargs: {"access_token": "fresh-access", "refresh_token": "fresh-refresh"},
         )
         with system_context(reason="test noexp run"):

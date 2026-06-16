@@ -19,13 +19,6 @@ export const enIamMessages: Record<string, string> = {
   "iam.users.deactivate": "Deactivate",
   "iam.users.activate": "Activate",
 
-  // External accounts page — form-section labels and revoke confirm.
-  "iam.externalAccounts.group.identity": "Identity",
-  "iam.externalAccounts.provider": "Provider",
-  "iam.externalAccounts.revoke.title": "Revoke this account?",
-  "iam.externalAccounts.revoke.body":
-    "The linked identity can no longer be used to sign in.",
-
   // OAuth login methods (the public sign-in slot).
   "iam.login.loadingOptions": "Loading sign-in options...",
   "iam.login.providersUnavailable": "Sign-in providers unavailable",
@@ -85,51 +78,10 @@ export const enIamMessages: Record<string, string> = {
   "iam.overview.unassigned.summary": "{count} without direct roles",
   "iam.overview.unassigned.empty": "Every principal has a role.",
 
-  // Providers page — form-section labels and actions.
-  "iam.providers.group.client": "Client",
-  "iam.providers.group.endpoints": "Endpoints",
-  "iam.providers.group.loginPolicy": "Login policy",
-  "iam.providers.group.scopes": "Scopes",
-  "iam.providers.group.oauthMetadata": "OAuth metadata",
-  "iam.providers.action.connect": "Connect account",
-  "iam.providers.action.discover": "Discover endpoints",
-  "iam.providers.action.disable": "Disable",
-  "iam.providers.action.enable": "Enable",
-  "iam.providers.connect.startError": "Could not start account connection.",
-  "iam.providers.connect.redirecting": "Redirecting...",
-  "iam.providers.connect.openAuthorize": "Open the authorization page",
-  "iam.providers.connect.instructions": ", approve, then paste the code it shows below.",
-  "iam.providers.connect.codeLabel": "Authorization code",
-  "iam.providers.connect.codePlaceholder": "code#state",
-  "iam.providers.connect.codeIncomplete":
-    "That code looks incomplete — paste the full value the page showed.",
-  "iam.providers.connect.codeMismatch":
-    "That code is from a different attempt — start the connection again.",
-  "iam.providers.connect.stateIncomplete":
-    "Connection state is incomplete — start the connection again.",
-  "iam.providers.connect.connected": "Account connected.",
-
-  // Credentials page — form-section labels and actions.
-  "iam.credentials.group.health": "Health",
-  "iam.credentials.action.reveal": "Reveal secret",
-  "iam.credentials.reveal.noSecret": "This credential has no stored secret to reveal.",
-  "iam.credentials.reveal.title": "Credential secret",
-  "iam.credentials.reveal.body":
-    "Copy it now — it is shown on request only and never kept in the form.",
-  "iam.credentials.reveal.secretLabel": "Secret",
-  "iam.credentials.revoke.title": "Revoke this credential?",
-  "iam.credentials.revoke.body": "Anything using it to authenticate will stop working.",
-
-  // Account-connect callback page.
-  "iam.connectCallback.completing": "Connecting account...",
-  "iam.connectCallback.confirming": "Your account connection is being confirmed.",
-  "iam.connectCallback.failedTitle": "Could not connect account",
-  "iam.connectCallback.backToProviders": "Back to providers",
-  "iam.connectCallback.browserOnly":
-    "The account callback can only be completed in a browser.",
-  "iam.connectCallback.missingInfo":
-    "The account callback is missing required information.",
-  "iam.connectCallback.completeError": "Could not connect account.",
+  // OIDC sign-in providers page — form-section labels and the discover action.
+  "iam.oidc.group.provider": "Provider",
+  "iam.oidc.group.loginPolicy": "Login policy",
+  "iam.oidc.action.discover": "Discover endpoints",
 
   // Grants page.
   "iam.grants.group.namespace": "Namespace",

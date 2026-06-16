@@ -1,0 +1,8 @@
+# OIDC refinement for the demo Google connection seeded in 030: discovery URL and a
+# login-domain allow-list. Auto-link/create stay off (defaults), so this demo verifies
+# an identity but never provisions a user on its own.
+- xref: demo_google_oidc
+  oauth_client: notes.demo_google
+  discovery_url: https://accounts.google.com/.well-known/openid-configuration
+  allowed_email_domains:
+    - example.com

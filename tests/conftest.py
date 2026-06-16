@@ -18,11 +18,12 @@ from rebac import actor_context, system_context
 
 from angee.agents.backends import InferenceBackend, InferenceModelSpec
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.iam.credentials import CredentialKind
-from angee.iam.models import Credential as AbstractCredential
-from angee.iam.models import ExternalAccount as AbstractExternalAccount
-from angee.iam.models import OAuthClient as AbstractOAuthClient
+from angee.iam_integrate_oidc.models import OidcClient as AbstractOidcClient
+from angee.integrate.credentials import CredentialKind
+from angee.integrate.models import Credential as AbstractCredential
+from angee.integrate.models import ExternalAccount as AbstractExternalAccount
 from angee.integrate.models import Integration as AbstractIntegration
+from angee.integrate.models import OAuthClient as AbstractOAuthClient
 from angee.integrate.models import Repository as AbstractRepository
 from angee.integrate.models import Source as AbstractSource
 from angee.integrate.models import Template as AbstractTemplate
@@ -41,42 +42,55 @@ from angee.storage.models import Folder as AbstractFolder
 from angee.storage.models import MimeType as AbstractMimeType
 
 
-class ExternalAccount(AbstractExternalAccount):
-    """Concrete IAM external account used by source-addon tests."""
-
-    class Meta(AbstractExternalAccount.Meta):
-        """Django model options for the canonical test external account."""
-
-        abstract = False
-        app_label = "iam"
-        db_table = "test_connections_external_account"
-        rebac_resource_type = "auth/external_account"
-        rebac_id_attr = "sqid"
-
-
 class OAuthClient(AbstractOAuthClient):
-    """Concrete IAM OAuth client used by source-addon tests."""
+    """Concrete integration OAuth client used by source-addon tests."""
 
     class Meta(AbstractOAuthClient.Meta):
         """Django model options for the canonical test OAuth client."""
 
         abstract = False
-        app_label = "iam"
-        db_table = "test_connections_oauth_client"
-        rebac_resource_type = "auth/oauth_client"
+        app_label = "integrate"
+        db_table = "test_integrate_oauth_client"
+        rebac_resource_type = "integrate/oauth_client"
+        rebac_id_attr = "sqid"
+
+
+class OidcClient(AbstractOidcClient):
+    """Concrete OIDC refinement used by source-addon tests."""
+
+    class Meta(AbstractOidcClient.Meta):
+        """Django model options for the canonical test OIDC client."""
+
+        abstract = False
+        app_label = "iam_integrate_oidc"
+        db_table = "test_iam_integrate_oidc_oidc_client"
+        rebac_resource_type = "iam_integrate_oidc/oidc_client"
+        rebac_id_attr = "sqid"
+
+
+class ExternalAccount(AbstractExternalAccount):
+    """Concrete integration external account used by source-addon tests."""
+
+    class Meta(AbstractExternalAccount.Meta):
+        """Django model options for the canonical test external account."""
+
+        abstract = False
+        app_label = "integrate"
+        db_table = "test_integrate_external_account"
+        rebac_resource_type = "integrate/external_account"
         rebac_id_attr = "sqid"
 
 
 class Credential(AbstractCredential):
-    """Concrete IAM credential used by source-addon tests."""
+    """Concrete integration credential used by source-addon tests."""
 
     class Meta(AbstractCredential.Meta):
         """Django model options for the canonical test credential."""
 
         abstract = False
-        app_label = "iam"
-        db_table = "test_connections_credential"
-        rebac_resource_type = "auth/credential"
+        app_label = "integrate"
+        db_table = "test_integrate_credential"
+        rebac_resource_type = "integrate/credential"
         rebac_id_attr = "sqid"
 
 
@@ -163,8 +177,8 @@ class MarkdownPage(AbstractMarkdownPage):
         rebac_id_attr = "sqid"
 
 
-IAM_CONNECTION_TEST_MODELS = (OAuthClient, ExternalAccount, Credential)
-"""Concrete IAM connection models created on demand by IAM test fixtures."""
+IAM_CONNECTION_TEST_MODELS = (OAuthClient, OidcClient, ExternalAccount, Credential)
+"""Concrete integration connection models created on demand by connection test fixtures."""
 
 INTEGRATE_TEST_MODELS = (Vendor, Integration)
 """Concrete integration catalogue/integration models created on demand by integrate fixtures."""

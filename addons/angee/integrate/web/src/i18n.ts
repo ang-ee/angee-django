@@ -52,6 +52,63 @@ export const enIntegrateMessages: Record<string, string> = {
   "integrate.addRepo.searching": "Searching…",
   "integrate.addRepo.noMatches": "No matching repositories.",
   "integrate.addRepo.added": "Added",
+
+  // --- Connect surface (outbound OAuth: providers, accounts, credentials) ---
+  // Cohesive block; relocatable to a future `iam_integrate_oidc/web` as a unit.
+  "integrate.revoke": "Revoke",
+
+  // OAuth providers page — form-section labels and actions.
+  "integrate.providers.group.client": "Client",
+  "integrate.providers.group.endpoints": "Endpoints",
+  "integrate.providers.group.behavior": "Behavior",
+  "integrate.providers.group.scopes": "Scopes",
+  "integrate.providers.group.claims": "Claims",
+  "integrate.providers.group.oauthMetadata": "OAuth metadata",
+  "integrate.providers.action.connect": "Connect account",
+  "integrate.providers.action.disable": "Disable",
+  "integrate.providers.action.enable": "Enable",
+  "integrate.providers.connect.startError": "Could not start account connection.",
+  "integrate.providers.connect.redirecting": "Redirecting...",
+  "integrate.providers.connect.openAuthorize": "Open the authorization page",
+  "integrate.providers.connect.instructions": ", approve, then paste the code it shows below.",
+  "integrate.providers.connect.codeLabel": "Authorization code",
+  "integrate.providers.connect.codePlaceholder": "code#state",
+  "integrate.providers.connect.codeIncomplete":
+    "That code looks incomplete — paste the full value the page showed.",
+  "integrate.providers.connect.codeMismatch":
+    "That code is from a different attempt — start the connection again.",
+  "integrate.providers.connect.stateIncomplete":
+    "Connection state is incomplete — start the connection again.",
+  "integrate.providers.connect.connected": "Account connected.",
+
+  // Credentials page — form-section labels and actions.
+  "integrate.credentials.group.health": "Health",
+  "integrate.credentials.action.reveal": "Reveal secret",
+  "integrate.credentials.reveal.noSecret": "This credential has no stored secret to reveal.",
+  "integrate.credentials.reveal.title": "Credential secret",
+  "integrate.credentials.reveal.body":
+    "Copy it now — it is shown on request only and never kept in the form.",
+  "integrate.credentials.reveal.secretLabel": "Secret",
+  "integrate.credentials.revoke.title": "Revoke this credential?",
+  "integrate.credentials.revoke.body": "Anything using it to authenticate will stop working.",
+
+  // External accounts page — form-section labels and revoke confirm.
+  "integrate.externalAccounts.group.identity": "Identity",
+  "integrate.externalAccounts.provider": "Provider",
+  "integrate.externalAccounts.revoke.title": "Revoke this account?",
+  "integrate.externalAccounts.revoke.body":
+    "The linked identity can no longer be used for API access.",
+
+  // Account-connect callback page.
+  "integrate.connectCallback.completing": "Connecting account...",
+  "integrate.connectCallback.confirming": "Your account connection is being confirmed.",
+  "integrate.connectCallback.failedTitle": "Could not connect account",
+  "integrate.connectCallback.backToProviders": "Back to providers",
+  "integrate.connectCallback.browserOnly":
+    "The account callback can only be completed in a browser.",
+  "integrate.connectCallback.missingInfo":
+    "The account callback is missing required information.",
+  "integrate.connectCallback.completeError": "Could not connect account.",
 };
 
 // A translator bound to the `integrate` namespace: resolves against the host

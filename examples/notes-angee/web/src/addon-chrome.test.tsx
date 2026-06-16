@@ -67,15 +67,14 @@ describe("addon route chrome", () => {
         { label: "Users" },
       ],
     });
-    // A federation page sits under the route-less "Federation" dropdown, which
-    // inherits its target from its first child (Providers).
-    await expect(chromeFor("/iam/providers")).resolves.toEqual({
+    // OIDC sign-in providers are a direct child of the IAM rail (the OAuth connect
+    // substrate moved to @angee/integrate).
+    await expect(chromeFor("/iam/oidc")).resolves.toEqual({
       title: "IAM",
       icon: "auth",
       breadcrumbs: [
         { label: "IAM", to: "/iam" },
-        { label: "Federation", to: "/iam/providers" },
-        { label: "Providers" },
+        { label: "OIDC Providers" },
       ],
     });
   });

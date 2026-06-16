@@ -26,7 +26,7 @@ from angee.agents.skills import parse_skill_meta
 from angee.base.fields import ImplClassField, SqidField, StateField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
-from angee.iam.credentials import CredentialKind
+from angee.integrate.credentials import CredentialKind
 from angee.integrate.models import Capability
 
 
@@ -291,7 +291,7 @@ class Skill(SqidMixin, AuditMixin, AngeeModel):
 class MCPServer(SqidMixin, AuditMixin, AngeeModel):
     """An MCP server an agent can reach — internal to the platform or external.
 
-    An external server authenticates with an ``iam.Credential``; the operator renders
+    An external server authenticates with an ``integrate.Credential``; the operator renders
     the selected servers and their authorized tools into an agent's MCP config.
     """
 
@@ -309,7 +309,7 @@ class MCPServer(SqidMixin, AuditMixin, AngeeModel):
     # the frozen bearer, so the verifier stops matching and the agent's MCP calls 401
     # until reprovisioned. Constrain to static credentials at the catalogue level.
     credential = models.ForeignKey(
-        "iam.Credential",
+        "integrate.Credential",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -638,7 +638,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
 
         Server-side only — the value is pushed to the operator secret store under
         ``inference_secret_name()`` and never returned to the browser. An OAuth token
-        near expiry is renewed first (:meth:`iam.Credential.ensure_fresh`) so the value
+        near expiry is renewed first (:meth:`integrate.Credential.ensure_fresh`) so the value
         frozen into the provisioned service has its full lifetime ahead of it.
         """
 
@@ -649,7 +649,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         return str(credential.secret_value())
 
     def _inference_credential(self) -> Any:
-        """Return the ``iam.Credential`` backing this agent's inference model, or ``None``.
+        """Return the ``integrate.Credential`` backing this agent's inference model, or ``None``.
 
         Asks the model for its credential (the catalogue owns the
         model→provider→integration→credential chain) rather than walking it here.

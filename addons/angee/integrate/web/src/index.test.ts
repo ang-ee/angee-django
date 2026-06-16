@@ -53,14 +53,60 @@ describe("integrate addon manifest", () => {
     // Route-less root: target inherited from the first child (Integrations).
     expect(menu?.route).toBeUndefined();
     expect(menu?.group).toBe("platform");
-    expect(menu?.children?.map((child) => child.route)).toEqual([
+    expect(menu?.children?.map((child) => child.id)).toEqual([
       "integrate.integrations",
       "integrate.vendors",
       "integrate.webhooks",
       "integrate.vcs",
       "integrate.repositories",
       "integrate.sources",
+      "integrate.connections",
     ]);
+  });
+
+  test("groups the outbound connect surface under a route-less Connections dropdown", () => {
+    const menu = integrate.menus?.[0] as BaseMenuItem | undefined;
+    const connections = menu?.children?.find(
+      (child) => child.id === "integrate.connections",
+    );
+    // Route-less group → renders as a dropdown of its children.
+    expect(connections?.route).toBeUndefined();
+    expect(connections?.children?.map((child) => child.route)).toEqual([
+      "integrate.providers",
+      "integrate.accounts",
+      "integrate.credentials",
+    ]);
+  });
+
+  test("registers the account-connect callback on the console shell", () => {
+    const route = (integrate.routes ?? []).find(
+      (item) => item.name === "integrate.connect.callback",
+    );
+    const legacy = (integrate.routes ?? []).find(
+      (item) => item.name === "integrate.connect.callback.legacy",
+    );
+    expect(route?.path).toBe("/callback");
+    expect(route?.shell).toBe("console");
+    expect(route?.component).toBeTypeOf("function");
+    expect(legacy?.path).toBe("/iam/oauth/callback");
+    expect(legacy?.component).toBe(route?.component);
+  });
+
+  test("nests each connect record route under its list, no component", () => {
+    for (const [name, parent] of [
+      ["integrate.provider", "integrate.providers"],
+      ["integrate.account", "integrate.accounts"],
+      ["integrate.credential", "integrate.credentials"],
+    ] as const) {
+      const record = (integrate.routes ?? []).find((route) => route.name === name);
+      expect(record?.path).toContain("/$id");
+      expect(record?.parent).toBe(parent);
+      expect(record?.component).toBeUndefined();
+    }
+  });
+
+  test("registers the Credential create form override", () => {
+    expect(integrate.forms?.Credential).toBeDefined();
   });
 
   test("references the landing route from exactly one menu item (chrome derivation)", () => {

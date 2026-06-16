@@ -21,6 +21,7 @@ from strawberry.extensions import SchemaExtension
 
 from angee.base.fields import StateField
 from angee.base.mixins import RevisionMixin
+from angee.graphql.extension import extends_type
 from angee.graphql.revisions import revisions
 from angee.graphql.schema import (
     DEFAULT_SCHEMA_NAME,
@@ -287,6 +288,98 @@ def test_collect_dedupes_by_identity() -> None:
     ).parts
 
     assert collected["public"].query == (HelloQuery,)
+
+
+@strawberry.type
+class Widget:
+    """Upstream type that a downstream addon extends (module-scope for resolution)."""
+
+    name: str
+
+
+@extends_type(Widget)
+@strawberry.type
+class WidgetExtra:
+    """Downstream donor contributing ``extra`` onto :class:`Widget`."""
+
+    extra: int
+
+
+@strawberry.type
+class WidgetQuery:
+    @strawberry.field
+    def widget(self) -> Widget:
+        return Widget(name="x")
+
+
+def test_type_extension_merges_downstream_fields_onto_upstream_type() -> None:
+    """A downstream ``type_extensions`` donor adds its fields to the upstream type."""
+
+    schema = GraphQLSchemas(
+        [
+            addon(public={"query": [WidgetQuery], "types": [Widget]}),
+            addon(public={"type_extensions": [WidgetExtra]}),
+        ]
+    ).build("public")
+
+    block = schema.as_str()
+    assert "name: String!" in block
+    assert "extra: Int!" in block
+
+
+def test_type_extension_is_idempotent_across_collections() -> None:
+    """The same donor applied by a second collection does not re-add or error."""
+
+    for _ in range(2):
+        schema = GraphQLSchemas(
+            [
+                addon(public={"query": [WidgetQuery], "types": [Widget]}),
+                addon(public={"type_extensions": [WidgetExtra]}),
+            ]
+        ).build("public")
+    sdl = schema.as_str()
+    # Exactly one `extra` field — the second collection skipped re-adding it.
+    assert sdl.count("extra: Int!") == 1
+
+
+def test_type_extension_rejects_field_collision() -> None:
+    """A donor field already declared on the target fails fast."""
+
+    @strawberry.type
+    class Conflict:
+        shared: str
+
+    @extends_type(Conflict)
+    @strawberry.type
+    class ConflictExtra:
+        shared: int
+
+    @strawberry.type
+    class ConflictQuery:
+        @strawberry.field
+        def conflict(self) -> Conflict:
+            return Conflict(shared="x")
+
+    with pytest.raises(ImproperlyConfigured, match="already declared"):
+        GraphQLSchemas(
+            [
+                addon(public={"query": [ConflictQuery], "types": [Conflict]}),
+                addon(public={"type_extensions": [ConflictExtra]}),
+            ]
+        ).build("public")
+
+
+def test_type_extension_requires_marker() -> None:
+    """A ``type_extensions`` member without ``@extends_type`` is rejected."""
+
+    @strawberry.type
+    class Unmarked:
+        extra: int
+
+    with pytest.raises(ImproperlyConfigured, match="extends_type"):
+        GraphQLSchemas([addon(public={"query": [HelloQuery], "type_extensions": [Unmarked]})]).build(
+            "public"
+        )
 
 
 def test_build_schema_merges_query_surfaces() -> None:

@@ -31,7 +31,7 @@ from rebac.roles import grant
 from strawberry import relay
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.iam.credentials import CredentialKind
+from angee.integrate.credentials import CredentialKind
 from angee.integrate.events import EventKind
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,

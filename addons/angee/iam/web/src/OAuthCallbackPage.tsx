@@ -1,11 +1,11 @@
-import { useAuthoredMutation } from "@angee/sdk";
-import { useCallback, useMemo, type ReactNode } from "react";
-
 import {
   OAuthCallback,
   type CallbackExchange,
   type OAuthCallbackCopy,
-} from "./OAuthCallback";
+} from "@angee/base";
+import { useAuthoredMutation } from "@angee/sdk";
+import { useCallback, useMemo, type ReactNode } from "react";
+
 import {
   LOGIN_COMPLETE_MUTATION,
   type LoginCompleteData,

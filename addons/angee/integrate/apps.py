@@ -19,5 +19,10 @@ class IntegrateConfig(AppConfig):
 
     resources = {
         "master": ({"path": "resources/master/010_integrate.vendor.yaml", "adopt": "slug"},),
+        "install": (
+            {"path": "resources/install/010_integrate.oauthclient.yaml", "adopt": ["slug", "environment"]},
+        ),
     }
-    """Default third-party vendor catalogue, adopted by slug so reloads stay idempotent."""
+    """Default vendor catalogue (master) and public OAuth client seeds (install),
+    adopted by natural key so reloads stay idempotent. The OIDC refinements for the
+    login-capable clients are seeded by the ``iam_integrate_oidc`` addon."""

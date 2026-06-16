@@ -178,12 +178,62 @@ uv run pytest tests
 ```
 Plus architecture/django review on the diff.
 
-## Open decision
+## As-built (status: DONE — verified)
 
-- Login policy ownership: **chosen** — fields owned by `iam_integrate_oidc` via
-  `extends = "integrate.OidcClient"` (cleanest ownership; OAuth base stays
-  login-free). Alternative considered & rejected: keep them on
-  `integrate.OidcClient` (one fewer model-extension but bleeds login policy into
-  the substrate). Flag if you prefer the alternative.
-- New addon name `iam_integrate_oidc` per request; `angee.oidc` / `angee.login`
-  would read shorter. Keeping requested name unless told otherwise.
+Verified green: `angee build`, `makemigrations` (fresh), `migrate`, `rebac sync`,
+`resources load` (master/install/demo), `schema --check`, `ruff`, `mypy`
+(40 files), `pytest` (377 passed). The dev DB was reset (no compat migrations).
+
+**The clean three-addon split — OAuth → OIDC inheritance across the boundary:**
+
+- **`integrate` is pure OAuth.** It owns `OAuthClient` (connect-for-API base, incl.
+  `userinfo_endpoint` + claim mapping so connect can label an account), the OAuth
+  protocol (`integrate/oauth/`: `OAuthClientProtocol`, state, errors, browser-flow),
+  `ExternalAccount`, `Credential`, the connect/disconnect flow, and the OAuth admin
+  CRUD. It has **no OIDC of any kind** and never references the login addon.
+- **`iam_integrate_oidc` is OIDC, extending integrate's OAuth and composing iam.**
+  It owns the `OidcClient` model (1:1 refinement of `integrate.OAuthClient`:
+  issuer/JWKS/discovery + login policy), the OIDC protocol
+  (`protocol.OidcClientProtocol(OAuthClientProtocol)` — real class inheritance over
+  integrate's base), ID-token verification, the login/link flow + resolver + session
+  bind, the OIDC admin CRUD/discover, and the last-sign-in delete guard. It
+  `depends_on (iam, integrate)`.
+- So the OAuth→OIDC inheritance is literal and spans the addon boundary: the data
+  refinement (`OidcClient.oauth_client` 1:1) and the protocol subclass both live in
+  the OIDC addon and extend integrate's OAuth.
+
+Other decisions, with rationale:
+
+- **`userinfo_endpoint` + claim mapping are on the OAuth base, not OIDC.** The
+  install seed proves connect-only providers (Anthropic) read userinfo + claims to
+  label the account. Only id-token trust (`issuer`/`jwks_uri`/`discovery_url` +
+  `verify_id_token`) is OIDC.
+- **`unlink_account` → `integrate.disconnect_account`** (generic, login-agnostic);
+  the last-sign-in guard is a `pre_delete` veto wired by `iam_integrate_oidc` via
+  `apps.lazy_model_operation` (raises `OAuthFlowError("only_sign_in_method")`,
+  surfaced as a typed result).
+- **GraphQL/REBAC/settings renames:** start payload `OidcStartPayload` →
+  `OAuthStartPayload`; `OidcFlowError` → `OAuthFlowError`; REBAC
+  `auth/{oauth_client,external_account,credential}` → `integrate/{...}` and
+  `iam_integrate_oidc/oidc_client`; settings `ANGEE_IAM_*` → `ANGEE_INTEGRATE_*`
+  (OAuth) and `ANGEE_OIDC_DISCOVERY_TTL` (login addon). `OAuthClientType` lost its
+  nested `oidc` projection (a cross-addon GraphQL nest); the login addon exposes
+  `OidcClientType` + `oidcClients` separately.
+- **Seeds:** integrate ships `010_integrate.oauthclient` (OAuth base, xrefs
+  `oauth_*`); the login addon ships `010_iam_integrate_oidc.oidcclient` (OIDC
+  refinements), referencing integrate's clients by **cross-addon xref**
+  (`integrate.oauth_gemini`) — verified resolvable by the resource loader.
+  Idempotency is by xref, not `adopt` (a FK adopt key filtered the raw xref against
+  the `id` column).
+- **`sync_from_settings` is OAuth-only.** Settings-driven OIDC config was dropped
+  (OIDC providers are configured via the login addon's seed/console). If a host ever
+  needs settings-driven OIDC, add a sync to the login addon.
+- Name kept as requested: `angee.iam_integrate_oidc`.
+
+## Follow-up (out of scope of this change)
+
+- **Frontend codegen** (`addons/angee/iam/web`): regenerate `documents.ts` against
+  the new SDL — the only break is the `OidcStartPayload` interface name →
+  `OAuthStartPayload`. No hand-written query changes (`unlinkAccount` is unused;
+  all operation/field names — `loginStart`, `connectAccountComplete`,
+  `availableConnections`, `isOidc` — are preserved).

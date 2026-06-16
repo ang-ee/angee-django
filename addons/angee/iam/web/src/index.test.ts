@@ -23,22 +23,9 @@ describe("iam addon manifest", () => {
     expect(legacyRoute?.component).toBe(route?.component);
   });
 
-  test("registers the console account-connect callback route", () => {
-    const route = iam.routes?.find((item) => item.name === "iam.connect.callback");
-    const legacyRoute = iam.routes?.find(
-      (item) => item.name === "iam.connect.callback.legacy",
-    );
-    expect(route?.path).toBe("/callback");
-    expect(route?.shell).toBe("console");
-    expect(route?.component).toBeTypeOf("function");
-    expect(legacyRoute?.path).toBe("/iam/oauth/callback");
-    expect(legacyRoute?.shell).toBe("console");
-    expect(legacyRoute?.component).toBe(route?.component);
-  });
-
   test("registers the console routes, with $id detail children for the DataPages", () => {
     const names = iam.routes?.map((route) => route.name) ?? [];
-    // The federation/users DataPages each contribute a list + a `$id` record route.
+    // The users/OIDC-providers DataPages each contribute a list + a `$id` record route.
     for (const name of [
       "iam.overview",
       "iam.users",
@@ -47,23 +34,28 @@ describe("iam addon manifest", () => {
       "iam.grants",
       "iam.relationships",
       "iam.schema",
-      "iam.providers",
-      "iam.providers.record",
-      "iam.accounts",
-      "iam.accounts.record",
-      "iam.credentials",
-      "iam.credentials.record",
+      "iam.oidc",
+      "iam.oidc.record",
     ]) {
       expect(names).toContain(name);
     }
-    expect(names).not.toContain("iam.connections");
-    const record = iam.routes?.find((route) => route.name === "iam.providers.record");
-    expect(record?.path).toBe("/iam/providers/$id");
-    expect(record?.parent).toBe("iam.providers");
+    // The OAuth connect substrate (providers/accounts/credentials + connect callback)
+    // moved to @angee/integrate.
+    for (const gone of [
+      "iam.providers",
+      "iam.accounts",
+      "iam.credentials",
+      "iam.connect.callback",
+    ]) {
+      expect(names).not.toContain(gone);
+    }
+    const record = iam.routes?.find((route) => route.name === "iam.oidc.record");
+    expect(record?.path).toBe("/iam/oidc/$id");
+    expect(record?.parent).toBe("iam.oidc");
     expect(record?.component).toBeUndefined();
   });
 
-  test("contributes the IAM console menu with Roles and Federation dropdowns", () => {
+  test("contributes the IAM console menu with a Roles dropdown and OIDC Providers", () => {
     const menu = iam.menus?.[0] as BaseMenuItem | undefined;
     expect(menu?.id).toBe("iam");
     expect(menu?.label).toBe("IAM");
@@ -73,7 +65,7 @@ describe("iam addon manifest", () => {
       "iam.overview",
       "iam.users",
       "iam.roles.group",
-      "iam.federation",
+      "iam.oidc",
     ]);
     const rolesGroup = menu?.children?.find((item) => item.id === "iam.roles.group");
     expect(rolesGroup?.route).toBeUndefined();
@@ -83,12 +75,8 @@ describe("iam addon manifest", () => {
       "iam.relationships",
       "iam.schema",
     ]);
-    const federation = menu?.children?.find((item) => item.id === "iam.federation");
-    expect(federation?.children?.map((item) => item.route)).toEqual([
-      "iam.providers",
-      "iam.accounts",
-      "iam.credentials",
-    ]);
+    const oidc = menu?.children?.find((item) => item.id === "iam.oidc");
+    expect(oidc?.route).toBe("iam.oidc");
   });
 
   test("references the landing route from exactly one menu item (chrome derivation)", () => {

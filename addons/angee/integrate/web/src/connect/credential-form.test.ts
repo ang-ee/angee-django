@@ -23,7 +23,7 @@ describe("credentialCreateForm", () => {
 
     expect([...fields.keys()]).toEqual(["name", "kind", "apiKey", "privateKey"]);
     // The kind discriminator offers only the admin-creatable kinds (OAuth arrives
-    // via login) with the lowercase write values the input expects.
+    // via the connect flow) with the lowercase write values the input expects.
     expect(fields.get("kind")?.options?.map((option) => option.value)).toEqual([
       "static_token",
       "ssh_key",

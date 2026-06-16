@@ -11,12 +11,12 @@ import {
 } from "@angee/base";
 import { useAuthoredMutation } from "@angee/sdk";
 
+import { useIntegrateT } from "../../i18n";
 import {
   REVEAL_CREDENTIAL_MUTATION,
   type RevealCredentialData,
   type RevealCredentialVariables,
 } from "../documents";
-import { useIamT } from "../i18n";
 
 const MODEL = "Credential";
 
@@ -32,7 +32,7 @@ const credentialList = (
 
 /** Per-user credential health (list / status / revoke / reveal); create via the form override. */
 export function CredentialsPage(): React.ReactElement {
-  const t = useIamT();
+  const t = useIntegrateT();
   const [revealCredential] = useAuthoredMutation<
     RevealCredentialData,
     RevealCredentialVariables
@@ -46,15 +46,15 @@ export function CredentialsPage(): React.ReactElement {
       const result = await revealCredential({ id: ctx.record.id });
       const secret = result?.revealCredential.secret ?? "";
       if (!secret) {
-        throw new Error(t("iam.credentials.reveal.noSecret"));
+        throw new Error(t("integrate.credentials.reveal.noSecret"));
       }
       await ctx.prompt({
-        title: t("iam.credentials.reveal.title"),
-        body: t("iam.credentials.reveal.body"),
+        title: t("integrate.credentials.reveal.title"),
+        body: t("integrate.credentials.reveal.body"),
         fields: [
           {
             name: "secret",
-            label: t("iam.credentials.reveal.secretLabel"),
+            label: t("integrate.credentials.reveal.secretLabel"),
             defaultValue: secret,
             readOnly: true,
           },
@@ -71,21 +71,21 @@ export function CredentialsPage(): React.ReactElement {
     <Form model={MODEL}>
       <Field name="displayName" title readOnly />
       <Field name="status" widget="statusbar" />
-      <Group label={t("iam.credentials.group.health")} columns={2}>
+      <Group label={t("integrate.credentials.group.health")} columns={2}>
         <Field name="kind" readOnly />
         <Field name="expiresAt" readOnly />
         <Field name="lastRefreshAt" readOnly />
         <Field name="lastRefreshStatus" readOnly />
       </Group>
-      <Action id="reveal" label={t("iam.credentials.action.reveal")} icon="eye" run={reveal} />
+      <Action id="reveal" label={t("integrate.credentials.action.reveal")} icon="eye" run={reveal} />
       <Action
         id="revoke"
-        label={t("iam.revoke")}
+        label={t("integrate.revoke")}
         danger
         set={{ status: "revoked" }}
         confirm={{
-          title: t("iam.credentials.revoke.title"),
-          body: t("iam.credentials.revoke.body"),
+          title: t("integrate.credentials.revoke.title"),
+          body: t("integrate.credentials.revoke.body"),
           danger: true,
         }}
         visibleWhen={(record) =>

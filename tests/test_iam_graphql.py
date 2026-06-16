@@ -1,4 +1,11 @@
-"""Tests for IAM connection GraphQL surfaces."""
+"""Tests for the OAuth/OIDC connection and login GraphQL surfaces.
+
+After the federation split the connection substrate (OAuth/OIDC clients, external
+accounts, credentials, connect/disconnect) is owned by ``integrate`` and OIDC
+*login* by ``iam_integrate_oidc``; ``iam`` keeps password login + user/permission
+admin. These tests compose the three addons' ``schemas`` into one schema per
+bucket, the way the runtime composer does.
+"""
 
 from __future__ import annotations
 
@@ -12,21 +19,39 @@ from django.contrib.auth import BACKEND_SESSION_KEY, SESSION_KEY, get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.management import call_command
 from django.db import connection
+from django.db.models.signals import pre_delete
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext, override_settings
 from rebac import app_settings, system_context
 from rebac.roles import grant
 from strawberry import relay
 
-from angee.iam import identity
-from angee.iam.credentials import CredentialKind
-from angee.iam.oidc.errors import OidcFlowError
-from tests.conftest import Credential, ExternalAccount, OAuthClient, addon_schema, execute_schema
+from angee.integrate.credentials import CredentialKind
+from angee.integrate.oauth import state
+from angee.integrate.oauth.client import OAuthClientProtocol
+from angee.integrate.oauth.errors import OAuthFlowError
+from tests.conftest import (
+    Credential,
+    ExternalAccount,
+    OAuthClient,
+    OidcClient,
+    addon_schema,
+    execute_schema,
+)
 from tests.conftest import _create_missing_tables as _create_connection_tables
 from tests.conftest import result_data as _data
 
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
+integrate_schema = importlib.import_module("angee.integrate.schema")
+oidc_schema = importlib.import_module("angee.iam_integrate_oidc.schema")
+oidc_identity = importlib.import_module("angee.iam_integrate_oidc.identity")
+integrate_connect = importlib.import_module("angee.integrate.connect")
+oidc_signals = importlib.import_module("angee.iam_integrate_oidc.signals")
+
+# The connection/login surface now spans three addons; tests compose them the way
+# the runtime does (one merged schema per bucket).
+_SCHEMA_SOURCES = (iam_schema.schemas, integrate_schema.schemas, oidc_schema.schemas)
 
 
 def test_available_connections_returns_only_enabled_oauth_clients_without_secret_fields(
@@ -105,7 +130,7 @@ def test_available_connections_reads_client_columns_without_per_row_queries(
 def test_login_start_rejects_non_oidc_or_disabled_oauth_client(
     iam_connection_tables: None,
 ) -> None:
-    """OIDC start fails closed when the selected OAuth client cannot run login."""
+    """OIDC start fails closed (typed error payload) when the client cannot run login."""
 
     non_oidc = _oauth_client("oauth", is_oidc=False, is_enabled=True)
     disabled = _oauth_client("off", is_oidc=True, is_enabled=False)
@@ -117,15 +142,18 @@ def test_login_start_rejects_non_oidc_or_disabled_oauth_client(
             redirectUri: "https://app.example/callback"
           ) {
             state
+            error
+            errorCode
           }
         }
     """
 
     for oauth_client in (non_oidc, disabled):
-        result = _execute(public_schema, query, {"oauthClientSqid": oauth_client.sqid})
+        data = _data(_execute(public_schema, query, {"oauthClientSqid": oauth_client.sqid}))
 
-        assert result.errors is not None
-        assert "enabled for OIDC" in result.errors[0].message
+        assert data["loginStart"]["state"] == ""
+        assert "enabled for OIDC" in data["loginStart"]["error"]
+        assert data["loginStart"]["errorCode"] == "client_not_configured"
 
 
 def test_login_start_returns_oidc_flow_error_payload(
@@ -221,13 +249,13 @@ def test_login_complete_provisions_and_logs_in(
         assert code == "code"
         assert state_token == start["state"]
         assert redirect_uri == "https://app.example/callback"
-        return identity.LoginCompletion(
+        return oidc_identity.LoginCompletion(
             user=user,
             claims={"sub": "sub-login", "email": "oidc@example.com"},
             next_path="/after-login",
         )
 
-    monkeypatch.setattr(iam_schema.identity, "complete_login", complete_login)
+    monkeypatch.setattr(oidc_identity, "complete_login", complete_login)
 
     completed = _data(
         _execute(
@@ -296,9 +324,9 @@ def test_login_complete_returns_oidc_flow_error_payload(
 
     def complete_login(*args: Any, **kwargs: Any) -> Any:
         del args, kwargs
-        raise OidcFlowError("invalid_id_token", 400, "bad token")
+        raise OAuthFlowError("invalid_id_token", 400, "bad token")
 
-    monkeypatch.setattr(iam_schema.identity, "complete_login", complete_login)
+    monkeypatch.setattr(oidc_identity, "complete_login", complete_login)
 
     completed = _data(
         _execute(
@@ -373,26 +401,24 @@ def test_link_account_complete_returns_account_claims_intent_and_coerced_next(
 
     def complete_link(
         selected_oauth_client: OAuthClient,
-        selected_user: Any | None = None,
         *,
         code: str,
         state_token: str,
         redirect_uri: str,
     ) -> Any:
-        del selected_user
         assert selected_oauth_client.pk == oauth_client.pk
         assert code == "code"
         assert redirect_uri == "https://app.example/callback"
-        record = iam_schema.state.consume(state_token)
+        record = state.consume(state_token)
         assert record.next_path == "/"
-        return identity.LinkCompletion(
+        return oidc_identity.LinkCompletion(
             account=account,
             user=user,
             claims={"sub": "sub-link-rich", "email": "link@example.com"},
             next_path=record.next_path or "/",
         )
 
-    monkeypatch.setattr(iam_schema.identity, "complete_link", complete_link)
+    monkeypatch.setattr(oidc_identity, "complete_link", complete_link)
 
     completed = _data(
         _execute(
@@ -470,7 +496,7 @@ def test_connect_account_complete_surfaces_provider_error_message(
     ) -> Any:
         del code, state_token, redirect_uri
         assert selected_oauth_client.pk == oauth_client.pk
-        raise OidcFlowError(
+        raise OAuthFlowError(
             "token_exchange_failed",
             429,
             body={
@@ -481,7 +507,7 @@ def test_connect_account_complete_surfaces_provider_error_message(
             },
         )
 
-    monkeypatch.setattr(iam_schema.identity, "complete_account_connect", complete_account_connect)
+    monkeypatch.setattr(integrate_connect, "complete_account_connect", complete_account_connect)
 
     completed = _data(
         _execute(
@@ -535,7 +561,6 @@ def test_oauth_client_crud_are_admin_only(
             displayName: "Console prod",
             clientId: "console-client",
             clientSecret: "console-secret",
-            isOidc: true,
             isEnabled: true,
             authorizeEndpoint: "https://issuer.example/authorize",
             tokenEndpoint: "https://issuer.example/token"
@@ -544,7 +569,6 @@ def test_oauth_client_crud_are_admin_only(
             slug
             icon
             displayName
-            isOidc
             configurationState
             clientSecret
           }
@@ -561,7 +585,6 @@ def test_oauth_client_crud_are_admin_only(
     assert oauth_client["slug"] == "console"
     assert oauth_client["icon"] == "console.svg"
     assert oauth_client["displayName"] == "Console prod"
-    assert oauth_client["isOidc"] is True
     assert oauth_client["configurationState"] == "ready"
     assert oauth_client["clientSecret"] == "console-secret"
     with system_context(reason="test.iam.oauth_client_secret"):
@@ -607,6 +630,48 @@ def test_oauth_client_crud_are_admin_only(
         {"oauthClient": oauth_client_id, "owner": str(admin.pk)},
         user=user,
     ).errors is not None
+
+
+def test_oidc_client_crud_adds_login_refinement_to_oauth_client(
+    iam_connection_tables: None,
+) -> None:
+    """The OIDC refinement is created against an OAuth client and is admin gated."""
+
+    plain = User.objects.create_user(username="oidc-crud-plain", email="plain@example.com")
+    admin = _platform_admin("oidc-crud-admin")
+    oauth_client = _oauth_client("refine-me", is_oidc=False)
+    oauth_client_id = relay.to_base64("OAuthClientType", oauth_client.sqid)
+    console_schema = _schema("console")
+    create_oidc_client = """
+        mutation CreateOidcClient($oauthClient: ID!) {
+          createOidcClient(data: {
+            oauthClient: $oauthClient,
+            issuer: "https://issuer.example",
+            discoveryUrl: "https://issuer.example/.well-known/openid-configuration",
+            createOnLogin: true,
+            allowedEmailDomains: ["example.com"]
+          }) {
+            issuer
+            discoveryUrl
+            createOnLogin
+            allowedEmailDomains
+          }
+        }
+    """
+    variables = {"oauthClient": oauth_client_id}
+
+    assert _execute(console_schema, create_oidc_client, variables, user=plain).errors is not None
+
+    created = _data(_execute(console_schema, create_oidc_client, variables, user=admin))["createOidcClient"]
+    assert created == {
+        "issuer": "https://issuer.example",
+        "discoveryUrl": "https://issuer.example/.well-known/openid-configuration",
+        "createOnLogin": True,
+        "allowedEmailDomains": ["example.com"],
+    }
+    with system_context(reason="test.iam_integrate_oidc.oidc_client"):
+        oauth_client.refresh_from_db()
+        assert oauth_client.oidc.create_on_login is True
 
 
 def test_reveal_credential_returns_the_secret_and_is_admin_only(
@@ -946,7 +1011,7 @@ def test_oauth_client_secret_is_console_readable_and_public_hidden(
 def test_account_connect_schema_exposes_generic_flow_without_token_material(
     iam_connection_tables: None,
 ) -> None:
-    """IAM exposes account-connect mutations and OAuth metadata without token values."""
+    """The connection surface exposes account-connect mutations and OAuth metadata without token values."""
 
     public_sdl = _schema("public").as_str()
     console_sdl = _schema("console").as_str()
@@ -1038,10 +1103,10 @@ def test_my_connected_accounts_are_scoped_to_session_user(
     assert accounts[0]["externalAccount"]["credentialStatus"] == "active"
 
 
-def test_unlink_account_only_removes_callers_credential(
+def test_disconnect_account_only_removes_callers_credential(
     iam_connection_tables: None,
 ) -> None:
-    """Unlinking deletes the session user's credential and leaves others alone."""
+    """Disconnecting deletes the session user's credential and leaves others alone."""
 
     alice = User.objects.create_user(username="unlink-alice", email="alice@example.com")
     bob = User.objects.create_user(username="unlink-bob", email="bob@example.com")
@@ -1071,8 +1136,8 @@ def test_unlink_account_only_removes_callers_credential(
         _execute(
             _schema("public"),
             """
-            mutation Unlink($sqid: String!) {
-              unlinkAccount(externalAccountSqid: $sqid) {
+            mutation Disconnect($sqid: String!) {
+              disconnectAccount(externalAccountSqid: $sqid) {
                 ok
                 error
                 errorCode
@@ -1084,17 +1149,17 @@ def test_unlink_account_only_removes_callers_credential(
         )
     )
 
-    assert data["unlinkAccount"] == {"ok": True, "error": None, "errorCode": None}
+    assert data["disconnectAccount"] == {"ok": True, "error": None, "errorCode": None}
     with system_context(reason="test assertions"):
         assert not Credential.objects.filter(user=alice, external_account=account).exists()
         assert Credential.objects.filter(user=bob, external_account=account).exists()
 
 
-def test_unlink_account_revokes_owner_so_oidc_login_is_blocked(
+def test_disconnect_account_revokes_owner_so_oidc_login_is_blocked(
     iam_connection_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Unlinking an OIDC credential revokes ownership so future OIDC login fails."""
+    """Disconnecting an OIDC credential revokes ownership so future OIDC login fails."""
 
     user = User.objects.create_user(
         username="unlink-oidc-owner",
@@ -1122,18 +1187,18 @@ def test_unlink_account_revokes_owner_so_oidc_login_is_blocked(
     )
     revoked_tokens: list[str] = []
 
-    def revoke_token(selected_oauth_client: Any, token: str) -> None:
-        assert selected_oauth_client.pk == oauth_client.pk
+    def revoke_token(self: OAuthClientProtocol, token: str) -> None:
+        assert self.oauth_client.pk == oauth_client.pk
         revoked_tokens.append(token)
 
-    monkeypatch.setattr(iam_schema.client_module, "revoke_token", revoke_token)
+    monkeypatch.setattr(OAuthClientProtocol, "revoke_token", revoke_token)
 
     data = _data(
         _execute(
             _schema("public"),
             """
-            mutation Unlink($sqid: String!) {
-              unlinkAccount(externalAccountSqid: $sqid) {
+            mutation Disconnect($sqid: String!) {
+              disconnectAccount(externalAccountSqid: $sqid) {
                 ok
                 error
                 errorCode
@@ -1145,21 +1210,20 @@ def test_unlink_account_revokes_owner_so_oidc_login_is_blocked(
         )
     )
 
-    assert data["unlinkAccount"] == {"ok": True, "error": None, "errorCode": None}
+    assert data["disconnectAccount"] == {"ok": True, "error": None, "errorCode": None}
     assert revoked_tokens == ["unlink-access"]
     with system_context(reason="test assertions"):
         assert ExternalAccount.objects.owner_for(account) is None
         assert not Credential.objects.filter(user=user, external_account=account).exists()
-    with pytest.raises(OidcFlowError):
-        identity.resolve(
-            oauth_client,
+    with pytest.raises(OAuthFlowError):
+        oidc_identity.OidcIdentityResolver(oauth_client).resolve(
             sub="sub-unlinked",
             email="owner@example.com",
             claims={"sub": "sub-unlinked"},
         )
 
 
-def test_unlink_account_blocks_last_oidc_sign_in_method_for_passwordless_user(
+def test_disconnect_account_blocks_last_oidc_sign_in_method_for_passwordless_user(
     iam_connection_tables: None,
 ) -> None:
     """Passwordless users cannot remove their last OIDC sign-in credential."""
@@ -1184,8 +1248,8 @@ def test_unlink_account_blocks_last_oidc_sign_in_method_for_passwordless_user(
         _execute(
             _schema("public"),
             """
-            mutation Unlink($sqid: String!) {
-              unlinkAccount(externalAccountSqid: $sqid) {
+            mutation Disconnect($sqid: String!) {
+              disconnectAccount(externalAccountSqid: $sqid) {
                 ok
                 error
                 errorCode
@@ -1197,7 +1261,7 @@ def test_unlink_account_blocks_last_oidc_sign_in_method_for_passwordless_user(
         )
     )
 
-    assert data["unlinkAccount"] == {
+    assert data["disconnectAccount"] == {
         "ok": False,
         "error": "only_sign_in_method",
         "errorCode": "only_sign_in_method",
@@ -1211,22 +1275,28 @@ def test_unlink_account_blocks_last_oidc_sign_in_method_for_passwordless_user(
 
 @pytest.fixture()
 def iam_connection_tables(transactional_db: Any) -> Iterator[None]:
-    """Create concrete connection tables for IAM GraphQL tests.
+    """Create concrete connection tables for connection/login GraphQL tests.
 
     Also materializes any other concrete ``auth``-app tables (e.g. test models
     registered by sibling suites with ``app_label="auth"``): deleting a real
     ``auth.User`` walks Django's deletion collector across every ``auth``-app
     relation (``AuditMixin`` adds ``SET_NULL`` user FKs), so a phantom registered
-    model without a table would break ``deleteUser`` under suite ordering.
+    model without a table would break ``deleteUser`` under suite ordering. Wires
+    the OIDC last-sign-in disconnect guard (normally connected by AppConfig.ready).
     """
 
     del transactional_db
     created_models = _create_connection_tables()
     created_models += _create_auth_app_tables()
     call_command("rebac", "sync", verbosity=0)
+    oidc_signals.connect()
     try:
         yield
     finally:
+        pre_delete.disconnect(
+            sender=apps.get_model("integrate", "Credential"),
+            dispatch_uid="iam_integrate_oidc.last_sign_in",
+        )
         if created_models:
             with connection.schema_editor() as schema_editor:
                 for model in reversed(created_models):
@@ -1254,23 +1324,39 @@ def test_discover_oidc_endpoints_is_admin_gated_and_validates_discovery_url(
     )
     admin = _platform_admin("discover-admin")
     client = _oauth_client("discoverable", discovery_url="")
-    client_id = relay.to_base64("OAuthClientType", client.sqid)
+    oidc_id = relay.to_base64("OidcClientType", client.oidc.sqid)
     console_schema = _schema("console")
     discover = "mutation($id: ID!){ discoverOidcEndpoints(id: $id){ ok message } }"
 
-    assert _execute(console_schema, discover, {"id": client_id}, user=plain).errors is not None
+    assert _execute(console_schema, discover, {"id": oidc_id}, user=plain).errors is not None
 
     result = _data(
-        _execute(console_schema, discover, {"id": client_id}, user=admin)
+        _execute(console_schema, discover, {"id": oidc_id}, user=admin)
     )["discoverOidcEndpoints"]
     assert result["ok"] is False
     assert "discovery url" in result["message"].lower()
 
 
 def _schema(name: str) -> Any:
-    """Build one IAM-only GraphQL schema bucket."""
+    """Build one merged GraphQL schema bucket spanning iam + integrate + login."""
 
-    return addon_schema(iam_schema.schemas, name)
+    merged: dict[str, tuple[Any, ...]] = {}
+    for source in _SCHEMA_SOURCES:
+        for key, values in source.get(name, {}).items():
+            merged[key] = _dedup((*merged.get(key, ()), *values))
+    return addon_schema({name: merged}, name)
+
+
+def _dedup(values: tuple[Any, ...]) -> tuple[Any, ...]:
+    """Return ``values`` with duplicate contributions (same object) removed, in order."""
+
+    seen: set[int] = set()
+    out: list[Any] = []
+    for value in values:
+        if id(value) not in seen:
+            seen.add(id(value))
+            out.append(value)
+    return tuple(out)
 
 
 def _execute(
@@ -1332,31 +1418,56 @@ def _user_global_id(user: Any) -> str:
     return relay.to_base64("UserType", str(getattr(user, "sqid", user.pk)))
 
 
+# Field names owned by the OIDC refinement (``OidcClient``); everything else passed
+# to ``_oauth_client`` lands on the OAuth base (``OAuthClient``).
+_OIDC_CLIENT_FIELDS = frozenset(
+    {"issuer", "discovery_url", "jwks_uri", "link_on_email_match", "create_on_login", "allowed_email_domains"}
+)
+
+
 def _oauth_client(
     slug: str,
-    **oauth_client_overrides: Any,
+    *,
+    is_oidc: bool = True,
+    is_enabled: bool = True,
+    **overrides: Any,
 ) -> OAuthClient:
-    """Create one self-describing OAuth client under system context."""
+    """Create one self-describing OAuth client (plus an OIDC refinement when OIDC).
 
-    defaults: dict[str, Any] = {
+    ``is_oidc=True`` attaches an ``OidcClient`` so the client can run login/link;
+    ``is_oidc=False`` is a connect-only client. OIDC-only overrides
+    (issuer/discovery_url/jwks_uri/policy) route to the refinement.
+    """
+
+    base_defaults: dict[str, Any] = {
         "display_name": slug.title(),
         "icon": f"{slug}.svg",
         "client_id": f"{slug}-client",
         "client_secret": "secret",
-        "issuer": "https://issuer.example",
-        "discovery_url": "https://issuer.example/.well-known/openid-configuration",
         "authorize_endpoint": "https://issuer.example/authorize",
         "token_endpoint": "https://issuer.example/token",
         "userinfo_endpoint": "https://issuer.example/userinfo",
-        "jwks_uri": "https://issuer.example/jwks",
-        "is_oidc": True,
-        "is_enabled": True,
+        "is_enabled": is_enabled,
         "supports_pkce": False,
         "default_scopes": ["openid", "email"],
     }
-    defaults.update(oauth_client_overrides)
+    # Explicit endpoints (above) make this a fully configured login provider; no
+    # discovery_url, so the OIDC flow never makes a discovery network call. Tests that
+    # exercise discovery set discovery_url explicitly.
+    oidc_defaults: dict[str, Any] = {
+        "issuer": "https://issuer.example",
+        "jwks_uri": "https://issuer.example/jwks",
+    }
+    for key, value in overrides.items():
+        if key in _OIDC_CLIENT_FIELDS:
+            oidc_defaults[key] = value
+        else:
+            base_defaults[key] = value
     with system_context(reason="test iam graphql setup"):
-        return OAuthClient.objects.create(slug=slug, **defaults)
+        oauth_client = OAuthClient.objects.create(slug=slug, **base_defaults)
+        if is_oidc:
+            OidcClient.objects.create(oauth_client=oauth_client, **oidc_defaults)
+    return oauth_client
 
 
 class _Session(dict[str, Any]):

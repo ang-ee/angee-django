@@ -13,7 +13,7 @@ class NotesConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "example.notes"
     label = "notes"
-    depends_on = ("angee.iam", "angee.integrate", "angee.agents", "angee.mcp")
+    depends_on = ("angee.iam", "angee.integrate", "angee.iam_integrate_oidc", "angee.agents", "angee.mcp")
     schemas = "schema.schemas"
     permissions = "permissions.zed"
     mcp_tools = "mcp_tools.register"
@@ -27,13 +27,14 @@ class NotesConfig(AppConfig):
         "demo": (
             "resources/demo/010_iam.user.yaml",
             "resources/demo/020_notes.note.yaml",
-            "resources/demo/030_iam.oauth_client.yaml",
+            "resources/demo/030_integrate.oauthclient.yaml",
+            "resources/demo/031_iam_integrate_oidc.oidcclient.yaml",
             "resources/demo/050_knowledge.vault.yaml",
             "resources/demo/060_knowledge.page.yaml",
             "resources/demo/070_knowledge.markdown_page.yaml",
             # Local template source: discover the repo's templates/ as integrate.Template
             # rows via the `local` VCS backend, ordered so each FK resolves before its use.
-            "resources/demo/080_iam.credential.yaml",
+            "resources/demo/080_integrate.credential.yaml",
             "resources/demo/081_integrate.vendor.yaml",
             "resources/demo/082_integrate.integration.yaml",
             "resources/demo/083_integrate.vcsintegration.yaml",
@@ -41,7 +42,7 @@ class NotesConfig(AppConfig):
             "resources/demo/085_integrate.source.yaml",
             # A ready-to-provision demo agent and its inference chain (placeholder
             # credential -> integration -> provider -> model -> templates -> agent).
-            "resources/demo/090_iam.credential.yaml",
+            "resources/demo/090_integrate.credential.yaml",
             "resources/demo/091_integrate.integration.yaml",
             "resources/demo/092_agents.inferenceprovider.yaml",
             "resources/demo/093_agents.inferencemodel.yaml",

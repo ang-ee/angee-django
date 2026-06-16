@@ -1,0 +1,331 @@
+"""OIDC login identity resolution: verify an external identity into an Angee user.
+
+The login bridge between ``integrate`` (the OAuth/OIDC connection substrate) and
+``iam`` (the user and session). It completes the login/link redirect using the
+OIDC protocol, then resolves the verified claims to a host user — returning an
+existing linked owner, or linking/creating one when the provider's ``OidcClient``
+policy allows. Account-connect (no login) lives in ``integrate.connect``.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Any, cast
+
+from django.apps import apps
+from django.contrib.auth import get_user_model
+from django.contrib.auth.base_user import AbstractBaseUser
+from django.db import models, transaction
+from rebac import system_context
+
+from angee.iam_integrate_oidc.protocol import OidcClientProtocol
+from angee.integrate.credentials import CredentialKind
+from angee.integrate.models import AccountStatus
+from angee.integrate.oauth import flow
+from angee.integrate.oauth.errors import INVALID_ID_TOKEN, INVALID_STATE, OAuthFlowError
+from angee.integrate.oauth.state import StateFlow, StateRecord
+
+IDENTITY_RESOLUTION_FAILED = "identity_resolution_failed"
+
+
+@dataclass(frozen=True, slots=True)
+class LoginCompletion:
+    """Resolved user and verified claims from one completed OIDC login flow."""
+
+    user: AbstractBaseUser
+    claims: dict[str, Any]
+    next_path: str
+
+
+@dataclass(frozen=True, slots=True)
+class LinkCompletion:
+    """Linked account, captured user, and verified claims from one OIDC link flow."""
+
+    account: models.Model
+    user: AbstractBaseUser
+    claims: dict[str, Any]
+    next_path: str
+
+
+def _require_oidc(oauth_client: Any) -> Any:
+    """Return the OAuth client's OIDC refinement, or fail the login flow."""
+
+    oidc = getattr(oauth_client, "oidc", None)
+    if oidc is None:
+        raise OAuthFlowError(INVALID_STATE, 400)
+    return oidc
+
+
+class OidcLoginCompletion:
+    """Complete one OIDC login/link redirect against an OAuth client's refinement."""
+
+    def __init__(self, oauth_client: Any) -> None:
+        """Bind completion to the OAuth client captured by session state."""
+
+        self.oauth_client = oauth_client
+        self.oidc = _require_oidc(oauth_client)
+        self.protocol = OidcClientProtocol(self.oidc)
+
+    def complete_login(self, *, code: str, state_token: str, redirect_uri: str) -> LoginCompletion:
+        """Complete an OIDC login redirect and return the resolved user with claims."""
+
+        record = flow.consume_validated_state(
+            self.oauth_client, state_token, redirect_uri, expected_flow=StateFlow.LOGIN
+        )
+        _tokens, claims = self._exchange_verify(code, state_token, redirect_uri, record)
+        sub = self._required_sub(claims)
+        user = resolve(self.oauth_client, sub=sub, email=self._claim_email(claims), claims=claims)
+        return LoginCompletion(user=user, claims=claims, next_path=record.next_path or "/")
+
+    def complete_link(self, *, code: str, state_token: str, redirect_uri: str) -> LinkCompletion:
+        """Complete an authenticated OIDC account-link redirect and return the linked account.
+
+        Links the verified external identity to the start-flow user and stores its
+        OAuth credential under ``(user, provider)`` — the same shape as connect, but
+        gated on a verified ID token.
+        """
+
+        record = flow.consume_validated_state(
+            self.oauth_client, state_token, redirect_uri, expected_flow=StateFlow.LINK
+        )
+        link_user = OidcIdentityResolver(self.oauth_client).user_for_link_state(record)
+        tokens, claims = self._exchange_verify(code, state_token, redirect_uri, record)
+        sub = self._required_sub(claims)
+        email = self._claim_email(claims) or ""
+        Account = cast(Any, apps.get_model("integrate", "ExternalAccount"))
+        Credential = cast(Any, apps.get_model("integrate", "Credential"))
+        with system_context(reason="iam_integrate_oidc.link"), transaction.atomic():
+            account = Account.objects.filter(oauth_client=self.oauth_client, external_id=sub).first()
+            if account is not None:
+                owner = Account.objects.owner_for(account)
+                if owner is not None and owner.pk != link_user.pk:
+                    raise OAuthFlowError("account_already_linked", 409)
+            account = Account.objects.link(
+                self.oauth_client,
+                sub,
+                owner=link_user,
+                email=email,
+                identity_claims=claims,
+                display_name=self.oauth_client.display_name_from_claims(claims, email),
+                avatar_url=self.oauth_client.avatar_url_from_claims(claims),
+            )
+            credential = Credential.objects.upsert_for_user(
+                link_user,
+                self.oauth_client,
+                CredentialKind.OAUTH,
+                tokens,
+                external_account=account,
+            )
+            account.credential = credential
+            account.save(update_fields=["credential", "updated_at"])
+        return LinkCompletion(
+            account=cast(models.Model, account),
+            user=link_user,
+            claims=claims,
+            next_path=record.next_path or "/",
+        )
+
+    def _exchange_verify(
+        self, code: str, state_token: str, redirect_uri: str, record: StateRecord
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Return ``(tokens, claims)``: verified ID-token claims enriched by userinfo."""
+
+        tokens = self.protocol.exchange_code(
+            code=code,
+            redirect_uri=redirect_uri,
+            code_verifier=record.code_verifier,
+            state=state_token,
+        )
+        claims = self.protocol.verify_id_token(str(tokens.get("id_token", "")), nonce=record.nonce)
+        userinfo = self.protocol.fetch_userinfo(str(tokens.get("access_token", "") or ""))
+        if userinfo:
+            claims = {**userinfo, **claims}
+        return tokens, claims
+
+    def _required_sub(self, claims: dict[str, Any]) -> str:
+        """Return the subject claim or fail the redirect completion."""
+
+        sub = claims.get("sub")
+        if not sub:
+            raise OAuthFlowError(INVALID_ID_TOKEN, 400)
+        return str(sub)
+
+    def _claim_email(self, claims: dict[str, Any]) -> str | None:
+        """Return the email claim when present."""
+
+        value = self.oauth_client.email_from_claims(claims)
+        return value or None
+
+
+class OidcIdentityResolver:
+    """Resolve OIDC claims to a host user, linking or provisioning when policy allows.
+
+    Operates on ``get_user_model()`` (the host's swappable user model) through
+    generic Django manager methods, so it is correct whatever the host's User is.
+    The per-provider login policy is read from the ``OidcClient`` refinement.
+    """
+
+    def __init__(self, oauth_client: Any) -> None:
+        """Bind resolution to the OAuth client whose OIDC login policy applies."""
+
+        self.oauth_client = oauth_client
+        self.oidc = _require_oidc(oauth_client)
+
+    def resolve(self, *, sub: str, email: str | None, claims: dict[str, Any]) -> AbstractBaseUser:
+        """Return the user for one verified OIDC identity, or fail closed."""
+
+        Account = cast(Any, apps.get_model("integrate", "ExternalAccount"))
+        with system_context(reason="iam_integrate_oidc.resolve"), transaction.atomic():
+            account = Account.objects.filter(oauth_client=self.oauth_client, external_id=sub).first()
+            if account is not None:
+                # A revoked/expired/disabled account or a deactivated user must not log in.
+                if account.status != AccountStatus.ACTIVE:
+                    raise OAuthFlowError(IDENTITY_RESOLUTION_FAILED, 403)
+                owner = Account.objects.owner_for(account)
+                if owner is None or not owner.is_active:
+                    raise OAuthFlowError(IDENTITY_RESOLUTION_FAILED, 403)
+                return cast(AbstractBaseUser, owner)
+
+            normalized_email = email or ""
+            if (
+                self.oidc.link_on_email_match
+                and normalized_email
+                and self.oidc.allows_email_domain(normalized_email)
+            ):
+                user = self._find_by_email(normalized_email)
+                if user is not None and user.is_active:
+                    Account.objects.link(
+                        self.oauth_client,
+                        sub,
+                        owner=user,
+                        email=normalized_email,
+                        identity_claims=claims,
+                        display_name=Account.display_name_from_claims(claims, normalized_email),
+                    )
+                    return user
+
+            if self.oidc.create_on_login and (
+                not normalized_email or self.oidc.allows_email_domain(normalized_email)
+            ):
+                user = self._create_for_identity(normalized_email, sub, claims=claims)
+                Account.objects.link(
+                    self.oauth_client,
+                    sub,
+                    owner=user,
+                    email=normalized_email,
+                    identity_claims=claims,
+                    display_name=Account.display_name_from_claims(claims, normalized_email),
+                )
+                return user
+
+        raise OAuthFlowError(IDENTITY_RESOLUTION_FAILED, 403)
+
+    def user_for_link_state(self, record: StateRecord) -> AbstractBaseUser:
+        """Return the user captured when the authenticated link flow started."""
+
+        if not record.user_id:
+            raise OAuthFlowError(INVALID_STATE, 400)
+        user_model = get_user_model()
+        manager = cast(Any, user_model.objects)
+        with system_context(reason="iam_integrate_oidc.link_user"):
+            try:
+                user = manager.get(pk=record.user_id)
+            except user_model.DoesNotExist as exc:
+                raise OAuthFlowError(INVALID_STATE, 400) from exc
+        return cast(AbstractBaseUser, user)
+
+    def _find_by_email(self, email: str) -> AbstractBaseUser | None:
+        """Return the first user matching ``email`` case-insensitively."""
+
+        manager = cast(Any, get_user_model().objects)
+        return cast(AbstractBaseUser | None, manager.filter(email__iexact=email).order_by("pk").first())
+
+    def _create_for_identity(self, email: str, sub: str, *, claims: dict[str, Any]) -> AbstractBaseUser:
+        """Create a non-superuser user for one OIDC identity."""
+
+        manager = cast(Any, get_user_model().objects)
+        user_fields: dict[str, Any] = {}
+        if given_name := claims.get("given_name"):
+            user_fields["first_name"] = str(given_name)
+        if family_name := claims.get("family_name"):
+            user_fields["last_name"] = str(family_name)
+        return cast(
+            AbstractBaseUser,
+            manager.create_user(
+                username=self._available_username(email or f"oidc-{sub}"),
+                email=email,
+                password=None,
+                is_staff=False,
+                is_superuser=False,
+                **user_fields,
+            ),
+        )
+
+    def _available_username(self, seed: str) -> str:
+        """Return a unique Django username derived from ``seed``."""
+
+        manager = cast(Any, get_user_model().objects)
+        base = re.sub(r"[^\w.@+-]", "-", seed).strip("-")[:140] or "oidc-user"
+        candidate = base
+        suffix = 1
+        while manager.filter(username=candidate).exists():
+            suffix_text = f"-{suffix}"
+            candidate = f"{base[: 150 - len(suffix_text)]}{suffix_text}"
+            suffix += 1
+        return candidate
+
+
+def resolve(oauth_client: Any, *, sub: str, email: str | None, claims: dict[str, Any]) -> AbstractBaseUser:
+    """Resolve OIDC claims to a host user, linking or provisioning when policy allows.
+
+    The identity-resolution seam the login completion calls (and callers/tests can
+    substitute); delegates to :class:`OidcIdentityResolver`.
+    """
+
+    return OidcIdentityResolver(oauth_client).resolve(sub=sub, email=email, claims=claims)
+
+
+def complete_login(oauth_client: Any, *, code: str, state_token: str, redirect_uri: str) -> LoginCompletion:
+    """Complete an OIDC login redirect and return the resolved user with claims."""
+
+    return OidcLoginCompletion(oauth_client).complete_login(
+        code=code, state_token=state_token, redirect_uri=redirect_uri
+    )
+
+
+def complete_link(oauth_client: Any, *, code: str, state_token: str, redirect_uri: str) -> LinkCompletion:
+    """Complete an authenticated OIDC account-link redirect and return the linked account.
+
+    The linked user is the one captured in state when the flow started, never a
+    later session user.
+    """
+
+    return OidcLoginCompletion(oauth_client).complete_link(
+        code=code, state_token=state_token, redirect_uri=redirect_uri
+    )
+
+
+def is_only_oidc_sign_in(user: Any) -> bool:
+    """Return whether ``user`` has no password and only one OIDC sign-in account.
+
+    The guard the disconnect path consults before removing a sign-in credential, so
+    a user who logs in solely through OIDC cannot strip their last way back in.
+    """
+
+    if user.has_usable_password():
+        return False
+    Credential = cast(Any, apps.get_model("integrate", "Credential"))
+    with system_context(reason="iam_integrate_oidc.unlink.guard"):
+        oidc_account_count = (
+            Credential.objects.filter(
+                user=user,
+                kind="oauth",
+                oauth_client__oidc__isnull=False,
+                external_account__isnull=False,
+            )
+            .values("external_account_id")
+            .distinct()
+            .count()
+        )
+    return oidc_account_count <= 1

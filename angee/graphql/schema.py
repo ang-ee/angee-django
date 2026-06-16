@@ -22,6 +22,7 @@ from strawberry.types.execution import ExecutionContext
 from strawberry.utils.str_converters import to_camel_case
 
 from angee.addons import resolve_addon_reference
+from angee.graphql.extension import extension_target
 from angee.graphql.introspection import (
     django_model,
     surface_field_names,
@@ -38,10 +39,15 @@ SCHEMA_PART_KEYS: tuple[str, ...] = (
     "subscription",
     "types",
     "extensions",
+    "type_extensions",
 )
 """GraphQL merge buckets accepted from addon schema declarations."""
 
-_ROOT_TYPE_NAMES = {key: key.title() for key in SCHEMA_PART_KEYS if key not in {"types", "extensions"}}
+_NON_ROOT_KEYS = {"types", "extensions", "type_extensions"}
+_ROOT_TYPE_NAMES = {key: key.title() for key in SCHEMA_PART_KEYS if key not in _NON_ROOT_KEYS}
+
+_APPLIED_EXTENSIONS_ATTR = "__angee_applied_type_extensions__"
+"""Marker on a target Strawberry type recording which extensions are already merged."""
 
 
 def _unwrap_validation_error(exc: BaseException | None) -> ValidationError | None:
@@ -133,6 +139,10 @@ class SchemaParts:
     extensions: tuple[object, ...] = ()
     """Additional Strawberry schema extensions."""
 
+    type_extensions: tuple[object, ...] = ()
+    """Strawberry types (marked with ``extends_type``) whose fields are merged onto
+    an upstream type at build — the GraphQL parallel to a model ``extends``."""
+
     @classmethod
     def from_mapping(
         cls,
@@ -157,6 +167,7 @@ class SchemaParts:
             subscription=self._dedupe_by_identity(self.subscription + other.subscription),
             types=self._dedupe_by_identity(self.types + other.types),
             extensions=self._dedupe_by_identity(self.extensions + other.extensions),
+            type_extensions=self._dedupe_by_identity(self.type_extensions + other.type_extensions),
         )
 
     @staticmethod
@@ -186,6 +197,7 @@ class GraphQLSchemas:
 
         self.addons = tuple(addons)
         self._builds: dict[str, strawberry.Schema] = {}
+        self._type_extensions_applied = False
 
     @classmethod
     def from_discovery(cls) -> GraphQLSchemas:
@@ -230,12 +242,68 @@ class GraphQLSchemas:
 
         return self.build(name)._schema
 
+    def _ensure_type_extensions_applied(self) -> None:
+        """Merge every contributed ``type_extensions`` field onto its target type.
+
+        Applied once, before any schema builds, so a target carries its
+        downstream-contributed fields wherever it appears. The field objects are
+        copied so the donor extension type and the target never share one. The
+        target is contributed by an upstream addon (dependency order guarantees it
+        is defined first); strawberry-django resolves each appended relation field's
+        type from its model registry at build, so no upward import is needed.
+        """
+
+        if self._type_extensions_applied:
+            return
+        self._type_extensions_applied = True
+        applied: set[int] = set()
+        for parts in self.parts.values():
+            for extension in parts.type_extensions:
+                if id(extension) in applied:
+                    continue
+                applied.add(id(extension))
+                self._apply_type_extension(extension)
+
+    def _apply_type_extension(self, extension: object) -> None:
+        """Append one ``extends_type`` donor's fields onto its target's definition.
+
+        Idempotent across schema collections: the target is a global Strawberry type
+        object shared by every build, so each extension is recorded on the target and
+        applied at most once (a second collection skips it rather than re-adding the
+        field). A field name already present from a *different* source is a genuine
+        collision and fails fast.
+        """
+
+        target = extension_target(extension)
+        if target is None:
+            raise ImproperlyConfigured(
+                f"{surface_name(extension)} is listed in type_extensions but is not "
+                "marked with @extends_type(TargetType)"
+            )
+        applied = cast(set, getattr(target, _APPLIED_EXTENSIONS_ATTR, None) or set())
+        setattr(target, _APPLIED_EXTENSIONS_ATTR, applied)
+        if id(extension) in applied:
+            return
+        target_def = get_object_definition(target, strict=True)
+        donor_def = get_object_definition(cast(type, extension), strict=True)
+        existing = {field.name for field in target_def.fields}
+        for field in donor_def.fields:
+            if field.name in existing:
+                raise ImproperlyConfigured(
+                    f"type extension {surface_name(extension)} adds field {field.name!r} "
+                    f"already declared on {target_def.name}"
+                )
+            target_def.fields.append(copy.copy(field))
+            existing.add(field.name)
+        applied.add(id(extension))
+
     def _build(
         self,
         name: str,
     ) -> strawberry.Schema:
         """Build the merged live Strawberry schema named ``name``."""
 
+        self._ensure_type_extensions_applied()
         try:
             parts = self.parts[name]
         except KeyError as error:

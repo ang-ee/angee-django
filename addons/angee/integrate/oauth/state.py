@@ -1,4 +1,9 @@
-"""OIDC state records stored in Django's cache."""
+"""Single-use redirect state records stored in Django's cache.
+
+Shared by every browser redirect flow: account-connect (OAuth) and login/link
+(OIDC). State is keyed on the ``OAuthClient`` the picker selected; the OIDC layer
+loads that client's ``oidc`` refinement when completing a login.
+"""
 
 from __future__ import annotations
 
@@ -11,18 +16,18 @@ from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
 
-from angee.iam.oidc.errors import INVALID_STATE, OidcFlowError
+from angee.integrate.oauth.errors import INVALID_STATE, OAuthFlowError
 
 _DEFAULT_STATE_TTL_SECONDS = 600
-_CACHE_PREFIX = "angee.iam.oidc.state:"
+_CACHE_PREFIX = "angee.integrate.oauth.state:"
 
 
 class StateFlow(StrEnum):
-    """Which redirect mutation may consume one OIDC state token.
+    """Which redirect mutation may consume one state token.
 
     A token minted for a login must not complete a link/connect (and vice versa);
-    ``identity._validate_state_record`` fails closed when the flow does not
-    match, so a leaked state cannot be replayed across flows.
+    the completion path fails closed when the flow does not match, so a leaked
+    state cannot be replayed across flows.
     """
 
     LOGIN = "login"
@@ -32,7 +37,7 @@ class StateFlow(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class StateRecord:
-    """Cached data needed to complete one OIDC redirect."""
+    """Cached data needed to complete one OAuth/OIDC redirect."""
 
     oauth_client_id: str
     redirect_uri: str
@@ -52,7 +57,7 @@ def issue(
     next_path: str = "",
     flow: StateFlow = StateFlow.LOGIN,
 ) -> tuple[str, StateRecord]:
-    """Create and cache one single-use OIDC state record."""
+    """Create and cache one single-use redirect state record."""
 
     state_token = secrets.token_urlsafe(32)
     record = StateRecord(
@@ -79,7 +84,7 @@ def consume(state_token: str) -> StateRecord:
     key = _cache_key(state_token)
     record = cache.get(key)
     if not isinstance(record, StateRecord):
-        raise OidcFlowError(INVALID_STATE, 400)
+        raise OAuthFlowError(INVALID_STATE, 400)
     cache.delete(key)
     return record
 
@@ -91,6 +96,6 @@ def _cache_key(state_token: str) -> str:
 
 
 def _state_ttl_seconds() -> int:
-    """Return the configured lifetime for one OIDC state record."""
+    """Return the configured lifetime for one redirect state record."""
 
-    return int(getattr(settings, "ANGEE_IAM_OIDC_STATE_TTL", _DEFAULT_STATE_TTL_SECONDS))
+    return int(getattr(settings, "ANGEE_INTEGRATE_OAUTH_STATE_TTL", _DEFAULT_STATE_TTL_SECONDS))

@@ -1,7 +1,41 @@
 // Authorization schema for the integrate addon.
 // @rebac_package: integrate
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 5
+// @rebac_schema_revision: 7
+
+definition integrate/oauth_client {
+    relation admin: angee/role // rebac:const=admin
+
+    // Const-admin create can't gate an id-less insert (the sqid only exists
+    // post-insert, so the create check sees an empty resource id and denies
+    // everyone), so console creates run elevated (system_context) behind
+    // PlatformAdminPermission. Kept to document the admin-only intent.
+    permission create = admin->member
+    // Admin-only by design: OAuthClient holds OAuth secrets (projection-excluded).
+    permission read = admin->member
+    permission write = admin->member
+    permission delete = admin->member
+}
+
+definition integrate/external_account {
+    relation owner: auth/user
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = owner + admin->member
+    permission write = owner + admin->member
+    permission delete = owner + admin->member
+}
+
+definition integrate/credential {
+    relation owner: auth/user // rebac:field=user
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = owner + admin->member
+    permission write = owner + admin->member
+    permission delete = owner + admin->member
+}
 
 definition integrate/vendor {
     relation admin: angee/role // rebac:const=admin

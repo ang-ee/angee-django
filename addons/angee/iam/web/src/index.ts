@@ -8,28 +8,20 @@ import { createElement } from "react";
 
 import { enIamMessages } from "./i18n";
 import { OAuthCallbackPage } from "./OAuthCallbackPage";
-import { OAuthConnectCallbackPage } from "./OAuthConnectCallbackPage";
 import { OAuthLoginMethods } from "./OAuthLoginMethods";
-import {
-  CONNECT_CALLBACK_PATH,
-  LEGACY_CONNECT_CALLBACK_PATH,
-  LEGACY_LOGIN_CALLBACK_PATH,
-  LOGIN_CALLBACK_PATH,
-} from "./redirects";
-import { credentialCreateForm } from "./views/credential-form";
-import { CredentialsPage } from "./views/CredentialsPage";
-import { ExternalAccountsPage } from "./views/ExternalAccountsPage";
+import { LEGACY_LOGIN_CALLBACK_PATH, LOGIN_CALLBACK_PATH } from "./redirects";
 import { GrantsPage } from "./views/GrantsPage";
+import { OidcProvidersPage } from "./views/OidcProvidersPage";
 import { OverviewPage } from "./views/OverviewPage";
-import { ProvidersPage } from "./views/ProvidersPage";
 import { RelationshipsPage } from "./views/RelationshipsPage";
 import { RolesPage } from "./views/RolesPage";
 import { SchemaPage } from "./views/SchemaPage";
 import { UsersPage } from "./views/UsersPage";
 
-// Two top-bar dropdowns: "Roles" groups the REBAC views, "Federation" groups the
-// third-party sign-in surfaces. `TopMenu` renders a menu item with children as a
-// dropdown; a route-less parent inherits its first child's target.
+// One top-bar dropdown ("Roles" gathers the REBAC views) plus the "OIDC Providers"
+// item — the inbound sign-in provider admin (the OAuth login refinement; the OAuth
+// connect substrate moved to `@angee/integrate`). `TopMenu` renders a menu item with
+// children as a dropdown; a route-less parent inherits its first child's target.
 const identityMenu: readonly BaseMenuItem[] = [
   {
     // Route-less app root: the rail icon inherits its target from the first
@@ -52,16 +44,7 @@ const identityMenu: readonly BaseMenuItem[] = [
           { id: "iam.schema", label: "Schema", route: "iam.schema", icon: "columns" },
         ],
       },
-      {
-        id: "iam.federation",
-        label: "Federation",
-        icon: "grid",
-        children: [
-          { id: "iam.providers", label: "Providers", route: "iam.providers", icon: "auth" },
-          { id: "iam.accounts", label: "External Accounts", route: "iam.accounts", icon: "users" },
-          { id: "iam.credentials", label: "Credentials", route: "iam.credentials", icon: "check" },
-        ],
-      },
+      { id: "iam.oidc", label: "OIDC Providers", route: "iam.oidc", icon: "grid" },
     ],
   },
 ];
@@ -88,35 +71,16 @@ const iam = defineBaseAddon({
       shell: "public",
       component: OAuthCallbackPage,
     },
-    {
-      name: "iam.connect.callback",
-      path: CONNECT_CALLBACK_PATH,
-      shell: "console",
-      component: OAuthConnectCallbackPage,
-    },
-    {
-      name: "iam.connect.callback.legacy",
-      path: LEGACY_CONNECT_CALLBACK_PATH,
-      shell: "console",
-      component: OAuthConnectCallbackPage,
-    },
     { name: "iam.overview", path: "/iam", shell: "console", component: OverviewPage },
     ...consolePage("iam.users", "/iam/users", UsersPage),
     { name: "iam.roles", path: "/iam/roles", shell: "console", component: RolesPage },
     { name: "iam.grants", path: "/iam/grants", shell: "console", component: GrantsPage },
     { name: "iam.relationships", path: "/iam/relationships", shell: "console", component: RelationshipsPage },
     { name: "iam.schema", path: "/iam/schema", shell: "console", component: SchemaPage },
-    ...consolePage("iam.providers", "/iam/providers", ProvidersPage),
-    ...consolePage("iam.accounts", "/iam/accounts", ExternalAccountsPage),
-    ...consolePage("iam.credentials", "/iam/credentials", CredentialsPage),
+    ...consolePage("iam.oidc", "/iam/oidc", OidcProvidersPage),
   ],
   menus: identityMenu,
   i18n: { iam: enIamMessages },
-  // The credential CRUD form: used by the Credentials page "New" and the
-  // relation-picker inline create (e.g. an Integration's credential field).
-  forms: {
-    Credential: credentialCreateForm,
-  },
   slots: [
     {
       slot: AUTH_LOGIN_METHOD_SLOT,

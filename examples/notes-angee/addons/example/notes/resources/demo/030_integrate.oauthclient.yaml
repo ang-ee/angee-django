@@ -1,0 +1,18 @@
+# A disabled demo OIDC connection (base). The client id is a placeholder — the real
+# authorize round-trip needs a deployment to configure and enable its own credentials.
+# Its OIDC refinement (discovery + login policy) is seeded in 031.
+- xref: demo_google
+  slug: google
+  icon: google
+  display_name: Google (demo)
+  client_id: demo-oidc-client
+  is_enabled: false
+  authorize_endpoint: https://accounts.google.com/o/oauth2/v2/auth
+  token_endpoint: https://oauth2.googleapis.com/token
+  default_scopes:
+    - openid
+    - email
+  scopes_catalogue:
+    - openid
+    - email
+    - profile

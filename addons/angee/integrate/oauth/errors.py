@@ -1,4 +1,10 @@
-"""OIDC flow errors surfaced to callers as stable codes."""
+"""OAuth/OIDC flow errors surfaced to callers as stable codes.
+
+The shared failure vocabulary for the connection protocol. OAuth owns the base
+codes (state, token exchange); the OIDC layer reuses the same
+:class:`OAuthFlowError` for its id-token/userinfo failures, and the login addon
+adds its own identity-resolution codes on top.
+"""
 
 from __future__ import annotations
 
@@ -12,12 +18,11 @@ MISSING_ENDPOINT = "missing_endpoint"
 TOKEN_EXCHANGE_FAILED = "token_exchange_failed"
 INVALID_ID_TOKEN = "invalid_id_token"
 USERINFO_FAILED = "userinfo_failed"
-IDENTITY_RESOLUTION_FAILED = "identity_resolution_failed"
 EXTERNAL_ACCOUNT_RESOLUTION_FAILED = "external_account_resolution_failed"
 
 
-class OidcFlowError(Exception):
-    """Exception carrying a stable OIDC failure code and HTTP status."""
+class OAuthFlowError(Exception):
+    """Exception carrying a stable OAuth/OIDC failure code and HTTP status."""
 
     def __init__(
         self,

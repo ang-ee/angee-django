@@ -1,6 +1,6 @@
 """The agents addon's MCP bearer → actor verifier.
 
-An ``agents.MCPServer.credential`` (an ``iam.Credential``) holds the bearer the
+An ``agents.MCPServer.credential`` (an ``integrate.Credential``) holds the bearer the
 agent presents to an internal MCP server. This verifier matches an inbound bearer
 to that credential and resolves it to the actor the tool bodies run under. It is
 named by ``ANGEE_MCP_ACTOR_VERIFIER`` (see ``agents.autoconfig``); the base

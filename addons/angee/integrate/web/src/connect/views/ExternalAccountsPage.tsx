@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Action, Column, DataPage, Field, Form, Group, List } from "@angee/base";
 
-import { useIamT } from "../i18n";
+import { useIntegrateT } from "../../i18n";
 
 const MODEL = "ExternalAccount";
 
@@ -16,30 +16,30 @@ const accountList = (
   </List>
 );
 
-/** Linked external identities (list / edit / delete; created via OAuth login). */
+/** Linked external identities (list / edit / delete; created via the connect flow). */
 export function ExternalAccountsPage(): React.ReactElement {
-  const t = useIamT();
+  const t = useIntegrateT();
   // Identity (provider + externalId) is fixed at link time; the console edits the
-  // scalar profile/status. Creation happens through the OAuth login flow, so the
+  // scalar profile/status. Creation happens through the connect flow, so the
   // Create button is hidden here.
   const accountForm = (
     <Form model={MODEL}>
       <Field name="displayName" title />
       <Field name="status" widget="statusbar" />
-      <Group label={t("iam.externalAccounts.group.identity")} columns={2}>
-        <Field name="providerLabel" label={t("iam.externalAccounts.provider")} readOnly />
+      <Group label={t("integrate.externalAccounts.group.identity")} columns={2}>
+        <Field name="providerLabel" label={t("integrate.externalAccounts.provider")} readOnly />
         <Field name="externalId" readOnly />
         <Field name="email" />
         <Field name="avatarUrl" />
       </Group>
       <Action
         id="revoke"
-        label={t("iam.revoke")}
+        label={t("integrate.revoke")}
         danger
         set={{ status: "revoked" }}
         confirm={{
-          title: t("iam.externalAccounts.revoke.title"),
-          body: t("iam.externalAccounts.revoke.body"),
+          title: t("integrate.externalAccounts.revoke.title"),
+          body: t("integrate.externalAccounts.revoke.body"),
           danger: true,
         }}
         visibleWhen={(record) =>

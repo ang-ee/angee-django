@@ -2,13 +2,14 @@ import type { ReactNode } from "react";
 import { Field } from "@angee/base";
 
 /**
- * The declarative create form for IAM credentials, registered as the `Credential`
- * form override so it is used wherever a credential is created — the Credentials
- * page "New" and the relation-picker inline create.
+ * The declarative create form for integrate credentials, registered as the
+ * `Credential` form override so it is used wherever a credential is created — the
+ * Credentials page "New" and the relation-picker inline create (e.g. an
+ * Integration's credential field).
  *
  * A `kind` discriminator swaps the material field via `showWhen` (static token →
  * API token; SSH key → private key); the secret is write-only and `user` defaults
- * to the session admin server-side. OAuth credentials are minted by the login
+ * to the session admin server-side. OAuth credentials are minted by the connect
  * flow, so they are not offered here.
  */
 export const credentialCreateForm: ReactNode = (

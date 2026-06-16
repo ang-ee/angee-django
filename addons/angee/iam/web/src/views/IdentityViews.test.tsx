@@ -28,9 +28,9 @@ import { ModalsHost, ToastProvider, baseIcons, defaultWidgets } from "@angee/bas
 
 import { GrantsPage } from "./GrantsPage";
 
-// The model-driven pages (Users / Providers / External Accounts / Credentials)
-// are exercised end-to-end (they carry no bespoke logic to unit-test, like the
-// notes/storage DataPages). GrantsPage is a custom REBAC view, so it is tested.
+// The model-driven pages (Users / OIDC Providers) are exercised end-to-end (they
+// carry no bespoke logic to unit-test, like the notes/storage DataPages).
+// GrantsPage is a custom REBAC view, so it is tested.
 const sdkMocks = vi.hoisted(() => ({
   grants: {
     data: undefined as unknown,

@@ -141,6 +141,7 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "angee.mcp.apps.McpConfig",
         "angee.operator.apps.OperatorConfig",
         "angee.agents.apps.AgentsConfig",
+        "angee.iam_integrate_oidc.apps.IAMIntegrateOidcConfig",
         "example.notes.apps.NotesConfig",
     ]
 

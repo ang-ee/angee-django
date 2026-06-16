@@ -1,4 +1,4 @@
-"""Credential kind registry for IAM connection secrets.
+"""Credential kind registry for connection secrets.
 
 This registry is the seam for future credential kinds such as ``vault_ref``:
 add a new ``CredentialKindHandler`` subclass that owns that material shape and
@@ -15,7 +15,7 @@ from typing import Any, ClassVar
 from django.db import models
 from django.utils import timezone
 
-from angee.iam.oidc import client as oidc_client
+from angee.integrate.oauth.client import OAuthClientProtocol
 
 
 class CredentialKind(models.TextChoices):
@@ -152,8 +152,8 @@ class OAuthCredentialHandler(CredentialKindHandler):
         The provider may rotate the refresh token; a returned one replaces the stored one
         (otherwise the existing one is kept). ``credential`` is reloaded from the persisted
         row so a caller reading :meth:`secret_value` next sees the fresh token. Does not
-        lock or re-check freshness — :meth:`iam.Credential.ensure_fresh` serializes
-        concurrent refreshes; raises (``OidcFlowError``/``ValueError``) when the grant is
+        lock or re-check freshness — :meth:`integrate.Credential.ensure_fresh` serializes
+        concurrent refreshes; raises (``OAuthFlowError``/``ValueError``) when the grant is
         rejected or no refresh token is stored.
         """
 
@@ -162,7 +162,7 @@ class OAuthCredentialHandler(CredentialKindHandler):
         oauth_client = getattr(credential, "oauth_client", None)
         if oauth_client is None or not refresh_value:
             raise ValueError("OAuth credential has no refresh token to renew from.")
-        tokens = oidc_client.refresh_token(oauth_client, refresh_token=refresh_value)
+        tokens = OAuthClientProtocol(oauth_client).refresh_token(refresh_token=refresh_value)
         # The response fully describes the new token; only carry the refresh token forward
         # when the provider didn't rotate it (so a one-time token isn't dropped) — never the
         # old token's ``expires_in``/``scope``, which describe the token being replaced.

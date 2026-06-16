@@ -193,10 +193,32 @@ Rules that follow from the layering:
 - Cross-addon dependencies are one-way (e.g. `integrate → iam`, never the
   reverse); reject a bridge/diamond addon that would couple both ways.
 - GraphQL authoring is native Strawberry. Addons expose a `schemas` mapping in
-  conventional `schema.py` modules. Each named schema contributes Strawberry
-  types into fixed buckets (`query`, `mutation`, `subscription`, `types`,
-  `extensions`); Angee merges buckets across addons and builds one Strawberry
+  conventional `schema.py` modules. Each named schema contributes into fixed
+  buckets (`query`, `mutation`, `subscription`, `types`, `extensions`,
+  `type_extensions`); Angee merges buckets across addons and builds one Strawberry
   `Schema` per name.
+- **GraphQL types and enums bind to the composed *runtime* model, never the
+  abstract source class.** Resolve the model with `apps.get_model("app", "Model")`
+  (the concrete emitted class), not `from app.models import Model` (the abstract
+  source); the runtime class is the post-composition source of truth for fields,
+  relations, and choices. A registry-backed enum (`ImplClassField`) is read off the
+  runtime field, so the GraphQL enum already reflects every addon's contributions.
+- **Extension is symmetric across three axes — extend, never edit the owner — and
+  the schema is built after the runtime is composed, so all three apply
+  post-composition with the dependency staying one-way (downstream reaches up; the
+  upstream never references down).** Add a *field* to another addon's model with an
+  `extends = "app.Model"` source model; add a *value* to an open enum with an
+  `ImplClassField` registry (settings-keyed, one impl class per key — use it only
+  when each key has genuinely distinct implementation code, not as a workaround for
+  a closed `TextChoices`); add a *field onto another addon's GraphQL type* with
+  `@extends_type(UpstreamType)` on a `strawberry_django.type` bound to the same
+  runtime model, listed in the `type_extensions` bucket — the composer merges its
+  fields onto the target and strawberry-django resolves any relation projection
+  from its model registry (e.g. `iam_integrate_oidc` adds `OAuthClientType.oidc`
+  without `integrate` importing it). A type extension is global-additive, like a
+  model `extends`: the field lands on the target wherever it appears (the bucket
+  only gates registration), so reference a field type that some bucket lacks and
+  that bucket's build fails loudly rather than leaking.
 - Use symbolic model references across addon boundaries; avoid import cycles.
 - Build output must be byte-deterministic.
 
@@ -297,7 +319,7 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 - **OAuth/OIDC outbound requests must send an honest, non-browser User-Agent.**
   Anthropic's token-endpoint edge 429s spoofed browser/curl User-Agents with a
   `rate_limit_error` (before any auth check) and 403s urllib's `Python-urllib`
-  default; an honest client UA passes. `angee.iam.oidc.client` owns the value
+  default; an honest client UA passes. `angee.integrate.oauth.client` owns the value
   (`_USER_AGENT`); never reintroduce a browser spoof or fall back to urllib's
   default.
 - **An `ImplClassField` builds its enum at model-import time from its

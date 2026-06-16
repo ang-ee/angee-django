@@ -32,7 +32,7 @@ from angee.agents.models import Agent as AbstractAgent
 from angee.agents.models import MCPServer as AbstractMCPServer
 from angee.agents.models import MCPTool as AbstractMCPTool
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.iam.credentials import CredentialKind
+from angee.integrate.credentials import CredentialKind
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,
@@ -540,7 +540,7 @@ def test_render_view_context_never_previews_encrypted_secret(agents_console_tabl
             name="leaky-cred",
             material={"api_key": "SUPER-SECRET-XYZ"},
         )
-        view = {"kind": "record", "type": "auth/credential", "sqid": str(credential.sqid)}
+        view = {"kind": "record", "type": "integrate/credential", "sqid": str(credential.sqid)}
         rendered = render_view_context(view)
 
     assert str(credential.sqid) in rendered  # the row IS previewed (name, kind, …)

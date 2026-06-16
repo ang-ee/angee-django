@@ -1,5 +1,9 @@
-import { Alert, Button, Spinner, safeRedirectPath } from "@angee/base";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+
+import { Alert } from "../ui/alert";
+import { Button } from "../ui/button";
+import { Spinner } from "../ui/spinner";
+import { safeRedirectPath } from "./safe-redirect";
 
 /**
  * Outcome a flow derives from its completion payload: `ok` redirects to `next`
@@ -59,8 +63,9 @@ const completionRequests = new Map<string, Promise<CallbackOutcome>>();
 /**
  * Shared OAuth/OIDC redirect handler: reads `code`/`state` (or a provider
  * `error`) from the URL, exchanges the code exactly once, then redirects on
- * success or renders the error frame. Both the sign-in and account-connect
- * callbacks render this with their own `complete` and `copy`.
+ * success or renders the error frame. The sign-in (`@angee/iam`) and
+ * account-connect (`@angee/integrate`) callbacks render this with their own
+ * `complete` and `copy`.
  */
 export function OAuthCallback({
   redirectUri,

@@ -35,8 +35,14 @@ from angee.graphql.crud import crud
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
-from angee.iam.schema import CredentialType, UserType
-from angee.integrate.schema import IntegrationType, SourceType, TemplateType, VendorType
+from angee.iam.schema import UserType
+from angee.integrate.schema import (
+    CredentialType,
+    IntegrationType,
+    SourceType,
+    TemplateType,
+    VendorType,
+)
 from angee.operator.daemon import OperatorDaemon
 
 InferenceProvider = apps.get_model("agents", "InferenceProvider")
