@@ -54,7 +54,7 @@ dev = [
 [tool.uv.sources]
 # Developing against the local django-zed-rebac checkout while a create-gating fix
 # lands; switch back to the published pin once it ships.
-django-zed-rebac = { path = "/Users/alexis/Work/angee/django-zed-rebac", editable = true }
+# django-zed-rebac = { path = "../django-zed-rebac", editable = true }
 
 [tool.hatch.build.targets.wheel]
 # Two source roots merge into the one `angee` PEP 420 namespace: the framework
