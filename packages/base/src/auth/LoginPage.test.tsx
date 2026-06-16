@@ -54,11 +54,12 @@ describe("LoginPage", () => {
 
     render(
       <Wrapper>
-        <LoginPage />
+        <LoginPage showAtmosphere={false} />
       </Wrapper>,
     );
 
     expect(screen.getByRole("heading", { name: "Sign in" })).toBeTruthy();
+    expect(screen.getByTestId("angee-logo-cube")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Forgot your password?" })).toBeTruthy();
     expect(screen.getByText("Demo users")).toBeTruthy();
   });

@@ -2,6 +2,7 @@ import type { ReactElement, ReactNode } from "react";
 
 import { useBaseT } from "../i18n";
 import { cn } from "../lib/cn";
+import { useThemePreference, type ThemePreference } from "../lib/theme";
 import { useChatter } from "../communication/chatter-context";
 import { Button } from "../ui/button";
 import { Tooltip } from "../ui/tooltip";
@@ -18,6 +19,7 @@ export interface TopBarProps {
   brand?: ReactNode;
   hideSearch?: boolean;
   hideSystray?: boolean;
+  hideThemeToggle?: boolean;
   menuItems?: TopMenuProps["items"];
   onHelp?: () => void;
   onNotifications?: () => void;
@@ -34,6 +36,7 @@ export function TopBar({
   brand,
   hideSearch = false,
   hideSystray = false,
+  hideThemeToggle = false,
   menuItems,
   onHelp,
   onNotifications,
@@ -68,6 +71,7 @@ export function TopBar({
       {hideSystray ? null : (
         <Systray onHelp={onHelp} onNotifications={onNotifications} />
       )}
+      {hideThemeToggle ? null : <ThemeToggleButton />}
       {showUserMenu ? (
         <UserMenu
           className="size-icon-btn-md rounded-md border-0"
@@ -79,6 +83,32 @@ export function TopBar({
       {trailing}
       {showChatterToggle ? <ChatterToggleButton /> : null}
     </header>
+  );
+}
+
+function ThemeToggleButton(): ReactElement {
+  const t = useBaseT();
+  const { resolved, setPreference } = useThemePreference();
+  const next: ThemePreference = resolved === "dark" ? "light" : "dark";
+  const label =
+    next === "dark"
+      ? t("chrome.switchToDarkTheme")
+      : t("chrome.switchToLightTheme");
+
+  return (
+    <Tooltip label={label}>
+      <Button
+        type="button"
+        variant="icon"
+        size="iconSm"
+        aria-label={label}
+        aria-pressed={resolved === "dark"}
+        onClick={() => setPreference(next)}
+        className="text-on-rail-mut hover:bg-rail-hi hover:text-on-rail-hi"
+      >
+        <Glyph name={next === "dark" ? "moon" : "sun"} />
+      </Button>
+    </Tooltip>
   );
 }
 

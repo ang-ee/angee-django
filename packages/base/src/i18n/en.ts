@@ -133,6 +133,8 @@ export const enBaseMessages: Record<string, string> = {
   "chrome.signOut": "Sign out",
   "chrome.breadcrumb": "Breadcrumb",
   "chrome.topBar": "Workspace top bar",
+  "chrome.switchToDarkTheme": "Switch to dark mode",
+  "chrome.switchToLightTheme": "Switch to light mode",
   "chrome.primaryNav": "Primary navigation",
   "chrome.collapseChatter": "Collapse chatter",
   "chrome.openChatter": "Open chatter",

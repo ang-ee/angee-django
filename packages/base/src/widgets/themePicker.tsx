@@ -1,51 +1,37 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { useEffect, type ReactElement } from "react";
 
 import { cn } from "../lib/cn";
+import {
+  applyThemePreference,
+  normaliseThemePreference,
+  useThemePreference,
+  type ThemePreference,
+} from "../lib/theme";
 import { widgetLabel } from "./label";
 import type { WidgetDefinition, WidgetRenderProps } from "./types";
 
-type ThemeValue = "light" | "dark" | "system";
-
-const THEME_STORAGE_KEY = "angee:theme";
 const THEME_OPTIONS = [
   { value: "light", label: "Light" },
   { value: "dark", label: "Dark" },
   { value: "system", label: "System" },
-] satisfies readonly { value: ThemeValue; label: string }[];
+] satisfies readonly { value: ThemePreference; label: string }[];
 
 function ThemePickerEdit({
   value,
   onChange,
   field,
   readOnly,
-}: WidgetRenderProps<ThemeValue>): ReactElement {
-  const [storedTheme, setStoredTheme] = useState<ThemeValue>("system");
-  const theme = normaliseTheme(value) ?? storedTheme;
+}: WidgetRenderProps<ThemePreference>): ReactElement {
+  const { preference, setPreference, system } = useThemePreference();
+  const theme = normaliseThemePreference(value) ?? preference;
 
   useEffect(() => {
-    const initial = storedThemeValue();
-    setStoredTheme(initial);
-    applyTheme(initial);
-  }, []);
+    applyThemePreference(theme);
+  }, [theme, system]);
 
-  useEffect(() => {
-    applyTheme(theme);
-  }, [theme]);
-
-  useEffect(() => {
-    if (theme !== "system" || typeof window === "undefined") return;
-    const query = window.matchMedia?.("(prefers-color-scheme: dark)");
-    if (!query) return;
-    const update = () => applyTheme("system");
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }, [theme]);
-
-  function selectTheme(next: ThemeValue): void {
+  function selectTheme(next: ThemePreference): void {
     if (readOnly) return;
-    setStoredTheme(next);
-    persistTheme(next);
-    applyTheme(next);
+    setPreference(next);
     onChange?.(next);
   }
 
@@ -84,8 +70,8 @@ function ThemePickerEdit({
 
 function ThemePickerRead({
   value,
-}: WidgetRenderProps<ThemeValue>): ReactElement {
-  const theme = normaliseTheme(value) ?? "system";
+}: WidgetRenderProps<ThemePreference>): ReactElement {
+  const theme = normaliseThemePreference(value) ?? "system";
   const label =
     THEME_OPTIONS.find((item) => item.value === theme)?.label ?? "System";
   return (
@@ -106,40 +92,9 @@ export const themePickerWidget = {
   edit: ThemePickerEdit,
   read: ThemePickerRead,
   cell: ThemePickerRead,
-} satisfies WidgetDefinition<ThemeValue>;
+} satisfies WidgetDefinition<ThemePreference>;
 
-function normaliseTheme(value: string | null | undefined): ThemeValue | null {
-  return value === "light" || value === "dark" || value === "system"
-    ? value
-    : null;
-}
-
-function storedThemeValue(): ThemeValue {
-  if (typeof window === "undefined") return "system";
-  return (
-    normaliseTheme(window.localStorage.getItem(THEME_STORAGE_KEY)) ?? "system"
-  );
-}
-
-function persistTheme(value: ThemeValue): void {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(THEME_STORAGE_KEY, value);
-}
-
-function applyTheme(value: ThemeValue): void {
-  if (typeof document === "undefined") return;
-  document.documentElement.dataset.theme = resolvedTheme(value);
-}
-
-function resolvedTheme(value: ThemeValue): "light" | "dark" {
-  if (value !== "system") return value;
-  if (typeof window === "undefined") return "light";
-  return window.matchMedia?.("(prefers-color-scheme: dark)").matches
-    ? "dark"
-    : "light";
-}
-
-function swatchClass(value: ThemeValue): string {
+function swatchClass(value: ThemePreference): string {
   if (value === "dark") return "bg-fg";
   if (value === "system") {
     return "bg-[linear-gradient(135deg,var(--color-fg)_0_50%,var(--color-sheet)_50%_100%)]";

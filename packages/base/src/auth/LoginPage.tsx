@@ -379,23 +379,23 @@ function DefaultCardHeader({
   }
 
   return (
-    <div className="mb-8 flex items-start gap-4">
-      <span
-        className="grid size-11 shrink-0 place-content-center rounded-md border border-border-subtle bg-inset/80 shadow-sm"
+    <div className="mb-8 grid grid-cols-[4rem_minmax(0,1fr)] items-start gap-4 text-left">
+      <div
+        className="pointer-events-none grid size-16 p-2"
         aria-hidden="true"
       >
-        <AngeeLogo
-          aria-hidden="true"
-          preset="gold"
-          geometry="full"
-          bgColor={null}
-          size={24}
-          width={24}
-          height={24}
+        <AngeeLogoCube
+          size={9}
+          gap={0.75}
+          leftColor="#9A7D0A"
+          rightColor="#E6B400"
+          baseDark="#FCD34D"
+          animationSpeed={18}
+          animationType="rotate"
         />
-      </span>
-      <div className="min-w-0 pt-0.5">
-        <p className="mb-1 text-base font-semibold leading-none text-fg">
+      </div>
+      <div className="min-w-0 pt-1">
+        <p className="mb-2 text-base font-semibold leading-none text-fg">
           Angee
         </p>
         <h1 className="text-28 font-semibold leading-tight text-fg">

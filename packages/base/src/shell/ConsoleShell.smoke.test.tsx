@@ -13,6 +13,7 @@ import { useMemo, type ReactNode, type SVGProps } from "react";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
 import { parseFlatSearch, stringifyFlatSearch } from "../createApp";
+import { setThemePreference, storedThemePreference } from "../lib/theme";
 import { ConsoleShell } from "./ConsoleShell";
 import { ControlBand } from "./ControlBand";
 import { useChatterContent } from "../communication";
@@ -101,7 +102,11 @@ describe("ConsoleShell", () => {
   beforeAll(() => {
     Element.prototype.getAnimations ??= () => [];
   });
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+    setThemePreference("system");
+    document.documentElement.removeAttribute("data-theme");
+  });
 
   test("composes rail navigation, top chrome, breadcrumbs, content, and chatter", async () => {
     renderInRouter(
@@ -127,6 +132,9 @@ describe("ConsoleShell", () => {
     expect(within(topBar).queryByText("Ops")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Open command palette" }),
+    ).toBeTruthy();
+    expect(
+      within(topBar).getByRole("button", { name: "Switch to dark mode" }),
     ).toBeTruthy();
 
     const breadcrumb = screen.getByRole("navigation", { name: "Breadcrumb" });
@@ -155,6 +163,23 @@ describe("ConsoleShell", () => {
     // Lands in the shell's control row, not inline in the content area.
     expect(control?.contains(button)).toBe(true);
     expect(screen.getByRole("main").contains(button)).toBe(false);
+  });
+
+  test("toggles the document theme from the top bar", async () => {
+    renderInRouter(
+      <ConsoleShell title="Notes" icon="file">
+        <section aria-label="Page body">Body content</section>
+      </ConsoleShell>,
+    );
+    await screen.findByText("Body content");
+
+    fireEvent.click(screen.getByRole("button", { name: "Switch to dark mode" }));
+
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(storedThemePreference()).toBe("dark");
+    expect(
+      screen.getByRole("button", { name: "Switch to light mode" }),
+    ).toBeTruthy();
   });
 
   test("leaves the area-control row empty when no ControlBand is mounted", async () => {
