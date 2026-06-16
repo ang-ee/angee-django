@@ -12,7 +12,8 @@ import knowledge from "@angee/knowledge";
 import operator from "@angee/operator";
 import storage from "@angee/storage";
 
-import futureCityUrl from "../../../../assets/backgrounds/angee-future-city.png";
+// import futureCityUrl from "../../../../assets/backgrounds/angee-future-city.png";
+import childrenFutureUrl from "../../../../assets/backgrounds/angee-children-future.png";
 import publicSDL from "../../runtime/schemas/public.graphql?raw";
 import consoleSDL from "../../runtime/schemas/console.graphql?raw";
 import { DemoForgotPasswordHint } from "./demo-auth";
@@ -28,7 +29,7 @@ const authAddon = defineBaseAddon({
       component: () => (
         <LoginPage
           redirectTo="/notes"
-          backgroundImageUrl={futureCityUrl}
+          backgroundImageUrl={childrenFutureUrl}
           passwordHelp={<DemoForgotPasswordHint />}
         />
       ),
