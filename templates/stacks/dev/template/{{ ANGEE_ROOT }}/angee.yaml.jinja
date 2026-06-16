@@ -156,24 +156,17 @@ jobs:
     depends_on: [deps, operator-schema]
 
 services:
-  # uvicorn serves the stable Angee ASGI entrypoint. Unlike Daphne's runserver it
-  # sends the ASGI lifespan that starts the MCP mount's session manager (see
-  # angee.asgi). --reload watches the workdir (the project source). When the
-  # project lives *under* the framework checkout (the monorepo layout), we also
-  # watch the framework's `angee`/`addons` so editing framework source hot-reloads
-  # too: both paths are manifest-relative, so the hop from the app workdir up to the
-  # framework root is `../` per project segment below it (e.g. project
-  # `examples/notes-angee` → `../../`). A consumer whose project is not under the
-  # framework gets plain workdir watching. (uvicorn ignores the cwd once any
-  # --reload-dir is given, so the app dir `.` is listed explicitly.)
-  {%- set _proj = project_path.split('/') %}
-  {%- set _fw = framework_path.split('/') %}
-  {%- set _under = _proj | length > _fw | length and _proj[:_fw | length] == _fw %}
-  {%- set _up = '../' * (_proj | length - _fw | length) %}
+  # Angee overrides `runserver` to serve angee.asgi with uvicorn (keeping the ASGI
+  # lifespan the MCP mount's session manager needs — see angee.asgi) under Django's
+  # own follow-imports autoreloader. That watches every imported source file —
+  # consumer addons, base addons, framework core, and editable deps — with no
+  # `--reload-dir` math, and never the generated runtime/ tree (the emit happens
+  # during each child's boot, before its reloader snapshots), so a model edit
+  # reloads once. The boot also regenerates the GraphQL SDL (Vite then HMRs).
   django:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "uvicorn", "angee.asgi:application", "--host", "127.0.0.1", "--port", "{{ django_port }}", "--reload"{% if _under %}, "--reload-dir", ".", "--reload-dir", "{{ _up }}angee", "--reload-dir", "{{ _up }}addons"{% endif %}]
+    command: ["uv", "run", "python", "manage.py", "runserver", "127.0.0.1:{{ django_port }}"]
     env:
       ANGEE_PROJECT_DIR: "."
       # Django mints the browser's scoped connection token over the daemon's direct

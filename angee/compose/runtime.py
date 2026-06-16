@@ -24,6 +24,7 @@ from django.utils.module_loading import module_has_submodule
 
 from angee.base.mixins import HistoryMixin, ModelDecorator
 from angee.base.models import AngeeModel
+from angee.fs import write_atomic
 
 GENERATED_SENTINEL = "# ANGEE GENERATED RUNTIME - DO NOT EDIT"
 """Sentinel required before destructive runtime cleanup."""
@@ -173,7 +174,7 @@ class Runtime:
         """Write every rendered source file, creating parents as needed."""
 
         for relative_path, text in self.render_sources().items():
-            self._write(self.runtime_dir / relative_path, text)
+            write_atomic(self.runtime_dir / relative_path, text)
 
     def is_current(self) -> bool:
         """Return whether the on-disk runtime matches the rendered sources."""
@@ -575,14 +576,6 @@ class Runtime:
             path.is_file() and self._is_preserved_migration_path(path)
             for path in self.runtime_dir.rglob("*")
         )
-
-    def _write(self, path: Path, text: str) -> None:
-        """Write ``text`` to ``path``, creating parents first."""
-
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists() and path.read_text(encoding="utf-8") == text:
-            return
-        path.write_text(text, encoding="utf-8")
 
     def _class_import(
         self,

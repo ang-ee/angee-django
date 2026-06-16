@@ -112,6 +112,27 @@ Send = Callable[[MutableMapping[str, Any]], Awaitable[None]]
 ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
 
 
+def _emit_dev_sdl() -> None:
+    """Regenerate the generated GraphQL SDL once per dev-serve worker boot.
+
+    Only the dev ``runserver`` path sets ``ANGEE_DEV_SDL=1`` (a production serve
+    leaves the runtime image untouched), so this is a no-op everywhere else. It
+    runs at ASGI-import time, after :func:`get_asgi_application` has populated the
+    app registry, so the concrete models the SDL introspects are imported. The
+    GraphQL owner is imported lazily so a production serve never loads strawberry
+    here. Management commands (``schema --check``/``angee build --check``/tests)
+    never import this module, so their drift gates stay live.
+    """
+
+    if os.environ.get("ANGEE_DEV_SDL") != "1":
+        return
+    # Deferred: keep the GraphQL/strawberry stack off the no-op production-serve
+    # import path (the flag is set only by the dev `runserver` override).
+    from angee.graphql.sdl import GraphQLSdl
+
+    GraphQLSdl.from_discovery().emit_if_stale()
+
+
 def _application() -> Any:
     """Build the ASGI application after settings and apps are ready.
 
@@ -125,6 +146,7 @@ def _application() -> Any:
     """
 
     django_asgi_app = get_asgi_application()
+    _emit_dev_sdl()
     websocket_patterns = _websocket_urlpatterns()
     http_mounts = _http_mounts()
     if not websocket_patterns and not http_mounts:

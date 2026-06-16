@@ -255,7 +255,21 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 - **Regenerate the SDL after `angee build`** — re-run `manage.py schema`
   (+ `--check`). A missing `runtime/schemas/*.graphql` makes Vite ENOENT and the
   SPA silently fails to mount (every e2e fails at list load) while `:5173` still
-  returns 200; check `runtime/schemas/` before chasing app/test regressions.
+  returns 200; check `runtime/schemas/` before chasing app/test regressions. (The
+  dev server regenerates it for you — see the `runserver` pitfall — but a manual
+  `angee build` outside `angee dev` still needs the explicit `schema` step.)
+- **`angee dev` serves via Angee's `runserver` override, not `uvicorn --reload`.**
+  `angee.compose` ships a `runserver` that runs `ASGI_APPLICATION` under uvicorn
+  supervised by Django's follow-imports autoreloader (mirrors Daphne's override).
+  It needs no `--reload-dir`: Django watches imported source — consumer/base addons,
+  framework core, *and* editable deps — and never the generated `runtime/` (each
+  child re-emits before its reloader snapshots), so a model edit reloads once. Don't
+  reintroduce `uvicorn --reload`/`--reload-dir` heuristics in the stack template. The
+  boot regenerates the SDL when `ANGEE_DEV_SDL=1` (set only by that command), so a
+  live edit refreshes `runtime/schemas/*.graphql` and Vite HMRs; `schema --check`
+  stays a real drift gate because management commands never import `angee.asgi`.
+  Generated files (runtime models + SDL) are written atomically via
+  `angee.fs.write_atomic`. Install `pywatchman` for event-based (vs 1s-poll) reload.
 - **`makemigrations` must name every changed app** — include `resources` (and
   `base`) or `resources load` fails with `no such table: resources_resource`.
 - **A resource yaml loads only when listed** in the addon's `AppConfig.resources`
