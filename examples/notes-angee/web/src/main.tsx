@@ -12,12 +12,22 @@ import knowledge from "@angee/knowledge";
 import operator from "@angee/operator";
 import storage from "@angee/storage";
 
-// import futureCityUrl from "../../../../assets/backgrounds/angee-future-city.png";
-import childrenFutureUrl from "../../../../assets/backgrounds/angee-children-future.png";
 import publicSDL from "../../runtime/schemas/public.graphql?raw";
 import consoleSDL from "../../runtime/schemas/console.graphql?raw";
 import { DemoForgotPasswordHint } from "./demo-auth";
 import "./index.css";
+
+const loginBackgroundUrls = Object.entries(
+  import.meta.glob<string>("../../../../assets/backgrounds/*.{avif,jpeg,jpg,png,webp}", {
+    eager: true,
+    import: "default",
+    query: "?url",
+  }),
+)
+  .sort(([left], [right]) => left.localeCompare(right))
+  .map(([, url]) => url);
+
+const loginBackgroundImageUrl = pickRandomLoginBackgroundUrl(loginBackgroundUrls);
 
 const authAddon = defineBaseAddon({
   id: "auth",
@@ -29,7 +39,7 @@ const authAddon = defineBaseAddon({
       component: () => (
         <LoginPage
           redirectTo="/notes"
-          backgroundImageUrl={childrenFutureUrl}
+          backgroundImageUrl={loginBackgroundImageUrl}
           passwordHelp={<DemoForgotPasswordHint />}
         />
       ),
@@ -56,3 +66,8 @@ createApp({
   defaultSchema: "console",
   home: "/notes",
 }).mount("#root");
+
+function pickRandomLoginBackgroundUrl(urls: readonly string[]): string | undefined {
+  if (urls.length === 0) return undefined;
+  return urls[Math.floor(Math.random() * urls.length)];
+}
