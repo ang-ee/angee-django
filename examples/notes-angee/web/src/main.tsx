@@ -4,6 +4,7 @@ import {
   createApp,
   defineBaseAddon,
 } from "@angee/base";
+import { useEffect, useState } from "react";
 import notes from "@angee-example/notes-web";
 import agents from "@angee/agents";
 import iam from "@angee/iam";
@@ -17,6 +18,8 @@ import consoleSDL from "../../runtime/schemas/console.graphql?raw";
 import { DemoForgotPasswordHint } from "./demo-auth";
 import "./index.css";
 
+const LOGIN_BACKGROUND_ROTATION_MS = 15_000;
+
 const loginBackgroundUrls = Object.entries(
   import.meta.glob<string>("../../../../assets/backgrounds/*.{avif,jpeg,jpg,png,webp}", {
     eager: true,
@@ -27,8 +30,6 @@ const loginBackgroundUrls = Object.entries(
   .sort(([left], [right]) => left.localeCompare(right))
   .map(([, url]) => url);
 
-const loginBackgroundImageUrl = pickRandomLoginBackgroundUrl(loginBackgroundUrls);
-
 const authAddon = defineBaseAddon({
   id: "auth",
   routes: [
@@ -36,13 +37,7 @@ const authAddon = defineBaseAddon({
       name: "auth.login",
       path: "/login",
       shell: "public",
-      component: () => (
-        <LoginPage
-          redirectTo="/notes"
-          backgroundImageUrl={loginBackgroundImageUrl}
-          passwordHelp={<DemoForgotPasswordHint />}
-        />
-      ),
+      component: LoginRoute,
     },
   ],
 });
@@ -67,7 +62,41 @@ createApp({
   home: "/notes",
 }).mount("#root");
 
-function pickRandomLoginBackgroundUrl(urls: readonly string[]): string | undefined {
+function LoginRoute() {
+  const [backgroundImageUrl, setBackgroundImageUrl] = useState(() =>
+    pickRandomLoginBackgroundUrl(loginBackgroundUrls),
+  );
+
+  useEffect(() => {
+    if (loginBackgroundUrls.length < 2) return undefined;
+
+    const interval = window.setInterval(() => {
+      setBackgroundImageUrl((current) =>
+        pickRandomLoginBackgroundUrl(loginBackgroundUrls, current),
+      );
+    }, LOGIN_BACKGROUND_ROTATION_MS);
+
+    return () => window.clearInterval(interval);
+  }, []);
+
+  return (
+    <LoginPage
+      redirectTo="/notes"
+      backgroundImageUrl={backgroundImageUrl}
+      passwordHelp={<DemoForgotPasswordHint />}
+    />
+  );
+}
+
+function pickRandomLoginBackgroundUrl(
+  urls: readonly string[],
+  previousUrl?: string,
+): string | undefined {
   if (urls.length === 0) return undefined;
-  return urls[Math.floor(Math.random() * urls.length)];
+  if (urls.length === 1) return urls[0];
+
+  const candidates = previousUrl
+    ? urls.filter((url) => url !== previousUrl)
+    : urls;
+  return candidates[Math.floor(Math.random() * candidates.length)] ?? urls[0];
 }

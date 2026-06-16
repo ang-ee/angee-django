@@ -3,11 +3,11 @@ import type {
   BaseAddonRoute,
 } from "@angee/base";
 import { defineBaseAddon } from "@angee/base";
-import { Boxes } from "lucide-react";
 import { createElement, type ComponentType, type ReactNode } from "react";
 
 import { OperatorTransportProvider } from "./data/transport";
 import { enOperatorBundleForMenu, enOperatorMessages } from "./i18n";
+import { OperatorGlyph } from "./OperatorGlyph";
 import {
   GitOpsSection,
 } from "./views/sections/GitOpsSection";
@@ -165,7 +165,7 @@ const operator = defineBaseAddon({
       ...enOperatorMessages,
     },
   },
-  icons: { operator: Boxes },
+  icons: { operator: OperatorGlyph },
 });
 
 export default operator;

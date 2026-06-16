@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -22,6 +23,7 @@ export const AUTH_LOGIN_PAGE_FOOTER_SLOT = "auth.login.page-footer";
 export const AUTH_LOGIN_PASSWORD_HELP_SLOT = "auth.login.password-help";
 
 const HERO_SLIDE_KEYS = ["intent", "agentNative", "composable"] as const;
+const LOGIN_BACKDROP_FADE_MS = 1_000;
 
 export interface LoginPageProps {
   brand?: ReactNode;
@@ -280,16 +282,27 @@ function LoginVisualBackdrop({
   imageUrl?: string;
   showAtmosphere: boolean;
 }): ReactNode {
+  const {
+    currentImageUrl,
+    currentImageVisible,
+    previousImageUrl,
+  } = useFadingBackdropImage(imageUrl);
+
   return (
     <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
-      {imageUrl ? (
-        <div
-          className="absolute inset-0 bg-cover bg-center bg-no-repeat"
-          style={{ backgroundImage: `url("${imageUrl}")` }}
+      <div className="absolute inset-0 bg-[linear-gradient(135deg,#07111f,#123129_46%,#08101d)]" />
+      {previousImageUrl ? (
+        <LoginBackdropImageLayer imageUrl={previousImageUrl} />
+      ) : null}
+      {currentImageUrl ? (
+        <LoginBackdropImageLayer
+          imageUrl={currentImageUrl}
+          className={cn(
+            "transition-opacity duration-1000 ease-out motion-reduce:transition-none",
+            currentImageVisible ? "opacity-100" : "opacity-0",
+          )}
         />
-      ) : (
-        <div className="absolute inset-0 bg-[linear-gradient(135deg,#07111f,#123129_46%,#08101d)]" />
-      )}
+      ) : null}
       <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(4,9,18,0.72)_0%,rgba(4,9,18,0.18)_46%,rgba(4,9,18,0.48)_100%)]" />
       <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(4,9,18,0.08)_0%,rgba(4,9,18,0.12)_44%,rgba(4,9,18,0.58)_100%)]" />
       {showAtmosphere ? (
@@ -299,6 +312,55 @@ function LoginVisualBackdrop({
         </>
       ) : null}
     </div>
+  );
+}
+
+function useFadingBackdropImage(imageUrl?: string): {
+  currentImageUrl?: string;
+  currentImageVisible: boolean;
+  previousImageUrl?: string;
+} {
+  const currentImageUrlRef = useRef(imageUrl);
+  const [currentImageUrl, setCurrentImageUrl] = useState(imageUrl);
+  const [previousImageUrl, setPreviousImageUrl] = useState<string | undefined>();
+  const [currentImageVisible, setCurrentImageVisible] = useState(true);
+
+  useEffect(() => {
+    if (imageUrl === currentImageUrlRef.current) return undefined;
+
+    setPreviousImageUrl(currentImageUrlRef.current);
+    currentImageUrlRef.current = imageUrl;
+    setCurrentImageUrl(imageUrl);
+    setCurrentImageVisible(false);
+
+    const frame = window.requestAnimationFrame(() => {
+      setCurrentImageVisible(true);
+    });
+    const timeout = window.setTimeout(() => {
+      setPreviousImageUrl(undefined);
+    }, LOGIN_BACKDROP_FADE_MS);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timeout);
+    };
+  }, [imageUrl]);
+
+  return { currentImageUrl, currentImageVisible, previousImageUrl };
+}
+
+function LoginBackdropImageLayer({
+  className,
+  imageUrl,
+}: {
+  className?: string;
+  imageUrl: string;
+}): ReactNode {
+  return (
+    <div
+      className={cn("absolute inset-0 bg-cover bg-center bg-no-repeat", className)}
+      style={{ backgroundImage: `url("${imageUrl}")` }}
+    />
   );
 }
 
