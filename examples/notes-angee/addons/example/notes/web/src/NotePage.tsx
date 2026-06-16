@@ -45,6 +45,16 @@ const noteList = (
     list={GroupListView}
     defaultGroups={NOTE_DEFAULT_GROUPS}
     order={{ updatedAt: "DESC" }}
+    emptyState={{
+      icon: "agent",
+      title: "No notes yet",
+      description: "The agent isn't running yet — provision it to start chatting.",
+      action: {
+        label: "Set up your assistant",
+        href: "/agents",
+        icon: "agent",
+      },
+    }}
   >
     <Column field="title" />
     <Column field="tags" sortable={false} />

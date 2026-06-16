@@ -1,9 +1,11 @@
 import * as React from "react";
+import { Link } from "@tanstack/react-router";
 
 import { Glyph } from "../chrome/Glyph";
 import { EmptyState } from "../fragments/EmptyState";
 import { useBaseT, type BaseMessageVars } from "../i18n";
 import { cn } from "../lib/cn";
+import { buttonVariants } from "../ui/button";
 import { ScrollArea } from "../ui/scroll-area";
 import { Tabs } from "../ui/tabs";
 import {
@@ -181,6 +183,14 @@ function defaultTabs(
           icon="agent"
           title={t("chatter.noAgent")}
           description={t("chatter.agentHint")}
+          actions={
+            <Link
+              className={buttonVariants({ variant: "primary", size: "sm" })}
+              to="/agents"
+            >
+              {t("chatter.agentAction")}
+            </Link>
+          }
           className="min-h-48 p-4"
         />
       ),

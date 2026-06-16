@@ -15,9 +15,11 @@ import type { DataViewGroup } from "./data-view-model";
 import {
   LIST_VIEW_SCROLL_BUDGET,
   ListCellContent,
+  ListEmpty,
   readPath,
   type RowGroup,
 } from "./ListInternals";
+import type { ListEmptyContent } from "./list-view-types";
 import { columnTone } from "./page";
 import type { ColumnDescriptor } from "./page";
 
@@ -35,7 +37,7 @@ export interface BoardViewProps<TRow extends Row = Row> {
   selectedIds: ReadonlySet<string>;
   interactive: boolean;
   fetching?: boolean;
-  emptyMessage: React.ReactNode;
+  emptyMessage: ListEmptyContent;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
 }
@@ -78,7 +80,7 @@ function BoardRows<TRow extends Row>({
   fetching: boolean;
   groups: readonly RowGroup<TRow>[];
   groupStack: readonly DataViewGroup[];
-  emptyMessage: React.ReactNode;
+  emptyMessage: ListEmptyContent;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
 }): React.ReactElement {
@@ -94,7 +96,7 @@ function BoardRows<TRow extends Row>({
         />
       );
     }
-    return <div className="px-3 py-8 text-center text-fg-muted">{emptyMessage}</div>;
+    return <ListEmpty className="px-3 py-8">{emptyMessage}</ListEmpty>;
   }
   // Kanban is most useful with an active group axis; with no group-by applied a single lane is shown.
   // The board renders the current page only (bounded by the page-size cap, MAX_PAGE_SIZE), grouped into lanes; no row virtualization is used here.

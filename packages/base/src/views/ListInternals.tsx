@@ -2,6 +2,7 @@
 // `cellContent`, column building, and the group key/label helpers. Imports only
 // ui/sdk/page leaves so parent view modules can depend on it without a cycle.
 import * as React from "react";
+import { Link, useNavigate } from "@tanstack/react-router";
 import {
   flexRender,
   type Cell as TableCellModel,
@@ -12,7 +13,6 @@ import {
   type Table as TableModel,
 } from "@tanstack/react-table";
 import type { Virtualizer } from "@tanstack/react-virtual";
-import { useNavigate } from "@tanstack/react-router";
 import type {
   AggregateBucket,
   AggregateMeasure,
@@ -27,13 +27,14 @@ import { format, isValid, parseISO } from "date-fns";
 import { Spinner } from "../ui/spinner";
 
 import { Glyph } from "../chrome/Glyph";
+import { EmptyState } from "../fragments/EmptyState";
 import { useBaseT } from "../i18n";
 import { RelativeTime } from "../fragments/RelativeTime";
 import { cn } from "../lib/cn";
 import { dragSourceProps, type DndPayload, type DragSourceProps } from "../lib/dnd";
 import { titleCase } from "../lib/titleCase";
 import { Badge } from "../ui/badge";
-import { Button } from "../ui/button";
+import { Button, buttonVariants, type ButtonVariant } from "../ui/button";
 import { Checkbox, CheckboxVisual } from "../ui/checkbox";
 import { Chip } from "../ui/chip";
 import { DropdownMenu } from "../ui/dropdown-menu";
@@ -51,6 +52,11 @@ import {
 import { useResolvedWidget } from "../widgets";
 import type { DataViewContextValue } from "./data-view-context";
 import type { DataViewGroup } from "./data-view-model";
+import type {
+  ListEmptyAction,
+  ListEmptyContent,
+  ListEmptyState,
+} from "./list-view-types";
 import { columnTone } from "./page";
 import type {
   ColumnAggregate,
@@ -161,7 +167,7 @@ export interface FlatListBodyProps<TRow extends Row> {
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
   draggableRow?: (row: TRow) => DndPayload | null;
-  emptyMessage: React.ReactNode;
+  emptyMessage: ListEmptyContent;
   fetching: boolean;
   footerAggregate?: AggregateBucket | null;
 }
@@ -255,7 +261,7 @@ export function FlatListBody<TRow extends Row>({
                 colSpan={colSpan}
                 className="py-8 text-center text-fg-muted"
               >
-                {emptyMessage}
+                <ListEmpty>{emptyMessage}</ListEmpty>
               </TableCell>
             </TableRow>
           ) : (
@@ -1259,15 +1265,33 @@ function skeletonCellWidth(index: number): string {
   return widths[index % widths.length] ?? "w-2/3";
 }
 
-/** The centered, full-height empty body the non-table renderers (gallery,
- *  timeline, tree) share — a single line of muted text in the middle of the pane. */
+/** The centered empty body shared by the table, gallery, timeline, tree, and board views. */
 export function ListEmpty({
   children,
   className,
 }: {
-  children: React.ReactNode;
+  children: ListEmptyContent;
   className?: string;
 }): React.ReactElement {
+  if (isListEmptyState(children)) {
+    return (
+      <div
+        className={cn(
+          "grid h-full place-content-center text-center",
+          className,
+        )}
+      >
+        <EmptyState
+          actions={children.actions ?? renderListEmptyAction(children.action)}
+          className="min-h-0 p-6 shadow-none"
+          description={children.description}
+          icon={children.icon}
+          title={children.title}
+        />
+      </div>
+    );
+  }
+
   return (
     <div
       className={cn(
@@ -1278,6 +1302,52 @@ export function ListEmpty({
       {children}
     </div>
   );
+}
+
+function isListEmptyState(value: ListEmptyContent): value is ListEmptyState {
+  return (
+    typeof value === "object"
+    && value !== null
+    && !Array.isArray(value)
+    && !React.isValidElement(value)
+    && "title" in value
+  );
+}
+
+function renderListEmptyAction(
+  action: ListEmptyAction | undefined,
+): React.ReactNode {
+  if (!action) return null;
+  const variant: ButtonVariant = action.variant ?? "primary";
+  const content = (
+    <>
+      {typeof action.icon === "string" ? <Glyph name={action.icon} /> : action.icon}
+      {action.label}
+    </>
+  );
+  if (action.href) {
+    if (isInternalHref(action.href)) {
+      return (
+        <Link className={buttonVariants({ variant })} to={action.href}>
+          {content}
+        </Link>
+      );
+    }
+    return (
+      <a className={buttonVariants({ variant })} href={action.href}>
+        {content}
+      </a>
+    );
+  }
+  return (
+    <Button onClick={action.onClick} variant={variant}>
+      {content}
+    </Button>
+  );
+}
+
+function isInternalHref(href: string): boolean {
+  return href.startsWith("/") && !href.startsWith("//");
 }
 
 export function looksLikeDateField(field: string): boolean {

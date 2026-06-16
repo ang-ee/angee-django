@@ -38,6 +38,7 @@ import {
   SelectionBar,
   type ListColumn,
 } from "./ListInternals";
+import type { ListEmptyState } from "./list-view-types";
 import {
   activeFilterIdsFor,
   addCustomFilter as addCustomFilterToFilter,
@@ -65,6 +66,7 @@ export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   onListStateChange?: (state: ListViewState<TRow>) => void;
   rowHref?: (row: TRow) => string;
   emptyMessage?: React.ReactNode;
+  emptyState?: ListEmptyState;
   className?: string;
   selectable?: boolean;
   /** Controls rendered in the toolbar's leading slot, beside the filter. */
@@ -132,6 +134,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   onListStateChange,
   rowHref,
   emptyMessage = "No records.",
+  emptyState,
   className,
   selectable = false,
   toolbarActions,
@@ -142,6 +145,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
 }: RowsListViewProps<TRow> & {
   dataView: DataViewContextValue;
 }): React.ReactElement {
+  const emptyContent = emptyState ?? emptyMessage;
   const [layout, setLayout] = React.useState<RowLayout>("list");
   const handledDefaultGroupRef = React.useRef<DataViewGroup | null>(null);
   React.useEffect(() => {
@@ -301,6 +305,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
             }
             fetching={fetching}
             emptyMessage={emptyMessage}
+            emptyState={emptyState}
           />
         ) : (
           <FlatListBody
@@ -322,7 +327,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
             rowHref={rowHref}
             onRowClick={onRowClick}
             draggableRow={draggableRow}
-            emptyMessage={emptyMessage}
+            emptyMessage={emptyContent}
             fetching={fetching}
           />
         )}

@@ -9,6 +9,7 @@ import {
 } from "../lib/dnd";
 import { Tree, type TreeNode } from "../ui/tree";
 import { ListEmpty } from "./ListInternals";
+import type { ListEmptyState } from "./list-view-types";
 
 /**
  * The hierarchical View: flat `rows` carrying a self-referential `parent`
@@ -43,6 +44,8 @@ export interface TreeViewProps<
   onNodeDrop?: (nodeId: string, payload: DndPayload, row: TRow) => void;
   /** Shown centered when there are no nodes. */
   emptyMessage?: ReactNode;
+  /** Structured empty state shown when there are no nodes. */
+  emptyState?: ListEmptyState;
   className?: string;
 }
 
@@ -61,8 +64,10 @@ export function TreeView<TRow extends Record<string, unknown>>({
   canDropOnNode,
   onNodeDrop,
   emptyMessage = "No records.",
+  emptyState,
   className,
 }: TreeViewProps<TRow>): ReactElement {
+  const emptyContent = emptyState ?? emptyMessage;
   const rowsById = useMemo(
     () => new Map(rows.map((row) => [String(row[rowKey] ?? ""), row])),
     [rows, rowKey],
@@ -76,7 +81,7 @@ export function TreeView<TRow extends Record<string, unknown>>({
 
   if (nodes.length === 0) {
     return (
-      <ListEmpty className={cn("min-h-0 p-8", className)}>{emptyMessage}</ListEmpty>
+      <ListEmpty className={cn("min-h-0 p-8", className)}>{emptyContent}</ListEmpty>
     );
   }
 

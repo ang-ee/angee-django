@@ -104,7 +104,8 @@ export const enBaseMessages: Record<string, string> = {
   "chatter.noActivity": "No activity yet",
   "chatter.activityHint": "Record activity will appear here.",
   "chatter.noAgent": "No agent yet",
-  "chatter.agentHint": "Set up your assistant",
+  "chatter.agentHint": "The agent isn't running yet — provision it to start chatting.",
+  "chatter.agentAction": "Set up your assistant",
   // Chat surface primitives (communication/chat).
   "chat.composer.send": "send",
   "chat.composer.newline": "newline",

@@ -1,6 +1,7 @@
 import * as React from "react";
-import { Card, CardContent } from "@angee/base";
+import { Card, CardContent, EmptyState, buttonVariants } from "@angee/base";
 import { fromRelayGlobalId, useAuthoredMutation } from "@angee/sdk";
+import { Link } from "@tanstack/react-router";
 
 import { useAgentsT } from "../i18n";
 import {
@@ -65,7 +66,22 @@ export function AgentChatterPane({
     return <PaneMessage>{t("agents.chat.resolving")}</PaneMessage>;
   }
   if (session === null) {
-    return <PaneMessage>{t("agents.agent.chatUnavailable")}</PaneMessage>;
+    return (
+      <EmptyState
+        icon="agent"
+        title={t("agents.agent.noRunningAgent")}
+        description={t("agents.agent.chatUnavailable")}
+        actions={
+          <Link
+            className={buttonVariants({ variant: "primary", size: "sm" })}
+            to="/agents"
+          >
+            {t("agents.agent.setupAssistant")}
+          </Link>
+        }
+        className="min-h-48 p-4"
+      />
+    );
   }
   return <AgentChat agentId={session.agentId} view={liveView} modelHandle={session.modelHandle} />;
 }

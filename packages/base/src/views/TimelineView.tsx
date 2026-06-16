@@ -5,6 +5,7 @@ import type { Row } from "@angee/sdk";
 import { cn } from "../lib/cn";
 import { TimelineEntry } from "../fragments/TimelineEntry";
 import { ListEmpty, parseRowDate } from "./ListInternals";
+import type { ListEmptyState } from "./list-view-types";
 
 /**
  * The chronological View — rows bucketed by day (newest first), each rendered
@@ -26,6 +27,8 @@ export interface TimelineViewProps<TRow extends Row = Row> {
   renderEntry?: (row: TRow) => ReactNode;
   /** Shown centered when there are no dated rows. */
   emptyMessage?: ReactNode;
+  /** Structured empty state shown when there are no dated rows. */
+  emptyState?: ListEmptyState;
   className?: string;
 }
 
@@ -43,8 +46,10 @@ export function TimelineView<TRow extends Row = Row>({
   rowKey = "id" as keyof TRow & string,
   renderEntry,
   emptyMessage = "No records.",
+  emptyState,
   className,
 }: TimelineViewProps<TRow>): ReactElement {
+  const emptyContent = emptyState ?? emptyMessage;
   const groups = useMemo<DayGroup<TRow>[]>(() => {
     const dated = rows
       .map((row) => ({ row, date: parseRowDate(row[dateField]) }))
@@ -63,7 +68,7 @@ export function TimelineView<TRow extends Row = Row>({
   return (
     <div className={cn("flex-1 overflow-y-auto bg-canvas p-6", className)}>
       {groups.length === 0 ? (
-        <ListEmpty>{emptyMessage}</ListEmpty>
+        <ListEmpty>{emptyContent}</ListEmpty>
       ) : (
       <ol className="mx-auto flex max-w-3xl flex-col gap-6">
         {groups.map((group) => (

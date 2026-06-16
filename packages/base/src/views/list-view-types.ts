@@ -4,6 +4,7 @@ import type {
   Row,
   UseResourceListOptions,
 } from "@angee/sdk";
+import type { ButtonVariant } from "../ui/button";
 
 import type {
   DataToolbarFilterField,
@@ -12,6 +13,24 @@ import type {
 } from "../toolbars";
 import type { ListViewState } from "./data-view-surface";
 import type { ColumnDescriptor } from "./page";
+
+export interface ListEmptyAction {
+  label: ReactNode;
+  href?: string;
+  onClick?: () => void;
+  icon?: ReactNode | string;
+  variant?: ButtonVariant;
+}
+
+export interface ListEmptyState {
+  title: ReactNode;
+  description?: ReactNode;
+  icon?: ReactNode | string;
+  action?: ListEmptyAction;
+  actions?: ReactNode;
+}
+
+export type ListEmptyContent = ReactNode | ListEmptyState;
 
 // The lean list contract. Grouping-only props (e.g. defaultGroup) live on
 // GroupListViewProps so the flat ListView never advertises grouping it can't do.
@@ -46,6 +65,8 @@ export interface ListViewProps<TRow extends Row = Row> {
   rowHref?: (row: TRow) => string;
   /** Empty-state content shown when the list has no rows. */
   emptyMessage?: ReactNode;
+  /** Structured empty-state content, including an optional action. */
+  emptyState?: ListEmptyState;
   /** Class name applied to the collection renderer root. */
   className?: string;
 }

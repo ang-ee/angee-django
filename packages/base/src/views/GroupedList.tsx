@@ -49,6 +49,7 @@ import {
 import {
   ALIGN_CLASS,
   ListHeaderCell,
+  ListEmpty,
   ListLoadingFooter,
   ListSkeletonRows,
   RecordRow,
@@ -64,6 +65,7 @@ import {
   type VisibleFieldOption,
 } from "./ListInternals";
 import type { ColumnDescriptor } from "./page";
+import type { ListEmptyContent } from "./list-view-types";
 
 const GROUPED_LIST_ITEM_PAGE_SIZE = 20;
 
@@ -91,7 +93,7 @@ export interface GroupedListBodyProps<TRow extends Row> {
   interactive: boolean;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
-  emptyMessage: React.ReactNode;
+  emptyMessage: ListEmptyContent;
   modelMetadata?: ModelMetadata | null;
   onPagerStateChange: (state: GroupPagerState) => void;
 }
@@ -226,7 +228,7 @@ interface GroupLevelProps<TRow extends Row> extends GroupRenderProps<TRow> {
   page: number;
   pageSize: number;
   enabled: boolean;
-  emptyMessage: React.ReactNode;
+  emptyMessage: ListEmptyContent;
   regionId?: string;
   onPagerStateChange?: (state: GroupPagerState) => void;
 }
@@ -366,7 +368,7 @@ function GroupLevel<TRow extends Row>({
         depth={depth}
         className="py-8 text-center text-fg-muted"
       >
-        {depth === 0 ? emptyMessage : "No sub-groups."}
+        {depth === 0 ? <ListEmpty>{emptyMessage}</ListEmpty> : "No sub-groups."}
       </GroupLevelStatusBody>
     );
   }
@@ -561,7 +563,7 @@ interface GroupSectionProps<TRow extends Row> extends GroupRenderProps<TRow> {
   remainingAxes: readonly GroupByDimension[];
   remainingGroups: readonly DataViewGroup[];
   pageSize: number;
-  emptyMessage: React.ReactNode;
+  emptyMessage: ListEmptyContent;
   expanded: boolean;
   page: number;
   bodyId?: string;
@@ -719,7 +721,7 @@ interface BranchGroupSectionProps<TRow extends Row> extends GroupRenderProps<TRo
   pageSize: number;
   expanded: boolean;
   regionId: string;
-  emptyMessage: React.ReactNode;
+  emptyMessage: ListEmptyContent;
 }
 
 function BranchGroupSection<TRow extends Row>({

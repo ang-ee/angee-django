@@ -11,8 +11,10 @@ export const enAgentsMessages: Record<string, string> = {
   "agents.agent.provisioningInputs": "Provisioning inputs",
   "agents.agent.tabProvision": "Provision",
   "agents.agent.tabChat": "Chat",
+  "agents.agent.noRunningAgent": "No agent yet",
   "agents.agent.chatUnavailable":
     "The agent isn't running yet — provision it to start chatting.",
+  "agents.agent.setupAssistant": "Set up your assistant",
 
   // AgentChat — the live ACP chat surface (header, composer, settings cog).
   "agents.chat.title": "Agent",

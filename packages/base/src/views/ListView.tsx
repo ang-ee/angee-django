@@ -72,7 +72,12 @@ export type {
   ColumnAlign,
   ListColumn,
 } from "./ListInternals";
-export type { ListViewProps } from "./list-view-types";
+export type {
+  ListEmptyAction,
+  ListEmptyContent,
+  ListEmptyState,
+  ListViewProps,
+} from "./list-view-types";
 
 // GroupListView is a superset of the lean list: it owns the grouping-only
 // defaults (seeded here, their sole owner — DataPage just forwards them).
@@ -143,11 +148,13 @@ function ListViewBody<TRow extends Row = Row>({
   onListStateChange,
   rowHref,
   emptyMessage = "No records.",
+  emptyState,
   className,
   dataView,
 }: ListViewShellProps<TRow> & {
   dataView: DataViewContextValue;
 }): React.ReactElement {
+  const emptyContent = emptyState ?? emptyMessage;
   const modelMetadata = useModelMetadata(model);
   const resolvedColumns = React.useMemo(
     () => columnsWithMetadataDefaults(columns, modelMetadata),
@@ -394,7 +401,7 @@ function ListViewBody<TRow extends Row = Row>({
             interactive={interactive}
             rowHref={rowHref}
             onRowClick={onRowClick}
-            emptyMessage={emptyMessage}
+            emptyMessage={emptyContent}
             onPagerStateChange={handleGroupPagerStateChange}
           />
         ) : surface.list.error ? (
@@ -409,7 +416,7 @@ function ListViewBody<TRow extends Row = Row>({
             selectedIds={surface.selectedIds}
             interactive={interactive}
             fetching={surface.list.fetching}
-            emptyMessage={emptyMessage}
+            emptyMessage={emptyContent}
             rowHref={rowHref}
             onRowClick={onRowClick}
           />
@@ -434,7 +441,7 @@ function ListViewBody<TRow extends Row = Row>({
             interactive={interactive}
             rowHref={rowHref}
             onRowClick={onRowClick}
-            emptyMessage={emptyMessage}
+            emptyMessage={emptyContent}
             fetching={surface.list.fetching}
           />
         ) : (
@@ -455,7 +462,7 @@ function ListViewBody<TRow extends Row = Row>({
             interactive={interactive}
             rowHref={rowHref}
             onRowClick={onRowClick}
-            emptyMessage={emptyMessage}
+            emptyMessage={emptyContent}
             fetching={surface.list.fetching}
           />
         )}
