@@ -66,5 +66,9 @@ export type { OperatorSectionProps } from "./views/parts/OperatorSection";
 export { ServiceRow, ServicesSection } from "./views/sections/ServicesSection";
 export type { ServiceRowProps, ServicesSectionProps } from "./views/sections/ServicesSection";
 
+// The shared live service-log panel (structured `/logs/stream` socket + status),
+// so a provisioning addon embeds the same logs view as the operator console.
+export { ServiceLogs } from "./views/sections/logs";
+
 export { WorkspaceRow, WorkspacesSection } from "./views/sections/WorkspacesSection";
 export type { WorkspaceRowProps, WorkspacesSectionProps } from "./views/sections/WorkspacesSection";

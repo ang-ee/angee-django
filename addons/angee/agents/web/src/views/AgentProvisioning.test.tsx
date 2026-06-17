@@ -54,6 +54,9 @@ vi.mock("@angee/operator/runtime", () => ({
   ServiceRow: ({ name }: { name: string }) => (
     <section data-testid="service-row">{name}</section>
   ),
+  ServiceLogs: ({ name, title }: { name: string; title?: ReactNode }) => (
+    <section data-testid="service-logs" data-name={name}>{title}</section>
+  ),
   StateTag: ({ state }: { state: string }) => <span>{state}</span>,
   WorkspaceRow: ({ name }: { name: string }) => (
     <section data-testid="workspace-row">{name}</section>

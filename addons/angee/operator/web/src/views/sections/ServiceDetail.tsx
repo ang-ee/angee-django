@@ -18,7 +18,7 @@ import { SERVICE_ENDPOINT_QUERY } from "../../data/documents";
 import { useOperatorT } from "../../i18n";
 import { useOperatorSnapshot } from "../../data/transport";
 import { StateTag } from "../parts/StateTag";
-import { LogPanel, useServiceLogStream } from "./logs";
+import { ServiceLogs } from "./logs";
 import { ServiceActions, useServiceActions } from "./service-actions";
 
 interface ServiceEndpointData {
@@ -42,8 +42,6 @@ export function ServiceDetail(): ReactElement {
     variables: { name: name ?? "" },
     pause: !name,
   });
-  const logs = useServiceLogStream(name);
-
   const service = (snapshot?.services ?? []).find((candidate) => candidate.name === name) ?? null;
   const resolved = endpoint.data?.serviceEndpoint ?? null;
 
@@ -111,7 +109,7 @@ export function ServiceDetail(): ReactElement {
         </CardContent>
       </Card>
 
-      <LogPanel logs={logs} title={t("operator.services.detail.logs")} />
+      <ServiceLogs name={service.name} />
     </div>
   );
 }

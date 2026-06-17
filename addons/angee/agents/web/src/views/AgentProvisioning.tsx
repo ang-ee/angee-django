@@ -1,6 +1,7 @@
 import * as React from "react";
 import {
   OperatorTransportProvider,
+  ServiceLogs,
   ServiceRow,
   StateTag,
   WorkspaceRow,
@@ -41,19 +42,9 @@ interface NameVariables extends Record<string, unknown> {
   name: string;
 }
 
-interface ServiceLogsData {
-  onServiceLogs: string;
-}
-
 interface WorkspaceStatusData {
   onWorkspaceStatusChange: WorkspaceStatus;
 }
-
-const SERVICE_LOGS_SUBSCRIPTION = `
-  subscription AgentServiceLogs($name: String!) {
-    onServiceLogs(name: $name)
-  }
-`;
 
 const WORKSPACE_STATUS_SUBSCRIPTION = `
   subscription AgentWorkspaceStatus($name: String!) {
@@ -177,13 +168,12 @@ function AgentOperatorRuntime({
   lifecycle: string;
   workspace: string;
 }): React.ReactElement {
-  const runtime = useProvisionRuntime(workspace, service);
+  const runtime = useProvisionRuntime(workspace);
 
   return pane === "service" ? (
     <ServiceRuntimeView
       error={runtime.error}
       expectsService={expectsService}
-      log={runtime.serviceLog}
       service={service}
     />
   ) : (
@@ -237,12 +227,10 @@ function WorkspaceRuntimeView({
 function ServiceRuntimeView({
   error,
   expectsService,
-  log,
   service,
 }: {
   error: string;
   expectsService: boolean;
-  log: string;
   service: string;
 }): React.ReactElement {
   const t = useAgentsT();
@@ -251,10 +239,13 @@ function ServiceRuntimeView({
     <div className="flex flex-col gap-4">
       {error ? <p className="text-13 text-danger-text">{error}</p> : null}
       {service ? (
-        <ServiceRow
-          emptyMessage={t("agents.provisioning.activityWaitingService")}
-          name={service}
-        />
+        <>
+          <ServiceRow
+            emptyMessage={t("agents.provisioning.activityWaitingService")}
+            name={service}
+          />
+          <ServiceLogs name={service} title={t("agents.provisioning.serviceLogs")} />
+        </>
       ) : (
         <p className="text-13 text-fg-muted">
           {expectsService
@@ -262,10 +253,6 @@ function ServiceRuntimeView({
             : t("agents.provisioning.none")}
         </p>
       )}
-      <LogPanel
-        log={log}
-        title={t("agents.provisioning.serviceLogs")}
-      />
     </div>
   );
 }
@@ -335,69 +322,25 @@ function SourceStatusTable({
   );
 }
 
-function LogPanel({
-  log,
-  title,
-}: {
-  log: string;
-  title: string;
-}): React.ReactElement {
-  const t = useAgentsT();
-
-  return (
-    <div className="rounded-md border border-border-subtle bg-inset">
-      <div className="border-b border-border-subtle px-3 py-2 text-13 font-medium text-fg">
-        {title}
-      </div>
-      <pre className="max-h-72 min-h-24 overflow-auto whitespace-pre-wrap px-3 py-2 font-mono text-13 leading-relaxed text-fg-muted">
-        {tailLog(log) || t("agents.provisioning.logsWaiting")}
-      </pre>
-    </div>
-  );
-}
-
-function useProvisionRuntime(workspace: string, service: string): {
+function useProvisionRuntime(workspace: string): {
   error: string;
-  serviceLog: string;
   workspaceStatus: WorkspaceStatus | null;
 } {
-  const [serviceLog, setServiceLog] = React.useState("");
   const workspaceVariables = React.useMemo<NameVariables>(
     () => ({ name: workspace }),
     [workspace],
   );
-  const serviceVariables = React.useMemo<NameVariables>(
-    () => ({ name: service }),
-    [service],
-  );
-  React.useEffect(() => setServiceLog(""), [service]);
-
-  const handleServiceLog = React.useCallback((data: ServiceLogsData) => {
-    setServiceLog((current) => mergeLog(current, data.onServiceLogs));
-  }, []);
 
   const workspaceStatusResult = useOperatorSubscription<WorkspaceStatusData, NameVariables>(
     WORKSPACE_STATUS_SUBSCRIPTION,
     workspaceVariables,
     { enabled: Boolean(workspace) },
   );
-  const serviceLogs = useOperatorSubscription<ServiceLogsData, NameVariables>(
-    SERVICE_LOGS_SUBSCRIPTION,
-    serviceVariables,
-    { enabled: Boolean(service), onData: handleServiceLog },
-  );
 
   const workspaceStatus = workspaceStatusResult.data?.onWorkspaceStatusChange ?? null;
-  const error =
-    workspaceStatusResult.error?.message ??
-    serviceLogs.error?.message ??
-    "";
+  const error = workspaceStatusResult.error?.message ?? "";
 
-  return {
-    error,
-    serviceLog,
-    workspaceStatus,
-  };
+  return { error, workspaceStatus };
 }
 
 function isLifecycleActive(status: string | null | undefined): boolean {
@@ -415,18 +358,6 @@ function agentRuntime(record: Row | null): string {
 function stringField(record: Row | null, key: string): string {
   const value = record?.[key];
   return typeof value === "string" ? value : "";
-}
-
-function mergeLog(current: string, next: string): string {
-  if (!next) return current;
-  if (!current || next.startsWith(current)) return next;
-  if (current.endsWith(next)) return current;
-  const separator = current.endsWith("\n") || next.startsWith("\n") ? "" : "\n";
-  return `${current}${separator}${next}`;
-}
-
-function tailLog(log: string, lines = 120): string {
-  return log.split(/\r?\n/).slice(-lines).join("\n").trimEnd();
 }
 
 function sourceDrift(

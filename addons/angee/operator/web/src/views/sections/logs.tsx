@@ -178,6 +178,24 @@ export function useServiceLogStream(name: string | undefined): DaemonLogStream {
   return { lines, error, streaming };
 }
 
+/**
+ * A drop-in live service-log panel: the structured `/logs/stream` WebSocket tail
+ * + the connection-status panel. The one service-logs surface — the operator
+ * console's service detail and any addon that provisions a service (the agents
+ * console) compose this rather than re-plumbing a log subscription.
+ */
+export function ServiceLogs({
+  name,
+  title,
+}: {
+  name: string | undefined;
+  title?: ReactNode;
+}): ReactNode {
+  const t = useOperatorT();
+  const logs = useServiceLogStream(name);
+  return <LogPanel logs={logs} title={title ?? t("operator.services.detail.logs")} />;
+}
+
 /** A titled log card with a connection-status badge and the {@link LogStream} tail. */
 export function LogPanel({
   logs,
