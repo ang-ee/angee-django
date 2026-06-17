@@ -44,6 +44,7 @@ import type {
 } from "./data-view-model";
 import {
   groupPagerStatesEqual,
+  useExpandedKeys,
   type GroupPagerState,
 } from "./grouped-list-utils";
 import {
@@ -314,19 +315,10 @@ function GroupLevel<TRow extends Row>({
     setLocalPage((current) => Math.min(current, pageCount));
   }, [depth, enabled, groupAggregation.totalCount, pageSize]);
 
-  // stableBucketKey maps are intentionally not pruned; old entries restore state when groups reappear.
-  const [expandedKeys, setExpandedKeys] = React.useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
+  // expandedKeys (shared hook) and pageByKey are intentionally not pruned; old
+  // entries restore state when groups reappear.
+  const { expandedKeys, toggle: toggleExpanded } = useExpandedKeys();
   const [pageByKey, setPageByKey] = React.useState<Record<string, number>>({});
-  const toggleExpanded = React.useCallback((key: string) => {
-    setExpandedKeys((current) => {
-      const next = new Set(current);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }, []);
   const setGroupPage = React.useCallback((key: string, nextPage: number) => {
     setPageByKey((current) => ({
       ...current,

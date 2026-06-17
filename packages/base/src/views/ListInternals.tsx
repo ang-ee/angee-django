@@ -170,6 +170,9 @@ export interface FlatListBodyProps<TRow extends Row> {
   emptyMessage: ListEmptyContent;
   fetching: boolean;
   footerAggregate?: AggregateBucket | null;
+  /** Expanded group keys; when provided, group headers become collapse toggles. */
+  expandedKeys?: ReadonlySet<string>;
+  onToggleGroup?: (key: string) => void;
 }
 
 export function FlatListBody<TRow extends Row>({
@@ -194,6 +197,8 @@ export function FlatListBody<TRow extends Row>({
   emptyMessage,
   fetching,
   footerAggregate,
+  expandedKeys,
+  onToggleGroup,
 }: FlatListBodyProps<TRow>): React.ReactElement {
   const t = useBaseT();
   const colSpan = Math.max(1, visibleColumnCount + (selectable ? 1 : 0));
@@ -285,6 +290,8 @@ export function FlatListBody<TRow extends Row>({
                       onRowClick,
                       draggableRow,
                       measures,
+                      expandedKeys,
+                      onToggleGroup,
                     })
                   : null;
               })}
@@ -720,6 +727,8 @@ function renderListItem<TRow extends Row>({
   onRowClick,
   draggableRow,
   measures,
+  expandedKeys,
+  onToggleGroup,
 }: {
   item: ListRenderItem<TRow>;
   colSpan: number;
@@ -730,16 +739,21 @@ function renderListItem<TRow extends Row>({
   onRowClick?: (row: TRow) => void;
   draggableRow?: (row: TRow) => DndPayload | null;
   measures: readonly GroupMeasure[];
+  expandedKeys?: ReadonlySet<string>;
+  onToggleGroup?: (key: string) => void;
 }): React.ReactElement {
   if (item.kind === "group") {
     return (
       <GroupHeader
         key={`group:${item.group.key}`}
+        groupKey={item.group.key}
         label={item.group.label ?? ""}
         rows={item.group.rows}
         depth={item.group.depth}
         colSpan={colSpan}
         measures={measures}
+        expanded={expandedKeys?.has(item.group.key) ?? true}
+        onToggle={onToggleGroup}
       />
     );
   }
@@ -776,40 +790,73 @@ function VirtualPaddingRow({
 }
 
 function GroupHeader<TRow extends Row>({
+  groupKey,
   label,
   rows,
   depth,
   colSpan,
   measures,
+  expanded,
+  onToggle,
 }: {
+  groupKey: string;
   label: string;
   rows: readonly TableRowModel<TRow>[];
   depth: number;
   colSpan: number;
   measures: readonly GroupMeasure[];
+  expanded: boolean;
+  onToggle?: (key: string) => void;
 }): React.ReactElement {
   const rowCount = rows.length;
   const summaries = measures.flatMap((measure) => {
     const value = measureRows(rows, measure);
     return value == null ? [] : [formatMeasure(value, measure)];
   });
+  const indent = { paddingLeft: `calc(0.75rem + ${depth * 1.25}rem)` };
+  // The chevron only appears when the header is a toggle; the lead/trailing
+  // content is identical either way, so it is rendered once and the branch
+  // chooses only the wrapper (interactive button vs static row).
+  const content = (
+    <>
+      <span className="inline-flex min-w-0 items-center gap-2 font-semibold text-fg">
+        {onToggle ? (
+          <Glyph
+            name={expanded ? "chevron-down" : "chevron-right"}
+            className="size-3.5 shrink-0 text-fg-muted"
+          />
+        ) : null}
+        <span className="min-w-0 truncate">{label}</span>
+        <span className="font-normal text-fg-muted">
+          {rowCount.toLocaleString()}
+        </span>
+      </span>
+      <span className="shrink-0 text-fg-muted">{summaries.join(" · ")}</span>
+    </>
+  );
   return (
     <TableRow>
-      <TableCell colSpan={colSpan} className="h-8 bg-sheet-2 py-1.5">
-        <div className="flex items-center justify-between gap-3 text-13">
-          <span
-            className="inline-flex items-center gap-2 font-semibold text-fg"
-            style={{ paddingLeft: `${depth * 1.25}rem` }}
+      <TableCell colSpan={colSpan} className="h-8 bg-sheet-2 p-0">
+        {onToggle ? (
+          // aria-controls is omitted deliberately: the group's rows are loose
+          // virtualized siblings with no stable container id to reference.
+          <button
+            type="button"
+            className="flex h-8 w-full min-w-0 items-center justify-between gap-3 px-3 text-left text-13 outline-none hover:bg-inset focus-visible:focus-ring"
+            style={indent}
+            aria-expanded={expanded}
+            onClick={() => onToggle(groupKey)}
           >
-            <span>{label}</span>
-            <span className="font-normal text-fg-muted">
-              {rowCount.toLocaleString()}
-            </span>
-          </span>
-          <span className="text-fg-muted">
-            {summaries.join(" · ")}
-          </span>
-        </div>
+            {content}
+          </button>
+        ) : (
+          <div
+            className="flex h-8 items-center justify-between gap-3 px-3 text-13"
+            style={indent}
+          >
+            {content}
+          </div>
+        )}
       </TableCell>
     </TableRow>
   );

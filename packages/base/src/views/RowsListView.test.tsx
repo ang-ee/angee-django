@@ -1,0 +1,86 @@
+// @vitest-environment happy-dom
+
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  RouterProvider,
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from "@tanstack/react-router";
+import type { ReactElement } from "react";
+import { afterEach, describe, expect, test } from "vitest";
+
+import { parseFlatSearch, stringifyFlatSearch } from "../createApp";
+import { RowsListView } from "./RowsListView";
+import type { ListColumn } from "./ListInternals";
+
+afterEach(() => cleanup());
+
+interface Item extends Record<string, unknown> {
+  id: string;
+  name: string;
+  region: string;
+}
+
+const ROWS: Item[] = [
+  { id: "1", name: "Alpha", region: "East" },
+  { id: "2", name: "Beta", region: "East" },
+  { id: "3", name: "Gamma", region: "West" },
+];
+
+// Only the name column is shown, so "East"/"West" appear solely as group headers
+// (never as row cells) — the assertions stay unambiguous across expand/collapse.
+const columns: readonly ListColumn<Item>[] = [{ field: "name", header: "Name" }];
+
+function renderInRouter(ui: ReactElement): void {
+  const rootRoute = createRootRoute();
+  const indexRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/",
+    component: () => ui,
+  });
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([indexRoute]),
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+    parseSearch: parseFlatSearch,
+    stringifySearch: stringifyFlatSearch,
+  });
+  render(<RouterProvider router={router} />);
+}
+
+// These assert the collapse semantics — the `flattenListItems`/`expandedKeys`
+// reshape and the `aria-expanded` toggle — through the render output. Under
+// happy-dom the virtualizer reports zero items, so `FlatListBody` takes its
+// "render all" fallback; this does not exercise the virtualized count/padding.
+describe("RowsListView grouping", () => {
+  test("groups are collapsed by default and a header click expands only that group", async () => {
+    renderInRouter(
+      <RowsListView<Item>
+        rows={ROWS}
+        columns={columns}
+        defaultGroup={{ field: "region" }}
+      />,
+    );
+
+    // Both group headers render; their bodies do not (collapsed by default).
+    const east = (await screen.findByText("East")).closest("button");
+    const west = screen.getByText("West").closest("button");
+    expect(east?.getAttribute("aria-expanded")).toBe("false");
+    expect(west?.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("Alpha")).toBeNull();
+    expect(screen.queryByText("Gamma")).toBeNull();
+
+    // Expanding East reveals only its rows; West stays collapsed.
+    fireEvent.click(east as HTMLElement);
+    expect(east?.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("Alpha")).toBeTruthy();
+    expect(screen.getByText("Beta")).toBeTruthy();
+    expect(screen.queryByText("Gamma")).toBeNull();
+
+    // Toggling it again collapses it back.
+    fireEvent.click(east as HTMLElement);
+    expect(east?.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("Alpha")).toBeNull();
+  });
+});

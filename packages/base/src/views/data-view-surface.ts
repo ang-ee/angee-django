@@ -21,6 +21,7 @@ import {
 } from "@angee/sdk";
 
 import type { DataViewContextValue } from "./data-view-context";
+import { useExpandedKeys } from "./grouped-list-utils";
 import {
   type DataViewFilter,
   type DataViewGroup,
@@ -102,6 +103,9 @@ interface DataViewPresentationSurface<TRow extends Row = Row> {
   setPageSelection: (checked: boolean) => void;
   groupedRows: readonly RowGroup<TRow>[];
   listItems: readonly ListRenderItem<TRow>[];
+  /** Keys of the groups the viewer has expanded; empty means collapsed-by-default. */
+  expandedKeys: ReadonlySet<string>;
+  toggleGroup: (key: string) => void;
   tableScrollRef: React.RefObject<HTMLDivElement | null>;
   rowVirtualizer: Virtualizer<HTMLDivElement, Element>;
 }
@@ -410,9 +414,12 @@ function useDataViewPresentationSurface<TRow extends Row>({
     () => groupRows(rowModels, rowGroupStack, modelMetadata),
     [modelMetadata, rowGroupStack, rowModels],
   );
+  // Collapse is the framework default for grouped rows: groups start collapsed
+  // and the viewer expands them. The state machine is shared with GroupedList.
+  const { expandedKeys, toggle: toggleGroup } = useExpandedKeys();
   const listItems = React.useMemo(
-    () => flattenListItems(groupedRows),
-    [groupedRows],
+    () => flattenListItems(groupedRows, expandedKeys),
+    [expandedKeys, groupedRows],
   );
   const tableScrollRef = React.useRef<HTMLDivElement | null>(null);
   const rowVirtualizer = useVirtualizer({
@@ -439,6 +446,8 @@ function useDataViewPresentationSurface<TRow extends Row>({
     setPageSelection,
     groupedRows,
     listItems,
+    expandedKeys,
+    toggleGroup,
     tableScrollRef,
     rowVirtualizer,
   };
@@ -619,14 +628,22 @@ function groupRowsByRest<TRow extends Row>(
   );
 }
 
+// Flatten the group tree to the virtualizer's render list, emitting a collapsed
+// group's header but none of its body. Re-flattening expanded-only (rather than
+// post-filtering rows) keeps the virtualizer count and estimated heights exact.
 function flattenListItems<TRow extends Row>(
   groups: readonly RowGroup<TRow>[],
+  expandedKeys: ReadonlySet<string>,
 ): ListRenderItem<TRow>[] {
   const output: ListRenderItem<TRow>[] = [];
   for (const group of groups) {
-    if (group.label !== null) output.push({ kind: "group", group });
+    const hasHeader = group.label !== null;
+    if (hasHeader) output.push({ kind: "group", group });
+    // The label-less root carries no header and is always open; a real group is
+    // open only when the viewer has expanded its key.
+    if (hasHeader && !expandedKeys.has(group.key)) continue;
     if (group.children.length > 0) {
-      output.push(...flattenListItems(group.children));
+      output.push(...flattenListItems(group.children, expandedKeys));
     } else {
       for (const row of group.rows) output.push({ kind: "row", row });
     }
