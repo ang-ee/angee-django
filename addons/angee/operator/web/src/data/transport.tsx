@@ -22,23 +22,21 @@ import {
 } from "react";
 
 import { useOperatorT } from "../i18n";
-import { OPERATOR_CONNECTION_QUERY, SNAPSHOT_QUERY } from "./documents";
+import {
+  OPERATOR_CONNECTION_QUERY,
+  SNAPSHOT_QUERY,
+  STACK_SNAPSHOT_SUBSCRIPTION,
+} from "./documents";
 import { createOperatorClient } from "./operator-client";
 import type {
   OperatorConnectionInfo,
   OperatorSnapshot,
   OperatorSnapshotQueryData,
   OperatorSnapshotSections,
+  OperatorSnapshotSubscriptionData,
 } from "./types";
 
 const CONSOLE_SCHEMA = "console";
-// Known exception to the frontend no-poll rule (docs/frontend/guidelines.md): the
-// daemon publishes per-resource subscriptions (onWorkspaceStatusChange/onServiceLogs)
-// but no aggregate snapshot-change event, so the multi-root console snapshot is
-// polled until the daemon SDL grows one. Per-agent views already stream live.
-// Fix proposed daemon-side: angee-operator docs/proposals/console-snapshot-subscription.md
-// (onConsoleSnapshotChange) — switch this hook to subscribe + one-shot query then.
-const POLL_INTERVAL_MS = 5_000;
 // Daemon connection tokens are short-lived (the daemon mints with a ~30m TTL).
 // Refresh the bridge token well before then and rebuild the daemon client, so a
 // long-running console never degrades to a dead token.
@@ -215,38 +213,46 @@ export function useOperatorSnapshot(
     [sectionsKey],
   );
 
+  // The one-shot query owns first paint: the daemon emits no snapshot on connect,
+  // so the console reads the current state once. The live subscription supersedes
+  // it for every subsequent change (no polling — see docs/frontend/guidelines.md).
   const [result, reexecute] = useQuery<OperatorSnapshotQueryData, SnapshotVariables>({
     query: SNAPSHOT_QUERY,
     variables,
     requestPolicy: "cache-and-network",
   });
 
+  // `onStackSnapshotChange` pushes the whole `StackSnapshot` whenever the daemon's
+  // aggregate hash changes; urql dedupes the (variable-free) document so the 8 panes
+  // share one upstream subscription. The latest push is the live snapshot.
+  const live = useOperatorSubscription<OperatorSnapshotSubscriptionData>(
+    STACK_SNAPSHOT_SUBSCRIPTION,
+  );
+
   const reexecuteRef = useRef(reexecute);
-  const fetchingRef = useRef(result.fetching);
   useEffect(() => {
     reexecuteRef.current = reexecute;
-    fetchingRef.current = result.fetching;
-  }, [reexecute, result.fetching]);
+  }, [reexecute]);
 
-  useEffect(() => {
-    const intervalId = globalThis.setInterval(() => {
-      // Skip the tick while a request is already in flight. The daemon's
-      // git-backed resolvers (sources, gitOps) can take longer than the poll
-      // interval, and a network-only reexecute aborts the pending request — so
-      // an unconditional poll would cancel each fetch before it ever resolves
-      // and the snapshot would never settle.
-      if (!fetchingRef.current) {
-        reexecuteRef.current({ requestPolicy: "network-only" });
-      }
-    }, POLL_INTERVAL_MS);
-    return () => globalThis.clearInterval(intervalId);
-  }, []);
-
+  // An imperative re-pull of the one-shot query, for an instant local refresh
+  // after a mutation rather than waiting for the daemon's next snapshot push.
   const refetch = useCallback(() => {
     reexecuteRef.current({ requestPolicy: "network-only" });
   }, []);
 
-  const snapshot = useMemo(() => snapshotFromQueryData(result.data), [result.data]);
+  // Keep whichever source updated most recently. The live push wins as it
+  // arrives, but an explicit refetch (network-only, after a mutation) must be
+  // able to supersede a stale push — a static `live ?? query` would mask refetch
+  // forever once any push landed.
+  const [data, setData] = useState<OperatorSnapshotQueryData | null>(null);
+  useEffect(() => {
+    const pushed = live.data?.onStackSnapshotChange;
+    if (pushed) setData(pushed);
+  }, [live.data]);
+  useEffect(() => {
+    if (result.data) setData(result.data);
+  }, [result.data]);
+  const snapshot = useMemo(() => snapshotFromQueryData(data), [data]);
 
   return { result, snapshot, refetch };
 }
@@ -322,8 +328,9 @@ export function useOperatorSubscription<
 
 // The daemon exposes its state as separate root fields; assemble the roots each
 // pane requested into one snapshot, defaulting absent (un-`@include`d) lists.
+// Accepts the query data or a live subscription push (same root shape).
 function snapshotFromQueryData(
-  data: OperatorSnapshotQueryData | undefined,
+  data: OperatorSnapshotQueryData | null | undefined,
 ): OperatorSnapshot | null {
   if (!data) return null;
   return {

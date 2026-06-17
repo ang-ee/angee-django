@@ -33,6 +33,7 @@ import type {
   WorkspaceRef,
   TemplateDescriptor,
   SecretRef,
+  StackSnapshot,
   StackStatus,
   GitOpsTopology,
   MutationResult,
@@ -71,6 +72,16 @@ export interface OperatorSnapshotQueryData {
   templates?: readonly TemplateDescriptor[] | null;
   secrets?: readonly SecretRef[] | null;
   gitOpsTopology?: GitOpsTopology | null;
+}
+
+/**
+ * The live snapshot push: `onStackSnapshotChange` carries the daemon's aggregate
+ * `StackSnapshot` (the generated type). It selects every root, so all are present
+ * on each push; its non-null arrays are assignable to the query's nullable roots,
+ * so {@link snapshotFromQueryData} consumes either source.
+ */
+export interface OperatorSnapshotSubscriptionData {
+  onStackSnapshotChange?: StackSnapshot | null;
 }
 
 /** Which panes' data to fetch — maps to the snapshot query's `@include` flags. */

@@ -15,8 +15,126 @@ export const OPERATOR_CONNECTION_QUERY = `
   }
 `;
 
+// The per-root field selections the console reads — the single source of truth
+// for "what the snapshot is" (the field body of each root). The polling
+// `SNAPSHOT_QUERY` selects these roots directly (gated by `@include`); the live
+// `STACK_SNAPSHOT_SUBSCRIPTION` selects the same bodies under the daemon's
+// aggregate `StackSnapshot`. Keeping the bodies here once means the query and the
+// subscription can never drift. Each entry is the GraphQL field name and its
+// selection body; `snapshotRoot` assembles them (the `@include` directive, when
+// present, sits between the name and the body, where GraphQL requires it).
+const SNAPSHOT_ROOTS = {
+  health: { field: "health", body: `{
+    status
+    name
+    message
+  }` },
+  stackStatus: { field: "stackStatus", body: `{
+    root
+    name
+  }` },
+  services: { field: "services", body: `{
+    name
+    runtime
+    status
+    health
+  }` },
+  workspaces: { field: "workspaces", body: `{
+    name
+    path
+    template
+    processComposePort
+    ttl
+    ttlExpiresAt
+  }` },
+  sources: { field: "sources", body: `{
+    name
+    slot
+    kind
+    path
+    exists
+    state
+    branch
+    ref
+    currentRef
+    dirty
+    ahead
+    behind
+    pushed
+  }` },
+  gitOpsTopology: { field: "gitOpsTopology", body: `{
+    root
+    name
+    summary {
+      sources
+      workspaces
+      worktrees
+      clean
+      dirty
+      ahead
+      behind
+      diverged
+      missing
+      error
+      unpushed
+    }
+    links {
+      id
+      source
+      workspace
+      slot
+      kind
+      state
+      branch
+      ref
+      currentRef
+      dirty
+      ahead
+      behind
+      pushed
+      error
+    }
+  }` },
+  jobs: { field: "jobs", body: `{
+    name
+    runtime
+  }` },
+  templates: { field: "templates", body: `{
+    ref
+    kind
+    name
+    path
+    inputs {
+      name
+      type
+      required
+      immutable
+      generated
+      default
+    }
+  }` },
+  secrets: { field: "secrets", body: `{
+    name
+    declared
+    hasValue
+    required
+    generated
+    import
+    envVar
+  }` },
+} as const;
+
+type SnapshotRoot = (typeof SNAPSHOT_ROOTS)[keyof typeof SNAPSHOT_ROOTS];
+
+/** A snapshot root field, optionally gated by an `@include(if: $var)` directive. */
+function snapshotRoot(root: SnapshotRoot, include?: string): string {
+  const directive = include ? ` @include(if: ${include})` : "";
+  return `${root.field}${directive} ${root.body}`;
+}
+
 // One query selecting the daemon root each pane needs; `@include` keeps a pane's
-// roots out of the request when it isn't shown.
+// roots out of the request when it isn't shown. Used for the first paint (the
+// daemon emits no snapshot on connect); the live subscription supersedes it.
 export const SNAPSHOT_QUERY = `
   query OperatorSnapshot(
     $wantOverview: Boolean!
@@ -28,103 +146,40 @@ export const SNAPSHOT_QUERY = `
     $wantTemplates: Boolean!
     $wantSecrets: Boolean!
   ) {
-    health @include(if: $wantOverview) {
-      status
-      name
-      message
-    }
-    stackStatus @include(if: $wantOverview) {
-      root
-      name
-    }
-    services @include(if: $wantServices) {
-      name
-      runtime
-      status
-      health
-    }
-    workspaces @include(if: $wantWorkspaces) {
-      name
-      path
-      template
-      processComposePort
-      ttl
-      ttlExpiresAt
-    }
-    sources @include(if: $wantSources) {
-      name
-      slot
-      kind
-      path
-      exists
-      state
-      branch
-      ref
-      currentRef
-      dirty
-      ahead
-      behind
-      pushed
-    }
-    gitOpsTopology @include(if: $wantGitOps) {
-      root
-      name
-      summary {
-        sources
-        workspaces
-        worktrees
-        clean
-        dirty
-        ahead
-        behind
-        diverged
-        missing
-        error
-        unpushed
-      }
-      links {
-        id
-        source
-        workspace
-        slot
-        kind
-        state
-        branch
-        ref
-        currentRef
-        dirty
-        ahead
-        behind
-        pushed
-        error
-      }
-    }
-    jobs @include(if: $wantOperations) {
-      name
-      runtime
-    }
-    templates @include(if: $wantTemplates) {
-      ref
-      kind
-      name
-      path
-      inputs {
-        name
-        type
-        required
-        immutable
-        generated
-        default
-      }
-    }
-    secrets @include(if: $wantSecrets) {
-      name
-      declared
-      hasValue
-      required
-      generated
-      import
-      envVar
+    ${snapshotRoot(SNAPSHOT_ROOTS.health, "$wantOverview")}
+    ${snapshotRoot(SNAPSHOT_ROOTS.stackStatus, "$wantOverview")}
+    ${snapshotRoot(SNAPSHOT_ROOTS.services, "$wantServices")}
+    ${snapshotRoot(SNAPSHOT_ROOTS.workspaces, "$wantWorkspaces")}
+    ${snapshotRoot(SNAPSHOT_ROOTS.sources, "$wantSources")}
+    ${snapshotRoot(SNAPSHOT_ROOTS.gitOpsTopology, "$wantGitOps")}
+    ${snapshotRoot(SNAPSHOT_ROOTS.jobs, "$wantOperations")}
+    ${snapshotRoot(SNAPSHOT_ROOTS.templates, "$wantTemplates")}
+    ${snapshotRoot(SNAPSHOT_ROOTS.secrets, "$wantSecrets")}
+  }
+`;
+
+// The live snapshot push. `onStackSnapshotChange` fires whenever the daemon's
+// aggregate snapshot hash changes and carries the whole `StackSnapshot`. Unlike
+// `SNAPSHOT_QUERY`, this deliberately drops the per-pane `@include` gating and
+// selects every root: one variable-free document means urql dedupes the eight
+// panes' hooks to a single upstream subscription. The trade-off is that every
+// push ships all roots and re-renders every pane; acceptable because the daemon
+// assembles one hashed local aggregate. If the slow roots (`sources`/git topology)
+// make pushes heavy, gate the subscription daemon-side with `want*` variables
+// mirroring the query. The daemon does not emit on connect, so `SNAPSHOT_QUERY`
+// still owns first paint.
+export const STACK_SNAPSHOT_SUBSCRIPTION = `
+  subscription OperatorStackSnapshot {
+    onStackSnapshotChange {
+      ${snapshotRoot(SNAPSHOT_ROOTS.health)}
+      ${snapshotRoot(SNAPSHOT_ROOTS.stackStatus)}
+      ${snapshotRoot(SNAPSHOT_ROOTS.services)}
+      ${snapshotRoot(SNAPSHOT_ROOTS.workspaces)}
+      ${snapshotRoot(SNAPSHOT_ROOTS.sources)}
+      ${snapshotRoot(SNAPSHOT_ROOTS.gitOpsTopology)}
+      ${snapshotRoot(SNAPSHOT_ROOTS.jobs)}
+      ${snapshotRoot(SNAPSHOT_ROOTS.templates)}
+      ${snapshotRoot(SNAPSHOT_ROOTS.secrets)}
     }
   }
 `;

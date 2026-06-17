@@ -299,6 +299,23 @@ input StackRuntimeInput {
   build: Boolean
 }
 
+"""
+The stack overview aggregate — the root fields the web console reads as one.
+Mirrors the Query-root types so a client can subscribe to the whole snapshot
+and field-prune via its selection set.
+"""
+type StackSnapshot {
+  health: MutationResult
+  stackStatus: StackStatus
+  services: [ServiceState!]!
+  jobs: [JobState!]!
+  sources: [SourceState!]!
+  workspaces: [WorkspaceRef!]!
+  templates: [TemplateDescriptor!]!
+  secrets: [SecretRef!]!
+  gitOpsTopology: GitOpsTopology
+}
+
 type StackStatus {
   root: String!
   name: String!
@@ -312,6 +329,9 @@ type Subscription {
   onServiceLogs(name: String!): String!
   onWorkspaceLogs(name: String!): String!
   onWorkspaceStatusChange(name: String!): WorkspaceStatus!
+
+  """Emitted whenever the aggregate stack snapshot's hash changes."""
+  onStackSnapshotChange: StackSnapshot!
 }
 
 type TemplateDescriptor {
