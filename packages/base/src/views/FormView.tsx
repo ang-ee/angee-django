@@ -1258,6 +1258,10 @@ function mutationData(
     if (!isFieldVisible(field, values)) continue;
     const next = values[field.name];
     if (isUnselectedOption(field, next)) continue;
+    // Blank numeric create fields should let the GraphQL input default apply.
+    // Sending "" fails Int/Float coercion, and sending null fails non-null fields
+    // with defaults such as `Int! = 0`.
+    if (options.isCreate && isEmptyNumericValue(field, next)) continue;
     if (!options.isCreate && valuesEqual(next, options.baseline[field.name])) {
       continue;
     }
@@ -1268,6 +1272,7 @@ function mutationData(
 }
 
 function emptyValue(field: FieldDescriptor): unknown {
+  if (isNumericField(field)) return null;
   if (isNullableScalarWidget(field)) return null;
   if (field.widget === "tagInput") return [];
   if (field.kind === "switch" || field.widget === "switch") return false;
@@ -1288,6 +1293,15 @@ function isEmptyFieldValue(value: unknown): boolean {
 function isNullableScalarWidget(field: FieldDescriptor): boolean {
   const id = fieldWidgetId(field);
   return id === "date" || id === "datetime";
+}
+
+function isNumericField(field: FieldDescriptor): boolean {
+  const id = fieldWidgetId(field);
+  return id === "integer" || id === "float";
+}
+
+function isEmptyNumericValue(field: FieldDescriptor, value: unknown): boolean {
+  return isNumericField(field) && value == null;
 }
 
 function hasOptionValue(field: FieldDescriptor): boolean {

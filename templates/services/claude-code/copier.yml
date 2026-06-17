@@ -28,7 +28,7 @@ _angee:
     model:
       type: str
       default: ""
-      help: Optional Claude model override (CLAUDE_MODEL).
+      help: Optional Claude Code model override (ANTHROPIC_MODEL).
     permission_mode:
       type: str
       default: acceptEdits

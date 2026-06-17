@@ -1,5 +1,5 @@
 // The ACP chat runtime: opens a forward-authed WebSocket to a running agent, drives
-// the ACP session (initialize → newSession → prompt/cancel), folds `session/update`
+// the ACP session (initialize → newSession → setModel → prompt/cancel), folds `session/update`
 // notifications into an assistant-ui external store, and renders the result through
 // `AssistantRuntimeProvider`. The browser speaks ACP to the agent through the
 // operator's central Caddy; the route token is short-lived, so the endpoint is
@@ -17,6 +17,7 @@ import {
   type Agent,
   type Client,
   type McpServer,
+  type NewSessionResponse,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionNotification,
@@ -57,6 +58,8 @@ export interface AcpRuntime {
   clear: () => void;
   /** The agent's advertised MCP servers, for the session info panel. */
   mcpServers: Record<string, McpServerConfig>;
+  /** The model handle selected on the Agent row and applied to the ACP session. */
+  modelHandle: string;
   /** Render the `<system_context>` for the current view, for the session info panel. */
   renderContext: () => Promise<string>;
 }
@@ -75,6 +78,7 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
   const [error, setError] = React.useState<string | null>(null);
   const [isRunning, setIsRunning] = React.useState(false);
   const [mcpServers, setMcpServers] = React.useState<Record<string, McpServerConfig>>({});
+  const [modelHandle, setModelHandle] = React.useState("");
   // Bumping this re-runs the connect effect — the `reconnect()` control.
   const [reconnectNonce, setReconnectNonce] = React.useState(0);
 
@@ -115,6 +119,8 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
     // token-refresh reconnect does not re-run the effect, so it keeps the live conversation.
     setMessages([]);
     setIsRunning(false);
+    setMcpServers({});
+    setModelHandle("");
 
     const tearDown = (): void => {
       transportRef.current?.close();
@@ -133,6 +139,7 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
         if (!active) return;
         const validated = parseEndpoint(endpoint);
         setMcpServers(validated.mcpServers);
+        setModelHandle(validated.modelHandle);
         const transport = openAcpTransport(validated.url, validated.token);
         transportRef.current = transport;
         const connection = new ClientSideConnection(() => makeClient(onUpdateRef), transport.stream);
@@ -153,6 +160,8 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
           cwd: "/workspace",
           mcpServers: toMcpServers(validated.mcpServers),
         });
+        if (!active) return;
+        await selectSessionModel(connection, session, validated.modelHandle);
         if (!active) return;
         sessionIdRef.current = session.sessionId;
         setStatus("ready");
@@ -238,7 +247,7 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
     convertMessage,
   });
 
-  return { runtime, status, error, reconnect, clear, mcpServers, renderContext };
+  return { runtime, status, error, reconnect, clear, mcpServers, modelHandle, renderContext };
 }
 
 /** Convert a stored chat message to the assistant-ui thread shape: each part maps to the
@@ -325,6 +334,31 @@ function toMcpServers(servers: Record<string, McpServerConfig>): McpServer[] {
     url: config.url,
     headers: Object.entries(config.headers ?? {}).map(([key, value]) => ({ name: key, value })),
   }));
+}
+
+/** Select the Agent row's model for the ACP session before the first prompt. */
+export async function selectSessionModel(
+  connection: Agent,
+  session: NewSessionResponse,
+  modelHandle: string,
+): Promise<void> {
+  if (modelHandle === "") return;
+  const models = session.models;
+  // No standard ACP model state means the agent owns its own model (e.g. opencode selects
+  // from its config / OPENCODE_MODEL and advertises models through a non-standard
+  // `configOptions` field this client can't drive). Defer to its configured model rather
+  // than failing the whole session — the handle is pinned in the agent's container. A
+  // claude-code-style agent does advertise `models`, so its selection below still runs.
+  if (models == null) return;
+  if (models.currentModelId === modelHandle) return;
+  if (!models.availableModels.some((model) => model.modelId === modelHandle)) {
+    const available = models.availableModels.map((model) => model.modelId).join(", ") || "none";
+    throw new Error(`The selected model ${modelHandle} is not available in this agent session (${available}).`);
+  }
+  if (connection.setSessionModel === undefined) {
+    throw new Error(`The agent does not support selecting ${modelHandle} for this session.`);
+  }
+  await connection.setSessionModel({ sessionId: session.sessionId, modelId: modelHandle });
 }
 
 /** Extract the plain text of a composer message. */

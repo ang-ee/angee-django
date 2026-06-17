@@ -28,6 +28,18 @@ _PROVISION_TIMEOUT = 60
 """Seconds to wait on a server-side render call (workspace/service create)."""
 
 
+class OperatorDaemonError(RuntimeError):
+    """An operator daemon REST call failed."""
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class OperatorDaemonNotFound(OperatorDaemonError):
+    """The daemon reported that the requested resource is already absent."""
+
+
 @dataclass(frozen=True, slots=True)
 class OperatorDaemon:
     """The operator daemon bridge resolved from settings.
@@ -226,7 +238,9 @@ class OperatorDaemon:
         except urllib.error.HTTPError as error:
             # Surface the daemon's own error message instead of a bare "HTTP 500":
             # the body is JSON like ``{"error": "…"}`` (or text); the caller records it.
-            raise RuntimeError(f"operator {method} {url.rsplit('/', 1)[-1]}: {_daemon_error(error)}") from error
+            message = f"operator {method} {url.rsplit('/', 1)[-1]}: {_daemon_error(error)}"
+            error_class = OperatorDaemonNotFound if error.code == 404 else OperatorDaemonError
+            raise error_class(message, status_code=error.code) from error
         return json.loads(body) if body else None
 
     def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:

@@ -45,7 +45,9 @@ _angee:
     operator.port_pool.process_compose: { range: "10000-10999" }
     # Caddy edge host port — each workspace leases a distinct one so parallel
     # workspace stacks (and the base stack on :80) don't all contend for :80.
-    operator.port_pool.edge:       { range: "7000-7099" }
+    # Start at 7001: on macOS :7000 is held by Control Center (AirPlay Receiver),
+    # so an edge that leased 7000 would fail to bind and the agent socket 1006s.
+    operator.port_pool.edge:       { range: "7001-7099" }
   sources:
     repo:
       source: angee-django
@@ -62,7 +64,12 @@ _angee:
     - template: templates/stacks/dev
       root: .
       inputs:
-        project_name:       "${inputs.example}"
+        # Stack name == the docker-compose project name. Scope it to the workspace so
+        # parallel workspace stacks get ISOLATED compose projects (their own edge/agent
+        # containers). Sharing one name ("notes-angee") made Compose merge containers
+        # across workspaces — one stack's agent ended up fronted by another stack's edge
+        # (or none), so the browser's chat socket hit a dead edge port → WebSocket 1006.
+        project_name:       "${inputs.example}-${workspace.name}"
         project_path:       "examples/${inputs.example}"  # logical, no `..` — resolved by angee
         django_port:        "${alloc.django}"
         ui_port:            "${alloc.ui}"

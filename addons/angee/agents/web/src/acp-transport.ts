@@ -3,7 +3,7 @@
 // the operator's central Caddy, which forward-auths the upgrade against a route token;
 // browsers cannot set WebSocket headers, so the token rides in the URL query.
 
-import { ndJsonStream, type Stream } from "@zed-industries/agent-client-protocol";
+import { ndJsonStream, type AnyMessage, type Stream } from "@zed-industries/agent-client-protocol";
 
 /** A live ACP transport: the ndjson `Stream` plus the socket's open/close lifecycle. */
 export interface AcpTransport {
@@ -109,15 +109,63 @@ export function openAcpTransport(url: string, token: string): AcpTransport {
   });
 
   return {
-    stream: ndJsonStream(output, input),
+    stream: patchSetModelWireMethod(ndJsonStream(output, input)),
     ready,
     closed,
     close: () => socket.close(),
   };
 }
 
+/**
+ * Work around @zed-industries/agent-client-protocol@0.4.5 sending setSessionModel()
+ * over `session/set_mode`. Remove this shim once the dependency emits `session/set_model`.
+ */
+export function patchSetModelWireMethod(stream: Stream): Stream {
+  return {
+    readable: stream.readable,
+    writable: new WritableStream<AnyMessage>({
+      async write(message) {
+        const writer = stream.writable.getWriter();
+        try {
+          await writer.write(rewriteBrokenSetModelRequest(message));
+        } finally {
+          writer.releaseLock();
+        }
+      },
+      async close() {
+        const writer = stream.writable.getWriter();
+        try {
+          await writer.close();
+        } finally {
+          writer.releaseLock();
+        }
+      },
+      async abort(reason) {
+        const writer = stream.writable.getWriter();
+        try {
+          await writer.abort(reason);
+        } finally {
+          writer.releaseLock();
+        }
+      },
+    }),
+  };
+}
+
+/** Rewrite only the ACP client library's broken set-model request shape. */
+export function rewriteBrokenSetModelRequest(message: AnyMessage): AnyMessage {
+  if (!("method" in message) || message.method !== "session/set_mode") return message;
+  const params = message.params;
+  if (!isRecord(params) || typeof params.modelId !== "string" || "modeId" in params) return message;
+  return { ...message, method: "session/set_model" };
+}
+
 /** Return `url` with `token` appended as a `token` query parameter. */
 function appendToken(url: string, token: string): string {
   const separator = url.includes("?") ? "&" : "?";
   return `${url}${separator}token=${encodeURIComponent(token)}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

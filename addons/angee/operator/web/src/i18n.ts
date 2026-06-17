@@ -53,6 +53,7 @@ export const enOperatorMessages: Record<string, string> = {
   "operator.services.column.health": "Health",
   "operator.services.start": "Start",
   "operator.services.restart": "Restart",
+  "operator.services.recreate": "Recreate",
   "operator.services.stop": "Stop",
   "operator.services.destroy": "Destroy",
   "operator.services.destroy.confirm.title": "Destroy service?",

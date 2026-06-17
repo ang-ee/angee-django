@@ -69,7 +69,11 @@ function canProvisionAgent(record: Row | null): boolean {
 }
 
 function canDeprovisionAgent(record: Row | null): boolean {
-  return agentLifecycle(record) === "READY";
+  return (
+    ["PROVISIONING", "READY", "DEPROVISIONING"].includes(agentLifecycle(record)) ||
+    stringField(record, "workspace") !== "" ||
+    stringField(record, "service") !== ""
+  );
 }
 
 function canDeleteAgent(record: Row): boolean {

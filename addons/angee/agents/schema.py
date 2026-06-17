@@ -44,7 +44,7 @@ from angee.integrate.schema import (
     TemplateType,
     VendorType,
 )
-from angee.operator.daemon import OperatorDaemon
+from angee.operator.daemon import OperatorDaemon, OperatorDaemonNotFound
 
 InferenceProvider = apps.get_model("agents", "InferenceProvider")
 InferenceModel = apps.get_model("agents", "InferenceModel")
@@ -164,12 +164,15 @@ class AgentChatEndpoint:
     ``token`` as a query parameter, which the central Caddy forward-auths against
     the operator. ``mcp_servers`` is the agent's rendered ``.mcp.json`` server map,
     so the chat session can advertise the same MCP servers the agent runs with.
+    ``model_handle`` is the selected agent model, used to select the ACP session
+    model explicitly after session creation.
     """
 
     url: str
     token: str
     expires_at: str
     mcp_servers: JSON
+    model_handle: str
 
 
 @strawberry.type
@@ -803,13 +806,14 @@ class AgentActionMutation:
         ``operatorConnection`` mints with — the session user.
         """
 
-        agent = _resolve(Agent, id, reason="agents.graphql.agent_chat_endpoint")
+        agent = _resolve(Agent, id, reason="agents.graphql.agent_chat_endpoint", select_related=("model",))
         session = _mint_session(agent)
         return AgentChatEndpoint(
             url=session["url"],
             token=session["token"],
             expires_at=session["expires_at"],
             mcp_servers=session["mcp_servers"],
+            model_handle=str(agent.model.name) if agent.model is not None else "",
         )
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
@@ -868,16 +872,24 @@ class AgentActionMutation:
             service = agent.service
             agent.mark_deprovisioning()
         daemon = OperatorDaemon.from_settings()
+        service_destroyed = False
         try:
             # The service is a stack entry distinct from the workspace it mounts, so destroy
             # it explicitly before the workspace; otherwise the next provision can 409.
             if service:
-                daemon.destroy_service(service)
+                try:
+                    daemon.destroy_service(service)
+                except OperatorDaemonNotFound:
+                    pass
+                service_destroyed = True
             if workspace:
-                daemon.destroy_workspace(workspace)
+                try:
+                    daemon.destroy_workspace(workspace)
+                except OperatorDaemonNotFound:
+                    pass
         except Exception as error:  # noqa: BLE001 — teardown failure is the result, not a 500
             with system_context(reason="agents.graphql.deprovision_agent.failed"):
-                agent.mark_provision_failed(f"Teardown failed: {error}")
+                agent.mark_provision_failed(f"Teardown failed: {error}", clear_service=service_destroyed)
             return ActionResult(ok=False, message=f"Teardown failed: {error}")
         with system_context(reason="agents.graphql.deprovision_agent.recorded"):
             agent.mark_deprovisioned()

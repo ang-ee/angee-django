@@ -371,6 +371,27 @@ describe("FormView", () => {
     });
   });
 
+  test("omits blank numeric fields from create payloads", async () => {
+    renderWithProviders(
+      <FormView
+        model="agents.InferenceModel"
+        fields={[
+          { name: "name", label: "Name", title: true },
+          { name: "contextWindow", label: "Context Window", widget: "integer" },
+          { name: "maxOutputTokens", label: "Max Output Tokens", widget: "integer" },
+          { name: "temperature", label: "Temperature", widget: "float" },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: { name: "" },
+    });
+  });
+
   test("merges default values into create payloads", async () => {
     renderWithProviders(
       <FormView

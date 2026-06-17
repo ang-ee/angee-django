@@ -13,3 +13,8 @@
   kind: service
   name: claude-code
   path: templates/services/claude-code
+- xref: tpl_opencode
+  source: notes.source_local_templates
+  kind: service
+  name: opencode
+  path: templates/services/opencode

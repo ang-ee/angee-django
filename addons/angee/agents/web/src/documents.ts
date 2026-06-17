@@ -67,9 +67,10 @@ export interface DeprovisionAgentData {
 export type IdVariables = ByIdVariables;
 
 // The browser-reachable chat endpoint for a running agent: the routed WebSocket URL
-// (no token), a per-actor route token to append as `?token=`, and the agent's rendered
-// MCP server map to advertise on the ACP session. A mutation, not a query: each call
-// mints a fresh, short-lived route token server-side (a side effect).
+// (no token), a per-actor route token to append as `?token=`, the selected model handle
+// to apply via ACP `session/set_model`, and the agent's rendered MCP server map to
+// advertise on the ACP session. A mutation, not a query: each call mints a fresh,
+// short-lived route token server-side (a side effect).
 export const AGENT_CHAT_ENDPOINT_MUTATION = `
   mutation AgentChatEndpoint($id: ID!) {
     agentChatEndpoint(id: $id) {
@@ -77,6 +78,7 @@ export const AGENT_CHAT_ENDPOINT_MUTATION = `
       token
       expiresAt
       mcpServers
+      modelHandle
     }
   }
 `;
@@ -100,6 +102,7 @@ export const AgentChatEndpointSchema = v.object({
   token: v.string(),
   expiresAt: v.string(),
   mcpServers: v.record(v.string(), McpServerConfigSchema),
+  modelHandle: v.string(),
 });
 
 export type AgentChatEndpoint = v.InferOutput<typeof AgentChatEndpointSchema>;

@@ -1,6 +1,15 @@
-# One model in the provider catalogue. `name` is what the agent passes to the rendered
-# container as CLAUDE_MODEL — change it to any model your plan serves.
+# Models in the provider catalogue. A model's `name` is the runtime handle the agent
+# passes to its rendered container — change it to any model your plan serves. The handle
+# format is runtime-specific: claude-code passes it verbatim as ANTHROPIC_MODEL (the
+# Anthropic API id), while opencode expects a `provider/model` handle (OPENCODE_MODEL and
+# its ACP model selection). The same Anthropic model therefore gets sibling rows over the
+# one provider, one per runtime's handle convention.
 - xref: model_claude_demo
   provider: notes.provider_anthropic_demo
   name: claude-sonnet-4-6
   display_name: Claude Sonnet 4.6
+# The opencode-handle sibling: same Anthropic model, addressed the way opencode expects.
+- xref: model_opencode_demo
+  provider: notes.provider_anthropic_demo
+  name: anthropic/claude-sonnet-4-6
+  display_name: Claude Sonnet 4.6 (OpenCode)

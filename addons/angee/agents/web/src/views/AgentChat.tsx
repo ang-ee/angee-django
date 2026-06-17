@@ -49,10 +49,9 @@ export function AgentChat({
   modelHandle?: string;
 }): React.ReactElement {
   const t = useAgentsT();
-  const { runtime, status, error, reconnect, clear, mcpServers, renderContext } = useAcpRuntime(
-    agentId,
-    view,
-  );
+  const runtimeState = useAcpRuntime(agentId, view);
+  const { runtime, status, error, reconnect, clear, mcpServers, renderContext } = runtimeState;
+  const effectiveModelHandle = runtimeState.modelHandle || modelHandle;
   const ready = status === "ready";
 
   return (
@@ -60,13 +59,13 @@ export function AgentChat({
       <div className="flex h-full min-h-[28rem] flex-col bg-sheet">
         <ChatHeader
           title={t("agents.chat.title")}
-          subtitle={modelHandle}
+          subtitle={effectiveModelHandle}
           statusLabel={t(`agents.chat.status.${status}`)}
           statusTone={statusTone(status)}
           actions={
             <>
               <SessionInfoPopover
-                modelHandle={modelHandle}
+                modelHandle={effectiveModelHandle}
                 view={view}
                 mcpServers={mcpServers}
                 renderContext={renderContext}

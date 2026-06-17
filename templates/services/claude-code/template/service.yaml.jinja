@@ -23,7 +23,7 @@ services:
 {%- endif %}
       CLAUDE_PERMISSION_MODE: "{{ permission_mode }}"
 {%- if model %}
-      CLAUDE_MODEL: "{{ model }}"
+      ANTHROPIC_MODEL: "{{ model }}"
 {%- endif %}
     route:
       port: 3007

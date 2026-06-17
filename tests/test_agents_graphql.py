@@ -33,6 +33,7 @@ from angee.agents.models import MCPServer as AbstractMCPServer
 from angee.agents.models import MCPTool as AbstractMCPTool
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate.credentials import CredentialKind
+from angee.operator.daemon import OperatorDaemonNotFound
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,
@@ -399,6 +400,62 @@ def test_provision_agent_failure_tears_down_workspace_and_records_error(
         assert (agent.workspace, "image build failed" in agent.last_error) == ("", True)
 
 
+def test_deprovision_agent_treats_missing_operator_instances_as_gone(
+    agents_console_tables: None, monkeypatch: Any
+) -> None:
+    """A deprovision retry clears stale names when the daemon says they are already gone."""
+
+    admin = _platform_admin("agt-deprov-missing-admin")
+    agent = _provisionable_agent(
+        admin,
+        "Gonebot",
+        slug="agt-deprov-missing-tpl",
+        workspace="ws-gone",
+        service="svc-gone",
+        lifecycle="ready",
+        runtime_status="error",
+        last_error='Teardown failed: operator POST destroy: HTTP 404: service "svc-gone" is not declared',
+    )
+    agent_id = _gid("AgentType", agent.sqid)
+    calls: list[tuple[str, str]] = []
+
+    class _MissingDaemon:
+        @classmethod
+        def from_settings(cls) -> _MissingDaemon:
+            return cls()
+
+        def destroy_service(self, name: str) -> None:
+            calls.append(("destroy_service", name))
+            raise OperatorDaemonNotFound(f'operator POST destroy: HTTP 404: service "{name}" is not declared')
+
+        def destroy_workspace(self, name: str) -> None:
+            calls.append(("destroy_workspace", name))
+            raise OperatorDaemonNotFound(f'operator POST destroy?purge=true: HTTP 404: workspace "{name}" is not found')
+
+    monkeypatch.setattr(agents_schema, "OperatorDaemon", _MissingDaemon)
+
+    result = _data(
+        _execute(
+            _schema(),
+            "mutation($id: ID!){ deprovisionAgent(id: $id){ ok message } }",
+            {"id": agent_id},
+            user=admin,
+        )
+    )["deprovisionAgent"]
+
+    assert result == {"ok": True, "message": "Deprovisioned."}
+    assert calls == [("destroy_service", "svc-gone"), ("destroy_workspace", "ws-gone")]
+    with system_context(reason="test.agents.deprov_missing.verify"):
+        agent.refresh_from_db()
+        assert (agent.workspace, agent.service, str(agent.lifecycle), str(agent.runtime_status), agent.last_error) == (
+            "",
+            "",
+            "deprovisioned",
+            "stopped",
+            "",
+        )
+
+
 def test_provision_agent_records_error_when_plan_resolution_fails(
     agents_console_tables: None, monkeypatch: Any
 ) -> None:
@@ -644,8 +701,13 @@ def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(
 
     admin = _platform_admin("agt-chat-admin")
     plain = User.objects.create_user(username="agt-chat-plain", email="chat@example.com")
+    integration = make_integration("agt-chat-provider")
     with system_context(reason="test.agents.chat.seed"):
-        agent = Agent.objects.create(name="Chatty", owner=admin, service="svc-chat")
+        model = InferenceModel.objects.create(
+            provider=InferenceProvider.objects.create(integration=integration, name="P", backend_class="manual"),
+            name="claude-opus-4-8",
+        )
+        agent = Agent.objects.create(name="Chatty", owner=admin, service="svc-chat", model=model)
         server = MCPServer.objects.create(name="notes", url="http://host.docker.internal:8101/mcp/notes/")
         agent.mcp_servers.add(server)
     agent_id = _gid("AgentType", agent.sqid)
@@ -668,7 +730,7 @@ def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(
 
     query = """
         mutation Chat($id: ID!) {
-          agentChatEndpoint(id: $id) { url token expiresAt mcpServers }
+          agentChatEndpoint(id: $id) { url token expiresAt mcpServers modelHandle }
         }
     """
     assert _execute(console := _schema(), query, {"id": agent_id}, user=plain).errors is not None
@@ -677,6 +739,7 @@ def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(
     assert endpoint["url"] == "wss://svc-chat.example.test/"
     assert endpoint["token"] == "jwt-route"
     assert endpoint["expiresAt"] == "2026-06-15T00:00:00Z"
+    assert endpoint["modelHandle"] == "claude-opus-4-8"
     assert endpoint["mcpServers"] == {
         "notes": {"type": "http", "url": "http://host.docker.internal:8101/mcp/notes/"},
     }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import urllib.error
+import urllib.request
 from types import SimpleNamespace
 
 import pytest
@@ -11,7 +12,7 @@ import strawberry
 from rebac import SubjectRef
 
 from angee.operator import schema as operator_schema
-from angee.operator.daemon import OperatorDaemon, _daemon_error
+from angee.operator.daemon import OperatorDaemon, OperatorDaemonNotFound, _daemon_error
 
 _CONNECTION_QUERY = "{ operatorConnection { endpoint token } }"
 _ACTOR = SubjectRef.of("auth/user", "abc")
@@ -28,6 +29,35 @@ def test_daemon_error_surfaces_the_response_body() -> None:
     )
     assert _daemon_error(err(409, b'{"reason": "already exists"}')) == "HTTP 409: already exists"
     assert _daemon_error(err(503, b"upstream down")) == "HTTP 503: upstream down"
+
+
+def test_daemon_request_raises_typed_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HTTP 404 remains a readable daemon error and is typed for idempotent teardown."""
+
+    def missing(_request: urllib.request.Request, timeout: int) -> None:
+        del timeout
+        raise urllib.error.HTTPError(
+            "http://op/services/svc/destroy",
+            404,
+            "not found",
+            {},
+            io.BytesIO(b'{"error": "service \\"svc\\" is not declared"}'),
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", missing)
+    daemon = OperatorDaemon(
+        endpoint="http://op/graphql",
+        server_base="http://op",
+        admin_bearer="admin",
+        scope=(),
+        ttl="1h",
+    )
+
+    with pytest.raises(OperatorDaemonNotFound) as raised:
+        daemon.destroy_service("svc")
+
+    assert raised.value.status_code == 404
+    assert str(raised.value) == 'operator POST destroy: HTTP 404: service "svc" is not declared'
 
 
 # --- endpoint resolution ------------------------------------------------------

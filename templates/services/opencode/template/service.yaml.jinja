@@ -1,7 +1,9 @@
 # One service entry appended to the outer stack by `service create`. Routed through
 # the operator's central Caddy (see claude-code/service.yaml.jinja) — `route:` replaces
 # `ports:`, the operator owns edge auth, and the API key is an operator-held secret.
-{%- set key_secret = secret_name if secret_name else provider ~ "-api-key" %}
+# The operator renders this stack entry with its own engine (not Python Jinja2/copier),
+# which supports only if/elif/else plus simple value interpolation — no `set` tag, string
+# concatenation, or inline conditional. Keep it to the constructs claude-code's entry uses.
 services:
   {{ service_name }}:
     runtime: container
@@ -12,17 +14,38 @@ services:
     mounts:
       - "workspace://{{ workspace_name }}:/workspace"
     env:
+      # Provider selects the API-key env var; the secret name falls back to
+      # "<provider>-api-key" when the caller leaves `secret_name` blank.
 {%- if provider == "openai" %}
-      OPENAI_API_KEY: "${secret.{{ key_secret }}}"
-{%- elif provider == "openrouter" %}
-      OPENROUTER_API_KEY: "${secret.{{ key_secret }}}"
-{%- elif provider == "groq" %}
-      GROQ_API_KEY: "${secret.{{ key_secret }}}"
+{%- if secret_name %}
+      OPENAI_API_KEY: "${secret.{{ secret_name }}}"
 {%- else %}
-      ANTHROPIC_API_KEY: "${secret.{{ key_secret }}}"
+      OPENAI_API_KEY: "${secret.openai-api-key}"
+{%- endif %}
+{%- elif provider == "openrouter" %}
+{%- if secret_name %}
+      OPENROUTER_API_KEY: "${secret.{{ secret_name }}}"
+{%- else %}
+      OPENROUTER_API_KEY: "${secret.openrouter-api-key}"
+{%- endif %}
+{%- elif provider == "groq" %}
+{%- if secret_name %}
+      GROQ_API_KEY: "${secret.{{ secret_name }}}"
+{%- else %}
+      GROQ_API_KEY: "${secret.groq-api-key}"
+{%- endif %}
+{%- else %}
+{%- if secret_name %}
+      ANTHROPIC_API_KEY: "${secret.{{ secret_name }}}"
+{%- else %}
+      ANTHROPIC_API_KEY: "${secret.anthropic-api-key}"
+{%- endif %}
 {%- endif %}
 {%- if model %}
       OPENCODE_MODEL: "{{ model }}"
+      # Load the baked config (model: {env:OPENCODE_MODEL}) so opencode pins this model
+      # instead of its own default; opencode does not take the model over the ACP session.
+      OPENCODE_CONFIG: "/home/node/.config/opencode/angee.json"
 {%- endif %}
     route:
       port: 3007

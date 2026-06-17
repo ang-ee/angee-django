@@ -1,11 +1,15 @@
-# A ready-to-provision demo agent, wired to the Anthropic provider/model (092/093) and the
-# agent-default workspace + claude-code service templates (094). After a fresh seed:
+# Two ready-to-provision demo agents over the same Anthropic provider (092) — one per agent
+# runtime, so the demo shows both the claude-code and opencode service templates (094) end to
+# end. Each is wired to its runtime's model handle (093) and the shared agent-default
+# workspace template. After a fresh seed, for each agent:
 #   1. connect "Anthropic Personal Plans" (Providers page) to mint a real OAuth credential,
-#   2. set this agent's inference credential to that OAuth credential (Agents page) — the
+#   2. set the agent's inference credential to that OAuth credential (Agents page) — the
 #      per-agent `inference_credential` overrides the seeded placeholder (090, no key),
-#   3. click Provision on this agent (Agents page) and watch the workspace + service come up.
+#   3. click Provision on the agent (Agents page) and watch the workspace + service come up.
 # Until step 2, provisioning is refused (the placeholder carries no usable secret) rather
-# than bringing up an agent that can't authenticate.
+# than bringing up an agent that can't authenticate. (The opencode template's anthropic
+# branch injects the secret as ANTHROPIC_API_KEY, so connect an Anthropic API-key credential
+# there rather than the OAuth Personal Plans token claude-code uses.)
 #
 # Uses the nested `_meta`/`rows` form because Agent has a `model` field, which collides
 # with the flat format's reserved `model` (Django-model) key.
@@ -24,3 +28,16 @@ rows:
       service_template: notes.tpl_claude_code
       mcp_servers:
         - notes.mcp_angee
+  # The opencode counterpart. No `mcp_servers`: the agent-default workspace writes a
+  # `.mcp.json` (claude-code's format), which opencode does not read — wiring the platform
+  # MCP server into opencode means emitting its own config, a separate follow-up.
+  - _xref: agent_demo_opencode
+    fields:
+      name: Demo Agent (OpenCode)
+      owner: notes.user_admin
+      instructions: |
+        You are a helpful coding agent working in /workspace. Keep changes small and
+        explain what you did.
+      model: notes.model_opencode_demo
+      workspace_template: notes.tpl_agent_default
+      service_template: notes.tpl_opencode
