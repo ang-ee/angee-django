@@ -92,6 +92,11 @@ export {
   type MetricGridTile,
 } from "./MetricGrid";
 export {
+  LogStream,
+  logStreamVariants,
+  type LogStreamProps,
+} from "./LogStream";
+export {
   MetricStrip,
   MetricTile,
   metricStripVariants,
