@@ -18,6 +18,7 @@ export interface BaseMenuItem extends MenuItem {
   parentId?: string;
   description?: string;
   group?: ChromeMenuGroup;
+  sidebar?: boolean;
   status?: ChromeMenuStatus;
   tone?: ChromeMenuTone;
   badge?: number;
@@ -29,6 +30,7 @@ export interface ChromeMenuItem extends ComposedMenuItem {
   parentId?: string;
   description?: string;
   group?: ChromeMenuGroup;
+  sidebar?: boolean;
   status?: ChromeMenuStatus;
   tone?: ChromeMenuTone;
   badge?: number;
@@ -59,6 +61,7 @@ export class ChromeMenuNode implements ChromeMenuItem {
   parentNode?: ChromeMenuNode;
   description?: string;
   group?: ChromeMenuGroup;
+  sidebar?: boolean;
   status?: ChromeMenuStatus;
   tone?: ChromeMenuTone;
   badge?: number;
@@ -263,7 +266,13 @@ export function buildMenuTree(
     const parentId = item.parentKey;
     if (!parentId) continue;
     const parent = byId.get(parentId);
-    if (!parent) continue;
+    if (!parent) {
+      // A `parentId` is an explicit contribution into another addon's menu, so a
+      // missing target is a wiring bug — fail fast (matching the duplicate-id and
+      // cycle throws), except for the reserved virtual chrome anchors.
+      if (CHROME_MENU_PARENT_IDS.has(parentId)) continue;
+      throw new Error(`Menu item "${item.id}" names unknown parent "${parentId}".`);
+    }
     parent.appendChild(item);
     childIds.add(item.id);
   }

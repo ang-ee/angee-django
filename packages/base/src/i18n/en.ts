@@ -138,6 +138,7 @@ export const enBaseMessages: Record<string, string> = {
   "chrome.switchToDarkTheme": "Switch to dark mode",
   "chrome.switchToLightTheme": "Switch to light mode",
   "chrome.primaryNav": "Primary navigation",
+  "chrome.sectionNav": "Section navigation",
   "chrome.collapseChatter": "Collapse chatter",
   "chrome.openChatter": "Open chatter",
   "app.loadingWorkspace": "Loading workspace…",

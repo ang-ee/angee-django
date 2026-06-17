@@ -11,6 +11,7 @@ INSTALLED_APPS:
   - angee.knowledge
   - angee.mcp
   - angee.operator
+  - angee.platform
   - angee.storage
   - example.notes
 

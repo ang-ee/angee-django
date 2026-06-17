@@ -135,6 +135,31 @@ class ResourceQuerySet(models.QuerySet[Any]):
             (entry.display, len(entry.read_resource_rows())) for entry in self._entries_for(addons, tiers=tiers)
         )
 
+    def counts_by_addon(self) -> dict[str, int]:
+        """Return ledger row counts keyed by source addon (the dotted name).
+
+        The ledger is untyped (no ``rebac_resource_type``); the elevated read is
+        bracketed in ``system_context`` so it is explicit and audited. Callers own
+        the access gate (e.g. the platform console's ``platform/explorer`` read).
+        """
+
+        with system_context(reason="resources.counts_by_addon"):
+            return {
+                row["source_addon"]: row["count"]
+                for row in self.values("source_addon").annotate(count=models.Count("id"))
+            }
+
+    def ledger_page(self, *, limit: int) -> list[Any]:
+        """Return up to ``limit`` ledger rows in the model's declared order.
+
+        A hard ``limit`` bounds the fetch and the GraphQL payload — the ledger
+        grows one row per imported resource. The read is elevated/audited as in
+        ``counts_by_addon``; callers own the access gate.
+        """
+
+        with system_context(reason="resources.ledger_page"):
+            return list(self.all()[:limit])
+
     def _groups_for(
         self,
         addons: Iterable[Any],

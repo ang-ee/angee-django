@@ -6,6 +6,7 @@ export {
   type AppChooserProps,
 } from "./AppChooser";
 export { AppRail, type AppRailProps } from "./AppRail";
+export { ConsoleSubNav, useConsoleSubNav } from "./ConsoleSubNav";
 export {
   Breadcrumb,
   type BreadcrumbItem,

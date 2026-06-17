@@ -210,6 +210,18 @@ describe("trailFor", () => {
     ).toThrow(/Menu item "a" creates a parent cycle/);
   });
 
+  test("throws when a contribution names an unknown parent", () => {
+    expect(() =>
+      MenuTree.from([{ id: "child", parentId: "ghost" }]),
+    ).toThrow(/Menu item "child" names unknown parent "ghost"/);
+  });
+
+  test("tolerates a reserved virtual parent (systray/user) with no node", () => {
+    expect(() =>
+      MenuTree.from([{ id: "entry", parentId: "systray", to: "/x" }]),
+    ).not.toThrow();
+  });
+
   test("throws when target fallback links cycle", () => {
     const a = new ChromeMenuNode({ id: "a" });
     const b = new ChromeMenuNode({ id: "b" });

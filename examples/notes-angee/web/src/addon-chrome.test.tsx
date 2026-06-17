@@ -10,9 +10,12 @@ import { within } from "@testing-library/react";
 import notes from "@angee-example/notes-web";
 import iam from "@angee/iam";
 import operator from "@angee/operator";
+import platform from "@angee/platform";
 import { describe, expect, test } from "vitest";
 
-const ADDONS: readonly BaseAddon[] = [notes, iam, operator];
+// `operator` contributes its console into the `platform` app (parentId), so a
+// valid composition must include platform — without it the contribution dangles.
+const ADDONS: readonly BaseAddon[] = [notes, iam, operator, platform];
 
 describe("addon route chrome", () => {
   test("derives notes chrome from the notes menu", async () => {
@@ -79,16 +82,23 @@ describe("addon route chrome", () => {
     });
   });
 
-  test("derives operator chrome from the operator menu", async () => {
+  test("derives operator chrome nested under the platform app", async () => {
+    // Operator contributes into the platform app, so its pages live under the
+    // Platform app: the chrome's app identity is Platform (`>_`), and the trail
+    // descends Platform › Operator › <section>.
     await expect(chromeFor("/operator")).resolves.toEqual({
-      title: "Operator",
-      icon: "operator",
-      breadcrumbs: [{ label: "Operator" }],
+      title: "Platform",
+      icon: "platform",
+      breadcrumbs: [
+        { label: "Platform", to: "/platform" },
+        { label: "Operator" },
+      ],
     });
     await expect(chromeFor("/operator/services")).resolves.toEqual({
-      title: "Operator",
-      icon: "operator",
+      title: "Platform",
+      icon: "platform",
       breadcrumbs: [
+        { label: "Platform", to: "/platform" },
         { label: "Operator", to: "/operator" },
         { label: "Services" },
       ],

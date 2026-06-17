@@ -9,10 +9,23 @@ from django.core.exceptions import ImproperlyConfigured
 
 
 class AppGraph:
-    """Resolve project addon roots into ordered Django app configs."""
+    """Resolve project addon roots into ordered Django app configs.
+
+    ``resolve`` also annotates each returned config with the composed-graph facts
+    a runtime reader (e.g. the platform console) needs but cannot re-derive
+    correctly from outside — the graph's owner records them here so consumers
+    only read:
+
+    - ``angee_addon_root``: whether the project declared this app as a root
+      (``True``) versus pulling it in only through another app's ``depends_on``
+      closure (``False``). The root/dependency split is the source of an addon's
+      "consumer" vs "required" classification.
+    - ``angee_depends_on``: the addon's declared dependency names, normalized
+      through :meth:`app_dependencies` (the one parser of that fact).
+    """
 
     def resolve(self, roots: Iterable[str | AppConfig]) -> tuple[AppConfig, ...]:
-        """Return root Django apps plus their ``depends_on`` closure."""
+        """Return root Django apps plus their ``depends_on`` closure, annotated."""
 
         app_configs_by_name: dict[str, AppConfig] = {}
         aliases: dict[str, str] = {}
@@ -82,6 +95,11 @@ class AppGraph:
             visit_app(name, ordered=ordered, visiting=visiting, visited=visited)
         for name in sorted(app_configs_by_name):
             visit_app(name, ordered=ordered, visiting=visiting, visited=visited)
+
+        root_name_set = set(root_names)
+        for config in ordered:
+            config.angee_addon_root = config.name in root_name_set
+            config.angee_depends_on = self.app_dependencies(config)
         return tuple(ordered)
 
     def app_dependencies(self, config: AppConfig) -> tuple[str, ...]:

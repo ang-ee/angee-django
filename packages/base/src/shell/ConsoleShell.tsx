@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { AppRail } from "../chrome/AppRail";
 import { Breadcrumb, type BreadcrumbItem } from "../chrome/Breadcrumb";
+import { ConsoleSubNav, useConsoleSubNav } from "../chrome/ConsoleSubNav";
 import { TopBar, type TopBarProps } from "../chrome/TopBar";
 import { Chatter } from "../communication/Chatter";
 import { ChatterProvider } from "../communication/chatter-context";
@@ -30,6 +31,10 @@ export function ConsoleShell({
     React.useState<HTMLDivElement | null>(null);
   const [statusHost, setStatusHost] =
     React.useState<HTMLDivElement | null>(null);
+  // Apps that opt into the sidebar (`sidebar: true` on their root menu) render
+  // their sections in a left settings-style sub-nav *in addition to* the top bar.
+  // The grid grows a `sidebar` column; the top bar is unchanged either way.
+  const { show: showSubNav } = useConsoleSubNav();
 
   return (
     <ChatterProvider>
@@ -37,11 +42,13 @@ export function ConsoleShell({
         <StatuslineProvider host={statusHost}>
           <div
             className={cn(
-              "console-grid h-screen w-screen bg-canvas text-fg",
+              showSubNav ? "console-grid-sidebar" : "console-grid",
+              "h-screen w-screen bg-canvas text-fg",
               className,
             )}
           >
             <AppRail className="area-rail" />
+            {showSubNav ? <ConsoleSubNav /> : null}
             <TopBar
               className="area-topbar"
               topMenu={topMenu}

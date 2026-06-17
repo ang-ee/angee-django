@@ -46,7 +46,6 @@ const storageMenu: readonly BaseMenuItem[] = [
     id: STORAGE_ID,
     label: "Files",
     icon: "files",
-    group: "platform",
     route: "storage.files",
     children: [
       { id: "storage.files", label: "Files", icon: "files", route: "storage.files" },

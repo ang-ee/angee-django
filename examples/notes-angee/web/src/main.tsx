@@ -11,6 +11,8 @@ import iam from "@angee/iam";
 import integrate from "@angee/integrate";
 import knowledge from "@angee/knowledge";
 import operator from "@angee/operator";
+import platform from "@angee/platform";
+import resources from "@angee/resources";
 import storage from "@angee/storage";
 
 import publicSDL from "../../runtime/schemas/public.graphql?raw";
@@ -43,7 +45,10 @@ const authAddon = defineBaseAddon({
 });
 
 createApp({
-  addons: [notes, authAddon, iam, integrate, agents, operator, storage, knowledge],
+  // Platform apps cluster at the bottom of the rail (group: "platform"): IAM,
+  // Integrate, then the Platform app. Operator and Resources contribute their
+  // sections into Platform (parentId), so they carry no rail glyph of their own.
+  addons: [notes, authAddon, iam, integrate, agents, operator, storage, knowledge, resources, platform],
   shells: {
     console: { chrome: ConsoleShell },
     // Chrome defaults to PassthroughChrome and a public-keyed shell is

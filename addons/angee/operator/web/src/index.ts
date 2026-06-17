@@ -99,15 +99,15 @@ const operatorRoutes: readonly BaseAddonRoute[] = [
   },
 ];
 
-// The framework renders a top-level menu item's `children` as the section
-// navigation (a `NavigationMenu` dropdown under "Operator") — so the sections live
-// in the chrome's own menu, not a hand-rolled tab bar inside the pages.
+// Operator contributes its console into the platform app: `parentId: "platform"`
+// nests this group under the platform settings sub-nav, where its `children`
+// render as the Operator section list. It keeps `route: "operator.overview"` as
+// its target so the route's `menu: OPERATOR_ID` crumb still resolves to it.
 const operatorRootMenu: BaseMenuItem = {
   id: OPERATOR_ID,
+  parentId: "platform",
   label: OPERATOR_TITLE,
   icon: OPERATOR_ID,
-  group: "platform",
-  // The root item owns Operator's rail target; `menu: OPERATOR_ID` selects this crumb for overview.
   route: "operator.overview",
   children: [
     {

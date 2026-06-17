@@ -44,8 +44,10 @@ vi.mock("@angee/sdk", async (importOriginal) => {
       fetching: false,
       error: null,
     }),
-    // Two apps: "Notes" (with two sections) and a sibling "Ops". The rail
-    // switches apps; the top bar shows the active app's sections.
+    // Three apps: a domain app "Notes" (with two sections), a sibling domain app
+    // "Ops", and a platform app "Admin" (with two sections). The rail switches
+    // apps and clusters platform apps at the bottom; a domain app shows its
+    // sections in the top bar, a platform app in the left settings sub-nav.
     useMenus: () => [
       {
         id: "notes",
@@ -58,11 +60,23 @@ vi.mock("@angee/sdk", async (importOriginal) => {
         ],
       },
       { id: "ops", label: "Ops", to: "/ops", icon: "activity" },
+      {
+        id: "admin",
+        label: "Admin",
+        to: "/admin",
+        icon: "settings",
+        group: "platform",
+        sidebar: true,
+        children: [
+          { id: "admin.overview", label: "Overview", to: "/admin", icon: "home" },
+          { id: "admin.settings", label: "Settings", to: "/admin/settings", icon: "settings" },
+        ],
+      },
     ],
   };
 });
 
-function renderInRouter(children: ReactNode) {
+function renderInRouter(children: ReactNode, initialPath = "/notes") {
   const rootRoute = createRootRoute({
     component: () => <Outlet />,
   });
@@ -88,9 +102,25 @@ function renderInRouter(children: ReactNode) {
     path: "/ops",
     component: () => null,
   });
+  const adminRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/admin",
+    component: () => <>{children}</>,
+  });
+  const adminSettingsRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/admin/settings",
+    component: () => null,
+  });
   const router = createRouter({
-    routeTree: rootRoute.addChildren([notesRoute, archiveRoute, opsRoute]),
-    history: createMemoryHistory({ initialEntries: ["/notes"] }),
+    routeTree: rootRoute.addChildren([
+      notesRoute,
+      archiveRoute,
+      opsRoute,
+      adminRoute,
+      adminSettingsRoute,
+    ]),
+    history: createMemoryHistory({ initialEntries: [initialPath] }),
     parseSearch: parseFlatSearch,
     stringifySearch: stringifyFlatSearch,
   });
@@ -123,6 +153,8 @@ describe("ConsoleShell", () => {
     expect(notesLink.getAttribute("href")).toBe("/notes");
     expect(notesLink.getAttribute("aria-current")).toBe("page");
     expect(within(rail).getByRole("link", { name: "Ops" })).toBeTruthy();
+    // The platform app clusters in the rail's bottom zone, still a rail link.
+    expect(within(rail).getByRole("link", { name: "Admin" })).toBeTruthy();
 
     // The top bar navigates within the active app: it lists Notes' sections and
     // never the sibling app's entry.
@@ -145,6 +177,27 @@ describe("ConsoleShell", () => {
     expect(screen.getByRole("tab", { name: "Angee" })).toBeTruthy();
     expect(screen.getByText("No agent yet")).toBeTruthy();
     expect(screen.getByText("Set up your assistant")).toBeTruthy();
+  });
+
+  test("renders a sidebar app's sections in both the sub-nav and the top bar", async () => {
+    renderInRouter(
+      <ConsoleShell title="Admin" icon="settings">
+        <section aria-label="Page body">Admin body</section>
+      </ConsoleShell>,
+      "/admin",
+    );
+    await screen.findByText("Admin body");
+
+    // An app opting into the sidebar (`sidebar: true`) shows its sections in the
+    // settings-style left sub-nav.
+    const subNav = screen.getByRole("navigation", { name: "Section navigation" });
+    expect(within(subNav).getByRole("link", { name: "Overview" })).toBeTruthy();
+    expect(within(subNav).getByRole("link", { name: "Settings" })).toBeTruthy();
+
+    // …and the top bar keeps them too — the sidebar is additive, not a swap.
+    const topBar = screen.getByRole("banner", { name: "Workspace top bar" });
+    expect(within(topBar).getByText("Overview")).toBeTruthy();
+    expect(within(topBar).getByText("Settings")).toBeTruthy();
   });
 
   test("portals a ControlBand into the area-control row", async () => {

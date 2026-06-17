@@ -12,3 +12,4 @@ class ResourcesConfig(AppConfig):
     angee_addon = True
     name = "angee.resources"
     depends_on = ("angee.base",)
+    schemas = "schema.schemas"

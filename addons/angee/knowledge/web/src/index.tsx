@@ -43,7 +43,6 @@ const knowledgeMenu: readonly BaseMenuItem[] = [
     id: KNOWLEDGE_ID,
     label: "Knowledge",
     icon: "knowledge",
-    group: "platform",
     route: "knowledge.home",
     children: [
       { id: "knowledge.home", label: "Wiki", icon: "knowledge", route: "knowledge.home" },

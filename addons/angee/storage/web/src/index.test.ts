@@ -37,7 +37,8 @@ describe("storage addon manifest", () => {
     const menu = storage.menus?.[0] as BaseMenuItem | undefined;
     expect(menu?.id).toBe("storage");
     expect(menu?.route).toBe("storage.files");
-    expect(menu?.group).toBe("platform");
+    // Storage is a domain app (top of the rail), so it carries no group.
+    expect(menu?.group).toBeUndefined();
     expect(menu?.children?.map((child) => child.route)).toEqual([
       "storage.files",
       "storage.settings",

@@ -67,18 +67,44 @@ export function AppRail({ className }: AppRailProps): ReactElement {
     () => orderedRailItems(tree.railMenuItems(), railPreferences.order),
     [railPreferences.order, tree],
   );
+  // The rail has two zones: domain apps on top (draggable), platform apps
+  // clustered at the bottom — the same `group` taxonomy the AppChooser splits
+  // into "Apps"/"Platform". Each zone is its own DnD context, so apps reorder
+  // within a zone but never cross the divider. The single `order` pref stays the
+  // source of truth, stored domain-first then platform.
+  const domainItems = useMemo(
+    () => items.filter((item) => item.group !== "platform"),
+    [items],
+  );
+  const platformItems = useMemo(
+    () => items.filter((item) => item.group === "platform"),
+    [items],
+  );
+  const domainIds = useMemo(() => domainItems.map((item) => item.id), [domainItems]);
+  const platformIds = useMemo(
+    () => platformItems.map((item) => item.id),
+    [platformItems],
+  );
   const itemIds = useMemo(() => items.map((item) => item.id), [items]);
   const defaultItemId = itemIds.includes(railPreferences.defaultItemId ?? "")
     ? railPreferences.defaultItemId
     : null;
-  const handleOrderChange = useCallback(
-    (order: readonly string[]) => {
+  const commitZoneOrder = useCallback(
+    (nextDomain: readonly string[], nextPlatform: readonly string[]) => {
       setRailPreferences({
         ...railPreferences,
-        order,
+        order: [...nextDomain, ...nextPlatform],
       });
     },
     [railPreferences, setRailPreferences],
+  );
+  const handleDomainOrderChange = useCallback(
+    (order: readonly string[]) => commitZoneOrder(order, platformIds),
+    [commitZoneOrder, platformIds],
+  );
+  const handlePlatformOrderChange = useCallback(
+    (order: readonly string[]) => commitZoneOrder(domainIds, order),
+    [commitZoneOrder, domainIds],
   );
   const handleItemLongPress = useCallback(
     (item: ChromeMenuNode) => {
@@ -105,12 +131,25 @@ export function AppRail({ className }: AppRailProps): ReactElement {
         className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto"
       >
         <SortableRail
-          items={items}
+          items={domainItems}
           pathname={pathname}
           defaultItemId={defaultItemId}
           onItemLongPress={handleItemLongPress}
-          onOrderChange={handleOrderChange}
+          onOrderChange={handleDomainOrderChange}
         />
+        {platformItems.length ? (
+          <>
+            <div className="flex-1" aria-hidden />
+            <div className="h-px w-6 shrink-0 bg-border-on-rail" aria-hidden />
+            <SortableRail
+              items={platformItems}
+              pathname={pathname}
+              defaultItemId={defaultItemId}
+              onItemLongPress={handleItemLongPress}
+              onOrderChange={handlePlatformOrderChange}
+            />
+          </>
+        ) : null}
       </nav>
     </aside>
   );
@@ -371,7 +410,6 @@ function RailItem({
 }): ReactElement | null {
   const iconName = item.iconName;
   const to = item.target;
-  if (!to) return null;
   const label = item.displayLabel;
   const title = railItemTitle(label, defaultApp);
   const {
@@ -388,6 +426,9 @@ function RailItem({
       itemId: item.id,
     },
   });
+  // Rail items always carry a target (railMenuItems filters target-less nodes);
+  // guard after the hooks so hook order stays stable (Rules of Hooks).
+  if (!to) return null;
   const { role: _dragRole, ...dragAttributes } = attributes;
   const activeDrag = dragging || isDragging;
   return (

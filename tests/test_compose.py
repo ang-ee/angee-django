@@ -17,6 +17,7 @@ import angee.compose as compose_package
 import angee.compose.runtime as runtime_module
 from angee.base.mixins import RevisionMixin
 from angee.base.models import AngeeModel
+from angee.compose.appgraph import AppGraph
 from angee.compose.apps import ComposeConfig
 from angee.compose.management.commands.angee import Command
 from angee.compose.runtime import Runtime
@@ -321,3 +322,22 @@ def test_build_emit_does_not_recheck_after_writing(
     Command()._handle_build({"check": False})
 
     assert calls == ["current", "emit"]
+
+
+def test_appgraph_annotates_roots_and_dependencies() -> None:
+    """resolve() tags declared roots and normalizes each app's dependencies.
+
+    The platform console reads these annotations instead of re-deriving the
+    composed graph (``addons/angee/platform/schema.py``).
+    """
+
+    graph = AppGraph()
+    configs = {config.name: config for config in graph.resolve(["angee.iam"])}
+
+    iam = configs["angee.iam"]
+    assert iam.angee_addon_root is True
+    assert iam.angee_depends_on == graph.app_dependencies(iam)
+    assert "angee.resources" in iam.angee_depends_on
+
+    # `resources` is pulled in through iam's closure, not declared — a dependency.
+    assert configs["angee.resources"].angee_addon_root is False

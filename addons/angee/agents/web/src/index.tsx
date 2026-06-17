@@ -40,7 +40,9 @@ const agentsMenu: readonly BaseMenuItem[] = [
     id: AGENTS_ID,
     label: "Agents",
     icon: "agent",
-    group: "platform",
+    // A domain app (top of the rail) that opts into the settings-style left
+    // sub-nav for its grouped sections — they still render as top-bar dropdowns.
+    sidebar: true,
     children: [
       {
         id: "agents.menu.agents",

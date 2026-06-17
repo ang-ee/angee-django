@@ -416,21 +416,27 @@
     "rail crumbs  chatter"
     "rail content chatter";
 }
-/* Variant carrying a secondary vertical sub-nav column (`sidebar`) between
-   the app rail and content — used when the active top-menu declares a rail
-   layout. The sidebar spans the crumbs + content rows; the topbar still
-   stretches full width. */
+/* Variant carrying a secondary vertical sub-nav column (`sidebar`) between the
+   app rail and content — used for platform consoles, whose sections render as a
+   settings-style left nav instead of top-bar links. The sidebar spans the
+   crumbs + control + content rows; the topbar and status row still stretch full
+   width, and the control row is preserved so a platform page can still publish a
+   ControlBand. */
 @utility console-grid-sidebar {
   display: grid;
   grid-template-columns: var(--spacing-rail-w) auto 1fr auto;
   grid-template-rows:
     var(--spacing-topbar-h)
     var(--spacing-crumbs-h)
-    1fr;
+    auto
+    1fr
+    auto;
   grid-template-areas:
     "rail topbar  topbar  topbar"
     "rail sidebar crumbs  chatter"
-    "rail sidebar content chatter";
+    "rail sidebar control chatter"
+    "rail sidebar content chatter"
+    "rail status  status  status";
 }
 @utility area-rail    { grid-area: rail; }
 @utility area-topbar  { grid-area: topbar; }

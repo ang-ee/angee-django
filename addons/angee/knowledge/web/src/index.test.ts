@@ -37,7 +37,8 @@ describe("knowledge addon manifest", () => {
     const menu = knowledge.menus?.[0] as BaseMenuItem | undefined;
     expect(menu?.id).toBe("knowledge");
     expect(menu?.route).toBe("knowledge.home");
-    expect(menu?.group).toBe("platform");
+    // Knowledge is a domain app (top of the rail), so it carries no group.
+    expect(menu?.group).toBeUndefined();
     expect(menu?.children?.map((child) => child.route)).toEqual([
       "knowledge.home",
       "knowledge.settings",
