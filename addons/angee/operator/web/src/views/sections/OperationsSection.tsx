@@ -4,10 +4,12 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
-  Skeleton,
+  RowsListView,
   useConfirm,
+  useToast,
+  type ListColumn,
 } from "@angee/base";
-import { useState, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 
 import {
   JOB_RUN_MUTATION,
@@ -18,17 +20,15 @@ import {
 } from "../../data/documents";
 import { useOperatorT } from "../../i18n";
 import { useOperatorAction, useOperatorSnapshot } from "../../data/transport";
-import {
-  DaemonResourceTable,
-  DaemonResourceTableSkeleton,
-} from "../parts/DaemonResourceTable";
-import { OperatorSection } from "../parts/OperatorSection";
+import type { JobState } from "../../data/types";
 import { runDaemonAction, type DaemonActionData } from "../parts/run-action";
 
 type StackVars = Record<string, unknown>;
 interface JobVars extends Record<string, unknown> {
   name: string;
 }
+
+/** A stack lifecycle control: its label, tone, variables, and handler. */
 interface StackAction {
   field: string;
   label: string;
@@ -39,102 +39,62 @@ interface StackAction {
   run: (variables: StackVars) => Promise<DaemonActionData>;
 }
 
-/** Operations pane: a daemon job table with run + stack lifecycle controls. */
+// RowsListView keys rows by `id`; the daemon identifies a job by name.
+type JobRowData = JobState & { id: string };
+
+/** Operations pane: the daemon job list with run + stack lifecycle controls. */
 export function OperationsSection(): ReactNode {
   const t = useOperatorT();
-  const confirm = useConfirm();
   const { snapshot, result, refetch } = useOperatorSnapshot({ operations: true });
-  const [actionError, setActionError] = useState<string | null>(null);
+  const { runJob, stackActions, runStack, busy } = useOperationActions(refetch);
 
-  const build = useOperatorAction<DaemonActionData, StackVars>(STACK_BUILD_MUTATION);
-  const up = useOperatorAction<DaemonActionData, StackVars>(STACK_UP_MUTATION);
-  const down = useOperatorAction<DaemonActionData, StackVars>(STACK_DOWN_MUTATION);
-  const destroy = useOperatorAction<DaemonActionData, StackVars>(STACK_DESTROY_MUTATION);
-  const jobRun = useOperatorAction<DaemonActionData, JobVars>(JOB_RUN_MUTATION);
-  const busy =
-    build.result.fetching ||
-    up.result.fetching ||
-    down.result.fetching ||
-    destroy.result.fetching ||
-    jobRun.result.fetching;
+  const rows = useMemo<readonly JobRowData[]>(
+    () => (snapshot?.jobs ?? []).map((job) => ({ ...job, id: job.name })),
+    [snapshot],
+  );
 
-  const jobs = snapshot?.jobs ?? [];
-  const stackActions: readonly StackAction[] = [
-    { field: "stackBuild", label: t("operator.operations.stack.build"), variant: "secondary", variables: {}, run: build.run },
-    { field: "stackUp", label: t("operator.operations.stack.up"), variant: "secondary", variables: {}, run: up.run },
-    { field: "stackDown", label: t("operator.operations.stack.down"), variant: "ghost", variables: {}, run: down.run },
-    {
-      field: "stackDestroy",
-      label: t("operator.operations.stack.destroy"),
-      variant: "ghost",
-      variables: { purge: false },
-      dangerous: true,
-      run: destroy.run,
-    },
-  ];
-
-  function runStack(action: StackAction): void {
-    void (async () => {
-      if (action.dangerous) {
-        const ok = await confirm({
-          title: t("operator.operations.stack.destroy.confirm.title"),
-          body: t("operator.operations.stack.destroy.confirm.body"),
-          confirm: action.label,
-          danger: true,
-        });
-        if (!ok) return;
-      }
-      await runDaemonAction({
-        run: action.run,
-        field: action.field,
-        variables: action.variables,
-        label: action.label,
-        setError: setActionError,
-        refetch,
-      });
-    })();
-  }
+  const columns = useMemo<readonly ListColumn<JobRowData>[]>(
+    () => [
+      {
+        field: "name",
+        header: t("operator.operations.column.name"),
+        render: (job) => <span className="font-medium text-fg">{job.name}</span>,
+      },
+      {
+        field: "runtime",
+        header: t("operator.operations.column.runtime"),
+        render: (job) => <span className="text-13 text-fg-muted">{job.runtime}</span>,
+      },
+      {
+        field: "actions",
+        header: t("operator.table.actions"),
+        sortable: false,
+        align: "right",
+        render: (job) => (
+          <div className="flex justify-end gap-1">
+            <Button
+              disabled={busy}
+              onClick={() => runJob(job)}
+              size="sm"
+              variant="secondary"
+            >
+              {t("operator.operations.run")}
+            </Button>
+          </div>
+        ),
+      },
+    ],
+    [busy, runJob, t],
+  );
 
   return (
-    <OperatorSection
-      title={t("section.operator.operations.title")}
-      loading={result.fetching && !snapshot}
-      error={result.error && !snapshot ? result.error : null}
-      loadingMessage={t("operator.operations.loading")}
-      loadingContent={<OperationsLoading />}
-      actionError={actionError}
-    >
-      <DaemonResourceTable
-        actions={[
-          {
-            label: t("operator.operations.run"),
-            variant: "secondary",
-            run: (job) =>
-              runDaemonAction({
-                run: jobRun.run,
-                field: "jobRun",
-                variables: { name: job.name },
-                label: t("operator.operations.run"),
-                setError: setActionError,
-                refetch,
-              }),
-          },
-        ]}
-        actionsLabel={t("operator.table.actions")}
-        busy={busy}
-        columns={[
-          {
-            header: t("operator.operations.column.name"),
-            cell: (job) => <span className="font-medium text-fg">{job.name}</span>,
-          },
-          {
-            header: t("operator.operations.column.runtime"),
-            cell: (job) => <span className="text-13 text-fg-muted">{job.runtime}</span>,
-          },
-        ]}
+    <>
+      <RowsListView<JobRowData>
+        rows={rows}
+        columns={columns}
+        fetching={result.fetching}
+        error={snapshot ? null : result.error}
         emptyMessage={t("operator.operations.empty")}
-        rowKey={(job) => job.name}
-        rows={jobs}
       />
 
       <Card>
@@ -157,26 +117,97 @@ export function OperationsSection(): ReactNode {
           </div>
         </CardContent>
       </Card>
-    </OperatorSection>
+    </>
   );
 }
 
-function OperationsLoading(): ReactNode {
-  return (
-    <>
-      <DaemonResourceTableSkeleton columnCount={2} actions />
-      <Card>
-        <CardHeader>
-          <Skeleton shape="text" size="md" className="w-32" />
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-wrap gap-2">
-            {Array.from({ length: 4 }, (_, index) => (
-              <Skeleton key={index} className="h-btn-sm w-20" />
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-    </>
+/**
+ * The operations actions: the per-job run plus the four stack lifecycle controls.
+ * Each runs via {@link runDaemonAction} and surfaces a failure as a toast — the
+ * live snapshot then reflects the new state, so the pane needs no local result
+ * store. The destroy control confirms (styled) before running.
+ */
+function useOperationActions(refetch: () => void): {
+  runJob: (job: JobState) => void;
+  stackActions: readonly StackAction[];
+  runStack: (action: StackAction) => void;
+  busy: boolean;
+} {
+  const t = useOperatorT();
+  const confirm = useConfirm();
+  const toast = useToast();
+
+  const build = useOperatorAction<DaemonActionData, StackVars>(STACK_BUILD_MUTATION);
+  const up = useOperatorAction<DaemonActionData, StackVars>(STACK_UP_MUTATION);
+  const down = useOperatorAction<DaemonActionData, StackVars>(STACK_DOWN_MUTATION);
+  const destroy = useOperatorAction<DaemonActionData, StackVars>(STACK_DESTROY_MUTATION);
+  const jobRun = useOperatorAction<DaemonActionData, JobVars>(JOB_RUN_MUTATION);
+  const busy =
+    build.result.fetching ||
+    up.result.fetching ||
+    down.result.fetching ||
+    destroy.result.fetching ||
+    jobRun.result.fetching;
+
+  const runJob = useMemo(
+    () => (job: JobState) => {
+      void runDaemonAction({
+        run: jobRun.run,
+        field: "jobRun",
+        variables: { name: job.name },
+        label: t("operator.operations.run"),
+        setError: (message) => {
+          if (message) toast.danger({ title: message });
+        },
+        refetch,
+      });
+    },
+    [jobRun.run, refetch, t, toast],
   );
+
+  const stackActions = useMemo<readonly StackAction[]>(
+    () => [
+      { field: "stackBuild", label: t("operator.operations.stack.build"), variant: "secondary", variables: {}, run: build.run },
+      { field: "stackUp", label: t("operator.operations.stack.up"), variant: "secondary", variables: {}, run: up.run },
+      { field: "stackDown", label: t("operator.operations.stack.down"), variant: "ghost", variables: {}, run: down.run },
+      {
+        field: "stackDestroy",
+        label: t("operator.operations.stack.destroy"),
+        variant: "ghost",
+        variables: { purge: false },
+        dangerous: true,
+        run: destroy.run,
+      },
+    ],
+    [build.run, destroy.run, down.run, t, up.run],
+  );
+
+  const runStack = useMemo(
+    () => (action: StackAction) => {
+      void (async () => {
+        if (action.dangerous) {
+          const ok = await confirm({
+            title: t("operator.operations.stack.destroy.confirm.title"),
+            body: t("operator.operations.stack.destroy.confirm.body"),
+            confirm: action.label,
+            danger: true,
+          });
+          if (!ok) return;
+        }
+        await runDaemonAction({
+          run: action.run,
+          field: action.field,
+          variables: action.variables,
+          label: action.label,
+          setError: (message) => {
+            if (message) toast.danger({ title: message });
+          },
+          refetch,
+        });
+      })();
+    },
+    [confirm, refetch, t, toast],
+  );
+
+  return { runJob, stackActions, runStack, busy };
 }

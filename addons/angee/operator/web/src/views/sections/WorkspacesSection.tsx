@@ -1,5 +1,12 @@
-import { Button, Skeleton, useConfirm } from "@angee/base";
-import { useState, type ReactNode } from "react";
+import {
+  Button,
+  RowsListView,
+  Skeleton,
+  useConfirm,
+  useToast,
+  type ListColumn,
+} from "@angee/base";
+import { useMemo, type ReactNode } from "react";
 
 import {
   WORKSPACE_DESTROY_MUTATION,
@@ -8,94 +15,103 @@ import {
 import { useOperatorT } from "../../i18n";
 import { useOperatorAction, useOperatorSnapshot } from "../../data/transport";
 import type { WorkspaceRef } from "../../data/types";
-import {
-  DaemonResourceTable,
-  DaemonResourceTableSkeleton,
-  type DaemonResourceAction,
-} from "../parts/DaemonResourceTable";
 import { OperatorSection } from "../parts/OperatorSection";
 import { runDaemonAction, type DaemonActionData } from "../parts/run-action";
 
 interface WorkspaceActionVars extends Record<string, unknown> {
   name: string;
 }
-interface WorkspaceAction {
-  field: string;
+
+/** A lifecycle action rendered per workspace row: its label, tone, and handler. */
+interface WorkspaceRowAction {
   label: string;
   variant: "secondary" | "ghost";
-  /** Destructive — require a styled confirmation naming the workspace first. */
-  dangerous?: boolean;
-  run: (variables: WorkspaceActionVars) => Promise<DaemonActionData>;
+  perform: (workspace: WorkspaceRef) => void;
 }
 
+// RowsListView keys rows by `id`; the daemon identifies a workspace by name.
+type WorkspaceRowData = WorkspaceRef & { id: string };
+
 export interface WorkspacesSectionProps {
-  /** Restrict the table to these workspace names; omit to show every workspace. */
+  /** Restrict the list to these workspace names; omit to show every workspace. */
   names?: readonly string[];
-  /** Override the pane title (e.g. when embedded for one agent's workspace). */
+  /** Retained for API compatibility; the console nav owns the page heading. */
   title?: ReactNode;
 }
 
 /** Workspaces pane: the daemon's worktree workspaces with sync/destroy actions. */
-export function WorkspacesSection({ names, title }: WorkspacesSectionProps = {}): ReactNode {
-  const {
-    actionError,
-    actions,
-    busy,
-    result,
-    snapshot,
-    t,
-    workspaces,
-  } = useWorkspaceControls(names);
+export function WorkspacesSection({ names }: WorkspacesSectionProps = {}): ReactNode {
+  const t = useOperatorT();
+  const { snapshot, result, refetch } = useOperatorSnapshot({ workspaces: true });
+  const { actions, busy } = useWorkspaceActions(refetch);
+
+  const rows = useMemo<readonly WorkspaceRowData[]>(
+    () =>
+      (snapshot?.workspaces ?? [])
+        .filter((workspace) => names === undefined || names.includes(workspace.name))
+        .map((workspace) => ({ ...workspace, id: workspace.name })),
+    [names, snapshot],
+  );
+
+  const columns = useMemo<readonly ListColumn<WorkspaceRowData>[]>(
+    () => [
+      {
+        field: "name",
+        header: t("operator.workspaces.column.name"),
+        render: (workspace) => <span className="font-medium text-fg">{workspace.name}</span>,
+      },
+      {
+        field: "template",
+        header: t("operator.workspaces.column.template"),
+        render: (workspace) => (
+          <span className="text-13 text-fg-muted">{workspace.template}</span>
+        ),
+      },
+      {
+        field: "path",
+        header: t("operator.workspaces.column.path"),
+        render: (workspace) => (
+          <span className="font-mono text-13 text-fg-muted">{workspace.path}</span>
+        ),
+      },
+      {
+        field: "processComposePort",
+        header: t("operator.workspaces.column.port"),
+        align: "right",
+        render: (workspace) => (
+          <span className="text-13 tabular-nums text-fg-muted">
+            {workspace.processComposePort ?? "—"}
+          </span>
+        ),
+      },
+      {
+        field: "ttl",
+        header: t("operator.workspaces.column.ttl"),
+        render: (workspace) => (
+          <span className="text-13 text-fg-muted">{workspace.ttl ?? "—"}</span>
+        ),
+      },
+      {
+        field: "actions",
+        header: t("operator.table.actions"),
+        sortable: false,
+        align: "right",
+        render: (workspace) => (
+          <WorkspaceActions actions={actions} busy={busy} workspace={workspace} />
+        ),
+      },
+    ],
+    [actions, busy, t],
+  );
 
   return (
-    <OperatorSection
-      title={title === undefined ? t("section.operator.workspaces.title") : title}
-      loading={result.fetching && !snapshot}
-      error={result.error && !snapshot ? result.error : null}
-      loadingMessage={t("operator.workspaces.loading")}
-      loadingContent={<DaemonResourceTableSkeleton columnCount={5} actions />}
-      actionError={actionError}
-    >
-      <DaemonResourceTable
-        actions={actions}
-        actionsLabel={t("operator.table.actions")}
-        busy={busy}
-        columns={[
-          {
-            header: t("operator.workspaces.column.name"),
-            cell: (workspace) => <span className="font-medium text-fg">{workspace.name}</span>,
-          },
-          {
-            header: t("operator.workspaces.column.template"),
-            cell: (workspace) => (
-              <span className="text-13 text-fg-muted">{workspace.template}</span>
-            ),
-          },
-          {
-            header: t("operator.workspaces.column.path"),
-            cell: (workspace) => (
-              <span className="font-mono text-13 text-fg-muted">{workspace.path}</span>
-            ),
-          },
-          {
-            header: t("operator.workspaces.column.port"),
-            align: "end",
-            cell: (workspace) => (
-              <span className="text-13 tabular-nums text-fg-muted">
-                {workspace.processComposePort ?? "—"}
-              </span>
-            ),
-          },
-          {
-            header: t("operator.workspaces.column.ttl"),
-            cell: (workspace) => <span className="text-13 text-fg-muted">{workspace.ttl ?? "—"}</span>,
-          },
-        ]}
-        emptyMessage={t("operator.workspaces.empty")}
-        rowKey={(workspace) => workspace.name}
-        rows={workspaces}
-      />
-    </OperatorSection>
+    <RowsListView<WorkspaceRowData>
+      rows={rows}
+      columns={columns}
+      fetching={result.fetching}
+      error={snapshot ? null : result.error}
+      emptyMessage={t("operator.workspaces.empty")}
+    />
   );
 }
 
@@ -108,16 +124,11 @@ export interface WorkspaceRowProps {
 
 /** Compact single-workspace row for views that already own the workspace identity. */
 export function WorkspaceRow({ name, emptyMessage }: WorkspaceRowProps): ReactNode {
-  const {
-    actionError,
-    actions,
-    busy,
-    result,
-    snapshot,
-    t,
-    workspaces,
-  } = useWorkspaceControls([name]);
-  const workspace = workspaces[0] ?? null;
+  const t = useOperatorT();
+  const { snapshot, result, refetch } = useOperatorSnapshot({ workspaces: true });
+  const { actions, busy } = useWorkspaceActions(refetch);
+  const workspace =
+    (snapshot?.workspaces ?? []).find((candidate) => candidate.name === name) ?? null;
 
   return (
     <OperatorSection
@@ -125,14 +136,9 @@ export function WorkspaceRow({ name, emptyMessage }: WorkspaceRowProps): ReactNo
       error={result.error && !snapshot ? result.error : null}
       loadingMessage={t("operator.workspaces.loading")}
       loadingContent={<WorkspaceRowSkeleton />}
-      actionError={actionError}
     >
       {workspace ? (
-        <WorkspaceControlRow
-          actions={actions}
-          busy={busy}
-          workspace={workspace}
-        />
+        <WorkspaceControlRow actions={actions} busy={busy} workspace={workspace} />
       ) : (
         <p className="border-y border-border-subtle py-3 text-13 text-fg-muted">
           {emptyMessage ?? t("operator.workspaces.empty")}
@@ -142,72 +148,93 @@ export function WorkspaceRow({ name, emptyMessage }: WorkspaceRowProps): ReactNo
   );
 }
 
-function useWorkspaceControls(names?: readonly string[]): {
-  actionError: string | null;
-  actions: readonly DaemonResourceAction<WorkspaceRef>[];
+/**
+ * The two workspace lifecycle actions, each wrapped to confirm (when destructive),
+ * run via {@link runDaemonAction}, and surface a failure as a toast — the live
+ * snapshot then reflects the new state, so the row needs no local result store.
+ */
+function useWorkspaceActions(refetch: () => void): {
+  actions: readonly WorkspaceRowAction[];
   busy: boolean;
-  result: ReturnType<typeof useOperatorSnapshot>["result"];
-  snapshot: ReturnType<typeof useOperatorSnapshot>["snapshot"];
-  t: ReturnType<typeof useOperatorT>;
-  workspaces: readonly WorkspaceRef[];
 } {
   const t = useOperatorT();
   const confirm = useConfirm();
-  const { snapshot, result, refetch } = useOperatorSnapshot({ workspaces: true });
-  const [actionError, setActionError] = useState<string | null>(null);
+  const toast = useToast();
 
   const syncBase = useOperatorAction<DaemonActionData, WorkspaceActionVars>(WORKSPACE_SYNC_BASE_MUTATION);
   const destroy = useOperatorAction<DaemonActionData, WorkspaceActionVars>(WORKSPACE_DESTROY_MUTATION);
   const busy = syncBase.result.fetching || destroy.result.fetching;
 
-  const workspaces = (snapshot?.workspaces ?? []).filter(
-    (workspace) => names === undefined || names.includes(workspace.name),
+  const actions = useMemo<readonly WorkspaceRowAction[]>(() => {
+    const defs = [
+      { field: "workspaceSyncBase", label: t("operator.workspaces.syncBase"), variant: "secondary" as const, run: syncBase.run },
+      {
+        field: "workspaceDestroy",
+        label: t("operator.workspaces.destroy"),
+        variant: "ghost" as const,
+        dangerous: true,
+        run: destroy.run,
+      },
+    ];
+    return defs.map((def) => ({
+      label: def.label,
+      variant: def.variant,
+      perform: (workspace: WorkspaceRef) => {
+        void (async () => {
+          if (def.dangerous) {
+            const ok = await confirm({
+              title: t("operator.workspaces.destroy.confirm.title"),
+              body: t("operator.workspaces.destroy.confirm.body", { name: workspace.name }),
+              confirm: def.label,
+              danger: true,
+            });
+            if (!ok) return;
+          }
+          await runDaemonAction({
+            run: def.run,
+            field: def.field,
+            variables:
+              def.field === "workspaceDestroy"
+                ? { name: workspace.name, purge: false }
+                : { name: workspace.name },
+            label: def.label,
+            setError: (message) => {
+              if (message) toast.danger({ title: message });
+            },
+            refetch,
+          });
+        })();
+      },
+    }));
+  }, [confirm, destroy.run, refetch, syncBase.run, t, toast]);
+
+  return { actions, busy };
+}
+
+function WorkspaceActions({
+  actions,
+  busy,
+  workspace,
+}: {
+  actions: readonly WorkspaceRowAction[];
+  busy: boolean;
+  workspace: WorkspaceRef;
+}): ReactNode {
+  return (
+    <div className="flex justify-end gap-1">
+      {actions.map((action) => (
+        <Button
+          key={action.label}
+          disabled={busy}
+          onClick={() => action.perform(workspace)}
+          size="sm"
+          variant={action.variant}
+        >
+          {action.label}
+        </Button>
+      ))}
+    </div>
   );
-  const actions: readonly WorkspaceAction[] = [
-    { field: "workspaceSyncBase", label: t("operator.workspaces.syncBase"), variant: "secondary", run: syncBase.run },
-    { field: "workspaceDestroy", label: t("operator.workspaces.destroy"), variant: "ghost", dangerous: true, run: destroy.run },
-  ];
-
-  function handle(action: WorkspaceAction, workspace: WorkspaceRef): void {
-    void (async () => {
-      if (action.dangerous) {
-        const ok = await confirm({
-          title: t("operator.workspaces.destroy.confirm.title"),
-          body: t("operator.workspaces.destroy.confirm.body", { name: workspace.name }),
-          confirm: action.label,
-          danger: true,
-        });
-        if (!ok) return;
-      }
-      await runDaemonAction({
-        run: action.run,
-        field: action.field,
-        variables:
-          action.field === "workspaceDestroy"
-            ? { name: workspace.name, purge: false }
-            : { name: workspace.name },
-        label: action.label,
-        setError: setActionError,
-        refetch,
-      });
-    })();
-  }
-
-  return {
-    actionError,
-    actions: actions.map(
-      (action): DaemonResourceAction<WorkspaceRef> => ({
-        label: action.label,
-        variant: action.variant,
-        run: (workspace) => handle(action, workspace),
-      }),
-    ),
-    busy,
-    result,
-    snapshot,
-    t,
-    workspaces,
-  };
 }
 
 function WorkspaceControlRow({
@@ -215,7 +242,7 @@ function WorkspaceControlRow({
   busy,
   workspace,
 }: {
-  actions: readonly DaemonResourceAction<WorkspaceRef>[];
+  actions: readonly WorkspaceRowAction[];
   busy: boolean;
   workspace: WorkspaceRef;
 }): ReactNode {
@@ -226,28 +253,12 @@ function WorkspaceControlRow({
         "items-center gap-6 border-y border-border-subtle py-2 text-13"
       }
     >
-      <span className="min-w-0 truncate font-medium text-fg">
-        {workspace.name}
-      </span>
-      <span className="min-w-0 truncate text-fg-muted">
-        {workspace.template}
-      </span>
+      <span className="min-w-0 truncate font-medium text-fg">{workspace.name}</span>
+      <span className="min-w-0 truncate text-fg-muted">{workspace.template}</span>
       <span className="min-w-0 truncate font-mono text-fg-muted" title={workspace.path}>
         {workspace.path}
       </span>
-      <div className="flex shrink-0 justify-end gap-1 whitespace-nowrap">
-        {actions.map((action, index) => (
-          <Button
-            disabled={busy}
-            key={index}
-            onClick={() => void action.run(workspace)}
-            size="sm"
-            variant={action.variant}
-          >
-            {action.label}
-          </Button>
-        ))}
-      </div>
+      <WorkspaceActions actions={actions} busy={busy} workspace={workspace} />
     </div>
   );
 }
