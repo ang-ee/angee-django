@@ -40,6 +40,7 @@ def issue_flow(
     user_id: str | None = None,
     next_path: str = "/",
     flow: state.StateFlow = state.StateFlow.CONNECT,
+    integration_id: str = "",
 ) -> tuple[str, state.StateRecord, str, str]:
     """Issue and session-bind state for one redirect flow.
 
@@ -55,6 +56,7 @@ def issue_flow(
         user_id=user_id,
         next_path=next_path,
         flow=flow,
+        integration_id=integration_id,
     )
     session = cast(Any, request).session
     session[f"{_SESSION_OAUTH_CLIENT_PREFIX}{state_token}"] = str(oauth_client.sqid)

@@ -28,23 +28,19 @@ export function InferenceProvidersPage(): React.ReactElement {
     [refreshProviderModels],
   );
 
-  const backendClassOptions = useEnumOptions(PROVIDER_MODEL, "backendClass");
-
   return (
     <DataPage model={PROVIDER_MODEL} placement="inline" routed>
       <List model={PROVIDER_MODEL}>
         <Column field="name" />
-        <Column field="backendClass" />
-        <Column field="status" widget="statusBadge" />
+        <Column field="integration.implLabel" header="Implementation" />
+        <Column field="integration.status" header="Status" widget="statusBadge" />
       </List>
       <Form model={PROVIDER_MODEL}>
         <Field name="name" title />
         <Field name="integration" createOnly />
         <Group label={t("agents.inference.backend")} columns={2}>
-          <Field name="backendClass" widget="select" options={backendClassOptions} createOnly />
           <Field name="baseUrl" />
         </Group>
-        <Field name="status" widget="statusbar" />
         <Field name="config" widget="json" />
         <Action id="refresh-models" label={t("agents.inference.refreshModels")} icon="refresh" run={refreshModels} />
       </Form>

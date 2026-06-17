@@ -147,6 +147,7 @@ function ListViewBody<TRow extends Row = Row>({
   onRowClick,
   onListStateChange,
   rowHref,
+  cardActions,
   emptyMessage = "No records.",
   emptyState,
   className,
@@ -319,6 +320,10 @@ function ListViewBody<TRow extends Row = Row>({
     surface.selectedIds,
     dataView.clearSelectedIds,
   );
+  const cardActionContext = React.useMemo(
+    () => ({ refresh: surface.list.refetch }),
+    [surface.list.refetch],
+  );
 
   return (
     <>
@@ -419,6 +424,8 @@ function ListViewBody<TRow extends Row = Row>({
             emptyMessage={emptyContent}
             rowHref={rowHref}
             onRowClick={onRowClick}
+            cardActions={cardActions}
+            cardActionContext={cardActionContext}
           />
         ) : flatMeasures.length > 0 ? (
           <FlatListBodyWithAggregate

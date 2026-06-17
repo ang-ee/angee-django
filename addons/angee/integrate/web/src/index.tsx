@@ -81,7 +81,7 @@ const integrateRoutes: readonly BaseAddonRoute[] = [
     path: "/integrate/vcs",
     shell: "console",
     component: VCSIntegrationsPage,
-    model: "VCSIntegration",
+    model: "VcsBridge",
   },
   {
     name: "integrate.vcsIntegration",

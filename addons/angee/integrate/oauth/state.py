@@ -47,6 +47,7 @@ class StateRecord:
     created_at: datetime
     next_path: str = ""
     flow: StateFlow = StateFlow.LOGIN
+    integration_id: str = ""
 
 
 def issue(
@@ -56,6 +57,7 @@ def issue(
     user_id: str | None = None,
     next_path: str = "",
     flow: StateFlow = StateFlow.LOGIN,
+    integration_id: str = "",
 ) -> tuple[str, StateRecord]:
     """Create and cache one single-use redirect state record."""
 
@@ -73,6 +75,7 @@ def issue(
         created_at=timezone.now(),
         next_path=next_path,
         flow=flow,
+        integration_id=integration_id,
     )
     cache.set(_cache_key(state_token), record, timeout=_state_ttl_seconds())
     return state_token, record

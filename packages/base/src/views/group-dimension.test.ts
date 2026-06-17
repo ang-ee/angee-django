@@ -34,6 +34,19 @@ describe("dataViewGroupToAggregateDimension", () => {
     });
   });
 
+  test("can group on one row field while querying a different aggregate axis", () => {
+    expect(
+      dataViewGroupToAggregateDimension({
+        field: "vendorLabel",
+        aggregateField: "vendor",
+        aggregateKey: "vendorId",
+      }),
+    ).toEqual({
+      field: "VENDOR",
+      key: "vendorId",
+    });
+  });
+
   test("carries granularity through, uppercased", () => {
     expect(
       dataViewGroupToAggregateDimension({
@@ -61,5 +74,15 @@ describe("groupOrderField", () => {
     expect(groupOrderField({ field: "oauthClient_IsEnabled" })).toBe(
       "oauth_client__is_enabled",
     );
+  });
+
+  test("orders by the aggregate axis when it differs from the row field", () => {
+    expect(
+      groupOrderField({
+        field: "vendorLabel",
+        aggregateField: "vendor",
+        aggregateKey: "vendorId",
+      }),
+    ).toBe("vendor");
   });
 });

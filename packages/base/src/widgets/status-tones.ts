@@ -23,12 +23,12 @@ export const STATUS_TONES: ToneValueBuckets = {
     "running", "ready", "up", "online", "healthy", "completed",
   ],
   warning: [
-    "draft", "review", "pending", "in_review",
+    "draft", "paused", "review", "pending", "in_review",
     "provisioning", "deprovisioning", "starting", "warning", "degraded",
   ],
   danger: ["error", "failed", "denied", "lost", "down", "crashed"],
   neutral: [
-    "archived", "deleted", "rejected", "blocked",
+    "archived", "deleted", "disabled", "rejected", "blocked",
     "stopped", "deprovisioned", "idle", "inactive", "offline", "unknown", "default",
   ],
 };

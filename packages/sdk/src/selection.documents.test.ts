@@ -131,6 +131,42 @@ const SDL = /* GraphQL */ `
     sum: SaleSumFields
   }
 
+  type IntegrationType implements Node {
+    id: ID!
+    status: String!
+    implClass: String!
+  }
+
+  input IntegrationFilter {
+    status: StrFilterLookup
+  }
+
+  input IntegrationAggregateGroupBySpec {
+    field: String!
+  }
+
+  input IntegrationAggregateGroupOrder {
+    field: String!
+    direction: OrderDirection! = ASC
+  }
+
+  type IntegrationAggregateGroupKey {
+    implClass: String
+    status: String
+  }
+
+  type IntegrationAggregateGrouped {
+    key: IntegrationAggregateGroupKey!
+    count: Int!
+    filter: JSON!
+  }
+
+  type IntegrationAggregateGroupedResult {
+    pageInfo: OffsetPaginationInfo!
+    totalCount: Int!
+    results: [IntegrationAggregateGrouped!]!
+  }
+
   type SaleRevision {
     id: ID!
     createdAt: DateTime!
@@ -216,6 +252,12 @@ const SDL = /* GraphQL */ `
       filter: SaleFilter
       orderBy: [SaleGroupOrder!] = null
     ): SaleGroupedResult!
+    integrationGroups(
+      groupBy: [IntegrationAggregateGroupBySpec!]!
+      pagination: OffsetPaginationInput
+      filter: IntegrationFilter
+      orderBy: [IntegrationAggregateGroupOrder!] = null
+    ): IntegrationAggregateGroupedResult!
     saleRevisions(id: ID!): [SaleRevision!]!
     oauthClientRecord(id: ID!): OAuthClient
     identityClients(pagination: OffsetPaginationInput): OAuthClientOffsetPaginated!
@@ -474,6 +516,28 @@ describe("aggregate documents", () => {
         "$pagination: OffsetPaginationInput, $orderBy: [SaleGroupOrder!]) { " +
         "saleBreakdown(groupBy: $groupBy, pagination: $pagination, orderBy: $orderBy) { " +
         "totalCount results { key { createdAtMonth } count } " +
+        "pageInfo { offset limit } } }",
+    );
+    expectValid(document);
+  });
+
+  test("the grouped aggregate uses schema-declared group input and order input types", () => {
+    const document = assembleGroupByDocument(
+      "integrate.Integration",
+      rootFields("integrate.Integration"),
+      {
+        keyFields: ["implClass"],
+        withFilter: true,
+        withOrderBy: true,
+      },
+    );
+    expect(document).toBe(
+      "query integrationGroups($groupBy: [IntegrationAggregateGroupBySpec!]!, " +
+        "$pagination: OffsetPaginationInput, $filter: IntegrationFilter, " +
+        "$orderBy: [IntegrationAggregateGroupOrder!]) { " +
+        "integrationGroups(groupBy: $groupBy, pagination: $pagination, " +
+        "filter: $filter, orderBy: $orderBy) { " +
+        "totalCount results { key { implClass } count } " +
         "pageInfo { offset limit } } }",
     );
     expectValid(document);

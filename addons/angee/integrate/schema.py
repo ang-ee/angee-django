@@ -25,6 +25,7 @@ from strawberry_django.pagination import OffsetPaginated
 
 from angee.base.models import instance_from_public_id
 from angee.graphql.actions import ActionResult
+from angee.graphql.aggregates import rebac_aggregate_builder
 from angee.graphql.crud import crud
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.node import AngeeNode
@@ -37,7 +38,7 @@ from angee.integrate import connect as _connect
 from angee.integrate.credentials import handler_for
 from angee.integrate.oauth import flow, state
 from angee.integrate.oauth.client import OAuthClientProtocol
-from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, OAuthFlowError
+from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, OAuthFlowError
 from angee.integrate.registry import bridge_models
 
 Vendor = apps.get_model("integrate", "Vendor")
@@ -394,6 +395,20 @@ class ConnectAccountResult:
 
 
 @strawberry.type
+class ConnectIntegrationResult:
+    """Result returned by one-click integration connect/attach."""
+
+    integration: "IntegrationType | None" = None
+    authorize_url: str = ""
+    state: str = ""
+    error: str | None = None
+    error_code: str | None = None
+    mode: str = "auto"
+    redirect_uri: str = ""
+    attached: bool = False
+
+
+@strawberry.type
 class UnlinkAccountResult:
     """Result returned by the account-disconnect mutation."""
 
@@ -499,6 +514,79 @@ def _flow_error_message(error: OAuthFlowError) -> str:
     return error.provider_message or str(error)
 
 
+def _integration_impl_class(impl_class: str) -> type:
+    """Return the configured implementation class for one integration key."""
+
+    field = cast(Any, Integration._meta.get_field("impl_class"))
+    return cast(type, field.resolve_class(impl_class))
+
+
+def _oauth_client_for_integration(integration: Any) -> Any:
+    """Return the OAuth client this integration implementation connects through."""
+
+    impl = integration.impl
+    hint = str(getattr(impl, "oauth_client", "") or "")
+    if not hint:
+        vendor = getattr(integration, "vendor", None)
+        hint = str(getattr(vendor, "slug", "") or "")
+    if not hint:
+        raise OAuthFlowError("integration_not_connectable", 400, "Integration has no OAuth client.")
+    vendor_slug = str(getattr(getattr(integration, "vendor", None), "slug", "") or "")
+    slug = hint.format(vendor=vendor_slug)
+    with system_context(reason="integrate.graphql.connect_integration.oauth_client"):
+        oauth_client = OAuthClient.objects.filter(slug=slug, environment="prod").first()
+        if oauth_client is None:
+            oauth_client = OAuthClient.objects.filter(slug=slug).order_by("environment").first()
+    if oauth_client is None or not oauth_client.is_enabled:
+        raise OAuthFlowError("integration_not_connectable", 400, "Integration has no enabled OAuth client.")
+    return oauth_client
+
+
+def _current_user_integration(
+    user: Any,
+    *,
+    integration_id: relay.GlobalID | None,
+    vendor_slug: str,
+    impl_class: str,
+) -> Any:
+    """Return the current user's target integration, creating the draft selector row when needed."""
+
+    if integration_id is not None:
+        integration = _resolve(Integration, integration_id, reason="integrate.graphql.connect_integration")
+        if integration.owner_id != user.pk:
+            raise PermissionDenied("Integration does not belong to the current user.")
+        return integration
+
+    vendor_key = vendor_slug.strip()
+    impl_key = impl_class.strip()
+    if not (vendor_key and impl_key):
+        raise ValueError("connectIntegration requires integrationId or vendorSlug and implClass.")
+    _integration_impl_class(impl_key)
+    vendor = _vendor_by_slug(vendor_key)
+    with system_context(reason="integrate.graphql.connect_integration.draft"), transaction.atomic():
+        integration, _created = Integration.objects.get_or_create(
+            owner=user,
+            vendor=vendor,
+            impl_class=impl_key,
+            defaults={"status": "draft"},
+        )
+    return integration
+
+
+def _attach_completed_integration(integration_sqid: str, user: Any, credential: Any) -> None:
+    """Attach a freshly connected credential to the integration named in OAuth state."""
+
+    if not integration_sqid:
+        return
+    with system_context(reason="integrate.graphql.connect_integration.complete"):
+        integration = Integration.objects.filter(sqid=integration_sqid).first()
+    if integration is None or integration.owner_id != user.pk:
+        raise OAuthFlowError(INVALID_STATE, 400)
+    if credential.user_id != user.pk:
+        raise PermissionDenied("Credential does not belong to the current user.")
+    integration.attach_credential(credential)
+
+
 def _admin_delete(
     model: Any,
     node_id: str,
@@ -584,6 +672,71 @@ class ConnectionMutation:
         )
 
     @strawberry.mutation
+    def connect_integration(
+        self,
+        info: strawberry.Info,
+        integration_id: relay.GlobalID | None = None,
+        vendor_slug: str = "",
+        impl_class: str = "",
+        redirect_uri: str = "",
+        next: str = "/",
+    ) -> ConnectIntegrationResult:
+        """Attach this user's live credential to an integration, or start OAuth."""
+
+        user = _session_user(info)
+        request = _request(info)
+        try:
+            integration = _current_user_integration(
+                user,
+                integration_id=integration_id,
+                vendor_slug=vendor_slug,
+                impl_class=impl_class,
+            )
+            oauth_client = _oauth_client_for_integration(integration)
+            credential = Credential.objects.live_oauth_for_user(user, oauth_client)
+            if credential is not None:
+                if credential.user_id != user.pk:
+                    raise PermissionDenied("Credential does not belong to the current user.")
+                integration.attach_credential(credential)
+                return ConnectIntegrationResult(
+                    integration=cast("IntegrationType", integration),
+                    attached=True,
+                )
+
+            if not redirect_uri:
+                raise OAuthFlowError("redirect_uri_required", 400, "OAuth redirect URI is required.")
+            if oauth_client.configuration_state != "ready":
+                raise OAuthFlowError(
+                    CLIENT_NOT_CONFIGURED,
+                    400,
+                    f"OAuth client is not fully configured ({oauth_client.configuration_state}).",
+                )
+            state_token, record, effective_redirect_uri, mode = flow.issue_flow(
+                request,
+                oauth_client,
+                redirect_uri,
+                user_id=str(user.pk),
+                next_path=flow.coerce_next_path(next, request),
+                flow=state.StateFlow.CONNECT,
+                integration_id=str(integration.sqid),
+            )
+            authorize_url = OAuthClientProtocol(oauth_client).authorize_url(
+                state=state_token,
+                redirect_uri=effective_redirect_uri,
+                scopes=oauth_client.default_scope_values,
+                code_challenge=flow.pkce_challenge(record.code_verifier),
+            )
+        except OAuthFlowError as error:
+            return ConnectIntegrationResult(error=_flow_error_message(error), error_code=error.code)
+        return ConnectIntegrationResult(
+            integration=cast("IntegrationType", integration),
+            authorize_url=authorize_url,
+            state=state_token,
+            mode=mode,
+            redirect_uri=effective_redirect_uri,
+        )
+
+    @strawberry.mutation
     def connect_account_complete(
         self,
         info: strawberry.Info,
@@ -603,6 +756,7 @@ class ConnectionMutation:
                 state_token=state,
                 redirect_uri=redirect_uri,
             )
+            _attach_completed_integration(result.integration_id, result.user, result.credential)
         except OAuthFlowError as error:
             return ConnectAccountResult(error=_flow_error_message(error), error_code=error.code)
         return ConnectAccountResult(
@@ -861,6 +1015,38 @@ class IntegrationType(AngeeNode):
         label = str(getattr(vendor, "display_name", "") or getattr(vendor, "slug", "") or "integration")
         return f"{label} ({cast(Any, self).status})"
 
+    @strawberry_django.field(only=["impl_class"])
+    def impl_category(self) -> str:
+        """Return this integration implementation's board grouping category.
+
+        Reads the class-level metadata off the resolved impl class — no instance,
+        no companion fetch — so a board/list render does not N+1 over companions.
+        """
+
+        impl_class = _integration_impl_class(cast(Any, self).impl_class)
+        return str(getattr(impl_class, "category", "") or "none")
+
+    @strawberry_django.field(only=["impl_class"])
+    def impl_label(self) -> str:
+        """Return this integration implementation's human label."""
+
+        impl_class = _integration_impl_class(cast(Any, self).impl_class)
+        return str(getattr(impl_class, "label", "") or cast(Any, self).impl_class)
+
+    @strawberry_django.field(only=["vendor"])
+    def vendor_slug(self) -> str:
+        """Return the vendor slug as a flat grouping field."""
+
+        vendor = getattr(cast(Any, self), "vendor", None)
+        return str(getattr(vendor, "slug", "") or "")
+
+    @strawberry_django.field(only=["vendor"])
+    def vendor_label(self) -> str:
+        """Return the vendor display label as a flat grouping field."""
+
+        vendor = getattr(cast(Any, self), "vendor", None)
+        return str(getattr(vendor, "display_name", "") or getattr(vendor, "slug", "") or "")
+
 
 @strawberry.input
 class VendorInput:
@@ -951,6 +1137,10 @@ class IntegrationInput:
     impl_class: str | None = strawberry.UNSET
     config: JSON | None = strawberry.UNSET
     status: str | None = strawberry.UNSET
+    name: str = ""
+    base_url: str = ""
+    webhook_secret: str = ""
+    companion_config: JSON | None = strawberry.UNSET
 
 
 @strawberry.input
@@ -967,6 +1157,42 @@ class IntegrationPatch:
     status: str | None = strawberry.UNSET
 
 
+@strawberry_django.filter_type(Integration, lookups=True)
+class IntegrationFilter:
+    """Field lookups accepted when filtering the integrations list.
+
+    The grouped integrations view needs filter echo for each server aggregate
+    axis so expanded buckets can page their rows through the normal list root.
+    Keep this to direct model fields; relation-path axes cannot echo filters.
+    """
+
+    vendor: auto
+    impl_class: auto
+    status: auto
+
+
+@strawberry_django.order_type(Integration)
+class IntegrationOrder:
+    """Orderings accepted by the integrations connection."""
+
+    vendor: auto
+    impl_class: auto
+    status: auto
+    created_at: auto
+    updated_at: auto
+
+
+_integration_aggregates = rebac_aggregate_builder(
+    model=Integration,
+    name_prefix="IntegrationAggregate",
+    aggregate_fields=["id"],
+    group_by_fields=["impl_class", "vendor", "status"],
+    filter_type=IntegrationFilter,
+    pagination_style="offset",
+    enable_filter_echo=True,
+).build()
+
+
 @strawberry.type
 class IntegrateConsoleQuery:
     """Admin integration catalogue and integration queries."""
@@ -978,11 +1204,15 @@ class IntegrateConsoleQuery:
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
     integrations: OffsetPaginated[IntegrationType] = strawberry_django.offset_paginated(
+        filters=IntegrationFilter,
+        order=IntegrationOrder,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
     integration: IntegrationType | None = strawberry_django.node(
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
+    integration_aggregate = _integration_aggregates.aggregate_field
+    integration_groups = _integration_aggregates.group_by_field
     webhook_subscriptions: OffsetPaginated[WebhookSubscriptionType] = strawberry_django.offset_paginated(
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
@@ -1002,16 +1232,41 @@ _VENDOR_MUTATION = crud(
 )
 """Admin vendor CRUD: const-admin gated by ``PlatformAdminPermission``, written elevated."""
 
+@strawberry.type
+class IntegrationCreateMutation:
+    """Admin create for an Integration and its optional implementation companion."""
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def create_integration(self, data: IntegrationInput) -> IntegrationType:
+        """Create a draft integration and companion row in one transaction."""
+
+        vendor = _resolve(Vendor, data.vendor, reason="integrate.graphql.integration.create.vendor")
+        owner = _user_from_global_id(data.owner)
+        impl_key = _create_impl_key(data.impl_class)
+        impl_class = _integration_impl_class(impl_key)
+        integration_config = {} if data.config in (strawberry.UNSET, None) else data.config
+        companion_values = _companion_create_values(data)
+        with system_context(reason="integrate.graphql.integration.create"), transaction.atomic():
+            integration = Integration.objects.create(
+                vendor=vendor,
+                owner=owner,
+                impl_class=impl_key,
+                config=integration_config,
+                status="draft",
+            )
+            impl_class.create_companion(integration, companion_values)
+        return cast(IntegrationType, integration)
+
+
 _INTEGRATION_MUTATION = crud(
     IntegrationType,
-    create=IntegrationInput,
     update=IntegrationPatch,
     delete=True,
     permission_classes=_ADMIN_PERMISSION_CLASSES,
     name="integration",
     write_context="integrate.graphql.integration",
 )
-"""Admin integration CRUD: FK inputs resolve via strawberry-django; written elevated."""
+"""Admin integration update/delete; create writes the companion through IntegrationCreateMutation."""
 
 _WEBHOOK_MUTATION = crud(
     WebhookSubscriptionType,
@@ -1056,6 +1311,29 @@ def _vendor_by_slug(slug: str) -> Any:
     if vendor is None:
         raise ValueError(f"Vendor {slug!r} was not found.")
     return vendor
+
+
+def _create_impl_key(value: str | None) -> str:
+    """Return the implementation key stored by an integration create."""
+
+    if value is None or value is strawberry.UNSET:
+        return "none"
+    return str(value).strip() or "none"
+
+
+def _companion_create_values(data: IntegrationInput) -> dict[str, Any]:
+    """Return companion field values from the combined integration create input."""
+
+    values: dict[str, Any] = {}
+    if data.name:
+        values["name"] = data.name
+    if data.base_url:
+        values["base_url"] = data.base_url
+    if data.webhook_secret:
+        values["webhook_secret"] = data.webhook_secret
+    if data.companion_config not in (strawberry.UNSET, None):
+        values["config"] = data.companion_config
+    return values
 
 
 @strawberry.type
@@ -1285,7 +1563,7 @@ class RepoCandidate:
 
 
 @strawberry.input
-class VCSIntegrationInput:
+class VcsBridgeInput:
     """Fields accepted when creating a VCS bridge companion."""
 
     integration: relay.GlobalID
@@ -1293,7 +1571,7 @@ class VCSIntegrationInput:
 
 
 @strawberry.input
-class VCSIntegrationPatch:
+class VcsBridgePatch:
     """Fields accepted when updating a VCS bridge companion."""
 
     id: relay.GlobalID
@@ -1376,8 +1654,8 @@ class VCSConsoleQuery:
 
 _VCS_INTEGRATION_MUTATION = crud(
     VcsBridgeType,
-    create=VCSIntegrationInput,
-    update=VCSIntegrationPatch,
+    create=VcsBridgeInput,
+    update=VcsBridgePatch,
     delete=True,
     permission_classes=_ADMIN_PERMISSION_CLASSES,
     name="vcs_integration",
@@ -1465,10 +1743,15 @@ _CONSOLE_TYPES: list[type] = [
     ConnectableAccount,
     OAuthStartPayload,
     ConnectAccountResult,
+    ConnectIntegrationResult,
     UnlinkAccountResult,
     RevealedCredentialSecret,
     VendorType,
     IntegrationType,
+    _integration_aggregates.aggregate_type,
+    _integration_aggregates.grouped_type,
+    _integration_aggregates.grouped_result_type,
+    _integration_aggregates.group_key_type,
     WebhookSubscriptionType,
     VcsBridgeType,
     RepositoryType,
@@ -1488,6 +1771,7 @@ schemas = {
             ConnectableAccount,
             OAuthStartPayload,
             ConnectAccountResult,
+            ConnectIntegrationResult,
             UnlinkAccountResult,
             VendorType,
             IntegrationType,
@@ -1502,6 +1786,7 @@ schemas = {
             IntegrateCredentialMutation,
             ConnectionMutation,
             _VENDOR_MUTATION,
+            IntegrationCreateMutation,
             _INTEGRATION_MUTATION,
             _WEBHOOK_MUTATION,
             _VCS_INTEGRATION_MUTATION,

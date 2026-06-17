@@ -75,6 +75,7 @@ class VCSBackend(IntegrationImpl):
 
     category = "vcs"
     companion_model = "integrate.VcsBridge"
+    companion_create_fields = ("webhook_secret",)
     label = "VCS"
     icon = "git-branch"
 

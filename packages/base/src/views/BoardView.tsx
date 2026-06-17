@@ -22,6 +22,7 @@ import {
 import type { ListEmptyContent } from "./list-view-types";
 import { columnTone } from "./page";
 import type { ColumnDescriptor } from "./page";
+import type { CardActionContext } from "./list-view-types";
 
 const BOARD_SCROLL_STYLE: React.CSSProperties = {
   height: LIST_VIEW_SCROLL_BUDGET,
@@ -40,6 +41,8 @@ export interface BoardViewProps<TRow extends Row = Row> {
   emptyMessage: ListEmptyContent;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
+  cardActions?: (row: TRow, context: CardActionContext) => React.ReactNode;
+  cardActionContext?: CardActionContext;
 }
 
 export function BoardView<TRow extends Row = Row>(
@@ -53,6 +56,8 @@ export function BoardView<TRow extends Row = Row>(
     emptyMessage,
     rowHref,
     onRowClick,
+    cardActions,
+    cardActionContext,
   } = props;
   return (
     <BoardRows
@@ -63,9 +68,15 @@ export function BoardView<TRow extends Row = Row>(
       emptyMessage={emptyMessage}
       rowHref={rowHref}
       onRowClick={onRowClick}
+      cardActions={cardActions}
+      cardActionContext={cardActionContext ?? EMPTY_CARD_ACTION_CONTEXT}
     />
   );
 }
+
+const EMPTY_CARD_ACTION_CONTEXT: CardActionContext = {
+  refresh: () => undefined,
+};
 
 function BoardRows<TRow extends Row>({
   columns,
@@ -75,6 +86,8 @@ function BoardRows<TRow extends Row>({
   emptyMessage,
   rowHref,
   onRowClick,
+  cardActions,
+  cardActionContext,
 }: {
   columns: readonly ColumnDescriptor<TRow>[];
   fetching: boolean;
@@ -83,6 +96,8 @@ function BoardRows<TRow extends Row>({
   emptyMessage: ListEmptyContent;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
+  cardActions?: (row: TRow, context: CardActionContext) => React.ReactNode;
+  cardActionContext: CardActionContext;
 }): React.ReactElement {
   const t = useBaseT();
   const leaves = groups.flatMap(flattenLeaves);
@@ -114,6 +129,8 @@ function BoardRows<TRow extends Row>({
           groupFields={groupFields}
           rowHref={rowHref}
           onRowClick={onRowClick}
+          cardActions={cardActions}
+          cardActionContext={cardActionContext}
         />
       ))}
     </div>
@@ -185,6 +202,8 @@ function BoardLane<TRow extends Row>({
   groupFields,
   rowHref,
   onRowClick,
+  cardActions,
+  cardActionContext,
 }: {
   columns: readonly ColumnDescriptor<TRow>[];
   group: RowGroup<TRow>;
@@ -192,6 +211,8 @@ function BoardLane<TRow extends Row>({
   groupFields: ReadonlySet<string>;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
+  cardActions?: (row: TRow, context: CardActionContext) => React.ReactNode;
+  cardActionContext: CardActionContext;
 }): React.ReactElement {
   const headingId = React.useId();
   const tone = laneDotTone(group, groupStack, columns);
@@ -219,6 +240,8 @@ function BoardLane<TRow extends Row>({
             row={row}
             rowHref={rowHref}
             onRowClick={onRowClick}
+            cardActions={cardActions}
+            cardActionContext={cardActionContext}
           />
         ))}
       </div>
@@ -232,24 +255,29 @@ function BoardRowCard<TRow extends Row>({
   row,
   rowHref,
   onRowClick,
+  cardActions,
+  cardActionContext,
 }: {
   columns: readonly ColumnDescriptor<TRow>[];
   groupFields: ReadonlySet<string>;
   row: TableRowModel<TRow>;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
+  cardActions?: (row: TRow, context: CardActionContext) => React.ReactNode;
+  cardActionContext: CardActionContext;
 }): React.ReactElement {
   const href = rowHref?.(row.original);
+  const actions = cardActions?.(row.original, cardActionContext);
   const cardColumns = columns
     .filter((column) => !groupFields.has(column.field))
     .slice(0, 4);
   const [titleColumn, ...detailColumns] = cardColumns;
   return (
-    <BoardCardShell
-      href={href}
-      onClick={onRowClick ? () => onRowClick(row.original) : undefined}
-    >
-      <article className="grid gap-2 rounded-lg border border-border-subtle bg-sheet p-3 shadow-xs transition hover:-translate-y-0.5 hover:border-border hover:shadow-md">
+    <article className="grid gap-2 rounded-lg border border-border-subtle bg-sheet p-3 shadow-xs transition hover:-translate-y-0.5 hover:border-border hover:shadow-md">
+      <BoardCardShell
+        href={href}
+        onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+      >
         {titleColumn ? (
           <span className="block min-w-0 truncate text-sm font-semibold text-fg">
             <ListCellContent column={titleColumn} row={row.original} />
@@ -268,8 +296,13 @@ function BoardRowCard<TRow extends Row>({
             </span>
           </div>
         ))}
-      </article>
-    </BoardCardShell>
+      </BoardCardShell>
+      {actions ? (
+        <footer className="flex items-center justify-end gap-2 border-t border-border-subtle pt-2">
+          {actions}
+        </footer>
+      ) : null}
+    </article>
   );
 }
 

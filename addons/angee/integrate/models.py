@@ -50,7 +50,7 @@ from rebac.models import active_relationship_model
 
 from angee.base.fields import EncryptedField, ImplClassField, SqidField, StateField
 from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeModel
+from angee.base.models import AngeeManager, AngeeModel
 from angee.integrate.credentials import CredentialKind, handler_for
 from angee.integrate.events import EventKind
 from angee.integrate.impl import IntegrationImpl
@@ -661,6 +661,22 @@ class CredentialManager(RebacManager.from_queryset(CredentialQuerySet)):  # type
 
     _REASON = "integrate.connections.credential"
 
+    def live_oauth_for_user(self, user: Any, oauth_client: Any) -> Any | None:
+        """Return this user's active, non-expired OAuth credential for one client."""
+
+        with system_context(reason="integrate.connections.credential.live"):
+            return (
+                self.filter(
+                    user=user,
+                    oauth_client=oauth_client,
+                    kind=CredentialKind.OAUTH,
+                    status=CredentialStatus.ACTIVE,
+                )
+                .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()))
+                .select_related("external_account", "oauth_client")
+                .first()
+            )
+
     def upsert_for_user(
         self,
         user: Any,
@@ -1011,12 +1027,6 @@ class IntegrationStatus(models.TextChoices):
         except ValueError as error:
             raise ValueError(f"Unsupported integration status: {raw}") from error
 
-    @property
-    def is_error(self) -> bool:
-        """Return whether this integration is in an error state."""
-
-        return self is IntegrationStatus.ERROR
-
 
 class Integration(SqidMixin, AuditMixin, AngeeModel):
     """A product/workspace integration to a vendor account.
@@ -1067,7 +1077,7 @@ class Integration(SqidMixin, AuditMixin, AngeeModel):
     last_error = models.TextField(blank=True)
     last_error_at = models.DateTimeField(null=True, blank=True)
 
-    objects = RebacManager()
+    objects = AngeeManager()
 
     class Meta:
         """Django model options for integrations."""
@@ -1137,6 +1147,18 @@ class Integration(SqidMixin, AuditMixin, AngeeModel):
         field = cast(ImplClassField, type(self)._meta.get_field("impl_class"))
         impl_class = cast(type[IntegrationImpl], field.resolve_class(self.impl_class))
         return impl_class(self, impl_class.companion_for(self))
+
+    def attach_credential(self, credential: Any) -> None:
+        """Attach a live credential and activate this draft integration."""
+
+        self.credential = credential
+        self.account = getattr(credential, "external_account", None)
+        if self.status == IntegrationStatus.DRAFT:
+            self.status = IntegrationStatus.ACTIVE
+        if self.pk is None:
+            return
+        with system_context(reason="integrate.integration.attach_credential"), transaction.atomic():
+            self.save(update_fields=["account", "credential", "status", "updated_at"])
 
     def report_status(self, status: IntegrationStatus | str, error: str = "") -> None:
         """Record implementation status telemetry and persist this integration."""

@@ -55,6 +55,10 @@ export interface ModelRootFieldMetadata {
   aggregate?: string;
   /** Query field returning grouped aggregate buckets. */
   groupBy?: string;
+  /** Input type accepted by the grouped aggregate root's `groupBy` argument. */
+  groupByInput?: string;
+  /** Input type accepted by the grouped aggregate root's `orderBy` argument. */
+  groupOrderInput?: string;
   /** Query field returning newest-first field revisions for one record. */
   revisions?: string;
   /** Selectable fields on the revision projection type, excluding `id`. */
@@ -222,8 +226,13 @@ function rootFieldsForType(
       if (rootFields.aggregate === undefined && isAggregateField(field, type)) {
         rootFields.aggregate = name;
       }
-      if (rootFields.groupBy === undefined && isGroupByField(field, type)) {
+      const groupBy = groupByFieldMetadata(field, type);
+      if (rootFields.groupBy === undefined && groupBy) {
         rootFields.groupBy = name;
+        rootFields.groupByInput = groupBy.groupByInput;
+        if (groupBy.groupOrderInput) {
+          rootFields.groupOrderInput = groupBy.groupOrderInput;
+        }
       }
       const revision = revisionFieldMetadata(field, type);
       if (rootFields.revisions === undefined && revision) {
@@ -280,17 +289,59 @@ function isAggregateField(
     && hasModelInputArg(field, type, "Filter");
 }
 
-function isGroupByField(
+interface GroupByFieldMetadata {
+  groupByInput: string;
+  groupOrderInput?: string;
+}
+
+function groupByFieldMetadata(
   field: GraphQLField<unknown, unknown>,
   type: GraphQLObjectType,
-): boolean {
+): GroupByFieldMetadata | null {
   const returnType = namedObjectType(field.type);
-  if (!returnType || !hasModelInputArg(field, type, "GroupBySpec")) return false;
+  const groupBySpec = groupBySpecArgName(field);
+  if (!returnType || !groupBySpec || !groupBySpecMatchesType(groupBySpec, type)) {
+    return null;
+  }
   const resultsType = returnType.getFields().results?.type;
   const rowType = resultsType ? listItemObjectType(resultsType) : null;
-  if (!rowType) return false;
+  if (!rowType) return null;
   const rowFields = rowType.getFields();
-  return "key" in rowFields && "count" in rowFields;
+  if (!("key" in rowFields && "count" in rowFields)) return null;
+  const groupOrderInput = groupOrderArgName(field);
+  return {
+    groupByInput: groupBySpec,
+    ...(groupOrderInput ? { groupOrderInput } : {}),
+  };
+}
+
+function groupBySpecArgName(
+  field: GraphQLField<unknown, unknown>,
+): string | null {
+  const arg = field.args.find((candidate) => candidate.name === "groupBy");
+  if (!arg) return null;
+  const inputType = getNamedType(arg.type);
+  if (!isInputObjectType(inputType)) return null;
+  const name = inputType.name;
+  return name.endsWith("GroupBySpec") ? name : null;
+}
+
+function groupOrderArgName(
+  field: GraphQLField<unknown, unknown>,
+): string | null {
+  const arg = field.args.find((candidate) => candidate.name === "orderBy");
+  if (!arg) return null;
+  const inputType = getNamedType(arg.type);
+  return isInputObjectType(inputType) ? inputType.name : null;
+}
+
+function groupBySpecMatchesType(
+  groupBySpecName: string,
+  type: GraphQLObjectType,
+): boolean {
+  const base = inputBaseName(type);
+  return groupBySpecName === `${base}GroupBySpec`
+    || groupBySpecName.startsWith(`${base}Aggregate`);
 }
 
 function revisionFieldMetadata(

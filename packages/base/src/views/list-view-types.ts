@@ -14,6 +14,11 @@ import type {
 import type { ListViewState } from "./data-view-surface";
 import type { ColumnDescriptor } from "./page";
 
+export interface CardActionContext {
+  /** Re-pull the collection backing the board/list surface. */
+  refresh: () => void;
+}
+
 export interface ListEmptyAction {
   label: ReactNode;
   href?: string;
@@ -63,6 +68,8 @@ export interface ListViewProps<TRow extends Row = Row> {
   onListStateChange?: (state: ListViewState<TRow>) => void;
   /** Optional href for a row, used when rows should render as links. */
   rowHref?: (row: TRow) => string;
+  /** Optional action content rendered in each board card footer. */
+  cardActions?: (row: TRow, context: CardActionContext) => ReactNode;
   /** Empty-state content shown when the list has no rows. */
   emptyMessage?: ReactNode;
   /** Structured empty-state content, including an optional action. */

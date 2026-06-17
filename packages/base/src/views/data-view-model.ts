@@ -65,6 +65,8 @@ export interface DataViewSort {
 
 export interface DataViewGroup {
   field: string;
+  aggregateField?: string;
+  aggregateKey?: string;
   granularity?: DataViewGroupGranularity;
 }
 
@@ -405,6 +407,8 @@ export class DataViewState {
   private static normaliseGroup(group: DataViewGroup): DataViewGroup {
     return {
       field: group.field,
+      ...(group.aggregateField ? { aggregateField: group.aggregateField } : {}),
+      ...(group.aggregateKey ? { aggregateKey: group.aggregateKey } : {}),
       ...(group.granularity ? { granularity: group.granularity } : {}),
     };
   }
@@ -511,17 +515,45 @@ function serializeDataViewSort(sort: DataViewSort): string {
 }
 
 function parseDataViewGroup(value: string): DataViewGroup | null {
-  const [field, granularity, extra] = value.split(":");
-  if (!field || extra !== undefined) return null;
-  if (granularity === undefined || granularity === "") return { field };
+  const [fieldPart, granularity, extra] = value.split(":");
+  if (!fieldPart || extra !== undefined) return null;
+  const group = parseDataViewGroupFields(fieldPart);
+  if (!group) return null;
+  const { field, aggregateField, aggregateKey } = group;
+  if (granularity === undefined || granularity === "") {
+    return {
+      field,
+      ...(aggregateField ? { aggregateField } : {}),
+      ...(aggregateKey ? { aggregateKey } : {}),
+    };
+  }
   if (!isGroupGranularity(granularity)) return null;
-  return { field, granularity };
+  return {
+    field,
+    ...(aggregateField ? { aggregateField } : {}),
+    ...(aggregateKey ? { aggregateKey } : {}),
+    granularity,
+  };
+}
+
+function parseDataViewGroupFields(value: string): Pick<
+  DataViewGroup,
+  "field" | "aggregateField" | "aggregateKey"
+> | null {
+  const parts = value.split("~");
+  if (parts.length === 1) return parts[0] ? { field: parts[0] } : null;
+  const [field, aggregateField, aggregateKey, extra] = parts;
+  if (!field || !aggregateField || !aggregateKey || extra !== undefined) {
+    return null;
+  }
+  return { field, aggregateField, aggregateKey };
 }
 
 function serializeDataViewGroup(group: DataViewGroup): string {
-  return group.granularity
-    ? `${group.field}:${group.granularity}`
+  const field = group.aggregateField || group.aggregateKey
+    ? `${group.field}~${group.aggregateField ?? group.field}~${group.aggregateKey ?? group.field}`
     : group.field;
+  return group.granularity ? `${field}:${group.granularity}` : field;
 }
 
 function parseDataViewGroupStack(value: string): readonly DataViewGroup[] | null {
@@ -541,7 +573,10 @@ export function dataViewGroupsEqual(
   left: DataViewGroup,
   right: DataViewGroup,
 ): boolean {
-  return left.field === right.field && left.granularity === right.granularity;
+  return left.field === right.field
+    && left.aggregateField === right.aggregateField
+    && left.aggregateKey === right.aggregateKey
+    && left.granularity === right.granularity;
 }
 
 function isGroupGranularity(value: string): value is DataViewGroupGranularity {

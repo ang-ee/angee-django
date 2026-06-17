@@ -81,6 +81,27 @@ describe("data-view model", () => {
     expect(state.view).toBe("board");
   });
 
+  test("round-trips groups with explicit aggregate axes", () => {
+    const state = DataViewState.create({
+      groupStack: [
+        {
+          field: "vendorLabel",
+          aggregateField: "vendor",
+          aggregateKey: "vendorId",
+        },
+      ],
+    });
+
+    const search = dataViewStateToSearch(state);
+
+    expect(search.group).toBe("vendorLabel~vendor~vendorId");
+    expect(dataViewSearchToState(search).group).toEqual({
+      field: "vendorLabel",
+      aggregateField: "vendor",
+      aggregateKey: "vendorId",
+    });
+  });
+
   test("resets page and clears selection when query scope changes", () => {
     const state = DataViewState.create({
       page: 4,

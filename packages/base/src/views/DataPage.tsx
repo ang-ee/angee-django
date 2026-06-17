@@ -134,6 +134,7 @@ export interface DataPageProps<TRow extends Row = Row> {
    * create) — e.g. provisioning and chat panels. See `FormView.recordTabs`. */
   recordTabs?: FormViewProps["recordTabs"];
   rowHref?: (row: TRow) => string;
+  cardActions?: ListViewProps<TRow>["cardActions"];
   className?: string;
 }
 
@@ -266,6 +267,7 @@ function DataPageBody<TRow extends Row = Row>({
   createDefaults,
   recordExtras,
   recordTabs,
+  cardActions,
   className,
 }: DataPageBodyProps<TRow>): React.ReactElement {
   const resolvedRecordId = recordController.recordId;
@@ -291,6 +293,7 @@ function DataPageBody<TRow extends Row = Row>({
     defaultGroup,
     defaultGroups,
     rowHref: resolvedRowHref,
+    cardActions,
     ...(declarations.list
       ? listElementRenderProps(declarations.list.props)
       : {}),

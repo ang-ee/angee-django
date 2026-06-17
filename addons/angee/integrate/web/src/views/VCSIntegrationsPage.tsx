@@ -7,7 +7,6 @@ import {
   Form,
   List,
   type ActionContext,
-  useEnumOptions,
 } from "@angee/base";
 import { runActionResult, useAuthoredMutation } from "@angee/sdk";
 
@@ -21,16 +20,7 @@ import {
   type SyncVcsIntegrationData,
 } from "../documents";
 
-const MODEL = "integrate.VCSIntegration";
-
-const integrationList = (
-  <List model={MODEL}>
-    <Column field="displayName" />
-    <Column field="backendClass" />
-    <Column field="status" widget="statusBadge" />
-    <Column field="lastSyncCompletedAt" />
-  </List>
-);
+const MODEL = "integrate.VcsBridge";
 
 /**
  * VCS integrations: the git-host capabilities, their backend impl, and sync
@@ -46,11 +36,6 @@ export function VCSIntegrationsPage(): React.ReactElement {
     DiscoverRepositoriesData,
     DiscoverRepositoriesVariables
   >(DISCOVER_REPOSITORIES_MUTATION);
-
-  // `backendClass` reads as the UPPERCASE enum member but its create input is a
-  // lowercase String key; `useEnumOptions` lower-cases the option values, and
-  // `createOnly` keeps the read casing off the edit patch.
-  const backendClassOptions = useEnumOptions(MODEL, "backendClass");
 
   const sync = React.useCallback(
     async (ctx: ActionContext) => {
@@ -73,19 +58,23 @@ export function VCSIntegrationsPage(): React.ReactElement {
 
   return (
     <DataPage model={MODEL} placement="inline" routed>
-      {integrationList}
-      <Form model={MODEL}>
-        {/* The integration and its backend class are fixed at create; the patch
-            input carries neither, so both are create-only. */}
-        <Field name="integration" createOnly />
-        <Field
-          name="backendClass"
-          widget="select"
-          options={backendClassOptions}
-          createOnly
+      <List model={MODEL}>
+        <Column field="displayName" />
+        <Column
+          field="integration.implLabel"
+          header={t("integrate.integrations.implClass")}
         />
-        <Field name="status" widget="statusbar" />
-        <Field name="config" widget="json" />
+        <Column
+          field="integration.status"
+          header={t("integrate.col.status")}
+          widget="statusBadge"
+        />
+        <Column field="lastSyncCompletedAt" />
+      </List>
+      <Form model={MODEL}>
+        {/* The implementation lives on the owning Integration. */}
+        <Field name="integration" createOnly />
+        <Field name="lastSyncStatus" readOnly />
         {/* Write-only signing secret — set on create, never read back. */}
         <Field name="webhookSecret" widget="text" kind="string" createOnly />
         <Action id="sync" label={t("integrate.action.syncNow")} icon="refresh" run={sync} />

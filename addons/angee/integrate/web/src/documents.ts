@@ -16,6 +16,20 @@ export const TEST_CONNECTION_MUTATION = `
   }
 `;
 
+export const CONNECT_INTEGRATION_MUTATION = `
+  mutation ConnectIntegration($integrationId: ID!, $redirectUri: String!, $next: String!) {
+    connectIntegration(integrationId: $integrationId, redirectUri: $redirectUri, next: $next) {
+      attached
+      authorizeUrl
+      error
+      mode
+      state
+      redirectUri
+      integration { id status }
+    }
+  }
+`;
+
 /** `{ ok, message }` action outcome — the shared SDK contract. */
 export type ActionResultData = ActionOutcome;
 
@@ -25,6 +39,24 @@ export interface SyncIntegrationData {
 
 export interface TestConnectionData {
   testConnection: ActionResultData;
+}
+
+export interface ConnectIntegrationData {
+  connectIntegration: {
+    attached: boolean;
+    authorizeUrl: string;
+    error: string | null;
+    mode?: string;
+    state?: string;
+    redirectUri?: string;
+    integration: { id: string; status: string } | null;
+  };
+}
+
+export interface ConnectIntegrationVariables extends Record<string, unknown> {
+  integrationId: string;
+  redirectUri: string;
+  next: string;
 }
 
 /** Single-id action variables — the shared SDK contract. */

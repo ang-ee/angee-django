@@ -67,6 +67,7 @@ class InferenceBackend(IntegrationImpl):
 
     category = "inference"
     companion_model = "agents.InferenceProvider"
+    companion_create_fields = ("name", "base_url", "config")
     label = "Inference"
     icon = "sparkles"
 
@@ -81,6 +82,19 @@ class InferenceBackend(IntegrationImpl):
 
         raise NotImplementedError("InferenceBackend subclasses must implement list_models().")
 
+    @classmethod
+    def companion_create_values(cls, integration: Any, values: dict[str, Any]) -> dict[str, Any]:
+        """Return inference-provider fields, defaulting the required display name."""
+
+        attrs = super().companion_create_values(integration, values)
+        name = str(attrs.get("name") or "").strip()
+        if not name:
+            vendor = getattr(integration, "vendor", None)
+            vendor_label = str(getattr(vendor, "display_name", "") or getattr(vendor, "slug", "") or "").strip()
+            name = f"{vendor_label} {cls.label}".strip() or cls.label
+            attrs["name"] = name
+        return attrs
+
 
 class ManualInferenceBackend(InferenceBackend):
     """Built-in backend with no client — its catalogue is curated by hand.
@@ -89,6 +103,11 @@ class ManualInferenceBackend(InferenceBackend):
     so its :class:`InferenceModel` rows are entered through the console. A vendor
     backend addon supplies the live-listing alternative.
     """
+
+    # Vendor-neutral: a base addon never pins a product OAuth client. The connect
+    # flow falls back to the integration's vendor slug
+    # (see ``_oauth_client_for_integration``); a vendor backend addon sets its own.
+    oauth_client = ""
 
     def list_models(self) -> Sequence[InferenceModelSpec]:
         """Return no models; the catalogue is maintained by hand on this backend."""

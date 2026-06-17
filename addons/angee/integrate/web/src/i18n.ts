@@ -10,8 +10,27 @@ export const enIntegrateMessages: Record<string, string> = {
   "integrate.action.refresh": "Refresh",
   "integrate.action.disable": "Disable",
 
+  // Shared list/group column labels.
+  "integrate.col.status": "Status",
+  "integrate.col.capability": "Capability",
+  "integrate.col.vendor": "Vendor",
+  "integrate.col.credential": "Credential",
+  "integrate.col.lastError": "Last error",
+
   // Integrations page.
+  "integrate.integrations.identity": "Identity",
   "integrate.integrations.authentication": "Authentication",
+  "integrate.integrations.runtime": "Runtime",
+  "integrate.integrations.inference": "Inference provider",
+  "integrate.integrations.vcs": "VCS bridge",
+  "integrate.integrations.implClass": "Implementation",
+  "integrate.integrations.providerName": "Provider name",
+  "integrate.integrations.baseUrl": "Base URL",
+  "integrate.integrations.providerConfig": "Provider config",
+  "integrate.integrations.webhookSecret": "Webhook secret",
+  "integrate.integrations.action.connect": "Connect",
+  "integrate.integrations.connect.startError": "Could not start integration connection.",
+  "integrate.integrations.connect.connected": "Integration connected.",
   "integrate.integrations.testConnection": "Test connection",
   "integrate.integrations.activate": "Activate",
 

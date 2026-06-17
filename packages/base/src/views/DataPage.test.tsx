@@ -836,6 +836,51 @@ describe("DataPage", () => {
     });
   });
 
+  test("renders board card actions outside the card navigation button", async () => {
+    const onSelect = vi.fn();
+    const onConnect = vi.fn();
+    const boardColumns = [
+      { field: "title", header: "Title" },
+      { field: "status", header: "Status" },
+      { field: "priority", header: "Priority" },
+    ] satisfies readonly ListColumn[];
+
+    render(
+      <TestUrlState searchParams="?view=board&group=status">
+        <DataPage
+          model="notes.Note"
+          columns={boardColumns}
+          formFields={formFields}
+          list={GroupListView}
+          onSelect={onSelect}
+          cardActions={(row) =>
+            row.status === "DRAFT" ? (
+              <button type="button" onClick={() => onConnect(row.id)}>
+                Connect
+              </button>
+            ) : null
+          }
+        />
+      </TestUrlState>,
+    );
+
+    const draftLane = await screen.findByRole("region", { name: "Draft" });
+    const cardButton = within(draftLane).getByRole("button", {
+      name: /Third/,
+    });
+    const connectButton = within(draftLane).getByRole("button", {
+      name: "Connect",
+    });
+
+    expect(connectButton.closest("button")).toBe(connectButton);
+    fireEvent.click(connectButton);
+    expect(onConnect).toHaveBeenCalledWith("note-3");
+    expect(onSelect).not.toHaveBeenCalled();
+
+    fireEvent.click(cardButton);
+    expect(onSelect).toHaveBeenCalledWith("note-3");
+  });
+
   test("seeds different default groups for list and board views", async () => {
     const onUrlUpdate = vi.fn();
     const boardColumns = [

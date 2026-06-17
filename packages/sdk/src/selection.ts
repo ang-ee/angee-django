@@ -317,11 +317,12 @@ export function assembleGroupByDocument(
 ): string {
   const typeName = typeNameForModel(modelLabel);
   const field = requireRootField(modelLabel, rootFields, "groupBy");
+  const groupByInput = assertName(rootFields.groupByInput ?? `${typeName}GroupBySpec`);
   const keyFields = [...new Set(options.keyFields.map(assertName))];
   const keySelection = keyFields.length > 0 ? keyFields.join(" ") : "__typename";
   const measureSelection = aggregateMeasureSelection(options.measures);
   const declared = [
-    `$groupBy: [${typeName}GroupBySpec!]!`,
+    `$groupBy: [${groupByInput}!]!`,
     "$pagination: OffsetPaginationInput",
   ];
   const args = ["groupBy: $groupBy", "pagination: $pagination"];
@@ -330,7 +331,10 @@ export function assembleGroupByDocument(
     args.push("filter: $filter");
   }
   if (options.withOrderBy) {
-    declared.push(`$orderBy: [${typeName}GroupOrder!]`);
+    const groupOrderInput = assertName(
+      rootFields.groupOrderInput ?? `${typeName}GroupOrder`,
+    );
+    declared.push(`$orderBy: [${groupOrderInput}!]`);
     args.push("orderBy: $orderBy");
   }
   const resultSelection = [

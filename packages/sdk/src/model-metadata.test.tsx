@@ -116,6 +116,45 @@ describe("fieldMetadataFromSDL", () => {
     expect(root?.create).toBe("createWidget");
     expect(root?.requiredCreateFields).toEqual(["name", "color"]);
   });
+
+  test("captures grouped aggregate roots with prefixed aggregate types", () => {
+    const metadata = fieldMetadataFromSDL(/* GraphQL */ `
+      type IntegrationType { id: ID! status: String! }
+      type NoteType { id: ID! title: String! }
+      input IntegrationFilter { status: String }
+      input NoteFilter { title: String }
+      input IntegrationAggregateGroupBySpec { field: String! }
+      input IntegrationAggregateGroupOrder { field: String! }
+      input NoteGroupBySpec { field: String! }
+      type IntegrationAggregateAggregate { count: Int! }
+      type IntegrationAggregateGrouped { key: String count: Int! }
+      type IntegrationAggregateGroupedResult {
+        results: [IntegrationAggregateGrouped!]!
+      }
+      type NoteGrouped { key: String count: Int! }
+      type NoteGroupedResult { results: [NoteGrouped!]! }
+      type Query {
+        integrations: [IntegrationType!]!
+        notes: [NoteType!]!
+        integrationAggregate(filter: IntegrationFilter = null): IntegrationAggregateAggregate!
+        integrationGroups(groupBy: [IntegrationAggregateGroupBySpec!]!, filter: IntegrationFilter = null, orderBy: [IntegrationAggregateGroupOrder!] = null): IntegrationAggregateGroupedResult!
+        noteGroups(groupBy: [NoteGroupBySpec!]!, filter: NoteFilter = null): NoteGroupedResult!
+      }
+    `);
+
+    expect(required(metadata.types.IntegrationType).rootFields).toMatchObject({
+      list: "integrations",
+      aggregate: "integrationAggregate",
+      groupBy: "integrationGroups",
+      groupByInput: "IntegrationAggregateGroupBySpec",
+      groupOrderInput: "IntegrationAggregateGroupOrder",
+    });
+    expect(required(metadata.types.NoteType).rootFields).toMatchObject({
+      list: "notes",
+      groupBy: "noteGroups",
+      groupByInput: "NoteGroupBySpec",
+    });
+  });
 });
 
 function required<T>(value: T | undefined): T {

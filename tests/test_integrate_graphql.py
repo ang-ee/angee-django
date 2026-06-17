@@ -98,6 +98,37 @@ def test_integration_node_resolves_nested_relations(
     }
 
 
+def test_integration_groups_aggregate_runs_with_rebac_scope(
+    integrate_console_tables: None,
+) -> None:
+    """The integration aggregate root executes through the Angee aggregate queryset seam."""
+
+    admin = _platform_admin("conn-groups-admin")
+    make_integration("conn-groups", impl_class="stub")
+    console_schema = _schema()
+
+    grouped = _data(
+        _execute(
+            console_schema,
+            """
+            query IntegrationGroups($groupBy: [IntegrationAggregateGroupBySpec!]!) {
+              integrationGroups(groupBy: $groupBy, pagination: {offset: 0, limit: 10}) {
+                totalCount
+                results {
+                  key { implClass }
+                  count
+                }
+              }
+            }
+            """,
+            {"groupBy": [{"field": "IMPL_CLASS"}]},
+            user=admin,
+        )
+    )["integrationGroups"]
+    assert grouped["totalCount"] == 1
+    assert grouped["results"] == [{"key": {"implClass": "STUB"}, "count": 1}]
+
+
 def test_integration_update_delete_are_admin_only(
     integrate_console_tables: None,
 ) -> None:

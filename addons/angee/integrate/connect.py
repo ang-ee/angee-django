@@ -39,6 +39,7 @@ class AccountConnectCompletion:
     user: AbstractBaseUser
     claims: dict[str, Any]
     next_path: str
+    integration_id: str = ""
 
 
 def complete_account_connect(
@@ -106,6 +107,7 @@ def complete_account_connect(
         user=user,
         claims=claims,
         next_path=record.next_path or "/",
+        integration_id=record.integration_id,
     )
 
 

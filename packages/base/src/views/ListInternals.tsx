@@ -876,8 +876,8 @@ export function dataViewGroupToAggregateDimension(
   group: DataViewGroup,
 ): GroupByDimension {
   return {
-    field: graphQLEnumValue(group.field),
-    key: aggregateKeyField(group),
+    field: graphQLEnumValue(group.aggregateField ?? group.field),
+    key: group.aggregateKey ?? aggregateKeyField(group),
     ...(group.granularity
       ? { granularity: group.granularity.toUpperCase() }
       : {}),
@@ -898,11 +898,12 @@ export function groupOrderByForSort(
 }
 
 export function groupOrderField(group: DataViewGroup): string {
-  const field = fieldToSnake(group.field);
+  const field = fieldToSnake(group.aggregateField ?? group.field);
   return group.granularity ? `${field}_${group.granularity}` : field;
 }
 
 function aggregateKeyField(group: DataViewGroup): string {
+  if (group.aggregateKey) return group.aggregateKey;
   return group.granularity
     ? `${group.field}${titleCase(group.granularity).replace(/\s+/g, "")}`
     : group.field;
