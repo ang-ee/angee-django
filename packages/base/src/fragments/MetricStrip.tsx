@@ -11,15 +11,26 @@ export interface MetricTileValue {
   icon?: React.ReactNode | string;
   label: React.ReactNode;
   value: React.ReactNode;
+  /** When set, the tile is a link to this href (rendered as an `<a>`). */
+  href?: string;
+  /**
+   * Client-side navigation handler for `href` — called on a plain left-click so
+   * the consumer routes in-app (the tile keeps the real `href` for middle-click /
+   * open-in-new-tab). Omit for a normal full-navigation anchor.
+   */
+  onNavigate?: (href: string) => void;
 }
 
 export type MetricTileProps = Omit<
-  React.HTMLAttributes<HTMLDivElement>,
+  React.HTMLAttributes<HTMLElement>,
   "className"
 > &
   MetricTileValue & {
     className?: string;
   };
+
+const NAVIGABLE_TILE =
+  "cursor-pointer no-underline outline-none transition hover:ring-2 hover:ring-border-focus focus-visible:focus-ring";
 
 export type MetricStripProps = Omit<
   React.HTMLAttributes<HTMLDListElement>,
@@ -42,24 +53,59 @@ export const metricStripVariants = tv({
   },
 });
 
-export const MetricTile = React.forwardRef<HTMLDivElement, MetricTileProps>(
+export const MetricTile = React.forwardRef<HTMLElement, MetricTileProps>(
   function MetricTile(
-    { className, detail, icon, label, value, ...props },
+    { className, detail, icon, label, value, href, onNavigate, onClick, ...props },
     ref,
   ) {
     const styles = metricStripVariants();
+    const body = (
+      <>
+        <div className={styles.header()}>
+          <SectionEyebrow as="dt">{label}</SectionEyebrow>
+          {icon ? <span className={styles.icon()}>{renderGlyph(icon)}</span> : null}
+        </div>
+        <dd className={styles.value()}>{value}</dd>
+        {detail ? <p className={styles.detail()}>{detail}</p> : null}
+      </>
+    );
+
+    if (href != null) {
+      const target = href;
+      function handleClick(event: React.MouseEvent<HTMLAnchorElement>): void {
+        onClick?.(event);
+        if (
+          event.defaultPrevented ||
+          event.button !== 0 ||
+          event.metaKey ||
+          event.ctrlKey ||
+          event.shiftKey ||
+          event.altKey ||
+          !onNavigate
+        ) {
+          return;
+        }
+        event.preventDefault();
+        onNavigate(target);
+      }
+      return (
+        <Card asChild className={styles.tile({ className: cn(className, NAVIGABLE_TILE) })} density="sm">
+          <a
+            ref={ref as React.Ref<HTMLAnchorElement>}
+            href={target}
+            onClick={handleClick}
+            {...props}
+          >
+            {body}
+          </a>
+        </Card>
+      );
+    }
 
     return (
       <Card asChild className={styles.tile({ className })} density="sm">
-        <div ref={ref} {...props}>
-          <div className={styles.header()}>
-            <SectionEyebrow as="dt">{label}</SectionEyebrow>
-            {icon ? (
-              <span className={styles.icon()}>{renderGlyph(icon)}</span>
-            ) : null}
-          </div>
-          <dd className={styles.value()}>{value}</dd>
-          {detail ? <p className={styles.detail()}>{detail}</p> : null}
+        <div ref={ref as React.Ref<HTMLDivElement>} onClick={onClick} {...props}>
+          {body}
         </div>
       </Card>
     );
