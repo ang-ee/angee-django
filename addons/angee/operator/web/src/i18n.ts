@@ -120,6 +120,9 @@ export const enOperatorMessages: Record<string, string> = {
   // Templates.
   "operator.templates.loading": "Loading templates",
   "operator.templates.empty.title": "No templates",
+  "operator.templates.column.name": "Template",
+  "operator.templates.column.kind": "Kind",
+  "operator.templates.column.path": "Path",
   "operator.templates.inputs": "Inputs",
   "operator.templates.input.required": "required",
   "operator.templates.input.optional": "optional",

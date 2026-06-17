@@ -1,135 +1,104 @@
 import {
   Badge,
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  EmptyState,
-  Skeleton,
+  Code,
+  RowsListView,
+  type DataToolbarGroupOption,
+  type ListColumn,
 } from "@angee/base";
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
 import { useOperatorSnapshot } from "../../data/transport";
-import type { TemplateDescriptor, TemplateInputDescriptor } from "../../data/types";
-import { OperatorSection } from "../parts/OperatorSection";
+import type { TemplateDescriptor } from "../../data/types";
 
-/** Templates pane: the addable template catalog + each template's input schema. */
+// RowsListView keys rows by `id`; a template is identified by its ref.
+type TemplateRow = TemplateDescriptor & { id: string };
+
+const MAX_INPUT_CHIPS = 6;
+
+/** Templates pane: the addable template catalog, grouped by kind. */
 export function TemplatesSection(): ReactNode {
   const t = useOperatorT();
   const { snapshot, result } = useOperatorSnapshot({ templates: true });
-  const templates = snapshot?.templates ?? [];
+
+  const rows = useMemo<readonly TemplateRow[]>(
+    () => (snapshot?.templates ?? []).map((template) => ({ ...template, id: template.ref })),
+    [snapshot],
+  );
+
+  const columns = useMemo<readonly ListColumn<TemplateRow>[]>(
+    () => [
+      {
+        field: "name",
+        header: t("operator.templates.column.name"),
+        render: (template) => (
+          <span className="flex min-w-0 flex-col">
+            <span className="truncate font-medium text-fg">{template.name ?? template.ref}</span>
+            <span className="truncate font-mono text-2xs text-fg-muted">{template.ref}</span>
+          </span>
+        ),
+      },
+      {
+        field: "kind",
+        header: t("operator.templates.column.kind"),
+        render: (template) => (
+          <Badge density="compact" shape="pill" tone="neutral">{template.kind}</Badge>
+        ),
+      },
+      {
+        field: "path",
+        header: t("operator.templates.column.path"),
+        render: (template) => <Code truncate>{template.path}</Code>,
+      },
+      {
+        field: "inputs",
+        header: t("operator.templates.inputs"),
+        sortable: false,
+        render: (template) => <TemplateInputs template={template} />,
+      },
+    ],
+    [t],
+  );
+
+  const groupOptions: readonly DataToolbarGroupOption[] = useMemo(
+    () => [{ id: "kind", label: t("operator.templates.column.kind"), group: { field: "kind" }, type: "value" }],
+    [t],
+  );
 
   return (
-    <OperatorSection
-      title={t("section.operator.templates.title")}
-      loading={result.fetching && !snapshot}
-      error={result.error && !snapshot ? result.error : null}
-      loadingMessage={t("operator.templates.loading")}
-      loadingContent={<TemplatesLoading />}
-    >
-      {templates.length === 0 ? (
-        <EmptyState icon="columns" title={t("operator.templates.empty.title")} />
-      ) : (
-        <div className="flex flex-col gap-3">
-          {templates.map((template) => (
-            <TemplateCard key={template.ref} template={template} />
-          ))}
-        </div>
-      )}
-    </OperatorSection>
+    <RowsListView<TemplateRow>
+      rows={rows}
+      columns={columns}
+      groupOptions={groupOptions}
+      fetching={result.fetching}
+      error={snapshot ? null : result.error}
+      emptyMessage={t("operator.templates.empty.title")}
+    />
   );
 }
 
-function TemplatesLoading(): ReactNode {
+/** A template's input schema as a compact chip wrap; required inputs stand out. */
+function TemplateInputs({ template }: { template: TemplateDescriptor }): ReactNode {
+  if (template.inputs.length === 0) {
+    return <span className="text-fg-muted">—</span>;
+  }
+  const shown = template.inputs.slice(0, MAX_INPUT_CHIPS);
+  const overflow = template.inputs.length - shown.length;
   return (
-    <div className="flex flex-col gap-3" aria-hidden="true">
-      {Array.from({ length: 3 }, (_, index) => (
-        <Card key={index}>
-          <CardHeader>
-            <CardTitle className="flex flex-wrap items-center gap-2">
-              <Skeleton
-                shape="text"
-                size="md"
-                className={index % 2 === 0 ? "w-36" : "w-28"}
-              />
-              <Skeleton shape="text" size="sm" className="w-20" />
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="grid gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <Skeleton className="h-tag-h w-16 rounded-full" />
-              <Skeleton shape="text" size="sm" className="w-56" />
-            </div>
-            <div className="grid gap-1">
-              <Skeleton shape="text" size="sm" className="w-20" />
-              <Skeleton shape="text" size="sm" className="w-44" />
-            </div>
-          </CardContent>
-        </Card>
+    <span className="flex flex-wrap items-center gap-1">
+      {shown.map((input) => (
+        <Badge
+          key={input.name}
+          density="compact"
+          shape="pill"
+          tone={input.required ? "warning" : "neutral"}
+        >
+          {input.name}
+        </Badge>
       ))}
-    </div>
-  );
-}
-
-function TemplateCard({ template }: { template: TemplateDescriptor }): ReactNode {
-  const t = useOperatorT();
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex flex-wrap items-center gap-2">
-          {template.name ?? template.ref}
-          <span className="font-mono text-13 font-normal text-fg-muted">{template.ref}</span>
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center gap-2 text-13 text-fg-muted">
-          <Badge density="compact" shape="pill" tone="neutral">
-            {template.kind}
-          </Badge>
-          <span className="font-mono">{template.path}</span>
-        </div>
-
-        {template.inputs.length > 0 ? (
-          <div className="flex flex-col gap-1">
-            <span className="text-2xs font-semibold uppercase tracking-wide text-fg-muted">
-              {t("operator.templates.inputs")}
-            </span>
-            {template.inputs.map((input) => (
-              <TemplateInputRow input={input} key={input.name} />
-            ))}
-          </div>
-        ) : null}
-
-        {/* TODO(S6): render a template into a workspace/service (workspaceCreate)
-            once an input-collection form lands. */}
-      </CardContent>
-    </Card>
-  );
-}
-
-function TemplateInputRow({ input }: { input: TemplateInputDescriptor }): ReactNode {
-  const t = useOperatorT();
-  return (
-    <div className="flex flex-wrap items-center gap-2 text-13">
-      <span className="font-mono text-fg-2">{input.name}</span>
-      <Badge density="compact" shape="pill" tone="neutral">
-        {input.type ?? "—"}
-      </Badge>
-      <Badge density="compact" shape="pill" tone={input.required ? "warning" : "neutral"}>
-        {input.required ? t("operator.templates.input.required") : t("operator.templates.input.optional")}
-      </Badge>
-      {input.immutable ? (
-        <Badge density="compact" shape="pill" tone="neutral">
-          {t("operator.templates.input.immutable")}
-        </Badge>
+      {overflow > 0 ? (
+        <Badge density="compact" shape="pill" tone="neutral">{`+${overflow}`}</Badge>
       ) : null}
-      {input.generated ? (
-        <Badge density="compact" shape="pill" tone="neutral">
-          {t("operator.templates.input.generated")}
-        </Badge>
-      ) : null}
-      <span className="text-fg-muted">= {input.default ?? "—"}</span>
-    </div>
+    </span>
   );
 }

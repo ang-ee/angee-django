@@ -1,5 +1,12 @@
-import { Button, Skeleton, useConfirm } from "@angee/base";
-import { useState, type ReactNode } from "react";
+import {
+  Button,
+  RowsListView,
+  Skeleton,
+  useConfirm,
+  useToast,
+  type ListColumn,
+} from "@angee/base";
+import { useMemo, type ReactNode } from "react";
 
 import {
   SERVICE_DESTROY_MUTATION,
@@ -10,11 +17,6 @@ import {
 import { useOperatorT } from "../../i18n";
 import { useOperatorAction, useOperatorSnapshot } from "../../data/transport";
 import type { ServiceState } from "../../data/types";
-import {
-  DaemonResourceTable,
-  DaemonResourceTableSkeleton,
-  type DaemonResourceAction,
-} from "../parts/DaemonResourceTable";
 import { OperatorSection } from "../parts/OperatorSection";
 import { StateTag } from "../parts/StateTag";
 import { runDaemonAction, type DaemonActionData } from "../parts/run-action";
@@ -22,70 +24,81 @@ import { runDaemonAction, type DaemonActionData } from "../parts/run-action";
 interface ServiceActionVars extends Record<string, unknown> {
   name: string;
 }
-interface ServiceAction {
-  field: string;
+
+/** A lifecycle action rendered per service row: its label, tone, and handler. */
+interface ServiceRowAction {
   label: string;
   variant: "secondary" | "ghost";
-  /** Destructive — require a styled confirmation naming the service first. */
-  dangerous?: boolean;
-  run: (variables: ServiceActionVars) => Promise<DaemonActionData>;
+  perform: (service: ServiceState) => void;
 }
 
+// RowsListView keys rows by `id`; the daemon identifies a service by name.
+type ServiceRowData = ServiceState & { id: string };
+
 export interface ServicesSectionProps {
-  /** Restrict the table to these service names; omit to show every service. */
+  /** Restrict the list to these service names; omit to show every service. */
   names?: readonly string[];
-  /** Override the pane title (e.g. when embedded for one agent's service). */
+  /** Retained for API compatibility; the console nav owns the page heading. */
   title?: ReactNode;
 }
 
-/** Services pane: a daemon service table with lifecycle actions. */
-export function ServicesSection({ names, title }: ServicesSectionProps = {}): ReactNode {
-  const {
-    actionError,
-    actions,
-    busy,
-    result,
-    services,
-    snapshot,
-    t,
-  } = useServiceControls(names);
+/** Services pane: the daemon service list with lifecycle actions. */
+export function ServicesSection({ names }: ServicesSectionProps = {}): ReactNode {
+  const t = useOperatorT();
+  const { snapshot, result, refetch } = useOperatorSnapshot({ services: true });
+  const { actions, busy } = useServiceActions(refetch);
+
+  const rows = useMemo<readonly ServiceRowData[]>(
+    () =>
+      (snapshot?.services ?? [])
+        .filter((service) => names === undefined || names.includes(service.name))
+        .map((service) => ({ ...service, id: service.name })),
+    [names, snapshot],
+  );
+
+  const columns = useMemo<readonly ListColumn<ServiceRowData>[]>(
+    () => [
+      {
+        field: "name",
+        header: t("operator.services.column.name"),
+        render: (service) => <span className="font-medium text-fg">{service.name}</span>,
+      },
+      {
+        field: "runtime",
+        header: t("operator.services.column.runtime"),
+        render: (service) => <span className="text-13 text-fg-muted">{service.runtime}</span>,
+      },
+      {
+        field: "status",
+        header: t("operator.services.column.status"),
+        render: (service) => <StateTag state={service.status} />,
+      },
+      {
+        field: "health",
+        header: t("operator.services.column.health"),
+        render: (service) => <span className="text-13 text-fg-muted">{service.health ?? "—"}</span>,
+      },
+      {
+        field: "actions",
+        header: t("operator.table.actions"),
+        sortable: false,
+        align: "right",
+        render: (service) => (
+          <ServiceActions actions={actions} busy={busy} service={service} />
+        ),
+      },
+    ],
+    [actions, busy, t],
+  );
 
   return (
-    <OperatorSection
-      title={title === undefined ? t("section.operator.services.title") : title}
-      loading={result.fetching && !snapshot}
-      error={result.error && !snapshot ? result.error : null}
-      loadingMessage={t("operator.services.loading")}
-      loadingContent={<DaemonResourceTableSkeleton columnCount={4} actions />}
-      actionError={actionError}
-    >
-      <DaemonResourceTable
-        actions={actions}
-        actionsLabel={t("operator.table.actions")}
-        busy={busy}
-        columns={[
-          {
-            header: t("operator.services.column.name"),
-            cell: (service) => <span className="font-medium text-fg">{service.name}</span>,
-          },
-          {
-            header: t("operator.services.column.runtime"),
-            cell: (service) => <span className="text-13 text-fg-muted">{service.runtime}</span>,
-          },
-          {
-            header: t("operator.services.column.status"),
-            cell: (service) => <StateTag state={service.status} />,
-          },
-          {
-            header: t("operator.services.column.health"),
-            cell: (service) => <span className="text-13 text-fg-muted">{service.health ?? "—"}</span>,
-          },
-        ]}
-        emptyMessage={t("operator.services.empty")}
-        rowKey={(service) => service.name}
-        rows={services}
-      />
-    </OperatorSection>
+    <RowsListView<ServiceRowData>
+      rows={rows}
+      columns={columns}
+      fetching={result.fetching}
+      error={snapshot ? null : result.error}
+      emptyMessage={t("operator.services.empty")}
+    />
   );
 }
 
@@ -98,16 +111,10 @@ export interface ServiceRowProps {
 
 /** Compact single-service row for views that already own the service identity. */
 export function ServiceRow({ name, emptyMessage }: ServiceRowProps): ReactNode {
-  const {
-    actionError,
-    actions,
-    busy,
-    result,
-    services,
-    snapshot,
-    t,
-  } = useServiceControls([name]);
-  const service = services[0] ?? null;
+  const t = useOperatorT();
+  const { snapshot, result, refetch } = useOperatorSnapshot({ services: true });
+  const { actions, busy } = useServiceActions(refetch);
+  const service = (snapshot?.services ?? []).find((candidate) => candidate.name === name) ?? null;
 
   return (
     <OperatorSection
@@ -115,14 +122,9 @@ export function ServiceRow({ name, emptyMessage }: ServiceRowProps): ReactNode {
       error={result.error && !snapshot ? result.error : null}
       loadingMessage={t("operator.services.loading")}
       loadingContent={<ServiceRowSkeleton />}
-      actionError={actionError}
     >
       {service ? (
-        <ServiceControlRow
-          actions={actions}
-          busy={busy}
-          service={service}
-        />
+        <ServiceControlRow actions={actions} busy={busy} service={service} />
       ) : (
         <p className="border-y border-border-subtle py-3 text-13 text-fg-muted">
           {emptyMessage ?? t("operator.services.empty")}
@@ -132,19 +134,18 @@ export function ServiceRow({ name, emptyMessage }: ServiceRowProps): ReactNode {
   );
 }
 
-function useServiceControls(names?: readonly string[]): {
-  actionError: string | null;
-  actions: readonly DaemonResourceAction<ServiceState>[];
+/**
+ * The four service lifecycle actions, each wrapped to confirm (when destructive),
+ * run via {@link runDaemonAction}, and surface a failure as a toast — the live
+ * snapshot then reflects the new state, so the row needs no local result store.
+ */
+function useServiceActions(refetch: () => void): {
+  actions: readonly ServiceRowAction[];
   busy: boolean;
-  result: ReturnType<typeof useOperatorSnapshot>["result"];
-  services: readonly ServiceState[];
-  snapshot: ReturnType<typeof useOperatorSnapshot>["snapshot"];
-  t: ReturnType<typeof useOperatorT>;
 } {
   const t = useOperatorT();
   const confirm = useConfirm();
-  const { snapshot, result, refetch } = useOperatorSnapshot({ services: true });
-  const [actionError, setActionError] = useState<string | null>(null);
+  const toast = useToast();
 
   const start = useOperatorAction<DaemonActionData, ServiceActionVars>(SERVICE_START_MUTATION);
   const stop = useOperatorAction<DaemonActionData, ServiceActionVars>(SERVICE_STOP_MUTATION);
@@ -156,59 +157,75 @@ function useServiceControls(names?: readonly string[]): {
     restart.result.fetching ||
     destroy.result.fetching;
 
-  const services = (snapshot?.services ?? []).filter(
-    (service) => names === undefined || names.includes(service.name),
+  const actions = useMemo<readonly ServiceRowAction[]>(() => {
+    const defs = [
+      { field: "serviceStart", label: t("operator.services.start"), variant: "secondary" as const, run: start.run },
+      { field: "serviceRestart", label: t("operator.services.restart"), variant: "ghost" as const, run: restart.run },
+      { field: "serviceStop", label: t("operator.services.stop"), variant: "ghost" as const, run: stop.run },
+      {
+        field: "serviceDestroy",
+        label: t("operator.services.destroy"),
+        variant: "ghost" as const,
+        dangerous: true,
+        run: destroy.run,
+      },
+    ];
+    return defs.map((def) => ({
+      label: def.label,
+      variant: def.variant,
+      perform: (service: ServiceState) => {
+        void (async () => {
+          if (def.dangerous) {
+            const ok = await confirm({
+              title: t("operator.services.destroy.confirm.title"),
+              body: t("operator.services.destroy.confirm.body", { name: service.name }),
+              confirm: def.label,
+              danger: true,
+            });
+            if (!ok) return;
+          }
+          await runDaemonAction({
+            run: def.run,
+            field: def.field,
+            variables: { name: service.name },
+            label: def.label,
+            setError: (message) => {
+              if (message) toast.danger({ title: message });
+            },
+            refetch,
+          });
+        })();
+      },
+    }));
+  }, [confirm, destroy.run, refetch, restart.run, start.run, stop.run, t, toast]);
+
+  return { actions, busy };
+}
+
+function ServiceActions({
+  actions,
+  busy,
+  service,
+}: {
+  actions: readonly ServiceRowAction[];
+  busy: boolean;
+  service: ServiceState;
+}): ReactNode {
+  return (
+    <div className="flex justify-end gap-1">
+      {actions.map((action) => (
+        <Button
+          key={action.label}
+          disabled={busy}
+          onClick={() => action.perform(service)}
+          size="sm"
+          variant={action.variant}
+        >
+          {action.label}
+        </Button>
+      ))}
+    </div>
   );
-  const actions: readonly ServiceAction[] = [
-    { field: "serviceStart", label: t("operator.services.start"), variant: "secondary", run: start.run },
-    { field: "serviceRestart", label: t("operator.services.restart"), variant: "ghost", run: restart.run },
-    { field: "serviceStop", label: t("operator.services.stop"), variant: "ghost", run: stop.run },
-    {
-      field: "serviceDestroy",
-      label: t("operator.services.destroy"),
-      variant: "ghost",
-      dangerous: true,
-      run: destroy.run,
-    },
-  ];
-
-  function handle(action: ServiceAction, service: ServiceState): void {
-    void (async () => {
-      if (action.dangerous) {
-        const ok = await confirm({
-          title: t("operator.services.destroy.confirm.title"),
-          body: t("operator.services.destroy.confirm.body", { name: service.name }),
-          confirm: action.label,
-          danger: true,
-        });
-        if (!ok) return;
-      }
-      await runDaemonAction({
-        run: action.run,
-        field: action.field,
-        variables: { name: service.name },
-        label: action.label,
-        setError: setActionError,
-        refetch,
-      });
-    })();
-  }
-
-  return {
-    actionError,
-    actions: actions.map(
-      (action): DaemonResourceAction<ServiceState> => ({
-        label: action.label,
-        variant: action.variant,
-        run: (service) => handle(action, service),
-      }),
-    ),
-    busy,
-    result,
-    services,
-    snapshot,
-    t,
-  };
 }
 
 function ServiceControlRow({
@@ -216,7 +233,7 @@ function ServiceControlRow({
   busy,
   service,
 }: {
-  actions: readonly DaemonResourceAction<ServiceState>[];
+  actions: readonly ServiceRowAction[];
   busy: boolean;
   service: ServiceState;
 }): ReactNode {
@@ -227,28 +244,12 @@ function ServiceControlRow({
         "items-center gap-6 border-y border-border-subtle py-2 text-13"
       }
     >
-      <span className="min-w-0 truncate font-medium text-fg">
-        {service.name}
-      </span>
-      <span className="whitespace-nowrap text-fg-muted">
-        {service.runtime}
-      </span>
+      <span className="min-w-0 truncate font-medium text-fg">{service.name}</span>
+      <span className="whitespace-nowrap text-fg-muted">{service.runtime}</span>
       <span className="whitespace-nowrap">
         <StateTag state={service.status} />
       </span>
-      <div className="flex shrink-0 justify-end gap-1 whitespace-nowrap">
-        {actions.map((action, index) => (
-          <Button
-            disabled={busy}
-            key={index}
-            onClick={() => void action.run(service)}
-            size="sm"
-            variant={action.variant}
-          >
-            {action.label}
-          </Button>
-        ))}
-      </div>
+      <ServiceActions actions={actions} busy={busy} service={service} />
     </div>
   );
 }
