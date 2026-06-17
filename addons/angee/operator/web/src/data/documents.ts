@@ -241,20 +241,8 @@ export const SERVICE_UP_MUTATION = `
   }
 `;
 
-// The recent log buffer (history) for first paint of the service detail logs.
-export const SERVICE_LOGS_QUERY = `
-  query OperatorServiceLogHistory($name: String!, $limit: Int) {
-    serviceLogs(name: $name, limit: $limit)
-  }
-`;
-
-// The live log tail (v0.6: this now actually streams line-by-line). Each emission
-// is one log line; the detail view accumulates them past the history.
-export const SERVICE_LOGS_SUBSCRIPTION = `
-  subscription OperatorServiceLogStream($name: String!) {
-    onServiceLogs(name: $name)
-  }
-`;
+// Service logs stream over the structured `/services/{name}/logs/stream`
+// WebSocket (see useServiceLogStream), not GraphQL — exact per-service framing.
 
 // The service's resolved endpoint (routed URL + internal host/port) for detail.
 export const SERVICE_ENDPOINT_QUERY = `

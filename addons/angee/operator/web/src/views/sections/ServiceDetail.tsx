@@ -14,15 +14,11 @@ import { type ReactElement } from "react";
 import { useParams } from "@tanstack/react-router";
 import { useQuery } from "urql";
 
-import {
-  SERVICE_ENDPOINT_QUERY,
-  SERVICE_LOGS_QUERY,
-  SERVICE_LOGS_SUBSCRIPTION,
-} from "../../data/documents";
+import { SERVICE_ENDPOINT_QUERY } from "../../data/documents";
 import { useOperatorT } from "../../i18n";
 import { useOperatorSnapshot } from "../../data/transport";
 import { StateTag } from "../parts/StateTag";
-import { LogPanel, useDaemonLogStream } from "./logs";
+import { LogPanel, useServiceLogStream } from "./logs";
 import { ServiceActions, useServiceActions } from "./service-actions";
 
 interface ServiceEndpointData {
@@ -46,13 +42,7 @@ export function ServiceDetail(): ReactElement {
     variables: { name: name ?? "" },
     pause: !name,
   });
-  const logs = useDaemonLogStream({
-    name,
-    historyQuery: SERVICE_LOGS_QUERY,
-    historyField: "serviceLogs",
-    streamSubscription: SERVICE_LOGS_SUBSCRIPTION,
-    streamField: "onServiceLogs",
-  });
+  const logs = useServiceLogStream(name);
 
   const service = (snapshot?.services ?? []).find((candidate) => candidate.name === name) ?? null;
   const resolved = endpoint.data?.serviceEndpoint ?? null;

@@ -7,11 +7,11 @@ import {
   CardTitle,
   LogStream,
 } from "@angee/base";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "urql";
 
 import { useOperatorT } from "../../i18n";
-import { useOperatorSubscription } from "../../data/transport";
+import { useOperatorConnection, useOperatorSubscription } from "../../data/transport";
 
 const HISTORY_LIMIT = 500;
 const MAX_LIVE_LINES = 2000;
@@ -76,6 +76,106 @@ export function useDaemonLogStream({
     error: stream.error ?? history.error ?? null,
     streaming: stream.fetching && stream.error == null,
   };
+}
+
+const SERVICE_LOG_TAIL = 500;
+const RECONNECT_DELAY_MS = 2000;
+
+// Build the structured per-service log socket URL from the same-origin daemon
+// endpoint: swap the graphql path for the logs-stream path, http→ws, carrying the
+// operator bearer (it passes the admin/operator tier) and a `tail` backlog.
+function serviceLogsSocketUrl(
+  endpoint: string,
+  token: string,
+  name: string,
+  tail: number,
+): string {
+  const url = new URL(endpoint, window.location.href);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = `${url.pathname.replace(/\/graphql\/?$/, "")}/services/${encodeURIComponent(name)}/logs/stream`;
+  url.search = `tail=${tail}&token=${encodeURIComponent(token)}`;
+  return url.toString();
+}
+
+// One `LogLine` frame → a display line. Prefixes the best-effort level when
+// present; falls back to the raw text for a non-JSON frame.
+function parseLogFrame(data: unknown): string | null {
+  if (typeof data !== "string") return null;
+  try {
+    const frame = JSON.parse(data) as { message?: unknown; level?: unknown };
+    if (typeof frame.message !== "string") return null;
+    const level = typeof frame.level === "string" ? frame.level : null;
+    return level ? `${level.toUpperCase().padEnd(5)} ${frame.message}` : frame.message;
+  } catch {
+    return data;
+  }
+}
+
+/**
+ * A service's live logs over the v0.6 structured `/services/{name}/logs/stream`
+ * WebSocket: the socket replays `tail` backlog then follows live, framing each
+ * line as a `LogLine` (exact per-service attribution + best-effort level). It
+ * reconnects after a drop without re-replaying the backlog and surfaces the
+ * connection state through {@link DaemonLogStream}.
+ */
+export function useServiceLogStream(name: string | undefined): DaemonLogStream {
+  const { endpoint, token } = useOperatorConnection();
+  const [lines, setLines] = useState<readonly string[]>([]);
+  const [streaming, setStreaming] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  useEffect(() => {
+    if (!name) return;
+    setLines([]);
+    setStreaming(false);
+    setError(null);
+
+    let disposed = false;
+    let socket: WebSocket | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let connectedOnce = false;
+
+    const open = (): void => {
+      if (disposed) return;
+      const ws = new WebSocket(
+        serviceLogsSocketUrl(endpoint, token, name, connectedOnce ? 0 : SERVICE_LOG_TAIL),
+      );
+      socket = ws;
+      ws.onopen = () => {
+        if (disposed) return;
+        connectedOnce = true;
+        setStreaming(true);
+        setError(null);
+      };
+      ws.onmessage = (event: MessageEvent) => {
+        if (disposed) return;
+        const line = parseLogFrame(event.data);
+        if (line == null) return;
+        setLines((prev) => {
+          const next = [...prev, line];
+          return next.length > MAX_LIVE_LINES ? next.slice(-MAX_LIVE_LINES) : next;
+        });
+      };
+      ws.onerror = () => {
+        if (disposed) return;
+        setError(new Error("Log stream connection error"));
+      };
+      ws.onclose = () => {
+        if (disposed) return;
+        setStreaming(false);
+        timer = setTimeout(open, RECONNECT_DELAY_MS);
+      };
+    };
+    open();
+
+    return () => {
+      disposed = true;
+      if (timer) clearTimeout(timer);
+      socket?.close();
+    };
+  }, [endpoint, token, name]);
+
+  return { lines, error, streaming };
 }
 
 /** A titled log card with a connection-status badge and the {@link LogStream} tail. */

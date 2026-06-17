@@ -81,6 +81,13 @@ type ConnectionState =
 
 const OperatorClientContext = createContext<Client | null>(null);
 
+/** The resolved daemon connection — the same-origin endpoint and minted bearer. */
+export interface OperatorConnection {
+  endpoint: string;
+  token: string;
+}
+const OperatorConnectionContext = createContext<OperatorConnection | null>(null);
+
 export interface OperatorTransportProviderProps {
   children: ReactNode;
 }
@@ -170,9 +177,24 @@ export function OperatorTransportProvider({
 
   return (
     <OperatorClientContext.Provider value={daemonClient}>
-      <UrqlProvider value={daemonClient}>{children}</UrqlProvider>
+      <OperatorConnectionContext.Provider
+        value={{ endpoint: endpoint as string, token: token as string }}
+      >
+        <UrqlProvider value={daemonClient}>{children}</UrqlProvider>
+      </OperatorConnectionContext.Provider>
     </OperatorClientContext.Provider>
   );
+}
+
+/** The daemon connection (endpoint + bearer) for non-GraphQL transports (log sockets). */
+export function useOperatorConnection(): OperatorConnection {
+  const connection = useContext(OperatorConnectionContext);
+  if (!connection) {
+    throw new Error(
+      "useOperatorConnection must be used inside OperatorTransportProvider.",
+    );
+  }
+  return connection;
 }
 
 export function useOperatorClient(): Client {
