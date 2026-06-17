@@ -1,7 +1,13 @@
 import { useMemo, type ReactElement } from "react";
 
-import { useModelMetadata, useResourceList, type Row } from "@angee/sdk";
+import {
+  useModelMetadata,
+  useModelRoute,
+  useResourceList,
+  type Row,
+} from "@angee/sdk";
 
+import { recordPath } from "./DataPageRouted";
 import {
   formFieldsFromMetadata,
   type RelationFieldInfo,
@@ -55,6 +61,11 @@ export function RelationFieldWidget({
     [relatedMetadata],
   );
 
+  // A "follow" arrow appears only when the related model has a routed detail page
+  // and a record is selected — navigating to it turns the relation into a link.
+  const basePath = useModelRoute(relation.model);
+  const followHref = basePath && value ? recordPath(basePath, value) : undefined;
+
   return (
     <RelationPicker
       value={value}
@@ -63,6 +74,7 @@ export function RelationFieldWidget({
       readOnly={readOnly}
       placeholder={placeholder}
       aria-label={ariaLabel}
+      followHref={followHref}
       create={
         relation.canCreate && createFields.length > 0
           ? {
@@ -73,6 +85,16 @@ export function RelationFieldWidget({
           : undefined
       }
       onCreated={() => list.refetch()}
+      // Edit is offered whenever the model has editable fields — intentionally
+      // UX-only, not gated on a `canEdit` flag (the SDL exposes no per-relation
+      // edit capability). The server is the authorization boundary: a denied
+      // patch surfaces in the dialog's own error banner.
+      edit={
+        createFields.length > 0
+          ? { model: relation.model, fields: createFields }
+          : undefined
+      }
+      onEdited={() => list.refetch()}
     />
   );
 }

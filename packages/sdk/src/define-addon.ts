@@ -16,6 +16,13 @@ export interface AddonRoute {
   parent?: string;
   /** Which shell renders this route's chrome (`console`, `public`, …). */
   shell: string;
+  /**
+   * Model whose collection this route lists, e.g. `"OAuthClient"`. Set it on a
+   * routed collection page (not its `$id` child) to make the model "followable":
+   * a relation field targeting it resolves this route as the detail destination.
+   * One route per model — a second claim is a build-time error.
+   */
+  model?: string;
 }
 
 /** A navigation entry; many menu items may target one route. */

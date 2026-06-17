@@ -17,6 +17,7 @@ from django.core.management import call_command
 from django.db import connection
 from django.utils import timezone
 from rebac import system_context
+from strawberry_django_aggregates import AggregateOp, compute_aggregation
 
 from angee.iam_integrate_oidc import identity
 from angee.iam_integrate_oidc import protocol as oidc_protocol
@@ -1103,3 +1104,46 @@ class _FakeJwksClient:
 
         del token
         return SimpleNamespace(key=self.key)
+
+
+@pytest.mark.django_db
+def test_oidc_group_by_oauth_enabled() -> None:
+    """OIDC providers group by their OAuth client's enabled flag (to-one axis).
+
+    Exercises the resolver path behind ``oidcClientGroups``: ``OidcClient`` must
+    use an Angee-backed manager (so ``scoped_for_aggregate`` exists — a bare
+    ``RebacManager`` queryset lacks it), and the to-one relation axis
+    ``oauth_client__is_enabled`` must fold correctly. Build-only coverage cannot
+    catch a missing ``scoped_for_aggregate``; this runs the aggregation.
+    """
+
+    created_models = _create_missing_tables()
+    try:
+        call_command("rebac", "sync", verbosity=0)
+        with system_context(reason="test oidc group-by"):
+            enabled = OAuthClient.objects.create(
+                slug="enabled-client",
+                display_name="Enabled",
+                client_id="c1",
+                is_enabled=True,
+            )
+            disabled = OAuthClient.objects.create(
+                slug="disabled-client",
+                display_name="Disabled",
+                client_id="c2",
+                is_enabled=False,
+            )
+            OidcClient.objects.create(oauth_client=enabled)
+            OidcClient.objects.create(oauth_client=disabled)
+            rows = compute_aggregation(
+                OidcClient.objects.all().scoped_for_aggregate(),
+                group_by=[("oauth_client__is_enabled", None)],
+                aggregates=[(AggregateOp.COUNT, None)],
+            )
+        by_enabled = {row["oauth_client__is_enabled"]: row["count"] for row in rows}
+        assert by_enabled == {True: 1, False: 1}
+    finally:
+        if created_models:
+            with connection.schema_editor() as schema_editor:
+                for model in reversed(created_models):
+                    schema_editor.delete_model(model)

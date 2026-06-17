@@ -179,6 +179,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     // Built-in renderers are universal (PreviewPane always includes them); the
     // runtime carries only addon-contributed providers.
     previews: composed.previews,
+    routesByModel: modelRouteIndex(routes),
   };
 
   const defaultSchema = input.defaultSchema ?? "public";
@@ -669,6 +670,28 @@ function chromeFieldsNeedingDerivation(
   route: BaseAddonRoute,
 ): readonly ChromeField[] {
   return DERIVED_CHROME_FIELDS.filter((field) => route[field] === undefined);
+}
+
+/**
+ * Index each model to the base path of the collection route that lists it (the
+ * `model`-tagged route), for relation "follow" navigation. A model may be claimed
+ * by only one route — a second claim is a build-time error, matching the registry
+ * collision discipline elsewhere.
+ */
+function modelRouteIndex(
+  routes: readonly BaseAddonRoute[],
+): Record<string, string> {
+  const byModel: Record<string, string> = {};
+  for (const route of routes) {
+    if (!route.model) continue;
+    if (Object.prototype.hasOwnProperty.call(byModel, route.model)) {
+      throw new Error(
+        `Route "${route.name}" claims model "${route.model}" already claimed by another route.`,
+      );
+    }
+    byModel[route.model] = route.path;
+  }
+  return byModel;
 }
 
 function validateRoutes(

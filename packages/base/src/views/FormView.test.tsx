@@ -326,6 +326,33 @@ describe("FormView", () => {
     expect(screen.getByText("3")).toBeTruthy();
   });
 
+  test("renders labelled groups as tab panels when layout is tabs", async () => {
+    renderWithProviders(
+      <Form model="notes.Note" id="note-1" layout="tabs">
+        <Field name="title" label="Title" title />
+        <Group label="Details">
+          <Field name="summary" label="Summary" />
+        </Group>
+        <Group label="Schedule">
+          <Field name="location" label="Location" />
+        </Group>
+      </Form>,
+    );
+
+    // Each labelled group becomes a tab; the title stays in the header.
+    expect(await screen.findByRole("tab", { name: "Details" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Schedule" })).toBeTruthy();
+    expect(await screen.findByLabelText("Title")).toBeTruthy();
+
+    // The first tab's panel is shown; later panels mount only when selected.
+    expect(screen.getByText("Summary")).toBeTruthy();
+    expect(screen.queryByText("Location")).toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Schedule" }));
+    expect(await screen.findByText("Location")).toBeTruthy();
+    expect(screen.queryByText("Summary")).toBeNull();
+  });
+
   test("submits only changed writable fields for an update", async () => {
     renderForm("note-1");
 

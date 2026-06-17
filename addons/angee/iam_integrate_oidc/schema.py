@@ -24,6 +24,7 @@ from strawberry_django.pagination import OffsetPaginated
 
 from angee.base.models import instance_from_public_id
 from angee.graphql.actions import ActionResult
+from angee.graphql.aggregates import rebac_aggregate_builder
 from angee.graphql.crud import crud
 from angee.graphql.extension import extends_type
 from angee.graphql.node import AngeeNode
@@ -340,6 +341,37 @@ class OidcClientType(AngeeNode):
 
         return cast(list[str], cast(Any, self).allowed_email_domain_values)
 
+    @strawberry_django.field(only=["oauth_client"], select_related=["oauth_client"])
+    def oauth_enabled(self) -> bool:
+        """Whether the underlying OAuth client is enabled — the provider's effective on/off.
+
+        The OAuth base owns the ``is_enabled`` flag; OIDC surfaces it (the relation is
+        select-related, no per-row query) so the admin list and detail show whether a
+        login provider is actually live without opening the OAuth client.
+        """
+
+        return bool(cast(Any, self).oauth_client.is_enabled)
+
+
+# Grouped aggregates for the admin list: fold OIDC providers by their OAuth
+# client's enabled flag. ``oauth_client__is_enabled`` is a *to-one* relation-path
+# axis — the OAuth base owns the flag, the OIDC refinement groups across the 1:1
+# join (no row multiplication; supported since strawberry-django-aggregates 0.5.0).
+# Count is the only measure (``id``).
+_oidc_aggregates = rebac_aggregate_builder(
+    model=OidcClient,
+    aggregate_fields=["id"],
+    group_by_fields=["oauth_client__is_enabled"],
+    pagination_style="offset",
+).build()
+
+_AGGREGATE_TYPES: list[type] = [
+    _oidc_aggregates.aggregate_type,
+    _oidc_aggregates.grouped_type,
+    _oidc_aggregates.grouped_result_type,
+    _oidc_aggregates.group_key_type,
+]
+
 
 @strawberry.input
 class OidcClientInput:
@@ -377,6 +409,8 @@ class OidcConsoleQuery:
     oidc_client: OidcClientType | None = strawberry_django.node(
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
+    oidc_client_aggregate = _oidc_aggregates.aggregate_field
+    oidc_client_groups = _oidc_aggregates.group_by_field
 
 
 _OIDC_CLIENT_MUTATION = crud(
@@ -446,7 +480,7 @@ _PUBLIC_TYPES: list[type] = [
     UserType,
 ]
 
-_CONSOLE_TYPES: list[type] = [*_PUBLIC_TYPES, OidcClientType, OAuthClientType]
+_CONSOLE_TYPES: list[type] = [*_PUBLIC_TYPES, OidcClientType, OAuthClientType, *_AGGREGATE_TYPES]
 
 schemas = {
     "public": {

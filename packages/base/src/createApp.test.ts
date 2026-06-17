@@ -4,6 +4,7 @@ import { createElement, type ReactNode } from "react";
 import { cleanup, waitFor } from "@testing-library/react";
 import {
   useAuthoredQuery,
+  useModelRoute,
 } from "@angee/sdk";
 import { useParams } from "@tanstack/react-router";
 import { afterEach, describe, expect, test } from "vitest";
@@ -379,6 +380,76 @@ describe("createApp route menu refs", () => {
         },
       ])),
     ).toThrow(/references unknown menu item "missing-menu"/);
+  });
+});
+
+describe("createApp model route index", () => {
+  test("exposes a model's collection path through useModelRoute", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    history.replaceState(null, "", "/clients");
+
+    function ClientsProbe(): ReactNode {
+      const path = useModelRoute("OAuthClient");
+      return createElement("span", null, `route ${path ?? "none"}`);
+    }
+
+    const app = createApp(testAppInput([
+      {
+        id: "clients",
+        routes: [
+          {
+            name: "clients.home",
+            path: "/clients",
+            shell: "console",
+            component: ClientsProbe,
+            model: "OAuthClient",
+          },
+          {
+            name: "clients.record",
+            path: "/clients/$id",
+            shell: "console",
+            parent: "clients.home",
+          },
+        ],
+      },
+    ]));
+    const root = app.mount(host);
+
+    try {
+      await waitFor(() => {
+        expect(host.textContent).toContain("route /clients");
+      });
+    } finally {
+      root.unmount();
+      host.remove();
+    }
+  });
+
+  test("rejects two routes claiming the same model", () => {
+    expect(() =>
+      createApp(testAppInput([
+        {
+          id: "dup-model",
+          routes: [
+            {
+              name: "a.home",
+              path: "/a",
+              shell: "console",
+              component: EmptyPage,
+              model: "OAuthClient",
+            },
+            {
+              name: "b.home",
+              path: "/b",
+              shell: "console",
+              component: EmptyPage,
+              model: "OAuthClient",
+            },
+          ],
+        },
+      ])),
+    ).toThrow(/claims model "OAuthClient"/);
   });
 });
 

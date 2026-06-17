@@ -26,6 +26,8 @@ export interface AppRuntime {
   chatter: readonly ChatterContribution[];
   slots: readonly SlotContribution[];
   previews: readonly PreviewContribution[];
+  /** Collection route base path per model name, for "follow relation" navigation. */
+  routesByModel: Readonly<Record<string, string>>;
 }
 
 const EMPTY_RUNTIME: AppRuntime = {
@@ -37,6 +39,7 @@ const EMPTY_RUNTIME: AppRuntime = {
   chatter: [],
   slots: [],
   previews: [],
+  routesByModel: {},
 };
 
 const RuntimeContext = makeContext<AppRuntime>("AppRuntime");
@@ -68,6 +71,16 @@ export function useWidget(id: string): unknown {
 export function useFormOverride(model: string): unknown {
   // `?.` guards a `Partial<AppRuntime>` provider that spread `forms: undefined`.
   return useAppRuntime().forms?.[model];
+}
+
+/**
+ * The collection route base path for a model (e.g. `"OAuthClient"` →
+ * `"/integrate/providers"`), or `undefined` when no route lists it. Drives the
+ * relation "follow" affordance — a model without a routed page simply offers none.
+ */
+export function useModelRoute(model: string): string | undefined {
+  // `?.` guards a `Partial<AppRuntime>` provider that spread `routesByModel: undefined`.
+  return useAppRuntime().routesByModel?.[model];
 }
 
 /** The merged menu list. */

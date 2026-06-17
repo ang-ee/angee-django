@@ -82,6 +82,10 @@ export const enIamMessages: Record<string, string> = {
   "iam.oidc.group.provider": "Provider",
   "iam.oidc.group.loginPolicy": "Login policy",
   "iam.oidc.action.discover": "Discover endpoints",
+  "iam.oidc.column.provider": "Provider",
+  "iam.oidc.column.status": "Status",
+  "iam.oidc.status.enabled": "Enabled",
+  "iam.oidc.status.disabled": "Disabled",
 
   // Grants page.
   "iam.grants.group.namespace": "Namespace",

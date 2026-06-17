@@ -10,11 +10,10 @@ protocol`, and the login flow — lives entirely in this addon.
 from __future__ import annotations
 
 from django.db import models
-from rebac.managers import RebacManager
 
 from angee.base.fields import SqidField
 from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeModel
+from angee.base.models import AngeeManager, AngeeModel
 
 
 class OidcClient(SqidMixin, AuditMixin, AngeeModel):
@@ -43,7 +42,11 @@ class OidcClient(SqidMixin, AuditMixin, AngeeModel):
     create_on_login = models.BooleanField(default=False)
     allowed_email_domains = models.JSONField(default=list, blank=True)
 
-    objects = RebacManager()
+    # AngeeManager (a REBAC manager over AngeeQuerySet) keeps actor row-scoping
+    # AND supplies `scoped_for_aggregate`, which `rebac_aggregate_builder` requires
+    # for the grouped/aggregate query fields below — a bare RebacManager's queryset
+    # lacks it.
+    objects = AngeeManager()
 
     class Meta:
         """Django model options for OIDC client refinements."""

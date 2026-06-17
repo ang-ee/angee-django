@@ -481,7 +481,7 @@ requires-dist = [
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.12" },
     { name = "python-magic", specifier = ">=0.4.27" },
     { name = "pyyaml", specifier = ">=6" },
-    { name = "strawberry-django-aggregates", specifier = ">=0.4.1" },
+    { name = "strawberry-django-aggregates", specifier = ">=0.5.0" },
     { name = "strawberry-graphql", specifier = ">=0.270" },
     { name = "strawberry-graphql-django", specifier = ">=0.86" },
     { name = "tablib", specifier = ">=3" },
@@ -1789,16 +1789,16 @@ wheels = [
 
 [[package]]
 name = "strawberry-django-aggregates"
-version = "0.4.1"
+version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
     { name = "strawberry-graphql" },
     { name = "strawberry-graphql-django" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b8/06/9d1c59cf18c4a78ce95f3723661342940563d17fd7f02c93c6171bf60ef1/strawberry_django_aggregates-0.4.1.tar.gz", hash = "sha256:96c9d42ef9ce08f4f44051f2c98ceb8db3efae18b52d19d46b5b43267f4e3e68", size = 142411, upload-time = "2026-06-02T16:24:44.537Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ba/fc/0b9a8d1b40d59d6f56e63af46e3da07e61915eaab7c8df861d6e2a5e8b10/strawberry_django_aggregates-0.5.0.tar.gz", hash = "sha256:b73161bb46abb58027b10c6bc1b7c6f2b08fb15251a661d99e204a7df51d4789", size = 147149, upload-time = "2026-06-17T15:44:09.746Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5a/e3/bbb8c393a915c24b35b56d8f30cca7f08c331a38ac2f0eb371d2cb3c4df6/strawberry_django_aggregates-0.4.1-py3-none-any.whl", hash = "sha256:e0f2ce90e06c5a20f70297319baddcd043be20e6dc225129c08ccf0e69ada93f", size = 98041, upload-time = "2026-06-02T16:24:43.559Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/ba/56e531d245f136a6d6ccc0037102477cf54d3d2bcb316e2323a8919812bd/strawberry_django_aggregates-0.5.0-py3-none-any.whl", hash = "sha256:0570cf9ed341140419cf383931d5d8ca308a9ea4fa5b7bcddd2d802bc339ffac", size = 99957, upload-time = "2026-06-17T15:44:08.475Z" },
 ]
 
 [[package]]

@@ -154,6 +154,14 @@ export interface FormViewProps {
   deleteAction?: RecordDeleteAction;
   /** Hide the optional delete command unless the loaded record matches. */
   deleteVisibleWhen?: (record: Row) => boolean;
+  /**
+   * Section layout. `"stacked"` (default) renders each `<Group>` as a labelled
+   * section stacked down the form. `"tabs"` renders each *labelled* group as a tab
+   * panel via the shared `<Tabs>` primitive; the title/body/status and any
+   * ungrouped fields stay above the tab strip. Opt a long form in per form
+   * (`<Form layout="tabs">`); existing stacked forms are unaffected.
+   */
+  layout?: "stacked" | "tabs";
   /** Class name applied to the form root. */
   className?: string;
 }
@@ -215,6 +223,7 @@ export function FormView({
   recordTabs,
   deleteAction,
   deleteVisibleWhen,
+  layout = "stacked",
   className,
 }: FormViewProps): React.ReactElement {
   const t = useBaseT();
@@ -577,6 +586,34 @@ export function FormView({
   const recordTabList = recordTabs ?? [];
   const tabbed = recordPanelContext != null && recordTabList.length > 0;
 
+  // Render a list of section models in the chosen layout. `"stacked"` keeps each
+  // labelled group as its own section; `"tabs"` renders the labelled groups as tab
+  // panels (and stacks any unlabelled/ungrouped section above the strip). The same
+  // visibility-filtered list flows through both, so `showWhen` is honored either way.
+  const renderSectionModels = (
+    list: readonly FormSectionModel[],
+  ): React.ReactNode => {
+    if (layout !== "tabs") {
+      return list.map((section) => (
+        <FormSection key={section.key} section={section} renderField={renderField} />
+      ));
+    }
+    const stacked = list.filter((section) => section.label == null);
+    const tabbedSections = list.filter(
+      (section) => section.label != null && section.fields.length > 0,
+    );
+    return (
+      <>
+        {stacked.map((section) => (
+          <FormSection key={section.key} section={section} renderField={renderField} />
+        ))}
+        {tabbedSections.length > 0 ? (
+          <FormSectionTabs sections={tabbedSections} renderField={renderField} />
+        ) : null}
+      </>
+    );
+  };
+
   // The form body: field sections then the prominent body field. Shown inline on a
   // plain form, or wrapped as the leading "Overview" tab when `recordTabs` is set.
   const overviewBody = (
@@ -585,23 +622,11 @@ export function FormView({
         {hasConditionalFields ? (
           <form.Subscribe selector={(state) => state.values}>
             {(values) =>
-              visibleSections(sections, values as Values).map((section) => (
-                <FormSection
-                  key={section.key}
-                  section={section}
-                  renderField={renderField}
-                />
-              ))
+              renderSectionModels(visibleSections(sections, values as Values))
             }
           </form.Subscribe>
         ) : (
-          sections.map((section) => (
-            <FormSection
-              key={section.key}
-              section={section}
-              renderField={renderField}
-            />
-          ))
+          renderSectionModels(sections)
         )}
       </div>
 
@@ -965,6 +990,45 @@ function FormSection({
         {section.fields.map((field) => renderField(field))}
       </FormGrid>
     </section>
+  );
+}
+
+/**
+ * Render labelled groups as tabs (one panel per group) instead of stacked
+ * sections. The group label becomes the tab; the panel drops the in-body eyebrow
+ * (the tab already names it). Active tab is derived/guarded so a group that drops
+ * out (all its fields hidden by `showWhen`) falls back to the first remaining tab
+ * rather than leaving an empty panel.
+ */
+function FormSectionTabs({
+  sections,
+  renderField,
+}: {
+  sections: readonly FormSectionModel[];
+  renderField: (field: FieldDescriptor) => React.ReactNode;
+}): React.ReactElement {
+  const [active, setActive] = React.useState(sections[0]?.key);
+  const value = sections.some((section) => section.key === active)
+    ? active
+    : sections[0]?.key;
+  return (
+    <Tabs value={value} onValueChange={setActive} variant="card">
+      <Tabs.List>
+        {sections.map((section) => (
+          <Tabs.Tab key={section.key} value={section.key}>
+            {section.label}
+          </Tabs.Tab>
+        ))}
+      </Tabs.List>
+      {sections.map((section) => (
+        <Tabs.Panel key={section.key} value={section.key}>
+          <FormSection
+            section={{ ...section, label: undefined }}
+            renderField={renderField}
+          />
+        </Tabs.Panel>
+      ))}
+    </Tabs>
   );
 }
 

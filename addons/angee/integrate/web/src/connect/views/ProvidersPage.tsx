@@ -140,7 +140,7 @@ export function ProvidersPage(): React.ReactElement {
   return (
     <DataPage model={MODEL} placement="inline" routed>
       {providerList}
-      <Form model={MODEL}>
+      <Form model={MODEL} layout="tabs">
         <Field name="displayName" title />
         <Group label={t("integrate.providers.group.client")} columns={2}>
           <Field name="slug" />

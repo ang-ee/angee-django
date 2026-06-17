@@ -1,7 +1,12 @@
 import { useState, type ReactElement, type ReactNode } from "react";
+import { useNavigate } from "@tanstack/react-router";
 
+import { Glyph } from "../chrome/Glyph";
+import { useBaseT } from "../i18n";
 import { ControlBandProvider } from "../shell/ControlBand";
+import { Button } from "../ui/button";
 import { Dialog } from "../ui/dialog";
+import { TextLink } from "../ui/text-link";
 import {
   RelationField,
   type RelationOption,
@@ -26,6 +31,16 @@ export interface RelationCreateConfig {
   title?: ReactNode;
 }
 
+/** What the inline edit form needs to edit the *selected* related record. */
+export interface RelationEditConfig {
+  /** Related model label, e.g. `"OAuthClient"`. */
+  model: string;
+  /** Fields the inline edit form renders (the related model's editable fields). */
+  fields?: readonly FieldDescriptor[];
+  /** Dialog title; defaults to `Edit <model>`. */
+  title?: ReactNode;
+}
+
 export interface RelationPickerProps {
   value?: string | null;
   onChange?: (value: string) => void;
@@ -43,13 +58,33 @@ export interface RelationPickerProps {
   create?: RelationCreateConfig;
   /** Called with the new id after an inline create (e.g. to refetch options). */
   onCreated?: (id: string) => void;
+  /**
+   * Enables the in-place "Edit" affordance: a pencil beside the picker opens the
+   * *selected* record in a form dialog, so a related record is changed without
+   * leaving the parent surface. Server-enforced permission surfaces in the form.
+   */
+  edit?: RelationEditConfig;
+  /** Called with the id after an inline edit (e.g. to refetch options for a relabel). */
+  onEdited?: (id: string) => void;
+  /**
+   * In-app path to the selected record's detail page. When set, a "follow" arrow
+   * beside the picker navigates there — so a chosen relation is a link to its
+   * record, not a dead end. Omitted when the target model has no routed page.
+   */
+  followHref?: string;
 }
 
+/** The open inline-form dialog: a create prefilled with the typed query, or an edit of a record. */
+type DialogState =
+  | { mode: "create"; query: string }
+  | { mode: "edit"; id: string };
+
 /**
- * A `RelationField` backed by an inline create form. The caller supplies the
- * options (and, to enable create, the related model + its create fields); on
- * "Create …" a `FormView` create dialog opens prefilled with the typed name,
- * and saving selects the new record without leaving the parent surface.
+ * A `RelationField` backed by inline create/edit forms and a "follow" arrow. The
+ * caller supplies the options (and, to enable an affordance, the related model +
+ * its form fields); "Create …" opens a create dialog prefilled with the typed
+ * name, the pencil edits the selected record, and the arrow opens its detail page
+ * — all without leaving the parent surface.
  */
 export function RelationPicker({
   value,
@@ -61,73 +96,139 @@ export function RelationPicker({
   readOnly,
   create,
   onCreated,
+  edit,
+  onEdited,
+  followHref,
 }: RelationPickerProps): ReactElement {
-  // The typed query while the create dialog is open; `null` means closed.
-  const [draftName, setDraftName] = useState<string | null>(null);
+  const t = useBaseT();
+  // The open inline-form dialog; `null` means closed.
+  const [dialog, setDialog] = useState<DialogState | null>(null);
   const prefillField = create?.prefillField ?? "name";
+  const canEdit = Boolean(edit) && !readOnly && Boolean(value);
 
   return (
     <>
-      <RelationField
-        value={value}
-        onChange={onChange}
-        options={options}
-        placeholder={placeholder}
-        searchPlaceholder={searchPlaceholder}
-        aria-label={ariaLabel}
-        readOnly={readOnly}
-        onCreate={create ? (query) => setDraftName(query) : undefined}
-      />
-      {create ? (
-        <Dialog.Root
-          open={draftName !== null}
-          onOpenChange={(open) => {
-            if (!open) setDraftName(null);
-          }}
-        >
-          <Dialog.Portal>
-            <Dialog.Backdrop />
-            <Dialog.Content size="lg">
-              <Dialog.Header>
-                <div className="flex items-start gap-3">
-                  <div className="min-w-0 flex-1">
-                    <Dialog.Title>
-                      {create.title ?? `New ${create.model.toLowerCase()}`}
-                    </Dialog.Title>
-                  </div>
-                  <Dialog.Close />
+      <div className="flex min-w-0 items-center gap-1">
+        <div className="min-w-0 flex-1">
+          <RelationField
+            value={value}
+            onChange={onChange}
+            options={options}
+            placeholder={placeholder}
+            searchPlaceholder={searchPlaceholder}
+            aria-label={ariaLabel}
+            readOnly={readOnly}
+            onCreate={create ? (query) => setDialog({ mode: "create", query }) : undefined}
+          />
+        </div>
+        {canEdit && value ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="iconMd"
+            aria-label={t("relation.edit")}
+            className="shrink-0"
+            onClick={() => setDialog({ mode: "edit", id: value })}
+          >
+            <Glyph decorative name="pencil" />
+          </Button>
+        ) : null}
+        {followHref ? <FollowRecordLink href={followHref} /> : null}
+      </div>
+      <Dialog.Root
+        open={dialog !== null}
+        onOpenChange={(open) => {
+          if (!open) setDialog(null);
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Backdrop />
+          <Dialog.Content size="lg">
+            <Dialog.Header>
+              <div className="flex items-start gap-3">
+                <div className="min-w-0 flex-1">
+                  <Dialog.Title>{dialogTitle(dialog, create, edit)}</Dialog.Title>
                 </div>
-              </Dialog.Header>
-              <Dialog.Body>
-                {/* Force the form's control band inline so Create lands in the
-                    dialog instead of portaling to the shell's top band. */}
-                {draftName !== null ? (
-                  <ControlBandProvider host={undefined}>
-                    <FormView
-                      model={create.model}
-                      id={null}
-                      fields={create.fields}
-                      defaultValues={{ [prefillField]: draftName }}
-                      submitLabel="Create"
-                      onSaved={(row) => {
-                        const id =
-                          typeof row.id === "string"
-                            ? row.id
-                            : String(row.id ?? "");
-                        if (id) {
-                          onChange?.(id);
-                          onCreated?.(id);
-                        }
-                        setDraftName(null);
-                      }}
-                    />
-                  </ControlBandProvider>
-                ) : null}
-              </Dialog.Body>
-            </Dialog.Content>
-          </Dialog.Portal>
-        </Dialog.Root>
-      ) : null}
+                <Dialog.Close />
+              </div>
+            </Dialog.Header>
+            <Dialog.Body>
+              {/* Force the form's control band inline so Save lands in the dialog
+                  instead of portaling to the shell's top band. */}
+              {dialog?.mode === "create" && create ? (
+                <ControlBandProvider host={undefined}>
+                  <FormView
+                    model={create.model}
+                    id={null}
+                    fields={create.fields}
+                    defaultValues={{ [prefillField]: dialog.query }}
+                    onSaved={(row) => {
+                      const id = rowId(row);
+                      if (id) {
+                        onChange?.(id);
+                        onCreated?.(id);
+                      }
+                      setDialog(null);
+                    }}
+                  />
+                </ControlBandProvider>
+              ) : null}
+              {dialog?.mode === "edit" && edit ? (
+                <ControlBandProvider host={undefined}>
+                  <FormView
+                    model={edit.model}
+                    id={dialog.id}
+                    fields={edit.fields}
+                    onSaved={(row) => {
+                      onEdited?.(rowId(row) || dialog.id);
+                      setDialog(null);
+                    }}
+                  />
+                </ControlBandProvider>
+              ) : null}
+            </Dialog.Body>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </>
+  );
+}
+
+function rowId(row: { id?: unknown }): string {
+  return typeof row.id === "string" ? row.id : String(row.id ?? "");
+}
+
+function dialogTitle(
+  dialog: DialogState | null,
+  create: RelationCreateConfig | undefined,
+  edit: RelationEditConfig | undefined,
+): ReactNode {
+  if (dialog?.mode === "edit") {
+    return edit?.title ?? `Edit ${edit?.model.toLowerCase() ?? "record"}`;
+  }
+  return create?.title ?? `New ${create?.model.toLowerCase() ?? "record"}`;
+}
+
+/**
+ * The "follow" arrow beside a relation picker: a client-side navigation to the
+ * selected record's detail page. A separate component so its router hook runs
+ * only when a follow target exists (router-less renders pass no `followHref`).
+ */
+function FollowRecordLink({ href }: { href: string }): ReactElement {
+  const t = useBaseT();
+  const navigate = useNavigate();
+  return (
+    // A real `<a href>` (via `TextLink`) so cmd/middle-click opens the record in
+    // a new tab and the control reads as a link to AT; a plain click does SPA
+    // navigation through `onNavigate`.
+    <TextLink
+      href={href}
+      onNavigate={(to) => void navigate({ to })}
+      aria-label={t("relation.follow")}
+      variant="muted"
+      className="inline-flex size-icon-btn-md shrink-0 items-center justify-center rounded-md transition-colors hover:bg-inset focus-visible:focus-ring [&_.glyph]:size-4"
+    >
+      <Glyph decorative name="arrow-up-right" />
+    </TextLink>
   );
 }

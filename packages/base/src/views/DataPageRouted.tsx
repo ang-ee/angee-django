@@ -116,7 +116,9 @@ function normalizeRoutePath(path: string): string {
   return path.replace(/\/+$/, "") || "/";
 }
 
-function recordPath(basePath: string, id: string): string {
+/** Join a collection base path with a record id (shared by routed navigation and
+ * the relation "follow" affordance, so id-encoding lives in one place). */
+export function recordPath(basePath: string, id: string): string {
   if (basePath === "/") return `/${encodeURIComponent(id)}`;
   return `${basePath}/${encodeURIComponent(id)}`;
 }

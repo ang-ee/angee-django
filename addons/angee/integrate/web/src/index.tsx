@@ -37,6 +37,7 @@ const integrateRoutes: readonly BaseAddonRoute[] = [
     path: "/integrate",
     shell: "console",
     component: IntegrationsPage,
+    model: "Integration",
   },
   {
     // The integration record nests under the list; `IntegrationsPage` reads the
@@ -52,6 +53,7 @@ const integrateRoutes: readonly BaseAddonRoute[] = [
     path: "/integrate/vendors",
     shell: "console",
     component: VendorsPage,
+    model: "Vendor",
   },
   {
     name: "integrate.vendor",
@@ -64,6 +66,7 @@ const integrateRoutes: readonly BaseAddonRoute[] = [
     path: "/integrate/webhooks",
     shell: "console",
     component: WebhooksPage,
+    model: "WebhookSubscription",
   },
   {
     name: "integrate.webhook",
@@ -78,6 +81,7 @@ const integrateRoutes: readonly BaseAddonRoute[] = [
     path: "/integrate/vcs",
     shell: "console",
     component: VCSIntegrationsPage,
+    model: "VCSIntegration",
   },
   {
     name: "integrate.vcsIntegration",
@@ -90,6 +94,7 @@ const integrateRoutes: readonly BaseAddonRoute[] = [
     path: "/integrate/repositories",
     shell: "console",
     component: RepositoriesPage,
+    model: "Repository",
   },
   {
     name: "integrate.repository",
@@ -102,6 +107,7 @@ const integrateRoutes: readonly BaseAddonRoute[] = [
     path: "/integrate/sources",
     shell: "console",
     component: SourcesPage,
+    model: "Source",
   },
   {
     name: "integrate.source",
@@ -134,6 +140,7 @@ const integrateRoutes: readonly BaseAddonRoute[] = [
     path: "/integrate/providers",
     shell: "console",
     component: ProvidersPage,
+    model: "OAuthClient",
   },
   {
     name: "integrate.provider",
@@ -146,6 +153,7 @@ const integrateRoutes: readonly BaseAddonRoute[] = [
     path: "/integrate/accounts",
     shell: "console",
     component: ExternalAccountsPage,
+    model: "ExternalAccount",
   },
   {
     name: "integrate.account",
@@ -158,6 +166,7 @@ const integrateRoutes: readonly BaseAddonRoute[] = [
     path: "/integrate/credentials",
     shell: "console",
     component: CredentialsPage,
+    model: "Credential",
   },
   {
     name: "integrate.credential",

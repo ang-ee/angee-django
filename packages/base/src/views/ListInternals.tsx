@@ -1209,6 +1209,12 @@ function graphQLEnumValue(field: string): string {
 
 function fieldToSnake(field: string): string {
   return field
+    // A `_<Capital>` is Strawberry's camel form of a Django `__` relation
+    // path (e.g. `oauthClient_IsEnabled` ← `oauth_client__is_enabled`):
+    // restore the double underscore so a to-one group axis round-trips to
+    // its backend enum (`OAUTH_CLIENT__IS_ENABLED`). A no-op for ordinary
+    // camelCase fields, which never contain `_<Capital>`.
+    .replace(/_([A-Z])/g, "__$1")
     .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .replace(/[-\s]+/g, "_")

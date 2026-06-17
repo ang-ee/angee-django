@@ -89,6 +89,17 @@ hand-rolling a concern. TypeScript dependency setup belongs in `package.json`,
   predicate (mirroring `Action.visibleWhen`) drives a discriminated form — a `kind`
   select that swaps the body — and a hidden field is never submitted. Reach for a
   custom form component only when the declarative DSL genuinely cannot express it.
+- A long form opts into tabs with `<Form layout="tabs">` (default `"stacked"`):
+  each *labelled* `<Group>` becomes a tab panel, while the title/body/status and any
+  ungrouped fields stay above the tab strip. It is per-form — existing stacked forms
+  are untouched — and reuses the same `<Group>` declarations, so no field metadata is
+  duplicated. Group your fields for the stacked layout and tabbing is one prop away.
+- A relation field is a link, not a dead end. A routed collection page tags its
+  model on the route — `{ name, path, component, model: "OAuthClient" }` (one route
+  per model, build-time fail-fast) — and the relation widget resolves it through
+  `useModelRoute(model)` to show a "follow" arrow to the selected record's detail
+  page (breadcrumbs come from that route). A model with no routed page simply shows
+  no arrow.
 - Register a model's create form once via `defineAddon`'s
   `forms: { Model: <…Field/Group children…> }`; the standard renderer uses it
   wherever that model is created, including the relation-picker inline create. Use
@@ -97,6 +108,11 @@ hand-rolling a concern. TypeScript dependency setup belongs in `package.json`,
   `RelationPicker`'s `create` needs only `{ model }` (the override supersedes any
   passed `fields` on create); pass inline `fields` only for a data-dependent form
   whose options are fetched at runtime and so cannot be a static registration.
+  `RelationPicker` also offers inline **edit** (a pencil beside the picker opens the
+  *selected* record in a form dialog) — wired by `RelationFieldWidget` from the
+  related model's fields, so a relation is created, edited, and followed without
+  leaving the parent form. The create-form override stays create-only: an edit
+  dialog renders the passed `fields` (the registered form is not reused for edit).
 - A labeled control is a page element or a `FieldRoot`. Reach for `FieldRoot` /
   `FieldLabel` (the stacked label-over-control owner, e.g. for an ephemeral
   composer not bound to a model record) before hand-rolling a `<label>` wrapper.
@@ -182,6 +198,14 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   item's id) or the chrome derivation throws "referenced by multiple menu items" —
   or make the root route-less so it inherits its target through a descendant and the
   leaf is the route's sole reference.
+- **Group by a to-one relation with the camel group-key field.** A server group-by
+  axis may traverse a forward FK/OneToOne (e.g. `group_by_fields=["oauth_client__is_enabled"]`
+  in `schema.py`; to-many stays refused). The backend emits the group-key field in
+  camel form (`oauthClient_IsEnabled`) and the groupable enum in `__` SNAKE_UPPER
+  (`OAUTH_CLIENT__IS_ENABLED`). A `DataToolbarGroupOption`'s `group.field` is the
+  *camel key* (`"oauthClient_IsEnabled"`) — `dataViewGroupToAggregateDimension`
+  reads it verbatim as the bucket key and `fieldToSnake`-uppercases it to the enum
+  (a `_<Capital>` restores the Django `__`). Use the camel key, not the snake path.
 - **Live cross-actor refresh requires a `changes()` subscription.** A list/picker
   auto-invalidates from `<model>Changed` on the subscription schema, gated on the
   schema actually declaring it — so a model without

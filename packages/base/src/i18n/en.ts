@@ -183,6 +183,8 @@ export const enBaseMessages: Record<string, string> = {
   "relation.searchPlaceholder": "Search…",
   "relation.noMatches": "No matches.",
   "relation.create": "Create “{query}”",
+  "relation.follow": "Open record",
+  "relation.edit": "Edit record",
   "preview.loading": "Loading preview…",
   "preview.loadError": "Could not load file",
   "preview.noInline": "No inline preview.",

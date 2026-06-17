@@ -127,6 +127,29 @@ const editableGroups = [
   },
 ] satisfies readonly GroupDescriptor[];
 
+// A long form split across several labelled groups — rendered as tabs via
+// `layout="tabs"` (the title/body stay in the header above the tab strip).
+const tabbedGroups = [
+  {
+    label: "Ownership",
+    columns: 2,
+    fields: [ownerField, priorityField, visibilityField],
+    actions: [],
+  },
+  {
+    label: "Timestamps",
+    columns: 2,
+    fields: [createdAtField, updatedAtField, wordsField],
+    actions: [],
+  },
+  {
+    label: "Tags",
+    columns: 1,
+    fields: [tagsField],
+    actions: [],
+  },
+] satisfies readonly GroupDescriptor[];
+
 const readOnlyFields = editableFields.map((field) => ({
   ...field,
   readOnly: true,
@@ -185,12 +208,24 @@ export const ReadOnlyMode: Story = {
   ),
 };
 
+export const TabbedLayout: Story = {
+  render: () => (
+    <FormViewFixture
+      fields={editableFields}
+      groups={tabbedGroups}
+      layout="tabs"
+    />
+  ),
+};
+
 function FormViewFixture({
   fields,
   groups,
+  layout,
 }: {
   fields: readonly FormField[];
   groups: readonly GroupDescriptor[];
+  layout?: "stacked" | "tabs";
 }) {
   return (
     <RuntimeFixture schemas={storySchemas}>
@@ -199,6 +234,7 @@ function FormViewFixture({
         id={storyRecord.id}
         fields={fields}
         groups={groups}
+        layout={layout}
         returning={[
           "owner",
           "priority",

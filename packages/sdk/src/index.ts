@@ -151,6 +151,7 @@ export {
   useAppRuntime,
   useWidget,
   useFormOverride,
+  useModelRoute,
   useMenus,
   useSlot,
   usePreviews,
