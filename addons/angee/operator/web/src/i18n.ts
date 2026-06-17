@@ -72,6 +72,12 @@ export const enOperatorMessages: Record<string, string> = {
   "operator.workspaces.destroy.confirm.title": "Destroy workspace?",
   "operator.workspaces.destroy.confirm.body":
     "“{name}” will be destroyed — its files are removed and this cannot be undone.",
+  "operator.workspaces.detail.notFound": "Workspace not found",
+  "operator.workspaces.detail.overview": "Overview",
+  "operator.workspaces.detail.expiresAt": "Expires",
+  "operator.workspaces.detail.mcp": "Playwright MCP",
+  "operator.workspaces.detail.logs": "Logs",
+  "operator.workspaces.detail.logs.empty": "Waiting for log output…",
 
   // Sources.
   "operator.sources.loading": "Loading sources",
@@ -87,6 +93,13 @@ export const enOperatorMessages: Record<string, string> = {
   "operator.sources.fetch": "Fetch",
   "operator.sources.pull": "Pull",
   "operator.sources.push": "Push",
+  "operator.sources.detail.notFound": "Source not found",
+  "operator.sources.detail.overview": "Overview",
+  "operator.sources.detail.path": "Path",
+  "operator.sources.detail.upstream": "Upstream",
+  "operator.sources.detail.currentRef": "Current ref",
+  "operator.sources.detail.pushed": "Pushed",
+  "operator.sources.detail.error": "Error",
 
   // GitOps.
   "operator.gitops.loading": "Loading GitOps topology",

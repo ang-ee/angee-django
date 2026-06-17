@@ -5,3 +5,11 @@ const OPERATOR_ROOT = "/operator";
 export function serviceDetailPath(name: string): string {
   return `${OPERATOR_ROOT}/services/${encodeURIComponent(name)}`;
 }
+
+export function workspaceDetailPath(name: string): string {
+  return `${OPERATOR_ROOT}/workspaces/${encodeURIComponent(name)}`;
+}
+
+export function sourceDetailPath(name: string): string {
+  return `${OPERATOR_ROOT}/sources/${encodeURIComponent(name)}`;
+}

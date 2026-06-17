@@ -27,6 +27,8 @@ import { ServiceDetail } from "./views/sections/ServiceDetail";
 import {
   SourcesSection,
 } from "./views/sections/SourcesSection";
+import { SourceDetail } from "./views/sections/SourceDetail";
+import { WorkspaceDetail } from "./views/sections/WorkspaceDetail";
 import {
   TemplatesSection,
 } from "./views/sections/TemplatesSection";
@@ -76,10 +78,24 @@ const operatorRoutes: readonly BaseAddonRoute[] = [
     component: operatorSectionRoute(WorkspacesSection),
   },
   {
+    name: "operator.workspaces.detail",
+    path: "/operator/workspaces/$name",
+    shell: "console",
+    menu: "operator.workspaces",
+    component: operatorSectionRoute(WorkspaceDetail),
+  },
+  {
     name: "operator.sources",
     path: "/operator/sources",
     shell: "console",
     component: operatorSectionRoute(SourcesSection),
+  },
+  {
+    name: "operator.sources.detail",
+    path: "/operator/sources/$name",
+    shell: "console",
+    menu: "operator.sources",
+    component: operatorSectionRoute(SourceDetail),
   },
   {
     name: "operator.gitops",

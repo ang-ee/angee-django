@@ -311,6 +311,21 @@ export const WORKSPACE_SYNC_BASE_MUTATION = `
   }
 `;
 
+// The recent log buffer (history) for first paint of the workspace detail logs.
+export const WORKSPACE_LOGS_QUERY = `
+  query OperatorWorkspaceLogHistory($name: String!, $limit: Int) {
+    workspaceLogs(name: $name, limit: $limit)
+  }
+`;
+
+// The live log tail. Each emission is one log line; the detail view accumulates
+// them past the history (mirrors the service log stream).
+export const WORKSPACE_LOGS_SUBSCRIPTION = `
+  subscription OperatorWorkspaceLogStream($name: String!) {
+    onWorkspaceLogs(name: $name)
+  }
+`;
+
 export const SOURCE_FETCH_MUTATION = `
   mutation OperatorSourceFetch($name: String!) {
     sourceFetch(name: $name) ${SOURCE_FIELDS}
