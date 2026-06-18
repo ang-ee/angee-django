@@ -193,6 +193,51 @@ def test_refresh_provider_models_is_admin_gated(agents_console_tables: None) -> 
     assert result["ok"] is True
 
 
+def test_create_inference_provider_requires_inference_impl(agents_console_tables: None) -> None:
+    """InferenceProvider create is guarded by the owning Integration impl class."""
+
+    admin = _platform_admin("agt-provider-create-admin")
+    none_integration = make_integration("agt-provider-none")
+    vcs_integration = make_integration("agt-provider-vcs", impl_class="stub")
+    manual_integration = make_integration("agt-provider-manual", impl_class="manual")
+    console = _schema()
+    mutation = """
+        mutation CreateProvider($integration: ID!) {
+          createInferenceProvider(
+            data: {integration: $integration, name: "Provider", baseUrl: "https://api.example.test"}
+          ) {
+            name
+            baseUrl
+            integration { implClass }
+          }
+        }
+    """
+
+    for integration in (none_integration, vcs_integration):
+        denied = _execute(
+            console,
+            mutation,
+            {"integration": _gid("IntegrationType", integration.sqid)},
+            user=admin,
+        )
+        assert denied.errors is not None
+        assert "does not use an inference implementation" in denied.errors[0].message
+
+    created = _data(
+        _execute(
+            console,
+            mutation,
+            {"integration": _gid("IntegrationType", manual_integration.sqid)},
+            user=admin,
+        )
+    )["createInferenceProvider"]
+    assert created == {
+        "name": "Provider",
+        "baseUrl": "https://api.example.test",
+        "integration": {"implClass": "MANUAL"},
+    }
+
+
 def test_create_mcp_server_keeps_defaults_for_omitted_optionals(agents_console_tables: None) -> None:
     """A create omitting optional non-null fields leaves them at the model default.
 

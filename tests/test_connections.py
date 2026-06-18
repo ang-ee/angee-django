@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 from typing import Any
+from urllib import parse
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -55,6 +56,41 @@ def test_resolve_connect_redirect_picks_auto_or_manual() -> None:
     # the session — both fall back to the manual paste callback.
     assert fixed.resolve_connect_redirect("http://127.0.0.1:5177/callback") == (manual, "manual")
     assert fixed.resolve_connect_redirect("https://console.example/callback") == (manual, "manual")
+
+
+def test_oauth_protocol_discovers_missing_authorize_endpoint() -> None:
+    """A discovery-only OAuth client can start an authorization flow."""
+
+    oauth_client = OAuthClient(
+        slug="discovered",
+        display_name="Discovered",
+        client_id="client-id",
+        discovery_url="https://provider.example/.well-known/oauth-authorization-server",
+    )
+    calls = 0
+
+    def discover_endpoints() -> dict[str, str]:
+        nonlocal calls
+        calls += 1
+        oauth_client.authorize_endpoint = "https://provider.example/oauth/authorize"
+        oauth_client.token_endpoint = "https://provider.example/oauth/token"
+        return {"authorization_endpoint": oauth_client.authorize_endpoint}
+
+    oauth_client.discover_endpoints = discover_endpoints  # type: ignore[method-assign]
+
+    assert oauth_client.configuration_state == "ready"
+    url = OAuthClientProtocol(oauth_client).authorize_url(
+        state="state-token",
+        redirect_uri="https://app.example/callback",
+        scopes=("profile",),
+    )
+
+    parsed = parse.urlsplit(url)
+    assert calls == 1
+    assert parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", "")) == (
+        "https://provider.example/oauth/authorize"
+    )
+    assert dict(parse.parse_qsl(parsed.query))["client_id"] == "client-id"
 
 
 def test_oauth_client_claim_accessors_support_dotted_paths() -> None:

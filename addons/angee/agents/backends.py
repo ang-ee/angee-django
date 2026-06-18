@@ -68,6 +68,7 @@ class InferenceBackend(IntegrationImpl):
     category = "inference"
     related_model = "agents.InferenceProvider"
     related_create_fields = ("name", "base_url", "config")
+    related_create_input_fields = {"config": "related_config"}
     label = "Inference"
     icon = "sparkles"
     defaults = {

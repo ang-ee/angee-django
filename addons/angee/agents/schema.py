@@ -21,13 +21,14 @@ import strawberry_django
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
-from django.db import models
+from django.db import models, transaction
 from rebac import current_actor, system_context
 from strawberry import auto, relay
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
 from angee.agents.autoconfig import SETTINGS as _AGENTS_SETTINGS
+from angee.agents.backends import InferenceBackend
 from angee.agents.context import render_view_context
 from angee.agents.models import RuntimeStatus
 from angee.base.mixins import actor_user_id
@@ -433,16 +434,50 @@ _AGENT_MUTATION = crud(
 )
 """Admin agent CRUD: owner is field-backed REBAC; written elevated."""
 
+
+def _require_inference_integration(integration: Any) -> None:
+    """Raise when an integration's implementation is not an inference backend."""
+
+    impl_class = Integration.objects.impl_class_for_key(str(getattr(integration, "impl_class", "")))
+    if not issubclass(impl_class, InferenceBackend):
+        raise ValueError(f"Integration {integration.sqid} does not use an inference implementation.")
+
+
+@strawberry.type
+class InferenceProviderCreateMutation:
+    """Admin create for an inference provider, validating the owning integration impl."""
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def create_inference_provider(self, data: InferenceProviderInput) -> InferenceProviderType:
+        """Create an inference provider only for integrations backed by ``InferenceBackend``."""
+
+        integration = _resolve(
+            Integration,
+            data.integration,
+            reason="agents.graphql.inference_provider.create.integration",
+        )
+        _require_inference_integration(integration)
+        attrs: dict[str, Any] = {
+            "integration": integration,
+            "name": data.name,
+            "base_url": data.base_url,
+        }
+        if data.config is not strawberry.UNSET:
+            attrs["config"] = data.config
+        with system_context(reason="agents.graphql.inference_provider.create"), transaction.atomic():
+            provider = InferenceProvider.objects.create(**attrs)
+        return cast(InferenceProviderType, provider)
+
+
 _INFERENCE_PROVIDER_MUTATION = crud(
     InferenceProviderType,
-    create=InferenceProviderInput,
     update=InferenceProviderPatch,
     delete=True,
     permission_classes=_ADMIN_PERMISSION_CLASSES,
     name="inference_provider",
     write_context="agents.graphql.inference_provider",
 )
-"""Admin inference-provider CRUD: FK input resolves via strawberry-django; written elevated."""
+"""Admin inference-provider update/delete; create validates the owning Integration impl."""
 
 _INFERENCE_MODEL_MUTATION = crud(
     InferenceModelType,
@@ -942,6 +977,7 @@ schemas = {
         "query": [AgentsConsoleQuery],
         "mutation": [
             _AGENT_MUTATION,
+            InferenceProviderCreateMutation,
             _INFERENCE_PROVIDER_MUTATION,
             _INFERENCE_MODEL_MUTATION,
             _MCP_SERVER_MUTATION,

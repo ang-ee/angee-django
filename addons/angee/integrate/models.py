@@ -1083,6 +1083,38 @@ class IntegrationStatus(models.TextChoices):
             raise ValueError(f"Unsupported integration status: {raw}") from error
 
 
+class IntegrationManager(AngeeManager):
+    """Manager factories for invariants that span Integration and its impl row."""
+
+    def create_with_impl(
+        self,
+        *,
+        related_input: Any | None = None,
+        related_unset: Any = None,
+        **attrs: Any,
+    ) -> Any:
+        """Create an integration and its implementation-owned related row atomically."""
+
+        impl_key = str(attrs.get("impl_class") or "none").strip() or "none"
+        attrs["impl_class"] = impl_key
+        impl_class = self.impl_class_for_key(impl_key)
+        with transaction.atomic():
+            integration = self.create(**attrs)
+            related_values = (
+                {}
+                if related_input is None
+                else impl_class.related_create_values_from_input(integration, related_input, unset=related_unset)
+            )
+            impl_class.create_related_row(integration, related_values)
+        return integration
+
+    def impl_class_for_key(self, key: str) -> type[IntegrationImpl]:
+        """Return the implementation class registered for ``key`` on this model."""
+
+        field = cast(ImplClassField, self.model._meta.get_field("impl_class"))
+        return cast(type[IntegrationImpl], field.resolve_class(key))
+
+
 class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     """A product/workspace integration to a vendor account.
 
@@ -1132,7 +1164,7 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     last_error = models.TextField(blank=True)
     last_error_at = models.DateTimeField(null=True, blank=True)
 
-    objects = AngeeManager()
+    objects = IntegrationManager()
 
     class Meta:
         """Django model options for integrations."""

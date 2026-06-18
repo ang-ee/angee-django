@@ -10,6 +10,7 @@ import {
   GroupListView,
   List,
   useEnumOptions,
+  useImplCategory,
   useImplPrefill,
   usePrompt,
   useToast,
@@ -36,6 +37,7 @@ const CONNECT_NEXT = "/integrate";
 export function IntegrationsPage(): React.ReactElement {
   const t = useIntegrateT();
   const implClassOptions = useEnumOptions(MODEL, "implClass");
+  const implClassCategory = useImplCategory(MODEL, "implClass");
   const implClassPrefill = useImplPrefill(MODEL, "implClass");
 
   // Aggregate on the real groupable axes (impl_class / vendor / status); the
@@ -128,20 +130,20 @@ export function IntegrationsPage(): React.ReactElement {
             name="name"
             label={t("integrate.integrations.providerName")}
             createOnly
-            showWhen={(values) => isInferenceImpl(values.implClass)}
+            showWhen={(values) => implClassCategory(values.implClass) === "inference"}
           />
           <Field
             name="baseUrl"
             label={t("integrate.integrations.baseUrl")}
             createOnly
-            showWhen={(values) => isInferenceImpl(values.implClass)}
+            showWhen={(values) => implClassCategory(values.implClass) === "inference"}
           />
           <Field
             name="relatedConfig"
             label={t("integrate.integrations.providerConfig")}
             widget="json"
             createOnly
-            showWhen={(values) => isInferenceImpl(values.implClass)}
+            showWhen={(values) => implClassCategory(values.implClass) === "inference"}
           />
         </Group>
         <Group label={t("integrate.integrations.vcs")} columns={2}>
@@ -151,7 +153,7 @@ export function IntegrationsPage(): React.ReactElement {
             widget="text"
             kind="string"
             createOnly
-            showWhen={(values) => isVcsImpl(values.implClass)}
+            showWhen={(values) => implClassCategory(values.implClass) === "vcs"}
           />
         </Group>
         <Group label={t("integrate.integrations.authentication")} columns={2}>
@@ -281,17 +283,6 @@ function IntegrationConnectButton({
 
 function canConnectIntegration(row: Row): boolean {
   return row.credential == null || normalizeValue(row.status) === "draft";
-}
-
-// These mirror the impl keys registered under each category in
-// ANGEE_INTEGRATION_IMPLS. The server owns impl->category; until that category
-// is projected to the create form, keep these in sync with the registry.
-function isVcsImpl(value: unknown): boolean {
-  return ["github", "local"].includes(normalizeValue(value));
-}
-
-function isInferenceImpl(value: unknown): boolean {
-  return ["anthropic", "openai", "manual"].includes(normalizeValue(value));
 }
 
 function normalizeValue(value: unknown): string {

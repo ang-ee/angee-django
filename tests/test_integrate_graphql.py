@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Iterator
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -40,6 +41,8 @@ from tests.conftest import (
     Integration,
     OAuthClient,
     SchemaAddon,
+    StubVCSBackend,
+    VcsBridge,
     Vendor,
     WebhookSubscription,
     execute_schema,
@@ -146,6 +149,85 @@ def test_impl_choices_are_admin_only(integrate_console_tables: None) -> None:
     assert _execute(console_schema, query, user=plain).errors is not None
     result = _data(_execute(console_schema, query, user=admin))["implChoices"]
     assert {"key": "none"} in result
+
+
+def test_update_integration_rejects_impl_class_patch(integrate_console_tables: None) -> None:
+    """The implementation discriminator is create-time only."""
+
+    admin = _platform_admin("impl-patch-admin")
+    conn = make_integration("impl-patch")
+    console_schema = _schema()
+
+    result = _execute(
+        console_schema,
+        """
+        mutation UpdateIntegration($id: ID!) {
+          updateIntegration(data: {id: $id, implClass: "stub"}) {
+            status
+          }
+        }
+        """,
+        {"id": _integration_global_id(conn)},
+        user=admin,
+    )
+
+    assert result.errors is not None
+    assert "implClass" in result.errors[0].message
+
+
+def test_create_with_impl_creates_related_row_and_rolls_back(
+    integrate_console_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Integration manager owns related-row creation transactionally."""
+
+    user = User.objects.create_user(username="impl-factory-owner", email="impl-factory@example.com")
+    unset = object()
+    with system_context(reason="test.integrate.create_with_impl.seed"):
+        oauth_client = OAuthClient.objects.create(
+            slug="impl-factory",
+            display_name="Impl Factory",
+            client_id="impl-factory-client",
+        )
+        credential = Credential.objects.upsert_for_user(
+            user,
+            oauth_client,
+            CredentialKind.STATIC_TOKEN,
+            {"api_key": "x"},
+        )
+        vendor = Vendor.objects.create(slug="impl-factory", display_name="Impl Factory")
+        integration = Integration.objects.create_with_impl(
+            vendor=vendor,
+            credential=credential,
+            owner=user,
+            impl_class="stub",
+            status="active",
+            related_input=SimpleNamespace(webhook_secret="created-secret"),
+            related_unset=unset,
+        )
+
+        bridge = VcsBridge.objects.get(integration=integration)
+        assert str(bridge.webhook_secret) == "created-secret"
+
+        rollback_vendor = Vendor.objects.create(slug="impl-factory-rollback", display_name="Rollback")
+
+        def fail_create_related_row(cls: type[StubVCSBackend], integration: Any, values: dict[str, Any]) -> None:
+            del cls, integration, values
+            raise ValueError("related validation failed")
+
+        monkeypatch.setattr(StubVCSBackend, "create_related_row", classmethod(fail_create_related_row))
+        with pytest.raises(ValueError, match="related validation failed"):
+            Integration.objects.create_with_impl(
+                vendor=rollback_vendor,
+                credential=credential,
+                owner=user,
+                impl_class="stub",
+                status="active",
+                related_input=SimpleNamespace(webhook_secret="bad-secret"),
+                related_unset=unset,
+            )
+
+        assert not Integration.objects.filter(vendor=rollback_vendor, owner=user, impl_class="stub").exists()
 
 
 def test_integration_update_delete_are_admin_only(
@@ -412,8 +494,7 @@ def test_sync_integration_runs_for_an_admin(
             user=admin,
         )
     )["syncIntegration"]
-    # No concrete bridge models are registered in the test app, so the eager sync
-    # finds nothing to run and reports success.
+    # No bridge rows exist, so the eager sync finds nothing to run and reports success.
     assert result["ok"] is True
     assert "bridge" in result["message"].lower()
 
@@ -507,7 +588,7 @@ def integrate_console_tables(transactional_db: Any) -> Iterator[None]:
     """Create the iam + integrate (incl. webhook) console tables and sync REBAC."""
 
     del transactional_db
-    created_models = _create_connection_tables(IAM_CONNECTION_TEST_MODELS + INTEGRATE_TEST_MODELS)
+    created_models = _create_connection_tables(IAM_CONNECTION_TEST_MODELS + INTEGRATE_TEST_MODELS + (VcsBridge,))
     webhook_created = False
     if WebhookSubscription._meta.db_table not in connection.introspection.table_names():
         with connection.schema_editor() as schema_editor:

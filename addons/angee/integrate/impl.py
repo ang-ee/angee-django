@@ -9,7 +9,8 @@ this base keeps only the shared catalogue/connect metadata and the optional link
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, ClassVar
 
 from django.apps import apps
 from django.core.exceptions import ObjectDoesNotExist
@@ -24,6 +25,7 @@ class IntegrationImpl(ImplBase):
     category = "none"
     related_model: str | None = None
     related_create_fields: tuple[str, ...] = ()
+    related_create_input_fields: ClassVar[Mapping[str, str]] = {}
     label = "Integration"
     icon = ""
     oauth_client = ""
@@ -77,6 +79,18 @@ class IntegrationImpl(ImplBase):
 
         del integration
         return {field: values[field] for field in cls.related_create_fields if field in values}
+
+    @classmethod
+    def related_create_values_from_input(cls, integration: Any, source: Any, *, unset: Any) -> dict[str, Any]:
+        """Return related create values read from an owner-declared input mapping."""
+
+        values: dict[str, Any] = {}
+        for field in cls.related_create_fields:
+            input_name = cls.related_create_input_fields.get(field, field)
+            value = getattr(source, input_name, unset)
+            if value not in (None, "", unset):
+                values[field] = value
+        return cls.related_create_values(integration, values)
 
 
 class NullIntegrationImpl(IntegrationImpl):

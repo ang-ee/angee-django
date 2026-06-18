@@ -312,6 +312,66 @@ class WidgetQuery:
         return Widget(name="x")
 
 
+@strawberry.input
+class InputExtensionBaseInput:
+    """Upstream input for additive input-extension tests."""
+
+    name: str
+
+
+@strawberry.input
+class InputExtensionFirstInput(InputExtensionBaseInput):
+    """First downstream input donor."""
+
+    first: str = ""
+
+
+@strawberry.input
+class InputExtensionSecondInput(InputExtensionBaseInput):
+    """Second downstream input donor."""
+
+    second: str = ""
+
+
+@strawberry.type
+class InputExtensionMutation:
+    """Mutation that receives the upstream input after donors are merged."""
+
+    @strawberry.mutation
+    def save_input(self, data: InputExtensionBaseInput) -> str:
+        return f"{data.name}:{getattr(data, 'first', '')}:{getattr(data, 'second', '')}"
+
+
+@strawberry.input
+class InputExtensionCollisionBaseInput:
+    """Upstream input for collision tests."""
+
+    name: str
+
+
+@strawberry.input
+class InputExtensionCollisionFirstInput(InputExtensionCollisionBaseInput):
+    """First donor defining the colliding field."""
+
+    shared: str = ""
+
+
+@strawberry.input
+class InputExtensionCollisionSecondInput(InputExtensionCollisionBaseInput):
+    """Second donor defining the colliding field."""
+
+    shared: int = 0
+
+
+@strawberry.type
+class InputExtensionCollisionMutation:
+    """Mutation that anchors the collision-test input in the schema."""
+
+    @strawberry.mutation
+    def save_input(self, data: InputExtensionCollisionBaseInput) -> str:
+        return data.name
+
+
 def test_type_extension_merges_downstream_fields_onto_upstream_type() -> None:
     """A downstream ``type_extensions`` donor adds its fields to the upstream type."""
 
@@ -380,6 +440,54 @@ def test_type_extension_requires_marker() -> None:
         GraphQLSchemas([addon(public={"query": [HelloQuery], "type_extensions": [Unmarked]})]).build(
             "public"
         )
+
+
+def test_input_extension_merges_multiple_donors() -> None:
+    """Several downstream input donors add fields to one upstream input."""
+
+    schema = GraphQLSchemas(
+        [
+            addon(
+                public={
+                    "query": [HelloQuery],
+                    "mutation": [InputExtensionMutation],
+                    "input_extensions": [InputExtensionFirstInput],
+                }
+            ),
+            addon(public={"input_extensions": [InputExtensionSecondInput]}),
+        ]
+    ).build("public")
+
+    sdl = schema.as_str()
+    assert "first: String!" in sdl
+    assert "second: String!" in sdl
+    result = schema.execute_sync(
+        """
+        mutation {
+          saveInput(data: {name: "base", first: "one", second: "two"})
+        }
+        """
+    )
+    assert result.errors is None
+    assert result.data == {"saveInput": "base:one:two"}
+
+
+def test_input_extension_rejects_field_collision() -> None:
+    """Two input donors adding the same field to one base fail fast."""
+
+    with pytest.raises(ImproperlyConfigured, match="already declared"):
+        GraphQLSchemas(
+            [
+                addon(
+                    public={
+                        "query": [HelloQuery],
+                        "mutation": [InputExtensionCollisionMutation],
+                        "input_extensions": [InputExtensionCollisionFirstInput],
+                    }
+                ),
+                addon(public={"input_extensions": [InputExtensionCollisionSecondInput]}),
+            ]
+        ).build("public")
 
 
 def test_build_schema_merges_query_surfaces() -> None:

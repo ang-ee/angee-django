@@ -204,8 +204,8 @@ Rules that follow from the layering:
   source); the runtime class is the post-composition source of truth for fields,
   relations, and choices. A registry-backed enum (`ImplClassField`) is read off the
   runtime field, so the GraphQL enum already reflects every addon's contributions.
-- **Extension is symmetric across three axes — extend, never edit the owner — and
-  the schema is built after the runtime is composed, so all three apply
+- **Extension is symmetric across four axes — extend, never edit the owner — and
+  the schema is built after the runtime is composed, so all four apply
   post-composition with the dependency staying one-way (downstream reaches up; the
   upstream never references down).** Add a *field* to another addon's model with an
   `extends = "app.Model"` source model; add a *value* to an open enum with an
@@ -216,10 +216,15 @@ Rules that follow from the layering:
   runtime model, listed in the `type_extensions` bucket — the composer merges its
   fields onto the target and strawberry-django resolves any relation projection
   from its model registry (e.g. `iam_integrate_oidc` adds `OAuthClientType.oidc`
-  without `integrate` importing it). A type extension is global-additive, like a
-  model `extends`: the field lands on the target wherever it appears (the bucket
-  only gates registration), so reference a field type that some bucket lacks and
-  that bucket's build fails loudly rather than leaking.
+  without `integrate` importing it); add *fields onto another addon's handwritten
+  GraphQL input* by subclassing the target `@strawberry.input` and listing the
+  subclass in `input_extensions`. Input extensions are the write-side equivalent:
+  they must subclass the target input and add fields only; the schema assembler
+  merges multiple donors additively in addon order and fails fast on field-name
+  collisions. Type and input extensions are global-additive, like a model
+  `extends`: the field lands on the target wherever it appears (the bucket only
+  gates registration), so reference a field type that some bucket lacks and that
+  bucket's build fails loudly rather than leaking.
 - Use symbolic model references across addon boundaries; avoid import cycles.
 - Build output must be byte-deterministic.
 
@@ -341,7 +346,7 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   is supplied by the owning addon's `autoconfig`, so every settings module that
   installs the addon must carry a **non-empty** mapping, including a bare module
   that skips the composer (`tests/settings.py` declares both
-  `ANGEE_STORAGE_BACKEND_CLASSES` and `ANGEE_VCS_CLIENT_CLASSES`). An empty
+  `ANGEE_STORAGE_BACKEND_CLASSES` and `ANGEE_INTEGRATION_IMPLS`). An empty
   registry raises `ImproperlyConfigured` at import — give the addon a
   noop/null-object default so the set is never empty. The column stores the key
   (`local`), never a dotted path.

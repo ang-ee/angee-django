@@ -5,9 +5,9 @@ refresh, and revocation — everything needed to connect an external account for
 API access (Gemini, Grok, Anthropic), with no identity/login concern. OIDC login
 extends this in ``angee.iam_integrate_oidc.protocol.OAuthClientOidcProtocol``.
 
-Endpoints are taken from the row as configured; the base never performs OIDC
-discovery (that is the OIDC layer's job), so a base ``OAuthClient`` must carry its
-authorize/token endpoints explicitly.
+Endpoints are taken from the row as configured; when a row has a discovery URL,
+the protocol asks the row to fill missing OAuth endpoints before failing. OIDC
+login extends this in ``iam_integrate_oidc`` for ID-token/userinfo verification.
 """
 
 from __future__ import annotations
@@ -130,6 +130,14 @@ class OAuthClientProtocol:
             fields["client_secret"] = client_secret
         _post_form_no_response(revoke_endpoint, fields)
 
+    def ensure_endpoints(self) -> dict[str, Any]:
+        """Ask the OAuth client row to fill endpoint fields from discovery."""
+
+        discover = getattr(self.oauth_client, "discover_endpoints", None)
+        if not callable(discover):
+            return {}
+        return dict(discover())
+
     def _authorize_query(
         self,
         *,
@@ -205,6 +213,9 @@ class OAuthClientProtocol:
         """Return a configured endpoint value, or raise when the row omits it."""
 
         value = str(getattr(self.oauth_client, field, "") or "")
+        if not value:
+            self.ensure_endpoints()
+            value = str(getattr(self.oauth_client, field, "") or "")
         if not value:
             raise OAuthFlowError(MISSING_ENDPOINT, 400)
         return value

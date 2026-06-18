@@ -16,7 +16,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.core.exceptions import ObjectDoesNotExist
-from django.db import models, transaction
+from django.db import IntegrityError, models, transaction
 from django.utils import timezone
 from rebac import PermissionDenied, system_context
 from strawberry import auto, relay
@@ -538,8 +538,7 @@ def _flow_error_message(error: OAuthFlowError) -> str:
 def _integration_impl_class(impl_class: str) -> type[IntegrationImpl]:
     """Return the configured implementation class for one integration key."""
 
-    field = cast(Any, Integration._meta.get_field("impl_class"))
-    return cast(type[IntegrationImpl], field.resolve_class(impl_class))
+    return cast(type[IntegrationImpl], Integration.objects.impl_class_for_key(impl_class))
 
 
 def _oauth_client_for_integration(integration: Any) -> Any:
@@ -584,13 +583,21 @@ def _current_user_integration(
         raise ValueError("connectIntegration requires integrationId or vendorSlug and implClass.")
     _integration_impl_class(impl_key)
     vendor = _vendor_by_slug(vendor_key)
-    with system_context(reason="integrate.graphql.connect_integration.draft"), transaction.atomic():
-        integration, _created = Integration.objects.get_or_create(
-            owner=user,
-            vendor=vendor,
-            impl_class=impl_key,
-            defaults={"status": "draft"},
-        )
+    with system_context(reason="integrate.graphql.connect_integration.draft"):
+        integration = Integration.objects.filter(owner=user, vendor=vendor, impl_class=impl_key).first()
+        if integration is not None:
+            return integration
+        try:
+            integration = Integration.objects.create_with_impl(
+                owner=user,
+                vendor=vendor,
+                impl_class=impl_key,
+                status="draft",
+            )
+        except IntegrityError:
+            integration = Integration.objects.filter(owner=user, vendor=vendor, impl_class=impl_key).first()
+            if integration is None:
+                raise
     return integration
 
 
@@ -1201,7 +1208,6 @@ class IntegrationPatch:
     credential: relay.GlobalID | None = strawberry.UNSET
     account: relay.GlobalID | None = strawberry.UNSET
     owner: relay.GlobalID | None = strawberry.UNSET
-    impl_class: str | None = strawberry.UNSET
     config: JSON | None = strawberry.UNSET
     status: str | None = strawberry.UNSET
 
@@ -1306,7 +1312,6 @@ class IntegrationCreateMutation:
             )
         )
         impl_key = _create_impl_key(data.impl_class)
-        impl_class = _integration_impl_class(impl_key)
         attrs: dict[str, Any] = {
             "vendor": vendor,
             "owner": owner,
@@ -1320,10 +1325,12 @@ class IntegrationCreateMutation:
             attrs["config"] = data.config
         if data.status not in (strawberry.UNSET, None):
             attrs["status"] = data.status
-        related_values = _related_create_values(impl_class, data)
-        with system_context(reason="integrate.graphql.integration.create"), transaction.atomic():
-            integration = Integration.objects.create(**attrs)
-            impl_class.create_related_row(integration, related_values)
+        with system_context(reason="integrate.graphql.integration.create"):
+            integration = Integration.objects.create_with_impl(
+                related_input=data,
+                related_unset=strawberry.UNSET,
+                **attrs,
+            )
         return cast(IntegrationType, integration)
 
 
@@ -1388,25 +1395,6 @@ def _create_impl_key(value: str | None) -> str:
     if value is None or value is strawberry.UNSET:
         return "none"
     return str(value).strip() or "none"
-
-
-def _related_create_values(impl: type[IntegrationImpl], data: IntegrationInput) -> dict[str, Any]:
-    """Return the related model's create values, read off the combined input by the
-    impl's declared ``related_create_fields``.
-
-    The related model's own ``config`` arrives as ``related_config`` so it never
-    collides with the Integration's ``config``; every other field is read by name.
-    Fields a downstream addon contributes to the input (via ``input_extensions``) are
-    present on ``data`` once merged, so integrate names no downstream field here.
-    """
-
-    values: dict[str, Any] = {}
-    for field in impl.related_create_fields:
-        input_attr = "related_config" if field == "config" else field
-        value = getattr(data, input_attr, strawberry.UNSET)
-        if value not in (None, "", strawberry.UNSET):
-            values[field] = value
-    return values
 
 
 @strawberry.type

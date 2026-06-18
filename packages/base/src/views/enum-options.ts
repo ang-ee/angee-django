@@ -30,13 +30,36 @@ const IMPL_CHOICES_DOCUMENT = `
   query ImplChoices($model: String!, $field: String!) {
     implChoices(model: $model, field: $field) {
       key
+      category
       defaults
     }
   }
 `;
 
+export interface ImplChoice {
+  key: string;
+  category: string;
+  defaults: Record<string, unknown>;
+}
+
 interface ImplChoicesData {
-  implChoices: readonly { key: string; defaults: Record<string, unknown> }[];
+  implChoices: readonly ImplChoice[];
+}
+
+export function useImplChoices(model: string, field: string): readonly ImplChoice[] {
+  const { data } = useAuthoredQuery<ImplChoicesData>(IMPL_CHOICES_DOCUMENT, {
+    model,
+    field,
+  });
+  return data?.implChoices ?? [];
+}
+
+export function useImplCategory(model: string, field: string): (value: unknown) => string {
+  const choices = useImplChoices(model, field);
+  return React.useMemo(() => {
+    const byKey = new Map(choices.map((choice) => [choice.key, choice.category]));
+    return (value: unknown) => byKey.get(String(value)) ?? "";
+  }, [choices]);
 }
 
 /**
@@ -51,13 +74,10 @@ export function useImplPrefill(
   model: string,
   field: string,
 ): (value: unknown) => Record<string, unknown> | undefined {
-  const { data } = useAuthoredQuery<ImplChoicesData>(IMPL_CHOICES_DOCUMENT, {
-    model,
-    field,
-  });
+  const choices = useImplChoices(model, field);
   return React.useMemo(() => {
     const byKey = new Map(
-      (data?.implChoices ?? []).map((choice) => [choice.key, choice.defaults]),
+      choices.map((choice) => [choice.key, choice.defaults]),
     );
     return (value: unknown) => {
       const defaults = byKey.get(String(value));
@@ -66,7 +86,7 @@ export function useImplPrefill(
         Object.entries(defaults).map(([name, seed]) => [snakeToCamel(name), seed]),
       );
     };
-  }, [data]);
+  }, [choices]);
 }
 
 function snakeToCamel(name: string): string {

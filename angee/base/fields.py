@@ -22,6 +22,8 @@ from django.utils.module_loading import import_string
 from django_choices_field import TextChoicesField
 from django_sqids import SqidsField
 
+from angee.base.impl import ImplBase
+
 
 def _derive_fernet(label: str) -> Fernet:
     """Return the Fernet instance for one model column label."""
@@ -322,8 +324,6 @@ class ImplClassField(TextChoicesField):
         the rest comes from the resolved ``ImplBase`` subclass. A non-``ImplBase``
         impl (a bare behaviour class) degrades to a label-only choice.
         """
-
-        from angee.base.impl import ImplBase
 
         choices: list[dict[str, Any]] = []
         for key in sorted(self._registry()):
