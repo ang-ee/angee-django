@@ -70,16 +70,8 @@ describe("addon route chrome", () => {
         { label: "Users" },
       ],
     });
-    // OIDC sign-in providers are a direct child of the IAM rail (the OAuth connect
-    // substrate moved to @angee/integrate).
-    await expect(chromeFor("/iam/oidc")).resolves.toEqual({
-      title: "IAM",
-      icon: "auth",
-      breadcrumbs: [
-        { label: "IAM", to: "/iam" },
-        { label: "OIDC Providers" },
-      ],
-    });
+    // OIDC login is no longer a separate IAM page — it's a tab on integrate's OAuth
+    // client form (contributed by the iam addon, gated to OIDC provider types).
   });
 
   test("derives operator chrome nested under the platform app", async () => {

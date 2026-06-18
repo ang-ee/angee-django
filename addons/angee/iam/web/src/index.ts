@@ -1,6 +1,7 @@
 import {
   AUTH_LOGIN_METHOD_SLOT,
   defineBaseAddon,
+  formViewSectionsSlot,
   type BaseAddonRoute,
   type BaseMenuItem,
 } from "@angee/base";
@@ -11,7 +12,7 @@ import { OAuthCallbackPage } from "./OAuthCallbackPage";
 import { OAuthLoginMethods } from "./OAuthLoginMethods";
 import { LEGACY_LOGIN_CALLBACK_PATH, LOGIN_CALLBACK_PATH } from "./redirects";
 import { GrantsPage } from "./views/GrantsPage";
-import { OidcProvidersPage } from "./views/OidcProvidersPage";
+import { oidcLoginSection } from "./views/oidc-section";
 import { OverviewPage } from "./views/OverviewPage";
 import { RelationshipsPage } from "./views/RelationshipsPage";
 import { RolesPage } from "./views/RolesPage";
@@ -44,7 +45,6 @@ const identityMenu: readonly BaseMenuItem[] = [
           { id: "iam.schema", label: "Schema", route: "iam.schema", icon: "columns" },
         ],
       },
-      { id: "iam.oidc", label: "OIDC Providers", route: "iam.oidc", icon: "grid" },
     ],
   },
 ];
@@ -83,9 +83,6 @@ const iam = defineBaseAddon({
     { name: "iam.grants", path: "/iam/grants", shell: "console", component: GrantsPage },
     { name: "iam.relationships", path: "/iam/relationships", shell: "console", component: RelationshipsPage },
     { name: "iam.schema", path: "/iam/schema", shell: "console", component: SchemaPage },
-    // No model claim: integrate.providers is the canonical OAuthClient route in the
-    // model->route index; this is a filtered "OIDC providers" view of the same model.
-    ...consolePage("iam.oidc", "/iam/oidc", OidcProvidersPage),
   ],
   menus: identityMenu,
   i18n: { iam: enIamMessages },
@@ -94,6 +91,14 @@ const iam = defineBaseAddon({
       slot: AUTH_LOGIN_METHOD_SLOT,
       id: "iam.oauth-login",
       content: createElement(OAuthLoginMethods),
+    },
+    {
+      // OIDC login lives on the OAuth client itself; this contributes the OIDC tab
+      // into integrate's OAuth-client form, gated to the OIDC provider types this
+      // addon owns. No separate OIDC page/model — it's the same OAuthClient row.
+      slot: formViewSectionsSlot("OAuthClient"),
+      id: "iam.oidc-login",
+      content: oidcLoginSection,
     },
   ],
 });

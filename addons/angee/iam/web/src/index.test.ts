@@ -1,5 +1,6 @@
 import {
   AUTH_LOGIN_METHOD_SLOT,
+  formViewSectionsSlot,
   MenuTree,
   type BaseMenuItem,
   type ChromeMenuItem,
@@ -25,7 +26,8 @@ describe("iam addon manifest", () => {
 
   test("registers the console routes, with $id detail children for the DataPages", () => {
     const names = iam.routes?.map((route) => route.name) ?? [];
-    // The users/OIDC-providers DataPages each contribute a list + a `$id` record route.
+    // The Users DataPage contributes a list + a `$id` record route. (OIDC login is
+    // now a tab on integrate's OAuth client form, not a separate iam page.)
     for (const name of [
       "iam.overview",
       "iam.users",
@@ -34,8 +36,6 @@ describe("iam addon manifest", () => {
       "iam.grants",
       "iam.relationships",
       "iam.schema",
-      "iam.oidc",
-      "iam.oidc.record",
     ]) {
       expect(names).toContain(name);
     }
@@ -49,13 +49,13 @@ describe("iam addon manifest", () => {
     ]) {
       expect(names).not.toContain(gone);
     }
-    const record = iam.routes?.find((route) => route.name === "iam.oidc.record");
-    expect(record?.path).toBe("/iam/oidc/$id");
-    expect(record?.parent).toBe("iam.oidc");
+    const record = iam.routes?.find((route) => route.name === "iam.users.record");
+    expect(record?.path).toBe("/iam/users/$id");
+    expect(record?.parent).toBe("iam.users");
     expect(record?.component).toBeUndefined();
   });
 
-  test("contributes the IAM console menu with a Roles dropdown and OIDC Providers", () => {
+  test("contributes the IAM console menu with a Roles dropdown", () => {
     const menu = iam.menus?.[0] as BaseMenuItem | undefined;
     expect(menu?.id).toBe("iam");
     expect(menu?.label).toBe("IAM");
@@ -65,7 +65,6 @@ describe("iam addon manifest", () => {
       "iam.overview",
       "iam.users",
       "iam.roles.group",
-      "iam.oidc",
     ]);
     const rolesGroup = menu?.children?.find((item) => item.id === "iam.roles.group");
     expect(rolesGroup?.route).toBeUndefined();
@@ -75,8 +74,6 @@ describe("iam addon manifest", () => {
       "iam.relationships",
       "iam.schema",
     ]);
-    const oidc = menu?.children?.find((item) => item.id === "iam.oidc");
-    expect(oidc?.route).toBe("iam.oidc");
   });
 
   test("references the landing route from exactly one menu item (chrome derivation)", () => {
@@ -86,11 +83,16 @@ describe("iam addon manifest", () => {
     expect(tree.itemsForRoute("iam.overview")).toHaveLength(1);
   });
 
-  test("contributes OAuth methods to the login method slot", () => {
-    const slot = iam.slots?.[0];
-    expect(iam.slots).toHaveLength(1);
-    expect(slot?.slot).toBe(AUTH_LOGIN_METHOD_SLOT);
-    expect(slot?.id).toBe("iam.oauth-login");
-    expect(slot?.content).toBeDefined();
+  test("contributes the login methods and the OIDC tab on the OAuth client form", () => {
+    expect(iam.slots).toHaveLength(2);
+    const login = iam.slots?.[0];
+    expect(login?.slot).toBe(AUTH_LOGIN_METHOD_SLOT);
+    expect(login?.id).toBe("iam.oauth-login");
+    expect(login?.content).toBeDefined();
+    // The OIDC login tab the iam addon adds to integrate's OAuth client form.
+    const oidc = iam.slots?.[1];
+    expect(oidc?.slot).toBe(formViewSectionsSlot("OAuthClient"));
+    expect(oidc?.id).toBe("iam.oidc-login");
+    expect(oidc?.content).toBeDefined();
   });
 });

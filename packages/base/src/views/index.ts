@@ -79,6 +79,8 @@ export {
 export {
   FormView,
   FORM_VIEW_RECORD_CHROME_SLOT,
+  FORM_VIEW_SECTIONS_SLOT,
+  formViewSectionsSlot,
   type FormViewProps,
   type FormField,
   type FieldKind,

@@ -175,6 +175,22 @@ export interface FormViewProps {
  */
 export const FORM_VIEW_RECORD_CHROME_SLOT = "form-view.record-chrome";
 
+/**
+ * Model-scoped slot for addon-contributed form sections. The addon that owns a
+ * model's `ImplClassField` impls contributes the section that impl enables (e.g.
+ * the OIDC login tab the iam addon adds to integrate's OAuth client form), gating
+ * its fields with `showWhen` keyed on the impl value — so the base form stays
+ * agnostic to the contributing addon's fields and a project without that addon
+ * composes cleanly. Contributed `<Group>`/`<Action>` content parses like declared
+ * children, so the fields join the form's values, selection, and submit.
+ */
+export const FORM_VIEW_SECTIONS_SLOT = "form-view.sections";
+
+/** The model-scoped section-slot name an addon contributes form groups/actions to. */
+export function formViewSectionsSlot(model: string): string {
+  return `${FORM_VIEW_SECTIONS_SLOT}:${model}`;
+}
+
 type Values = Record<string, unknown>;
 
 const TITLE_TEXT_CLASS =
@@ -246,6 +262,25 @@ export function FormView({
   const formOverride = useFormOverride(model);
   // Host/addon-contributed record chrome (star/share/…); base ships none.
   const recordChrome = useSlot(FORM_VIEW_RECORD_CHROME_SLOT);
+  // Addon-contributed form sections for this model (e.g. the OIDC login tab the
+  // iam addon adds to the OAuth client form). Parsed like declared children so
+  // their fields join the form's values/selection/submit; each contribution gates
+  // its own fields with `showWhen` keyed on the impl value.
+  const sectionEntries = useSlot(formViewSectionsSlot(model));
+  const slotGroups = React.useMemo(
+    () =>
+      sectionEntries.flatMap((entry) =>
+        parsePageGroups(entry.content as React.ReactNode),
+      ),
+    [sectionEntries],
+  );
+  const slotActions = React.useMemo(
+    () =>
+      sectionEntries.flatMap((entry) =>
+        parsePageActions(entry.content as React.ReactNode),
+      ),
+    [sectionEntries],
+  );
   const isCreate = id == null;
   // An addon may register a declarative create form for a model (composed into the
   // runtime). On create it replaces the declared/metadata fields, so DataPage "New"
@@ -255,10 +290,14 @@ export function FormView({
     isCreate && React.isValidElement(formOverride) ? formOverride : null;
   const declaredFields =
     overrideNode != null ? parsePageFields(overrideNode) : fields ?? childFields;
-  const declaredGroups =
-    overrideNode != null ? parsePageGroups(overrideNode) : groups ?? childGroups;
-  const declaredActions =
-    overrideNode != null ? parsePageActions(overrideNode) : actions ?? childActions;
+  const declaredGroups = [
+    ...(overrideNode != null ? parsePageGroups(overrideNode) : groups ?? childGroups),
+    ...slotGroups,
+  ];
+  const declaredActions = [
+    ...(overrideNode != null ? parsePageActions(overrideNode) : actions ?? childActions),
+    ...slotActions,
+  ];
   const resolvedFields = React.useMemo(
     () =>
       withModeLockedFields(
