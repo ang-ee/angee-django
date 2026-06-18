@@ -59,7 +59,7 @@ Integration = apps.get_model("integrate", "Integration")
 
 @strawberry_django.type(InferenceProvider)
 class InferenceProviderType(AngeeNode):
-    """Admin projection of an inference provider companion."""
+    """Admin projection of an inference provider related model."""
 
     integration: IntegrationType
     name: auto
@@ -72,11 +72,11 @@ class InferenceProviderType(AngeeNode):
 @extends_type(IntegrationType)
 @strawberry_django.type(Integration)
 class IntegrationInferenceProviderExtension:
-    """Contributes the inference provider companion onto integrate's IntegrationType."""
+    """Contributes the inference provider related model onto integrate's IntegrationType."""
 
     @strawberry_django.field(only=["id"])
     def inference_provider(self) -> InferenceProviderType | None:
-        """Return this integration's inference provider companion when present."""
+        """Return this integration's inference provider related model when present."""
 
         try:
             return cast(InferenceProviderType, cast(Any, self).agents_inferenceprovider)

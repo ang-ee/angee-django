@@ -1,7 +1,7 @@
 """The host-agnostic git implementation contract.
 
 A :class:`VCSBackend` is an ``Integration`` implementation that reads a repository
-through a ``VcsBridge`` companion — either a host's remote over its REST API
+through a ``VcsBridge`` related model — either a host's remote over its REST API
 (``integrate_github.GitHubBackend``) or a local working tree
 (:class:`LocalVCSBackend`) — listing repositories, walking trees, reading blobs,
 and resolving refs. A host backend never clones (git transport belongs to the
@@ -74,8 +74,8 @@ class VCSBackend(BridgeImpl):
     """
 
     category = "vcs"
-    companion_model = "integrate.VcsBridge"
-    companion_create_fields = ("webhook_secret",)
+    related_model = "integrate.VcsBridge"
+    related_create_fields = ("webhook_secret",)
     label = "VCS"
     icon = "git-branch"
 

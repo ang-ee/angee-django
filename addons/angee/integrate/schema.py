@@ -28,7 +28,7 @@ from angee.graphql.actions import ActionResult
 from angee.graphql.aggregates import rebac_aggregate_builder
 from angee.graphql.crud import crud
 from angee.graphql.deletion import DeletePreview
-from angee.graphql.impl import ImplChoicesQuery
+from angee.graphql.impl import ImplChoice, impl_choices as resolve_impl_choices
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
@@ -42,6 +42,7 @@ from angee.integrate.oauth import flow, state
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, OAuthFlowError
 from angee.integrate.registry import bridge_models
+from angee.integrate.vcs.backend import VCSBackend
 
 Vendor = apps.get_model("integrate", "Vendor")
 Integration = apps.get_model("integrate", "Integration")
@@ -53,6 +54,17 @@ VcsBridge = apps.get_model("integrate", "VcsBridge")
 Repository = apps.get_model("integrate", "Repository")
 Source = apps.get_model("integrate", "Source")
 Template = apps.get_model("integrate", "Template")
+
+
+@strawberry.type
+class ConsoleImplChoicesQuery:
+    """Admin-gated impl-choice metadata for console forms."""
+
+    @strawberry.field(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def impl_choices(self, model: str, field: str) -> list[ImplChoice]:
+        """Return registry choices for an ``ImplClassField``."""
+
+        return resolve_impl_choices(model, field)
 
 
 # --- Connection substrate: OAuth/OIDC clients, external accounts, credentials ----
@@ -232,7 +244,7 @@ class OAuthClientInput:
 
     display_name: str
     client_id: str
-    slug: str | None = strawberry.UNSET
+    slug: str
     provider_type: str = "generic_oauth2"
     icon: str = ""
     client_secret: str = ""
@@ -1029,7 +1041,7 @@ class IntegrationType(AngeeNode):
 
     @strawberry_django.field(only=["id"])
     def bridge(self) -> VcsBridgeType | None:
-        """Return this integration's VCS bridge companion when present."""
+        """Return this integration's VCS bridge related model when present."""
 
         try:
             return cast("VcsBridgeType", cast(Any, self).integrate_vcsbridge)
@@ -1053,7 +1065,7 @@ class IntegrationType(AngeeNode):
         """Return this integration implementation's board grouping category.
 
         Reads the class-level metadata off the resolved impl class — no instance,
-        no companion fetch — so a board/list render does not N+1 over companions.
+        no related model fetch — so a board/list render does not N+1 over related models.
         """
 
         impl_class = _integration_impl_class(cast(Any, self).impl_class)
@@ -1089,7 +1101,7 @@ class VendorInput:
     """Fields accepted when creating a vendor."""
 
     display_name: str
-    slug: str | None = strawberry.UNSET
+    slug: str
     website_url: str = ""
     icon: str = ""
     description: str = ""
@@ -1176,7 +1188,7 @@ class IntegrationInput:
     name: str = ""
     base_url: str = ""
     webhook_secret: str = ""
-    companion_config: JSON | None = strawberry.UNSET
+    related_config: JSON | None = strawberry.UNSET
 
 
 @strawberry.input
@@ -1270,27 +1282,47 @@ _VENDOR_MUTATION = crud(
 
 @strawberry.type
 class IntegrationCreateMutation:
-    """Admin create for an Integration and its optional implementation companion."""
+    """Admin create for an Integration and its optional implementation related model."""
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def create_integration(self, data: IntegrationInput) -> IntegrationType:
-        """Create a draft integration and companion row in one transaction."""
+        """Create a draft integration and related row in one transaction."""
 
         vendor = _resolve(Vendor, data.vendor, reason="integrate.graphql.integration.create.vendor")
         owner = _user_from_global_id(data.owner)
+        credential = (
+            None
+            if data.credential is None
+            else _resolve(Credential, data.credential, reason="integrate.graphql.integration.create.credential")
+        )
+        account = (
+            strawberry.UNSET
+            if data.account is strawberry.UNSET
+            else (
+                None
+                if data.account is None
+                else _resolve(ExternalAccount, data.account, reason="integrate.graphql.integration.create.account")
+            )
+        )
         impl_key = _create_impl_key(data.impl_class)
         impl_class = _integration_impl_class(impl_key)
-        integration_config: Any = {} if data.config in (strawberry.UNSET, None) else data.config
-        companion_values = _companion_create_values(data)
+        attrs: dict[str, Any] = {
+            "vendor": vendor,
+            "owner": owner,
+            "impl_class": impl_key,
+        }
+        if credential is not None:
+            attrs["credential"] = credential
+        if account is not strawberry.UNSET:
+            attrs["account"] = account
+        if data.config not in (strawberry.UNSET, None):
+            attrs["config"] = data.config
+        if data.status not in (strawberry.UNSET, None):
+            attrs["status"] = data.status
+        related_values = _related_create_values(data)
         with system_context(reason="integrate.graphql.integration.create"), transaction.atomic():
-            integration = Integration.objects.create(
-                vendor=vendor,
-                owner=owner,
-                impl_class=impl_key,
-                config=integration_config,
-                status="draft",
-            )
-            impl_class.create_companion(integration, companion_values)
+            integration = Integration.objects.create(**attrs)
+            impl_class.create_related_row(integration, related_values)
         return cast(IntegrationType, integration)
 
 
@@ -1302,7 +1334,7 @@ _INTEGRATION_MUTATION = crud(
     name="integration",
     write_context="integrate.graphql.integration",
 )
-"""Admin integration update/delete; create writes the companion through IntegrationCreateMutation."""
+"""Admin integration update/delete; create writes the related model through IntegrationCreateMutation."""
 
 _WEBHOOK_MUTATION = crud(
     WebhookSubscriptionType,
@@ -1357,8 +1389,8 @@ def _create_impl_key(value: str | None) -> str:
     return str(value).strip() or "none"
 
 
-def _companion_create_values(data: IntegrationInput) -> dict[str, Any]:
-    """Return companion field values from the combined integration create input."""
+def _related_create_values(data: IntegrationInput) -> dict[str, Any]:
+    """Return related model field values from the combined integration create input."""
 
     values: dict[str, Any] = {}
     if data.name:
@@ -1367,8 +1399,8 @@ def _companion_create_values(data: IntegrationInput) -> dict[str, Any]:
         values["base_url"] = data.base_url
     if data.webhook_secret:
         values["webhook_secret"] = data.webhook_secret
-    if data.companion_config not in (strawberry.UNSET, None):
-        values["config"] = data.companion_config
+    if data.related_config not in (strawberry.UNSET, None):
+        values["config"] = data.related_config
     return values
 
 
@@ -1511,7 +1543,7 @@ class WebhookActionMutation:
 
 @strawberry_django.type(VcsBridge)
 class VcsBridgeType(AngeeNode):
-    """Admin projection of a VCS bridge companion."""
+    """Admin projection of a VCS bridge related model."""
 
     integration: IntegrationType
     last_sync_completed_at: auto
@@ -1600,7 +1632,7 @@ class RepoCandidate:
 
 @strawberry.input
 class VcsBridgeInput:
-    """Fields accepted when creating a VCS bridge companion."""
+    """Fields accepted when creating a VCS bridge related model."""
 
     integration: relay.GlobalID
     webhook_secret: str = ""
@@ -1608,7 +1640,7 @@ class VcsBridgeInput:
 
 @strawberry.input
 class VcsBridgePatch:
-    """Fields accepted when updating a VCS bridge companion."""
+    """Fields accepted when updating a VCS bridge related model."""
 
     id: relay.GlobalID
     webhook_secret: str | None = strawberry.UNSET
@@ -1688,9 +1720,38 @@ class VCSConsoleQuery:
             return [_repo_candidate(descriptor) for descriptor in vcs.search_repositories(query)]
 
 
+def _require_vcs_integration(integration: Any) -> None:
+    """Raise when an integration's implementation is not a VCS backend."""
+
+    impl_class = _integration_impl_class(str(getattr(integration, "impl_class", "")))
+    if not issubclass(impl_class, VCSBackend):
+        raise ValueError(f"Integration {integration.sqid} does not use a VCS implementation.")
+
+
+@strawberry.type
+class VcsBridgeCreateMutation:
+    """Admin create for a VCS bridge, validating the owning integration impl."""
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def create_vcs_integration(self, data: VcsBridgeInput) -> VcsBridgeType:
+        """Create a VCS bridge only for integrations backed by ``VCSBackend``."""
+
+        integration = _resolve(
+            Integration,
+            data.integration,
+            reason="integrate.graphql.vcs_integration.create.integration",
+        )
+        _require_vcs_integration(integration)
+        with system_context(reason="integrate.graphql.vcs_integration.create"), transaction.atomic():
+            bridge = VcsBridge.objects.create(
+                integration=integration,
+                webhook_secret=data.webhook_secret,
+            )
+        return cast(VcsBridgeType, bridge)
+
+
 _VCS_INTEGRATION_MUTATION = crud(
     VcsBridgeType,
-    create=VcsBridgeInput,
     update=VcsBridgePatch,
     delete=True,
     permission_classes=_ADMIN_PERMISSION_CLASSES,
@@ -1817,7 +1878,7 @@ schemas = {
     "console": {
         # The impl-picker lookup (Integration.impl_class / OAuthClient.provider_type
         # live here); a generic framework query contributed where its models do.
-        "query": [ImplChoicesQuery, IntegrateConnectionConsoleQuery, IntegrateConsoleQuery, VCSConsoleQuery],
+        "query": [ConsoleImplChoicesQuery, IntegrateConnectionConsoleQuery, IntegrateConsoleQuery, VCSConsoleQuery],
         "mutation": [
             _OAUTH_CLIENT_MUTATION,
             IntegrateExternalAccountMutation,
@@ -1827,6 +1888,7 @@ schemas = {
             IntegrationCreateMutation,
             _INTEGRATION_MUTATION,
             _WEBHOOK_MUTATION,
+            VcsBridgeCreateMutation,
             _VCS_INTEGRATION_MUTATION,
             _SOURCE_MUTATION,
             _REPOSITORY_MUTATION,

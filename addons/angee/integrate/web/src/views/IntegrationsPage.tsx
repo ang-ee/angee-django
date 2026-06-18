@@ -128,26 +128,20 @@ export function IntegrationsPage(): React.ReactElement {
             name="name"
             label={t("integrate.integrations.providerName")}
             createOnly
-            showWhen={(values) =>
-              isCreateForm(values) && isInferenceImpl(values.implClass)
-            }
+            showWhen={(values) => isInferenceImpl(values.implClass)}
           />
           <Field
             name="baseUrl"
             label={t("integrate.integrations.baseUrl")}
             createOnly
-            showWhen={(values) =>
-              isCreateForm(values) && isInferenceImpl(values.implClass)
-            }
+            showWhen={(values) => isInferenceImpl(values.implClass)}
           />
           <Field
-            name="companionConfig"
+            name="relatedConfig"
             label={t("integrate.integrations.providerConfig")}
             widget="json"
             createOnly
-            showWhen={(values) =>
-              isCreateForm(values) && isInferenceImpl(values.implClass)
-            }
+            showWhen={(values) => isInferenceImpl(values.implClass)}
           />
         </Group>
         <Group label={t("integrate.integrations.vcs")} columns={2}>
@@ -157,9 +151,7 @@ export function IntegrationsPage(): React.ReactElement {
             widget="text"
             kind="string"
             createOnly
-            showWhen={(values) =>
-              isCreateForm(values) && isVcsImpl(values.implClass)
-            }
+            showWhen={(values) => isVcsImpl(values.implClass)}
           />
         </Group>
         <Group label={t("integrate.integrations.authentication")} columns={2}>
@@ -289,10 +281,6 @@ function IntegrationConnectButton({
 
 function canConnectIntegration(row: Row): boolean {
   return row.credential == null || normalizeValue(row.status) === "draft";
-}
-
-function isCreateForm(values: Row): boolean {
-  return normalizeValue(values.status) === "";
 }
 
 // These mirror the impl keys registered under each category in

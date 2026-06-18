@@ -16,7 +16,7 @@ from rebac import system_context, to_object_ref, to_subject_ref
 from rebac.models import active_relationship_model
 
 from angee.integrate.events import EventKind
-from angee.integrate.models import Bridge, IntegrationCompanion
+from angee.integrate.models import Bridge, IntegrationMixin
 from angee.integrate.net import validate_public_url
 from angee.integrate.webhooks import HTTP_TIMEOUT_SECONDS, SIGNATURE_HEADER
 from tests.conftest import (
@@ -163,7 +163,7 @@ def test_runtime_marker_is_per_class() -> None:
             abstract = True
             app_label = "tests"
 
-    assert IntegrationCompanion.is_runtime_model() is False
+    assert IntegrationMixin.is_runtime_model() is False
     assert Bridge.is_runtime_model() is False
     assert RuntimeBridge.is_runtime_model() is True
 

@@ -1,9 +1,10 @@
 """Integration implementation descriptors.
 
-An ``Integration`` row stores the registry key for the implementation that owns
-its behavior. Concrete addons contribute subclasses through
-``ANGEE_INTEGRATION_IMPLS``; this base keeps only the shared catalogue/connect
-metadata and the optional one-to-one companion binding.
+An ``Integration`` row stores the registry key for the implementation that owns its
+behaviour. Concrete addons contribute subclasses through ``ANGEE_INTEGRATION_IMPLS``;
+this base keeps only the shared catalogue/connect metadata and the optional link to a
+*related model* — the structured 1:1 data an implementation needs beyond the
+``Integration``'s generic ``config`` blob (e.g. a bridge's sync cursor).
 """
 
 from __future__ import annotations
@@ -21,32 +22,32 @@ class IntegrationImpl(ImplBase):
     """Base descriptor for one row-selected integration implementation."""
 
     category = "none"
-    companion_model: str | None = None
-    companion_create_fields: tuple[str, ...] = ()
+    related_model: str | None = None
+    related_create_fields: tuple[str, ...] = ()
     label = "Integration"
     icon = ""
     oauth_client = ""
 
-    def __init__(self, integration: Any, companion: Any | None = None) -> None:
-        """Bind this implementation to its owning integration and companion row."""
+    def __init__(self, integration: Any, related: Any | None = None) -> None:
+        """Bind this implementation to its owning integration and its related row."""
 
         self.integration = integration
-        self.companion = companion
+        self.related = related
 
     @classmethod
-    def companion_model_class(cls) -> type[models.Model] | None:
-        """Return this implementation's companion model class, when declared."""
+    def related_model_class(cls) -> type[models.Model] | None:
+        """Return this implementation's related model class, when it declares one."""
 
-        if not cls.companion_model:
+        if not cls.related_model:
             return None
-        app_label, model_name = cls.companion_model.split(".", 1)
+        app_label, model_name = cls.related_model.split(".", 1)
         return apps.get_model(app_label, model_name)
 
     @classmethod
-    def companion_for(cls, integration: Any) -> Any | None:
-        """Return this implementation's declared companion row when it exists."""
+    def related_row(cls, integration: Any) -> Any | None:
+        """Return this implementation's 1:1 related row for ``integration``, if present."""
 
-        model = cls.companion_model_class()
+        model = cls.related_model_class()
         if model is None:
             return None
         related_name = f"{model._meta.app_label}_{model._meta.model_name}"
@@ -56,71 +57,77 @@ class IntegrationImpl(ImplBase):
             return None
 
     @classmethod
-    def create_companion(cls, integration: Any, values: dict[str, Any]) -> Any | None:
-        """Create this implementation's companion row from declared create values."""
+    def create_related_row(cls, integration: Any, values: dict[str, Any]) -> Any | None:
+        """Create this implementation's 1:1 related row from declared create values."""
 
-        model = cls.companion_model_class()
+        model = cls.related_model_class()
         if model is None:
             return None
-        attrs = cls.companion_create_values(integration, values)
+        attrs = cls.related_create_values(integration, values)
         return model.objects.create(integration=integration, **attrs)
 
     @classmethod
-    def companion_create_values(cls, integration: Any, values: dict[str, Any]) -> dict[str, Any]:
-        """Return the subset of create values owned by this companion model."""
+    def related_create_values(cls, integration: Any, values: dict[str, Any]) -> dict[str, Any]:
+        """Return the subset of create values owned by the related model.
+
+        Listed explicitly (not derived from the model's fields) because input names
+        don't always match field names — e.g. the form's ``related_config`` maps to
+        the related model's own ``config`` column, distinct from the Integration's.
+        """
 
         del integration
-        return {field: values[field] for field in cls.companion_create_fields if field in values}
+        return {field: values[field] for field in cls.related_create_fields if field in values}
 
 
 class NullIntegrationImpl(IntegrationImpl):
-    """Neutral implementation for draft rows with no capability companion."""
+    """Neutral implementation for a draft row with no chosen implementation."""
 
     key = "none"
     label = "Draft"
 
 
 class BridgeImpl(IntegrationImpl):
-    """Base descriptor for an integration bridge to an external system."""
+    """Base descriptor for an inbound bridge — it pulls/subscribes to external data.
+
+    Bridges run on a schedule (``run_due_bridges`` over ``Bridge.next_sync_at``) and
+    keep their sync state on a ``Bridge`` related model.
+    """
 
     category = "bridge"
     label = "Bridge"
     icon = "plug"
 
 
-class IMAPBridge(BridgeImpl):
-    """Shared defaults for IMAP mailbox bridges."""
+class Client(IntegrationImpl):
+    """Base descriptor for an outbound client — it calls out to an external service.
 
-    category = "mail"
-    label = "IMAP"
-    icon = "mail"
-    defaults = {
-        "config": {
-            "host": "",
-            "port": 993,
-            "security": "ssl",
-        },
-    }
+    The counterpart of :class:`BridgeImpl` (which pulls data in): a client sends
+    requests to a remote API. The call itself lives on the concrete subclass; this
+    base only carries the ``client`` category. A client is often stateless (its
+    settings ride the Integration's ``config``) and declares no ``related_model``.
+    """
 
-
-class GenericIMAPBridge(IMAPBridge):
-    """Fallback IMAP bridge for arbitrary providers."""
-
-    key = "generic_imap"
-    label = "Generic IMAP"
+    category = "client"
+    label = "Client"
+    icon = "send"
 
 
-class GmailIMAP(IMAPBridge):
-    """Gmail IMAP bridge with Google's host defaults."""
+class QueuedClient(Client):
+    """Base for a client whose work runs asynchronously, with retries.
 
-    key = "gmail_imap"
-    label = "Gmail IMAP"
-    icon = "google"
-    defaults = {
-        "vendor": "google",
-        "config": {
-            "host": "imap.gmail.com",
-            "port": 993,
-            "security": "ssl",
-        },
-    }
+    For calls too slow or too failure-prone to run inline — outbound sends, or
+    long-running remote jobs like training and video inference. The concrete subclass
+    implements :meth:`run`; the framework's Celery layer dispatches it and applies
+    ``max_retries`` + backoff, because the stack delegates queues and retries to
+    Celery (``docs/stack.md``) rather than a hand-rolled per-impl loop. A provider
+    that submits a remote job and polls for completion persists the remote handle on
+    its ``related_model`` and reschedules until done.
+    """
+
+    max_retries: int = 5
+    retry_backoff_base_seconds: int = 10
+
+    def run(self, payload: dict[str, Any]) -> Any:
+        """Perform one unit of queued work; implemented by the concrete client."""
+
+        raise NotImplementedError

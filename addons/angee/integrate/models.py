@@ -4,7 +4,7 @@ This addon owns the integration layer end to end. The connection substrate — t
 ``OAuthClient`` registration, the user's ``ExternalAccount`` at a provider, and the
 per-user ``Credential`` material — authenticates everything above it. On top of
 that sit the third-party ``Vendor`` catalogue, the first-class ``Integration``
-an integration runs over, optional companion rows (``VcsBridge``,
+an integration runs over, optional related rows (``VcsBridge``,
 ``agents.InferenceProvider``), the host-agnostic VCS inventory
 (``VcsBridge`` + ``Repository``/``Source``/``Template``), and outbound
 ``WebhookSubscription``.
@@ -48,7 +48,7 @@ from rebac.models import active_relationship_model
 
 from angee.base.fields import EncryptedField, ImplClassField, SqidField, StateField
 from angee.base.impl import ImplDefaultsMixin
-from angee.base.mixins import AuditMixin, SlugFromNameMixin, SqidMixin
+from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel
 from angee.integrate.credentials import CredentialKind, handler_for
 from angee.integrate.events import EventKind
@@ -209,7 +209,7 @@ class OAuthClientManager(RebacManager.from_queryset(OAuthClientQuerySet)):  # ty
             raise ValueError(f"ANGEE_INTEGRATE_OAUTH_CLIENTS entry {index} is missing required field(s): {names}")
 
 
-class OAuthClient(SqidMixin, SlugFromNameMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
+class OAuthClient(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     """OAuth2 client registration for connecting an external account.
 
     The base of the connection substrate: enough to run the authorization-code and
@@ -227,10 +227,7 @@ class OAuthClient(SqidMixin, SlugFromNameMixin, ImplDefaultsMixin, AuditMixin, A
     runtime = True
 
     sqid = SqidField(real_field_name="id", prefix="clt", min_length=8)
-    slug_source_field = "display_name"
-    slug_scope_fields = ("environment",)
-
-    slug = models.SlugField(blank=True)
+    slug = models.SlugField()
     provider_type = ImplClassField(
         base_class=OAuthProviderType,
         registry_setting="ANGEE_OAUTH_PROVIDER_TYPES",
@@ -1033,7 +1030,7 @@ def _validated_manager_values(
     return dict(values)
 
 
-class Vendor(SqidMixin, SlugFromNameMixin, AuditMixin, AngeeModel):
+class Vendor(SqidMixin, AuditMixin, AngeeModel):
     """Admin-managed third-party catalogue (GitHub, Google, Slack, …).
 
     The single source of truth for "what is this third party" — branding and
@@ -1046,7 +1043,7 @@ class Vendor(SqidMixin, SlugFromNameMixin, AuditMixin, AngeeModel):
     runtime = True
 
     sqid = SqidField(real_field_name="id", prefix="vnd", min_length=8)
-    slug = models.SlugField(unique=True, blank=True)
+    slug = models.SlugField(unique=True)
     display_name = models.CharField(max_length=128)
     website_url = models.URLField(blank=True)
     icon = models.CharField(max_length=128, blank=True)
@@ -1093,7 +1090,7 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     ``credential`` (and optionally an ``account``) from the connection substrate to
     authenticate, points at a catalogue ``vendor``, and stores the implementation
     key that owns its behavior. Implementations that need extra persisted fields
-    attach one optional one-to-one companion row.
+    attach one optional one-to-one related row.
     """
 
     runtime = True
@@ -1200,11 +1197,11 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
 
     @property
     def impl(self) -> IntegrationImpl:
-        """Return this row's implementation bound to its declared companion."""
+        """Return this row's implementation bound to its declared related model."""
 
         field = cast(ImplClassField, type(self)._meta.get_field("impl_class"))
         impl_class = cast(type[IntegrationImpl], field.resolve_class(self.impl_class))
-        return impl_class(self, impl_class.companion_for(self))
+        return impl_class(self, impl_class.related_row(self))
 
     def attach_credential(self, credential: Any) -> None:
         """Attach a live credential and activate this draft integration."""
@@ -1245,12 +1242,12 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
             )
 
 
-class IntegrationCompanion(SqidMixin, AuditMixin, AngeeModel):
-    """Abstract base for optional one-to-one integration companions."""
+class IntegrationMixin(SqidMixin, AuditMixin, AngeeModel):
+    """Abstract base for optional one-to-one integration related models."""
 
-    # ``%(app_label)s_%(class)s``: every concrete companion gets a distinct reverse
+    # ``%(app_label)s_%(class)s``: every concrete related model gets a distinct reverse
     # accessor on ``Integration``. ``Integration.impl`` resolves the declared
-    # companion model through this convention.
+    # related model through this convention.
     integration = models.OneToOneField(
         "integrate.Integration",
         on_delete=models.CASCADE,
@@ -1258,13 +1255,13 @@ class IntegrationCompanion(SqidMixin, AuditMixin, AngeeModel):
     )
 
     class Meta:
-        """Django model options for abstract companion inheritance."""
+        """Django model options for abstract related-model inheritance."""
 
         abstract = True
 
 
-class Bridge(IntegrationCompanion):
-    """Abstract base for companions that synchronize or subscribe to vendor data.
+class Bridge(IntegrationMixin):
+    """Abstract base for related models that synchronize or subscribe to vendor data.
 
     Another pure base: a domain bridge that materializes declares
     ``runtime = True`` on that class.
@@ -1376,7 +1373,7 @@ class RepoVisibility(models.TextChoices):
 
 
 class VcsBridge(Bridge):
-    """The VCS sync companion over an ``Integration``.
+    """The VCS sync related model over an ``Integration``.
 
     A :class:`Bridge`: the scheduler refreshes its repositories' sources over the
     host REST API and an inbound push webhook triggers the same refresh. The
@@ -1396,7 +1393,7 @@ class VcsBridge(Bridge):
     objects = RebacManager()
 
     class Meta:
-        """Django model options for the VCS bridge companion."""
+        """Django model options for the VCS bridge related model."""
 
         abstract = True
         rebac_resource_type = "integrate/vcs_integration"

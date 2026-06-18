@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from django.db import models
 
-from angee.integrate.models import Bridge, IntegrationCompanion, IntegrationStatus
+from angee.integrate.models import Bridge, IntegrationMixin, IntegrationStatus
 from tests.conftest import Integration
 
 
@@ -22,11 +22,11 @@ class ConcreteBridge(Bridge):
 
 
 def test_integrate_bases_are_abstract() -> None:
-    """IntegrationCompanion and Bridge are abstract inheritance bases only."""
+    """IntegrationMixin and Bridge are abstract inheritance bases only."""
 
-    assert IntegrationCompanion._meta.abstract is True
+    assert IntegrationMixin._meta.abstract is True
     assert Bridge._meta.abstract is True
-    assert issubclass(Bridge, IntegrationCompanion)
+    assert issubclass(Bridge, IntegrationMixin)
 
 
 def test_bridge_declares_runtime_contract_methods() -> None:

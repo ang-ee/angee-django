@@ -23,7 +23,7 @@ import {
 const MODEL = "integrate.VcsBridge";
 
 /**
- * VCS bridges: companion rows that bind an existing `Integration` to repository
+ * VCS bridges: related rows that bind an existing `Integration` to repository
  * discovery and source sync.
  */
 export function VcsBridgesPage(): React.ReactElement {

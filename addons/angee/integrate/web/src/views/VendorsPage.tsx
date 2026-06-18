@@ -14,7 +14,7 @@ const vendorList = (
 const vendorForm = (
   <Form model={MODEL}>
     <Field name="displayName" title />
-    <Field name="slug" />
+    <Field name="slug" widget="slug" />
     <Field name="icon" />
     <Field name="websiteUrl" />
     <Field name="description" />

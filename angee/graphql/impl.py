@@ -24,31 +24,31 @@ class ImplChoice:
     defaults: JSON
 
 
-@strawberry.type
-class ImplChoicesQuery:
-    """Generic lookup for any ``ImplClassField`` on a composed runtime model."""
+def impl_choices(model: str, field: str) -> list[ImplChoice]:
+    """Return choice metadata for ``model.field`` when it is an ``ImplClassField``.
 
-    @strawberry.field
-    def impl_choices(self, model: str, field: str) -> list[ImplChoice]:
-        """Return choice metadata for ``model.field`` when it is an ``ImplClassField``."""
+    The reusable resolver behind the impl-picker query. The framework stays
+    auth-agnostic, so an addon wraps this in its own admin-gated query field (e.g.
+    integrate's ``ConsoleImplChoicesQuery``) rather than exposing it ungated.
+    """
 
-        django_model = _model_for_label(model)
-        try:
-            model_field = django_model._meta.get_field(_field_name(field))
-        except FieldDoesNotExist as error:
-            raise ImproperlyConfigured(f"{django_model._meta.label} has no field {field!r}.") from error
-        if not isinstance(model_field, ImplClassField):
-            raise ImproperlyConfigured(f"{django_model._meta.label}.{model_field.name} is not an ImplClassField.")
-        return [
-            ImplChoice(
-                key=str(choice["key"]),
-                label=str(choice["label"]),
-                icon=str(choice["icon"]),
-                category=str(choice["category"]),
-                defaults=choice["defaults"],
-            )
-            for choice in model_field.impl_choices()
-        ]
+    django_model = _model_for_label(model)
+    try:
+        model_field = django_model._meta.get_field(_field_name(field))
+    except FieldDoesNotExist as error:
+        raise ImproperlyConfigured(f"{django_model._meta.label} has no field {field!r}.") from error
+    if not isinstance(model_field, ImplClassField):
+        raise ImproperlyConfigured(f"{django_model._meta.label}.{model_field.name} is not an ImplClassField.")
+    return [
+        ImplChoice(
+            key=str(choice["key"]),
+            label=str(choice["label"]),
+            icon=str(choice["icon"]),
+            category=str(choice["category"]),
+            defaults=choice["defaults"],
+        )
+        for choice in model_field.impl_choices()
+    ]
 
 
 def _model_for_label(label: str) -> type[Any]:

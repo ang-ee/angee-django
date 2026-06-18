@@ -3,7 +3,7 @@
 An :class:`Agent` is a definition the operator later renders into a workspace and
 service. It draws on three catalogues this addon also owns: :class:`Skill` rows
 discovered from an ``integrate.Source``, :class:`MCPServer`/:class:`MCPTool` rows,
-and an :class:`InferenceProvider` companion over an ``Integration`` with its
+and an :class:`InferenceProvider` related model over an ``Integration`` with its
 :class:`InferenceModel` rows. Templates are agents with
 ``is_template`` set. This addon keeps definitions only; the operator owns lifecycle.
 """
@@ -27,7 +27,7 @@ from angee.base.fields import SqidField, StateField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.integrate.credentials import CredentialKind
-from angee.integrate.models import IntegrationCompanion
+from angee.integrate.models import IntegrationMixin
 
 
 class InferenceModelUse(models.TextChoices):
@@ -99,8 +99,8 @@ class RuntimeStatus(models.TextChoices):
     WARNING = "warning", "Warning"
 
 
-class InferenceProvider(IntegrationCompanion):
-    """The inference companion over an ``Integration`` — an LLM provider account.
+class InferenceProvider(IntegrationMixin):
+    """The inference related model over an ``Integration`` — an LLM provider account.
 
     It draws its API credential from ``self.integration.credential`` and resolves
     the row-selected :class:`~angee.agents.backends.InferenceBackend` from
@@ -120,7 +120,7 @@ class InferenceProvider(IntegrationCompanion):
     objects = RebacManager()
 
     class Meta:
-        """Django model options for the inference provider companion."""
+        """Django model options for the inference provider related model."""
 
         abstract = True
         ordering = ("name",)

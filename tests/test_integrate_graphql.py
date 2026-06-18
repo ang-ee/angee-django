@@ -129,6 +129,25 @@ def test_integration_groups_aggregate_runs_with_rebac_scope(
     assert grouped["results"] == [{"key": {"implClass": "STUB"}, "count": 1}]
 
 
+def test_impl_choices_are_admin_only(integrate_console_tables: None) -> None:
+    """Impl choice metadata is console data, so it is platform-admin gated."""
+
+    console_schema = _schema()
+    plain = User.objects.create_user(username="impl-choices-plain", email="plain@example.com")
+    admin = _platform_admin("impl-choices-admin")
+    query = """
+        query {
+          implChoices(model: "integrate.Integration", field: "implClass") {
+            key
+          }
+        }
+    """
+
+    assert _execute(console_schema, query, user=plain).errors is not None
+    result = _data(_execute(console_schema, query, user=admin))["implChoices"]
+    assert {"key": "none"} in result
+
+
 def test_integration_update_delete_are_admin_only(
     integrate_console_tables: None,
 ) -> None:
@@ -456,6 +475,31 @@ def test_update_integration_status_accepts_the_lowercase_value(
     with system_context(reason="test.integrate.status.verify"):
         conn.refresh_from_db()
         assert str(conn.status) == "disabled"
+
+
+def test_create_vcs_integration_rejects_non_vcs_impl(
+    integrate_console_tables: None,
+) -> None:
+    """A VCS bridge cannot point at a non-VCS integration implementation."""
+
+    console_schema = _schema()
+    admin = _platform_admin("vcs-create-admin")
+    conn = make_integration("vcs-create-not-vcs")
+    result = _execute(
+        console_schema,
+        """
+        mutation CreateVcs($integration: ID!) {
+          createVcsIntegration(data: {integration: $integration}) {
+            id
+          }
+        }
+        """,
+        {"integration": _integration_global_id(conn)},
+        user=admin,
+    )
+
+    assert result.errors is not None
+    assert "does not use a VCS implementation" in result.errors[0].message
 
 
 @pytest.fixture()

@@ -24,8 +24,6 @@ SETTINGS = {
     "ANGEE_INTEGRATION_IMPLS": {
         "none": "angee.integrate.impl.NullIntegrationImpl",
         "local": "angee.integrate.vcs.backend.LocalVCSBackend",
-        "generic_imap": "angee.integrate.impl.GenericIMAPBridge",
-        "gmail_imap": "angee.integrate.impl.GmailIMAP",
     },
 }
 """Django settings contributed when the integrate addon is installed."""

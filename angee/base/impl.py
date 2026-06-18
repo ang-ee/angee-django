@@ -3,10 +3,9 @@
 An :class:`~angee.base.fields.ImplClassField` column selects one of these by key.
 Beyond the behaviour its domain needs, an impl carries shared metadata and
 *defaults* — the field values the owning row materialises when the impl is
-chosen. Defaults merge along the MRO, so a refinement (``GmailIMAP``) inherits its
-base's defaults (``IMAPBridge``) and overrides only what differs. Abstract bases
-leave ``key`` blank and stay out of the registry; concrete leaves (including the
-``Generic*`` fallbacks) register a key and are pickable.
+chosen. Defaults merge along the MRO, so refinements inherit their base's
+defaults and override only what differs. Abstract bases leave ``key`` blank and
+stay out of the registry; concrete leaves register a key and are pickable.
 """
 
 from __future__ import annotations
@@ -15,6 +14,7 @@ from typing import Any, ClassVar
 
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
+
 
 class ImplBase:
     """Base for an implementation selectable by an ``ImplClassField`` key.
@@ -32,22 +32,33 @@ class ImplBase:
 
     @classmethod
     def effective_defaults(cls) -> dict[str, Any]:
-        """Return this impl's defaults merged along the MRO (base → derived; derived wins)."""
+        """Return this impl's defaults merged along the MRO (base → derived; derived wins).
+
+        Dict-valued defaults (e.g. ``config``) merge one level deep, so a refinement
+        (``GmailIMAP``) adds keys to its base's (``IMAPBridge``) ``config`` instead of
+        replacing it; scalar values are overridden outright.
+        """
 
         merged: dict[str, Any] = {}
         for base in reversed(cls.__mro__):
             own = base.__dict__.get("defaults")
-            if own:
-                merged.update(own)
+            if not own:
+                continue
+            for field_name, value in own.items():
+                current = merged.get(field_name)
+                if isinstance(current, dict) and isinstance(value, dict):
+                    merged[field_name] = {**current, **value}
+                else:
+                    merged[field_name] = value
         return merged
 
     @classmethod
     def display_label(cls) -> str:
         """Return this impl's own label, falling back to a title-cased key.
 
-        ``label`` is each impl's name, not a domain trait: a refinement that omits
-        it reads from its key (``gmail_imap`` → "Gmail Imap"), never the base's
-        label. ``icon``/``category`` inherit normally.
+        ``label`` is each impl's name, not a domain trait: a refinement that
+        omits it reads from its key, never the base's label.
+        ``icon``/``category`` inherit normally.
         """
 
         own_label = cls.__dict__.get("label")

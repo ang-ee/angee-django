@@ -4,18 +4,6 @@
 
 import type { ActionOutcome, ByIdVariables } from "@angee/sdk";
 
-export const SYNC_INTEGRATION_MUTATION = `
-  mutation SyncIntegration($id: ID!) {
-    syncIntegration(id: $id) { ok message }
-  }
-`;
-
-export const TEST_CONNECTION_MUTATION = `
-  mutation TestConnection($id: ID!) {
-    testConnection(id: $id) { ok message }
-  }
-`;
-
 export const CONNECT_INTEGRATION_MUTATION = `
   mutation ConnectIntegration($integrationId: ID!, $redirectUri: String!, $next: String!) {
     connectIntegration(integrationId: $integrationId, redirectUri: $redirectUri, next: $next) {
@@ -32,14 +20,6 @@ export const CONNECT_INTEGRATION_MUTATION = `
 
 /** `{ ok, message }` action outcome — the shared SDK contract. */
 export type ActionResultData = ActionOutcome;
-
-export interface SyncIntegrationData {
-  syncIntegration: ActionResultData;
-}
-
-export interface TestConnectionData {
-  testConnection: ActionResultData;
-}
 
 export interface ConnectIntegrationData {
   connectIntegration: {

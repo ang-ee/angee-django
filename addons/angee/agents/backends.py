@@ -1,12 +1,12 @@
 """Inference implementation protocol and the bundled built-in backend.
 
 An inference backend is an ``Integration`` implementation with an
-``InferenceProvider`` companion. A vendor backend (openai, anthropic, …) wraps an
+``InferenceProvider`` related model. A vendor backend (openai, anthropic, …) wraps an
 HTTP client and lists the provider's models live; it ships in its own addon and
 registers its key in ``ANGEE_INTEGRATION_IMPLS``. The bundled
 :class:`ManualInferenceBackend` is built in and uses no client — its catalogue is
 curated by hand. This module stays ORM-free; the backend reads its credential
-from the integration and endpoint from the provider companion it is bound to.
+from the integration and endpoint from the provider related model it is bound to.
 """
 
 from __future__ import annotations
@@ -62,23 +62,23 @@ class InferenceBackend(IntegrationImpl):
     """The strategy one inference integration resolves to.
 
     Subclasses read the API credential from ``integration.credential`` and the
-    endpoint from the ``provider`` companion's ``base_url``.
+    endpoint from the ``provider`` related model's ``base_url``.
     """
 
     category = "inference"
-    companion_model = "agents.InferenceProvider"
-    companion_create_fields = ("name", "base_url", "config")
+    related_model = "agents.InferenceProvider"
+    related_create_fields = ("name", "base_url", "config")
     label = "Inference"
     icon = "sparkles"
     defaults = {
         "status": "draft",
     }
 
-    def __init__(self, integration: Any, companion: Any | None = None) -> None:
-        """Bind this backend to its integration and provider companion."""
+    def __init__(self, integration: Any, related: Any | None = None) -> None:
+        """Bind this backend to its integration and provider related model."""
 
-        super().__init__(integration, companion)
-        self.provider = companion
+        super().__init__(integration, related)
+        self.provider = related
 
     def list_models(self) -> Sequence[InferenceModelSpec]:
         """Return the provider's advertised models for catalogue upsert."""
@@ -86,10 +86,10 @@ class InferenceBackend(IntegrationImpl):
         raise NotImplementedError("InferenceBackend subclasses must implement list_models().")
 
     @classmethod
-    def companion_create_values(cls, integration: Any, values: dict[str, Any]) -> dict[str, Any]:
+    def related_create_values(cls, integration: Any, values: dict[str, Any]) -> dict[str, Any]:
         """Return inference-provider fields, defaulting the required display name."""
 
-        attrs = super().companion_create_values(integration, values)
+        attrs = super().related_create_values(integration, values)
         name = str(attrs.get("name") or "").strip()
         if not name:
             vendor = getattr(integration, "vendor", None)

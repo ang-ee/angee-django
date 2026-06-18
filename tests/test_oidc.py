@@ -1118,7 +1118,7 @@ def test_oidc_group_by_login_enabled() -> None:
                 client_id="c1",
                 is_enabled=True,
             )
-            disabled = OAuthClient.objects.create(
+            OAuthClient.objects.create(
                 slug="disabled-client",
                 display_name="Disabled",
                 client_id="c2",

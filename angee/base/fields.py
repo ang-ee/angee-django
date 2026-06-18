@@ -315,19 +315,6 @@ class ImplClassField(TextChoicesField):
         camel = "".join(part.capitalize() for part in core.split("_") if part)
         return f"{camel or 'Impl'}Impl"
 
-    def resolve_impl(self, key: Any) -> Any:
-        """Return the resolved impl class, requiring it be an ``ImplBase`` (default-bearing base)."""
-
-        from angee.base.impl import ImplBase
-
-        impl = self.resolve_class(key)
-        if not (isinstance(impl, type) and issubclass(impl, ImplBase)):
-            raise ImproperlyConfigured(
-                f"settings.{self.registry_setting}[{str(key)!r}] is not an ImplBase; "
-                "impl_choices and default materialisation require an ImplBase subclass."
-            )
-        return impl
-
     def impl_choices(self) -> list[dict[str, Any]]:
         """Return pickable choices (``key``/``label``/``icon``/``category``/``defaults``) for the registry.
 
