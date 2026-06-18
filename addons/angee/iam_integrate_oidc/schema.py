@@ -29,7 +29,7 @@ from angee.iam.permissions import request_from_info as _request
 from angee.iam.permissions import session_user as _session_user
 from angee.iam.schema import UserType
 from angee.iam_integrate_oidc import identity
-from angee.iam_integrate_oidc.protocol import OidcClientProtocol
+from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
 from angee.integrate.oauth import flow as oauth_flow
 from angee.integrate.oauth import state as oauth_state
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, OAuthFlowError
@@ -155,7 +155,7 @@ def _start_login_flow(
         next_path=next_path,
         flow=flow,
     )
-    authorize_url = OidcClientProtocol(oauth_client).authorize_url(
+    authorize_url = OAuthClientOidcProtocol(oauth_client).authorize_url(
         state=state_token,
         redirect_uri=effective_redirect_uri,
         scopes=oauth_client.default_scope_values,
@@ -318,7 +318,7 @@ class OidcLoginMutation:
 
 
 @strawberry.type
-class OidcClientActionMutation:
+class OAuthClientOidcActionMutation:
     """Operational actions on an OIDC login provider."""
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
@@ -387,7 +387,7 @@ schemas = {
     },
     "console": {
         "query": [OidcLoginQuery],
-        "mutation": [OidcLoginMutation, OidcClientActionMutation],
+        "mutation": [OidcLoginMutation, OAuthClientOidcActionMutation],
         "types": _CONSOLE_TYPES,
         "type_extensions": [OAuthClientOidcExtension],
     },

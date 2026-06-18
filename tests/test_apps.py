@@ -154,14 +154,14 @@ def test_integrate_config_installs_public_oauth_provider_resources() -> None:
     assert "client_secret" not in grok
 
 
-def test_iam_integrate_oidc_config_installs_oidc_client_defaults() -> None:
+def test_iam_integrate_oidc_config_installs_oauth_client_oidc_defaults() -> None:
     """The OIDC login addon ships id-token trust config for OAuth client rows."""
 
     config = apps.get_app_config("iam_integrate_oidc")
     manifest = resource_manifest_for(config)
 
     assert manifest["install"] == (
-        {"path": "resources/install/010_integrate.oauthclient.yaml", "adopt": ["slug", "environment"]},
+        {"path": "resources/install/010_integrate.oauthclient.yaml", "adopt": ("slug", "environment")},
     )
 
     oidc_rows = ResourceEntry.from_declaration(config, "install", manifest["install"][0]).read_resource_rows()

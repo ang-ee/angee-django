@@ -12,7 +12,7 @@ export const enIntegrateMessages: Record<string, string> = {
 
   // Shared list/group column labels.
   "integrate.col.status": "Status",
-  "integrate.col.capability": "Capability",
+  "integrate.col.implementation": "Implementation",
   "integrate.col.vendor": "Vendor",
   "integrate.col.credential": "Credential",
   "integrate.col.lastError": "Last error",

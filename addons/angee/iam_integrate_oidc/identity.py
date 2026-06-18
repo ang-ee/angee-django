@@ -19,7 +19,7 @@ from django.contrib.auth.base_user import AbstractBaseUser
 from django.db import models, transaction
 from rebac import system_context
 
-from angee.iam_integrate_oidc.protocol import OidcClientProtocol
+from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.models import AccountStatus
 from angee.integrate.oauth import flow
@@ -64,7 +64,7 @@ class OidcLoginCompletion:
 
         self.oauth_client = oauth_client
         _require_login_enabled(oauth_client)
-        self.protocol = OidcClientProtocol(oauth_client)
+        self.protocol = OAuthClientOidcProtocol(oauth_client)
 
     def complete_login(self, *, code: str, state_token: str, redirect_uri: str) -> LoginCompletion:
         """Complete an OIDC login redirect and return the resolved user with claims."""

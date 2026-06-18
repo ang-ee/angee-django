@@ -34,7 +34,7 @@ _ALLOWED_JWT_ALGORITHMS = (
 )
 
 
-class OidcClientProtocol(OAuthClientProtocol):
+class OAuthClientOidcProtocol(OAuthClientProtocol):
     """OIDC login protocol for one OAuth client with OIDC login fields."""
 
     def __init__(self, oauth_client: Any) -> None:

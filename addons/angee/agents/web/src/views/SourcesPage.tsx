@@ -6,7 +6,7 @@ import { REFRESH_SOURCE_MUTATION, type IdVariables, type RefreshSourceData } fro
 import { useAgentsT } from "../i18n";
 
 // Skill sources are `integrate.Source` rows of kind "skill". The repository and its
-// VCS integration are set up in the integrate console; here a source points at a
+// VCS bridge are set up in the integrate console; here a source points at a
 // repo path, and Refresh (re-)discovers its skills.
 const MODEL = "integrate.Source";
 const SKILL_DEFAULTS = { kind: "skill" };

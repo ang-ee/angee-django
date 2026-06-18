@@ -26,7 +26,7 @@ const MODEL = "integrate.VcsBridge";
  * VCS bridges: companion rows that bind an existing `Integration` to repository
  * discovery and source sync.
  */
-export function VCSIntegrationsPage(): React.ReactElement {
+export function VcsBridgesPage(): React.ReactElement {
   const t = useIntegrateT();
   const [syncVcs] = useAuthoredMutation<SyncVcsBridgeData, IdVariables>(
     SYNC_VCS_BRIDGE_MUTATION,

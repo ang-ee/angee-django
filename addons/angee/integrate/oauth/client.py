@@ -3,7 +3,7 @@
 The base of the connection protocol: authorization-code redirect, code exchange,
 refresh, and revocation — everything needed to connect an external account for
 API access (Gemini, Grok, Anthropic), with no identity/login concern. OIDC login
-extends this in ``angee.iam_integrate_oidc.protocol.OidcClientProtocol``.
+extends this in ``angee.iam_integrate_oidc.protocol.OAuthClientOidcProtocol``.
 
 Endpoints are taken from the row as configured; the base never performs OIDC
 discovery (that is the OIDC layer's job), so a base ``OAuthClient`` must carry its

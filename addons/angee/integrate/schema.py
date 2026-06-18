@@ -1707,7 +1707,7 @@ _REPOSITORY_MUTATION = crud(
 
 @strawberry.type
 class VCSActionMutation:
-    """Operational actions on a VCS integration and its inventory."""
+    """Operational actions on a VCS bridge and its inventory."""
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def add_repository(self, vcs_integration_id: relay.GlobalID, name: str) -> RepositoryType:
@@ -1728,7 +1728,7 @@ class VCSActionMutation:
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def sync_vcs_integration(self, id: relay.GlobalID) -> ActionResult:
-        """Refresh every repository's sources for one VCS integration now."""
+        """Refresh every repository's sources for one VCS bridge now."""
 
         vcs = _resolve(VcsBridge, id, reason="integrate.graphql.sync_vcs_integration")
         now = timezone.now()

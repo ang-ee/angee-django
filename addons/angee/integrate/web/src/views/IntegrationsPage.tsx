@@ -39,13 +39,13 @@ export function IntegrationsPage(): React.ReactElement {
   const implClassPrefill = useImplPrefill(MODEL, "implClass");
 
   // Aggregate on the real groupable axes (impl_class / vendor / status); the
-  // capability lane displays the impl's category. Tone is resolved by the shared
+  // implementation lane displays the impl's category. Tone is resolved by the shared
   // STATUS_TONES vocabulary — never a private map (docs/frontend/guidelines.md).
   const groupOptions = React.useMemo<readonly DataToolbarGroupOption[]>(
     () => [
       {
         id: "impl-category",
-        label: t("integrate.col.capability"),
+        label: t("integrate.col.implementation"),
         group: {
           field: "implCategory",
           aggregateField: "implClass",
@@ -99,7 +99,7 @@ export function IntegrationsPage(): React.ReactElement {
         }}
       >
         <Column field="displayName" />
-        <Column field="implLabel" header={t("integrate.col.capability")} />
+        <Column field="implLabel" header={t("integrate.col.implementation")} />
         <Column field="vendorLabel" header={t("integrate.col.vendor")} />
         <Column field="status" widget="statusBadge" />
         <Column
