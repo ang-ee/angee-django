@@ -164,8 +164,8 @@ jobs:
   # document globs; the stack only orders it after schema emission and before Vite.
   codegen:
     runtime: local
-    workdir: source://app/{{ web_path }}
-    command: ["pnpm", "codegen"]
+    workdir: source://app
+    command: ["pnpm", "--dir", "{{ web_path }}", "codegen"]
     depends_on: [deps, schema]
 
 services:
@@ -197,8 +197,8 @@ services:
   # port and the e2e harness (docs/testing/e2e.md) targets the same URL.
   frontend:
     runtime: local
-    workdir: source://app/{{ web_path }}
-    command: ["pnpm", "dev"]
+    workdir: source://app
+    command: ["pnpm", "--dir", "{{ web_path }}", "dev"]
     env:
       ANGEE_DJANGO_URL: http://127.0.0.1:{{ django_port }}
       ANGEE_UI_PORT: "{{ ui_port }}"
