@@ -113,15 +113,19 @@ class Client(IntegrationImpl):
 
 
 class QueuedClient(Client):
-    """Base for a client whose work runs asynchronously, with retries.
+    """Base for a client whose work is meant to run asynchronously, with retries.
 
-    For calls too slow or too failure-prone to run inline — outbound sends, or
-    long-running remote jobs like training and video inference. The concrete subclass
-    implements :meth:`run`; the framework's Celery layer dispatches it and applies
-    ``max_retries`` + backoff, because the stack delegates queues and retries to
-    Celery (``docs/stack.md``) rather than a hand-rolled per-impl loop. A provider
-    that submits a remote job and polls for completion persists the remote handle on
-    its ``related_model`` and reschedules until done.
+    The vocabulary for calls too slow or failure-prone to run inline — outbound
+    sends, or long-running remote jobs like training / video inference. A concrete
+    subclass implements :meth:`run`; ``max_retries``/``retry_backoff_base_seconds``
+    declare its retry policy.
+
+    NOTE: no async dispatcher is wired yet. The stack earmarks Celery for queues and
+    retries (``docs/stack.md``) but it is not locked, so this base only fixes the
+    contract a future Celery (or due-time scanner) layer will drive — it must not be
+    relied on for dispatch until that lands. A provider that submits a remote job and
+    polls would persist the remote handle on its ``related_model`` and reschedule
+    until done.
     """
 
     max_retries: int = 5

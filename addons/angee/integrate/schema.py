@@ -28,7 +28,8 @@ from angee.graphql.actions import ActionResult
 from angee.graphql.aggregates import rebac_aggregate_builder
 from angee.graphql.crud import crud
 from angee.graphql.deletion import DeletePreview
-from angee.graphql.impl import ImplChoice, impl_choices as resolve_impl_choices
+from angee.graphql.impl import ImplChoice
+from angee.graphql.impl import impl_choices as resolve_impl_choices
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES

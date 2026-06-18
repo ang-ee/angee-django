@@ -449,6 +449,9 @@ export function FormView({
           baselineValuesRef.current = savedValues;
           setPatchedRecord(saved);
           form.reset(savedValues);
+          // A reused, still-mounted create form starts each new record with a clean
+          // slug-derive state (no `id` change fires the create-reset effect here).
+          if (isCreate) manualSlugFieldsRef.current = new Set();
           onSaved?.(saved);
         }
       } catch (error) {
