@@ -12,7 +12,7 @@ import { Provider as UrqlProvider } from "urql";
 import type { Client } from "@urql/core";
 import { buildSchema } from "graphql";
 
-import { useAuthoredSubscription } from "./authored-hooks";
+import { useDocumentSubscription } from "./document-subscription";
 import { makeContext } from "./make-context";
 import { createRefetchRegistry, type RefetchRegistry } from "./relay-registry";
 import { typeNameForModel } from "./selection";
@@ -57,7 +57,7 @@ function ModelChangeListener(props: {
 }): ReactNode {
   const { typename, registry } = props;
   const document = useMemo(() => changeSubscriptionDocument(typename), [typename]);
-  useAuthoredSubscription(document, undefined, {
+  useDocumentSubscription(document, undefined, {
     onData: () => registry.invalidate([typename]),
   });
   return null;

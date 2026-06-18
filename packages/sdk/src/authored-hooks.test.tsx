@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 import { renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
-import { fetchExchange } from "@urql/core";
+import { fetchExchange, type TypedDocumentNode } from "@urql/core";
+import { parse } from "graphql";
 import { describe, expect, test, vi } from "vitest";
 
 import { useAuthoredMutation, useAuthoredQuery } from "./authored-hooks";
@@ -34,14 +35,21 @@ function wrapperWith(fetch: typeof globalThis.fetch) {
     });
 }
 
+function typedDocument<TData, TVariables extends Record<string, unknown>>(
+  source: string,
+): TypedDocumentNode<TData, TVariables> {
+  return parse(source) as TypedDocumentNode<TData, TVariables>;
+}
+
 describe("useAuthoredQuery", () => {
-  test("runs a hand-written document and returns its data", async () => {
+  test("runs a generated authored document and returns its data", async () => {
     const { fetch } = mockTransport({ noteRevisions: [{ id: "r1" }] });
+    const document = typedDocument<
+      { noteRevisions: Array<{ id: string }> },
+      { id: string }
+    >("query revs($id: Sqid!) { noteRevisions(id: $id) { id } }");
     const { result } = renderHook(
-      () => useAuthoredQuery<{ noteRevisions: Array<{ id: string }> }>(
-        "query revs($id: Sqid!) { noteRevisions(id: $id) { id } }",
-        { id: "1" },
-      ),
+      () => useAuthoredQuery(document, { id: "1" }),
       { wrapper: wrapperWith(fetch) },
     );
     await waitFor(() => expect(result.current.fetching).toBe(false));
@@ -50,8 +58,11 @@ describe("useAuthoredQuery", () => {
 
   test("does not run when disabled", () => {
     const { fetch } = mockTransport({});
+    const document = typedDocument<{ __typename: string }, Record<string, never>>(
+      "query { __typename }",
+    );
     renderHook(
-      () => useAuthoredQuery("query { __typename }", {}, { enabled: false }),
+      () => useAuthoredQuery(document, {}, { enabled: false }),
       { wrapper: wrapperWith(fetch) },
     );
     expect(fetch).not.toHaveBeenCalled();
@@ -61,10 +72,12 @@ describe("useAuthoredQuery", () => {
 describe("useAuthoredMutation", () => {
   test("runs the mutation and resolves to its data", async () => {
     const { fetch } = mockTransport({ archiveNote: { ok: true } });
+    const document = typedDocument<
+      { archiveNote: { ok: boolean } },
+      { id: string }
+    >("mutation arch($id: Sqid!) { archiveNote(id: $id) { ok } }");
     const { result } = renderHook(
-      () => useAuthoredMutation<{ archiveNote: { ok: boolean } }>(
-        "mutation arch($id: Sqid!) { archiveNote(id: $id) { ok } }",
-      ),
+      () => useAuthoredMutation(document),
       { wrapper: wrapperWith(fetch) },
     );
     const [archive] = result.current;
@@ -79,8 +92,12 @@ describe("useAuthoredMutation", () => {
         headers: { "content-type": "application/json" },
       }),
     ) as unknown as typeof globalThis.fetch;
+    const document = typedDocument<
+      { fail: { ok: boolean } },
+      Record<string, never>
+    >("mutation { fail { ok } }");
     const { result } = renderHook(
-      () => useAuthoredMutation("mutation { fail { ok } }"),
+      () => useAuthoredMutation(document),
       { wrapper: wrapperWith(fetch) },
     );
     const [run] = result.current;

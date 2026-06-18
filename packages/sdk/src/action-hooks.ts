@@ -12,7 +12,7 @@ function actionDocument(field: string): string {
 export type ActionMutate = (id: string) => Promise<string | undefined>;
 
 /**
- * Run a single-id action mutation — `<field>(id: ID!): ActionResult{ok,message}`
+ * Run a single-id action mutation — `<field>(id: ID!): ActionResult`
  * — derived from its field name alone: no authored document, result type, or
  * variables. The runner applies {@link runActionResult} (a business failure
  * throws → error toast; success returns its message → success toast), so it drops

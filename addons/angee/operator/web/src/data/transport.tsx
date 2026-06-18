@@ -1,5 +1,5 @@
 import { Alert, EmptyState, LoadingPanel } from "@angee/base";
-import { errorMessage, useAuthoredSubscription, useSchemaClients } from "@angee/sdk";
+import { errorMessage, useDocumentSubscription, useSchemaClients } from "@angee/sdk";
 import {
   Provider as UrqlProvider,
   useMutation,
@@ -323,11 +323,11 @@ export function useOperatorSubscription<
   variables?: TVariables,
   options: OperatorSubscriptionOptions<TData> = {},
 ): OperatorSubscriptionResult<TData> {
-  // Delegate to the SDK hook, the owner of authored-subscription semantics: it fires
+  // Delegate to the SDK document runner, the owner of subscription semantics: it fires
   // `onData` from an effect once per push, never from the urql reducer. A reducer must
   // stay a pure (previous, value) => next accumulator — a side effect there (e.g. the
   // `setState` the agent service-log path wires in) runs during urql's render phase.
-  return useAuthoredSubscription<TData, TVariables>(document, variables, options);
+  return useDocumentSubscription<TData, TVariables>(document, variables, options);
 }
 
 // The daemon exposes its state as separate root fields; assemble the roots each

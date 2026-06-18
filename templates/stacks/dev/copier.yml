@@ -24,6 +24,11 @@ framework_path:
   default: "."
   help: Path to the angee-django monorepo root. Used to reach Storybook (the `@angee/storybook` package under `packages/storybook`) and to run `pnpm install` at the workspace root. Default `.` assumes the repo-level layout (manifest at `<repo>/.angee/angee.yaml`); for downstream projects that consume angee-django as a sibling checkout, point at the sibling (e.g. `--input framework_path=../angee-django`).
 
+web_path:
+  type: path
+  default: "web"
+  help: Path to the project's Vite web package, relative to `project_path`. Its package owns the `dev` and `codegen` scripts for the composed project's generated GraphQL operation types.
+
 ANGEE_ROOT:
   type: str
   default: .angee

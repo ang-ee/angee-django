@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Derive the action-mutation allow-list from each schema's emitted SDL. An action
 // field is a Mutation field with exactly one `id: ID!` argument that returns the
-// `ActionResult{ok,message}` shape; the emitted `ActionFieldName` union pins
+// backend-owned `ActionResult`; the emitted `ActionFieldName` union pins
 // `useActionMutation` (@angee/sdk) to real action fields at compile time. Written
 // beside the client-preset output so `@angee/gql/<schema>/actions` resolves via
 // the same alias. Generated from the one source of truth (the SDL).
@@ -24,16 +24,7 @@ function actionFields(sdlPath) {
       const arg = field.args[0];
       if (arg.name !== "id" || String(arg.type) !== "ID!") return false;
       const returned = getNamedType(field.type);
-      if (!(returned instanceof GraphQLObjectType)) return false;
-      const result = returned.getFields();
-      // The ActionResult contract precisely — `ok: Boolean!` + `message: String!`,
-      // not merely fields *named* ok/message — so an unrelated return type can't
-      // widen the allow-list and feed a mistyped outcome to `runActionResult`.
-      if (!result.ok || !result.message) return false;
-      return (
-        String(result.ok.type) === "Boolean!" &&
-        String(result.message.type) === "String!"
-      );
+      return returned instanceof GraphQLObjectType && returned.name === "ActionResult";
     })
     .sort();
 }
@@ -47,7 +38,7 @@ for (const name of SCHEMAS) {
     `// Generated from runtime/schemas/${name}.graphql — do not edit by hand.`,
     "// Run `pnpm codegen` to regenerate.",
     "//",
-    "// Mutation fields shaped `<field>(id: ID!): ActionResult{ok,message}` — the",
+    "// Mutation fields shaped `<field>(id: ID!): ActionResult` — the",
     "// compile-time allow-list for `useActionMutation` (@angee/sdk).",
     "",
     `export type ActionFieldName = ${union};`,

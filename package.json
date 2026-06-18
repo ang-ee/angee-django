@@ -8,7 +8,7 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "codegen": "pnpm -C examples/notes-angee/web codegen",
+    "codegen": "pnpm --filter @angee-example/notes-host codegen",
     "pretypecheck": "pnpm codegen",
     "typecheck": "pnpm -r typecheck",
     "pretest": "pnpm codegen",

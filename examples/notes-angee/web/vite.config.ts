@@ -13,11 +13,9 @@ const uiPort = Number(process.env.ANGEE_UI_PORT ?? 5173);
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  // The alias for this project's generated typed operations. Mirrors the
-  // `@angee/gql/*` paths in `tsconfig.base.json` and `vitest.shared.ts` so Vite
-  // resolves the same per-schema `runtime/gql/<name>/` the type checker does.
-  // (Framework-repo dev wiring; a rendered downstream project gets this emitted
-  // per-project by the composer/template — see the plan note.)
+  // The alias for this project's generated typed operations. It mirrors the
+  // framework-repo fixture path used by tsconfig/vitest, while the project web
+  // package itself owns generation into this `runtime/gql/<name>/` tree.
   resolve: {
     alias: [
       {

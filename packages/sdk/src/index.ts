@@ -124,6 +124,15 @@ export {
   type AuthoredMutate,
   type AuthoredSubscriptionOptions,
 } from "./authored-hooks";
+export {
+  useDocumentSubscription,
+  type DocumentSubscriptionOptions,
+  type DocumentSubscriptionRun,
+} from "./document-subscription";
+export {
+  type DocumentData,
+  type DocumentVariables,
+} from "./typed-document";
 
 // Action-mutation result handling.
 export {

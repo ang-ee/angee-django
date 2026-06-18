@@ -159,13 +159,12 @@ jobs:
     command: ["pnpm", "--filter", "@angee/operator", "codegen"]
     depends_on: [deps, operator-schema]
 
-  # Regenerate the SPA's typed GraphQL operations into runtime/gql/<name>/ from the
-  # freshly emitted SDL. The `build` reset above clears that tree and the frontend
-  # imports `@angee/gql/<name>` from it, so it must be (re)generated after `schema`
-  # and before Vite starts.
+  # Regenerate this project's typed GraphQL operations into runtime/gql/<name>/
+  # from the freshly emitted SDL. The web package owns its codegen config and
+  # document globs; the stack only orders it after schema emission and before Vite.
   codegen:
     runtime: local
-    workdir: source://framework
+    workdir: source://app/{{ web_path }}
     command: ["pnpm", "codegen"]
     depends_on: [deps, schema]
 
@@ -198,8 +197,8 @@ services:
   # port and the e2e harness (docs/testing/e2e.md) targets the same URL.
   frontend:
     runtime: local
-    workdir: source://framework
-    command: ["pnpm", "--filter", "@angee-example/notes-host", "dev"]
+    workdir: source://app/{{ web_path }}
+    command: ["pnpm", "dev"]
     env:
       ANGEE_DJANGO_URL: http://127.0.0.1:{{ django_port }}
       ANGEE_UI_PORT: "{{ ui_port }}"

@@ -30,6 +30,12 @@ import {
 
 afterEach(() => cleanup());
 
+type AuthoredQueryDocument = Parameters<typeof useAuthoredQuery>[0];
+
+function typedDocument(source: string): AuthoredQueryDocument {
+  return source as unknown as AuthoredQueryDocument;
+}
+
 describe("createApp search codec", () => {
   test("round-trips the login next parameter as a flat string", () => {
     const next = "/notes?page=2&view=board&group=status:year";
@@ -94,14 +100,16 @@ describe("createApp schema binding", () => {
     const host = document.createElement("div");
     document.body.append(host);
     history.replaceState(null, "", "/public-page");
+    const publicProbe = typedDocument("query PublicProbe { schemaProbe }");
+    const consoleProbe = typedDocument("query ConsoleProbe { schemaProbe }");
 
     function PublicPage(): ReactNode {
-      useAuthoredQuery("query PublicProbe { schemaProbe }");
+      useAuthoredQuery(publicProbe);
       return createElement("span", null, "Public probe");
     }
 
     function ConsolePage(): ReactNode {
-      useAuthoredQuery("query ConsoleProbe { schemaProbe }");
+      useAuthoredQuery(consoleProbe);
       return createElement("span", null, "Console probe");
     }
 

@@ -5,6 +5,7 @@
 // (available connections, login start/complete) lives in `./documents.public`.
 
 import { graphql, type DocumentType } from "@angee/gql/console";
+import type { DocumentVariables } from "@angee/sdk";
 
 export const IamRoles = graphql(`
   query IamRoles {
@@ -125,35 +126,23 @@ export const IamGrantRole = graphql(`
   }
 `);
 
-/** Offset-pagination input shared by the IAM list reads. */
-export interface IAMPaginationVariables extends Record<string, unknown> {
-  pagination: {
-    offset: number;
-    limit: number;
-  };
-}
-
 /** One `roles` row, derived from the `IamRoles` selection. */
 export type IAMRole = DocumentType<typeof IamRoles>["roles"][number];
 
-export type IAMOverviewVariables = IAMPaginationVariables;
+export type IAMOverviewVariables = DocumentVariables<typeof IamOverview>;
 
-export type IAMUsersVariables = IAMPaginationVariables;
+export type IAMUsersVariables = DocumentVariables<typeof IamUsers>;
 
 /** One `grants.results` row, derived from the `IamGrants` selection. */
 export type IAMGrant = DocumentType<typeof IamGrants>["grants"]["results"][number];
 
-export type IAMGrantsVariables = IAMPaginationVariables;
+export type IAMGrantsVariables = DocumentVariables<typeof IamGrants>;
 
 /** One `relationships.results` row, derived from the `IamRelationships` selection. */
 export type IAMRelationship =
   DocumentType<typeof IamRelationships>["relationships"]["results"][number];
 
-export interface IAMRelationshipsVariables extends IAMPaginationVariables {
-  resourceType?: string | null;
-  subjectType?: string | null;
-  relation?: string | null;
-}
+export type IAMRelationshipsVariables = DocumentVariables<typeof IamRelationships>;
 
 /** One `rebacSchema` resource entry, derived from the `IamRebacSchema` selection. */
 export type IAMResourceSchema =
@@ -165,12 +154,6 @@ export type IAMRelationSchema = IAMResourceSchema["relations"][number];
 /** A permission within a `rebacSchema` resource. */
 export type IAMPermissionSchema = IAMResourceSchema["permissions"][number];
 
-export interface IAMRevokeRoleVariables extends Record<string, unknown> {
-  principalId: string;
-  role: string;
-}
+export type IAMRevokeRoleVariables = DocumentVariables<typeof IamRevokeRole>;
 
-export interface IAMGrantRoleVariables extends Record<string, unknown> {
-  principalId: string;
-  role: string;
-}
+export type IAMGrantRoleVariables = DocumentVariables<typeof IamGrantRole>;

@@ -1,13 +1,8 @@
 {
   "compilerOptions": {
-    // DEV WIRING (framework repo only): `@angee/gql/<schema>` is pinned to the
-    // example project's generated typed-document modules — the canonical project
-    // this repo's own typecheck/tests run against. A rendered downstream project
-    // gets these `paths` emitted per-project by the composer/template, pointing at
-    // ITS `runtime/gql/<schema>`. One fact mirrored across three resolvers until
-    // the composer owns the emission: here, the Vite alias (example
-    // `vite.config.ts`), and the Vitest alias (`vitest.shared.ts`). See
-    // `.agents/plans/typed-graphql-operations.md`.
+    // Framework-repo fixture wiring: base addon packages typecheck against the
+    // notes example project's generated typed-document modules. A downstream
+    // project's own web package should point `@angee/gql/*` at its runtime/gql.
     "paths": {
       "@angee/gql/*": ["./examples/notes-angee/runtime/gql/*"]
     },

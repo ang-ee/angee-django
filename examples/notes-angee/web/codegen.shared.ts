@@ -26,14 +26,10 @@ const scalars = {
   JSON: "unknown",
 } as const;
 
-// Roots that author operations: the framework addons, the project's consumer
-// addons, and the app shell itself.
-//
-// NOTE (downstream): these globs assume the framework-repo monorepo checkout. A
-// downstream project consumes the base addons from `node_modules/@angee/*`, not
-// `../../../addons/angee/*`, so the rendered project template must point these
-// roots at the installed package locations. The convention (route by document
-// filename) is identical; only the roots differ. Tracked in the plan note.
+// Roots that author operations for the notes example project: framework addon
+// packages in this monorepo, this project's consumer addons, and the app shell
+// itself. Another project owns its own web-package codegen config with the same
+// filename convention but roots that match its install layout.
 const DOCUMENT_ROOTS = [
   "../../../addons/angee/*/web/src",
   "../addons/*/*/web/src",

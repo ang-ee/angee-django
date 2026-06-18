@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { TypedDocumentNode } from "@urql/core";
+import { parse } from "graphql";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { useAuthoredSubscription } from "./authored-hooks";
@@ -49,6 +51,12 @@ vi.mock("urql", () => ({
   },
 }));
 
+function typedDocument<TData, TVariables extends Record<string, unknown>>(
+  source: string,
+): TypedDocumentNode<TData, TVariables> {
+  return parse(source) as TypedDocumentNode<TData, TVariables>;
+}
+
 describe("useAuthoredSubscription", () => {
   beforeEach(() => {
     sub.afterReducer = null;
@@ -61,11 +69,14 @@ describe("useAuthoredSubscription", () => {
 
   test("fires onData from an effect after the push, never from the reducer", async () => {
     const onData = vi.fn();
+    const document = typedDocument<{ ping: string }, Record<string, never>>(
+      "subscription { ping }",
+    );
     // The reducer has just run; the effect that fires onData has not flushed yet.
     sub.afterReducer = () => expect(onData).not.toHaveBeenCalled();
 
     renderHook(() =>
-      useAuthoredSubscription<{ ping: string }>("subscription { ping }", undefined, { onData }),
+      useAuthoredSubscription(document, undefined, { onData }),
     );
     expect(onData).not.toHaveBeenCalled(); // nothing fires before the first push
 
@@ -75,8 +86,11 @@ describe("useAuthoredSubscription", () => {
 
   test("fires onData once per push — not on bare re-renders", async () => {
     const onData = vi.fn();
+    const document = typedDocument<{ ping: string }, Record<string, never>>(
+      "subscription { ping }",
+    );
     const { rerender } = renderHook(() =>
-      useAuthoredSubscription<{ ping: string }>("subscription { ping }", undefined, { onData }),
+      useAuthoredSubscription(document, undefined, { onData }),
     );
 
     act(() => sub.emit({ ping: "one" }));
