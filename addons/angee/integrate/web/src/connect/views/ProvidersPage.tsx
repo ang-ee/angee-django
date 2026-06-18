@@ -7,6 +7,7 @@ import {
   Form,
   Group,
   List,
+  useEnumOptions,
   type ActionContext,
 } from "@angee/base";
 import { useAuthoredMutation } from "@angee/sdk";
@@ -137,19 +138,32 @@ export function ProvidersPage(): React.ReactElement {
     [connectAccountStart, connectAccountComplete, t],
   );
 
+  // Provider type is an ImplClassField (Google / Generic OIDC / Generic OAuth);
+  // picking one seeds the client's defaults (endpoints/scopes/icon) on create via
+  // the server-side ImplDefaultsMixin. useEnumOptions lower-cases the write value.
+  const providerTypeOptions = useEnumOptions(MODEL, "providerType");
+
   return (
     <DataPage model={MODEL} placement="inline" routed>
       {providerList}
       <Form model={MODEL} layout="tabs">
         <Field name="displayName" title />
         <Group label={t("integrate.providers.group.client")} columns={2}>
-          <Field name="slug" />
+          <Field
+            name="providerType"
+            widget="select"
+            options={providerTypeOptions}
+            createOnly
+          />
+          {/* Slug auto-derives from the name (SlugFromNameMixin); editable on edit only. */}
+          <Field name="slug" editOnly />
           <Field name="icon" />
           <Field name="environment" />
           <Field name="clientId" />
           <Field name="clientSecret" />
         </Group>
         <Group label={t("integrate.providers.group.endpoints")} columns={2}>
+          <Field name="discoveryUrl" />
           <Field name="authorizeEndpoint" />
           <Field name="tokenEndpoint" />
           <Field name="revokeEndpoint" />
