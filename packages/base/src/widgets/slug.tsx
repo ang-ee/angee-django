@@ -37,7 +37,7 @@ function SlugEdit({
       value={value ?? ""}
       readOnly={readOnly}
       className="font-mono"
-      aria-label={widgetLabel(field, "Slug")}
+      aria-label={widgetLabel(field, field?.name ?? "slug")}
       placeholder={fieldPlaceholder(field)}
       onChange={(event) => onChange?.(slugifyInput(event.currentTarget.value))}
     />

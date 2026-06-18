@@ -535,6 +535,7 @@ export function FormView({
         seededIdRef.current = null;
         seededRecordRef.current = null;
         baselineValuesRef.current = emptyValues;
+        manualSlugFieldsRef.current = new Set();
         form.reset(emptyValues);
         setSaveError(null);
       }

@@ -9,7 +9,9 @@ import {
   waitFor,
 } from "@testing-library/react";
 import {
+  Outlet,
   RouterContextProvider,
+  RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRoute,
@@ -18,6 +20,7 @@ import {
 import {
   AppRuntimeProvider,
   ModelMetadataProvider,
+  type AppRuntime,
   type Row,
   type SchemaFieldMetadata,
 } from "@angee/sdk";
@@ -27,7 +30,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../feedback";
 import { defaultWidgets } from "../widgets";
 import { Form } from "./Form";
-import { FormView, type FormField } from "./FormView";
+import { FormView, formViewSectionsSlot, type FormField } from "./FormView";
 import {
   Action,
   Field,
@@ -353,6 +356,150 @@ describe("FormView", () => {
     expect(screen.queryByText("Summary")).toBeNull();
   });
 
+  test("derives a slug from the header title field while creating", async () => {
+    sdkMocks.record = null;
+    renderWithProviders(
+      <FormView
+        model="notes.Note"
+        fields={[
+          { name: "title", label: "Title", title: true },
+          { name: "slug", widget: "slug" },
+        ]}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Title" }), {
+      target: { value: "Hello Brave World!" },
+    });
+
+    expect(
+      (screen.getByRole("textbox", { name: "Slug" }) as HTMLInputElement).value,
+    ).toBe("hello-brave-world");
+  });
+
+  test("does not overwrite a manually edited slug when the title changes", async () => {
+    sdkMocks.record = null;
+    renderWithProviders(
+      <FormView
+        model="notes.Note"
+        fields={[
+          { name: "title", label: "Title", title: true },
+          { name: "slug", widget: "slug" },
+        ]}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Title" }), {
+      target: { value: "First Title" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Slug" }), {
+      target: { value: "custom-slug" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Title" }), {
+      target: { value: "Second Title" },
+    });
+
+    expect(
+      (screen.getByRole("textbox", { name: "Slug" }) as HTMLInputElement).value,
+    ).toBe("custom-slug");
+  });
+
+  test("clears manual slug state when an edit form resets back to create", async () => {
+    sdkMocks.record = null;
+
+    function Harness(): ReactElement {
+      const [id, setId] = useState<string | null>(null);
+      return (
+        <>
+          <button
+            type="button"
+            onClick={() => {
+              sdkMocks.record = {
+                id: "note-1",
+                title: "Saved Title",
+                slug: "saved-title",
+              };
+              setId("note-1");
+            }}
+          >
+            edit
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              sdkMocks.record = null;
+              setId(null);
+            }}
+          >
+            create
+          </button>
+          <FormView
+            model="notes.Note"
+            id={id}
+            fields={[
+              { name: "title", label: "Title", title: true },
+              { name: "slug", widget: "slug" },
+            ]}
+          />
+        </>
+      );
+    }
+
+    renderWithProviders(<Harness />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Slug" }), {
+      target: { value: "manual-slug" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "edit" }));
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).value,
+      ).toBe("Saved Title"),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "create" }));
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("textbox", { name: "Slug" }) as HTMLInputElement).value,
+      ).toBe(""),
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Title" }), {
+      target: { value: "Fresh Title" },
+    });
+    expect(
+      (screen.getByRole("textbox", { name: "Slug" }) as HTMLInputElement).value,
+    ).toBe("fresh-title");
+  });
+
+  test("derives a slug from an explicit slugFrom source field", async () => {
+    sdkMocks.record = null;
+    renderWithProviders(
+      <FormView
+        model="notes.Note"
+        fields={[
+          { name: "title", label: "Title", title: true },
+          { name: "sourceName", label: "Source Name" },
+          { name: "slug", widget: "slug", slugFrom: "sourceName" },
+        ]}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Title" }), {
+      target: { value: "Ignored Title" },
+    });
+    expect(
+      (screen.getByRole("textbox", { name: "Slug" }) as HTMLInputElement).value,
+    ).toBe("");
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Source Name" }), {
+      target: { value: "Source Value" },
+    });
+    expect(
+      (screen.getByRole("textbox", { name: "Slug" }) as HTMLInputElement).value,
+    ).toBe("source-value");
+  });
+
   test("submits only changed writable fields for an update", async () => {
     renderForm("note-1");
 
@@ -436,6 +583,70 @@ describe("FormView", () => {
     });
   });
 
+  test("overwrites pre-seeded sibling fields from impl prefill only while creating", async () => {
+    const implFields = [
+      { name: "displayName", label: "Display Name", title: true },
+      {
+        name: "providerType",
+        label: "Provider Type",
+        prefill: (value) =>
+          value === "oidc" ? { isEnabled: false, authorizeEndpoint: "/auth" } : null,
+      },
+      { name: "isEnabled", label: "Enabled", widget: "switch" },
+      { name: "authorizeEndpoint", label: "Authorize Endpoint" },
+    ] satisfies readonly FormField[];
+
+    sdkMocks.record = null;
+    renderWithProviders(
+      <FormView
+        model="OAuthClient"
+        fields={implFields}
+        defaultValues={{ isEnabled: true }}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Provider Type"), {
+      target: { value: "oidc" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: {
+        displayName: "",
+        providerType: "oidc",
+        isEnabled: false,
+        authorizeEndpoint: "/auth",
+      },
+    });
+
+    cleanup();
+    sdkMocks.record = {
+      id: "client-1",
+      displayName: "Client",
+      providerType: "generic",
+      isEnabled: true,
+      authorizeEndpoint: "",
+    };
+    sdkMocks.mutate.mockReset();
+    renderWithProviders(
+      <FormView model="OAuthClient" id="client-1" fields={implFields} />,
+    );
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText("Display Name") as HTMLInputElement).value,
+      ).toBe("Client"),
+    );
+    fireEvent.change(screen.getByLabelText("Provider Type"), {
+      target: { value: "oidc" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: { providerType: "oidc", id: "client-1" },
+    });
+  });
+
   test("submits fields declared through the groups prop", async () => {
     renderWithProviders(
       <FormView
@@ -458,6 +669,44 @@ describe("FormView", () => {
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
     expect(sdkMocks.mutate).toHaveBeenCalledWith({
       data: { title: "Grouped" },
+    });
+  });
+
+  test("merges FORM_VIEW_SECTIONS_SLOT fields into the submit payload", async () => {
+    sdkMocks.record = null;
+    renderWithProviders(
+      <FormView model="notes.Note">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      undefined,
+      undefined,
+      {
+        slots: [
+          {
+            slot: formViewSectionsSlot("notes.Note"),
+            id: "notes.extra",
+            content: (
+              <Group label="Extra">
+                <Field name="slotCode" label="Slot Code" />
+              </Group>
+            ),
+          },
+        ],
+      },
+    );
+
+    expect(screen.getByText("Extra")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Title"), {
+      target: { value: "Slot Title" },
+    });
+    fireEvent.change(screen.getByLabelText("Slot Code"), {
+      target: { value: "slot-1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: { title: "Slot Title", slotCode: "slot-1" },
     });
   });
 
@@ -556,6 +805,63 @@ describe("FormView", () => {
       "Renamed",
     );
     expect(screen.queryByRole("button", { name: "Discard" })).toBeNull();
+  });
+
+  test("does not block navigation after a successful save resets dirty state", async () => {
+    let router: ReturnType<typeof createRouter> | undefined;
+
+    function Root(): ReactElement {
+      return (
+        <ModalsHost>
+          <ToastProvider>
+            <ModelMetadataProvider>
+              <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+                <Outlet />
+              </AppRuntimeProvider>
+            </ModelMetadataProvider>
+          </ToastProvider>
+        </ModalsHost>
+      );
+    }
+
+    const rootRoute = createRootRoute({ component: Root });
+    const indexRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/",
+      component: () => (
+        <FormView
+          model="notes.Note"
+          id="note-1"
+          fields={fields}
+          onSaved={() => {
+            void router?.navigate({ to: "/next" });
+          }}
+        />
+      ),
+    });
+    const nextRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/next",
+      component: () => <span>Next route</span>,
+    });
+    router = createRouter({
+      routeTree: rootRoute.addChildren([indexRoute, nextRoute]),
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+    });
+    render(<RouterProvider router={router} />);
+
+    const title = await screen.findByLabelText("Title");
+    await waitFor(() =>
+      expect((title as HTMLInputElement).value).toBe("First"),
+    );
+
+    fireEvent.change(title, { target: { value: "Renamed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(router?.state.location.pathname).toBe("/next"));
+    expect(await screen.findByText("Next route")).toBeTruthy();
+    expect(screen.queryByText(/Unsaved changes/)).toBeNull();
   });
 
   test("projects only fields the SDL read type exposes (skips write-only inputs)", async () => {
@@ -774,6 +1080,7 @@ function renderWithProviders(
   children: ReactElement,
   metadata?: SchemaFieldMetadata,
   forms?: Record<string, unknown>,
+  runtime?: Partial<AppRuntime>,
 ): void {
   const rootRoute = createRootRoute();
   const indexRoute = createRoute({
@@ -792,7 +1099,11 @@ function renderWithProviders(
         <ToastProvider>
           <ModelMetadataProvider metadata={metadata}>
             <AppRuntimeProvider
-              runtime={{ widgets: defaultWidgets, ...(forms ? { forms } : {}) }}
+              runtime={{
+                widgets: defaultWidgets,
+                ...(forms ? { forms } : {}),
+                ...runtime,
+              }}
             >
               {children}
             </AppRuntimeProvider>
