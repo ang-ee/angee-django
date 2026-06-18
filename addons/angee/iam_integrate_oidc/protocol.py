@@ -41,18 +41,6 @@ _ALLOWED_JWT_ALGORITHMS = (
     "RS256",
     "ES256",
 )
-# Discovery fills blank endpoints across both rows: the OAuth base owns the
-# transport and userinfo endpoints; the OIDC refinement owns issuer/JWKS.
-_OAUTH_DISCOVERY_FIELDS = {
-    "authorize_endpoint": "authorization_endpoint",
-    "token_endpoint": "token_endpoint",
-    "revoke_endpoint": "revocation_endpoint",
-    "userinfo_endpoint": "userinfo_endpoint",
-}
-_OIDC_DISCOVERY_FIELDS = {
-    "issuer": "issuer",
-    "jwks_uri": "jwks_uri",
-}
 
 
 class OidcClientProtocol(OAuthClientProtocol):
@@ -166,7 +154,7 @@ class OidcClientProtocol(OAuthClientProtocol):
         if access_token and not str(getattr(self.oauth_client, "userinfo_endpoint", "") or ""):
             try:
                 self.ensure_endpoints()
-            except Exception:
+            except OAuthFlowError:
                 return {}
         return super().fetch_userinfo(access_token)
 
@@ -184,16 +172,9 @@ class OidcClientProtocol(OAuthClientProtocol):
         if not discovery_url:
             return {}
         discovery = self._discovery_document(discovery_url)
-        for field, key in _OAUTH_DISCOVERY_FIELDS.items():
-            if not getattr(self.oauth_client, field, ""):
-                value = discovery.get(key)
-                if value:
-                    setattr(self.oauth_client, field, str(value))
-        for field, key in _OIDC_DISCOVERY_FIELDS.items():
-            if not getattr(self.oidc, field, ""):
-                value = discovery.get(key)
-                if value:
-                    setattr(self.oidc, field, str(value))
+        # Each owner projects the discovery document onto its own blank fields.
+        self.oauth_client.fill_endpoints_from_discovery(discovery)
+        self.oidc.fill_from_discovery(discovery)
         return discovery
 
     def _discovery_document(self, discovery_url: str) -> dict[str, Any]:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from collections.abc import Iterator
 from datetime import timedelta
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from typing import Any
 from urllib import parse
 
@@ -1076,7 +1076,13 @@ def _stub_oauth_client(**overrides: Any) -> SimpleNamespace:
         "token_request_format_value",
         token_format if token_format in {"form", "json"} else "form",
     )
-    return SimpleNamespace(**defaults)
+    client = SimpleNamespace(**defaults)
+    # Bind the real model behavior (discovery-fill owns its own endpoint fields).
+    client.DISCOVERY_ENDPOINT_FIELDS = OAuthClient.DISCOVERY_ENDPOINT_FIELDS
+    client.fill_endpoints_from_discovery = MethodType(
+        OAuthClient.fill_endpoints_from_discovery, client
+    )
+    return client
 
 
 def _stub_oidc_client(*, oauth_client: SimpleNamespace | None = None, **overrides: Any) -> SimpleNamespace:
@@ -1090,7 +1096,10 @@ def _stub_oidc_client(*, oauth_client: SimpleNamespace | None = None, **override
     }
     defaults.update(overrides)
     defaults["oauth_client"] = base
-    return SimpleNamespace(**defaults)
+    client = SimpleNamespace(**defaults)
+    client.DISCOVERY_FIELDS = OidcClient.DISCOVERY_FIELDS
+    client.fill_from_discovery = MethodType(OidcClient.fill_from_discovery, client)
+    return client
 
 
 class _FakeJwksClient:

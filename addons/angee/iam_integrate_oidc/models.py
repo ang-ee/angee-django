@@ -9,6 +9,9 @@ protocol`, and the login flow — lives entirely in this addon.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 from django.db import models
 
 from angee.base.fields import SqidField
@@ -83,3 +86,23 @@ class OidcClient(SqidMixin, AuditMixin, AngeeModel):
         if not email or "@" not in email:
             return False
         return email.rsplit("@", 1)[1].lower() in allowed_domains
+
+    # OIDC discovery key -> the blank field this refinement fills from it. The
+    # refinement owns issuer/JWKS; the OAuth base owns its transport endpoints.
+    DISCOVERY_FIELDS = {
+        "issuer": "issuer",
+        "jwks_uri": "jwks_uri",
+    }
+
+    def fill_from_discovery(self, discovery: Mapping[str, Any]) -> bool:
+        """Fill this refinement's blank issuer/JWKS from a discovery document; return whether changed."""
+
+        changed = False
+        for field, key in self.DISCOVERY_FIELDS.items():
+            if getattr(self, field, ""):
+                continue
+            value = discovery.get(key)
+            if value:
+                setattr(self, field, str(value))
+                changed = True
+        return changed

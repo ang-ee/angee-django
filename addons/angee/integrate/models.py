@@ -410,6 +410,34 @@ class OAuthClient(SqidMixin, AuditMixin, AngeeModel):
             return ""
         return str(value)
 
+    # OIDC discovery key -> the blank endpoint field this client fills from it. The
+    # OAuth base owns its own transport/userinfo endpoints; discovery fills only
+    # blanks, so explicit configuration is never overwritten.
+    DISCOVERY_ENDPOINT_FIELDS = {
+        "authorize_endpoint": "authorization_endpoint",
+        "token_endpoint": "token_endpoint",
+        "revoke_endpoint": "revocation_endpoint",
+        "userinfo_endpoint": "userinfo_endpoint",
+    }
+
+    def fill_endpoints_from_discovery(self, discovery: Mapping[str, Any]) -> bool:
+        """Fill this client's blank endpoints from a discovery document; return whether changed.
+
+        The client owns projecting a discovery document onto its own endpoint
+        fields, so a caller (the OIDC protocol/discovery action) never reaches in to
+        set them by name.
+        """
+
+        changed = False
+        for field, key in self.DISCOVERY_ENDPOINT_FIELDS.items():
+            if getattr(self, field, ""):
+                continue
+            value = discovery.get(key)
+            if value:
+                setattr(self, field, str(value))
+                changed = True
+        return changed
+
 
 class ExternalAccountQuerySet(RebacQuerySet[Any]):
     """REBAC-scoped reads for external accounts."""
