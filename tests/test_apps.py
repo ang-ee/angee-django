@@ -137,7 +137,8 @@ def test_integrate_config_installs_public_oauth_provider_resources() -> None:
     assert gemini["token_endpoint"] == "https://oauth2.googleapis.com/token"
     assert gemini["userinfo_endpoint"] == "https://www.googleapis.com/oauth2/v2/userinfo"
     assert gemini["is_enabled"] is True
-    # OIDC trust config (issuer/jwks/discovery) lives on the refinement, not the base.
+    # OIDC trust config (issuer/jwks/discovery) lives in the OIDC login addon, not
+    # the integrate base seed.
     assert "issuer" not in gemini
     assert "jwks_uri" not in gemini
     assert "discovery_url" not in gemini
@@ -153,31 +154,31 @@ def test_integrate_config_installs_public_oauth_provider_resources() -> None:
     assert "client_secret" not in grok
 
 
-def test_iam_integrate_oidc_config_installs_oidc_refinements() -> None:
-    """The OIDC login addon ships the id-token trust config, keyed to integrate's clients.
-
-    The refinement rows live in this addon (not integrate), and reference the
-    login-capable OAuth clients integrate seeds by a cross-addon xref.
-    """
+def test_iam_integrate_oidc_config_installs_oidc_client_defaults() -> None:
+    """The OIDC login addon ships id-token trust config for OAuth client rows."""
 
     config = apps.get_app_config("iam_integrate_oidc")
     manifest = resource_manifest_for(config)
 
     assert manifest["install"] == (
-        {"path": "resources/install/010_iam_integrate_oidc.oidcclient.yaml"},
+        {"path": "resources/install/010_integrate.oauthclient.yaml", "adopt": ["slug", "environment"]},
     )
 
     oidc_rows = ResourceEntry.from_declaration(config, "install", manifest["install"][0]).read_resource_rows()
-    assert {row.model_label for row in oidc_rows} == {"iam_integrate_oidc.oidcclient"}
+    assert {row.model_label for row in oidc_rows} == {"integrate.oauthclient"}
     oidc_by_xref = {row.xref: row for row in oidc_rows}
-    assert set(oidc_by_xref) == {"gemini_oidc", "grok_oidc"}
-    gemini_oidc = oidc_by_xref["gemini_oidc"].values
-    assert gemini_oidc["oauth_client"] == "integrate.oauth_gemini"
+    assert set(oidc_by_xref) == {"oauth_gemini_oidc", "oauth_grok_oidc"}
+    gemini_oidc = oidc_by_xref["oauth_gemini_oidc"].values
+    assert gemini_oidc["slug"] == "gemini"
+    assert gemini_oidc["environment"] == "prod"
+    assert gemini_oidc["login_enabled"] is True
     assert gemini_oidc["issuer"] == "https://accounts.google.com"
     assert gemini_oidc["jwks_uri"] == "https://www.googleapis.com/oauth2/v3/certs"
     assert gemini_oidc["discovery_url"] == "https://accounts.google.com/.well-known/openid-configuration"
-    grok_oidc = oidc_by_xref["grok_oidc"].values
-    assert grok_oidc["oauth_client"] == "integrate.oauth_grok"
+    grok_oidc = oidc_by_xref["oauth_grok_oidc"].values
+    assert grok_oidc["slug"] == "grok"
+    assert grok_oidc["environment"] == "prod"
+    assert grok_oidc["login_enabled"] is True
     assert grok_oidc["issuer"] == "https://auth.x.ai"
     assert grok_oidc["discovery_url"] == "https://auth.x.ai/.well-known/openid-configuration"
 

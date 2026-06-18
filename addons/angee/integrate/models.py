@@ -75,8 +75,7 @@ class AccountStatus(models.TextChoices):
     """Connection lifecycle for a linked external account.
 
     Pure connection health — does the account's credential still work. The
-    integration-health rollup across capabilities lives on ``IntegrationStatus``,
-    not here.
+    integration implementation health lives on ``Integration``, not here.
     """
 
     ACTIVE = "active", "Active"
@@ -598,7 +597,7 @@ class ExternalAccount(SqidMixin, AuditMixin, AngeeModel):
     Connection identity only: which client minted it (``oauth_client``), which
     external subject (``external_id``), and the credential that authenticates as
     it. The integration that *runs over* a connection lives in
-    ``integrate.Integration``, which owns the capability-health rollup.
+    ``integrate.Integration``, which owns implementation health.
     """
 
     runtime = True
@@ -1395,7 +1394,7 @@ class VcsBridge(Bridge):
     objects = RebacManager()
 
     class Meta:
-        """Django model options for the VCS integration capability."""
+        """Django model options for the VCS bridge companion."""
 
         abstract = True
         rebac_resource_type = "integrate/vcs_integration"

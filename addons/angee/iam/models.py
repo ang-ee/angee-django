@@ -1,9 +1,9 @@
 """Source models for Angee identity.
 
-Pure identity: the swappable ``User`` and its manager. The OAuth/OIDC connection
-substrate (``OAuthClient``/``OidcClient``/``ExternalAccount``/``Credential``) is
-owned by ``integrate``; it never authenticated a session, and identity here never
-reads it.
+Pure identity: the swappable ``User`` and its manager. The OAuth connection
+substrate (``OAuthClient``/``ExternalAccount``/``Credential``) is owned by
+``integrate``; OIDC login fields are contributed onto that OAuth client by
+``iam_integrate_oidc``.
 """
 
 from __future__ import annotations

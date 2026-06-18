@@ -8,7 +8,6 @@ import {
   Group,
   List,
   type ActionContext,
-  type DataToolbarGroupOption,
 } from "@angee/base";
 import { useAuthoredMutation } from "@angee/sdk";
 
@@ -20,9 +19,8 @@ import {
 import { useIamT } from "../i18n";
 
 // OIDC login providers are OAuth clients with the login fields set. The OIDC
-// addon folds those fields (issuer/JWKS/login policy) onto `OAuthClient` via the
-// `extends` model — there is no separate `OidcClient` row — so this page edits the
-// OAuth client directly, scoped to the login-enabled ones.
+// addon folds issuer/JWKS/login policy onto `OAuthClient`, so this page edits the
+// OAuth client's login fields directly (new rows default to a login provider).
 const MODEL = "OAuthClient";
 
 /**
@@ -48,27 +46,14 @@ export function OidcProvidersPage(): React.ReactElement {
     [discoverEndpoints],
   );
 
-  // Group providers by the OAuth client's enabled flag (a live provider is one
-  // whose client is enabled).
-  const groupOptions = React.useMemo<readonly DataToolbarGroupOption[]>(
-    () => [
-      {
-        id: "isEnabled",
-        label: t("iam.oidc.column.status"),
-        group: { field: "isEnabled" },
-        type: "value",
-      },
-    ],
-    [t],
-  );
-
+  // Lists every OAuth client and edits its OIDC/login fields; new rows default to a
+  // login provider. (A login-enabled-only filter/grouping awaits a filterable
+  // `oauthClients` query — the integrate console query is currently unfiltered.)
   return (
     <DataPage
       model={MODEL}
       placement="inline"
       routed
-      groupOptions={groupOptions}
-      filter={{ loginEnabled: true }}
       createDefaults={{ loginEnabled: true }}
     >
       <List model={MODEL}>

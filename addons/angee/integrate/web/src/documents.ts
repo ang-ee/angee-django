@@ -82,15 +82,15 @@ export interface RotateWebhookSecretData {
   rotateWebhookSecret: { ok: boolean; secret: string };
 }
 
-// --- VCS console: integration picker, repo typeahead, and inventory actions --
-// VCSIntegration/Source CRUD and Repository delete stay model-driven (DataPage
+// --- VCS console: bridge picker, repo typeahead, and inventory actions --
+// VcsBridge/Source CRUD and Repository delete stay model-driven (DataPage
 // reads the SDL). These are the bespoke reads the VCS views need — the
-// integration picker for the add dialog and the repo search typeahead — plus the
+// bridge picker for the add dialog and the repo search typeahead — plus the
 // non-CRUD action mutations a button invokes.
 
-/** VCS integrations for the add-repository dialog's integration picker. */
-export const VCS_INTEGRATIONS_QUERY = `
-  query IntegrateVcsIntegrations($pagination: OffsetPaginationInput) {
+/** VCS bridges for the add-repository dialog's bridge picker. */
+export const VCS_BRIDGES_QUERY = `
+  query IntegrateVcsBridges($pagination: OffsetPaginationInput) {
     vcsIntegrations(pagination: $pagination) {
       results {
         id
@@ -131,9 +131,9 @@ export const DISCOVER_REPOSITORIES_MUTATION = `
   }
 `;
 
-/** Refresh every repository's sources for one VCS integration. */
-export const SYNC_VCS_INTEGRATION_MUTATION = `
-  mutation IntegrateSyncVcsIntegration($id: ID!) {
+/** Refresh every repository's sources for one VCS bridge. */
+export const SYNC_VCS_BRIDGE_MUTATION = `
+  mutation IntegrateSyncVcsBridge($id: ID!) {
     syncVcsIntegration(id: $id) { ok message }
   }
 `;
@@ -146,19 +146,19 @@ export const REFRESH_SOURCE_MUTATION = `
 `;
 
 /** Selection result for one `vcsIntegrations.results` item (the picker option). */
-export interface VcsIntegrationOption {
+export interface VcsBridgeOption {
   id: string;
   displayName: string;
 }
 
-/** Selection result for `IntegrateVcsIntegrations`. */
-export interface VcsIntegrationsData {
+/** Selection result for `IntegrateVcsBridges`. */
+export interface VcsBridgesData {
   vcsIntegrations: {
-    results: VcsIntegrationOption[];
+    results: VcsBridgeOption[];
   };
 }
 
-export interface VcsIntegrationsVariables extends Record<string, unknown> {
+export interface VcsBridgesVariables extends Record<string, unknown> {
   pagination?: {
     offset: number;
     limit: number;
@@ -208,8 +208,8 @@ export interface DiscoverRepositoriesVariables extends Record<string, unknown> {
   org: string;
 }
 
-/** Selection result for `IntegrateSyncVcsIntegration`. */
-export interface SyncVcsIntegrationData {
+/** Selection result for `IntegrateSyncVcsBridge`. */
+export interface SyncVcsBridgeData {
   syncVcsIntegration: ActionResultData;
 }
 

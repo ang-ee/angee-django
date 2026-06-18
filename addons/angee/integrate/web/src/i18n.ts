@@ -31,10 +31,8 @@ export const enIntegrateMessages: Record<string, string> = {
   "integrate.integrations.action.connect": "Connect",
   "integrate.integrations.connect.startError": "Could not start integration connection.",
   "integrate.integrations.connect.connected": "Integration connected.",
-  "integrate.integrations.testConnection": "Test connection",
-  "integrate.integrations.activate": "Activate",
 
-  // VCS integrations page.
+  // VCS bridge page.
   "integrate.vcs.discover": "Discover repositories",
 
   // Repositories page detail groups.
@@ -58,15 +56,15 @@ export const enIntegrateMessages: Record<string, string> = {
   // Add-repository dialog.
   "integrate.addRepo.title": "Add repository",
   "integrate.addRepo.description":
-    "Pick a VCS integration, then type to find a repository to inventory.",
-  "integrate.addRepo.integrationLabel": "VCS integration",
-  "integrate.addRepo.integrationPlaceholder": "Select an integration",
-  "integrate.addRepo.integrationSearch": "Search integrations…",
+    "Pick a VCS bridge, then type to find a repository to inventory.",
+  "integrate.addRepo.integrationLabel": "VCS bridge",
+  "integrate.addRepo.integrationPlaceholder": "Select a bridge",
+  "integrate.addRepo.integrationSearch": "Search bridges...",
   "integrate.addRepo.nameLabel": "Repository name",
   "integrate.addRepo.namePlaceholder": "Type a repository name…",
   "integrate.addRepo.addFailed": "Could not add repository.",
   "integrate.addRepo.selectIntegration":
-    "Select an integration to search its repositories.",
+    "Select a bridge to search its repositories.",
   "integrate.addRepo.typeToSearch": "Type a repository name to search.",
   "integrate.addRepo.searching": "Searching…",
   "integrate.addRepo.noMatches": "No matching repositories.",

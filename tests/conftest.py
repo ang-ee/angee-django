@@ -47,7 +47,7 @@ class OAuthClient(AbstractOAuthClient, AbstractOAuthClientOidc):
 
     Composes the OIDC login extension (``OAuthClientOidc``) the way the composer
     folds it onto the real ``OAuthClient`` — so the one table carries both the OAuth
-    substrate and the OIDC login fields (no separate ``OidcClient`` row).
+    substrate and the OIDC login fields on one concrete model.
     """
 
     class Meta(AbstractOAuthClient.Meta):

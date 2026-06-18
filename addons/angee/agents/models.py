@@ -120,7 +120,7 @@ class InferenceProvider(IntegrationCompanion):
     objects = RebacManager()
 
     class Meta:
-        """Django model options for the inference provider capability."""
+        """Django model options for the inference provider companion."""
 
         abstract = True
         ordering = ("name",)

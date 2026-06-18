@@ -21,26 +21,26 @@ import { useIntegrateT } from "../i18n";
 import {
   ADD_REPOSITORY_MUTATION,
   SEARCH_REPOSITORIES_QUERY,
-  VCS_INTEGRATIONS_QUERY,
+  VCS_BRIDGES_QUERY,
   type AddRepositoryData,
   type AddRepositoryVariables,
   type RepoCandidate,
   type SearchRepositoriesData,
   type SearchRepositoriesVariables,
-  type VcsIntegrationsData,
-  type VcsIntegrationsVariables,
+  type VcsBridgesData,
+  type VcsBridgesVariables,
 } from "../documents";
 
 /** The repository model whose list refetches after an add. */
 const REPOSITORY_MODEL = "integrate.Repository";
-// One safety-capped read of the integration catalogue for the picker.
-const INTEGRATION_LIMIT = 200;
+// One safety-capped read of the bridge catalogue for the picker.
+const BRIDGE_LIMIT = 200;
 // Debounce keystrokes before hitting the host search API.
 const SEARCH_DEBOUNCE_MS = 250;
 
 /**
  * The "Add repository" affordance: a control-band button opening a dialog that
- * picks a VCS integration and types a repository name like a foreign-key field.
+ * picks a VCS bridge and types a repository name like a foreign-key field.
  * Matches against `searchRepositories` (live host candidates, debounced) and on
  * pick inventories the row via `addRepository`, refreshing the repository list.
  * The dialog stays open so several repositories can be added in one sitting.
@@ -59,8 +59,8 @@ export function AddRepositoryControl(): React.ReactElement {
   );
 }
 
-const INTEGRATION_VARS: VcsIntegrationsVariables = {
-  pagination: { offset: 0, limit: INTEGRATION_LIMIT },
+const BRIDGE_VARS: VcsBridgesVariables = {
+  pagination: { offset: 0, limit: BRIDGE_LIMIT },
 };
 
 function AddRepositoryDialog({
@@ -71,34 +71,33 @@ function AddRepositoryDialog({
   onOpenChange: (open: boolean) => void;
 }): React.ReactElement {
   const t = useIntegrateT();
-  const integrationsQuery = useAuthoredQuery<
-    VcsIntegrationsData,
-    VcsIntegrationsVariables
-  >(VCS_INTEGRATIONS_QUERY, INTEGRATION_VARS, { enabled: open });
-  const integrationOptions = React.useMemo<readonly RelationOption[]>(
+  const bridgesQuery = useAuthoredQuery<
+    VcsBridgesData,
+    VcsBridgesVariables
+  >(VCS_BRIDGES_QUERY, BRIDGE_VARS, { enabled: open });
+  const bridgeOptions = React.useMemo<readonly RelationOption[]>(
     () =>
-      (integrationsQuery.data?.vcsIntegrations.results ?? []).map(
-        (integration) => ({
-          value: integration.id,
-          label: integration.displayName,
+      (bridgesQuery.data?.vcsIntegrations.results ?? []).map(
+        (bridge) => ({
+          value: bridge.id,
+          label: bridge.displayName,
         }),
       ),
-    [integrationsQuery.data],
+    [bridgesQuery.data],
   );
 
   const [pickedId, setPickedId] = React.useState<string | null>(null);
-  // Auto-select when the account is unambiguous, so a single-integration host
+  // Auto-select when the account is unambiguous, so a single-bridge host
   // skips straight to typing.
-  const soleIntegration =
-    integrationOptions.length === 1 ? integrationOptions[0] : undefined;
-  const vcsIntegrationId = pickedId ?? soleIntegration?.value ?? "";
+  const soleBridge = bridgeOptions.length === 1 ? bridgeOptions[0] : undefined;
+  const vcsBridgeId = pickedId ?? soleBridge?.value ?? "";
 
   const [query, setQuery] = React.useState("");
   const [debouncedQuery] = useDebounce(query.trim(), SEARCH_DEBOUNCE_MS);
-  const searchEnabled = open && vcsIntegrationId !== "" && debouncedQuery !== "";
+  const searchEnabled = open && vcsBridgeId !== "" && debouncedQuery !== "";
   const searchVars = React.useMemo<SearchRepositoriesVariables>(
-    () => ({ vcsIntegrationId, query: debouncedQuery }),
-    [vcsIntegrationId, debouncedQuery],
+    () => ({ vcsIntegrationId: vcsBridgeId, query: debouncedQuery }),
+    [vcsBridgeId, debouncedQuery],
   );
   const searchQuery = useAuthoredQuery<
     SearchRepositoriesData,
@@ -118,7 +117,7 @@ function AddRepositoryDialog({
   const [added, setAdded] = React.useState<ReadonlySet<string>>(new Set());
   const [error, setError] = React.useState<string | null>(null);
 
-  // Reset per-session state whenever the dialog closes or the integration changes.
+  // Reset per-session state whenever the dialog closes or the bridge changes.
   React.useEffect(() => {
     if (!open) {
       setQuery("");
@@ -130,15 +129,15 @@ function AddRepositoryDialog({
   React.useEffect(() => {
     setAdded(new Set());
     setError(null);
-  }, [vcsIntegrationId]);
+  }, [vcsBridgeId]);
 
   const add = React.useCallback(
     async (candidate: RepoCandidate) => {
-      if (vcsIntegrationId === "") return;
+      if (vcsBridgeId === "") return;
       setAdding(candidate.name);
       setError(null);
       try {
-        await addRepository({ vcsIntegrationId, name: candidate.name });
+        await addRepository({ vcsIntegrationId: vcsBridgeId, name: candidate.name });
         setAdded((prev) => new Set(prev).add(candidate.name));
         refreshRepositories();
       } catch (cause) {
@@ -147,7 +146,7 @@ function AddRepositoryDialog({
         setAdding(null);
       }
     },
-    [addRepository, refreshRepositories, t, vcsIntegrationId],
+    [addRepository, refreshRepositories, t, vcsBridgeId],
   );
 
   return (
@@ -170,8 +169,8 @@ function AddRepositoryDialog({
             <div className="flex flex-col gap-3">
               <RelationField
                 aria-label={t("integrate.addRepo.integrationLabel")}
-                value={vcsIntegrationId}
-                options={integrationOptions}
+                value={vcsBridgeId}
+                options={bridgeOptions}
                 placeholder={t("integrate.addRepo.integrationPlaceholder")}
                 searchPlaceholder={t("integrate.addRepo.integrationSearch")}
                 onChange={setPickedId}
@@ -181,7 +180,7 @@ function AddRepositoryDialog({
                 aria-label={t("integrate.addRepo.nameLabel")}
                 placeholder={t("integrate.addRepo.namePlaceholder")}
                 value={query}
-                disabled={vcsIntegrationId === ""}
+                disabled={vcsBridgeId === ""}
                 onChange={(event) => setQuery(event.currentTarget.value)}
               />
               {error ? (
@@ -193,7 +192,7 @@ function AddRepositoryDialog({
                 candidates={candidates}
                 fetching={searchQuery.fetching}
                 searching={searchEnabled}
-                hasIntegration={vcsIntegrationId !== ""}
+                hasBridge={vcsBridgeId !== ""}
                 adding={adding}
                 added={added}
                 onAdd={add}
@@ -210,7 +209,7 @@ function RepoCandidateList({
   candidates,
   fetching,
   searching,
-  hasIntegration,
+  hasBridge,
   adding,
   added,
   onAdd,
@@ -218,13 +217,13 @@ function RepoCandidateList({
   candidates: readonly RepoCandidate[];
   fetching: boolean;
   searching: boolean;
-  hasIntegration: boolean;
+  hasBridge: boolean;
   adding: string | null;
   added: ReadonlySet<string>;
   onAdd: (candidate: RepoCandidate) => void;
 }): React.ReactElement {
   const t = useIntegrateT();
-  if (!hasIntegration) {
+  if (!hasBridge) {
     return <ListHint>{t("integrate.addRepo.selectIntegration")}</ListHint>;
   }
   if (!searching) {

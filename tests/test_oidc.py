@@ -1104,8 +1104,8 @@ class _FakeJwksClient:
 def test_oidc_group_by_login_enabled() -> None:
     """OAuth clients group directly by the login-enabled OIDC discriminator.
 
-    Exercises the one-model shape: OIDC login capability is no longer represented
-    by a refinement row, so grouping runs over ``OAuthClient.login_enabled``.
+    Exercises the one-model shape: OIDC login is represented directly by
+    ``OAuthClient.login_enabled``.
     """
 
     created_models = _create_missing_tables()

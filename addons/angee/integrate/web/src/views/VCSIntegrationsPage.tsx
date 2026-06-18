@@ -13,24 +13,23 @@ import { runActionResult, useAuthoredMutation } from "@angee/sdk";
 import { useIntegrateT } from "../i18n";
 import {
   DISCOVER_REPOSITORIES_MUTATION,
-  SYNC_VCS_INTEGRATION_MUTATION,
+  SYNC_VCS_BRIDGE_MUTATION,
   type DiscoverRepositoriesData,
   type DiscoverRepositoriesVariables,
   type IdVariables,
-  type SyncVcsIntegrationData,
+  type SyncVcsBridgeData,
 } from "../documents";
 
 const MODEL = "integrate.VcsBridge";
 
 /**
- * VCS integrations: the git-host capabilities, their backend impl, and sync
- * health. The form binds an existing `Integration` (vendor=github) to a backend
- * class, then `discover`/`sync` populate and refresh the repository inventory.
+ * VCS bridges: companion rows that bind an existing `Integration` to repository
+ * discovery and source sync.
  */
 export function VCSIntegrationsPage(): React.ReactElement {
   const t = useIntegrateT();
-  const [syncVcs] = useAuthoredMutation<SyncVcsIntegrationData, IdVariables>(
-    SYNC_VCS_INTEGRATION_MUTATION,
+  const [syncVcs] = useAuthoredMutation<SyncVcsBridgeData, IdVariables>(
+    SYNC_VCS_BRIDGE_MUTATION,
   );
   const [discover] = useAuthoredMutation<
     DiscoverRepositoriesData,

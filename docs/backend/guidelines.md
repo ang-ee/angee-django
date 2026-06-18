@@ -163,9 +163,10 @@ Rules that follow from the layering:
   things in the domain's own terms, and keep side-effecting work on the operator
   — Django stays the catalogue.
 - **Choosing how a row selects per-variant behaviour.** Classify by what varies:
-  - *Persisted fields differ per variant* → **subclass the model**; discover the
-    concrete subclasses through the app registry (e.g. `integrate.Capability`/
-    `Bridge`/`Source` + `integrate/registry.py`). Data and behaviour on the model.
+  - *Persisted fields differ per variant* → **subclass or attach the model that
+    owns those fields**; discover concrete runtime families through the app
+    registry where needed (e.g. `integrate.Bridge`/`Source` +
+    `integrate/registry.py`). Data and behaviour stay on the owning model.
   - *Only behaviour differs, open set (addons contribute impls)* → **one concrete
     model + `angee.base.fields.ImplClassField`** naming a non-model
     strategy/client/backend class. One table (unified list/reconcile, no field
