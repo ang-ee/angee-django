@@ -48,6 +48,16 @@ class GitHubApiError(Exception):
 class GitHubBackend(VCSBackend):
     """A :class:`VCSBackend` that reads a GitHub remote over the REST API."""
 
+    key = "github"
+    label = "GitHub"
+    icon = "github"
+    defaults = {
+        "vendor": "github",
+        "config": {
+            "github_api_base": DEFAULT_API_BASE,
+        },
+    }
+
     @property
     def api_base(self) -> str:
         """Return the REST API base URL (``api.github.com`` or a configured GHE host)."""

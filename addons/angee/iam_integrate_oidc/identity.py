@@ -3,8 +3,8 @@
 The login bridge between ``integrate`` (the OAuth/OIDC connection substrate) and
 ``iam`` (the user and session). It completes the login/link redirect using the
 OIDC protocol, then resolves the verified claims to a host user — returning an
-existing linked owner, or linking/creating one when the provider's ``OidcClient``
-policy allows. Account-connect (no login) lives in ``integrate.connect``.
+existing linked owner, or linking/creating one when the provider's OAuth-client
+login policy allows. Account-connect (no login) lives in ``integrate.connect``.
 """
 
 from __future__ import annotations
@@ -48,24 +48,23 @@ class LinkCompletion:
     next_path: str
 
 
-def _require_oidc(oauth_client: Any) -> Any:
-    """Return the OAuth client's OIDC refinement, or fail the login flow."""
+def _require_login_enabled(oauth_client: Any) -> Any:
+    """Return the OAuth client when it is enabled for OIDC login, or fail."""
 
-    oidc = getattr(oauth_client, "oidc", None)
-    if oidc is None:
+    if not bool(getattr(oauth_client, "login_enabled", False)):
         raise OAuthFlowError(INVALID_STATE, 400)
-    return oidc
+    return oauth_client
 
 
 class OidcLoginCompletion:
-    """Complete one OIDC login/link redirect against an OAuth client's refinement."""
+    """Complete one OIDC login/link redirect against an OAuth client."""
 
     def __init__(self, oauth_client: Any) -> None:
         """Bind completion to the OAuth client captured by session state."""
 
         self.oauth_client = oauth_client
-        self.oidc = _require_oidc(oauth_client)
-        self.protocol = OidcClientProtocol(self.oidc)
+        _require_login_enabled(oauth_client)
+        self.protocol = OidcClientProtocol(oauth_client)
 
     def complete_login(self, *, code: str, state_token: str, redirect_uri: str) -> LoginCompletion:
         """Complete an OIDC login redirect and return the resolved user with claims."""
@@ -163,14 +162,14 @@ class OidcIdentityResolver:
 
     Operates on ``get_user_model()`` (the host's swappable user model) through
     generic Django manager methods, so it is correct whatever the host's User is.
-    The per-provider login policy is read from the ``OidcClient`` refinement.
+    The per-provider login policy is read from the OAuth client row.
     """
 
     def __init__(self, oauth_client: Any) -> None:
         """Bind resolution to the OAuth client whose OIDC login policy applies."""
 
         self.oauth_client = oauth_client
-        self.oidc = _require_oidc(oauth_client)
+        _require_login_enabled(oauth_client)
 
     def resolve(self, *, sub: str, email: str | None, claims: dict[str, Any]) -> AbstractBaseUser:
         """Return the user for one verified OIDC identity, or fail closed."""
@@ -189,9 +188,9 @@ class OidcIdentityResolver:
 
             normalized_email = email or ""
             if (
-                self.oidc.link_on_email_match
+                self.oauth_client.link_on_email_match
                 and normalized_email
-                and self.oidc.allows_email_domain(normalized_email)
+                and self.oauth_client.allows_email_domain(normalized_email)
             ):
                 user = self._find_by_email(normalized_email)
                 if user is not None and user.is_active:
@@ -205,8 +204,8 @@ class OidcIdentityResolver:
                     )
                     return user
 
-            if self.oidc.create_on_login and (
-                not normalized_email or self.oidc.allows_email_domain(normalized_email)
+            if self.oauth_client.create_on_login and (
+                not normalized_email or self.oauth_client.allows_email_domain(normalized_email)
             ):
                 user = self._create_for_identity(normalized_email, sub, claims=claims)
                 Account.objects.link(
@@ -321,7 +320,7 @@ def is_only_oidc_sign_in(user: Any) -> bool:
             Credential.objects.filter(
                 user=user,
                 kind="oauth",
-                oauth_client__oidc__isnull=False,
+                oauth_client__login_enabled=True,
                 external_account__isnull=False,
             )
             .values("external_account_id")

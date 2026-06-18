@@ -164,9 +164,11 @@ class OAuthClientType(AngeeNode):
 
     display_name: auto
     slug: auto
+    provider_type: auto
     icon: auto
     environment: auto
     client_id: auto
+    discovery_url: auto
     authorize_endpoint: auto
     token_endpoint: auto
     revoke_endpoint: auto
@@ -226,12 +228,14 @@ class OAuthClientType(AngeeNode):
 class OAuthClientInput:
     """Admin-write fields accepted when creating an OAuth client (base, connect)."""
 
-    slug: str
     display_name: str
     client_id: str
+    slug: str | None = strawberry.UNSET
+    provider_type: str = "generic_oauth2"
     icon: str = ""
     client_secret: str = ""
     environment: str = "prod"
+    discovery_url: str = ""
     authorize_endpoint: str = ""
     token_endpoint: str = ""
     revoke_endpoint: str = ""
@@ -251,6 +255,12 @@ class OAuthClientInput:
     email_claim: str = "email"
     display_name_claim: str = ""
     avatar_url_claim: str = ""
+    issuer: str = ""
+    jwks_uri: str = ""
+    login_enabled: bool = False
+    link_on_email_match: bool = False
+    create_on_login: bool = False
+    allowed_email_domains: list[str] = strawberry.field(default_factory=list)
 
 
 @strawberry.input
@@ -259,11 +269,13 @@ class OAuthClientPatch:
 
     id: relay.GlobalID
     slug: str | None = strawberry.UNSET
+    provider_type: str | None = strawberry.UNSET
     icon: str | None = strawberry.UNSET
     display_name: str | None = strawberry.UNSET
     client_id: str | None = strawberry.UNSET
     client_secret: str | None = strawberry.UNSET
     environment: str | None = strawberry.UNSET
+    discovery_url: str | None = strawberry.UNSET
     authorize_endpoint: str | None = strawberry.UNSET
     token_endpoint: str | None = strawberry.UNSET
     revoke_endpoint: str | None = strawberry.UNSET
@@ -283,6 +295,12 @@ class OAuthClientPatch:
     email_claim: str | None = strawberry.UNSET
     display_name_claim: str | None = strawberry.UNSET
     avatar_url_claim: str | None = strawberry.UNSET
+    issuer: str | None = strawberry.UNSET
+    jwks_uri: str | None = strawberry.UNSET
+    login_enabled: bool | None = strawberry.UNSET
+    link_on_email_match: bool | None = strawberry.UNSET
+    create_on_login: bool | None = strawberry.UNSET
+    allowed_email_domains: list[str] | None = strawberry.UNSET
 
 
 @strawberry.input
@@ -1031,6 +1049,9 @@ class IntegrationType(AngeeNode):
         """Return this integration implementation's human label."""
 
         impl_class = _integration_impl_class(cast(Any, self).impl_class)
+        display_label = getattr(impl_class, "display_label", None)
+        if callable(display_label):
+            return str(display_label())
         return str(getattr(impl_class, "label", "") or cast(Any, self).impl_class)
 
     @strawberry_django.field(only=["vendor"])
@@ -1052,8 +1073,8 @@ class IntegrationType(AngeeNode):
 class VendorInput:
     """Fields accepted when creating a vendor."""
 
-    slug: str
     display_name: str
+    slug: str | None = strawberry.UNSET
     website_url: str = ""
     icon: str = ""
     description: str = ""

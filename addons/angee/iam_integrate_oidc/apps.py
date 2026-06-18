@@ -8,9 +8,9 @@ from django.apps import AppConfig
 class IAMIntegrateOidcConfig(AppConfig):
     """Source app manifest for the OIDC login addon.
 
-    OIDC end to end: it extends ``integrate``'s OAuth with the ``OidcClient``
-    refinement, the OIDC protocol, and ID-token verification, and composes ``iam``
-    (the user and session) into the login/link flow.
+    OIDC end to end: it extends ``integrate``'s OAuth client with login fields,
+    the OIDC protocol, and ID-token verification, and composes ``iam`` (the user
+    and session) into the login/link flow.
     """
 
     default = True
@@ -20,14 +20,13 @@ class IAMIntegrateOidcConfig(AppConfig):
     label = "iam_integrate_oidc"
     depends_on = ("angee.iam", "angee.integrate")
     schemas = "schema.schemas"
-    permissions = "permissions.zed"
 
     resources = {
         "install": (
-            {"path": "resources/install/010_iam_integrate_oidc.oidcclient.yaml"},
+            {"path": "resources/install/010_integrate.oauthclient.yaml", "adopt": ["slug", "environment"]},
         ),
     }
-    """OIDC refinements for the login-capable public OAuth clients integrate seeds."""
+    """OIDC defaults for the login-capable public OAuth clients integrate seeds."""
 
     def ready(self) -> None:
         """Wire the last-sign-in disconnect guard after app population."""

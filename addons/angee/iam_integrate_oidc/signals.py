@@ -42,7 +42,7 @@ def guard_last_sign_in(sender: Any, instance: Any, **kwargs: Any) -> None:
     if str(instance.kind) != "oauth":
         return
     oauth_client = getattr(instance, "oauth_client", None)
-    if oauth_client is None or getattr(oauth_client, "oidc", None) is None:
+    if oauth_client is None or not getattr(oauth_client, "login_enabled", False):
         return
     if is_only_oidc_sign_in(instance.user):
         raise OAuthFlowError("only_sign_in_method", 409)

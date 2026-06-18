@@ -8,6 +8,7 @@ from typing import Any, ClassVar
 import reversion
 from django.conf import settings
 from django.db import models
+from django.utils.text import slugify
 from rebac import app_settings, current_actor
 
 from angee.base.fields import SqidField
@@ -127,6 +128,68 @@ class AuditMixin(models.Model):
         if touched and update_fields is not None:
             kwargs["update_fields"] = update_fields | touched
         super().save(*args, **kwargs)
+
+
+class SlugFromNameMixin(models.Model):
+    """Generate a unique slug from a configured name field when slug is blank."""
+
+    slug_source_field: ClassVar[str] = "display_name"
+    """Field whose value seeds ``slug`` when a row is first saved without one."""
+
+    slug_scope_fields: ClassVar[tuple[str, ...]] = ()
+    """Field names that scope slug uniqueness; empty means globally unique."""
+
+    class Meta:
+        """Django model options for slug generation only."""
+
+        abstract = True
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Fill a blank slug from ``slug_source_field`` before saving."""
+
+        update_fields = kwargs.get("update_fields")
+        generated = False
+        if not str(getattr(self, "slug", "") or "").strip():
+            self.slug = self._available_slug()
+            generated = True
+
+        if generated and update_fields is not None:
+            update_set = set(update_fields)
+            if not update_set:
+                super().save(*args, **kwargs)
+                return
+            update_set.add("slug")
+            kwargs["update_fields"] = update_set
+        super().save(*args, **kwargs)
+
+    def _available_slug(self) -> str:
+        """Return the first slug not already used in this instance's configured scope."""
+
+        slug_field = self._meta.get_field("slug")
+        max_length = getattr(slug_field, "max_length", None) or 50
+        raw = str(getattr(self, self.slug_source_field, "") or "").strip()
+        base = slugify(raw) or "item"
+        base = base[:max_length].strip("-") or "item"
+        candidate = base
+        suffix = 2
+        while self._slug_exists(candidate):
+            suffix_text = f"-{suffix}"
+            candidate = f"{base[: max_length - len(suffix_text)].strip('-')}{suffix_text}"
+            suffix += 1
+        return candidate
+
+    def _slug_exists(self, candidate: str) -> bool:
+        """Return whether ``candidate`` already exists in this row's slug scope."""
+
+        filters = {"slug": candidate}
+        for field_name in self.slug_scope_fields:
+            field = self._meta.get_field(field_name)
+            lookup = field.attname if isinstance(field, models.ForeignKey) else field.name
+            filters[lookup] = getattr(self, lookup)
+        queryset = type(self)._default_manager.filter(**filters)
+        if self.pk is not None:
+            queryset = queryset.exclude(pk=self.pk)
+        return queryset.exists()
 
 
 class HistoryMixin(models.Model):

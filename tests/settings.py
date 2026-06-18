@@ -39,6 +39,13 @@ ANGEE_INTEGRATION_IMPLS = {
     "manual": "angee.agents.backends.ManualInferenceBackend",
     "stub_inference": "tests.conftest.StubInferenceBackend",
 }
+# OAuth provider types (normally each addon's autoconfig contributes these); the
+# ImplClassField enum requires a non-empty registry at model-import time.
+ANGEE_OAUTH_PROVIDER_TYPES = {
+    "generic_oauth2": "angee.integrate.oauth.providers.GenericOAuth2",
+    "generic_oidc": "angee.iam_integrate_oidc.providers.GenericOidc",
+    "google": "angee.iam_integrate_oidc.providers.GoogleType",
+}
 # The agents-supplied bearer→actor verifier is composer autoconfig (angee.agents); a
 # bare test settings module that skips the composer declares it so the verifier is
 # wired. The MCP actor is bracketed around each tool call by

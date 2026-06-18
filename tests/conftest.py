@@ -18,7 +18,7 @@ from rebac import actor_context, system_context
 
 from angee.agents.backends import InferenceBackend, InferenceModelSpec
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.iam_integrate_oidc.models import OidcClient as AbstractOidcClient
+from angee.iam_integrate_oidc.models import OAuthClientOidc as AbstractOAuthClientOidc
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.models import Credential as AbstractCredential
 from angee.integrate.models import ExternalAccount as AbstractExternalAccount
@@ -42,8 +42,13 @@ from angee.storage.models import Folder as AbstractFolder
 from angee.storage.models import MimeType as AbstractMimeType
 
 
-class OAuthClient(AbstractOAuthClient):
-    """Concrete integration OAuth client used by source-addon tests."""
+class OAuthClient(AbstractOAuthClient, AbstractOAuthClientOidc):
+    """Concrete OAuth client used by source-addon tests.
+
+    Composes the OIDC login extension (``OAuthClientOidc``) the way the composer
+    folds it onto the real ``OAuthClient`` — so the one table carries both the OAuth
+    substrate and the OIDC login fields (no separate ``OidcClient`` row).
+    """
 
     class Meta(AbstractOAuthClient.Meta):
         """Django model options for the canonical test OAuth client."""
@@ -52,19 +57,6 @@ class OAuthClient(AbstractOAuthClient):
         app_label = "integrate"
         db_table = "test_integrate_oauth_client"
         rebac_resource_type = "integrate/oauth_client"
-        rebac_id_attr = "sqid"
-
-
-class OidcClient(AbstractOidcClient):
-    """Concrete OIDC refinement used by source-addon tests."""
-
-    class Meta(AbstractOidcClient.Meta):
-        """Django model options for the canonical test OIDC client."""
-
-        abstract = False
-        app_label = "iam_integrate_oidc"
-        db_table = "test_iam_integrate_oidc_oidc_client"
-        rebac_resource_type = "iam_integrate_oidc/oidc_client"
         rebac_id_attr = "sqid"
 
 
@@ -177,7 +169,7 @@ class MarkdownPage(AbstractMarkdownPage):
         rebac_id_attr = "sqid"
 
 
-IAM_CONNECTION_TEST_MODELS = (OAuthClient, OidcClient, ExternalAccount, Credential)
+IAM_CONNECTION_TEST_MODELS = (OAuthClient, ExternalAccount, Credential)
 """Concrete integration connection models created on demand by connection test fixtures."""
 
 INTEGRATE_TEST_MODELS = (Vendor, Integration)

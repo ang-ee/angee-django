@@ -2,22 +2,17 @@
 
 The clean extension of the OAuth base: inherits the OAuth2 authorization-code/
 refresh behavior from :class:`~angee.integrate.oauth.client.OAuthClientProtocol`
-and adds the OpenID Connect layer — ``.well-known`` discovery (filling blank
-endpoints across the OAuth client and its OIDC refinement), ID-token
-verification, and the userinfo fetch. Bound to an ``OidcClient`` (a refinement of
-an ``integrate.OAuthClient``). The authorize request requires the ``openid`` scope
-and a ``nonce``; every operation ensures endpoints from discovery first.
+and adds the OpenID Connect layer: ID-token verification, userinfo enrichment, and
+OIDC authorize parameters. Bound directly to the single ``OAuthClient`` row; when
+configured, discovery is owned by that row's ``discover_endpoints()`` method.
 """
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Iterable
 from typing import Any
 
 import jwt
-from django.conf import settings
-from django.core.cache import cache
 from jwt import PyJWKClient
 from jwt.exceptions import PyJWKClientError, PyJWTError
 
@@ -25,18 +20,14 @@ from angee.integrate.oauth.client import (
     _USER_AGENT,
     HTTP_TIMEOUT_SECONDS,
     OAuthClientProtocol,
-    _get_json,
     _with_query,
 )
 from angee.integrate.oauth.errors import (
-    DISCOVERY_FAILED,
     INVALID_ID_TOKEN,
     MISSING_ENDPOINT,
     OAuthFlowError,
 )
 
-_DEFAULT_DISCOVERY_TTL_SECONDS = 3600
-_DISCOVERY_CACHE_PREFIX = "angee.iam_integrate_oidc.discovery:"
 _ALLOWED_JWT_ALGORITHMS = (
     "RS256",
     "ES256",
@@ -44,13 +35,12 @@ _ALLOWED_JWT_ALGORITHMS = (
 
 
 class OidcClientProtocol(OAuthClientProtocol):
-    """OIDC login protocol for one ``OidcClient`` (an ``OAuthClient`` refinement)."""
+    """OIDC login protocol for one OAuth client with OIDC login fields."""
 
-    def __init__(self, oidc_client: Any) -> None:
-        """Bind to an ``OidcClient`` row, reusing its ``OAuthClient`` for transport."""
+    def __init__(self, oauth_client: Any) -> None:
+        """Bind to one OAuth client row."""
 
-        super().__init__(oidc_client.oauth_client)
-        self.oidc = oidc_client
+        super().__init__(oauth_client)
 
     def authorize_url(
         self,
@@ -112,12 +102,12 @@ class OidcClientProtocol(OAuthClientProtocol):
 
         if not id_token:
             raise OAuthFlowError(INVALID_ID_TOKEN, 400)
-        issuer = str(getattr(self.oidc, "issuer", "") or "")
-        jwks_uri = str(getattr(self.oidc, "jwks_uri", "") or "")
+        issuer = str(getattr(self.oauth_client, "issuer", "") or "")
+        jwks_uri = str(getattr(self.oauth_client, "jwks_uri", "") or "")
         if not issuer or not jwks_uri:
             self.ensure_endpoints()
-            issuer = str(getattr(self.oidc, "issuer", "") or "")
-            jwks_uri = str(getattr(self.oidc, "jwks_uri", "") or "")
+            issuer = str(getattr(self.oauth_client, "issuer", "") or "")
+            jwks_uri = str(getattr(self.oauth_client, "jwks_uri", "") or "")
         if not issuer or not jwks_uri:
             raise OAuthFlowError(MISSING_ENDPOINT, 400)
         client_id = str(getattr(self.oauth_client, "client_id", ""))
@@ -159,52 +149,16 @@ class OidcClientProtocol(OAuthClientProtocol):
         return super().fetch_userinfo(access_token)
 
     def ensure_endpoints(self) -> dict[str, Any]:
-        """Fill blank endpoints on the OAuth client and its OIDC refinement via discovery.
+        """Fill blank endpoints on the OAuth client via discovery.
 
-        A no-op when the refinement carries no ``discovery_url`` (endpoints are then
+        A no-op when the client carries no ``discovery_url`` (endpoints are then
         configured explicitly). The discovery document is cached per URL, so an
-        explicitly-configured provider that also sets a discovery URL fetches at most
-        once. In-memory only: the fetched endpoints serve the current request and are
-        not persisted.
+        explicitly-configured provider that also sets a discovery URL fetches at
+        most once. In-memory only: the fetched endpoints serve the current request
+        and are not persisted unless the caller saves the client.
         """
 
-        discovery_url = str(getattr(self.oidc, "discovery_url", "") or "")
-        if not discovery_url:
-            return {}
-        discovery = self._discovery_document(discovery_url)
-        # Each owner projects the discovery document onto its own blank fields.
-        self.oauth_client.fill_endpoints_from_discovery(discovery)
-        self.oidc.fill_from_discovery(discovery)
-        return discovery
-
-    def _discovery_document(self, discovery_url: str) -> dict[str, Any]:
-        """Return the cached or freshly fetched OIDC discovery document."""
-
-        cache_key = _discovery_cache_key(discovery_url)
-        cached = cache.get(cache_key)
-        if isinstance(cached, dict):
-            return cached
-        try:
-            discovery = _get_json(discovery_url, error_code=DISCOVERY_FAILED)
-        except OAuthFlowError:
-            raise
-        except Exception as exc:
-            raise OAuthFlowError(DISCOVERY_FAILED, 400) from exc
-        cache.set(cache_key, discovery, timeout=_discovery_ttl_seconds())
-        return discovery
-
-
-def _discovery_cache_key(discovery_url: str) -> str:
-    """Return the cache key for one OIDC discovery URL."""
-
-    digest = hashlib.sha256(discovery_url.encode("utf-8")).hexdigest()
-    return f"{_DISCOVERY_CACHE_PREFIX}{digest}"
-
-
-def _discovery_ttl_seconds() -> int:
-    """Return the configured lifetime for cached OIDC discovery documents."""
-
-    return int(getattr(settings, "ANGEE_OIDC_DISCOVERY_TTL", _DEFAULT_DISCOVERY_TTL_SECONDS))
+        return dict(self.oauth_client.discover_endpoints())
 
 
 def _audience_matches(value: object, expected: str) -> bool:

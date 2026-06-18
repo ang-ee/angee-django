@@ -18,7 +18,7 @@ from typing import Any
 
 from django.conf import settings
 
-from angee.integrate.impl import IntegrationImpl
+from angee.integrate.impl import BridgeImpl
 
 # Directories the local backend never treats as source — a broad ``Source.path`` on a
 # working tree would otherwise walk (and ingest stray ``copier.yml`` from) these.
@@ -65,7 +65,7 @@ class RepoDescriptor:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
-class VCSBackend(IntegrationImpl):
+class VCSBackend(BridgeImpl):
     """Abstract REST backend for a git host, bound to one ``Integration``.
 
     Concrete hosts implement the primitives below; ``VcsBridge`` calls into
@@ -124,6 +124,16 @@ class LocalVCSBackend(VCSBackend):
     Template`` flow as a hosted remote, with no network. It reads the *working tree*;
     ``ref`` is informational — there is one repo and no commit to resolve.
     """
+
+    key = "local"
+    label = "Local checkout"
+    defaults = {
+        "config": {
+            "local_root": "../..",
+            "local_org": "local",
+            "local_default_branch": "main",
+        },
+    }
 
     def ls_repos(self, *, org: str = "") -> list[RepoDescriptor]:
         """Return the single configured local repository."""

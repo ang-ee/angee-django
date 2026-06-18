@@ -10,6 +10,9 @@ SETTINGS = {
     # discovery TTL belongs to the ``iam_integrate_oidc`` addon.
     "ANGEE_INTEGRATE_OAUTH_CLIENTS": (),
     "ANGEE_INTEGRATE_OAUTH_STATE_TTL": 600,
+    "ANGEE_OAUTH_PROVIDER_TYPES": {
+        "generic_oauth2": "angee.integrate.oauth.providers.GenericOAuth2",
+    },
     # The ``Integration.impl_class`` registry: each key an ``Integration`` row may
     # name → the dotted path of the ``IntegrationImpl`` it resolves to. ``none`` is
     # the neutral draft/null-object implementation (``ImplClassField`` requires a
@@ -21,6 +24,8 @@ SETTINGS = {
     "ANGEE_INTEGRATION_IMPLS": {
         "none": "angee.integrate.impl.NullIntegrationImpl",
         "local": "angee.integrate.vcs.backend.LocalVCSBackend",
+        "generic_imap": "angee.integrate.impl.GenericIMAPBridge",
+        "gmail_imap": "angee.integrate.impl.GmailIMAP",
     },
 }
 """Django settings contributed when the integrate addon is installed."""

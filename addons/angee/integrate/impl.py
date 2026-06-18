@@ -13,8 +13,10 @@ from typing import Any
 from django.apps import apps
 from django.core.exceptions import ObjectDoesNotExist
 
+from angee.base.impl import ImplBase
 
-class IntegrationImpl:
+
+class IntegrationImpl(ImplBase):
     """Base descriptor for one row-selected integration implementation."""
 
     category = "none"
@@ -72,3 +74,52 @@ class IntegrationImpl:
 
 class NullIntegrationImpl(IntegrationImpl):
     """Neutral implementation for draft rows with no capability companion."""
+
+    key = "none"
+    label = "Draft"
+
+
+class BridgeImpl(IntegrationImpl):
+    """Base descriptor for an integration bridge to an external system."""
+
+    category = "bridge"
+    label = "Bridge"
+    icon = "plug"
+
+
+class IMAPBridge(BridgeImpl):
+    """Shared defaults for IMAP mailbox bridges."""
+
+    category = "mail"
+    label = "IMAP"
+    icon = "mail"
+    defaults = {
+        "config": {
+            "host": "",
+            "port": 993,
+            "security": "ssl",
+        },
+    }
+
+
+class GenericIMAPBridge(IMAPBridge):
+    """Fallback IMAP bridge for arbitrary providers."""
+
+    key = "generic_imap"
+    label = "Generic IMAP"
+
+
+class GmailIMAP(IMAPBridge):
+    """Gmail IMAP bridge with Google's host defaults."""
+
+    key = "gmail_imap"
+    label = "Gmail IMAP"
+    icon = "google"
+    defaults = {
+        "vendor": "google",
+        "config": {
+            "host": "imap.gmail.com",
+            "port": 993,
+            "security": "ssl",
+        },
+    }

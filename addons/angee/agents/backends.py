@@ -70,6 +70,9 @@ class InferenceBackend(IntegrationImpl):
     companion_create_fields = ("name", "base_url", "config")
     label = "Inference"
     icon = "sparkles"
+    defaults = {
+        "status": "draft",
+    }
 
     def __init__(self, integration: Any, companion: Any | None = None) -> None:
         """Bind this backend to its integration and provider companion."""
@@ -107,6 +110,8 @@ class ManualInferenceBackend(InferenceBackend):
     # Vendor-neutral: a base addon never pins a product OAuth client. The connect
     # flow falls back to the integration's vendor slug
     # (see ``_oauth_client_for_integration``); a vendor backend addon sets its own.
+    key = "manual"
+    label = "Manual inference"
     oauth_client = ""
 
     def list_models(self) -> Sequence[InferenceModelSpec]:

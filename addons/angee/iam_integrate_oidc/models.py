@@ -1,11 +1,4 @@
-"""Source model for the OIDC login addon: the OIDC refinement of an OAuth client.
-
-The clean data-layer extension: an ``integrate.OAuthClient`` that also speaks
-OpenID Connect has one of these (``oauth_client.oidc``), and its presence is what
-makes a provider a *login* provider. ``integrate`` owns OAuth and never references
-this model; OIDC — the model here, the protocol in :mod:`angee.iam_integrate_oidc.
-protocol`, and the login flow — lives entirely in this addon.
-"""
+"""OIDC login fields contributed onto ``integrate.OAuthClient``."""
 
 from __future__ import annotations
 
@@ -14,55 +7,30 @@ from typing import Any
 
 from django.db import models
 
-from angee.base.fields import SqidField
-from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel
+from angee.base.models import AngeeModel
 
 
-class OidcClient(SqidMixin, AuditMixin, AngeeModel):
-    """The OpenID Connect refinement of an ``integrate.OAuthClient``.
+class OAuthClientOidc(AngeeModel):
+    """OpenID Connect login extension for ``integrate.OAuthClient``.
 
-    Composition over inheritance at the data layer (the protocol uses real class
-    inheritance): it owns what verifying an ID token needs — discovery and the
-    issuer/JWKS — on top of the OAuth base (which already owns the userinfo endpoint
-    and claim mapping). It also holds the per-provider login *policy* (whether a
-    login may link to or create a user, and the email-domain allow-list); the OAuth
-    base stays free of all of it, so account-connect carries no login logic.
+    The composer folds these fields into the single OAuth client table when the
+    OIDC login addon is installed. Presence is no longer a separate 1:1 row:
+    ``login_enabled`` is the discriminator for public login/link flows.
     """
 
-    runtime = True
+    extends = "integrate.OAuthClient"
 
-    sqid = SqidField(real_field_name="id", prefix="oic", min_length=8)
-    oauth_client = models.OneToOneField(
-        "integrate.OAuthClient",
-        on_delete=models.CASCADE,
-        related_name="oidc",
-    )
     issuer = models.URLField(blank=True)
-    discovery_url = models.URLField(blank=True)
     jwks_uri = models.URLField(blank=True)
+    login_enabled = models.BooleanField(default=False, db_index=True)
     link_on_email_match = models.BooleanField(default=False)
     create_on_login = models.BooleanField(default=False)
     allowed_email_domains = models.JSONField(default=list, blank=True)
 
-    # AngeeManager (a REBAC manager over AngeeQuerySet) keeps actor row-scoping
-    # AND supplies `scoped_for_aggregate`, which `rebac_aggregate_builder` requires
-    # for the grouped/aggregate query fields below — a bare RebacManager's queryset
-    # lacks it.
-    objects = AngeeManager()
-
     class Meta:
-        """Django model options for OIDC client refinements."""
+        """Abstract extension base composed into ``integrate.OAuthClient``."""
 
         abstract = True
-        ordering = ("oauth_client__slug",)
-        rebac_resource_type = "iam_integrate_oidc/oidc_client"
-        rebac_id_attr = "sqid"
-
-    def __str__(self) -> str:
-        """Return the underlying OAuth client's label."""
-
-        return f"oidc:{getattr(self.oauth_client, 'slug', '?')}"
 
     @property
     def allowed_email_domain_values(self) -> list[str]:
@@ -87,15 +55,14 @@ class OidcClient(SqidMixin, AuditMixin, AngeeModel):
             return False
         return email.rsplit("@", 1)[1].lower() in allowed_domains
 
-    # OIDC discovery key -> the blank field this refinement fills from it. The
-    # refinement owns issuer/JWKS; the OAuth base owns its transport endpoints.
     DISCOVERY_FIELDS = {
         "issuer": "issuer",
         "jwks_uri": "jwks_uri",
     }
+    """Discovery-document keys projected onto OIDC login fields."""
 
-    def fill_from_discovery(self, discovery: Mapping[str, Any]) -> bool:
-        """Fill this refinement's blank issuer/JWKS from a discovery document; return whether changed."""
+    def fill_extension_fields_from_discovery(self, discovery: Mapping[str, Any]) -> bool:
+        """Fill blank OIDC fields from a discovery document; return whether changed."""
 
         changed = False
         for field, key in self.DISCOVERY_FIELDS.items():
@@ -105,4 +72,5 @@ class OidcClient(SqidMixin, AuditMixin, AngeeModel):
             if value:
                 setattr(self, field, str(value))
                 changed = True
-        return changed
+        parent = getattr(super(), "fill_extension_fields_from_discovery", None)
+        return (bool(parent(discovery)) if parent is not None else False) or changed

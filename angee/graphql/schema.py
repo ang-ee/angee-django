@@ -23,6 +23,7 @@ from strawberry.utils.str_converters import to_camel_case
 
 from angee.addons import resolve_addon_reference
 from angee.graphql.extension import extension_target
+from angee.graphql.impl import ImplChoice, ImplChoicesQuery
 from angee.graphql.introspection import (
     django_model,
     surface_field_names,
@@ -312,7 +313,7 @@ class GraphQLSchemas:
                 f"GraphQL schema {name!r} has no contributions; available schemas: {available}"
             ) from error
 
-        query = self._merge_root(name, "query", parts.query)
+        query = self._merge_root(name, "query", (ImplChoicesQuery, *parts.query))
         if query is None:
             raise ImproperlyConfigured(f"GraphQL schema {name!r} has no query root")
         self._assert_rebac_managers(name, parts.types)
@@ -325,7 +326,7 @@ class GraphQLSchemas:
                 "subscription",
                 parts.subscription,
             ),
-            types=cast(list[Any], list(parts.types)),
+            types=cast(list[Any], [ImplChoice, *parts.types]),
             extensions=cast(
                 list[Any],
                 [

@@ -10,10 +10,8 @@ an integration runs over, optional companion rows (``VcsBridge``,
 ``WebhookSubscription``.
 
 This addon is pure OAuth: it connects *out* to external systems and never
-authenticates a session, and it has no OpenID Connect of its own. OIDC — the
-``OidcClient`` refinement of an ``OAuthClient``, ID-token verification, and the
-login flow that turns a verified identity into an Angee session — lives one level
-up in ``iam_integrate_oidc``, which extends this OAuth base and composes the
+authenticates a session. OIDC login fields and ID-token verification live one
+level up in ``iam_integrate_oidc``, which extends this OAuth base and composes the
 ``iam`` user. Host-specific VCS backends live in their own addons
 (``integrate_github``) and are named per ``Integration.impl_class`` row; this
 addon never imports them.
@@ -49,12 +47,15 @@ from rebac.managers import RebacManager, RebacQuerySet
 from rebac.models import active_relationship_model
 
 from angee.base.fields import EncryptedField, ImplClassField, SqidField, StateField
-from angee.base.mixins import AuditMixin, SqidMixin
+from angee.base.impl import ImplDefaultsMixin
+from angee.base.mixins import AuditMixin, SlugFromNameMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel
 from angee.integrate.credentials import CredentialKind, handler_for
 from angee.integrate.events import EventKind
 from angee.integrate.impl import IntegrationImpl
 from angee.integrate.net import validate_public_url
+from angee.integrate.oauth.discovery import discovery_document
+from angee.integrate.oauth.providers import OAuthProviderType
 from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.vcs.backend import VCSBackend
 from angee.integrate.vcs.templates import parse_template_meta
@@ -121,8 +122,10 @@ class OAuthClientManager(RebacManager.from_queryset(OAuthClientQuerySet)):  # ty
     seed_fields = frozenset(
         {
             "display_name",
+            "provider_type",
             "icon",
             "client_id",
+            "discovery_url",
             "authorize_endpoint",
             "token_endpoint",
             "revoke_endpoint",
@@ -207,15 +210,14 @@ class OAuthClientManager(RebacManager.from_queryset(OAuthClientQuerySet)):  # ty
             raise ValueError(f"ANGEE_INTEGRATE_OAUTH_CLIENTS entry {index} is missing required field(s): {names}")
 
 
-class OAuthClient(SqidMixin, AuditMixin, AngeeModel):
+class OAuthClient(SqidMixin, SlugFromNameMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     """OAuth2 client registration for connecting an external account.
 
     The base of the connection substrate: enough to run the authorization-code and
     refresh flows and act against a provider's API (Gemini, Grok, Anthropic). It
-    carries no identity or login policy — a provider that also authenticates a
-    *login* gains an ``OidcClient`` refinement, owned by the ``iam_integrate_oidc``
-    addon (reachable here only as the reverse ``self.oidc`` when that addon is
-    installed); this addon never reads it.
+    carries no identity or login policy itself — a provider that also
+    authenticates a *login* gains direct fields from the ``iam_integrate_oidc``
+    extension when that addon is installed.
 
     Self-describing: ``slug`` is its own connect-client key and ``icon``/
     ``display_name`` its own button branding. The third-party catalogue is
@@ -226,12 +228,22 @@ class OAuthClient(SqidMixin, AuditMixin, AngeeModel):
     runtime = True
 
     sqid = SqidField(real_field_name="id", prefix="clt", min_length=8)
-    slug = models.SlugField()
+    slug_source_field = "display_name"
+    slug_scope_fields = ("environment",)
+
+    slug = models.SlugField(blank=True)
+    provider_type = ImplClassField(
+        base_class=OAuthProviderType,
+        registry_setting="ANGEE_OAUTH_PROVIDER_TYPES",
+        default="generic_oauth2",
+    )
+    """Provider preset key whose defaults seed this OAuth client."""
     icon = models.CharField(max_length=128, blank=True)
     environment = models.CharField(max_length=32, default="prod")
     display_name = models.CharField(max_length=128)
     client_id = models.CharField(max_length=255, blank=True)
     client_secret = EncryptedField(blank=True)
+    discovery_url = models.URLField(blank=True)
     authorize_endpoint = models.URLField(blank=True)
     token_endpoint = models.URLField(blank=True)
     revoke_endpoint = models.URLField(blank=True)
@@ -437,6 +449,23 @@ class OAuthClient(SqidMixin, AuditMixin, AngeeModel):
                 setattr(self, field, str(value))
                 changed = True
         return changed
+
+    def fill_extension_fields_from_discovery(self, discovery: Mapping[str, Any]) -> bool:
+        """Hook for composed extensions to project discovery onto their own fields."""
+
+        del discovery
+        return False
+
+    def discover_endpoints(self) -> Mapping[str, Any]:
+        """Fetch discovery and fill blank OAuth/extension endpoints on this row."""
+
+        discovery_url = str(getattr(self, "discovery_url", "") or "")
+        if not discovery_url:
+            return {}
+        discovery = discovery_document(discovery_url)
+        self.fill_endpoints_from_discovery(discovery)
+        self.fill_extension_fields_from_discovery(discovery)
+        return discovery
 
 
 class ExternalAccountQuerySet(RebacQuerySet[Any]):
@@ -1003,7 +1032,7 @@ def _validated_manager_values(
     return dict(values)
 
 
-class Vendor(SqidMixin, AuditMixin, AngeeModel):
+class Vendor(SqidMixin, SlugFromNameMixin, AuditMixin, AngeeModel):
     """Admin-managed third-party catalogue (GitHub, Google, Slack, …).
 
     The single source of truth for "what is this third party" — branding and
@@ -1016,7 +1045,7 @@ class Vendor(SqidMixin, AuditMixin, AngeeModel):
     runtime = True
 
     sqid = SqidField(real_field_name="id", prefix="vnd", min_length=8)
-    slug = models.SlugField(unique=True)
+    slug = models.SlugField(unique=True, blank=True)
     display_name = models.CharField(max_length=128)
     website_url = models.URLField(blank=True)
     icon = models.CharField(max_length=128, blank=True)
@@ -1056,7 +1085,7 @@ class IntegrationStatus(models.TextChoices):
             raise ValueError(f"Unsupported integration status: {raw}") from error
 
 
-class Integration(SqidMixin, AuditMixin, AngeeModel):
+class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     """A product/workspace integration to a vendor account.
 
     The first-class "what we're connected to and what runs over it": it draws a
