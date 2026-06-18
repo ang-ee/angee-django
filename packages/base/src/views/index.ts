@@ -30,7 +30,7 @@ export {
   type RelationPickerProps,
   type RelationCreateConfig,
 } from "./RelationPicker";
-export { useEnumOptions } from "./enum-options";
+export { useEnumOptions, useImplPrefill } from "./enum-options";
 export {
   GraphView,
   type GraphViewEdge,

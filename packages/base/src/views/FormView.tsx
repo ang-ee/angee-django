@@ -560,11 +560,27 @@ export function FormView({
           onChange={(next) => {
             clearServerFieldError(field.name);
             api.handleChange(next);
+            applyFieldPrefill(field, next);
           }}
         />
       )}
     </form.Field>
   );
+
+  // Seed blank siblings from a field's `prefill` (the impl-defaults mechanism):
+  // an explicit value the user already entered is never overwritten.
+  function applyFieldPrefill(field: FieldDescriptor, value: unknown): void {
+    const seeds = field.prefill?.(value);
+    if (!seeds) return;
+    for (const [name, seed] of Object.entries(seeds)) {
+      const current = form.getFieldValue(name);
+      const isBlank =
+        current == null ||
+        current === "" ||
+        (Array.isArray(current) && current.length === 0);
+      if (isBlank) form.setFieldValue(name, seed);
+    }
+  }
 
   const recordPanelContext: RecordPanelContext | null =
     !isCreate && id != null ? { recordId: id, reload } : null;

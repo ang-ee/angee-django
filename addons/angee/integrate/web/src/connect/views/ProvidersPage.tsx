@@ -8,6 +8,7 @@ import {
   Group,
   List,
   useEnumOptions,
+  useImplPrefill,
   type ActionContext,
 } from "@angee/base";
 import { useAuthoredMutation } from "@angee/sdk";
@@ -142,6 +143,7 @@ export function ProvidersPage(): React.ReactElement {
   // picking one seeds the client's defaults (endpoints/scopes/icon) on create via
   // the server-side ImplDefaultsMixin. useEnumOptions lower-cases the write value.
   const providerTypeOptions = useEnumOptions(MODEL, "providerType");
+  const providerTypePrefill = useImplPrefill(MODEL, "providerType");
 
   return (
     <DataPage model={MODEL} placement="inline" routed>
@@ -153,6 +155,7 @@ export function ProvidersPage(): React.ReactElement {
             name="providerType"
             widget="select"
             options={providerTypeOptions}
+            prefill={providerTypePrefill}
             createOnly
           />
           {/* Slug auto-derives from the name (SlugFromNameMixin); editable on edit only. */}

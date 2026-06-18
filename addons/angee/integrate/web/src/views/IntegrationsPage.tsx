@@ -10,6 +10,7 @@ import {
   GroupListView,
   List,
   useEnumOptions,
+  useImplPrefill,
   usePrompt,
   useToast,
   type DataToolbarGroupOption,
@@ -35,6 +36,7 @@ const CONNECT_NEXT = "/integrate";
 export function IntegrationsPage(): React.ReactElement {
   const t = useIntegrateT();
   const implClassOptions = useEnumOptions(MODEL, "implClass");
+  const implClassPrefill = useImplPrefill(MODEL, "implClass");
 
   // Aggregate on the real groupable axes (impl_class / vendor / status); the
   // capability lane displays the impl's category. Tone is resolved by the shared
@@ -116,6 +118,7 @@ export function IntegrationsPage(): React.ReactElement {
             label={t("integrate.integrations.implClass")}
             widget="select"
             options={implClassOptions}
+            prefill={implClassPrefill}
             createOnly
           />
           <Field name="status" widget="statusbar" editOnly />

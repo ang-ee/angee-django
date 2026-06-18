@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useModelMetadata } from "@angee/sdk";
+import { useAuthoredQuery, useModelMetadata } from "@angee/sdk";
 
 import type { WidgetOption } from "../widgets";
 import { enumValueLabel } from "./ListInternals";
@@ -24,4 +24,51 @@ export function useEnumOptions(model: string, field: string): readonly WidgetOpt
       })),
     [metadata, field],
   );
+}
+
+const IMPL_CHOICES_DOCUMENT = `
+  query ImplChoices($model: String!, $field: String!) {
+    implChoices(model: $model, field: $field) {
+      key
+      defaults
+    }
+  }
+`;
+
+interface ImplChoicesData {
+  implChoices: readonly { key: string; defaults: Record<string, unknown> }[];
+}
+
+/**
+ * A prefill function for an `ImplClassField` select: given the chosen impl key,
+ * returns that impl's defaults keyed by *camelCase form field name*, ready to pass
+ * to a `<Field prefill>`. The server (`implChoices`) owns the per-impl defaults
+ * (merged along the impl MRO); this only re-keys snake_case model fields to the
+ * camelCase the form uses. Defaults seed *blank* siblings, so the user can still
+ * override before saving (the backend also materialises them on create).
+ */
+export function useImplPrefill(
+  model: string,
+  field: string,
+): (value: unknown) => Record<string, unknown> | undefined {
+  const { data } = useAuthoredQuery<ImplChoicesData>(IMPL_CHOICES_DOCUMENT, {
+    model,
+    field,
+  });
+  return React.useMemo(() => {
+    const byKey = new Map(
+      (data?.implChoices ?? []).map((choice) => [choice.key, choice.defaults]),
+    );
+    return (value: unknown) => {
+      const defaults = byKey.get(String(value));
+      if (!defaults) return undefined;
+      return Object.fromEntries(
+        Object.entries(defaults).map(([name, seed]) => [snakeToCamel(name), seed]),
+      );
+    };
+  }, [data]);
+}
+
+function snakeToCamel(name: string): string {
+  return name.replace(/_([a-z0-9])/g, (_match, char: string) => char.toUpperCase());
 }

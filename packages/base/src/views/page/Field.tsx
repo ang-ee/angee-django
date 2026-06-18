@@ -29,6 +29,13 @@ export interface FieldProps {
    * select can swap the body. A hidden field is never sent.
    */
   showWhen?: (values: Row) => boolean;
+  /**
+   * Seed sibling fields when this field's value changes — the impl-defaults
+   * mechanism. Returns a `{fieldName: value}` map (camelCase form field names);
+   * the form sets each *blank* sibling, never overwriting a value the user
+   * entered. Pair with `useImplPrefill(model, field)` for an `ImplClassField`.
+   */
+  prefill?: (value: unknown) => Record<string, unknown> | null | undefined;
   title?: boolean;
   body?: boolean;
   kind?: PageFieldKind;
@@ -48,6 +55,8 @@ export interface FieldDescriptor {
   editOnly?: boolean;
   /** Render and submit this field only when the predicate matches form values (see `FieldProps`). */
   showWhen?: (values: Row) => boolean;
+  /** Seed blank sibling fields when this field changes (see `FieldProps.prefill`). */
+  prefill?: (value: unknown) => Record<string, unknown> | null | undefined;
   title?: boolean;
   body?: boolean;
   kind?: PageFieldKind;
