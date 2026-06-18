@@ -26,8 +26,8 @@ class IAMIntegrateOidcConfig(AppConfig):
         "install": (
             {"path": "resources/install/010_integrate.oauthclient.yaml", "adopt": ["slug", "environment"]},
         ),
+        "demo": ({"path": "resources/demo/010_integrate.oauthclient.yaml", "adopt": ["slug", "environment"]},),
     }
-    """OIDC defaults for the login-capable public OAuth clients integrate seeds."""
 
     def ready(self) -> None:
         """Wire the last-sign-in disconnect guard after app population."""

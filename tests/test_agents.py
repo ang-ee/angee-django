@@ -27,6 +27,7 @@ from angee.agents.models import InferenceProvider as AbstractInferenceProvider
 from angee.agents.models import Skill as AbstractSkill
 from angee.agents.skills import parse_skill_meta
 from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
+from angee.agents_integrate_openai.backend import OpenAIInferenceBackend
 from angee.integrate.credentials import CredentialKind
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
@@ -316,6 +317,67 @@ class _FakeAnthropicClient:
         self.instances.append(self)
 
 
+class _FakeOpenAIModels:
+    """Small fake for the OpenAI SDK models resource."""
+
+    def __init__(self, client: Any) -> None:
+        self.client = client
+        self.calls: list[dict[str, Any]] = []
+
+    def list(self, **kwargs: Any) -> Any:
+        """Return one SDK-shaped model page."""
+
+        self.calls.append(kwargs)
+        return SimpleNamespace(
+            data=[
+                SimpleNamespace(
+                    id="gpt-4.1",
+                    owned_by="openai",
+                ),
+                SimpleNamespace(id="text-embedding-3-large", owned_by="openai"),
+                SimpleNamespace(id="gpt-image-1", owned_by="openai"),
+                SimpleNamespace(id="gpt-4o-transcribe", owned_by="openai"),
+            ]
+        )
+
+
+class _FakeOpenAICompletions:
+    """Small fake for the OpenAI SDK chat completions resource."""
+
+    def __init__(self, client: Any) -> None:
+        self.client = client
+        self.calls: list[dict[str, Any]] = []
+
+    def create(self, **kwargs: Any) -> Any:
+        """Record a chat completion request and return an SDK-shaped response."""
+
+        self.calls.append(kwargs)
+        return SimpleNamespace(
+            id="chatcmpl_1",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="pong"))],
+            usage=SimpleNamespace(prompt_tokens=3, completion_tokens=1, total_tokens=4),
+        )
+
+
+class _FakeOpenAIChat:
+    """Small fake for the OpenAI SDK chat resource."""
+
+    def __init__(self, client: Any) -> None:
+        self.completions = _FakeOpenAICompletions(client)
+
+
+class _FakeOpenAIClient:
+    """Small fake for ``openai.OpenAI``."""
+
+    instances: list[Any] = []
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+        self.models = _FakeOpenAIModels(self)
+        self.chat = _FakeOpenAIChat(self)
+        self.instances.append(self)
+
+
 @pytest.mark.django_db(transaction=True)
 def test_anthropic_backend_refresh_syncs_native_and_broker_models(
     agents_tables: None,
@@ -438,6 +500,163 @@ def test_anthropic_chat_rejects_options_that_override_owned_request_fields(
     with system_context(reason="test anthropic options guard"):
         provider = InferenceProvider.objects.create(integration=integration, name="Anthropic")
         model = InferenceModel.objects.create(provider=provider, name="claude-sonnet-4-6")
+
+    with pytest.raises(ValueError, match="model"):
+        model.chat([{"role": "user", "content": "Ping"}], options={"model": "other"})
+
+
+@pytest.mark.django_db(transaction=True)
+def test_openai_backend_refresh_syncs_native_and_broker_models(
+    agents_tables: None,
+    monkeypatch: Any,
+) -> None:
+    """OpenAI model sync emits native and broker-prefixed handles from the SDK."""
+
+    del agents_tables
+    _FakeOpenAIClient.instances.clear()
+    monkeypatch.setattr(OpenAIInferenceBackend, "client_class", _FakeOpenAIClient)
+    integration = make_integration(
+        "openai-sdk",
+        impl_class="openai",
+        material={"api_key": "api-key"},
+    )
+    with system_context(reason="test openai provider"):
+        provider = InferenceProvider.objects.create(integration=integration, name="OpenAI")
+
+    assert provider.refresh_models() == 2
+
+    client = _FakeOpenAIClient.instances[-1]
+    assert client.kwargs == {"api_key": "api-key"}
+    assert client.models.calls == [{}]
+    with system_context(reason="test read"):
+        models = {model.name: model for model in InferenceModel.objects.filter(provider=provider)}
+    assert set(models) == {"gpt-4.1", "openai/gpt-4.1"}
+    assert models["gpt-4.1"].display_name == "gpt-4.1"
+    assert models["gpt-4.1"].config == {
+        "provider_model": "gpt-4.1",
+        "source": "openai",
+        "owned_by": "openai",
+    }
+    assert models["openai/gpt-4.1"].display_name == "gpt-4.1 (openai)"
+    assert models["openai/gpt-4.1"].config["provider_model"] == "gpt-4.1"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_openai_backend_rejects_oauth_credentials(
+    agents_tables: None,
+    monkeypatch: Any,
+) -> None:
+    """The OpenAI SDK backend is explicit about accepting static API keys only."""
+
+    del agents_tables
+    _FakeOpenAIClient.instances.clear()
+    monkeypatch.setattr(OpenAIInferenceBackend, "client_class", _FakeOpenAIClient)
+    integration = make_integration(
+        "openai-oauth-chat",
+        kind=CredentialKind.OAUTH,
+        impl_class="openai",
+        material={"access_token": "oauth-token"},
+    )
+    with system_context(reason="test openai oauth rejection"):
+        provider = InferenceProvider.objects.create(integration=integration, name="OpenAI")
+        model = InferenceModel.objects.create(provider=provider, name="gpt-4.1")
+
+    with pytest.raises(ValueError, match="does not support OAuth"):
+        model.chat([{"role": "user", "content": "Ping"}])
+    assert _FakeOpenAIClient.instances == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_openai_model_chat_uses_sdk_chat_completions_and_strips_broker_prefix(
+    agents_tables: None,
+    monkeypatch: Any,
+) -> None:
+    """Direct model chat uses the OpenAI SDK without provisioning an agent."""
+
+    del agents_tables
+    _FakeOpenAIClient.instances.clear()
+    monkeypatch.setattr(OpenAIInferenceBackend, "client_class", _FakeOpenAIClient)
+    integration = make_integration(
+        "openai-chat",
+        impl_class="openai",
+        material={"api_key": "api-key"},
+    )
+    with system_context(reason="test openai chat"):
+        provider = InferenceProvider.objects.create(integration=integration, name="OpenAI")
+        model = InferenceModel.objects.create(provider=provider, name="openai/gpt-4.1")
+
+    response = model.chat(
+        [{"role": "user", "content": "Ping"}],
+        system="Policy",
+        max_tokens=12,
+        temperature=0.2,
+        options={"top_p": 0.9},
+    )
+
+    client = _FakeOpenAIClient.instances[-1]
+    assert client.kwargs == {"api_key": "api-key"}
+    assert client.chat.completions.calls == [
+        {
+            "model": "gpt-4.1",
+            "messages": [
+                {"role": "system", "content": "Policy"},
+                {"role": "user", "content": "Ping"},
+            ],
+            "max_tokens": 12,
+            "temperature": 0.2,
+            "top_p": 0.9,
+        }
+    ]
+    assert response.text == "pong"
+    assert response.content == [{"type": "text", "text": "pong"}]
+    assert response.usage == {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_openai_backend_can_configure_max_completion_tokens(
+    agents_tables: None,
+    monkeypatch: Any,
+) -> None:
+    """OpenAI owns the max-token wire field but lets provider config pick the SDK parameter."""
+
+    del agents_tables
+    _FakeOpenAIClient.instances.clear()
+    monkeypatch.setattr(OpenAIInferenceBackend, "client_class", _FakeOpenAIClient)
+    integration = make_integration(
+        "openai-max-completion",
+        impl_class="openai",
+        material={"api_key": "api-key"},
+    )
+    with system_context(reason="test openai max tokens"):
+        provider = InferenceProvider.objects.create(
+            integration=integration,
+            name="OpenAI",
+            config={"max_tokens_param": "max_completion_tokens"},
+        )
+        model = InferenceModel.objects.create(provider=provider, name="gpt-4.1")
+
+    assert model.chat([{"role": "user", "content": "Ping"}], max_tokens=8).text == "pong"
+    assert _FakeOpenAIClient.instances[-1].chat.completions.calls[-1]["max_completion_tokens"] == 8
+
+
+@pytest.mark.django_db(transaction=True)
+def test_openai_chat_rejects_options_that_override_owned_request_fields(
+    agents_tables: None,
+    monkeypatch: Any,
+) -> None:
+    """Provider-specific options cannot replace the selected catalogue model."""
+
+    del agents_tables
+    _FakeOpenAIClient.instances.clear()
+    monkeypatch.setattr(OpenAIInferenceBackend, "client_class", _FakeOpenAIClient)
+    integration = make_integration(
+        "openai-owned-options",
+        impl_class="openai",
+        material={"api_key": "api-key"},
+    )
+    with system_context(reason="test openai options guard"):
+        provider = InferenceProvider.objects.create(integration=integration, name="OpenAI")
+        model = InferenceModel.objects.create(provider=provider, name="gpt-4.1")
 
     with pytest.raises(ValueError, match="model"):
         model.chat([{"role": "user", "content": "Ping"}], options={"model": "other"})

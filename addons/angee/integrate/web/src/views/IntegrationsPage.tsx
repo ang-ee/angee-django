@@ -271,8 +271,8 @@ function IntegrationConnectButton({
   );
 }
 
-function canConnectIntegration(row: Row): boolean {
-  return row.credential == null || normalizeValue(row.status) === "draft";
+export function canConnectIntegration(row: Row): boolean {
+  return row.credential === null || normalizeValue(row.status) === "draft";
 }
 
 function normalizeValue(value: unknown): string {

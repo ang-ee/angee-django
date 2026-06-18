@@ -18,3 +18,17 @@ class AgentsConfig(AppConfig):
     depends_on = ("angee.integrate", "angee.operator", "angee.mcp")
     schemas = "schema.schemas"
     permissions = "permissions.zed"
+    resources = {
+        "demo": (
+            {
+                "path": "resources/demo/010_integrate.credential.yaml",
+                "depends_on": "iam:resources/demo/010_iam.user.yaml",
+                "adopt": ("user", "name"),
+            },
+            {
+                "path": "resources/demo/020_agents.mcpserver.yaml",
+                "depends_on": "resources/demo/010_integrate.credential.yaml",
+                "adopt": "name",
+            },
+        ),
+    }

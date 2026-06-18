@@ -1,0 +1,6 @@
+# The inference provider companion over the OpenAI integration. The demo seeds
+# baseline model handles, and `refreshProviderModels` can replace/extend them
+# from OpenAI once the integration has a usable credential.
+- xref: provider_openai_demo
+  integration: agents_integrate_openai.integration_openai_demo
+  name: OpenAI

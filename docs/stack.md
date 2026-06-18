@@ -43,6 +43,7 @@ Dependency changes must update this file in the same change.
 | pyjwt[crypto] | JWT and JOSE verification | OIDC discovery and exchange orchestration |
 | mcp (jlowin FastMCP v2) | MCP server — tool registration, JSON-RPC, StreamableHTTP ASGI app, bearer auth (`TokenVerifier`), per-call middleware | Mounts one StreamableHTTP app at `/mcp` via the `asgi.py` `http_mounts` seam (its `http_app` lifespan entered by `angee.asgi` via `router.lifespan_context`), authenticates the bearer to a REBAC actor with a `fastmcp.server.auth.TokenVerifier` and brackets each tool call in that actor; addon tools — incl. `GraphQLTool` operations executed under the actor (`angee.mcp.graphql`) — run scoped, and rebac authorizes |
 | anthropic | Anthropic Claude API SDK — Messages API client, model catalogue, retries, typed SDK models | `agents_integrate_anthropic` maps Angee inference providers/models to the SDK and contributes the backend into `ANGEE_INTEGRATION_IMPLS` |
+| openai | OpenAI Python SDK — Chat Completions client, model catalogue, retries, typed SDK models | `agents_integrate_openai` maps Angee inference providers/models to the SDK and contributes the backend into `ANGEE_INTEGRATION_IMPLS` |
 | python-magic | MIME detection from file bytes | Storage finalize detection (requires the system libmagic) |
 | uv | Python dependency resolution and workspaces | Workspace layout |
 

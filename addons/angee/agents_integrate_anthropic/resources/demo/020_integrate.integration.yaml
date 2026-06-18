@@ -1,0 +1,10 @@
+# The Anthropic integration the inference provider runs over. It uses the live
+# Anthropic backend, so refreshing models asks Anthropic when a usable static API key
+# or Anthropic Personal OAuth credential is attached. The placeholder credential keeps
+# the row seedable; replace/connect it before live inference.
+- xref: integration_anthropic_demo
+  owner: iam.user_admin
+  vendor: integrate.anthropic
+  impl_class: anthropic
+  credential: agents_integrate_anthropic.cred_anthropic_demo
+  status: active

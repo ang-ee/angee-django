@@ -193,6 +193,43 @@ def test_refresh_provider_models_is_admin_gated(agents_console_tables: None) -> 
     assert result["ok"] is True
 
 
+def test_inference_models_query_accepts_provider_filter(agents_console_tables: None) -> None:
+    """The model catalogue list supports the generic DataPage `filters` argument."""
+
+    admin = _platform_admin("agt-model-filter-admin")
+    integration_a = make_integration("agt-model-filter-a", impl_class="manual")
+    integration_b = make_integration("agt-model-filter-b", impl_class="manual")
+    with system_context(reason="test.agents.model_filter.seed"):
+        provider_a = InferenceProvider.objects.create(integration=integration_a, name="Anthropic")
+        provider_b = InferenceProvider.objects.create(integration=integration_b, name="Manual")
+        InferenceModel.objects.create(provider=provider_a, name="claude-sonnet-4-6")
+        InferenceModel.objects.create(provider=provider_a, name="claude-opus-4-8")
+        InferenceModel.objects.create(provider=provider_b, name="manual-model")
+
+    result = _data(
+        _execute(
+            _schema(),
+            """
+            query ModelsForProvider($provider: ID!) {
+              inferenceModels(filters: {provider: $provider}, order: {name: ASC}) {
+                totalCount
+                results {
+                  name
+                  provider { name }
+                }
+              }
+            }
+            """,
+            {"provider": _gid("InferenceProviderType", provider_a.sqid)},
+            user=admin,
+        )
+    )["inferenceModels"]
+
+    assert result["totalCount"] == 2
+    assert [row["name"] for row in result["results"]] == ["claude-opus-4-8", "claude-sonnet-4-6"]
+    assert {row["provider"]["name"] for row in result["results"]} == {"Anthropic"}
+
+
 def test_create_inference_provider_requires_inference_impl(agents_console_tables: None) -> None:
     """InferenceProvider create is guarded by the owning Integration impl class."""
 

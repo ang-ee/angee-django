@@ -2,7 +2,7 @@
 # resolved against BASE_DIR by LocalVCSBackend — "../.." is the repo root, where
 # templates/ lives.
 - xref: integration_local_templates
-  owner: notes.user_admin
+  owner: iam.user_admin
   vendor: notes.vendor_local
   impl_class: local
   credential: notes.cred_local_templates

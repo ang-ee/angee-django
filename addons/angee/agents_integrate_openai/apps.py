@@ -1,18 +1,18 @@
-"""Django config for the Anthropic inference integration addon."""
+"""Django config for the OpenAI inference integration addon."""
 
 from __future__ import annotations
 
 from django.apps import AppConfig
 
 
-class AgentsIntegrateAnthropicConfig(AppConfig):
-    """Source app manifest for Anthropic's inference backend."""
+class AgentsIntegrateOpenAIConfig(AppConfig):
+    """Source app manifest for OpenAI's inference backend."""
 
     default = True
     angee_addon = True
     default_auto_field = "django.db.models.BigAutoField"
-    name = "angee.agents_integrate_anthropic"
-    label = "agents_integrate_anthropic"
+    name = "angee.agents_integrate_openai"
+    label = "agents_integrate_openai"
     depends_on = ("angee.agents", "angee.integrate")
     resources = {
         "demo": (

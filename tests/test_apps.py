@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from importlib import import_module
 from types import ModuleType
 
 import pytest
@@ -19,6 +20,15 @@ def _module(name: str) -> ModuleType:
     module = ModuleType(name)
     module.__file__ = __file__
     return module
+
+
+def _resource_rows(config: AppConfig, tier: str, path: str) -> dict[str, dict[str, object]]:
+    """Return one resource file's row values keyed by xref."""
+
+    manifest = resource_manifest_for(config)
+    declaration = next(item for item in manifest[tier] if item["path"] == path)
+    entry = ResourceEntry.from_declaration(config, tier, declaration)
+    return {row.xref: row.values for row in entry.read_resource_rows()}
 
 
 def test_base_config_is_a_dependency_node() -> None:
@@ -154,6 +164,162 @@ def test_integrate_config_installs_public_oauth_provider_resources() -> None:
     assert "client_secret" not in grok
 
 
+def test_iam_config_owns_shared_demo_users() -> None:
+    """The reusable demo identities live with IAM, not a consumer example."""
+
+    config = apps.get_app_config("iam")
+    manifest = resource_manifest_for(config)
+
+    assert manifest["demo"] == ({"path": "resources/demo/010_iam.user.yaml", "adopt": "username"},)
+    rows = _resource_rows(config, "demo", "resources/demo/010_iam.user.yaml")
+    assert set(rows) == {"user_admin", "user_alice", "user_bob"}
+    assert rows["user_admin"]["username"] == "admin"
+
+
+def test_agents_config_owns_builtin_mcp_demo_seed() -> None:
+    """The built-in MCP catalogue seed belongs to the agents addon."""
+
+    config = apps.get_app_config("agents")
+    manifest = resource_manifest_for(config)
+
+    assert [item["path"] for item in manifest["demo"]] == [
+        "resources/demo/010_integrate.credential.yaml",
+        "resources/demo/020_agents.mcpserver.yaml",
+    ]
+    assert manifest["demo"][0]["adopt"] == ("user", "name")
+    assert manifest["demo"][1]["adopt"] == "name"
+    mcp_rows = _resource_rows(config, "demo", "resources/demo/020_agents.mcpserver.yaml")
+    assert mcp_rows["mcp_angee"]["credential"] == "agents.cred_mcp_angee"
+
+
+def test_anthropic_addon_owns_demo_provider_chain() -> None:
+    """The demo Anthropic inference chain lives with the Anthropic addon."""
+
+    from angee.agents_integrate_anthropic.apps import AgentsIntegrateAnthropicConfig
+
+    module = import_module("angee.agents_integrate_anthropic")
+    config = AgentsIntegrateAnthropicConfig("angee.agents_integrate_anthropic", module)
+    manifest = resource_manifest_for(config)
+
+    assert [item["path"] for item in manifest["demo"]] == [
+        "resources/demo/010_integrate.credential.yaml",
+        "resources/demo/020_integrate.integration.yaml",
+        "resources/demo/030_agents.inferenceprovider.yaml",
+        "resources/demo/040_agents.inferencemodel.yaml",
+    ]
+    assert manifest["demo"][0]["adopt"] == ("user", "name")
+    assert manifest["demo"][1]["adopt"] == ("owner", "vendor", "impl_class")
+    assert manifest["demo"][2]["adopt"] == "integration"
+    assert manifest["demo"][3]["adopt"] == ("provider", "name")
+    integration_rows = _resource_rows(config, "demo", "resources/demo/020_integrate.integration.yaml")
+    assert integration_rows["integration_anthropic_demo"]["owner"] == "iam.user_admin"
+    assert integration_rows["integration_anthropic_demo"]["credential"] == (
+        "agents_integrate_anthropic.cred_anthropic_demo"
+    )
+    assert integration_rows["integration_anthropic_demo"]["impl_class"] == "anthropic"
+    provider_rows = _resource_rows(config, "demo", "resources/demo/030_agents.inferenceprovider.yaml")
+    assert provider_rows["provider_anthropic_demo"]["integration"] == (
+        "agents_integrate_anthropic.integration_anthropic_demo"
+    )
+    model_rows = _resource_rows(config, "demo", "resources/demo/040_agents.inferencemodel.yaml")
+    assert model_rows["model_claude_demo"]["provider"] == "agents_integrate_anthropic.provider_anthropic_demo"
+
+
+def test_openai_addon_owns_demo_provider_chain() -> None:
+    """The demo OpenAI inference chain lives with the OpenAI addon."""
+
+    from angee.agents_integrate_openai.apps import AgentsIntegrateOpenAIConfig
+
+    module = import_module("angee.agents_integrate_openai")
+    config = AgentsIntegrateOpenAIConfig("angee.agents_integrate_openai", module)
+    manifest = resource_manifest_for(config)
+
+    assert [item["path"] for item in manifest["demo"]] == [
+        "resources/demo/010_integrate.credential.yaml",
+        "resources/demo/020_integrate.integration.yaml",
+        "resources/demo/030_agents.inferenceprovider.yaml",
+        "resources/demo/040_agents.inferencemodel.yaml",
+    ]
+    assert manifest["demo"][0]["adopt"] == ("user", "name")
+    assert manifest["demo"][1]["adopt"] == ("owner", "vendor", "impl_class")
+    assert manifest["demo"][2]["adopt"] == "integration"
+    assert manifest["demo"][3]["adopt"] == ("provider", "name")
+    integration_rows = _resource_rows(config, "demo", "resources/demo/020_integrate.integration.yaml")
+    assert integration_rows["integration_openai_demo"]["owner"] == "iam.user_admin"
+    assert integration_rows["integration_openai_demo"]["credential"] == "agents_integrate_openai.cred_openai_demo"
+    assert integration_rows["integration_openai_demo"]["impl_class"] == "openai"
+    provider_rows = _resource_rows(config, "demo", "resources/demo/030_agents.inferenceprovider.yaml")
+    assert provider_rows["provider_openai_demo"]["integration"] == "agents_integrate_openai.integration_openai_demo"
+    model_rows = _resource_rows(config, "demo", "resources/demo/040_agents.inferencemodel.yaml")
+    assert model_rows["model_openai_demo"]["provider"] == "agents_integrate_openai.provider_openai_demo"
+
+
+def test_notes_demo_only_composes_reusable_agent_seeds() -> None:
+    """The notes example keeps project-specific demo rows and references addon seeds."""
+
+    from example.notes.apps import NotesConfig
+
+    module = import_module("example.notes")
+    config = NotesConfig("example.notes", module)
+    manifest = resource_manifest_for(config)
+    demo_paths = {item["path"] for item in manifest["demo"]}
+
+    assert "resources/demo/010_iam.user.yaml" not in demo_paths
+    assert "resources/demo/091_integrate.integration.yaml" not in demo_paths
+    agent_rows = _resource_rows(config, "demo", "resources/demo/095_agents.agent.yaml")
+    assert agent_rows["agent_demo"]["owner"] == "iam.user_admin"
+    assert agent_rows["agent_demo"]["model"] == "agents_integrate_anthropic.model_claude_demo"
+    assert agent_rows["agent_demo"]["mcp_servers"] == ["agents.mcp_angee"]
+
+
+def test_anthropic_backend_connects_personal_oauth_client() -> None:
+    """The Anthropic inference backend uses OAuth tokens from personal-plan consent."""
+
+    from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
+
+    assert AnthropicInferenceBackend.oauth_client == "anthropic-personal"
+
+
+def test_openai_backend_uses_static_credentials_not_oauth_connect() -> None:
+    """The OpenAI inference backend is API-key backed unless a later OAuth addon owns that flow."""
+
+    from angee.agents_integrate_openai.backend import OpenAIInferenceBackend
+
+    assert OpenAIInferenceBackend.oauth_client == ""
+
+
+def test_openai_autoconfig_contributes_integration_impl_registry() -> None:
+    """The OpenAI addon uses the composer-owned SETTINGS contract."""
+
+    from angee.agents_integrate_openai.autoconfig import SETTINGS
+
+    assert SETTINGS["ANGEE_INTEGRATION_IMPLS.openai"] == (
+        "angee.agents_integrate_openai.backend.OpenAIInferenceBackend"
+    )
+
+
+def test_knowledge_config_owns_handbook_demo_seed() -> None:
+    """The reusable handbook demo content lives with the knowledge addon."""
+
+    config = apps.get_app_config("knowledge")
+    manifest = resource_manifest_for(config)
+
+    assert [item["path"] for item in manifest["demo"]] == [
+        "resources/demo/010_knowledge.vault.yaml",
+        "resources/demo/020_knowledge.page.yaml",
+        "resources/demo/030_knowledge.markdown_page.yaml",
+    ]
+    assert manifest["demo"][0]["adopt"] == ("owner", "name")
+    assert manifest["demo"][1]["adopt"] == ("vault", "title")
+    assert manifest["demo"][2]["adopt"] == "page"
+    vault_rows = _resource_rows(config, "demo", "resources/demo/010_knowledge.vault.yaml")
+    page_rows = _resource_rows(config, "demo", "resources/demo/020_knowledge.page.yaml")
+    markdown_rows = _resource_rows(config, "demo", "resources/demo/030_knowledge.markdown_page.yaml")
+    assert vault_rows["vault_handbook"]["owner"] == "iam.user_admin"
+    assert page_rows["page_getting_started"]["vault"] == "knowledge.vault_handbook"
+    assert markdown_rows["md_getting_started"]["page"] == "knowledge.page_getting_started"
+
+
 def test_iam_integrate_oidc_config_installs_oauth_client_oidc_defaults() -> None:
     """The OIDC login addon ships id-token trust config for OAuth client rows."""
 
@@ -163,6 +329,9 @@ def test_iam_integrate_oidc_config_installs_oauth_client_oidc_defaults() -> None
     assert config.permissions == "permissions.zed"
     assert manifest["install"] == (
         {"path": "resources/install/010_integrate.oauthclient.yaml", "adopt": ("slug", "environment")},
+    )
+    assert manifest["demo"] == (
+        {"path": "resources/demo/010_integrate.oauthclient.yaml", "adopt": ("slug", "environment")},
     )
 
     oidc_rows = ResourceEntry.from_declaration(config, "install", manifest["install"][0]).read_resource_rows()
@@ -182,6 +351,11 @@ def test_iam_integrate_oidc_config_installs_oauth_client_oidc_defaults() -> None
     assert grok_oidc["login_enabled"] is True
     assert grok_oidc["issuer"] == "https://auth.x.ai"
     assert grok_oidc["discovery_url"] == "https://auth.x.ai/.well-known/openid-configuration"
+    demo_rows = _resource_rows(config, "demo", "resources/demo/010_integrate.oauthclient.yaml")
+    assert demo_rows["demo_google"]["slug"] == "google"
+    assert demo_rows["demo_google"]["environment"] == "prod"
+    assert demo_rows["demo_google"]["provider_type"] == "google"
+    assert demo_rows["demo_google"]["login_enabled"] is True
 
 
 def test_integrate_config_installs_agentic_vendor_resources() -> None:

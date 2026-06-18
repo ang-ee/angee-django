@@ -6,6 +6,7 @@
 # stay off (defaults), so this demo verifies an identity but never provisions a user.
 - xref: demo_google
   slug: google
+  environment: prod
   icon: google
   display_name: Google (demo)
   provider_type: google

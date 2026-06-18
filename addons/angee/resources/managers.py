@@ -169,11 +169,11 @@ class ResourceQuerySet(models.QuerySet[Any]):
         """Return selected rows grouped by source entry and model."""
 
         groups: list[ResourceGroup] = []
-        by_key: dict[tuple[str, str], ResourceGroup] = {}
+        by_key: dict[tuple[str, str, str], ResourceGroup] = {}
         for entry in self._entries_for(addons, tiers=tiers):
             for row in entry.read_resource_rows():
                 model = resolve_model(row.model_label)
-                key = (entry.source, model._meta.label_lower)
+                key = (entry.addon.name, entry.source, model._meta.label_lower)
                 group = by_key.get(key)
                 if group is None:
                     group = ResourceGroup(entry=entry, model=model, rows=[])

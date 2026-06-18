@@ -38,6 +38,7 @@ ANGEE_INTEGRATION_IMPLS = {
     "stub": "tests.conftest.StubVCSBackend",
     "manual": "angee.agents.backends.ManualInferenceBackend",
     "anthropic": "angee.agents_integrate_anthropic.backend.AnthropicInferenceBackend",
+    "openai": "angee.agents_integrate_openai.backend.OpenAIInferenceBackend",
     "stub_inference": "tests.conftest.StubInferenceBackend",
 }
 # OAuth provider types (normally each addon's autoconfig contributes these); the

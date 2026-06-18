@@ -22,6 +22,7 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
+from django.db.models import Q
 from rebac import current_actor, system_context
 from strawberry import auto, relay
 from strawberry.scalars import JSON
@@ -386,6 +387,43 @@ class AgentOrder:
     updated_at: auto
 
 
+@strawberry_django.filter_type(InferenceModel, lookups=True)
+class InferenceModelFilter:
+    """Field lookups accepted when filtering the inference model catalogue."""
+
+    name: auto
+    display_name: auto
+    model_use: auto
+    is_default: auto
+    status: auto
+
+    @strawberry_django.filter_field
+    def provider(self, queryset: Any, value: relay.GlobalID, prefix: str) -> tuple[Any, Q]:
+        """Narrow catalogue rows to one provider addressed by its relay id."""
+
+        return queryset, Q(**{f"{prefix}provider__sqid": value.node_id})
+
+    @strawberry_django.filter_field
+    def publisher(self, queryset: Any, value: relay.GlobalID, prefix: str) -> tuple[Any, Q]:
+        """Narrow catalogue rows to one publisher vendor addressed by its relay id."""
+
+        return queryset, Q(**{f"{prefix}publisher__sqid": value.node_id})
+
+
+@strawberry_django.order_type(InferenceModel)
+class InferenceModelOrder:
+    """Orderings accepted by the inference model catalogue."""
+
+    provider: auto
+    publisher: auto
+    name: auto
+    display_name: auto
+    model_use: auto
+    is_default: auto
+    status: auto
+    updated_at: auto
+
+
 @strawberry.type
 class AgentsConsoleQuery:
     """Admin agent-catalogue queries."""
@@ -415,6 +453,8 @@ class AgentsConsoleQuery:
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
     inference_models: OffsetPaginated[InferenceModelType] = strawberry_django.offset_paginated(
+        filters=InferenceModelFilter,
+        order=InferenceModelOrder,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
     inference_model: InferenceModelType | None = strawberry_django.node(

@@ -6,6 +6,7 @@ ALLOWED_HOSTS:
 INSTALLED_APPS:
   - angee.agents
   - angee.agents_integrate_anthropic
+  - angee.agents_integrate_openai
   - angee.integrate
   - angee.iam_integrate_oidc
   - angee.integrate_github

@@ -3,7 +3,7 @@ _meta:
 rows:
   - xref: md_getting_started
     fields:
-      page: notes.page_getting_started
+      page: knowledge.page_getting_started
       body: |
         # Getting Started
 
@@ -15,7 +15,7 @@ rows:
         - Link pages with `[[Wikilinks]]` to build backlinks.
   - xref: md_architecture
     fields:
-      page: notes.page_architecture
+      page: knowledge.page_architecture
       body: |
         # Architecture
 
@@ -31,7 +31,7 @@ rows:
         3. The composer turns contracts into a runnable project.
   - xref: md_wikilinks
     fields:
-      page: notes.page_wikilinks
+      page: knowledge.page_wikilinks
       body: |
         # Wikilinks
 

@@ -1,0 +1,9 @@
+# The OpenAI integration the inference provider runs over. It uses the live
+# OpenAI backend, so refreshing models asks OpenAI when a usable static API key
+# is attached. The placeholder credential keeps the row seedable.
+- xref: integration_openai_demo
+  owner: iam.user_admin
+  vendor: integrate.openai
+  impl_class: openai
+  credential: agents_integrate_openai.cred_openai_demo
+  status: active

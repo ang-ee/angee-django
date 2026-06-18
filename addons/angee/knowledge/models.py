@@ -91,6 +91,7 @@ class Vault(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
         ordering = ("name", "sqid")
         rebac_resource_type = "knowledge/vault"
         rebac_id_attr = "sqid"
+        constraints = (models.UniqueConstraint(fields=("owner", "name"), name="uniq_knowledge_vault_owner_name"),)
 
     def __str__(self) -> str:
         """Return the vault name for Django displays."""
@@ -173,6 +174,7 @@ class Page(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
         ordering = ("title", "sqid")
         rebac_resource_type = "knowledge/page"
         rebac_id_attr = "sqid"
+        constraints = (models.UniqueConstraint(fields=("vault", "title"), name="uniq_knowledge_page_vault_title"),)
 
     def __str__(self) -> str:
         """Return the page title for Django displays."""

@@ -1,5 +1,5 @@
-# The agent-default workspace + claude-code service templates, pre-materialised so the
-# demo agent (095) can reference them before a source sync runs. Keyed by (source, path)
+# The agent-default workspace + service templates, pre-materialised so demo agents can
+# reference them before a source sync runs. Keyed by (source, path)
 # to exactly match what the local-templates source (085) discovers, so a later Refresh
 # upserts these rows instead of duplicating them. `name`/`kind` mirror each template's
 # copier.yml `_angee` (the daemon resolves its render target by name + kind).

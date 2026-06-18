@@ -13,7 +13,14 @@ class NotesConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "example.notes"
     label = "notes"
-    depends_on = ("angee.iam", "angee.integrate", "angee.iam_integrate_oidc", "angee.agents", "angee.mcp")
+    depends_on = (
+        "angee.iam",
+        "angee.integrate",
+        "angee.iam_integrate_oidc",
+        "angee.agents",
+        "angee.agents_integrate_anthropic",
+        "angee.mcp",
+    )
     schemas = "schema.schemas"
     permissions = "permissions.zed"
     mcp_tools = "mcp_tools.register"
@@ -25,28 +32,47 @@ class NotesConfig(AppConfig):
     resources = {
         "install": ("resources/install/010_integrate.vendor.yaml",),
         "demo": (
-            "resources/demo/010_iam.user.yaml",
-            "resources/demo/020_notes.note.yaml",
-            "resources/demo/030_integrate.oauthclient.yaml",
-            "resources/demo/050_knowledge.vault.yaml",
-            "resources/demo/060_knowledge.page.yaml",
-            "resources/demo/070_knowledge.markdown_page.yaml",
+            {
+                "path": "resources/demo/020_notes.note.yaml",
+                "depends_on": "iam:resources/demo/010_iam.user.yaml",
+            },
             # Local template source: discover the repo's templates/ as integrate.Template
             # rows via the `local` VCS backend, ordered so each FK resolves before its use.
-            "resources/demo/080_integrate.credential.yaml",
+            {
+                "path": "resources/demo/080_integrate.credential.yaml",
+                "depends_on": "iam:resources/demo/010_iam.user.yaml",
+            },
             "resources/demo/081_integrate.vendor.yaml",
-            "resources/demo/082_integrate.integration.yaml",
-            "resources/demo/083_integrate.vcsbridge.yaml",
-            "resources/demo/084_integrate.repository.yaml",
-            "resources/demo/085_integrate.source.yaml",
-            # A ready-to-provision demo agent and its inference chain (placeholder
-            # credential -> integration -> provider -> model -> templates -> agent).
-            "resources/demo/090_integrate.credential.yaml",
-            "resources/demo/091_integrate.integration.yaml",
-            "resources/demo/092_agents.inferenceprovider.yaml",
-            "resources/demo/093_agents.inferencemodel.yaml",
-            "resources/demo/094_integrate.template.yaml",
-            "resources/demo/0945_agents.mcpserver.yaml",
-            "resources/demo/095_agents.agent.yaml",
+            {
+                "path": "resources/demo/082_integrate.integration.yaml",
+                "depends_on": (
+                    "resources/demo/080_integrate.credential.yaml",
+                    "resources/demo/081_integrate.vendor.yaml",
+                ),
+            },
+            {
+                "path": "resources/demo/083_integrate.vcsbridge.yaml",
+                "depends_on": "resources/demo/082_integrate.integration.yaml",
+            },
+            {
+                "path": "resources/demo/084_integrate.repository.yaml",
+                "depends_on": "resources/demo/083_integrate.vcsbridge.yaml",
+            },
+            {
+                "path": "resources/demo/085_integrate.source.yaml",
+                "depends_on": "resources/demo/084_integrate.repository.yaml",
+            },
+            {
+                "path": "resources/demo/094_integrate.template.yaml",
+                "depends_on": "resources/demo/085_integrate.source.yaml",
+            },
+            {
+                "path": "resources/demo/095_agents.agent.yaml",
+                "depends_on": (
+                    "resources/demo/094_integrate.template.yaml",
+                    "agents:resources/demo/020_agents.mcpserver.yaml",
+                    "agents_integrate_anthropic:resources/demo/040_agents.inferencemodel.yaml",
+                ),
+            },
         ),
     }

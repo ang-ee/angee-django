@@ -21,6 +21,9 @@ class IAMConfig(AppConfig):
     )
     schemas = "schema.schemas"
     permissions = "permissions.zed"
+    resources = {
+        "demo": ({"path": "resources/demo/010_iam.user.yaml", "adopt": "username"},),
+    }
 
     def ready(self) -> None:
         """Wire IAM-owned REBAC relationships after app population."""

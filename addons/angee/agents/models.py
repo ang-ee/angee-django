@@ -358,7 +358,7 @@ class MCPServer(SqidMixin, AuditMixin, AngeeModel):
     runtime = True
 
     sqid = SqidField(real_field_name="id", prefix="mcp", min_length=8)
-    name = models.CharField(max_length=200)
+    name = models.CharField(max_length=200, unique=True)
     description = models.TextField(blank=True)
     placement = StateField(choices_enum=MCPPlacement, default=MCPPlacement.EXTERNAL)
     transport = StateField(choices_enum=MCPTransport, default=MCPTransport.HTTP)

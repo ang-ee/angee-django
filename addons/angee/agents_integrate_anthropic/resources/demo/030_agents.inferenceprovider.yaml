@@ -1,0 +1,6 @@
+# The inference provider companion over the Anthropic integration. The demo seeds
+# baseline model handles, and `refreshProviderModels` can replace/extend them
+# from Anthropic once the integration has a usable credential.
+- xref: provider_anthropic_demo
+  integration: agents_integrate_anthropic.integration_anthropic_demo
+  name: Anthropic

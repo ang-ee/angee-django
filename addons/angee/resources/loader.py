@@ -18,7 +18,7 @@ from import_export.utils import get_related_model
 
 from angee.base.models import instance_from_public_id, public_id_of
 from angee.base.serialization import json_safe
-from angee.resources.entries import FROZEN_TIERS, RESERVED_ROW_KEYS, ResourceEntry
+from angee.resources.entries import RESERVED_ROW_KEYS, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.widgets import (
     XrefForeignKeyWidget,
@@ -192,7 +192,7 @@ class AngeeResource(resources.ModelResource):
         row_hash: str,
         ledger: Resource | None,
     ) -> RowResult | None:
-        """Adopt an unledgered target and return any frozen-tier skip."""
+        """Adopt an unledgered target before normal row import runs."""
 
         if ledger is not None:
             return None
@@ -200,14 +200,7 @@ class AngeeResource(resources.ModelResource):
         if adopted is None:
             return None
         self._adopted_instances[xref] = adopted
-        if self.entry.tier not in FROZEN_TIERS:
-            return None
-        self._upsert_ledger(
-            xref=xref,
-            instance=adopted,
-            row_hash=row_hash,
-        )
-        return self._skip_result(adopted)
+        return None
 
     def _skip_decision(
         self,
@@ -219,8 +212,6 @@ class AngeeResource(resources.ModelResource):
 
         if ledger is None:
             return None
-        if self.entry.tier in FROZEN_TIERS:
-            return self._skip_result(instance)
         if instance is not None and ledger.content_hash == row_hash:
             return self._skip_result(instance)
         return None
@@ -338,7 +329,13 @@ class AngeeResource(resources.ModelResource):
             composite = self._composite_adoption_candidate(row, adopt)
             if composite is None:
                 return None
-            matches = list(self._meta.model._default_manager.filter(**composite)[:2])
+            queryset = self._meta.model._default_manager.filter(**composite)
+            condition = self._unique_field_set_condition(adopt)
+            if condition is not None:
+                if not self._row_matches_condition(row, condition):
+                    return None
+                queryset = queryset.filter(condition)
+            matches = list(queryset[:2])
             if len(matches) != 1:
                 return None
             return matches[0]
@@ -377,7 +374,7 @@ class AngeeResource(resources.ModelResource):
                 raise ImproperlyConfigured(f"{self.entry.display}: adopt field {field.name!r} is not importable")
             if resource_field.column_name not in row:
                 return None
-            value = row.get(resource_field.column_name)
+            value = self._adoption_field_value(resource_field, row)
             if value in (None, ""):
                 return None
             candidate[field.name] = value
@@ -396,10 +393,82 @@ class AngeeResource(resources.ModelResource):
             raise ImproperlyConfigured(f"{self.entry.display}: adopt field {field_name!r} is not importable")
         if resource_field.column_name not in row:
             return None
-        value = row.get(resource_field.column_name)
+        value = self._adoption_field_value(resource_field, row)
         if value in (None, ""):
             return None
         return field.name, value
+
+    def _adoption_field_value(self, resource_field: fields.Field, row: Mapping[str, Any]) -> Any:
+        """Return one adoption key value after the field's widget cleans it."""
+
+        return resource_field.clean(row)
+
+    def _row_matches_condition(self, row: Mapping[str, Any], condition: models.Q) -> bool:
+        """Return whether a resource row satisfies one conditional unique constraint."""
+
+        results: list[bool] = []
+        for child in condition.children:
+            if isinstance(child, models.Q):
+                results.append(self._row_matches_condition(row, child))
+                continue
+            lookup, expected = child
+            results.append(self._row_matches_lookup(row, str(lookup), expected))
+        if condition.connector == models.Q.OR:
+            matched = any(results)
+        elif condition.connector == models.Q.AND:
+            matched = all(results)
+        else:
+            raise ImproperlyConfigured(
+                f"{self.entry.display}: adopt condition connector {condition.connector!r} is not supported"
+            )
+        return not matched if condition.negated else matched
+
+    def _row_matches_lookup(self, row: Mapping[str, Any], lookup: str, expected: Any) -> bool:
+        """Return whether a row value satisfies one supported Q lookup."""
+
+        parts = lookup.split("__")
+        operator = "exact"
+        if parts[-1] in {"exact", "isnull"}:
+            operator = parts.pop()
+        if len(parts) != 1:
+            raise ImproperlyConfigured(f"{self.entry.display}: adopt condition lookup {lookup!r} is not supported")
+        field = self._condition_field(parts[0])
+        value = self._condition_field_value(field, row)
+        if operator == "isnull":
+            return (value is None) is bool(expected)
+        if operator == "exact":
+            return self._prepared_condition_value(field, value) == self._prepared_condition_value(field, expected)
+        raise ImproperlyConfigured(f"{self.entry.display}: adopt condition lookup {lookup!r} is not supported")
+
+    def _condition_field(self, field_name: str) -> models.Field[Any, Any]:
+        """Return one model field named by a conditional unique constraint."""
+
+        try:
+            field = self._meta.model._meta.get_field(field_name)
+        except FieldDoesNotExist as error:
+            raise ImproperlyConfigured(
+                f"{self.entry.display}: adopt condition field {field_name!r} does not exist"
+            ) from error
+        if not isinstance(field, models.Field):
+            raise ImproperlyConfigured(f"{self.entry.display}: adopt condition field {field_name!r} is not importable")
+        return field
+
+    def _condition_field_value(self, field: models.Field[Any, Any], row: Mapping[str, Any]) -> Any:
+        """Return one condition field value from the row or the model default."""
+
+        resource_field = self.fields.get(field.name)
+        if resource_field is not None and resource_field.column_name in row:
+            return self._adoption_field_value(resource_field, row)
+        if field.has_default():
+            return field.get_default()
+        return None
+
+    def _prepared_condition_value(self, field: models.Field[Any, Any], value: Any) -> Any:
+        """Return one condition value normalized for model-field comparison."""
+
+        if isinstance(field, models.ForeignKey) and isinstance(value, models.Model):
+            value = value.pk
+        return field.get_prep_value(value)
 
     def _unique_adoption_field(
         self,
@@ -449,22 +518,31 @@ class AngeeResource(resources.ModelResource):
         return tuple(fields)
 
     def _has_unique_field_set(self, field_names: tuple[str, ...]) -> bool:
-        """Return whether ``field_names`` identify an unconditional unique constraint."""
+        """Return whether ``field_names`` identify a model-owned unique constraint."""
+
+        return self._find_unique_field_set_condition(field_names)[0]
+
+    def _unique_field_set_condition(self, field_names: tuple[str, ...]) -> models.Q | None:
+        """Return the unique constraint condition for one adoption key, if any."""
+
+        found, condition = self._find_unique_field_set_condition(field_names)
+        return condition if found else None
+
+    def _find_unique_field_set_condition(self, field_names: tuple[str, ...]) -> tuple[bool, models.Q | None]:
+        """Return whether ``field_names`` match a unique constraint and its condition."""
 
         expected = frozenset(field_names)
         for unique_together in self._meta.model._meta.unique_together:
             if frozenset(unique_together) == expected:
-                return True
+                return True, None
         for constraint in self._meta.model._meta.constraints:
             if not isinstance(constraint, models.UniqueConstraint):
-                continue
-            if getattr(constraint, "condition", None) is not None:
                 continue
             if getattr(constraint, "expressions", ()):
                 continue
             if frozenset(getattr(constraint, "fields", ())) == expected:
-                return True
-        return False
+                return True, getattr(constraint, "condition", None)
+        return False, None
 
     def _is_adoptable_field(self, field: models.Field[Any, Any]) -> bool:
         """Return whether ``field`` can identify an adopted target."""

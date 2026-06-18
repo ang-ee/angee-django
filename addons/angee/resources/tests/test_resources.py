@@ -558,6 +558,115 @@ def test_resource_manager_loads_rows_and_resolves_xrefs(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_resource_manager_keeps_same_path_groups_addon_scoped(
+    tmp_path: Path,
+) -> None:
+    """Same-named files in separate addons keep addon-local ledger ownership."""
+
+    class SharedUser(AngeeModel):
+        """User-like model loaded from multiple addon resource files."""
+
+        username = models.CharField(max_length=40, unique=True)
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "base"
+
+    class SharedNote(AngeeModel):
+        """Note-like model referencing an addon-local resource user."""
+
+        title = models.CharField(max_length=80)
+        created_by = models.ForeignKey(SharedUser, on_delete=models.CASCADE)
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "base"
+
+    class SharedLedger(Resource):
+        """Concrete resource ledger for addon-scoped grouping tests."""
+
+        class Meta(Resource.Meta):
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+            abstract = False
+
+    alpha_root = tmp_path / "alpha"
+    beta_root = tmp_path / "beta"
+    for root in (alpha_root, beta_root):
+        (root / "resources").mkdir(parents=True)
+    (alpha_root / "resources" / "010_base.shareduser.csv").write_text(
+        "_xref,username\nalpha_user,alpha\n",
+        encoding="utf-8",
+    )
+    (beta_root / "resources" / "010_base.shareduser.csv").write_text(
+        "_xref,username\nbeta_user,beta\n",
+        encoding="utf-8",
+    )
+    (beta_root / "resources" / "020_base.sharednote.yaml").write_text(
+        "- _xref: beta_note\n"
+        "  title: Beta note\n"
+        "  created_by: beta.beta_user\n",
+        encoding="utf-8",
+    )
+    alpha = addon(
+        alpha_root,
+        name="tests.alpha",
+        label="alpha",
+        manifest={
+            "master": ({"path": "resources/010_base.shareduser.csv"},),
+            "install": (),
+            "demo": (),
+        },
+    )
+    beta = addon(
+        beta_root,
+        name="tests.beta",
+        label="beta",
+        manifest={
+            "master": (
+                {"path": "resources/010_base.shareduser.csv"},
+                {
+                    "path": "resources/020_base.sharednote.yaml",
+                    "depends_on": "resources/010_base.shareduser.csv",
+                },
+            ),
+            "install": (),
+            "demo": (),
+        },
+    )
+
+    models_to_create = (SharedUser, SharedNote, SharedLedger)
+    with connection.schema_editor() as schema_editor:
+        for model in models_to_create:
+            schema_editor.create_model(model)
+    try:
+        SharedLedger.objects.load_addons(
+            (alpha, beta),
+            tiers=[Resource.Tier.MASTER],
+        )
+
+        with system_context(reason="resource grouping assertions"):
+            beta_user = SharedUser.objects.get(username="beta")
+            beta_note = SharedNote.objects.get(title="Beta note")
+        ledgers = {
+            (row.source_addon, row.xref): row.target_model
+            for row in SharedLedger.objects.order_by("source_addon", "xref")
+        }
+
+        assert beta_note.created_by == beta_user
+        assert ledgers[("tests.alpha", "alpha_user")] == "base.SharedUser"
+        assert ledgers[("tests.beta", "beta_user")] == "base.SharedUser"
+        assert ledgers[("tests.beta", "beta_note")] == "base.SharedNote"
+    finally:
+        with connection.schema_editor() as schema_editor:
+            for model in reversed(models_to_create):
+                schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
 def test_resource_load_rejects_existing_xref_for_another_model(
     tmp_path: Path,
 ) -> None:
@@ -768,8 +877,8 @@ def test_resource_adoption_is_opt_in(tmp_path: Path) -> None:
         )
 
         assert result.created == 0
-        assert result.updated == 0
-        assert result.skipped == 1
+        assert result.updated == 1
+        assert result.skipped == 0
         with system_context(reason="resource adoption assertions"):
             assert AdoptUser.objects.count() == 1
         assert AdoptLedger.objects.get(xref="existing").target_id
@@ -840,7 +949,8 @@ def test_resource_adoption_uses_explicit_unique_field(
             tiers=[Resource.Tier.INSTALL],
         )
 
-        assert result.skipped == 1
+        assert result.updated == 1
+        assert result.skipped == 0
         with system_context(reason="explicit adoption assertions"):
             assert ExplicitAdoptUser.objects.count() == 1
         assert ExplicitAdoptLedger.objects.get(xref="existing").target_id
@@ -914,11 +1024,153 @@ def test_resource_adoption_accepts_composite_unique_fields(tmp_path: Path) -> No
         )
 
         assert result.created == 0
-        assert result.updated == 0
-        assert result.skipped == 1
+        assert result.updated == 1
+        assert result.skipped == 0
         existing.refresh_from_db()
-        assert existing.label == "Existing"
+        assert existing.label == "Seeded"
         assert CompositeLedger.objects.get(xref="anthropic").target_id == existing.public_id
+
+        second = CompositeLedger.objects.load_addons(
+            (owner,),
+            tiers=[Resource.Tier.INSTALL],
+        )
+        assert second.created == 0
+        assert second.updated == 0
+        assert second.skipped == 1
+
+        (resource_dir / "010_base.compositeclient.csv").write_text(
+            "_xref,slug,environment,label\nanthropic,anthropic,prod,Changed\n",
+            encoding="utf-8",
+        )
+        third = CompositeLedger.objects.load_addons(
+            (owner,),
+            tiers=[Resource.Tier.INSTALL],
+        )
+        assert third.created == 0
+        assert third.updated == 1
+        assert third.skipped == 0
+        existing.refresh_from_db()
+        assert existing.label == "Changed"
+    finally:
+        with connection.schema_editor() as schema_editor:
+            for model in reversed(models_to_create):
+                schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_resource_adoption_accepts_conditional_composite_unique_fields(tmp_path: Path) -> None:
+    """Resource adoption can reuse rows governed by a conditional composite unique key."""
+
+    class ConditionalOwner(AngeeModel):
+        """Model addressed by xref from the conditional adoption key."""
+
+        username = models.CharField(max_length=40, unique=True)
+
+        class Meta:
+            """Django model options for the conditional owner test model."""
+
+            app_label = "base"
+
+    class ConditionalCredential(AngeeModel):
+        """Model whose local identity is unique only for provider-less rows."""
+
+        user = models.ForeignKey(ConditionalOwner, on_delete=models.CASCADE)
+        name = models.CharField(max_length=40, blank=True)
+        oauth_client = models.CharField(max_length=40, blank=True, null=True)
+        label = models.CharField(max_length=80, blank=True)
+
+        class Meta:
+            """Django model options for the conditional adoption test model."""
+
+            app_label = "base"
+            constraints = (
+                models.UniqueConstraint(
+                    fields=("user", "name"),
+                    condition=models.Q(oauth_client__isnull=True) & ~models.Q(name=""),
+                    name="uniq_resource_conditional_credential",
+                ),
+            )
+
+    class ConditionalLedger(Resource):
+        """Concrete resource ledger for conditional adoption tests."""
+
+        class Meta(Resource.Meta):
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+            abstract = False
+
+    resource_dir = tmp_path / "resources"
+    resource_dir.mkdir()
+    (resource_dir / "010_base.conditionalowner.csv").write_text(
+        "_xref,username\nadmin,admin\n",
+        encoding="utf-8",
+    )
+    (resource_dir / "010_base.conditionalcredential.csv").write_text(
+        "_xref,user,name,label\nstatic-key,resource_addon.admin,api-key,Seeded\n",
+        encoding="utf-8",
+    )
+    (resource_dir / "020_base.conditionalcredential.csv").write_text(
+        "_xref,user,name,oauth_client,label\nstatic-key-oauth,resource_addon.admin,api-key,client-a,OAuth row\n",
+        encoding="utf-8",
+    )
+    owner = addon(
+        tmp_path,
+        manifest={
+            "master": (),
+            "install": (
+                {
+                    "path": "resources/010_base.conditionalowner.csv",
+                    "adopt": "username",
+                },
+                {
+                    "path": "resources/010_base.conditionalcredential.csv",
+                    "depends_on": "resources/010_base.conditionalowner.csv",
+                    "adopt": ["user", "name"],
+                },
+                {
+                    "path": "resources/020_base.conditionalcredential.csv",
+                    "depends_on": "resources/010_base.conditionalcredential.csv",
+                    "adopt": ["user", "name"],
+                },
+            ),
+            "demo": (),
+        },
+    )
+
+    models_to_create = (ConditionalOwner, ConditionalCredential, ConditionalLedger)
+    with connection.schema_editor() as schema_editor:
+        for model in models_to_create:
+            schema_editor.create_model(model)
+    try:
+        user = ConditionalOwner.objects.create(username="admin")
+        existing = ConditionalCredential.objects.create(user=user, name="api-key", label="Existing")
+
+        result = ConditionalLedger.objects.load_addons(
+            (owner,),
+            tiers=[Resource.Tier.INSTALL],
+        )
+
+        assert result.created == 1
+        assert result.updated == 2
+        assert result.skipped == 0
+        existing.refresh_from_db()
+        assert existing.label == "Seeded"
+        with system_context(reason="conditional adoption assertions"):
+            assert ConditionalCredential.objects.count() == 2
+            oauth_row = ConditionalCredential.objects.get(oauth_client="client-a")
+        assert oauth_row.name == "api-key"
+        assert oauth_row.label == "OAuth row"
+        assert ConditionalLedger.objects.get(xref="static-key").target_id == existing.public_id
+        assert ConditionalLedger.objects.get(xref="static-key-oauth").target_id == oauth_row.public_id
+
+        second = ConditionalLedger.objects.load_addons(
+            (owner,),
+            tiers=[Resource.Tier.INSTALL],
+        )
+        assert second.created == 0
+        assert second.updated == 0
+        assert second.skipped == 3
     finally:
         with connection.schema_editor() as schema_editor:
             for model in reversed(models_to_create):

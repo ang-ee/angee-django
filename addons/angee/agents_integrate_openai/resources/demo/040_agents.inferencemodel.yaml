@@ -1,0 +1,11 @@
+# Models in the provider catalogue. A model's `name` is the runtime handle the agent
+# passes to its rendered container. Refreshing the provider can add the exact
+# account-visible model list from OpenAI.
+- xref: model_openai_demo
+  provider: agents_integrate_openai.provider_openai_demo
+  name: gpt-4.1
+  display_name: GPT-4.1
+- xref: model_openai_broker_demo
+  provider: agents_integrate_openai.provider_openai_demo
+  name: openai/gpt-4.1
+  display_name: GPT-4.1 (OpenAI)
