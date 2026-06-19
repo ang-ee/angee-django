@@ -294,6 +294,8 @@ deletion opportunities instead of producing one broad audit blob.
   `.agents/plans/reviewer-slicing-strategy.md`
 - [ ] Refactoring workflow:
   `.agents/plans/refactoring-workflow.md`
+- [ ] Research batch findings:
+  `.agents/plans/pre-1-0-dry-audit-research-findings.md`
 
 Each researcher must answer:
 
