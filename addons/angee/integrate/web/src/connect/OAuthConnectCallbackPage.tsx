@@ -8,7 +8,7 @@ import { useCallback, useMemo, type ReactNode } from "react";
 
 import { useIntegrateT } from "../i18n";
 import { IntegrateConnectAccountComplete } from "./documents.public";
-import { connectCallbackRedirectUri } from "./redirects";
+import { currentConnectCallbackRedirectUri } from "./redirects";
 
 /** OAuth account-connect redirect handler: completes the connect code exchange. */
 export function OAuthConnectCallbackPage(): ReactNode {
@@ -44,7 +44,7 @@ export function OAuthConnectCallbackPage(): ReactNode {
       complete={complete}
       copy={copy}
       fallbackRedirect="/integrate/accounts"
-      redirectUri={connectCallbackRedirectUri()}
+      redirectUri={currentConnectCallbackRedirectUri()}
     />
   );
 }

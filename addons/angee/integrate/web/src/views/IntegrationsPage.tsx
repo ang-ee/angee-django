@@ -14,6 +14,7 @@ import {
 import { useAuthoredMutation, type Row } from "@angee/sdk";
 
 import { canConnectRecord, ConnectOAuthButton } from "../connect/ConnectOAuthButton";
+import { connectCallbackPathForRecord } from "../connect/redirects";
 import { ConnectIntegration } from "../documents";
 import { useIntegrateT } from "../i18n";
 
@@ -143,6 +144,7 @@ function IntegrationConnectButton({
       label={t("integrate.integrations.action.connect")}
       connectedTitle={t("integrate.integrations.connect.connected")}
       startErrorTitle={t("integrate.integrations.connect.startError")}
+      callbackPath={connectCallbackPathForRecord(row)}
       next={CONNECT_NEXT}
       onConnected={refresh}
       start={async ({ redirectUri, next }) => {

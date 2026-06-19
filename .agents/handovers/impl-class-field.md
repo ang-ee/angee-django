@@ -38,8 +38,8 @@ contradiction; the boundary is:
   `Bridge` subclasses; behavior + data on the model).
 - **Same fields, only behavior differs per variant → one concrete model + an
   `ImplClassField` naming a non-model strategy/client class** (e.g.
-  `VCSIntegration` row → a `GitHubClient`; `InferenceIntegration` row → an
-  `AnthropicClient`). This keeps one table (unified list/reconcile, no field
+  `VcsBridge` row → a GitHub VCS backend; `InferenceProvider` row → an
+  Anthropic inference backend). This keeps one table (unified list/reconcile, no field
   duplication) while behavior stays explicit and per-row.
 
 Make this distinction explicit in the backend guideline so future addons pick

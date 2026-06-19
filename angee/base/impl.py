@@ -131,6 +131,28 @@ class ImplDefaultsMixin(models.Model):
 
         abstract = True
 
+    @classmethod
+    def impl_key_for(cls, field_name: str, value: Any, *, default: str | None = None) -> str:
+        """Return the canonical registry key for one ``ImplClassField`` value."""
+
+        field = cls._impl_field(field_name)
+        if value is None:
+            if default is None:
+                raise ValueError(f"{cls.__name__}.{field_name} requires an impl key.")
+            value = default
+        key = str(field.key_for(value) or "")
+        field.resolve_class(key)
+        return key
+
+    @classmethod
+    def _impl_field(cls, field_name: str) -> Any:
+        """Return the named impl field or raise when the field is not impl-owned."""
+
+        field = cls._meta.get_field(field_name)
+        if not (callable(getattr(field, "key_for", None)) and callable(getattr(field, "resolve_class", None))):
+            raise FieldDoesNotExist(f"{cls.__name__}.{field_name} is not an ImplClassField.")
+        return field
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Record the caller-supplied field names so create-time seeding skips them."""
 
@@ -153,3 +175,23 @@ class ImplDefaultsMixin(models.Model):
                 if isinstance(impl, type) and issubclass(impl, ImplBase):
                     impl.materialize(self, provided=provided)
         super().save(*args, **kwargs)
+
+    def set_impl_key(self, field_name: str, value: Any, *, default: str | None = None) -> bool:
+        """Assign an impl key and return whether the stored key changed."""
+
+        field = type(self)._impl_field(field_name)
+        key = type(self).impl_key_for(field_name, value, default=default)
+        changed = key != getattr(self, field.attname)
+        setattr(self, field.attname, key)
+        return changed
+
+    def materialize_impl_defaults(self, field_name: str, *, provided: frozenset[str] = frozenset()) -> None:
+        """Apply the selected impl's defaults for one impl field."""
+
+        field = type(self)._impl_field(field_name)
+        key = getattr(self, field.attname, None)
+        if not key:
+            return
+        impl = field.resolve_class(key)
+        if isinstance(impl, type) and issubclass(impl, ImplBase):
+            impl.materialize(self, provided=provided | {field.name, field.attname})

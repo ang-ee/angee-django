@@ -75,7 +75,7 @@ definition integrate/webhook_subscription {
     permission delete = owner + admin->member
 }
 
-definition integrate/vcs_integration {
+definition integrate/vcs_bridge {
     relation integration: integrate/integration // rebac:field=integration_ptr
     relation admin: angee/role // rebac:const=admin
 
@@ -87,13 +87,13 @@ definition integrate/vcs_integration {
 }
 
 definition integrate/repository {
-    relation vcs_integration: integrate/vcs_integration // rebac:field=vcs_integration
+    relation vcs_bridge: integrate/vcs_bridge // rebac:field=vcs_bridge
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
-    permission read = vcs_integration->read + admin->member
-    permission write = vcs_integration->write + admin->member
-    permission delete = vcs_integration->write + admin->member
+    permission read = vcs_bridge->read + admin->member
+    permission write = vcs_bridge->write + admin->member
+    permission delete = vcs_bridge->write + admin->member
 }
 
 definition integrate/source {

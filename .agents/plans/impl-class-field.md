@@ -9,8 +9,8 @@ default (storage `local`; integrate `none` → `NoopVCSClient`). Decision histor
 registry-key (§4) → briefly `__subclasses__()` → settings-dict → enum-backed
 (this final form, on the architect's "make it an enum" + "noop dummy" calls).
 This session implemented the shared field + `storage.Backend` adoption + the doc
-rule; a parallel agent built the `integrate` adoption (`VCSIntegration`), and the
-shared field's non-empty-registry contract is satisfied there by the noop.
+rule; a parallel agent built the `integrate` adoption (now `VcsBridge`), and the
+shared field's non-empty-registry contract is satisfied there by the default VCS backend.
 Handover: `.agents/handovers/impl-class-field.md`.
 
 ## 1. What forced this
@@ -164,7 +164,7 @@ otherwise be empty ships a **noop/null-object default**: storage `local`
 built at *model-import time* from the setting, so **every settings module that
 installs the addon must carry a non-empty mapping** — including bare modules that
 skip the composer (`tests/settings.py` declares both
-`ANGEE_STORAGE_BACKEND_CLASSES` and `ANGEE_VCS_CLIENT_CLASSES`). An empty registry
+`ANGEE_STORAGE_BACKEND_CLASSES` and `ANGEE_VCS_BACKEND_CLASSES`). An empty registry
 raises `ImproperlyConfigured` at import. This import-time coupling is the cost of
 the native-enum choice over a plain empty-tolerant column.
 

@@ -294,13 +294,12 @@ mass addon adoption.
   - [x] Pin the repro from
     `/Users/alexis/.codex/attachments/ca885d38-88d5-447c-8aa4-be2881a422a4/pasted-text.txt`:
     `DataPage` for `integrate.VcsBridge` throws because schema metadata does not
-    expose a `delete` root field, even though the console SDL contains
-    `deleteVcsIntegration`.
+    expose a `delete` root field. The canonical root is now `deleteVcsBridge`.
   - [x] First eliminate stale-artifact causes: run `angee build`, `schema`,
     `pnpm run codegen`, and restart Vite before judging the code path.
   - [x] Add a regression test that renders or metadata-loads `VcsBridgesPage`
     under the `console` schema and proves `integrate.VcsBridge` resolves
-    `deleteVcsIntegration`.
+    `deleteVcsBridge`.
   - [x] If the active schema is wrong, fix shell/schema binding so console routes
     cannot read public-schema model metadata.
   - [x] If metadata inference is wrong, fix the metadata owner in
@@ -308,6 +307,11 @@ mass addon adoption.
     facts over addon-local workarounds.
   - [x] Keep the current guideline contract: `DataPage` requires a delete root
     unless a real read-only `DataPage` mode is designed and implemented in base.
+  - [x] Follow-up cleanup: canonicalize the source owner instead of preserving
+    the workaround. `VcsBridge` now owns `vcsBridge(s)` SDL roots, VCS bridge
+    action variables, `Repository.vcs_bridge`, and `integrate/vcs_bridge` REBAC
+    relations; the SDK delete-root matcher no longer carries the
+    old target-mismatch fallback.
 
 - [x] Centralize status-to-tone mapping.
   - [x] Route private maps through

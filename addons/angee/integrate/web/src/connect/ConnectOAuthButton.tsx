@@ -19,6 +19,7 @@ export interface ConnectOAuthButtonProps {
   label: string;
   connectedTitle: string;
   startErrorTitle: string;
+  callbackPath?: string;
   next: string;
   start: (input: {
     redirectUri: string;
@@ -32,6 +33,7 @@ export function ConnectOAuthButton({
   label,
   connectedTitle,
   startErrorTitle,
+  callbackPath,
   next,
   start,
   onConnected,
@@ -48,7 +50,7 @@ export function ConnectOAuthButton({
     setStarting(true);
     try {
       const payload = await start({
-        redirectUri: connectCallbackRedirectUri(),
+        redirectUri: connectCallbackRedirectUri(callbackPath),
         next,
       });
       if (payload?.error) throw new Error(payload.error);

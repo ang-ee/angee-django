@@ -281,9 +281,10 @@ architect direction before preserving the current shape.
 
 ### VCS Naming Decision
 
-- **Finding:** one row is named both `VcsBridge` and `VCS Integration` across
-  model, GraphQL roots, REBAC/resource type, routes, and labels.
-- **Greenfield:** choose `VcsBridge` or `VcsIntegration` once.
+- **Status:** resolved in the MTI cleanup follow-up. The canonical noun is
+  `VcsBridge`: schema roots are `vcsBridge(s)`, mutations/actions are
+  `*VcsBridge`, repository inventory points to `Repository.vcs_bridge`, and
+  REBAC uses `integrate/vcs_bridge`.
 - **True owner:** public model/schema vocabulary.
 - **Deletion:** remove the other noun from routes, GraphQL roots, resource
   names, tests, and docs/comments.
@@ -380,7 +381,7 @@ rule applies.
 
 - **`Provider` means two concepts:** agents `InferenceProvider` and integrate
   `OAuthClient`/OAuth provider routes both use generic provider language.
-- **`VcsBridge` vs `VCS Integration`:** one public concept has two nouns.
+- **VCS bridge naming:** resolved; keep `VcsBridge` as the one public noun.
 - **Source-kind pages repeat:** integrate sources, agents skill sources, and
   templates repeat source-kind page mechanics.
 - **Agent lifecycle rules are page-local:** React decodes raw status/runtime

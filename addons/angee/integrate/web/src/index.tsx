@@ -16,7 +16,10 @@ import { OAuthConnectCallbackPage } from "./connect/OAuthConnectCallbackPage";
 import { CredentialsPage } from "./connect/views/CredentialsPage";
 import { ExternalAccountsPage } from "./connect/views/ExternalAccountsPage";
 import { ProvidersPage } from "./connect/views/ProvidersPage";
-import { CONNECT_CALLBACK_PATH } from "./connect/redirects";
+import {
+  CONNECT_CALLBACK_FALLBACK_PATH,
+  CONNECT_CALLBACK_PATH,
+} from "./connect/redirects";
 import { enIntegrateMessages } from "./i18n";
 import { IntegrationsPage } from "./views/IntegrationsPage";
 import { RepositoriesPage } from "./views/RepositoriesPage";
@@ -83,7 +86,7 @@ const integrateRoutes: readonly BaseAddonRoute[] = [
     model: "VcsBridge",
   },
   {
-    name: "integrate.vcsIntegration",
+    name: "integrate.vcsBridge",
     path: "/integrate/vcs/$id",
     shell: "console",
     parent: "integrate.vcs",
@@ -136,6 +139,12 @@ const integrateRoutes: readonly BaseAddonRoute[] = [
   {
     name: "integrate.connect.callback",
     path: CONNECT_CALLBACK_PATH,
+    shell: "console",
+    component: OAuthConnectCallbackPage,
+  },
+  {
+    name: "integrate.connect.callbackFallback",
+    path: CONNECT_CALLBACK_FALLBACK_PATH,
     shell: "console",
     component: OAuthConnectCallbackPage,
   },
@@ -209,7 +218,7 @@ const integrateMenu: readonly BaseMenuItem[] = [
           { id: "integrate.sources", label: "Sources", icon: "source", route: "integrate.sources" },
           { id: "integrate.templates", label: "Templates", icon: "integrateTemplate", route: "integrate.templates" },
           { id: "integrate.repositories", label: "Repositories", icon: "repository", route: "integrate.repositories" },
-          { id: "integrate.vcs", label: "VCS Integrations", icon: "vcs", route: "integrate.vcs" },
+          { id: "integrate.vcs", label: "VCS Bridges", icon: "vcs", route: "integrate.vcs" },
         ],
       },
       {
@@ -256,8 +265,11 @@ export {
   type OAuthConnectPayload,
 } from "./connect/ConnectOAuthButton";
 export {
+  CONNECT_CALLBACK_FALLBACK_PATH,
   CONNECT_CALLBACK_PATH,
+  connectCallbackPathForRecord,
   connectCallbackRedirectUri,
+  currentConnectCallbackRedirectUri,
 } from "./connect/redirects";
 
 export default integrate;

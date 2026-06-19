@@ -32,7 +32,7 @@ export function RepositoriesPage(): React.ReactElement {
             never hand-created or edited, so the detail is read-only; DataPage
             still wires the per-record delete (the only Repository mutation). */}
         <Form model={MODEL}>
-          <Field name="vcsIntegration" readOnly />
+          <Field name="vcsBridge" readOnly />
           <Group label={t("integrate.repositories.repository")} columns={2}>
             <Field name="org" readOnly />
             <Field name="name" readOnly />

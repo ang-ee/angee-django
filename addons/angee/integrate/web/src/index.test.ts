@@ -21,7 +21,7 @@ describe("integrate addon manifest", () => {
       ["integrate.integration", "integrate.integrations"],
       ["integrate.vendor", "integrate.vendors"],
       ["integrate.webhook", "integrate.webhooks"],
-      ["integrate.vcsIntegration", "integrate.vcs"],
+      ["integrate.vcsBridge", "integrate.vcs"],
       ["integrate.repository", "integrate.repositories"],
       ["integrate.source", "integrate.sources"],
       ["integrate.template", "integrate.templates"],
@@ -77,7 +77,7 @@ describe("integrate addon manifest", () => {
     ]);
   });
 
-  test("groups repository inventory under Sources with VCS integrations", () => {
+  test("groups repository inventory under Sources with VCS bridges", () => {
     const menu = integrate.menus?.[0] as BaseMenuItem | undefined;
     const sources = menu?.children?.find(
       (child) => child.id === "integrate.sources.group",
@@ -88,7 +88,7 @@ describe("integrate addon manifest", () => {
       ["Sources", "integrate.sources"],
       ["Templates", "integrate.templates"],
       ["Repositories", "integrate.repositories"],
-      ["VCS Integrations", "integrate.vcs"],
+      ["VCS Bridges", "integrate.vcs"],
     ]);
   });
 
@@ -119,13 +119,18 @@ describe("integrate addon manifest", () => {
     const route = (integrate.routes ?? []).find(
       (item) => item.name === "integrate.connect.callback",
     );
+    const fallback = (integrate.routes ?? []).find(
+      (item) => item.name === "integrate.connect.callbackFallback",
+    );
     expect(route?.path).toBe("/integrate/oauth/callback");
     expect(route?.shell).toBe("console");
     expect(route?.component).toBeTypeOf("function");
+    expect(fallback?.path).toBe("/callback");
+    expect(fallback?.shell).toBe("console");
+    expect(fallback?.component).toBe(route?.component);
     expect(
       (integrate.routes ?? []).some((item) =>
         item.name.startsWith("integrate.connect.callback.") ||
-        item.path === "/callback" ||
         item.path === "/iam/oauth/callback",
       ),
     ).toBe(false);

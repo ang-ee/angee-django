@@ -77,12 +77,11 @@ Co-query: connect picker = `OAuthClient.objects...`; login picker =
 `create_on_login`, `allowed_email_domains` (+ `allows_email_domain`). Lands on the
 same table but **owned by the login addon** — connect/protocol never see it.
 
-> Note: data-layer split is **composition** (OneToOne), because the composer
-> flattens abstract bases into one concrete table per leaf (see `Bridge`/
-> `VCSIntegration`) and does not use Django MTI — so "OIDC is-a OAuth" is
-> expressed as inheritance at the **service layer** (below) and composition at the
-> **data layer**. This kills the `is_oidc` flag, keeps both co-queryable, and
-> keeps the OAuth base login-free.
+> Note: this split predates the integration MTI cleanup. The current composer can
+> emit Django multi-table-inheritance children such as `VcsBridge`, but OIDC login
+> fields still use `extends = "integrate.OAuthClient"` because they are additive
+> same-row protocol fields on the OAuth client, not a mutually exclusive child
+> integration kind.
 
 ## Service/code layer split (here OIDC inherits OAuth)
 

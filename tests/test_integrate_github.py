@@ -135,12 +135,12 @@ def test_verify_webhook_checks_hmac(monkeypatch: pytest.MonkeyPatch) -> None:
     body = b'{"ref":"refs/heads/main"}'
     digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
     backend = gh.GitHubBackend(_integration())
-    vcs_integration = SimpleNamespace(webhook_secret=secret)
+    vcs_bridge = SimpleNamespace(webhook_secret=secret)
 
     good = SimpleNamespace(headers={gh.WEBHOOK_SIGNATURE_HEADER: f"sha256={digest}"}, body=body)
     bad = SimpleNamespace(headers={gh.WEBHOOK_SIGNATURE_HEADER: "sha256=deadbeef"}, body=body)
 
-    assert backend.verify_webhook(vcs_integration, good) is True
-    assert backend.verify_webhook(vcs_integration, bad) is False
+    assert backend.verify_webhook(vcs_bridge, good) is True
+    assert backend.verify_webhook(vcs_bridge, bad) is False
     # No secret configured → never authentic.
     assert backend.verify_webhook(SimpleNamespace(webhook_secret=""), good) is False

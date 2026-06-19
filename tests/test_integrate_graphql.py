@@ -236,7 +236,7 @@ def test_vcs_bridge_child_creation_creates_parent_identity(integrate_console_tab
             {"api_key": "x"},
         )
         vendor = Vendor.objects.create(slug="vcs-child", display_name="VCS Child")
-        assert integrate_schema._vcs_backend_key("STUB") == "stub"
+        assert VcsBridge.impl_key_for("backend_class", "STUB", default="local") == "stub"
         bridge = VcsBridge.objects.create(
             vendor=vendor,
             credential=credential,
@@ -667,7 +667,7 @@ def test_update_integration_status_accepts_the_graphql_enum_name(
         assert str(conn.status) == "draft"
 
 
-def test_create_vcs_integration_creates_child_row(
+def test_create_vcs_bridge_creates_child_row(
     integrate_console_tables: None,
 ) -> None:
     """VCS bridge create writes the child row directly."""
@@ -680,7 +680,7 @@ def test_create_vcs_integration_creates_child_row(
             console_schema,
             """
             mutation CreateVcs($vendor: ID!, $owner: ID!) {
-              createVcsIntegration(
+              createVcsBridge(
                 data: {vendor: $vendor, owner: $owner, backendClass: "stub", config: {stub_repos: []}}
               ) {
                 backendClass
@@ -695,12 +695,12 @@ def test_create_vcs_integration_creates_child_row(
             },
             user=admin,
         )
-    )["createVcsIntegration"]
+    )["createVcsBridge"]
 
     assert result == {"backendClass": "STUB", "status": "DRAFT", "config": {"stub_repos": []}}
 
 
-def test_update_vcs_integration_accepts_backend_class(
+def test_update_vcs_bridge_accepts_backend_class(
     integrate_console_tables: None,
 ) -> None:
     """A saved VCS child can switch backend and materialize backend defaults."""
@@ -713,7 +713,7 @@ def test_update_vcs_integration_accepts_backend_class(
             console_schema,
             """
             mutation UpdateVcs($id: ID!) {
-              updateVcsIntegration(data: {id: $id, backendClass: "local"}) {
+              updateVcsBridge(data: {id: $id, backendClass: "local"}) {
                 backendClass
                 config
               }
@@ -722,7 +722,7 @@ def test_update_vcs_integration_accepts_backend_class(
             {"id": _gid("VcsBridgeType", bridge.sqid)},
             user=admin,
         )
-    )["updateVcsIntegration"]
+    )["updateVcsBridge"]
 
     assert result == {
         "backendClass": "LOCAL",
@@ -742,7 +742,7 @@ def test_update_vcs_integration_accepts_backend_class(
         }
 
 
-def test_update_vcs_integration_rejects_unknown_backend_class(
+def test_update_vcs_bridge_rejects_unknown_backend_class(
     integrate_console_tables: None,
 ) -> None:
     """VCS backend updates validate through the VCS backend registry."""
@@ -754,7 +754,7 @@ def test_update_vcs_integration_rejects_unknown_backend_class(
         console_schema,
         """
         mutation UpdateVcs($id: ID!) {
-          updateVcsIntegration(data: {id: $id, backendClass: "none"}) {
+          updateVcsBridge(data: {id: $id, backendClass: "none"}) {
             id
           }
         }
@@ -770,7 +770,7 @@ def test_update_vcs_integration_rejects_unknown_backend_class(
         assert bridge.backend_class == "stub"
 
 
-def test_update_vcs_integration_rejects_parent_impl_class(
+def test_update_vcs_bridge_rejects_parent_impl_class(
     integrate_console_tables: None,
 ) -> None:
     """The VCS patch exposes backendClass, not the parent implClass."""
@@ -782,7 +782,7 @@ def test_update_vcs_integration_rejects_parent_impl_class(
         console_schema,
         """
         mutation UpdateVcs($id: ID!) {
-          updateVcsIntegration(data: {id: $id, implClass: "none"}) {
+          updateVcsBridge(data: {id: $id, implClass: "none"}) {
             id
           }
         }

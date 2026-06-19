@@ -14,7 +14,11 @@ import {
   type DataToolbarFilterOption,
   type DataToolbarGroupOption,
 } from "@angee/base";
-import { canConnectRecord, ConnectOAuthButton } from "@angee/integrate";
+import {
+  canConnectRecord,
+  ConnectOAuthButton,
+  connectCallbackPathForRecord,
+} from "@angee/integrate";
 import { useActionMutation, useAuthoredMutation, useResourceList, type Row } from "@angee/sdk";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
@@ -98,6 +102,7 @@ function ProviderConnectButton({
       label={t("agents.inference.connect.action")}
       connectedTitle={t("agents.inference.connect.connected")}
       startErrorTitle={t("agents.inference.connect.startError")}
+      callbackPath={inferenceConnectCallbackPath(row)}
       next="/agents/providers"
       onConnected={refresh}
       start={async ({ redirectUri, next }) => {
@@ -110,6 +115,12 @@ function ProviderConnectButton({
 
 function canConnectProvider(row: Row): boolean {
   return canConnectRecord(row);
+}
+
+export function inferenceConnectCallbackPath(
+  row: Record<string, unknown>,
+): string | undefined {
+  return connectCallbackPathForRecord(row);
 }
 
 export function InferenceModelsPage(): React.ReactElement {

@@ -1536,7 +1536,7 @@ class VcsBridgeType(AngeeNode):
 class RepositoryType(AngeeNode):
     """Admin projection of one inventoried repository."""
 
-    vcs_integration: VcsBridgeType
+    vcs_bridge: VcsBridgeType
     org: auto
     name: auto
     remote: auto
@@ -1671,10 +1671,10 @@ def _repo_candidate(descriptor: Any) -> RepoCandidate:
 class VCSConsoleQuery:
     """Admin VCS inventory queries."""
 
-    vcs_integrations: OffsetPaginated[VcsBridgeType] = strawberry_django.offset_paginated(
+    vcs_bridges: OffsetPaginated[VcsBridgeType] = strawberry_django.offset_paginated(
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
-    vcs_integration: VcsBridgeType | None = strawberry_django.node(
+    vcs_bridge: VcsBridgeType | None = strawberry_django.node(
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
     repositories: OffsetPaginated[RepositoryType] = strawberry_django.offset_paginated(
@@ -1698,42 +1698,30 @@ class VCSConsoleQuery:
     )
 
     @strawberry.field(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def search_repositories(self, vcs_integration_id: relay.GlobalID, query: str) -> list[RepoCandidate]:
+    def search_repositories(self, vcs_bridge_id: relay.GlobalID, query: str) -> list[RepoCandidate]:
         """Return host repositories matching ``query`` for the add typeahead."""
 
         vcs = resolve_action_target(
             VcsBridge,
-            vcs_integration_id,
+            vcs_bridge_id,
             reason="integrate.graphql.search_repositories",
         )
         with system_context(reason="integrate.graphql.search_repositories"):
             return [_repo_candidate(descriptor) for descriptor in vcs.search_repositories(query)]
 
 
-def _vcs_backend_key(value: str | None) -> str:
-    """Return a VCS backend key, defaulting to the local dev backend."""
-
-    field = cast(Any, VcsBridge._meta.get_field("backend_class"))
-    if value is None or value is strawberry.UNSET:
-        key = "local"
-    else:
-        key = str(field.key_for(value) or "")
-    field.resolve_class(key)
-    return key
-
-
 @strawberry.type
 class VcsBridgeCreateMutation:
-    """Admin create for a VCS bridge child, validating the parent integration impl."""
+    """Admin create for a VCS bridge child, validating backend-owned fields."""
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def create_vcs_integration(self, data: VcsBridgeInput) -> VcsBridgeType:
+    def create_vcs_bridge(self, data: VcsBridgeInput) -> VcsBridgeType:
         """Create a VCS child row directly."""
 
         vendor = resolve_action_target(
             Vendor,
             data.vendor,
-            reason="integrate.graphql.vcs_integration.create.vendor",
+            reason="integrate.graphql.vcs_bridge.create.vendor",
         )
         owner = _user_from_global_id(data.owner)
         credential = (
@@ -1742,7 +1730,7 @@ class VcsBridgeCreateMutation:
             else resolve_action_target(
                 Credential,
                 data.credential,
-                reason="integrate.graphql.vcs_integration.create.credential",
+                reason="integrate.graphql.vcs_bridge.create.credential",
             )
         )
         account = (
@@ -1754,14 +1742,18 @@ class VcsBridgeCreateMutation:
                 else resolve_action_target(
                     ExternalAccount,
                     data.account,
-                    reason="integrate.graphql.vcs_integration.create.account",
+                    reason="integrate.graphql.vcs_bridge.create.account",
                 )
             )
         )
         attrs: dict[str, Any] = {
             "vendor": vendor,
             "owner": owner,
-            "backend_class": _vcs_backend_key(data.backend_class),
+            "backend_class": VcsBridge.impl_key_for(
+                "backend_class",
+                None if data.backend_class is strawberry.UNSET else data.backend_class,
+                default="local",
+            ),
             "webhook_secret": data.webhook_secret,
         }
         if credential is not None:
@@ -1772,7 +1764,7 @@ class VcsBridgeCreateMutation:
             attrs["config"] = data.config
         if data.status not in (strawberry.UNSET, None):
             attrs["status"] = data.status
-        with system_context(reason="integrate.graphql.vcs_integration.create"), transaction.atomic():
+        with system_context(reason="integrate.graphql.vcs_bridge.create"), transaction.atomic():
             bridge = VcsBridge.objects.create(**attrs)
         return cast(VcsBridgeType, bridge)
 
@@ -1782,22 +1774,22 @@ class VcsBridgeUpdateMutation:
     """Admin update for a VCS bridge child, validating backend-owned fields."""
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def update_vcs_integration(self, data: VcsBridgePatch) -> VcsBridgeType:
+    def update_vcs_bridge(self, data: VcsBridgePatch) -> VcsBridgeType:
         """Update a VCS child row, rematerializing backend defaults on backend change."""
 
         bridge = resolve_action_target(
             VcsBridge,
             data.id,
-            reason="integrate.graphql.vcs_integration.update",
+            reason="integrate.graphql.vcs_bridge.update",
         )
         provided: set[str] = set()
         backend_changed = False
-        with system_context(reason="integrate.graphql.vcs_integration.update"), transaction.atomic():
+        with system_context(reason="integrate.graphql.vcs_bridge.update"), transaction.atomic():
             if data.vendor is not strawberry.UNSET:
                 bridge.vendor = resolve_action_target(
                     Vendor,
                     data.vendor,
-                    reason="integrate.graphql.vcs_integration.update.vendor",
+                    reason="integrate.graphql.vcs_bridge.update.vendor",
                 )
                 provided.add("vendor")
             if data.owner is not strawberry.UNSET:
@@ -1810,7 +1802,7 @@ class VcsBridgeUpdateMutation:
                     else resolve_action_target(
                         Credential,
                         data.credential,
-                        reason="integrate.graphql.vcs_integration.update.credential",
+                        reason="integrate.graphql.vcs_bridge.update.credential",
                     )
                 )
                 provided.add("credential")
@@ -1821,14 +1813,12 @@ class VcsBridgeUpdateMutation:
                     else resolve_action_target(
                         ExternalAccount,
                         data.account,
-                        reason="integrate.graphql.vcs_integration.update.account",
+                        reason="integrate.graphql.vcs_bridge.update.account",
                     )
                 )
                 provided.add("account")
             if data.backend_class is not strawberry.UNSET:
-                backend_key = _vcs_backend_key(data.backend_class)
-                backend_changed = backend_key != bridge.backend_class
-                bridge.backend_class = backend_key
+                backend_changed = bridge.set_impl_key("backend_class", data.backend_class, default="local")
             if data.status is not strawberry.UNSET:
                 bridge.status = data.status
                 provided.add("status")
@@ -1839,19 +1829,19 @@ class VcsBridgeUpdateMutation:
                 bridge.webhook_secret = data.webhook_secret or ""
                 provided.add("webhook_secret")
             if backend_changed:
-                bridge.materialize_backend_defaults(provided=frozenset(provided))
+                bridge.materialize_impl_defaults("backend_class", provided=frozenset(provided))
             bridge.save()
         return cast(VcsBridgeType, bridge)
 
 
-_VCS_INTEGRATION_MUTATION = crud(
+_VCS_BRIDGE_MUTATION = crud(
     VcsBridgeType,
     delete=True,
     permission_classes=_ADMIN_PERMISSION_CLASSES,
-    name="vcs_integration",
-    write_context="integrate.graphql.vcs_integration",
+    name="vcs_bridge",
+    write_context="integrate.graphql.vcs_bridge",
 )
-"""Admin VCS-integration CRUD: webhook_secret is write-only; written elevated."""
+"""Admin VCS bridge CRUD: webhook_secret is write-only; written elevated."""
 
 _SOURCE_MUTATION = crud(
     SourceType,
@@ -1879,29 +1869,29 @@ class VCSActionMutation:
     """Operational actions on a VCS bridge and its inventory."""
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def add_repository(self, vcs_integration_id: relay.GlobalID, name: str) -> RepositoryType:
+    def add_repository(self, vcs_bridge_id: relay.GlobalID, name: str) -> RepositoryType:
         """Inventory one repository by its host ``name`` (a picked typeahead result)."""
 
-        vcs = resolve_action_target(VcsBridge, vcs_integration_id, reason="integrate.graphql.add_repository")
+        vcs = resolve_action_target(VcsBridge, vcs_bridge_id, reason="integrate.graphql.add_repository")
         with system_context(reason="integrate.graphql.add_repository"):
             return cast(RepositoryType, vcs.import_repository(name))
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def discover_repositories(self, vcs_integration_id: relay.GlobalID, org: str = "") -> ActionResult:
+    def discover_repositories(self, vcs_bridge_id: relay.GlobalID, org: str = "") -> ActionResult:
         """Inventory every repository the account exposes (bulk import; prunes vanished)."""
 
-        vcs = resolve_action_target(VcsBridge, vcs_integration_id, reason="integrate.graphql.discover_repositories")
+        vcs = resolve_action_target(VcsBridge, vcs_bridge_id, reason="integrate.graphql.discover_repositories")
         with system_context(reason="integrate.graphql.discover_repositories"):
             count = vcs.discover_repositories(org=org)
         return ActionResult(ok=True, message=f"Inventoried {count} repository(ies).")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def sync_vcs_integration(self, id: relay.GlobalID) -> ActionResult:
+    def sync_vcs_bridge(self, id: relay.GlobalID) -> ActionResult:
         """Refresh every repository's sources for one VCS bridge now."""
 
-        vcs = resolve_action_target(VcsBridge, id, reason="integrate.graphql.sync_vcs_integration")
+        vcs = resolve_action_target(VcsBridge, id, reason="integrate.graphql.sync_vcs_bridge")
         now = timezone.now()
-        with system_context(reason="integrate.graphql.sync_vcs_integration"):
+        with system_context(reason="integrate.graphql.sync_vcs_bridge"):
             vcs.mark_sync_started(now=now)
             try:
                 result = vcs.sync()
@@ -1984,7 +1974,7 @@ schemas = {
             _WEBHOOK_MUTATION,
             VcsBridgeCreateMutation,
             VcsBridgeUpdateMutation,
-            _VCS_INTEGRATION_MUTATION,
+            _VCS_BRIDGE_MUTATION,
             _SOURCE_MUTATION,
             _REPOSITORY_MUTATION,
             IntegrationCredentialMutation,

@@ -43,7 +43,7 @@ from tests.test_integrate_vcs import (
     VCS_TEST_MODELS,
     Repository,
     Source,
-    _vcs_integration,
+    _vcs_bridge,
 )
 
 
@@ -175,7 +175,7 @@ def test_skill_source_refresh_materializes_and_prunes(agents_tables: None) -> No
     """A skill source refresh walks the tree for ``SKILL.md`` and upserts/prunes rows."""
 
     del agents_tables
-    vcs = _vcs_integration("skills", config={"stub_repos": REPOS, "stub_tree": SKILL_TREE, "stub_blobs": SKILL_BLOBS})
+    vcs = _vcs_bridge("skills", config={"stub_repos": REPOS, "stub_tree": SKILL_TREE, "stub_blobs": SKILL_BLOBS})
     vcs.discover_repositories()
     with system_context(reason="test"):
         repository = Repository.objects.get(name="acme/widgets")

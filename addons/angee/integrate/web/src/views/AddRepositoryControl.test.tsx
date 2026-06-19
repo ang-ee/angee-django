@@ -114,7 +114,7 @@ describe("AddRepositoryControl typeahead", () => {
     const candidate = await screen.findByRole("button", { name: /acme\/widgets/ });
     // The debounced search carries the picked bridge and the typed query.
     expect(sdkMocks.lastSearchVars).toEqual({
-      vcsIntegrationId: VCS_ID,
+      vcsBridgeId: VCS_ID,
       query: "widget",
     });
 
@@ -122,7 +122,7 @@ describe("AddRepositoryControl typeahead", () => {
 
     await waitFor(() =>
       expect(sdkMocks.addRepository).toHaveBeenCalledWith({
-        vcsIntegrationId: VCS_ID,
+        vcsBridgeId: VCS_ID,
         name: "acme/widgets",
       }),
     );
@@ -142,7 +142,7 @@ function renderControl(): ReturnType<typeof render> {
 
 function integrationsData(): unknown {
   return {
-    vcsIntegrations: {
+    vcsBridges: {
       results: [{ id: VCS_ID, displayName: "github (active)" }],
     },
   };

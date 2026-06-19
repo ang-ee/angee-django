@@ -66,10 +66,10 @@ class RepoDescriptor:
 
 
 class VCSBackend(BridgeImpl):
-    """Abstract REST backend for a git host, bound to one ``Integration``.
+    """Abstract REST backend for a git host, bound to one ``VcsBridge``.
 
     Concrete hosts implement the primitives below; ``VcsBridge`` calls into
-    them. The constructor receives the VCS integration child so the backend can
+    them. The constructor receives the VCS bridge child so the backend can
     read its credential and bridge-owned config.
     """
 
@@ -78,7 +78,7 @@ class VCSBackend(BridgeImpl):
     icon = "git-branch"
 
     def ls_repos(self, *, org: str = "") -> list[RepoDescriptor]:
-        """List repositories visible to this integration, optionally within ``org``."""
+        """List repositories visible to this bridge, optionally within ``org``."""
 
         raise NotImplementedError("VCSBackend subclasses must implement ls_repos().")
 
@@ -97,8 +97,8 @@ class VCSBackend(BridgeImpl):
 
         raise NotImplementedError("VCSBackend subclasses must implement rev_parse().")
 
-    def verify_webhook(self, vcs_integration: Any, request: Any) -> bool:
-        """Return whether an inbound webhook request is authentic for this integration."""
+    def verify_webhook(self, vcs_bridge: Any, request: Any) -> bool:
+        """Return whether an inbound webhook request is authentic for this bridge."""
 
         raise NotImplementedError("VCSBackend subclasses must implement verify_webhook().")
 
@@ -193,10 +193,10 @@ class LocalVCSBackend(VCSBackend):
             raise FileNotFoundError(name)
         return descriptor
 
-    def verify_webhook(self, vcs_integration: Any, request: Any) -> bool:
+    def verify_webhook(self, vcs_bridge: Any, request: Any) -> bool:
         """Reject inbound webhooks: a local working tree has no host to authenticate."""
 
-        del vcs_integration, request
+        del vcs_bridge, request
         return False
 
     @property

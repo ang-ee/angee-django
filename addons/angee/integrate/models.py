@@ -1349,7 +1349,7 @@ class VcsBridge(Bridge):
         """Django model options for the VCS bridge child model."""
 
         abstract = True
-        rebac_resource_type = "integrate/vcs_integration"
+        rebac_resource_type = "integrate/vcs_bridge"
         rebac_id_attr = "sqid"
 
     def __str__(self) -> str:
@@ -1364,13 +1364,6 @@ class VcsBridge(Bridge):
         field = cast(ImplClassField, type(self)._meta.get_field("backend_class"))
         backend_class = cast(type[VCSBackend], field.resolve_class(self.backend_class))
         return backend_class(self)
-
-    def materialize_backend_defaults(self, *, provided: frozenset[str] = frozenset()) -> None:
-        """Apply this VCS backend's defaults to every unprovided bridge field."""
-
-        field = cast(ImplClassField, type(self)._meta.get_field("backend_class"))
-        backend_class = cast(type[VCSBackend], field.resolve_class(self.backend_class))
-        backend_class.materialize(self, provided=provided | {"backend_class"})
 
     def repositories_by_org(self) -> dict[str, list[Any]]:
         """Return every visible repository grouped and sorted by owning org."""
@@ -1412,13 +1405,13 @@ class VcsBridge(Bridge):
         return sum(source.refresh() for repository in self.repositories.all() for source in repository.sources.all())
 
     def handle_webhook(self, payload: Any) -> None:
-        """Re-sync this integration's inventory on an inbound push webhook."""
+        """Re-sync this bridge's inventory on an inbound push webhook."""
 
         del payload
         self.sync()
 
     def verify_webhook(self, request: Any) -> bool:
-        """Return whether an inbound push webhook is authentic for this integration."""
+        """Return whether an inbound push webhook is authentic for this bridge."""
 
         return self.backend.verify_webhook(self, request)
 
@@ -1448,7 +1441,7 @@ class VcsBridge(Bridge):
 class RepositoryManager(RebacManager):
     """Manager owning the upsert/reconcile of repository rows from a host listing."""
 
-    def reconcile(self, vcs_integration: Any, descriptors: Iterable[Any]) -> int:
+    def reconcile(self, vcs_bridge: Any, descriptors: Iterable[Any]) -> int:
         """Upsert one repository row per descriptor and prune rows that vanished.
 
         Bulk import for ``discoverRepositories``: prunes against the full listing,
@@ -1460,21 +1453,21 @@ class RepositoryManager(RebacManager):
         seen: set[Any] = set()
         with system_context(reason="integrate.repository.reconcile"), transaction.atomic():
             for descriptor in descriptor_list:
-                seen.add(self._upsert(vcs_integration, descriptor).pk)
-            self.filter(vcs_integration=vcs_integration).exclude(pk__in=seen).delete()
+                seen.add(self._upsert(vcs_bridge, descriptor).pk)
+            self.filter(vcs_bridge=vcs_bridge).exclude(pk__in=seen).delete()
         return len(descriptor_list)
 
-    def add(self, vcs_integration: Any, descriptor: Any) -> Any:
+    def add(self, vcs_bridge: Any, descriptor: Any) -> Any:
         """Inventory one repository (no prune) — the typeahead "add this repo" path."""
 
         with system_context(reason="integrate.repository.add"), transaction.atomic():
-            return self._upsert(vcs_integration, descriptor)
+            return self._upsert(vcs_bridge, descriptor)
 
-    def _upsert(self, vcs_integration: Any, descriptor: Any) -> Any:
+    def _upsert(self, vcs_bridge: Any, descriptor: Any) -> Any:
         """Create or update one repository row from a host descriptor."""
 
         repository, _created = self.update_or_create(
-            vcs_integration=vcs_integration,
+            vcs_bridge=vcs_bridge,
             name=descriptor.name,
             defaults={
                 "org": descriptor.org,
@@ -1500,7 +1493,7 @@ class Repository(SqidMixin, AuditMixin, AngeeModel):
     runtime = True
 
     sqid = SqidField(real_field_name="id", prefix="repo", min_length=8)
-    vcs_integration = models.ForeignKey(
+    vcs_bridge = models.ForeignKey(
         "integrate.VcsBridge",
         on_delete=models.CASCADE,
         related_name="repositories",
@@ -1528,7 +1521,7 @@ class Repository(SqidMixin, AuditMixin, AngeeModel):
         rebac_id_attr = "sqid"
         constraints = (
             models.UniqueConstraint(
-                fields=("vcs_integration", "name"),
+                fields=("vcs_bridge", "name"),
                 name="uniq_integrate_repository_name",
             ),
         )
@@ -1625,8 +1618,8 @@ class TemplateManager(RebacManager):
     def sync_from_source(self, source: Any) -> int:
         """Walk the source for ``copier.yml`` and upsert/prune ``Template`` rows."""
 
-        vcs_integration = source.repository.vcs_integration
-        descriptors = vcs_integration.discover(source, marker="copier.yml", parse=parse_template_meta)
+        vcs_bridge = source.repository.vcs_bridge
+        descriptors = vcs_bridge.discover(source, marker="copier.yml", parse=parse_template_meta)
         seen: set[Any] = set()
         with system_context(reason="integrate.template.sync"), transaction.atomic():
             for descriptor in descriptors:

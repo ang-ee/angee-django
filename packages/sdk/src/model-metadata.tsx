@@ -267,7 +267,7 @@ function rootFieldsForType(
         deleteCandidates.push(name);
       }
     }
-    rootFields.delete = deleteFieldFor(type, rootFields, deleteCandidates);
+    rootFields.delete = deleteFieldFor(type, deleteCandidates);
   }
   return rootFields;
 }
@@ -437,50 +437,9 @@ function inputFieldNames(inputType: GraphQLInputObjectType): readonly string[] {
   return Object.keys(inputType.getFields());
 }
 
-function deleteFieldFor(
-  type: GraphQLObjectType,
-  rootFields: ModelRootFieldMetadata,
-  candidates: readonly string[],
-): string | undefined {
-  // DeletePreview does not carry the deleted model type in SDL, so the schema
-  // cannot link delete to a model by return type the way create/update can. Ask
-  // the operation names for their target first (`createVcsIntegration` /
-  // `updateVcsIntegration` -> `VcsIntegration`), then fall back to the model type
-  // name for conventional roots (`deleteWidget`).
-  const targets = [
-    operationTargetName(rootFields.create, "create"),
-    operationTargetName(rootFields.update, "update"),
-    inputBaseName(type),
-    commonSuffix(rootFields.create, rootFields.update),
-  ].filter((target): target is string => Boolean(target));
-  return candidates.find((candidate) =>
-    targets.some((target) => namesMatchSuffix(candidate, target)),
-  );
-}
-
-function operationTargetName(
-  name: string | undefined,
-  verb: "create" | "update" | "delete",
-): string | undefined {
-  if (!name || !name.toLowerCase().startsWith(verb)) return undefined;
-  const target = name.slice(verb.length);
-  return target === "" ? undefined : target;
-}
-
-function commonSuffix(
-  left: string | undefined,
-  right: string | undefined,
-): string | undefined {
-  if (!left || !right) return undefined;
-  let index = 0;
-  while (
-    index < left.length
-    && index < right.length
-    && left[left.length - 1 - index] === right[right.length - 1 - index]
-  ) {
-    index += 1;
-  }
-  return index > 0 ? left.slice(left.length - index) : undefined;
+function deleteFieldFor(type: GraphQLObjectType, candidates: readonly string[]): string | undefined {
+  const target = inputBaseName(type);
+  return candidates.find((candidate) => namesMatchSuffix(candidate, target));
 }
 
 function namesMatchSuffix(name: string, suffix: string): boolean {

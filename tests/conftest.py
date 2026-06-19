@@ -191,7 +191,7 @@ class VcsBridge(Integration, AbstractVcsBridge):
         abstract = False
         app_label = "integrate"
         db_table = "test_integrate_vcs_bridge"
-        rebac_resource_type = "integrate/vcs_integration"
+        rebac_resource_type = "integrate/vcs_bridge"
         rebac_id_attr = "sqid"
 
 
@@ -336,10 +336,10 @@ class StubVCSBackend(VCSBackend):
         del repository, ref
         return "stubsha"
 
-    def verify_webhook(self, vcs_integration: Any, request: Any) -> bool:
+    def verify_webhook(self, vcs_bridge: Any, request: Any) -> bool:
         """Accept every webhook in tests."""
 
-        del vcs_integration, request
+        del vcs_bridge, request
         return True
 
 

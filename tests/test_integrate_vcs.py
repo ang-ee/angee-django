@@ -70,8 +70,8 @@ def vcs_tables(transactional_db: Any) -> Iterator[None]:
                     schema_editor.delete_model(model)
 
 
-def _vcs_integration(slug: str, *, config: dict[str, Any], backend_class: str = "stub") -> Any:
-    """Create a VCS integration child whose host/local data rides on config."""
+def _vcs_bridge(slug: str, *, config: dict[str, Any], backend_class: str = "stub") -> Any:
+    """Create a VCS bridge child whose host/local data rides on config."""
 
     return make_integration(slug, backend_class=backend_class, model=VcsBridge, config=config)
 
@@ -88,7 +88,7 @@ def test_discover_repositories_reconciles_and_prunes(vcs_tables: None) -> None:
     """discoverRepositories inventories every repo and prunes ones that vanished."""
 
     del vcs_tables
-    vcs = _vcs_integration("disco", config={"stub_repos": REPOS})
+    vcs = _vcs_bridge("disco", config={"stub_repos": REPOS})
 
     assert vcs.discover_repositories() == 2
     assert _repo_names() == {"acme/widgets", "acme/gadgets"}
@@ -105,7 +105,7 @@ def test_import_repository_adds_one_without_pruning(vcs_tables: None) -> None:
     """addRepository inventories the picked repo and leaves the others in place."""
 
     del vcs_tables
-    vcs = _vcs_integration("imp", config={"stub_repos": REPOS})
+    vcs = _vcs_bridge("imp", config={"stub_repos": REPOS})
     vcs.discover_repositories()
 
     repository = vcs.import_repository("acme/widgets")
@@ -118,7 +118,7 @@ def test_search_repositories_is_the_typeahead(vcs_tables: None) -> None:
     """searchRepositories returns name-matching host candidates for the typeahead."""
 
     del vcs_tables
-    vcs = _vcs_integration("search", config={"stub_repos": REPOS})
+    vcs = _vcs_bridge("search", config={"stub_repos": REPOS})
     assert [candidate.name for candidate in vcs.search_repositories("widget")] == ["acme/widgets"]
 
 
@@ -127,7 +127,7 @@ def test_source_refresh_materializes_templates(vcs_tables: None) -> None:
     """A template source refresh walks the tree and upserts Template rows."""
 
     del vcs_tables
-    vcs = _vcs_integration("tpl", config={"stub_repos": REPOS, "stub_tree": TREE, "stub_blobs": BLOBS})
+    vcs = _vcs_bridge("tpl", config={"stub_repos": REPOS, "stub_tree": TREE, "stub_blobs": BLOBS})
     vcs.discover_repositories()
     with system_context(reason="test"):
         repository = Repository.objects.get(name="acme/widgets")
@@ -144,7 +144,7 @@ def test_sync_refreshes_every_source(vcs_tables: None) -> None:
     """The Bridge sync refreshes each repository's sources over the host."""
 
     del vcs_tables
-    vcs = _vcs_integration("sync", config={"stub_repos": REPOS, "stub_tree": TREE, "stub_blobs": BLOBS})
+    vcs = _vcs_bridge("sync", config={"stub_repos": REPOS, "stub_tree": TREE, "stub_blobs": BLOBS})
     vcs.discover_repositories()
     with system_context(reason="test"):
         repository = Repository.objects.get(name="acme/widgets")
@@ -173,7 +173,7 @@ def test_local_backend_materializes_templates_through_the_source_flow(vcs_tables
     stray.mkdir(parents=True)
     (stray / "copier.yml").write_text("_angee:\n  kind: workspace\n  name: Stray\n")
 
-    vcs = _vcs_integration(
+    vcs = _vcs_bridge(
         "local",
         config={"local_root": str(tmp_path), "local_name": "checkout"},
         backend_class="local",

@@ -12,6 +12,31 @@ Status for the clean MTI slice: composer MTI support, `VcsBridge`, and
 `InferenceProvider` are implemented. OpenAI/Anthropic/manual/OpenAI-compatible
 providers are inference `backend_class` values, not integration impls.
 
+## Next Cleanup Queue
+
+- [x] Extract shared `ImplClassField` update/default plumbing. `VcsBridge` and
+  `InferenceProvider` currently duplicate the same GraphQL sequence: normalize
+  backend key, detect changes, track provided fields, materialize defaults, and
+  save. The owner should be the impl/defaults layer (`angee.base.impl` /
+  `angee.base.fields`) so schema resolvers stay thin.
+- [ ] Consider an omission sentinel convention for `ImplDefaultsMixin.impl_key_for`
+  if a third caller needs create-time default key handling. Current callers pass
+  `None` for omitted GraphQL values explicitly; avoid importing GraphQL sentinels
+  into the base layer.
+- [ ] Add a base record-action helper for single-id `ActionResult` mutations.
+  Integrate pages repeatedly guard `ctx.record.id`, call `useActionMutation`,
+  refresh the record, and return the message. The owner should be `@angee/base`
+  because it owns `ActionContext` and record action UI; pages should compose one
+  hook per action.
+- [ ] Make relation facets/group options a base/DataPage primitive before
+  hand-authoring more inference list filters. The provider/model-capability
+  filters should reuse relation metadata and the same relation option-fetch path
+  as fields, not page-local list queries.
+- [ ] Standardize relation-id filters. Prefer a strawberry-django-native
+  relation filter shape from the frontend primitive; if not enough, add one
+  relay/global-id relation lookup helper in `angee.graphql` and reuse it across
+  agents/knowledge.
+
 ## Locked Decisions
 
 - Use Django multi-table inheritance as the model shape for integration kinds

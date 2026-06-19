@@ -48,7 +48,7 @@ from tests.conftest import (
 from tests.conftest import _create_missing_tables as _create_tables
 from tests.conftest import result_data as _data
 from tests.test_agents import InferenceModel, InferenceProvider, Skill, _provider
-from tests.test_integrate_vcs import REPOS, VCS_TEST_MODELS, Repository, Source, Template, _vcs_integration
+from tests.test_integrate_vcs import REPOS, VCS_TEST_MODELS, Repository, Source, Template, _vcs_bridge
 
 User = get_user_model()
 
@@ -455,7 +455,7 @@ def test_provision_agent_renders_via_daemon_and_is_admin_gated(agents_console_ta
     admin = _platform_admin("agt-render-admin")
     plain = User.objects.create_user(username="agt-render-plain", email="render@example.com")
     provider = _provider("agt-render", name="P")
-    vcs = _vcs_integration("agt-render-tpl", config={"stub_repos": REPOS})
+    vcs = _vcs_bridge("agt-render-tpl", config={"stub_repos": REPOS})
     vcs.discover_repositories()
     with system_context(reason="test.agents.render.seed"):
         repository = Repository.objects.get(name="acme/widgets")
@@ -572,7 +572,7 @@ def test_provision_agent_failure_tears_down_workspace_and_records_error(
     """A service-render failure tears the orphaned workspace down and marks error."""
 
     admin = _platform_admin("agt-fail-admin")
-    vcs = _vcs_integration("agt-fail-tpl", config={"stub_repos": REPOS})
+    vcs = _vcs_bridge("agt-fail-tpl", config={"stub_repos": REPOS})
     vcs.discover_repositories()
     with system_context(reason="test.agents.fail.seed"):
         repository = Repository.objects.get(name="acme/widgets")
@@ -1235,7 +1235,7 @@ def _provisionable_agent(owner: Any, name: str, *, slug: str, **agent_fields: An
     already-provisioned row.
     """
 
-    vcs = _vcs_integration(slug, config={"stub_repos": REPOS})
+    vcs = _vcs_bridge(slug, config={"stub_repos": REPOS})
     vcs.discover_repositories()
     with system_context(reason="test.agents.provisionable.seed"):
         repository = Repository.objects.get(name="acme/widgets")
@@ -1258,7 +1258,7 @@ def _provisionable_agent(owner: Any, name: str, *, slug: str, **agent_fields: An
 def _seed_agent_and_skills(owner: Any) -> tuple[Any, Any, Any]:
     """Create a skill source with two skills and an owned agent (all elevated)."""
 
-    vcs = _vcs_integration("agt-m2m", config={"stub_repos": REPOS})
+    vcs = _vcs_bridge("agt-m2m", config={"stub_repos": REPOS})
     vcs.discover_repositories()
     with system_context(reason="test.agents.m2m.seed"):
         repository = Repository.objects.get(name="acme/widgets")

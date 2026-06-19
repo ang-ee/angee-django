@@ -16,7 +16,7 @@ const ROUTES: readonly AddonRouteCase[] = [
   { addon: "agents", path: "/agents/mcp-servers", expectText: "angee-demo" },
   { addon: "agents", path: "/agents/mcp-tools", expectText: "Enabled" },
   { addon: "agents", path: "/agents/providers", expectText: "Anthropic" },
-  { addon: "agents", path: "/agents/models", expectText: "Claude Sonnet" },
+  { addon: "agents", path: "/agents/models", expectText: "Model Use" },
 
   { addon: "iam", path: "/iam", expectText: "Grant access" },
   { addon: "iam", path: "/iam/users", expectText: "alice@example.com" },
@@ -25,23 +25,23 @@ const ROUTES: readonly AddonRouteCase[] = [
   { addon: "iam", path: "/iam/relationships", expectText: "Resource Ref" },
   { addon: "iam", path: "/iam/schema", expectText: "Inference Model" },
 
-  { addon: "integrate", path: "/integrate", expectText: "Github" },
+  { addon: "integrate", path: "/integrate", expectText: "Implementation" },
   { addon: "integrate", path: "/integrate/vendors", expectText: "Acme Integrations" },
   { addon: "integrate", path: "/integrate/webhooks", expectText: "Target Url" },
-  { addon: "integrate", path: "/integrate/vcs", expectText: "github (active)" },
-  { addon: "integrate", path: "/integrate/repositories", expectText: "ang-ee/angee-django" },
+  { addon: "integrate", path: "/integrate/vcs", expectText: "local (active)" },
+  { addon: "integrate", path: "/integrate/repositories", expectText: "angee-django" },
   { addon: "integrate", path: "/integrate/sources", expectText: "template" },
   { addon: "integrate", path: "/integrate/templates", expectText: "workspace" },
   { addon: "integrate", path: "/integrate/providers", expectText: "Apexive SSO" },
   { addon: "integrate", path: "/integrate/accounts", expectText: "Provider Label" },
-  { addon: "integrate", path: "/integrate/credentials", expectText: "Github Token" },
+  { addon: "integrate", path: "/integrate/credentials", expectText: "local-templates" },
 
   { addon: "knowledge", path: "/knowledge", expectText: "Handbook" },
   { addon: "knowledge", path: "/knowledge/settings", expectText: "Handbook" },
 
   { addon: "operator", path: "/operator", expectText: "notes-angee" },
-  { addon: "operator", path: "/operator/services", expectText: "agent-demo-agent" },
-  { addon: "operator", path: "/operator/workspaces", expectText: "demo-agent" },
+  { addon: "operator", path: "/operator/services", expectText: "frontend" },
+  { addon: "operator", path: "/operator/workspaces", expectText: "No workspaces." },
   { addon: "operator", path: "/operator/sources", expectText: "framework" },
   { addon: "operator", path: "/operator/gitops", expectText: "Unpushed" },
   { addon: "operator", path: "/operator/operations", expectText: "Stack lifecycle" },
@@ -59,7 +59,7 @@ const ROUTES: readonly AddonRouteCase[] = [
 ];
 
 const REPOSITORY_DETAIL =
-  "/integrate/repositories/UmVwb3NpdG9yeVR5cGU6cmVwb2diSEpkbWZy";
+  "/integrate/repositories/UmVwb3NpdG9yeVR5cGU6cmVwb1VrTFdaZzlE";
 
 test.describe("addon route smoke", () => {
   test.use({ storageState: roleStatePath("admin") });
@@ -87,10 +87,10 @@ test.describe("addon route smoke", () => {
 
     expect(new URL(page.url()).pathname).toBe(REPOSITORY_DETAIL);
     await expect(page.getByText("Something went wrong!")).toHaveCount(0);
-    await expect(page.getByRole("heading", { name: "ang-ee/angee-django" })).toBeVisible({
+    await expect(page.getByRole("heading", { name: "angee-django" })).toBeVisible({
       timeout: 20_000,
     });
-    await expect(page.getByText("VCS INTEGRATION")).toBeVisible();
+    await expect(page.getByText("VCS BRIDGE")).toBeVisible();
     await expect(page.getByRole("button", { name: /^Save$/ })).toHaveCount(0);
     await issues.settled();
     expect(issues.messages()).toEqual([]);

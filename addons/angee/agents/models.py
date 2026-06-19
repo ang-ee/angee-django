@@ -164,13 +164,6 @@ class InferenceProvider(ImplDefaultsMixin, AngeeModel):
         model = apps.get_model("agents", "InferenceModel")
         return int(model.objects.sync_from_provider(self))
 
-    def materialize_backend_defaults(self, *, provided: frozenset[str] = frozenset()) -> None:
-        """Apply this provider backend's defaults to every unprovided provider field."""
-
-        field = cast(ImplClassField, type(self)._meta.get_field("backend_class"))
-        backend_class = cast(type[InferenceBackend], field.resolve_class(self.backend_class))
-        backend_class.materialize(self, provided=provided | {"backend_class"})
-
     def chat(
         self,
         *,
@@ -307,8 +300,8 @@ class SkillManager(RebacManager):
     def sync_from_source(self, source: Any) -> int:
         """Walk the source for ``SKILL.md`` and upsert/prune :class:`Skill` rows."""
 
-        vcs_integration = source.repository.vcs_integration
-        descriptors = vcs_integration.discover(source, marker="SKILL.md", parse=parse_skill_meta)
+        vcs_bridge = source.repository.vcs_bridge
+        descriptors = vcs_bridge.discover(source, marker="SKILL.md", parse=parse_skill_meta)
         seen: set[Any] = set()
         with system_context(reason="agents.skill.sync"), transaction.atomic():
             for descriptor in descriptors:

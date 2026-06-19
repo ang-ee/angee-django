@@ -124,34 +124,34 @@ describe("fieldMetadataFromSDL", () => {
     expect(root?.updateFields).toEqual(["name", "count"]);
   });
 
-  test("matches delete roots whose operation target differs from the model name", () => {
+  test("matches conventional delete roots for generated model names", () => {
     const writeMetadata = fieldMetadataFromSDL(/* GraphQL */ `
       type DeletePreview { totalDeletedCount: Int! }
       type VcsBridgeType { id: ID! displayName: String! }
       type VcsBridgeTypeOffsetPaginated { results: [VcsBridgeType!]! }
-      input VcsBridgeInput { integration: ID! }
+      input VcsBridgeInput { vendor: ID! }
       input VcsBridgePatch { id: ID! webhookSecret: String }
       type Query {
-        vcsIntegrations: VcsBridgeTypeOffsetPaginated!
-        vcsIntegration(id: ID!): VcsBridgeType
+        vcsBridges: VcsBridgeTypeOffsetPaginated!
+        vcsBridge(id: ID!): VcsBridgeType
       }
       type Mutation {
-        createVcsIntegration(data: VcsBridgeInput!): VcsBridgeType!
-        updateVcsIntegration(data: VcsBridgePatch!): VcsBridgeType!
-        deleteVcsIntegration(id: ID!, confirm: Boolean = false): DeletePreview!
+        createVcsBridge(data: VcsBridgeInput!): VcsBridgeType!
+        updateVcsBridge(data: VcsBridgePatch!): VcsBridgeType!
+        deleteVcsBridge(id: ID!, confirm: Boolean = false): DeletePreview!
       }
     `);
 
     expect(
       required(modelMetadataForLabel(writeMetadata, "integrate.VcsBridge")).rootFields,
     ).toMatchObject({
-      detail: "vcsIntegration",
-      list: "vcsIntegrations",
-      create: "createVcsIntegration",
-      createFields: ["integration"],
-      update: "updateVcsIntegration",
+      detail: "vcsBridge",
+      list: "vcsBridges",
+      create: "createVcsBridge",
+      createFields: ["vendor"],
+      update: "updateVcsBridge",
       updateFields: ["webhookSecret"],
-      delete: "deleteVcsIntegration",
+      delete: "deleteVcsBridge",
     });
   });
 

@@ -133,10 +133,10 @@ class GitHubBackend(VCSBackend):
 
         return self._descriptor(self._get(f"/repos/{name}"))
 
-    def verify_webhook(self, vcs_integration: Any, request: Any) -> bool:
+    def verify_webhook(self, vcs_bridge: Any, request: Any) -> bool:
         """Verify an inbound push webhook's HMAC-SHA256 signature against the secret."""
 
-        secret = str(getattr(vcs_integration, "webhook_secret", "") or "")
+        secret = str(getattr(vcs_bridge, "webhook_secret", "") or "")
         signature = _request_header(request, WEBHOOK_SIGNATURE_HEADER)
         if not secret or not signature:
             return False

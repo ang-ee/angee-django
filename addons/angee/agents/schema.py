@@ -29,10 +29,8 @@ from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
 from angee.agents.autoconfig import SETTINGS as _AGENTS_SETTINGS
-from angee.agents.backends import InferenceBackend
 from angee.agents.context import render_view_context
 from angee.agents.models import RuntimeStatus
-from angee.base.fields import ImplClassField
 from angee.base.mixins import actor_user_id
 from angee.graphql.actions import ActionResult, resolve_action_target
 from angee.graphql.aggregates import rebac_aggregate_builder
@@ -531,21 +529,6 @@ _AGENT_MUTATION = crud(
 """Admin agent CRUD: owner is field-backed REBAC; written elevated."""
 
 
-def _provider_backend_key(value: str | None) -> str:
-    """Return an inference backend key, defaulting to manual."""
-
-    if value is None or value is strawberry.UNSET:
-        key = "manual"
-    else:
-        field = cast(ImplClassField, InferenceProvider._meta.get_field("backend_class"))
-        key = str(field.key_for(value) or "")
-    field = cast(ImplClassField, InferenceProvider._meta.get_field("backend_class"))
-    impl_class = field.resolve_class(key)
-    if not issubclass(impl_class, InferenceBackend):
-        raise ValueError(f"Backend {key!r} is not an inference backend.")
-    return key
-
-
 def _provider_oauth_client(provider: Any) -> Any:
     """Return the OAuth client selected by this provider's backend."""
 
@@ -600,7 +583,11 @@ class InferenceProviderCreateMutation:
         attrs: dict[str, Any] = {
             "vendor": vendor,
             "owner": owner,
-            "backend_class": _provider_backend_key(data.backend_class),
+            "backend_class": InferenceProvider.impl_key_for(
+                "backend_class",
+                None if data.backend_class is strawberry.UNSET else data.backend_class,
+                default="manual",
+            ),
         }
         if credential is not None:
             attrs["credential"] = credential
@@ -692,9 +679,7 @@ class InferenceProviderUpdateMutation:
                 )
                 provided.add("credential")
             if data.backend_class is not strawberry.UNSET:
-                backend_key = _provider_backend_key(data.backend_class)
-                backend_changed = backend_key != provider.backend_class
-                provider.backend_class = backend_key
+                backend_changed = provider.set_impl_key("backend_class", data.backend_class, default="manual")
             if data.status not in (strawberry.UNSET, None):
                 provider.status = data.status
                 provided.add("status")
@@ -711,7 +696,7 @@ class InferenceProviderUpdateMutation:
                 provider.config = data.config
                 provided.add("config")
             if backend_changed:
-                provider.materialize_backend_defaults(provided=frozenset(provided))
+                provider.materialize_impl_defaults("backend_class", provided=frozenset(provided))
             provider.save()
         return cast(InferenceProviderType, provider)
 

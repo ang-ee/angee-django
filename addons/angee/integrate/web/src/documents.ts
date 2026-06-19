@@ -45,7 +45,7 @@ export const RotateWebhookSecret = graphql(`
 /** VCS bridges for the add-repository dialog's bridge picker. */
 export const IntegrateVcsBridges = graphql(`
   query IntegrateVcsBridges($pagination: OffsetPaginationInput) {
-    vcsIntegrations(pagination: $pagination) {
+    vcsBridges(pagination: $pagination) {
       results {
         id
         displayName
@@ -56,8 +56,8 @@ export const IntegrateVcsBridges = graphql(`
 
 /** The add typeahead: host repositories matching a typed query, not yet inventoried. */
 export const IntegrateSearchRepositories = graphql(`
-  query IntegrateSearchRepositories($vcsIntegrationId: ID!, $query: String!) {
-    searchRepositories(vcsIntegrationId: $vcsIntegrationId, query: $query) {
+  query IntegrateSearchRepositories($vcsBridgeId: ID!, $query: String!) {
+    searchRepositories(vcsBridgeId: $vcsBridgeId, query: $query) {
       name
       org
       defaultBranch
@@ -69,8 +69,8 @@ export const IntegrateSearchRepositories = graphql(`
 
 /** Inventory one picked repository; returns the created row. */
 export const IntegrateAddRepository = graphql(`
-  mutation IntegrateAddRepository($vcsIntegrationId: ID!, $name: String!) {
-    addRepository(vcsIntegrationId: $vcsIntegrationId, name: $name) {
+  mutation IntegrateAddRepository($vcsBridgeId: ID!, $name: String!) {
+    addRepository(vcsBridgeId: $vcsBridgeId, name: $name) {
       id
       org
       name
@@ -80,14 +80,14 @@ export const IntegrateAddRepository = graphql(`
 
 /** Bulk-inventory every repository an account exposes. */
 export const IntegrateDiscoverRepositories = graphql(`
-  mutation IntegrateDiscoverRepositories($vcsIntegrationId: ID!, $org: String!) {
-    discoverRepositories(vcsIntegrationId: $vcsIntegrationId, org: $org) { ok message }
+  mutation IntegrateDiscoverRepositories($vcsBridgeId: ID!, $org: String!) {
+    discoverRepositories(vcsBridgeId: $vcsBridgeId, org: $org) { ok message }
   }
 `);
 
-/** Selection result for one `vcsIntegrations.results` item (the picker option). */
+/** Selection result for one `vcsBridges.results` item (the picker option). */
 export type VcsBridgeOption =
-  DocumentType<typeof IntegrateVcsBridges>["vcsIntegrations"]["results"][number];
+  DocumentType<typeof IntegrateVcsBridges>["vcsBridges"]["results"][number];
 
 /** One host repository candidate the add typeahead lists (the SDL `RepoCandidate`). */
 export type RepoCandidate = DocumentType<

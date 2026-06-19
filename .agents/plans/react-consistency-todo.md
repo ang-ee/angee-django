@@ -26,7 +26,7 @@ now guards `ok` too. `runActionResult` exports only the function (the
 - [x] **T12** One `runActionResult(outcome)` for `{ ok, message }` actions
       (`if (!ok) throw new Error(message); return message`), exported from
       `@angee/sdk`. Wire integrate `IntegrationsPage`/`SourcesPage`/`WebhooksPage`/
-      `VCSIntegrationsPage` (+ confirm agents `InferencePage` matches). Kills the
+      `VcsBridgesPage` (+ confirm agents `InferencePage` matches). Kills the
       green-toast-on-failure bug.
 - [x] **T11** Route aggregate reads through the model refetch/invalidation
       registry: add `useRegisterModelRefetch` + return `refetch` from
@@ -266,7 +266,7 @@ visual-parity spot-check across both themes still recommended before release.
         humanizes. Base gained ONE `enumValueLabel(meta) = meta.description ??
         statusLabel(meta.value)` beside `statusLabel` (the humanization owner);
         the 3 consumers (`enumOptions`, `enumLabelFromMetadata`, integrate
-        `VCSIntegrationsPage`) derive through it. Exported `enumValueLabel` +
+        `VcsBridgesPage`) derive through it. Exported `enumValueLabel` +
         `statusLabel` from `@angee/base` (review fix: a public enum-label helper
         whose delegate stayed private was an incoherent seam). Tests updated to the
         structural shape.

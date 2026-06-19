@@ -74,7 +74,7 @@ function AddRepositoryDialog({
   });
   const bridgeOptions = React.useMemo<readonly RelationOption[]>(
     () =>
-      (bridgesQuery.data?.vcsIntegrations.results ?? []).map(
+      (bridgesQuery.data?.vcsBridges.results ?? []).map(
         (bridge) => ({
           value: bridge.id,
           label: bridge.displayName,
@@ -93,7 +93,7 @@ function AddRepositoryDialog({
   const [debouncedQuery] = useDebounce(query.trim(), SEARCH_DEBOUNCE_MS);
   const searchEnabled = open && vcsBridgeId !== "" && debouncedQuery !== "";
   const searchVars = React.useMemo<SearchRepositoryVariables>(
-    () => ({ vcsIntegrationId: vcsBridgeId, query: debouncedQuery }),
+    () => ({ vcsBridgeId, query: debouncedQuery }),
     [vcsBridgeId, debouncedQuery],
   );
   const searchQuery = useAuthoredQuery(IntegrateSearchRepositories, searchVars, {
@@ -130,7 +130,7 @@ function AddRepositoryDialog({
       setAdding(candidate.name);
       setError(null);
       try {
-        await addRepository({ vcsIntegrationId: vcsBridgeId, name: candidate.name });
+        await addRepository({ vcsBridgeId, name: candidate.name });
         setAdded((prev) => new Set(prev).add(candidate.name));
         refreshRepositories();
       } catch (cause) {

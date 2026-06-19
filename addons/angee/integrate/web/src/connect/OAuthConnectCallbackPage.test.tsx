@@ -7,6 +7,10 @@ import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { OAuthConnectCallbackPage } from "./OAuthConnectCallbackPage";
+import {
+  CONNECT_CALLBACK_FALLBACK_PATH,
+  CONNECT_CALLBACK_PATH,
+} from "./redirects";
 
 const mocks = vi.hoisted(() => ({ mutate: vi.fn() }));
 
@@ -56,7 +60,38 @@ describe("OAuthConnectCallbackPage", () => {
 
     await waitFor(() => expect(vi.mocked(window.location.assign)).toHaveBeenCalledWith("/integrate/accounts"));
     expect(mocks.mutate).toHaveBeenCalledWith(
-      expect.objectContaining({ code: "connect-ok", state: "s1" }),
+      expect.objectContaining({
+        code: "connect-ok",
+        state: "s1",
+        redirectUri: `${window.location.origin}${CONNECT_CALLBACK_PATH}`,
+      }),
+    );
+  });
+
+  test("completes the fallback callback with the fallback redirect URI", async () => {
+    window.history.replaceState(null, "", `${CONNECT_CALLBACK_FALLBACK_PATH}?code=connect-ok&state=s3`);
+    mocks.mutate.mockResolvedValue({
+      connectAccountComplete: {
+        next: "/integrate/accounts",
+        error: null,
+        account: null,
+        credential: null,
+      },
+    });
+
+    render(
+      <Runtime>
+        <OAuthConnectCallbackPage />
+      </Runtime>,
+    );
+
+    await waitFor(() => expect(vi.mocked(window.location.assign)).toHaveBeenCalledWith("/integrate/accounts"));
+    expect(mocks.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: "connect-ok",
+        state: "s3",
+        redirectUri: `${window.location.origin}${CONNECT_CALLBACK_FALLBACK_PATH}`,
+      }),
     );
   });
 

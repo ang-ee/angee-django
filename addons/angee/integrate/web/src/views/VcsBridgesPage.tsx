@@ -23,7 +23,7 @@ const MODEL = "integrate.VcsBridge";
  */
 export function VcsBridgesPage(): React.ReactElement {
   const t = useIntegrateT();
-  const [syncVcs] = useActionMutation<ActionFieldName>("syncVcsIntegration");
+  const [syncVcs] = useActionMutation<ActionFieldName>("syncVcsBridge");
   const [discover] = useAuthoredMutation(IntegrateDiscoverRepositories);
   const backendClassOptions = useEnumOptions(MODEL, "backendClass");
   const backendClassPrefill = useImplPrefill(MODEL, "backendClass");
@@ -40,7 +40,7 @@ export function VcsBridgesPage(): React.ReactElement {
   const discoverAll = React.useCallback(
     async (ctx: ActionContext) => {
       if (typeof ctx.record?.id !== "string") return;
-      const result = await discover({ vcsIntegrationId: ctx.record.id, org: "" });
+      const result = await discover({ vcsBridgeId: ctx.record.id, org: "" });
       ctx.refresh();
       return runActionResult(result?.discoverRepositories);
     },
