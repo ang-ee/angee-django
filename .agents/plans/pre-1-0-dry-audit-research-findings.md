@@ -33,6 +33,9 @@ architect direction before preserving the current shape.
 
 ### Native GraphQL Extension Owner
 
+- **Status:** Done, verified 2026-06-19. Output type extensions now use native
+  Strawberry/strawberry-django `extend=True`; Angee only keeps schema-bucket
+  collection, addon-order dedupe, and registration with Strawberry.
 - **Finding:** Angee manually merges output GraphQL type extensions while
   `strawberry_django.type(..., extend=True)` exists.
 - **Current code:** `angee/graphql/schema.py`, `angee/graphql/extension.py`,
@@ -46,6 +49,13 @@ architect direction before preserving the current shape.
   `_merge_extension_fields` if parity holds.
 - **Guardrail:** parity tests across named schemas, downstream addons,
   collisions, and idempotency.
+- **Evidence:** no source hits remain for `extends_type`,
+  `_ensure_type_extensions_applied`, `_apply_type_extension`, or
+  `_merge_extension_fields`; `type_extensions` now carries native extension
+  classes such as `@strawberry_django.type(..., extend=True)` in
+  `addons/angee/agents/schema.py` and `addons/angee/iam_integrate_oidc/schema.py`.
+- **Verification:** independent reviewer confirmed the old output merge path is
+  gone; `uv run pytest tests/test_graphql.py` passed with 26 tests.
 
 ### CRUD Update Mutation Owner
 
@@ -326,7 +336,7 @@ rule applies.
 
 Run these before implementation:
 
-1. `angee.graphql / output type extension / native strawberry-django extend=True`
+1. [x] `angee.graphql / output type extension / native strawberry-django extend=True`
 2. `angee.graphql / CRUD update / upstream hook vs custom mutation`
 3. `integrate / OAuth protocol / Authlib stack decision`
 4. `agents+integrate / integration child models / django-polymorphic spike`
