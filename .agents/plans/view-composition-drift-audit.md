@@ -27,6 +27,48 @@ The desired end state:
 - **No local workarounds.** A page-local workaround is treated as evidence of a
   missing owner-level primitive or backend contract.
 
+## Success Looks Like
+
+Success is **less code, fewer choices, and more obvious ownership**.
+
+- **Net deletion.** Platform LOC goes down across the refactor waves. Any LOC
+  increase is tied to a named shared owner and unlocks larger deletion. Addon
+  files get thinner: fewer local hooks, tables, forms, label maps, option maps,
+  query wrappers, SDK wrappers, and one-off helpers.
+- **Thin addons.** Addons mostly declare domain facts: models, fields, forms,
+  columns, routes, actions, provider/backend choices. Model-backed pages use
+  `DataPage` / `List` / `Form` / `GroupListView`. Daemon or in-memory pages use
+  a named shared primitive like `RowsListView`, not bespoke table/view state.
+  Provider-specific addons hold provider-specific behavior; shared
+  agent/integration behavior stays in shared owners.
+- **Library leverage.** Researchers can point to places where Angee deleted code
+  by leaning on Django, Strawberry, TanStack, urql, React, FastMCP,
+  OpenAI/Anthropic SDKs, and the rest of `docs/stack.md`. No addon solves
+  something already owned by the stack. `docs/stack.md` stays the dependency
+  ownership map, not a wish list.
+- **One owner per fact.** Permission logic is not duplicated in
+  React/GraphQL/pages. Schema/list/group/filter behavior lives in
+  `angee.graphql` / `@angee/sdk` / `@angee/base`, not page-local code. Model
+  behavior lives on models/managers/querysets. SDK transport quirks live in
+  provider backends, not domain models or generic framework code.
+- **Normalized names.** The same concept has the same noun across model, schema,
+  route, menu, page, component, file, tests, and docs. Names like `provider`,
+  `integration`, `backend`, and `impl` are distinct only when the concepts are
+  distinct. Renames reduce confusion instead of adding compatibility aliases
+  forever.
+- **Guardrails.** The architecture gate is used before structural changes. New
+  code has focused tests or grep/lint checks preventing reintroduction of raw
+  addon tables, hand-written GraphQL types, duplicate permissions, direct icon
+  imports, and other drift.
+- **Clear golden path.** A new addon/page should feel almost boring: declare the
+  model, schema roots, route, list fields, form fields, group axes, and actions;
+  compose shared primitives; run checks. If an agent needs to hand-roll a table,
+  custom form state, local GraphQL types, custom permission logic, or SDK
+  plumbing, that should fail the architecture gate.
+
+The strongest success signal: a future feature takes fewer lines than the
+previous one because the framework has learned the pattern.
+
 ## Omission
 
 Call the immediate omission **view composition drift**.
