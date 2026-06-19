@@ -9,9 +9,9 @@ import {
   Group,
   List,
   NEW_RECORD_ID,
-  type ActionContext,
+  useRecordActionMutation,
 } from "@angee/base";
-import { useActionMutation, useModelInvalidation } from "@angee/sdk";
+import { useModelInvalidation } from "@angee/sdk";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useIntegrateT } from "../i18n";
@@ -48,19 +48,18 @@ const templateSourceList = (
 export function TemplatesPage(): React.ReactElement {
   const t = useIntegrateT();
   const [sourceRecordId, setSourceRecordId] = React.useState<string | undefined>();
-  const [refreshSource] = useActionMutation<ActionFieldName>("refreshSource");
   const refreshTemplates = useModelInvalidation(TEMPLATE_MODEL);
   const refreshSources = useModelInvalidation(SOURCE_MODEL);
-  const syncTemplates = React.useCallback(
-    async (ctx: ActionContext) => {
-      if (typeof ctx.record?.id !== "string") return;
-      const message = await refreshSource(ctx.record.id);
-      ctx.refresh();
+  const afterSyncTemplates = React.useCallback(
+    () => {
       refreshSources();
       refreshTemplates();
-      return message;
     },
-    [refreshSource, refreshSources, refreshTemplates],
+    [refreshSources, refreshTemplates],
+  );
+  const [syncTemplates] = useRecordActionMutation<ActionFieldName>(
+    "refreshSource",
+    { afterSuccess: afterSyncTemplates },
   );
 
   return (

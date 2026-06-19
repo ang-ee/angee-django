@@ -9,10 +9,11 @@ import {
   List,
   useEnumOptions,
   useImplPrefill,
+  useRecordActionMutation,
   type ActionContext,
 } from "@angee/base";
 import type { ActionFieldName } from "@angee/gql/console/actions";
-import { useActionMutation, useAuthoredMutation } from "@angee/sdk";
+import { useAuthoredMutation } from "@angee/sdk";
 
 import { useIntegrateT } from "../../i18n";
 import {
@@ -55,22 +56,14 @@ export function ProvidersPage(): React.ReactElement {
   const [connectAccountComplete] = useAuthoredMutation(
     IntegrateConnectAccountComplete,
   );
-  const [discoverEndpoints] =
-    useActionMutation<ActionFieldName>("discoverOauthEndpoints");
+  const [discover] = useRecordActionMutation<ActionFieldName>(
+    "discoverOauthEndpoints",
+    { defaultMessage: t("integrate.providers.discover.done") },
+  );
 
   // Fill the transport endpoints from the client's discovery URL (no manual entry).
   // Persists onto the saved row and re-pulls it, so the form shows the resolved
   // endpoints; available once a discovery URL is set.
-  const discover = React.useCallback(
-    async (ctx: ActionContext) => {
-      if (typeof ctx.record?.id !== "string") return;
-      const message = await discoverEndpoints(ctx.record.id);
-      ctx.refresh();
-      return message ?? t("integrate.providers.discover.done");
-    },
-    [discoverEndpoints, t],
-  );
-
   const connect = React.useCallback(
     async (ctx: ActionContext) => {
       if (typeof window === "undefined" || typeof ctx.record?.id !== "string") {

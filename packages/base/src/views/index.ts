@@ -112,6 +112,14 @@ export {
   useBulkDelete,
   type UseBulkDeleteResult,
 } from "./useBulkDelete";
+export {
+  recordActionId,
+  useRecordAction,
+  useRecordActionMutation,
+  type RecordAction,
+  type RecordActionRunner,
+  type UseRecordActionOptions,
+} from "./record-action";
 export { enumValueLabel, statusLabel } from "./ListInternals";
 export * from "./data-view-model";
 export * from "./data-view-context";

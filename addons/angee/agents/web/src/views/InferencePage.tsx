@@ -1,7 +1,6 @@
 import * as React from "react";
 import {
   Action,
-  type ActionContext,
   Column,
   DataPage,
   Field,
@@ -9,6 +8,7 @@ import {
   Group,
   GroupListView,
   List,
+  useRecordActionMutation,
   useEnumOptions,
   useImplPrefill,
   type DataToolbarFilterOption,
@@ -19,7 +19,7 @@ import {
   ConnectOAuthButton,
   connectCallbackPathForRecord,
 } from "@angee/integrate";
-import { useActionMutation, useAuthoredMutation, useResourceList, type Row } from "@angee/sdk";
+import { useAuthoredMutation, useResourceList, type Row } from "@angee/sdk";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { ConnectInferenceProvider } from "../documents";
@@ -30,19 +30,9 @@ const MODEL_MODEL = "agents.InferenceModel";
 
 export function InferenceProvidersPage(): React.ReactElement {
   const t = useAgentsT();
-  const [refreshProviderModels] = useActionMutation<ActionFieldName>("refreshProviderModels");
+  const [refreshModels] = useRecordActionMutation<ActionFieldName>("refreshProviderModels");
   const backendClassOptions = useEnumOptions(PROVIDER_MODEL, "backendClass");
   const backendClassPrefill = useImplPrefill(PROVIDER_MODEL, "backendClass");
-
-  const refreshModels = React.useCallback(
-    async (ctx: ActionContext) => {
-      if (typeof ctx.record?.id !== "string") return;
-      const message = await refreshProviderModels(ctx.record.id);
-      ctx.refresh();
-      return message;
-    },
-    [refreshProviderModels],
-  );
 
   return (
     <DataPage

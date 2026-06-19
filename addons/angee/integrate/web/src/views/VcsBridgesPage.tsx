@@ -8,9 +8,10 @@ import {
   List,
   useEnumOptions,
   useImplPrefill,
-  type ActionContext,
+  useRecordAction,
+  useRecordActionMutation,
 } from "@angee/base";
-import { runActionResult, useActionMutation, useAuthoredMutation } from "@angee/sdk";
+import { runActionResult, useAuthoredMutation } from "@angee/sdk";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useIntegrateT } from "../i18n";
@@ -23,29 +24,19 @@ const MODEL = "integrate.VcsBridge";
  */
 export function VcsBridgesPage(): React.ReactElement {
   const t = useIntegrateT();
-  const [syncVcs] = useActionMutation<ActionFieldName>("syncVcsBridge");
+  const [sync] = useRecordActionMutation<ActionFieldName>("syncVcsBridge");
   const [discover] = useAuthoredMutation(IntegrateDiscoverRepositories);
   const backendClassOptions = useEnumOptions(MODEL, "backendClass");
   const backendClassPrefill = useImplPrefill(MODEL, "backendClass");
 
-  const sync = React.useCallback(
-    async (ctx: ActionContext) => {
-      if (typeof ctx.record?.id !== "string") return;
-      const message = await syncVcs(ctx.record.id);
-      ctx.refresh();
-      return message;
-    },
-    [syncVcs],
-  );
-  const discoverAll = React.useCallback(
-    async (ctx: ActionContext) => {
-      if (typeof ctx.record?.id !== "string") return;
-      const result = await discover({ vcsBridgeId: ctx.record.id, org: "" });
-      ctx.refresh();
+  const discoverRepositories = React.useCallback(
+    async (id: string) => {
+      const result = await discover({ vcsBridgeId: id, org: "" });
       return runActionResult(result?.discoverRepositories);
     },
     [discover],
   );
+  const discoverAll = useRecordAction(discoverRepositories);
 
   return (
     <DataPage model={MODEL} placement="inline" routed>

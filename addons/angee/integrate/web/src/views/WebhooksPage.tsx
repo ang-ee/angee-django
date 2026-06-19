@@ -7,9 +7,10 @@ import {
   Form,
   Group,
   List,
+  useRecordActionMutation,
   type ActionContext,
 } from "@angee/base";
-import { useActionMutation, useAuthoredMutation } from "@angee/sdk";
+import { useAuthoredMutation } from "@angee/sdk";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useIntegrateT } from "../i18n";
@@ -28,18 +29,8 @@ const webhookList = (
 /** Outbound webhook subscriptions and their delivery operations. */
 export function WebhooksPage(): React.ReactElement {
   const t = useIntegrateT();
-  const [testDelivery] = useActionMutation<ActionFieldName>("testWebhookDelivery");
+  const [sendTest] = useRecordActionMutation<ActionFieldName>("testWebhookDelivery");
   const [rotateSecret] = useAuthoredMutation(RotateWebhookSecret);
-
-  const sendTest = React.useCallback(
-    async (ctx: ActionContext) => {
-      if (typeof ctx.record?.id !== "string") return;
-      const message = await testDelivery(ctx.record.id);
-      ctx.refresh();
-      return message;
-    },
-    [testDelivery],
-  );
   const rotate = React.useCallback(
     async (ctx: ActionContext) => {
       if (typeof ctx.record?.id !== "string") return;

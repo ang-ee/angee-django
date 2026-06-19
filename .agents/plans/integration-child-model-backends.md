@@ -23,11 +23,13 @@ providers are inference `backend_class` values, not integration impls.
   if a third caller needs create-time default key handling. Current callers pass
   `None` for omitted GraphQL values explicitly; avoid importing GraphQL sentinels
   into the base layer.
-- [ ] Add a base record-action helper for single-id `ActionResult` mutations.
+- [x] Add a base record-action helper for single-id `ActionResult` mutations.
   Integrate pages repeatedly guard `ctx.record.id`, call `useActionMutation`,
   refresh the record, and return the message. The owner should be `@angee/base`
   because it owns `ActionContext` and record action UI; pages should compose one
-  hook per action.
+  hook per action. Implemented as `useRecordAction` /
+  `useRecordActionMutation` in `@angee/base`, then wired into agents and
+  integrate record actions.
 - [ ] Make relation facets/group options a base/DataPage primitive before
   hand-authoring more inference list filters. The provider/model-capability
   filters should reuse relation metadata and the same relation option-fetch path

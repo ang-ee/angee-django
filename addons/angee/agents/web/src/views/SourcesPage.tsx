@@ -1,6 +1,14 @@
 import * as React from "react";
-import { Action, type ActionContext, Column, DataPage, Field, Form, Group, List } from "@angee/base";
-import { useActionMutation } from "@angee/sdk";
+import {
+  Action,
+  Column,
+  DataPage,
+  Field,
+  Form,
+  Group,
+  List,
+  useRecordActionMutation,
+} from "@angee/base";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useAgentsT } from "../i18n";
@@ -13,18 +21,7 @@ const SKILL_DEFAULTS = { kind: "skill" };
 
 export function SourcesPage(): React.ReactElement {
   const t = useAgentsT();
-  const [refreshSource] = useActionMutation<ActionFieldName>("refreshSource");
-  const refresh = React.useCallback(
-    async (ctx: ActionContext) => {
-      if (typeof ctx.record?.id !== "string") return;
-      // `useActionMutation` applies `runActionResult`: an ok:false business
-      // failure throws (→ error toast), success returns its message.
-      const message = await refreshSource(ctx.record.id);
-      ctx.refresh();
-      return message;
-    },
-    [refreshSource],
-  );
+  const [refresh] = useRecordActionMutation<ActionFieldName>("refreshSource");
 
   return (
     <DataPage

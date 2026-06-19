@@ -11,6 +11,7 @@ import {
   Glyph,
   Group,
   List,
+  useRecordActionMutation,
   useToast,
   type RecordToolbarContext,
   type RecordTabDescriptor,
@@ -196,7 +197,10 @@ function AgentDataPage({
   const labels = useAgentLabels();
   const t = useAgentsT();
   const invalidateAgent = useModelInvalidation(MODEL);
-  const [deprovisionAgent] = useActionMutation<ActionFieldName>("deprovisionAgent");
+  const [deprovision] = useRecordActionMutation<ActionFieldName>("deprovisionAgent", {
+    afterSuccess: invalidateAgent,
+    missingRecordMessage: t("agents.provisioning.saveFirst"),
+  });
   const recordTabs: readonly RecordTabDescriptor[] | undefined = isTemplate
     ? undefined
     : [
@@ -253,14 +257,7 @@ function AgentDataPage({
               danger: true,
             }}
             visibleWhen={canDeprovisionAgent}
-            run={async ({ record, refresh }) => {
-              const id = stringField(record, "id");
-              if (!id) throw new Error(t("agents.provisioning.saveFirst"));
-              const message = await deprovisionAgent(id);
-              invalidateAgent();
-              refresh();
-              return message;
-            }}
+            run={deprovision}
           />
         ) : null}
         <Field name="name" title />

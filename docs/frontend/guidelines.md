@@ -32,11 +32,14 @@ hand-rolling a concern. TypeScript dependency setup belongs in `package.json`,
   opaque (parse, do not assert).
 - **Single-id action mutations are derived, not authored.** For a
   `<field>(id: ID!): ActionResult` mutation, call
-  `useActionMutation<ActionFieldName>("field")` (`ActionFieldName` from
-  `@angee/gql/<schema>/actions`) — no document, result type, or variables. The
-  runner takes the `id` and returns the success message (it applies
-  `runActionResult`: an `ok:false` business failure throws → error toast). Don't
-  hand-author these as `graphql()` documents.
+  `useActionMutation<ActionFieldName>("field")` in headless code, or
+  `useRecordActionMutation<ActionFieldName>("field")` for a rendered
+  `@angee/base` `<Action run={...}>` bound to the open record. `ActionFieldName`
+  comes from `@angee/gql/<schema>/actions`; no document, result type, or
+  variables are authored. SDK owns deriving/running the mutation; base owns
+  adapting it to `ActionContext` (record id, refresh, missing-record handling,
+  success hooks). Don't hand-author these as `graphql()` documents or page-local
+  `ctx.record.id → mutate → refresh` callbacks.
 - React does not own business logic, permissions, models, or persistence.
 - **React state has one owner.** Keep canonical facts in the smallest owner:
   route/search facts in TanStack Router/nuqs, server facts in GraphQL/urql, data

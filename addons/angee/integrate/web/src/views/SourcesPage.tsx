@@ -7,9 +7,8 @@ import {
   Form,
   Group,
   List,
-  type ActionContext,
+  useRecordActionMutation,
 } from "@angee/base";
-import { useActionMutation } from "@angee/sdk";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useIntegrateT } from "../i18n";
@@ -32,16 +31,7 @@ const sourceList = (
  */
 export function SourcesPage(): React.ReactElement {
   const t = useIntegrateT();
-  const [refreshSource] = useActionMutation<ActionFieldName>("refreshSource");
-  const refresh = React.useCallback(
-    async (ctx: ActionContext) => {
-      if (typeof ctx.record?.id !== "string") return;
-      const message = await refreshSource(ctx.record.id);
-      ctx.refresh();
-      return message;
-    },
-    [refreshSource],
-  );
+  const [refresh] = useRecordActionMutation<ActionFieldName>("refreshSource");
 
   return (
     <DataPage model={MODEL} placement="inline" routed>
