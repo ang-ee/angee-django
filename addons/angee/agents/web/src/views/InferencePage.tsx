@@ -118,7 +118,6 @@ export function InferenceModelsPage(): React.ReactElement {
   const modelUseOptions = useEnumOptions(MODEL_MODEL, "modelUse");
   const providerFacet = useRelationFacet(MODEL_MODEL, {
     field: "provider",
-    filterField: "providerId",
     label: t("agents.inference.provider"),
   });
   const groupOptions = React.useMemo<readonly DataToolbarGroupOption[]>(
@@ -137,6 +136,15 @@ export function InferenceModelsPage(): React.ReactElement {
     ],
     [providerFacet.groupOption, t],
   );
+  const defaultGroups = React.useMemo(
+    () => ({
+      list: { field: "modelUse" },
+      ...(providerFacet.groupOption
+        ? { board: providerFacet.groupOption.group }
+        : {}),
+    }),
+    [providerFacet.groupOption],
+  );
 
   return (
     <DataPage model={MODEL_MODEL} placement="inline" routed>
@@ -146,14 +154,7 @@ export function InferenceModelsPage(): React.ReactElement {
         filters={providerFacet.filters}
         filterFields={providerFacet.filterFields}
         groupOptions={groupOptions}
-        defaultGroups={{
-          list: { field: "modelUse" },
-          board: {
-            field: "provider.name",
-            aggregateField: "provider",
-            aggregateKey: "providerId",
-          },
-        }}
+        defaultGroups={defaultGroups}
       >
         <Column field="name" />
         <Column field="provider.name" header={t("agents.inference.provider")} />

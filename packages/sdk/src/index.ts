@@ -62,6 +62,8 @@ export {
   type ModelFieldKind,
   type ModelFieldMetadata,
   type ModelMetadata,
+  type ModelRelationFilterMetadata,
+  type ModelRelationFilterMode,
   type ModelRootFieldMetadata,
   type SchemaFieldMetadata,
 } from "./model-metadata";

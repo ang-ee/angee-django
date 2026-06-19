@@ -36,7 +36,6 @@ describe("useRelationFacet", () => {
       () =>
         useRelationFacet("agents.InferenceModel", {
           field: "provider",
-          filterField: "providerId",
           label: "Provider",
         }),
       { wrapper: Metadata },
@@ -109,6 +108,40 @@ describe("useRelationFacet", () => {
     });
   });
 
+  test("builds direct id preset filters without exposing custom filter fields", () => {
+    const { result } = renderHook(
+      () => useRelationFacet("agents.InferenceModel", { field: "publisher" }),
+      { wrapper: Metadata },
+    );
+
+    expect(result.current.filters[0]).toMatchObject({
+      id: "publisher:provider-anthropic",
+      filter: { publisher: "provider-anthropic" },
+    });
+    expect(result.current.filterFields).toEqual([]);
+    expect(result.current.groupOption).toMatchObject({
+      id: "publisher.name",
+      group: {
+        field: "publisher.name",
+        aggregateField: "publisher",
+        aggregateKey: "publisher",
+      },
+    });
+  });
+
+  test("suppresses default group options without aggregate-key metadata", () => {
+    const { result } = renderHook(
+      () => useRelationFacet("agents.InferenceModel", { field: "owner" }),
+      { wrapper: Metadata },
+    );
+
+    expect(result.current.filters[0]).toMatchObject({
+      id: "ownerId:provider-anthropic",
+      filter: { ownerId: { exact: "provider-anthropic" } },
+    });
+    expect(result.current.groupOption).toBeUndefined();
+  });
+
   test("falls back to ids for empty related labels", () => {
     sdkMocks.list.mockReturnValue(resourceList([
       { id: "provider-unnamed", name: "" },
@@ -158,6 +191,30 @@ const METADATA: SchemaFieldMetadata = {
           name: "provider",
           kind: "relation",
           relationTarget: "InferenceProviderType",
+          relationFilter: {
+            field: "providerId",
+            mode: "lookup",
+            aggregateKey: "providerId",
+          },
+        },
+        publisher: {
+          name: "publisher",
+          kind: "relation",
+          relationTarget: "InferenceProviderType",
+          relationFilter: {
+            field: "publisher",
+            mode: "id",
+            aggregateKey: "publisher",
+          },
+        },
+        owner: {
+          name: "owner",
+          kind: "relation",
+          relationTarget: "InferenceProviderType",
+          relationFilter: {
+            field: "ownerId",
+            mode: "lookup",
+          },
         },
         name: { name: "name", kind: "scalar", scalar: "String" },
       },

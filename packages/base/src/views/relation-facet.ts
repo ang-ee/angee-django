@@ -2,6 +2,8 @@ import * as React from "react";
 import {
   useModelMetadata,
   useSchemaFieldMetadata,
+  type ModelRelationFilterMetadata,
+  type ModelRelationFilterMode,
 } from "@angee/sdk";
 
 import type {
@@ -9,7 +11,7 @@ import type {
   DataToolbarFilterOption,
   DataToolbarGroupOption,
 } from "../toolbars";
-import type { DataViewGroup } from "./data-view-model";
+import type { DataViewFilter, DataViewGroup } from "./data-view-model";
 import {
   relationFieldInfo,
   type RelationFieldInfo,
@@ -25,9 +27,11 @@ export interface RelationFacetOptions {
   field: string;
   /** Toolbar label; defaults to the relation field name. */
   label?: React.ReactNode;
-  /** Filter lookup field accepted by the current model filter input. */
-  filterField: string;
-  /** Aggregate bucket key returned by the API; defaults to `filterField`. */
+  /** Filter field accepted by the current model filter input; defaults to SDL metadata. */
+  filterField?: string;
+  /** Filter value shape; defaults to SDL metadata, then lookup for explicit fields. */
+  filterMode?: ModelRelationFilterMode;
+  /** Aggregate bucket key returned by the API; defaults to SDL metadata. */
   aggregateKey?: string;
   /** Related-record display field; defaults to the related model representation. */
   labelField?: string;
@@ -51,7 +55,8 @@ export function useRelationFacet(
   const {
     aggregateKey: optionAggregateKey,
     field,
-    filterField,
+    filterField: optionFilterField,
+    filterMode: optionFilterMode,
     group,
     label: optionLabel,
     labelField: optionLabelField,
@@ -69,32 +74,40 @@ export function useRelationFacet(
     pageSize,
     sort: true,
   });
-  const aggregateKey = optionAggregateKey ?? filterField;
+  const filter = React.useMemo(
+    () =>
+      relationFilterConfig(relation?.filter, {
+        field: optionFilterField,
+        mode: optionFilterMode,
+      }),
+    [optionFilterField, optionFilterMode, relation],
+  );
+  const aggregateKey = optionAggregateKey ?? filter?.aggregateKey;
   const label = optionLabel ?? relationLabel(field);
   const filters = React.useMemo<readonly DataToolbarFilterOption[]>(
     () =>
-      relation
+      relation && filter
         ? choiceOptions.map((option) => ({
-            id: `${filterField}:${option.value}`,
+            id: `${filter.field}:${option.value}`,
             label: option.label,
             chipLabel: option.label,
-            filter: { [filterField]: { exact: option.value } },
+            filter: relationFacetFilter(filter, option.value),
           }))
         : EMPTY_FILTER_OPTIONS,
-    [choiceOptions, filterField, relation],
+    [choiceOptions, filter, relation],
   );
   const filterFields = React.useMemo<readonly DataToolbarFilterField[]>(
     () =>
-      relation
+      relation && filter?.mode === "lookup"
         ? [{
-            id: filterField,
-            field: filterField,
+            id: filter.field,
+            field: filter.field,
             label,
             type: "selection",
             options: choiceOptions,
           }]
         : EMPTY_FILTER_FIELDS,
-    [choiceOptions, filterField, label, relation],
+    [choiceOptions, filter, label, relation],
   );
   const groupOption = React.useMemo(
     () =>
@@ -119,6 +132,29 @@ export function useRelationFacet(
   );
 }
 
+function relationFilterConfig(
+  metadata: ModelRelationFilterMetadata | undefined,
+  override: {
+    field: string | undefined;
+    mode: ModelRelationFilterMode | undefined;
+  },
+): ModelRelationFilterMetadata | undefined {
+  if (!override.field) return metadata;
+  return {
+    field: override.field,
+    mode: override.mode ?? metadata?.mode ?? "lookup",
+    ...(metadata?.aggregateKey ? { aggregateKey: metadata.aggregateKey } : {}),
+  };
+}
+
+function relationFacetFilter(
+  filter: ModelRelationFilterMetadata,
+  value: string,
+): DataViewFilter {
+  if (filter.mode === "id") return { [filter.field]: value };
+  return { [filter.field]: { exact: value } };
+}
+
 function relationGroupOption({
   aggregateKey,
   field,
@@ -127,7 +163,7 @@ function relationGroupOption({
   labelField,
   relation,
 }: {
-  aggregateKey: string;
+  aggregateKey: string | undefined;
   field: string;
   group: DataViewGroup | false | undefined;
   label: React.ReactNode;
@@ -135,15 +171,18 @@ function relationGroupOption({
   relation: RelationFieldInfo | null;
 }): DataToolbarGroupOption | undefined {
   if (!relation || group === false) return undefined;
-  const resolvedGroup = group ?? {
+  const resolvedGroup = group;
+  if (!resolvedGroup && !aggregateKey) return undefined;
+  const defaultGroup = {
     field: `${field}.${labelField ?? relation.labelField}`,
     aggregateField: field,
-    aggregateKey,
+    aggregateKey: aggregateKey ?? field,
   };
+  const optionGroup = resolvedGroup ?? defaultGroup;
   return {
-    id: resolvedGroup.field,
+    id: optionGroup.field,
     label,
-    group: resolvedGroup,
+    group: optionGroup,
   };
 }
 

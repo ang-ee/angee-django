@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type {
   ModelFieldMetadata,
   ModelMetadata,
+  ModelRelationFilterMetadata,
   SchemaFieldMetadata,
 } from "@angee/sdk";
 
@@ -22,6 +23,8 @@ export interface RelationFieldInfo {
   labelField: string;
   /** A create mutation exists for the related model. */
   canCreate: boolean;
+  /** Filter shape accepted by the current model's filter input for this relation. */
+  filter?: ModelRelationFilterMetadata;
 }
 
 // Server-owned fields a create form never edits.
@@ -83,6 +86,7 @@ export function relationFieldInfo(
     model: stripTypeSuffix(field.relationTarget),
     labelField: related.recordRepresentation ?? "id",
     canCreate: Boolean(related.rootFields.create),
+    ...(field.relationFilter ? { filter: field.relationFilter } : {}),
   };
 }
 

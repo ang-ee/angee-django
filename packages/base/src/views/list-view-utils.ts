@@ -16,6 +16,7 @@ import {
   type DataViewGroup,
   type DataViewLookup,
   type DataViewLookupOperator,
+  type FilterFacet,
 } from "./data-view-model";
 import {
   groupFieldLabel,
@@ -228,7 +229,7 @@ export function activeFilterIdsFor(
   return options.flatMap((option) => {
     const facet = Filter.facetFromFilter(option.filter);
     if (!facet) return [];
-    return value.facetValues(facet.field).includes(facet.value)
+    return value.facetValues(facet).includes(facet.value)
       ? [option.id]
       : [];
   });
@@ -360,7 +361,7 @@ function isFacetFilter(
   if (operator !== "exact" && operator !== "inList") return false;
   const facets = options
     .map((option) => Filter.facetFromFilter(option.filter))
-    .filter((facet): facet is { field: string; value: string } => facet !== null)
+    .filter((facet): facet is FilterFacet => facet !== null)
     .filter((facet) => facet.field === field);
   if (facets.length === 0) return false;
   if (operator === "exact") {

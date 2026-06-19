@@ -35,6 +35,16 @@ export interface ModelEnumValueMetadata {
   description?: string;
 }
 
+/** Filter value shape a relation field's list filter input accepts. */
+export type ModelRelationFilterMode = "lookup" | "id";
+
+/** Relation filter contract derived from the model's SDL filter input. */
+export interface ModelRelationFilterMetadata {
+  field: string;
+  mode: ModelRelationFilterMode;
+  aggregateKey?: string;
+}
+
 /** Metadata for one GraphQL object field, derived from the printed SDL. */
 export interface ModelFieldMetadata {
   name: string;
@@ -44,6 +54,7 @@ export interface ModelFieldMetadata {
   enumName?: string;
   values?: readonly ModelEnumValueMetadata[];
   relationTarget?: string;
+  relationFilter?: ModelRelationFilterMetadata;
 }
 
 /** Root operation fields the SDL declares for one exposed model type. */
@@ -186,11 +197,22 @@ export function fieldMetadataFromSchema(schema: GraphQLSchema): SchemaFieldMetad
   const types: Record<string, ModelMetadata> = {};
   const rootFields = rootFieldsByType(schema);
   for (const type of schemaObjectTypes(schema)) {
+    const filterInput = filterInputForType(schema, type);
+    const groupKeyFields = groupKeyFieldsForType(schema, type);
     const fields = Object.fromEntries(
-      Object.values(type.getFields()).map((field) => [
-        field.name,
-        metadataForField(field.name, field.type, field.description),
-      ]),
+      Object.values(type.getFields()).map((field) => {
+        const metadata = metadataForField(field.name, field.type, field.description);
+        const relationFilter = metadata.kind === "relation"
+          ? relationFilterForField(field.name, filterInput, groupKeyFields)
+          : undefined;
+        return [
+          field.name,
+          {
+            ...metadata,
+            ...(relationFilter ? { relationFilter } : {}),
+          },
+        ];
+      }),
     );
     const recordRepresentation = recordRepresentationFor(fields);
     types[type.name] = {
@@ -270,6 +292,77 @@ function rootFieldsForType(
     rootFields.delete = deleteFieldFor(type, deleteCandidates);
   }
   return rootFields;
+}
+
+function filterInputForType(
+  schema: GraphQLSchema,
+  type: GraphQLObjectType,
+): GraphQLInputObjectType | null {
+  const query = schema.getQueryType();
+  if (!query) return null;
+  for (const field of Object.values(query.getFields())) {
+    if (!returnsCollectionOf(field.type, type.name)) continue;
+    const input = modelInputType(field, type, "Filter");
+    if (input) return input;
+  }
+  return null;
+}
+
+function groupKeyFieldsForType(
+  schema: GraphQLSchema,
+  type: GraphQLObjectType,
+): ReadonlySet<string> {
+  const query = schema.getQueryType();
+  if (!query) return new Set();
+  for (const field of Object.values(query.getFields())) {
+    if (!groupByFieldMetadata(field, type)) continue;
+    const returnType = namedObjectType(field.type);
+    const resultsType = returnType?.getFields().results?.type;
+    const rowType = resultsType ? listItemObjectType(resultsType) : null;
+    const key = rowType?.getFields().key;
+    const keyType = key ? namedObjectType(key.type) : null;
+    if (keyType) return new Set(Object.keys(keyType.getFields()));
+  }
+  return new Set();
+}
+
+function relationFilterForField(
+  fieldName: string,
+  filterInput: GraphQLInputObjectType | null,
+  groupKeyFields: ReadonlySet<string>,
+): ModelRelationFilterMetadata | undefined {
+  const filterFields = filterInput?.getFields();
+  if (!filterFields) return undefined;
+  const aggregateKey = relationAggregateKey(fieldName, groupKeyFields);
+  for (const name of [`${fieldName}Id`, fieldName]) {
+    const filterField = filterFields[name];
+    const mode = filterField ? relationFilterMode(filterField.type) : null;
+    if (mode) {
+      return {
+        field: name,
+        mode,
+        ...(aggregateKey ? { aggregateKey } : {}),
+      };
+    }
+  }
+  return undefined;
+}
+
+function relationAggregateKey(
+  fieldName: string,
+  groupKeyFields: ReadonlySet<string>,
+): string | undefined {
+  const idKey = `${fieldName}Id`;
+  if (groupKeyFields.has(idKey)) return idKey;
+  return groupKeyFields.has(fieldName) ? fieldName : undefined;
+}
+
+function relationFilterMode(type: GraphQLType): ModelRelationFilterMode | null {
+  const namedType = getNamedType(type);
+  if (isScalarType(namedType) && namedType.name === "ID") return "id";
+  if (!isInputObjectType(namedType)) return null;
+  const fields = namedType.getFields();
+  return "exact" in fields || "inList" in fields ? "lookup" : null;
 }
 
 function isDetailField(

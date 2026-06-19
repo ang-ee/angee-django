@@ -41,7 +41,17 @@ providers are inference `backend_class` values, not integration impls.
 - [ ] Standardize relation-id filters. Prefer a strawberry-django-native
   relation filter shape from the frontend primitive; if not enough, add one
   relay/global-id relation lookup helper in `angee.graphql` and reuse it across
-  agents/knowledge.
+  agents/knowledge. First sub-slice implemented the frontend/SDK owner for
+  object relations: SDL metadata now records each relation field's filter
+  contract (`lookup` or direct `ID`), and relation facets
+  consume that metadata instead of page-local names such as `providerId`.
+- [ ] Expose relation metadata for scalar-ID foreign keys. Knowledge/storage
+  still expose some relation owners as `ID` plus `*Label` rather than object
+  relation fields, so a later backend/schema-owner slice must decide whether to
+  expose object relations, schema directives, a Relay-id lookup helper, or
+  another native metadata source. Do not use strawberry-django's native
+  `DjangoModelFilterInput { pk }` for relation facets until the backend owns
+  the public-id-to-pk boundary.
 
 ## Locked Decisions
 

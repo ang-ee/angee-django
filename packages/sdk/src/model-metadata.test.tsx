@@ -193,6 +193,48 @@ describe("fieldMetadataFromSDL", () => {
       groupByInput: "NoteGroupBySpec",
     });
   });
+
+  test("captures relation filter contracts from filter inputs", () => {
+    const metadata = fieldMetadataFromSDL(/* GraphQL */ `
+      type ProviderType { id: ID! name: String! }
+      type ModelType {
+        id: ID!
+        provider: ProviderType
+        publisher: ProviderType
+        drive: ProviderType
+      }
+      type ModelTypeOffsetPaginated { results: [ModelType!]! }
+      input DjangoModelFilterInput { pk: ID! }
+      input IdLookup { exact: ID inList: [ID!] }
+      input ModelFilter {
+        provider: DjangoModelFilterInput
+        providerId: IdLookup
+        publisher: ID
+        drive: DjangoModelFilterInput
+      }
+      input ModelAggregateGroupBySpec { field: String! }
+      type ModelAggregateGroupKey { providerId: ID publisher: ID }
+      type ModelAggregateGrouped { key: ModelAggregateGroupKey! count: Int! }
+      type ModelAggregateGroupedResult { results: [ModelAggregateGrouped!]! }
+      type Query {
+        models(filters: ModelFilter): ModelTypeOffsetPaginated!
+        modelGroups(groupBy: [ModelAggregateGroupBySpec!]!, filter: ModelFilter): ModelAggregateGroupedResult!
+      }
+    `);
+
+    const fields = required(metadata.types.ModelType).fields;
+    expect(required(fields.provider).relationFilter).toEqual({
+      field: "providerId",
+      mode: "lookup",
+      aggregateKey: "providerId",
+    });
+    expect(required(fields.publisher).relationFilter).toEqual({
+      field: "publisher",
+      mode: "id",
+      aggregateKey: "publisher",
+    });
+    expect(required(fields.drive).relationFilter).toBeUndefined();
+  });
 });
 
 function required<T>(value: T | null | undefined): T {

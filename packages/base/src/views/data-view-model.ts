@@ -111,6 +111,7 @@ export type DataViewAction =
 export interface FilterFacet {
   field: string;
   value: string;
+  mode: "lookup" | "id";
 }
 
 export class Filter {
@@ -128,16 +129,23 @@ export class Filter {
     const [entry] = Object.entries(filter);
     if (!entry) return null;
     const [field, value] = entry;
+    if (typeof value === "string") return { field, value, mode: "id" };
     const lookup = isDataViewLookup(value) ? value : null;
     const exact = lookup?.exact;
-    return typeof exact === "string" ? { field, value: exact } : null;
+    return typeof exact === "string" ? { field, value: exact, mode: "lookup" } : null;
   }
 
   hasEntries(): boolean {
     return Object.keys(this.value).length > 0;
   }
 
-  facetValues(field: string): readonly string[] {
+  facetValues(facet: FilterFacet | string): readonly string[] {
+    const field = typeof facet === "string" ? facet : facet.field;
+    const mode = typeof facet === "string" ? "lookup" : facet.mode;
+    if (mode === "id") {
+      const value = this.value[field];
+      return typeof value === "string" ? [value] : [];
+    }
     const lookup = this.lookup(field);
     const exact = lookup?.exact;
     if (typeof exact === "string") return [exact];
@@ -148,7 +156,14 @@ export class Filter {
   }
 
   toggleFacet(facet: FilterFacet): DataViewFilter {
-    const current = this.facetValues(facet.field);
+    if (facet.mode === "id") {
+      const current = this.facetValues(facet);
+      const next = { ...this.value };
+      if (current.includes(facet.value)) delete next[facet.field];
+      else next[facet.field] = facet.value;
+      return next;
+    }
+    const current = this.facetValues(facet);
     const nextValues = current.includes(facet.value)
       ? current.filter((value) => value !== facet.value)
       : [...current, facet.value];

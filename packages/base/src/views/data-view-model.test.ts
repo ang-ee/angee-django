@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   DataViewState,
+  Filter,
   dataViewSearchToState,
   dataViewStateToSearch,
 } from "./data-view-model";
@@ -100,6 +101,41 @@ describe("data-view model", () => {
       aggregateField: "vendor",
       aggregateKey: "vendorId",
     });
+  });
+
+  test("toggles lookup facets as exact/in-list lookups", () => {
+    const selected = Filter.from({}).toggleFacet({
+      field: "providerId",
+      value: "provider-a",
+      mode: "lookup",
+    });
+    const expanded = Filter.from(selected).toggleFacet({
+      field: "providerId",
+      value: "provider-b",
+      mode: "lookup",
+    });
+
+    expect(selected).toEqual({ providerId: { exact: "provider-a" } });
+    expect(expanded).toEqual({ providerId: { inList: ["provider-a", "provider-b"] } });
+    expect(Filter.from(expanded).facetValues({
+      field: "providerId",
+      value: "provider-a",
+      mode: "lookup",
+    })).toEqual(["provider-a", "provider-b"]);
+  });
+
+  test("toggles direct id facets as scalar filters", () => {
+    const facet = {
+      field: "publisher",
+      value: "publisher-a",
+      mode: "id" as const,
+    };
+    const selected = Filter.from({}).toggleFacet(facet);
+    const cleared = Filter.from(selected).toggleFacet(facet);
+
+    expect(selected).toEqual({ publisher: "publisher-a" });
+    expect(Filter.from(selected).facetValues(facet)).toEqual(["publisher-a"]);
+    expect(cleared).toEqual({});
   });
 
   test("resets page and clears selection when query scope changes", () => {
