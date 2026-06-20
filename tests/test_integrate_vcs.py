@@ -9,12 +9,14 @@ themselves).
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from django.core.management import call_command
 from django.db import connection
+from django.utils import timezone
 from rebac import system_context
 
 from angee.integrate.vcs.backend import LocalVCSBackend
@@ -140,8 +142,8 @@ def test_source_refresh_materializes_templates(vcs_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_sync_refreshes_every_source(vcs_tables: None) -> None:
-    """The Bridge sync refreshes each repository's sources over the host."""
+def test_run_sync_refreshes_sources_and_records_lifecycle(vcs_tables: None) -> None:
+    """The Bridge sync owner refreshes sources and records lifecycle telemetry."""
 
     del vcs_tables
     vcs = _vcs_bridge("sync", config={"stub_repos": REPOS, "stub_tree": TREE, "stub_blobs": BLOBS})
@@ -150,9 +152,16 @@ def test_sync_refreshes_every_source(vcs_tables: None) -> None:
         repository = Repository.objects.get(name="acme/widgets")
         Source.objects.create(repository=repository, kind="template", path="templates")
 
+    now = timezone.now()
     with system_context(reason="test sync"):  # the scheduler / GraphQL action wrap sync() likewise
-        assert vcs.sync() == 1
+        assert vcs.run_sync(now=now) == 1
         assert Template.objects.count() == 1
+    vcs.refresh_from_db()
+    assert vcs.last_sync_started_at == now
+    assert vcs.last_sync_completed_at == now
+    assert vcs.last_sync_status == "ok"
+    assert vcs.last_sync_items == 1
+    assert vcs.next_sync_at == now + timedelta(seconds=vcs.poll_interval)
 
 
 @pytest.mark.django_db(transaction=True)

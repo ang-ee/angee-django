@@ -1477,14 +1477,11 @@ class IntegrationActionMutation:
             for model in bridge_models():
                 for bridge in model._default_manager.filter(pk=integration.pk).order_by("pk"):
                     ran += 1
-                    bridge.mark_sync_started(now=now)
                     try:
-                        result = bridge.sync()
-                    except Exception as error:  # noqa: BLE001 — report any bridge failure as telemetry
-                        bridge.record_sync_error(error, now=now)
+                        result = bridge.run_sync(now=now)
+                    except Exception:  # noqa: BLE001 — run_sync recorded the bridge failure as telemetry.
                         errors += 1
                     else:
-                        bridge.record_sync(result, now=now)
                         items += result
         if ran == 0:
             return ActionResult(ok=True, message="No bridges to sync.")
@@ -1923,13 +1920,10 @@ class VCSActionMutation:
         vcs = resolve_action_target(VcsBridge, id, reason="integrate.graphql.sync_vcs_bridge")
         now = timezone.now()
         with system_context(reason="integrate.graphql.sync_vcs_bridge"):
-            vcs.mark_sync_started(now=now)
             try:
-                result = vcs.sync()
+                result = vcs.run_sync(now=now)
             except Exception as error:  # noqa: BLE001 — sync failure is the result, not a 500
-                vcs.record_sync_error(error, now=now)
                 return ActionResult(ok=False, message=f"Sync failed: {error}")
-            vcs.record_sync(result, now=now)
         return ActionResult(ok=True, message=f"Synced {result} item(s).")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)

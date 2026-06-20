@@ -1354,6 +1354,18 @@ class Bridge(AngeeModel):
                 ]
             )
 
+    def run_sync(self, *, now: datetime) -> int:
+        """Run one sync attempt and persist its lifecycle telemetry."""
+
+        self.mark_sync_started(now=now)
+        try:
+            result = self.sync()
+            self.record_sync(result, now=now)
+        except Exception as error:  # noqa: BLE001 — sync failure is telemetry, then caller policy.
+            self.record_sync_error(error, now=now)
+            raise
+        return result
+
     def sync(self) -> int:
         """Synchronize this bridge with its external system."""
 
