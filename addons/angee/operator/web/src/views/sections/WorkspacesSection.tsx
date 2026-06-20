@@ -24,8 +24,6 @@ type WorkspaceSourceRowData = WorkspaceSourceStatus & { id: string };
 export interface WorkspacesSectionProps {
   /** Restrict the list to these workspace names; omit to show every workspace. */
   names?: readonly string[];
-  /** Retained for API compatibility; the console nav owns the page heading. */
-  title?: ReactNode;
 }
 
 /** Workspaces pane: the daemon's worktree workspaces. Rows open the detail page. */

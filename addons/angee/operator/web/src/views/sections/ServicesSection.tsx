@@ -20,8 +20,6 @@ type ServiceRowData = ServiceState & { id: string };
 export interface ServicesSectionProps {
   /** Restrict the list to these service names; omit to show every service. */
   names?: readonly string[];
-  /** Retained for API compatibility; the console nav owns the page heading. */
-  title?: ReactNode;
 }
 
 /** Services pane: the daemon service list. Rows open the service detail page. */
