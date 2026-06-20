@@ -37,7 +37,6 @@ from angee.graphql.crud import crud
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode, detail
 from angee.graphql.subscriptions import changes
-from angee.iam.identity import user_from_public_id as _user_from_public_id
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.schema import UserType
 from angee.integrate import connect as _connect
@@ -49,7 +48,9 @@ from angee.integrate.schema import (
     SourceType,
     TemplateType,
     VendorType,
+    apply_integration_patch_fields,
     connect_integration_target,
+    integration_create_attrs,
 )
 from angee.operator.daemon import OperatorDaemon, OperatorDaemonNotFound
 
@@ -520,57 +521,22 @@ class InferenceProviderCreateMutation:
     def create_inference_provider(self, data: InferenceProviderInput) -> InferenceProviderType:
         """Create an inference provider directly."""
 
-        vendor = resolve_action_target(
-            apps.get_model("integrate", "Vendor"),
-            data.vendor,
-            reason="agents.graphql.inference_provider.create.vendor",
-        )
-        owner = _user_from_public_id(data.owner)
-        credential = (
-            None
-            if data.credential is None
-            else resolve_action_target(
-                apps.get_model("integrate", "Credential"),
-                data.credential,
-                reason="agents.graphql.inference_provider.create.credential",
-            )
-        )
-        account = (
-            strawberry.UNSET
-            if data.account is strawberry.UNSET
-            else (
-                None
-                if data.account is None
-                else resolve_action_target(
-                    apps.get_model("integrate", "ExternalAccount"),
-                    data.account,
-                    reason="agents.graphql.inference_provider.create.account",
-                )
-            )
-        )
-        attrs: dict[str, Any] = {
-            "vendor": vendor,
-            "owner": owner,
+        attrs = {
+            **integration_create_attrs(data, reason="agents.graphql.inference_provider.create"),
             "backend_class": InferenceProvider.impl_key_for(
                 "backend_class",
                 None if data.backend_class is strawberry.UNSET else data.backend_class,
                 default="manual",
             ),
         }
-        if credential is not None:
-            attrs["credential"] = credential
-            if account is strawberry.UNSET:
-                account = getattr(credential, "external_account", None)
-        if account is not strawberry.UNSET:
-            attrs["account"] = account
+        if data.account is strawberry.UNSET and (credential := attrs.get("credential")) is not None:
+            attrs["account"] = getattr(credential, "external_account", None)
         if data.name:
             attrs["name"] = data.name
         if data.base_url:
             attrs["base_url"] = data.base_url
         if data.credential_env:
             attrs["credential_env"] = data.credential_env
-        if data.status not in (strawberry.UNSET, None):
-            attrs["status"] = data.status
         if data.config is not strawberry.UNSET:
             attrs["config"] = data.config
         with system_context(reason="agents.graphql.inference_provider.create"), transaction.atomic():
@@ -622,35 +588,16 @@ class InferenceProviderUpdateMutation:
             data.id,
             reason="agents.graphql.inference_provider.update",
         )
-        provided: set[str] = set()
         backend_changed = False
         with system_context(reason="agents.graphql.inference_provider.update"), transaction.atomic():
-            if data.vendor is not strawberry.UNSET:
-                provider.vendor = resolve_action_target(
-                    apps.get_model("integrate", "Vendor"),
-                    data.vendor,
-                    reason="agents.graphql.inference_provider.update.vendor",
-                )
-                provided.add("vendor")
-            if data.owner is not strawberry.UNSET:
-                provider.owner = _user_from_public_id(data.owner)
-                provided.add("owner")
-            if data.credential is not strawberry.UNSET:
-                provider.credential = (
-                    None
-                    if data.credential is None
-                    else resolve_action_target(
-                        apps.get_model("integrate", "Credential"),
-                        data.credential,
-                        reason="agents.graphql.inference_provider.update.credential",
-                    )
-                )
-                provided.add("credential")
+            provided = apply_integration_patch_fields(
+                provider,
+                data,
+                reason="agents.graphql.inference_provider.update",
+                ignore_null_status=True,
+            )
             if data.backend_class is not strawberry.UNSET:
                 backend_changed = provider.set_impl_key("backend_class", data.backend_class, default="manual")
-            if data.status not in (strawberry.UNSET, None):
-                provider.status = data.status
-                provided.add("status")
             if data.name is not strawberry.UNSET:
                 provider.name = data.name or ""
                 provided.add("name")
