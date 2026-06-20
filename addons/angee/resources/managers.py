@@ -105,7 +105,7 @@ class ResourceQuerySet(models.QuerySet[Any]):
                         )
                     except (IntegrityError, ResourceImportError) as error:
                         raise ResourceLoadError(f"{group.entry.display}: {error}") from error
-                    load_result = LoadResult.from_rows(result.rows, initial=load_result)
+                    load_result = load_result.with_result(result)
                 if dry_run:
                     raise DryRunRollback()
         except DryRunRollback:

@@ -12,10 +12,11 @@ from typing import Any
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, connection, models
+from import_export.results import Result, RowResult
 from rebac import system_context
 
 from angee.base.models import AngeeModel
-from angee.resources.entries import EntryGraph, ResourceEntry
+from angee.resources.entries import EntryGraph, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.fetch import _PublicUrlRedirectHandler, fetch_url
 from angee.resources.models import Resource
@@ -71,6 +72,19 @@ def entry(
         tier,
         declaration,
     )
+
+
+def test_load_result_counts_import_export_totals() -> None:
+    """Load accounting delegates row-type counts to django-import-export."""
+
+    result = Result()
+    result.totals[RowResult.IMPORT_TYPE_NEW] = 2
+    result.totals[RowResult.IMPORT_TYPE_UPDATE] = 3
+    result.totals[RowResult.IMPORT_TYPE_SKIP] = 5
+
+    counted = LoadResult(created=1, updated=1, skipped=1).with_result(result)
+
+    assert counted == LoadResult(created=3, updated=4, skipped=6)
 
 
 def test_resource_entry_reads_structured_rows_and_fields(

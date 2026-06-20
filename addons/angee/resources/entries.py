@@ -16,7 +16,7 @@ from django.core.exceptions import ImproperlyConfigured, SuspiciousFileOperation
 from django.db import models
 from django.db.models.utils import make_model_tuple
 from django.utils._os import safe_join
-from import_export.results import RowResult
+from import_export.results import Result, RowResult
 
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.fetch import fetch_url
@@ -612,26 +612,15 @@ class LoadResult:
     skipped: int
     """Rows skipped because the ledger already matched."""
 
-    @classmethod
-    def from_rows(
-        cls,
-        rows: Iterable[RowResult],
-        *,
-        initial: LoadResult | None = None,
-    ) -> LoadResult:
-        """Return load counts tallied from import-export row results."""
+    def with_result(self, result: Result) -> LoadResult:
+        """Return this load count plus import-export's native result totals."""
 
-        created = initial.created if initial is not None else 0
-        updated = initial.updated if initial is not None else 0
-        skipped = initial.skipped if initial is not None else 0
-        for row in rows:
-            if row.import_type == RowResult.IMPORT_TYPE_NEW:
-                created += 1
-            elif row.import_type == RowResult.IMPORT_TYPE_UPDATE:
-                updated += 1
-            elif row.import_type == RowResult.IMPORT_TYPE_SKIP:
-                skipped += 1
-        return cls(created=created, updated=updated, skipped=skipped)
+        totals = result.totals
+        return type(self)(
+            created=self.created + totals[RowResult.IMPORT_TYPE_NEW],
+            updated=self.updated + totals[RowResult.IMPORT_TYPE_UPDATE],
+            skipped=self.skipped + totals[RowResult.IMPORT_TYPE_SKIP],
+        )
 
     @property
     def loaded(self) -> int:
