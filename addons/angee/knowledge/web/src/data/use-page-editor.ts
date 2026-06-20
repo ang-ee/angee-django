@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useDebouncedCallback } from "@angee/base";
 import { useAuthoredMutation } from "@angee/sdk";
 
 import { KnowledgeUpdatePage, KnowledgeUpdatePageBody } from "./documents";
@@ -36,8 +37,6 @@ export function usePageEditor(
   const [status, setStatus] = useState<SaveStatus>("idle");
   const bodyHashRef = useRef(initial.bodyHash);
   const savedTitleRef = useRef(initial.title);
-  const pendingBodyRef = useRef<string | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
   // Held in a ref so the save callbacks stay stable across an unstable `onSaved`
   // (e.g. an inline refetch closure) — otherwise the unmount-flush effect would
@@ -56,7 +55,6 @@ export function usePageEditor(
 
   const saveBody = useCallback(
     async (next: string) => {
-      pendingBodyRef.current = null;
       setSafeStatus("saving");
       try {
         const data = await updateBody({
@@ -78,16 +76,15 @@ export function usePageEditor(
     },
     [pageId, updateBody, setSafeStatus],
   );
+  const debouncedSaveBody = useDebouncedCallback(saveBody, AUTOSAVE_MS);
 
   const setBody = useCallback(
     (next: string) => {
       setBodyState(next);
-      pendingBodyRef.current = next;
       setStatus("saving");
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => void saveBody(next), AUTOSAVE_MS);
+      void debouncedSaveBody(next);
     },
-    [saveBody],
+    [debouncedSaveBody],
   );
 
   const commitTitle = useCallback(() => {
@@ -108,11 +105,9 @@ export function usePageEditor(
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      if (timerRef.current) clearTimeout(timerRef.current);
-      const pending = pendingBodyRef.current;
-      if (pending !== null) void saveBody(pending);
+      void debouncedSaveBody.flush();
     };
-  }, [saveBody]);
+  }, [debouncedSaveBody]);
 
   return { title, body, status, setTitle: setTitleState, commitTitle, setBody };
 }
