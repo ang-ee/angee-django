@@ -122,16 +122,18 @@ def crud(
     return strawberry.type(surface)
 
 
-class _AngeeCreateMutation(DjangoCreateMutation):
-    """Create mutation whose relation IDs are public sqids."""
+class _AngeeMutationCloneMixin:
+    """Preserve Angee's public key field settings through Strawberry cloning."""
 
     def __copy__(self) -> Any:
-        """Preserve Angee's public key field through Strawberry field cloning."""
-
         new_field = super().__copy__()
         new_field.key_attr = self.key_attr
         new_field.argument_name = self.argument_name
         return new_field
+
+
+class _AngeeCreateMutation(_AngeeMutationCloneMixin, DjangoCreateMutation):
+    """Create mutation whose relation IDs are public sqids."""
 
     def create(self, data: dict[str, Any], *, info: Info) -> Any:
         model = self.django_model
@@ -145,16 +147,8 @@ class _AngeeCreateMutation(DjangoCreateMutation):
         )
 
 
-class _AngeeUpdateMutation(DjangoUpdateMutation):
+class _AngeeUpdateMutation(_AngeeMutationCloneMixin, DjangoUpdateMutation):
     """Update mutation whose write target is loaded without field redaction."""
-
-    def __copy__(self) -> Any:
-        """Preserve Angee's public key field through Strawberry field cloning."""
-
-        new_field = super().__copy__()
-        new_field.key_attr = self.key_attr
-        new_field.argument_name = self.argument_name
-        return new_field
 
     def instance_level_update(
         self,
