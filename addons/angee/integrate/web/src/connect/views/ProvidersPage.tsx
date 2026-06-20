@@ -7,6 +7,7 @@ import {
   Form,
   Group,
   List,
+  recordActionId,
   useEnumOptions,
   useImplPrefill,
   useRecordActionMutation,
@@ -66,11 +67,10 @@ export function ProvidersPage(): React.ReactElement {
   // endpoints; available once a discovery URL is set.
   const connect = React.useCallback(
     async (ctx: ActionContext) => {
-      if (typeof window === "undefined" || typeof ctx.record?.id !== "string") {
-        return;
-      }
+      const id = recordActionId(ctx);
+      if (typeof window === "undefined" || !id) return;
       const result = await connectAccountStart({
-        id: ctx.record.id,
+        id,
         redirectUri: connectCallbackRedirectUri(),
         next: "/integrate/accounts",
       });
