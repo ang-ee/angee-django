@@ -1,6 +1,7 @@
 import * as React from "react";
 import {
   useResourceList,
+  rowPublicId,
   type Row,
   type UseResourceListResult,
 } from "@angee/sdk";
@@ -51,7 +52,7 @@ export function relationOptionsFromRows(
   config: Pick<RelationOptionsConfig, "sort"> = {},
 ): readonly RelationOption[] {
   const options = rows.flatMap((row) => {
-    const value = typeof row.id === "string" ? row.id : "";
+    const value = rowPublicId(row) ?? "";
     if (!value) return [];
     return [{ value, label: relationOptionLabel(row, labelField, value) }];
   });

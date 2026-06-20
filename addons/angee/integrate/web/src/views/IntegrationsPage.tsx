@@ -11,7 +11,7 @@ import {
   useImplPrefill,
   type DataToolbarGroupOption,
 } from "@angee/base";
-import { useAuthoredMutation, type Row } from "@angee/sdk";
+import { rowPublicId, useAuthoredMutation, type Row } from "@angee/sdk";
 
 import { canConnectRecord, ConnectOAuthButton } from "../connect/ConnectOAuthButton";
 import { connectCallbackPathForRecord } from "../connect/redirects";
@@ -136,7 +136,7 @@ function IntegrationConnectButton({
 }): React.ReactElement | null {
   const t = useIntegrateT();
   const [connectIntegration] = useAuthoredMutation(ConnectIntegration);
-  const id = typeof row.id === "string" ? row.id : "";
+  const id = rowPublicId(row) ?? "";
   if (!id) return null;
 
   return (

@@ -14,6 +14,7 @@ import {
   useResourceAggregate,
   useResourceGroupBy,
   useResourceList,
+  rowPublicId,
   type AggregateBucket,
   type GroupByDimension,
   type ModelMetadata,
@@ -879,8 +880,7 @@ function LeafGroupSection<TRow extends Row>({
     columns: tableColumns as ColumnDef<TRow>[],
     state: { columnVisibility },
     getCoreRowModel: getCoreRowModel(),
-    getRowId: (row, index) =>
-      typeof row.id === "string" ? row.id : String(index),
+    getRowId: (row, index) => rowPublicId(row) ?? String(index),
     autoResetPageIndex: false,
     autoResetExpanded: false,
   });

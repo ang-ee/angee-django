@@ -1,6 +1,7 @@
 import * as React from "react";
 import {
   useResourceList,
+  rowPublicId,
   type Row,
 } from "@angee/sdk";
 import { Glyph } from "../chrome/Glyph";
@@ -352,7 +353,8 @@ function DataPageBody<TRow extends Row = Row>({
 
   const handleSaved = React.useCallback(
     (row: Row) => {
-      if (typeof row.id === "string") handleSelectRecord?.(row.id);
+      const id = rowPublicId(row);
+      if (id !== null) handleSelectRecord?.(id);
     },
     [handleSelectRecord],
   );
@@ -361,7 +363,8 @@ function DataPageBody<TRow extends Row = Row>({
   }, [handleSelectRecord]);
   const handleRowClick = React.useCallback(
     (row: TRow) => {
-      if (typeof row.id === "string") handleSelectRecord?.(row.id);
+      const id = rowPublicId(row);
+      if (id !== null) handleSelectRecord?.(id);
     },
     [handleSelectRecord],
   );
@@ -374,7 +377,7 @@ function DataPageBody<TRow extends Row = Row>({
       pendingNavigation.edge === "first"
         ? listState.rows[0]
         : listState.rows[listState.rows.length - 1];
-    const targetId = rowId(target);
+    const targetId = rowPublicId(target);
     if (targetId) {
       setPendingNavigation(null);
       handleSelectRecord?.(targetId);
@@ -978,7 +981,7 @@ function buildRecordNavigation<TRow extends Row>({
   >;
 }): RecordNavigation | null {
   if (creating || typeof recordId !== "string" || !listState) return null;
-  const index = listState.rows.findIndex((row) => rowId(row) === recordId);
+  const index = listState.rows.findIndex((row) => rowPublicId(row) === recordId);
   if (index < 0) {
     // The open record isn't in the loaded slice (e.g. a grouped list or a deep
     // record). Keep the pager visible with the filtered total; page-local
@@ -988,8 +991,8 @@ function buildRecordNavigation<TRow extends Row>({
 
   const current = (listState.page - 1) * listState.pageSize + index + 1;
   const total = listState.total ?? Math.max(current, listState.rows.length);
-  const prevId = rowId(listState.rows[index - 1]);
-  const nextId = rowId(listState.rows[index + 1]);
+  const prevId = rowPublicId(listState.rows[index - 1]);
+  const nextId = rowPublicId(listState.rows[index + 1]);
   const canPrevPage = listState.hasPrev && listState.page > 1;
   const canNextPage =
     listState.hasNext &&
@@ -1019,10 +1022,6 @@ function buildRecordNavigation<TRow extends Row>({
             }
           : undefined,
   };
-}
-
-function rowId(row: Row | undefined): string | null {
-  return typeof row?.id === "string" ? row.id : null;
 }
 
 function mergeFilters<TRow extends Row>(
@@ -1055,5 +1054,5 @@ function rowIdsEqual(
   right: readonly Row[],
 ): boolean {
   if (left.length !== right.length) return false;
-  return left.every((row, index) => rowId(row) === rowId(right[index]));
+  return left.every((row, index) => rowPublicId(row) === rowPublicId(right[index]));
 }

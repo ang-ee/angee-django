@@ -19,7 +19,7 @@ import {
   ConnectOAuthButton,
   connectCallbackPathForRecord,
 } from "@angee/integrate";
-import { useAuthoredMutation, type Row } from "@angee/sdk";
+import { rowPublicId, useAuthoredMutation, type Row } from "@angee/sdk";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { ConnectInferenceProvider } from "../documents";
@@ -84,7 +84,7 @@ function ProviderConnectButton({
 }): React.ReactElement | null {
   const t = useAgentsT();
   const [connectProvider] = useAuthoredMutation(ConnectInferenceProvider);
-  const id = typeof row.id === "string" ? row.id : "";
+  const id = rowPublicId(row) ?? "";
   if (!id) return null;
 
   return (

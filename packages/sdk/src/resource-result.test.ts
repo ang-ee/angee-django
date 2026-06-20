@@ -5,6 +5,7 @@ import {
   extractNode,
   extractPage,
   extractRevisions,
+  rowPublicId,
   revisionSnapshot,
   type PageInfo,
 } from "./resource-result";
@@ -19,6 +20,18 @@ describe("extractNode", () => {
     expect(extractNode({ sale: null })).toBeNull();
     expect(extractNode(undefined)).toBeNull();
     expect(extractNode({})).toBeNull();
+  });
+});
+
+describe("rowPublicId", () => {
+  test("returns a resource row's string id", () => {
+    expect(rowPublicId({ id: "nte_123", title: "A" })).toBe("nte_123");
+  });
+
+  test("returns null when a row has no public string id", () => {
+    expect(rowPublicId({ id: 1 })).toBeNull();
+    expect(rowPublicId({})).toBeNull();
+    expect(rowPublicId(null)).toBeNull();
   });
 });
 

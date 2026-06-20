@@ -95,7 +95,7 @@ export type {
   DeletePreviewGroup,
   DeletePreviewNode,
 } from "./resource-result";
-export { revisionSnapshot } from "./resource-result";
+export { revisionSnapshot, rowPublicId } from "./resource-result";
 
 // Aggregates.
 export {
