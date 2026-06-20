@@ -101,6 +101,15 @@ export function hashAvatarColor(seed: string): AvatarColorSlot {
   return ((hash % 8) + 1) as AvatarColorSlot;
 }
 
+export function avatarInitials(label: string): string {
+  const parts = label.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  return parts
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
+}
+
 export const Avatar = React.forwardRef<HTMLSpanElement, AvatarProps>(
   function Avatar(
     {

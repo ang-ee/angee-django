@@ -1,6 +1,6 @@
 import type { ReactElement, ReactNode } from "react";
 
-import { Avatar } from "../ui/avatar";
+import { Avatar, avatarInitials } from "../ui/avatar";
 import { Select } from "../ui/select";
 import { widgetLabel } from "./label";
 import type { WidgetDefinition, WidgetOption, WidgetRenderProps } from "./types";
@@ -55,7 +55,7 @@ function OwnerCellRead({
         size="sm"
         src={src}
         alt={text}
-        initials={initials(text)}
+        initials={avatarInitials(text)}
         className="shrink-0"
       />
       <span className="min-w-0 truncate">{label}</span>
@@ -99,13 +99,4 @@ function ownerText(value: OwnerCellValue | undefined, label: ReactNode): string 
     return value.name ?? value.value ?? value.id ?? "";
   }
   return "";
-}
-
-function initials(label: string): string {
-  const parts = label.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  return parts
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? "")
-    .join("");
 }

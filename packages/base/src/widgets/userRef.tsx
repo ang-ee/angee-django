@@ -1,5 +1,6 @@
 import type { ReactElement } from "react";
 
+import { avatarInitials } from "../ui/avatar";
 import type { WidgetDefinition, WidgetRenderProps } from "./types";
 
 type UserRefValue = string;
@@ -12,7 +13,7 @@ function UserRefRead({
     <span className="inline-flex min-w-0 items-center gap-2 text-13 text-fg">
       {label ? (
         <span className="grid size-5 shrink-0 place-content-center rounded-full bg-inset text-2xs font-semibold uppercase text-fg-muted">
-          {initials(label)}
+          {avatarInitials(label)}
         </span>
       ) : null}
       <span className="min-w-0 truncate">{label}</span>
@@ -24,12 +25,3 @@ export const userRefWidget = {
   read: UserRefRead,
   cell: UserRefRead,
 } satisfies WidgetDefinition<UserRefValue>;
-
-function initials(label: string): string {
-  const parts = label.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  return parts
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? "")
-    .join("");
-}
