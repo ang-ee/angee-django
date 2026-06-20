@@ -32,104 +32,15 @@ import { WebhooksPage } from "./views/WebhooksPage";
 const INTEGRATE_ID = "integrate";
 
 const integrateRoutes: readonly BaseAddonRoute[] = [
-  {
-    // No `menu:` — the route is referenced by exactly one menu item (the
-    // Integrations child), so chrome derivation needs no disambiguation.
-    name: "integrate.integrations",
-    path: "/integrate",
-    shell: "console",
-    component: IntegrationsPage,
-    model: "Integration",
-  },
-  {
-    // The integration record nests under the list; `IntegrationsPage` reads the
-    // `$id` param and swaps to the detail form, so this route carries only the URL.
-    name: "integrate.integration",
-    path: "/integrate/$id",
-    shell: "console",
-    parent: "integrate.integrations",
-  },
-  {
-    // Static `/integrate/vendors` outranks the `/integrate/$id` param route.
-    name: "integrate.vendors",
-    path: "/integrate/vendors",
-    shell: "console",
-    component: VendorsPage,
-    model: "Vendor",
-  },
-  {
-    name: "integrate.vendor",
-    path: "/integrate/vendors/$id",
-    shell: "console",
-    parent: "integrate.vendors",
-  },
-  {
-    name: "integrate.webhooks",
-    path: "/integrate/webhooks",
-    shell: "console",
-    component: WebhooksPage,
-    model: "WebhookSubscription",
-  },
-  {
-    name: "integrate.webhook",
-    path: "/integrate/webhooks/$id",
-    shell: "console",
-    parent: "integrate.webhooks",
-  },
-  {
-    // Static `/integrate/vcs` outranks the `/integrate/$id` param route, like
-    // vendors/webhooks.
-    name: "integrate.vcs",
-    path: "/integrate/vcs",
-    shell: "console",
-    component: VcsBridgesPage,
-    model: "VcsBridge",
-  },
-  {
-    name: "integrate.vcsBridge",
-    path: "/integrate/vcs/$id",
-    shell: "console",
-    parent: "integrate.vcs",
-  },
-  {
-    name: "integrate.repositories",
-    path: "/integrate/repositories",
-    shell: "console",
-    component: RepositoriesPage,
-    model: "Repository",
-  },
-  {
-    name: "integrate.repository",
-    path: "/integrate/repositories/$id",
-    shell: "console",
-    parent: "integrate.repositories",
-  },
-  {
-    name: "integrate.sources",
-    path: "/integrate/sources",
-    shell: "console",
-    component: SourcesPage,
-    model: "Source",
-  },
-  {
-    name: "integrate.source",
-    path: "/integrate/sources/$id",
-    shell: "console",
-    parent: "integrate.sources",
-  },
-  {
-    name: "integrate.templates",
-    path: "/integrate/templates",
-    shell: "console",
-    component: TemplatesPage,
-    model: "Template",
-  },
-  {
-    name: "integrate.template",
-    path: "/integrate/templates/$id",
-    shell: "console",
-    parent: "integrate.templates",
-  },
+  // List/detail pairs: the list route owns the component/model, and the `$id`
+  // child carries only the nested record URL.
+  ...consoleRecordRoutes("integrate.integrations", "integrate.integration", "/integrate", IntegrationsPage, "Integration"),
+  ...consoleRecordRoutes("integrate.vendors", "integrate.vendor", "/integrate/vendors", VendorsPage, "Vendor"),
+  ...consoleRecordRoutes("integrate.webhooks", "integrate.webhook", "/integrate/webhooks", WebhooksPage, "WebhookSubscription"),
+  ...consoleRecordRoutes("integrate.vcs", "integrate.vcsBridge", "/integrate/vcs", VcsBridgesPage, "VcsBridge"),
+  ...consoleRecordRoutes("integrate.repositories", "integrate.repository", "/integrate/repositories", RepositoriesPage, "Repository"),
+  ...consoleRecordRoutes("integrate.sources", "integrate.source", "/integrate/sources", SourcesPage, "Source"),
+  ...consoleRecordRoutes("integrate.templates", "integrate.template", "/integrate/templates", TemplatesPage, "Template"),
 
   // --- Connect surface (outbound OAuth) -----------------------------------
   // The account-connect callback: the provider redirects back here after the user
@@ -148,46 +59,23 @@ const integrateRoutes: readonly BaseAddonRoute[] = [
     shell: "console",
     component: OAuthConnectCallbackPage,
   },
-  {
-    name: "integrate.providers",
-    path: "/integrate/providers",
-    shell: "console",
-    component: ProvidersPage,
-    model: "OAuthClient",
-  },
-  {
-    name: "integrate.provider",
-    path: "/integrate/providers/$id",
-    shell: "console",
-    parent: "integrate.providers",
-  },
-  {
-    name: "integrate.accounts",
-    path: "/integrate/accounts",
-    shell: "console",
-    component: ExternalAccountsPage,
-    model: "ExternalAccount",
-  },
-  {
-    name: "integrate.account",
-    path: "/integrate/accounts/$id",
-    shell: "console",
-    parent: "integrate.accounts",
-  },
-  {
-    name: "integrate.credentials",
-    path: "/integrate/credentials",
-    shell: "console",
-    component: CredentialsPage,
-    model: "Credential",
-  },
-  {
-    name: "integrate.credential",
-    path: "/integrate/credentials/$id",
-    shell: "console",
-    parent: "integrate.credentials",
-  },
+  ...consoleRecordRoutes("integrate.providers", "integrate.provider", "/integrate/providers", ProvidersPage, "OAuthClient"),
+  ...consoleRecordRoutes("integrate.accounts", "integrate.account", "/integrate/accounts", ExternalAccountsPage, "ExternalAccount"),
+  ...consoleRecordRoutes("integrate.credentials", "integrate.credential", "/integrate/credentials", CredentialsPage, "Credential"),
 ];
+
+function consoleRecordRoutes(
+  name: string,
+  detailName: string,
+  path: string,
+  component: BaseAddonRoute["component"],
+  model: string,
+): readonly BaseAddonRoute[] {
+  return [
+    { name, path, shell: "console", component, model },
+    { name: detailName, path: `${path}/$id`, shell: "console", parent: name },
+  ];
+}
 
 const integrateMenu: readonly BaseMenuItem[] = [
   {
