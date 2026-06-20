@@ -54,4 +54,20 @@ describe("UploadDropTarget", () => {
     expect(onFiles).not.toHaveBeenCalled();
     expect(screen.queryByText("Drop files")).toBeNull();
   });
+
+  test("prevents the browser's default file drop when disabled", () => {
+    const onFiles = vi.fn();
+    const file = new File(["hello"], "hello.txt");
+    render(
+      <UploadDropTarget disabled onFiles={onFiles} overlay="Drop files">
+        <span>Body</span>
+      </UploadDropTarget>,
+    );
+
+    const target = screen.getByText("Body").parentElement!;
+    const drop = fireEvent.drop(target, { dataTransfer: fileTransfer([file]) });
+
+    expect(drop).toBe(false);
+    expect(onFiles).not.toHaveBeenCalled();
+  });
 });
