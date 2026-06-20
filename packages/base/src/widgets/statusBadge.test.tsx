@@ -93,4 +93,23 @@ describe("statusBadge widget tone", () => {
     );
     expect(screen.getByText("Bespoke").className).toContain("bg-brand-soft");
   });
+
+  test("edit renders the shared status select owner", () => {
+    const Edit = statusBadgeWidget.edit;
+
+    render(
+      <Edit
+        value="draft"
+        field={{
+          options: [
+            { value: "draft", label: "Draft" },
+            { value: "active", label: "Active" },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("combobox", { name: "Status" })).toBeTruthy();
+    expect(screen.getByText("Draft")).toBeTruthy();
+  });
 });
