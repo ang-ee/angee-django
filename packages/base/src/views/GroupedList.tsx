@@ -38,9 +38,11 @@ import {
   TableRow,
 } from "../ui/table";
 import type { DataViewContextValue } from "./data-view-context";
-import type {
-  DataViewGroup,
-  DataViewResourceOrder,
+import {
+  Filter,
+  stableSerialize,
+  type DataViewGroup,
+  type DataViewResourceOrder,
 } from "./data-view-model";
 import {
   groupPagerStatesEqual,
@@ -598,7 +600,7 @@ function GroupSection<TRow extends Row>({
   const active = expanded && expandable;
   const label = bucketLabel(bucket, group, modelMetadata);
   const cumulativeFilter = React.useMemo(
-    () => combineFilters(parentFilter, bucket.filter),
+    () => Filter.combine(parentFilter, bucket.filter),
     [bucket.filter, parentFilter],
   );
   const branch = remainingAxes.length > 0;
@@ -959,46 +961,6 @@ function bucketLabel(
   return label ?? "All records";
 }
 
-function combineFilters(
-  left: ListFilter,
-  right: AggregateBucket["filter"],
-): ListFilter {
-  const leftRecord = filterRecord(left);
-  const rightRecord = filterRecord(right);
-  if (!leftRecord || Object.keys(leftRecord).length === 0) return rightRecord;
-  if (!rightRecord || Object.keys(rightRecord).length === 0) return leftRecord;
-  return combineFilterRecords(leftRecord, rightRecord);
-}
-
-function combineFilterRecords(
-  left: Record<string, unknown>,
-  right: Record<string, unknown>,
-): Record<string, unknown> {
-  const next: Record<string, unknown> = { ...left };
-  let andFilter: Record<string, unknown> | undefined;
-  for (const [key, value] of Object.entries(right)) {
-    if (!Object.prototype.hasOwnProperty.call(next, key)) {
-      next[key] = value;
-      continue;
-    }
-    if (stableSerialize(next[key]) === stableSerialize(value)) continue;
-    andFilter = { ...andFilter, [key]: value };
-  }
-  if (!andFilter) return next;
-  const existingAnd = filterRecord(next.AND);
-  next.AND = existingAnd
-    ? combineFilterRecords(existingAnd, andFilter)
-    : andFilter;
-  return next;
-}
-
-function filterRecord(filter: unknown): Record<string, unknown> | undefined {
-  if (!filter || typeof filter !== "object" || Array.isArray(filter)) {
-    return undefined;
-  }
-  return filter as Record<string, unknown>;
-}
-
 function depthIndentStyle(depth: number): React.CSSProperties | undefined {
   if (depth <= 0) return undefined;
   return { paddingLeft: `calc(0.75rem + ${depth * 1.25}rem)` };
@@ -1007,19 +969,4 @@ function depthIndentStyle(depth: number): React.CSSProperties | undefined {
 function normaliseLocalPage(page: number): number {
   if (!Number.isFinite(page)) return 1;
   return Math.max(1, Math.floor(page));
-}
-
-function stableSerialize(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(stableSerialize).join(",")}]`;
-  }
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    return `{${Object.keys(record)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`)
-      .join(",")}}`;
-  }
-  if (value === undefined) return "undefined";
-  return JSON.stringify(value);
 }

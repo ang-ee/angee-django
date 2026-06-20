@@ -253,6 +253,9 @@ Success:
 - [ ] Graphlib topo-sort stability before E23.
 - [ ] Whether G3 knowledge decomposition is in this DRY wave or a product feature wave.
 - [ ] Whether E27 build-time metadata waits for G1 typed operations.
+- [ ] E16 DataToolbar picker shell needs a broader no-growth design before
+      implementation. A local `PickerDisclosure` extraction was rejected because
+      it passed tests but grew the toolbar by 17 lines without enough payoff.
 - [ ] If custom session-auth backend selection becomes a goal, lift the canonical
       OIDC login backend string to an IAM-owned constant; E7 intentionally keeps
       the current ModelBackend contract.
@@ -282,4 +285,5 @@ Update after every slice commit.
 | E13 Use MIME catalogue file glyphs | same commit | -5 source | storage file rows carry catalogue glyph facts; views render row-owned icons | `MimeType.icon_key` owns file glyph choice; MIME checks only decide thumbnail rendering | frontend + architecture pass; registry coverage deferred | storage typecheck/test; `git diff --check` |
 | E14 Add storage download cache contract | same commit | +18 prod, +63 tests | storage download response advertises validators and token-carrier-safe private caching | Django cache helpers own ETag/conditional/Vary mechanics; `content_hash` and token TTL supply facts | backend + architecture pass after fixes | `ruff`; storage pytest |
 | E15 Use SDK model dumps | `d4811bd8` | -12 prod, +27 tests; total LOC `210,558` vs baseline `206,023` (`+4,535`) | provider addons stop recursively walking arbitrary objects for SDK JSON | OpenAI/Anthropic Pydantic SDK models own nested `model_dump(mode="json")`; tests use real SDK response models | backend + architecture pass | `ruff`; agents pytest + agents GraphQL pytest |
-| S1 SDK mutation busy state | this commit | +3 prod, +82 tests, +44 plan; total LOC `210,686` vs baseline `206,023` (`+4,663`) | action/auth/resource callers keep using one SDK mutation seam; analyzer findings are queued as sliceable owner moves | `useDocumentMutation` uses `useBusyRun`; `useBusyRun` owns overlapping async busy state with a counter | frontend + architecture pass after P2 fix | SDK focused tests + full SDK test; SDK typecheck; base focused tests; `git diff --check` |
+| S1 SDK mutation busy state | `02d5e096` | +3 prod, +82 tests, +44 plan; total LOC `210,686` vs baseline `206,023` (`+4,663`) | action/auth/resource callers keep using one SDK mutation seam; analyzer findings are queued as sliceable owner moves | `useDocumentMutation` uses `useBusyRun`; `useBusyRun` owns overlapping async busy state with a counter | frontend + architecture pass after P2 fix | SDK focused tests + full SDK test; SDK typecheck; base focused tests; `git diff --check` |
+| E17 Move filter algebra to `Filter` | this commit | -8 prod, +44 tests, +2 plan; total LOC `210,722` vs baseline `206,023` (`+4,699`) | grouped list consumes data-view filter algebra instead of carrying local merge helpers | `Filter.combine()` / `Filter.and()` own bucket filter merge and object-shaped `AND`; `stableSerialize` has one shared owner | frontend + architecture pass | full base test; base typecheck; `git diff --check` |

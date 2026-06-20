@@ -166,6 +166,50 @@ describe("data-view model", () => {
     expect(cleared).toEqual({});
   });
 
+  test("combines filters without duplicating equivalent constraints", () => {
+    const filter = Filter.combine(
+      { status: { exact: "ACTIVE" } },
+      { status: { exact: "ACTIVE" }, owner: { sqid: "usr_1" } },
+    );
+
+    expect(filter).toEqual({
+      status: { exact: "ACTIVE" },
+      owner: { sqid: "usr_1" },
+    });
+  });
+
+  test("keeps conflicting filter constraints under object-shaped AND", () => {
+    const filter = Filter.combine(
+      { updatedAt: { gte: "2026-01-01" } },
+      { updatedAt: { exact: "2026-01-20" }, status: { exact: "ACTIVE" } },
+    );
+
+    expect(Array.isArray(filter.AND)).toBe(false);
+    expect(filter).toEqual({
+      updatedAt: { gte: "2026-01-01" },
+      status: { exact: "ACTIVE" },
+      AND: { updatedAt: { exact: "2026-01-20" } },
+    });
+  });
+
+  test("combines conflicts into an existing AND branch", () => {
+    const filter = Filter.combine(
+      {
+        updatedAt: { gte: "2026-01-01" },
+        AND: { updatedAt: { lte: "2026-01-31" } },
+      },
+      { updatedAt: { exact: "2026-01-20" } },
+    );
+
+    expect(filter).toEqual({
+      updatedAt: { gte: "2026-01-01" },
+      AND: {
+        updatedAt: { lte: "2026-01-31" },
+        AND: { updatedAt: { exact: "2026-01-20" } },
+      },
+    });
+  });
+
   test("resets page and clears selection when query scope changes", () => {
     const state = DataViewState.create({
       page: 4,
