@@ -37,6 +37,7 @@ class AnthropicInferenceBackend(SDKInferenceBackend):
     }
     default_broker_name = DEFAULT_BROKER_NAME
     default_model_limit = DEFAULT_MODEL_LIMIT
+    client_class_path = "anthropic.Anthropic"
     sdk_package_name = "anthropic"
 
     def list_models(self) -> Sequence[InferenceModelSpec]:
@@ -111,13 +112,3 @@ class AnthropicInferenceBackend(SDKInferenceBackend):
                 raise ValueError(f"Anthropic messages only support user/assistant roles, got {role!r}.")
             messages.append({"role": role, "content": content})
         return "\n\n".join(part for part in system_parts if part), messages
-
-    @staticmethod
-    def _load_client_class() -> Any:
-        """Import Anthropic lazily so tests can monkeypatch without the package."""
-
-        try:
-            from anthropic import Anthropic
-        except ImportError as error:  # pragma: no cover - exercised only when dependency is missing at runtime.
-            raise RuntimeError("Install the `anthropic` package to use the Anthropic inference backend.") from error
-        return Anthropic

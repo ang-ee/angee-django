@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
+from django.utils.module_loading import import_string
+
 from angee.agents.backends import InferenceBackend, InferenceModelSpec, InferenceRequest
 
 _OAUTH_CREDENTIAL_KIND = "oauth"
@@ -14,6 +16,7 @@ class SDKInferenceBackend(InferenceBackend):
     """Base for inference backends that wrap a vendor's official Python SDK."""
 
     client_class: ClassVar[Any | None] = None
+    client_class_path: ClassVar[str] = ""
     default_broker_name: ClassVar[str] = ""
     default_model_limit: ClassVar[int] = 1000
     oauth_auth_kwarg: ClassVar[str] = "auth_token"
@@ -167,7 +170,13 @@ class SDKInferenceBackend(InferenceBackend):
     def _load_client_class(self) -> Any:
         """Import the concrete SDK client class."""
 
-        raise RuntimeError(f"Install the `{self.sdk_package_name}` package to use the {self.label} inference backend.")
+        install_hint = f"Install the `{self.sdk_package_name}` package to use the {self.label} inference backend."
+        if not self.client_class_path:
+            raise RuntimeError(install_hint)
+        try:
+            return import_string(self.client_class_path)
+        except ImportError as error:
+            raise RuntimeError(install_hint) from error
 
     @staticmethod
     def _credential_kind(credential: Any) -> str:

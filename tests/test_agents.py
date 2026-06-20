@@ -29,6 +29,7 @@ from angee.agents.models import Agent as AbstractAgent
 from angee.agents.models import InferenceModel as AbstractInferenceModel
 from angee.agents.models import InferenceProvider as AbstractInferenceProvider
 from angee.agents.models import Skill as AbstractSkill
+from angee.agents.sdk_backends import SDKInferenceBackend
 from angee.agents.skills import parse_skill_meta
 from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
 from angee.agents_integrate_openai.backend import OpenAIInferenceBackend
@@ -262,6 +263,44 @@ def test_manual_backend_advertises_no_models(agents_tables: None) -> None:
     assert provider.refresh_models() == 0
     with system_context(reason="test read"):
         assert InferenceModel.objects.filter(provider=provider).count() == 0
+
+
+def test_sdk_backend_loads_client_class_by_dotted_path() -> None:
+    """SDK backends declare their client class path; the shared base imports it."""
+
+    class DemoSDKBackend(SDKInferenceBackend):
+        label = "Demo"
+        client_class_path = "types.SimpleNamespace"
+        sdk_package_name = "types"
+
+    assert DemoSDKBackend(SimpleNamespace())._load_client_class() is SimpleNamespace
+
+
+def test_sdk_backend_client_class_override_skips_dotted_import() -> None:
+    """Tests and custom backends can still inject a client class directly."""
+
+    class DemoSDKBackend(SDKInferenceBackend):
+        label = "Demo"
+        client_class = SimpleNamespace
+        client_class_path = "missing_provider_sdk.Client"
+        sdk_package_name = "missing-provider-sdk"
+
+        def _client_kwargs(self) -> dict[str, Any]:
+            return {}
+
+    assert type(DemoSDKBackend(SimpleNamespace()).client()).__name__ == "SimpleNamespace"
+
+
+def test_sdk_backend_wraps_missing_client_package_error() -> None:
+    """Missing SDK imports fail with the backend's install hint."""
+
+    class MissingSDKBackend(SDKInferenceBackend):
+        label = "Missing"
+        client_class_path = "missing_provider_sdk.Client"
+        sdk_package_name = "missing-provider-sdk"
+
+    with pytest.raises(RuntimeError, match="missing-provider-sdk.*Missing inference backend"):
+        MissingSDKBackend(SimpleNamespace())._load_client_class()
 
 
 @pytest.mark.django_db(transaction=True)
