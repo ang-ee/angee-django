@@ -83,7 +83,7 @@ def resource_manifest_for(app_config: AppConfig) -> dict[str, tuple[dict[str, An
 
     manifest: dict[str, tuple[dict[str, Any], ...]] = {tier: () for tier in ResourceTier.values}
     for raw_tier, declarations in (getattr(app_config, "resources", {}) or {}).items():
-        tier = _resource_tier_value(raw_tier)
+        tier = ResourceTier.from_value(raw_tier)
         manifest[tier] = _resource_entries(app_config, declarations)
     return manifest
 
@@ -154,16 +154,6 @@ def _relative_app_path(app_config: AppConfig, value: object) -> str:
         safe_join(app_config.path, raw)
     except SuspiciousFileOperation as error:
         raise ImproperlyConfigured(f"Manifest path {raw!r} must be relative and stay inside the addon") from error
-    return raw
-
-
-def _resource_tier_value(value: object) -> str:
-    """Return one normalized resource tier value."""
-
-    raw = str(getattr(value, "value", value))
-    if raw not in ResourceTier.values:
-        expected = ", ".join(ResourceTier.values)
-        raise ImproperlyConfigured(f"Unknown resource tier {raw!r}; expected one of {expected}")
     return raw
 
 

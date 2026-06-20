@@ -12,6 +12,7 @@ from django.core.exceptions import ImproperlyConfigured
 from angee.base.apps import BaseConfig
 from angee.graphql.schema import schema_parts_for
 from angee.resources.entries import ResourceEntry, resource_manifest_for
+from angee.resources.tiers import ResourceTier
 
 
 def _module(name: str) -> ModuleType:
@@ -85,6 +86,20 @@ def test_resource_manifest_normalizes_tiers_and_entries() -> None:
         },
     )
     assert manifest["demo"] == ({"url": "https://example.test/demo.csv"},)
+
+
+def test_resource_manifest_accepts_resource_tier_enum_keys() -> None:
+    """Manifest tier normalization delegates enum handling to ResourceTier."""
+
+    class ResourceConfig(AppConfig):
+        name = "tests.enum_resources"
+        label = "enum_resources"
+        resources = {ResourceTier.INSTALL: ("resources/users.csv",)}
+
+    config = ResourceConfig("tests.enum_resources", _module("tests.enum_resources"))
+    manifest = resource_manifest_for(config)
+
+    assert manifest["install"] == ({"path": "resources/users.csv"},)
 
 
 def test_integrate_config_installs_public_oauth_provider_resources() -> None:
