@@ -40,7 +40,7 @@ export function InferenceProvidersPage(): React.ReactElement {
       placement="inline"
       routed
       cardActions={(row, context) =>
-        canConnectProvider(row) ? <ProviderConnectButton row={row} refresh={context.refresh} /> : null
+        canConnectRecord(row) ? <ProviderConnectButton row={row} refresh={context.refresh} /> : null
       }
     >
       <List model={PROVIDER_MODEL}>
@@ -92,7 +92,7 @@ function ProviderConnectButton({
       label={t("agents.inference.connect.action")}
       connectedTitle={t("agents.inference.connect.connected")}
       startErrorTitle={t("agents.inference.connect.startError")}
-      callbackPath={inferenceConnectCallbackPath(row)}
+      callbackPath={connectCallbackPathForRecord(row)}
       next="/agents/providers"
       onConnected={refresh}
       start={async ({ redirectUri, next }) => {
@@ -101,16 +101,6 @@ function ProviderConnectButton({
       }}
     />
   );
-}
-
-function canConnectProvider(row: Row): boolean {
-  return canConnectRecord(row);
-}
-
-export function inferenceConnectCallbackPath(
-  row: Record<string, unknown>,
-): string | undefined {
-  return connectCallbackPathForRecord(row);
 }
 
 export function InferenceModelsPage(): React.ReactElement {

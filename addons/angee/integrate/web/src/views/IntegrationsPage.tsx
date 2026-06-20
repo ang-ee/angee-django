@@ -56,7 +56,7 @@ export function IntegrationsPage(): React.ReactElement {
 
   const cardActions = React.useCallback(
     (row: Row, context: { refresh: () => void }) =>
-      canConnectIntegration(row) ? (
+      canConnectRecord(row) ? (
         <IntegrationConnectButton row={row} refresh={context.refresh} />
       ) : null,
     [],
@@ -157,8 +157,4 @@ function IntegrationConnectButton({
       }}
     />
   );
-}
-
-export function canConnectIntegration(row: Row): boolean {
-  return canConnectRecord(row);
 }
