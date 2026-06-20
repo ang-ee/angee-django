@@ -59,7 +59,7 @@ class DeletePreviewNode:
         return cls(
             label=str(instance._meta.verbose_name),
             object_label=str(instance),
-            object_id=_object_id(instance),
+            object_id=public_id_of(instance) or None,
             children=[],
         )
 
@@ -99,7 +99,7 @@ class DeletePreviewNode:
         return cls(
             label=str(model._meta.verbose_name),
             object_label=str(instance),
-            object_id=_object_id(instance),
+            object_id=public_id_of(instance) or None,
             children=[
                 cls.from_group(group_model, preview_rows)
                 for group_model, preview_rows in sorted(
@@ -196,7 +196,7 @@ def delete_by_public_id(
 
     context = system_context(reason=reason) if reason is not None else nullcontext()
     with context, transaction.atomic():
-        instance = _resolve_delete_target(
+        instance = require_instance_for_id(
             model,
             public_id,
             queryset=queryset if queryset is not None else model._default_manager.all(),
@@ -348,23 +348,6 @@ def _count_by_model(
         model = type(instance)
         counts[model] = counts.get(model, 0) + 1
     return counts
-
-
-def _object_id(instance: models.Model) -> str | None:
-    """Return the public id used in deletion preview nodes."""
-
-    return public_id_of(instance) or None
-
-
-def _resolve_delete_target(
-    model: type[models.Model],
-    public_id: str,
-    *,
-    queryset: models.QuerySet[models.Model],
-) -> models.Model:
-    """Return the delete target addressed by ``public_id`` or raise."""
-
-    return require_instance_for_id(model, public_id, queryset=queryset)
 
 
 def _read_scoped_queryset(
