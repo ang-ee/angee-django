@@ -252,6 +252,12 @@ def test_notes_demo_only_composes_reusable_agent_seeds() -> None:
     module = import_module("example.notes")
     config = NotesConfig("example.notes", module)
     manifest = resource_manifest_for(config)
+    assert manifest["install"] == ({"path": "resources/install/010_integrate.vendor.yaml", "adopt": "slug"},)
+    demo_by_path = {item["path"]: item for item in manifest["demo"]}
+    assert demo_by_path["resources/demo/080_integrate.credential.yaml"]["adopt"] == ("user", "name")
+    assert demo_by_path["resources/demo/081_integrate.vendor.yaml"]["adopt"] == "slug"
+    assert demo_by_path["resources/demo/084_integrate.repository.yaml"]["adopt"] == ("vcs_bridge", "name")
+    assert demo_by_path["resources/demo/094_integrate.template.yaml"]["adopt"] == ("source", "path")
     demo_paths = {item["path"] for item in manifest["demo"]}
 
     assert "resources/demo/010_iam.user.yaml" not in demo_paths
@@ -367,6 +373,18 @@ def test_integrate_config_installs_agentic_vendor_resources() -> None:
     assert rows_by_xref["gemini"].values["display_name"] == "Google Gemini"
     assert rows_by_xref["grok"].values["slug"] == "grok"
     assert rows_by_xref["grok"].values["website_url"] == "https://x.ai/grok"
+
+
+def test_storage_install_resources_adopt_unique_slugs() -> None:
+    """Storage install seeds use their slug natural keys for idempotent reloads."""
+
+    config = apps.get_app_config("storage")
+    manifest = resource_manifest_for(config)
+
+    assert manifest["install"] == (
+        {"path": "resources/install/010_storage.backend.yaml", "adopt": "slug"},
+        {"path": "resources/install/020_storage.drive.yaml", "adopt": "slug"},
+    )
 
 
 def test_resource_manifest_rejects_unknown_tiers() -> None:

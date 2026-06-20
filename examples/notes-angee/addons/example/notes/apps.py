@@ -30,7 +30,7 @@ class NotesConfig(AppConfig):
     ``mcp`` package when a test runner adds the addon directory to ``sys.path``.
     """
     resources = {
-        "install": ("resources/install/010_integrate.vendor.yaml",),
+        "install": ({"path": "resources/install/010_integrate.vendor.yaml", "adopt": "slug"},),
         "demo": (
             {
                 "path": "resources/demo/020_notes.note.yaml",
@@ -41,8 +41,9 @@ class NotesConfig(AppConfig):
             {
                 "path": "resources/demo/080_integrate.credential.yaml",
                 "depends_on": "iam:resources/demo/010_iam.user.yaml",
+                "adopt": ("user", "name"),
             },
-            "resources/demo/081_integrate.vendor.yaml",
+            {"path": "resources/demo/081_integrate.vendor.yaml", "adopt": "slug"},
             {
                 "path": "resources/demo/083_integrate.vcsbridge.yaml",
                 "depends_on": (
@@ -53,6 +54,7 @@ class NotesConfig(AppConfig):
             {
                 "path": "resources/demo/084_integrate.repository.yaml",
                 "depends_on": "resources/demo/083_integrate.vcsbridge.yaml",
+                "adopt": ("vcs_bridge", "name"),
             },
             {
                 "path": "resources/demo/085_integrate.source.yaml",
@@ -61,6 +63,7 @@ class NotesConfig(AppConfig):
             {
                 "path": "resources/demo/094_integrate.template.yaml",
                 "depends_on": "resources/demo/085_integrate.source.yaml",
+                "adopt": ("source", "path"),
             },
             {
                 "path": "resources/demo/095_agents.agent.yaml",

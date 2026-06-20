@@ -113,18 +113,13 @@ class AngeeResource(resources.ModelResource):
         row_hash = self._row_content_hash(row)
         ledger = self._ledger_for_xref(xref)
         self._record_row_state(xref, row_hash, ledger)
+        instance = self._instance_from_ledger(ledger)
 
-        adopted = self._adopt_for_row(xref, row, row_hash, ledger)
-        if adopted is not None:
-            return adopted
-
-        skip = self._skip_decision(
-            ledger,
-            self._instance_from_ledger(ledger),
-            row_hash,
-        )
-        if skip is not None:
-            return skip
+        adopted = self._adopt_for_row(xref, row, ledger, instance)
+        if adopted is None:
+            skip = self._skip_decision(ledger, instance, row_hash)
+            if skip is not None:
+                return skip
 
         return cast(
             RowResult,
@@ -150,10 +145,12 @@ class AngeeResource(resources.ModelResource):
     def instance_for_xref(self, xref: str) -> models.Model | None:
         """Return an existing or adopted instance for a row xref."""
 
+        if xref in self._adopted_instances:
+            return self._adopted_instances[xref]
         self._ledger_for_xref(xref)
         ledger = self._existing_ledgers[xref]
         if ledger is None:
-            return self._adopted_instances.get(xref)
+            return None
         return self._instance_from_ledger(ledger)
 
     def _prime_existing_ledgers(self, dataset: tablib.Dataset) -> None:
@@ -189,18 +186,18 @@ class AngeeResource(resources.ModelResource):
         self,
         xref: str,
         row: Mapping[str, Any],
-        row_hash: str,
         ledger: Resource | None,
-    ) -> RowResult | None:
-        """Adopt an unledgered target before normal row import runs."""
+        instance: models.Model | None,
+    ) -> models.Model | None:
+        """Adopt a target before normal row import runs when the ledger cannot."""
 
-        if ledger is not None:
+        if ledger is not None and instance is not None:
             return None
         adopted = self._adopt_existing_target(row)
         if adopted is None:
             return None
         self._adopted_instances[xref] = adopted
-        return None
+        return adopted
 
     def _skip_decision(
         self,

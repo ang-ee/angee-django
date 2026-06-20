@@ -32,8 +32,8 @@ class StorageConfig(AppConfig):
     resources = {
         "master": ({"path": "resources/master/010_storage.mimetype.yaml", "adopt": "mime_type"},),
         "install": (
-            "resources/install/010_storage.backend.yaml",
-            "resources/install/020_storage.drive.yaml",
+            {"path": "resources/install/010_storage.backend.yaml", "adopt": "slug"},
+            {"path": "resources/install/020_storage.drive.yaml", "adopt": "slug"},
         ),
     }
     """MIME taxonomy (master, adopted by mime type) plus the default local backend and drive."""
