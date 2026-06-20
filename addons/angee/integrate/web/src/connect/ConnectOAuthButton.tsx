@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Button, Glyph, usePrompt, useToast } from "@angee/base";
-import { useAuthoredMutation } from "@angee/sdk";
+import { errorMessage, useAuthoredMutation } from "@angee/sdk";
 
 import { useIntegrateT } from "../i18n";
 import { IntegrateConnectAccountComplete } from "./documents.public";
@@ -122,7 +122,7 @@ export function ConnectOAuthButton({
         void connect().catch((error) => {
           toast.danger({
             title: label,
-            description: error instanceof Error ? error.message : startErrorTitle,
+            description: errorMessage(error, startErrorTitle),
           });
         });
       }}

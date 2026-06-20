@@ -17,6 +17,7 @@ import {
   type RecordTabDescriptor,
 } from "@angee/base";
 import {
+  errorMessage,
   useActionMutation,
   useModelInvalidation,
   useResourceRecord,
@@ -140,10 +141,7 @@ function AgentProvisionToolbarAction({
       if (previousLifecycle) patchRecord({ lifecycle: previousLifecycle });
       toast.danger({
         title: t("agents.provisioning.provisionFailed"),
-        description:
-          caught instanceof Error
-            ? caught.message
-            : t("agents.provisioning.actionFailed"),
+        description: errorMessage(caught, t("agents.provisioning.actionFailed")),
       });
     }
   };

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { errorMessage } from "@angee/sdk";
 
 import { Alert } from "../ui/alert";
 import { Button } from "../ui/button";
@@ -186,8 +187,4 @@ function completeOnce(
   });
   completionRequests.set(key, request);
   return request;
-}
-
-function errorMessage(caught: unknown, fallback: string): string {
-  return caught instanceof Error ? caught.message : fallback;
 }

@@ -1,5 +1,6 @@
 import * as React from "react";
 import {
+  errorMessage,
   useModelRootFields,
   useResourceMutation,
   type DeletePreview,
@@ -104,7 +105,10 @@ export function useBulkDelete(
       .catch((error: unknown) => {
         toast.danger({
           title: "Delete preview failed",
-          description: errorMessage(error),
+          description: errorMessage(
+            error,
+            "The delete preview could not be loaded.",
+          ),
         });
       })
       .finally(() => {
@@ -254,8 +258,4 @@ function toastDeleteOutcome({
     return;
   }
   toast.warning(options);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "The delete preview could not be loaded.";
 }

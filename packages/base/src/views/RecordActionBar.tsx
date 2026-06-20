@@ -1,5 +1,5 @@
 import * as React from "react";
-import type { Row } from "@angee/sdk";
+import { errorMessage, type Row } from "@angee/sdk";
 
 import { Button } from "../ui/button";
 import { DropdownMenu } from "../ui/dropdown-menu";
@@ -90,8 +90,7 @@ export function RecordActionBar({
       } catch (error) {
         toast.danger({
           title: actionLabelText(action),
-          description:
-            error instanceof Error ? error.message : "The action failed.",
+          description: errorMessage(error, "The action failed."),
         });
       } finally {
         if (mountedRef.current) setPendingId(null);

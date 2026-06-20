@@ -1,5 +1,5 @@
 import { useId, useState, type FormEvent, type ReactNode } from "react";
-import { useLoginWithPassword } from "@angee/sdk";
+import { errorMessage, useLoginWithPassword } from "@angee/sdk";
 
 import { useBaseT } from "../i18n";
 import { Button } from "../ui/button";
@@ -42,9 +42,7 @@ export function UsernamePasswordForm({
       }
       setError(t("auth.invalidCredentials"));
     } catch (caught) {
-      setError(
-        caught instanceof Error ? caught.message : t("auth.genericError"),
-      );
+      setError(errorMessage(caught, t("auth.genericError")));
     }
   }
 
