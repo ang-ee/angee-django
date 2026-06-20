@@ -745,12 +745,12 @@ class ConnectionMutation:
         the operator never types them by hand. Requires a discovery URL on the row.
         """
 
+        oauth_client = resolve_action_target(
+            OAuthClient,
+            id,
+            reason="integrate.graphql.discover_oauth_endpoints",
+        )
         with system_context(reason="integrate.graphql.discover_oauth_endpoints"):
-            oauth_client = instance_from_public_id(
-                OAuthClient, str(id), queryset=OAuthClient._default_manager.all()
-            )
-            if oauth_client is None:
-                raise ValueError(f"OAuth client {id!s} was not found")
             if not str(getattr(oauth_client, "discovery_url", "") or ""):
                 return ActionResult(ok=False, message="Set a discovery URL first.")
             try:
