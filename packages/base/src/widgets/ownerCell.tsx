@@ -3,7 +3,12 @@ import type { ReactElement, ReactNode } from "react";
 import { Avatar, avatarInitials } from "../ui/avatar";
 import { Select } from "../ui/select";
 import { widgetLabel } from "./label";
-import type { WidgetDefinition, WidgetOption, WidgetRenderProps } from "./types";
+import {
+  optionTextLabel,
+  type WidgetDefinition,
+  type WidgetOption,
+  type WidgetRenderProps,
+} from "./types";
 
 type OwnerCellRecord = {
   id?: string;
@@ -85,15 +90,8 @@ function ownerLabel(
   return value.label ?? value.name ?? value.value ?? value.id ?? "";
 }
 
-function textLabel(value: ReactNode): string {
-  if (typeof value === "string" || typeof value === "number") {
-    return String(value);
-  }
-  return "";
-}
-
 function ownerText(value: OwnerCellValue | undefined, label: ReactNode): string {
-  const text = textLabel(label);
+  const text = optionTextLabel(label, "");
   if (text) return text;
   if (typeof value === "object" && value) {
     return value.name ?? value.value ?? value.id ?? "";

@@ -14,6 +14,7 @@ import {
 import { widgetLabel } from "./label";
 import {
   optionLabel,
+  optionTextLabel,
   type WidgetDefinition,
   type WidgetOption,
   type WidgetRenderProps,
@@ -79,7 +80,7 @@ function ComboboxEdit({
                     key={option.value}
                     value={option.value}
                     disabled={option.disabled}
-                    label={stringLabel(option.label)}
+                    label={optionTextLabel(option.label)}
                   >
                     <SelectItemText>{option.label}</SelectItemText>
                     <SelectItemIndicator />
@@ -123,14 +124,7 @@ function filterOptions(
   const normalized = query.trim().toLowerCase();
   if (!normalized) return options;
   return options.filter((option) => {
-    const haystack = `${option.value} ${stringLabel(option.label) ?? ""}`;
+    const haystack = `${option.value} ${optionTextLabel(option.label)}`;
     return haystack.toLowerCase().includes(normalized);
   });
-}
-
-function stringLabel(value: ReactNode): string | undefined {
-  if (typeof value === "string" || typeof value === "number") {
-    return String(value);
-  }
-  return undefined;
 }
