@@ -8,7 +8,6 @@ from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.test import TransactionTestCase
 from rebac import actor_context, system_context, to_subject_ref
-from strawberry import relay
 
 from angee.graphql.schema import GraphQLSchemas
 
@@ -57,7 +56,7 @@ class NotesVersioningTests(TransactionTestCase):
             schema = GraphQLSchemas.from_discovery().build("console")
             result = schema.execute_sync(
                 query,
-                variable_values={"id": relay.to_base64("NoteType", self.note.sqid)},
+                variable_values={"id": str(self.note.sqid)},
             )
 
         self.assertIsNone(result.errors)
@@ -96,7 +95,7 @@ class NotesVersioningTests(TransactionTestCase):
             schema = GraphQLSchemas.from_discovery().build("console")
             result = schema.execute_sync(
                 query,
-                variable_values={"id": relay.to_base64("NoteType", sqid)},
+                variable_values={"id": str(sqid)},
             )
 
         self.assertIsNone(result.errors)

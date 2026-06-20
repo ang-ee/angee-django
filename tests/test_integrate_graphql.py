@@ -7,8 +7,8 @@ assembles at runtime — and run over the concrete iam + integrate test tables.
 
 Harness note: source-addon tests stand in Django's default auth user for the
 swappable iam ``User`` (it has no ``sqid``). The create mutations take an
-``owner: GlobalID`` that strawberry-django resolves through ``UserType``'s
-``sqid`` NodeID, which the stand-in user lacks — so the owner-bearing *create*
+``owner: ID`` that Angee resolves through ``UserType``'s public id, which the
+stand-in user lacks — so the owner-bearing *create*
 path is exercised by building rows through the model managers (as ``runtime``
 would resolve them) and asserting CRUD over those rows. ``createWebhookSubscription``'s
 write-only ``secret`` is covered by the SDL invariant plus the read-back row.
@@ -28,7 +28,6 @@ from django.db import connection
 from django.test import RequestFactory
 from rebac import app_settings, system_context
 from rebac.roles import grant
-from strawberry import relay
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate.credentials import CredentialKind
@@ -83,7 +82,7 @@ def test_integration_node_resolves_nested_relations(
               }
             }
             """,
-            {"id": _integration_global_id(conn)},
+            {"id": _public_id(conn)},
             user=admin,
         )
     )["integration"]
@@ -180,7 +179,7 @@ def test_update_integration_rejects_impl_class_patch(integrate_console_tables: N
           }
         }
         """,
-        {"id": _integration_global_id(conn)},
+        {"id": _public_id(conn)},
         user=admin,
     )
 
@@ -207,8 +206,8 @@ def test_create_integration_rejects_child_backend_key(integrate_console_tables: 
         }
         """,
         {
-            "vendor": _gid("VendorType", vendor.sqid),
-            "owner": relay.to_base64("UserType", str(owner.pk)),
+            "vendor": _public_id(vendor.sqid),
+            "owner": str(owner.pk),
         },
         user=admin,
     )
@@ -269,9 +268,9 @@ def test_integration_update_delete_are_admin_only(
 
     # ``createIntegration`` is admin gated: the permission check fires before any FK
     # input resolution, so a non-admin is denied regardless of the owner id supplied.
-    # (The full create write path needs an iam ``User`` with a ``sqid`` NodeID, which
+    # (The full create write path needs an iam ``User`` with a public id, which
     # the source-addon stand-in auth user lacks — see the module docstring.)
-    owner_id = relay.to_base64("UserType", str(conn.owner.pk))
+    owner_id = str(conn.owner.pk)
     assert _execute(
         console_schema,
         """
@@ -285,7 +284,7 @@ def test_integration_update_delete_are_admin_only(
         user=plain,
     ).errors is not None
 
-    integration_id = _integration_global_id(conn)
+    integration_id = _public_id(conn)
     update_integration = """
         mutation UpdateIntegration($id: ID!) {
           updateIntegration(data: {id: $id, status: "disabled"}) {
@@ -348,7 +347,7 @@ def test_webhook_crud_secret_write_only(
           }
         }
         """,
-        {"owner": relay.to_base64("UserType", str(owner.pk))},
+        {"owner": str(owner.pk)},
         user=plain,
     ).errors is not None
     with system_context(reason="test.integrate.webhook_crud.create"):
@@ -358,7 +357,7 @@ def test_webhook_crud_secret_write_only(
             secret="top-secret",
             event_kinds=[_BRIDGE_SYNCED],
         )
-    subscription_id = relay.to_base64("WebhookSubscriptionType", subscription.sqid)
+    subscription_id = str(subscription.sqid)
 
     # The created row reads back without ever exposing the secret.
     read_back = _data(
@@ -426,7 +425,7 @@ def test_integration_action_mutations_are_admin_only(
     console_schema = _schema()
     plain = User.objects.create_user(username="action-plain", email="action-plain@example.com")
     conn = make_integration("action-gate")
-    conn_id = _integration_global_id(conn)
+    conn_id = _public_id(conn)
     owner = User.objects.create_user(username="action-owner", email="action-owner@example.com")
     with system_context(reason="test.integrate.action_gate.seed"):
         subscription = WebhookSubscription.objects.create(
@@ -435,7 +434,7 @@ def test_integration_action_mutations_are_admin_only(
             secret="original-secret",
             event_kinds=[_BRIDGE_SYNCED],
         )
-    sub_id = relay.to_base64("WebhookSubscriptionType", subscription.sqid)
+    sub_id = str(subscription.sqid)
 
     denied = [
         ("mutation($id: ID!){ syncIntegration(id: $id){ ok } }", {"id": conn_id}),
@@ -467,7 +466,7 @@ def test_create_integration_from_credential_is_authenticated_user_owned(
             {"access_token": "oauth-token"},
         )
         Vendor.objects.create(slug="anthropic", display_name="Anthropic")
-    credential_id = relay.to_base64("CredentialType", credential.sqid)
+    credential_id = str(credential.sqid)
     mutation = """
         mutation Connect($credential: ID!) {
           createIntegrationFromCredential(
@@ -577,7 +576,7 @@ def test_sync_integration_runs_for_an_admin(
         _execute(
             console_schema,
             "mutation($id: ID!){ syncIntegration(id: $id){ ok message } }",
-            {"id": _integration_global_id(conn)},
+            {"id": _public_id(conn)},
             user=admin,
         )
     )["syncIntegration"]
@@ -601,7 +600,7 @@ def test_rotate_webhook_secret_changes_the_stored_secret(
             secret="original-secret",
             event_kinds=[_BRIDGE_SYNCED],
         )
-    sub_id = relay.to_base64("WebhookSubscriptionType", subscription.sqid)
+    sub_id = str(subscription.sqid)
 
     result = _data(
         _execute(
@@ -635,7 +634,7 @@ def test_update_integration_status_accepts_the_lowercase_value(
         _execute(
             console_schema,
             'mutation($id: ID!){ updateIntegration(data: {id: $id, status: "disabled"}){ status } }',
-            {"id": _integration_global_id(conn)},
+            {"id": _public_id(conn)},
             user=admin,
         )
     )["updateIntegration"]
@@ -657,7 +656,7 @@ def test_update_integration_status_accepts_the_graphql_enum_name(
         _execute(
             console_schema,
             'mutation($id: ID!){ updateIntegration(data: {id: $id, status: "DRAFT"}){ status } }',
-            {"id": _integration_global_id(conn)},
+            {"id": _public_id(conn)},
             user=admin,
         )
     )["updateIntegration"]
@@ -690,8 +689,8 @@ def test_create_vcs_bridge_creates_child_row(
             }
             """,
             {
-                "vendor": _gid("VendorType", seed.vendor.sqid),
-                "owner": relay.to_base64("UserType", str(seed.owner.pk)),
+                "vendor": _public_id(seed.vendor.sqid),
+                "owner": str(seed.owner.pk),
             },
             user=admin,
         )
@@ -719,7 +718,7 @@ def test_update_vcs_bridge_accepts_backend_class(
               }
             }
             """,
-            {"id": _gid("VcsBridgeType", bridge.sqid)},
+            {"id": _public_id(bridge.sqid)},
             user=admin,
         )
     )["updateVcsBridge"]
@@ -759,7 +758,7 @@ def test_update_vcs_bridge_rejects_unknown_backend_class(
           }
         }
         """,
-        {"id": _gid("VcsBridgeType", bridge.sqid)},
+        {"id": _public_id(bridge.sqid)},
         user=admin,
     )
 
@@ -787,7 +786,7 @@ def test_update_vcs_bridge_rejects_parent_impl_class(
           }
         }
         """,
-        {"id": _gid("VcsBridgeType", bridge.sqid)},
+        {"id": _public_id(bridge.sqid)},
         user=admin,
     )
 
@@ -861,18 +860,10 @@ def _platform_admin(username: str) -> Any:
     return admin
 
 
-def _integration_global_id(conn: Any) -> str:
-    """Return the relay global id ``IntegrationType`` mutations resolve for ``conn``."""
+def _public_id(value: Any) -> str:
+    """Return the public id mutations resolve for ``value``."""
 
-    with system_context(reason="test.integrate.integration_global_id"):
-        return relay.to_base64("IntegrationType", conn.sqid)
-
-
-def _gid(typename: str, node_id: str) -> str:
-    """Return one relay global id."""
-
-    with system_context(reason="test.integrate.global_id"):
-        return relay.to_base64(typename, node_id)
+    return str(getattr(value, "sqid", value))
 
 
 def _sdl_block(sdl: str, header: str) -> str:

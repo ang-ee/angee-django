@@ -1,13 +1,11 @@
 import type { DndPayload } from "@angee/base";
-import { relationRelayGlobalId, toRelayGlobalId } from "@angee/sdk";
 
-import { DRIVE_TYPE, FOLDER_TYPE } from "../lib/global-id";
 import type { StorageFile, StorageFolder } from "./documents";
 
 /** Dnd payload kind for a dragged file; tree nodes accept it as a drop target. */
 export const STORAGE_FILE_DND = "storage.file";
 
-/** The body of a dragged-file payload — the file's relay GlobalID. */
+/** The body of a dragged-file payload: the file's public id. */
 export interface FileDragData {
   id: string;
 }
@@ -59,7 +57,7 @@ export function fileRows(
   return files
     .filter(
       (file) =>
-        toRelayGlobalId(DRIVE_TYPE, file.drive) === driveId && inScope(file, scope),
+        file.drive === driveId && inScope(file, scope),
     )
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     .map((file) => ({
@@ -73,8 +71,8 @@ export function fileRows(
       owner: file.createdByLabel ?? "—",
       updatedAt: file.updatedAt,
       url: file.url,
-      drive: toRelayGlobalId(DRIVE_TYPE, file.drive),
-      folder: relationRelayGlobalId(FOLDER_TYPE, file.folder),
+      drive: file.drive,
+      folder: file.folder,
     }));
 }
 
@@ -82,7 +80,7 @@ function inScope(file: StorageFile, scope: string): boolean {
   if (scope === TRASH_SCOPE) return file.isTrashed;
   if (file.isTrashed) return false;
   if (scope === ALL_SCOPE) return true;
-  return relationRelayGlobalId(FOLDER_TYPE, file.folder) === scope;
+  return file.folder === scope;
 }
 
 /** The selected file's full record, for the preview pane. */
@@ -105,11 +103,11 @@ export function folderTreeRows(
   ];
   for (const folder of folders) {
     if (folder.isVirtual) continue;
-    if (toRelayGlobalId(DRIVE_TYPE, folder.drive ?? "") !== driveId) continue;
+    if ((folder.drive ?? "") !== driveId) continue;
     rows.push({
       id: folder.id,
       name: folder.name,
-      parent: relationRelayGlobalId(FOLDER_TYPE, folder.parent) ?? "",
+      parent: folder.parent ?? "",
       icon: "folder",
     });
   }

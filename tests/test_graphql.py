@@ -140,17 +140,19 @@ class RelatedRevisionEntry(RevisionMixin, models.Model):
 
 
 @strawberry.type
-class ThingNode(strawberry.relay.Node):
-    """Relay node surface reused across named schemas."""
+class ThingType:
+    """Plain surface reused across named schemas."""
 
-    id: strawberry.relay.NodeID[int]
+    id: strawberry.ID
 
 
 @strawberry.type
 class NodeQuery:
-    """Query exposing a relay node field that two schemas share."""
+    """Query exposing a field surface that two schemas share."""
 
-    thing: ThingNode | None = strawberry.relay.node()
+    @strawberry.field
+    def thing(self) -> ThingType | None:
+        return None
 
 
 @strawberry.type
@@ -558,15 +560,17 @@ def test_validation_errors_surface_per_field_extensions() -> None:
     assert plain_extensions["formErrors"] == ["Something went wrong."]
 
 
-def test_graphql_identity_exports_relay_node_and_connection() -> None:
-    """The framework exposes one relay node and cursor connection seam."""
+def test_graphql_identity_exports_public_node_and_connection() -> None:
+    """The framework exposes one public node and cursor connection seam."""
 
     from strawberry_django.relay import DjangoCursorConnection
 
     from angee.graphql.node import AngeeConnection as Connection
     from angee.graphql.node import AngeeNode
 
-    assert issubclass(AngeeNode, strawberry.relay.Node)
+    definition = strawberry.types.get_object_definition(AngeeNode)
+    assert definition is not None
+    assert definition.name == "Node"
     assert issubclass(Connection, DjangoCursorConnection)
 
 
@@ -640,7 +644,7 @@ def test_revisions_query_surface_exposes_revision_mixin_versions() -> None:
     """A generated revision query replaces consumer-authored resolvers.
 
     Asserts the emitted schema surface — the bounded query field and its
-    revisioned-field projection. The runtime data path (GlobalID -> instance ->
+    revisioned-field projection. The runtime data path (public id -> instance ->
     newest-first projection) is covered end-to-end against the real, reversion-
     registered notes.Note in examples/notes-angee/e2e (notes-form-interactions
     "the Activity tab renders the revision timeline"); reversion cannot resolve
@@ -720,20 +724,20 @@ def test_render_sdl_prints_each_schema() -> None:
     assert "world: String!" in rendered["console"]
 
 
-def test_relay_surface_shared_across_named_schemas_renders() -> None:
-    """A relay node field reused in two schemas keeps independent fields.
+def test_surface_shared_across_named_schemas_renders() -> None:
+    """A query surface reused in two schemas keeps independent fields.
 
-    Relay field extensions mutate their field in place when a schema is
-    built; a surface contributed to more than one named schema must not hand
-    the same field object to two builds.
+    Field extensions may mutate their field in place when a schema is built; a
+    surface contributed to more than one named schema must not hand the same
+    field object to two builds.
     """
 
     rendered = GraphQLSchemas(
         [addon(public={"query": [NodeQuery]}, console={"query": [NodeQuery]})]
     ).render_sdl()
 
-    assert "thing(" in rendered["public"]
-    assert "thing(" in rendered["console"]
+    assert "thing: ThingType" in rendered["public"]
+    assert "thing: ThingType" in rendered["console"]
 
 
 def test_build_schema_unknown_name_lists_available() -> None:

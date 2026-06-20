@@ -317,7 +317,7 @@ export function useResourceRevisions(
 export interface ResourceMutationVariables {
   /** For `create`/`update`: the input/patch (an `update` patch carries its id). */
   data?: Record<string, unknown>;
-  /** For `delete`: the relay id to remove. */
+  /** For `delete`: the public id to remove. */
   id?: string;
   /** For `delete`: false previews the cascade without deleting. */
   confirm?: boolean;

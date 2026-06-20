@@ -29,8 +29,8 @@ import { ModalsHost, baseIcons } from "@angee/base";
 import { OverviewPage } from "./OverviewPage";
 import { documentName } from "./test-documents";
 
-const ALICE_RELAY_ID = "VXNlclR5cGU6dXNyXzE=";
-const STALE_RELAY_ID = "VXNlclR5cGU6dXNyXzI=";
+const ALICE_PUBLIC_ID = "usr_1";
+const STALE_PUBLIC_ID = "usr_2";
 
 const sdkMocks = vi.hoisted(() => ({
   overview: {
@@ -125,7 +125,7 @@ describe("IAM overview page", () => {
     sdkMocks.overview.data = overviewData();
     sdkMocks.users.data = usersData({
       totalCount: 501,
-      results: [userData({ id: ALICE_RELAY_ID })],
+      results: [userData({ id: ALICE_PUBLIC_ID })],
     });
 
     renderInRouter(<OverviewPage />);
@@ -154,7 +154,7 @@ describe("IAM overview page", () => {
       ],
       unassignedUsers: [
         userData({
-          id: STALE_RELAY_ID,
+          id: STALE_PUBLIC_ID,
           username: "unassigned",
           email: "unassigned@example.com",
         }),
@@ -162,7 +162,7 @@ describe("IAM overview page", () => {
     });
     sdkMocks.users.data = usersData({
       totalCount: 1,
-      results: [userData({ id: ALICE_RELAY_ID })],
+      results: [userData({ id: ALICE_PUBLIC_ID })],
     });
 
     renderInRouter(<OverviewPage />);
@@ -174,11 +174,11 @@ describe("IAM overview page", () => {
     expect(screen.getByText("unassigned")).toBeTruthy();
   });
 
-  test("submits the selected user's relay id and renders the user label on success", async () => {
+  test("submits the selected user's public id and renders the user label on success", async () => {
     sdkMocks.overview.data = overviewData();
     sdkMocks.users.data = usersData({
       totalCount: 1,
-      results: [userData({ id: ALICE_RELAY_ID })],
+      results: [userData({ id: ALICE_PUBLIC_ID })],
     });
     sdkMocks.grantRole.mockResolvedValue({ grantRole: true });
 
@@ -194,7 +194,7 @@ describe("IAM overview page", () => {
 
     await waitFor(() =>
       expect(sdkMocks.grantRole).toHaveBeenCalledWith({
-        principalId: ALICE_RELAY_ID,
+        principalId: ALICE_PUBLIC_ID,
         role: "angee/role:writer",
       }),
     );
@@ -206,7 +206,7 @@ describe("IAM overview page", () => {
 
   test("falls back to the selected principal id when the user row is stale", async () => {
     const staleUser = userData({
-      id: STALE_RELAY_ID,
+      id: STALE_PUBLIC_ID,
       username: "stale",
       email: "",
     });
@@ -225,12 +225,12 @@ describe("IAM overview page", () => {
         "angee / Writer",
       ),
     );
-    staleUser.id = "VXNlclR5cGU6dXNyXzk=";
+    staleUser.id = "usr_9";
     fireEvent.click(screen.getByRole("button", { name: "Grant" }));
 
     await waitFor(() =>
       expect(sdkMocks.grantRole).toHaveBeenCalledWith({
-        principalId: STALE_RELAY_ID,
+        principalId: STALE_PUBLIC_ID,
         role: "angee/role:writer",
       }),
     );

@@ -1,7 +1,7 @@
 // Authored GraphQL for the knowledge wiki. Vaults and pages are read through
 // their offset-paginated connections (fetched once; the browser scopes to the
 // active vault client-side, see `page-rows.ts`); the open page's body and
-// backlinks load on demand through the relay node query.
+// backlinks load on demand through the public detail query.
 
 import { graphql, type DocumentType } from "@angee/gql/console";
 

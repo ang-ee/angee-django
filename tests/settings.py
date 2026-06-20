@@ -58,3 +58,9 @@ ANGEE_OAUTH_PROVIDER_TYPES = {
 # angee.mcp.middleware.ActorMiddleware and read via rebac's ambient current_actor
 # (no REBAC_MCP_ACTOR_RESOLVER override needed).
 ANGEE_MCP_ACTOR_VERIFIER = "angee.agents.mcp_verifier.resolve_actor"
+STRAWBERRY_DJANGO = {
+    # Mirror the composer-owned public ID contract for source-addon tests that
+    # bypass compose settings.
+    "DEFAULT_PK_FIELD_NAME": "sqid",
+    "MAP_AUTO_ID_AS_GLOBAL_ID": False,
+}

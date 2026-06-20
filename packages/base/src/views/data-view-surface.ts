@@ -511,6 +511,8 @@ function matchesClientLookup(value: unknown, lookup: unknown): boolean {
     return value === lookup;
   }
   const record = lookup as Record<string, unknown>;
+  if ("sqid" in record) return relationPublicId(value) === record.sqid;
+  if ("pk" in record) return relationPublicId(value) === record.pk;
   if ("exact" in record) return value === record.exact;
   if (Array.isArray(record.inList)) return record.inList.includes(value);
   if (typeof record.isNull === "boolean") return (value == null) === record.isNull;
@@ -546,6 +548,12 @@ function matchesClientLookup(value: unknown, lookup: unknown): boolean {
   if ("lt" in record && compareClientValues(value, record.lt) >= 0) return false;
   if ("lte" in record && compareClientValues(value, record.lte) > 0) return false;
   return true;
+}
+
+function relationPublicId(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const record = value as Record<string, unknown>;
+  return record.sqid ?? record.id ?? record.pk ?? value;
 }
 
 function sortClientRows<TRow extends Row>(

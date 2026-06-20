@@ -8,12 +8,13 @@ from typing import cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from strawberry import auto, relay
+from strawberry import auto
 from strawberry_django.pagination import OffsetPaginated
 
 from angee.graphql.aggregates import rebac_aggregate_builder
 from angee.graphql.crud import crud
-from angee.graphql.node import AngeeNode
+from angee.graphql.ids import PublicID
+from angee.graphql.node import AngeeNode, detail
 from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_display_label, user_public_id
@@ -76,7 +77,7 @@ class NoteInput:
 class NotePatch:
     """Fields accepted when updating a note."""
 
-    id: relay.GlobalID
+    id: PublicID
     title: str | None = strawberry.UNSET
     body: str | None = strawberry.UNSET
     status: Note.Status | None = strawberry.UNSET
@@ -143,7 +144,7 @@ class NotesQuery:
         filters=NoteFilter,
         order=NoteOrder,
     )
-    note: NoteType | None = strawberry_django.node()
+    note: NoteType | None = detail(NoteType)
     note_aggregate = _note_aggregates.aggregate_field
     note_groups = _note_aggregates.group_by_field
 

@@ -1,7 +1,7 @@
 // Runtime GraphQL document builder.
 //
 // The backend owns the schema. A view supplies only a model type label and the
-// dotted field paths it wants to read; this module turns those into the relay
+// dotted field paths it wants to read; this module turns those into the GraphQL
 // query, detail, mutation, and aggregate documents the schema serves. `id` is
 // injected at every object level so the normalized cache always has a key.
 
@@ -105,56 +105,10 @@ export function typeNameForModel(modelLabel: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
-/**
- * Encode a bare public id as the relay GlobalID a node `id` carries
- * (`btoa("DriveType:drv…")`). Relation fields (`file.drive`, `page.vault`, …)
- * come back as the bare public sqid, so normalising them up to the GlobalID lets
- * a client-side join match the related row's `id` — and keeps the value valid as
- * a GlobalID mutation input. One relay boundary, owned here.
- */
-export function toRelayGlobalId(typeName: string, id: string): string {
-  return btoa(`${typeName}:${id}`);
-}
-
-/**
- * Decode a relay GlobalID back to the bare public id (sqid) it wraps — the inverse
- * of {@link toRelayGlobalId}. The node `id` is the only public id a GraphQL type
- * exposes (the raw sqid is not a field), so a caller that needs the sqid (e.g. a
- * rebac resource id for a view envelope) recovers it here rather than selecting a
- * non-existent `sqid` field. Same relay boundary, owned here.
- */
-export function fromRelayGlobalId(globalId: string): string {
-  const decoded = atob(globalId);
-  const separator = decoded.indexOf(":");
-  return separator === -1 ? decoded : decoded.slice(separator + 1);
-}
-
-/** The relay GlobalID for a relation field's optional bare id, preserving null. */
-export function relationRelayGlobalId(
-  typeName: string,
-  id: string | null | undefined,
-): string | null {
-  return id ? toRelayGlobalId(typeName, id) : null;
-}
-
-/**
- * The bare public id encoded inside a relay GlobalID, or `null` when the value
- * is not one. The inverse of `toRelayGlobalId`: decode `btoa("DriveType:drv…")`
- * back to the `drv…` suffix. The same relay boundary owns both directions, so a
- * client showing the human-facing id never re-implements the `atob` decode.
- */
-export function relayGlobalIdSuffix(value: string): string | null {
-  let decoded: string;
-  try {
-    decoded = typeof atob === "function" ? atob(value.trim()) : "";
-  } catch {
-    return null;
-  }
-  const separator = decoded.indexOf(":");
-  if (separator <= 0) return null;
-  if (!/^[A-Za-z][A-Za-z0-9]*$/.test(decoded.slice(0, separator))) return null;
-  const suffix = decoded.slice(separator + 1).trim();
-  return suffix === "" ? null : suffix;
+/** Return a displayable public id from a GraphQL ID value. */
+export function publicIdLabel(value: string): string | null {
+  const publicId = value.trim();
+  return publicId === "" ? null : publicId;
 }
 
 function requireRootField(
@@ -171,7 +125,7 @@ function requireRootField(
   return assertName(field);
 }
 
-/** Relay detail document using the schema-declared detail root field. */
+/** Detail document using the schema-declared detail root field. */
 export function assembleDetailDocument(
   modelLabel: string,
   fieldPaths: readonly string[],

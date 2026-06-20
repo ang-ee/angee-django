@@ -179,7 +179,7 @@ decision; outline so Phase A is built with it in mind:
   renders its groups as additional tabs on the parent form, collecting nested
   values into the submit payload.
 - **Backend (nested write)**: extend the 1:1 input to accept a nested create/patch
-  instead of only a `GlobalID`, or add a single mutation that writes both rows in
+  instead of only a public id, or add a single mutation that writes both rows in
   one transaction — `addons/angee/iam_integrate_oidc/schema.py`
   (`OidcClientInput.oauth_client`) + `addons/angee/integrate/schema.py`
   (`OAuthClientInput`/`OAuthClientPatch`). strawberry-django owns nested write;

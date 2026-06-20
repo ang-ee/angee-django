@@ -10,7 +10,7 @@ import strawberry_django
 from django.contrib.auth.models import Group
 from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
-from strawberry import auto, relay
+from strawberry import auto
 
 import angee.graphql.deletion as deletion_module
 from angee.graphql.crud import _delete_resolver, crud
@@ -162,8 +162,8 @@ def test_delete_resolver_preserves_blocked_and_removes_unblocked(
     )
     delete = _delete_resolver(Group)
 
-    blocked_preview = delete(relay.GlobalID(type_name="GroupType", node_id=str(blocked.pk)), confirm=True)
-    removable_preview = delete(relay.GlobalID(type_name="GroupType", node_id=str(removable.pk)), confirm=True)
+    blocked_preview = delete(str(blocked.pk), confirm=True)
+    removable_preview = delete(str(removable.pk), confirm=True)
 
     assert blocked_preview.has_blockers
     assert Group.objects.filter(pk=blocked.pk).exists()
@@ -198,7 +198,7 @@ def test_delete_resolver_defaults_to_preview_without_deleting(
         classmethod(preview_for),
     )
 
-    preview = _delete_resolver(Group)(relay.GlobalID(type_name="GroupType", node_id=str(group.pk)))
+    preview = _delete_resolver(Group)(str(group.pk))
 
     assert not preview.has_blockers
     assert Group.objects.filter(pk=group.pk).exists()
@@ -253,7 +253,7 @@ def test_delete_resolver_previews_and_deletes_inside_transaction(
         classmethod(preview_for),
     )
 
-    _delete_resolver(Group)(relay.GlobalID(type_name="GroupType", node_id=str(group.pk)), confirm=True)
+    _delete_resolver(Group)(str(group.pk), confirm=True)
 
     assert entered
     assert not active

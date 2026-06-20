@@ -43,13 +43,14 @@ from rebac.roles import (
     roles_of as rebac_roles_of,
 )
 from rebac.schema.ast import PermArrow, PermBinOp, PermNil, PermRef
-from strawberry import auto, relay
+from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
 from angee.base.models import instance_from_public_id
 from angee.graphql.deletion import DeletePreview, delete_by_public_id
-from angee.graphql.node import AngeeNode
+from angee.graphql.ids import PublicID
+from angee.graphql.node import AngeeNode, detail
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_display_label as _user_display_label
 from angee.iam.identity import user_principal
@@ -319,7 +320,7 @@ class UserInput:
 class UserPatch:
     """Admin-write fields accepted when updating a user. ``password`` re-hashes when set."""
 
-    id: relay.GlobalID
+    id: PublicID
     username: str | None = strawberry.UNSET
     password: str | None = strawberry.UNSET
     email: str | None = strawberry.UNSET
@@ -791,7 +792,8 @@ class IAMConsoleQuery:
     users: OffsetPaginated[UserType] = strawberry_django.offset_paginated(
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
-    user: UserType | None = strawberry_django.node(
+    user: UserType | None = detail(
+        UserType,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
 
@@ -907,7 +909,7 @@ class IAMUserMutation:
         """Update one user; re-hash the password only when a new one is supplied."""
 
         with system_context(reason="iam.graphql.user.update"), transaction.atomic():
-            user = instance_from_public_id(User, data.id.node_id, queryset=User._default_manager.all())
+            user = instance_from_public_id(User, str(data.id), queryset=User._default_manager.all())
             if user is None:
                 raise ValueError(f"User {data.id!s} was not found")
             for field in ("username", "email", "first_name", "last_name", "is_staff", "is_active"):
@@ -920,12 +922,12 @@ class IAMUserMutation:
         return cast(UserType, user)
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def delete_user(self, id: relay.GlobalID, confirm: bool = False) -> DeletePreview:
+    def delete_user(self, id: PublicID, confirm: bool = False) -> DeletePreview:
         """Delete one user when unblocked."""
 
         return delete_by_public_id(
             User,
-            id.node_id,
+            str(id),
             reason="iam.graphql.user.delete",
             confirm=confirm,
         )

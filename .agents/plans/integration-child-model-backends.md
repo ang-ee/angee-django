@@ -40,7 +40,7 @@ providers are inference `backend_class` values, not integration impls.
   schema owner.
 - [ ] Standardize relation-id filters. Prefer a strawberry-django-native
   relation filter shape from the frontend primitive; if not enough, add one
-  relay/global-id relation lookup helper in `angee.graphql` and reuse it across
+  public-id relation lookup helper in `angee.graphql` and reuse it across
   agents/knowledge. First sub-slice implemented the frontend/SDK owner for
   object relations: SDL metadata now records each relation field's filter
   contract (`lookup` or direct `ID`), and relation facets

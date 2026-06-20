@@ -207,9 +207,8 @@ visual-parity spot-check across both themes still recommended before release.
         `aggregates.ts` beside `dimensionKey`. The `${field}Id` fallback was dead
         (the document selects `key { <dimensionKey> }`, so a bucket only ever
         carries the value under the dimension's key) — deleted, not carried over.
-      • `recordSubtitleParts`' relay-id `atob` decode → `relayGlobalIdSuffix(value)`
-        in `selection.ts` beside `toRelayGlobalId` (one relay boundary, both
-        directions owned). +unit tests for all three.
+      • `recordSubtitleParts`' old base64 `atob` decode → raw public-id display
+        in `selection.ts` beside the ID helpers. +unit tests for the public-id path.
       LEAVE-SEPARATE: `recordSubtitleParts`' `createdAt`/`updatedAt`/`wordCount`
       field-name sniffing + Intl date/word-count formatting stays in base FormView
       — it is presentation/humanization (the SDK stays structural), `wordCount` is
@@ -288,8 +287,7 @@ visual-parity spot-check across both themes still recommended before release.
 - [x] `run()` busy-wrapper hook (×3) → SDK `useBusyRun(onChanged)` ({busy, run<T>});
       storage useFile/useFolderActions + knowledge usePageActions consume it
       (+ unit test for the busy/onChanged/throw contract).
-- [x] relay `global-id` codec (×2) → `@angee/sdk` (`toRelayGlobalId`,
-      `relationRelayGlobalId`); storage/knowledge re-export + keep `*_TYPE` consts.
+- [x] public-id codec (×2) deleted; storage/knowledge now use raw public ids directly.
 - [x] `ActionResultData`/`IdVariables` per addon → SDK `ActionOutcome`/
       `ByIdVariables`; integrate + agents `documents.ts` alias them (named
       `ActionOutcome` to avoid colliding with base's `ActionResult` = Action.run).

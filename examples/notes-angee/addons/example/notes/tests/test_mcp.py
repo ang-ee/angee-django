@@ -96,7 +96,7 @@ class NotesMCPServerTests(TransactionTestCase):
             self.assertEqual(read["body"], "one two three")
             self.assertEqual(read["tags"], ["a", "b"])
 
-            # update_note exercises the flatten + sqid→GlobalID write path: change the
+            # update_note exercises the flatten + sqid write path: change the
             # title/tags on the note alice owns, then confirm the change persisted.
             updated = await self._tool(
                 "update_note", {"sqid": created["sqid"], "title": "Renamed via MCP", "tags": ["x"]}

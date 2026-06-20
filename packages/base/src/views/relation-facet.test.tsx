@@ -48,30 +48,19 @@ describe("useRelationFacet", () => {
     });
     expect(result.current.filters).toEqual([
       {
-        id: "providerId:provider-anthropic",
+        id: "provider:provider-anthropic",
         label: "Anthropic",
         chipLabel: "Anthropic",
-        filter: { providerId: { exact: "provider-anthropic" } },
+        filter: { provider: { sqid: "provider-anthropic" } },
       },
       {
-        id: "providerId:provider-openai",
+        id: "provider:provider-openai",
         label: "OpenAI",
         chipLabel: "OpenAI",
-        filter: { providerId: { exact: "provider-openai" } },
+        filter: { provider: { sqid: "provider-openai" } },
       },
     ]);
-    expect(result.current.filterFields).toEqual([
-      {
-        id: "providerId",
-        field: "providerId",
-        label: "Provider",
-        type: "selection",
-        options: [
-          { value: "provider-anthropic", label: "Anthropic" },
-          { value: "provider-openai", label: "OpenAI" },
-        ],
-      },
-    ]);
+    expect(result.current.filterFields).toEqual([]);
     expect(result.current.groupOption).toEqual({
       id: "provider.name",
       label: "Provider",
@@ -96,7 +85,7 @@ describe("useRelationFacet", () => {
 
     expect(result.current.filters[0]).toMatchObject({
       id: "provider:provider-anthropic",
-      filter: { provider: { exact: "provider-anthropic" } },
+      filter: { provider: { sqid: "provider-anthropic" } },
     });
     expect(result.current.groupOption).toMatchObject({
       id: "provider.name",
@@ -108,7 +97,7 @@ describe("useRelationFacet", () => {
     });
   });
 
-  test("builds direct id preset filters without exposing custom filter fields", () => {
+  test("builds relation preset filters without exposing custom filter fields", () => {
     const { result } = renderHook(
       () => useRelationFacet("agents.InferenceModel", { field: "publisher" }),
       { wrapper: Metadata },
@@ -116,7 +105,7 @@ describe("useRelationFacet", () => {
 
     expect(result.current.filters[0]).toMatchObject({
       id: "publisher:provider-anthropic",
-      filter: { publisher: "provider-anthropic" },
+      filter: { publisher: { sqid: "provider-anthropic" } },
     });
     expect(result.current.filterFields).toEqual([]);
     expect(result.current.groupOption).toMatchObject({
@@ -192,8 +181,9 @@ const METADATA: SchemaFieldMetadata = {
           kind: "relation",
           relationTarget: "InferenceProviderType",
           relationFilter: {
-            field: "providerId",
+            field: "provider",
             mode: "lookup",
+            lookup: "sqid",
             aggregateKey: "providerId",
           },
         },
@@ -203,7 +193,8 @@ const METADATA: SchemaFieldMetadata = {
           relationTarget: "InferenceProviderType",
           relationFilter: {
             field: "publisher",
-            mode: "id",
+            mode: "lookup",
+            lookup: "sqid",
             aggregateKey: "publisher",
           },
         },
@@ -214,6 +205,7 @@ const METADATA: SchemaFieldMetadata = {
           relationFilter: {
             field: "ownerId",
             mode: "lookup",
+            lookup: "exact",
           },
         },
         name: { name: "name", kind: "scalar", scalar: "String" },

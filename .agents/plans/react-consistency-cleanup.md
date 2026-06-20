@@ -218,7 +218,7 @@ The exact anti-pattern the constitution names, in many places:
 ### T10. No-owner plumbing helpers duplicated across addons / SDK — ⊕⊕ `[code-dry, MED–HIGH]`
 Lift each to `@angee/sdk` (or a base lib):
 - `unknown → message` error helper (×5, both addons); `run()` busy-wrapper hook
-  (×3 action hooks); relay `global-id` codec (×2, storage+knowledge);
+  (×3 action hooks); raw public-id projection (storage+knowledge);
   `ActionResultData`/`IdVariables` redefined per addon; `titleCase` reimplemented
   as `titleLabel`/`stateLabel`; `pageSize={50}` restated at **14** sites (it *is*
   `DEFAULT_PAGE_SIZE`); ⌘K handler + `isTextEntryTarget` (×2); confirm/prompt

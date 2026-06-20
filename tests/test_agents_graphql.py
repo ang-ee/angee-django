@@ -24,7 +24,6 @@ from django.db import connection
 from django.test import RequestFactory
 from rebac import app_settings, system_context
 from rebac.roles import grant
-from strawberry import relay
 
 from angee.agents.context import render_view_context
 from angee.agents.mcp_verifier import resolve_actor
@@ -137,8 +136,8 @@ def test_agent_update_sets_many_to_many_skills(agents_console_tables: None) -> N
             }
             """,
             {
-                "id": _gid("AgentType", agent.sqid),
-                "skills": [_gid("SkillType", skill_a.sqid), _gid("SkillType", skill_b.sqid)],
+                "id": _public_id(agent.sqid),
+                "skills": [_public_id(skill_a.sqid), _public_id(skill_b.sqid)],
             },
             user=admin,
         )
@@ -153,7 +152,7 @@ def test_agent_update_sets_many_to_many_skills(agents_console_tables: None) -> N
         _execute(
             console,
             "mutation Clear($id: ID!) { updateAgent(data: {id: $id, skills: []}) { skills { name } } }",
-            {"id": _gid("AgentType", agent.sqid)},
+            {"id": _public_id(agent.sqid)},
             user=admin,
         )
     )
@@ -173,7 +172,7 @@ def test_agent_update_is_platform_admin_gated(agents_console_tables: None) -> No
           updateAgent(data: {id: $id, name: "Renamed"}) { name }
         }
     """
-    agent_id = _gid("AgentType", agent.sqid)
+    agent_id = _public_id(agent.sqid)
 
     assert _execute(console := _schema(), update, {"id": agent_id}, user=plain).errors is not None
     renamed = _data(_execute(console, update, {"id": agent_id}, user=admin))["updateAgent"]
@@ -186,7 +185,7 @@ def test_refresh_provider_models_is_admin_gated(agents_console_tables: None) -> 
     admin = _platform_admin("agt-refresh-admin")
     plain = User.objects.create_user(username="agt-refresh-plain", email="plain@example.com")
     provider = _provider("agt-refresh", name="P")
-    provider_id = _gid("InferenceProviderType", provider.sqid)
+    provider_id = _public_id(provider.sqid)
     query = "mutation($id: ID!){ refreshProviderModels(id: $id){ ok message } }"
 
     assert _execute(console := _schema(), query, {"id": provider_id}, user=plain).errors is not None
@@ -194,8 +193,8 @@ def test_refresh_provider_models_is_admin_gated(agents_console_tables: None) -> 
     assert result["ok"] is True
 
 
-def test_inference_models_query_accepts_provider_id_filter(agents_console_tables: None) -> None:
-    """The model catalogue list supports toolbar provider facet filters."""
+def test_inference_models_query_accepts_provider_sqid_filter(agents_console_tables: None) -> None:
+    """The model catalogue list supports native provider relation filters."""
 
     admin = _platform_admin("agt-model-filter-admin")
     provider_a = _provider("agt-model-filter-a", name="Anthropic")
@@ -210,7 +209,7 @@ def test_inference_models_query_accepts_provider_id_filter(agents_console_tables
             _schema(),
             """
             query ModelsForProvider($provider: ID!) {
-              inferenceModels(filters: {providerId: {exact: $provider}}, order: {name: ASC}) {
+              inferenceModels(filters: {provider: {sqid: $provider}}, order: {name: ASC}) {
                 totalCount
                 results {
                   name
@@ -219,7 +218,7 @@ def test_inference_models_query_accepts_provider_id_filter(agents_console_tables
               }
             }
             """,
-            {"provider": _gid("InferenceProviderType", provider_a.sqid)},
+            {"provider": _public_id(provider_a.sqid)},
             user=admin,
         )
     )["inferenceModels"]
@@ -282,8 +281,8 @@ def test_inference_model_groups_aggregate_runs_for_provider_and_capability(
         {"key": {"modelUse": "EMBEDDING"}, "count": 1, "filter": {"modelUse": {"exact": "EMBEDDING"}}},
     ]
     assert grouped["byProvider"]["totalCount"] == 2
-    provider_filters = {row["filter"]["provider"]["pk"] for row in grouped["byProvider"]["results"]}
-    assert provider_filters == {provider_a.pk, provider_b.pk}
+    provider_filters = {row["filter"]["provider"]["sqid"] for row in grouped["byProvider"]["results"]}
+    assert provider_filters == {provider_a.sqid, provider_b.sqid}
 
 
 def test_create_inference_provider_creates_child_row(agents_console_tables: None) -> None:
@@ -318,8 +317,8 @@ def test_create_inference_provider_creates_child_row(agents_console_tables: None
             console,
             mutation,
             {
-                "vendor": _gid("VendorType", seed.vendor.sqid),
-                "owner": relay.to_base64("UserType", str(seed.owner.pk)),
+                "vendor": _public_id(seed.vendor.sqid),
+                "owner": str(seed.owner.pk),
             },
             user=admin,
         )
@@ -366,7 +365,7 @@ def test_update_inference_provider_backend_rematerializes_defaults(agents_consol
         _execute(
             _schema(),
             mutation,
-            {"id": _gid("InferenceProviderType", provider.sqid)},
+            {"id": _public_id(provider.sqid)},
             user=admin,
         )
     )["updateInferenceProvider"]
@@ -386,7 +385,7 @@ def test_connect_inference_provider_uses_provider_backend_oauth_client(agents_co
 
     del agents_console_tables
     provider = _provider("agt-provider-connect", backend_class="anthropic", name="Anthropic")
-    provider_id = _gid("InferenceProviderType", provider.sqid)
+    provider_id = _public_id(provider.sqid)
     with system_context(reason="test.agents.provider_connect.seed"):
         oauth_client = OAuthClient.objects.create(
             slug="anthropic-personal",
@@ -478,7 +477,7 @@ def test_provision_agent_renders_via_daemon_and_is_admin_gated(agents_console_ta
             workspace_template=workspace_template,
             service_template=service_template,
         )
-    agent_id = _gid("AgentType", agent.sqid)
+    agent_id = _public_id(agent.sqid)
 
     calls: list[tuple[Any, ...]] = []
 
@@ -587,7 +586,7 @@ def test_provision_agent_failure_tears_down_workspace_and_records_error(
                 source=source, kind="service", name="claude-code", path="services/claude-code"
             ),
         )
-    agent_id = _gid("AgentType", agent.sqid)
+    agent_id = _public_id(agent.sqid)
 
     destroyed: list[str] = []
     recorded: list[tuple[str, str]] = []
@@ -648,7 +647,7 @@ def test_deprovision_agent_treats_missing_operator_instances_as_gone(
         runtime_status="error",
         last_error='Teardown failed: operator POST destroy: HTTP 404: service "svc-gone" is not declared',
     )
-    agent_id = _gid("AgentType", agent.sqid)
+    agent_id = _public_id(agent.sqid)
     calls: list[tuple[str, str]] = []
 
     class _MissingDaemon:
@@ -701,7 +700,7 @@ def test_provision_agent_records_error_when_plan_resolution_fails(
 
     admin = _platform_admin("agt-planfail-admin")
     agent = _provisionable_agent(admin, "PlanFail", slug="agt-planfail-tpl")
-    agent_id = _gid("AgentType", agent.sqid)
+    agent_id = _public_id(agent.sqid)
 
     def _boom(_agent: Any) -> Any:
         raise RuntimeError("credential is unreadable")
@@ -738,7 +737,7 @@ def test_reprovision_agent_recreates_service_over_existing_workspace(
         admin, "Rebot", slug="agt-reprov-tpl", workspace="ws-keep", service="svc-old",
         lifecycle="ready", runtime_status="running",
     )
-    agent_id = _gid("AgentType", agent.sqid)
+    agent_id = _public_id(agent.sqid)
 
     calls: list[tuple[Any, ...]] = []
 
@@ -796,7 +795,7 @@ def test_reprovision_agent_failure_clears_destroyed_service_but_keeps_workspace(
         admin, "ReDoomed", slug="agt-reprovfail-tpl", workspace="ws-keep", service="svc-old",
         lifecycle="ready", runtime_status="running",
     )
-    agent_id = _gid("AgentType", agent.sqid)
+    agent_id = _public_id(agent.sqid)
 
     destroyed: list[str] = []
 
@@ -859,7 +858,7 @@ def test_provision_agent_refuses_when_inference_credential_has_no_secret(
             name="claude-opus-4-8",
         )
     agent = _provisionable_agent(admin, "NoKey", slug="agt-nokey-tpl", model=model)
-    agent_id = _gid("AgentType", agent.sqid)
+    agent_id = _public_id(agent.sqid)
 
     called: list[str] = []
 
@@ -942,7 +941,7 @@ def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(
         agent = Agent.objects.create(name="Chatty", owner=admin, service="svc-chat", model=model)
         server = MCPServer.objects.create(name="notes", url="http://host.docker.internal:8101/mcp/notes/")
         agent.mcp_servers.add(server)
-    agent_id = _gid("AgentType", agent.sqid)
+    agent_id = _public_id(agent.sqid)
 
     minted: list[tuple[str, str, str]] = []
 
@@ -991,7 +990,7 @@ def test_agent_chat_endpoint_errors_when_agent_not_running(agents_console_tables
     result = _execute(
         _schema(),
         "mutation($id: ID!){ agentChatEndpoint(id: $id){ url } }",
-        {"id": _gid("AgentType", agent.sqid)},
+        {"id": _public_id(agent.sqid)},
         user=admin,
     )
     assert result.errors is not None
@@ -1066,7 +1065,7 @@ def test_render_agent_prompt_builds_system_context_and_is_admin_gated(
     with system_context(reason="test.agents.prompt.seed"):
         agent = Agent.objects.create(name="Prompted", owner=admin)
         server = MCPServer.objects.create(name="Local Notes", url="http://x/mcp/notes/")
-    agent_id = _gid("AgentType", agent.sqid)
+    agent_id = _public_id(agent.sqid)
     mutation = """
         mutation Prompt($id: ID!, $view: JSON!) { renderAgentPrompt(id: $id, view: $view) }
     """
@@ -1301,8 +1300,7 @@ def _platform_admin(username: str) -> Any:
     return admin
 
 
-def _gid(typename: str, sqid: str) -> str:
-    """Return the relay global id for a console node."""
+def _public_id(sqid: str) -> str:
+    """Return the public id for a console node."""
 
-    with system_context(reason="test.agents.global_id"):
-        return relay.to_base64(typename, sqid)
+    return str(sqid)

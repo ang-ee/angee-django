@@ -45,7 +45,7 @@ deps to the relevant `package.json` and `mcp` to `pyproject.toml`; refresh lockf
 **`addons/angee/agents/schema.py`** — new type + resolver on the agents schema:
 - `@strawberry.type AgentChatEndpoint { url: str; token: str; expires_at: str; mcp_servers: JSON }`.
 - Add to the agents **query** class (gated like other admin/owner reads):
-  `agent_chat_endpoint(self, info, id: relay.GlobalID) -> AgentChatEndpoint`.
+  `agent_chat_endpoint(self, info, id: PublicID) -> AgentChatEndpoint`.
   - Resolve the agent (REBAC-scoped). If `not agent.service`: raise a typed error
     ("agent is not running"). 
   - `daemon = OperatorDaemon.from_settings()`; `ep = daemon.service_endpoint(agent.service)`;
@@ -114,7 +114,7 @@ capped, with a pointer to the MCP tools. Tested in `tests/test_agents_graphql.py
 
 ## Step 3 (original spec) — Context resolver (agents base)
 
-`render_agent_prompt(self, info, id: relay.GlobalID, view: JSON) -> str` — build a
+`render_agent_prompt(self, info, id: PublicID, view: JSON) -> str` — build a
 `<system_context>…</system_context>` text block from a **view envelope**
 (`{kind: record|list|dashboard, type: "<app>/<model>", sqid?, sqids?, params?}`): the
 view metadata + short previews of the selected rows (sudo read, cap ~20), and an instruction

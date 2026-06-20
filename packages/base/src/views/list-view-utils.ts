@@ -358,17 +358,20 @@ function isFacetFilter(
   value: unknown,
   options: readonly DataToolbarFilterOption[],
 ): boolean {
-  if (operator !== "exact" && operator !== "inList") return false;
   const facets = options
     .map((option) => Filter.facetFromFilter(option.filter))
     .filter((facet): facet is FilterFacet => facet !== null)
     .filter((facet) => facet.field === field);
   if (facets.length === 0) return false;
-  if (operator === "exact") {
-    return facets.some((facet) => facet.value === value);
+  if (operator === "inList") {
+    return Array.isArray(value)
+      && value.every((item) => facets.some((facet) => facet.value === item));
   }
-  return Array.isArray(value)
-    && value.every((item) => facets.some((facet) => facet.value === item));
+  const operatorFacets = facets.filter(
+    (facet) => (facet.lookup ?? "exact") === operator,
+  );
+  if (operatorFacets.length === 0) return false;
+  return operatorFacets.some((facet) => facet.value === value);
 }
 
 function customFilterChipLabel({

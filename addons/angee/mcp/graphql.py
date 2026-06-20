@@ -11,8 +11,7 @@ schema, response projection, and operation document, then registers a FastMCP to
 :meth:`_CompiledTool.run` executes the operation through :func:`execute_under_actor`.
 
 Boundary conventions (the agent surface differs from the GraphQL wire):
-- ids are the public ``sqid``; the GlobalID's node id *is* the sqid, so the boundary is a
-  pure ``relay`` base64 encode/decode (a GraphQL ``id`` arg/field is exposed as ``sqid``).
+- ids are the public ``sqid``; a GraphQL ``id`` arg/field is exposed as ``sqid``.
 - field names are ``snake_case`` for the agent, ``camelCase`` on the wire.
 - a single input object (``createNote(data:)``) is flattened to top-level tool args.
 - an offset-paginated list exposes ``limit`` → ``pagination.limit`` and projects ``results``.
@@ -37,7 +36,6 @@ from graphql import (
     GraphQLScalarType,
     Undefined,
 )
-from strawberry.relay import from_base64, to_base64
 from strawberry.utils.str_converters import to_camel_case, to_snake_case
 
 from angee.graphql.schema import GraphQLSchemas
@@ -122,10 +120,10 @@ class GraphQLTool:
 
     ``operation`` is the root field name in the ``schema`` bucket; ``name`` is the MCP
     tool name. ``fields`` is the response projection in snake_case (``sqid`` selects the
-    node's GlobalID and decodes it). The compiler derives the input schema and document
+    node's public id). The compiler derives the input schema and document
     from introspection; the hints below name the one input arg the tool drives:
     ``flatten`` lifts an input object's fields to top-level args, ``id_arg`` exposes a
-    scalar GraphQL id arg as ``sqid``, ``limit_arg`` maps a top-level int to
+        scalar GraphQL id arg as ``sqid``, ``limit_arg`` maps a top-level int to
     ``pagination.limit`` for an offset-paginated list, and ``fixed`` injects constant
     GraphQL arguments the agent never sees (e.g. ``confirm`` on a delete).
     """
@@ -179,7 +177,7 @@ class _CompiledTool(Tool):
         return ToolResult(structured_content=self._project(payload))
 
     def _variables(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Map agent args to GraphQL variables: limit→pagination, sqid→GlobalID, flatten."""
+        """Map agent args to GraphQL variables: limit→pagination, sqid→ID, flatten."""
 
         args = dict(arguments)
         sqid = args.pop("sqid", None)
@@ -187,23 +185,21 @@ class _CompiledTool(Tool):
         if self.limit_arg and self.limit_arg in args:
             variables["pagination"] = {"limit": args.pop(self.limit_arg)}
         if self.id_arg and sqid is not None:
-            variables[self.id_arg] = to_base64(self.node_type, str(sqid))
+            variables[self.id_arg] = str(sqid)
         if self.flatten_arg:
             obj: dict[str, Any] = {to_camel_case(key): value for key, value in args.items()}
             if sqid is not None:
-                obj["id"] = to_base64(self.node_type, str(sqid))
+                obj["id"] = str(sqid)
             variables[self.flatten_arg] = obj
         variables.update(self.fixed)
         return variables
 
     def _project(self, row: dict[str, Any]) -> dict[str, Any]:
-        """Project one GraphQL node into the agent shape (snake keys, GlobalID→sqid)."""
+        """Project one GraphQL node into the agent shape (snake keys, id→sqid)."""
 
         out: dict[str, Any] = {}
         for key, wire, is_id in self.leaves:
             value = row.get(wire)
-            if is_id and isinstance(value, str):
-                value = from_base64(value)[1]
             out[key] = value
         return out
 

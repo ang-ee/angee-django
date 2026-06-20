@@ -5,7 +5,7 @@
 # shapes strawberry-django emits, so a document valid here is valid against a real
 # runtime endpoint:
 #
-#  - standard relay node ids (`id: ID!`) and a `Node` interface;
+#  - public node ids (`id: ID!`) and a `Node` interface;
 #  - offset pagination (`totalCount`, `results`, `pageInfo { offset limit }`) read
 #    with `pagination: { offset, limit }`, so the client owns "page N of M";
 #  - a `@oneOf` order input over an `Ordering` enum, and lookup-object filters;
@@ -26,9 +26,9 @@ scalar JSON
 
 scalar BigInt
 
-"""An object with a Globally Unique ID"""
+"""An object with a public ID"""
 interface Node {
-  """The Globally Unique ID of this object"""
+  """The public ID of this object"""
   id: ID!
 }
 
@@ -258,6 +258,11 @@ type Viewer implements Node {
   isStaff: Boolean!
   isActive: Boolean!
   preferences: JSON!
+}
+
+type IAMRoleType {
+  id: ID!
+  namespace: String!
 }
 
 type LoginPayload {

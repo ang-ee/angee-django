@@ -45,7 +45,7 @@ const PAGE_MODEL = "knowledge.Page";
 // client-side so the navigator and reader share one fetch.
 const KNOWLEDGE_LIST_LIMIT = 500;
 
-/** Reader route for one page — its relay id, percent-encoded into the path. */
+/** Reader route for one page: its public id, percent-encoded into the path. */
 function pageDetailPath(id: string): string {
   return `/knowledge/${encodeURIComponent(id)}`;
 }

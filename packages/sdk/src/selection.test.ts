@@ -5,8 +5,7 @@ import {
   clampPageSize,
   MAX_PAGE_SIZE,
   printSelection,
-  relayGlobalIdSuffix,
-  toRelayGlobalId,
+  publicIdLabel,
   typeNameForModel,
 } from "./selection";
 
@@ -73,17 +72,14 @@ describe("model naming", () => {
 
 });
 
-describe("relay global id", () => {
-  test("relayGlobalIdSuffix decodes the public id encoded by toRelayGlobalId", () => {
-    expect(relayGlobalIdSuffix(toRelayGlobalId("DriveType", "drv_123"))).toBe(
-      "drv_123",
-    );
+describe("public id helpers", () => {
+  test("publicIdLabel returns the raw public id", () => {
+    expect(publicIdLabel("drv_123")).toBe("drv_123");
   });
 
-  test("relayGlobalIdSuffix returns null for a non-global-id value", () => {
-    expect(relayGlobalIdSuffix("plain-id")).toBeNull();
-    expect(relayGlobalIdSuffix(btoa("nocolon"))).toBeNull();
-    expect(relayGlobalIdSuffix(btoa("9Type:x"))).toBeNull();
+  test("publicIdLabel returns null for a blank id", () => {
+    expect(publicIdLabel("plain-id")).toBe("plain-id");
+    expect(publicIdLabel("  ")).toBeNull();
   });
 });
 

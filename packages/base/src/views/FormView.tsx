@@ -2,7 +2,7 @@ import * as React from "react";
 import { useForm, useStore } from "@tanstack/react-form";
 import { useBlocker } from "@tanstack/react-router";
 import {
-  relayGlobalIdSuffix,
+  publicIdLabel,
   useFormOverride,
   useResourceMutation,
   useResourceRecord,
@@ -1610,13 +1610,9 @@ function presentValue(value: unknown): unknown | undefined {
   return value;
 }
 
-/**
- * Prefer the human-facing public id in the subtitle. A relay global id encodes
- * `Type:publicId`, so the relay codec decodes it to that suffix (e.g. the sqid);
- * otherwise fall back to a short slice of whatever identifier the record carries.
- */
+/** Prefer the human-facing public id in the subtitle. */
 function recordIdLabel(value: string): string {
-  return relayGlobalIdSuffix(value) ?? shortRecordId(value);
+  return publicIdLabel(value) ?? shortRecordId(value);
 }
 
 function shortRecordId(value: string): string {

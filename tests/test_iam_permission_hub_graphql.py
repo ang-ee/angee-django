@@ -16,7 +16,6 @@ from rebac import ObjectRef, app_settings, system_context
 from rebac.actors import to_subject_ref
 from rebac.models import active_relationship_model
 from rebac.roles import ROLE_RELATION, grant
-from strawberry import relay
 
 from tests.conftest import _create_missing_tables as _create_connection_tables
 from tests.conftest import addon_schema, execute_schema
@@ -24,7 +23,6 @@ from tests.conftest import result_data as _data
 
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
-integrate_schema = importlib.import_module("angee.integrate.schema")
 
 
 def test_permission_hub_queries_are_admin_only(
@@ -365,10 +363,10 @@ def test_grant_role_then_revoke_role_writes_and_removes_role_tuple(
     assert not _role_membership_exists(target, variables["role"])
 
 
-def test_grant_role_accepts_user_relay_global_id(
+def test_grant_role_accepts_user_public_id(
     iam_permission_hub_tables: None,
 ) -> None:
-    """The grant mutation accepts the relay global id exposed by UserType.id."""
+    """The grant mutation accepts the public id exposed by UserType.id."""
 
     admin = _platform_admin("hub-relay-admin")
     target = User.objects.create_user(
@@ -378,7 +376,7 @@ def test_grant_role_accepts_user_relay_global_id(
     console_schema = _schema("console")
     node_id = str(getattr(target, "sqid", target.pk))
     variables = {
-        "principalId": relay.to_base64(iam_schema.UserType, node_id),
+        "principalId": node_id,
         "role": "angee/role:relay_writer",
     }
 
@@ -415,10 +413,10 @@ def test_grant_role_accepts_user_relay_global_id(
     assert not _role_membership_exists(target, variables["role"])
 
 
-def test_grant_role_ignores_non_user_relay_global_id(
+def test_grant_role_rejects_encoded_relay_id(
     iam_permission_hub_tables: None,
 ) -> None:
-    """A non-user relay global id is handled as a raw principal id."""
+    """Encoded Relay IDs are not accepted as public principal IDs."""
 
     admin = _platform_admin("hub-relay-guard-admin")
     target = User.objects.create_user(
@@ -435,10 +433,7 @@ def test_grant_role_ignores_non_user_relay_global_id(
         }
         """,
         {
-            "principalId": relay.to_base64(
-                integrate_schema.OAuthClientType,
-                str(getattr(target, "sqid", target.pk)),
-            ),
+            "principalId": f"OAuthClientType:{getattr(target, 'sqid', target.pk)}",
             "role": role,
         },
         user=admin,

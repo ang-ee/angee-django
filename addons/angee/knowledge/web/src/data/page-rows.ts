@@ -1,7 +1,5 @@
 import type { DndPayload } from "@angee/base";
-import { relationRelayGlobalId, toRelayGlobalId } from "@angee/sdk";
 
-import { PAGE_TYPE, VAULT_TYPE } from "../lib/global-id";
 import type { KnowledgePageRow } from "./documents";
 
 // The browser fetches every vault/page once and scopes client-side, so this
@@ -19,7 +17,7 @@ export interface KnowledgeTreeRow extends Record<string, unknown> {
 /** Dnd payload kind for a dragged page; tree nodes accept it to reparent. */
 export const KNOWLEDGE_PAGE_DND = "knowledge.page";
 
-/** The body of a dragged-page payload — the page's relay GlobalID. */
+/** The body of a dragged-page payload: the page's public id. */
 export interface PageDragData {
   id: string;
 }
@@ -49,13 +47,13 @@ export function pageTreeRows(
   vaultId: string,
 ): KnowledgeTreeRow[] {
   return pages
-    .filter((page) => toRelayGlobalId(VAULT_TYPE, page.vault) === vaultId)
+    .filter((page) => page.vault === vaultId)
     .slice()
     .sort(comparePages)
     .map((page) => ({
       id: page.id,
       title: page.title,
-      parent: relationRelayGlobalId(PAGE_TYPE, page.parent) ?? "",
+      parent: page.parent ?? "",
       icon: pageIcon(page.kind),
     }));
 }
@@ -77,7 +75,7 @@ export function pageIdByTitle(
   const wanted = title.trim().toLowerCase();
   const match = pages.find(
     (page) =>
-      toRelayGlobalId(VAULT_TYPE, page.vault) === vaultId &&
+      page.vault === vaultId &&
       page.title.trim().toLowerCase() === wanted,
   );
   return match?.id ?? null;
@@ -106,7 +104,7 @@ export function isSelfOrAncestor(
   const seen = new Set<string>();
   let current = byId.get(nodeId);
   while (current) {
-    const parentId = relationRelayGlobalId(PAGE_TYPE, current.parent);
+    const parentId = current.parent;
     if (!parentId || seen.has(parentId)) return false;
     if (parentId === ancestorId) return true;
     seen.add(parentId);

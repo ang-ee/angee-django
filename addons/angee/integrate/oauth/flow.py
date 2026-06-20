@@ -111,13 +111,13 @@ def enabled_oauth_client(oauth_client_sqid: str) -> Any:
 
 
 def oauth_client_from_id(oauth_client_id: Any) -> Any:
-    """Return the OAuth client addressed by one GraphQL global id, or raise."""
+    """Return the OAuth client addressed by one GraphQL public id, or raise."""
 
     model = _oauth_client_model()
     with system_context(reason="integrate.graphql.oauth_client.lookup"):
         oauth_client = instance_from_public_id(
             model,
-            oauth_client_id.node_id,
+            str(oauth_client_id),
             queryset=model._default_manager.all(),
         )
     if oauth_client is None:
@@ -126,7 +126,7 @@ def oauth_client_from_id(oauth_client_id: Any) -> Any:
 
 
 def enabled_oauth_client_from_id(oauth_client_id: Any) -> Any:
-    """Return one enabled OAuth client addressed by a Relay id, or raise."""
+    """Return one enabled OAuth client addressed by a public id, or raise."""
 
     oauth_client = oauth_client_from_id(oauth_client_id)
     if not oauth_client.is_enabled:

@@ -121,7 +121,7 @@ export interface AngeeUrqlClientOptions {
   sdl?: string;
   /** WebSocket endpoint; derived from `url` when omitted. */
   wsEndpoint?: string;
-  /** Schema-derived graphcache keying + relay resolvers. */
+  /** Schema-derived graphcache keying + connection resolvers. */
   cache?: CacheConfig;
   /**
    * Transport auth strategy; defaults to {@link sessionAuth} (Django cookie +
@@ -144,7 +144,7 @@ export interface AngeeUrqlClientOptions {
  * Build the urql client for one named schema: a configured normalized cache, a
  * graphql-ws subscription transport, and an HTTP transport authed by `auth`
  * (the Django session cookie + CSRF header by default). The cache must be
- * configured (keys + relay resolvers) for normalized reads and pagination to
+ * configured (keys + connection resolvers) for normalized reads and pagination to
  * work.
  */
 export function createUrqlClient(options: AngeeUrqlClientOptions): Client {

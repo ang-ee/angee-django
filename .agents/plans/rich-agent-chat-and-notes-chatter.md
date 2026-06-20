@@ -156,7 +156,7 @@ RUNNING-preferred, returns a token + mcpServers, `None` when no running agent).
 
 New `addons/angee/agents/web/src/views/AgentChatterPane.tsx`: the chatter-bound entry
 (mirrors p1's `AgentChatter`). Props: the current view `{model, recordId}` from the chatter
-host. It builds the envelope `{kind:"record", type: model, sqid: fromRelayGlobalId(recordId)}`,
+host. It builds the envelope `{kind:"record", type: model, sqid: recordId}`,
 calls `resolveSessionForView(view)`, and renders the Track-1 `AgentChat` against the
 returned session — or an empty/CTA state (`useAgentsT`) when the mutation returns `None`.
 

@@ -12,6 +12,7 @@ import type { ReactElement } from "react";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { parseFlatSearch, stringifyFlatSearch } from "../createApp";
+import { DataViewProvider } from "./data-view-context";
 import { RowsListView } from "./RowsListView";
 import type { ListColumn } from "./ListInternals";
 
@@ -21,6 +22,10 @@ interface Item extends Record<string, unknown> {
   id: string;
   name: string;
   region: string;
+  provider?: {
+    id: string;
+    name: string;
+  };
 }
 
 const ROWS: Item[] = [
@@ -82,5 +87,34 @@ describe("RowsListView grouping", () => {
     fireEvent.click(east as HTMLElement);
     expect(east?.getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByText("Alpha")).toBeNull();
+  });
+});
+
+describe("RowsListView filters", () => {
+  test("matches relation public-id lookup filters against local row objects", async () => {
+    renderInRouter(
+      <DataViewProvider initialState={{ filter: { provider: { sqid: "ipr_anthropic" } } }}>
+        <RowsListView<Item>
+          rows={[
+            {
+              id: "1",
+              name: "Claude",
+              region: "West",
+              provider: { id: "ipr_anthropic", name: "Anthropic" },
+            },
+            {
+              id: "2",
+              name: "GPT",
+              region: "West",
+              provider: { id: "ipr_openai", name: "OpenAI" },
+            },
+          ]}
+          columns={columns}
+        />
+      </DataViewProvider>,
+    );
+
+    expect(await screen.findByText("Claude")).toBeTruthy();
+    expect(screen.queryByText("GPT")).toBeNull();
   });
 });

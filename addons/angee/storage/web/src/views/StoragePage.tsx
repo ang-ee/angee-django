@@ -43,7 +43,7 @@ import { NewFolderControl } from "./NewFolderControl";
 import { SelectedFolderControl } from "./SelectedFolderControl";
 import { useStorageT } from "../i18n";
 
-/** Detail route for one file row — its relay id, percent-encoded into the path. */
+/** Detail route for one file row: its public id, percent-encoded into the path. */
 function fileDetailPath(id: string): string {
   return `/storage/${encodeURIComponent(id)}`;
 }

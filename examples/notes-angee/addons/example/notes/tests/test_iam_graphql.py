@@ -81,7 +81,7 @@ class IAMGraphQLTests(TransactionTestCase):
         anonymous_again = self.graphql("query { currentUser { username } }")
         self.assertEqual(anonymous_again["data"], {"currentUser": None})
 
-    def test_notes_page_and_update_by_relay_id(self) -> None:
+    def test_notes_page_and_update_by_public_id(self) -> None:
         self.graphql(
             """
             mutation {
@@ -110,8 +110,8 @@ class IAMGraphQLTests(TransactionTestCase):
         notes = page["data"]["notes"]
         self.assertGreaterEqual(notes["totalCount"], 3)
         welcome = next(node for node in notes["results"] if node["title"] == "Welcome to Angee")
-        relay_id = welcome["id"]
-        self.assertNotEqual(relay_id, self.welcome.sqid)
+        public_id = welcome["id"]
+        self.assertEqual(public_id, self.welcome.sqid)
         self.assertIn("backend", welcome["tags"])
         self.assertGreater(welcome["wordCount"], 0)
 
@@ -121,29 +121,29 @@ class IAMGraphQLTests(TransactionTestCase):
               note(id: $id) { id title }
             }
             """,
-            {"id": relay_id},
+            {"id": public_id},
         )
         self.assertEqual(
             by_id["data"]["note"],
-            {"id": relay_id, "title": "Welcome to Angee"},
+            {"id": public_id, "title": "Welcome to Angee"},
         )
 
         updated = self.graphql(
             """
             mutation UpdateNote($id: ID!) {
               updateNote(
-                data: {id: $id, title: "Welcome through Relay"}
+                data: {id: $id, title: "Welcome through Public ID"}
               ) {
                 id
                 title
               }
             }
             """,
-            {"id": relay_id},
+            {"id": public_id},
         )
         self.assertEqual(
             updated["data"]["updateNote"],
-            {"id": relay_id, "title": "Welcome through Relay"},
+            {"id": public_id, "title": "Welcome through Public ID"},
         )
 
     def test_note_can_have_in_review_status(self) -> None:
@@ -642,7 +642,7 @@ class IAMGraphQLTests(TransactionTestCase):
             {"Draft idea", "Bug triage notes", "1:1 agenda"},
         )
 
-        # bob's scope hides alice's note even when addressed by relay id.
+        # bob's scope hides alice's note even when addressed by public id.
         scoped_out = self.post(
             bob,
             "query NoteByID($id: ID!) { note(id: $id) { id } }",

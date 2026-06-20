@@ -10,12 +10,12 @@ import strawberry
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from rebac.errors import MissingActorError
-from strawberry import relay
 from strawberry.scalars import JSON
 
 from angee.base.mixins import RevisionMixin
 from angee.base.models import instance_from_public_id
 from angee.graphql.access import gated_read_fields
+from angee.graphql.ids import PublicID
 from angee.graphql.introspection import django_model, surface_name
 
 _SURFACE_CACHE: dict[tuple[type[models.Model], str], type] = {}
@@ -60,17 +60,17 @@ def revisions(
 def _revision_resolver(model: type[models.Model], revision_type: Any) -> Any:
     """Return a field resolver for one model's newest-first revisions."""
 
-    def resolve(id: relay.GlobalID, first: int = _REVISION_FIRST_DEFAULT) -> list[Any]:
+    def resolve(id: PublicID, first: int = _REVISION_FIRST_DEFAULT) -> list[Any]:
         """Return actor-visible revisions for one model instance."""
 
-        instance = _resolve_instance(model, id.node_id)
+        instance = _resolve_instance(model, str(id))
         if instance is None:
             return []
         versions = cast(Any, instance).revisions[:_revision_first(first)]
-        return [revision_type(version) for version in versions]
+        return [revision_type(instance, version) for version in versions]
 
     resolve.__annotations__ = {
-        "id": relay.GlobalID,
+        "id": PublicID,
         "first": int,
         "return": _list_annotation(revision_type),
     }
@@ -105,8 +105,8 @@ def _revision_type(model: type[models.Model], singular: str) -> Any:
     for field in fields:
         annotations[field.name] = _field_annotation(field)
 
-    def __init__(self: Any, version: Any) -> None:
-        self.id = strawberry.ID(str(version.pk))
+    def __init__(self: Any, instance: models.Model, version: Any) -> None:
+        self.id = strawberry.ID(f"{cast(Any, instance).public_id}.{version.pk}")
         self.created_at = cast(datetime, version.revision.date_created)
         self.comment = cast(str | None, version.revision.comment or None)
         field_dict = cast(dict[str, Any], version.field_dict)

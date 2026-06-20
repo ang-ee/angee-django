@@ -6,7 +6,6 @@ import pytest
 import strawberry
 import strawberry_django
 from django.db import connection, models
-from strawberry import relay
 
 from angee.graphql.crud import crud
 
@@ -93,7 +92,7 @@ def test_delete_note_dry_run_returns_tree_and_confirm_deletes() -> None:
               }
             }
             """,
-            variable_values={"id": relay.to_base64("NoteType", note.pk)},
+            variable_values={"id": str(note.pk)},
         )
 
         assert dry_run.errors is None
@@ -116,7 +115,7 @@ def test_delete_note_dry_run_returns_tree_and_confirm_deletes() -> None:
               }
             }
             """,
-            variable_values={"id": relay.to_base64("NoteType", note.pk)},
+            variable_values={"id": str(note.pk)},
         )
 
         assert default_preview.errors is None
@@ -132,7 +131,7 @@ def test_delete_note_dry_run_returns_tree_and_confirm_deletes() -> None:
               }
             }
             """,
-            variable_values={"id": relay.to_base64("NoteType", note.pk)},
+            variable_values={"id": str(note.pk)},
         )
 
         assert confirmed.errors is None

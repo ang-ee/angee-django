@@ -297,7 +297,7 @@ function rootFields(modelLabel: string): ModelRootFieldMetadata {
 }
 
 describe("assembleDetailDocument", () => {
-  test("queries the schema-declared detail field by relay id", () => {
+  test("queries the schema-declared detail field by public id", () => {
     const document = assembleDetailDocument("Sale", ["title", "state"], rootFields("Sale"));
     expect(document).toBe(
       "query saleLookup($id: ID!) { saleLookup(id: $id) { id title state } }",
@@ -307,7 +307,7 @@ describe("assembleDetailDocument", () => {
 });
 
 describe("assembleRevisionsDocument", () => {
-  test("queries the schema-declared revisions field by relay id", () => {
+  test("queries the schema-declared revisions field by public id", () => {
     const document = assembleRevisionsDocument(
       "Sale",
       ["createdAt", "comment", "title"],

@@ -17,7 +17,6 @@ import {
   type RecordTabDescriptor,
 } from "@angee/base";
 import {
-  fromRelayGlobalId,
   useActionMutation,
   useModelInvalidation,
   useResourceRecord,
@@ -33,8 +32,8 @@ import { type AgentChatView } from "../documents";
 const MODEL = "agents.Agent";
 
 // Just what the chat gate needs: a running, service-backed agent gets the chat panel.
-// (`sqid` is not a GraphQL field — the agent's public id is recovered from the relay
-// `id` for the view envelope; see below.)
+// (`sqid` is not a GraphQL field — the agent's public id is carried by `id` for
+// the view envelope; see below.)
 const CHAT_FIELDS = ["id", "runtimeStatus", "service"] as const;
 
 /** Read a string field off the boundary record (`Record<string, unknown>`), or "". */
@@ -98,7 +97,7 @@ function AgentChatPanel({ agentId }: { agentId: string }): React.ReactElement {
       </Card>
     );
   }
-  const view: AgentChatView = { kind: "record", type: "agents/agent", sqid: fromRelayGlobalId(agentId) };
+  const view: AgentChatView = { kind: "record", type: "agents/agent", sqid: agentId };
   return <AgentChat agentId={agentId} view={view} />;
 }
 

@@ -25,7 +25,7 @@ Reference prototype (read-only): `/Users/alexis/Work/angee/angee-django-p1`
 ## 0. Status ledger
 
 - ✅ **M1 — auth + REBAC↔GraphQL seams** (committed). `iam.User` (composed swappable,
-  label `iam`), `AngeeNode`/relay ids, universal REBAC extensions, denial codes
+  label `iam`), `AngeeNode`/public ids, universal REBAC extensions, denial codes
   (`UNAUTHENTICATED`/`PERMISSION_DENIED`), `login`/`logout`/`currentUser`, REBAC-scoped
   notes read-side + count aggregate, WS `noteChanged` gating, addon GraphQL in `schema.py`.
 - ✅ **M2 — one-boot compose + full SDL + dev stack** (committed). Emit-then-adopt (no
@@ -224,8 +224,8 @@ M1 adversarial review (verify against HEAD):
   the no-actor session/credential fetch (`get_user`/`aget_user` wrap `system_context`), or
   give `iam.User` a plain `BaseUserManager`. (Earlier review called the current narrow form
   "fine" — architect to confirm whether to keep or fix.)
-- **crud delete id surface** (`src/angee/base/graphql/crud.py`): delete takes a bare sqid while
-  `node`/`update` take relay `GlobalID` — unify (use `strawberry_django.mutations.delete`).
+- **crud delete id surface** (`src/angee/base/graphql/crud.py`): delete, detail, and update
+  now take raw public sqid IDs through the shared Angee GraphQL boundary.
 - **`_merge_root` copy.copy** (`src/angee/base/graphql/schema.py`): builds each named schema's
   root from per-schema surface **instances** instead of shallow-copying to undo relay's
   in-place field mutation.

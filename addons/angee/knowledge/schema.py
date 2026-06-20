@@ -7,14 +7,15 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.db.models import F, Q
+from django.db.models import F
 from rebac import system_context
-from strawberry import auto, relay
+from strawberry import auto
 from strawberry_django.pagination import OffsetPaginated
 
 from angee.base.models import instance_from_public_id, public_id_for
 from angee.graphql.crud import crud
-from angee.graphql.node import AngeeNode
+from angee.graphql.ids import PublicID
+from angee.graphql.node import AngeeNode, detail
 from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_display_label, user_public_id
@@ -182,7 +183,7 @@ class VaultInput:
 class VaultPatch:
     """Fields accepted when updating a vault."""
 
-    id: relay.GlobalID
+    id: PublicID
     name: str | None = strawberry.UNSET
     description: str | None = strawberry.UNSET
     icon: str | None = strawberry.UNSET
@@ -193,10 +194,10 @@ class VaultPatch:
 class PageInput:
     """Fields accepted when creating a page."""
 
-    vault: relay.GlobalID
+    vault: PublicID
     title: str
     kind: str = Page.Kind.NOTE
-    parent: relay.GlobalID | None = None
+    parent: PublicID | None = None
     icon: str = ""
 
 
@@ -204,13 +205,13 @@ class PageInput:
 class PagePatch:
     """Fields accepted when updating a page."""
 
-    id: relay.GlobalID
+    id: PublicID
     title: str | None = strawberry.UNSET
     kind: str | None = strawberry.UNSET
     icon: str | None = strawberry.UNSET
     # Reparent (move) within the vault — null lifts the page to the root. The
     # REBAC `parent->write` gate authorises the destination.
-    parent: relay.GlobalID | None = strawberry.UNSET
+    parent: PublicID | None = strawberry.UNSET
 
 
 @strawberry.type
@@ -244,15 +245,10 @@ class VaultOrder:
 class PageFilter:
     """Field lookups accepted when filtering the pages connection."""
 
+    vault: auto
     title: auto
     kind: auto
     updated_at: auto
-
-    @strawberry_django.filter_field
-    def vault(self, queryset: Any, value: relay.GlobalID, prefix: str) -> tuple[Any, Q]:
-        """Narrow pages to one vault addressed by its global id."""
-
-        return queryset, Q(**{f"{prefix}vault__sqid": value.node_id})
 
 
 @strawberry_django.order_type(Page)
@@ -273,12 +269,12 @@ class KnowledgeQuery:
         filters=VaultFilter,
         order=VaultOrder,
     )
-    vault: VaultType | None = strawberry_django.node()
+    vault: VaultType | None = detail(VaultType)
     pages: OffsetPaginated[PageType] = strawberry_django.offset_paginated(
         filters=PageFilter,
         order=PageOrder,
     )
-    page: PageType | None = strawberry_django.node()
+    page: PageType | None = detail(PageType)
 
 
 @strawberry.type
@@ -310,14 +306,14 @@ class KnowledgeMutation:
     def create_page(self, data: PageInput) -> PageType:
         """Create a page in a vault the requesting user can write."""
 
-        vault = instance_from_public_id(Vault, data.vault.node_id)
+        vault = instance_from_public_id(Vault, str(data.vault))
         if vault is None:
-            raise ValueError(f"Vault {data.vault.node_id!r} was not found")
+            raise ValueError(f"Vault {str(data.vault)!r} was not found")
         parent = None
         if data.parent is not None:
-            parent = instance_from_public_id(Page, data.parent.node_id)
+            parent = instance_from_public_id(Page, str(data.parent))
             if parent is None:
-                raise ValueError(f"Page {data.parent.node_id!r} was not found")
+                raise ValueError(f"Page {str(data.parent)!r} was not found")
         return cast(
             PageType,
             Page._default_manager.create_in(
@@ -332,15 +328,15 @@ class KnowledgeMutation:
     @strawberry.mutation
     def update_page_body(
         self,
-        page: relay.GlobalID,
+        page: PublicID,
         body: str,
         expected_hash: str | None = None,
     ) -> PageBodyPayload:
         """Write a page's markdown body, last-write-wins with a stale guard."""
 
-        target = instance_from_public_id(Page, page.node_id)
+        target = instance_from_public_id(Page, str(page))
         if target is None:
-            raise ValueError(f"Page {page.node_id!r} was not found")
+            raise ValueError(f"Page {str(page)!r} was not found")
         try:
             markdown = MarkdownPage._default_manager.write_body(
                 target,

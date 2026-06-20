@@ -22,9 +22,8 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
-from django.db.models import Q
 from rebac import current_actor, system_context
-from strawberry import auto, relay
+from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
@@ -35,9 +34,10 @@ from angee.base.mixins import actor_user_id
 from angee.graphql.actions import ActionResult, resolve_action_target
 from angee.graphql.aggregates import rebac_aggregate_builder
 from angee.graphql.crud import crud
-from angee.graphql.node import AngeeNode
+from angee.graphql.ids import PublicID
+from angee.graphql.node import AngeeNode, detail
 from angee.graphql.subscriptions import changes
-from angee.iam.identity import user_from_global_id as _user_from_global_id
+from angee.iam.identity import user_from_public_id as _user_from_public_id
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.schema import UserType
 from angee.integrate.oauth.errors import OAuthFlowError
@@ -211,7 +211,7 @@ class AgentSession:
     ``agentChatEndpoint``. A ``None`` result means the user has no running agent.
     """
 
-    agent_id: relay.GlobalID
+    agent_id: PublicID
     agent_name: str
     status: str
     model_handle: str
@@ -221,10 +221,10 @@ class AgentSession:
 class InferenceProviderInput:
     """Fields accepted when creating an inference provider."""
 
-    vendor: relay.GlobalID
-    owner: relay.GlobalID
-    credential: relay.GlobalID | None = None
-    account: relay.GlobalID | None = strawberry.UNSET
+    vendor: PublicID
+    owner: PublicID
+    credential: PublicID | None = None
+    account: PublicID | None = strawberry.UNSET
     backend_class: str | None = strawberry.UNSET
     status: str | None = strawberry.UNSET
     name: str = ""
@@ -239,11 +239,11 @@ class InferenceProviderInput:
 class InferenceProviderPatch:
     """Fields accepted when updating an inference provider."""
 
-    id: relay.GlobalID
-    vendor: relay.GlobalID | None = strawberry.UNSET
-    owner: relay.GlobalID | None = strawberry.UNSET
-    credential: relay.GlobalID | None = strawberry.UNSET
-    account: relay.GlobalID | None = strawberry.UNSET
+    id: PublicID
+    vendor: PublicID | None = strawberry.UNSET
+    owner: PublicID | None = strawberry.UNSET
+    credential: PublicID | None = strawberry.UNSET
+    account: PublicID | None = strawberry.UNSET
     backend_class: str | None = strawberry.UNSET
     status: str | None = strawberry.UNSET
     name: str | None = strawberry.UNSET
@@ -256,9 +256,9 @@ class InferenceProviderPatch:
 class InferenceModelInput:
     """Fields accepted when creating a catalogue model."""
 
-    provider: relay.GlobalID
+    provider: PublicID
     name: str
-    publisher: relay.GlobalID | None = None
+    publisher: PublicID | None = None
     display_name: str = ""
     description: str = ""
     model_use: str = "chat"
@@ -276,9 +276,9 @@ class InferenceModelInput:
 class InferenceModelPatch:
     """Fields accepted when updating a catalogue model."""
 
-    id: relay.GlobalID
+    id: PublicID
     name: str | None = strawberry.UNSET
-    publisher: relay.GlobalID | None = strawberry.UNSET
+    publisher: PublicID | None = strawberry.UNSET
     display_name: str | None = strawberry.UNSET
     description: str | None = strawberry.UNSET
     model_use: str | None = strawberry.UNSET
@@ -299,7 +299,7 @@ class MCPServerInput:
     placement: str = "external"
     transport: str = "http"
     url: str = ""
-    credential: relay.GlobalID | None = None
+    credential: PublicID | None = None
     config: JSON | None = strawberry.UNSET  # UNSET over the non-null column (see InferenceProviderInput).
 
 
@@ -307,13 +307,13 @@ class MCPServerInput:
 class MCPServerPatch:
     """Fields accepted when updating an MCP server."""
 
-    id: relay.GlobalID
+    id: PublicID
     name: str | None = strawberry.UNSET
     description: str | None = strawberry.UNSET
     placement: str | None = strawberry.UNSET
     transport: str | None = strawberry.UNSET
     url: str | None = strawberry.UNSET
-    credential: relay.GlobalID | None = strawberry.UNSET
+    credential: PublicID | None = strawberry.UNSET
     config: JSON | None = strawberry.UNSET
 
 
@@ -321,7 +321,7 @@ class MCPServerPatch:
 class MCPToolInput:
     """Fields accepted when creating an MCP tool."""
 
-    server: relay.GlobalID
+    server: PublicID
     name: str
     description: str = ""
     input_schema: JSON | None = strawberry.UNSET  # UNSET over the non-null column.
@@ -332,7 +332,7 @@ class MCPToolInput:
 class MCPToolPatch:
     """Fields accepted when updating an MCP tool."""
 
-    id: relay.GlobalID
+    id: PublicID
     name: str | None = strawberry.UNSET
     description: str | None = strawberry.UNSET
     input_schema: JSON | None = strawberry.UNSET
@@ -349,14 +349,14 @@ class AgentInput:
     """
 
     name: str
-    owner: relay.GlobalID
+    owner: PublicID
     description: str = ""
     is_template: bool = False
     instructions: str = ""
-    model: relay.GlobalID | None = None
-    inference_credential: relay.GlobalID | None = None
-    service_template: relay.GlobalID | None = None
-    workspace_template: relay.GlobalID | None = None
+    model: PublicID | None = None
+    inference_credential: PublicID | None = None
+    service_template: PublicID | None = None
+    workspace_template: PublicID | None = None
     # UNSET over non-null columns (see InferenceProviderInput); the nullable FKs above keep None.
     service_inputs: JSON | None = strawberry.UNSET
     workspace_inputs: JSON | None = strawberry.UNSET
@@ -368,18 +368,18 @@ class AgentInput:
 class AgentPatch:
     """Fields accepted when updating an agent."""
 
-    id: relay.GlobalID
+    id: PublicID
     name: str | None = strawberry.UNSET
     description: str | None = strawberry.UNSET
     is_template: bool | None = strawberry.UNSET
     instructions: str | None = strawberry.UNSET
-    model: relay.GlobalID | None = strawberry.UNSET
-    inference_credential: relay.GlobalID | None = strawberry.UNSET
-    skills: list[relay.GlobalID] | None = strawberry.UNSET
-    mcp_servers: list[relay.GlobalID] | None = strawberry.UNSET
-    mcp_tools: list[relay.GlobalID] | None = strawberry.UNSET
-    service_template: relay.GlobalID | None = strawberry.UNSET
-    workspace_template: relay.GlobalID | None = strawberry.UNSET
+    model: PublicID | None = strawberry.UNSET
+    inference_credential: PublicID | None = strawberry.UNSET
+    skills: list[PublicID] | None = strawberry.UNSET
+    mcp_servers: list[PublicID] | None = strawberry.UNSET
+    mcp_tools: list[PublicID] | None = strawberry.UNSET
+    service_template: PublicID | None = strawberry.UNSET
+    workspace_template: PublicID | None = strawberry.UNSET
     service_inputs: JSON | None = strawberry.UNSET
     workspace_inputs: JSON | None = strawberry.UNSET
     lifecycle: str | None = strawberry.UNSET
@@ -408,48 +408,17 @@ class AgentOrder:
     updated_at: auto
 
 
-@strawberry.input
-class IdLookup:
-    """Relay-id lookup shape used by toolbar facets over relation owners."""
-
-    exact: relay.GlobalID | None = strawberry.UNSET
-    in_list: list[relay.GlobalID] | None = strawberry.UNSET
-
-
-def id_lookup_q(prefix: str, field: str, value: IdLookup) -> Q:
-    """Return a Q object for a relay-id exact/in-list lookup."""
-
-    query = Q()
-    if value.exact not in (None, strawberry.UNSET):
-        query &= Q(**{f"{prefix}{field}": cast(relay.GlobalID, value.exact).node_id})
-    if value.in_list not in (None, strawberry.UNSET):
-        ids = [item.node_id for item in cast(list[relay.GlobalID], value.in_list)]
-        query &= Q(**{f"{prefix}{field}__in": ids})
-    return query
-
-
 @strawberry_django.filter_type(InferenceModel, lookups=True)
 class InferenceModelFilter:
     """Field lookups accepted when filtering the inference model catalogue."""
 
     provider: auto
+    publisher: auto
     name: auto
     display_name: auto
     model_use: auto
     is_default: auto
     status: auto
-
-    @strawberry_django.filter_field
-    def provider_id(self, queryset: Any, value: IdLookup, prefix: str) -> tuple[Any, Q]:
-        """Toolbar-friendly provider facet addressed by provider relay ids."""
-
-        return queryset, id_lookup_q(prefix, "provider__sqid", value)
-
-    @strawberry_django.filter_field
-    def publisher(self, queryset: Any, value: relay.GlobalID, prefix: str) -> tuple[Any, Q]:
-        """Narrow catalogue rows to one publisher vendor addressed by its relay id."""
-
-        return queryset, Q(**{f"{prefix}publisher__sqid": value.node_id})
 
 
 @strawberry_django.order_type(InferenceModel)
@@ -486,23 +455,24 @@ class AgentsConsoleQuery:
         order=AgentOrder,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
-    agent: AgentType | None = strawberry_django.node(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    agent: AgentType | None = detail(AgentType, permission_classes=_ADMIN_PERMISSION_CLASSES)
     skills: OffsetPaginated[SkillType] = strawberry_django.offset_paginated(
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
-    skill: SkillType | None = strawberry_django.node(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    skill: SkillType | None = detail(SkillType, permission_classes=_ADMIN_PERMISSION_CLASSES)
     mcp_servers: OffsetPaginated[MCPServerType] = strawberry_django.offset_paginated(
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
-    mcp_server: MCPServerType | None = strawberry_django.node(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    mcp_server: MCPServerType | None = detail(MCPServerType, permission_classes=_ADMIN_PERMISSION_CLASSES)
     mcp_tools: OffsetPaginated[MCPToolType] = strawberry_django.offset_paginated(
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
-    mcp_tool: MCPToolType | None = strawberry_django.node(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    mcp_tool: MCPToolType | None = detail(MCPToolType, permission_classes=_ADMIN_PERMISSION_CLASSES)
     inference_providers: OffsetPaginated[InferenceProviderType] = strawberry_django.offset_paginated(
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
-    inference_provider: InferenceProviderType | None = strawberry_django.node(
+    inference_provider: InferenceProviderType | None = detail(
+        InferenceProviderType,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
     inference_models: OffsetPaginated[InferenceModelType] = strawberry_django.offset_paginated(
@@ -510,7 +480,8 @@ class AgentsConsoleQuery:
         order=InferenceModelOrder,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
-    inference_model: InferenceModelType | None = strawberry_django.node(
+    inference_model: InferenceModelType | None = detail(
+        InferenceModelType,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
     inference_model_aggregate = _inference_model_aggregates.aggregate_field
@@ -557,7 +528,7 @@ class InferenceProviderCreateMutation:
             data.vendor,
             reason="agents.graphql.inference_provider.create.vendor",
         )
-        owner = _user_from_global_id(data.owner)
+        owner = _user_from_public_id(data.owner)
         credential = (
             None
             if data.credential is None
@@ -618,7 +589,7 @@ class InferenceProviderConnectMutation:
     def connect_inference_provider(
         self,
         info: strawberry.Info,
-        id: relay.GlobalID,
+        id: PublicID,
         redirect_uri: str = "",
         next: str = "/agents/providers",
     ) -> ConnectIntegrationResult:
@@ -665,7 +636,7 @@ class InferenceProviderUpdateMutation:
                 )
                 provided.add("vendor")
             if data.owner is not strawberry.UNSET:
-                provider.owner = _user_from_global_id(data.owner)
+                provider.owner = _user_from_public_id(data.owner)
                 provided.add("owner")
             if data.credential is not strawberry.UNSET:
                 provider.credential = (
@@ -824,7 +795,7 @@ class InferenceActionMutation:
     """Operational actions on an inference provider."""
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def refresh_provider_models(self, id: relay.GlobalID) -> ActionResult:
+    def refresh_provider_models(self, id: PublicID) -> ActionResult:
         """Re-list one provider's models into the catalogue now."""
 
         provider = resolve_action_target(InferenceProvider, id, reason="agents.graphql.refresh_provider_models")
@@ -949,7 +920,7 @@ class AgentActionMutation:
     """
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def provision_agent(self, id: relay.GlobalID) -> ActionResult:
+    def provision_agent(self, id: PublicID) -> ActionResult:
         """Render the agent into an operator workspace + service and record the instance.
 
         A render failure (including credential/plan resolution) records the reason and
@@ -1004,7 +975,7 @@ class AgentActionMutation:
         return ActionResult(ok=True, message=f"Provisioned “{result['service'] or result['workspace']}”.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def reprovision_agent(self, id: relay.GlobalID) -> ActionResult:
+    def reprovision_agent(self, id: PublicID) -> ActionResult:
         """Recreate the agent's service over its existing workspace, re-syncing secrets.
 
         Use after changing the agent's credential or config: a service resolves its
@@ -1061,7 +1032,7 @@ class AgentActionMutation:
         return ActionResult(ok=True, message=f"Recreated service “{new_service}”.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def agent_chat_endpoint(self, id: relay.GlobalID) -> AgentChatEndpoint:
+    def agent_chat_endpoint(self, id: PublicID) -> AgentChatEndpoint:
         """Mint the chat WebSocket endpoint + route token for a running agent.
 
         A mutation, not a query: each call mints a fresh, short-lived per-actor route
@@ -1097,14 +1068,14 @@ class AgentActionMutation:
             return None
         model = getattr(agent, "model", None)
         return AgentSession(
-            agent_id=relay.GlobalID(type_name="AgentType", node_id=str(agent.sqid)),
+            agent_id=PublicID(str(agent.sqid)),
             agent_name=str(agent.name),
             status=str(agent.runtime_status),
             model_handle=str(model) if model is not None else "",
         )
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def render_agent_prompt(self, id: relay.GlobalID, view: JSON) -> str:
+    def render_agent_prompt(self, id: PublicID, view: JSON) -> str:
         """Render the ``<system_context>`` block for an agent and the user's open view.
 
         ``view`` is the view envelope ``{kind, type: "<app>/<model>", sqid?, sqids?,
@@ -1118,7 +1089,7 @@ class AgentActionMutation:
         return render_view_context(dict(view) if isinstance(view, dict) else {})
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def deprovision_agent(self, id: relay.GlobalID) -> ActionResult:
+    def deprovision_agent(self, id: PublicID) -> ActionResult:
         """Tear down the agent's operator workspace and services, then clear the record.
 
         Also the reset for any stuck agent (stranded ``PROVISIONING``/``DEPROVISIONING``

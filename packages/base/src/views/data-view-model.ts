@@ -36,6 +36,12 @@ export const DATA_VIEW_LOOKUP_OPERATORS = [
 ] as const;
 export type DataViewLookupOperator =
   (typeof DATA_VIEW_LOOKUP_OPERATORS)[number];
+export const DATA_VIEW_RELATION_LOOKUP_OPERATORS = ["sqid", "pk"] as const;
+export type DataViewRelationLookupOperator =
+  (typeof DATA_VIEW_RELATION_LOOKUP_OPERATORS)[number];
+export type DataViewFacetLookupOperator =
+  | DataViewLookupOperator
+  | DataViewRelationLookupOperator;
 
 /** Whether a string is one of the supported lookup operators. */
 export function isLookupOperator(value: string): value is DataViewLookupOperator {
@@ -48,7 +54,7 @@ export type DataViewFilterValue =
   | DataViewLookup
   | DataViewFilter;
 export type DataViewLookup = {
-  [operator in DataViewLookupOperator]?: DataViewFilterValue;
+  [operator in DataViewFacetLookupOperator]?: DataViewFilterValue;
 };
 export type DataViewFilter = {
   [field: string]: DataViewFilterValue;
@@ -112,6 +118,7 @@ export interface FilterFacet {
   field: string;
   value: string;
   mode: "lookup" | "id";
+  lookup?: DataViewFacetLookupOperator;
 }
 
 export class Filter {
@@ -131,8 +138,19 @@ export class Filter {
     const [field, value] = entry;
     if (typeof value === "string") return { field, value, mode: "id" };
     const lookup = isDataViewLookup(value) ? value : null;
-    const exact = lookup?.exact;
-    return typeof exact === "string" ? { field, value: exact, mode: "lookup" } : null;
+    if (!lookup) return null;
+    for (const operator of ["sqid", "pk", "exact"] as const) {
+      const lookupValue = lookup[operator];
+      if (typeof lookupValue === "string") {
+        return { field, value: lookupValue, mode: "lookup", lookup: operator };
+      }
+    }
+    const [lookupValue] = Array.isArray(lookup.inList)
+      ? lookup.inList.filter((item): item is string => typeof item === "string")
+      : [];
+    return lookupValue
+      ? { field, value: lookupValue, mode: "lookup", lookup: "inList" }
+      : null;
   }
 
   hasEntries(): boolean {
@@ -147,6 +165,14 @@ export class Filter {
       return typeof value === "string" ? [value] : [];
     }
     const lookup = this.lookup(field);
+    if (typeof facet !== "string" && facet.lookup && facet.lookup !== "exact") {
+      const lookupValue = lookup?.[facet.lookup];
+      return Array.isArray(lookupValue)
+        ? lookupValue.filter((value): value is string => typeof value === "string")
+        : typeof lookupValue === "string"
+          ? [lookupValue]
+          : [];
+    }
     const exact = lookup?.exact;
     if (typeof exact === "string") return [exact];
     const inList = lookup?.inList;
@@ -161,6 +187,22 @@ export class Filter {
       const next = { ...this.value };
       if (current.includes(facet.value)) delete next[facet.field];
       else next[facet.field] = facet.value;
+      return next;
+    }
+    if (facet.lookup && facet.lookup !== "exact") {
+      const current = this.facetValues(facet);
+      const next = { ...this.value };
+      if (facet.lookup === "inList") {
+        const nextValues = current.includes(facet.value)
+          ? current.filter((value) => value !== facet.value)
+          : [...current, facet.value];
+        if (nextValues.length === 0) delete next[facet.field];
+        else next[facet.field] = { inList: nextValues };
+      } else if (current.includes(facet.value)) {
+        delete next[facet.field];
+      } else {
+        next[facet.field] = { [facet.lookup]: facet.value };
+      }
       return next;
     }
     const current = this.facetValues(facet);
@@ -612,8 +654,12 @@ function dataViewFilterFromUnknown(value: unknown): DataViewFilter | null {
 function isDataViewLookup(value: unknown): value is DataViewLookup {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   if (Object.getPrototypeOf(value) !== Object.prototype) return false;
-  const record = value as Partial<Record<DataViewLookupOperator, unknown>>;
-  return DATA_VIEW_LOOKUP_OPERATORS.some((operator) =>
+  const record = value as Partial<Record<DataViewFacetLookupOperator, unknown>>;
+  const operators = [
+    ...DATA_VIEW_LOOKUP_OPERATORS,
+    ...DATA_VIEW_RELATION_LOOKUP_OPERATORS,
+  ];
+  return operators.some((operator) =>
     Object.prototype.hasOwnProperty.call(record, operator),
   );
 }

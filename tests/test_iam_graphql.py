@@ -24,7 +24,6 @@ from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext, override_settings
 from rebac import app_settings, system_context
 from rebac.roles import grant
-from strawberry import relay
 
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.oauth import state
@@ -465,7 +464,7 @@ def test_connect_account_complete_surfaces_provider_error_message(
     oauth_client = _oauth_client("connect-anthropic", is_oidc=False)
     public_schema = _schema("public")
     request = _request(user)
-    oauth_client_id = relay.to_base64("OAuthClientType", oauth_client.sqid)
+    oauth_client_id = str(oauth_client.sqid)
     start = _data(
         _execute(
             public_schema,
@@ -639,7 +638,7 @@ def test_oauth_client_crud_sets_oidc_login_fields(
     plain = User.objects.create_user(username="oidc-crud-plain", email="plain@example.com")
     admin = _platform_admin("oidc-crud-admin")
     oauth_client = _oauth_client("refine-me", is_oidc=False)
-    oauth_client_id = relay.to_base64("OAuthClientType", oauth_client.sqid)
+    oauth_client_id = str(oauth_client.sqid)
     console_schema = _schema("console")
     update_oauth_client = """
         mutation UpdateOauthClient($id: ID!) {
@@ -750,7 +749,7 @@ def test_user_crud_create_update_delete_are_admin_only(
     with system_context(reason="test.iam.user_crud.create"):
         user = User.objects.get(username="console-user")
         assert user.check_password("first-secret")
-    user_id = _user_global_id(user)
+    user_id = _user_public_id(user)
 
     changed = _data(
         _execute(
@@ -878,7 +877,7 @@ def test_external_account_update_delete_are_admin_only(
         display_name="Before",
         status="active",
     )
-    account_id = relay.to_base64("ExternalAccountType", account.sqid)
+    account_id = str(account.sqid)
     console_schema = _schema("console")
     update_account = """
         mutation UpdateExternalAccount($id: ID!) {
@@ -955,7 +954,7 @@ def test_credential_crud_create_delete_are_admin_only(
           }
         }
     """
-    variables = {"user": _user_global_id(owner)}
+    variables = {"user": _user_public_id(owner)}
 
     assert _execute(console_schema, create_credential, variables, user=plain).errors is not None
 
@@ -971,7 +970,7 @@ def test_credential_crud_create_delete_are_admin_only(
         credential = Credential.objects.get(user=owner, name="ci-token")
         assert credential.kind == CredentialKind.STATIC_TOKEN
         assert credential.oauth_client_id is None
-    credential_id = relay.to_base64("CredentialType", credential.sqid)
+    credential_id = str(credential.sqid)
 
     delete_credential = """
         mutation DeleteCredential($id: ID!) {
@@ -1364,7 +1363,7 @@ def test_discover_oauth_endpoints_is_admin_gated_and_validates_discovery_url(
     )
     admin = _platform_admin("discover-admin")
     client = _oauth_client("discoverable", discovery_url="")
-    oauth_client_id = relay.to_base64("OAuthClientType", client.sqid)
+    oauth_client_id = str(client.sqid)
     console_schema = _schema("console")
     discover = "mutation($id: ID!){ discoverOauthEndpoints(id: $id){ ok message } }"
 
@@ -1447,15 +1446,15 @@ def _platform_admin(username: str) -> Any:
     return admin
 
 
-def _user_global_id(user: Any) -> str:
-    """Return the relay global id ``UserType`` mutations resolve for ``user``.
+def _user_public_id(user: Any) -> str:
+    """Return the public id ``UserType`` mutations resolve for ``user``.
 
     The source-addon test user is Django's default auth user (no ``sqid``), so its
     public id is the primary key — the same value ``instance_from_public_id`` reads
-    back from the global id on the write path.
+    on the write path.
     """
 
-    return relay.to_base64("UserType", str(getattr(user, "sqid", user.pk)))
+    return str(getattr(user, "sqid", user.pk))
 
 
 def _oauth_client(

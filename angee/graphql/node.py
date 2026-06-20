@@ -1,28 +1,37 @@
-"""Relay identity and pagination primitives for Angee GraphQL types."""
+"""GraphQL identity and pagination primitives for Angee types."""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import strawberry
+import strawberry_django
+from django.db import models
 from django.db.models import QuerySet
-from strawberry import relay
-from strawberry.relay.types import NodeIterableType, NodeType
+from strawberry.relay.types import NodeIterableType
 from strawberry.types import Info
 from strawberry.utils.await_maybe import AwaitableOrValue
 from strawberry_django.relay import DjangoCursorConnection
 from typing_extensions import Self
 
+from angee.base.models import public_id_of
+from angee.graphql.ids import PublicID, instance_for_id
+from angee.graphql.introspection import django_model
 
-@strawberry.interface
-class AngeeNode(relay.Node):
-    """Relay node whose object id is the model's public sqid."""
 
-    sqid: relay.NodeID[str]
+@strawberry.interface(name="Node")
+class AngeeNode:
+    """GraphQL object whose id field is the model's public id."""
+
+    @strawberry.field(description="The public ID of this object.")
+    def id(self) -> PublicID:
+        """Return this row's public id."""
+
+        return PublicID(public_id_of(cast(models.Model, self)))
 
 
 @strawberry.type(name="CursorConnection")
-class AngeeConnection(DjangoCursorConnection[relay.NodeType]):
+class AngeeConnection(DjangoCursorConnection[Any]):
     """Keyset connection that honors each model's ``Meta.ordering``.
 
     ``DjangoCursorConnection`` keyset pagination orders by the queryset's
@@ -35,7 +44,7 @@ class AngeeConnection(DjangoCursorConnection[relay.NodeType]):
     @classmethod
     def resolve_connection(
         cls,
-        nodes: NodeIterableType[NodeType],
+        nodes: NodeIterableType[Any],
         *,
         info: Info,
         **kwargs: Any,
@@ -45,3 +54,27 @@ class AngeeConnection(DjangoCursorConnection[relay.NodeType]):
         if isinstance(nodes, QuerySet) and not nodes.query.order_by and nodes.model._meta.ordering:
             nodes = nodes.order_by(*nodes.model._meta.ordering)
         return super().resolve_connection(nodes, info=info, **kwargs)
+
+
+def detail(
+    node: type,
+    *,
+    permission_classes: list[type] | None = None,
+) -> Any:
+    """Return a typed detail root field addressed by a public id."""
+
+    model = django_model(node)
+
+    def resolve(id: PublicID) -> Any | None:
+        """Return the row addressed by the public id."""
+
+        return instance_for_id(model, id)
+
+    resolve.__annotations__ = {
+        "id": PublicID,
+        "return": node | None,
+    }
+    return strawberry_django.field(
+        resolver=resolve,
+        permission_classes=permission_classes,
+    )

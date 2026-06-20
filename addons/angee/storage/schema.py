@@ -11,14 +11,15 @@ from django.apps import apps
 from django.urls import reverse
 from rebac import ObjectRef, current_actor, system_context
 from rebac.backends import backend as rebac_backend
-from strawberry import UNSET, auto, relay
+from strawberry import UNSET, auto
 from strawberry.permission import BasePermission
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
 from angee.base.models import public_id_for
 from angee.graphql.crud import crud
-from angee.graphql.node import AngeeNode
+from angee.graphql.ids import PublicID
+from angee.graphql.node import AngeeNode, detail
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_display_label, user_public_id
 from angee.storage import exceptions
@@ -240,9 +241,9 @@ class FileUploadBeginInput:
     filename: str
     mime_type: str = ""
     size_bytes: int = 0
-    drive: relay.GlobalID | None = None
+    drive: PublicID | None = None
     drive_slug: str = ""
-    folder: relay.GlobalID | None = None
+    folder: PublicID | None = None
     content_hash: str = ""
 
 
@@ -268,7 +269,7 @@ class FileUploadBeginPayload:
 class FileUploadFinalizeInput:
     """Fields accepted when finalizing an upload."""
 
-    file: relay.GlobalID
+    file: PublicID
     content_hash: str
     size_bytes: int
 
@@ -286,10 +287,10 @@ class FileUploadFinalizePayload:
 class FilePatch:
     """Fields accepted when updating a file."""
 
-    id: relay.GlobalID
+    id: PublicID
     filename: str | None = UNSET
     title: str | None = UNSET
-    folder: relay.GlobalID | None = UNSET
+    folder: PublicID | None = UNSET
     metadata: JSON | None = UNSET
 
 
@@ -297,9 +298,9 @@ class FilePatch:
 class FolderInput:
     """Fields accepted when creating a folder."""
 
-    drive: relay.GlobalID
+    drive: PublicID
     name: str
-    parent: relay.GlobalID | None = None
+    parent: PublicID | None = None
     description: str = ""
 
 
@@ -307,17 +308,17 @@ class FolderInput:
 class FolderPatch:
     """Fields accepted when updating a folder."""
 
-    id: relay.GlobalID
+    id: PublicID
     name: str | None = UNSET
     description: str | None = UNSET
-    parent: relay.GlobalID | None = UNSET
+    parent: PublicID | None = UNSET
 
 
 @strawberry.input
 class DriveInput:
     """Fields accepted when creating a drive."""
 
-    backend: relay.GlobalID
+    backend: PublicID
     slug: str
     name: str
     description: str = ""
@@ -328,7 +329,7 @@ class DriveInput:
 class DrivePatch:
     """Fields accepted when updating a drive."""
 
-    id: relay.GlobalID
+    id: PublicID
     name: str | None = UNSET
     description: str | None = UNSET
     prefix: str | None = UNSET
@@ -350,7 +351,7 @@ class BackendInput:
 class BackendPatch:
     """Fields accepted when updating a storage backend."""
 
-    id: relay.GlobalID
+    id: PublicID
     label: str | None = UNSET
     backend_class: str | None = UNSET
     backend_config: JSON | None = UNSET
@@ -393,10 +394,10 @@ class StorageQuery:
     drives: OffsetPaginated[DriveType] = strawberry_django.offset_paginated(
         filters=DriveFilter, order=DriveOrder
     )
-    drive: DriveType | None = strawberry_django.node()
+    drive: DriveType | None = detail(DriveType)
     folders: OffsetPaginated[FolderType] = strawberry_django.offset_paginated(filters=FolderFilter)
     files: OffsetPaginated[FileType] = strawberry_django.offset_paginated(filters=FileFilter, order=FileOrder)
-    file: FileType | None = strawberry_django.node()
+    file: FileType | None = detail(FileType)
     mime_types: OffsetPaginated[MimeTypeType] = strawberry_django.offset_paginated()
 
 
@@ -409,7 +410,8 @@ class StorageConsoleQuery:
         order=BackendOrder,
         permission_classes=_STORAGE_ADMIN_CLASSES,
     )
-    backend: BackendType | None = strawberry_django.node(
+    backend: BackendType | None = detail(
+        BackendType,
         permission_classes=_STORAGE_ADMIN_CLASSES,
     )
 
@@ -427,9 +429,9 @@ class StorageMutation:
                 filename=input.filename,
                 mime_type=input.mime_type,
                 size_bytes=input.size_bytes,
-                drive_id=input.drive.node_id if input.drive else "",
+                drive_id=str(input.drive) if input.drive else "",
                 drive_slug=input.drive_slug,
-                folder_id=input.folder.node_id if input.folder else "",
+                folder_id=str(input.folder) if input.folder else "",
                 content_hash=input.content_hash,
             )
         except exceptions.UploadError as error:
@@ -444,7 +446,7 @@ class StorageMutation:
     def file_upload_finalize(self, input: FileUploadFinalizeInput) -> FileUploadFinalizePayload:
         """Verify uploaded bytes and return the READY row."""
 
-        row = File.objects.all().from_public_id(input.file.node_id)
+        row = File.objects.all().from_public_id(str(input.file))
         if row is None:
             return FileUploadFinalizePayload(error="file not found", error_code="not_found")
         try:
@@ -459,9 +461,9 @@ class StorageMutation:
 
         try:
             folder = Folder.objects.create_in_drive(
-                drive_id=data.drive.node_id,
+                drive_id=str(data.drive),
                 name=data.name,
-                parent_id=data.parent.node_id if data.parent else "",
+                parent_id=str(data.parent) if data.parent else "",
                 description=data.description,
             )
         except exceptions.UploadError as error:
@@ -469,10 +471,10 @@ class StorageMutation:
         return cast(FolderType, folder)
 
     @strawberry.mutation
-    def restore_file(self, id: relay.GlobalID) -> FileType | None:
+    def restore_file(self, id: PublicID) -> FileType | None:
         """Pull one file out of the Trash smart folder."""
 
-        row = File.objects.all().from_public_id(id.node_id)
+        row = File.objects.all().from_public_id(str(id))
         if row is None:
             raise ValueError("file not found")
         row.restore()
@@ -484,11 +486,11 @@ class StorageConsoleMutation:
     """Admin-only storage mutations."""
 
     @strawberry.mutation(permission_classes=_STORAGE_ADMIN_CLASSES)
-    def purge_file(self, id: relay.GlobalID) -> bool:
+    def purge_file(self, id: PublicID) -> bool:
         """Permanently delete one file row and its backend object."""
 
         with system_context(reason="storage.graphql.purge_file"):
-            row = File._default_manager.all().from_public_id(id.node_id)
+            row = File._default_manager.all().from_public_id(str(id))
             if row is None:
                 raise ValueError("file not found")
             row.purge()

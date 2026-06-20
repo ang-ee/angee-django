@@ -160,7 +160,7 @@ functions. Per `GraphQLTool`:
 duplication hatch.
 
 `execute_under_actor`: build/cache the operation document, map args→variables (incl.
-sqid→GlobalID), `await schema.execute(doc, variable_values, context_value)` (actor is
+raw sqid IDs), `await schema.execute(doc, variable_values, context_value)` (actor is
 already ambient via the `on_call_tool` middleware), raise on `result.errors`, return
 the projection (v2 validates against `output_schema`, emits structured content).
 `context_value` is a request shim carrying the actor for resolvers that read
@@ -179,7 +179,7 @@ call.
 ## Resolved decisions
 
 - **FastMCP base:** jlowin **FastMCP v2** (pinned, wrapped behind `angee.mcp`).
-- **Agent-facing id:** **sqid**; the mapper translates sqid↔`relay.GlobalID` at the boundary.
+- **Agent-facing id:** **sqid**; GraphQL also accepts and returns the raw public id.
 - **Ad-hoc mode:** **none** — curated per-operation tools only (no generic `execute`).
 - **Mutations:** explicit allow-list only; never auto-exposed.
 - **Description precedence:** GraphQL field `.description` (auto) < spec `description`
@@ -216,7 +216,7 @@ call.
    **✅ engine + notes conversion DONE (2026-06-15):** `execute_under_actor` (verified
    off-request, scoped), the `GraphQLTool` spec + `_compile`/`register_graphql_tools`
    seam, the graphql-core→JSON-Schema mapper, projection (camelCase↔snake_case,
-   `relay.GlobalID`↔`sqid` via base64), operation-document generation, and
+   raw GraphQL ID↔`sqid`), operation-document generation, and
    `ToolAnnotations` from op kind. Notes' four tools are now GraphQL-backed — the
    hand-rolled ORM access/`_summary`/`_detail` are gone; `test_mcp.py` green; ruff + mypy
    clean. **Deferred to B1.x:** the `fixed`/`args` levers, `CustomTool`, the
@@ -232,7 +232,7 @@ call.
 - **Lifespan ownership** (drive `mcp_app.lifespan`, never `session_manager.run()`) — one
   integration test; forgetting yields "task group not initialized".
 - **`AccessToken.subject` gone** → `claims["subject"]`; update verifier + middleware.
-- **sqid↔GlobalID** — settle once in the mapper; load-bearing for every id-taking op.
+- **sqid IDs** — settle once in the mapper; load-bearing for every id-taking op.
 - **Context-dependent resolvers** (read `info.context` beyond the actor) — flag at
   registration; provide a faithful request shim or don't expose.
 - **Union/interface returns** — defer (raise "not MCP-exposable yet") rather than emit a

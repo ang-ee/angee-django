@@ -124,6 +124,34 @@ describe("data-view model", () => {
     })).toEqual(["provider-a", "provider-b"]);
   });
 
+  test("toggles public-id relation facets as single lookup filters", () => {
+    const facet = Filter.facetFromFilter({
+      provider: { sqid: "provider-a" },
+    });
+
+    expect(facet).toEqual({
+      field: "provider",
+      value: "provider-a",
+      mode: "lookup",
+      lookup: "sqid",
+    });
+
+    const selected = Filter.from({}).toggleFacet(facet!);
+    const replaced = Filter.from(selected).toggleFacet({
+      ...facet!,
+      value: "provider-b",
+    });
+    const cleared = Filter.from(replaced).toggleFacet({
+      ...facet!,
+      value: "provider-b",
+    });
+
+    expect(selected).toEqual({ provider: { sqid: "provider-a" } });
+    expect(Filter.from(selected).facetValues(facet!)).toEqual(["provider-a"]);
+    expect(replaced).toEqual({ provider: { sqid: "provider-b" } });
+    expect(cleared).toEqual({});
+  });
+
   test("toggles direct id facets as scalar filters", () => {
     const facet = {
       field: "publisher",

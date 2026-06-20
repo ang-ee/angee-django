@@ -12,7 +12,7 @@ export interface FileActions {
   trash: (id: string) => Promise<void>;
   /** Pull a file back out of the Trash. */
   restore: (id: string) => Promise<void>;
-  /** Move a file into a folder (a folder GlobalID), or `null` for the root. */
+  /** Move a file into a folder by public id, or `null` for the root. */
   move: (id: string, folder: string | null) => Promise<void>;
   /** Soft-delete many files in one pass, refetching once. */
   trashMany: (ids: Iterable<string>) => Promise<void>;

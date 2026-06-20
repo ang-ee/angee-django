@@ -98,7 +98,7 @@ export function useRelationFacet(
   );
   const filterFields = React.useMemo<readonly DataToolbarFilterField[]>(
     () =>
-      relation && filter?.mode === "lookup"
+      relation && filter?.mode === "lookup" && isToolbarLookup(filter.lookup)
         ? [{
             id: filter.field,
             field: filter.field,
@@ -132,6 +132,10 @@ export function useRelationFacet(
   );
 }
 
+function isToolbarLookup(lookup: string | undefined): boolean {
+  return lookup === undefined || lookup === "exact" || lookup === "inList";
+}
+
 function relationFilterConfig(
   metadata: ModelRelationFilterMetadata | undefined,
   override: {
@@ -140,9 +144,11 @@ function relationFilterConfig(
   },
 ): ModelRelationFilterMetadata | undefined {
   if (!override.field) return metadata;
+  const sameField = override.field === metadata?.field;
   return {
     field: override.field,
     mode: override.mode ?? metadata?.mode ?? "lookup",
+    lookup: sameField ? metadata?.lookup : "exact",
     ...(metadata?.aggregateKey ? { aggregateKey: metadata.aggregateKey } : {}),
   };
 }
@@ -152,7 +158,12 @@ function relationFacetFilter(
   value: string,
 ): DataViewFilter {
   if (filter.mode === "id") return { [filter.field]: value };
-  return { [filter.field]: { exact: value } };
+  const lookup = filter.lookup ?? "exact";
+  return {
+    [filter.field]: {
+      [lookup]: lookup === "inList" ? [value] : value,
+    },
+  };
 }
 
 function relationGroupOption({

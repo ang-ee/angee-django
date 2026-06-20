@@ -5,24 +5,25 @@ from __future__ import annotations
 from typing import Any
 
 import strawberry
-import strawberry_django
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from rebac import system_context
-from strawberry import UNSET, relay
+from strawberry import UNSET
 from strawberry.annotation import StrawberryAnnotation
 from strawberry.extensions.field_extension import FieldExtension, SyncExtensionResolver
 from strawberry.types import Info
 from strawberry_django.mutations import resolvers as mutation_resolvers
 from strawberry_django.mutations.fields import (
+    DjangoCreateMutation,
     DjangoUpdateMutation,
     get_pk,
     get_vdata,
 )
 from strawberry_django.permissions import filter_with_perms
 
-from angee.base.models import instance_from_public_id
+from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.deletion import DeletePreview, delete_by_public_id
+from angee.graphql.ids import PublicID, coerce_relation_public_ids, instance_for_id
 from angee.graphql.introspection import django_model, surface_name
 
 
@@ -87,7 +88,7 @@ def crud(
         add(
             "create",
             node,
-            strawberry_django.mutations.create(
+            _create_mutation(
                 create,
                 permission_classes=permission_classes,
                 extensions=write_extensions(),
@@ -121,8 +122,39 @@ def crud(
     return strawberry.type(surface)
 
 
+class _AngeeCreateMutation(DjangoCreateMutation):
+    """Create mutation whose relation IDs are public sqids."""
+
+    def __copy__(self) -> Any:
+        """Preserve Angee's public key field through Strawberry field cloning."""
+
+        new_field = super().__copy__()
+        new_field.key_attr = self.key_attr
+        new_field.argument_name = self.argument_name
+        return new_field
+
+    def create(self, data: dict[str, Any], *, info: Info) -> Any:
+        model = self.django_model
+        assert model is not None
+        return mutation_resolvers.create(
+            info,
+            model,
+            coerce_relation_public_ids(model, data),
+            key_attr=self.key_attr,
+            full_clean=self.full_clean,
+        )
+
+
 class _AngeeUpdateMutation(DjangoUpdateMutation):
     """Update mutation whose write target is loaded without field redaction."""
+
+    def __copy__(self) -> Any:
+        """Preserve Angee's public key field through Strawberry field cloning."""
+
+        new_field = super().__copy__()
+        new_field.key_attr = self.key_attr
+        new_field.argument_name = self.argument_name
+        return new_field
 
     def instance_level_update(
         self,
@@ -151,8 +183,27 @@ class _AngeeUpdateMutation(DjangoUpdateMutation):
         return self.update(
             info,
             instance,
-            mutation_resolvers.parse_input(info, vdata, key_attr=self.key_attr),
+            coerce_relation_public_ids(model, mutation_resolvers.parse_input(info, vdata, key_attr=self.key_attr)),
         )
+
+
+def _create_mutation(
+    input_type: type,
+    *,
+    permission_classes: list[type] | None,
+    extensions: list[FieldExtension] | None,
+) -> _AngeeCreateMutation:
+    """Return Angee's Strawberry-Django create field."""
+
+    return _AngeeCreateMutation(
+        input_type,
+        python_name=None,
+        django_name=None,
+        graphql_name=None,
+        type_annotation=StrawberryAnnotation.from_annotation(None),
+        permission_classes=permission_classes or [],
+        extensions=extensions or (),
+    )
 
 
 def _update_mutation(
@@ -169,6 +220,7 @@ def _update_mutation(
         django_name=None,
         graphql_name=None,
         type_annotation=StrawberryAnnotation.from_annotation(None),
+        key_attr=PUBLIC_ID_FIELD_NAME,
         permission_classes=permission_classes or [],
         extensions=extensions or (),
     )
@@ -193,10 +245,8 @@ def _resolve_for_write(
     """Return a write-ready instance addressed by mutation input."""
 
     queryset = _write_queryset(model)
-    if isinstance(key, relay.GlobalID):
-        instance = instance_from_public_id(model, key.node_id, queryset=queryset)
-    elif key_attr in (None, "id"):
-        instance = instance_from_public_id(model, str(key), queryset=queryset)
+    if key_attr in (None, "id", PUBLIC_ID_FIELD_NAME):
+        instance = instance_for_id(model, key, queryset=queryset)
     else:
         assert key_attr is not None
         try:
@@ -211,12 +261,12 @@ def _resolve_for_write(
 def _delete_resolver(model: type[models.Model]) -> Any:
     """Return a mutation resolver that previews then deletes."""
 
-    def delete(id: relay.GlobalID, confirm: bool = False) -> DeletePreview:
-        """Delete one model instance by global id when unblocked."""
+    def delete(id: PublicID, confirm: bool = False) -> DeletePreview:
+        """Delete one model instance by public id when unblocked."""
 
         return delete_by_public_id(
             model,
-            id.node_id,
+            str(id),
             confirm=confirm,
             queryset=_write_queryset(model),
         )

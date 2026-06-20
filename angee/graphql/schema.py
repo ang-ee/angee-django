@@ -22,6 +22,7 @@ from strawberry.types.execution import ExecutionContext
 from strawberry.utils.str_converters import to_camel_case
 
 from angee.addons import resolve_addon_reference
+from angee.graphql.ids import assert_unique_sqid_prefixes
 from angee.graphql.introspection import (
     django_model,
     surface_field_names,
@@ -255,11 +256,12 @@ class GraphQLSchemas:
                 f"GraphQL schema {name!r} has no contributions; available schemas: {available}"
             ) from error
 
+        types = self._schema_types(parts)
         query = self._merge_root(name, "query", parts.query)
         if query is None:
             raise ImproperlyConfigured(f"GraphQL schema {name!r} has no query root")
-        types = self._schema_types(parts)
         self._assert_rebac_managers(name, types)
+        assert_unique_sqid_prefixes(types)
         self._describe_choice_enums(types)
         schema = AngeeSchema(
             query=query,
@@ -318,9 +320,9 @@ class GraphQLSchemas:
             _ROOT_TYPE_NAMES[key],
             cast(tuple[type, ...], surfaces),
         )
-        # Each named schema owns independent field objects: relay field
-        # extensions mutate fields in place during build, so a surface shared
-        # across schemas must not hand the same field to two schema builds.
+        # Each named schema owns independent field objects: field extensions can
+        # mutate fields in place during build, so a surface shared across schemas
+        # must not hand the same field to two schema builds.
         definition = get_object_definition(root, strict=True)
         definition.fields = [copy.copy(field) for field in definition.fields]
         return root

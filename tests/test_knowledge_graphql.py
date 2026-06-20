@@ -6,7 +6,6 @@ import importlib
 from typing import Any
 
 from rebac import actor_context
-from strawberry import relay
 
 from tests.conftest import (
     MarkdownPage,
@@ -97,14 +96,39 @@ def test_pages_query_is_actor_scoped_and_vault_filtered(knowledge_tables: None) 
             schema,
             """
             query PagesIn($vault: ID!) {
-              pages(filters: {vault: $vault}) { results { title } }
+              pages(filters: {vault: {sqid: $vault}}) { results { title } }
             }
             """,
-            {"vault": _global_id("VaultType", research)},
+            {"vault": _public_id(research)},
             user=alice,
         )
     )["pages"]["results"]
     assert [row["title"] for row in filtered] == ["Reading list"]
+
+
+def test_detail_query_resolves_raw_sqid(knowledge_tables: None) -> None:
+    """Typed detail fields refetch a public object by raw sqid."""
+
+    alice = create_user("alice")
+    vault = vault_for(alice, name="Node vault")
+
+    data = result_data(
+        execute_schema(
+            _schema("public"),
+            """
+            query Vault($id: ID!) {
+              vault(id: $id) {
+                id
+                name
+              }
+            }
+            """,
+            {"id": str(vault.sqid)},
+            user=alice,
+        )
+    )
+
+    assert data["vault"] == {"id": str(vault.sqid), "name": "Node vault"}
 
 
 def test_update_page_body_round_trip_and_stale_guard(knowledge_tables: None) -> None:
@@ -115,7 +139,7 @@ def test_update_page_body_round_trip_and_stale_guard(knowledge_tables: None) -> 
     with actor_context(alice):
         page = Page.objects.create_in(vault, title="Draft")
     schema = _schema("public")
-    page_id = _global_id("PageType", page)
+    page_id = _public_id(page)
 
     written = result_data(
         execute_schema(
@@ -184,7 +208,7 @@ def test_update_page_body_reports_unsupported_kind(knowledge_tables: None) -> No
               updatePageBody(page: $page, body: "nope") { ok errorCode }
             }
             """,
-            {"page": _global_id("PageType", folder)},
+            {"page": _public_id(folder)},
             user=alice,
         )
     )["updatePageBody"]
@@ -210,7 +234,7 @@ def test_page_backlinks_list_resolved_sources(knowledge_tables: None) -> None:
               page(id: $id) { backlinks { title displayText } }
             }
             """,
-            {"id": _global_id("PageType", target)},
+            {"id": _public_id(target)},
             user=alice,
         )
     )["page"]
@@ -232,7 +256,7 @@ def test_crud_update_is_row_scoped(knowledge_tables: None) -> None:
           updateVault(data: {id: $id, name: "Taken over"}) { id }
         }
         """,
-        {"id": _global_id("VaultType", vault)},
+        {"id": _public_id(vault)},
         user=bob,
     )
     assert denied.errors is not None
@@ -245,7 +269,7 @@ def test_crud_update_is_row_scoped(knowledge_tables: None) -> None:
               updateVault(data: {id: $id, name: "Lab notes"}) { name }
             }
             """,
-            {"id": _global_id("VaultType", vault)},
+            {"id": _public_id(vault)},
             user=alice,
         )
     )["updateVault"]
@@ -260,7 +284,7 @@ def test_delete_vault_previews_blast_radius(knowledge_tables: None) -> None:
     with actor_context(alice):
         Page.objects.create_in(vault, title="Reading list")
     schema = _schema("public")
-    vault_id = _global_id("VaultType", vault)
+    vault_id = _public_id(vault)
 
     preview = result_data(
         execute_schema(
@@ -327,7 +351,7 @@ def _page_titles(schema: Any, user: Any) -> list[str]:
     return [row["title"] for row in rows]
 
 
-def _global_id(type_name: str, instance: Any) -> str:
-    """Return the relay global id for one node instance."""
+def _public_id(instance: Any) -> str:
+    """Return the public id for one node instance."""
 
-    return str(relay.GlobalID(type_name=type_name, node_id=str(instance.sqid)))
+    return str(instance.sqid)

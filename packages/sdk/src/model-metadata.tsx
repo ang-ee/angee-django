@@ -42,6 +42,7 @@ export type ModelRelationFilterMode = "lookup" | "id";
 export interface ModelRelationFilterMetadata {
   field: string;
   mode: ModelRelationFilterMode;
+  lookup?: string;
   aggregateKey?: string;
 }
 
@@ -334,13 +335,13 @@ function relationFilterForField(
   const filterFields = filterInput?.getFields();
   if (!filterFields) return undefined;
   const aggregateKey = relationAggregateKey(fieldName, groupKeyFields);
-  for (const name of [`${fieldName}Id`, fieldName]) {
+  for (const name of [fieldName, `${fieldName}Id`]) {
     const filterField = filterFields[name];
-    const mode = filterField ? relationFilterMode(filterField.type) : null;
-    if (mode) {
+    const shape = filterField ? relationFilterShape(filterField.type) : null;
+    if (shape) {
       return {
         field: name,
-        mode,
+        ...shape,
         ...(aggregateKey ? { aggregateKey } : {}),
       };
     }
@@ -357,12 +358,17 @@ function relationAggregateKey(
   return groupKeyFields.has(fieldName) ? fieldName : undefined;
 }
 
-function relationFilterMode(type: GraphQLType): ModelRelationFilterMode | null {
+function relationFilterShape(
+  type: GraphQLType,
+): Pick<ModelRelationFilterMetadata, "mode" | "lookup"> | null {
   const namedType = getNamedType(type);
-  if (isScalarType(namedType) && namedType.name === "ID") return "id";
+  if (isScalarType(namedType) && namedType.name === "ID") return { mode: "id" };
   if (!isInputObjectType(namedType)) return null;
   const fields = namedType.getFields();
-  return "exact" in fields || "inList" in fields ? "lookup" : null;
+  for (const lookup of ["sqid", "exact", "pk", "inList"]) {
+    if (lookup in fields) return { mode: "lookup", lookup };
+  }
+  return null;
 }
 
 function isDetailField(

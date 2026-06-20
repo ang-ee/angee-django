@@ -84,6 +84,15 @@ def test_iam_user_is_the_default_auth_model(tmp_path: Path) -> None:
     assert "angee.iam.apps.IAMConfig" in installed
 
 
+def test_graphql_public_pk_is_sqid(tmp_path: Path) -> None:
+    """Composed GraphQL filters expose sqid as the public pk name."""
+
+    settings = _compose(tmp_path)
+
+    assert settings["STRAWBERRY_DJANGO"]["DEFAULT_PK_FIELD_NAME"] == "sqid"
+    assert settings["STRAWBERRY_DJANGO"]["MAP_AUTO_ID_AS_GLOBAL_ID"] is False
+
+
 def test_iam_installs_csrf_middleware_for_session_graphql(tmp_path: Path) -> None:
     """IAM installs CSRF protection while bearer requests can opt out."""
 

@@ -19,7 +19,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rebac import PermissionDenied, system_context
-from strawberry import auto, relay
+from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
@@ -29,11 +29,12 @@ from angee.graphql.actions import ActionResult, resolve_action_target
 from angee.graphql.aggregates import rebac_aggregate_builder
 from angee.graphql.crud import crud
 from angee.graphql.deletion import DeletePreview, delete_by_public_id
+from angee.graphql.ids import PublicID
 from angee.graphql.impl import ImplChoice
 from angee.graphql.impl import impl_choices as resolve_impl_choices
-from angee.graphql.node import AngeeNode
+from angee.graphql.node import AngeeNode, detail
 from angee.graphql.subscriptions import changes
-from angee.iam.identity import user_from_global_id as _user_from_global_id
+from angee.iam.identity import user_from_public_id as _user_from_public_id
 from angee.iam.identity import user_principal as _user_principal
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import request_from_info as _request
@@ -278,7 +279,7 @@ class OAuthClientInput:
 class OAuthClientPatch:
     """Admin-write fields accepted when updating an OAuth client."""
 
-    id: relay.GlobalID
+    id: PublicID
     slug: str | None = strawberry.UNSET
     provider_type: str | None = strawberry.UNSET
     icon: str | None = strawberry.UNSET
@@ -312,7 +313,7 @@ class OAuthClientPatch:
 class ExternalAccountInput:
     """Fields accepted when manually linking an external account."""
 
-    oauth_client: relay.GlobalID
+    oauth_client: PublicID
     external_id: str
     owner: str | None = None
     email: str = ""
@@ -325,7 +326,7 @@ class ExternalAccountInput:
 class ExternalAccountPatch:
     """Admin-write fields accepted when updating an external account (scalars only)."""
 
-    id: relay.GlobalID
+    id: PublicID
     email: str | None = strawberry.UNSET
     display_name: str | None = strawberry.UNSET
     avatar_url: str | None = strawberry.UNSET
@@ -342,7 +343,7 @@ class CredentialInput:
 
     name: str
     kind: str
-    user: relay.GlobalID | None = None
+    user: PublicID | None = None
     api_key: str = ""
     private_key: str = ""
 
@@ -351,7 +352,7 @@ class CredentialInput:
 class CredentialPatch:
     """Admin-write fields accepted when updating a credential."""
 
-    id: relay.GlobalID
+    id: PublicID
     status: str | None = strawberry.UNSET
 
 
@@ -485,8 +486,8 @@ def _console_credentials(info: strawberry.Info) -> Any:
     return cast(Any, Credential.objects).console_credentials()
 
 
-def _oauth_client_from_id(oauth_client_id: relay.GlobalID) -> Any:
-    """Return the OAuth client addressed by one GraphQL global id."""
+def _oauth_client_from_id(oauth_client_id: PublicID) -> Any:
+    """Return the OAuth client addressed by one public GraphQL id."""
 
     return flow.oauth_client_from_id(oauth_client_id)
 
@@ -551,7 +552,7 @@ def _oauth_client_for_integration(integration: Any) -> Any:
 def _current_user_integration(
     user: Any,
     *,
-    integration_id: relay.GlobalID | None,
+    integration_id: PublicID | None,
     vendor_slug: str,
     impl_class: str,
 ) -> Any:
@@ -678,7 +679,7 @@ class ConnectionMutation:
     def connect_account_start(
         self,
         info: strawberry.Info,
-        id: relay.GlobalID,
+        id: PublicID,
         redirect_uri: str,
         next: str = "/",
     ) -> OAuthStartPayload:
@@ -721,7 +722,7 @@ class ConnectionMutation:
         )
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def discover_oauth_endpoints(self, id: relay.GlobalID) -> ActionResult:
+    def discover_oauth_endpoints(self, id: PublicID) -> ActionResult:
         """Fetch the provider's discovery document and fill this client's blank endpoints.
 
         The resolved authorize/token/userinfo endpoints (and any composed extension
@@ -731,7 +732,7 @@ class ConnectionMutation:
 
         with system_context(reason="integrate.graphql.discover_oauth_endpoints"):
             oauth_client = instance_from_public_id(
-                OAuthClient, id.node_id, queryset=OAuthClient._default_manager.all()
+                OAuthClient, str(id), queryset=OAuthClient._default_manager.all()
             )
             if oauth_client is None:
                 raise ValueError(f"OAuth client {id!s} was not found")
@@ -749,7 +750,7 @@ class ConnectionMutation:
     def connect_integration(
         self,
         info: strawberry.Info,
-        integration_id: relay.GlobalID | None = None,
+        integration_id: PublicID | None = None,
         vendor_slug: str = "",
         impl_class: str = "",
         redirect_uri: str = "",
@@ -853,21 +854,24 @@ class IntegrateConnectionConsoleQuery:
         resolver=_console_oauth_clients,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
-    oauth_client: OAuthClientType | None = strawberry_django.node(
+    oauth_client: OAuthClientType | None = detail(
+        OAuthClientType,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
     external_accounts: OffsetPaginated[ExternalAccountType] = strawberry_django.offset_paginated(
         resolver=_console_external_accounts,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
-    external_account: ExternalAccountType | None = strawberry_django.node(
+    external_account: ExternalAccountType | None = detail(
+        ExternalAccountType,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
     credential_health: OffsetPaginated[CredentialType] = strawberry_django.offset_paginated(
         resolver=_console_credentials,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
-    credential: CredentialType | None = strawberry_django.node(
+    credential: CredentialType | None = detail(
+        CredentialType,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
 
@@ -911,7 +915,7 @@ class IntegrateExternalAccountMutation:
 
         with system_context(reason="integrate.graphql.external_account.update"), transaction.atomic():
             account = instance_from_public_id(
-                ExternalAccount, data.id.node_id, queryset=ExternalAccount._default_manager.all()
+                ExternalAccount, str(data.id), queryset=ExternalAccount._default_manager.all()
             )
             if account is None:
                 raise ValueError(f"External account {data.id!s} was not found")
@@ -923,7 +927,7 @@ class IntegrateExternalAccountMutation:
         return cast(ExternalAccountType, account)
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def delete_external_account(self, id: relay.GlobalID, confirm: bool = False) -> DeletePreview:
+    def delete_external_account(self, id: PublicID, confirm: bool = False) -> DeletePreview:
         """Revoke the owner grant, then delete the account (owner is a REBAC tuple)."""
 
         def revoke(account: Any) -> None:
@@ -933,7 +937,7 @@ class IntegrateExternalAccountMutation:
 
         return delete_by_public_id(
             ExternalAccount,
-            id.node_id,
+            str(id),
             reason="integrate.graphql.external_account.delete",
             confirm=confirm,
             before_delete=revoke,
@@ -945,12 +949,12 @@ class IntegrateCredentialMutation:
     """Admin CRUD for credentials; create mints provider-less kinds (OAuth arrives via connect)."""
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def reveal_credential(self, id: relay.GlobalID) -> RevealedCredentialSecret:
+    def reveal_credential(self, id: PublicID) -> RevealedCredentialSecret:
         """Return one credential's decrypted secret for an admin to copy."""
 
-        with system_context(reason=f"integrate.graphql.credential.reveal:{id.node_id}"):
+        with system_context(reason=f"integrate.graphql.credential.reveal:{str(id)}"):
             credential = instance_from_public_id(
-                Credential, id.node_id, queryset=Credential._default_manager.all()
+                Credential, str(id), queryset=Credential._default_manager.all()
             )
             if credential is None:
                 raise ValueError(f"Credential {id!s} was not found")
@@ -960,7 +964,7 @@ class IntegrateCredentialMutation:
     def create_credential(self, info: strawberry.Info, data: CredentialInput) -> CredentialType:
         """Create one provider-less credential, dispatching material by ``kind``."""
 
-        user = _session_user(info) if data.user is None else _user_from_global_id(data.user)
+        user = _session_user(info) if data.user is None else _user_from_public_id(data.user)
         credential = Credential.objects.create_local_credential(
             user,
             kind=data.kind,
@@ -975,7 +979,7 @@ class IntegrateCredentialMutation:
 
         with system_context(reason="integrate.graphql.credential.update"), transaction.atomic():
             credential = instance_from_public_id(
-                Credential, data.id.node_id, queryset=Credential._default_manager.all()
+                Credential, str(data.id), queryset=Credential._default_manager.all()
             )
             if credential is None:
                 raise ValueError(f"Credential {data.id!s} was not found")
@@ -985,12 +989,12 @@ class IntegrateCredentialMutation:
         return cast(CredentialType, credential)
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def delete_credential(self, id: relay.GlobalID, confirm: bool = False) -> DeletePreview:
+    def delete_credential(self, id: PublicID, confirm: bool = False) -> DeletePreview:
         """Best-effort remote revoke, then delete the credential when unblocked."""
 
         return delete_by_public_id(
             Credential,
-            id.node_id,
+            str(id),
             reason="integrate.graphql.credential.delete",
             confirm=confirm,
             before_delete=_revoke_remote_oauth_token,
@@ -1105,7 +1109,7 @@ class VendorInput:
 class VendorPatch:
     """Fields accepted when updating a vendor."""
 
-    id: relay.GlobalID
+    id: PublicID
     slug: str | None = strawberry.UNSET
     display_name: str | None = strawberry.UNSET
     website_url: str | None = strawberry.UNSET
@@ -1139,12 +1143,12 @@ class WebhookSubscriptionType(AngeeNode):
 class WebhookSubscriptionInput:
     """Fields accepted when creating a webhook subscription."""
 
-    owner: relay.GlobalID
+    owner: PublicID
     target_url: str
     secret: str
     event_kinds: JSON | None = None
     impl_app_filter: JSON | None = None
-    integration_filter: relay.GlobalID | None = None
+    integration_filter: PublicID | None = None
     enabled: bool = True
 
 
@@ -1152,12 +1156,12 @@ class WebhookSubscriptionInput:
 class WebhookSubscriptionPatch:
     """Fields accepted when updating a webhook subscription."""
 
-    id: relay.GlobalID
+    id: PublicID
     target_url: str | None = strawberry.UNSET
     secret: str | None = strawberry.UNSET
     event_kinds: JSON | None = strawberry.UNSET
     impl_app_filter: JSON | None = strawberry.UNSET
-    integration_filter: relay.GlobalID | None = strawberry.UNSET
+    integration_filter: PublicID | None = strawberry.UNSET
     enabled: bool | None = strawberry.UNSET
 
 
@@ -1165,15 +1169,15 @@ class WebhookSubscriptionPatch:
 class IntegrationInput:
     """Fields accepted when creating an integration.
 
-    FK GlobalIDs resolve to instances via strawberry-django (like storage's
+    FK public ids resolve to instances via the GraphQL write boundary (like storage's
     ``DriveInput.backend``); ``owner`` is field-backed REBAC, so writing it
     derives the owner tuple.
     """
 
-    vendor: relay.GlobalID
-    owner: relay.GlobalID
-    credential: relay.GlobalID | None = None
-    account: relay.GlobalID | None = strawberry.UNSET
+    vendor: PublicID
+    owner: PublicID
+    credential: PublicID | None = None
+    account: PublicID | None = strawberry.UNSET
     impl_class: str | None = strawberry.UNSET
     status: str | None = strawberry.UNSET
 
@@ -1182,11 +1186,11 @@ class IntegrationInput:
 class IntegrationPatch:
     """Fields accepted when updating an integration."""
 
-    id: relay.GlobalID
-    vendor: relay.GlobalID | None = strawberry.UNSET
-    credential: relay.GlobalID | None = strawberry.UNSET
-    account: relay.GlobalID | None = strawberry.UNSET
-    owner: relay.GlobalID | None = strawberry.UNSET
+    id: PublicID
+    vendor: PublicID | None = strawberry.UNSET
+    credential: PublicID | None = strawberry.UNSET
+    account: PublicID | None = strawberry.UNSET
+    owner: PublicID | None = strawberry.UNSET
     status: str | None = strawberry.UNSET
 
 
@@ -1233,7 +1237,8 @@ class IntegrateConsoleQuery:
     vendors: OffsetPaginated[VendorType] = strawberry_django.offset_paginated(
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
-    vendor: VendorType | None = strawberry_django.node(
+    vendor: VendorType | None = detail(
+        VendorType,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
     integrations: OffsetPaginated[IntegrationType] = strawberry_django.offset_paginated(
@@ -1241,7 +1246,8 @@ class IntegrateConsoleQuery:
         order=IntegrationOrder,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
-    integration: IntegrationType | None = strawberry_django.node(
+    integration: IntegrationType | None = detail(
+        IntegrationType,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
     integration_aggregate = _integration_aggregates.aggregate_field
@@ -1249,7 +1255,8 @@ class IntegrateConsoleQuery:
     webhook_subscriptions: OffsetPaginated[WebhookSubscriptionType] = strawberry_django.offset_paginated(
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
-    webhook_subscription: WebhookSubscriptionType | None = strawberry_django.node(
+    webhook_subscription: WebhookSubscriptionType | None = detail(
+        WebhookSubscriptionType,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
 
@@ -1278,7 +1285,7 @@ class IntegrationCreateMutation:
             data.vendor,
             reason="integrate.graphql.integration.create.vendor",
         )
-        owner = _user_from_global_id(data.owner)
+        owner = _user_from_public_id(data.owner)
         credential = (
             None
             if data.credential is None
@@ -1377,7 +1384,7 @@ class IntegrationCredentialMutation:
     def create_integration_from_credential(
         self,
         info: strawberry.Info,
-        credential: relay.GlobalID,
+        credential: PublicID,
         vendor_slug: str,
     ) -> IntegrationType:
         """Create or update this user's integration from a connected credential.
@@ -1427,7 +1434,7 @@ class IntegrationActionMutation:
     """Operational actions on an integration (sync, connection test)."""
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def sync_integration(self, id: relay.GlobalID) -> ActionResult:
+    def sync_integration(self, id: PublicID) -> ActionResult:
         """Run every bridge of one integration now (eager variant of the scheduler)."""
 
         integration = resolve_action_target(Integration, id, reason="integrate.graphql.sync_integration")
@@ -1456,7 +1463,7 @@ class IntegrationActionMutation:
         )
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def test_connection(self, id: relay.GlobalID) -> ActionResult:
+    def test_connection(self, id: PublicID) -> ActionResult:
         """Probe the integration's credential so the operator sees it is usable."""
 
         integration = resolve_action_target(Integration, id, reason="integrate.graphql.test_connection")
@@ -1476,7 +1483,7 @@ class WebhookActionMutation:
     """Operational actions on an outbound webhook subscription."""
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def test_webhook_delivery(self, id: relay.GlobalID) -> ActionResult:
+    def test_webhook_delivery(self, id: PublicID) -> ActionResult:
         """Send a test event to one subscription and report the delivery outcome."""
 
         subscription = resolve_action_target(WebhookSubscription, id, reason="integrate.graphql.test_webhook_delivery")
@@ -1496,7 +1503,7 @@ class WebhookActionMutation:
         return ActionResult(ok=True, message=f"Delivered (status {status}).")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def rotate_webhook_secret(self, id: relay.GlobalID) -> RotatedSecret:
+    def rotate_webhook_secret(self, id: PublicID) -> RotatedSecret:
         """Roll one subscription's signing secret and return the new value once."""
 
         subscription = resolve_action_target(WebhookSubscription, id, reason="integrate.graphql.rotate_webhook_secret")
@@ -1607,10 +1614,10 @@ class RepoCandidate:
 class VcsBridgeInput:
     """Fields accepted when creating a VCS bridge child row."""
 
-    vendor: relay.GlobalID
-    owner: relay.GlobalID
-    credential: relay.GlobalID | None = None
-    account: relay.GlobalID | None = strawberry.UNSET
+    vendor: PublicID
+    owner: PublicID
+    credential: PublicID | None = None
+    account: PublicID | None = strawberry.UNSET
     backend_class: str | None = strawberry.UNSET
     status: str | None = strawberry.UNSET
     config: JSON | None = strawberry.UNSET
@@ -1621,11 +1628,11 @@ class VcsBridgeInput:
 class VcsBridgePatch:
     """Fields accepted when updating a VCS bridge child model."""
 
-    id: relay.GlobalID
-    vendor: relay.GlobalID | None = strawberry.UNSET
-    credential: relay.GlobalID | None = strawberry.UNSET
-    account: relay.GlobalID | None = strawberry.UNSET
-    owner: relay.GlobalID | None = strawberry.UNSET
+    id: PublicID
+    vendor: PublicID | None = strawberry.UNSET
+    credential: PublicID | None = strawberry.UNSET
+    account: PublicID | None = strawberry.UNSET
+    owner: PublicID | None = strawberry.UNSET
     backend_class: str | None = strawberry.UNSET
     status: str | None = strawberry.UNSET
     config: JSON | None = strawberry.UNSET
@@ -1636,7 +1643,7 @@ class VcsBridgePatch:
 class SourceInput:
     """Fields accepted when creating a source."""
 
-    repository: relay.GlobalID
+    repository: PublicID
     kind: str
     ref: str = ""
     path: str = ""
@@ -1646,7 +1653,7 @@ class SourceInput:
 class SourcePatch:
     """Fields accepted when updating a source."""
 
-    id: relay.GlobalID
+    id: PublicID
     kind: str | None = strawberry.UNSET
     ref: str | None = strawberry.UNSET
     path: str | None = strawberry.UNSET
@@ -1674,31 +1681,35 @@ class VCSConsoleQuery:
     vcs_bridges: OffsetPaginated[VcsBridgeType] = strawberry_django.offset_paginated(
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
-    vcs_bridge: VcsBridgeType | None = strawberry_django.node(
+    vcs_bridge: VcsBridgeType | None = detail(
+        VcsBridgeType,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
     repositories: OffsetPaginated[RepositoryType] = strawberry_django.offset_paginated(
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
-    repository: RepositoryType | None = strawberry_django.node(
+    repository: RepositoryType | None = detail(
+        RepositoryType,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
     sources: OffsetPaginated[SourceType] = strawberry_django.offset_paginated(
         filters=SourceFilter,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
-    source: SourceType | None = strawberry_django.node(
+    source: SourceType | None = detail(
+        SourceType,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
     templates: OffsetPaginated[TemplateType] = strawberry_django.offset_paginated(
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
-    template: TemplateType | None = strawberry_django.node(
+    template: TemplateType | None = detail(
+        TemplateType,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
 
     @strawberry.field(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def search_repositories(self, vcs_bridge_id: relay.GlobalID, query: str) -> list[RepoCandidate]:
+    def search_repositories(self, vcs_bridge_id: PublicID, query: str) -> list[RepoCandidate]:
         """Return host repositories matching ``query`` for the add typeahead."""
 
         vcs = resolve_action_target(
@@ -1723,7 +1734,7 @@ class VcsBridgeCreateMutation:
             data.vendor,
             reason="integrate.graphql.vcs_bridge.create.vendor",
         )
-        owner = _user_from_global_id(data.owner)
+        owner = _user_from_public_id(data.owner)
         credential = (
             None
             if data.credential is None
@@ -1793,7 +1804,7 @@ class VcsBridgeUpdateMutation:
                 )
                 provided.add("vendor")
             if data.owner is not strawberry.UNSET:
-                bridge.owner = _user_from_global_id(data.owner)
+                bridge.owner = _user_from_public_id(data.owner)
                 provided.add("owner")
             if data.credential is not strawberry.UNSET:
                 bridge.credential = (
@@ -1869,7 +1880,7 @@ class VCSActionMutation:
     """Operational actions on a VCS bridge and its inventory."""
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def add_repository(self, vcs_bridge_id: relay.GlobalID, name: str) -> RepositoryType:
+    def add_repository(self, vcs_bridge_id: PublicID, name: str) -> RepositoryType:
         """Inventory one repository by its host ``name`` (a picked typeahead result)."""
 
         vcs = resolve_action_target(VcsBridge, vcs_bridge_id, reason="integrate.graphql.add_repository")
@@ -1877,7 +1888,7 @@ class VCSActionMutation:
             return cast(RepositoryType, vcs.import_repository(name))
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def discover_repositories(self, vcs_bridge_id: relay.GlobalID, org: str = "") -> ActionResult:
+    def discover_repositories(self, vcs_bridge_id: PublicID, org: str = "") -> ActionResult:
         """Inventory every repository the account exposes (bulk import; prunes vanished)."""
 
         vcs = resolve_action_target(VcsBridge, vcs_bridge_id, reason="integrate.graphql.discover_repositories")
@@ -1886,7 +1897,7 @@ class VCSActionMutation:
         return ActionResult(ok=True, message=f"Inventoried {count} repository(ies).")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def sync_vcs_bridge(self, id: relay.GlobalID) -> ActionResult:
+    def sync_vcs_bridge(self, id: PublicID) -> ActionResult:
         """Refresh every repository's sources for one VCS bridge now."""
 
         vcs = resolve_action_target(VcsBridge, id, reason="integrate.graphql.sync_vcs_bridge")
@@ -1902,7 +1913,7 @@ class VCSActionMutation:
         return ActionResult(ok=True, message=f"Synced {result} item(s).")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def refresh_source(self, id: relay.GlobalID) -> ActionResult:
+    def refresh_source(self, id: PublicID) -> ActionResult:
         """Re-enumerate one source's output rows now."""
 
         source = resolve_action_target(Source, id, reason="integrate.graphql.refresh_source")

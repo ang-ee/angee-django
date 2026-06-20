@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Card, CardContent, EmptyState, buttonVariants } from "@angee/base";
-import { fromRelayGlobalId, useAuthoredMutation } from "@angee/sdk";
+import { useAuthoredMutation } from "@angee/sdk";
 import { Link } from "@tanstack/react-router";
 
 import { useAgentsT } from "../i18n";
@@ -41,7 +41,7 @@ export function AgentChatterPane({
   const liveView = React.useMemo<AgentChatView>(
     () =>
       recordId !== undefined
-        ? { kind: "record", type: model, sqid: fromRelayGlobalId(recordId) }
+        ? { kind: "record", type: model, sqid: recordId }
         : { kind: "dashboard", type: model },
     [model, recordId],
   );

@@ -224,7 +224,7 @@ These can run in parallel because their write sets are naturally separate.
     [integrate/schema.py](/Users/alexis/Work/angee/angee-django/addons/angee/integrate/schema.py:1367).
   - [x] Add addon tests covering denied, missing, and allowed action cases.
 
-- [x] Move IAM principal/global-id resolution out of schema-private helpers.
+- [x] Move IAM principal/public-id resolution out of schema-private helpers.
   - [x] Move helper behavior from
     [iam/schema.py](/Users/alexis/Work/angee/angee-django/addons/angee/iam/schema.py:527)
     to `angee.iam.identity` or `UserManager`.
@@ -379,9 +379,9 @@ mass addon adoption.
     [knowledge PageEditor.tsx](/Users/alexis/Work/angee/angee-django/addons/angee/knowledge/web/src/views/PageEditor.tsx:146)
     to the base date owner.
 
-- [x] Remove local Relay global ID aliases.
-  - [x] Delete or reduce storage/knowledge `lib/global-id.ts` wrappers.
-  - [x] Use SDK `toRelayGlobalId` / `relationRelayGlobalId` names directly.
+- [x] Remove local public ID aliases.
+  - [x] Delete storage/knowledge public-id wrapper files.
+  - [x] Use raw public ids directly.
 
 - [x] Route platform addon discovery through the shared owner.
   - [x] Replace direct `getattr(config, "angee_addon", False)` in
@@ -501,7 +501,7 @@ compatibility shims only; leave adoption to the addon worker.
 
 Fix Wave 2 / Agent E from `.agents/plans/dry-architecture-audit-fix-plan.md`
 after the Base UI Worker lands primitives. Own addon web packages. Replace
-AgentProvisioning duplication, inline controls, private status/date/global-id
+AgentProvisioning duplication, inline controls, private status/date/public-id
 helpers, and Platform/Resources i18n gaps. Do not modify base primitives except
 for small bug fixes coordinated with the Base UI Worker.
 

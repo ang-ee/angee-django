@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
-from strawberry import relay
 
 import angee.graphql.actions as actions_module
 from angee.graphql.actions import resolve_action_target
@@ -39,7 +38,7 @@ def test_resolve_action_target_elevates_lookup(
 
     target = resolve_action_target(
         Group,
-        relay.GlobalID(type_name="GroupType", node_id=str(group.pk)),
+        str(group.pk),
         reason="tests.action",
     )
 
@@ -54,7 +53,7 @@ def test_resolve_action_target_raises_clear_not_found() -> None:
     with pytest.raises(ValueError, match="Group 'missing' was not found."):
         resolve_action_target(
             Group,
-            relay.GlobalID(type_name="GroupType", node_id="missing"),
+            "missing",
             reason="tests.action.missing",
         )
 
@@ -72,7 +71,7 @@ def test_resolve_action_target_applies_select_related() -> None:
 
     target = resolve_action_target(
         Permission,
-        relay.GlobalID(type_name="PermissionType", node_id=str(permission.pk)),
+        str(permission.pk),
         reason="tests.action.select_related",
         select_related=("content_type",),
     )

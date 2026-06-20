@@ -204,12 +204,10 @@ describe("fieldMetadataFromSDL", () => {
         drive: ProviderType
       }
       type ModelTypeOffsetPaginated { results: [ModelType!]! }
-      input DjangoModelFilterInput { pk: ID! }
-      input IdLookup { exact: ID inList: [ID!] }
+      input DjangoModelFilterInput { sqid: ID! }
       input ModelFilter {
         provider: DjangoModelFilterInput
-        providerId: IdLookup
-        publisher: ID
+        publisher: DjangoModelFilterInput
         drive: DjangoModelFilterInput
       }
       input ModelAggregateGroupBySpec { field: String! }
@@ -224,16 +222,22 @@ describe("fieldMetadataFromSDL", () => {
 
     const fields = required(metadata.types.ModelType).fields;
     expect(required(fields.provider).relationFilter).toEqual({
-      field: "providerId",
+      field: "provider",
       mode: "lookup",
+      lookup: "sqid",
       aggregateKey: "providerId",
     });
     expect(required(fields.publisher).relationFilter).toEqual({
       field: "publisher",
-      mode: "id",
+      mode: "lookup",
+      lookup: "sqid",
       aggregateKey: "publisher",
     });
-    expect(required(fields.drive).relationFilter).toBeUndefined();
+    expect(required(fields.drive).relationFilter).toEqual({
+      field: "drive",
+      mode: "lookup",
+      lookup: "sqid",
+    });
   });
 });
 

@@ -14,7 +14,7 @@ describe("cache keys", () => {
   const key = (typename: string, data: Record<string, unknown>): string | null =>
     keys[typename]?.({ __typename: typename, ...data }) ?? null;
 
-  test("keys an entity by its relay id", () => {
+  test("keys an entity by its public id", () => {
     expect(key("Sale", { id: "abc" })).toBe("abc");
     expect(key("Viewer", { id: "xyz" })).toBe("xyz");
   });
@@ -22,6 +22,10 @@ describe("cache keys", () => {
   test("null-keys page and page-info value objects", () => {
     expect(key("SaleOffsetPaginated", {})).toBeNull();
     expect(key("OffsetPaginationInfo", { offset: 0 })).toBeNull();
+  });
+
+  test("null-keys non-node objects even when they expose id", () => {
+    expect(key("IAMRoleType", { id: "admin", namespace: "default" })).toBeNull();
   });
 
   test("null-keys aggregate value objects (no id)", () => {
@@ -37,10 +41,10 @@ describe("cache keys", () => {
   });
 });
 
-describe("relay resolvers", () => {
+describe("connection resolvers", () => {
   test("offset-paginated list fields get no cursor-merge resolver", () => {
     // Offset pages replace the list (jump-to-page); urql caches each page by its
-    // variables, so no relay pagination resolver is wired.
+    // variables, so no cursor pagination resolver is wired.
     expect(resolvers.Query?.sales).toBeUndefined();
   });
 

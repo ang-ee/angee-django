@@ -12,7 +12,6 @@ from typing import Any
 
 from django.contrib.auth import get_user_model
 from rebac import app_settings, system_context
-from strawberry import relay
 
 from angee.base.models import instance_from_public_id, public_id_for
 
@@ -65,9 +64,10 @@ def user_principal(principal_id: str, *, graphql_type_name: str = "UserType") ->
     public_lookup = getattr(user_model, "public_id_lookup", None)
     if callable(public_lookup):
         lookups.append(public_lookup(resolved_id))
-    pk = user_model._meta.pk
-    if pk is not None:
-        lookups.append({pk.name: resolved_id})
+    else:
+        pk = user_model._meta.pk
+        if pk is not None:
+            lookups.append({pk.name: resolved_id})
 
     tried: set[tuple[tuple[str, Any], ...]] = set()
     with system_context(reason="iam.identity.principal"):
@@ -85,24 +85,19 @@ def user_principal(principal_id: str, *, graphql_type_name: str = "UserType") ->
     raise ValueError(f"User principal {principal_id!r} was not found.")
 
 
-def user_from_global_id(user_id: relay.GlobalID) -> Any:
-    """Return the user addressed by one GraphQL global id, or raise."""
+def user_from_public_id(user_id: Any) -> Any:
+    """Return the user addressed by one GraphQL public id, or raise."""
 
     user_model = get_user_model()
     with system_context(reason="iam.identity.user.lookup"):
-        user = instance_from_public_id(user_model, user_id.node_id, queryset=user_model._default_manager.all())
+        user = instance_from_public_id(user_model, str(user_id), queryset=user_model._default_manager.all())
     if user is None:
         raise ValueError(f"User {user_id!s} was not found.")
     return user
 
 
 def _user_principal_node_id(principal_id: str, *, graphql_type_name: str) -> str:
-    """Return the public id from a user Relay id, or the original principal id."""
+    """Return the public id from a user principal id."""
 
-    try:
-        global_id = relay.GlobalID.from_id(principal_id)
-    except ValueError:
-        return principal_id
-    if global_id.type_name == graphql_type_name:
-        return global_id.node_id
+    del graphql_type_name
     return principal_id
