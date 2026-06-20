@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  dateFromUnknown,
   dateFromValue,
   formatDate,
   formatDateStorage,
@@ -34,6 +35,8 @@ describe("date formatting", () => {
   test("formats storage and time-control values through date-fns", () => {
     const date = new Date(2026, 5, 18, 9, 7);
 
+    expect(dateFromUnknown({})).toBeNull();
+    expect(dateFromValue(date.getTime())?.getTime()).toBe(date.getTime());
     expect(formatDateStorage(date)).toBe("2026-06-18");
     expect(formatDateStorage(null)).toBeNull();
     expect(formatDateTimeStorage(date)).toBe("2026-06-18T09:07");

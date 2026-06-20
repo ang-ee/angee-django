@@ -86,7 +86,6 @@ export const enIamMessages: Record<string, string> = {
   "iam.oidc.column.status": "Status",
 
   // Grants page.
-  "iam.grants.group.namespace": "Namespace",
   "iam.grants.column.principal": "Principal",
   "iam.grants.column.role": "Role",
   "iam.grants.column.namespace": "Namespace",

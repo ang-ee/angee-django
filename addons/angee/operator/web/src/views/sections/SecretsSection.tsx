@@ -4,7 +4,6 @@ import {
   RowsListView,
   useConfirm,
   usePrompt,
-  useToast,
   type ListColumn,
 } from "@angee/base";
 import { useCallback, useMemo, type ReactNode } from "react";
@@ -16,10 +15,10 @@ import {
 } from "../../data/documents.daemon";
 import { useOperatorAction, useOperatorSnapshot } from "../../data/transport";
 import type { SecretRef } from "../../data/types";
-import { runDaemonAction } from "../parts/run-action";
+import { daemonRowsByName, type DaemonRow } from "../parts/daemon-rows";
+import { useRunDaemonAction } from "../parts/run-action";
 
-// RowsListView keys rows by `id`; the daemon identifies a secret by name.
-type SecretRowData = SecretRef & { id: string };
+type SecretRowData = DaemonRow<SecretRef>;
 
 /** Secrets pane: declared secrets (presence only) + set (via a prompt) / delete. */
 export function SecretsSection(): ReactNode {
@@ -27,11 +26,7 @@ export function SecretsSection(): ReactNode {
   const prompt = usePrompt();
   const { snapshot, result, refetch } = useOperatorSnapshot({ secrets: true });
   const { setSecret, deleteSecret, busy } = useSecretActions(refetch);
-
-  const rows = useMemo<readonly SecretRowData[]>(
-    () => (snapshot?.secrets ?? []).map((secret) => ({ ...secret, id: secret.name })),
-    [snapshot],
-  );
+  const rows = daemonRowsByName(snapshot?.secrets ?? []);
 
   // The set form is a prompt (a form surface), not a panel crammed above the list.
   // A row's name pre-fills it; the toolbar action collects an arbitrary name.
@@ -160,12 +155,7 @@ export function SecretsSection(): ReactNode {
   );
 }
 
-/**
- * The two secret mutations — set (prompt-driven) and delete (per-row, confirmed)
- * — each run via {@link runDaemonAction} and surface a failure as a toast; the
- * live snapshot then reflects the new state, so neither needs a local result
- * store. `setSecret` returns whether it succeeded.
- */
+/** Secret mutations: prompt-driven set plus per-row confirmed delete. */
 function useSecretActions(refetch: () => void): {
   setSecret: (name: string, value: string) => Promise<boolean>;
   deleteSecret: (secret: SecretRef) => void;
@@ -173,7 +163,7 @@ function useSecretActions(refetch: () => void): {
 } {
   const t = useOperatorT();
   const confirm = useConfirm();
-  const toast = useToast();
+  const runDaemon = useRunDaemonAction(refetch);
 
   const set = useOperatorAction(SECRET_SET_MUTATION);
   const remove = useOperatorAction(SECRET_DELETE_MUTATION);
@@ -181,15 +171,13 @@ function useSecretActions(refetch: () => void): {
 
   const setSecret = useCallback(
     (name: string, value: string): Promise<boolean> =>
-      runDaemonAction({
+      runDaemon({
         run: set.run,
         field: "secretSet",
         variables: { name, value },
         label: t("operator.secrets.set.label"),
-        toast,
-        refetch,
       }),
-    [refetch, set.run, t, toast],
+    [runDaemon, set.run, t],
   );
 
   const deleteSecret = useCallback(
@@ -202,17 +190,15 @@ function useSecretActions(refetch: () => void): {
           danger: true,
         });
         if (!ok) return;
-        await runDaemonAction({
+        await runDaemon({
           run: remove.run,
           field: "secretDelete",
           variables: { name: secret.name },
           label: t("operator.secrets.delete.label"),
-          toast,
-          refetch,
         });
       })();
     },
-    [confirm, refetch, remove.run, t, toast],
+    [confirm, remove.run, runDaemon, t],
   );
 
   return { setSecret, deleteSecret, busy };

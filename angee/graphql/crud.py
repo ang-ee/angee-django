@@ -23,7 +23,7 @@ from strawberry_django.permissions import filter_with_perms
 
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.deletion import DeletePreview, delete_by_public_id
-from angee.graphql.ids import PublicID, coerce_relation_public_ids, instance_for_id
+from angee.graphql.ids import PublicID, coerce_relation_public_ids, require_instance_for_id
 from angee.graphql.introspection import django_model, surface_name
 
 
@@ -240,7 +240,7 @@ def _resolve_for_write(
 
     queryset = _write_queryset(model)
     if key_attr in (None, "id", PUBLIC_ID_FIELD_NAME):
-        instance = instance_for_id(model, key, queryset=queryset)
+        return require_instance_for_id(model, key, queryset=queryset)
     else:
         assert key_attr is not None
         try:

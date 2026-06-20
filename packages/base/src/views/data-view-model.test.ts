@@ -208,6 +208,20 @@ describe("data-view model", () => {
     });
   });
 
+  test("returns no optional filter when both sides are empty", () => {
+    expect(Filter.combineOptional(undefined, {})).toBeUndefined();
+  });
+
+  test("keeps optional conflicting filters under object-shaped AND", () => {
+    expect(Filter.combineOptional(
+      { status: { exact: "ACTIVE" } },
+      { status: { exact: "DRAFT" } },
+    )).toEqual({
+      status: { exact: "ACTIVE" },
+      AND: { status: { exact: "DRAFT" } },
+    });
+  });
+
   test("keeps conflicting filter constraints under object-shaped AND", () => {
     const filter = Filter.combine(
       { updatedAt: { gte: "2026-01-01" } },

@@ -8,7 +8,7 @@ from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any
 
-from django.apps import AppConfig, apps
+from django.apps import apps
 from django.core.asgi import get_asgi_application
 
 from angee.addons import addon_contribution
@@ -43,14 +43,8 @@ def _websocket_urlpatterns() -> list[object]:
 
     patterns: list[object] = []
     for app_config in apps.get_app_configs():
-        patterns.extend(_addon_websocket_urlpatterns(app_config))
+        patterns.extend(addon_contribution(app_config, "asgi", "websocket_urlpatterns", allow_callable=True))
     return patterns
-
-
-def _addon_websocket_urlpatterns(app_config: AppConfig) -> list[object]:
-    """Return WebSocket URL patterns from one addon's conventional ``asgi.py``."""
-
-    return addon_contribution(app_config, "asgi", "websocket_urlpatterns", allow_callable=True)
 
 
 def _http_mounts() -> list[tuple[str, Any]]:
@@ -58,22 +52,11 @@ def _http_mounts() -> list[tuple[str, Any]]:
 
     mounts: list[tuple[str, Any]] = []
     for app_config in apps.get_app_configs():
-        mounts.extend(_addon_http_mounts(app_config))
+        mounts.extend(
+            (str(prefix), app)
+            for prefix, app in addon_contribution(app_config, "asgi", "http_mounts", allow_callable=True)
+        )
     return mounts
-
-
-def _addon_http_mounts(app_config: AppConfig) -> list[tuple[str, Any]]:
-    """Return HTTP-mount contributions from one addon's conventional ``asgi.py``.
-
-    The mirror of :func:`_addon_websocket_urlpatterns` for HTTP sub-apps: an addon
-    exposes ``http_mounts()`` (or ``http_mounts``) returning ``(prefix, app)`` pairs
-    — e.g. the MCP addon's StreamableHTTP app at ``/mcp``.
-    """
-
-    return [
-        (str(prefix), app)
-        for prefix, app in addon_contribution(app_config, "asgi", "http_mounts", allow_callable=True)
-    ]
 
 
 Scope = MutableMapping[str, Any]

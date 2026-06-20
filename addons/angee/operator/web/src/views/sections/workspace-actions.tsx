@@ -1,4 +1,4 @@
-import { useConfirm, useToast } from "@angee/base";
+import { useConfirm } from "@angee/base";
 import { useMemo } from "react";
 
 import {
@@ -8,25 +8,20 @@ import {
 import { useOperatorT } from "../../i18n";
 import { useOperatorAction } from "../../data/transport";
 import type { WorkspaceRef } from "../../data/types";
-import { runDaemonAction } from "../parts/run-action";
+import { useRunDaemonAction } from "../parts/run-action";
 import type { RowAction } from "../parts/RowActions";
 
 /** A lifecycle action for a workspace: its label, tone, and bound handler. */
 export type WorkspaceRowAction = RowAction<WorkspaceRef>;
 
-/**
- * The two workspace lifecycle actions, each wrapped to confirm (when destructive),
- * run via {@link runDaemonAction}, and surface a failure as a toast — the live
- * snapshot then reflects the new state, so callers need no local result store.
- * Shared by the detail page and the embedded WorkspaceRow.
- */
+/** Workspace lifecycle actions shared by the detail page and embedded WorkspaceRow. */
 export function useWorkspaceActions(refetch: () => void): {
   actions: readonly WorkspaceRowAction[];
   busy: boolean;
 } {
   const t = useOperatorT();
   const confirm = useConfirm();
-  const toast = useToast();
+  const runDaemon = useRunDaemonAction(refetch);
 
   const syncBase = useOperatorAction(WORKSPACE_SYNC_BASE_MUTATION);
   const destroy = useOperatorAction(WORKSPACE_DESTROY_MUTATION);
@@ -38,13 +33,11 @@ export function useWorkspaceActions(refetch: () => void): {
         label: t("operator.workspaces.syncBase"),
         variant: "secondary",
         perform: (workspace: WorkspaceRef) => {
-          void runDaemonAction({
+          void runDaemon({
             run: syncBase.run,
             field: "workspaceSyncBase",
             variables: { name: workspace.name },
             label: t("operator.workspaces.syncBase"),
-            toast,
-            refetch,
           });
         },
       },
@@ -60,19 +53,17 @@ export function useWorkspaceActions(refetch: () => void): {
               danger: true,
             });
             if (!ok) return;
-            await runDaemonAction({
+            await runDaemon({
               run: destroy.run,
               field: "workspaceDestroy",
               variables: { name: workspace.name, purge: false },
               label: t("operator.workspaces.destroy"),
-              toast,
-              refetch,
             });
           })();
         },
       },
     ] satisfies readonly WorkspaceRowAction[];
-  }, [confirm, destroy.run, refetch, syncBase.run, t, toast]);
+  }, [confirm, destroy.run, runDaemon, syncBase.run, t]);
 
   return { actions, busy };
 }

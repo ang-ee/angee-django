@@ -70,7 +70,7 @@ class AnthropicInferenceBackend(SDKInferenceBackend):
 
         system, messages = self._anthropic_messages(request)
         params: dict[str, Any] = {
-            **self._message_options(request),
+            **self._message_options(request, reserved=_RESERVED_MESSAGE_OPTIONS, owner="Anthropic"),
             "model": self._provider_model(request.model),
             "messages": messages,
             "max_tokens": request.max_tokens,
@@ -84,16 +84,11 @@ class AnthropicInferenceBackend(SDKInferenceBackend):
         message = self.client().messages.create(**params)
         raw = self._json_object(message)
         return InferenceResponse(
-            text=self._content_text(getattr(message, "content", [])),
+            text=self._string_content(getattr(message, "content", [])),
             content=self._json_list(raw.get("content")),
             usage=self._json_object(raw.get("usage")),
             raw=raw,
         )
-
-    def _message_options(self, request: InferenceRequest) -> dict[str, Any]:
-        """Return allowed provider-specific Messages API kwargs."""
-
-        return super()._message_options(request, reserved=_RESERVED_MESSAGE_OPTIONS, owner="Anthropic")
 
     def _anthropic_messages(self, request: InferenceRequest) -> tuple[str, list[dict[str, Any]]]:
         """Return Anthropic Messages API ``system`` and ``messages`` arguments."""

@@ -37,6 +37,7 @@ import {
   type WidgetDefinition,
   type WidgetField,
 } from "../widgets";
+import { dateFromUnknown, formatDate } from "../widgets/date-format";
 import {
   fieldWidgetId,
   isRelationIdField,
@@ -1623,14 +1624,8 @@ function shortRecordId(value: string): string {
 }
 
 function formatRecordDate(value: unknown): string {
-  const text = String(value);
-  const date = new Date(text);
-  if (Number.isNaN(date.getTime())) return text;
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  }).format(date);
+  const date = dateFromUnknown(value);
+  return date ? formatDate(date) : String(value);
 }
 
 function formatWordCount(value: unknown): string {

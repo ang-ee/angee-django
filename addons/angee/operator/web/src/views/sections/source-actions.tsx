@@ -1,4 +1,3 @@
-import { useToast } from "@angee/base";
 import { useMemo } from "react";
 
 import {
@@ -9,24 +8,19 @@ import {
 import { useOperatorT } from "../../i18n";
 import { useOperatorAction } from "../../data/transport";
 import type { SourceState } from "../../data/types";
-import { runDaemonAction } from "../parts/run-action";
+import { useRunDaemonAction } from "../parts/run-action";
 import type { RowAction } from "../parts/RowActions";
 
 /** A git action for a source: its label, tone, and bound handler. */
 export type SourceRowAction = RowAction<SourceState>;
 
-/**
- * The three source git actions, each run via {@link runDaemonAction} and
- * surfacing a failure as a toast — the live snapshot then reflects the new state,
- * so callers need no local result store. Sources have no destructive action, so
- * none confirms. Shared by the source detail page.
- */
+/** Source git actions shared by the source detail page. */
 export function useSourceActions(refetch: () => void): {
   actions: readonly SourceRowAction[];
   busy: boolean;
 } {
   const t = useOperatorT();
-  const toast = useToast();
+  const runDaemon = useRunDaemonAction(refetch);
 
   const fetchSource = useOperatorAction(SOURCE_FETCH_MUTATION);
   const pull = useOperatorAction(SOURCE_PULL_MUTATION);
@@ -48,17 +42,15 @@ export function useSourceActions(refetch: () => void): {
       label: def.label,
       variant: def.variant,
       perform: (source: SourceState) => {
-        void runDaemonAction({
+        void runDaemon({
           run: def.run,
           field: def.field,
           variables: { name: source.name },
           label: def.label,
-          toast,
-          refetch,
         });
       },
     }));
-  }, [fetchSource.run, pull.run, push.run, refetch, t, toast]);
+  }, [fetchSource.run, pull.run, push.run, runDaemon, t]);
 
   return { actions, busy };
 }

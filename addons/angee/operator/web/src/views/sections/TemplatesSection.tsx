@@ -10,9 +10,9 @@ import { useMemo, type ReactNode } from "react";
 import { useOperatorT } from "../../i18n";
 import { useOperatorSnapshot } from "../../data/transport";
 import type { TemplateDescriptor } from "../../data/types";
+import { daemonRows, type DaemonRow } from "../parts/daemon-rows";
 
-// RowsListView keys rows by `id`; a template is identified by its ref.
-type TemplateRow = TemplateDescriptor & { id: string };
+type TemplateRow = DaemonRow<TemplateDescriptor>;
 
 const MAX_INPUT_CHIPS = 6;
 
@@ -20,11 +20,7 @@ const MAX_INPUT_CHIPS = 6;
 export function TemplatesSection(): ReactNode {
   const t = useOperatorT();
   const { snapshot, result } = useOperatorSnapshot({ templates: true });
-
-  const rows = useMemo<readonly TemplateRow[]>(
-    () => (snapshot?.templates ?? []).map((template) => ({ ...template, id: template.ref })),
-    [snapshot],
-  );
+  const rows = daemonRows(snapshot?.templates ?? [], (template) => template.ref);
 
   const columns = useMemo<readonly ListColumn<TemplateRow>[]>(
     () => [

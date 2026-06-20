@@ -1001,31 +1001,31 @@ def test_composer_rejects_dependency_cycles(
         Composer(settings).compose_settings()
 
 
-def test_root_urlconf_ignores_plain_django_dependency_urls() -> None:
+def test_addon_contribution_ignores_plain_django_dependency_urls() -> None:
     """Plain Django dependencies must not leak conventional URLs into Angee."""
 
     import django.contrib.auth as auth_module
     from django.contrib.auth.apps import AuthConfig
 
-    from angee import urls as angee_urls
+    from angee.addons import addon_contribution
 
     auth_config = AuthConfig("django.contrib.auth", auth_module)
 
-    assert angee_urls._addon_urlpatterns(auth_config) == []
+    assert addon_contribution(auth_config, "urls", "urlpatterns") == []
 
 
-def test_root_urlconf_requires_explicit_angee_addon_marker() -> None:
+def test_addon_contribution_requires_explicit_angee_addon_marker() -> None:
     """A ``depends_on`` attribute alone does not opt an app into route mounting."""
 
     import django.contrib.auth as auth_module
     from django.contrib.auth.apps import AuthConfig
 
-    from angee import urls as angee_urls
+    from angee.addons import addon_contribution
 
     auth_config = AuthConfig("django.contrib.auth", auth_module)
     auth_config.depends_on = ()  # type: ignore[attr-defined]
 
-    assert angee_urls._addon_urlpatterns(auth_config) == []
+    assert addon_contribution(auth_config, "urls", "urlpatterns") == []
 
 
 def test_addon_contribution_loads_callable_conventional_modules(

@@ -23,7 +23,7 @@ import type {
   ModelMetadata,
   Row,
 } from "@angee/sdk";
-import { format, isValid, parseISO } from "date-fns";
+import { format } from "date-fns";
 import { Spinner } from "../ui/spinner";
 
 import { Glyph } from "../chrome/Glyph";
@@ -50,6 +50,7 @@ import {
   TableRow,
 } from "../ui/table";
 import { useResolvedWidget } from "../widgets";
+import { dateFromUnknown } from "../widgets/date-format";
 import type { DataViewContextValue } from "./data-view-context";
 import type { DataViewGroup } from "./data-view-model";
 import type {
@@ -930,7 +931,7 @@ export function groupKey(
     ? enumLabelFromMetadata(metadata, group.field, value)
     : null;
   if (enumLabel) return enumLabel;
-  const date = parseRowDate(value);
+  const date = dateFromUnknown(value);
   if (!date) return typeof value === "string" ? statusLabel(value) : String(value);
   if (group.granularity === "year") return String(date.getFullYear());
   if (group.granularity === "quarter") {
@@ -988,7 +989,7 @@ export function cellContent<TRow extends Row>(
       </span>
     );
   }
-  const date = looksLikeDateField(column.field) ? parseRowDate(value) : null;
+  const date = looksLikeDateField(column.field) ? dateFromUnknown(value) : null;
   if (date) return <RelativeTime value={date} />;
   return displayValue(value);
 }
@@ -1406,20 +1407,4 @@ function isInternalHref(href: string): boolean {
 
 export function looksLikeDateField(field: string): boolean {
   return /(?:At|Date|On)$/.test(field);
-}
-
-/**
- * Coerce a row cell value to a `Date`, or `null`. One owner (date-fns, per
- * `docs/stack.md`) so list cells, grouping, and the timeline bucket a value the
- * same way: a `Date` passes through, a number is an epoch, a string is ISO-parsed.
- */
-export function parseRowDate(value: unknown): Date | null {
-  if (value instanceof Date) return isValid(value) ? value : null;
-  if (typeof value === "number") {
-    const date = new Date(value);
-    return isValid(date) ? date : null;
-  }
-  if (typeof value !== "string") return null;
-  const date = parseISO(value);
-  return isValid(date) ? date : null;
 }

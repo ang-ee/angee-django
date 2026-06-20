@@ -555,6 +555,84 @@ def _integration_impl_class(impl_class: str) -> type[IntegrationImpl]:
     return cast(type[IntegrationImpl], Integration.objects.impl_class_for_key(impl_class))
 
 
+def integration_create_attrs(
+    data: Any,
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    """Resolve inherited ``Integration`` create fields from GraphQL public ids."""
+
+    credential = (
+        None
+        if data.credential is None
+        else resolve_action_target(
+            Credential,
+            data.credential,
+            reason=f"{reason}.credential",
+        )
+    )
+    account = (
+        strawberry.UNSET
+        if data.account is strawberry.UNSET
+        else (
+            None
+            if data.account is None
+            else resolve_action_target(
+                ExternalAccount,
+                data.account,
+                reason=f"{reason}.account",
+            )
+        )
+    )
+    attrs: dict[str, Any] = {
+        "vendor": resolve_action_target(Vendor, data.vendor, reason=f"{reason}.vendor"),
+        "owner": _user_from_public_id(data.owner),
+    }
+    if credential is not None:
+        attrs["credential"] = credential
+    if account is not strawberry.UNSET:
+        attrs["account"] = account
+    if data.status not in (strawberry.UNSET, None):
+        attrs["status"] = data.status
+    return attrs
+
+
+def apply_integration_patch_fields(
+    target: Any,
+    data: Any,
+    *,
+    reason: str,
+    ignore_null_status: bool = False,
+) -> set[str]:
+    """Apply inherited ``Integration`` patch fields and return provided names."""
+
+    provided: set[str] = set()
+    if data.vendor is not strawberry.UNSET:
+        target.vendor = resolve_action_target(Vendor, data.vendor, reason=f"{reason}.vendor")
+        provided.add("vendor")
+    if data.owner is not strawberry.UNSET:
+        target.owner = _user_from_public_id(data.owner)
+        provided.add("owner")
+    if data.credential is not strawberry.UNSET:
+        target.credential = (
+            None
+            if data.credential is None
+            else resolve_action_target(Credential, data.credential, reason=f"{reason}.credential")
+        )
+        provided.add("credential")
+    if data.account is not strawberry.UNSET:
+        target.account = (
+            None
+            if data.account is None
+            else resolve_action_target(ExternalAccount, data.account, reason=f"{reason}.account")
+        )
+        provided.add("account")
+    if data.status is not strawberry.UNSET and (data.status is not None or not ignore_null_status):
+        target.status = data.status
+        provided.add("status")
+    return provided
+
+
 def _oauth_client_for_integration(integration: Any) -> Any:
     """Return the OAuth client this integration implementation connects through."""
 
@@ -1313,47 +1391,10 @@ class IntegrationCreateMutation:
     def create_integration(self, data: IntegrationInput) -> IntegrationType:
         """Create a draft integration parent row."""
 
-        vendor = resolve_action_target(
-            Vendor,
-            data.vendor,
-            reason="integrate.graphql.integration.create.vendor",
-        )
-        owner = _user_from_public_id(data.owner)
-        credential = (
-            None
-            if data.credential is None
-            else resolve_action_target(
-                Credential,
-                data.credential,
-                reason="integrate.graphql.integration.create.credential",
-            )
-        )
-        account = (
-            strawberry.UNSET
-            if data.account is strawberry.UNSET
-            else (
-                None
-                if data.account is None
-                else resolve_action_target(
-                    ExternalAccount,
-                    data.account,
-                    reason="integrate.graphql.integration.create.account",
-                )
-            )
-        )
         impl_value = None if data.impl_class is strawberry.UNSET else data.impl_class
         impl_key = Integration.impl_key_for("impl_class", impl_value, default="none")
-        attrs: dict[str, Any] = {
-            "vendor": vendor,
-            "owner": owner,
-            "impl_class": impl_key,
-        }
-        if credential is not None:
-            attrs["credential"] = credential
-        if account is not strawberry.UNSET:
-            attrs["account"] = account
-        if data.status not in (strawberry.UNSET, None):
-            attrs["status"] = data.status
+        attrs = integration_create_attrs(data, reason="integrate.graphql.integration.create")
+        attrs["impl_class"] = impl_key
         with system_context(reason="integrate.graphql.integration.create"):
             integration = Integration.objects.create(**attrs)
         return cast(IntegrationType, integration)
@@ -1741,37 +1782,8 @@ class VcsBridgeCreateMutation:
     def create_vcs_bridge(self, data: VcsBridgeInput) -> VcsBridgeType:
         """Create a VCS child row directly."""
 
-        vendor = resolve_action_target(
-            Vendor,
-            data.vendor,
-            reason="integrate.graphql.vcs_bridge.create.vendor",
-        )
-        owner = _user_from_public_id(data.owner)
-        credential = (
-            None
-            if data.credential is None
-            else resolve_action_target(
-                Credential,
-                data.credential,
-                reason="integrate.graphql.vcs_bridge.create.credential",
-            )
-        )
-        account = (
-            strawberry.UNSET
-            if data.account is strawberry.UNSET
-            else (
-                None
-                if data.account is None
-                else resolve_action_target(
-                    ExternalAccount,
-                    data.account,
-                    reason="integrate.graphql.vcs_bridge.create.account",
-                )
-            )
-        )
-        attrs: dict[str, Any] = {
-            "vendor": vendor,
-            "owner": owner,
+        attrs = {
+            **integration_create_attrs(data, reason="integrate.graphql.vcs_bridge.create"),
             "backend_class": VcsBridge.impl_key_for(
                 "backend_class",
                 None if data.backend_class is strawberry.UNSET else data.backend_class,
@@ -1779,14 +1791,8 @@ class VcsBridgeCreateMutation:
             ),
             "webhook_secret": data.webhook_secret,
         }
-        if credential is not None:
-            attrs["credential"] = credential
-        if account is not strawberry.UNSET:
-            attrs["account"] = account
         if data.config is not strawberry.UNSET:
             attrs["config"] = data.config
-        if data.status not in (strawberry.UNSET, None):
-            attrs["status"] = data.status
         with system_context(reason="integrate.graphql.vcs_bridge.create"), transaction.atomic():
             bridge = VcsBridge.objects.create(**attrs)
         return cast(VcsBridgeType, bridge)
@@ -1805,46 +1811,15 @@ class VcsBridgeUpdateMutation:
             data.id,
             reason="integrate.graphql.vcs_bridge.update",
         )
-        provided: set[str] = set()
         backend_changed = False
         with system_context(reason="integrate.graphql.vcs_bridge.update"), transaction.atomic():
-            if data.vendor is not strawberry.UNSET:
-                bridge.vendor = resolve_action_target(
-                    Vendor,
-                    data.vendor,
-                    reason="integrate.graphql.vcs_bridge.update.vendor",
-                )
-                provided.add("vendor")
-            if data.owner is not strawberry.UNSET:
-                bridge.owner = _user_from_public_id(data.owner)
-                provided.add("owner")
-            if data.credential is not strawberry.UNSET:
-                bridge.credential = (
-                    None
-                    if data.credential is None
-                    else resolve_action_target(
-                        Credential,
-                        data.credential,
-                        reason="integrate.graphql.vcs_bridge.update.credential",
-                    )
-                )
-                provided.add("credential")
-            if data.account is not strawberry.UNSET:
-                bridge.account = (
-                    None
-                    if data.account is None
-                    else resolve_action_target(
-                        ExternalAccount,
-                        data.account,
-                        reason="integrate.graphql.vcs_bridge.update.account",
-                    )
-                )
-                provided.add("account")
+            provided = apply_integration_patch_fields(
+                bridge,
+                data,
+                reason="integrate.graphql.vcs_bridge.update",
+            )
             if data.backend_class is not strawberry.UNSET:
                 backend_changed = bridge.set_impl_key("backend_class", data.backend_class, default="local")
-            if data.status is not strawberry.UNSET:
-                bridge.status = data.status
-                provided.add("status")
             if data.config is not strawberry.UNSET:
                 bridge.config = data.config
                 provided.add("config")

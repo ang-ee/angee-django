@@ -10,7 +10,6 @@ import {
   Code,
   RowsListView,
   useConfirm,
-  type DataToolbarGroupOption,
   type ListColumn,
 } from "@angee/base";
 import {
@@ -34,17 +33,6 @@ import { useIamT } from "../i18n";
 export function GrantsPage(): ReactElement {
   const t = useIamT();
   const confirm = useConfirm();
-  const grantGroupOptions = useMemo<readonly DataToolbarGroupOption[]>(
-    () => [
-      {
-        id: "namespace",
-        label: t("iam.grants.group.namespace"),
-        group: { field: "namespace" },
-        type: "value",
-      },
-    ],
-    [t],
-  );
   const variables = useMemo<IAMGrantsVariables>(
     () => ({ pagination: { offset: 0, limit: IAM_LIST_LIMIT } }),
     [],
@@ -150,7 +138,6 @@ export function GrantsPage(): ReactElement {
         columns={grantColumns}
         fetching={query.fetching}
         error={query.error}
-        groupOptions={grantGroupOptions}
         defaultGroup={{ field: "namespace" }}
         pageSize={50}
       />

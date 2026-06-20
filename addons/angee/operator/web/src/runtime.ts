@@ -55,7 +55,7 @@ export {
 } from "./data/provision";
 export type { TemplateMatch, WorkspaceStatusResult } from "./data/provision";
 
-export { runDaemonAction } from "./views/parts/run-action";
+export { runDaemonAction, useRunDaemonAction } from "./views/parts/run-action";
 export type { DaemonActionData, RunDaemonActionParams } from "./views/parts/run-action";
 
 export { StateTag } from "./views/parts/StateTag";

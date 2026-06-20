@@ -1,4 +1,4 @@
-import { useConfirm, useToast } from "@angee/base";
+import { useConfirm } from "@angee/base";
 import { useMemo } from "react";
 
 import {
@@ -11,25 +11,20 @@ import {
 import { useOperatorT } from "../../i18n";
 import { useOperatorAction } from "../../data/transport";
 import type { ServiceState } from "../../data/types";
-import { runDaemonAction } from "../parts/run-action";
+import { useRunDaemonAction } from "../parts/run-action";
 import type { RowAction } from "../parts/RowActions";
 
 /** A lifecycle action for a service: its label, tone, and bound handler. */
 export type ServiceRowAction = RowAction<ServiceState>;
 
-/**
- * The service lifecycle actions, each wrapped to confirm (when destructive),
- * run via {@link runDaemonAction}, and surface a failure as a toast — the live
- * snapshot then reflects the new state, so callers need no local result store.
- * Shared by the services list row, the detail page, and the embedded ServiceRow.
- */
+/** Service lifecycle actions shared by the list row, detail page, and embedded ServiceRow. */
 export function useServiceActions(refetch: () => void): {
   actions: readonly ServiceRowAction[];
   busy: boolean;
 } {
   const t = useOperatorT();
   const confirm = useConfirm();
-  const toast = useToast();
+  const runDaemon = useRunDaemonAction(refetch);
 
   const start = useOperatorAction(SERVICE_START_MUTATION);
   const stop = useOperatorAction(SERVICE_STOP_MUTATION);
@@ -64,13 +59,11 @@ export function useServiceActions(refetch: () => void): {
             });
             if (!ok) return;
           }
-          await runDaemonAction({
+          await runDaemon({
             run,
             field,
             variables: { name: service.name },
             label,
-            toast,
-            refetch,
           });
         })();
       },
@@ -82,7 +75,7 @@ export function useServiceActions(refetch: () => void): {
         label: t("operator.services.recreate"),
         variant: "ghost",
         perform: (service) => {
-          void runDaemonAction({
+          void runDaemon({
             run: recreate.run,
             field: "stackUp",
             // Recreate rebuilds the image and recreates the container, so a service-template change
@@ -91,15 +84,13 @@ export function useServiceActions(refetch: () => void): {
             // rebuilds an image, so scope `stackUp` to this one service.
             variables: { input: { services: [service.name], build: true } },
             label: t("operator.services.recreate"),
-            toast,
-            refetch,
           });
         },
       },
       named("serviceStop", t("operator.services.stop"), "ghost", stop.run),
       named("serviceDestroy", t("operator.services.destroy"), "ghost", destroy.run, true),
     ] satisfies readonly ServiceRowAction[];
-  }, [confirm, destroy.run, recreate.run, refetch, restart.run, start.run, stop.run, t, toast]);
+  }, [confirm, destroy.run, recreate.run, restart.run, runDaemon, start.run, stop.run, t]);
 
   return { actions, busy };
 }

@@ -151,6 +151,11 @@ export class Filter {
     return Filter.from(left).and(right);
   }
 
+  static combineOptional(left: unknown, right: unknown): DataViewFilter | undefined {
+    const filter = Filter.combine(left, right);
+    return Object.keys(filter).length > 0 ? filter : undefined;
+  }
+
   static facetFromFilter(filter: DataViewFilter): FilterFacet | null {
     const [entry] = Object.entries(filter);
     if (!entry) return null;

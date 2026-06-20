@@ -10,13 +10,13 @@ import { useOperatorT } from "../../i18n";
 import { useOperatorSnapshot } from "../../data/transport";
 import type { ServiceState } from "../../data/types";
 import { serviceDetailPath } from "../../lib/paths";
+import { daemonRowsByName, type DaemonRow } from "../parts/daemon-rows";
 import { OperatorSection } from "../parts/OperatorSection";
 import { RowActions } from "../parts/RowActions";
 import { StateTag } from "../parts/StateTag";
 import { useServiceActions } from "./service-actions";
 
-// RowsListView keys rows by `id`; the daemon identifies a service by name.
-type ServiceRowData = ServiceState & { id: string };
+type ServiceRowData = DaemonRow<ServiceState>;
 
 export interface ServicesSectionProps {
   /** Restrict the list to these service names; omit to show every service. */
@@ -27,13 +27,10 @@ export interface ServicesSectionProps {
 export function ServicesSection({ names }: ServicesSectionProps = {}): ReactNode {
   const t = useOperatorT();
   const { snapshot, result } = useOperatorSnapshot({ services: true });
-
-  const rows = useMemo<readonly ServiceRowData[]>(
-    () =>
-      (snapshot?.services ?? [])
-        .filter((service) => names === undefined || names.includes(service.name))
-        .map((service) => ({ ...service, id: service.name })),
-    [names, snapshot],
+  const rows = daemonRowsByName(
+    (snapshot?.services ?? []).filter(
+      (service) => names === undefined || names.includes(service.name),
+    ),
   );
 
   const columns = useMemo<readonly ListColumn<ServiceRowData>[]>(

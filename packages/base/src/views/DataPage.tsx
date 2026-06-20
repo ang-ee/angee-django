@@ -35,9 +35,9 @@ import {
   useDataView,
   useDataViewMaybe,
 } from "./data-view-context";
-import { useSyncPageSize } from "./data-view-surface";
+import { useResourceListState, useSyncPageSize } from "./data-view-surface";
 import {
-  type DataViewFilter,
+  Filter,
   type DataViewDefaultGroups,
   type DataViewGroup,
   type DataViewKind,
@@ -816,7 +816,7 @@ function ListStateProbe<TRow extends Row>({
     return [...paths];
   }, [columns, fields]);
   const mergedFilter = React.useMemo(
-    () => mergeFilters(filter, dataView.state.filter),
+    () => Filter.combineOptional(filter, dataView.state.filter),
     [dataView.state.filter, filter],
   );
   const sortOrder = dataView.state.resourceOrder();
@@ -827,29 +827,7 @@ function ListStateProbe<TRow extends Row>({
     pageSize: dataView.state.pageSize,
     page: dataView.state.page,
   });
-  const rows = list.rows as readonly TRow[];
-  const listState = React.useMemo<ListViewState<TRow>>(
-    () => ({
-      rows,
-      total: list.total,
-      page: list.page,
-      pageSize: list.pageSize,
-      pageCount: list.pageCount,
-      hasNext: list.hasNext,
-      hasPrev: list.hasPrev,
-      fetching: list.fetching,
-    }),
-    [
-      rows,
-      list.total,
-      list.page,
-      list.pageSize,
-      list.pageCount,
-      list.hasNext,
-      list.hasPrev,
-      list.fetching,
-    ],
-  );
+  const listState = useResourceListState<TRow>(list);
   React.useEffect(() => {
     onListStateChange(listState);
   }, [listState, onListStateChange]);
@@ -1027,14 +1005,6 @@ function buildRecordNavigation<TRow extends Row>({
             }
           : undefined,
   };
-}
-
-function mergeFilters<TRow extends Row>(
-  base: ListViewProps<TRow>["filter"],
-  view: DataViewFilter,
-): ListViewProps<TRow>["filter"] {
-  if (!base) return Object.keys(view).length > 0 ? view : undefined;
-  return { ...base, ...view };
 }
 
 function listStatesEqual<TRow extends Row>(

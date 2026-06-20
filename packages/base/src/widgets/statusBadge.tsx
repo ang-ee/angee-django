@@ -1,29 +1,9 @@
 import type { ReactElement } from "react";
 
 import { Badge } from "../ui/badge";
-import { Select } from "../ui/select";
-import { widgetLabel } from "./label";
 import { statusTone } from "./status-tones";
+import { StatusSelectEdit } from "./statusSelectEdit";
 import { optionLabel, type WidgetDefinition, type WidgetRenderProps } from "./types";
-
-function StatusBadgeEdit({
-  value,
-  onChange,
-  field,
-  readOnly,
-}: WidgetRenderProps<string>): ReactElement {
-  return (
-    <Select
-      value={value ?? ""}
-      options={field?.options ?? []}
-      readOnly={readOnly}
-      disabled={readOnly}
-      aria-label={widgetLabel(field, "Status")}
-      placeholder={widgetLabel(field, "Status")}
-      onValueChange={(next) => onChange?.(next)}
-    />
-  );
-}
 
 function StatusBadgeRead({
   value,
@@ -42,7 +22,7 @@ function StatusBadgeRead({
 }
 
 export const statusBadgeWidget = {
-  edit: StatusBadgeEdit,
+  edit: StatusSelectEdit,
   read: StatusBadgeRead,
   cell: StatusBadgeRead,
 } satisfies WidgetDefinition<string>;

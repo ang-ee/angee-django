@@ -37,6 +37,7 @@ from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,
     Credential,
+    ExternalAccount,
     Integration,
     OAuthClient,
     SchemaAddon,
@@ -350,13 +351,25 @@ def test_update_inference_provider_backend_rematerializes_defaults(agents_consol
         name="Custom",
         credential_env="CUSTOM_KEY",
     )
+    with system_context(reason="test.agents.provider_update.account"):
+        oauth_client = OAuthClient.objects.create(
+            slug="agt-provider-update-account",
+            display_name="Provider Update Account",
+        )
+        account = ExternalAccount.objects.link(
+            oauth_client,
+            "agt-provider-update-ext",
+            owner=provider.owner,
+            email="provider-update@example.test",
+        )
     mutation = """
-        mutation UpdateProvider($id: ID!) {
-          updateInferenceProvider(data: {id: $id, backendClass: "anthropic"}) {
+        mutation UpdateProvider($id: ID!, $account: ID!) {
+          updateInferenceProvider(data: {id: $id, backendClass: "anthropic", account: $account}) {
             backendClass
             name
             credentialEnv
             vendor { slug }
+            account { externalId }
           }
         }
     """
@@ -365,7 +378,7 @@ def test_update_inference_provider_backend_rematerializes_defaults(agents_consol
         _execute(
             _schema(),
             mutation,
-            {"id": _public_id(provider.sqid)},
+            {"id": _public_id(provider.sqid), "account": _public_id(account.sqid)},
             user=admin,
         )
     )["updateInferenceProvider"]
@@ -375,9 +388,11 @@ def test_update_inference_provider_backend_rematerializes_defaults(agents_consol
         "name": "Anthropic",
         "credentialEnv": "ANTHROPIC_API_KEY",
         "vendor": {"slug": "anthropic"},
+        "account": {"externalId": "agt-provider-update-ext"},
     }
     provider.refresh_from_db()
     assert provider.vendor_id == anthropic.pk
+    assert provider.account_id == account.pk
 
 
 def test_connect_inference_provider_uses_provider_backend_oauth_client(agents_console_tables: None) -> None:

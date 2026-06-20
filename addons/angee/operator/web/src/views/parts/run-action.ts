@@ -1,5 +1,7 @@
 import { errorMessage } from "@angee/sdk";
-import type { ToastApi } from "@angee/base";
+import { useCallback } from "react";
+
+import { useToast, type ToastApi } from "@angee/base";
 
 /** A daemon mutation payload keyed by its single root field (shape varies by op). */
 export type DaemonActionData = Record<string, unknown>;
@@ -16,6 +18,19 @@ export type RunDaemonActionParams<
   refetch: () => void;
   toast: Pick<ToastApi, "danger">;
 };
+
+type BoundRunDaemonAction = <Data extends object, V extends Record<string, unknown>>(
+  params: Omit<RunDaemonActionParams<Data, V>, "refetch" | "toast">,
+) => Promise<boolean>;
+
+/** Bind daemon action failures to the console toast queue and snapshot refresh. */
+export function useRunDaemonAction(refetch: () => void): BoundRunDaemonAction {
+  const toast = useToast();
+  return useCallback<BoundRunDaemonAction>(
+    (params) => runDaemonAction({ ...params, refetch, toast }),
+    [refetch, toast],
+  );
+}
 
 /**
  * Run a daemon mutation safely for a section pane: run, surface failures as

@@ -6,7 +6,6 @@ import {
   CardTitle,
   RowsListView,
   useConfirm,
-  useToast,
   type ListColumn,
 } from "@angee/base";
 import { useMemo, type ReactNode } from "react";
@@ -21,7 +20,8 @@ import {
 import { useOperatorT } from "../../i18n";
 import { useOperatorAction, useOperatorSnapshot } from "../../data/transport";
 import type { JobState } from "../../data/types";
-import { runDaemonAction } from "../parts/run-action";
+import { daemonRowsByName, type DaemonRow } from "../parts/daemon-rows";
+import { useRunDaemonAction } from "../parts/run-action";
 
 /** A stack lifecycle control: its label, tone, variables, and handler. */
 interface StackAction {
@@ -33,19 +33,14 @@ interface StackAction {
   perform: () => Promise<boolean>;
 }
 
-// RowsListView keys rows by `id`; the daemon identifies a job by name.
-type JobRowData = JobState & { id: string };
+type JobRowData = DaemonRow<JobState>;
 
 /** Operations pane: the daemon job list with run + stack lifecycle controls. */
 export function OperationsSection(): ReactNode {
   const t = useOperatorT();
   const { snapshot, result, refetch } = useOperatorSnapshot({ operations: true });
   const { runJob, stackActions, runStack, busy } = useOperationActions(refetch);
-
-  const rows = useMemo<readonly JobRowData[]>(
-    () => (snapshot?.jobs ?? []).map((job) => ({ ...job, id: job.name })),
-    [snapshot],
-  );
+  const rows = daemonRowsByName(snapshot?.jobs ?? []);
 
   const columns = useMemo<readonly ListColumn<JobRowData>[]>(
     () => [
@@ -115,12 +110,7 @@ export function OperationsSection(): ReactNode {
   );
 }
 
-/**
- * The operations actions: the per-job run plus the four stack lifecycle controls.
- * Each runs via {@link runDaemonAction} and surfaces a failure as a toast — the
- * live snapshot then reflects the new state, so the pane needs no local result
- * store. The destroy control confirms (styled) before running.
- */
+/** Operations actions: per-job run plus stack lifecycle controls. */
 function useOperationActions(refetch: () => void): {
   runJob: (job: JobState) => void;
   stackActions: readonly StackAction[];
@@ -129,7 +119,7 @@ function useOperationActions(refetch: () => void): {
 } {
   const t = useOperatorT();
   const confirm = useConfirm();
-  const toast = useToast();
+  const runDaemon = useRunDaemonAction(refetch);
 
   const build = useOperatorAction(STACK_BUILD_MUTATION);
   const up = useOperatorAction(STACK_UP_MUTATION);
@@ -145,16 +135,14 @@ function useOperationActions(refetch: () => void): {
 
   const runJob = useMemo(
     () => (job: JobState) => {
-      void runDaemonAction({
+      void runDaemon({
         run: jobRun.run,
         field: "jobRun",
         variables: { name: job.name },
         label: t("operator.operations.run"),
-        toast,
-        refetch,
       });
     },
-    [jobRun.run, refetch, t, toast],
+    [jobRun.run, runDaemon, t],
   );
 
   const stackActions = useMemo<readonly StackAction[]>(
@@ -164,13 +152,11 @@ function useOperationActions(refetch: () => void): {
         label: t("operator.operations.stack.build"),
         variant: "secondary",
         perform: () =>
-          runDaemonAction({
+          runDaemon({
             run: build.run,
             field: "stackBuild",
             variables: {},
             label: t("operator.operations.stack.build"),
-            toast,
-            refetch,
           }),
       },
       {
@@ -178,13 +164,11 @@ function useOperationActions(refetch: () => void): {
         label: t("operator.operations.stack.up"),
         variant: "secondary",
         perform: () =>
-          runDaemonAction({
+          runDaemon({
             run: up.run,
             field: "stackUp",
             variables: {},
             label: t("operator.operations.stack.up"),
-            toast,
-            refetch,
           }),
       },
       {
@@ -192,13 +176,11 @@ function useOperationActions(refetch: () => void): {
         label: t("operator.operations.stack.down"),
         variant: "ghost",
         perform: () =>
-          runDaemonAction({
+          runDaemon({
             run: down.run,
             field: "stackDown",
             variables: {},
             label: t("operator.operations.stack.down"),
-            toast,
-            refetch,
           }),
       },
       {
@@ -207,17 +189,15 @@ function useOperationActions(refetch: () => void): {
         variant: "ghost",
         dangerous: true,
         perform: () =>
-          runDaemonAction({
+          runDaemon({
             run: destroy.run,
             field: "stackDestroy",
             variables: { purge: false },
             label: t("operator.operations.stack.destroy"),
-            toast,
-            refetch,
           }),
       },
     ],
-    [build.run, destroy.run, down.run, refetch, t, toast, up.run],
+    [build.run, destroy.run, down.run, runDaemon, t, up.run],
   );
 
   const runStack = useMemo(

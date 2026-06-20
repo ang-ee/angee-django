@@ -4,7 +4,8 @@ import type { Row } from "@angee/sdk";
 
 import { cn } from "../lib/cn";
 import { TimelineEntry } from "../fragments/TimelineEntry";
-import { ListEmpty, parseRowDate } from "./ListInternals";
+import { dateFromUnknown } from "../widgets/date-format";
+import { ListEmpty } from "./ListInternals";
 import type { ListEmptyState } from "./list-view-types";
 
 /**
@@ -52,7 +53,7 @@ export function TimelineView<TRow extends Row = Row>({
   const emptyContent = emptyState ?? emptyMessage;
   const groups = useMemo<DayGroup<TRow>[]>(() => {
     const dated = rows
-      .map((row) => ({ row, date: parseRowDate(row[dateField]) }))
+      .map((row) => ({ row, date: dateFromUnknown(row[dateField]) }))
       .filter((entry): entry is { row: TRow; date: Date } => entry.date !== null)
       .sort((a, b) => b.date.getTime() - a.date.getTime());
     const buckets = new Map<string, DayGroup<TRow>>();
@@ -87,7 +88,7 @@ export function TimelineView<TRow extends Row = Row>({
                   <TimelineEntry
                     key={id}
                     title={titleField ? String(row[titleField] ?? "") : ""}
-                    timestamp={parseRowDate(row[dateField])}
+                    timestamp={dateFromUnknown(row[dateField])}
                     body={bodyField ? row[bodyField] : undefined}
                   />
                 );

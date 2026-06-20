@@ -10,6 +10,7 @@ import { useMemo, type ReactNode } from "react";
 import { useOperatorT } from "../../i18n";
 import { useOperatorSnapshot } from "../../data/transport";
 import type { GitOpsLink, GitOpsSummary } from "../../data/types";
+import type { DaemonRow } from "../parts/daemon-rows";
 import { StateTag } from "../parts/StateTag";
 
 interface SummaryTile {
@@ -27,8 +28,7 @@ const SUMMARY_TILES: readonly SummaryTile[] = [
   { id: "unpushed", labelKey: "operator.gitops.summary.unpushed" },
 ];
 
-// RowsListView keys rows by `id`; the daemon already stamps each link with one.
-type GitOpsRow = GitOpsLink & { id: string };
+type GitOpsRow = DaemonRow<GitOpsLink>;
 
 /** GitOps pane: a read-only topology summary above the per-link drift list. */
 export function GitOpsSection(): ReactNode {

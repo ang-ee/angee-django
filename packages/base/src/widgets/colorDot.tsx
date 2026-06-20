@@ -1,9 +1,8 @@
 import type { ReactElement } from "react";
 
-import { Select } from "../ui/select";
 import { StatusDot } from "../ui/status-icon";
-import { widgetLabel } from "./label";
 import { statusTone } from "./status-tones";
+import { StatusSelectEdit } from "./statusSelectEdit";
 import { optionLabel, type WidgetDefinition, type WidgetRenderProps } from "./types";
 
 /**
@@ -26,27 +25,8 @@ function ColorDotRead({ value, field }: WidgetRenderProps<string>): ReactElement
   );
 }
 
-function ColorDotEdit({
-  value,
-  onChange,
-  field,
-  readOnly,
-}: WidgetRenderProps<string>): ReactElement {
-  return (
-    <Select
-      value={value ?? ""}
-      options={field?.options ?? []}
-      readOnly={readOnly}
-      disabled={readOnly}
-      aria-label={widgetLabel(field, "Status")}
-      placeholder={widgetLabel(field, "Status")}
-      onValueChange={(next) => onChange?.(next)}
-    />
-  );
-}
-
 export const colorDotWidget = {
-  edit: ColorDotEdit,
+  edit: StatusSelectEdit,
   read: ColorDotRead,
   cell: ColorDotRead,
 } satisfies WidgetDefinition<string>;
