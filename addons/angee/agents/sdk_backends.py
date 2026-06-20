@@ -204,12 +204,6 @@ class SDKInferenceBackend(InferenceBackend):
         return str(content or "").strip()
 
     @classmethod
-    def _content_text(cls, content: Any) -> str:
-        """Return concatenated assistant text content."""
-
-        return cls._string_content(content)
-
-    @classmethod
     def _json_list(cls, value: Any) -> list[dict[str, Any]]:
         """Return a JSON-safe list of mapping objects."""
 

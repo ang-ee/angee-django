@@ -81,7 +81,7 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
         """Send one non-streaming Chat Completions request through OpenAI."""
 
         params: dict[str, Any] = {
-            **self._chat_options(request),
+            **self._message_options(request, reserved=_RESERVED_CHAT_OPTIONS, owner="OpenAI"),
             "model": self._provider_model(request.model),
             "messages": self._openai_messages(request),
             self._max_tokens_param(): request.max_tokens,
@@ -99,11 +99,6 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
             usage=self._json_object(raw.get("usage")),
             raw=raw,
         )
-
-    def _chat_options(self, request: InferenceRequest) -> dict[str, Any]:
-        """Return allowed provider-specific Chat Completions kwargs."""
-
-        return self._message_options(request, reserved=_RESERVED_CHAT_OPTIONS, owner="OpenAI")
 
     def _is_chat_model(self, model_id: str) -> bool:
         """Return whether an OpenAI model id should enter the chat catalogue."""
