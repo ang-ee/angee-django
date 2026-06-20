@@ -17,9 +17,10 @@ import { useQuery } from "urql";
 import { SERVICE_ENDPOINT_QUERY } from "../../data/documents.daemon";
 import { useOperatorT } from "../../i18n";
 import { useOperatorSnapshot } from "../../data/transport";
+import { RowActions } from "../parts/RowActions";
 import { StateTag } from "../parts/StateTag";
 import { ServiceLogs } from "./logs";
-import { ServiceActions, useServiceActions } from "./service-actions";
+import { useServiceActions } from "./service-actions";
 
 /** Service detail: state + lifecycle actions + the live log tail. */
 export function ServiceDetail(): ReactElement {
@@ -62,10 +63,10 @@ export function ServiceDetail(): ReactElement {
         }
       />
 
-      <ServiceActions
+      <RowActions
         actions={actions}
         busy={busy}
-        service={service}
+        subject={service}
         className="flex flex-wrap gap-1"
       />
 

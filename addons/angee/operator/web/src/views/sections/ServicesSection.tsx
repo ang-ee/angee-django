@@ -11,8 +11,9 @@ import { useOperatorSnapshot } from "../../data/transport";
 import type { ServiceState } from "../../data/types";
 import { serviceDetailPath } from "../../lib/paths";
 import { OperatorSection } from "../parts/OperatorSection";
+import { RowActions } from "../parts/RowActions";
 import { StateTag } from "../parts/StateTag";
-import { ServiceActions, useServiceActions } from "./service-actions";
+import { useServiceActions } from "./service-actions";
 
 // RowsListView keys rows by `id`; the daemon identifies a service by name.
 type ServiceRowData = ServiceState & { id: string };
@@ -115,7 +116,7 @@ export function ServiceRow({ name, emptyMessage }: ServiceRowProps): ReactNode {
           <span className="whitespace-nowrap">
             <StateTag state={service.status} />
           </span>
-          <ServiceActions actions={actions} busy={busy} service={service} />
+          <RowActions actions={actions} busy={busy} subject={service} />
         </div>
       ) : (
         <p className="border-y border-border-subtle py-3 text-13 text-fg-muted">

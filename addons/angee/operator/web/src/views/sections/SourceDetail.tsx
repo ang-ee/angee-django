@@ -14,8 +14,9 @@ import { useParams } from "@tanstack/react-router";
 
 import { useOperatorT } from "../../i18n";
 import { useOperatorSnapshot } from "../../data/transport";
+import { RowActions } from "../parts/RowActions";
 import { StateTag } from "../parts/StateTag";
-import { SourceActions, useSourceActions } from "./source-actions";
+import { useSourceActions } from "./source-actions";
 
 /** Source detail: drift readout + the source's git actions (no log stream). */
 export function SourceDetail(): ReactElement {
@@ -53,10 +54,10 @@ export function SourceDetail(): ReactElement {
         }
       />
 
-      <SourceActions
+      <RowActions
         actions={actions}
         busy={busy}
-        source={source}
+        subject={source}
         className="flex flex-wrap gap-1"
       />
 

@@ -1,5 +1,5 @@
-import { Button, useToast } from "@angee/base";
-import { useMemo, type ReactNode } from "react";
+import { useToast } from "@angee/base";
+import { useMemo } from "react";
 
 import {
   SOURCE_FETCH_MUTATION,
@@ -10,13 +10,10 @@ import { useOperatorT } from "../../i18n";
 import { useOperatorAction } from "../../data/transport";
 import type { SourceState } from "../../data/types";
 import { runDaemonAction } from "../parts/run-action";
+import type { RowAction } from "../parts/RowActions";
 
 /** A git action for a source: its label, tone, and bound handler. */
-export interface SourceRowAction {
-  label: string;
-  variant: "secondary" | "ghost";
-  perform: (source: SourceState) => void;
-}
+export type SourceRowAction = RowAction<SourceState>;
 
 /**
  * The three source git actions, each run via {@link runDaemonAction} and
@@ -64,33 +61,4 @@ export function useSourceActions(refetch: () => void): {
   }, [fetchSource.run, pull.run, push.run, refetch, t, toast]);
 
   return { actions, busy };
-}
-
-/** A horizontal bar of a source's git action buttons. */
-export function SourceActions({
-  actions,
-  busy,
-  source,
-  className = "flex justify-end gap-1",
-}: {
-  actions: readonly SourceRowAction[];
-  busy: boolean;
-  source: SourceState;
-  className?: string;
-}): ReactNode {
-  return (
-    <div className={className}>
-      {actions.map((action) => (
-        <Button
-          key={action.label}
-          disabled={busy}
-          onClick={() => action.perform(source)}
-          size="sm"
-          variant={action.variant}
-        >
-          {action.label}
-        </Button>
-      ))}
-    </div>
-  );
 }

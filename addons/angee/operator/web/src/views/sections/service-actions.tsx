@@ -1,5 +1,5 @@
-import { Button, useConfirm, useToast } from "@angee/base";
-import { useMemo, type ReactNode } from "react";
+import { useConfirm, useToast } from "@angee/base";
+import { useMemo } from "react";
 
 import {
   SERVICE_DESTROY_MUTATION,
@@ -12,13 +12,10 @@ import { useOperatorT } from "../../i18n";
 import { useOperatorAction } from "../../data/transport";
 import type { ServiceState } from "../../data/types";
 import { runDaemonAction } from "../parts/run-action";
+import type { RowAction } from "../parts/RowActions";
 
 /** A lifecycle action for a service: its label, tone, and bound handler. */
-export interface ServiceRowAction {
-  label: string;
-  variant: "secondary" | "ghost";
-  perform: (service: ServiceState) => void;
-}
+export type ServiceRowAction = RowAction<ServiceState>;
 
 /**
  * The service lifecycle actions, each wrapped to confirm (when destructive),
@@ -105,33 +102,4 @@ export function useServiceActions(refetch: () => void): {
   }, [confirm, destroy.run, recreate.run, refetch, restart.run, start.run, stop.run, t, toast]);
 
   return { actions, busy };
-}
-
-/** A horizontal bar of a service's lifecycle action buttons. */
-export function ServiceActions({
-  actions,
-  busy,
-  service,
-  className = "flex justify-end gap-1",
-}: {
-  actions: readonly ServiceRowAction[];
-  busy: boolean;
-  service: ServiceState;
-  className?: string;
-}): ReactNode {
-  return (
-    <div className={className}>
-      {actions.map((action) => (
-        <Button
-          key={action.label}
-          disabled={busy}
-          onClick={() => action.perform(service)}
-          size="sm"
-          variant={action.variant}
-        >
-          {action.label}
-        </Button>
-      ))}
-    </div>
-  );
 }
