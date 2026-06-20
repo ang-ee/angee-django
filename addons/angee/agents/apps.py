@@ -10,7 +10,6 @@ class AgentsConfig(AppConfig):
 
     default = True
     angee_addon = True
-    default_auto_field = "django.db.models.BigAutoField"
     name = "angee.agents"
     label = "agents"
     # operator: agent provisioning drives the daemon over its REST bridge server-side.

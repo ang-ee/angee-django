@@ -10,7 +10,6 @@ class AgentsIntegrateOpenAIConfig(AppConfig):
 
     default = True
     angee_addon = True
-    default_auto_field = "django.db.models.BigAutoField"
     name = "angee.agents_integrate_openai"
     label = "agents_integrate_openai"
     depends_on = ("angee.agents", "angee.integrate")

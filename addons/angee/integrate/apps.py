@@ -10,7 +10,6 @@ class IntegrateConfig(AppConfig):
 
     default = True
     angee_addon = True
-    default_auto_field = "django.db.models.BigAutoField"
     name = "angee.integrate"
     label = "integrate"
     depends_on = ("angee.iam",)

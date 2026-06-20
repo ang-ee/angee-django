@@ -18,7 +18,6 @@ class OperatorConfig(AppConfig):
 
     default = True
     angee_addon = True
-    default_auto_field = "django.db.models.BigAutoField"
     name = "angee.operator"
     label = "operator"
     depends_on = ("angee.iam",)
