@@ -479,7 +479,6 @@ class Directory(Bridge):
                 source_href=book.href,
                 defaults={
                     "name": book.name,
-                    "owner_id": self.owner_id,
                     "created_by_id": self.owner_id,
                 },
             )

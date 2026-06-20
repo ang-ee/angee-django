@@ -10,8 +10,5 @@ SETTINGS = {
     "ANGEE_DIRECTORY_BACKEND_CLASSES": {
         "manual": "angee.parties.backends.ManualDirectoryBackend",
     },
-    # Integration-level descriptor for a directory connection, so a connected
-    # directory is a ``bridge`` integration rather than the null/draft impl.
-    "ANGEE_INTEGRATION_IMPLS.directory": "angee.parties.impl.DirectoryIntegrationImpl",
 }
 """Django settings contributed when the parties addon is installed."""

@@ -235,7 +235,6 @@ class PartiesDirectoryMutation:
                 vendor=vendor,
                 owner=user,
                 credential=credential,
-                impl_class="directory",
                 backend_class="carddav",
                 config={"server_url": server_url, "display_name": name},
                 status="active",
