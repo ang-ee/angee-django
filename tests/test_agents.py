@@ -300,6 +300,17 @@ def test_inference_provider_service_environment_reads_provider_credential_env(
     assert provider.service_environment() == {}
 
 
+class _FakeModelPage:
+    """SDK-shaped iterable page over one or more model batches."""
+
+    def __init__(self, *pages: list[Any]) -> None:
+        self.pages = pages
+
+    def __iter__(self) -> Iterator[Any]:
+        for page in self.pages:
+            yield from page
+
+
 class _FakeAnthropicModels:
     """Small fake for the Anthropic SDK models resource."""
 
@@ -307,19 +318,30 @@ class _FakeAnthropicModels:
         self.client = client
         self.calls: list[dict[str, Any]] = []
 
-    def list(self, **kwargs: Any) -> list[Any]:
-        """Return one SDK-shaped model row."""
+    def list(self, **kwargs: Any) -> _FakeModelPage:
+        """Return SDK-shaped model pages."""
 
         self.calls.append(kwargs)
-        return [
-            SimpleNamespace(
-                id="claude-sonnet-4-6",
-                display_name="Claude Sonnet 4.6",
-                max_input_tokens=200000,
-                max_tokens=64000,
-                capabilities={"vision": True},
-            )
-        ]
+        return _FakeModelPage(
+            [
+                SimpleNamespace(
+                    id="claude-sonnet-4-6",
+                    display_name="Claude Sonnet 4.6",
+                    max_input_tokens=200000,
+                    max_tokens=64000,
+                    capabilities={"vision": True},
+                )
+            ],
+            [
+                SimpleNamespace(
+                    id="claude-opus-4-8",
+                    display_name="Claude Opus 4.8",
+                    max_input_tokens=200000,
+                    max_tokens=32000,
+                    capabilities={"vision": True},
+                )
+            ],
+        )
 
 
 class _FakeAnthropicMessages:
@@ -360,20 +382,23 @@ class _FakeOpenAIModels:
         self.client = client
         self.calls: list[dict[str, Any]] = []
 
-    def list(self, **kwargs: Any) -> Any:
-        """Return one SDK-shaped model page."""
+    def list(self, **kwargs: Any) -> _FakeModelPage:
+        """Return SDK-shaped model pages."""
 
         self.calls.append(kwargs)
-        return SimpleNamespace(
-            data=[
+        return _FakeModelPage(
+            [
                 SimpleNamespace(
                     id="gpt-4.1",
                     owned_by="openai",
                 ),
                 SimpleNamespace(id="text-embedding-3-large", owned_by="openai"),
+            ],
+            [
+                SimpleNamespace(id="gpt-4.2", owned_by="openai"),
                 SimpleNamespace(id="gpt-image-1", owned_by="openai"),
                 SimpleNamespace(id="gpt-4o-transcribe", owned_by="openai"),
-            ]
+            ],
         )
 
 
@@ -431,19 +456,25 @@ def test_anthropic_backend_refresh_syncs_native_and_broker_models(
         material={"api_key": "api-key"},
     )
 
-    assert provider.refresh_models() == 2
+    assert provider.refresh_models() == 4
 
     client = _FakeAnthropicClient.instances[-1]
     assert client.kwargs == {"api_key": "api-key"}
     assert client.models.calls == [{"limit": 1000}]
     with system_context(reason="test read"):
         models = {model.name: model for model in InferenceModel.objects.filter(provider=provider)}
-    assert set(models) == {"claude-sonnet-4-6", "anthropic/claude-sonnet-4-6"}
+    assert set(models) == {
+        "claude-sonnet-4-6",
+        "anthropic/claude-sonnet-4-6",
+        "claude-opus-4-8",
+        "anthropic/claude-opus-4-8",
+    }
     assert models["claude-sonnet-4-6"].display_name == "Claude Sonnet 4.6"
     assert models["claude-sonnet-4-6"].context_window == 200000
     assert models["claude-sonnet-4-6"].max_output_tokens == 64000
     assert models["anthropic/claude-sonnet-4-6"].display_name == "Claude Sonnet 4.6 (anthropic)"
     assert models["anthropic/claude-sonnet-4-6"].config["provider_model"] == "claude-sonnet-4-6"
+    assert models["claude-opus-4-8"].display_name == "Claude Opus 4.8"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -557,14 +588,14 @@ def test_openai_backend_refresh_syncs_native_and_broker_models(
         material={"api_key": "api-key"},
     )
 
-    assert provider.refresh_models() == 2
+    assert provider.refresh_models() == 4
 
     client = _FakeOpenAIClient.instances[-1]
     assert client.kwargs == {"api_key": "api-key"}
     assert client.models.calls == [{}]
     with system_context(reason="test read"):
         models = {model.name: model for model in InferenceModel.objects.filter(provider=provider)}
-    assert set(models) == {"gpt-4.1", "openai/gpt-4.1"}
+    assert set(models) == {"gpt-4.1", "openai/gpt-4.1", "gpt-4.2", "openai/gpt-4.2"}
     assert models["gpt-4.1"].display_name == "gpt-4.1"
     assert models["gpt-4.1"].config == {
         "provider_model": "gpt-4.1",
@@ -573,6 +604,7 @@ def test_openai_backend_refresh_syncs_native_and_broker_models(
     }
     assert models["openai/gpt-4.1"].display_name == "gpt-4.1 (openai)"
     assert models["openai/gpt-4.1"].config["provider_model"] == "gpt-4.1"
+    assert models["gpt-4.2"].display_name == "gpt-4.2"
 
 
 @pytest.mark.django_db(transaction=True)

@@ -43,7 +43,7 @@ class AnthropicInferenceBackend(SDKInferenceBackend):
         """List Anthropic models and their broker-prefixed aliases."""
 
         specs: list[InferenceModelSpec] = []
-        for model in self._iter_page(self.client().models.list(limit=self._model_limit())):
+        for model in self.client().models.list(limit=self._model_limit()):
             model_id = str(getattr(model, "id", "") or "").strip()
             if not model_id:
                 continue

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
 from angee.agents.backends import InferenceBackend, InferenceModelSpec, InferenceRequest
@@ -175,15 +175,6 @@ class SDKInferenceBackend(InferenceBackend):
 
         kind = getattr(credential, "kind", "")
         return str(getattr(kind, "value", kind))
-
-    @staticmethod
-    def _iter_page(page: Iterable[Any] | Any) -> list[Any]:
-        """Return SDK page items from either an iterable page or a test double."""
-
-        data = getattr(page, "data", None)
-        if data is not None:
-            return list(data)
-        return list(page)
 
     @staticmethod
     def _string_content(content: Any) -> str:

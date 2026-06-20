@@ -57,7 +57,7 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
         """List OpenAI models and their broker-prefixed aliases."""
 
         specs: list[InferenceModelSpec] = []
-        for model in self._iter_page(self.client().models.list()):
+        for model in self.client().models.list():
             model_id = str(getattr(model, "id", "") or "").strip()
             if not model_id:
                 continue
