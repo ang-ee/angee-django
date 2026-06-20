@@ -21,6 +21,7 @@ import {
   IntegrateConnectAccountComplete,
   IntegrateConnectAccountStart,
 } from "../documents.public";
+import { parseManualCode } from "../ConnectOAuthButton";
 import { connectCallbackRedirectUri } from "../redirects";
 
 const MODEL = "OAuthClient";
@@ -110,24 +111,13 @@ export function ProvidersPage(): React.ReactElement {
         ],
       });
       if (!entered) return;
-      // Split on the LAST "#": the state tail is a urlsafe token (no "#"), but an
-      // opaque authorization code may contain one — anchoring on the end keeps it whole.
-      const pasted = (entered.pasted ?? "").trim();
-      const hash = pasted.lastIndexOf("#");
-      const code = hash > 0 ? pasted.slice(0, hash) : "";
-      const pastedState = hash > 0 ? pasted.slice(hash + 1) : "";
-      if (!code || !pastedState) {
-        throw new Error(t("integrate.providers.connect.codeIncomplete"));
-      }
-      if (payload.state && pastedState !== payload.state) {
-        throw new Error(t("integrate.providers.connect.codeMismatch"));
-      }
+      const { code, state } = parseManualCode(entered.pasted, payload.state ?? "", t);
       if (!payload.redirectUri) {
         throw new Error(t("integrate.providers.connect.stateIncomplete"));
       }
       const completed = await connectAccountComplete({
         code,
-        state: pastedState,
+        state,
         redirectUri: payload.redirectUri,
       });
       const done = completed?.connectAccountComplete;
