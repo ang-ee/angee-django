@@ -29,6 +29,7 @@ from angee.integrate.oauth import flow as oauth_flow
 from angee.integrate.oauth import state as oauth_state
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, OAuthFlowError
 from angee.integrate.schema import (
+    ConnectableAccount,
     ConnectedExternalAccountType,
     OAuthClientType,
     OAuthStartPayload,
@@ -41,32 +42,8 @@ OAuthClient = apps.get_model("integrate", "OAuthClient")
 
 
 @strawberry.type
-class AvailableConnection:
+class AvailableConnection(ConnectableAccount):
     """Picker-safe OAuth client fields for the public OIDC login picker."""
-
-    @strawberry.field
-    def oauth_client_sqid(self) -> strawberry.ID:
-        """Return the OAuth client sqid accepted by login/link mutations."""
-
-        return strawberry.ID(str(cast(Any, self).sqid))
-
-    @strawberry.field
-    def oauth_client_display_name(self) -> str:
-        """Return the OAuth client display label."""
-
-        return str(cast(Any, self).display_name)
-
-    @strawberry.field
-    def oauth_client_slug(self) -> str:
-        """Return the OAuth client slug (the provider key)."""
-
-        return str(cast(Any, self).slug)
-
-    @strawberry.field
-    def oauth_client_icon(self) -> str:
-        """Return the OAuth client branding icon."""
-
-        return str(cast(Any, self).icon)
 
     @strawberry.field
     def is_oidc(self) -> bool:
