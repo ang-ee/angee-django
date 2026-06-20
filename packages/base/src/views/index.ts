@@ -90,8 +90,10 @@ export {
 } from "./FormView";
 export {
   DataPage,
+  DrawerDataPage,
   NEW_RECORD_ID,
   type DataPageProps,
+  type DrawerDataPageProps,
   type RecordPlacement,
   type RecordSmartButtonDescriptor,
 } from "./DataPage";

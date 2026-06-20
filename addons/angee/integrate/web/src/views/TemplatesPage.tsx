@@ -4,6 +4,7 @@ import {
   Column,
   ControlBandProvider,
   DataPage,
+  DrawerDataPage,
   Field,
   Form,
   Group,
@@ -47,7 +48,6 @@ const templateSourceList = (
 // sources and then inspects the discovered Copier manifest metadata.
 export function TemplatesPage(): React.ReactElement {
   const t = useIntegrateT();
-  const [sourceRecordId, setSourceRecordId] = React.useState<string | undefined>();
   const refreshTemplates = useModelInvalidation(TEMPLATE_MODEL);
   const refreshSources = useModelInvalidation(SOURCE_MODEL);
   const afterSyncTemplates = React.useCallback(
@@ -65,41 +65,35 @@ export function TemplatesPage(): React.ReactElement {
   return (
     <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-8 px-6 py-6 sm:px-8">
       <Section title={t("integrate.templateSources.title")}>
-        <ControlBandProvider host={undefined}>
-          <DataPage
-            model={SOURCE_MODEL}
-            placement="drawer"
-            filter={{ kind: { exact: TEMPLATE_SOURCE_KIND } }}
-            createDefaults={TEMPLATE_SOURCE_DEFAULTS}
-            recordId={sourceRecordId}
-            onSelect={(id) => setSourceRecordId(id ?? NEW_RECORD_ID)}
-            onClose={() => setSourceRecordId(undefined)}
-          >
-            {templateSourceList}
-            <Form model={SOURCE_MODEL}>
-              {/* `kind` is create-only (not read-only) so the template seed is submitted. */}
-              <Field name="repository" createOnly />
-              <Group label={t("integrate.templateSources.pointer")} columns={2}>
-                <Field
-                  name="kind"
-                  widget="select"
-                  options={TEMPLATE_KIND_OPTIONS}
-                  createOnly
-                />
-                <Field name="ref" />
-              </Group>
-              <Field name="path" />
-              <Field name="lastSyncedAt" readOnly />
-              <Action
-                id="syncTemplates"
-                label={t("integrate.templateSources.sync")}
-                icon="refresh"
-                run={syncTemplates}
-                visibleWhen={(record) => String(record.id ?? "") !== NEW_RECORD_ID}
+        <DrawerDataPage
+          model={SOURCE_MODEL}
+          filter={{ kind: { exact: TEMPLATE_SOURCE_KIND } }}
+          createDefaults={TEMPLATE_SOURCE_DEFAULTS}
+        >
+          {templateSourceList}
+          <Form model={SOURCE_MODEL}>
+            {/* `kind` is create-only (not read-only) so the template seed is submitted. */}
+            <Field name="repository" createOnly />
+            <Group label={t("integrate.templateSources.pointer")} columns={2}>
+              <Field
+                name="kind"
+                widget="select"
+                options={TEMPLATE_KIND_OPTIONS}
+                createOnly
               />
-            </Form>
-          </DataPage>
-        </ControlBandProvider>
+              <Field name="ref" />
+            </Group>
+            <Field name="path" />
+            <Field name="lastSyncedAt" readOnly />
+            <Action
+              id="syncTemplates"
+              label={t("integrate.templateSources.sync")}
+              icon="refresh"
+              run={syncTemplates}
+              visibleWhen={(record) => String(record.id ?? "") !== NEW_RECORD_ID}
+            />
+          </Form>
+        </DrawerDataPage>
       </Section>
 
       <Section title={t("integrate.templates.title")}>

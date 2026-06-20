@@ -31,7 +31,7 @@ import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../feedback";
 import { parseFlatSearch, stringifyFlatSearch } from "../createApp";
-import { DataPage } from "./DataPage";
+import { DataPage, DrawerDataPage } from "./DataPage";
 import { Form } from "./Form";
 import type { FormField } from "./FormView";
 import {
@@ -663,6 +663,27 @@ describe("DataPage", () => {
 
     expect(await screen.findByText("First")).toBeTruthy();
     expect(screen.getByText("Status")).toBeTruthy();
+  });
+
+  test("DrawerDataPage owns drawer record state and inline controls", async () => {
+    render(
+      <TestUrlState>
+        <DrawerDataPage
+          model="notes.Note"
+          columns={columns}
+          formFields={formFields}
+        />
+      </TestUrlState>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "New note" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect((within(dialog).getByLabelText("Title") as HTMLInputElement).value)
+      .toBe("");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Board view" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
   test("renders record navigation and reuses the view switcher in record chrome", async () => {

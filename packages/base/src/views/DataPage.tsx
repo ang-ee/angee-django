@@ -13,6 +13,7 @@ import {
   DialogPortal,
   DialogRoot,
 } from "../ui/dialog";
+import { ControlBandProvider } from "../shell/ControlBand";
 import { DeletePreviewDialog } from "./DeletePreviewDialog";
 import {
   ListView,
@@ -139,6 +140,11 @@ export interface DataPageProps<TRow extends Row = Row> {
   className?: string;
 }
 
+export type DrawerDataPageProps<TRow extends Row = Row> = Omit<
+  DataPageProps<TRow>,
+  "creating" | "onClose" | "onSelect" | "placement" | "recordId" | "routed"
+>;
+
 interface DataPageDeclarations<TRow extends Row = Row> {
   list?: DataPageListDeclaration<TRow>;
   form?: DataPageFormDeclaration;
@@ -223,6 +229,25 @@ export function DataPage<TRow extends Row = Row>({
     <DataViewProvider initialState={initialState} resource={props.model}>
       {content}
     </DataViewProvider>
+  );
+}
+
+/** A drawer-mode `DataPage` with self-owned record state and inline controls. */
+export function DrawerDataPage<TRow extends Row = Row>(
+  props: DrawerDataPageProps<TRow>,
+): React.ReactElement {
+  const [recordId, setRecordId] = React.useState<string | undefined>(undefined);
+
+  return (
+    <ControlBandProvider host={undefined}>
+      <DataPage
+        {...props}
+        placement="drawer"
+        recordId={recordId}
+        onSelect={(id) => setRecordId(id ?? NEW_RECORD_ID)}
+        onClose={() => setRecordId(undefined)}
+      />
+    </ControlBandProvider>
   );
 }
 
