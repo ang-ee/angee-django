@@ -1180,6 +1180,10 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     runtime = True
 
     sqid = SqidField(real_field_name="id", prefix="int_", min_length=8)
+    # Operator-given label (the connect flow sets it); blank falls back to the
+    # vendor-derived :attr:`display_label`. The one human name for every child
+    # (directory, channel, …), so it is not re-buried in each child's config.
+    display_name = models.CharField(max_length=255, blank=True, default="")
     vendor = models.ForeignKey("integrate.Vendor", on_delete=models.PROTECT, related_name="integrations")
     impl_class = ImplClassField(
         base_class=IntegrationImpl,
@@ -1231,9 +1235,15 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         return f"{vendor_slug}:{self.public_id}"
 
     @property
-    def display_name(self) -> str:
-        """Return a human label for integration headers and relation pickers."""
+    def display_label(self) -> str:
+        """Return the operator label, or a vendor-derived one when none was given.
 
+        Headers, lists, and relation pickers read this so a named integration shows
+        its name and an unnamed one still reads as ``Vendor (status)``.
+        """
+
+        if self.display_name:
+            return str(self.display_name)
         vendor = getattr(self, "vendor", None)
         label = str(getattr(vendor, "display_name", "") or getattr(vendor, "slug", "") or "integration")
         return f"{label} ({self.status})"

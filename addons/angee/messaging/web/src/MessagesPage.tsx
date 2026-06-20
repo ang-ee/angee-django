@@ -1,5 +1,6 @@
 import * as React from "react";
 import {
+  Action,
   Column,
   DataPage,
   Field,
@@ -15,6 +16,10 @@ import {
 
 const MODEL = "messaging.Message";
 
+// Default the inbox to a by-status grouping. Hoisted to a stable reference so the
+// list does not re-seed its grouping on every render.
+const DEFAULT_GROUPS = { list: { field: "status" } } as const;
+
 /**
  * The inbox: cross-thread "smart aggregation" over messages. Sender / channel /
  * thread are shared `useRelationFacet`s (the same SDL-derived facet any relation
@@ -23,9 +28,11 @@ const MODEL = "messaging.Message";
  * the list creates nothing; status is the one human-editable field.
  */
 export function MessagesPage(): React.ReactElement {
-  const senderFacet = useRelationFacet(MODEL, { field: "sender", label: "Sender" });
-  const channelFacet = useRelationFacet(MODEL, { field: "channel", label: "Channel" });
-  const threadFacet = useRelationFacet(MODEL, { field: "thread", label: "Thread" });
+  const senderFacet = useRelationFacet(MODEL, { field: "sender", label: "Sender", labelField: "value" });
+  // Channel has no string title of its own, so label the facet by its displayName
+  // (the operator-given name, vendor-derived when unset) rather than the default id.
+  const channelFacet = useRelationFacet(MODEL, { field: "channel", label: "Channel", labelField: "displayName" });
+  const threadFacet = useRelationFacet(MODEL, { field: "thread", label: "Thread", labelField: "subject" });
 
   const filters = React.useMemo<readonly DataToolbarFilterOption[]>(
     () => [...senderFacet.filters, ...channelFacet.filters, ...threadFacet.filters],
@@ -53,7 +60,7 @@ export function MessagesPage(): React.ReactElement {
         filters={filters}
         filterFields={filterFields}
         groupOptions={groupOptions}
-        defaultGroups={{ list: { field: "status" } }}
+        defaultGroups={DEFAULT_GROUPS}
       >
         <Column field="subject" />
         <Column field="sender.value" header="Sender" />
@@ -63,7 +70,10 @@ export function MessagesPage(): React.ReactElement {
       </List>
       <Form model={MODEL}>
         <Field name="subject" readOnly />
-        <Field name="status" />
+        {/* status reads the UPPERCASE enum member name but its String patch input
+            takes the lowercase value, so moderation rides declarative verbs (which
+            write the value) rather than an editable enum field. */}
+        <Field name="status" readOnly />
         <Group label="Envelope" columns={2}>
           <Field name="platform" readOnly />
           <Field name="direction" readOnly />
@@ -71,6 +81,26 @@ export function MessagesPage(): React.ReactElement {
           <Field name="externalId" readOnly />
         </Group>
         <Field name="preview" readOnly />
+        <Action
+          id="hide"
+          label="Hide"
+          set={{ status: "hidden" }}
+          visibleWhen={(record) => record.status !== "HIDDEN" && record.status !== "REMOVED"}
+        />
+        <Action
+          id="remove"
+          label="Remove"
+          danger
+          confirm={{ title: "Remove message?", body: "It is hidden from the inbox until restored.", danger: true }}
+          set={{ status: "removed" }}
+          visibleWhen={(record) => record.status !== "REMOVED"}
+        />
+        <Action
+          id="restore"
+          label="Restore"
+          set={{ status: "synced" }}
+          visibleWhen={(record) => record.status === "HIDDEN" || record.status === "REMOVED"}
+        />
       </Form>
     </DataPage>
   );

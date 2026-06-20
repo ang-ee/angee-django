@@ -18,6 +18,8 @@ INSTALLED_APPS = [
     "angee.knowledge",
     "angee.mcp",
     "angee.storage",
+    "angee.parties",
+    "angee.messaging",
 ]
 DATABASES = {
     "default": {
@@ -44,6 +46,14 @@ ANGEE_INFERENCE_BACKEND_CLASSES = {
     "anthropic": "angee.agents_integrate_anthropic.backend.AnthropicInferenceBackend",
     "openai": "angee.agents_integrate_openai.backend.OpenAIInferenceBackend",
     "stub_inference": "tests.conftest.StubInferenceBackend",
+}
+# Directory/channel backends each addon's autoconfig normally contributes; declared
+# here so the ImplClassField registries are non-empty at model-import time.
+ANGEE_DIRECTORY_BACKEND_CLASSES = {
+    "manual": "angee.parties.backends.ManualDirectoryBackend",
+}
+ANGEE_CHANNEL_BACKEND_CLASSES = {
+    "manual": "angee.messaging.backends.ManualChannelBackend",
 }
 # OAuth provider types (normally each addon's autoconfig contributes these); the
 # ImplClassField enum requires a non-empty registry at model-import time.

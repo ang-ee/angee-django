@@ -8,12 +8,14 @@ drive, soft-deleted to Trash), and :class:`FileAttachment` (polymorphic edge
 from any model row to a file).
 
 A File is created as a DRAFT targeting a backend key, then bytes arrive from
-some source and :meth:`File.finalize` verifies and publishes them. Today the
-only source is a client upload: ``File.objects.draft`` reserves the row,
-:meth:`File.issue_upload_token` hands the client a one-shot URL, and
-:meth:`File.receive_bytes` (or a presigned backend later) lands the bytes.
-Server-side URL fetch and adopting bytes already on the backend are sibling
-sources that converge on the same ``finalize``. Renditions, virus scanning,
+some source and :meth:`File.finalize` verifies and publishes them. Two byte
+sources converge on that one ``finalize``: a client upload (``File.objects.draft``
+reserves the row, :meth:`File.issue_upload_token` hands the client a one-shot URL,
+:meth:`File.receive_bytes` lands the bytes) and a server-side ingest of bytes
+already in hand (:meth:`FileManager.ingest_bytes` — what a sync fetching message
+attachments or contact photos uses). A presigned backend or adopting bytes
+already on the backend are further siblings on the same path. Renditions, virus
+scanning,
 extraction, and search belong to downstream addons that subscribe to
 ``storage.signals.file_finalized`` or attach rows through ``FileAttachment``.
 """
@@ -21,6 +23,7 @@ extraction, and search belong to downstream addons that subscribe to
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 import posixpath
 import re
@@ -37,7 +40,7 @@ from django.core.exceptions import (
     SuspiciousFileOperation,
     ValidationError,
 )
-from django.core.files.base import File as DjangoFile
+from django.core.files.base import ContentFile, File as DjangoFile
 from django.db import IntegrityError, models, transaction
 from django.db.models import Q
 from django.urls import reverse
@@ -519,6 +522,63 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         row.sudo(reason="storage.file.draft")
         row.save()
         return row
+
+    def ingest_bytes(
+        self,
+        content: bytes,
+        *,
+        filename: str,
+        owner_id: Any = None,
+        drive_id: str = "",
+        drive_slug: str = "",
+        folder_id: str = "",
+    ) -> Any:
+        """Ingest bytes already in hand into a drive and return the READY File.
+
+        The server-side sibling of the proxy upload: the bytes are trusted (a
+        sync fetched them), so this writes them to the content-addressed key and
+        finalizes in one call instead of minting an upload token. Idempotent —
+        bytes the drive already holds READY return the existing row. ``owner_id``
+        stamps ``created_by`` (the file's ``owner`` relation); the whole verb runs
+        elevated, so a sync needs no per-actor drive grant, and read access is
+        scoped afterwards by the stamped owner.
+        """
+
+        digest = hashlib.sha256(content).hexdigest()
+        with system_context(reason="storage.file.ingest_bytes"):
+            row = self.draft(
+                filename=filename,
+                size_bytes=len(content),
+                drive_id=drive_id,
+                drive_slug=drive_slug,
+                folder_id=folder_id,
+                content_hash=digest,
+            )
+            if row.upload_state == UploadState.READY:
+                return row  # content-addressed dedup hit — the bytes already exist
+            if owner_id is not None and row.created_by_id is None:
+                # AuditMixin only stamps created_by when unset, so set the sync's
+                # owner before the elevated context erases the ambient actor.
+                row.created_by_id = owner_id
+                row.save(update_fields=["created_by"])
+            storage = row.storage
+            saved_path = storage.save(row.storage_path, ContentFile(content, name=row.storage_path))
+            if saved_path and saved_path != row.storage_path:
+                row.storage_path = saved_path
+                row.save(update_fields=["storage_path"])
+            try:
+                return row.finalize(expected_hash=digest, expected_size=len(content))
+            except exceptions.UploadConflict:
+                # A concurrent ingest of identical bytes won the dedup race; the
+                # winner is READY, so resolve to it instead of failing the sync.
+                winner = self.filter(
+                    drive_id=row.drive_id,
+                    content_hash=digest,
+                    upload_state=UploadState.READY,
+                ).first()
+                if winner is not None:
+                    return winner
+                raise
 
     def for_upload_token(self, token: str) -> Any:
         """Return the DRAFT row a signed proxy upload token addresses.

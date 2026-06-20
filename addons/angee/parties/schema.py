@@ -196,6 +196,12 @@ class DirectoryType(AngeeNode):
     created_at: auto
     updated_at: auto
 
+    @strawberry_django.field(only=["display_name", "vendor", "status"])
+    def display_name(self) -> str:
+        """Return the operator-given directory name (the connect flow sets it)."""
+
+        return cast(Any, self).display_label
+
 
 @strawberry.type
 class PartiesDirectoryMutation:
@@ -221,13 +227,15 @@ class PartiesDirectoryMutation:
         user = session_user(info)
         credential_model = apps.get_model("integrate", "Credential")
         vendor_model = apps.get_model("integrate", "Vendor")
-        credential = credential_model.objects.create_local_credential(
-            user,
-            kind="basic_auth",
-            name=f"CardDAV — {name}",
-            material={"username": username, "password": password},
-        )
+        # Credential creation, the directory, and the connection probe share one
+        # transaction so a probe failure rolls all of it back — no orphan credential.
         with system_context(reason="parties.graphql.connect_carddav"), transaction.atomic():
+            credential = credential_model.objects.create_local_credential(
+                user,
+                kind="basic_auth",
+                name=f"CardDAV — {name}",
+                material={"username": username, "password": password},
+            )
             vendor, _created = vendor_model.objects.get_or_create(
                 slug="carddav", defaults={"display_name": "CardDAV"}
             )
@@ -236,10 +244,14 @@ class PartiesDirectoryMutation:
                 owner=user,
                 credential=credential,
                 backend_class="carddav",
-                config={"server_url": server_url, "display_name": name},
+                display_name=name,
+                config={"server_url": server_url},
                 status="active",
                 created_by_id=user.pk,
             )
+            # Validate the URL + credentials before the directory persists, so a bad
+            # connection surfaces here instead of as a silent first-sync failure.
+            directory.backend.probe()
         return cast(DirectoryType, directory)
 
 
@@ -423,9 +435,11 @@ class PersonFilter:
 class HandleFilter:
     """Field lookups accepted when filtering the handles connection."""
 
+    party: auto
     platform: auto
     is_own: auto
     is_verified: auto
+    is_preferred: auto
     created_at: auto
 
 
@@ -435,6 +449,24 @@ class HandleOrder:
 
     platform: auto
     value: auto
+    created_at: auto
+
+
+@strawberry_django.filter_type(Address, lookups=True)
+class AddressFilter:
+    """Field lookups accepted when filtering the addresses connection (incl. by party)."""
+
+    party: auto
+    label: auto
+    created_at: auto
+
+
+@strawberry_django.filter_type(Affiliation, lookups=True)
+class AffiliationFilter:
+    """Field lookups accepted when filtering the affiliations connection (incl. by party)."""
+
+    party: auto
+    organization: auto
     created_at: auto
 
 
@@ -469,6 +501,14 @@ class PartiesQuery:
         order=HandleOrder,
     )
     handle: HandleType | None = detail(HandleType)
+    addresses: OffsetPaginated[AddressType] = strawberry_django.offset_paginated(
+        filters=AddressFilter,
+    )
+    address: AddressType | None = detail(AddressType)
+    affiliations: OffsetPaginated[AffiliationType] = strawberry_django.offset_paginated(
+        filters=AffiliationFilter,
+    )
+    affiliation: AffiliationType | None = detail(AffiliationType)
     directories: OffsetPaginated[DirectoryType] = strawberry_django.offset_paginated()
     directory: DirectoryType | None = detail(DirectoryType)
     contact_folders: OffsetPaginated[ContactFolderType] = strawberry_django.offset_paginated()

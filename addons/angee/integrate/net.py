@@ -27,6 +27,10 @@ METADATA_IPS = frozenset(
 )
 """Well-known cloud metadata service addresses that must never receive callbacks."""
 
+_SHARED_ADDRESS_SPACE = ipaddress.ip_network("100.64.0.0/10")
+"""RFC 6598 carrier-grade-NAT range — Alibaba Cloud exposes metadata at
+``100.100.100.200`` inside it, so it is treated as metadata, not as a private LAN."""
+
 _IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 
@@ -95,16 +99,26 @@ def canonical_address(address: _IpAddress) -> _IpAddress:
     return address
 
 
-def is_unsafe_address(address: _IpAddress) -> bool:
-    """Return whether ``address`` is forbidden for outbound calls."""
+def is_unsafe_address(address: _IpAddress, *, allow_private: bool = False) -> bool:
+    """Return whether ``address`` is forbidden for outbound calls.
+
+    Default (public) mode rejects every non-public address. ``allow_private=True``
+    is the operator-configured-connection policy — a self-hosted host on a private
+    network: it permits RFC-1918 / loopback so those connections work, but still
+    rejects the SSRF escapes that have no legitimate target either way — cloud
+    metadata (the well-known IPs, *and* link-local ``169.254/16`` / the RFC 6598
+    shared range that front metadata services), multicast, and unspecified.
+    """
 
     address = canonical_address(address)
-    return (
+    if (
         address in METADATA_IPS
-        or address.is_loopback
-        or address.is_private
         or address.is_link_local
-        or address.is_unspecified
+        or address in _SHARED_ADDRESS_SPACE
         or address.is_multicast
-        or address.is_reserved
-    )
+        or address.is_unspecified
+    ):
+        return True
+    if allow_private:
+        return False
+    return address.is_loopback or address.is_private or address.is_reserved

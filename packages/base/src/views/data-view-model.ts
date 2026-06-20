@@ -62,8 +62,9 @@ export type DataViewFilter = {
   [field: string]: DataViewFilterValue;
 };
 export type DataViewResourceOrder = Record<string, DataViewOrderDirection>;
-// TODO: derive the text-search field from addon/schema title metadata, not a
-// hardcoded product title field.
+// The fallback text-search field when a model declares no representation. The
+// model-driven list resolves the real field from `recordRepresentation`
+// (see `resolveTextFilterField`); this is only the default for metadata-less rows.
 export const DEFAULT_TEXT_FILTER_FIELD = "title";
 
 export interface DataViewSort {

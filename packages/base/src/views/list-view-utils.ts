@@ -247,18 +247,37 @@ export function nextFacetFilter(
   return Filter.from(filter).toggleFacet(facet);
 }
 
-export function textFilterValue(filter: DataViewFilter): string {
-  return Filter.from(filter).textTerm();
+/**
+ * The field the free-text search box reads/writes. Defaults to the model's
+ * ``recordRepresentation`` (e.g. ``displayName`` for Person) so search filters the
+ * model's real title field, falling back to the generic ``title`` when unknown.
+ */
+export function resolveTextFilterField(
+  metadata: { recordRepresentation?: string } | null | undefined,
+): string {
+  return metadata?.recordRepresentation ?? DEFAULT_TEXT_FILTER_FIELD;
 }
 
-export function nextTextFilter(filter: DataViewFilter, value: string): DataViewFilter {
-  return Filter.from(filter).withTextTerm(value);
+export function textFilterValue(
+  filter: DataViewFilter,
+  field: string = DEFAULT_TEXT_FILTER_FIELD,
+): string {
+  return Filter.from(filter).textTerm(field);
+}
+
+export function nextTextFilter(
+  filter: DataViewFilter,
+  value: string,
+  field: string = DEFAULT_TEXT_FILTER_FIELD,
+): DataViewFilter {
+  return Filter.from(filter).withTextTerm(value, field);
 }
 
 export function customFilterChipsFor(
   filter: DataViewFilter,
   filterOptions: readonly DataToolbarFilterOption[],
   fields: readonly DataToolbarFilterField[],
+  textField: string = DEFAULT_TEXT_FILTER_FIELD,
 ): readonly DataToolbarCustomFilterChip[] {
   const chips: DataToolbarCustomFilterChip[] = [];
   const fieldLabels = new Map(
@@ -269,7 +288,8 @@ export function customFilterChipsFor(
     for (const [operator, operatorValue] of Object.entries(value)) {
       if (!isLookupOperator(operator)) continue;
       if (isFacetFilter(field, operator, operatorValue, filterOptions)) continue;
-      if (field === DEFAULT_TEXT_FILTER_FIELD && operator === "iContains") {
+      // The free-text search term owns its own input, so it is not a removable chip.
+      if (field === textField && operator === "iContains") {
         continue;
       }
       chips.push({

@@ -1,48 +1,73 @@
 import * as React from "react";
 import {
+  Action,
   Column,
   DataPage,
   Field,
   Form,
   Group,
   List,
+  RowsListView,
+  type ListColumn,
   type RecordPanelContext,
   type RecordTabDescriptor,
 } from "@angee/base";
-import { useResourceList } from "@angee/sdk";
+import { useResourceList, type Row } from "@angee/sdk";
 
 const MODEL = "messaging.Thread";
 const MESSAGE_MODEL = "messaging.Message";
 
-/** The messages in a thread, listed on the thread's detail panel. */
+const THREAD_MESSAGE_FIELDS = ["id", "subject", "preview", "status", "sentAt"];
+
+// Every resource row selects `id`; narrow to the id-bearing shape RowsListView keys on.
+type MessageRow = Row & { id: string };
+
+const threadMessageColumns: readonly ListColumn<MessageRow>[] = [
+  {
+    field: "subject",
+    render: (row) => <span className="font-medium text-fg">{String(row.subject ?? "")}</span>,
+  },
+  {
+    field: "preview",
+    header: "Preview",
+    sortable: false,
+    render: (row) => <span className="text-fg-muted">{String(row.preview ?? "")}</span>,
+  },
+  { field: "status", widget: "statusBadge" },
+  { field: "sentAt" },
+];
+
+/**
+ * The messages in a thread, listed on the thread's detail panel. The relation
+ * lookup is `sqid` (the SDL filter for the FK), and the shared RowsListView owns
+ * the fetching/error/empty states rather than a hand-rolled list.
+ */
 function ThreadMessagesTab({ recordId }: RecordPanelContext): React.ReactElement {
-  const { rows } = useResourceList(MESSAGE_MODEL, {
-    filter: { thread: { exact: recordId } },
-    fields: ["id", "subject", "preview", "status", "sentAt"],
+  const { rows, fetching, error } = useResourceList(MESSAGE_MODEL, {
+    filter: { thread: { sqid: recordId } },
+    fields: THREAD_MESSAGE_FIELDS,
     order: { sentAt: "ASC" },
   });
-  if (rows.length === 0) {
-    return <p className="px-1 py-3 text-13 text-fg-muted">No messages in this thread yet.</p>;
-  }
   return (
-    <ul className="flex flex-col gap-2">
-      {rows.map((message) => (
-        <li key={String(message.id)} className="rounded-md border border-border bg-sheet px-3 py-2">
-          <div className="truncate text-13 text-fg">{String(message.subject ?? "")}</div>
-          <div className="truncate text-12 text-fg-muted">{String(message.preview ?? "")}</div>
-        </li>
-      ))}
-    </ul>
+    <RowsListView
+      rows={rows as readonly MessageRow[]}
+      columns={threadMessageColumns}
+      fetching={fetching}
+      error={error}
+      rowHref={(row) => `/messaging/inbox/${row.id}`}
+      emptyMessage="No messages in this thread yet."
+    />
   );
 }
 
+const threadRecordTabs: readonly RecordTabDescriptor[] = [
+  { id: "messages", label: "Messages", render: (context) => <ThreadMessagesTab {...context} /> },
+];
+
 /** Threads: list + detail, the detail carrying the thread's Messages. */
 export function ThreadsPage(): React.ReactElement {
-  const recordTabs: readonly RecordTabDescriptor[] = [
-    { id: "messages", label: "Messages", render: (context) => <ThreadMessagesTab {...context} /> },
-  ];
   return (
-    <DataPage model={MODEL} placement="inline" routed hideCreate recordTabs={recordTabs}>
+    <DataPage model={MODEL} placement="inline" routed hideCreate recordTabs={threadRecordTabs}>
       <List model={MODEL}>
         <Column field="subject" />
         <Column field="modality" />
@@ -54,9 +79,36 @@ export function ThreadsPage(): React.ReactElement {
         <Group label="About" columns={2}>
           <Field name="platform" readOnly />
           <Field name="modality" readOnly />
-          <Field name="visibility" />
+          {/* visibility reads the UPPERCASE enum member name but its String patch
+              input takes the lowercase value, so the change rides declarative
+              verbs (which write the value) rather than an editable enum field. */}
+          <Field name="visibility" readOnly />
           <Field name="messageCount" readOnly />
         </Group>
+        <Action
+          id="vis-private"
+          label="Make private"
+          set={{ visibility: "private" }}
+          visibleWhen={(record) => record.visibility !== "PRIVATE"}
+        />
+        <Action
+          id="vis-unlisted"
+          label="Make unlisted"
+          set={{ visibility: "unlisted" }}
+          visibleWhen={(record) => record.visibility !== "UNLISTED"}
+        />
+        <Action
+          id="vis-public"
+          label="Make public"
+          set={{ visibility: "public" }}
+          visibleWhen={(record) => record.visibility !== "PUBLIC"}
+        />
+        <Action
+          id="vis-restricted"
+          label="Make restricted"
+          set={{ visibility: "restricted" }}
+          visibleWhen={(record) => record.visibility !== "RESTRICTED"}
+        />
       </Form>
     </DataPage>
   );

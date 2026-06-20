@@ -123,6 +123,9 @@ class Thread(SqidMixin, AuditMixin, AngeeModel):
         on_delete=models.SET_NULL,
         related_name="messaging_threads",
     )
+    # parent/body/subject_url/tags are social-milestone scope (a public thread row
+    # *is* its subject post): the foundation for public social, with no producer in
+    # this email slice yet.
     parent = models.ForeignKey(
         "self",
         null=True,
@@ -229,6 +232,7 @@ class Message(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
     direction = StateField(choices_enum=Direction, default=Direction.INBOUND)
     status = StateField(choices_enum=MessageStatus, default=MessageStatus.SYNCED)
     external_id = models.CharField(max_length=512, blank=True, default="")
+    # Social-milestone scope (the root post of a public thread); no producer yet.
     is_original_post = models.BooleanField(default=False)
     subject = models.CharField(max_length=512, blank=True, default="")
     preview = models.CharField(max_length=512, blank=True, default="")
@@ -267,6 +271,13 @@ class Fragment(SqidMixin, AuditMixin, AngeeModel):
     quote-link iff their parts share a Fragment), and isolates signatures (one
     repeated signature → one Fragment, excluded from search/quotation). ``kind`` is
     the secondary skip axis in the quotation builder; :attr:`Part.role` is primary.
+
+    Because the row is content-addressed and shared — two owners quoting the same
+    paragraph dedup to one row — it carries no REBAC type: a per-owner ``read`` on a
+    shared row would hide the text from every owner but the first. Visibility is
+    scoped instead by the owning :class:`Part`/:class:`Message` (each REBAC-gated);
+    the row is reached only through a readable Part and is never enumerable on its
+    own, mirroring storage's unscoped ``MimeType`` catalogue.
     """
 
     runtime = True
@@ -291,8 +302,8 @@ class Fragment(SqidMixin, AuditMixin, AngeeModel):
         """Django model options for the fragment source model."""
 
         abstract = True
-        rebac_resource_type = "messaging/fragment"
-        rebac_id_attr = "sqid"
+        # No rebac_resource_type: a content-addressed shared row is unscoped
+        # substrate, gated through the owning Part/Message (see the class docstring).
 
     def __str__(self) -> str:
         """Return a truncated preview for Django displays."""
@@ -385,7 +396,12 @@ class MessageEdge(SqidMixin, AuditMixin, AngeeModel):
     runtime = True
 
     class EdgeKind(models.TextChoices):
-        """The type of cross-message relation."""
+        """The type of cross-message relation.
+
+        ``quote`` is produced today (by the quotation builder); ``reply`` and the
+        rest are social-milestone scope — the foundation for the next milestone
+        (public social), with no producer in this email slice yet.
+        """
 
         REPLY = "reply", "Reply"
         QUOTE = "quote", "Quote"
@@ -500,7 +516,11 @@ class Participant(SqidMixin, AuditMixin, AngeeModel):
 
 
 class Reaction(SqidMixin, AuditMixin, AngeeModel):
-    """An attributed reaction to a message (distinct from the rolled-up metrics)."""
+    """An attributed reaction to a message (distinct from the rolled-up metrics).
+
+    Social-milestone scope: the foundation for public social (YouTube/Facebook/
+    WhatsApp); intentionally unused in this email slice (no producer yet).
+    """
 
     runtime = True
 
@@ -542,7 +562,8 @@ class MessageMetrics(SqidMixin, AuditMixin, AngeeModel):
     """Rolled-up public engagement metrics for a message (the public counts).
 
     Flat one-to-one, not MTI — the metric set overlaps heavily across platforms;
-    platform extras go in ``metadata``.
+    platform extras go in ``metadata``. Social-milestone scope: the foundation for
+    public social; intentionally unused in this email slice (no producer yet).
     """
 
     runtime = True

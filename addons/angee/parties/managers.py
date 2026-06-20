@@ -13,6 +13,7 @@ converges instead of duplicating. The sync runs under ``system_context``, so
 
 from __future__ import annotations
 
+import mimetypes
 from typing import TYPE_CHECKING, Any
 
 from django.apps import apps
@@ -125,6 +126,7 @@ class PartyManager(AngeeManager):
         handle_model = apps.get_model("parties", "Handle")
         party_handle_model = apps.get_model("parties", "PartyHandle")
         address_model = apps.get_model("parties", "Address")
+        affiliation_model = apps.get_model("parties", "Affiliation")
 
         with transaction.atomic():
             person, _created = person_model.objects.update_or_create(
@@ -139,6 +141,11 @@ class PartyManager(AngeeManager):
                     "name_suffix": parsed.name_suffix,
                     "nickname": parsed.nickname,
                     "notes": parsed.notes,
+                    "birthday": parsed.birthday,
+                    "anniversary": parsed.anniversary,
+                    # Mirror the source's photo: re-syncing identical bytes dedups to
+                    # the same File, and a removed photo clears the avatar.
+                    "avatar": self._ingest_avatar(parsed, owner_id=owner_id),
                     "raw_vcard": parsed.raw_vcard,
                     "source_etag": parsed.etag,
                     "created_by_id": owner_id,
@@ -148,23 +155,23 @@ class PartyManager(AngeeManager):
             handles = [
                 handle_model.objects.upsert(
                     platform="email", value=value, owner_id=owner_id, label=label,
-                    display_name=parsed.display_name,
+                    is_preferred=is_preferred, display_name=parsed.display_name,
                 )
-                for value, label in parsed.emails
+                for value, label, is_preferred in parsed.emails
             ] + [
                 handle_model.objects.upsert(
                     platform="phone", value=value, owner_id=owner_id, label=label,
-                    display_name=parsed.display_name,
+                    is_preferred=is_preferred, display_name=parsed.display_name,
                 )
-                for value, label in parsed.phones
+                for value, label, is_preferred in parsed.phones
             ]
             for handle in handles:
                 party_handle_model.objects.link(
                     person, handle, confidence=1.0, source="carddav", owner_id=owner_id
                 )
 
-            # Addresses carry no stable id, so mirror the parsed set wholesale —
-            # idempotent because the result is exactly the source's addresses.
+            # Addresses and the affiliation carry no stable id, so mirror the parsed
+            # set wholesale — idempotent because the result is exactly the source's.
             address_model.objects.filter(party=person).delete()
             for addr in parsed.addresses:
                 address_model.objects.create(
@@ -180,7 +187,39 @@ class PartyManager(AngeeManager):
                     created_by_id=owner_id,
                 )
 
+            affiliation_model.objects.filter(party=person).delete()
+            if parsed.organization or parsed.title or parsed.role or parsed.department:
+                affiliation_model.objects.create(
+                    party=person,
+                    organization_name=parsed.organization,
+                    title=parsed.title,
+                    role=parsed.role,
+                    department=parsed.department,
+                    is_primary=True,
+                    created_by_id=owner_id,
+                )
+
             return person
+
+    def _ingest_avatar(self, parsed: ParsedContact, *, owner_id: Any) -> Any:
+        """Persist a parsed contact photo through the storage File owner, or return None.
+
+        Delegates to ``File.objects.ingest_bytes`` — the storage owner's server-side
+        byte intake — so the avatar lands content-addressed (identical photos dedup)
+        and ``Party.avatar`` resolves. A URI photo is already resolved to bytes by
+        the directory backend's transport step before it reaches here.
+        """
+
+        photo = parsed.photo
+        if photo is None or not photo.data:
+            return None
+        file_model = apps.get_model("storage", "File")
+        extension = mimetypes.guess_extension(photo.mime) if photo.mime else ""
+        return file_model.objects.ingest_bytes(
+            photo.data,
+            filename=f"avatar{extension or '.bin'}",
+            owner_id=owner_id,
+        )
 
     def purge_missing(self, *, folder: Any, keep_uids: set[str]) -> int:
         """Delete the folder's synced parties whose source UID is no longer present.

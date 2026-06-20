@@ -55,17 +55,10 @@ definition messaging/part {
     permission delete = owner + admin->member
 }
 
-definition messaging/fragment {
-    relation owner: auth/user // rebac:field=created_by
-    relation editor: auth/user | auth/group#member
-    relation reader: auth/user | auth/group#member
-    relation admin: angee/role // rebac:const=admin
-
-    permission create = authenticated
-    permission read   = owner + editor + reader + admin->member
-    permission write  = owner + editor + admin->member
-    permission delete = owner + admin->member
-}
+// A Fragment is content-addressed and shared across owners (dedup by text hash),
+// so it carries no REBAC type — a per-owner read on a shared row would hide the
+// text from every owner but the first. Its visibility rides the owning part/message
+// (each gated below); the row is reached only through a readable part, never alone.
 
 definition messaging/message_edge {
     relation owner: auth/user // rebac:field=created_by

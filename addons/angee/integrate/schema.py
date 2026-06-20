@@ -1063,11 +1063,11 @@ class IntegrationType(AngeeNode):
         except ObjectDoesNotExist:
             return None
 
-    @strawberry_django.field(only=["vendor", "status"])
+    @strawberry_django.field(only=["display_name", "vendor", "status"])
     def display_name(self) -> str:
-        """Return the model-owned integration display label."""
+        """Return the operator label, falling back to the vendor-derived one."""
 
-        return str(cast(Any, self).display_name)
+        return cast(Any, self).display_label
 
     @strawberry_django.field(only=["impl_class"])
     def impl_category(self) -> str:
@@ -1120,11 +1120,11 @@ class ConnectedIntegrationType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["vendor", "status"])
+    @strawberry_django.field(only=["display_name", "vendor", "status"])
     def display_name(self) -> str:
-        """Return the model-owned integration display label."""
+        """Return the operator label, falling back to the vendor-derived one."""
 
-        return str(cast(Any, self).display_name)
+        return cast(Any, self).display_label
 
 
 @strawberry.input

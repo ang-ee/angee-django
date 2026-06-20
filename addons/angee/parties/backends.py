@@ -15,18 +15,35 @@ The ``parties_integrate_carddav`` addon contributes the ``carddav`` backend; the
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl
 
 
 @dataclass(frozen=True)
+class ParsedPhoto:
+    """A contact photo parsed from a source — inline bytes or a remote URI.
+
+    The pure parse step decodes inline (base64 / data-URI) photos to ``data`` and
+    records a ``uri`` for remote ones; the backend's transport step resolves any
+    ``uri`` to ``data`` before the map ingests it through the storage File owner.
+    """
+
+    data: bytes | None = None
+    uri: str = ""
+    mime: str = ""
+
+
+@dataclass(frozen=True)
 class ParsedAddressbook:
     """One address-book collection discovered on a source.
 
-    ``href`` is its stable collection URL (the folder dedup key). ``ctag`` and
-    ``sync_token`` are the incremental cursors: an unchanged ``ctag`` lets the sync
-    skip the whole collection, and ``sync_token`` (RFC 6578) drives delta fetches.
+    ``href`` is its stable collection URL (the folder dedup key). ``ctag`` is the
+    collection-version cursor used today — an unchanged ``ctag`` lets the sync skip
+    the whole collection. ``sync_token`` is reserved for a future RFC 6578
+    ``sync-collection`` delta fetch; the carddav backend does not yet populate or use
+    it (every sync is a full list + multiget), so it stays ``""`` for now.
     """
 
     href: str
@@ -56,7 +73,9 @@ class ParsedContact:
     ``uid`` is the source's stable id (a vCard ``UID``); it is the per-folder
     idempotency key, so it must be stable across syncs. ``etag`` is the
     per-resource version (for change detection) and ``raw_vcard`` is kept for
-    lossless round-trip. Emails/phones are ``(value, label)`` pairs.
+    lossless round-trip. Emails/phones are ``(value, label, is_preferred)`` triples.
+    ``organization``/``department``/``title``/``role`` carry the affiliation;
+    ``birthday``/``anniversary`` are resolved dates; ``photo`` is the avatar.
     """
 
     uid: str = ""
@@ -70,10 +89,15 @@ class ParsedContact:
     nickname: str = ""
     notes: str = ""
     organization: str = ""
+    department: str = ""
     title: str = ""
-    emails: tuple[tuple[str, str], ...] = ()
-    phones: tuple[tuple[str, str], ...] = ()
+    role: str = ""
+    birthday: date | None = None
+    anniversary: date | None = None
+    emails: tuple[tuple[str, str, bool], ...] = ()
+    phones: tuple[tuple[str, str, bool], ...] = ()
     addresses: tuple[ParsedAddress, ...] = ()
+    photo: ParsedPhoto | None = None
     raw_vcard: str = ""
 
 
@@ -88,6 +112,16 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
     category = "directory"
     label = "Directory"
     icon = "address-book"
+
+    def probe(self) -> None:
+        """Validate the source connection before a directory persists (no-op by default).
+
+        A source backend overrides this to fail fast on a bad URL or rejected
+        credentials, so the connect mutation never saves a directory that can never
+        sync. It must raise on a bad connection and return ``None`` on success.
+        """
+
+        return None
 
     def discover(self) -> list[ParsedAddressbook]:
         """Return every address-book collection the source exposes."""

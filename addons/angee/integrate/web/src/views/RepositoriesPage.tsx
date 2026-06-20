@@ -17,36 +17,40 @@ const repositoryList = (
 );
 
 /**
- * The inventoried repositories, with the "Add repository" typeahead in the
- * control band. The list creates nothing (`hideCreate`); rows arrive via the
- * typeahead or `discover` and leave via the per-record delete.
+ * The inventoried repositories, with the "Add repository" typeahead in the list
+ * toolbar (the framework toolbar slot, not a hand-rolled control-band sibling).
+ * The list creates nothing (`hideCreate`); rows arrive via the typeahead or
+ * `discover` and leave via the per-record delete.
  */
 export function RepositoriesPage(): React.ReactElement {
   const t = useIntegrateT();
   return (
-    <>
-      <AddRepositoryControl />
-      <DataPage model={MODEL} placement="inline" routed hideCreate>
-        {repositoryList}
-        {/* Repositories are inventoried by the add typeahead and `discover`,
-            never hand-created or edited, so the detail is read-only; DataPage
-            still wires the per-record delete (the only Repository mutation). */}
-        <Form model={MODEL}>
-          <Field name="vcsBridge" readOnly />
-          <Group label={t("integrate.repositories.repository")} columns={2}>
-            <Field name="org" readOnly />
-            <Field name="name" readOnly />
-            <Field name="defaultBranch" readOnly />
-            <Field name="visibility" readOnly />
-          </Group>
-          <Group label={t("integrate.repositories.remote")} columns={2}>
-            <Field name="remote" readOnly />
-            <Field name="sshRemote" readOnly />
-          </Group>
-          <Field name="webUrl" readOnly />
-          <Field name="archived" readOnly />
-        </Form>
-      </DataPage>
-    </>
+    <DataPage
+      model={MODEL}
+      placement="inline"
+      routed
+      hideCreate
+      toolbarActions={<AddRepositoryControl />}
+    >
+      {repositoryList}
+      {/* Repositories are inventoried by the add typeahead and `discover`,
+          never hand-created or edited, so the detail is read-only; DataPage
+          still wires the per-record delete (the only Repository mutation). */}
+      <Form model={MODEL}>
+        <Field name="vcsBridge" readOnly />
+        <Group label={t("integrate.repositories.repository")} columns={2}>
+          <Field name="org" readOnly />
+          <Field name="name" readOnly />
+          <Field name="defaultBranch" readOnly />
+          <Field name="visibility" readOnly />
+        </Group>
+        <Group label={t("integrate.repositories.remote")} columns={2}>
+          <Field name="remote" readOnly />
+          <Field name="sshRemote" readOnly />
+        </Group>
+        <Field name="webUrl" readOnly />
+        <Field name="archived" readOnly />
+      </Form>
+    </DataPage>
   );
 }

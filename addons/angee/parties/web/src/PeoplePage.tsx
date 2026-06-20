@@ -6,11 +6,119 @@ import {
   Form,
   Group,
   List,
+  RowsListView,
   useRelationFacet,
   type DataToolbarGroupOption,
+  type ListColumn,
+  type RecordPanelContext,
+  type RecordTabDescriptor,
 } from "@angee/base";
+import { useResourceList, type Row } from "@angee/sdk";
 
 const MODEL = "parties.Person";
+
+// Every resource row selects `id`; narrow to the id-bearing shape RowsListView keys on.
+type RelatedRow = Row & { id: string };
+
+const handleColumns: readonly ListColumn<RelatedRow>[] = [
+  { field: "platform" },
+  { field: "value", render: (row) => <span className="font-medium text-fg">{String(row.value ?? "")}</span> },
+  { field: "label" },
+  { field: "isPreferred", header: "Preferred", render: (row) => (row.isPreferred ? "Yes" : "") },
+];
+
+const addressColumns: readonly ListColumn<RelatedRow>[] = [
+  { field: "label" },
+  { field: "street", render: (row) => <span className="font-medium text-fg">{String(row.street ?? "")}</span> },
+  { field: "city" },
+  { field: "region" },
+  { field: "country" },
+];
+
+const affiliationColumns: readonly ListColumn<RelatedRow>[] = [
+  {
+    field: "organizationName",
+    header: "Organization",
+    render: (row) => <span className="font-medium text-fg">{String(row.organizationName ?? "")}</span>,
+  },
+  { field: "title" },
+  { field: "role" },
+  { field: "department" },
+];
+
+/**
+ * One related collection on the Person detail — the person's handles, addresses,
+ * or affiliations — composed on the shared RowsListView (filtered to this party),
+ * never a hand-rolled list, so it inherits the toolbar/empty/error affordances.
+ */
+function PartyRelatedTab({
+  recordId,
+  model,
+  fields,
+  columns,
+  emptyMessage,
+}: RecordPanelContext & {
+  model: string;
+  fields: readonly string[];
+  columns: readonly ListColumn<RelatedRow>[];
+  emptyMessage: string;
+}): React.ReactElement {
+  const { rows, fetching, error } = useResourceList(model, {
+    filter: { party: { sqid: recordId } },
+    fields,
+  });
+  return (
+    <RowsListView
+      rows={rows as readonly RelatedRow[]}
+      columns={columns}
+      fetching={fetching}
+      error={error}
+      emptyMessage={emptyMessage}
+    />
+  );
+}
+
+const personRecordTabs: readonly RecordTabDescriptor[] = [
+  {
+    id: "handles",
+    label: "Handles",
+    render: (context) => (
+      <PartyRelatedTab
+        {...context}
+        model="parties.Handle"
+        fields={["id", "platform", "value", "label", "isPreferred"]}
+        columns={handleColumns}
+        emptyMessage="No handles for this contact yet."
+      />
+    ),
+  },
+  {
+    id: "addresses",
+    label: "Addresses",
+    render: (context) => (
+      <PartyRelatedTab
+        {...context}
+        model="parties.Address"
+        fields={["id", "label", "street", "city", "region", "postalCode", "country"]}
+        columns={addressColumns}
+        emptyMessage="No addresses for this contact yet."
+      />
+    ),
+  },
+  {
+    id: "affiliations",
+    label: "Affiliations",
+    render: (context) => (
+      <PartyRelatedTab
+        {...context}
+        model="parties.Affiliation"
+        fields={["id", "organizationName", "title", "role", "department"]}
+        columns={affiliationColumns}
+        emptyMessage="No affiliations for this contact yet."
+      />
+    ),
+  },
+];
 
 const peopleForm = (
   <Form model={MODEL}>
@@ -36,7 +144,8 @@ const peopleForm = (
  * People (the person-kind contacts): full create/edit/list/detail, browsable by
  * folder. The folder facet is the shared `useRelationFacet` over the `folder`
  * relation — the same SDL-derived facet any model with a to-one relation gets, so
- * the folder navigation is reusable rather than a bespoke parties widget.
+ * the folder navigation is reusable rather than a bespoke parties widget. The
+ * detail carries the contact's handles, addresses, and affiliations as tabs.
  */
 export function PeoplePage(): React.ReactElement {
   const folderFacet = useRelationFacet(MODEL, { field: "folder", label: "Folder" });
@@ -45,7 +154,7 @@ export function PeoplePage(): React.ReactElement {
     [folderFacet.groupOption],
   );
   return (
-    <DataPage model={MODEL} placement="inline" routed>
+    <DataPage model={MODEL} placement="inline" routed recordTabs={personRecordTabs}>
       <List
         model={MODEL}
         filters={folderFacet.filters}

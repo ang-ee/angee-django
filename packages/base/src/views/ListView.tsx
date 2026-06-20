@@ -59,6 +59,7 @@ import {
   nextFacetFilter,
   nextTextFilter,
   removeCustomFilter,
+  resolveTextFilterField,
   textFilterValue,
 } from "./list-view-utils";
 import { columnsWithMetadataDefaults } from "./model-metadata-defaults";
@@ -145,6 +146,7 @@ function ListViewBody<TRow extends Row = Row>({
   onRowClick,
   onListStateChange,
   rowHref,
+  toolbarActions,
   cardActions,
   emptyMessage = "No records.",
   emptyState,
@@ -298,10 +300,14 @@ function ListViewBody<TRow extends Row = Row>({
     dataView.state.filter,
     filterOptions,
   );
+  // Search the model's real title field (recordRepresentation → e.g. displayName
+  // for Person), not the hardcoded "title" that non-title models lack.
+  const textFilterField = resolveTextFilterField(modelMetadata);
   const customFilterChips = customFilterChipsFor(
     dataView.state.filter,
     filterOptions,
     filterFields,
+    textFilterField,
   );
 
   const setPage = React.useCallback(
@@ -311,7 +317,7 @@ function ListViewBody<TRow extends Row = Row>({
     [dataView.setPage],
   );
 
-  const filterText = textFilterValue(dataView.state.filter);
+  const filterText = textFilterValue(dataView.state.filter, textFilterField);
   const interactive = Boolean(onRowClick || rowHref);
   const bulkDelete = useBulkDelete(
     model,
@@ -328,6 +334,7 @@ function ListViewBody<TRow extends Row = Row>({
       <ControlBand>
         <DataToolbar
           className={controlBandItemClassName}
+          actions={toolbarActions}
           pager={toolbarPager}
           view={grouping ? dataView.state.view : undefined}
           group={grouping ? dataView.state.group : undefined}
@@ -364,7 +371,7 @@ function ListViewBody<TRow extends Row = Row>({
             )
           }
           onFilterTextChange={(value) =>
-            dataView.setFilter(nextTextFilter(dataView.state.filter, value))
+            dataView.setFilter(nextTextFilter(dataView.state.filter, value, textFilterField))
           }
         />
       </ControlBand>

@@ -3,9 +3,10 @@ import {
   type BaseAddonRoute,
   type BaseMenuItem,
 } from "@angee/base";
-import { Building2, Contact, Users } from "lucide-react";
+import { AtSign, Building2, Contact, Users } from "lucide-react";
 
 import { DirectoriesPage } from "./DirectoriesPage";
+import { HandlesPage } from "./HandlesPage";
 import { OrganizationsPage } from "./OrganizationsPage";
 import { PeoplePage } from "./PeoplePage";
 
@@ -37,6 +38,7 @@ const partiesMenu: readonly BaseMenuItem[] = [
         route: "parties.organizations",
         icon: "organization",
       },
+      { id: "parties.handles", label: "Handles", route: "parties.handles", icon: "handle" },
       {
         id: "parties.directories",
         label: "Directories",
@@ -57,10 +59,11 @@ const parties = defineBaseAddon({
       OrganizationsPage,
       "parties.Organization",
     ),
+    ...consolePage("parties.handles", "/parties/handles", HandlesPage, "parties.Handle"),
     ...consolePage("parties.directories", "/parties/directories", DirectoriesPage, "parties.Directory"),
   ],
   menus: partiesMenu,
-  icons: { parties: Users, organization: Building2, "address-book": Contact },
+  icons: { parties: Users, organization: Building2, "address-book": Contact, handle: AtSign },
 });
 
 export default parties;

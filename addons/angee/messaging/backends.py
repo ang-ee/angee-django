@@ -91,7 +91,7 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
 
     category = "channel"
     label = "Channel"
-    icon = "messages"
+    icon = "inbox"
 
     def fetch_messages(self) -> list[ParsedMessage]:
         """Return the new messages since the bridge cursor as neutral dataclasses."""

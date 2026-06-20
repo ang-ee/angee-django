@@ -68,6 +68,9 @@ export interface ListViewProps<TRow extends Row = Row> {
   onListStateChange?: (state: ListViewState<TRow>) => void;
   /** Optional href for a row, used when rows should render as links. */
   rowHref?: (row: TRow) => string;
+  /** Controls rendered in the toolbar's leading slot, beside the filter — e.g. a
+   * "Connect" button for a list whose rows come from a connect flow. */
+  toolbarActions?: ReactNode;
   /** Optional action content rendered in each board card footer. */
   cardActions?: (row: TRow, context: CardActionContext) => ReactNode;
   /** Empty-state content shown when the list has no rows. */

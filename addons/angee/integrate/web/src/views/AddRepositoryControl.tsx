@@ -1,7 +1,6 @@
 import * as React from "react";
 import {
   Button,
-  ControlBand,
   Dialog,
   Glyph,
   Input,
@@ -34,23 +33,23 @@ const BRIDGE_LIMIT = 200;
 const SEARCH_DEBOUNCE_MS = 250;
 
 /**
- * The "Add repository" affordance: a control-band button opening a dialog that
- * picks a VCS bridge and types a repository name like a foreign-key field.
- * Matches against `searchRepositories` (live host candidates, debounced) and on
- * pick inventories the row via `addRepository`, refreshing the repository list.
+ * The "Add repository" affordance: a button (for the list toolbar slot) opening a
+ * dialog that picks a VCS bridge and types a repository name like a foreign-key
+ * field. Matches against `searchRepositories` (live host candidates, debounced) and
+ * on pick inventories the row via `addRepository`, refreshing the repository list.
  * The dialog stays open so several repositories can be added in one sitting.
  */
 export function AddRepositoryControl(): React.ReactElement {
   const t = useIntegrateT();
   const [open, setOpen] = React.useState(false);
   return (
-    <ControlBand>
+    <>
       <Button variant="primary" size="sm" onClick={() => setOpen(true)}>
         <Glyph decorative name="plus" />
         {t("integrate.addRepo.title")}
       </Button>
       <AddRepositoryDialog open={open} onOpenChange={setOpen} />
-    </ControlBand>
+    </>
   );
 }
 

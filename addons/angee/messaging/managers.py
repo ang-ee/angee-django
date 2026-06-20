@@ -4,7 +4,7 @@ A channel backend parses a source into neutral ``ParsedMessage`` rows; these
 managers turn each into a :class:`~angee.messaging.models.Message` with its thread,
 its recursive :class:`~angee.messaging.models.Part` tree (text content-addressed
 into :class:`~angee.messaging.models.Fragment`\\s), its participants, and its
-quotation edges. They carry the battle-scars the working model proved necessary:
+quotation edges. They encode the invariants a high-volume email sync depends on:
 
 - ``(platform, external_id)`` ``update_or_create`` keys make re-sync idempotent.
 - null bytes (``\\x00``) are stripped before every write (Postgres rejects them).
@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from django.apps import apps
 from django.db import models, transaction
+from django.db.models.functions import Coalesce, Greatest
 
 from angee.base.models import AngeeManager
 
@@ -67,8 +68,9 @@ def normalize_subject(subject: str) -> str:
         if stripped == text:
             break
         text = stripped
-    # Casing is preserved (the prefix match is case-insensitive); the working model
-    # matches threads on the case-preserved normalized subject.
+    # Casing is preserved (only the prefix match is case-insensitive) so the
+    # normalized subject still reads naturally and two subjects differing only in
+    # case stay distinct conversations.
     return text.strip()
 
 
@@ -123,6 +125,11 @@ class ThreadManager(AngeeManager):
         external id (``subj:<normalized>`` or ``msg:<id>``) so two concurrent batches
         resolving the same subject collide on the unique constraint and converge to
         one thread instead of double-creating.
+
+        A message with no threading hint *and* no subject keys on ``msg:<external_id>``
+        — its own one-message thread, never merged with another, because there is no
+        key to merge on (collapsing keyless messages would fuse unrelated mail). The
+        inbox groups such threads individually; they read as standalone conversations.
         """
 
         message_model = apps.get_model("messaging", "Message")
@@ -241,12 +248,17 @@ class MessageManager(AngeeManager):
         self._write_participants(message, thread, parsed, sender, owner_id)
         # Counters bump only for a newly created message, so a re-sync (which
         # update_or_create resolves to the existing row) never inflates the count.
+        # message_count rides an F() delta; last_message_at advances monotonically
+        # (Greatest over the existing value) so out-of-order ingest never regresses
+        # it. updated_at is left to its auto_now owner — never written here.
         if created:
-            thread_model.objects.filter(pk=thread.pk).update(
-                message_count=models.F("message_count") + 1,
-                last_message_at=parsed.sent_at or thread.last_message_at,
-                updated_at=parsed.sent_at or thread.last_message_at,
-            )
+            updates: dict[str, Any] = {"message_count": models.F("message_count") + 1}
+            if parsed.sent_at is not None:
+                updates["last_message_at"] = Greatest(
+                    Coalesce(models.F("last_message_at"), parsed.sent_at),
+                    parsed.sent_at,
+                )
+            thread_model.objects.filter(pk=thread.pk).update(**updates)
         return message
 
     def _build_parts(self, message: Any, parsed: ParsedPart, *, parent: Any, position: int, owner_id: Any) -> None:
@@ -279,17 +291,22 @@ class MessageManager(AngeeManager):
             self._build_parts(message, child, parent=part, position=index, owner_id=owner_id)
 
     def _ingest_file(self, parsed: ParsedPart, owner_id: Any) -> Any:
-        """Ingest attachment bytes into storage; returns the File or None.
+        """Persist attachment bytes through the storage File owner; returns the File or None.
 
-        Uses the storage server-side ingest verb when available; until that lands
-        (framework prereq), attachment bytes are skipped rather than half-written.
+        Delegates to ``File.objects.ingest_bytes`` — the storage owner's
+        server-side byte intake (draft → write → finalize) — so the attachment
+        lands content-addressed and ``Part.file`` resolves. The owner stamps the
+        file's ``created_by`` so the channel owner can read its own attachments.
         """
 
-        file_model = apps.get_model("storage", "File")
-        ingest = getattr(file_model.objects, "ingest_bytes", None)
-        if not callable(ingest) or parsed.content is None:
+        if parsed.content is None:
             return None
-        return ingest(parsed.content, filename=parsed.name or "attachment.bin", owner_id=owner_id)
+        file_model = apps.get_model("storage", "File")
+        return file_model.objects.ingest_bytes(
+            parsed.content,
+            filename=parsed.name or "attachment.bin",
+            owner_id=owner_id,
+        )
 
     def _write_participants(self, message: Any, thread: Any, parsed: ParsedMessage, sender: Any, owner_id: Any) -> None:
         participant_model = apps.get_model("messaging", "Participant")
@@ -330,20 +347,24 @@ class MessageEdgeManager(AngeeManager):
         )
         if not fragment_ids:
             return 0
+        # One pass over every sharing part: pull each sharer's message id *and*
+        # sent_at together, so edge direction needs no per-pair lookup. Excluding
+        # this message's own parts leaves only the others to link.
+        sharers_by_fragment: dict[Any, dict[Any, Any]] = {}
+        for fragment_id, other_id, other_sent_at in (
+            part_model.objects.filter(fragment_id__in=fragment_ids)
+            .exclude(message_id=message.pk)
+            .values_list("fragment_id", "message_id", "message__sent_at")
+        ):
+            sharers_by_fragment.setdefault(fragment_id, {})[other_id] = other_sent_at
         created = 0
-        for fragment_id in fragment_ids:
-            sharers = (
-                part_model.objects.filter(fragment_id=fragment_id)
-                .values_list("message_id", flat=True)
-                .distinct()
-            )
-            sharer_ids = list(sharers)
-            if len(sharer_ids) > _BOILERPLATE_CUTOFF:
+        for fragment_id, others in sharers_by_fragment.items():
+            # Boilerplate (a disclaimer/signature) is quoted by the whole corpus;
+            # linking it would join everything, so skip it past the cutoff.
+            if len(others) > _BOILERPLATE_CUTOFF:
                 continue
-            for other_id in sharer_ids:
-                if other_id == message.pk:
-                    continue
-                src_id, dst_id = self._direction(message.pk, other_id)
+            for other_id, other_sent_at in others.items():
+                src_id, dst_id = self._direction(message.pk, message.sent_at, other_id, other_sent_at)
                 _link, was_created = self.get_or_create(
                     src_id=src_id,
                     dst_id=dst_id,
@@ -353,15 +374,13 @@ class MessageEdgeManager(AngeeManager):
                 created += int(was_created)
         return created
 
-    def _direction(self, a_id: Any, b_id: Any) -> tuple[Any, Any]:
-        """Order an edge from the earlier message to the later one (by sent_at, then pk)."""
+    def _direction(self, a_id: Any, a_sent_at: Any, b_id: Any, b_sent_at: Any) -> tuple[Any, Any]:
+        """Order an edge from the earlier message to the later one (by sent_at, then pk).
 
-        message_model = apps.get_model("messaging", "Message")
-        rows = {
-            row["pk"]: row["sent_at"]
-            for row in message_model.objects.filter(pk__in=(a_id, b_id)).values("pk", "sent_at")
-        }
-        a_time, b_time = rows.get(a_id), rows.get(b_id)
-        if a_time and b_time and a_time != b_time:
-            return (a_id, b_id) if a_time < b_time else (b_id, a_id)
+        Both sent_at values are already in hand from the single sharers query, so
+        direction is a pure comparison — no extra lookup.
+        """
+
+        if a_sent_at and b_sent_at and a_sent_at != b_sent_at:
+            return (a_id, b_id) if a_sent_at < b_sent_at else (b_id, a_id)
         return (a_id, b_id) if a_id < b_id else (b_id, a_id)

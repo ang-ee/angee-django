@@ -152,10 +152,19 @@ class GitHubBackend(VCSBackend):
         return headers
 
     def _get(self, path: str) -> Any:
-        """GET one REST path and return parsed JSON; raise ``FileNotFoundError`` on 404."""
+        """GET one REST path and return parsed JSON; raise ``FileNotFoundError`` on 404.
 
+        A configured (non-default) ``github_api_base`` is a self-hosted GitHub
+        Enterprise host, which may sit on a private network, so private targets are
+        permitted only then — public ``api.github.com`` stays public-only.
+        """
+
+        allow_private = self.api_base != DEFAULT_API_BASE.rstrip("/")
         response = self.http.get(
-            f"{self.api_base}{path}", headers=self._headers(), timeout=HTTP_TIMEOUT_SECONDS
+            f"{self.api_base}{path}",
+            headers=self._headers(),
+            allow_private=allow_private,
+            timeout=HTTP_TIMEOUT_SECONDS,
         )
         if response.status == 404:
             raise FileNotFoundError(path)

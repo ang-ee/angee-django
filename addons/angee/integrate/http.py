@@ -10,9 +10,11 @@ lives in exactly one place.
 
 By default only public addresses are dialled. A backend whose connection URL is
 an operator-configured server — e.g. a self-hosted CardDAV host on a private
-network — passes ``allow_private=True``: that still rejects cloud-metadata,
-multicast, and unspecified addresses, but permits RFC-1918 / loopback /
-link-local hosts so self-hosted connections work.
+network — passes ``allow_private=True``: that permits RFC-1918 / loopback hosts so
+self-hosted connections work, but still rejects cloud-metadata (the well-known
+IPs, link-local ``169.254/16``, and the RFC 6598 shared range that front metadata
+services), multicast, and unspecified addresses. The address judgement itself is
+owned by ``net.is_unsafe_address``; this module only pins and dials.
 """
 
 from __future__ import annotations
@@ -29,12 +31,10 @@ from urllib.parse import SplitResult, urlunsplit
 
 from django.core.exceptions import ValidationError
 
-from .net import METADATA_IPS, canonical_address, is_unsafe_address, parse_http_url
+from .net import is_unsafe_address, parse_http_url
 
 HTTP_TIMEOUT_SECONDS = 10
 """Default timeout (seconds) for one outbound request."""
-
-_IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,17 +60,6 @@ class HttpResponse:
         """Return one response header by case-insensitive name, or ``""``."""
 
         return self.headers.get(name.lower(), "")
-
-
-def _address_blocked(address: _IpAddress, *, allow_private: bool) -> bool:
-    """Return whether ``address`` must not be dialled under the chosen policy."""
-
-    address = canonical_address(address)
-    if allow_private:
-        # Operator-configured connection URL: permit private/loopback/link-local,
-        # but never cloud-metadata or multicast/unspecified.
-        return address in METADATA_IPS or address.is_multicast or address.is_unspecified
-    return is_unsafe_address(address)
 
 
 @dataclass(frozen=True)
@@ -192,19 +181,32 @@ class HttpClient:
         """Send one request to ``url`` over a pinned connection and return the response."""
 
         parsed = parse_http_url(url)
-        pinned = self._resolve(parsed, allow_private=allow_private)[0]
-        connection = self._connection_for(parsed, pinned, timeout=timeout)
-        request_headers = {"Host": _host_header(parsed), **(headers or {})}
-        try:
-            connection.request(method, _request_target(parsed), body=body, headers=request_headers)
-            response = connection.getresponse()
-            return HttpResponse(
-                status=_response_status(response),
-                body=response.read(),
-                headers=_response_headers(response),
-            )
-        finally:
-            connection.close()
+        pinned_addresses = self._resolve(parsed, allow_private=allow_private)
+        # Host goes last so caller headers cannot override the pinned host: the TLS
+        # check and the origin server must both see the URL's real hostname.
+        request_headers = {**(headers or {}), "Host": _host_header(parsed)}
+        target = _request_target(parsed)
+        last_error: OSError | None = None
+        for pinned in pinned_addresses:
+            connection = self._connection_for(parsed, pinned, timeout=timeout)
+            try:
+                connection.request(method, target, body=body, headers=request_headers)
+                response = connection.getresponse()
+                return HttpResponse(
+                    status=_response_status(response),
+                    body=response.read(),
+                    headers=_response_headers(response),
+                )
+            except OSError as error:
+                # This validated address is unreachable; fall back to the next one.
+                last_error = error
+            finally:
+                connection.close()
+        # Every validated address failed to connect: surface the transport error
+        # (an OSError, distinct from the gate's ValidationError) for the caller.
+        if last_error is not None:
+            raise last_error
+        raise ValidationError("URL host could not be reached.")
 
     def _resolve(self, parsed: SplitResult, *, allow_private: bool) -> tuple[_PinnedAddress, ...]:
         """Resolve the host once and return the validated resolver answers."""
@@ -220,7 +222,7 @@ class HttpClient:
         seen: set[tuple[int, str, int]] = set()
         for family, socktype, proto, _canonname, sockaddr in results:
             address = ipaddress.ip_address(sockaddr[0])
-            if _address_blocked(address, allow_private=allow_private):
+            if is_unsafe_address(address, allow_private=allow_private):
                 raise ValidationError("URL host resolves to an address that is not allowed.")
             key = (int(family), str(address), int(proto))
             if key in seen:
@@ -288,7 +290,11 @@ def _host_header(parsed: SplitResult) -> str:
 
 
 def _response_status(response: Any) -> int:
-    """Return the integer HTTP status from a stdlib response or test double."""
+    """Return the integer HTTP status from a stdlib response or test double.
+
+    A response that carries no status at all is anomalous; raise rather than
+    defaulting to 200, which would mask a failure as success.
+    """
 
     status = getattr(response, "status", None)
     if status is not None:
@@ -296,7 +302,7 @@ def _response_status(response: Any) -> int:
     getcode = getattr(response, "getcode", None)
     if callable(getcode):
         return int(getcode())
-    return 200
+    raise ValueError("HTTP response carries no status code.")
 
 
 def _response_headers(response: Any) -> dict[str, str]:

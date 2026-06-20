@@ -10,6 +10,8 @@ message/thread.
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import strawberry
 import strawberry_django
 from django.apps import apps
@@ -20,6 +22,7 @@ from angee.graphql.aggregates import rebac_aggregate_builder
 from angee.graphql.crud import crud
 from angee.graphql.node import AngeeNode, detail
 from angee.graphql.subscriptions import changes
+from angee.parties.schema import HandleType
 
 Channel = apps.get_model("messaging", "Channel")
 Thread = apps.get_model("messaging", "Thread")
@@ -44,6 +47,12 @@ class ChannelType(AngeeNode):
     last_sync_items: auto
     created_at: auto
     updated_at: auto
+
+    @strawberry_django.field(only=["display_name", "vendor", "status"])
+    def display_name(self) -> str:
+        """Return the channel's operator label so the inbox facet reads by name."""
+
+        return cast(Any, self).display_label
 
 
 @strawberry_django.type(Fragment)
@@ -86,6 +95,7 @@ class ParticipantType(AngeeNode):
     """GraphQL projection of a thread/message participant."""
 
     role: auto
+    handle: HandleType | None
     joined_at: auto
     left_at: auto
 
@@ -103,6 +113,7 @@ class MessageType(AngeeNode):
     preview: auto
     sent_at: auto
     received_at: auto
+    sender: HandleType | None
     thread: "ThreadType | None"
     channel: ChannelType | None
     parts: list[PartType]

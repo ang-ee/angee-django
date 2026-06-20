@@ -3,7 +3,6 @@ import {
   Action,
   Button,
   Column,
-  ControlBand,
   DataPage,
   Dialog,
   Field,
@@ -25,6 +24,7 @@ const MODEL = "parties.Directory";
 
 const directoryList = (
   <List model={MODEL}>
+    <Column field="displayName" header="Name" />
     <Column field="status" widget="statusBadge" />
     <Column field="backendClass" />
     <Column field="lastSyncStatus" />
@@ -44,37 +44,35 @@ const directoryList = (
 export function DirectoriesPage(): React.ReactElement {
   const [sync] = useRecordActionMutation<ActionFieldName>("syncIntegration");
   return (
-    <>
-      <ConnectCardDavControl />
-      <DataPage model={MODEL} placement="inline" routed hideCreate>
-        {directoryList}
-        <Form model={MODEL}>
-          <Field name="status" readOnly />
-          <Field name="backendClass" readOnly />
-          <Field name="config" readOnly />
-          <Group label="Last sync" columns={2}>
-            <Field name="lastSyncStatus" readOnly />
-            <Field name="lastSyncItems" readOnly />
-            <Field name="lastSyncCompletedAt" readOnly />
-          </Group>
-          <Action id="sync" label="Sync now" icon="refresh" run={sync} />
-        </Form>
-      </DataPage>
-    </>
+    <DataPage model={MODEL} placement="inline" routed hideCreate toolbarActions={<ConnectCardDav />}>
+      {directoryList}
+      <Form model={MODEL}>
+        <Field name="displayName" title readOnly />
+        <Field name="status" readOnly />
+        <Field name="backendClass" readOnly />
+        <Field name="config" readOnly />
+        <Group label="Last sync" columns={2}>
+          <Field name="lastSyncStatus" readOnly />
+          <Field name="lastSyncItems" readOnly />
+          <Field name="lastSyncCompletedAt" readOnly />
+        </Group>
+        <Action id="sync" label="Sync now" icon="refresh" run={sync} />
+      </Form>
+    </DataPage>
   );
 }
 
-/** Control-band button + dialog that connects a CardDAV account. */
-function ConnectCardDavControl(): React.ReactElement {
+/** Button + dialog that connects a CardDAV account, for the list toolbar slot. */
+function ConnectCardDav(): React.ReactElement {
   const [open, setOpen] = React.useState(false);
   return (
-    <ControlBand>
+    <>
       <Button variant="primary" size="sm" onClick={() => setOpen(true)}>
         <Glyph decorative name="plus" />
         Connect CardDAV
       </Button>
       <ConnectDialog open={open} onOpenChange={setOpen} />
-    </ControlBand>
+    </>
   );
 }
 

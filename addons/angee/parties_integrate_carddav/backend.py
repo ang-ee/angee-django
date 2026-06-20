@@ -10,11 +10,19 @@ common), authenticated by the directory's Basic-auth credential, following one
 level of redirect. ``vobject`` parses each card into a neutral ``ParsedContact``;
 the idempotent ``(folder, source_uid)`` map onto parties is owned by
 ``Directory.sync`` + the parties managers, never here.
+
+Auth is Basic only: HTTP Digest is not yet supported. A Digest server would need a
+``DigestAuthCredentialHandler`` on the credential registry seam (the challenge /
+response round-trip), which is deferred until a Digest-only source needs it.
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 import xml.etree.ElementTree as ElementTree
+from dataclasses import replace
+from datetime import date, datetime
 from typing import Any
 from urllib.parse import urljoin, urlsplit, urlunsplit
 from xml.sax.saxutils import escape
@@ -26,6 +34,7 @@ from angee.parties.backends import (
     ParsedAddress,
     ParsedAddressbook,
     ParsedContact,
+    ParsedPhoto,
 )
 
 _NS = {
@@ -35,6 +44,8 @@ _NS = {
 }
 _MULTIGET_CHUNK = 100
 _REDIRECT_STATUSES = (301, 302, 307, 308)
+# vCard's reserved year for a birthday/anniversary whose year is omitted (``--MMDD``).
+_NO_YEAR_SENTINEL = 1604
 
 _PRINCIPAL_BODY = (
     '<?xml version="1.0" encoding="utf-8"?>'
@@ -75,6 +86,24 @@ class CardDavDirectoryBackend(DirectoryBackend):
 
     # --- discovery (DirectoryBackend contract) ---
 
+    def probe(self) -> None:
+        """Run discovery once to validate the URL + credentials before persisting.
+
+        Raises :class:`CardDavError` if the server URL is missing, unreachable, or
+        rejects the credentials — so the connect mutation fails fast instead of
+        saving a directory whose first sync would silently error. An empty (but
+        reachable, authenticated) account is allowed.
+        """
+
+        if not self._base_url():
+            raise CardDavError("A CardDAV server URL is required.")
+        try:
+            self.discover()
+        except CardDavError:
+            raise
+        except Exception as error:  # noqa: BLE001 — surface any transport/SSRF failure as a connect error.
+            raise CardDavError(f"Could not connect to the CardDAV server: {error}") from error
+
     def discover(self) -> list[ParsedAddressbook]:
         """Resolve the account's principal → home-set → address-book collections."""
 
@@ -91,13 +120,33 @@ class CardDavDirectoryBackend(DirectoryBackend):
         return self._enumerate(home)
 
     def fetch_contacts(self, addressbook: ParsedAddressbook) -> list[ParsedContact]:
-        """List the collection's vCard hrefs, then multiget them in batches."""
+        """List the collection's vCard hrefs, multiget them, and resolve photo URIs."""
 
         hrefs = self._list_vcard_hrefs(addressbook.href)
         contacts: list[ParsedContact] = []
         for start in range(0, len(hrefs), _MULTIGET_CHUNK):
             contacts.extend(self._multiget(addressbook.href, hrefs[start : start + _MULTIGET_CHUNK]))
-        return contacts
+        return [self._resolve_photo(contact) for contact in contacts]
+
+    def _resolve_photo(self, contact: ParsedContact) -> ParsedContact:
+        """Fetch a remote PHOTO URI into bytes so the map ingests one storage File.
+
+        The parse step already decoded inline photos; only a ``uri`` photo needs the
+        network, which belongs to the transport, not the pure parser or the map. A
+        fetch failure drops the photo rather than failing the whole contact.
+        """
+
+        photo = contact.photo
+        if photo is None or photo.data is not None or not photo.uri:
+            return contact
+        try:
+            response = self.http.get(photo.uri, allow_private=True)
+        except Exception:  # noqa: BLE001 — a broken avatar URL must not abort the sync.
+            return replace(contact, photo=None)
+        if not response.ok or not response.body:
+            return replace(contact, photo=None)
+        mime = photo.mime or response.header("content-type").split(";")[0].strip()
+        return replace(contact, photo=ParsedPhoto(data=response.body, mime=mime))
 
     # --- transport ---
 
@@ -245,11 +294,18 @@ def _parse_vcard(card: Any, *, etag: str, href: str, raw: str) -> ParsedContact:
         name_suffix=str(getattr(name, "suffix", "") or ""),
         nickname=_prop(card, "nickname"),
         notes=_prop(card, "note"),
+        # vCard ORG is structured "Org;Unit;…" — the first part is the org, the
+        # second its department.
         organization=str(org_values[0]) if org_values else "",
+        department=str(org_values[1]) if len(org_values) > 1 else "",
         title=_prop(card, "title"),
+        role=_prop(card, "role"),
+        birthday=_parse_date(_prop(card, "bday")),
+        anniversary=_parse_date(_prop(card, "anniversary")),
         emails=tuple(_labelled(item) for item in card.contents.get("email", [])),
         phones=tuple(_labelled(item) for item in card.contents.get("tel", [])),
         addresses=tuple(_address(item) for item in card.contents.get("adr", [])),
+        photo=_parse_photo(getattr(card, "photo", None)),
         raw_vcard=raw,
     )
 
@@ -261,11 +317,107 @@ def _prop(card: Any, prop: str) -> str:
     return str(component.value) if component is not None and component.value else ""
 
 
-def _labelled(component: Any) -> tuple[str, str]:
-    """Return ``(value, label)`` for an EMAIL/TEL component using its first TYPE."""
+def _labelled(component: Any) -> tuple[str, str, bool]:
+    """Return ``(value, label, is_preferred)`` for an EMAIL/TEL component.
 
-    types = component.params.get("TYPE", []) if hasattr(component, "params") else []
-    return str(component.value or ""), (str(types[0]).lower() if types else "")
+    ``label`` is the first non-``PREF`` ``TYPE`` (home/work/cell/…); ``is_preferred``
+    is set by ``TYPE=PREF`` (vCard 3.0) or a ``PREF`` parameter (vCard 4.0).
+    """
+
+    params = component.params if hasattr(component, "params") else {}
+    types = [str(item).lower() for item in params.get("TYPE", [])]
+    label = next((item for item in types if item != "pref"), "")
+    is_preferred = "pref" in types or bool(params.get("PREF"))
+    return str(component.value or ""), label, is_preferred
+
+
+def _parse_date(value: str) -> date | None:
+    """Parse a vCard ``BDAY``/``ANNIVERSARY`` into a date across the common formats.
+
+    Accepts ``YYYY-MM-DD`` and ``YYYYMMDD``; a year-omitted ``--MMDD``/``--MM-DD``
+    keeps the month/day under the vCard ``1604`` no-year sentinel. An unparseable or
+    empty value yields ``None`` rather than raising — one odd card never aborts a sync.
+    """
+
+    text = (value or "").strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d", "%Y%m%d"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    # Year-omitted vCard forms (--MMDD / --MM-DD): build month/day directly rather
+    # than via strptime, whose default-year handling is deprecated for day-of-month.
+    if text.startswith("--"):
+        digits = text[2:].replace("-", "")
+        if len(digits) == 4 and digits.isdigit():
+            try:
+                return date(_NO_YEAR_SENTINEL, int(digits[:2]), int(digits[2:]))
+            except ValueError:
+                return None
+    return None
+
+
+def _parse_photo(component: Any) -> ParsedPhoto | None:
+    """Parse a vCard ``PHOTO`` into inline bytes or a remote URI (pure — no fetch).
+
+    Handles vobject's already-decoded bytes, ``ENCODING=b``/base64 inline data, a
+    ``data:`` URI, and a plain ``http(s)`` URI (resolved later by the transport).
+    """
+
+    if component is None:
+        return None
+    params = component.params if hasattr(component, "params") else {}
+    mime = _photo_mime(params)
+    value = component.value
+    if isinstance(value, bytes):
+        return ParsedPhoto(data=value, mime=mime)
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.startswith("data:"):
+        return _parse_data_uri(text) or ParsedPhoto(mime=mime)
+    encodings = [str(item).lower() for item in params.get("ENCODING", [])]
+    if "b" in encodings or "base64" in encodings:
+        decoded = _b64decode(text)
+        return ParsedPhoto(data=decoded, mime=mime) if decoded is not None else None
+    if text.startswith(("http://", "https://")):
+        return ParsedPhoto(uri=text, mime=mime)
+    return None
+
+
+def _parse_data_uri(text: str) -> ParsedPhoto | None:
+    """Parse a ``data:[<mime>][;base64],<payload>`` URI into a ParsedPhoto."""
+
+    try:
+        header, _, payload = text[len("data:") :].partition(",")
+    except ValueError:
+        return None
+    if not payload:
+        return None
+    mime = header.split(";")[0].strip()
+    if ";base64" in header:
+        decoded = _b64decode(payload)
+        return ParsedPhoto(data=decoded, mime=mime) if decoded is not None else None
+    return None
+
+
+def _b64decode(text: str) -> bytes | None:
+    """Decode base64 text (whitespace tolerated), or ``None`` if malformed."""
+
+    try:
+        return base64.b64decode("".join(text.split()), validate=True)
+    except (binascii.Error, ValueError):
+        return None
+
+
+def _photo_mime(params: dict[str, Any]) -> str:
+    """Return a MIME type for a PHOTO from its ``TYPE`` param (e.g. JPEG → image/jpeg)."""
+
+    types = [str(item).lower() for item in params.get("TYPE", [])]
+    subtype = next((item for item in types if item not in ("", "uri")), "")
+    return f"image/{subtype}" if subtype else ""
 
 
 def _address(component: Any) -> ParsedAddress:
