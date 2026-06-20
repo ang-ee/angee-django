@@ -185,7 +185,7 @@ class Message(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
         OUTBOUND = "outbound", "Outbound"
         INTERNAL = "internal", "Internal"
 
-    class Status(models.TextChoices):
+    class MessageStatus(models.TextChoices):
         """Lifecycle + public moderation state of a message."""
 
         DRAFT = "draft", "Draft"
@@ -227,7 +227,7 @@ class Message(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
     )
     platform = StateField(choices_enum=Handle.Platform, default=Handle.Platform.EMAIL)
     direction = StateField(choices_enum=Direction, default=Direction.INBOUND)
-    status = StateField(choices_enum=Status, default=Status.SYNCED)
+    status = StateField(choices_enum=MessageStatus, default=MessageStatus.SYNCED)
     external_id = models.CharField(max_length=512, blank=True, default="")
     is_original_post = models.BooleanField(default=False)
     subject = models.CharField(max_length=512, blank=True, default="")
@@ -271,7 +271,7 @@ class Fragment(SqidMixin, AuditMixin, AngeeModel):
 
     runtime = True
 
-    class Kind(models.TextChoices):
+    class FragmentKind(models.TextChoices):
         """What a fragment of text is."""
 
         PARAGRAPH = "paragraph", "Paragraph"
@@ -283,7 +283,7 @@ class Fragment(SqidMixin, AuditMixin, AngeeModel):
     sqid = SqidField(real_field_name="id", prefix="frg_", min_length=8)
     text = models.TextField()
     hash = models.CharField(max_length=64, unique=True)
-    kind = StateField(choices_enum=Kind, default=Kind.PARAGRAPH)
+    kind = StateField(choices_enum=FragmentKind, default=FragmentKind.PARAGRAPH)
 
     objects = FragmentManager()
 
@@ -317,7 +317,7 @@ class Part(SqidMixin, AuditMixin, AngeeModel):
         INLINE = "inline", "Inline"
         ATTACHMENT = "attachment", "Attachment"
 
-    class Role(models.TextChoices):
+    class PartRole(models.TextChoices):
         """The semantic role of a part — the primary quotation/search filter axis."""
 
         BODY = "body", "Body"
@@ -341,7 +341,7 @@ class Part(SqidMixin, AuditMixin, AngeeModel):
     position = models.PositiveIntegerField(default=0)
     type = models.CharField(max_length=128, default="text/plain")
     disposition = StateField(choices_enum=Disposition, default=Disposition.INLINE)
-    role = StateField(choices_enum=Role, default=Role.BODY)
+    role = StateField(choices_enum=PartRole, default=PartRole.BODY)
     cid = models.CharField(max_length=256, blank=True, default="")
     name = models.CharField(max_length=512, blank=True, default="")
     fragment = models.ForeignKey(
@@ -384,7 +384,7 @@ class MessageEdge(SqidMixin, AuditMixin, AngeeModel):
 
     runtime = True
 
-    class Kind(models.TextChoices):
+    class EdgeKind(models.TextChoices):
         """The type of cross-message relation."""
 
         REPLY = "reply", "Reply"
@@ -405,7 +405,7 @@ class MessageEdge(SqidMixin, AuditMixin, AngeeModel):
         on_delete=models.CASCADE,
         related_name="edges_in",
     )
-    kind = StateField(choices_enum=Kind, default=Kind.QUOTE)
+    kind = StateField(choices_enum=EdgeKind, default=EdgeKind.QUOTE)
     fragment = models.ForeignKey(
         "messaging.Fragment",
         null=True,
@@ -449,7 +449,7 @@ class Participant(SqidMixin, AuditMixin, AngeeModel):
 
     runtime = True
 
-    class Role(models.TextChoices):
+    class ParticipantRole(models.TextChoices):
         """The envelope or membership role of a participant."""
 
         FROM = "from", "From"
@@ -481,7 +481,7 @@ class Participant(SqidMixin, AuditMixin, AngeeModel):
         on_delete=models.CASCADE,
         related_name="participations",
     )
-    role = StateField(choices_enum=Role, default=Role.TO)
+    role = StateField(choices_enum=ParticipantRole, default=ParticipantRole.TO)
     joined_at = models.DateTimeField(null=True, blank=True)
     left_at = models.DateTimeField(null=True, blank=True)
 

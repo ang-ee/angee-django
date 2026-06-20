@@ -211,18 +211,22 @@ class MessagePatch:
 
 _message_aggregates = rebac_aggregate_builder(
     model=Message,
+    name_prefix="MessageAggregate",
     aggregate_fields=["id"],
     group_by_fields=["thread", "sender", "channel", "status", "platform", "sent_at"],
     filter_type=MessageFilter,
-    name_prefix="Message",
-)
+    pagination_style="offset",
+    enable_filter_echo=True,
+).build()
 _thread_aggregates = rebac_aggregate_builder(
     model=Thread,
+    name_prefix="ThreadAggregate",
     aggregate_fields=["id", "message_count"],
     group_by_fields=["channel", "modality", "visibility", "last_message_at"],
     filter_type=ThreadFilter,
-    name_prefix="Thread",
-)
+    pagination_style="offset",
+    enable_filter_echo=True,
+).build()
 
 
 @strawberry.type

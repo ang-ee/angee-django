@@ -212,6 +212,16 @@ smaller and clearer.
 
 ## Mechanical Overrides
 
+- Never quick-fix to make something run. This is non-negotiable. In this repo
+  every change creates technical *investment* — a fix at the owning level that
+  leaves the whole platform cleaner — never technical *debt*, a workaround in the
+  consuming code that papers over the real defect. Cutting scope, dropping a
+  feature, weakening or disabling a check, or working around a failure to get a
+  build / schema / test / `angee dev` to pass is a bug, not a fix — find the owner
+  and fix it at the right level, however much more work that is. A workaround that
+  only makes it run hides the defect and does more harm than the failure it
+  silenced. When a fix is genuinely out of scope, stop and surface it; do not
+  paper over it.
 - Before structural refactors, remove dead code first.
 - Re-read a file before editing it, and read it again after.
 - If a search looks too small, narrow and rerun it.
