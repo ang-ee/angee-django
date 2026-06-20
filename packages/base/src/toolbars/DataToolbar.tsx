@@ -25,6 +25,7 @@ import type {
   DataViewLookupOperator,
 } from "../views/data-view-model";
 import { dataViewGroupsEqual } from "../views/data-view-model";
+import { groupFieldLabel } from "../views/ListInternals";
 
 export interface DataToolbarProps {
   pager: PagerState;
@@ -936,11 +937,6 @@ const EXACT_FILTER_OPERATORS: readonly DataToolbarCustomFilterOperator[] = [
   "isNull",
   "isNotNull",
 ];
-
-function groupFieldLabel(field: string): string {
-  const label = titleCase(field);
-  return label.endsWith(" At") ? label.slice(0, -3) : label;
-}
 
 function operatorsForField(
   field: DataToolbarFilterField | undefined,

@@ -219,3 +219,4 @@ Update after every slice commit.
 | S0 GraphQL sqid IDs | `3502d73c` | +824 incl. plan/tests | raw public IDs, no Relay wrappers | public-id helpers + typed details own identity | pass | pytest/schema/typecheck |
 | S0 sqid separator | `b26257d4` | +70 | canonical `abc_...` sqids | `SqidField` owns separator | pass | pytest/schema/ruff |
 | E1 Delete `FROZEN_TIERS` | same commit | -3 | resources addon keeps only live tier facts | resource skip behavior remains owned by `_skip_decision`/ledger hash logic | backend + architecture pass | `ruff`; resources pytest |
+| E2 Reuse `groupFieldLabel` owner | same commit | -4 source | toolbar composes shared list label owner | `ListInternals.groupFieldLabel` remains the only group-field casing rule | frontend + architecture pass | base typecheck/test |
