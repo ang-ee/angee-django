@@ -81,11 +81,12 @@ class AnthropicInferenceBackend(SDKInferenceBackend):
         if request.tools:
             params["tools"] = list(request.tools)
         message = self.client().messages.create(**params)
+        raw = self._json_object(message)
         return InferenceResponse(
             text=self._content_text(getattr(message, "content", [])),
-            content=self._json_list(getattr(message, "content", [])),
-            usage=self._json_object(getattr(message, "usage", None)),
-            raw=self._json_object(message),
+            content=self._json_list(raw.get("content")),
+            usage=self._json_object(raw.get("usage")),
+            raw=raw,
         )
 
     def _message_options(self, request: InferenceRequest) -> dict[str, Any]:

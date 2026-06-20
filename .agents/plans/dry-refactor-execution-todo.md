@@ -75,6 +75,8 @@ Per-slice implementation gate:
 - [ ] Net LOC trends downward across implementation slices. Growth is accepted
       only for guardrail tests, unsafe-contract deletion, or a shared owner that
       unlocks larger deletion.
+- [ ] Every slice reports total regular tracked-file LOC versus baseline commit
+      `261530412909d2d3864e83ba54dced7c9254083c`, not just local diff stats.
 
 ## Closed Workstreams
 
@@ -237,3 +239,4 @@ Update after every slice commit.
 | E12 Share `dedupeBy` utility | same commit | -10 source | base views/preferences reuse one first-wins dedupe mechanic without changing domain merge rules | `packages/base/src/lib/dedupe.ts` owns by-key array dedupe inside base | frontend + architecture pass | base typecheck; base vitest |
 | E13 Use MIME catalogue file glyphs | same commit | -5 source | storage file rows carry catalogue glyph facts; views render row-owned icons | `MimeType.icon_key` owns file glyph choice; MIME checks only decide thumbnail rendering | frontend + architecture pass; registry coverage deferred | storage typecheck/test; `git diff --check` |
 | E14 Add storage download cache contract | same commit | +18 prod, +63 tests | storage download response advertises validators and token-carrier-safe private caching | Django cache helpers own ETag/conditional/Vary mechanics; `content_hash` and token TTL supply facts | backend + architecture pass after fixes | `ruff`; storage pytest |
+| E15 Use SDK model dumps | this commit | -12 prod, +27 tests; total LOC `210,558` vs baseline `206,023` (`+4,535`) | provider addons stop recursively walking arbitrary objects for SDK JSON | OpenAI/Anthropic Pydantic SDK models own nested `model_dump(mode="json")`; tests use real SDK response models | backend + architecture pass | `ruff`; agents pytest + agents GraphQL pytest |

@@ -91,11 +91,12 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
             params["tools"] = list(request.tools)
         completion = self.client().chat.completions.create(**params)
         text = self._completion_text(completion)
+        raw = self._json_object(completion)
         return InferenceResponse(
             text=text,
             content=[{"type": "text", "text": text}] if text else [],
-            usage=self._json_object(getattr(completion, "usage", None)),
-            raw=self._json_object(completion),
+            usage=self._json_object(raw.get("usage")),
+            raw=raw,
         )
 
     def _chat_options(self, request: InferenceRequest) -> dict[str, Any]:
