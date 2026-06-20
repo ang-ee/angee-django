@@ -40,6 +40,38 @@ describe("useBusyRun", () => {
     expect(result.current.busy).toBe(false);
   });
 
+  test("stays busy until every overlapping action settles", async () => {
+    const { result } = renderHook(() => useBusyRun());
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    const first = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const second = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+
+    let firstRun!: Promise<void>;
+    let secondRun!: Promise<void>;
+    act(() => {
+      firstRun = result.current.run(() => first);
+      secondRun = result.current.run(() => second);
+    });
+    await waitFor(() => expect(result.current.busy).toBe(true));
+
+    await act(async () => {
+      releaseFirst();
+      await firstRun;
+    });
+    expect(result.current.busy).toBe(true);
+
+    await act(async () => {
+      releaseSecond();
+      await secondRun;
+    });
+    expect(result.current.busy).toBe(false);
+  });
+
   test("clears busy and re-throws without firing onChanged on failure", async () => {
     const onChanged = vi.fn();
     const { result } = renderHook(() => useBusyRun(onChanged));

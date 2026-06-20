@@ -110,6 +110,7 @@ finds an earlier wrong fork.
 | E13 | 3.7 | file glyph catalogue | Derive file glyph from catalogue owner. | frontend, architecture | LOC -7; file views stop carrying local icon maps. |
 | E14 | 8.1 | storage download response | Add/download ETag and Cache-Control owner behavior. | backend, architecture | LOC may grow +6; HTTP caching contract becomes explicit and tested. |
 | E15 | 1.3 | SDK model serialization | Replace `_json_value` recursion with SDK/Pydantic `model_dump(mode="json")`. | backend, architecture | LOC -30; provider glue stops walking arbitrary objects. |
+| S1 | bugfix | SDK write-state primitive | Make mutation loading follow the submitted promise and make `useBusyRun` overlap-safe. | frontend, architecture | LOC +3 prod; loading state stops depending on stale urql mutation flags. |
 | E16 | 3.1 | DataToolbar picker shell | Share filter/group disclosure editor shell. | frontend, architecture | LOC -18; toolbar chrome has one owner. |
 | E17 | 3.2 | `Filter` class | Move filter merge/AND algebra onto `Filter`. | frontend, architecture | LOC -38; pages call filter owner, no duplicate merge helpers. |
 | E18 | 2.4 | `ExternalAccount`/`Credential` | Move provider/display projections to model properties. | backend, architecture | LOC -8; schema fields become property dispatchers. |
@@ -128,6 +129,47 @@ Covered, not queued:
 - Post-audit 3.4 GroupedList i18n sweep is covered by the closed React
   consistency/i18n pass. Do not reopen unless a new drift grep or reviewer finds
   concrete remaining hardcoded copy.
+
+## Higher-Level Analyzer Queue
+
+These came from the June 20 read-only analyzer pass requested after E15. Treat
+them as drawing-board candidates: each needs the slice gate before edits, and
+P0/P1 items should run reviewers against the owner choice before implementation.
+
+### Backend / Library Ownership
+
+| ID | Priority | Owner candidate | Finding | Lower-surface target | Decision |
+|---|---:|---|---|---|---|
+| H1 | P1 | `agents.provisioning` service or `Agent` manager | Agent provisioning, rollback, secret sync, and daemon orchestration live in GraphQL resolvers. | Move provisioning/reprovision/deprovision work out of `agents/schema.py`; resolvers dispatch and return `ActionResult`. | Light architect approval on service vs manager shape. |
+| H2 | P1 | Integration child lifecycle helper/manager | Integration, VCS bridge, and inference provider create/update repeat parent-field resolution, impl defaults, and patch handling. | One integrate-owned child lifecycle owner that accepts plain mappings/dataclasses, not Strawberry inputs. | Architect approval before setting future child pattern. |
+| H3 | P2 | `angee.graphql.actions` + model methods | Action mutations repeat target lookup, `system_context`, and failure-to-`ActionResult` glue. | Small `run_action(...)` helper or model-owned action methods; keep permission/validation errors explicit. | No approval if kept small. |
+| H4 | P2 | `django-zed-rebac` adapter | GraphQL permission guards repeat `current_actor`/`check_field_access` shapes. | Tiny `current_actor_can(...)` or parameterized `RebacObjectPermission`. | Approval if IAM/admin semantics change. |
+| H5 | P2 | HTTP stack owner | OAuth, operator, GitHub, and webhooks carry parallel outbound HTTP/security behavior. | Decide stdlib helper vs locked HTTP dependency; preserve URL safety/IP pinning. | Stack-owner decision required. |
+| H6 | P3 | Resource adoption owner | Resource loader interprets Django uniqueness/conditional constraints directly. | Prefer model-owned natural/adoption key hooks or import-export-native identity where exact. | Public resource semantics decision required. |
+
+### Frontend / View Primitive Ownership
+
+| ID | Priority | Owner candidate | Finding | Lower-surface target | Decision |
+|---|---:|---|---|---|---|
+| H7 | P0 | `@angee/base` rows + SDK authored hooks | Authored-query row pages repeat query/project/`RowsListView` wiring. | `AuthoredRowsView` or `useAuthoredRows` that owns state and list wiring while row projection/columns stay local. | API name/shape approval useful. |
+| H8 | P0 | Operator-local first; maybe base remote collection later | Operator daemon sections are a parallel DataPage world. | `SnapshotSection`/`OperatorSnapshotRows` for snapshot slice, rows, href, empty/group wiring. | Decide operator-only vs base remote collection. |
+| H9 | P1 | Base explorer/tree primitive | Storage and knowledge share tree/explorer page skeletons. | Declarative `TreeExplorerPage` shell with collection picker, selected route id, loading/not-found/drop hooks. | Architect approval. |
+| H10 | P1 | SDK/base action runner | IAM/operator bespoke pending/error/refetch runners sit beside `useBusyRun`. | Shared action-state orchestrator; do not interpret every payload. | Approval if public cross-addon API. |
+| H11 | P2 | `DataPage` drawer mode | Drawer DataPage control state is repeated in storage, knowledge, integrate templates. | Self-controlled `DrawerDataPage`/managed drawer mode. | No approval. |
+| H12 | P2 | Base state fragments | List/graph error banners and dynamic labels drift from shared fragments/i18n. | Use shared `ErrorBanner`/state fragments and add small guard tests where useful. | No approval. |
+
+### Naming / Architecture Forks
+
+| ID | Priority | Owner candidate | Finding | Lower-surface target | Decision |
+|---|---:|---|---|---|---|
+| H13 | P0 | Integration child models | `Integration.impl_class` is stale parent-level implementation choice. | Parent `Integration` owns identity/lifecycle only; child model + child `backend_class`/`provider_type` own adapter kind. | Escalate if parent-only integrations remain real. |
+| H14 | P0 | Integration lifecycle/health model | `Integration.status` mixes lifecycle and runtime health. | Split lifecycle from health/runtime status; bridge sync telemetry stops mutating lifecycle. | Escalate if `ERROR` is intentionally lifecycle. |
+| H15 | P1 | `OAuthClient` vocabulary | OAuth “provider” route/page names collide with inference providers. | Code/routes use `oauthClient(s)`; UX labels may say provider if desired. | Escalate only if product vocabulary requires provider in code. |
+| H16 | P1 | OAuth redirect policy | Frontend callback routing probes record shape and Anthropic strings. | Backend exposes callback/redirect policy; frontend consumes a field. | Escalate if browser must choose before start call. |
+| H17 | P1 | VCS/source operation verbs | Import/discover/reconcile/refresh/sync are overloaded. | Normalize operation names around inventory, reconcile, refresh, sync bridge. | Escalate if `sync` is platform umbrella term. |
+| H18 | P2 | Webhook API naming | Webhook filters still leak `impl_app`. | Rename to addon/source/integration-kind axis before API hardens. | Escalate if already external API. |
+| H19 | P2 | Route/menu acronym convention | Route IDs use kebab acronym names while model/GraphQL use `MCP*`. | Use camel route/menu IDs like `agents.mcpServers`; URL paths may stay kebab. | Escalate if route names persisted. |
+| H20 | P2 | Inference model metadata names | `model_use` is labeled Capability while `capabilities` is separate JSON. | Label as “Model use” or rename enum field consistently. | Escalate if domain wants capability everywhere. |
 
 ## Larger DRY Workstreams
 
@@ -239,4 +281,5 @@ Update after every slice commit.
 | E12 Share `dedupeBy` utility | same commit | -10 source | base views/preferences reuse one first-wins dedupe mechanic without changing domain merge rules | `packages/base/src/lib/dedupe.ts` owns by-key array dedupe inside base | frontend + architecture pass | base typecheck; base vitest |
 | E13 Use MIME catalogue file glyphs | same commit | -5 source | storage file rows carry catalogue glyph facts; views render row-owned icons | `MimeType.icon_key` owns file glyph choice; MIME checks only decide thumbnail rendering | frontend + architecture pass; registry coverage deferred | storage typecheck/test; `git diff --check` |
 | E14 Add storage download cache contract | same commit | +18 prod, +63 tests | storage download response advertises validators and token-carrier-safe private caching | Django cache helpers own ETag/conditional/Vary mechanics; `content_hash` and token TTL supply facts | backend + architecture pass after fixes | `ruff`; storage pytest |
-| E15 Use SDK model dumps | this commit | -12 prod, +27 tests; total LOC `210,558` vs baseline `206,023` (`+4,535`) | provider addons stop recursively walking arbitrary objects for SDK JSON | OpenAI/Anthropic Pydantic SDK models own nested `model_dump(mode="json")`; tests use real SDK response models | backend + architecture pass | `ruff`; agents pytest + agents GraphQL pytest |
+| E15 Use SDK model dumps | `d4811bd8` | -12 prod, +27 tests; total LOC `210,558` vs baseline `206,023` (`+4,535`) | provider addons stop recursively walking arbitrary objects for SDK JSON | OpenAI/Anthropic Pydantic SDK models own nested `model_dump(mode="json")`; tests use real SDK response models | backend + architecture pass | `ruff`; agents pytest + agents GraphQL pytest |
+| S1 SDK mutation busy state | this commit | +3 prod, +82 tests, +44 plan; total LOC `210,686` vs baseline `206,023` (`+4,663`) | action/auth/resource callers keep using one SDK mutation seam; analyzer findings are queued as sliceable owner moves | `useDocumentMutation` uses `useBusyRun`; `useBusyRun` owns overlapping async busy state with a counter | frontend + architecture pass after P2 fix | SDK focused tests + full SDK test; SDK typecheck; base focused tests; `git diff --check` |

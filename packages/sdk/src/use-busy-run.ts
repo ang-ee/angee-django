@@ -14,19 +14,19 @@ export interface BusyRun {
  * hooks would otherwise each re-spell.
  */
 export function useBusyRun(onChanged?: () => void): BusyRun {
-  const [busy, setBusy] = useState(false);
+  const [inFlight, setInFlight] = useState(0);
   const run = useCallback(
     async <T>(action: () => Promise<T>): Promise<T> => {
-      setBusy(true);
+      setInFlight((current) => current + 1);
       try {
         const result = await action();
         onChanged?.();
         return result;
       } finally {
-        setBusy(false);
+        setInFlight((current) => Math.max(0, current - 1));
       }
     },
     [onChanged],
   );
-  return { busy, run };
+  return { busy: inFlight > 0, run };
 }
