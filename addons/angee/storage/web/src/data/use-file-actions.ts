@@ -1,10 +1,6 @@
-import { useAuthoredMutation, useBusyRun } from "@angee/sdk";
+import { useAuthoredMutation, useBusyRun, useResourceMutation } from "@angee/sdk";
 
-import {
-  StorageDeleteFile,
-  StorageRestoreFile,
-  StorageUpdateFile,
-} from "./documents";
+import { StorageRestoreFile } from "./documents";
 
 export interface FileActions {
   busy: boolean;
@@ -29,16 +25,16 @@ export function useFileActions(
   options: { onChanged?: () => void } = {},
 ): FileActions {
   const { onChanged } = options;
-  const [deleteFile] = useAuthoredMutation(StorageDeleteFile);
+  const [deleteFile] = useResourceMutation("storage.File", "delete");
   const [restoreFile] = useAuthoredMutation(StorageRestoreFile);
-  const [updateFile] = useAuthoredMutation(StorageUpdateFile);
+  const [updateFile] = useResourceMutation("storage.File", "update");
   const { busy, run } = useBusyRun(onChanged);
 
   return {
     busy,
     trash: (id) =>
       run(async () => {
-        await deleteFile({ id });
+        await deleteFile({ id, confirm: true });
       }),
     restore: (id) =>
       run(async () => {
@@ -50,7 +46,7 @@ export function useFileActions(
       }),
     trashMany: (ids) =>
       run(async () => {
-        for (const id of ids) await deleteFile({ id });
+        for (const id of ids) await deleteFile({ id, confirm: true });
       }),
     restoreMany: (ids) =>
       run(async () => {
