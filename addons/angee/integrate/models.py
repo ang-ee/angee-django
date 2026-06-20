@@ -45,6 +45,7 @@ from rebac import (
 )
 from rebac.managers import RebacManager, RebacQuerySet
 from rebac.models import active_relationship_model
+from strawberry_django.descriptors import model_property
 
 from angee.base.fields import EncryptedField, ImplClassField, SqidField, StateField
 from angee.base.impl import ImplDefaultsMixin
@@ -660,6 +661,34 @@ class ExternalAccount(SqidMixin, AuditMixin, AngeeModel):
         credential = getattr(self, "credential", None)
         return "" if credential is None else str(getattr(credential, "status", "") or "")
 
+    @property
+    def provider_slug(self) -> str:
+        """Return the originating OAuth client's slug."""
+
+        client = getattr(self, "oauth_client", None)
+        return str(getattr(client, "slug", "") or "")
+
+    @property
+    def provider_environment(self) -> str:
+        """Return the originating OAuth client's environment."""
+
+        client = getattr(self, "oauth_client", None)
+        return str(getattr(client, "environment", "") or "")
+
+    @property
+    def provider_label(self) -> str:
+        """Return the originating OAuth client's display label."""
+
+        client = getattr(self, "oauth_client", None)
+        return str(getattr(client, "display_name", "") or "")
+
+    @property
+    def provider_icon(self) -> str:
+        """Return the originating OAuth client's branding icon."""
+
+        client = getattr(self, "oauth_client", None)
+        return str(getattr(client, "icon", "") or "")
+
     @staticmethod
     def display_name_from_claims(claims: Mapping[str, Any], email: str) -> str:
         """Return the best display label from verified identity claims."""
@@ -894,8 +923,8 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
         related_name="credentials",
     )
     name = models.CharField(max_length=255, blank=True)
-    """Human label for a provider-less credential (its identity, unique per user);
-    ``oauth`` credentials leave it blank and derive a label from the provider/account."""
+    """Human credential label; provider-backed rows are named on create, local
+    rows use it as their per-user identity."""
     kind = StateField(choices_enum=CredentialKind)
     material = EncryptedField()
     status = StateField(choices_enum=CredentialStatus, default=CredentialStatus.ACTIVE)
@@ -963,6 +992,44 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
         """Return the primary secret value through the kind handler."""
 
         return str(self.handler.secret_value(self))
+
+    @model_property(
+        only=["name", "oauth_client_id", "external_account_id"],
+    )
+    def display_name(self) -> str:
+        """Return a human label for lists, headers, and relation pickers."""
+
+        if self.name:
+            return str(self.name)
+        client = getattr(self, "oauth_client", None)
+        if client is not None:
+            provider = str(
+                getattr(client, "slug", "")
+                or getattr(client, "display_name", "")
+                or "credential"
+            )
+            account = getattr(self, "external_account", None)
+            subject = str(getattr(account, "external_id", "") or "") if account else ""
+            return f"{provider}: {subject}" if subject else provider
+        return "credential"
+
+    @property
+    def connected_display_name(self) -> str:
+        """Return a public-safe label for the current user's connected account."""
+
+        if self.name:
+            return str(self.name)
+        account = getattr(self, "external_account", None)
+        if account is not None:
+            subject = str(
+                getattr(account, "email", "")
+                or getattr(account, "display_name", "")
+                or getattr(account, "external_id", "")
+                or ""
+            )
+            if subject:
+                return subject
+        return "credential"
 
     def ensure_fresh(self) -> None:
         """Renew this credential's token in place when it is near expiry and can refresh.
@@ -1164,6 +1231,14 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         return f"{vendor_slug}:{self.public_id}"
 
     @property
+    def display_name(self) -> str:
+        """Return a human label for integration headers and relation pickers."""
+
+        vendor = getattr(self, "vendor", None)
+        label = str(getattr(vendor, "display_name", "") or getattr(vendor, "slug", "") or "integration")
+        return f"{label} ({self.status})"
+
+    @property
     def impl(self) -> IntegrationImpl:
         """Return this row's integration-level implementation."""
 
@@ -1278,6 +1353,18 @@ class Bridge(AngeeModel):
                     "updated_at",
                 ]
             )
+
+    def run_sync(self, *, now: datetime) -> int:
+        """Run one sync attempt and persist its lifecycle telemetry."""
+
+        self.mark_sync_started(now=now)
+        try:
+            result = self.sync()
+            self.record_sync(result, now=now)
+        except Exception as error:  # noqa: BLE001 — sync failure is telemetry, then caller policy.
+            self.record_sync_error(error, now=now)
+            raise
+        return result
 
     def sync(self) -> int:
         """Synchronize this bridge with its external system."""

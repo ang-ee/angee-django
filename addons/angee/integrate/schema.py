@@ -22,9 +22,7 @@ from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
-from angee.base.fields import ImplClassField
-from angee.base.models import instance_from_public_id
-from angee.graphql.actions import ActionResult, resolve_action_target
+from angee.graphql.actions import ActionResult, action_target, resolve_action_target
 from angee.graphql.aggregates import rebac_aggregate_builder
 from angee.graphql.crud import crud
 from angee.graphql.deletion import DeletePreview, delete_by_public_id
@@ -96,40 +94,31 @@ class ExternalAccountType(AngeeNode):
     last_used_at: auto
     created_at: auto
     updated_at: auto
+    credential_status: str
 
-    @strawberry_django.field
-    def credential_status(self) -> str:
-        """Return the current OAuth credential status, if this account has one."""
-
-        return str(cast(Any, self).credential_status)
-
-    @strawberry_django.field
+    @strawberry_django.field(only=["oauth_client__slug"])
     def provider_slug(self) -> str:
-        """Return the originating OAuth client's slug (the provider key)."""
+        """Return the originating OAuth client's slug."""
 
-        return str(getattr(cast(Any, self).oauth_client, "slug", "") or "")
+        return str(cast(Any, self).provider_slug)
 
-    @strawberry_django.field
+    @strawberry_django.field(only=["oauth_client__environment"])
     def provider_environment(self) -> str:
-        """Return the originating OAuth client's environment.
+        """Return the originating OAuth client's environment."""
 
-        ``(slug, environment)`` is the OAuth client's unique key, so the console
-        can resolve an account back to its exact client without ambiguity.
-        """
+        return str(cast(Any, self).provider_environment)
 
-        return str(getattr(cast(Any, self).oauth_client, "environment", "") or "")
-
-    @strawberry_django.field
+    @strawberry_django.field(only=["oauth_client__display_name"])
     def provider_label(self) -> str:
         """Return the originating OAuth client's display label."""
 
-        return str(getattr(cast(Any, self).oauth_client, "display_name", "") or "")
+        return str(cast(Any, self).provider_label)
 
-    @strawberry_django.field
+    @strawberry_django.field(only=["oauth_client__icon"])
     def provider_icon(self) -> str:
         """Return the originating OAuth client's branding icon."""
 
-        return str(getattr(cast(Any, self).oauth_client, "icon", "") or "")
+        return str(cast(Any, self).provider_icon)
 
 
 @strawberry_django.type(Credential)
@@ -143,6 +132,7 @@ class CredentialType(AngeeNode):
     last_refresh_at: auto
     last_refresh_status: auto
     external_account: ExternalAccountType | None
+    display_name: str
     created_at: auto
     updated_at: auto
 
@@ -152,27 +142,53 @@ class CredentialType(AngeeNode):
 
         return cast("CredentialOAuthClientType | None", cast(Any, self).oauth_client)
 
-    @strawberry_django.field(only=["oauth_client", "external_account", "name"])
+
+@strawberry_django.type(ExternalAccount)
+class ConnectedExternalAccountType(AngeeNode):
+    """Public projection of the current user's connected external account."""
+
+    external_id: auto
+    email: auto
+    display_name: auto
+    avatar_url: auto
+    status: auto
+    last_used_at: auto
+    created_at: auto
+    updated_at: auto
+
+    @strawberry_django.field(only=["credential__status"])
+    def credential_status(self) -> str:
+        """Return this account credential's current status when it is loaded."""
+
+        return str(cast(Any, self).credential_status)
+
+
+@strawberry_django.type(Credential)
+class ConnectedCredentialType(AngeeNode):
+    """Public projection of one current-user connected credential."""
+
+    kind: auto
+    name: auto
+    status: auto
+    expires_at: auto
+    last_refresh_at: auto
+    last_refresh_status: auto
+    external_account: ConnectedExternalAccountType | None
+    created_at: auto
+    updated_at: auto
+
+    @strawberry_django.field(
+        only=[
+            "name",
+            "external_account__email",
+            "external_account__display_name",
+            "external_account__external_id",
+        ]
+    )
     def display_name(self) -> str:
-        """Return a human label for the list, form title, and relation pickers.
+        """Return the public-safe connected credential label."""
 
-        The stored ``name`` is the label (OAuth rows are named on create from their
-        provider + subject; see ``CredentialManager._oauth_credential_name``). It is the
-        ``name`` column the relation-picker representation reads, so preferring it keeps
-        the picker, list, and form consistent without dereferencing related rows. A
-        legacy unnamed OAuth row falls back to ``provider: subject``.
-        """
-
-        name = str(cast(Any, self).name or "")
-        if name:
-            return name
-        client = getattr(cast(Any, self), "oauth_client", None)
-        if client is not None:
-            provider = str(getattr(client, "slug", "") or getattr(client, "display_name", "") or "credential")
-            account = getattr(cast(Any, self), "external_account", None)
-            subject = str(getattr(account, "external_id", "") or "") if account else ""
-            return f"{provider}: {subject}" if subject else provider
-        return "credential"
+        return str(cast(Any, self).connected_display_name)
 
 
 @strawberry_django.type(OAuthClient)
@@ -410,8 +426,8 @@ class OAuthStartPayload:
 class ConnectAccountResult:
     """Result returned by OAuth account-connect completion."""
 
-    account: ExternalAccountType | None = None
-    credential: CredentialType | None = None
+    account: ConnectedExternalAccountType | None = None
+    credential: ConnectedCredentialType | None = None
     user: UserType | None = None
     intent: str = "connect"
     next: str = "/"
@@ -424,7 +440,7 @@ class ConnectAccountResult:
 class ConnectIntegrationResult:
     """Result returned by one-click integration connect/attach."""
 
-    integration: "IntegrationType | None" = None
+    integration: "ConnectedIntegrationType | None" = None
     authorize_url: str = ""
     state: str = ""
     error: str | None = None
@@ -491,7 +507,20 @@ def _console_credentials(info: strawberry.Info) -> Any:
 def _oauth_client_from_id(oauth_client_id: PublicID) -> Any:
     """Return the OAuth client addressed by one public GraphQL id."""
 
-    return flow.oauth_client_from_id(oauth_client_id)
+    return resolve_action_target(
+        OAuthClient,
+        oauth_client_id,
+        reason="integrate.graphql.oauth_client.lookup",
+    )
+
+
+def _enabled_oauth_client_from_id(oauth_client_id: PublicID) -> Any:
+    """Return the enabled OAuth client addressed by one public GraphQL id."""
+
+    oauth_client = _oauth_client_from_id(oauth_client_id)
+    if not oauth_client.is_enabled:
+        raise ValueError("OAuth client is not enabled.")
+    return oauth_client
 
 
 def _credential_material(data: CredentialInput) -> dict[str, str]:
@@ -520,12 +549,6 @@ def _revoke_remote_oauth_token(credential: Any) -> None:
         return
 
 
-def _flow_error_message(error: OAuthFlowError) -> str:
-    """Return the best safe human message for one OAuth flow error."""
-
-    return error.provider_message or str(error)
-
-
 def _integration_impl_class(impl_class: str) -> type[IntegrationImpl]:
     """Return the configured implementation class for one integration key."""
 
@@ -537,18 +560,13 @@ def _oauth_client_for_integration(integration: Any) -> Any:
 
     impl = integration.impl
     hint = str(getattr(impl, "oauth_client", "") or "")
-    if not hint:
-        vendor = getattr(integration, "vendor", None)
-        hint = str(getattr(vendor, "slug", "") or "")
-    if not hint:
-        raise OAuthFlowError("oauth_client_not_connectable", 400, "Integration has no OAuth client.")
     vendor_slug = str(getattr(getattr(integration, "vendor", None), "slug", "") or "")
-    slug = hint.format(vendor=vendor_slug)
-    with system_context(reason="integrate.graphql.connect_integration.oauth_client"):
-        oauth_client = OAuthClient.objects.enabled_for_slug(slug)
-    if oauth_client is None:
-        raise OAuthFlowError("oauth_client_not_connectable", 400, "Integration has no enabled OAuth client.")
-    return oauth_client
+    return _connect.enabled_oauth_client_from_hint(
+        hint or vendor_slug,
+        owner_label="Integration",
+        reason="integrate.graphql.connect_integration.oauth_client",
+        vendor_slug=vendor_slug,
+    )
 
 
 def _current_user_integration(
@@ -571,11 +589,9 @@ def _current_user_integration(
         return integration
 
     vendor_key = vendor_slug.strip()
-    impl_field = cast(ImplClassField, Integration._meta.get_field("impl_class"))
-    impl_key = impl_field.key_for(impl_class) or ""
-    if not (vendor_key and impl_key):
+    if not (vendor_key and impl_class.strip()):
         raise ValueError("connectIntegration requires integrationId or vendorSlug and implClass.")
-    impl_field.resolve_class(impl_key)
+    impl_key = Integration.impl_key_for("impl_class", impl_class)
     vendor = _vendor_by_slug(vendor_key)
     with system_context(reason="integrate.graphql.connect_integration.draft"):
         integration = Integration.objects.filter(owner=user, vendor=vendor, impl_class=impl_key).first()
@@ -627,7 +643,7 @@ def connect_integration_target(
         if credential.user_id != user.pk:
             raise PermissionDenied("Credential does not belong to the current user.")
         integration.attach_credential(credential)
-        return ConnectIntegrationResult(integration=cast("IntegrationType", integration), attached=True)
+        return ConnectIntegrationResult(integration=cast("ConnectedIntegrationType", integration), attached=True)
     if not redirect_uri:
         raise OAuthFlowError("redirect_uri_required", 400, "OAuth redirect URI is required.")
     if oauth_client.configuration_state != "ready":
@@ -653,7 +669,7 @@ def connect_integration_target(
         code_challenge=flow.pkce_challenge(record.code_verifier),
     )
     return ConnectIntegrationResult(
-        integration=cast("IntegrationType", integration),
+        integration=cast("ConnectedIntegrationType", integration),
         authorize_url=authorize_url,
         state=state_token,
         mode=mode,
@@ -668,7 +684,7 @@ class IntegrateConnectionsQuery:
     connectable_accounts: OffsetPaginated[ConnectableAccount] = strawberry_django.offset_paginated(
         resolver=_connectable_accounts,
     )
-    my_connected_accounts: OffsetPaginated[CredentialType] = strawberry_django.offset_paginated(
+    my_connected_accounts: OffsetPaginated[ConnectedCredentialType] = strawberry_django.offset_paginated(
         resolver=_my_connected_accounts,
     )
 
@@ -690,7 +706,7 @@ class ConnectionMutation:
         user = _session_user(info)
         request = _request(info)
         try:
-            oauth_client = flow.enabled_oauth_client_from_id(id)
+            oauth_client = _enabled_oauth_client_from_id(id)
             if oauth_client.configuration_state != "ready":
                 # Enabled but missing a client_id/endpoints would otherwise build an
                 # authorize URL the provider rejects opaquely; surface it as a typed
@@ -715,7 +731,7 @@ class ConnectionMutation:
                 code_challenge=flow.pkce_challenge(record.code_verifier),
             )
         except OAuthFlowError as error:
-            return OAuthStartPayload(error=_flow_error_message(error), error_code=error.code)
+            return OAuthStartPayload(error=error.public_message, error_code=error.code)
         return OAuthStartPayload(
             authorize_url=authorize_url,
             state=state_token,
@@ -732,12 +748,11 @@ class ConnectionMutation:
         the operator never types them by hand. Requires a discovery URL on the row.
         """
 
-        with system_context(reason="integrate.graphql.discover_oauth_endpoints"):
-            oauth_client = instance_from_public_id(
-                OAuthClient, str(id), queryset=OAuthClient._default_manager.all()
-            )
-            if oauth_client is None:
-                raise ValueError(f"OAuth client {id!s} was not found")
+        with action_target(
+            OAuthClient,
+            id,
+            reason="integrate.graphql.discover_oauth_endpoints",
+        ) as oauth_client:
             if not str(getattr(oauth_client, "discovery_url", "") or ""):
                 return ActionResult(ok=False, message="Set a discovery URL first.")
             try:
@@ -777,7 +792,7 @@ class ConnectionMutation:
                 next_path=next,
             )
         except OAuthFlowError as error:
-            return ConnectIntegrationResult(error=_flow_error_message(error), error_code=error.code)
+            return ConnectIntegrationResult(error=error.public_message, error_code=error.code)
 
     @strawberry.mutation
     def connect_account_complete(
@@ -801,10 +816,10 @@ class ConnectionMutation:
             )
             _attach_completed_integration(result.integration_id, result.user, result.credential)
         except OAuthFlowError as error:
-            return ConnectAccountResult(error=_flow_error_message(error), error_code=error.code)
+            return ConnectAccountResult(error=error.public_message, error_code=error.code)
         return ConnectAccountResult(
-            account=cast(ExternalAccountType, result.account),
-            credential=cast(CredentialType, result.credential),
+            account=cast(ConnectedExternalAccountType, result.account),
+            credential=cast(ConnectedCredentialType, result.credential),
             user=cast(UserType, result.user),
             next=result.next_path,
             claims=cast(JSON, result.claims),
@@ -845,7 +860,7 @@ class ConnectionMutation:
                 )
             return UnlinkAccountResult(ok=deleted > 0)
         except OAuthFlowError as error:
-            return UnlinkAccountResult(ok=False, error=_flow_error_message(error), error_code=error.code)
+            return UnlinkAccountResult(ok=False, error=error.public_message, error_code=error.code)
 
 
 @strawberry.type
@@ -915,12 +930,12 @@ class IntegrateExternalAccountMutation:
     def update_external_account(self, data: ExternalAccountPatch) -> ExternalAccountType:
         """Update one external account's scalar identity fields."""
 
+        account = resolve_action_target(
+            ExternalAccount,
+            data.id,
+            reason="integrate.graphql.external_account.update",
+        )
         with system_context(reason="integrate.graphql.external_account.update"), transaction.atomic():
-            account = instance_from_public_id(
-                ExternalAccount, str(data.id), queryset=ExternalAccount._default_manager.all()
-            )
-            if account is None:
-                raise ValueError(f"External account {data.id!s} was not found")
             for field in ("email", "display_name", "avatar_url", "status"):
                 value = getattr(data, field)
                 if value is not strawberry.UNSET:
@@ -954,12 +969,12 @@ class IntegrateCredentialMutation:
     def reveal_credential(self, id: PublicID) -> RevealedCredentialSecret:
         """Return one credential's decrypted secret for an admin to copy."""
 
+        credential = resolve_action_target(
+            Credential,
+            id,
+            reason=f"integrate.graphql.credential.reveal:{str(id)}",
+        )
         with system_context(reason=f"integrate.graphql.credential.reveal:{str(id)}"):
-            credential = instance_from_public_id(
-                Credential, str(id), queryset=Credential._default_manager.all()
-            )
-            if credential is None:
-                raise ValueError(f"Credential {id!s} was not found")
             return RevealedCredentialSecret(secret=str(credential.secret_value() or ""))
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
@@ -979,12 +994,12 @@ class IntegrateCredentialMutation:
     def update_credential(self, data: CredentialPatch) -> CredentialType:
         """Update one credential's status."""
 
+        credential = resolve_action_target(
+            Credential,
+            data.id,
+            reason="integrate.graphql.credential.update",
+        )
         with system_context(reason="integrate.graphql.credential.update"), transaction.atomic():
-            credential = instance_from_public_id(
-                Credential, str(data.id), queryset=Credential._default_manager.all()
-            )
-            if credential is None:
-                raise ValueError(f"Credential {data.id!s} was not found")
             if data.status is not strawberry.UNSET and data.status is not None:
                 credential.status = data.status
                 credential.save(update_fields=["status", "updated_at"])
@@ -1050,15 +1065,9 @@ class IntegrationType(AngeeNode):
 
     @strawberry_django.field(only=["vendor", "status"])
     def display_name(self) -> str:
-        """Return a human label for the record header and relation pickers.
+        """Return the model-owned integration display label."""
 
-        Integration has no natural string column; this gives ``recordRepresentation``
-        a value (vendor + status) to show.
-        """
-
-        vendor = getattr(cast(Any, self), "vendor", None)
-        label = str(getattr(vendor, "display_name", "") or getattr(vendor, "slug", "") or "integration")
-        return f"{label} ({cast(Any, self).status})"
+        return str(cast(Any, self).display_name)
 
     @strawberry_django.field(only=["impl_class"])
     def impl_category(self) -> str:
@@ -1094,6 +1103,28 @@ class IntegrationType(AngeeNode):
 
         vendor = getattr(cast(Any, self), "vendor", None)
         return str(getattr(vendor, "display_name", "") or getattr(vendor, "slug", "") or "")
+
+
+@strawberry_django.type(Integration)
+class ConnectedIntegrationType(AngeeNode):
+    """Public projection of a current-user integration connection."""
+
+    vendor: VendorType
+    credential: ConnectedCredentialType | None
+    account: ConnectedExternalAccountType | None
+    owner: UserType
+    impl_class: auto
+    status: auto
+    last_used_at: auto
+    last_used_status: auto
+    created_at: auto
+    updated_at: auto
+
+    @strawberry_django.field(only=["vendor", "status"])
+    def display_name(self) -> str:
+        """Return the model-owned integration display label."""
+
+        return str(cast(Any, self).display_name)
 
 
 @strawberry.input
@@ -1310,7 +1341,8 @@ class IntegrationCreateMutation:
                 )
             )
         )
-        impl_key = _create_impl_key(data.impl_class)
+        impl_value = None if data.impl_class is strawberry.UNSET else data.impl_class
+        impl_key = Integration.impl_key_for("impl_class", impl_value, default="none")
         attrs: dict[str, Any] = {
             "vendor": vendor,
             "owner": owner,
@@ -1367,17 +1399,6 @@ def _vendor_by_slug(slug: str) -> Any:
     return vendor
 
 
-def _create_impl_key(value: str | None) -> str:
-    """Return the implementation key stored by an integration create."""
-
-    if value is None or value is strawberry.UNSET:
-        return "none"
-    field = cast(Any, Integration._meta.get_field("impl_class"))
-    key = str(field.key_for(value) or "none")
-    field.resolve_class(key)
-    return key
-
-
 @strawberry.type
 class IntegrationCredentialMutation:
     """Self-service integration creation from connected credentials."""
@@ -1388,7 +1409,7 @@ class IntegrationCredentialMutation:
         info: strawberry.Info,
         credential: PublicID,
         vendor_slug: str,
-    ) -> IntegrationType:
+    ) -> ConnectedIntegrationType:
         """Create or update this user's integration from a connected credential.
 
         Self-service, not platform-admin: the authorization is *ownership of the
@@ -1428,7 +1449,7 @@ class IntegrationCredentialMutation:
                 integration.account = oauth_credential.external_account
                 integration.status = "active"
                 integration.save(update_fields=["credential", "account", "status", "updated_at"])
-        return cast(IntegrationType, integration)
+        return cast(ConnectedIntegrationType, integration)
 
 
 @strawberry.type
@@ -1439,23 +1460,19 @@ class IntegrationActionMutation:
     def sync_integration(self, id: PublicID) -> ActionResult:
         """Run every bridge of one integration now (eager variant of the scheduler)."""
 
-        integration = resolve_action_target(Integration, id, reason="integrate.graphql.sync_integration")
-        now = timezone.now()
         ran = 0
         errors = 0
         items = 0
-        with system_context(reason="integrate.graphql.sync_integration"):
+        with action_target(Integration, id, reason="integrate.graphql.sync_integration") as integration:
+            now = timezone.now()
             for model in bridge_models():
                 for bridge in model._default_manager.filter(pk=integration.pk).order_by("pk"):
                     ran += 1
-                    bridge.mark_sync_started(now=now)
                     try:
-                        result = bridge.sync()
-                    except Exception as error:  # noqa: BLE001 — report any bridge failure as telemetry
-                        bridge.record_sync_error(error, now=now)
+                        result = bridge.run_sync(now=now)
+                    except Exception:  # noqa: BLE001 — run_sync recorded the bridge failure as telemetry.
                         errors += 1
                     else:
-                        bridge.record_sync(result, now=now)
                         items += result
         if ran == 0:
             return ActionResult(ok=True, message="No bridges to sync.")
@@ -1468,8 +1485,7 @@ class IntegrationActionMutation:
     def test_connection(self, id: PublicID) -> ActionResult:
         """Probe the integration's credential so the operator sees it is usable."""
 
-        integration = resolve_action_target(Integration, id, reason="integrate.graphql.test_connection")
-        with system_context(reason="integrate.graphql.test_connection"):
+        with action_target(Integration, id, reason="integrate.graphql.test_connection") as integration:
             credential = integration.credential
             if credential is None:
                 return ActionResult(ok=False, message="No credential is attached.")
@@ -1488,8 +1504,11 @@ class WebhookActionMutation:
     def test_webhook_delivery(self, id: PublicID) -> ActionResult:
         """Send a test event to one subscription and report the delivery outcome."""
 
-        subscription = resolve_action_target(WebhookSubscription, id, reason="integrate.graphql.test_webhook_delivery")
-        with system_context(reason="integrate.graphql.test_webhook_delivery"):
+        with action_target(
+            WebhookSubscription,
+            id,
+            reason="integrate.graphql.test_webhook_delivery",
+        ) as subscription:
             ok, message = subscription.deliver_test()
         return ActionResult(ok=ok, message=message)
 
@@ -1497,8 +1516,11 @@ class WebhookActionMutation:
     def rotate_webhook_secret(self, id: PublicID) -> RotatedSecret:
         """Roll one subscription's signing secret and return the new value once."""
 
-        subscription = resolve_action_target(WebhookSubscription, id, reason="integrate.graphql.rotate_webhook_secret")
-        with system_context(reason="integrate.graphql.rotate_webhook_secret"):
+        with action_target(
+            WebhookSubscription,
+            id,
+            reason="integrate.graphql.rotate_webhook_secret",
+        ) as subscription:
             secret = subscription.rotate_secret()
         return RotatedSecret(ok=True, secret=secret)
 
@@ -1703,12 +1725,11 @@ class VCSConsoleQuery:
     def search_repositories(self, vcs_bridge_id: PublicID, query: str) -> list[RepoCandidate]:
         """Return host repositories matching ``query`` for the add typeahead."""
 
-        vcs = resolve_action_target(
+        with action_target(
             VcsBridge,
             vcs_bridge_id,
             reason="integrate.graphql.search_repositories",
-        )
-        with system_context(reason="integrate.graphql.search_repositories"):
+        ) as vcs:
             return [_repo_candidate(descriptor) for descriptor in vcs.search_repositories(query)]
 
 
@@ -1874,16 +1895,14 @@ class VCSActionMutation:
     def add_repository(self, vcs_bridge_id: PublicID, name: str) -> RepositoryType:
         """Inventory one repository by its host ``name`` (a picked typeahead result)."""
 
-        vcs = resolve_action_target(VcsBridge, vcs_bridge_id, reason="integrate.graphql.add_repository")
-        with system_context(reason="integrate.graphql.add_repository"):
+        with action_target(VcsBridge, vcs_bridge_id, reason="integrate.graphql.add_repository") as vcs:
             return cast(RepositoryType, vcs.import_repository(name))
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def discover_repositories(self, vcs_bridge_id: PublicID, org: str = "") -> ActionResult:
         """Inventory every repository the account exposes (bulk import; prunes vanished)."""
 
-        vcs = resolve_action_target(VcsBridge, vcs_bridge_id, reason="integrate.graphql.discover_repositories")
-        with system_context(reason="integrate.graphql.discover_repositories"):
+        with action_target(VcsBridge, vcs_bridge_id, reason="integrate.graphql.discover_repositories") as vcs:
             count = vcs.discover_repositories(org=org)
         return ActionResult(ok=True, message=f"Inventoried {count} repository(ies).")
 
@@ -1891,24 +1910,19 @@ class VCSActionMutation:
     def sync_vcs_bridge(self, id: PublicID) -> ActionResult:
         """Refresh every repository's sources for one VCS bridge now."""
 
-        vcs = resolve_action_target(VcsBridge, id, reason="integrate.graphql.sync_vcs_bridge")
-        now = timezone.now()
-        with system_context(reason="integrate.graphql.sync_vcs_bridge"):
-            vcs.mark_sync_started(now=now)
+        with action_target(VcsBridge, id, reason="integrate.graphql.sync_vcs_bridge") as vcs:
+            now = timezone.now()
             try:
-                result = vcs.sync()
+                result = vcs.run_sync(now=now)
             except Exception as error:  # noqa: BLE001 — sync failure is the result, not a 500
-                vcs.record_sync_error(error, now=now)
                 return ActionResult(ok=False, message=f"Sync failed: {error}")
-            vcs.record_sync(result, now=now)
         return ActionResult(ok=True, message=f"Synced {result} item(s).")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def refresh_source(self, id: PublicID) -> ActionResult:
         """Re-enumerate one source's output rows now."""
 
-        source = resolve_action_target(Source, id, reason="integrate.graphql.refresh_source")
-        with system_context(reason="integrate.graphql.refresh_source"):
+        with action_target(Source, id, reason="integrate.graphql.refresh_source") as source:
             count = source.refresh()
         return ActionResult(ok=True, message=f"Synced {count} item(s).")
 
@@ -1922,6 +1936,8 @@ _CONSOLE_TYPES: list[type] = [
     CredentialOAuthClientType,
     ExternalAccountType,
     CredentialType,
+    ConnectedExternalAccountType,
+    ConnectedCredentialType,
     ConnectableAccount,
     OAuthStartPayload,
     ConnectAccountResult,
@@ -1929,6 +1945,7 @@ _CONSOLE_TYPES: list[type] = [
     UnlinkAccountResult,
     RevealedCredentialSecret,
     VendorType,
+    ConnectedIntegrationType,
     IntegrationType,
     _integration_aggregates.aggregate_type,
     _integration_aggregates.grouped_type,
@@ -1947,16 +1964,15 @@ schemas = {
         "query": [IntegrateConnectionsQuery],
         "mutation": [ConnectionMutation, IntegrationCredentialMutation],
         "types": [
-            CredentialOAuthClientType,
-            ExternalAccountType,
-            CredentialType,
+            ConnectedExternalAccountType,
+            ConnectedCredentialType,
             ConnectableAccount,
             OAuthStartPayload,
             ConnectAccountResult,
             ConnectIntegrationResult,
             UnlinkAccountResult,
             VendorType,
-            IntegrationType,
+            ConnectedIntegrationType,
             UserType,
         ],
     },

@@ -992,6 +992,60 @@ def test_credential_crud_create_delete_are_admin_only(
         assert not Credential.objects.filter(pk=credential.pk).exists()
 
 
+def test_credential_health_display_name_query_count_stays_flat(
+    iam_connection_tables: None,
+) -> None:
+    """Credential display labels carry their own optimizer hints."""
+
+    admin = _platform_admin("cred-label-admin")
+    console_schema = _schema("console")
+    query = """
+        query {
+          credentialHealth(pagination: {limit: 10}) {
+            totalCount
+            results { displayName }
+          }
+        }
+    """
+
+    oauth_client = _oauth_client("cred-label-provider")
+    owner = User.objects.create_user(username="cred-label-one", email="one@example.com")
+    account = ExternalAccount.objects.link(oauth_client, "cred-label-one", owner=owner, email="one@example.com")
+    Credential.objects.upsert_for_user(
+        owner,
+        oauth_client,
+        CredentialKind.STATIC_TOKEN,
+        {"api_key": "one"},
+        external_account=account,
+    )
+    with CaptureQueriesContext(connection) as one_row:
+        _data(_execute(console_schema, query, user=admin))
+
+    for index in range(2, 4):
+        owner = User.objects.create_user(
+            username=f"cred-label-{index}",
+            email=f"{index}@example.com",
+        )
+        account = ExternalAccount.objects.link(
+            oauth_client,
+            f"cred-label-{index}",
+            owner=owner,
+            email=f"{index}@example.com",
+        )
+        Credential.objects.upsert_for_user(
+            owner,
+            oauth_client,
+            CredentialKind.STATIC_TOKEN,
+            {"api_key": str(index)},
+            external_account=account,
+        )
+    with CaptureQueriesContext(connection) as three_rows:
+        data = _data(_execute(console_schema, query, user=admin))
+
+    assert data["credentialHealth"]["totalCount"] == 3
+    assert len(three_rows.captured_queries) == len(one_row.captured_queries)
+
+
 def test_console_external_accounts_render_provider_projection(
     iam_connection_tables: None,
 ) -> None:
@@ -1030,6 +1084,35 @@ def test_console_external_accounts_render_provider_projection(
     assert row["providerLabel"] == "ListCo prod"
 
 
+def test_console_external_accounts_provider_projection_query_count_stays_flat(
+    iam_connection_tables: None,
+) -> None:
+    """The console external-account queryset owns the guarded OAuth-client load contract."""
+
+    admin = _platform_admin("ea-list-count-admin")
+    console_schema = _schema("console")
+    query = """
+        query {
+          externalAccounts(pagination: {limit: 10}) {
+            totalCount
+            results { externalId providerSlug providerEnvironment providerLabel providerIcon }
+          }
+        }
+    """
+
+    ExternalAccount.objects.link(_oauth_client("ea-one"), "sub-one", owner=admin)
+    with CaptureQueriesContext(connection) as one_row:
+        _data(_execute(console_schema, query, user=admin))
+
+    ExternalAccount.objects.link(_oauth_client("ea-two"), "sub-two", owner=admin)
+    ExternalAccount.objects.link(_oauth_client("ea-three"), "sub-three", owner=admin)
+    with CaptureQueriesContext(connection) as three_rows:
+        data = _data(_execute(console_schema, query, user=admin))
+
+    assert data["externalAccounts"]["totalCount"] == 3
+    assert len(three_rows.captured_queries) == len(one_row.captured_queries)
+
+
 def test_oauth_client_secret_is_console_readable_and_public_hidden(
     iam_connection_tables: None,
 ) -> None:
@@ -1057,7 +1140,10 @@ def test_account_connect_schema_exposes_generic_flow_without_token_material(
 
     assert "connectAccountStart(" in _sdl_block(public_sdl, "type Mutation")
     assert "connectAccountComplete(" in _sdl_block(public_sdl, "type Mutation")
-    assert "credential: CredentialType" in _sdl_block(public_sdl, "type ConnectAccountResult")
+    assert "credential: ConnectedCredentialType" in _sdl_block(public_sdl, "type ConnectAccountResult")
+    assert "type CredentialType implements" not in public_sdl
+    assert "providerSlug" not in public_sdl
+    assert "oauthClient:" not in public_sdl
     oauth_client_type = _sdl_block(console_sdl, "type OAuthClientType")
     oauth_client_input = _sdl_block(console_sdl, "input OAuthClientInput")
     oauth_client_patch = _sdl_block(console_sdl, "input OAuthClientPatch")
@@ -1126,6 +1212,7 @@ def test_my_connected_accounts_are_scoped_to_session_user(
             query {
               myConnectedAccounts(pagination: {limit: 10}) {
                 results {
+                  displayName
                   status
                   externalAccount { externalId email credentialStatus }
                 }
@@ -1138,8 +1225,25 @@ def test_my_connected_accounts_are_scoped_to_session_user(
 
     accounts = data["myConnectedAccounts"]["results"]
     assert [row["externalAccount"]["externalId"] for row in accounts] == ["alice-ext"]
+    assert accounts[0]["displayName"] == "Scope (alice@vendor.example)"
     assert accounts[0]["externalAccount"]["email"] == "alice@vendor.example"
     assert accounts[0]["externalAccount"]["credentialStatus"] == "active"
+
+    rich_account = _execute(
+        _schema("public"),
+        """
+        query {
+          myConnectedAccounts(pagination: {limit: 10}) {
+            results {
+              oauthClient { displayName }
+              externalAccount { providerSlug }
+            }
+          }
+        }
+        """,
+        user=alice,
+    )
+    assert rich_account.errors is not None
 
 
 def test_disconnect_account_only_removes_callers_credential(

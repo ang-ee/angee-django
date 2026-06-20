@@ -18,7 +18,7 @@ from strawberry_django.pagination import OffsetPaginated
 
 from angee.base.models import public_id_for
 from angee.graphql.crud import crud
-from angee.graphql.ids import PublicID
+from angee.graphql.ids import PublicID, instance_for_id
 from angee.graphql.node import AngeeNode, detail
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_display_label, user_public_id
@@ -446,7 +446,7 @@ class StorageMutation:
     def file_upload_finalize(self, input: FileUploadFinalizeInput) -> FileUploadFinalizePayload:
         """Verify uploaded bytes and return the READY row."""
 
-        row = File.objects.all().from_public_id(str(input.file))
+        row = instance_for_id(File, input.file, queryset=File.objects.all())
         if row is None:
             return FileUploadFinalizePayload(error="file not found", error_code="not_found")
         try:
@@ -474,7 +474,7 @@ class StorageMutation:
     def restore_file(self, id: PublicID) -> FileType | None:
         """Pull one file out of the Trash smart folder."""
 
-        row = File.objects.all().from_public_id(str(id))
+        row = instance_for_id(File, id, queryset=File.objects.all())
         if row is None:
             raise ValueError("file not found")
         row.restore()
@@ -490,7 +490,7 @@ class StorageConsoleMutation:
         """Permanently delete one file row and its backend object."""
 
         with system_context(reason="storage.graphql.purge_file"):
-            row = File._default_manager.all().from_public_id(str(id))
+            row = instance_for_id(File, id, queryset=File._default_manager.all())
             if row is None:
                 raise ValueError("file not found")
             row.purge()

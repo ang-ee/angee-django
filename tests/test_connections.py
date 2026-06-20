@@ -58,6 +58,18 @@ def test_resolve_connect_redirect_picks_auto_or_manual() -> None:
     assert fixed.resolve_connect_redirect("https://console.example/callback") == (manual, "manual")
 
 
+def test_oauth_flow_error_public_message_prefers_safe_provider_body() -> None:
+    """The OAuth error object owns the user-facing safe fallback text."""
+
+    provider_error = OAuthFlowError(
+        TOKEN_EXCHANGE_FAILED,
+        body={"error": {"message": " Rate limited. "}},
+    )
+
+    assert provider_error.public_message == "Rate limited."
+    assert OAuthFlowError("invalid_state").public_message == "invalid_state"
+
+
 def test_oauth_protocol_discovers_missing_authorize_endpoint() -> None:
     """A discovery-only OAuth client can start an authorization flow."""
 
@@ -275,7 +287,10 @@ def test_upsert_for_user_labels_the_credential_from_provider_and_subject() -> No
         call_command("rebac", "sync", verbosity=0)
         with system_context(reason="test name"):
             oauth_client = OAuthClient.objects.create(
-                slug="example", display_name="Example prod", client_id="example-client"
+                slug="example",
+                display_name="Example prod",
+                icon="example.svg",
+                client_id="example-client",
             )
             account = ExternalAccount.objects.link(oauth_client, "ext-name", owner=user, email="picker@example.com")
             credential = Credential.objects.upsert_for_user(
@@ -285,7 +300,20 @@ def test_upsert_for_user_labels_the_credential_from_provider_and_subject() -> No
                 {"api_key": "k"},
                 external_account=account,
             )
+            assert account.provider_slug == "example"
+            assert account.provider_environment == "prod"
+            assert account.provider_label == "Example prod"
+            assert account.provider_icon == "example.svg"
             assert credential.name == "Example prod (picker@example.com)"
+            assert credential.display_name == "Example prod (picker@example.com)"
+
+            legacy = Credential(
+                oauth_client=oauth_client,
+                external_account=account,
+                kind=CredentialKind.OAUTH,
+                material="{}",
+            )
+            assert legacy.display_name == "example: ext-name"
 
             # Create-only: a rename survives a later upsert (token refresh / reconnect).
             credential.name = "Renamed"
@@ -299,6 +327,7 @@ def test_upsert_for_user_labels_the_credential_from_provider_and_subject() -> No
             )
             assert again.pk == credential.pk
             assert again.name == "Renamed"
+            assert again.display_name == "Renamed"
     finally:
         if created_models:
             with connection.schema_editor() as schema_editor:

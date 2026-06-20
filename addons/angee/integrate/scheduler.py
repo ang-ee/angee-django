@@ -22,11 +22,9 @@ def run_due_bridges(*, now: datetime | None = None) -> dict[str, int]:
             due_bridges = model._default_manager.filter(next_sync_at__lte=timestamp).order_by("pk")
             for bridge in due_bridges:
                 ran += 1
-                bridge.mark_sync_started(now=timestamp)
                 try:
-                    bridge.record_sync(bridge.sync(), now=timestamp)
-                except Exception as error:
-                    bridge.record_sync_error(error, now=timestamp)
+                    bridge.run_sync(now=timestamp)
+                except Exception:  # noqa: BLE001 — run_sync recorded the bridge failure as telemetry.
                     errors += 1
 
     return {"ran": ran, "errors": errors}

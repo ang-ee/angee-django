@@ -7,15 +7,11 @@ import {
   type UseAggregateOptions,
 } from "@angee/sdk";
 
-import { dedupeBy } from "../lib/dedupe";
 import {
   ControlBand,
   controlBandItemClassName,
 } from "../shell/ControlBand";
-import {
-  DataToolbar,
-  type DataToolbarGroupOption,
-} from "../toolbars";
+import { DataToolbar } from "../toolbars";
 import type { PagerState } from "../ui/pager";
 import { BoardView } from "./BoardView";
 import {
@@ -59,6 +55,7 @@ import {
   customFilterChipsFor,
   mergeFilterFields,
   mergeFilterOptions,
+  mergeGroupOptions,
   nextFacetFilter,
   nextTextFilter,
   removeCustomFilter,
@@ -538,11 +535,4 @@ function defaultGroupsForToolbar(
     if (group) groups.push(group);
   }
   return groups;
-}
-
-function mergeGroupOptions(
-  explicit: readonly DataToolbarGroupOption[] | undefined,
-  inferred: readonly DataToolbarGroupOption[],
-): readonly DataToolbarGroupOption[] {
-  return dedupeBy([...(explicit ?? []), ...inferred], (option) => option.id);
 }

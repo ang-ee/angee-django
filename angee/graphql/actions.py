@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import TypeVar, cast
+
 import strawberry
 from django.db import models
 from rebac import system_context
 
 from angee.graphql.ids import PublicID, instance_for_id, public_id_value
+
+_ActionTarget = TypeVar("_ActionTarget", bound=models.Model)
 
 
 @strawberry.type
@@ -22,13 +28,13 @@ class ActionResult:
 
 
 def resolve_action_target(
-    model: type[models.Model],
+    model: type[_ActionTarget],
     id: PublicID,
     *,
     reason: str,
-    queryset: models.QuerySet[models.Model] | None = None,
+    queryset: models.QuerySet[_ActionTarget] | None = None,
     select_related: tuple[str, ...] = (),
-) -> models.Model:
+) -> _ActionTarget:
     """Return an elevated action target addressed by one GraphQL public id.
 
     The caller owns actor authorization, usually with field ``permission_classes``.
@@ -44,4 +50,26 @@ def resolve_action_target(
         instance = instance_for_id(model, id, queryset=active_queryset)
     if instance is None:
         raise ValueError(f"{model._meta.object_name} {public_id_value(id)!r} was not found.")
-    return instance
+    return cast(_ActionTarget, instance)
+
+
+@contextmanager
+def action_target(
+    model: type[_ActionTarget],
+    id: PublicID,
+    *,
+    reason: str,
+    queryset: models.QuerySet[_ActionTarget] | None = None,
+    select_related: tuple[str, ...] = (),
+) -> Iterator[_ActionTarget]:
+    """Yield a resolved action target inside the matching elevated context."""
+
+    target = resolve_action_target(
+        model,
+        id,
+        reason=reason,
+        queryset=queryset,
+        select_related=select_related,
+    )
+    with system_context(reason=reason):
+        yield target

@@ -12,16 +12,10 @@ import iam from "./index";
 describe("iam addon manifest", () => {
   test("registers the public login callback route", () => {
     const route = iam.routes?.find((item) => item.name === "iam.login.callback");
-    const legacyRoute = iam.routes?.find(
-      (item) => item.name === "iam.login.callback.legacy",
-    );
     expect(route?.name).toBe("iam.login.callback");
     expect(route?.path).toBe("/sso/callback");
     expect(route?.shell).toBe("public");
     expect(route?.component).toBeTypeOf("function");
-    expect(legacyRoute?.path).toBe("/login/callback");
-    expect(legacyRoute?.shell).toBe("public");
-    expect(legacyRoute?.component).toBe(route?.component);
   });
 
   test("registers the console routes, with $id detail children for the DataPages", () => {

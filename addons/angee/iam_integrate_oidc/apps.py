@@ -15,7 +15,6 @@ class IAMIntegrateOidcConfig(AppConfig):
 
     default = True
     angee_addon = True
-    default_auto_field = "django.db.models.BigAutoField"
     name = "angee.iam_integrate_oidc"
     label = "iam_integrate_oidc"
     depends_on = ("angee.iam", "angee.integrate")

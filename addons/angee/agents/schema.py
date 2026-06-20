@@ -31,7 +31,7 @@ from angee.agents.autoconfig import SETTINGS as _AGENTS_SETTINGS
 from angee.agents.context import render_view_context
 from angee.agents.models import RuntimeStatus
 from angee.base.mixins import actor_user_id
-from angee.graphql.actions import ActionResult, resolve_action_target
+from angee.graphql.actions import ActionResult, action_target, resolve_action_target
 from angee.graphql.aggregates import rebac_aggregate_builder
 from angee.graphql.crud import crud
 from angee.graphql.ids import PublicID
@@ -40,6 +40,7 @@ from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_from_public_id as _user_from_public_id
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.schema import UserType
+from angee.integrate import connect as _connect
 from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.schema import (
     ConnectIntegrationResult,
@@ -59,7 +60,6 @@ MCPServer = apps.get_model("agents", "MCPServer")
 MCPTool = apps.get_model("agents", "MCPTool")
 Agent = apps.get_model("agents", "Agent")
 Integration = apps.get_model("integrate", "Integration")
-OAuthClient = apps.get_model("integrate", "OAuthClient")
 
 
 @strawberry_django.type(InferenceProvider)
@@ -503,14 +503,13 @@ _AGENT_MUTATION = crud(
 def _provider_oauth_client(provider: Any) -> Any:
     """Return the OAuth client selected by this provider's backend."""
 
-    hint = str(getattr(provider.backend, "oauth_client", "") or "").strip()
-    if not hint:
-        raise OAuthFlowError("oauth_client_not_connectable", 400, "Inference provider has no OAuth client.")
-    with system_context(reason="agents.graphql.connect_inference_provider.oauth_client"):
-        oauth_client = OAuthClient.objects.enabled_for_slug(hint)
-    if oauth_client is None:
-        raise OAuthFlowError("oauth_client_not_connectable", 400, "Inference provider has no enabled OAuth client.")
-    return oauth_client
+    vendor_slug = str(getattr(getattr(provider, "vendor", None), "slug", "") or "")
+    return _connect.enabled_oauth_client_from_hint(
+        getattr(provider.backend, "oauth_client", ""),
+        owner_label="Inference provider",
+        reason="agents.graphql.connect_inference_provider.oauth_client",
+        vendor_slug=vendor_slug,
+    )
 
 
 @strawberry.type
@@ -607,7 +606,7 @@ class InferenceProviderConnectMutation:
                 next_path=next,
             )
         except OAuthFlowError as error:
-            return ConnectIntegrationResult(error=error.provider_message or str(error), error_code=error.code)
+            return ConnectIntegrationResult(error=error.public_message, error_code=error.code)
 
 
 @strawberry.type
@@ -796,8 +795,7 @@ class InferenceActionMutation:
     def refresh_provider_models(self, id: PublicID) -> ActionResult:
         """Re-list one provider's models into the catalogue now."""
 
-        provider = resolve_action_target(InferenceProvider, id, reason="agents.graphql.refresh_provider_models")
-        with system_context(reason="agents.graphql.refresh_provider_models"):
+        with action_target(InferenceProvider, id, reason="agents.graphql.refresh_provider_models") as provider:
             try:
                 count = provider.refresh_models()
             except Exception as error:  # noqa: BLE001 — backend failure is the result, not a 500

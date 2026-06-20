@@ -7,7 +7,7 @@ from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
 
 import angee.graphql.actions as actions_module
-from angee.graphql.actions import resolve_action_target
+from angee.graphql.actions import action_target, resolve_action_target
 
 
 @pytest.mark.django_db
@@ -79,3 +79,45 @@ def test_resolve_action_target_applies_select_related() -> None:
     assert target == permission
     assert target.content_type == content_type
     assert "content_type" in target._state.fields_cache
+
+
+@pytest.mark.django_db
+def test_action_target_wraps_lookup_and_body_in_system_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Action target contexts reuse the same audited reason for lookup and body."""
+
+    group = Group.objects.create(name="operators")
+    reasons: list[str | None] = []
+    active_depth = 0
+
+    class Context:
+        """Small context manager that records active elevation depth."""
+
+        def __init__(self, reason: str | None) -> None:
+            self.reason = reason
+
+        def __enter__(self) -> None:
+            nonlocal active_depth
+            reasons.append(self.reason)
+            active_depth += 1
+            return None
+
+        def __exit__(self, *exc: object) -> None:
+            nonlocal active_depth
+            active_depth -= 1
+            return None
+
+    def system_context(*, reason: str | None = None) -> Context:
+        """Return a recording system context."""
+
+        return Context(reason)
+
+    monkeypatch.setattr(actions_module, "system_context", system_context)
+
+    with action_target(Group, str(group.pk), reason="tests.action.context") as target:
+        assert target == group
+        assert active_depth == 1
+
+    assert active_depth == 0
+    assert reasons == ["tests.action.context", "tests.action.context"]

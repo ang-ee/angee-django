@@ -11,6 +11,7 @@ import {
   Explorer,
   LoadingPanel,
   RelationPicker,
+  recordPath,
   TreeView,
   WikilinkProvider,
   useConfirm,
@@ -45,11 +46,6 @@ const PAGE_MODEL = "knowledge.Page";
 // client-side so the navigator and reader share one fetch.
 const KNOWLEDGE_LIST_LIMIT = 500;
 
-/** Reader route for one page: its public id, percent-encoded into the path. */
-function pageDetailPath(id: string): string {
-  return `/knowledge/${encodeURIComponent(id)}`;
-}
-
 /**
  * The knowledge wiki: an `Explorer` of a vault switcher + page-tree navigator,
  * the open page's reader, and a backlinks aside. Vaults/pages load once; the
@@ -75,7 +71,7 @@ export function KnowledgePage(): ReactElement {
     "id" in params && typeof params.id === "string" ? params.id : null;
   const openPage = useCallback(
     (id: string) => {
-      void navigate({ to: pageDetailPath(id) });
+      void navigate({ to: recordPath("/knowledge", id) });
     },
     [navigate],
   );

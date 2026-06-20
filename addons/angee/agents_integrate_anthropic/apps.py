@@ -10,7 +10,6 @@ class AgentsIntegrateAnthropicConfig(AppConfig):
 
     default = True
     angee_addon = True
-    default_auto_field = "django.db.models.BigAutoField"
     name = "angee.agents_integrate_anthropic"
     label = "agents_integrate_anthropic"
     depends_on = ("angee.agents", "angee.integrate")

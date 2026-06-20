@@ -50,6 +50,7 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
         "credential_env": "OPENAI_API_KEY",
     }
     default_broker_name = DEFAULT_BROKER_NAME
+    client_class_path = "openai.OpenAI"
     oauth_auth_kwarg = ""
     sdk_package_name = "openai"
 
@@ -91,11 +92,12 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
             params["tools"] = list(request.tools)
         completion = self.client().chat.completions.create(**params)
         text = self._completion_text(completion)
+        raw = self._json_object(completion)
         return InferenceResponse(
             text=text,
             content=[{"type": "text", "text": text}] if text else [],
-            usage=self._json_object(getattr(completion, "usage", None)),
-            raw=self._json_object(completion),
+            usage=self._json_object(raw.get("usage")),
+            raw=raw,
         )
 
     def _chat_options(self, request: InferenceRequest) -> dict[str, Any]:
@@ -153,13 +155,3 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
         message = getattr(choices[0], "message", None)
         content = getattr(message, "content", "") if message is not None else ""
         return self._string_content(content)
-
-    @staticmethod
-    def _load_client_class() -> Any:
-        """Import OpenAI lazily so tests can monkeypatch without the package."""
-
-        try:
-            from openai import OpenAI
-        except ImportError as error:  # pragma: no cover - exercised only when dependency is missing at runtime.
-            raise RuntimeError("Install the `openai` package to use the OpenAI inference backend.") from error
-        return OpenAI

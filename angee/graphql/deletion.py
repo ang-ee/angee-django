@@ -17,7 +17,8 @@ from django.db.models.deletion import (
 from rebac import current_actor, system_context
 from rebac.resources import model_resource_type
 
-from angee.base.models import instance_from_public_id, public_id_of
+from angee.base.models import public_id_of
+from angee.graphql.ids import require_instance_for_id
 
 _PREVIEW_LEAF_LIMIT = 50
 
@@ -363,10 +364,7 @@ def _resolve_delete_target(
 ) -> models.Model:
     """Return the delete target addressed by ``public_id`` or raise."""
 
-    instance = instance_from_public_id(model, public_id, queryset=queryset)
-    if instance is None:
-        raise ValueError(f"{model._meta.object_name} {public_id!r} was not found")
-    return instance
+    return require_instance_for_id(model, public_id, queryset=queryset)
 
 
 def _read_scoped_queryset(

@@ -141,6 +141,8 @@ class ImplDefaultsMixin(models.Model):
                 raise ValueError(f"{cls.__name__}.{field_name} requires an impl key.")
             value = default
         key = str(field.key_for(value) or "")
+        if not key and default is not None:
+            key = str(field.key_for(default) or "")
         field.resolve_class(key)
         return key
 

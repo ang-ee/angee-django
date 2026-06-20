@@ -179,13 +179,6 @@ function useSecretActions(refetch: () => void): {
   const remove = useOperatorAction(SECRET_DELETE_MUTATION);
   const busy = set.result.fetching || remove.result.fetching;
 
-  const setError = useCallback(
-    (message: string | null) => {
-      if (message) toast.danger({ title: message });
-    },
-    [toast],
-  );
-
   const setSecret = useCallback(
     (name: string, value: string): Promise<boolean> =>
       runDaemonAction({
@@ -193,10 +186,10 @@ function useSecretActions(refetch: () => void): {
         field: "secretSet",
         variables: { name, value },
         label: t("operator.secrets.set.label"),
-        setError,
+        toast,
         refetch,
       }),
-    [refetch, set.run, setError, t],
+    [refetch, set.run, t, toast],
   );
 
   const deleteSecret = useCallback(
@@ -214,12 +207,12 @@ function useSecretActions(refetch: () => void): {
           field: "secretDelete",
           variables: { name: secret.name },
           label: t("operator.secrets.delete.label"),
-          setError,
+          toast,
           refetch,
         });
       })();
     },
-    [confirm, refetch, remove.run, setError, t],
+    [confirm, refetch, remove.run, t, toast],
   );
 
   return { setSecret, deleteSecret, busy };

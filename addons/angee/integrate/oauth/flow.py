@@ -17,7 +17,6 @@ from typing import Any, cast
 from django.apps import apps
 from django.http import HttpRequest
 from django.utils.http import url_has_allowed_host_and_scheme
-from rebac import system_context
 
 from angee.base.models import instance_from_public_id
 from angee.integrate.oauth import state
@@ -99,37 +98,11 @@ def consume_validated_state(
 def enabled_oauth_client(oauth_client_sqid: str) -> Any:
     """Return one enabled OAuth client addressed by sqid, or raise."""
 
-    oauth_client = (
-        _oauth_client_model()
-        .objects.system_context(reason="integrate.graphql.oauth_client")
-        .filter(sqid=oauth_client_sqid)
-        .first()
+    queryset = _oauth_client_model().objects.system_context(
+        reason="integrate.oauth.flow.oauth_client"
     )
+    oauth_client = instance_from_public_id(queryset.model, oauth_client_sqid, queryset=queryset)
     if oauth_client is None or not oauth_client.is_enabled:
-        raise ValueError("OAuth client is not enabled.")
-    return oauth_client
-
-
-def oauth_client_from_id(oauth_client_id: Any) -> Any:
-    """Return the OAuth client addressed by one GraphQL public id, or raise."""
-
-    model = _oauth_client_model()
-    with system_context(reason="integrate.graphql.oauth_client.lookup"):
-        oauth_client = instance_from_public_id(
-            model,
-            str(oauth_client_id),
-            queryset=model._default_manager.all(),
-        )
-    if oauth_client is None:
-        raise ValueError(f"OAuth client {oauth_client_id!s} was not found.")
-    return oauth_client
-
-
-def enabled_oauth_client_from_id(oauth_client_id: Any) -> Any:
-    """Return one enabled OAuth client addressed by a public id, or raise."""
-
-    oauth_client = oauth_client_from_id(oauth_client_id)
-    if not oauth_client.is_enabled:
         raise ValueError("OAuth client is not enabled.")
     return oauth_client
 

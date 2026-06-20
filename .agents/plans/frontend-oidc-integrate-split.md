@@ -9,9 +9,11 @@ Scope: **frontend only.** The backend three-addon split stays as verified; this
 realigns the React packages to it.
 
 2026-06 clean-MTI update: outbound connect now uses the integrate-owned
-canonical callback path `/integrate/oauth/callback`. The old `/callback` and
-`/iam/oauth/callback` aliases were intentionally removed as part of the
-pre-1.0 break; provider registrations must use the canonical integrate path.
+canonical callback path `/integrate/oauth/callback`; `/iam/oauth/callback` was
+intentionally removed as part of the pre-1.0 break. The mounted `/callback`
+route is no longer a generic legacy alias — it remains only as an integrate
+connect fallback for providers such as Anthropic that reject nested callback
+paths.
 
 ## Decision (by the architect, over several iterations)
 
@@ -56,7 +58,7 @@ both callbacks (no cross-addon web-import precedent; duplication is the DRY smel
 - `OAuthCallback.tsx` (+ test) moved from `iam/web`; exported via `auth/index.ts`.
 
 **`@angee/iam` keeps / gains (inbound auth):**
-- keeps `OAuthLoginMethods` slot, login callback route (`/sso/callback` + legacy),
+- keeps `OAuthLoginMethods` slot and the canonical login callback route (`/sso/callback`),
   `redirects.ts` login half, login `documents` (`availableConnections`,
   `loginStart`, `loginComplete`), `discoverOidcEndpoints`.
 - `OAuthCallbackPage` repointed to import `OAuthCallback` from `@angee/base`.
@@ -83,8 +85,9 @@ both callbacks (no cross-addon web-import precedent; duplication is the DRY smel
   `createOnly` (absent from `OidcClientPatch`).
 - Callback path strings were originally unchanged, but the clean-MTI pre-1.0
   pass superseded that compatibility note for outbound connect:
-  `/integrate/oauth/callback` is now canonical, and legacy outbound aliases are
-  removed. Inbound sign-in callbacks remain owned by `iam`.
+  `/integrate/oauth/callback` is now canonical, `/iam/oauth/callback` is removed,
+  and `/callback` is a provider-specific integrate connect fallback. Inbound
+  sign-in callbacks remain owned by `iam`.
 
 ## Verify (DoD)
 

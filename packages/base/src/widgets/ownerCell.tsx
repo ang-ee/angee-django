@@ -1,9 +1,14 @@
 import type { ReactElement, ReactNode } from "react";
 
-import { Avatar } from "../ui/avatar";
+import { Avatar, avatarInitials } from "../ui/avatar";
 import { Select } from "../ui/select";
 import { widgetLabel } from "./label";
-import type { WidgetDefinition, WidgetOption, WidgetRenderProps } from "./types";
+import {
+  optionTextLabel,
+  type WidgetDefinition,
+  type WidgetOption,
+  type WidgetRenderProps,
+} from "./types";
 
 type OwnerCellRecord = {
   id?: string;
@@ -55,7 +60,7 @@ function OwnerCellRead({
         size="sm"
         src={src}
         alt={text}
-        initials={initials(text)}
+        initials={avatarInitials(text)}
         className="shrink-0"
       />
       <span className="min-w-0 truncate">{label}</span>
@@ -85,27 +90,11 @@ function ownerLabel(
   return value.label ?? value.name ?? value.value ?? value.id ?? "";
 }
 
-function textLabel(value: ReactNode): string {
-  if (typeof value === "string" || typeof value === "number") {
-    return String(value);
-  }
-  return "";
-}
-
 function ownerText(value: OwnerCellValue | undefined, label: ReactNode): string {
-  const text = textLabel(label);
+  const text = optionTextLabel(label, "");
   if (text) return text;
   if (typeof value === "object" && value) {
     return value.name ?? value.value ?? value.id ?? "";
   }
   return "";
-}
-
-function initials(label: string): string {
-  const parts = label.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  return parts
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? "")
-    .join("");
 }

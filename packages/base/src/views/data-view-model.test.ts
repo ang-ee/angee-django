@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import {
   DataViewState,
   Filter,
+  dataViewFavoritesFromJson,
   dataViewSearchToState,
   dataViewStateToSearch,
 } from "./data-view-model";
@@ -80,6 +81,35 @@ describe("data-view model", () => {
     expect(state.sort).toEqual({ field: "title", dir: "asc" });
     expect(state.filter).toEqual({ status: { exact: "ACTIVE" } });
     expect(state.view).toBe("board");
+  });
+
+  test("decodes saved favorites from persisted JSON", () => {
+    const raw = JSON.stringify([
+      { id: "favorite:open", label: "Open" },
+      { id: "favorite:closed", label: "Closed", pageSize: 20 },
+    ]);
+
+    expect(dataViewFavoritesFromJson(raw)).toEqual([
+      { id: "favorite:open", label: "Open" },
+      { id: "favorite:closed", label: "Closed", pageSize: 20 },
+    ]);
+    expect(dataViewFavoritesFromJson("{")).toEqual([]);
+    expect(dataViewFavoritesFromJson(JSON.stringify([
+      { id: "favorite:valid", label: "Valid" },
+      { id: 123, label: "Invalid" },
+      { id: "favorite:missing-label" },
+    ]))).toEqual([{ id: "favorite:valid", label: "Valid" }]);
+  });
+
+  test("allocates stable favorite ids from labels", () => {
+    const state = DataViewState.create();
+
+    expect(state.toFavorite("Two per page").id).toBe("favorite:two-per-page");
+    expect(state.toFavorite("Two per page", [
+      { id: "favorite:two-per-page", label: "Two per page" },
+      { id: "favorite:two-per-page-2", label: "Two per page" },
+    ]).id).toBe("favorite:two-per-page-3");
+    expect(state.toFavorite("   ").id).toBe("favorite:search");
   });
 
   test("round-trips groups with explicit aggregate axes", () => {
@@ -164,6 +194,50 @@ describe("data-view model", () => {
     expect(selected).toEqual({ publisher: "publisher-a" });
     expect(Filter.from(selected).facetValues(facet)).toEqual(["publisher-a"]);
     expect(cleared).toEqual({});
+  });
+
+  test("combines filters without duplicating equivalent constraints", () => {
+    const filter = Filter.combine(
+      { status: { exact: "ACTIVE" } },
+      { status: { exact: "ACTIVE" }, owner: { sqid: "usr_1" } },
+    );
+
+    expect(filter).toEqual({
+      status: { exact: "ACTIVE" },
+      owner: { sqid: "usr_1" },
+    });
+  });
+
+  test("keeps conflicting filter constraints under object-shaped AND", () => {
+    const filter = Filter.combine(
+      { updatedAt: { gte: "2026-01-01" } },
+      { updatedAt: { exact: "2026-01-20" }, status: { exact: "ACTIVE" } },
+    );
+
+    expect(Array.isArray(filter.AND)).toBe(false);
+    expect(filter).toEqual({
+      updatedAt: { gte: "2026-01-01" },
+      status: { exact: "ACTIVE" },
+      AND: { updatedAt: { exact: "2026-01-20" } },
+    });
+  });
+
+  test("combines conflicts into an existing AND branch", () => {
+    const filter = Filter.combine(
+      {
+        updatedAt: { gte: "2026-01-01" },
+        AND: { updatedAt: { lte: "2026-01-31" } },
+      },
+      { updatedAt: { exact: "2026-01-20" } },
+    );
+
+    expect(filter).toEqual({
+      updatedAt: { gte: "2026-01-01" },
+      AND: {
+        updatedAt: { lte: "2026-01-31" },
+        AND: { updatedAt: { exact: "2026-01-20" } },
+      },
+    });
   });
 
   test("resets page and clears selection when query scope changes", () => {

@@ -7,6 +7,7 @@ import {
   Form,
   Group,
   List,
+  recordActionId,
   type ActionContext,
 } from "@angee/base";
 import { useAuthoredMutation } from "@angee/sdk";
@@ -35,8 +36,9 @@ export function CredentialsPage(): React.ReactElement {
   // decrypts it server-side on explicit admin request, then shows it once for copy.
   const reveal = React.useCallback(
     async (ctx: ActionContext) => {
-      if (typeof ctx.record?.id !== "string") return;
-      const result = await revealCredential({ id: ctx.record.id });
+      const id = recordActionId(ctx);
+      if (!id) return;
+      const result = await revealCredential({ id });
       const secret = result?.revealCredential.secret ?? "";
       if (!secret) {
         throw new Error(t("integrate.credentials.reveal.noSecret"));

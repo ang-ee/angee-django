@@ -13,6 +13,7 @@ import {
 } from "@tanstack/react-virtual";
 import {
   useResourceList,
+  rowPublicId,
   type ModelMetadata,
   type ResourceTypeName,
   type Row,
@@ -128,7 +129,7 @@ export interface RowsDataViewSurface<TRow extends StringIdRow = StringIdRow>
   sourceRows: readonly TRow[];
 }
 
-function useSyncPageSize(
+export function useSyncPageSize(
   dataView: DataViewContextValue,
   pageSize: number | undefined,
 ): void {
@@ -446,7 +447,7 @@ function useDataViewPresentationSurface<TRow extends Row>({
 }
 
 function modelRowId<TRow extends Row>(row: TRow, index: number): string {
-  return typeof row.id === "string" ? row.id : String(index);
+  return rowPublicId(row) ?? String(index);
 }
 
 function stringRowId<TRow extends StringIdRow>(row: TRow): string {

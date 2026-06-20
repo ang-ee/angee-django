@@ -1,45 +1,11 @@
 // Authored GraphQL for the knowledge wiki. Vaults and pages are read through
 // their offset-paginated connections (fetched once; the browser scopes to the
 // active vault client-side, see `page-rows.ts`); the open page's body and
-// backlinks load on demand through the public detail query.
+// backlinks load on demand through the public detail query. Standard CRUD
+// mutations are emitted by the SDK; only markdown/body-specific writes are
+// authored here.
 
 import { graphql, type DocumentType } from "@angee/gql/console";
-
-export const KnowledgeCreatePage = graphql(`
-  mutation KnowledgeCreatePage($data: PageInput!) {
-    createPage(data: $data) {
-      id
-      title
-    }
-  }
-`);
-
-export const KnowledgeCreateVault = graphql(`
-  mutation KnowledgeCreateVault($data: VaultInput!) {
-    createVault(data: $data) {
-      id
-      name
-    }
-  }
-`);
-
-export const KnowledgeDeletePage = graphql(`
-  mutation KnowledgeDeletePage($id: ID!) {
-    deletePage(id: $id, confirm: true) {
-      totalDeletedCount
-      hasBlockers
-    }
-  }
-`);
-
-export const KnowledgeUpdatePage = graphql(`
-  mutation KnowledgeUpdatePage($data: PagePatch!) {
-    updatePage(data: $data) {
-      id
-      title
-    }
-  }
-`);
 
 export const KnowledgeUpdatePageBody = graphql(`
   mutation KnowledgeUpdatePageBody($page: ID!, $body: String!, $expectedHash: String) {

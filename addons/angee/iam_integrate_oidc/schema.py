@@ -29,7 +29,7 @@ from angee.integrate.oauth import flow as oauth_flow
 from angee.integrate.oauth import state as oauth_state
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, OAuthFlowError
 from angee.integrate.schema import (
-    ExternalAccountType,
+    ConnectedExternalAccountType,
     OAuthClientType,
     OAuthStartPayload,
 )
@@ -92,7 +92,7 @@ class LoginCompletePayload:
 class LinkAccountResult:
     """Result returned by OIDC account-link completion."""
 
-    account: ExternalAccountType | None = None
+    account: ConnectedExternalAccountType | None = None
     user: UserType | None = None
     intent: str = ""
     next: str = "/"
@@ -169,12 +169,6 @@ def _start_login_flow(
     )
 
 
-def _flow_error_message(error: OAuthFlowError) -> str:
-    """Return the best safe human message for one OAuth flow error."""
-
-    return error.provider_message or str(error)
-
-
 @strawberry.type
 class OidcLoginQuery:
     """Public picker of login-capable OIDC providers."""
@@ -208,7 +202,7 @@ class OidcLoginMutation:
                 next_path=oauth_flow.coerce_next_path(next, request),
             )
         except OAuthFlowError as error:
-            return OAuthStartPayload(error=_flow_error_message(error), error_code=error.code)
+            return OAuthStartPayload(error=error.public_message, error_code=error.code)
 
     @strawberry.mutation
     def login_complete(
@@ -232,7 +226,7 @@ class OidcLoginMutation:
             with system_context(reason="iam_integrate_oidc.login"):
                 auth_login(request, result.user)
         except OAuthFlowError as error:
-            return LoginCompletePayload(ok=False, error=_flow_error_message(error), error_code=error.code)
+            return LoginCompletePayload(ok=False, error=error.public_message, error_code=error.code)
         return LoginCompletePayload(
             ok=True,
             user=cast(UserType, result.user),
@@ -263,7 +257,7 @@ class OidcLoginMutation:
                 flow=oauth_state.StateFlow.LINK,
             )
         except OAuthFlowError as error:
-            return OAuthStartPayload(error=_flow_error_message(error), error_code=error.code)
+            return OAuthStartPayload(error=error.public_message, error_code=error.code)
 
     @strawberry.mutation
     def link_account_complete(
@@ -286,9 +280,9 @@ class OidcLoginMutation:
                 redirect_uri=redirect_uri,
             )
         except OAuthFlowError as error:
-            return LinkAccountResult(error=_flow_error_message(error), error_code=error.code)
+            return LinkAccountResult(error=error.public_message, error_code=error.code)
         return LinkAccountResult(
-            account=cast(ExternalAccountType, result.account),
+            account=cast(ConnectedExternalAccountType, result.account),
             user=cast(UserType, result.user),
             intent="link",
             next=result.next_path,
@@ -353,7 +347,7 @@ _PUBLIC_TYPES: list[type] = [
     LoginCompletePayload,
     LinkAccountResult,
     OAuthStartPayload,
-    ExternalAccountType,
+    ConnectedExternalAccountType,
     UserType,
 ]
 

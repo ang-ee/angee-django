@@ -327,6 +327,13 @@ export function mergeFilterOptions(
   return mergeById(explicit, inferred);
 }
 
+export function mergeGroupOptions(
+  explicit: readonly DataToolbarGroupOption[] | undefined,
+  inferred: readonly DataToolbarGroupOption[],
+): readonly DataToolbarGroupOption[] {
+  return mergeById(explicit, inferred);
+}
+
 export function mergeFilterFields(
   explicit: readonly DataToolbarFilterField[] | undefined,
   inferred: readonly DataToolbarFilterField[],

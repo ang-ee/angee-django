@@ -174,6 +174,20 @@ export function createUrqlClient(options: AngeeUrqlClientOptions): Client {
 
 const FATAL_WS_CLOSE_CODES = new Set([1000, 1008, 4400, 4401, 4403, 4406, 4409]);
 
+/** Whether a graphql-ws close code is terminal rather than retryable. */
+export function isFatalGraphQLWsCloseCode(code: number): boolean {
+  return FATAL_WS_CLOSE_CODES.has(code);
+}
+
+/** Whether a graphql-ws close event is terminal rather than retryable. */
+export function isFatalGraphQLWsClose(event: unknown): boolean {
+  return (
+    typeof CloseEvent !== "undefined" &&
+    event instanceof CloseEvent &&
+    isFatalGraphQLWsCloseCode(event.code)
+  );
+}
+
 /**
  * A graphql-ws-backed forwarder for urql's subscriptionExchange. The WS URL is
  * resolved only when a WebSocket transport exists, so building a client in a
@@ -186,8 +200,7 @@ function subscriptionForwarder(endpoint: string) {
   const wsClient = createWSClient({
     url: graphQLWebSocketUrl(endpoint),
     lazy: true,
-    shouldRetry: (event) =>
-      !(event instanceof CloseEvent && FATAL_WS_CLOSE_CODES.has(event.code)),
+    shouldRetry: (event) => !isFatalGraphQLWsClose(event),
   });
   return (request: FetchBody) => ({
     subscribe(sink: {

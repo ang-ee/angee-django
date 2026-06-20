@@ -1,5 +1,6 @@
 import { useState, type ReactElement, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
+import { rowPublicId } from "@angee/sdk";
 
 import { Glyph } from "../chrome/Glyph";
 import { useBaseT } from "../i18n";
@@ -163,7 +164,7 @@ export function RelationPicker({
                     fields={create.fields}
                     defaultValues={{ [prefillField]: dialog.query }}
                     onSaved={(row) => {
-                      const id = rowId(row);
+                      const id = rowPublicId(row);
                       if (id) {
                         onChange?.(id);
                         onCreated?.(id);
@@ -180,7 +181,7 @@ export function RelationPicker({
                     id={dialog.id}
                     fields={edit.fields}
                     onSaved={(row) => {
-                      onEdited?.(rowId(row) || dialog.id);
+                      onEdited?.(rowPublicId(row) || dialog.id);
                       setDialog(null);
                     }}
                   />
@@ -192,10 +193,6 @@ export function RelationPicker({
       </Dialog.Root>
     </>
   );
-}
-
-function rowId(row: { id?: unknown }): string {
-  return typeof row.id === "string" ? row.id : String(row.id ?? "");
 }
 
 function dialogTitle(

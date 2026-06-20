@@ -237,9 +237,10 @@ export function useFileDropTarget({
 
   const onDragOver = useCallback<DragEventHandler>(
     (event) => {
-      if (disabled || !dragHasFiles(event.dataTransfer)) return;
+      if (!dragHasFiles(event.dataTransfer)) return;
       event.preventDefault();
-      event.dataTransfer.dropEffect = "copy";
+      event.dataTransfer.dropEffect = disabled ? "none" : "copy";
+      if (disabled) return;
       setIsOver(true);
     },
     [disabled],
@@ -254,10 +255,11 @@ export function useFileDropTarget({
     (event) => {
       depth.current = 0;
       setIsOver(false);
-      if (disabled || !dragHasFiles(event.dataTransfer)) return;
+      if (!dragHasFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      if (disabled) return;
       const files = Array.from(event.dataTransfer.files);
       if (files.length === 0) return;
-      event.preventDefault();
       onDrop(files, event);
     },
     [disabled, onDrop],

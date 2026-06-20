@@ -7,7 +7,7 @@ import {
   CardTitle,
   LogStream,
 } from "@angee/base";
-import type { DocumentData } from "@angee/sdk";
+import { isFatalGraphQLWsCloseCode, type DocumentData } from "@angee/sdk";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "urql";
 
@@ -91,12 +91,6 @@ export function useDaemonLogStream({
 const SERVICE_LOG_TAIL = 500;
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
-// Closes that won't recover by retrying (auth / policy / protocol). Everything
-// else — including a normal end-of-stream when a service stops — reconnects with
-// backoff so the tail resumes if the service comes back. Deliberately excludes the
-// normal 1000 close (graphql-ws treats it as terminal; a log follow wants to
-// re-follow).
-const TERMINAL_CLOSE_CODES = new Set([1008, 4400, 4401, 4403, 4406, 4409]);
 
 // Build the structured per-service log socket URL from the same-origin daemon
 // endpoint: swap the graphql path for the logs-stream path, http→ws, carrying the
@@ -183,7 +177,7 @@ export function useServiceLogStream(name: string | undefined): DaemonLogStream {
       ws.onclose = (event: CloseEvent) => {
         if (disposed) return;
         socket = null;
-        if (TERMINAL_CLOSE_CODES.has(event.code)) {
+        if (event.code !== 1000 && isFatalGraphQLWsCloseCode(event.code)) {
           setStatus("error");
           setError(new Error(`Log stream closed (${event.code})`));
           return;

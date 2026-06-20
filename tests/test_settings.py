@@ -819,6 +819,16 @@ def _write_addon(
     (package / "autoconfig.py").write_text(autoconfig, encoding="utf-8")
 
 
+def _addon_test_config(name: str) -> AppConfig:
+    """Return an opted-in ``AppConfig`` for a temp addon package."""
+
+    module = importlib.import_module(name)
+    config_cls = getattr(importlib.import_module(f"{name}.apps"), "TestConfig")
+    config = config_cls(name, module)
+    config.angee_addon = True
+    return config
+
+
 def test_addon_autoconfig_applies_setting_fragments(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1016,6 +1026,114 @@ def test_root_urlconf_requires_explicit_angee_addon_marker() -> None:
     auth_config.depends_on = ()  # type: ignore[attr-defined]
 
     assert angee_urls._addon_urlpatterns(auth_config) == []
+
+
+def test_addon_contribution_loads_callable_conventional_modules(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The shared addon loader owns callable ASGI contributions."""
+
+    _write_addon(tmp_path, "alpha")
+    (tmp_path / "alpha" / "asgi.py").write_text(
+        "def websocket_urlpatterns():\n"
+        "    return ['ws']\n"
+        "\n"
+        "http_mounts = [('/mcp', 'app')]\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    from angee.addons import addon_contribution
+
+    app_config = _addon_test_config("alpha")
+
+    assert addon_contribution(app_config, "asgi", "websocket_urlpatterns", allow_callable=True) == ["ws"]
+    assert addon_contribution(app_config, "asgi", "http_mounts", allow_callable=True) == [("/mcp", "app")]
+
+
+def test_addon_contribution_ignores_absent_conventional_module(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """No conventional submodule means no contribution and no import."""
+
+    _write_addon(tmp_path, "alpha_absent")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    from angee.addons import addon_contribution
+
+    app_config = _addon_test_config("alpha_absent")
+
+    assert addon_contribution(app_config, "asgi", "websocket_urlpatterns", allow_callable=True) == []
+    assert "alpha_absent.asgi" not in sys.modules
+
+
+def test_addon_contribution_wraps_conventional_module_import_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Import errors from conventional modules keep the old failure shape."""
+
+    _write_addon(tmp_path, "alpha_bad_import")
+    (tmp_path / "alpha_bad_import" / "asgi.py").write_text(
+        "import missing_angee_test_dependency\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    from angee.addons import addon_contribution
+
+    app_config = _addon_test_config("alpha_bad_import")
+
+    with pytest.raises(ImproperlyConfigured, match="alpha_bad_import.asgi failed to import"):
+        addon_contribution(app_config, "asgi", "websocket_urlpatterns", allow_callable=True)
+
+
+def test_addon_contribution_rejects_non_iterables(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Static and callable contributions must resolve to iterables."""
+
+    _write_addon(tmp_path, "alpha_non_iterable")
+    (tmp_path / "alpha_non_iterable" / "asgi.py").write_text(
+        "websocket_urlpatterns = 1\n"
+        "def http_mounts():\n"
+        "    return 1\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    from angee.addons import addon_contribution
+
+    app_config = _addon_test_config("alpha_non_iterable")
+
+    with pytest.raises(ImproperlyConfigured, match="websocket_urlpatterns must be iterable or callable"):
+        addon_contribution(app_config, "asgi", "websocket_urlpatterns", allow_callable=True)
+    with pytest.raises(ImproperlyConfigured, match="http_mounts must be iterable or callable"):
+        addon_contribution(app_config, "asgi", "http_mounts", allow_callable=True)
+
+
+def test_addon_contribution_rejects_urlpattern_callables(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """URLConf ``urlpatterns`` stays an iterable attribute, not a callable."""
+
+    _write_addon(tmp_path, "alpha_callable_urls")
+    (tmp_path / "alpha_callable_urls" / "urls.py").write_text(
+        "def urlpatterns():\n"
+        "    return []\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    from angee.addons import addon_contribution
+
+    app_config = _addon_test_config("alpha_callable_urls")
+
+    with pytest.raises(ImproperlyConfigured, match="alpha_callable_urls.urls.urlpatterns must be iterable"):
+        addon_contribution(app_config, "urls", "urlpatterns")
 
 
 def test_plain_addon_autoconfig_keys_are_defaults(

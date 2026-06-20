@@ -13,9 +13,8 @@ from rebac.errors import MissingActorError
 from strawberry.scalars import JSON
 
 from angee.base.mixins import RevisionMixin
-from angee.base.models import instance_from_public_id
 from angee.graphql.access import assert_no_gated_read_fields
-from angee.graphql.ids import PublicID
+from angee.graphql.ids import PublicID, instance_for_id
 from angee.graphql.introspection import django_model, surface_name
 
 _SURFACE_CACHE: dict[tuple[type[models.Model], str], type] = {}
@@ -84,7 +83,7 @@ def _resolve_instance(
     """Return the actor-visible model instance addressed by ``public_id``."""
 
     try:
-        return instance_from_public_id(model, public_id)
+        return instance_for_id(model, public_id)
     except MissingActorError:
         return None
 

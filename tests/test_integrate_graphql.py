@@ -236,6 +236,8 @@ def test_vcs_bridge_child_creation_creates_parent_identity(integrate_console_tab
             {"api_key": "x"},
         )
         vendor = Vendor.objects.create(slug="vcs-child", display_name="VCS Child")
+        assert Integration.impl_key_for("impl_class", "", default="none") == "none"
+        assert Integration.impl_key_for("impl_class", "   ", default="none") == "none"
         assert VcsBridge.impl_key_for("backend_class", "STUB", default="local") == "stub"
         bridge = VcsBridge.objects.create(
             vendor=vendor,

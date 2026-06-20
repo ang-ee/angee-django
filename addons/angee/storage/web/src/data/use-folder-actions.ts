@@ -1,10 +1,4 @@
-import { useAuthoredMutation, useBusyRun } from "@angee/sdk";
-
-import {
-  StorageCreateFolder,
-  StorageDeleteFolder,
-  StorageUpdateFolder,
-} from "./documents";
+import { useBusyRun, useResourceMutation } from "@angee/sdk";
 
 export interface FolderActions {
   busy: boolean;
@@ -28,9 +22,13 @@ export function useFolderActions(
   options: { onChanged?: () => void } = {},
 ): FolderActions {
   const { onChanged } = options;
-  const [createFolder] = useAuthoredMutation(StorageCreateFolder);
-  const [updateFolder] = useAuthoredMutation(StorageUpdateFolder);
-  const [deleteFolder] = useAuthoredMutation(StorageDeleteFolder);
+  const [createFolder] = useResourceMutation("storage.Folder", "create", {
+    fields: ["name"],
+  });
+  const [updateFolder] = useResourceMutation("storage.Folder", "update", {
+    fields: ["name"],
+  });
+  const [deleteFolder] = useResourceMutation("storage.Folder", "delete");
   const { busy, run } = useBusyRun(onChanged);
 
   return {
@@ -45,7 +43,7 @@ export function useFolderActions(
       }),
     remove: (id) =>
       run(async () => {
-        await deleteFolder({ id });
+        await deleteFolder({ id, confirm: true });
       }),
   };
 }

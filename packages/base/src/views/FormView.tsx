@@ -3,6 +3,7 @@ import { useForm, useStore } from "@tanstack/react-form";
 import { useBlocker } from "@tanstack/react-router";
 import {
   publicIdLabel,
+  rowPublicId,
   useFormOverride,
   useResourceMutation,
   useResourceRecord,
@@ -556,7 +557,7 @@ export function FormView({
       }
       return;
     }
-    const recordId = typeof record?.id === "string" ? record.id : null;
+    const recordId = rowPublicId(record);
     // Re-seed on a new record id, or when the record *object reference* changes
     // for the same id — a refetch landed with fresh server state (e.g. after a
     // record action). Keying off the reference (not a manual flag) means a stale
@@ -1414,7 +1415,7 @@ function recordFieldValue(record: Row, field: FieldDescriptor): unknown {
   const value = record[field.name];
   if (!isRelationIdField(field)) return value;
   if (typeof value === "string") return value;
-  if (isRecord(value) && typeof value.id === "string") return value.id;
+  if (isRecord(value)) return rowPublicId(value) ?? value;
   return value;
 }
 

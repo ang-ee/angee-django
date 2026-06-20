@@ -1,7 +1,6 @@
 import { safeRedirectPath } from "@angee/base";
 
 export const LOGIN_CALLBACK_PATH = "/sso/callback";
-export const LEGACY_LOGIN_CALLBACK_PATH = "/login/callback";
 export const DEFAULT_NEXT_PATH = "/";
 
 /** The absolute callback URL the OIDC provider redirects back to at sign-in. */

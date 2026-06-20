@@ -48,6 +48,12 @@ class OAuthFlowError(Exception):
 
         return _provider_message(self.body)
 
+    @property
+    def public_message(self) -> str:
+        """Return the safe message callers can show to users."""
+
+        return self.provider_message or str(self)
+
 
 def _provider_message(body: Any) -> str:
     """Extract a provider error message from one response body without leaking it."""

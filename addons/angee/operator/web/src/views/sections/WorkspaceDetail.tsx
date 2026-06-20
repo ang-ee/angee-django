@@ -18,8 +18,9 @@ import {
 } from "../../data/documents.daemon";
 import { useOperatorT } from "../../i18n";
 import { useOperatorSnapshot } from "../../data/transport";
+import { RowActions } from "../parts/RowActions";
 import { LogPanel, useDaemonLogStream } from "./logs";
-import { WorkspaceActions, useWorkspaceActions } from "./workspace-actions";
+import { useWorkspaceActions } from "./workspace-actions";
 
 /** Workspace detail: overview + lifecycle actions + the live log tail. */
 export function WorkspaceDetail(): ReactElement {
@@ -60,10 +61,10 @@ export function WorkspaceDetail(): ReactElement {
         meta={<span className="text-fg-muted">{workspace.template}</span>}
       />
 
-      <WorkspaceActions
+      <RowActions
         actions={actions}
         busy={busy}
-        workspace={workspace}
+        subject={workspace}
         className="flex flex-wrap gap-1"
       />
 

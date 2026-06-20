@@ -1,5 +1,5 @@
-import { Button, useConfirm, useToast } from "@angee/base";
-import { useMemo, type ReactNode } from "react";
+import { useConfirm, useToast } from "@angee/base";
+import { useMemo } from "react";
 
 import {
   WORKSPACE_DESTROY_MUTATION,
@@ -9,13 +9,10 @@ import { useOperatorT } from "../../i18n";
 import { useOperatorAction } from "../../data/transport";
 import type { WorkspaceRef } from "../../data/types";
 import { runDaemonAction } from "../parts/run-action";
+import type { RowAction } from "../parts/RowActions";
 
 /** A lifecycle action for a workspace: its label, tone, and bound handler. */
-export interface WorkspaceRowAction {
-  label: string;
-  variant: "secondary" | "ghost";
-  perform: (workspace: WorkspaceRef) => void;
-}
+export type WorkspaceRowAction = RowAction<WorkspaceRef>;
 
 /**
  * The two workspace lifecycle actions, each wrapped to confirm (when destructive),
@@ -36,9 +33,6 @@ export function useWorkspaceActions(refetch: () => void): {
   const busy = syncBase.result.fetching || destroy.result.fetching;
 
   const actions = useMemo<readonly WorkspaceRowAction[]>(() => {
-    const setError = (message: string | null): void => {
-      if (message) toast.danger({ title: message });
-    };
     return [
       {
         label: t("operator.workspaces.syncBase"),
@@ -49,7 +43,7 @@ export function useWorkspaceActions(refetch: () => void): {
             field: "workspaceSyncBase",
             variables: { name: workspace.name },
             label: t("operator.workspaces.syncBase"),
-            setError,
+            toast,
             refetch,
           });
         },
@@ -71,7 +65,7 @@ export function useWorkspaceActions(refetch: () => void): {
               field: "workspaceDestroy",
               variables: { name: workspace.name, purge: false },
               label: t("operator.workspaces.destroy"),
-              setError,
+              toast,
               refetch,
             });
           })();
@@ -81,33 +75,4 @@ export function useWorkspaceActions(refetch: () => void): {
   }, [confirm, destroy.run, refetch, syncBase.run, t, toast]);
 
   return { actions, busy };
-}
-
-/** A horizontal bar of a workspace's lifecycle action buttons. */
-export function WorkspaceActions({
-  actions,
-  busy,
-  workspace,
-  className = "flex justify-end gap-1",
-}: {
-  actions: readonly WorkspaceRowAction[];
-  busy: boolean;
-  workspace: WorkspaceRef;
-  className?: string;
-}): ReactNode {
-  return (
-    <div className={className}>
-      {actions.map((action) => (
-        <Button
-          key={action.label}
-          disabled={busy}
-          onClick={() => action.perform(workspace)}
-          size="sm"
-          variant={action.variant}
-        >
-          {action.label}
-        </Button>
-      ))}
-    </div>
-  );
 }

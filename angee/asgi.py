@@ -2,19 +2,16 @@
 
 from __future__ import annotations
 
-import importlib
 import os
-from collections.abc import Awaitable, Callable, Iterable, MutableMapping
+from collections.abc import Awaitable, Callable, MutableMapping
 from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from django.apps import AppConfig, apps
 from django.core.asgi import get_asgi_application
-from django.core.exceptions import ImproperlyConfigured
-from django.utils.module_loading import module_has_submodule
 
-from angee.addons import is_angee_addon
+from angee.addons import addon_contribution
 from angee.paths import resolve_path
 
 _PROJECT_DIR_ENV = "ANGEE_PROJECT_DIR"
@@ -53,22 +50,7 @@ def _websocket_urlpatterns() -> list[object]:
 def _addon_websocket_urlpatterns(app_config: AppConfig) -> list[object]:
     """Return WebSocket URL patterns from one addon's conventional ``asgi.py``."""
 
-    if not is_angee_addon(app_config):
-        return []
-    if not module_has_submodule(app_config.module, "asgi"):
-        return []
-    module_path = f"{app_config.name}.asgi"
-    try:
-        module = importlib.import_module(module_path)
-    except ImportError as error:
-        raise ImproperlyConfigured(f"{module_path} failed to import") from error
-    contribution = getattr(module, "websocket_urlpatterns", None)
-    if contribution is None:
-        return []
-    patterns = cast(Callable[[], object], contribution)() if callable(contribution) else contribution
-    if not isinstance(patterns, Iterable):
-        raise ImproperlyConfigured(f"{module_path}.websocket_urlpatterns must be iterable or callable")
-    return list(patterns)
+    return addon_contribution(app_config, "asgi", "websocket_urlpatterns", allow_callable=True)
 
 
 def _http_mounts() -> list[tuple[str, Any]]:
@@ -88,22 +70,10 @@ def _addon_http_mounts(app_config: AppConfig) -> list[tuple[str, Any]]:
     — e.g. the MCP addon's StreamableHTTP app at ``/mcp``.
     """
 
-    if not is_angee_addon(app_config):
-        return []
-    if not module_has_submodule(app_config.module, "asgi"):
-        return []
-    module_path = f"{app_config.name}.asgi"
-    try:
-        module = importlib.import_module(module_path)
-    except ImportError as error:
-        raise ImproperlyConfigured(f"{module_path} failed to import") from error
-    contribution = getattr(module, "http_mounts", None)
-    if contribution is None:
-        return []
-    mounts = cast(Callable[[], object], contribution)() if callable(contribution) else contribution
-    if not isinstance(mounts, Iterable):
-        raise ImproperlyConfigured(f"{module_path}.http_mounts must be iterable or callable")
-    return [(str(prefix), app) for prefix, app in mounts]
+    return [
+        (str(prefix), app)
+        for prefix, app in addon_contribution(app_config, "asgi", "http_mounts", allow_callable=True)
+    ]
 
 
 Scope = MutableMapping[str, Any]

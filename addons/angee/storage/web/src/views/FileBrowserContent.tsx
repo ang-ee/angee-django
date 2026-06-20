@@ -1,6 +1,6 @@
-import { useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { useMemo, useRef, type ReactElement, type ReactNode } from "react";
 
-import { Button, Glyph, RowsListView, cn } from "@angee/base";
+import { Button, Glyph, RowsListView, UploadDropTarget, cn } from "@angee/base";
 
 import { useStorageT } from "../i18n";
 import { fileDragPayload, type StorageFileRow } from "../data/file-rows";
@@ -45,31 +45,19 @@ export function FileBrowserContent({
 }: FileBrowserContentProps): ReactElement {
   const t = useStorageT();
   const inputRef = useRef<HTMLInputElement>(null);
-  const [dragging, setDragging] = useState(false);
   const columns = useMemo(() => fileColumns(t), [t]);
 
-  function startUpload(files: FileList | null): void {
+  function startUpload(files: FileList | readonly File[] | null): void {
     if (!canUpload || !files || files.length === 0) return;
     uploads.upload(Array.from(files), uploadTarget);
   }
 
   return (
-    <div
+    <UploadDropTarget
       className="relative flex h-full min-h-0 flex-col"
-      onDragOver={(event) => {
-        if (!canUpload) return;
-        event.preventDefault();
-        setDragging(true);
-      }}
-      onDragLeave={(event) => {
-        if (event.currentTarget.contains(event.relatedTarget as Node)) return;
-        setDragging(false);
-      }}
-      onDrop={(event) => {
-        event.preventDefault();
-        setDragging(false);
-        startUpload(event.dataTransfer.files);
-      }}
+      disabled={!canUpload}
+      overlay={t("storage.upload.dropOverlay")}
+      onFiles={startUpload}
     >
       {uploads.tasks.length > 0 ? (
         <UploadStrip tasks={uploads.tasks} onClear={uploads.clearFinished} t={t} />
@@ -104,11 +92,6 @@ export function FileBrowserContent({
           }
         />
       </div>
-      {dragging ? (
-        <div className="pointer-events-none absolute inset-0 grid place-content-center bg-brand-soft/50 text-15 font-medium text-brand-text">
-          {t("storage.upload.dropOverlay")}
-        </div>
-      ) : null}
       <input
         ref={inputRef}
         type="file"
@@ -119,7 +102,7 @@ export function FileBrowserContent({
           event.target.value = "";
         }}
       />
-    </div>
+    </UploadDropTarget>
   );
 }
 

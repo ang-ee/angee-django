@@ -37,7 +37,7 @@ export const IntegrateConnectAccountComplete = graphql(`
     connectAccountComplete(code: $code, state: $state, redirectUri: $redirectUri) {
       next
       error
-      account { id displayName providerSlug }
+      account { id displayName }
       credential { id displayName status }
     }
   }

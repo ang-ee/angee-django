@@ -7,6 +7,7 @@ import { Select } from "../ui/select";
 import { widgetLabel } from "./label";
 import {
   optionLabel,
+  optionTextLabel,
   type WidgetDefinition,
   type WidgetOption,
   type WidgetRenderProps,
@@ -85,7 +86,7 @@ function Many2ManyChips({
                 variant="ghost"
                 size="iconSm"
                 className="size-4 rounded-full"
-                aria-label={`Remove ${textLabel(label)}`}
+                aria-label={`Remove ${optionTextLabel(label, "record")}`}
                 onClick={() =>
                   onRemove(values.filter((value) => value !== item))
                 }
@@ -108,9 +109,4 @@ export const many2manyWidget = {
 
 function normaliseValues(value: readonly string[] | null | undefined): string[] {
   return [...new Set(value ?? [])].filter(Boolean);
-}
-
-function textLabel(value: WidgetOption["label"]): string {
-  if (typeof value === "string" || typeof value === "number") return String(value);
-  return "record";
 }

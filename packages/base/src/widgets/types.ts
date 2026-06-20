@@ -21,6 +21,16 @@ export function optionLabel(
   return options?.find((option) => option.value === value)?.label ?? value ?? "";
 }
 
+export function optionTextLabel(value: ReactNode): string | undefined;
+export function optionTextLabel(value: ReactNode, fallback: string): string;
+export function optionTextLabel(
+  value: ReactNode,
+  fallback?: string,
+): string | undefined {
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  return fallback;
+}
+
 export interface WidgetField {
   name?: string;
   label?: ReactNode;

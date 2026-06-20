@@ -1,7 +1,7 @@
 // Authored GraphQL for the storage console. Drives, folders, and files are read
 // through their offset-paginated console queries; the browser fetches each once
-// and scopes client-side (see `file-rows.ts`). Mutations (upload, folders) land
-// in a later slice.
+// and scopes client-side (see `file-rows.ts`). Standard CRUD mutations are
+// emitted by the SDK; only storage-specific verbs are authored here.
 
 import { graphql, type DocumentType } from "@angee/gql/console";
 
@@ -32,51 +32,6 @@ export const StorageFileUploadFinalize = graphql(`
         filename
         uploadState
       }
-    }
-  }
-`);
-
-export const StorageUpdateFile = graphql(`
-  mutation StorageUpdateFile($data: FilePatch!) {
-    updateFile(data: $data) {
-      id
-    }
-  }
-`);
-
-export const StorageCreateFolder = graphql(`
-  mutation StorageCreateFolder($data: FolderInput!) {
-    createFolder(data: $data) {
-      id
-      name
-    }
-  }
-`);
-
-export const StorageUpdateFolder = graphql(`
-  mutation StorageUpdateFolder($data: FolderPatch!) {
-    updateFolder(data: $data) {
-      id
-      name
-    }
-  }
-`);
-
-/** Delete a folder; its files fall back to the drive root (FK SET_NULL). */
-export const StorageDeleteFolder = graphql(`
-  mutation StorageDeleteFolder($id: ID!) {
-    deleteFolder(id: $id, confirm: true) {
-      totalDeletedCount
-      hasBlockers
-    }
-  }
-`);
-
-export const StorageDeleteFile = graphql(`
-  mutation StorageDeleteFile($id: ID!) {
-    deleteFile(id: $id, confirm: true) {
-      totalDeletedCount
-      hasBlockers
     }
   }
 `);

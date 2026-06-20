@@ -1,13 +1,11 @@
-import { useState, type ReactElement, type ReactNode } from "react";
+import { type ReactElement, type ReactNode } from "react";
 
 import {
   Column,
-  ControlBandProvider,
-  DataPage,
+  DrawerDataPage,
   Field,
   Form,
   List,
-  NEW_RECORD_ID,
 } from "@angee/base";
 import { useStorageT } from "../i18n";
 
@@ -29,7 +27,7 @@ export function StorageSettingsPage(): ReactElement {
         title={t("storage.settings.drives.title")}
         description={t("storage.settings.drives.description")}
       >
-        <AdminTable model={DRIVE_MODEL} hideCreate>
+        <DrawerDataPage model={DRIVE_MODEL} hideCreate>
           <List model={DRIVE_MODEL} order={{ name: "ASC" }}>
             <Column field="name" />
             <Column field="slug" />
@@ -43,14 +41,14 @@ export function StorageSettingsPage(): ReactElement {
             <Field name="description" widget="textarea" />
             <Field name="isArchived" label={t("storage.settings.archived")} widget="switch" />
           </Form>
-        </AdminTable>
+        </DrawerDataPage>
       </Section>
 
       <Section
         title={t("storage.settings.backends.title")}
         description={t("storage.settings.backends.description")}
       >
-        <AdminTable model={BACKEND_MODEL}>
+        <DrawerDataPage model={BACKEND_MODEL}>
           <List model={BACKEND_MODEL} order={{ label: "ASC" }}>
             <Column field="label" />
             <Column field="slug" />
@@ -66,7 +64,7 @@ export function StorageSettingsPage(): ReactElement {
             <Field name="isDefault" label={t("storage.settings.default")} widget="switch" />
             <Field name="isArchived" label={t("storage.settings.archived")} widget="switch" editOnly />
           </Form>
-        </AdminTable>
+        </DrawerDataPage>
       </Section>
     </div>
   );
@@ -90,34 +88,5 @@ function Section({
       </header>
       {children}
     </section>
-  );
-}
-
-/** A `DataPage` whose record form opens in a drawer, with self-owned open state. */
-function AdminTable({
-  model,
-  hideCreate,
-  children,
-}: {
-  model: string;
-  hideCreate?: boolean;
-  children: ReactNode;
-}): ReactElement {
-  const [recordId, setRecordId] = useState<string | undefined>(undefined);
-  // Two managed lists share one page, so each renders its own toolbar inline
-  // rather than portaling into the shell's single control band.
-  return (
-    <ControlBandProvider host={undefined}>
-      <DataPage
-        model={model}
-        placement="drawer"
-        hideCreate={hideCreate}
-        recordId={recordId}
-        onSelect={(id) => setRecordId(id ?? NEW_RECORD_ID)}
-        onClose={() => setRecordId(undefined)}
-      >
-        {children}
-      </DataPage>
-    </ControlBandProvider>
   );
 }

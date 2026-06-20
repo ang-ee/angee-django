@@ -12,9 +12,9 @@ from rebac import system_context
 from strawberry import auto
 from strawberry_django.pagination import OffsetPaginated
 
-from angee.base.models import instance_from_public_id, public_id_for
+from angee.base.models import public_id_for
 from angee.graphql.crud import crud
-from angee.graphql.ids import PublicID
+from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import AngeeNode, detail
 from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
@@ -306,14 +306,10 @@ class KnowledgeMutation:
     def create_page(self, data: PageInput) -> PageType:
         """Create a page in a vault the requesting user can write."""
 
-        vault = instance_from_public_id(Vault, str(data.vault))
-        if vault is None:
-            raise ValueError(f"Vault {str(data.vault)!r} was not found")
+        vault = require_instance_for_id(Vault, data.vault)
         parent = None
         if data.parent is not None:
-            parent = instance_from_public_id(Page, str(data.parent))
-            if parent is None:
-                raise ValueError(f"Page {str(data.parent)!r} was not found")
+            parent = require_instance_for_id(Page, data.parent)
         return cast(
             PageType,
             Page._default_manager.create_in(
@@ -334,9 +330,7 @@ class KnowledgeMutation:
     ) -> PageBodyPayload:
         """Write a page's markdown body, last-write-wins with a stale guard."""
 
-        target = instance_from_public_id(Page, str(page))
-        if target is None:
-            raise ValueError(f"Page {str(page)!r} was not found")
+        target = require_instance_for_id(Page, page)
         try:
             markdown = MarkdownPage._default_manager.write_body(
                 target,

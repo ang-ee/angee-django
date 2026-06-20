@@ -6,7 +6,7 @@ import {
   type AnyRoute,
   type AnyRouteMatch,
 } from "@tanstack/react-router";
-import type { Row } from "@angee/sdk";
+import { rowPublicId, type Row } from "@angee/sdk";
 
 import type { DataPageRecordController } from "./DataPage";
 
@@ -65,7 +65,7 @@ export function RoutedRecordController<TRow extends Row = Row>({
   }, [basePath, navigate]);
   const rowHref = React.useCallback(
     (row: TRow) => {
-      const id = rowId(row);
+      const id = rowPublicId(row);
       return id ? recordPath(basePath, id) : basePath;
     },
     [basePath],
@@ -121,8 +121,4 @@ function normalizeRoutePath(path: string): string {
 export function recordPath(basePath: string, id: string): string {
   if (basePath === "/") return `/${encodeURIComponent(id)}`;
   return `${basePath}/${encodeURIComponent(id)}`;
-}
-
-function rowId(row: Row | undefined): string | null {
-  return typeof row?.id === "string" ? row.id : null;
 }

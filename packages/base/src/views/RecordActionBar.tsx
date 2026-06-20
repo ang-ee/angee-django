@@ -1,5 +1,5 @@
 import * as React from "react";
-import type { Row } from "@angee/sdk";
+import { errorMessage, rowPublicId, type Row } from "@angee/sdk";
 
 import { Button } from "../ui/button";
 import { DropdownMenu } from "../ui/dropdown-menu";
@@ -47,7 +47,7 @@ export function RecordActionBar({
     mountedRef.current = false;
   }, []);
 
-  const recordId = typeof record?.id === "string" ? record.id : null;
+  const recordId = rowPublicId(record);
 
   const runAction = React.useCallback(
     async (action: ActionDescriptor): Promise<void> => {
@@ -90,8 +90,7 @@ export function RecordActionBar({
       } catch (error) {
         toast.danger({
           title: actionLabelText(action),
-          description:
-            error instanceof Error ? error.message : "The action failed.",
+          description: errorMessage(error, "The action failed."),
         });
       } finally {
         if (mountedRef.current) setPendingId(null);

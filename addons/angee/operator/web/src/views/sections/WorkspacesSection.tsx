@@ -10,9 +10,9 @@ import { useOperatorSnapshot } from "../../data/transport";
 import type { WorkspaceRef, WorkspaceSourceStatus } from "../../data/types";
 import { workspaceDetailPath } from "../../lib/paths";
 import { OperatorSection } from "../parts/OperatorSection";
+import { RowActions } from "../parts/RowActions";
 import { StateTag } from "../parts/StateTag";
 import {
-  WorkspaceActions,
   useWorkspaceActions,
   type WorkspaceRowAction,
 } from "./workspace-actions";
@@ -24,8 +24,6 @@ type WorkspaceSourceRowData = WorkspaceSourceStatus & { id: string };
 export interface WorkspacesSectionProps {
   /** Restrict the list to these workspace names; omit to show every workspace. */
   names?: readonly string[];
-  /** Retained for API compatibility; the console nav owns the page heading. */
-  title?: ReactNode;
 }
 
 /** Workspaces pane: the daemon's worktree workspaces. Rows open the detail page. */
@@ -242,7 +240,7 @@ function WorkspaceControlRow({
       <span className="min-w-0 truncate font-mono text-fg-muted" title={workspace.path}>
         {workspace.path}
       </span>
-      <WorkspaceActions actions={actions} busy={busy} workspace={workspace} />
+      <RowActions actions={actions} busy={busy} subject={workspace} />
     </div>
   );
 }

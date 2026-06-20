@@ -103,6 +103,17 @@ export interface DataViewFavorite {
   view?: DataViewKind;
 }
 
+export function dataViewFavoritesFromJson(
+  raw: string | null,
+): readonly DataViewFavorite[] {
+  try {
+    const value = raw ? JSON.parse(raw) : [];
+    return Array.isArray(value) ? value.filter(isDataViewFavorite) : [];
+  } catch {
+    return [];
+  }
+}
+
 export type DataViewAction =
   | { type: "setPage"; page: number }
   | { type: "setPageSize"; pageSize: number }
@@ -126,12 +137,17 @@ export interface FilterFacet {
 export class Filter {
   readonly value: DataViewFilter;
 
-  constructor(value: DataViewFilter = {}) {
-    this.value = { ...value };
+  constructor(value: unknown = {}) {
+    const record = filterRecord(value);
+    this.value = record ? ({ ...record } as DataViewFilter) : {};
   }
 
-  static from(value: DataViewFilter | undefined): Filter {
+  static from(value: unknown): Filter {
     return new Filter(value);
+  }
+
+  static combine(left: unknown, right: unknown): DataViewFilter {
+    return Filter.from(left).and(right);
   }
 
   static facetFromFilter(filter: DataViewFilter): FilterFacet | null {
@@ -157,6 +173,24 @@ export class Filter {
 
   hasEntries(): boolean {
     return Object.keys(this.value).length > 0;
+  }
+
+  and(filter: unknown): DataViewFilter {
+    const right = filterRecord(filter);
+    if (!right || Object.keys(right).length === 0) return this.value;
+    const next: Record<string, unknown> = { ...this.value };
+    let andFilter: Record<string, unknown> | undefined;
+    for (const [key, value] of Object.entries(right)) {
+      if (!Object.prototype.hasOwnProperty.call(next, key)) {
+        next[key] = value;
+      } else if (stableSerialize(next[key]) !== stableSerialize(value)) {
+        andFilter = { ...andFilter, [key]: value };
+      }
+    }
+    if (!andFilter) return next as DataViewFilter;
+    const existingAnd = filterRecord(next.AND);
+    next.AND = existingAnd ? Filter.combine(existingAnd, andFilter) : andFilter;
+    return next as DataViewFilter;
   }
 
   facetValues(facet: FilterFacet | string): readonly string[] {
@@ -384,9 +418,12 @@ export class DataViewState {
     return this.with({ selectedIds: new Set(selectedIds) });
   }
 
-  toFavorite(label: string, id: string): DataViewFavorite {
+  toFavorite(
+    label: string,
+    existingFavorites: readonly DataViewFavorite[] = [],
+  ): DataViewFavorite {
     return {
-      id,
+      id: nextDataViewFavoriteId(label, existingFavorites),
       label,
       pageSize: this.pageSize,
       ...(this.sort ? { sort: this.sort } : {}),
@@ -629,6 +666,21 @@ export function dataViewGroupsEqual(
     && left.granularity === right.granularity;
 }
 
+export function stableSerialize(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableSerialize).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`)
+      .join(",")}}`;
+  }
+  if (value === undefined) return "undefined";
+  return JSON.stringify(value);
+}
+
 function isGroupGranularity(value: string): value is DataViewGroupGranularity {
   return DATA_VIEW_GROUP_GRANULARITIES.includes(
     value as DataViewGroupGranularity,
@@ -639,9 +691,43 @@ function isDataViewKind(value: string): value is DataViewKind {
   return DATA_VIEW_KINDS.includes(value as DataViewKind);
 }
 
+function isDataViewFavorite(value: unknown): value is DataViewFavorite {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Partial<DataViewFavorite>;
+  return typeof record.id === "string" && typeof record.label === "string";
+}
+
+function nextDataViewFavoriteId(
+  label: string,
+  favorites: readonly DataViewFavorite[],
+): string {
+  const base = `favorite:${slugifyFavoriteLabel(label) || "search"}`;
+  const existing = new Set(favorites.map((favorite) => favorite.id));
+  if (!existing.has(base)) return base;
+  for (let suffix = 2; ; suffix += 1) {
+    const id = `${base}-${suffix}`;
+    if (!existing.has(id)) return id;
+  }
+}
+
+function slugifyFavoriteLabel(label: string): string {
+  return label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
 function dataViewFilterFromUnknown(value: unknown): DataViewFilter | null {
   if (!isDataViewFilter(value)) return null;
   return value as DataViewFilter;
+}
+
+function filterRecord(filter: unknown): Record<string, unknown> | undefined {
+  if (!filter || typeof filter !== "object" || Array.isArray(filter)) {
+    return undefined;
+  }
+  return filter as Record<string, unknown>;
 }
 
 function isDataViewLookup(value: unknown): value is DataViewLookup {

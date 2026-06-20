@@ -17,14 +17,19 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from anthropic.types import Message, TextBlock, Usage
 from django.core.management import call_command
 from django.db import connection
+from openai.types.chat import ChatCompletion, ChatCompletionMessage
+from openai.types.chat.chat_completion import Choice
+from openai.types.completion_usage import CompletionUsage
 from rebac import system_context
 
 from angee.agents.models import Agent as AbstractAgent
 from angee.agents.models import InferenceModel as AbstractInferenceModel
 from angee.agents.models import InferenceProvider as AbstractInferenceProvider
 from angee.agents.models import Skill as AbstractSkill
+from angee.agents.sdk_backends import SDKInferenceBackend
 from angee.agents.skills import parse_skill_meta
 from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
 from angee.agents_integrate_openai.backend import OpenAIInferenceBackend
@@ -260,6 +265,44 @@ def test_manual_backend_advertises_no_models(agents_tables: None) -> None:
         assert InferenceModel.objects.filter(provider=provider).count() == 0
 
 
+def test_sdk_backend_loads_client_class_by_dotted_path() -> None:
+    """SDK backends declare their client class path; the shared base imports it."""
+
+    class DemoSDKBackend(SDKInferenceBackend):
+        label = "Demo"
+        client_class_path = "types.SimpleNamespace"
+        sdk_package_name = "types"
+
+    assert DemoSDKBackend(SimpleNamespace())._load_client_class() is SimpleNamespace
+
+
+def test_sdk_backend_client_class_override_skips_dotted_import() -> None:
+    """Tests and custom backends can still inject a client class directly."""
+
+    class DemoSDKBackend(SDKInferenceBackend):
+        label = "Demo"
+        client_class = SimpleNamespace
+        client_class_path = "missing_provider_sdk.Client"
+        sdk_package_name = "missing-provider-sdk"
+
+        def _client_kwargs(self) -> dict[str, Any]:
+            return {}
+
+    assert type(DemoSDKBackend(SimpleNamespace()).client()).__name__ == "SimpleNamespace"
+
+
+def test_sdk_backend_wraps_missing_client_package_error() -> None:
+    """Missing SDK imports fail with the backend's install hint."""
+
+    class MissingSDKBackend(SDKInferenceBackend):
+        label = "Missing"
+        client_class_path = "missing_provider_sdk.Client"
+        sdk_package_name = "missing-provider-sdk"
+
+    with pytest.raises(RuntimeError, match="missing-provider-sdk.*Missing inference backend"):
+        MissingSDKBackend(SimpleNamespace())._load_client_class()
+
+
 @pytest.mark.django_db(transaction=True)
 def test_inference_provider_service_environment_reads_provider_credential_env(
     agents_tables: None,
@@ -355,11 +398,15 @@ class _FakeAnthropicMessages:
         """Record a message request and return an SDK-shaped response."""
 
         self.calls.append(kwargs)
-        return SimpleNamespace(
+        return Message(
             id="msg_1",
             type="message",
-            content=[SimpleNamespace(type="text", text="pong")],
-            usage=SimpleNamespace(input_tokens=3, output_tokens=1),
+            role="assistant",
+            model="claude-sonnet-4-6",
+            content=[TextBlock(type="text", text="pong")],
+            stop_reason="end_turn",
+            stop_sequence=None,
+            usage=Usage(input_tokens=3, output_tokens=1),
         )
 
 
@@ -413,10 +460,19 @@ class _FakeOpenAICompletions:
         """Record a chat completion request and return an SDK-shaped response."""
 
         self.calls.append(kwargs)
-        return SimpleNamespace(
+        return ChatCompletion(
             id="chatcmpl_1",
-            choices=[SimpleNamespace(message=SimpleNamespace(content="pong"))],
-            usage=SimpleNamespace(prompt_tokens=3, completion_tokens=1, total_tokens=4),
+            choices=[
+                Choice(
+                    finish_reason="stop",
+                    index=0,
+                    message=ChatCompletionMessage(role="assistant", content="pong"),
+                )
+            ],
+            created=1,
+            model="gpt-4.1",
+            object="chat.completion",
+            usage=CompletionUsage(prompt_tokens=3, completion_tokens=1, total_tokens=4),
         )
 
 
@@ -520,8 +576,11 @@ def test_anthropic_model_chat_uses_sdk_messages_and_strips_broker_prefix(
         }
     ]
     assert response.text == "pong"
-    assert response.content == [{"type": "text", "text": "pong"}]
-    assert response.usage == {"input_tokens": 3, "output_tokens": 1}
+    assert response.content == [{"citations": None, "type": "text", "text": "pong"}]
+    assert response.usage["input_tokens"] == 3
+    assert response.usage["output_tokens"] == 1
+    assert response.usage["service_tier"] is None
+    assert response.raw["id"] == "msg_1"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -675,7 +734,14 @@ def test_openai_model_chat_uses_sdk_chat_completions_and_strips_broker_prefix(
     ]
     assert response.text == "pong"
     assert response.content == [{"type": "text", "text": "pong"}]
-    assert response.usage == {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}
+    assert response.usage == {
+        "prompt_tokens": 3,
+        "completion_tokens": 1,
+        "total_tokens": 4,
+        "prompt_tokens_details": None,
+        "completion_tokens_details": None,
+    }
+    assert response.raw["id"] == "chatcmpl_1"
 
 
 @pytest.mark.django_db(transaction=True)

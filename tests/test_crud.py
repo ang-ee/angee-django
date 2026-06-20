@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import copy
 from typing import Protocol, cast
 
 import pytest
@@ -13,7 +14,7 @@ from django.db import transaction
 from strawberry import auto
 
 import angee.graphql.deletion as deletion_module
-from angee.graphql.crud import _delete_resolver, crud
+from angee.graphql.crud import _create_mutation, _delete_resolver, _update_mutation, crud
 from angee.graphql.deletion import DeletePreview, DeletePreviewGroup, delete_by_public_id
 
 
@@ -107,6 +108,25 @@ def test_crud_fields_merge_into_a_schema() -> None:
     assert "createGroup(data: GroupInput!): GroupType!" in sdl
     assert "deleteGroup(id: ID!, confirm: Boolean! = false): DeletePreview!" in sdl
     assert "type DeletePreview" in sdl
+
+
+def test_crud_mutation_clone_preserves_public_key_settings() -> None:
+    """Strawberry field cloning keeps Angee's raw-sqid write settings."""
+
+    create = _create_mutation(GroupInput, permission_classes=None, extensions=None)
+    create.key_attr = "sqid"
+    create.argument_name = "payload"
+    copied_create = copy(create)
+
+    update = _update_mutation(GroupPatch, permission_classes=None, extensions=None)
+    update.key_attr = "sqid"
+    update.argument_name = "payload"
+    copied_update = copy(update)
+
+    assert copied_create.key_attr == "sqid"
+    assert copied_create.argument_name == "payload"
+    assert copied_update.key_attr == "sqid"
+    assert copied_update.argument_name == "payload"
 
 
 @pytest.mark.django_db

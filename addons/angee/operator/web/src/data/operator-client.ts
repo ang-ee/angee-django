@@ -1,4 +1,9 @@
-import { bearerAuth, createUrqlClient, graphQLWebSocketUrl } from "@angee/sdk";
+import {
+  bearerAuth,
+  createUrqlClient,
+  graphQLWebSocketUrl,
+  isFatalGraphQLWsClose,
+} from "@angee/sdk";
 import { createClient as createWSClient } from "graphql-ws";
 import {
   cacheExchange,
@@ -30,8 +35,6 @@ export function createOperatorClient(connection: OperatorConnectionInfo): Client
   });
 }
 
-const FATAL_WS_CLOSE_CODES = new Set([1000, 1008, 4400, 4401, 4403, 4406, 4409]);
-
 function subscriptionForwarder(
   connection: OperatorConnectionInfo,
 ): SubscriptionForwarder {
@@ -42,8 +45,7 @@ function subscriptionForwarder(
     url: graphQLWebSocketUrl(connection.endpoint),
     connectionParams: { authorization: `Bearer ${connection.token}` },
     lazy: true,
-    shouldRetry: (event: unknown) =>
-      !(event instanceof CloseEvent && FATAL_WS_CLOSE_CODES.has(event.code)),
+    shouldRetry: (event: unknown) => !isFatalGraphQLWsClose(event),
   });
   return (request) => ({
     subscribe(sink: {

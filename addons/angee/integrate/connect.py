@@ -42,6 +42,35 @@ class AccountConnectCompletion:
     integration_id: str = ""
 
 
+def enabled_oauth_client_from_hint(
+    hint: Any,
+    *,
+    owner_label: str,
+    reason: str,
+    vendor_slug: str = "",
+) -> Any:
+    """Resolve an enabled OAuth client from a backend-declared client hint."""
+
+    raw_hint = str(hint or "").strip()
+    if not raw_hint:
+        raise OAuthFlowError(
+            "oauth_client_not_connectable",
+            400,
+            f"{owner_label} has no OAuth client.",
+        )
+    slug = raw_hint.format(vendor=vendor_slug)
+    OAuthClient = cast(Any, apps.get_model("integrate", "OAuthClient"))
+    with system_context(reason=reason):
+        oauth_client = OAuthClient.objects.enabled_for_slug(slug)
+    if oauth_client is None:
+        raise OAuthFlowError(
+            "oauth_client_not_connectable",
+            400,
+            f"{owner_label} has no enabled OAuth client.",
+        )
+    return oauth_client
+
+
 def complete_account_connect(
     oauth_client: Any,
     *,

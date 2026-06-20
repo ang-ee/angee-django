@@ -1,6 +1,7 @@
 import * as React from "react";
 import {
   useResourceList,
+  rowPublicId,
   type Row,
 } from "@angee/sdk";
 import { Glyph } from "../chrome/Glyph";
@@ -13,6 +14,7 @@ import {
   DialogPortal,
   DialogRoot,
 } from "../ui/dialog";
+import { ControlBandProvider } from "../shell/ControlBand";
 import { DeletePreviewDialog } from "./DeletePreviewDialog";
 import {
   ListView,
@@ -33,6 +35,7 @@ import {
   useDataView,
   useDataViewMaybe,
 } from "./data-view-context";
+import { useSyncPageSize } from "./data-view-surface";
 import {
   type DataViewFilter,
   type DataViewDefaultGroups,
@@ -138,6 +141,11 @@ export interface DataPageProps<TRow extends Row = Row> {
   className?: string;
 }
 
+export type DrawerDataPageProps<TRow extends Row = Row> = Omit<
+  DataPageProps<TRow>,
+  "creating" | "onClose" | "onSelect" | "placement" | "recordId" | "routed"
+>;
+
 interface DataPageDeclarations<TRow extends Row = Row> {
   list?: DataPageListDeclaration<TRow>;
   form?: DataPageFormDeclaration;
@@ -222,6 +230,25 @@ export function DataPage<TRow extends Row = Row>({
     <DataViewProvider initialState={initialState} resource={props.model}>
       {content}
     </DataViewProvider>
+  );
+}
+
+/** A drawer-mode `DataPage` with self-owned record state and inline controls. */
+export function DrawerDataPage<TRow extends Row = Row>(
+  props: DrawerDataPageProps<TRow>,
+): React.ReactElement {
+  const [recordId, setRecordId] = React.useState<string | undefined>(undefined);
+
+  return (
+    <ControlBandProvider host={undefined}>
+      <DataPage
+        {...props}
+        placement="drawer"
+        recordId={recordId}
+        onSelect={(id) => setRecordId(id ?? NEW_RECORD_ID)}
+        onClose={() => setRecordId(undefined)}
+      />
+    </ControlBandProvider>
   );
 }
 
@@ -326,7 +353,8 @@ function DataPageBody<TRow extends Row = Row>({
 
   const handleSaved = React.useCallback(
     (row: Row) => {
-      if (typeof row.id === "string") handleSelectRecord?.(row.id);
+      const id = rowPublicId(row);
+      if (id !== null) handleSelectRecord?.(id);
     },
     [handleSelectRecord],
   );
@@ -335,7 +363,8 @@ function DataPageBody<TRow extends Row = Row>({
   }, [handleSelectRecord]);
   const handleRowClick = React.useCallback(
     (row: TRow) => {
-      if (typeof row.id === "string") handleSelectRecord?.(row.id);
+      const id = rowPublicId(row);
+      if (id !== null) handleSelectRecord?.(id);
     },
     [handleSelectRecord],
   );
@@ -348,7 +377,7 @@ function DataPageBody<TRow extends Row = Row>({
       pendingNavigation.edge === "first"
         ? listState.rows[0]
         : listState.rows[listState.rows.length - 1];
-    const targetId = rowId(target);
+    const targetId = rowPublicId(target);
     if (targetId) {
       setPendingNavigation(null);
       handleSelectRecord?.(targetId);
@@ -773,11 +802,7 @@ function ListStateProbe<TRow extends Row>({
   dataView: ReturnType<typeof useDataView>;
   onListStateChange: (state: ListViewState<TRow>) => void;
 }): null {
-  React.useEffect(() => {
-    if (pageSize && dataView.state.pageSize !== pageSize) {
-      dataView.setPageSize(pageSize);
-    }
-  }, [dataView.setPageSize, dataView.state.pageSize, pageSize]);
+  useSyncPageSize(dataView, pageSize);
 
   const requestedFields = React.useMemo(() => {
     const paths = new Set<string>(["id"]);
@@ -956,7 +981,7 @@ function buildRecordNavigation<TRow extends Row>({
   >;
 }): RecordNavigation | null {
   if (creating || typeof recordId !== "string" || !listState) return null;
-  const index = listState.rows.findIndex((row) => rowId(row) === recordId);
+  const index = listState.rows.findIndex((row) => rowPublicId(row) === recordId);
   if (index < 0) {
     // The open record isn't in the loaded slice (e.g. a grouped list or a deep
     // record). Keep the pager visible with the filtered total; page-local
@@ -966,8 +991,8 @@ function buildRecordNavigation<TRow extends Row>({
 
   const current = (listState.page - 1) * listState.pageSize + index + 1;
   const total = listState.total ?? Math.max(current, listState.rows.length);
-  const prevId = rowId(listState.rows[index - 1]);
-  const nextId = rowId(listState.rows[index + 1]);
+  const prevId = rowPublicId(listState.rows[index - 1]);
+  const nextId = rowPublicId(listState.rows[index + 1]);
   const canPrevPage = listState.hasPrev && listState.page > 1;
   const canNextPage =
     listState.hasNext &&
@@ -997,10 +1022,6 @@ function buildRecordNavigation<TRow extends Row>({
             }
           : undefined,
   };
-}
-
-function rowId(row: Row | undefined): string | null {
-  return typeof row?.id === "string" ? row.id : null;
 }
 
 function mergeFilters<TRow extends Row>(
@@ -1033,5 +1054,5 @@ function rowIdsEqual(
   right: readonly Row[],
 ): boolean {
   if (left.length !== right.length) return false;
-  return left.every((row, index) => rowId(row) === rowId(right[index]));
+  return left.every((row, index) => rowPublicId(row) === rowPublicId(right[index]));
 }

@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
+from django.utils.module_loading import import_string
+
 from angee.agents.backends import InferenceBackend, InferenceModelSpec, InferenceRequest
 
 _OAUTH_CREDENTIAL_KIND = "oauth"
@@ -14,6 +16,7 @@ class SDKInferenceBackend(InferenceBackend):
     """Base for inference backends that wrap a vendor's official Python SDK."""
 
     client_class: ClassVar[Any | None] = None
+    client_class_path: ClassVar[str] = ""
     default_broker_name: ClassVar[str] = ""
     default_model_limit: ClassVar[int] = 1000
     oauth_auth_kwarg: ClassVar[str] = "auth_token"
@@ -167,7 +170,13 @@ class SDKInferenceBackend(InferenceBackend):
     def _load_client_class(self) -> Any:
         """Import the concrete SDK client class."""
 
-        raise RuntimeError(f"Install the `{self.sdk_package_name}` package to use the {self.label} inference backend.")
+        install_hint = f"Install the `{self.sdk_package_name}` package to use the {self.label} inference backend."
+        if not self.client_class_path:
+            raise RuntimeError(install_hint)
+        try:
+            return import_string(self.client_class_path)
+        except ImportError as error:
+            raise RuntimeError(install_hint) from error
 
     @staticmethod
     def _credential_kind(credential: Any) -> str:
@@ -204,37 +213,23 @@ class SDKInferenceBackend(InferenceBackend):
     def _json_list(cls, value: Any) -> list[dict[str, Any]]:
         """Return a JSON-safe list of mapping objects."""
 
-        dumped = cls._json_value(value)
+        dumped = cls._sdk_json(value)
         if isinstance(dumped, list):
             return [item if isinstance(item, dict) else {"value": item} for item in dumped]
         return []
 
     @classmethod
     def _json_object(cls, value: Any) -> dict[str, Any]:
-        """Return a JSON-safe object from SDK models, mappings, or plain objects."""
+        """Return a JSON-safe object from SDK models or mappings."""
 
-        dumped = cls._json_value(value)
-        return dumped if isinstance(dumped, dict) else {}
+        dumped = cls._sdk_json(value)
+        return dict(dumped) if isinstance(dumped, Mapping) else {}
 
     @classmethod
-    def _json_value(cls, value: Any) -> Any:
-        """Return a value safe to store in JSONField/GraphQL JSON."""
+    def _sdk_json(cls, value: Any) -> Any:
+        """Return SDK-owned JSON data without walking arbitrary Python objects."""
 
-        if value is None or isinstance(value, str | int | float | bool):
-            return value
-        if isinstance(value, Mapping):
-            return {str(key): cls._json_value(item) for key, item in value.items()}
-        if isinstance(value, Sequence) and not isinstance(value, str | bytes):
-            return [cls._json_value(item) for item in value]
         model_dump = getattr(value, "model_dump", None)
         if callable(model_dump):
-            try:
-                return cls._json_value(model_dump(mode="json"))
-            except TypeError:
-                return cls._json_value(model_dump())
-        attrs = {
-            key: item
-            for key, item in getattr(value, "__dict__", {}).items()
-            if not key.startswith("_")
-        }
-        return {key: cls._json_value(item) for key, item in attrs.items()}
+            return model_dump(mode="json")
+        return value

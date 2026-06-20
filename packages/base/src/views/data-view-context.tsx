@@ -11,6 +11,7 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 
 import {
   DataViewState,
+  dataViewFavoritesFromJson,
   dataViewSearchToState,
   dataViewStateToSearch,
   mergeDataViewSearch,
@@ -116,7 +117,7 @@ export function DataViewProvider({
       if (!trimmed) return;
       setSavedFavorites((current) => [
         ...current,
-        state.toFavorite(trimmed, nextFavoriteId(trimmed, current)),
+        state.toFavorite(trimmed, current),
       ]);
     },
     [state],
@@ -200,11 +201,7 @@ function readFavorites(
   const storage = favoriteStorage();
   if (!storageKey || !storage) return [];
   try {
-    const raw = storage.getItem(storageKey);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed)
-      ? parsed.filter(isDataViewFavorite)
-      : [];
+    return dataViewFavoritesFromJson(storage.getItem(storageKey));
   } catch {
     return [];
   }
@@ -226,31 +223,4 @@ function favoriteStorage(): Storage | null {
   } catch {
     return null;
   }
-}
-
-function isDataViewFavorite(value: unknown): value is DataViewFavorite {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const record = value as Partial<DataViewFavorite>;
-  return typeof record.id === "string" && typeof record.label === "string";
-}
-
-function nextFavoriteId(
-  label: string,
-  favorites: readonly DataViewFavorite[],
-): string {
-  const base = `favorite:${slugifyFavoriteLabel(label) || "search"}`;
-  const existing = new Set(favorites.map((favorite) => favorite.id));
-  if (!existing.has(base)) return base;
-  for (let suffix = 2; ; suffix += 1) {
-    const id = `${base}-${suffix}`;
-    if (!existing.has(id)) return id;
-  }
-}
-
-function slugifyFavoriteLabel(label: string): string {
-  return label
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
 }

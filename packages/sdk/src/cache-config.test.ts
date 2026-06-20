@@ -19,6 +19,10 @@ describe("cache keys", () => {
     expect(key("Viewer", { id: "xyz" })).toBe("xyz");
   });
 
+  test("does not key an entity by a non-string id", () => {
+    expect(key("Sale", { id: 1 })).toBeNull();
+  });
+
   test("null-keys page and page-info value objects", () => {
     expect(key("SaleOffsetPaginated", {})).toBeNull();
     expect(key("OffsetPaginationInfo", { offset: 0 })).toBeNull();

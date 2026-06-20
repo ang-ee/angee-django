@@ -17,6 +17,7 @@ import {
   type RecordTabDescriptor,
 } from "@angee/base";
 import {
+  errorMessage,
   useActionMutation,
   useModelInvalidation,
   useResourceRecord,
@@ -25,6 +26,7 @@ import {
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useAgentsT } from "../i18n";
+import { agentLifecycle, agentRuntime, stringField } from "./agent-record";
 import { AgentChat } from "./AgentChat";
 import { AgentProvisioning } from "./AgentProvisioning";
 import { type AgentChatView } from "../documents";
@@ -35,23 +37,6 @@ const MODEL = "agents.Agent";
 // (`sqid` is not a GraphQL field — the agent's public id is carried by `id` for
 // the view envelope; see below.)
 const CHAT_FIELDS = ["id", "runtimeStatus", "service"] as const;
-
-/** Read a string field off the boundary record (`Record<string, unknown>`), or "". */
-function stringField(record: Row | null, key: string): string {
-  const value = record?.[key];
-  return typeof value === "string" ? value : "";
-}
-
-// The agent carries two state axes, each reading as its UPPERCASE enum name: `lifecycle`
-// is the provision journey (DRAFT→PROVISIONING→READY→DEPROVISIONING→DEPROVISIONED) and
-// `runtimeStatus` the observed run state (STOPPED/RUNNING/ERROR/WARNING — the colored dot).
-function agentLifecycle(record: Row | null): string {
-  return stringField(record, "lifecycle").toUpperCase();
-}
-
-function agentRuntime(record: Row | null): string {
-  return stringField(record, "runtimeStatus").toUpperCase();
-}
 
 function canProvisionAgent(record: Row | null): boolean {
   // Provision a fresh or torn-down agent, or retry one whose last operation errored.
@@ -140,10 +125,7 @@ function AgentProvisionToolbarAction({
       if (previousLifecycle) patchRecord({ lifecycle: previousLifecycle });
       toast.danger({
         title: t("agents.provisioning.provisionFailed"),
-        description:
-          caught instanceof Error
-            ? caught.message
-            : t("agents.provisioning.actionFailed"),
+        description: errorMessage(caught, t("agents.provisioning.actionFailed")),
       });
     }
   };

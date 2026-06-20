@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 from collections.abc import Iterator
 from io import BytesIO
 from pathlib import Path
@@ -13,6 +14,7 @@ from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.db import connection
 from rebac import actor_context, system_context
+from rebac.roles import grant
 
 from angee.storage import exceptions
 from angee.storage.models import FileManager, UploadState
@@ -24,6 +26,9 @@ from tests.conftest import (
     Folder,
     MimeType,
     _create_missing_tables,
+    addon_schema,
+    execute_schema,
+    result_data,
 )
 
 # A real 1x1 PNG — libmagic classifies it as image/png; a fake signature would not.
@@ -33,6 +38,7 @@ PNG_BYTES = bytes.fromhex(
     "0049454e44ae426082"
 )
 PNG_SHA256 = hashlib.sha256(PNG_BYTES).hexdigest()
+storage_schema = importlib.import_module("angee.storage.schema")
 
 
 def test_file_source_model_owns_the_upload_protocol() -> None:
@@ -246,6 +252,98 @@ def test_soft_delete_trash_restore_and_purge(tmp_path: Path, drive: Any) -> None
     with system_context(reason="test storage purge"):
         row.purge()
     assert not File._base_manager.filter(content_hash=PNG_SHA256).exists()
+    assert not (tmp_path / storage_path).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_storage_graphql_custom_mutations_accept_public_ids(drive: Any) -> None:
+    """Custom storage mutations resolve raw sqids at the GraphQL boundary."""
+
+    schema = addon_schema(storage_schema.schemas, "public")
+    with actor_context(drive.alice):
+        row = File.objects.draft(
+            filename="graphql.png",
+            mime_type="image/png",
+            size_bytes=len(PNG_BYTES),
+            drive_id=str(drive.sqid),
+        )
+        token = row.issue_upload_token()
+        File.objects.for_upload_token(token).receive_bytes(BytesIO(PNG_BYTES))
+
+    finalized = result_data(
+        execute_schema(
+            schema,
+            """
+            mutation Finalize($input: FileUploadFinalizeInput!) {
+              fileUploadFinalize(input: $input) {
+                error
+                errorCode
+                file { id uploadState }
+              }
+            }
+            """,
+            {
+                "input": {
+                    "file": str(row.sqid),
+                    "contentHash": PNG_SHA256,
+                    "sizeBytes": len(PNG_BYTES),
+                }
+            },
+            user=drive.alice,
+        )
+    )["fileUploadFinalize"]
+    assert finalized == {
+        "error": None,
+        "errorCode": None,
+        "file": {"id": str(row.sqid), "uploadState": "READY"},
+    }
+
+    row.refresh_from_db()
+    with actor_context(drive.alice):
+        row.delete()
+
+    restored = result_data(
+        execute_schema(
+            schema,
+            """
+            mutation Restore($id: ID!) {
+              restoreFile(id: $id) { id isTrashed }
+            }
+            """,
+            {"id": str(row.sqid)},
+            user=drive.alice,
+        )
+    )["restoreFile"]
+    assert restored == {"id": str(row.sqid), "isTrashed": False}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_storage_graphql_purge_accepts_public_id(tmp_path: Path, drive: Any) -> None:
+    """The admin purge mutation resolves its raw sqid through the shared owner."""
+
+    admin = get_user_model().objects.create_user(
+        username="storage-graphql-admin",
+        email="storage-admin@example.com",
+        password="admin",
+    )
+    grant(actor=admin, role="storage/role:storage_admin")
+    row = _proxy_upload(drive, PNG_BYTES)
+    storage_path = row.storage_path
+    result = result_data(
+        execute_schema(
+            addon_schema(storage_schema.schemas, "console"),
+            """
+            mutation Purge($id: ID!) {
+              purgeFile(id: $id)
+            }
+            """,
+            {"id": str(row.sqid)},
+            user=admin,
+        )
+    )["purgeFile"]
+
+    assert result is True
+    assert not File._base_manager.filter(pk=row.pk).exists()
     assert not (tmp_path / storage_path).exists()
 
 

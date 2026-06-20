@@ -47,9 +47,8 @@ from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
-from angee.base.models import instance_from_public_id
 from angee.graphql.deletion import DeletePreview, delete_by_public_id
-from angee.graphql.ids import PublicID
+from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import AngeeNode, detail
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_display_label as _user_display_label
@@ -909,9 +908,7 @@ class IAMUserMutation:
         """Update one user; re-hash the password only when a new one is supplied."""
 
         with system_context(reason="iam.graphql.user.update"), transaction.atomic():
-            user = instance_from_public_id(User, str(data.id), queryset=User._default_manager.all())
-            if user is None:
-                raise ValueError(f"User {data.id!s} was not found")
+            user = require_instance_for_id(User, data.id, queryset=User._default_manager.all())
             for field in ("username", "email", "first_name", "last_name", "is_staff", "is_active"):
                 value = getattr(data, field)
                 if value is not strawberry.UNSET:

@@ -8,6 +8,7 @@ import {
   LoadingPanel,
   PreviewPane,
   RelationPicker,
+  recordPath,
   SelectionBarAction,
   TreeView,
   useConfirm,
@@ -42,11 +43,6 @@ import { FileDetail } from "./FileDetail";
 import { NewFolderControl } from "./NewFolderControl";
 import { SelectedFolderControl } from "./SelectedFolderControl";
 import { useStorageT } from "../i18n";
-
-/** Detail route for one file row: its public id, percent-encoded into the path. */
-function fileDetailPath(id: string): string {
-  return `/storage/${encodeURIComponent(id)}`;
-}
 
 // One safety-capped read each of drives/folders/files; the browser scopes the
 // set client-side so the navigator, list, and preview share one fetch.
@@ -143,7 +139,7 @@ export function StoragePage(): ReactElement {
     [files, openFileId],
   );
   const rowHref = useCallback(
-    (row: StorageFileRow) => fileDetailPath(row.id),
+    (row: StorageFileRow) => recordPath("/storage", row.id),
     [],
   );
   const uploads = useStorageUpload({ onUploaded: () => filesQuery.refetch() });

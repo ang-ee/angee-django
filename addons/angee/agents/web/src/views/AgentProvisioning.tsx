@@ -11,6 +11,7 @@ import {
 import { useResourceRecord, type Row } from "@angee/sdk";
 
 import { useAgentsT } from "../i18n";
+import { agentLifecycle, agentRuntime, stringField } from "./agent-record";
 
 const AGENT_MODEL = "agents.Agent";
 
@@ -229,17 +230,4 @@ function useProvisionRuntime(workspace: string): {
 
 function isLifecycleActive(status: string | null | undefined): boolean {
   return ["PROVISIONING", "DEPROVISIONING"].includes((status ?? "").toUpperCase());
-}
-
-function agentLifecycle(record: Row | null): string {
-  return stringField(record, "lifecycle").toUpperCase();
-}
-
-function agentRuntime(record: Row | null): string {
-  return stringField(record, "runtimeStatus").toUpperCase();
-}
-
-function stringField(record: Row | null, key: string): string {
-  const value = record?.[key];
-  return typeof value === "string" ? value : "";
 }

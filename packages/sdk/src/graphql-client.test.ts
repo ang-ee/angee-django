@@ -6,6 +6,7 @@ import {
   createCsrfTokenProvider,
   createUrqlClient,
   graphQLWebSocketUrl,
+  isFatalGraphQLWsCloseCode,
 } from "./graphql-client";
 
 function jsonResponse(body: unknown): Response {
@@ -29,6 +30,14 @@ describe("graphQLWebSocketUrl", () => {
     expect(graphQLWebSocketUrl("/graphql/", "https://app.test")).toBe(
       "wss://app.test/graphql/",
     );
+  });
+});
+
+describe("isFatalGraphQLWsCloseCode", () => {
+  test("classifies terminal graphql-ws close codes", () => {
+    expect(isFatalGraphQLWsCloseCode(1000)).toBe(true);
+    expect(isFatalGraphQLWsCloseCode(4403)).toBe(true);
+    expect(isFatalGraphQLWsCloseCode(1011)).toBe(false);
   });
 });
 

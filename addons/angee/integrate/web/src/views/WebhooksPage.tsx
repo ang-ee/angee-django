@@ -7,6 +7,7 @@ import {
   Form,
   Group,
   List,
+  recordActionId,
   useRecordActionMutation,
   type ActionContext,
 } from "@angee/base";
@@ -33,8 +34,9 @@ export function WebhooksPage(): React.ReactElement {
   const [rotateSecret] = useAuthoredMutation(RotateWebhookSecret);
   const rotate = React.useCallback(
     async (ctx: ActionContext) => {
-      if (typeof ctx.record?.id !== "string") return;
-      const result = await rotateSecret({ id: ctx.record.id });
+      const id = recordActionId(ctx);
+      if (!id) return;
+      const result = await rotateSecret({ id });
       const outcome = result?.rotateWebhookSecret;
       if (outcome && !outcome.ok)
         throw new Error(t("integrate.webhooks.rotateFailed"));

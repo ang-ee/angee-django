@@ -1,11 +1,4 @@
-import { useAuthoredMutation, useBusyRun } from "@angee/sdk";
-
-import {
-  KnowledgeCreatePage,
-  KnowledgeCreateVault,
-  KnowledgeDeletePage,
-  KnowledgeUpdatePage,
-} from "./documents";
+import { rowPublicId, useBusyRun, useResourceMutation } from "@angee/sdk";
 
 export interface PageActions {
   busy: boolean;
@@ -16,8 +9,6 @@ export interface PageActions {
     kind: string;
     parent: string | null;
   }) => Promise<string | null>;
-  /** Create a vault owned by the actor; returns its node id. */
-  createVault: (name: string) => Promise<string | null>;
   /** Delete a page (and its subtree). */
   deletePage: (id: string) => Promise<void>;
   /** Reparent a page (move) — `null` lifts it to the vault root. */
@@ -33,29 +24,27 @@ export function usePageActions(
   options: { onChanged?: () => void } = {},
 ): PageActions {
   const { onChanged } = options;
-  const [createPageMutation] = useAuthoredMutation(KnowledgeCreatePage);
-  const [createVaultMutation] = useAuthoredMutation(KnowledgeCreateVault);
-  const [deletePageMutation] = useAuthoredMutation(KnowledgeDeletePage);
-  const [updatePageMutation] = useAuthoredMutation(KnowledgeUpdatePage);
+  const [createPageMutation] = useResourceMutation("knowledge.Page", "create", {
+    fields: ["title"],
+  });
+  const [deletePageMutation] = useResourceMutation("knowledge.Page", "delete");
+  const [updatePageMutation] = useResourceMutation("knowledge.Page", "update", {
+    fields: ["title"],
+  });
   const { busy, run } = useBusyRun(onChanged);
 
   return {
     busy,
     createPage: ({ vault, title, kind, parent }) =>
       run(async () => {
-        const data = await createPageMutation({
+        const record = await createPageMutation({
           data: { vault, title, kind, parent },
         });
-        return data?.createPage.id ?? null;
-      }),
-    createVault: (name) =>
-      run(async () => {
-        const data = await createVaultMutation({ data: { name } });
-        return data?.createVault.id ?? null;
+        return rowPublicId(record);
       }),
     deletePage: (id) =>
       run(async () => {
-        await deletePageMutation({ id });
+        await deletePageMutation({ id, confirm: true });
       }),
     movePage: (id, parent) =>
       run(async () => {
