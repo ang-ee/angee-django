@@ -9,7 +9,6 @@ related row.
 
 from __future__ import annotations
 
-import json
 from typing import Any, cast
 
 import strawberry
@@ -1485,20 +1484,9 @@ class WebhookActionMutation:
         """Send a test event to one subscription and report the delivery outcome."""
 
         subscription = resolve_action_target(WebhookSubscription, id, reason="integrate.graphql.test_webhook_delivery")
-        body = json.dumps(
-            {"type": "test", "subscription": subscription.public_id},
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
         with system_context(reason="integrate.graphql.test_webhook_delivery"):
-            try:
-                status = subscription.deliver(body)
-            except Exception as error:  # noqa: BLE001 — delivery failure is the result, not a 500
-                message = "; ".join(error.messages) if hasattr(error, "messages") else str(error)
-                subscription.record_delivery_failure(status="", error=message)
-                return ActionResult(ok=False, message=f"Delivery failed: {message}")
-            subscription.record_delivery(status)
-        return ActionResult(ok=True, message=f"Delivered (status {status}).")
+            ok, message = subscription.deliver_test()
+        return ActionResult(ok=ok, message=message)
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def rotate_webhook_secret(self, id: PublicID) -> RotatedSecret:

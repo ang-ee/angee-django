@@ -32,6 +32,7 @@ from rebac.roles import grant
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.events import EventKind
+from angee.integrate.webhooks import WebhookDeliveryError
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,
@@ -643,6 +644,44 @@ def test_rotate_webhook_secret_changes_the_stored_secret(
     with system_context(reason="test.integrate.rotate.verify"):
         stored = WebhookSubscription.objects.get(pk=subscription.pk)
         assert str(stored.secret) == result["secret"]
+
+
+def test_test_webhook_delivery_records_failure_status(
+    integrate_console_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed test delivery records the HTTP status classified by the model owner."""
+
+    console_schema = _schema()
+    admin = _platform_admin("test-webhook-admin")
+    owner = User.objects.create_user(username="test-webhook-owner", email="test-webhook-owner@example.com")
+    with system_context(reason="test.integrate.webhook_test.seed"):
+        subscription = WebhookSubscription.objects.create(
+            owner=owner,
+            target_url="https://hooks.example.test/events",
+            secret="original-secret",
+            event_kinds=[_BRIDGE_SYNCED],
+        )
+
+    def fail_delivery(self: WebhookSubscription, body: bytes) -> str:
+        assert b'"type":"test"' in body
+        raise WebhookDeliveryError("service unavailable", status="503")
+
+    monkeypatch.setattr(WebhookSubscription, "deliver", fail_delivery)
+
+    result = _data(
+        _execute(
+            console_schema,
+            "mutation($id: ID!){ testWebhookDelivery(id: $id){ ok message } }",
+            {"id": str(subscription.sqid)},
+            user=admin,
+        )
+    )["testWebhookDelivery"]
+
+    subscription.refresh_from_db()
+    assert result == {"ok": False, "message": "Delivery failed: WebhookDeliveryError: service unavailable"}
+    assert subscription.last_delivery_status == "503"
+    assert subscription.consecutive_failures == 1
 
 
 def test_update_integration_status_accepts_the_lowercase_value(
