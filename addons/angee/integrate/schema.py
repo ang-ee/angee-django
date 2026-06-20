@@ -562,18 +562,13 @@ def _oauth_client_for_integration(integration: Any) -> Any:
 
     impl = integration.impl
     hint = str(getattr(impl, "oauth_client", "") or "")
-    if not hint:
-        vendor = getattr(integration, "vendor", None)
-        hint = str(getattr(vendor, "slug", "") or "")
-    if not hint:
-        raise OAuthFlowError("oauth_client_not_connectable", 400, "Integration has no OAuth client.")
     vendor_slug = str(getattr(getattr(integration, "vendor", None), "slug", "") or "")
-    slug = hint.format(vendor=vendor_slug)
-    with system_context(reason="integrate.graphql.connect_integration.oauth_client"):
-        oauth_client = OAuthClient.objects.enabled_for_slug(slug)
-    if oauth_client is None:
-        raise OAuthFlowError("oauth_client_not_connectable", 400, "Integration has no enabled OAuth client.")
-    return oauth_client
+    return _connect.enabled_oauth_client_from_hint(
+        hint or vendor_slug,
+        owner_label="Integration",
+        reason="integrate.graphql.connect_integration.oauth_client",
+        vendor_slug=vendor_slug,
+    )
 
 
 def _current_user_integration(
