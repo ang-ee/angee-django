@@ -82,9 +82,23 @@ def resolved_addresses(hostname: str, port: int | None) -> tuple[_IpAddress, ...
     return tuple(dict.fromkeys(addresses))
 
 
+def canonical_address(address: _IpAddress) -> _IpAddress:
+    """Return ``address`` unwrapped from any IPv4-mapped IPv6 form.
+
+    ``ipaddress`` reports an IPv4-mapped IPv6 address (``::ffff:169.254.169.254``)
+    as neither private nor link-local, so a metadata or private host reached in
+    that form would slip past the judgement. Callers judge the unwrapped IPv4.
+    """
+
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return address.ipv4_mapped
+    return address
+
+
 def is_unsafe_address(address: _IpAddress) -> bool:
     """Return whether ``address`` is forbidden for outbound calls."""
 
+    address = canonical_address(address)
     return (
         address in METADATA_IPS
         or address.is_loopback

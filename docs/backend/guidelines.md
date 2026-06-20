@@ -235,6 +235,18 @@ Rules that follow from the layering:
   - *Only behaviour differs, closed framework-known set* → a `StateField` + an
     eager **handler registry** (`iam.credentials.register_handler`/`handler_for`).
     The row stores the enum value; the kind projects as a GraphQL enum.
+- **Enum-backed fields use `StateField`, never `CharField(choices=…)`.**
+  `StateField` wraps django-choices-field's `TextChoicesField`, so strawberry-django
+  renders a native GraphQL enum straight from the `choices_enum`. A plain
+  `CharField` with `choices` renders as a bare `String` and silently drops the enum
+  at the API boundary — never use it for an enumerated value. `StateField` is for an
+  actual closed enum the row *carries* (status, platform, source, kind-of-credential).
+  A **type discriminator that selects mutually-exclusive concrete kinds is not an
+  enum field at all** — it is a Django child model (the first branch above): the
+  concrete child *is* the kind, so a `Party`→`Person`/`Organization` split has no
+  `kind` column. Reach for a child model, not a `StateField`, when the kinds carry
+  their own fields (e.g. a `Person` linking to an `iam.User` that an `Organization`
+  never has).
 - **Integration implementations are concrete integration children.** The
   top-level `integrate.Integration` row is the shared connection identity and
   lifecycle. Concrete integration kinds such as inference providers and VCS

@@ -337,7 +337,8 @@ class CredentialInput:
     """Admin-write fields for a provider-less credential (OAuth ones arrive via connect).
 
     ``kind`` discriminates the material: ``static_token`` reads ``api_key``,
-    ``ssh_key`` reads ``private_key``. ``user`` defaults to the calling admin.
+    ``ssh_key`` reads ``private_key``, ``basic_auth`` reads ``username`` +
+    ``password``. ``user`` defaults to the calling admin.
     """
 
     name: str
@@ -345,6 +346,8 @@ class CredentialInput:
     user: PublicID | None = None
     api_key: str = ""
     private_key: str = ""
+    username: str = ""
+    password: str = ""
 
 
 @strawberry.input
@@ -492,12 +495,14 @@ def _oauth_client_from_id(oauth_client_id: PublicID) -> Any:
 
 
 def _credential_material(data: CredentialInput) -> dict[str, str]:
-    """Read the secret the kind's handler names out of the discriminated input."""
+    """Read the secret(s) the kind's handler names out of the discriminated input."""
 
-    field = handler_for(data.kind).material_field
-    if not hasattr(data, field):
-        raise ValueError(f"Cannot create a credential of kind {data.kind!r}.")
-    return {field: getattr(data, field)}
+    material: dict[str, str] = {}
+    for field in handler_for(data.kind).input_material_fields():
+        if not hasattr(data, field):
+            raise ValueError(f"Cannot create a credential of kind {data.kind!r}.")
+        material[field] = getattr(data, field)
+    return material
 
 
 def _revoke_remote_oauth_token(credential: Any) -> None:

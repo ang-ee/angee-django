@@ -1,0 +1,111 @@
+// Authorization schema for the parties addon.
+// @rebac_package: parties
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 2
+
+// A party and its related rows (handles, links, addresses, affiliations) are
+// each owned by the user that created them, with platform admins reaching every
+// row through the const-backed `angee/role:admin` membership (no per-row tuple).
+// Each owns its own created_by rather than reaching through the party, so a
+// handle synced for an unknown sender (party still null) stays readable.
+
+definition parties/party {
+    relation owner: auth/user // rebac:field=created_by
+    relation editor: auth/user | auth/group#member
+    relation reader: auth/user | auth/group#member
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = owner + editor + reader + admin->member
+    permission write  = owner + editor + admin->member
+    permission delete = owner + admin->member
+}
+
+// Person and Organization are multi-table-inheritance children of parties/party.
+// Each owns its own created_by so its child row authorizes independently of the
+// parent row.
+
+definition parties/person {
+    relation owner: auth/user // rebac:field=created_by
+    relation editor: auth/user | auth/group#member
+    relation reader: auth/user | auth/group#member
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = owner + editor + reader + admin->member
+    permission write  = owner + editor + admin->member
+    permission delete = owner + admin->member
+}
+
+definition parties/organization {
+    relation owner: auth/user // rebac:field=created_by
+    relation editor: auth/user | auth/group#member
+    relation reader: auth/user | auth/group#member
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = owner + editor + reader + admin->member
+    permission write  = owner + editor + admin->member
+    permission delete = owner + admin->member
+}
+
+definition parties/handle {
+    relation owner: auth/user // rebac:field=created_by
+    relation editor: auth/user | auth/group#member
+    relation reader: auth/user | auth/group#member
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = owner + editor + reader + admin->member
+    permission write  = owner + editor + admin->member
+    permission delete = owner + admin->member
+}
+
+definition parties/party_handle {
+    relation owner: auth/user // rebac:field=created_by
+    relation editor: auth/user | auth/group#member
+    relation reader: auth/user | auth/group#member
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = owner + editor + reader + admin->member
+    permission write  = owner + editor + admin->member
+    permission delete = owner + admin->member
+}
+
+definition parties/address {
+    relation owner: auth/user // rebac:field=created_by
+    relation editor: auth/user | auth/group#member
+    relation reader: auth/user | auth/group#member
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = owner + editor + reader + admin->member
+    permission write  = owner + editor + admin->member
+    permission delete = owner + admin->member
+}
+
+definition parties/affiliation {
+    relation owner: auth/user // rebac:field=created_by
+    relation editor: auth/user | auth/group#member
+    relation reader: auth/user | auth/group#member
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = owner + editor + reader + admin->member
+    permission write  = owner + editor + admin->member
+    permission delete = owner + admin->member
+}
+
+// A Directory is a multi-table-inheritance child of integrate/integration (a
+// contacts-sync bridge), so its access derives from the parent integration the
+// way integrate/vcs_bridge does; platform admins reach all.
+definition parties/directory {
+    relation integration: integrate/integration // rebac:field=integration_ptr
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read   = integration->read + admin->member
+    permission write  = integration->write + admin->member
+    permission delete = integration->write + admin->member
+}

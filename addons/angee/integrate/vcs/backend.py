@@ -18,6 +18,7 @@ from typing import Any
 
 from django.conf import settings
 
+from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl
 
 # Directories the local backend never treats as source — a broad ``Source.path`` on a
@@ -65,12 +66,13 @@ class RepoDescriptor:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
-class VCSBackend(BridgeImpl):
+class VCSBackend(BridgeImpl, HttpClientMixin):
     """Abstract REST backend for a git host, bound to one ``VcsBridge``.
 
     Concrete hosts implement the primitives below; ``VcsBridge`` calls into
     them. The constructor receives the VCS bridge child so the backend can
-    read its credential and bridge-owned config.
+    read its credential and bridge-owned config, and reach the shared
+    SSRF-pinned client as ``self.http``.
     """
 
     category = "vcs"

@@ -1,0 +1,30 @@
+{
+  "name": "@angee/parties",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@angee/base": "workspace:*",
+    "@angee/sdk": "workspace:*",
+    "lucide-react": "^1.17.0"
+  },
+  "peerDependencies": {
+    "@tanstack/react-router": "^1",
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "devDependencies": {
+    "@tanstack/react-router": "^1.170.8",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "react": "^19",
+    "react-dom": "^19",
+    "typescript": "^6.0.3"
+  }
+}

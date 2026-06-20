@@ -13,6 +13,8 @@ INSTALLED_APPS:
   - angee.knowledge
   - angee.mcp
   - angee.operator
+  - angee.parties
+  - angee.parties_integrate_carddav
   - angee.platform
   - angee.storage
   - example.notes

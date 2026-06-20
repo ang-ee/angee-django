@@ -38,6 +38,7 @@ dependencies = [
   "fastmcp>=2.14.7,<2.15",
   "anthropic>=0.109.2",
   "openai>=2.43.0",
+  "vobject>=0.9.9",
 ]
 
 [dependency-groups]

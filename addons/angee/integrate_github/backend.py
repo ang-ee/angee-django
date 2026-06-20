@@ -3,9 +3,9 @@
 Reads a GitHub remote over the REST API to populate the ``integrate`` inventory —
 listing repositories (by org), walking trees, reading blobs, resolving refs — and
 verifies inbound push webhooks. It never clones: git transport is the operator's
-job. The outbound HTTP lives in a model-free helper (mirroring
-``webhooks.PinnedWebhookClient``) that reuses ``integrate.net`` for the SSRF gate;
-the API base is admin-configured (``api.github.com`` by default, a GHE host via
+job. Outbound calls go through the shared SSRF-pinned client (``self.http``, from
+:class:`~angee.integrate.http.HttpClientMixin` on :class:`VCSBackend`); the API
+base is admin-configured (``api.github.com`` by default, a GHE host via
 ``VcsBridge.config``), so the host is trusted rather than user-supplied per
 request.
 """
@@ -15,14 +15,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import http.client
-import json
 from typing import Any
-from urllib.parse import quote, urlunsplit
+from urllib.parse import quote
 
-from django.core.exceptions import ValidationError
-
-from angee.integrate.net import is_unsafe_address, parse_http_url, resolved_addresses
 from angee.integrate.vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
 
 HTTP_TIMEOUT_SECONDS = 15
@@ -159,12 +154,16 @@ class GitHubBackend(VCSBackend):
     def _get(self, path: str) -> Any:
         """GET one REST path and return parsed JSON; raise ``FileNotFoundError`` on 404."""
 
-        status, body = http_get(f"{self.api_base}{path}", self._headers())
-        if status == 404:
+        response = self.http.get(
+            f"{self.api_base}{path}", headers=self._headers(), timeout=HTTP_TIMEOUT_SECONDS
+        )
+        if response.status == 404:
             raise FileNotFoundError(path)
-        if status < 200 or status >= 300:
-            raise GitHubApiError(f"GitHub API GET {path} returned HTTP {status}", status=status)
-        return json.loads(body or b"null")
+        if not response.ok:
+            raise GitHubApiError(
+                f"GitHub API GET {path} returned HTTP {response.status}", status=response.status
+            )
+        return response.json()
 
     @staticmethod
     def _descriptor(item: dict[str, Any]) -> RepoDescriptor:
@@ -183,30 +182,6 @@ class GitHubBackend(VCSBackend):
             web_url=str(item.get("html_url", "")),
             archived=bool(item.get("archived")),
         )
-
-
-def http_get(url: str, headers: dict[str, str], *, timeout: int = HTTP_TIMEOUT_SECONDS) -> tuple[int, bytes]:
-    """GET ``url`` after gating its host, returning ``(status, body)``.
-
-    Module-level so tests can stub the network. Gates scheme + host through
-    ``integrate.net`` and rejects a host resolving to a non-public address.
-    """
-
-    parsed = parse_http_url(url)
-    host = str(parsed.hostname)
-    port = parsed.port or (http.client.HTTPS_PORT if parsed.scheme == "https" else http.client.HTTP_PORT)
-    for address in resolved_addresses(host, port):
-        if is_unsafe_address(address):
-            raise ValidationError("GitHub API host must resolve only to public IP addresses.")
-    target = urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
-    connection_class = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
-    connection = connection_class(host, port=port, timeout=timeout)
-    try:
-        connection.request("GET", target, headers=headers)
-        response = connection.getresponse()
-        return int(response.status), response.read()
-    finally:
-        connection.close()
 
 
 def _request_header(request: Any, name: str) -> str:

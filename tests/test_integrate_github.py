@@ -1,7 +1,7 @@
 """Tests for the GitHub VCS backend — REST shape, stubbing the network.
 
-``http_get`` is module-level precisely so these tests can replace it; no DB,
-settings, or live network is touched.
+The backend reads over the shared SSRF-pinned client (``self.http``); these tests
+replace ``HttpClient.get`` so no DB, settings, or live network is touched.
 """
 
 from __future__ import annotations
@@ -15,7 +15,20 @@ from typing import Any
 
 import pytest
 
+from angee.integrate.http import HttpClient, HttpResponse
 from angee.integrate_github import backend as gh
+
+
+def _patch_get(monkeypatch: pytest.MonkeyPatch, fake_http_get: Any) -> None:
+    """Route the shared client's GET through a ``(url, headers, *, timeout) -> (status, body)`` stub."""
+
+    def get(
+        self: Any, url: str, *, headers: Any = None, allow_private: bool = False, timeout: int = 15
+    ) -> HttpResponse:
+        status, body = fake_http_get(url, headers or {}, timeout=timeout)
+        return HttpResponse(status=status, body=body)
+
+    monkeypatch.setattr(HttpClient, "get", get)
 
 
 def _integration(*, api_base: str = "") -> Any:
@@ -53,7 +66,7 @@ def test_ls_repos_pages_through_every_repository(monkeypatch: pytest.MonkeyPatch
         body = page_one if url.endswith("page=1") else page_two if url.endswith("page=2") else []
         return 200, json.dumps(body).encode("utf-8")
 
-    monkeypatch.setattr(gh, "http_get", fake_http_get)
+    _patch_get(monkeypatch, fake_http_get)
 
     repos = gh.GitHubBackend(_integration()).ls_repos()
 
@@ -80,7 +93,7 @@ def test_ls_tree_filters_by_path_and_rejects_truncation(monkeypatch: pytest.Monk
             return 200, json.dumps({"sha": "deadbeef"}).encode("utf-8")
         return 200, json.dumps(tree).encode("utf-8")
 
-    monkeypatch.setattr(gh, "http_get", fake_http_get)
+    _patch_get(monkeypatch, fake_http_get)
     repository = SimpleNamespace(name="acme/widgets")
     entries = gh.GitHubBackend(_integration()).ls_tree(repository, ref="main", path="templates", recursive=True)
 
@@ -91,7 +104,7 @@ def test_ls_tree_filters_by_path_and_rejects_truncation(monkeypatch: pytest.Monk
             return 200, json.dumps({"sha": "deadbeef"}).encode("utf-8")
         return 200, json.dumps({"tree": [], "truncated": True}).encode("utf-8")
 
-    monkeypatch.setattr(gh, "http_get", truncated_http_get)
+    _patch_get(monkeypatch, truncated_http_get)
     with pytest.raises(gh.GitHubApiError):
         gh.GitHubBackend(_integration()).ls_tree(repository, ref="main", path="templates", recursive=True)
 
@@ -106,7 +119,7 @@ def test_cat_file_decodes_base64_and_404_is_filenotfound(monkeypatch: pytest.Mon
             return 404, b""
         return 200, json.dumps({"encoding": "base64", "content": content}).encode("utf-8")
 
-    monkeypatch.setattr(gh, "http_get", fake_http_get)
+    _patch_get(monkeypatch, fake_http_get)
     backend = gh.GitHubBackend(_integration())
     repository = SimpleNamespace(name="acme/widgets")
 
@@ -122,7 +135,7 @@ def test_search_repos_projects_candidates(monkeypatch: pytest.MonkeyPatch) -> No
         assert "/search/repositories" in url
         return 200, json.dumps({"items": [_repo("acme/widgets")]}).encode("utf-8")
 
-    monkeypatch.setattr(gh, "http_get", fake_http_get)
+    _patch_get(monkeypatch, fake_http_get)
     results = gh.GitHubBackend(_integration()).search_repos("widget", org="acme")
 
     assert [candidate.name for candidate in results] == ["acme/widgets"]

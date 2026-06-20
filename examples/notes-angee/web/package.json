@@ -18,6 +18,7 @@
     "@angee/integrate": "workspace:*",
     "@angee/knowledge": "workspace:*",
     "@angee/operator": "workspace:*",
+    "@angee/parties": "workspace:*",
     "@angee/platform": "workspace:*",
     "@angee/resources": "workspace:*",
     "@angee/sdk": "workspace:*",

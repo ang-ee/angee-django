@@ -18,7 +18,8 @@ from rebac.models import active_relationship_model
 from angee.integrate.events import EventKind
 from angee.integrate.models import Bridge
 from angee.integrate.net import validate_public_url
-from angee.integrate.webhooks import HTTP_TIMEOUT_SECONDS, SIGNATURE_HEADER
+from angee.integrate.http import HTTP_TIMEOUT_SECONDS
+from angee.integrate.webhooks import SIGNATURE_HEADER
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,
@@ -70,6 +71,11 @@ class FakeResponse:
         """Store the HTTP status exposed by http.client responses."""
 
         self.status = status
+
+    def read(self) -> bytes:
+        """Return an empty body — webhook delivery inspects only the status."""
+
+        return b""
 
 
 @pytest.fixture()
@@ -354,7 +360,7 @@ def test_deliver_event_rejects_unsafe_resolved_target_without_connecting(
     assert connections == []
     assert subscription.consecutive_failures == 1
     assert subscription.last_delivery_status == ""
-    assert "Webhook URL host must resolve only to public IP addresses." in subscription.last_error
+    assert "URL host resolves to an address that is not allowed." in subscription.last_error
 
 
 @pytest.mark.django_db(transaction=True)
@@ -497,8 +503,8 @@ def _record_connections(
 
             self.closed = True
 
-    monkeypatch.setattr("angee.integrate.webhooks._PinnedHTTPConnection", RecordingConnection)
-    monkeypatch.setattr("angee.integrate.webhooks._PinnedHTTPSConnection", RecordingConnection)
+    monkeypatch.setattr("angee.integrate.http._PinnedHTTPConnection", RecordingConnection)
+    monkeypatch.setattr("angee.integrate.http._PinnedHTTPSConnection", RecordingConnection)
     return connections
 
 

@@ -8,6 +8,7 @@ columns and delegates kind-specific behavior here.
 
 from __future__ import annotations
 
+import base64
 import json
 from datetime import datetime, timedelta
 from typing import Any, ClassVar
@@ -24,6 +25,7 @@ class CredentialKind(models.TextChoices):
     OAUTH = "oauth", "OAuth"
     STATIC_TOKEN = "static_token", "Static Token"
     SSH_KEY = "ssh_key", "SSH Key"
+    BASIC_AUTH = "basic_auth", "Basic Auth"
 
 
 class CredentialKindHandler:
@@ -34,6 +36,16 @@ class CredentialKindHandler:
     """The single secret key this kind stores — also the `CredentialInput` field
     that carries it (e.g. ``api_key``). This handler owns the kind↔secret mapping;
     callers ask the handler rather than switching on ``kind`` themselves."""
+    material_fields: ClassVar[tuple[str, ...]] = ()
+    """The credential-input fields this kind reads into its material when it stores
+    more than one (e.g. ``("username", "password")``); empty means just
+    ``material_field``. The handler owns its input shape, so the create resolver
+    never switches on ``kind``."""
+
+    def input_material_fields(self) -> tuple[str, ...]:
+        """Return the credential-input field names this kind reads into its material."""
+
+        return self.material_fields or (self.material_field,)
 
     def validate(self, material: dict[str, Any]) -> None:
         """Require the kind's secret material before it is stored."""
@@ -228,6 +240,37 @@ class SshKeyCredentialHandler(CredentialKindHandler):
         """SSH keys do not expire through a refresh flow."""
 
 
+class BasicAuthCredentialHandler(CredentialKindHandler):
+    """Handler for HTTP Basic-auth material — a username and a password.
+
+    Both halves live together in the encrypted ``material`` JSON; the password is
+    the primary secret (``material_field``) and the username rides alongside.
+    Used by a connection that authenticates its REST inventory with Basic auth,
+    such as a CardDAV directory or an IMAP host.
+    """
+
+    kind = "basic_auth"
+    material_field = "password"
+    material_fields = ("username", "password")
+
+    def validate(self, material: dict[str, Any]) -> None:
+        """Require both a username and a password before storing the credential."""
+
+        if not material.get("username") or not material.get("password"):
+            raise ValueError("basic_auth credential material requires a username and password.")
+
+    def auth_headers(self, credential: Any) -> dict[str, str]:
+        """Return an HTTP Basic ``Authorization`` header from the username and password."""
+
+        material = self.reveal(credential)
+        raw = f"{material.get('username', '')}:{material.get('password', '')}".encode()
+        return {"Authorization": f"Basic {base64.b64encode(raw).decode('ascii')}"}
+
+    def refresh(self, credential: Any) -> None:
+        """Basic-auth credentials do not expire through a refresh flow."""
+
+
 register_handler(OAuthCredentialHandler())
 register_handler(StaticTokenCredentialHandler())
 register_handler(SshKeyCredentialHandler())
+register_handler(BasicAuthCredentialHandler())
