@@ -248,10 +248,11 @@ class Runtime:
         the concrete parent when present, then the source, and pins
         ``Meta.abstract = False`` with ``app_label = label`` — so the generated
         class registers under the source addon's label when the composer imports
-        ``runtime.<label>.models``. Library-owned ``Meta`` facts ride along
-        (``db_table``, ``swappable``, REBAC options), and ``HistoryMixin``
-        models gain a ``HistoricalRecords`` field. Field collisions across the
-        composed bases are rejected at construction
+        ``runtime.<label>.models``. Django-owned ``Meta`` facts ride along
+        through ``class Meta(_SourceMeta)``; REBAC Meta options are re-emitted
+        because Django discards non-standard Meta attributes.
+        ``HistoryMixin`` models gain a ``HistoricalRecords`` field. Field
+        collisions across the composed bases are rejected at construction
         (``_check_field_collisions``).
         """
 
@@ -318,12 +319,6 @@ class Runtime:
                 "        abstract = False",
                 f"        app_label = {label!r}",
             ]
-            db_table = self._db_table_source(model_class)
-            if db_table is not None:
-                meta_lines.append(f"        db_table = {db_table}")
-            swappable = self._swappable_source(model_class)
-            if swappable is not None:
-                meta_lines.append(f"        swappable = {swappable}")
             meta_lines.extend(self._rebac_meta_source(model_class))
             body_lines = self._history_source(label, model_class)
             decorator_lines = [
@@ -692,25 +687,6 @@ class Runtime:
             if value is not None:
                 lines.append(f"        {attr} = {value!r}")
         return lines
-
-    def _db_table_source(self, model_class: type[models.Model]) -> str | None:
-        """Return an explicit source ``db_table`` override."""
-
-        original = getattr(model_class._meta, "original_attrs", {})
-        if "db_table" in original:
-            return repr(str(original["db_table"]))
-        return None
-
-    def _swappable_source(
-        self,
-        model_class: type[models.Model],
-    ) -> str | None:
-        """Return an explicit source ``swappable`` setting."""
-
-        swappable = getattr(model_class._meta, "swappable", None)
-        if swappable:
-            return repr(str(swappable))
-        return None
 
     def _history_excluded_fields(
         self,
