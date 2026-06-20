@@ -9,6 +9,7 @@ import { useOperatorT } from "../../i18n";
 import { useOperatorSnapshot } from "../../data/transport";
 import type { WorkspaceRef, WorkspaceSourceStatus } from "../../data/types";
 import { workspaceDetailPath } from "../../lib/paths";
+import { daemonRows, daemonRowsByName, type DaemonRow } from "../parts/daemon-rows";
 import { OperatorSection } from "../parts/OperatorSection";
 import { RowActions } from "../parts/RowActions";
 import { StateTag } from "../parts/StateTag";
@@ -17,9 +18,8 @@ import {
   type WorkspaceRowAction,
 } from "./workspace-actions";
 
-// RowsListView keys rows by `id`; the daemon identifies a workspace by name.
-type WorkspaceRowData = WorkspaceRef & { id: string };
-type WorkspaceSourceRowData = WorkspaceSourceStatus & { id: string };
+type WorkspaceRowData = DaemonRow<WorkspaceRef>;
+type WorkspaceSourceRowData = DaemonRow<WorkspaceSourceStatus>;
 
 export interface WorkspacesSectionProps {
   /** Restrict the list to these workspace names; omit to show every workspace. */
@@ -30,13 +30,10 @@ export interface WorkspacesSectionProps {
 export function WorkspacesSection({ names }: WorkspacesSectionProps = {}): ReactNode {
   const t = useOperatorT();
   const { snapshot, result } = useOperatorSnapshot({ workspaces: true });
-
-  const rows = useMemo<readonly WorkspaceRowData[]>(
-    () =>
-      (snapshot?.workspaces ?? [])
-        .filter((workspace) => names === undefined || names.includes(workspace.name))
-        .map((workspace) => ({ ...workspace, id: workspace.name })),
-    [names, snapshot],
+  const rows = daemonRowsByName(
+    (snapshot?.workspaces ?? []).filter(
+      (workspace) => names === undefined || names.includes(workspace.name),
+    ),
   );
 
   const columns = useMemo<readonly ListColumn<WorkspaceRowData>[]>(
@@ -139,15 +136,7 @@ export function WorkspaceSources({
   emptyMessage,
 }: WorkspaceSourcesProps): ReactNode {
   const t = useOperatorT();
-
-  const rows = useMemo<readonly WorkspaceSourceRowData[]>(
-    () =>
-      sources.map((source) => ({
-        ...source,
-        id: `${source.slot}:${source.source}`,
-      })),
-    [sources],
-  );
+  const rows = daemonRows(sources, (source) => `${source.slot}:${source.source}`);
 
   const columns = useMemo<readonly ListColumn<WorkspaceSourceRowData>[]>(
     () => [

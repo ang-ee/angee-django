@@ -20,6 +20,7 @@ import {
 import { useOperatorT } from "../../i18n";
 import { useOperatorAction, useOperatorSnapshot } from "../../data/transport";
 import type { JobState } from "../../data/types";
+import { daemonRowsByName, type DaemonRow } from "../parts/daemon-rows";
 import { useRunDaemonAction } from "../parts/run-action";
 
 /** A stack lifecycle control: its label, tone, variables, and handler. */
@@ -32,19 +33,14 @@ interface StackAction {
   perform: () => Promise<boolean>;
 }
 
-// RowsListView keys rows by `id`; the daemon identifies a job by name.
-type JobRowData = JobState & { id: string };
+type JobRowData = DaemonRow<JobState>;
 
 /** Operations pane: the daemon job list with run + stack lifecycle controls. */
 export function OperationsSection(): ReactNode {
   const t = useOperatorT();
   const { snapshot, result, refetch } = useOperatorSnapshot({ operations: true });
   const { runJob, stackActions, runStack, busy } = useOperationActions(refetch);
-
-  const rows = useMemo<readonly JobRowData[]>(
-    () => (snapshot?.jobs ?? []).map((job) => ({ ...job, id: job.name })),
-    [snapshot],
-  );
+  const rows = daemonRowsByName(snapshot?.jobs ?? []);
 
   const columns = useMemo<readonly ListColumn<JobRowData>[]>(
     () => [

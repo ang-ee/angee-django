@@ -15,10 +15,10 @@ import {
 } from "../../data/documents.daemon";
 import { useOperatorAction, useOperatorSnapshot } from "../../data/transport";
 import type { SecretRef } from "../../data/types";
+import { daemonRowsByName, type DaemonRow } from "../parts/daemon-rows";
 import { useRunDaemonAction } from "../parts/run-action";
 
-// RowsListView keys rows by `id`; the daemon identifies a secret by name.
-type SecretRowData = SecretRef & { id: string };
+type SecretRowData = DaemonRow<SecretRef>;
 
 /** Secrets pane: declared secrets (presence only) + set (via a prompt) / delete. */
 export function SecretsSection(): ReactNode {
@@ -26,11 +26,7 @@ export function SecretsSection(): ReactNode {
   const prompt = usePrompt();
   const { snapshot, result, refetch } = useOperatorSnapshot({ secrets: true });
   const { setSecret, deleteSecret, busy } = useSecretActions(refetch);
-
-  const rows = useMemo<readonly SecretRowData[]>(
-    () => (snapshot?.secrets ?? []).map((secret) => ({ ...secret, id: secret.name })),
-    [snapshot],
-  );
+  const rows = daemonRowsByName(snapshot?.secrets ?? []);
 
   // The set form is a prompt (a form surface), not a panel crammed above the list.
   // A row's name pre-fills it; the toolbar action collects an arbitrary name.

@@ -5,20 +5,16 @@ import { useOperatorT } from "../../i18n";
 import { useOperatorSnapshot } from "../../data/transport";
 import type { SourceState } from "../../data/types";
 import { sourceDetailPath } from "../../lib/paths";
+import { daemonRowsByName, type DaemonRow } from "../parts/daemon-rows";
 import { StateTag } from "../parts/StateTag";
 
-// RowsListView keys rows by `id`; the daemon identifies a source by name.
-type SourceRowData = SourceState & { id: string };
+type SourceRowData = DaemonRow<SourceState>;
 
 /** Sources pane: cached git/local sources with a drift readout. Rows open the source detail page. */
 export function SourcesSection(): ReactNode {
   const t = useOperatorT();
   const { snapshot, result } = useOperatorSnapshot({ sources: true });
-
-  const rows = useMemo<readonly SourceRowData[]>(
-    () => (snapshot?.sources ?? []).map((source) => ({ ...source, id: source.name })),
-    [snapshot],
-  );
+  const rows = daemonRowsByName(snapshot?.sources ?? []);
 
   const columns = useMemo<readonly ListColumn<SourceRowData>[]>(
     () => [
