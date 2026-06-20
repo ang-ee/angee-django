@@ -47,9 +47,6 @@ export function useServiceActions(refetch: () => void): {
     destroy.result.fetching;
 
   const actions = useMemo<readonly ServiceRowAction[]>(() => {
-    const setError = (message: string | null): void => {
-      if (message) toast.danger({ title: message });
-    };
     const named = (
       field: string,
       label: string,
@@ -75,7 +72,7 @@ export function useServiceActions(refetch: () => void): {
             field,
             variables: { name: service.name },
             label,
-            setError,
+            toast,
             refetch,
           });
         })();
@@ -97,7 +94,7 @@ export function useServiceActions(refetch: () => void): {
             // rebuilds an image, so scope `stackUp` to this one service.
             variables: { input: { services: [service.name], build: true } },
             label: t("operator.services.recreate"),
-            setError,
+            toast,
             refetch,
           });
         },

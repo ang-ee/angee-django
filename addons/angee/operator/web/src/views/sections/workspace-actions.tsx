@@ -36,9 +36,6 @@ export function useWorkspaceActions(refetch: () => void): {
   const busy = syncBase.result.fetching || destroy.result.fetching;
 
   const actions = useMemo<readonly WorkspaceRowAction[]>(() => {
-    const setError = (message: string | null): void => {
-      if (message) toast.danger({ title: message });
-    };
     return [
       {
         label: t("operator.workspaces.syncBase"),
@@ -49,7 +46,7 @@ export function useWorkspaceActions(refetch: () => void): {
             field: "workspaceSyncBase",
             variables: { name: workspace.name },
             label: t("operator.workspaces.syncBase"),
-            setError,
+            toast,
             refetch,
           });
         },
@@ -71,7 +68,7 @@ export function useWorkspaceActions(refetch: () => void): {
               field: "workspaceDestroy",
               variables: { name: workspace.name, purge: false },
               label: t("operator.workspaces.destroy"),
-              setError,
+              toast,
               refetch,
             });
           })();

@@ -143,13 +143,6 @@ function useOperationActions(refetch: () => void): {
     destroy.result.fetching ||
     jobRun.result.fetching;
 
-  const setError = useMemo(
-    () => (message: string | null): void => {
-      if (message) toast.danger({ title: message });
-    },
-    [toast],
-  );
-
   const runJob = useMemo(
     () => (job: JobState) => {
       void runDaemonAction({
@@ -157,11 +150,11 @@ function useOperationActions(refetch: () => void): {
         field: "jobRun",
         variables: { name: job.name },
         label: t("operator.operations.run"),
-        setError,
+        toast,
         refetch,
       });
     },
-    [jobRun.run, refetch, setError, t],
+    [jobRun.run, refetch, t, toast],
   );
 
   const stackActions = useMemo<readonly StackAction[]>(
@@ -176,7 +169,7 @@ function useOperationActions(refetch: () => void): {
             field: "stackBuild",
             variables: {},
             label: t("operator.operations.stack.build"),
-            setError,
+            toast,
             refetch,
           }),
       },
@@ -190,7 +183,7 @@ function useOperationActions(refetch: () => void): {
             field: "stackUp",
             variables: {},
             label: t("operator.operations.stack.up"),
-            setError,
+            toast,
             refetch,
           }),
       },
@@ -204,7 +197,7 @@ function useOperationActions(refetch: () => void): {
             field: "stackDown",
             variables: {},
             label: t("operator.operations.stack.down"),
-            setError,
+            toast,
             refetch,
           }),
       },
@@ -219,12 +212,12 @@ function useOperationActions(refetch: () => void): {
             field: "stackDestroy",
             variables: { purge: false },
             label: t("operator.operations.stack.destroy"),
-            setError,
+            toast,
             refetch,
           }),
       },
     ],
-    [build.run, destroy.run, down.run, refetch, setError, t, up.run],
+    [build.run, destroy.run, down.run, refetch, t, toast, up.run],
   );
 
   const runStack = useMemo(

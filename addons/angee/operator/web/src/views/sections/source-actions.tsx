@@ -37,9 +37,6 @@ export function useSourceActions(refetch: () => void): {
   const busy = fetchSource.result.fetching || pull.result.fetching || push.result.fetching;
 
   const actions = useMemo<readonly SourceRowAction[]>(() => {
-    const setError = (message: string | null): void => {
-      if (message) toast.danger({ title: message });
-    };
     const defs: readonly {
       field: string;
       label: string;
@@ -59,7 +56,7 @@ export function useSourceActions(refetch: () => void): {
           field: def.field,
           variables: { name: source.name },
           label: def.label,
-          setError,
+          toast,
           refetch,
         });
       },

@@ -1,28 +1,29 @@
 import { errorMessage } from "@angee/sdk";
+import type { ToastApi } from "@angee/base";
 
 /** A daemon mutation payload keyed by its single root field (shape varies by op). */
 export type DaemonActionData = Record<string, unknown>;
 
-export interface RunDaemonActionParams<
+export type RunDaemonActionParams<
   Data extends object,
   V extends Record<string, unknown>,
-> {
+> = {
   run: (variables: V) => Promise<Data>;
   /** The mutation's root field whose presence confirms the action ran. */
   field: string;
   variables: V;
   label: string;
-  setError: (message: string | null) => void;
   refetch: () => void;
-}
+  toast: Pick<ToastApi, "danger">;
+};
 
 /**
- * Run a daemon mutation safely for a section pane: clear the prior error, run,
- * and surface a failure. The daemon reports failure as a GraphQL error (the
- * transport rejects), not an `ok:false` payload — so any returned root field is
- * a success, and a missing root field counts as failure rather than silent
- * success. Always refetches the snapshot; never leaves an unhandled rejection,
- * so a click handler can `void` it.
+ * Run a daemon mutation safely for a section pane: run, surface failures as
+ * toasts, and refetch. The daemon reports failure as a GraphQL error (the
+ * transport rejects), not an `ok:false` payload — so any returned root field
+ * counts as success, and a missing root field counts as failure rather than
+ * silent success. Never leaves an unhandled rejection, so a click handler can
+ * `void` it.
  */
 export async function runDaemonAction<
   Data extends object,
@@ -30,18 +31,17 @@ export async function runDaemonAction<
 >(
   params: RunDaemonActionParams<Data, V>,
 ): Promise<boolean> {
-  const { run, field, variables, label, setError, refetch } = params;
-  setError(null);
+  const { run, field, variables, label, refetch, toast } = params;
   let succeeded = true;
   try {
     const data = await run(variables);
     if ((data as Record<string, unknown>)[field] == null) {
       succeeded = false;
-      setError(`${label} returned no result.`);
+      toast.danger({ title: `${label} returned no result.` });
     }
   } catch (error) {
     succeeded = false;
-    setError(errorMessage(error, `${label} failed.`));
+    toast.danger({ title: errorMessage(error, `${label} failed.`) });
   } finally {
     refetch();
   }
