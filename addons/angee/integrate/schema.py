@@ -1008,12 +1008,11 @@ class IntegrateExternalAccountMutation:
     def update_external_account(self, data: ExternalAccountPatch) -> ExternalAccountType:
         """Update one external account's scalar identity fields."""
 
-        account = resolve_action_target(
+        with action_target(
             ExternalAccount,
             data.id,
             reason="integrate.graphql.external_account.update",
-        )
-        with system_context(reason="integrate.graphql.external_account.update"), transaction.atomic():
+        ) as account, transaction.atomic():
             for field in ("email", "display_name", "avatar_url", "status"):
                 value = getattr(data, field)
                 if value is not strawberry.UNSET:
@@ -1047,12 +1046,11 @@ class IntegrateCredentialMutation:
     def reveal_credential(self, id: PublicID) -> RevealedCredentialSecret:
         """Return one credential's decrypted secret for an admin to copy."""
 
-        credential = resolve_action_target(
+        with action_target(
             Credential,
             id,
             reason=f"integrate.graphql.credential.reveal:{str(id)}",
-        )
-        with system_context(reason=f"integrate.graphql.credential.reveal:{str(id)}"):
+        ) as credential:
             return RevealedCredentialSecret(secret=str(credential.secret_value() or ""))
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
@@ -1072,12 +1070,11 @@ class IntegrateCredentialMutation:
     def update_credential(self, data: CredentialPatch) -> CredentialType:
         """Update one credential's status."""
 
-        credential = resolve_action_target(
+        with action_target(
             Credential,
             data.id,
             reason="integrate.graphql.credential.update",
-        )
-        with system_context(reason="integrate.graphql.credential.update"), transaction.atomic():
+        ) as credential, transaction.atomic():
             if data.status is not strawberry.UNSET and data.status is not None:
                 credential.status = data.status
                 credential.save(update_fields=["status", "updated_at"])
@@ -1806,13 +1803,12 @@ class VcsBridgeUpdateMutation:
     def update_vcs_bridge(self, data: VcsBridgePatch) -> VcsBridgeType:
         """Update a VCS child row, rematerializing backend defaults on backend change."""
 
-        bridge = resolve_action_target(
+        backend_changed = False
+        with action_target(
             VcsBridge,
             data.id,
             reason="integrate.graphql.vcs_bridge.update",
-        )
-        backend_changed = False
-        with system_context(reason="integrate.graphql.vcs_bridge.update"), transaction.atomic():
+        ) as bridge, transaction.atomic():
             provided = apply_integration_patch_fields(
                 bridge,
                 data,
