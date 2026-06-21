@@ -96,6 +96,7 @@ class Agent(AbstractAgent):
 AGENTS_GRAPHQL_MODELS = (Skill, MCPServer, MCPTool, InferenceProvider, InferenceModel, Agent)
 
 # Imported only now that every agents concrete is registered.
+agents_provisioning = importlib.import_module("angee.agents.provisioning")
 agents_schema = importlib.import_module("angee.agents.schema")
 iam_schema = importlib.import_module("angee.iam.schema")
 integrate_schema = importlib.import_module("angee.integrate.schema")
@@ -554,7 +555,7 @@ def test_provision_agent_renders_via_daemon_and_is_admin_gated(agents_console_ta
         def destroy_workspace(self, name: str, *, purge: bool = True) -> None:
             calls.append(("destroy", name))
 
-    monkeypatch.setattr(agents_schema, "OperatorDaemon", _FakeDaemon)
+    monkeypatch.setattr(agents_provisioning, "OperatorDaemon", _FakeDaemon)
     original_mark_provisioned = Agent.mark_provisioned
 
     def mark_provisioned_with_recorded_service(self: Agent, *, workspace: str, service: str = "") -> None:
@@ -654,7 +655,7 @@ def test_provision_agent_failure_tears_down_workspace_and_records_error(
         def destroy_workspace(self, name: str) -> None:
             destroyed.append(name)
 
-    monkeypatch.setattr(agents_schema, "OperatorDaemon", _FailingDaemon)
+    monkeypatch.setattr(agents_provisioning, "OperatorDaemon", _FailingDaemon)
 
     result = _data(
         _execute(
@@ -706,7 +707,7 @@ def test_deprovision_agent_treats_missing_operator_instances_as_gone(
             calls.append(("destroy_workspace", name))
             raise OperatorDaemonNotFound(f'operator POST destroy?purge=true: HTTP 404: workspace "{name}" is not found')
 
-    monkeypatch.setattr(agents_schema, "OperatorDaemon", _MissingDaemon)
+    monkeypatch.setattr(agents_provisioning, "OperatorDaemon", _MissingDaemon)
 
     result = _data(
         _execute(
@@ -748,7 +749,7 @@ def test_provision_agent_records_error_when_plan_resolution_fails(
     def _boom(_agent: Any) -> Any:
         raise RuntimeError("credential is unreadable")
 
-    monkeypatch.setattr(agents_schema, "_render_plan", _boom)
+    monkeypatch.setattr(agents_provisioning, "_render_plan", _boom)
 
     result = _data(
         _execute(
@@ -804,7 +805,7 @@ def test_reprovision_agent_recreates_service_over_existing_workspace(
             calls.append(("create_service", template, workspace))
             return "svc-new"
 
-    monkeypatch.setattr(agents_schema, "OperatorDaemon", _FakeDaemon)
+    monkeypatch.setattr(agents_provisioning, "OperatorDaemon", _FakeDaemon)
 
     reprovision = "mutation($id: ID!){ reprovisionAgent(id: $id){ ok message } }"
     assert _execute(console := _schema(), reprovision, {"id": agent_id}, user=plain).errors is not None
@@ -861,7 +862,7 @@ def test_reprovision_agent_failure_clears_destroyed_service_but_keeps_workspace(
         ) -> str:
             raise RuntimeError("service recreate failed")
 
-    monkeypatch.setattr(agents_schema, "OperatorDaemon", _FailingDaemon)
+    monkeypatch.setattr(agents_provisioning, "OperatorDaemon", _FailingDaemon)
 
     result = _data(
         _execute(
@@ -911,7 +912,7 @@ def test_provision_agent_refuses_when_inference_credential_has_no_secret(
             called.append("from_settings")
             return cls()
 
-    monkeypatch.setattr(agents_schema, "OperatorDaemon", _UnusedDaemon)
+    monkeypatch.setattr(agents_provisioning, "OperatorDaemon", _UnusedDaemon)
 
     result = _data(
         _execute(
