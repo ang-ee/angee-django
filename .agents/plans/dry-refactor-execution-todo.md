@@ -137,13 +137,24 @@ These came from the June 20 read-only analyzer pass requested after E15. Treat
 them as drawing-board candidates: each needs the slice gate before edits, and
 P0/P1 items should run reviewers against the owner choice before implementation.
 
+### Paid-Down Analyzer Findings
+
+These findings are no longer untouched. Do not reopen them at their original
+scope; use the narrowed follow-up only when a fresh slice can still delete code.
+
+| ID | Status | Evidence | Remaining follow-up |
+|---|---|---|---|
+| H2 | Partially paid down | S51 moved inherited Integration field write/coercion to integrate-owned helpers. | A future child lifecycle owner is only warranted if VCS/inference/backend defaults still duplicate after the next child-model pass. |
+| H3 | Partially paid down | S20 introduced `action_target()`; S55 converted the remaining exact resolve-then-enter-context copies in agents/integrate. | Consider model-owned action methods per domain; avoid a generic `run_action()` unless it deletes failure/result boilerplate without hiding validation. |
+| H8 | Partially paid down | S53 and S54 moved operator daemon action binding and row projection to operator-owned helpers. | A larger `OperatorSnapshotRows` remains possible, but only operator-local unless a second non-daemon remote collection proves the base primitive. |
+| H10 | Partially paid down | S1 made SDK mutation busy state promise-owned; S53 bound operator daemon action side effects once. | Cross-addon action-state orchestration still needs API approval; do not make every payload fit one runner. |
+| H11 | Closed | `DrawerDataPage` owner plus S33 removed drawer-wrapper duplication in storage/knowledge/integrate templates. | None; reopen only for a new drawer-mode duplication. |
+
 ### Backend / Library Ownership
 
 | ID | Priority | Owner candidate | Finding | Lower-surface target | Decision |
 |---|---:|---|---|---|---|
 | H1 | P1 | `agents.provisioning` service or `Agent` manager | Agent provisioning, rollback, secret sync, and daemon orchestration live in GraphQL resolvers. | Move provisioning/reprovision/deprovision work out of `agents/schema.py`; resolvers dispatch and return `ActionResult`. | Light architect approval on service vs manager shape. |
-| H2 | P1 | Integration child lifecycle helper/manager | Integration, VCS bridge, and inference provider create/update repeat parent-field resolution, impl defaults, and patch handling. | One integrate-owned child lifecycle owner that accepts plain mappings/dataclasses, not Strawberry inputs. | Architect approval before setting future child pattern. |
-| H3 | P2 | `angee.graphql.actions` + model methods | Action mutations repeat target lookup, `system_context`, and failure-to-`ActionResult` glue. | Small `run_action(...)` helper or model-owned action methods; keep permission/validation errors explicit. | No approval if kept small. |
 | H4 | P2 | `django-zed-rebac` adapter | GraphQL permission guards repeat `current_actor`/`check_field_access` shapes. | Tiny `current_actor_can(...)` or parameterized `RebacObjectPermission`. | Approval if IAM/admin semantics change. |
 | H5 | P2 | HTTP stack owner | OAuth, operator, GitHub, and webhooks carry parallel outbound HTTP/security behavior. | Decide stdlib helper vs locked HTTP dependency; preserve URL safety/IP pinning. | Stack-owner decision required. |
 | H6 | P3 | Resource adoption owner | Resource loader interprets Django uniqueness/conditional constraints directly. | Prefer model-owned natural/adoption key hooks or import-export-native identity where exact. | Public resource semantics decision required. |
@@ -153,10 +164,7 @@ P0/P1 items should run reviewers against the owner choice before implementation.
 | ID | Priority | Owner candidate | Finding | Lower-surface target | Decision |
 |---|---:|---|---|---|---|
 | H7 | P0 | `@angee/base` rows + SDK authored hooks | Authored-query row pages repeat query/project/`RowsListView` wiring. | `AuthoredRowsView` or `useAuthoredRows` that owns state and list wiring while row projection/columns stay local. | API name/shape approval useful. |
-| H8 | P0 | Operator-local first; maybe base remote collection later | Operator daemon sections are a parallel DataPage world. | `SnapshotSection`/`OperatorSnapshotRows` for snapshot slice, rows, href, empty/group wiring. | Decide operator-only vs base remote collection. |
 | H9 | P1 | Base explorer/tree primitive | Storage and knowledge share tree/explorer page skeletons. | Declarative `TreeExplorerPage` shell with collection picker, selected route id, loading/not-found/drop hooks. | Architect approval. |
-| H10 | P1 | SDK/base action runner | IAM/operator bespoke pending/error/refetch runners sit beside `useBusyRun`. | Shared action-state orchestrator; do not interpret every payload. | Approval if public cross-addon API. |
-| H11 | P2 | `DataPage` drawer mode | Drawer DataPage control state is repeated in storage, knowledge, integrate templates. | Self-controlled `DrawerDataPage`/managed drawer mode. | No approval. |
 | H12 | P2 | Base state fragments | List/graph error banners and dynamic labels drift from shared fragments/i18n. | Use shared `ErrorBanner`/state fragments and add small guard tests where useful. | No approval. |
 
 ### Naming / Architecture Forks
