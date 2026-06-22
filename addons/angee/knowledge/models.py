@@ -19,7 +19,6 @@ from django.conf import settings
 from django.db import IntegrityError, models, transaction
 from rebac import PermissionDenied, system_context, to_subject_ref
 
-from angee.base.fields import SqidField
 from angee.base.mixins import AuditMixin, HistoryMixin, RevisionMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel
 
@@ -71,7 +70,7 @@ class Vault(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
 
     runtime = True
 
-    sqid = SqidField(real_field_name="id", prefix="vlt_", min_length=8)
+    sqid_prefix = "vlt_"
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
@@ -136,6 +135,8 @@ class Page(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
 
     runtime = True
 
+    sqid_prefix = "pg_"
+
     class Kind(models.TextChoices):
         """Built-in page kinds.
 
@@ -148,7 +149,6 @@ class Page(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
         FOLDER = "folder", "Folder"
         TEMPLATE = "template", "Template"
 
-    sqid = SqidField(real_field_name="id", prefix="pg_", min_length=8)
     vault = models.ForeignKey(
         "knowledge.Vault",
         on_delete=models.CASCADE,
@@ -242,13 +242,14 @@ class MarkdownPage(SqidMixin, AuditMixin, AngeeModel, RevisionMixin):
 
     revisioned_fields = ("body",)
 
+    sqid_prefix = "mdp_"
+
     page_kinds: ClassVar[tuple[str, ...]] = cast("tuple[str, ...]", (Page.Kind.NOTE, Page.Kind.TEMPLATE))
     """Page kinds that carry a markdown body sidecar."""
 
     excerpt_chars: ClassVar[int] = 180
     """Number of body characters surfaced by :attr:`excerpt`."""
 
-    sqid = SqidField(real_field_name="id", prefix="mdp_", min_length=8)
     page = models.OneToOneField(
         "knowledge.Page",
         on_delete=models.CASCADE,
@@ -353,7 +354,7 @@ class Link(SqidMixin, AngeeModel):
 
     runtime = True
 
-    sqid = SqidField(real_field_name="id", prefix="lnk_", min_length=8)
+    sqid_prefix = "lnk_"
     source_page = models.ForeignKey(
         "knowledge.Page",
         on_delete=models.CASCADE,

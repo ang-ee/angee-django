@@ -44,10 +44,16 @@ class SqidField(SqidsField):
     """Angee's opaque public id column, declared as ``django-sqids`` glue.
 
     ``docs/stack.md`` names ``django-sqids`` the owner of opaque external ids;
-    this wrapper only makes the decoder total: ``from_db_value`` receives
-    ``None`` when the encoded column arrives through a nullable join — e.g.
-    ``values_list("parent__sqid")`` over a nullable self-FK, the shape REBAC
-    field-backed arrows query — and upstream encodes unconditionally there.
+    this wrapper makes the decoder total and lets a model state only the one
+    fact that varies between models — the prefix. A model declares
+    ``sqid_prefix = "nte_"`` (``SqidMixin`` exposes the attribute and the shared
+    column); the field reads it in ``contribute_to_class`` rather than every
+    model re-declaring the whole column. An explicit ``prefix=`` still wins.
+
+    Totality: ``from_db_value`` receives ``None`` when the encoded column
+    arrives through a nullable join — e.g. ``values_list("parent__sqid")`` over
+    a nullable self-FK, the shape REBAC field-backed arrows query — and upstream
+    encodes unconditionally there.
     """
 
     def __init__(self, *args: Any, prefix: str = "", **kwargs: Any) -> None:
@@ -56,13 +62,36 @@ class SqidField(SqidsField):
         self._angee_declared_prefix = prefix
         super().__init__(*args, prefix=self._canonical_prefix(prefix), **kwargs)
 
+    def contribute_to_class(self, cls: type[models.Model], name: str) -> None:
+        """Resolve the prefix from the model's ``<field>_prefix`` when unset.
+
+        Lets ``SqidMixin``'s one shared column serve every model: each model
+        states only ``sqid_prefix = "nte_"`` and the inherited field picks it up
+        here. ``sqid`` is a private, non-concrete column, so this never reaches a
+        migration — it only shapes how the id encodes.
+        """
+
+        super().contribute_to_class(cls, name)
+        if not self._angee_declared_prefix:
+            declared = getattr(cls, f"{name}_prefix", "")
+            if not isinstance(declared, str):
+                raise ImproperlyConfigured(
+                    f"{cls.__name__}.{name}_prefix must be a str, got {type(declared).__name__}."
+                )
+            self.prefix = self._canonical_prefix(declared)
+
     def deconstruct(self) -> tuple[str | None, str, list[Any], dict[str, Any]]:
-        """Serialize the full public-id contract for generated/runtime models."""
+        """Serialize the full public-id contract for generated/runtime models.
+
+        Emits the *resolved* ``prefix`` (not the declared one), so an emitted or
+        migration-state model carries the full prefix without needing the
+        source's ``sqid_prefix`` class attribute.
+        """
 
         name, path, args, kwargs = super().deconstruct()
         kwargs["real_field_name"] = self.real_field_name
-        if self._angee_declared_prefix:
-            kwargs["prefix"] = self._angee_declared_prefix
+        if self.prefix:
+            kwargs["prefix"] = self.prefix
         if self.min_length is not None:
             kwargs["min_length"] = self.min_length
         if self.alphabet is not None:

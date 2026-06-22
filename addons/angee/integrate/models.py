@@ -47,7 +47,7 @@ from rebac.managers import RebacManager, RebacQuerySet
 from rebac.models import active_relationship_model
 from strawberry_django.descriptors import model_property
 
-from angee.base.fields import EncryptedField, ImplClassField, SqidField, StateField
+from angee.base.fields import EncryptedField, ImplClassField, StateField
 from angee.base.impl import ImplDefaultsMixin
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel
@@ -234,7 +234,7 @@ class OAuthClient(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
 
     runtime = True
 
-    sqid = SqidField(real_field_name="id", prefix="clt_", min_length=8)
+    sqid_prefix = "clt_"
     slug = models.SlugField()
     provider_type = ImplClassField(
         base_class=OAuthProviderType,
@@ -609,7 +609,7 @@ class ExternalAccount(SqidMixin, AuditMixin, AngeeModel):
 
     runtime = True
 
-    sqid = SqidField(real_field_name="id", prefix="eac_", min_length=8)
+    sqid_prefix = "eac_"
     oauth_client = models.ForeignKey(
         "integrate.OAuthClient",
         on_delete=models.PROTECT,
@@ -899,7 +899,7 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
 
     runtime = True
 
-    sqid = SqidField(real_field_name="id", prefix="crd_", min_length=8)
+    sqid_prefix = "crd_"
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -1116,7 +1116,7 @@ class Vendor(SqidMixin, AuditMixin, AngeeModel):
 
     runtime = True
 
-    sqid = SqidField(real_field_name="id", prefix="vnd_", min_length=8)
+    sqid_prefix = "vnd_"
     slug = models.SlugField(unique=True)
     display_name = models.CharField(max_length=128)
     website_url = models.URLField(blank=True)
@@ -1179,7 +1179,7 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
 
     runtime = True
 
-    sqid = SqidField(real_field_name="id", prefix="int_", min_length=8)
+    sqid_prefix = "int_"
     # Operator-given label (the connect flow sets it); blank falls back to the
     # vendor-derived :attr:`display_label`. The one human name for every child
     # (directory, channel, …), so it is not re-buried in each child's config.
@@ -1596,7 +1596,7 @@ class Repository(SqidMixin, AuditMixin, AngeeModel):
 
     runtime = True
 
-    sqid = SqidField(real_field_name="id", prefix="repo_", min_length=8)
+    sqid_prefix = "repo_"
     vcs_bridge = models.ForeignKey(
         "integrate.VcsBridge",
         on_delete=models.CASCADE,
@@ -1647,7 +1647,7 @@ class Source(SqidMixin, AuditMixin, AngeeModel):
 
     runtime = True
 
-    sqid = SqidField(real_field_name="id", prefix="src_", min_length=8)
+    sqid_prefix = "src_"
     repository = models.ForeignKey("integrate.Repository", on_delete=models.CASCADE, related_name="sources")
     kind = models.CharField(max_length=64)
     """The source kind (e.g. ``template``, ``skill``); resolves to an output model."""
@@ -1754,7 +1754,7 @@ class Template(SqidMixin, AuditMixin, AngeeModel):
     source_kind = "template"
     """Binds the ``template`` source kind to this output model (see ``registry``)."""
 
-    sqid = SqidField(real_field_name="id", prefix="tpl_", min_length=8)
+    sqid_prefix = "tpl_"
     source = models.ForeignKey("integrate.Source", on_delete=models.CASCADE, related_name="templates")
     name = models.CharField(max_length=255, blank=True)
     kind = models.CharField(max_length=64, blank=True)
@@ -1833,7 +1833,7 @@ class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
 
     runtime = True
 
-    sqid = SqidField(real_field_name="id", prefix="whs_", min_length=8)
+    sqid_prefix = "whs_"
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,

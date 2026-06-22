@@ -19,7 +19,6 @@ from rebac.managers import RebacManager
 from rebac.permissions_mixin import RebacPermissionsMixin
 from rebac.roles import grant, revoke
 
-from angee.base.fields import SqidField
 from angee.base.mixins import SqidMixin
 from angee.base.models import AngeeModel
 
@@ -115,9 +114,10 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
 
     runtime = True
 
+    sqid_prefix = "usr_"
+
     username_validator = UnicodeUsernameValidator()
 
-    sqid = SqidField(real_field_name="id", prefix="usr_", min_length=8)
     username = models.CharField(
         max_length=150,
         unique=True,

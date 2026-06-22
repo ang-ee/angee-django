@@ -10,6 +10,7 @@ from django.db.models import F, Value
 from django.db.models.functions import Concat
 
 from angee.base.fields import EncryptedField, SqidField, _derive_fernet
+from angee.base.mixins import SqidMixin
 
 
 @pytest.mark.django_db(transaction=True)
@@ -429,3 +430,45 @@ def test_sqid_field_deconstruct_preserves_public_id_contract() -> None:
     assert kwargs["prefix"] == "abc_"
     assert kwargs["real_field_name"] == "id"
     assert kwargs["min_length"] == 8
+
+
+@pytest.mark.django_db(transaction=True)
+def test_sqid_mixin_resolves_prefix_from_sqid_prefix_attr() -> None:
+    """A model states only ``sqid_prefix``; the shared field reads it."""
+
+    class PrefixedThing(SqidMixin):
+        """Concrete model declaring only its public-id prefix."""
+
+        sqid_prefix = "abc_"
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(PrefixedThing)
+    try:
+        thing = PrefixedThing.objects.create()
+
+        assert PrefixedThing._meta.get_field("sqid").prefix == "abc_"
+        assert str(thing.sqid).startswith("abc_")
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(PrefixedThing)
+
+
+def test_sqid_field_rejects_non_string_prefix() -> None:
+    """A non-string ``sqid_prefix`` fails loudly at class definition."""
+
+    with pytest.raises(ImproperlyConfigured, match="sqid_prefix must be a str"):
+
+        class BadPrefixThing(SqidMixin):
+            """Model misconfiguring its public-id prefix."""
+
+            sqid_prefix = 5  # type: ignore[assignment]
+
+            class Meta:
+                """Django model options for the test model."""
+
+                app_label = "auth"

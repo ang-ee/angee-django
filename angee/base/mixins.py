@@ -52,9 +52,17 @@ class TimestampMixin(models.Model):
 
 
 class SqidMixin(models.Model):
-    """Add an opaque public identifier backed by the model primary key."""
+    """Add an opaque public identifier backed by the model primary key.
 
-    sqid = SqidField(real_field_name="id")
+    A model sets only the varying fact — its prefix — as ``sqid_prefix``
+    (e.g. ``sqid_prefix = "nte_"``); the shared ``sqid`` column reads it (see
+    ``SqidField.contribute_to_class``), so no model re-declares the field.
+    """
+
+    sqid_prefix: ClassVar[str] = ""
+    """Public-id prefix for ``sqid`` (e.g. ``"nte_"``); empty means no prefix."""
+
+    sqid = SqidField(real_field_name="id", min_length=8)
     """Opaque public identifier encoded from the integer primary key."""
 
     class Meta:

@@ -401,9 +401,12 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   `base`) or `resources load` fails with `no such table: resources_resource`.
 - **A resource yaml loads only when listed** in the addon's `AppConfig.resources`
   manifest (`{tier: (paths,)}`); an unlisted file silently loads nothing.
-- **Use `angee.base.fields.SqidField`** on any model whose sqid can be selected
-  through a nullable join — `django_sqids.SqidsField` crashes on a NULL (REBAC
-  `// rebac:field=` arrows run over nullable FKs).
+- **Give a model an opaque public id by mixing in `SqidMixin` and declaring
+  `sqid_prefix = "abc_"`** — the one fact that varies per model. The shared
+  `angee.base.fields.SqidField` reads that prefix in `contribute_to_class`; don't
+  re-declare the column. The field is NULL-safe by design, because a sqid can be
+  selected through a nullable join where `django_sqids.SqidsField` crashes on a
+  NULL (REBAC `// rebac:field=` arrows run over nullable FKs).
 - **A status field is read/write-asymmetric** — GraphQL serializes it on read as
   the uppercase enum NAME (`ACTIVE`) but the writable `Patch.status` `String`
   takes the lowercase model value (`"disabled"`).
