@@ -170,6 +170,9 @@ def test_console_data_query_metadata_declares_integration_surface() -> None:
     assert metadata.relation_axes[0].model_label == "integrate.Vendor"
     assert metadata.relation_axes[0].public_id_field == "sqid"
     assert metadata.relation_axes[0].label_axis == "vendor__display_name"
+    assert metadata.group_aliases[0].field == "impl_category"
+    assert metadata.group_aliases[0].aggregate_field == "impl_class"
+    assert metadata.group_aliases[0].aggregate_key == "impl_class"
     serialized = console_schema._schema.extensions["angee"]["dataQueries"]
     integration = {
         item["modelLabel"]: item
@@ -188,6 +191,13 @@ def test_console_data_query_metadata_declares_integration_surface() -> None:
             "modelLabel": "integrate.Vendor",
             "publicIdField": "sqid",
             "labelAxis": "vendor_DisplayName",
+        }
+    ]
+    assert integration["groupAliases"] == [
+        {
+            "field": "implCategory",
+            "aggregateField": "implClass",
+            "aggregateKey": "implClass",
         }
     ]
 

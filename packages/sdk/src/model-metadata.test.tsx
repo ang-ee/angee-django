@@ -371,7 +371,12 @@ describe("fieldMetadataFromSDL", () => {
     const metadata = fieldMetadataFromSDL(
       /* GraphQL */ `
         type ProviderType { id: ID! name: String! }
-        type ModelType { id: ID! provider: ProviderType }
+        type ModelType {
+          id: ID!
+          provider: ProviderType
+          implCategory: String!
+          implClass: String!
+        }
         type ModelTypeOffsetPaginated { results: [ModelType!]! }
         input LegacyRelationFilterInput { pk: ID! }
         input ModelFilter { provider: LegacyRelationFilterInput }
@@ -409,13 +414,20 @@ describe("fieldMetadataFromSDL", () => {
               filterFields: ["provider"],
               orderFields: [],
               aggregateFields: ["id"],
-              groupByFields: ["provider"],
+              groupByFields: ["provider", "implClass"],
               relationAxes: [
                 {
                   field: "provider",
                   modelLabel: "demo.Provider",
                   publicIdField: "sqid",
                   labelAxis: "provider_DisplayName",
+                },
+              ],
+              groupAliases: [
+                {
+                  field: "implCategory",
+                  aggregateField: "implClass",
+                  aggregateKey: "implClass",
                 },
               ],
             },
@@ -431,6 +443,54 @@ describe("fieldMetadataFromSDL", () => {
       aggregateKey: "providerId",
       labelKey: "provider_DisplayName",
     });
+    expect(required(metadata.types.ModelType).dataQuery?.groupAliases).toEqual([
+      {
+        field: "implCategory",
+        aggregateField: "implClass",
+        aggregateKey: "implClass",
+      },
+    ]);
+  });
+
+  test("rejects generated group aliases missing from the node type", () => {
+    expect(() =>
+      fieldMetadataFromSDL(
+        /* GraphQL */ `
+          type ModelType { id: ID! implClass: String! }
+          type Query { models: [ModelType!]! }
+        `,
+        {
+          angee: {
+            dataQueries: [
+              {
+                modelLabel: "demo.Model",
+                appLabel: "demo",
+                modelName: "model",
+                publicIdField: "sqid",
+                roots: { listName: "models" },
+                typeNames: {
+                  query: "ModelDataQuery",
+                  node: "ModelType",
+                },
+                capabilities: ["list", "groups"],
+                filterFields: [],
+                orderFields: [],
+                aggregateFields: ["id"],
+                groupByFields: ["implClass"],
+                relationAxes: [],
+                groupAliases: [
+                  {
+                    field: "implCategory",
+                    aggregateField: "implClass",
+                    aggregateKey: "implClass",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ),
+    ).toThrow(/does not expose that field/);
   });
 });
 

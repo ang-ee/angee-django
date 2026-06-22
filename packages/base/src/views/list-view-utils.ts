@@ -63,8 +63,28 @@ export function buildGroupOptions<TRow extends Row>(
   }
 
   const dataQueryGroupByFields = metadata?.dataQuery?.groupByFields ?? [];
+  const groupAliases = metadata?.dataQuery?.groupAliases ?? [];
+  const aliasedAggregateFields = new Set(
+    groupAliases.map((alias) => alias.aggregateField),
+  );
+  for (const alias of groupAliases) {
+    if (!metadata) continue;
+    const group = groupAliasToDataViewGroup(alias);
+    if (!groupAllowedByDataQuery(group, metadata)) continue;
+    const field = metadata.fields[alias.field];
+    if (!field) continue;
+    const type = dateGroupType(alias.field, field) ? "date" : "value";
+    addOption({
+      id: alias.field,
+      label: groupLabel(alias.field, field),
+      group,
+      type,
+      ...(type === "date" ? { granularities: DATE_GROUP_GRANULARITIES } : {}),
+    });
+  }
   for (const fieldName of dataQueryGroupByFields) {
     if (!metadata) continue;
+    if (aliasedAggregateFields.has(fieldName)) continue;
     const field = metadata.fields[fieldName];
     if (!field) continue;
     if (field.kind === "relation") continue;
@@ -162,8 +182,30 @@ export function resolveDataViewGroup(
   metadata: ModelMetadata | null,
 ): DataViewGroup {
   if (group.aggregateField && group.aggregateKey) return group;
+  const aliasGroup = groupAliasForField(group.field, metadata);
+  if (aliasGroup) return { ...group, ...aliasGroup };
   const relationGroup = relationGroupForFieldPath(group.field, metadata);
   return relationGroup ? { ...group, ...relationGroup } : group;
+}
+
+function groupAliasForField(
+  field: string,
+  metadata: ModelMetadata | null,
+): DataViewGroup | null {
+  const alias = metadata?.dataQuery?.groupAliases?.find((item) => item.field === field);
+  return alias ? groupAliasToDataViewGroup(alias) : null;
+}
+
+function groupAliasToDataViewGroup(alias: {
+  field: string;
+  aggregateField: string;
+  aggregateKey: string;
+}): DataViewGroup {
+  return {
+    field: alias.field,
+    aggregateField: alias.aggregateField,
+    aggregateKey: alias.aggregateKey,
+  };
 }
 
 function groupAllowedByDataQuery(

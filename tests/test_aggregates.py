@@ -188,6 +188,64 @@ def test_data_query_metadata_rejects_multiple_relation_label_axes() -> None:
         )
 
 
+def test_data_query_metadata_declares_group_aliases() -> None:
+    """A display field can group through a declared backend aggregate axis."""
+
+    @strawberry_django.type(DataQueryThing)
+    class DataQueryThingAliasType:
+        name: auto
+
+    query, _generated_types = data_query(
+        DataQueryThingAliasType,
+        type_name="DataQueryThingAliasQuery",
+        list_name="things",
+        aggregate_fields=["id"],
+        group_by_fields=["name"],
+        group_aliases={"name": "name"},
+    )
+
+    metadata = data_query_metadata(query)[0]
+    assert metadata.group_aliases[0].field == "name"
+    assert metadata.group_aliases[0].aggregate_field == "name"
+    assert metadata.group_aliases[0].aggregate_key == "name"
+
+
+def test_data_query_metadata_rejects_group_aliases_without_node_field() -> None:
+    """A group alias must point at a real GraphQL node field."""
+
+    @strawberry_django.type(DataQueryChild)
+    class DataQueryChildMissingAliasType:
+        name: auto
+
+    with pytest.raises(ImproperlyConfigured, match="not a field"):
+        data_query(
+            DataQueryChildMissingAliasType,
+            type_name="DataQueryChildMissingAliasQuery",
+            list_name="children",
+            aggregate_fields=["id"],
+            group_by_fields=["name"],
+            group_aliases={"missing": "name"},
+        )
+
+
+def test_data_query_metadata_rejects_group_aliases_without_group_axis() -> None:
+    """A group alias cannot target an axis the backend does not group by."""
+
+    @strawberry_django.type(DataQueryChild)
+    class DataQueryChildBadAliasType:
+        name: auto
+
+    with pytest.raises(ImproperlyConfigured, match="non-groupable aggregate axis"):
+        data_query(
+            DataQueryChildBadAliasType,
+            type_name="DataQueryChildBadAliasQuery",
+            list_name="children",
+            aggregate_fields=["id"],
+            group_by_fields=["parent"],
+            group_aliases={"name": "created_at"},
+        )
+
+
 @pytest.mark.django_db(transaction=True)
 def test_data_query_groups_echo_public_relation_id() -> None:
     """Grouped relation keys expose public ids while label axes expose display values."""

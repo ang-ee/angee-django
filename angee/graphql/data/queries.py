@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import strawberry
@@ -35,6 +35,7 @@ def data_query(
     group_name: str | None = None,
     aggregate_fields: Sequence[str] = (),
     group_by_fields: Sequence[str] = (),
+    group_aliases: Mapping[str, str] | None = None,
     enable_filter_echo: bool = False,
     include_list: bool = True,
     include_detail: bool = True,
@@ -165,6 +166,7 @@ def data_query(
         order_type=order,
         aggregate_fields=tuple(aggregate_fields),
         group_by_fields=tuple(group_by_fields),
+        group_aliases=tuple((group_aliases or {}).items()),
         enable_filter_echo=enable_filter_echo,
         aggregate_type=aggregate_type,
         grouped_type=grouped_type,

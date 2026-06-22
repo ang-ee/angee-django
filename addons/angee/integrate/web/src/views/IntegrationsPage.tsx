@@ -9,7 +9,6 @@ import {
   List,
   useEnumOptions,
   useImplPrefill,
-  type DataToolbarGroupOption,
 } from "@angee/base";
 import { rowPublicId, useAuthoredMutation, type Row } from "@angee/sdk";
 
@@ -25,34 +24,6 @@ export function IntegrationsPage(): React.ReactElement {
   const t = useIntegrateT();
   const implClassOptions = useEnumOptions(MODEL, "implClass");
   const implClassPrefill = useImplPrefill(MODEL, "implClass");
-
-  // Aggregate on the real groupable axes (impl_class / vendor / status); the
-  // implementation lane displays the impl's category. Tone is resolved by the shared
-  // STATUS_TONES vocabulary — never a private map (docs/frontend/guidelines.md).
-  const groupOptions = React.useMemo<readonly DataToolbarGroupOption[]>(
-    () => [
-      {
-        id: "impl-category",
-        label: t("integrate.col.implementation"),
-        group: {
-          field: "implCategory",
-          aggregateField: "implClass",
-          aggregateKey: "implClass",
-        },
-      },
-      {
-        id: "vendor",
-        label: t("integrate.col.vendor"),
-        group: {
-          field: "vendor.displayName",
-          aggregateField: "vendor",
-          aggregateKey: "vendorId",
-        },
-      },
-      { id: "status", label: t("integrate.col.status"), group: { field: "status" } },
-    ],
-    [t],
-  );
 
   const cardActions = React.useCallback(
     (row: Row, context: { refresh: () => void }) =>
@@ -72,18 +43,9 @@ export function IntegrationsPage(): React.ReactElement {
       <List
         model={MODEL}
         list={GroupListView}
-        groupOptions={groupOptions}
         defaultGroups={{
-          list: {
-            field: "implCategory",
-            aggregateField: "implClass",
-            aggregateKey: "implClass",
-          },
-          board: {
-            field: "implCategory",
-            aggregateField: "implClass",
-            aggregateKey: "implClass",
-          },
+          list: { field: "implCategory" },
+          board: { field: "implCategory" },
         }}
       >
         <Column field="displayName" />

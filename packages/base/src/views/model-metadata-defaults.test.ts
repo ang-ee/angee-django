@@ -297,6 +297,73 @@ describe("SDL metadata defaults", () => {
       },
     ]);
   });
+
+  test("derives scalar group alias options from data-query metadata", () => {
+    const integrationMetadata: ModelMetadata = {
+      typeName: "IntegrationType",
+      fields: {
+        implCategory: {
+          name: "implCategory",
+          kind: "scalar",
+          scalar: "String",
+          label: "Implementation",
+        },
+        implClass: {
+          name: "implClass",
+          kind: "enum",
+          enumName: "IntegrationImplsImpl",
+          label: "Impl Class",
+          values: [{ value: "NONE", description: "None" }],
+        },
+        status: { name: "status", kind: "scalar", scalar: "String", label: "Status" },
+      },
+      dataQuery: {
+        modelLabel: "integrate.Integration",
+        appLabel: "integrate",
+        modelName: "integration",
+        publicIdField: "sqid",
+        roots: {},
+        typeNames: { node: "IntegrationType" },
+        capabilities: ["list", "groups"],
+        filterFields: [],
+        orderFields: [],
+        aggregateFields: ["id"],
+        groupByFields: ["implClass", "status"],
+        relationAxes: [],
+        groupAliases: [
+          {
+            field: "implCategory",
+            aggregateField: "implClass",
+            aggregateKey: "implClass",
+          },
+        ],
+      },
+    };
+
+    expect(buildGroupOptions([], integrationMetadata, null)).toEqual([
+      {
+        id: "implCategory",
+        label: "Implementation",
+        group: {
+          field: "implCategory",
+          aggregateField: "implClass",
+          aggregateKey: "implClass",
+        },
+        type: "value",
+      },
+      {
+        id: "status",
+        label: "Status",
+        group: { field: "status" },
+        type: "value",
+      },
+    ]);
+    expect(resolveDataViewGroup({ field: "implCategory" }, integrationMetadata)).toEqual({
+      field: "implCategory",
+      aggregateField: "implClass",
+      aggregateKey: "implClass",
+    });
+  });
 });
 
 function required<T>(value: T | undefined): T {

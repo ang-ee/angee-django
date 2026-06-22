@@ -1255,7 +1255,7 @@ class IntegrationType(AngeeNode):
 
         return cast(Any, self).display_label
 
-    @strawberry_django.field(only=["impl_class"])
+    @strawberry_django.field(only=["impl_class"], description="Implementation")
     def impl_category(self) -> str:
         """Return this integration implementation's board grouping category.
 
@@ -1495,6 +1495,7 @@ IntegrationDataQuery, _INTEGRATION_DATA_TYPES = data_query(
     group_name="integration_groups",
     aggregate_fields=["id"],
     group_by_fields=["impl_class", "vendor", "vendor__display_name", "status"],
+    group_aliases={"impl_category": "impl_class"},
     enable_filter_echo=True,
     permission_classes=_ADMIN_PERMISSION_CLASSES,
     aggregate_kwargs={

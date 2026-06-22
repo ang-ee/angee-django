@@ -115,6 +115,7 @@ export interface DataQuerySurfaceMetadata {
   aggregateFields: readonly string[];
   groupByFields: readonly string[];
   relationAxes: readonly DataQueryRelationAxisMetadata[];
+  groupAliases?: readonly DataQueryGroupAliasMetadata[];
 }
 
 /** GraphQL root field names emitted for one model data query surface. */
@@ -146,6 +147,13 @@ export interface DataQueryRelationAxisMetadata {
   modelLabel: string;
   publicIdField: string;
   labelAxis?: string | null;
+}
+
+/** Display field that groups through another backend aggregate axis. */
+export interface DataQueryGroupAliasMetadata {
+  field: string;
+  aggregateField: string;
+  aggregateKey: string;
 }
 
 /** Metadata for one GraphQL object type. */
@@ -340,6 +348,23 @@ function validateDataQueryMetadata(
         `GraphQL schema metadata for "${dataQuery.modelLabel}" references ` +
           `missing input type "${groupBySpec}".`,
       );
+    }
+    const nodeFields = nodeType.getFields();
+    for (const alias of dataQuery.groupAliases ?? []) {
+      if (!(alias.field in nodeFields)) {
+        throw new Error(
+          `GraphQL schema metadata for "${dataQuery.modelLabel}" declares ` +
+            `group alias field "${alias.field}", but "${dataQuery.typeNames.node}" ` +
+            "does not expose that field.",
+        );
+      }
+      if (!dataQuery.groupByFields.includes(alias.aggregateField)) {
+        throw new Error(
+          `GraphQL schema metadata for "${dataQuery.modelLabel}" declares ` +
+            `group alias "${alias.field}" for non-groupable axis ` +
+            `"${alias.aggregateField}".`,
+        );
+      }
     }
   }
 }

@@ -205,8 +205,30 @@ Tenth relation-axis hardening slice completed on 2026-06-22:
       gone.
 - [x] Run focused backend/frontend/schema checks and commit the slice.
 
+Eleventh scalar group-alias slice completed on 2026-06-22:
+
+- [x] Add backend `groupAliases` metadata for display fields that group through
+      another aggregate axis.
+- [x] Declare `integrate.Integration.implCategory` as the display alias for
+      `implClass` in the data-query contract.
+- [x] Teach SDK/base metadata readers to resolve scalar group aliases and hide
+      the replaced raw group axis from toolbar options.
+- [x] Delete integration page-local group-option wiring; the page now declares
+      only `defaultGroups={{list:{field:"implCategory"}, board:{field:"implCategory"}}}`.
+- [x] Run focused backend/frontend/schema checks and commit the slice.
+
 Current local verification:
 
+- [x] `uv run ruff check angee/graphql/data/metadata.py angee/graphql/data/queries.py addons/angee/integrate/schema.py tests/test_aggregates.py tests/test_integrate_graphql.py`
+- [x] `uv run pytest tests/test_aggregates.py tests/test_integrate_graphql.py -q`
+- [x] `uv run examples/notes-angee/manage.py schema`
+- [x] `uv run examples/notes-angee/manage.py schema --check`
+- [x] `pnpm codegen`
+- [x] `pnpm --filter @angee/sdk test -- model-metadata`
+- [x] `pnpm --filter @angee/base test -- model-metadata-defaults group-dimension ListView DataPage`
+- [x] `pnpm --filter @angee/integrate test -- IntegrationsPage redirects`
+- [x] `pnpm --filter @angee/sdk --filter @angee/base --filter @angee/integrate --filter @angee-example/notes-host typecheck`
+- [x] `git diff --check`
 - [x] `uv run ruff check angee/graphql/data/metadata.py angee/graphql/data/aggregates.py addons/angee/agents/schema.py addons/angee/messaging/schema.py addons/angee/integrate/schema.py tests/test_aggregates.py tests/test_integrate_graphql.py`
 - [x] `uv run pytest tests/test_aggregates.py tests/test_integrate_graphql.py tests/test_agents_graphql.py tests/test_parties_graphql.py -q`
 - [x] `uv run examples/notes-angee/manage.py schema`
@@ -900,14 +922,14 @@ that the data contract now owns.
 
 ### Integrate
 
-- [ ] `Integration` data contract for vendor, impl class/category, status.
-- [ ] Express `implCategory` display alias as contract metadata instead of page
+- [x] `Integration` data contract for vendor, impl class/category, status.
+- [x] Express `implCategory` display alias as contract metadata instead of page
       group-option glue.
 - [x] Express vendor relation label mapping in the contract and delete the old
       flat `vendorLabel` data-view path.
 - [ ] Migrate `OAuthClient`, `ExternalAccount`, `Credential`, `Source`, and other
       list roots from filter/order-only to data contracts where useful.
-- [ ] Delete manual integration group option wiring.
+- [x] Delete manual integration group option wiring.
 
 ### Agents
 

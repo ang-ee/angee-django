@@ -57,6 +57,15 @@ class DataRelationAxisMetadata:
 
 
 @dataclass(frozen=True, slots=True)
+class DataGroupAliasMetadata:
+    """Metadata for a display field that groups through another aggregate axis."""
+
+    field: str
+    aggregate_field: str
+    aggregate_key: str
+
+
+@dataclass(frozen=True, slots=True)
 class DataQueryMetadata:
     """Internal metadata for one Angee model data query surface."""
 
@@ -75,6 +84,7 @@ class DataQueryMetadata:
     aggregate_fields: tuple[str, ...]
     group_by_fields: tuple[str, ...]
     relation_axes: tuple[DataRelationAxisMetadata, ...]
+    group_aliases: tuple[DataGroupAliasMetadata, ...]
     filter_type: type | None = None
     order_type: type | None = None
 
@@ -102,6 +112,7 @@ def make_data_query_metadata(
     order_type: type | None,
     aggregate_fields: tuple[str, ...],
     group_by_fields: tuple[str, ...],
+    group_aliases: tuple[tuple[str, str], ...],
     enable_filter_echo: bool,
     aggregate_type: type | None = None,
     grouped_type: type | None = None,
@@ -145,6 +156,7 @@ def make_data_query_metadata(
         aggregate_fields=aggregate_fields,
         group_by_fields=group_by_fields,
         relation_axes=_relation_axes(model, group_by_fields),
+        group_aliases=_group_aliases(node_type, model, group_by_fields, group_aliases),
         filter_type=filter_type,
         order_type=order_type,
     )
@@ -208,6 +220,14 @@ def _serialize_data_query(metadata: DataQueryMetadata) -> dict[str, object]:
                 "labelAxis": _wire_name_or_none(axis.label_axis),
             }
             for axis in metadata.relation_axes
+        ],
+        "groupAliases": [
+            {
+                "field": _wire_name(alias.field),
+                "aggregateField": _wire_name(alias.aggregate_field),
+                "aggregateKey": _wire_name(alias.aggregate_key),
+            }
+            for alias in metadata.group_aliases
         ],
     }
 
@@ -282,6 +302,43 @@ def _relation_axes(
             )
         )
     return tuple(relation_axes)
+
+
+def _group_aliases(
+    node_type: type,
+    model: type[models.Model],
+    group_by_fields: tuple[str, ...],
+    group_aliases: tuple[tuple[str, str], ...],
+) -> tuple[DataGroupAliasMetadata, ...]:
+    """Return validated group aliases declared by a data-query surface."""
+
+    node_fields = set(surface_field_names(node_type))
+    aliases: list[DataGroupAliasMetadata] = []
+    seen: set[str] = set()
+    for field, aggregate_field in group_aliases:
+        if field in seen:
+            raise ImproperlyConfigured(
+                f"data_query({model._meta.label}) declares duplicate group alias '{field}'."
+            )
+        seen.add(field)
+        if field not in node_fields:
+            raise ImproperlyConfigured(
+                f"data_query({model._meta.label}) group alias '{field}' is not a field on "
+                f"{surface_name(node_type)}."
+            )
+        if aggregate_field not in group_by_fields:
+            raise ImproperlyConfigured(
+                f"data_query({model._meta.label}) group alias '{field}' targets "
+                f"non-groupable aggregate axis '{aggregate_field}'."
+            )
+        aliases.append(
+            DataGroupAliasMetadata(
+                field=field,
+                aggregate_field=aggregate_field,
+                aggregate_key=aggregate_field,
+            )
+        )
+    return tuple(aliases)
 
 
 def _relation_label_axes(
