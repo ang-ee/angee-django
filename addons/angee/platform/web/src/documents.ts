@@ -53,7 +53,7 @@ export const PlatformExplorer = graphql(`
 `);
 
 /** The `platformExplorer` payload; `null` when the surface is unavailable. */
-type PlatformExplorerData = NonNullable<
+export type PlatformExplorerData = NonNullable<
   DocumentType<typeof PlatformExplorer>["platformExplorer"]
 >;
 

@@ -1,4 +1,4 @@
-import { useMemo, type ReactElement } from "react";
+import { type ReactElement } from "react";
 import { useParams } from "@tanstack/react-router";
 
 import {
@@ -14,9 +14,7 @@ import {
   MetricStrip,
   RecordHeader,
 } from "@angee/base";
-import { useAuthoredQuery } from "@angee/sdk";
 
-import { PlatformExplorer } from "../documents";
 import { usePlatformT } from "../i18n";
 import {
   addonDetailPath,
@@ -25,21 +23,16 @@ import {
   modelDetailPath,
 } from "../lib/paths";
 import { LinkedChips, RouterLink, useRouteNavigate } from "../lib/cells";
+import { usePlatformModel } from "../lib/explorer";
 
 export function ModelDetail(): ReactElement {
   const t = usePlatformT();
   const params = useParams({ strict: false });
   const id = "id" in params && typeof params.id === "string" ? params.id : undefined;
-  const query = useAuthoredQuery(PlatformExplorer);
-  const models = query.data?.platformExplorer?.models ?? [];
-  const model = useMemo(() => models.find((m) => m.label === id), [models, id]);
-  const dependedBy = useMemo(
-    () => models.filter((m) => m.dependsOn.includes(id ?? "")).map((m) => m.label).sort(),
-    [models, id],
-  );
+  const { model, dependedBy, fetching } = usePlatformModel(id);
   const go = useRouteNavigate();
 
-  if (query.fetching && !model) {
+  if (fetching && !model) {
     return <LoadingPanel message={t("platform.detail.model.loading")} />;
   }
   if (!model) {

@@ -1,21 +1,18 @@
-import { useCallback, type ReactElement } from "react";
+import { type ReactElement } from "react";
 import { parseAsString, useQueryState } from "nuqs";
 
 import {
-  AuthoredRowsList,
   Code,
+  RowsListView,
   type DataToolbarGroupOption,
   type ListColumn,
 } from "@angee/base";
-import type { DocumentData } from "@angee/sdk";
 
-import { PlatformExplorer } from "../documents";
 import { usePlatformT } from "../i18n";
 import { LinkedChips, TextRouteLink } from "../lib/cells";
+import { usePlatformModelRows } from "../lib/explorer";
 import { addonDetailPath, fieldsPath, modelDetailPath } from "../lib/paths";
-import { modelRows, type ModelRow } from "../lib/rows";
-
-type PlatformExplorerResult = DocumentData<typeof PlatformExplorer>;
+import { type ModelRow } from "../lib/rows";
 
 function columns(t: (key: string) => string): readonly ListColumn<ModelRow>[] {
   return [
@@ -78,19 +75,17 @@ function groupOptions(t: (key: string) => string): readonly DataToolbarGroupOpti
 export function ModelsPage(): ReactElement {
   const t = usePlatformT();
   const [addonScope] = useQueryState("addon", parseAsString);
-  const selectRows = useCallback((data: PlatformExplorerResult | undefined) => {
-    const all = modelRows(data?.platformExplorer?.models ?? []);
-    return addonScope ? all.filter((row) => row.addonId === addonScope) : all;
-  }, [addonScope]);
+  const { rows, fetching, error } = usePlatformModelRows({ addon: addonScope });
 
   return (
-    <AuthoredRowsList
-      document={PlatformExplorer}
-      selectRows={selectRows}
+    <RowsListView
+      rows={rows}
       columns={columns(t)}
       groupOptions={groupOptions(t)}
       defaultGroup={{ field: "addon" }}
       pageSize={50}
+      fetching={fetching}
+      error={error}
       emptyMessage={t("platform.empty.models")}
     />
   );

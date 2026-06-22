@@ -1,4 +1,4 @@
-import { useMemo, type ReactElement } from "react";
+import { type ReactElement } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { parseAsString, useQueryState } from "nuqs";
 
@@ -7,11 +7,9 @@ import {
   type GraphViewNode,
   type GraphViewNodeStyle,
 } from "@angee/base";
-import { useAuthoredQuery } from "@angee/sdk";
 
-import { PlatformExplorer } from "../documents";
+import { usePlatformModelGraph } from "../lib/explorer";
 import { modelDetailPath } from "../lib/paths";
-import { modelGraphEdges, modelGraphNodes } from "../lib/rows";
 
 const NODE_STYLES: Record<"model", GraphViewNodeStyle> = {
   model: {
@@ -23,23 +21,14 @@ const NODE_STYLES: Record<"model", GraphViewNodeStyle> = {
 };
 
 export function GraphPage(): ReactElement {
-  const query = useAuthoredQuery(PlatformExplorer);
   const navigate = useNavigate();
   const [modelScope] = useQueryState("model", parseAsString);
-  const explorer = query.data?.platformExplorer;
-  const nodes = useMemo(
-    () => modelGraphNodes(explorer?.models ?? [], modelScope),
-    [explorer, modelScope],
-  );
-  const edges = useMemo(
-    () => modelGraphEdges(explorer?.edges ?? []),
-    [explorer],
-  );
+  const { nodes, edges, error } = usePlatformModelGraph({ model: modelScope });
 
-  if (query.error) {
+  if (error) {
     return (
       <div className="px-3 py-6 text-13 text-danger-text">
-        {query.error.message}
+        {error.message}
       </div>
     );
   }

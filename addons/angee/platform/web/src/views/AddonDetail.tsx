@@ -1,4 +1,4 @@
-import { useMemo, type ReactElement } from "react";
+import { type ReactElement } from "react";
 import { useParams } from "@tanstack/react-router";
 
 import {
@@ -14,9 +14,7 @@ import {
   MetricStrip,
   RecordHeader,
 } from "@angee/base";
-import { useAuthoredQuery } from "@angee/sdk";
 
-import { PlatformExplorer } from "../documents";
 import { usePlatformT } from "../i18n";
 import {
   addonDetailPath,
@@ -25,6 +23,7 @@ import {
   modelsPath,
 } from "../lib/paths";
 import { LinkedChips, useRouteNavigate } from "../lib/cells";
+import { usePlatformAddon } from "../lib/explorer";
 
 const shortName = (dep: string): string => dep.split(".").pop() ?? dep;
 
@@ -32,25 +31,11 @@ export function AddonDetail(): ReactElement {
   const t = usePlatformT();
   const params = useParams({ strict: false });
   const id = "id" in params && typeof params.id === "string" ? params.id : undefined;
-  const query = useAuthoredQuery(PlatformExplorer);
-  const addons = query.data?.platformExplorer?.addons ?? [];
-  const addon = useMemo(() => addons.find((a) => a.id === id), [addons, id]);
-  const ids = useMemo(() => new Set(addons.map((a) => a.id)), [addons]);
-  const dependsOn = useMemo(
-    () => (addon?.dependsOn ?? []).filter((dep) => ids.has(dep)).sort(),
-    [addon, ids],
-  );
-  const dependedBy = useMemo(
-    () => addons.filter((a) => a.dependsOn.includes(id ?? "")).map((a) => a.id).sort(),
-    [addons, id],
-  );
-  const modelLabels = useMemo(
-    () => [...new Set(addon?.modelLabels ?? [])].sort(),
-    [addon],
-  );
+  const { addon, dependsOn, dependedBy, modelLabels, fetching } =
+    usePlatformAddon(id);
   const go = useRouteNavigate();
 
-  if (query.fetching && !addon) {
+  if (fetching && !addon) {
     return <LoadingPanel message={t("platform.detail.addon.loading")} />;
   }
   if (!addon) {

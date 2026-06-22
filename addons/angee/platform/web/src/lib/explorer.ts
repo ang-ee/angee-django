@@ -1,0 +1,242 @@
+import { useCallback, useMemo } from "react";
+
+import type { GraphViewEdge, GraphViewNode } from "@angee/base";
+import {
+  useAuthoredQuery,
+  useAuthoredRows,
+  type AuthoredQueryResult,
+  type AuthoredRowsResult,
+  type DocumentData,
+} from "@angee/sdk";
+
+import {
+  PlatformExplorer,
+  type PlatformAddonData,
+  type PlatformExplorerData,
+  type PlatformModelData,
+} from "../documents";
+import {
+  addonRows,
+  fieldRows,
+  modelGraphEdges,
+  modelGraphNodes,
+  modelRows,
+  type AddonRow,
+  type FieldRow,
+  type ModelRow,
+} from "./rows";
+
+export type PlatformExplorerResult = DocumentData<typeof PlatformExplorer>;
+
+const EMPTY_EXPLORER: PlatformExplorerData = {
+  addons: [],
+  models: [],
+  edges: [],
+};
+
+export interface PlatformModelRowsScope {
+  addon?: string | null;
+}
+
+export interface PlatformFieldRowsScope {
+  model?: string | null;
+  addon?: string | null;
+}
+
+export interface PlatformModelGraphScope {
+  model?: string | null;
+}
+
+export interface PlatformExplorerQuery
+  extends AuthoredQueryResult<PlatformExplorerResult> {
+  explorer: PlatformExplorerData | null;
+}
+
+export interface PlatformAddonDetail {
+  addon: PlatformAddonData | undefined;
+  dependsOn: readonly string[];
+  dependedBy: readonly string[];
+  modelLabels: readonly string[];
+}
+
+export interface PlatformModelDetail {
+  model: PlatformModelData | undefined;
+  dependedBy: readonly string[];
+}
+
+export interface PlatformAddonDetailResult
+  extends PlatformExplorerQuery,
+    PlatformAddonDetail {
+  notFound: boolean;
+}
+
+export interface PlatformModelDetailResult
+  extends PlatformExplorerQuery,
+    PlatformModelDetail {
+  notFound: boolean;
+}
+
+export interface PlatformModelGraphResult
+  extends AuthoredQueryResult<PlatformExplorerResult> {
+  nodes: readonly GraphViewNode<"model">[];
+  edges: readonly GraphViewEdge[];
+}
+
+function explorerOrEmpty(
+  data: PlatformExplorerResult | undefined,
+): PlatformExplorerData {
+  return data?.platformExplorer ?? EMPTY_EXPLORER;
+}
+
+function sortedUnique(values: readonly string[]): string[] {
+  return [...new Set(values)].sort();
+}
+
+export function selectPlatformAddonRows(
+  data: PlatformExplorerResult | undefined,
+): readonly AddonRow[] {
+  return addonRows(explorerOrEmpty(data).addons);
+}
+
+export function selectPlatformModelRows(
+  data: PlatformExplorerResult | undefined,
+  scope: PlatformModelRowsScope = {},
+): readonly ModelRow[] {
+  const rows = modelRows(explorerOrEmpty(data).models);
+  return scope.addon ? rows.filter((row) => row.addonId === scope.addon) : rows;
+}
+
+export function selectPlatformFieldRows(
+  data: PlatformExplorerResult | undefined,
+  scope: PlatformFieldRowsScope = {},
+): readonly FieldRow[] {
+  let rows = fieldRows(explorerOrEmpty(data).models);
+  if (scope.model) rows = rows.filter((row) => row.model === scope.model);
+  if (scope.addon) rows = rows.filter((row) => row.addonId === scope.addon);
+  return rows;
+}
+
+export function selectPlatformAddonDetail(
+  data: PlatformExplorerResult | undefined,
+  id?: string | null,
+): PlatformAddonDetail {
+  const addons = explorerOrEmpty(data).addons;
+  const addon = id ? addons.find((candidate) => candidate.id === id) : undefined;
+  const ids = new Set(addons.map((candidate) => candidate.id));
+  return {
+    addon,
+    dependsOn: sortedUnique((addon?.dependsOn ?? []).filter((dep) => ids.has(dep))),
+    dependedBy: id
+      ? addons
+          .filter((candidate) => candidate.dependsOn.includes(id))
+          .map((candidate) => candidate.id)
+          .sort()
+      : [],
+    modelLabels: sortedUnique(addon?.modelLabels ?? []),
+  };
+}
+
+export function selectPlatformModelDetail(
+  data: PlatformExplorerResult | undefined,
+  id?: string | null,
+): PlatformModelDetail {
+  const models = explorerOrEmpty(data).models;
+  return {
+    model: id ? models.find((candidate) => candidate.label === id) : undefined,
+    dependedBy: id
+      ? models
+          .filter((candidate) => candidate.dependsOn.includes(id))
+          .map((candidate) => candidate.label)
+          .sort()
+      : [],
+  };
+}
+
+export function selectPlatformModelGraph(
+  data: PlatformExplorerResult | undefined,
+  scope: PlatformModelGraphScope = {},
+): Pick<PlatformModelGraphResult, "nodes" | "edges"> {
+  const explorer = explorerOrEmpty(data);
+  return {
+    nodes: modelGraphNodes(explorer.models, scope.model),
+    edges: modelGraphEdges(explorer.edges),
+  };
+}
+
+export function usePlatformExplorer(): PlatformExplorerQuery {
+  const query = useAuthoredQuery(PlatformExplorer);
+  return {
+    ...query,
+    explorer: query.data?.platformExplorer ?? null,
+  };
+}
+
+export function usePlatformAddonRows(): AuthoredRowsResult<
+  PlatformExplorerResult,
+  AddonRow
+> {
+  const selectRows = useCallback(selectPlatformAddonRows, []);
+  return useAuthoredRows(PlatformExplorer, { selectRows });
+}
+
+export function usePlatformModelRows({
+  addon,
+}: PlatformModelRowsScope = {}): AuthoredRowsResult<
+  PlatformExplorerResult,
+  ModelRow
+> {
+  const selectRows = useCallback(
+    (data: PlatformExplorerResult | undefined) =>
+      selectPlatformModelRows(data, { addon }),
+    [addon],
+  );
+  return useAuthoredRows(PlatformExplorer, { selectRows });
+}
+
+export function usePlatformFieldRows({
+  model,
+  addon,
+}: PlatformFieldRowsScope = {}): AuthoredRowsResult<
+  PlatformExplorerResult,
+  FieldRow
+> {
+  const selectRows = useCallback(
+    (data: PlatformExplorerResult | undefined) =>
+      selectPlatformFieldRows(data, { model, addon }),
+    [model, addon],
+  );
+  return useAuthoredRows(PlatformExplorer, { selectRows });
+}
+
+export function usePlatformAddon(
+  id?: string | null,
+): PlatformAddonDetailResult {
+  const query = usePlatformExplorer();
+  const detail = useMemo(
+    () => selectPlatformAddonDetail(query.data, id),
+    [query.data, id],
+  );
+  return { ...query, ...detail, notFound: !query.fetching && !detail.addon };
+}
+
+export function usePlatformModel(
+  id?: string | null,
+): PlatformModelDetailResult {
+  const query = usePlatformExplorer();
+  const detail = useMemo(
+    () => selectPlatformModelDetail(query.data, id),
+    [query.data, id],
+  );
+  return { ...query, ...detail, notFound: !query.fetching && !detail.model };
+}
+
+export function usePlatformModelGraph({
+  model,
+}: PlatformModelGraphScope = {}): PlatformModelGraphResult {
+  const query = useAuthoredQuery(PlatformExplorer);
+  const graph = useMemo(
+    () => selectPlatformModelGraph(query.data, { model }),
+    [query.data, model],
+  );
+  return { ...query, ...graph };
+}
