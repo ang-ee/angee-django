@@ -3,9 +3,11 @@ import {
   Action,
   Column,
   DataPage,
+  Facet,
   Field,
   Form,
   Group,
+  GroupListView,
   List,
   RowsListView,
   type ListColumn,
@@ -64,11 +66,16 @@ const threadRecordTabs: readonly RecordTabDescriptor[] = [
   { id: "messages", label: "Messages", render: (context) => <ThreadMessagesTab {...context} /> },
 ];
 
-/** Threads: list + detail, the detail carrying the thread's Messages. */
+/**
+ * Threads: grouped list + detail, the detail carrying the thread's Messages.
+ * Channel is an explicit facet because it is a useful thread axis but not shown
+ * as a list column.
+ */
 export function ThreadsPage(): React.ReactElement {
   return (
     <DataPage model={MODEL} placement="inline" routed hideCreate recordTabs={threadRecordTabs}>
-      <List model={MODEL}>
+      <List model={MODEL} list={GroupListView}>
+        <Facet field="channel" label="Channel" labelField="displayName" />
         <Column field="subject" />
         <Column field="modality" />
         <Column field="messageCount" header="Messages" />

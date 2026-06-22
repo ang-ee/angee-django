@@ -146,6 +146,13 @@ Sixth frontend declarative-facet slice completed on 2026-06-22:
       explicit relation facet, so the toolbar has useful filters/group-by
       without dumping every contact into quick filters.
 
+Seventh frontend page-parity slice completed on 2026-06-22:
+
+- [x] Switch the messaging Threads page to `GroupListView`; its backend
+      `ThreadDataQuery` already owns filters/groups/aggregates.
+- [x] Make thread Channel an explicit relation facet because it is a useful
+      filter/group axis but is not displayed as a list column.
+
 Current local verification:
 
 - [x] `uv run python -m pytest tests/test_aggregates.py -q`
@@ -199,6 +206,8 @@ Current local verification:
 - [x] `uv run ruff check addons/angee/parties/schema.py tests/test_parties_graphql.py`
 - [x] `uv run examples/notes-angee/manage.py schema --check`
 - [x] `pnpm --filter @angee/parties typecheck`
+- [x] `pnpm --filter @angee/messaging typecheck`
+- [x] `pnpm --filter @angee/base test -- page relation-facet`
 
 ## North Star
 
