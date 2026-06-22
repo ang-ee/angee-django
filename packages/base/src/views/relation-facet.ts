@@ -80,6 +80,7 @@ interface DeclaredRelationFacet {
 export function useRelationFacet(
   model: string,
   options: RelationFacetOptions,
+  activeFilter?: DataViewFilter,
 ): RelationFacet {
   const {
     aggregateKey: optionAggregateKey,
@@ -129,6 +130,7 @@ export function useRelationFacet(
   );
   const facetQuery = useResourceFacets(model, {
     facets: facetSpecs,
+    ...(activeFilter !== undefined ? { filter: activeFilter } : {}),
     enabled: facetSpecs.length > 0,
   });
   const facetOptions = React.useMemo(
@@ -198,6 +200,7 @@ export function useRelationFacets(
   model: string,
   options: readonly RelationFacetOptions[] | undefined =
     EMPTY_RELATION_FACET_OPTIONS,
+  activeFilter?: DataViewFilter,
 ): RelationFacets {
   const schemaMetadata = useSchemaFieldMetadata();
   const modelMetadata = useModelMetadata(model);
@@ -213,6 +216,7 @@ export function useRelationFacets(
   );
   const facetQuery = useResourceFacets(model, {
     facets: facetSpecs,
+    ...(activeFilter !== undefined ? { filter: activeFilter } : {}),
     enabled: canQueryFacets && facetSpecs.length > 0,
   });
   const filters = React.useMemo<readonly DataToolbarFilterOption[]>(
@@ -277,6 +281,7 @@ export function useRelationFacetsForColumns<TRow extends Row>(
   model: string,
   columns: readonly ColumnDescriptor<TRow>[],
   metadata: ModelMetadata | null,
+  activeFilter?: DataViewFilter,
 ): Pick<RelationFacet, "filters" | "filterFields"> {
   const facets = React.useMemo(
     () => relationFacetsForColumns(columns, metadata),
@@ -285,6 +290,7 @@ export function useRelationFacetsForColumns<TRow extends Row>(
   const canQueryFacets = useGraphQLProviderAvailable();
   const facetQuery = useResourceFacets(model, {
     facets: facets.map((facet) => facet.spec),
+    ...(activeFilter !== undefined ? { filter: activeFilter } : {}),
     enabled: canQueryFacets && facets.length > 0,
   });
   const filters = React.useMemo<readonly DataToolbarFilterOption[]>(
@@ -449,6 +455,7 @@ function relationFacetSpecs(
     ...(labelOrderField
       ? { groupOrder: [{ field: labelOrderField, direction: "ASC" as const }] }
       : {}),
+    neutralizeFilterFields: [options.id],
     pageSize: options.pageSize,
   }];
 }

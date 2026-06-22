@@ -64,6 +64,7 @@ describe("useRelationFacet", () => {
         valueKey: "providerId",
         labelKey: "provider_Name",
         groupOrder: [{ field: "provider__name", direction: "ASC" }],
+        neutralizeFilterFields: ["provider"],
         pageSize: 200,
       }],
       enabled: true,
@@ -124,6 +125,7 @@ describe("useRelationFacet", () => {
         valueKey: "providerId",
         labelKey: "provider_Name",
         groupOrder: [{ field: "provider__name", direction: "ASC" }],
+        neutralizeFilterFields: ["provider"],
         pageSize: 200,
       }],
       enabled: true,
@@ -178,6 +180,7 @@ describe("useRelationFacet", () => {
         valueKey: "providerId",
         labelKey: "provider_Name",
         groupOrder: [{ field: "provider__name", direction: "ASC" }],
+        neutralizeFilterFields: ["provider"],
         pageSize: 200,
       }],
       enabled: true,
@@ -206,6 +209,41 @@ describe("useRelationFacet", () => {
         aggregateKey: "providerId",
       },
     }]);
+  });
+
+  test("passes active filters to declared facets for neutralized counts", () => {
+    renderHook(
+      () =>
+        useRelationFacets(
+          "agents.InferenceModel",
+          [{ field: "provider", label: "Provider" }],
+          {
+            provider: { sqid: "provider-openai" },
+            name: { iContains: "launch" },
+          },
+        ),
+      { wrapper: Metadata },
+    );
+
+    expect(sdkMocks.facets).toHaveBeenCalledWith("agents.InferenceModel", {
+      facets: [{
+        id: "provider",
+        groups: [
+          { field: "PROVIDER", key: "providerId" },
+          { field: "PROVIDER__NAME", key: "provider_Name" },
+        ],
+        valueKey: "providerId",
+        labelKey: "provider_Name",
+        groupOrder: [{ field: "provider__name", direction: "ASC" }],
+        neutralizeFilterFields: ["provider"],
+        pageSize: 200,
+      }],
+      filter: {
+        provider: { sqid: "provider-openai" },
+        name: { iContains: "launch" },
+      },
+      enabled: true,
+    });
   });
 
   test("keeps filter input and aggregate bucket keys separate", () => {

@@ -109,13 +109,17 @@ describe("useResourceFacets", () => {
         }],
       },
     });
-    const filter = { title: { iContains: "launch" } };
+    const filter = { title: { iContains: "launch" }, state: { exact: "OPEN" } };
     const { result } = renderHook(
       () =>
         useResourceFacets("Sale", {
           filter,
           facets: [
-            { id: "state", groups: [{ field: "STATE", key: "state" }] },
+            {
+              id: "state",
+              groups: [{ field: "STATE", key: "state" }],
+              neutralizeFilterFields: ["state"],
+            },
             {
               id: "created",
               groups: [{
@@ -140,17 +144,18 @@ describe("useResourceFacets", () => {
       filter: { createdAt: { month: "2026-06-01" } },
     });
     expect(compactGraphQL(bodies[0]?.query)).toContain(
-      "facet0: saleGroups( groupBy: $groupBy0 pagination: $pagination0 filter: $filter )",
+      "facet0: saleGroups( groupBy: $groupBy0 pagination: $pagination0 filter: $filter0 )",
     );
     expect(compactGraphQL(bodies[0]?.query)).toContain(
-      "facet1: saleGroups( groupBy: $groupBy1 pagination: $pagination1 filter: $filter )",
+      "facet1: saleGroups( groupBy: $groupBy1 pagination: $pagination1 filter: $filter1 )",
     );
     expect(bodies[0]?.variables).toEqual({
       groupBy0: [{ field: "STATE" }],
       pagination0: null,
+      filter0: { title: { iContains: "launch" } },
       groupBy1: [{ field: "CREATED_AT", granularity: "month" }],
       pagination1: { offset: 0, limit: 10 },
-      filter,
+      filter1: filter,
     });
   });
 });

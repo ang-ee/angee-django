@@ -66,6 +66,7 @@ export interface GraphQLGroupByQuery<
 export interface GraphQLFacetQuery {
   id: string;
   groups: readonly DataQueryGroup[];
+  filter?: DataQueryFilterValue<ResourceTypeName>;
   groupOrder?: readonly DataQueryGroupOrder[];
   page?: number;
   pageSize?: number;
@@ -172,10 +173,10 @@ export function createGraphQLDataSource({
       return assembleFacetsDocument(modelLabel, rootFields, {
         facets: query.facets.map((facet) => ({
           keyFields: facet.groups.map(dataQueryGroupKey),
+          withFilter: (facet.filter ?? query.filter) !== undefined,
           measures: facet.measures,
           withOrderBy: facet.groupOrder !== undefined,
         })),
-        withFilter: query.filter !== undefined,
         withFilterEcho: options.withFilterEcho ?? false,
       });
     },
@@ -188,11 +189,14 @@ export function createGraphQLDataSource({
         }));
         variables[`pagination${index}`] =
           groupPaginationVariables(facet.page, facet.pageSize) ?? null;
+        const filter = facet.filter ?? query.filter;
+        if (filter !== undefined) {
+          variables[`filter${index}`] = filter;
+        }
         if (facet.groupOrder !== undefined) {
           variables[`orderBy${index}`] = facet.groupOrder;
         }
       });
-      if (query.filter !== undefined) variables.filter = query.filter;
       return variables;
     },
   };

@@ -254,6 +254,28 @@ describe("data-view model", () => {
     });
   });
 
+  test("removes facet fields from nested filter controls", () => {
+    const filter = Filter.from({
+      provider: { sqid: "provider-a" },
+      status: { exact: "ACTIVE" },
+      AND: {
+        provider: { sqid: "provider-b" },
+        title: { iContains: "launch" },
+      },
+      OR: [
+        { provider: { sqid: "provider-c" } },
+        { status: { exact: "ARCHIVED" } },
+      ],
+      not: { provider: { sqid: "provider-d" } },
+    }).withoutFields(["provider"]);
+
+    expect(filter).toEqual({
+      status: { exact: "ACTIVE" },
+      AND: { title: { iContains: "launch" } },
+      OR: [{ status: { exact: "ARCHIVED" } }],
+    });
+  });
+
   test("resets page and clears selection when query scope changes", () => {
     const state = DataViewState.create({
       page: 4,

@@ -159,7 +159,11 @@ describe("createGraphQLDataSource", () => {
       source.facetsDocument(
         {
           facets: [
-            { id: "state", groups: [{ field: "STATE", key: "state" }] },
+            {
+              id: "state",
+              groups: [{ field: "STATE", key: "state" }],
+              filter: { title: { iContains: "launch" } },
+            },
             {
               id: "created",
               groups: [{
@@ -167,10 +171,10 @@ describe("createGraphQLDataSource", () => {
                 key: "createdAtMonth",
                 granularity: "month",
               }],
+              filter: { state: { exact: "OPEN" } },
               groupOrder: [{ field: "createdAtMonth", direction: "ASC" }],
             },
           ],
-          filter: {},
         },
         { withFilterEcho: true },
       ),
@@ -178,23 +182,28 @@ describe("createGraphQLDataSource", () => {
       "query saleBreakdownFacets(" +
         "$groupBy0: [SaleGroupBySpec!]!, " +
         "$pagination0: OffsetPaginationInput, " +
+        "$filter0: SaleFilter, " +
         "$groupBy1: [SaleGroupBySpec!]!, " +
         "$pagination1: OffsetPaginationInput, " +
-        "$orderBy1: [SaleGroupOrder!], " +
-        "$filter: SaleFilter) { " +
+        "$filter1: SaleFilter, " +
+        "$orderBy1: [SaleGroupOrder!]) { " +
         "facet0: saleBreakdown(groupBy: $groupBy0, " +
-        "pagination: $pagination0, filter: $filter) { " +
+        "pagination: $pagination0, filter: $filter0) { " +
         "totalCount results { key { state } count filter } " +
         "pageInfo { offset limit } } " +
         "facet1: saleBreakdown(groupBy: $groupBy1, " +
-        "pagination: $pagination1, filter: $filter, orderBy: $orderBy1) { " +
+        "pagination: $pagination1, filter: $filter1, orderBy: $orderBy1) { " +
         "totalCount results { key { createdAtMonth } count filter } " +
         "pageInfo { offset limit } } }",
     );
     expect(
       source.facetsVariables({
         facets: [
-          { id: "state", groups: [{ field: "STATE", key: "state" }] },
+          {
+            id: "state",
+            groups: [{ field: "STATE", key: "state" }],
+            filter: { title: { iContains: "launch" } },
+          },
           {
             id: "created",
             groups: [{
@@ -202,20 +211,21 @@ describe("createGraphQLDataSource", () => {
               key: "createdAtMonth",
               granularity: "month",
             }],
+            filter: { state: { exact: "OPEN" } },
             page: 2,
             pageSize: 10,
             groupOrder: [{ field: "createdAtMonth", direction: "ASC" }],
           },
         ],
-        filter: { state: { exact: "OPEN" } },
       }),
     ).toEqual({
       groupBy0: [{ field: "STATE" }],
       pagination0: null,
+      filter0: { title: { iContains: "launch" } },
       groupBy1: [{ field: "CREATED_AT", granularity: "month" }],
       pagination1: { offset: 10, limit: 10 },
       orderBy1: [{ field: "createdAtMonth", direction: "ASC" }],
-      filter: { state: { exact: "OPEN" } },
+      filter1: { state: { exact: "OPEN" } },
     });
   });
 

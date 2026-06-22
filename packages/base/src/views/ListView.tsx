@@ -22,6 +22,7 @@ import {
 } from "./data-view-context";
 import {
   DATA_VIEW_KINDS,
+  Filter,
   dataViewGroupsEqual,
   type DataViewDefaultGroups,
   type DataViewGroup,
@@ -164,7 +165,11 @@ function ListViewBody<TRow extends Row = Row>({
     () => columnsWithMetadataDefaults(columns, modelMetadata),
     [columns, modelMetadata],
   );
-  const declaredFacets = useRelationFacets(model, facets);
+  const mergedFilter = React.useMemo(
+    () => Filter.combineOptional(filter, dataView.state.filter),
+    [dataView.state.filter, filter],
+  );
+  const declaredFacets = useRelationFacets(model, facets, mergedFilter);
   const rawActiveDefaultGroup = defaultGroupForView(
     defaultGroup,
     defaultGroups,

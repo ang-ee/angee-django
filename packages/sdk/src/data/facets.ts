@@ -19,6 +19,10 @@ import {
   type DataQueryGroup,
   type DataQueryGroupOrder,
 } from "./query";
+import {
+  Filter,
+  type DataViewFilter,
+} from "./view-state";
 
 const EMPTY_FACETS: readonly ResourceFacetSpec[] = [];
 
@@ -33,6 +37,8 @@ export interface ResourceFacetSpec {
   labelKey?: string;
   /** Server-side ordering for this facet's buckets. */
   groupOrder?: readonly DataQueryGroupOrder[];
+  /** Filter fields to remove from this facet's count query. */
+  neutralizeFilterFields?: readonly string[];
   page?: number;
   pageSize?: number;
   measures?: readonly AggregateMeasure[];
@@ -98,6 +104,9 @@ export function useResourceFacets<
       stableFacets.map((facet) => ({
         id: facet.id,
         groups: facet.groups,
+        ...(withFilter
+          ? { filter: facetFilter(filter, facet.neutralizeFilterFields) }
+          : {}),
         ...(facet.groupOrder !== undefined
           ? { groupOrder: facet.groupOrder }
           : {}),
@@ -105,14 +114,13 @@ export function useResourceFacets<
         ...(facet.pageSize !== undefined ? { pageSize: facet.pageSize } : {}),
         ...(facet.measures !== undefined ? { measures: facet.measures } : {}),
       })),
-    [stableFacets],
+    [filter, stableFacets, withFilter],
   );
   const active =
     enabled && Boolean(modelLabel) && graphQLFacets.length > 0 && source.canQuery;
   const variables = useStableVariables(
     source.facetsVariables({
       facets: graphQLFacets,
-      ...(withFilter ? { filter } : {}),
     }),
   );
   const document = useMemo(
@@ -120,11 +128,10 @@ export function useResourceFacets<
       source.facetsDocument(
         {
           facets: graphQLFacets,
-          ...(withFilter ? { filter: {} } : {}),
         },
         { withFilterEcho },
       ),
-    [source, graphQLFacets, withFilter, withFilterEcho],
+    [source, graphQLFacets, withFilterEcho],
   );
   const run = useOptionalDocumentQuery(document, variables, active);
   useRegisterModelRefetch(modelLabel, run.refetch, active);
@@ -181,6 +188,15 @@ function resourceFacetResult(
 function firstGroupKey(facet: ResourceFacetSpec): string | undefined {
   const [group] = facet.groups;
   return group ? dataQueryGroupKey(group) : undefined;
+}
+
+function facetFilter<TName extends ResourceTypeName>(
+  filter: DataQueryFilter<TName> | undefined,
+  fields: readonly string[] | undefined,
+): DataViewFilter {
+  if (filter === undefined) return {};
+  if (!fields || fields.length === 0) return filter as DataViewFilter;
+  return Filter.from(filter).withoutFields(fields);
 }
 
 function stringValue(value: unknown): string | null {

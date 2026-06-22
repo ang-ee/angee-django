@@ -172,6 +172,8 @@ export interface AssembleFacetDocumentSpec {
   keyFields: readonly string[];
   /** Select these aggregate measures from every facet bucket. */
   measures?: readonly AggregateMeasure[];
+  /** Declare this facet's `$filter<N>` variable and pass it to the grouped field. */
+  withFilter?: boolean;
   /** Declare this facet's `$orderBy<N>` variable and pass it to the grouped field. */
   withOrderBy?: boolean;
 }
@@ -179,7 +181,7 @@ export interface AssembleFacetDocumentSpec {
 export interface AssembleFacetsDocumentOptions {
   /** One aliased grouped result field per requested facet. */
   facets: readonly AssembleFacetDocumentSpec[];
-  /** Declare shared `$filter: <Type>Filter` and pass it to every facet. */
+  /** Declare a filter for every facet. Use per-facet `withFilter` for new callers. */
   withFilter?: boolean;
   /** Select each grouped row's echoed list filter when the backend exposes it. */
   withFilterEcho?: boolean;
@@ -327,7 +329,8 @@ export function assembleGroupByDocument(
  * Multi-facet grouped document. Each facet is the same grouped root field under
  * a stable alias (`facet0`, `facet1`, …), so one request can fetch the counts
  * needed to render a toolbar's choice facets without issuing one query per
- * relation. A shared filter scopes every facet to the current data view state.
+ * relation. Each facet gets its own filter variable so callers can neutralize
+ * the facet's selected field while keeping the rest of the view filter active.
  */
 export function assembleFacetsDocument(
   modelLabel: string,
@@ -342,6 +345,9 @@ export function assembleFacetsDocument(
       `$groupBy${index}: [${groupByInput}!]!`,
       `$pagination${index}: OffsetPaginationInput`,
     ];
+    if (facet.withFilter || options.withFilter) {
+      variables.push(`$filter${index}: ${typeName}Filter`);
+    }
     if (facet.withOrderBy) {
       const groupOrderInput = assertName(
         rootFields.groupOrderInput ?? `${typeName}GroupOrder`,
@@ -350,13 +356,12 @@ export function assembleFacetsDocument(
     }
     return variables;
   });
-  if (options.withFilter) declared.push(`$filter: ${typeName}Filter`);
   const facets = options.facets.map((facet, index) => {
     const keyFields = [...new Set(facet.keyFields.map(assertName))];
     const keySelection = keyFields.length > 0 ? keyFields.join(" ") : "__typename";
     const measureSelection = aggregateMeasureSelection(facet.measures);
     const args = [`groupBy: $groupBy${index}`, `pagination: $pagination${index}`];
-    if (options.withFilter) args.push("filter: $filter");
+    if (facet.withFilter || options.withFilter) args.push(`filter: $filter${index}`);
     if (facet.withOrderBy) args.push(`orderBy: $orderBy${index}`);
     const resultSelection = [
       `key { ${keySelection} }`,

@@ -217,6 +217,16 @@ Eleventh scalar group-alias slice completed on 2026-06-22:
       only `defaultGroups={{list:{field:"implCategory"}, board:{field:"implCategory"}}}`.
 - [x] Run focused backend/frontend/schema checks and commit the slice.
 
+Twelfth facet-neutralized counts slice completed on 2026-06-22:
+
+- [x] Add SDK filter leaf removal so a facet count can drop its own active field
+      while preserving the rest of the view filter.
+- [x] Switch multi-facet GraphQL documents to per-facet filter variables
+      (`filter0`, `filter1`, ...) so different facets can use different domains.
+- [x] Pass the active list filter into declared relation facets from `ListView`
+      and let relation facet metadata declare which field should be neutralized.
+- [x] Cover enum-style and relation-style facet neutralization in SDK/base tests.
+
 Current local verification:
 
 - [x] `uv run ruff check angee/graphql/data/metadata.py angee/graphql/data/queries.py addons/angee/integrate/schema.py tests/test_aggregates.py tests/test_integrate_graphql.py`
@@ -303,6 +313,11 @@ Current local verification:
 - [x] `pnpm --filter @angee/agents --filter @angee/integrate --filter @angee/iam --filter @angee/parties --filter @angee/storage --filter @angee/knowledge typecheck`
 - [x] `uv run pytest tests/test_aggregates.py tests/test_integrate_graphql.py tests/test_agents_graphql.py tests/test_parties_graphql.py tests/test_iam_graphql.py tests/test_knowledge_graphql.py tests/test_storage.py`
 - [x] `pnpm --filter @angee/base test -- src/views/relation-facet.test.tsx src/views/DataPage.test.tsx src/views/group-dimension.test.ts`
+- [x] `pnpm --filter @angee/sdk test -- view-state facets graphql-source`
+- [x] `pnpm --filter @angee/base test -- relation-facet ListView`
+- [x] `pnpm --filter @angee/sdk typecheck`
+- [x] `pnpm --filter @angee/base typecheck`
+- [x] `git diff --check`
 
 ## North Star
 
@@ -870,7 +885,7 @@ Done when:
 
 - [x] Add backend facet query support using grouped aggregates.
 - [x] Add SDK facet hooks/data-source calls.
-- [ ] Implement facet-neutralized filters.
+- [x] Implement facet-neutralized filters.
 - [ ] Replace page-row-derived selection options.
 - [x] Replace most `useRelationFacet` usage with metadata-driven facets.
 - [x] Support relation label display and public-id filters.

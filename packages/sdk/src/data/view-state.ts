@@ -194,6 +194,12 @@ export class Filter {
     return Object.keys(this.value).length > 0;
   }
 
+  withoutFields(fields: Iterable<string>): DataViewFilter {
+    const omitted = new Set(fields);
+    if (omitted.size === 0) return this.value;
+    return withoutFilterFields(this.value, omitted);
+  }
+
   and(filter: unknown): DataViewFilter {
     const right = filterRecord(filter);
     if (!right || Object.keys(right).length === 0) return this.value;
@@ -292,6 +298,50 @@ export class Filter {
     const value = this.value[field];
     return isDataViewLookup(value) ? value : null;
   }
+}
+
+function withoutFilterFields(
+  value: unknown,
+  fields: ReadonlySet<string>,
+): DataViewFilter {
+  const record = filterRecord(value);
+  if (!record) return {};
+  const next: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(record)) {
+    if (fields.has(key)) continue;
+    if (isFilterControlKey(key)) {
+      const child = withoutFilterControlValue(item, fields);
+      if (child !== undefined) next[key] = child;
+      continue;
+    }
+    next[key] = item;
+  }
+  return next as DataViewFilter;
+}
+
+function withoutFilterControlValue(
+  value: unknown,
+  fields: ReadonlySet<string>,
+): unknown {
+  if (Array.isArray(value)) {
+    const items = value
+      .map((item) => withoutFilterFields(item, fields))
+      .filter((item) => Object.keys(item).length > 0);
+    return items.length > 0 ? items : undefined;
+  }
+  const record = filterRecord(value);
+  if (!record) return value;
+  const child = withoutFilterFields(record, fields);
+  return Object.keys(child).length > 0 ? child : undefined;
+}
+
+function isFilterControlKey(value: string): boolean {
+  return value === "AND"
+    || value === "OR"
+    || value === "NOT"
+    || value === "and"
+    || value === "or"
+    || value === "not";
 }
 
 export class DataViewState {
