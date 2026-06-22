@@ -85,7 +85,6 @@ def _iam_model(name: str) -> type[Any]:
 
 User = _iam_model("User")
 Group = _iam_model("Group")
-Permission = _iam_model("Permission")
 
 _IAM_OVERVIEW_DEFAULT_PEEK_LIMIT = 6
 _IAM_OVERVIEW_MAX_PEEK_LIMIT = 100
@@ -159,26 +158,6 @@ class GroupType(AngeeNode):
     """GraphQL projection of Django auth groups with Angee public ids."""
 
     name: auto
-
-
-@strawberry_django.type(Permission)
-class PermissionType(AngeeNode):
-    """GraphQL projection of Django auth permissions with Angee public ids."""
-
-    codename: auto
-    name: auto
-
-    @strawberry_django.field
-    def app_label(self) -> str:
-        """Return the Django app label that owns this permission."""
-
-        return str(cast(Any, self).content_type.app_label)
-
-    @strawberry_django.field
-    def model(self) -> str:
-        """Return the Django model name that owns this permission."""
-
-        return str(cast(Any, self).content_type.model)
 
 
 @strawberry.type
@@ -830,22 +809,6 @@ class GroupOrder:
     name: auto
 
 
-@strawberry_django.filter_type(Permission, lookups=True)
-class PermissionFilter:
-    """Field lookups accepted when filtering Django auth permissions."""
-
-    codename: auto
-    name: auto
-
-
-@strawberry_django.order_type(Permission)
-class PermissionOrder:
-    """Orderings accepted by the auth permissions list."""
-
-    codename: auto
-    name: auto
-
-
 UserDataQuery, _USER_DATA_TYPES = data_query(
     UserType,
     type_name="UserDataQuery",
@@ -879,31 +842,6 @@ GroupDataQuery, _GROUP_DATA_TYPES = data_query(
     enable_filter_echo=True,
     permission_classes=_ADMIN_PERMISSION_CLASSES,
     aggregate_kwargs={"name_prefix": "GroupAggregate", "pagination_style": "offset"},
-)
-
-
-def _permission_queryset(info: strawberry.Info) -> object:
-    """Return permissions with their content type for list/detail display."""
-
-    del info
-    return Permission.objects.select_related("content_type")
-
-
-PermissionDataQuery, _PERMISSION_DATA_TYPES = data_query(
-    PermissionType,
-    type_name="PermissionDataQuery",
-    filters=PermissionFilter,
-    order=PermissionOrder,
-    list_name="permissions",
-    detail_name="permission",
-    aggregate_name="permission_aggregate",
-    group_name="permission_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["content_type__app_label", "content_type__model"],
-    enable_filter_echo=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    list_kwargs={"resolver": _permission_queryset},
-    aggregate_kwargs={"name_prefix": "PermissionAggregate", "pagination_style": "offset"},
 )
 
 
@@ -1108,7 +1046,6 @@ schemas = {
             IAMConsoleQuery,
             UserDataQuery,
             GroupDataQuery,
-            PermissionDataQuery,
         ],
         "mutation": [
             IAMMutation,
@@ -1120,7 +1057,6 @@ schemas = {
             UserType,
             CurrentUserType,
             GroupType,
-            PermissionType,
             IAMRoleType,
             IAMGrantType,
             IAMRelationType,
@@ -1131,7 +1067,6 @@ schemas = {
             IAMOverviewType,
             *_USER_DATA_TYPES,
             *_GROUP_DATA_TYPES,
-            *_PERMISSION_DATA_TYPES,
             IAMRelationshipType,
         ],
     },

@@ -17,7 +17,6 @@ import pytest
 from django.apps import apps
 from django.contrib.auth import BACKEND_SESSION_KEY, SESSION_KEY, get_user_model
 from django.contrib.auth.models import AnonymousUser
-from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 from django.db import connection
 from django.db.models.signals import pre_delete
@@ -1175,38 +1174,22 @@ def test_console_schema_exposes_user_change_subscription(
 
 
 @pytest.mark.django_db
-def test_iam_auth_proxy_models_are_sqid_addressable() -> None:
-    """IAM auth-table proxies satisfy the public data identity contract."""
+def test_iam_group_proxy_model_is_sqid_addressable() -> None:
+    """The IAM auth-group proxy satisfies the public data identity contract."""
 
     group = iam_schema.Group.objects.create(name="Operators")
-    content_type = ContentType.objects.get_for_model(User)
-    permission = iam_schema.Permission.objects.create(
-        content_type=content_type,
-        codename="can_review_identity",
-        name="Can review identity",
-    )
 
     assert is_public_data_model(iam_schema.Group)
-    assert is_public_data_model(iam_schema.Permission)
     assert public_id_of(group).startswith("grp_")
-    assert public_id_of(permission).startswith("prm_")
     assert public_id_for(iam_schema.Group, group.pk) == group.sqid
-    assert public_id_for(iam_schema.Permission, permission.pk) == permission.sqid
     assert instance_from_public_id(iam_schema.Group, group.sqid).pk == group.pk
-    assert instance_from_public_id(iam_schema.Permission, permission.sqid).pk == permission.pk
 
 
 @pytest.mark.django_db
-def test_iam_group_and_permission_data_queries_use_proxy_sqids() -> None:
-    """The IAM auth catalogue surfaces list and detail rows by public sqids."""
+def test_iam_group_data_query_uses_proxy_sqids() -> None:
+    """The IAM auth-group catalogue surfaces list and detail rows by public sqids."""
 
     group = iam_schema.Group.objects.create(name="Operators")
-    content_type = ContentType.objects.get_for_model(User)
-    permission = iam_schema.Permission.objects.create(
-        content_type=content_type,
-        codename="can_manage_identity",
-        name="Can manage identity",
-    )
     admin = User.objects.create_superuser(
         username="auth-catalogue-admin",
         email="auth-catalogue-admin@example.com",
@@ -1217,42 +1200,27 @@ def test_iam_group_and_permission_data_queries_use_proxy_sqids() -> None:
     metadata = {item.model_label: item for item in console_schema.angee_data_queries}
     assert metadata["iam.Group"].roots.list_name == "groups"
     assert metadata["iam.Group"].roots.detail_name == "group"
-    assert metadata["iam.Permission"].roots.list_name == "permissions"
-    assert metadata["iam.Permission"].roots.detail_name == "permission"
+    assert "iam.Permission" not in metadata
 
     data = _data(
         _execute(
             console_schema,
             """
-            query AuthCatalogue($groupId: ID!, $permissionId: ID!) {
+            query AuthCatalogue($groupId: ID!) {
               groups(pagination: {limit: 10}) {
                 totalCount
                 results { id name }
               }
               group(id: $groupId) { id name }
-              permissions(pagination: {limit: 10}) {
-                totalCount
-                results { id codename name appLabel model }
-              }
-              permission(id: $permissionId) { id codename name appLabel model }
             }
             """,
-            {"groupId": group.sqid, "permissionId": permission.sqid},
+            {"groupId": group.sqid},
             user=admin,
         )
     )
 
     assert {"id": group.sqid, "name": "Operators"} in data["groups"]["results"]
     assert data["group"] == {"id": group.sqid, "name": "Operators"}
-    permission_row = {
-        "id": permission.sqid,
-        "codename": "can_manage_identity",
-        "name": "Can manage identity",
-        "appLabel": "auth",
-        "model": User._meta.model_name,
-    }
-    assert permission_row in data["permissions"]["results"]
-    assert data["permission"] == permission_row
 
 
 def test_my_connected_accounts_are_scoped_to_session_user(

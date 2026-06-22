@@ -12,7 +12,6 @@ from typing import Any
 
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import Group as DjangoGroup
-from django.contrib.auth.models import Permission as DjangoPermission
 from django.contrib.auth.models import UnicodeUsernameValidator
 from django.db import models
 from django.utils import timezone
@@ -34,18 +33,6 @@ class Group(SqidProxyMixin, DjangoGroup):
         """Django model options for the IAM group proxy."""
 
         proxy = True
-
-
-class Permission(SqidProxyMixin, DjangoPermission):
-    """Sqid-addressable proxy over Django's auth permission table."""
-
-    sqid_prefix = "prm_"
-
-    class Meta:
-        """Django model options for the IAM permission proxy."""
-
-        proxy = True
-        ordering = ("content_type__app_label", "content_type__model", "codename")
 
 
 class UserManager(RebacManager, BaseUserManager):

@@ -183,10 +183,11 @@ Ninth public-identity guardrail slice completed on 2026-06-22:
       auth.User fallback only.
 - [x] Add `SqidProxyMixin` for Django proxy models, because Django forbids
       field-bearing abstract bases on proxies.
-- [x] Expose Django auth `Group` and `Permission` through IAM-owned proxy models
-      with `grp_` / `prm_` public ids.
-- [x] Promote auth groups and permissions to IAM console `data_query(...)`
-      surfaces and React `DataPage`/`GroupListView` pages.
+- [x] Expose Django auth `Group` through an IAM-owned proxy model with `grp_`
+      public ids.
+- [x] Promote auth groups to an IAM console `data_query(...)` surface and a
+      React `DataPage`/`GroupListView` page under Users. Django auth
+      permissions stay unexposed because REBAC owns authorization semantics.
 
 Current local verification:
 

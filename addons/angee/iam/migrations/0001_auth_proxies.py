@@ -1,4 +1,4 @@
-"""Migration state for IAM proxy models over Django auth tables."""
+"""Migration state for IAM's proxy over Django auth groups."""
 
 from __future__ import annotations
 
@@ -24,16 +24,5 @@ class Migration(migrations.Migration):
                 "constraints": [],
             },
             bases=("auth.group",),
-        ),
-        migrations.CreateModel(
-            name="Permission",
-            fields=[],
-            options={
-                "ordering": ("content_type__app_label", "content_type__model", "codename"),
-                "proxy": True,
-                "indexes": [],
-                "constraints": [],
-            },
-            bases=("auth.permission",),
         ),
     ]

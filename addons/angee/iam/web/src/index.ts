@@ -15,7 +15,6 @@ import { GrantsPage } from "./views/GrantsPage";
 import { GroupsPage } from "./views/GroupsPage";
 import { oidcLoginSection } from "./views/oidc-section";
 import { OverviewPage } from "./views/OverviewPage";
-import { PermissionsPage } from "./views/PermissionsPage";
 import { RelationshipsPage } from "./views/RelationshipsPage";
 import { RolesPage } from "./views/RolesPage";
 import { SchemaPage } from "./views/SchemaPage";
@@ -35,15 +34,21 @@ const identityMenu: readonly BaseMenuItem[] = [
     group: "platform",
     children: [
       { id: "iam.overview", label: "Overview", route: "iam.overview", icon: "home" },
-      { id: "iam.users", label: "Users", route: "iam.users", icon: "users" },
+      {
+        id: "iam.users.group",
+        label: "Users",
+        icon: "users",
+        children: [
+          { id: "iam.users", label: "Users", route: "iam.users", icon: "users" },
+          { id: "iam.groups", label: "Groups", route: "iam.groups", icon: "users" },
+        ],
+      },
       {
         id: "iam.roles.group",
         label: "Roles",
         icon: "auth",
         children: [
           { id: "iam.roles", label: "Roles", route: "iam.roles", icon: "auth" },
-          { id: "iam.groups", label: "Groups", route: "iam.groups", icon: "users" },
-          { id: "iam.permissions", label: "Permissions", route: "iam.permissions", icon: "columns" },
           { id: "iam.grants", label: "Grants", route: "iam.grants", icon: "check" },
           { id: "iam.relationships", label: "Relationships", route: "iam.relationships", icon: "share" },
           { id: "iam.schema", label: "Schema", route: "iam.schema", icon: "columns" },
@@ -79,7 +84,6 @@ const iam = defineBaseAddon({
     ...consolePage("iam.users", "/iam/users", UsersPage, "User"),
     { name: "iam.roles", path: "/iam/roles", shell: "console", component: RolesPage },
     ...consolePage("iam.groups", "/iam/groups", GroupsPage, "iam.Group"),
-    ...consolePage("iam.permissions", "/iam/permissions", PermissionsPage, "iam.Permission"),
     { name: "iam.grants", path: "/iam/grants", shell: "console", component: GrantsPage },
     { name: "iam.relationships", path: "/iam/relationships", shell: "console", component: RelationshipsPage },
     { name: "iam.schema", path: "/iam/schema", shell: "console", component: SchemaPage },
