@@ -19,6 +19,8 @@ import storage from "@angee/storage";
 
 import publicSDL from "../../runtime/schemas/public.graphql?raw";
 import consoleSDL from "../../runtime/schemas/console.graphql?raw";
+import publicMetadata from "../../runtime/schemas/public.metadata.json";
+import consoleMetadata from "../../runtime/schemas/console.metadata.json";
 import { DemoForgotPasswordHint } from "./demo-auth";
 import "./index.css";
 
@@ -60,8 +62,8 @@ createApp({
     public: { schema: "public" },
   },
   schemas: {
-    public: { url: "/graphql/public/", sdl: publicSDL },
-    console: { url: "/graphql/console/", sdl: consoleSDL },
+    public: { url: "/graphql/public/", sdl: publicSDL, metadata: publicMetadata },
+    console: { url: "/graphql/console/", sdl: consoleSDL, metadata: consoleMetadata },
   },
   // The console is the primary surface, so it is the default schema; the public
   // login shell pins itself back to the public client above.

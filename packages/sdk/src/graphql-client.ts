@@ -12,6 +12,7 @@ import {
 import type { FetchBody } from "@urql/core/internal";
 
 import { cacheConfigFromSchema, type CacheConfig } from "./cache-config";
+import type { AngeeSchemaMetadata } from "./model-metadata";
 
 type FetchFn = typeof globalThis.fetch;
 
@@ -119,6 +120,8 @@ export interface AngeeUrqlClientOptions {
   url: string;
   /** Printed GraphQL SDL for this schema; derives cache and field metadata. */
   sdl?: string;
+  /** Generated schema metadata emitted beside the SDL; makes model data roots authoritative. */
+  metadata?: AngeeSchemaMetadata;
   /** WebSocket endpoint; derived from `url` when omitted. */
   wsEndpoint?: string;
   /** Schema-derived graphcache keying + connection resolvers. */

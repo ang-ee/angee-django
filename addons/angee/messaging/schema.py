@@ -2,7 +2,7 @@
 
 The console surface is read-heavy: messages arrive via channel sync, so the inbox
 is the ``Message`` aggregate grouped by thread / sender / channel / status / time
-(``rebac_aggregate_builder`` + the SDL-derived relation facets), and live updates
+(``data_query`` + the SDL-derived relation facets), and live updates
 ride ``changes``. Thread and message expose ``crud`` for human edits (status moves,
 deletes); parts/participants/metrics are read projections reached through their
 message/thread.
@@ -18,8 +18,8 @@ from django.apps import apps
 from strawberry import auto
 from strawberry_django.pagination import OffsetPaginated
 
-from angee.graphql.aggregates import rebac_aggregate_builder
 from angee.graphql.crud import crud
+from angee.graphql.data import data_query
 from angee.graphql.node import AngeeNode, detail
 from angee.graphql.subscriptions import changes
 from angee.parties.schema import HandleType
@@ -220,62 +220,55 @@ class MessagePatch:
     subject: str | None = strawberry.UNSET
 
 
-_message_aggregates = rebac_aggregate_builder(
-    model=Message,
-    name_prefix="MessageAggregate",
+MessageDataQuery, _MESSAGE_DATA_TYPES = data_query(
+    MessageType,
+    type_name="MessageDataQuery",
+    filters=MessageFilter,
+    order=MessageOrder,
+    list_name="messages",
+    detail_name="message",
+    aggregate_name="message_aggregate",
+    group_name="message_groups",
     aggregate_fields=["id"],
     group_by_fields=["thread", "sender", "channel", "status", "platform", "sent_at"],
-    filter_type=MessageFilter,
-    pagination_style="offset",
     enable_filter_echo=True,
-).build()
-_thread_aggregates = rebac_aggregate_builder(
-    model=Thread,
-    name_prefix="ThreadAggregate",
+    aggregate_kwargs={
+        "name_prefix": "MessageAggregate",
+        "pagination_style": "offset",
+    },
+)
+ThreadDataQuery, _THREAD_DATA_TYPES = data_query(
+    ThreadType,
+    type_name="ThreadDataQuery",
+    filters=ThreadFilter,
+    order=ThreadOrder,
+    list_name="threads",
+    detail_name="thread",
+    aggregate_name="thread_aggregate",
+    group_name="thread_groups",
     aggregate_fields=["id", "message_count"],
     group_by_fields=["channel", "modality", "visibility", "last_message_at"],
-    filter_type=ThreadFilter,
-    pagination_style="offset",
     enable_filter_echo=True,
-).build()
+    aggregate_kwargs={
+        "name_prefix": "ThreadAggregate",
+        "pagination_style": "offset",
+    },
+)
 
 
 @strawberry.type
 class MessagingQuery:
     """Messaging queries — the inbox, threads, and channels."""
 
-    messages: OffsetPaginated[MessageType] = strawberry_django.offset_paginated(
-        filters=MessageFilter,
-        order=MessageOrder,
-    )
-    message: MessageType | None = detail(MessageType)
-    threads: OffsetPaginated[ThreadType] = strawberry_django.offset_paginated(
-        filters=ThreadFilter,
-        order=ThreadOrder,
-    )
-    thread: ThreadType | None = detail(ThreadType)
     channels: OffsetPaginated[ChannelType] = strawberry_django.offset_paginated()
     channel: ChannelType | None = detail(ChannelType)
-    message_aggregate = _message_aggregates.aggregate_field
-    message_groups = _message_aggregates.group_by_field
-    thread_aggregate = _thread_aggregates.aggregate_field
-    thread_groups = _thread_aggregates.group_by_field
 
 
-_AGGREGATE_TYPES = [
-    _message_aggregates.aggregate_type,
-    _message_aggregates.grouped_type,
-    _message_aggregates.grouped_result_type,
-    _message_aggregates.group_key_type,
-    _thread_aggregates.aggregate_type,
-    _thread_aggregates.grouped_type,
-    _thread_aggregates.grouped_result_type,
-    _thread_aggregates.group_key_type,
-]
+_DATA_TYPES = [*_MESSAGE_DATA_TYPES, *_THREAD_DATA_TYPES]
 
 
 _MESSAGING_SCHEMA_BUCKET = {
-    "query": [MessagingQuery],
+    "query": [MessagingQuery, MessageDataQuery, ThreadDataQuery],
     "mutation": [
         crud(ThreadType, update=ThreadPatch, delete=True),
         crud(MessageType, update=MessagePatch, delete=True),
@@ -290,7 +283,7 @@ _MESSAGING_SCHEMA_BUCKET = {
         ParticipantType,
         ReactionType,
         MessageMetricsType,
-        *_AGGREGATE_TYPES,
+        *_DATA_TYPES,
     ],
 }
 

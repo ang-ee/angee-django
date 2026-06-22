@@ -30,8 +30,8 @@ from angee.agents.context import render_view_context
 from angee.agents.models import RuntimeStatus
 from angee.base.mixins import actor_user_id
 from angee.graphql.actions import ActionResult, action_target, resolve_action_target
-from angee.graphql.aggregates import rebac_aggregate_builder
 from angee.graphql.crud import crud
+from angee.graphql.data import data_query
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode, detail
 from angee.graphql.subscriptions import changes
@@ -434,15 +434,24 @@ class InferenceModelOrder:
     updated_at: auto
 
 
-_inference_model_aggregates = rebac_aggregate_builder(
-    model=InferenceModel,
-    name_prefix="InferenceModelAggregate",
+InferenceModelDataQuery, _INFERENCE_MODEL_DATA_TYPES = data_query(
+    InferenceModelType,
+    type_name="InferenceModelDataQuery",
+    filters=InferenceModelFilter,
+    order=InferenceModelOrder,
+    list_name="inference_models",
+    detail_name="inference_model",
+    aggregate_name="inference_model_aggregate",
+    group_name="inference_model_groups",
     aggregate_fields=["id", "context_window", "max_output_tokens"],
     group_by_fields=["provider", "model_use", "status"],
-    filter_type=InferenceModelFilter,
-    pagination_style="offset",
     enable_filter_echo=True,
-).build()
+    permission_classes=_ADMIN_PERMISSION_CLASSES,
+    aggregate_kwargs={
+        "name_prefix": "InferenceModelAggregate",
+        "pagination_style": "offset",
+    },
+)
 
 
 @strawberry.type
@@ -474,18 +483,6 @@ class AgentsConsoleQuery:
         InferenceProviderType,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
-    inference_models: OffsetPaginated[InferenceModelType] = strawberry_django.offset_paginated(
-        filters=InferenceModelFilter,
-        order=InferenceModelOrder,
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    inference_model: InferenceModelType | None = detail(
-        InferenceModelType,
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    inference_model_aggregate = _inference_model_aggregates.aggregate_field
-    inference_model_groups = _inference_model_aggregates.group_by_field
-
 
 _AGENT_MUTATION = crud(
     AgentType,
@@ -817,9 +814,7 @@ class AgentActionMutation:
         return provisioning.deprovision_agent(id)
 
 
-# Explicit annotation widens a homogeneous AngeeNode list past mypy's invariance check
-# (see integrate.schema._CONSOLE_TYPES).
-_CONSOLE_TYPES: list[type] = [
+_CONSOLE_TYPES: list[object] = [
     InferenceProviderType,
     InferenceModelType,
     SkillType,
@@ -827,16 +822,13 @@ _CONSOLE_TYPES: list[type] = [
     MCPToolType,
     AgentType,
     AgentChatEndpoint,
-    _inference_model_aggregates.aggregate_type,
-    _inference_model_aggregates.grouped_type,
-    _inference_model_aggregates.grouped_result_type,
-    _inference_model_aggregates.group_key_type,
+    *_INFERENCE_MODEL_DATA_TYPES,
 ]
 
 
 schemas = {
     "console": {
-        "query": [AgentsConsoleQuery],
+        "query": [AgentsConsoleQuery, InferenceModelDataQuery],
         "mutation": [
             _AGENT_MUTATION,
             InferenceProviderCreateMutation,

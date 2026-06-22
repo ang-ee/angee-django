@@ -9,12 +9,11 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from strawberry import auto
-from strawberry_django.pagination import OffsetPaginated
 
-from angee.graphql.aggregates import rebac_aggregate_builder
 from angee.graphql.crud import crud
+from angee.graphql.data import data_query
 from angee.graphql.ids import PublicID
-from angee.graphql.node import AngeeNode, detail
+from angee.graphql.node import AngeeNode
 from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_display_label, user_public_id
@@ -113,54 +112,26 @@ class NoteOrder:
     word_count: auto
 
 
-# Aggregation is owned by ``strawberry-django-aggregates``: it emits the
-# group-by surface (offset-paginated groups, multi-axis composite keys, the
-# full granularity track, having, and ordering). Angee contributes the
-# REBAC-scoped queryset hook. Group-by axes are non-gated read fields only:
-# ``is_starred`` and ``reminder_at`` are owner-gated reads (``read__*``), so
-# exposing either as an axis would leak owner-only values through bucket keys.
-# Count is the M2 measure; ``word_count`` is the summable numeric column.
-# ``enable_filter_echo`` adds a ``filter: JSON!`` to each grouped bucket: a value
-# shaped like ``notes(filters:)`` that re-selects that bucket's rows, so a client
-# can lazily page a group's items through the existing scoped list query. The
-# status axis is a choices column exposed as a GraphQL enum, so the echo must
-# emit the enum wire name (``DRAFT``) not the stored value (``draft``) —
-# resolved from the live filter type by the library (>=0.4.1).
-_note_aggregates = rebac_aggregate_builder(
-    model=Note,
+NotesQuery, _NOTE_DATA_TYPES = data_query(
+    NoteType,
+    type_name="NotesQuery",
+    filters=NoteFilter,
+    order=NoteOrder,
+    list_name="notes",
+    detail_name="note",
+    aggregate_name="note_aggregate",
+    group_name="note_groups",
     aggregate_fields=["id", "word_count"],
     group_by_fields=["status", "updated_at"],
-    filter_type=NoteFilter,
-    pagination_style="offset",
     enable_filter_echo=True,
-).build()
-
-
-@strawberry.type
-class NotesQuery:
-    """Public notes queries."""
-
-    notes: OffsetPaginated[NoteType] = strawberry_django.offset_paginated(
-        filters=NoteFilter,
-        order=NoteOrder,
-    )
-    note: NoteType | None = detail(NoteType)
-    note_aggregate = _note_aggregates.aggregate_field
-    note_groups = _note_aggregates.group_by_field
-
-
-_AGGREGATE_TYPES = [
-    _note_aggregates.aggregate_type,
-    _note_aggregates.grouped_type,
-    _note_aggregates.grouped_result_type,
-    _note_aggregates.group_key_type,
-]
+    aggregate_kwargs={"pagination_style": "offset"},
+)
 
 
 _NOTE_SCHEMA_BUCKET = {
     "query": [NotesQuery, revisions(NoteType)],
     "mutation": [crud(NoteType, create=NoteInput, update=NotePatch, delete=True)],
-    "types": [NoteType, *_AGGREGATE_TYPES],
+    "types": [NoteType, *_NOTE_DATA_TYPES],
 }
 
 

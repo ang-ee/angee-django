@@ -269,6 +269,169 @@ describe("fieldMetadataFromSDL", () => {
     // Two `ambiguous_*` leaves → ambiguous, so no label axis (group labels by id).
     expect(required(fields.ambiguous).relationFilter?.labelKey).toBeUndefined();
   });
+
+  test("uses generated data-query metadata as authoritative model roots", () => {
+    const metadata = fieldMetadataFromSDL(
+      /* GraphQL */ `
+        type IntegrationType { id: ID! status: String! }
+        type IntegrationAggregateAggregate { count: Int! }
+        input IntegrationAggregateGroupBySpec { field: String! }
+        type IntegrationAggregateGrouped { key: String count: Int! }
+        type IntegrationAggregateGroupedResult {
+          results: [IntegrationAggregateGrouped!]!
+        }
+        type Query {
+          integrations: [IntegrationType!]!
+          integration(id: ID!): IntegrationType
+          integrationAggregate: IntegrationAggregateAggregate!
+          integrationGroups(groupBy: [IntegrationAggregateGroupBySpec!]!): IntegrationAggregateGroupedResult!
+        }
+      `,
+      {
+        angee: {
+          dataQueries: [
+            {
+              modelLabel: "integrate.Integration",
+              appLabel: "integrate",
+              modelName: "integration",
+              publicIdField: "sqid",
+              roots: {
+                listName: "integrations",
+                detailName: "integration",
+                aggregateName: "integrationAggregate",
+                groupName: "integrationGroups",
+              },
+              typeNames: {
+                query: "IntegrationDataQuery",
+                node: "IntegrationType",
+                groupBySpec: "IntegrationAggregateGroupBySpec",
+              },
+              capabilities: ["list", "detail", "aggregate", "groups"],
+              filterFields: ["vendor", "status"],
+              orderFields: ["status"],
+              aggregateFields: ["id"],
+              groupByFields: ["vendor", "status"],
+              relationAxes: [],
+            },
+          ],
+        },
+      },
+    );
+
+    const integration = required(modelMetadataForLabel(metadata, "integrate.Integration"));
+    expect(integration.rootFields).toMatchObject({
+      detail: "integration",
+      list: "integrations",
+      aggregate: "integrationAggregate",
+      groupBy: "integrationGroups",
+      groupByInput: "IntegrationAggregateGroupBySpec",
+    });
+    expect(integration.dataQuery?.modelLabel).toBe("integrate.Integration");
+    expect(metadata.dataQueries?.[0]?.modelLabel).toBe("integrate.Integration");
+  });
+
+  test("fails fast when generated metadata drifts from the SDL", () => {
+    expect(() =>
+      fieldMetadataFromSDL(
+        /* GraphQL */ `
+          type IntegrationType { id: ID! status: String! }
+          type Query { integrations: [IntegrationType!]! }
+        `,
+        {
+          angee: {
+            dataQueries: [
+              {
+                modelLabel: "integrate.Integration",
+                appLabel: "integrate",
+                modelName: "integration",
+                publicIdField: "sqid",
+                roots: {
+                  listName: "integrations",
+                  groupName: "missingGroups",
+                },
+                typeNames: {
+                  query: "IntegrationDataQuery",
+                  node: "IntegrationType",
+                },
+                capabilities: ["list", "groups"],
+                filterFields: [],
+                orderFields: [],
+                aggregateFields: ["id"],
+                groupByFields: ["status"],
+                relationAxes: [],
+              },
+            ],
+          },
+        },
+      ),
+    ).toThrow(/missing Query field "missingGroups"/);
+  });
+
+  test("uses generated relation axes for public-id lookup filters", () => {
+    const metadata = fieldMetadataFromSDL(
+      /* GraphQL */ `
+        type ProviderType { id: ID! name: String! }
+        type ModelType { id: ID! provider: ProviderType }
+        type ModelTypeOffsetPaginated { results: [ModelType!]! }
+        input LegacyRelationFilterInput { pk: ID! }
+        input ModelFilter { provider: LegacyRelationFilterInput }
+        input ModelAggregateGroupBySpec { field: String! }
+        type ModelAggregateGroupKey {
+          providerId: ID
+          provider_DisplayName: String
+        }
+        type ModelAggregateGrouped { key: ModelAggregateGroupKey! count: Int! }
+        type ModelAggregateGroupedResult { results: [ModelAggregateGrouped!]! }
+        type Query {
+          models(filters: ModelFilter): ModelTypeOffsetPaginated!
+          modelGroups(groupBy: [ModelAggregateGroupBySpec!]!, filter: ModelFilter): ModelAggregateGroupedResult!
+        }
+      `,
+      {
+        angee: {
+          dataQueries: [
+            {
+              modelLabel: "demo.Model",
+              appLabel: "demo",
+              modelName: "model",
+              publicIdField: "sqid",
+              roots: {
+                listName: "models",
+                groupName: "modelGroups",
+              },
+              typeNames: {
+                query: "ModelDataQuery",
+                node: "ModelType",
+                filter: "ModelFilter",
+                groupBySpec: "ModelAggregateGroupBySpec",
+              },
+              capabilities: ["list", "groups", "filterEcho"],
+              filterFields: ["provider"],
+              orderFields: [],
+              aggregateFields: ["id"],
+              groupByFields: ["provider"],
+              relationAxes: [
+                {
+                  field: "provider",
+                  modelLabel: "demo.Provider",
+                  publicIdField: "sqid",
+                  labelAxis: "provider_DisplayName",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    );
+
+    expect(required(metadata.types.ModelType).fields.provider?.relationFilter).toEqual({
+      field: "provider",
+      mode: "lookup",
+      lookup: "sqid",
+      aggregateKey: "providerId",
+      labelKey: "provider_DisplayName",
+    });
+  });
 });
 
 function required<T>(value: T | null | undefined): T {

@@ -65,6 +65,11 @@ export {
   type ModelRelationFilterMode,
   type ModelRootFieldMetadata,
   type SchemaFieldMetadata,
+  type AngeeSchemaMetadata,
+  type DataQueryRelationAxisMetadata,
+  type DataQueryRootMetadata,
+  type DataQuerySurfaceMetadata,
+  type DataQueryTypeMetadata,
 } from "./model-metadata";
 
 // Resource data access.

@@ -94,12 +94,68 @@ export interface ModelRootFieldMetadata {
   delete?: string;
 }
 
+/** Generated schema metadata emitted beside SDL by Angee's backend schema owner. */
+export interface AngeeSchemaMetadata {
+  angee?: {
+    dataQueries?: readonly DataQuerySurfaceMetadata[];
+  };
+}
+
+/** One model-backed data query surface declared by the backend. */
+export interface DataQuerySurfaceMetadata {
+  modelLabel: string;
+  appLabel: string;
+  modelName: string;
+  publicIdField: string;
+  roots: DataQueryRootMetadata;
+  typeNames: DataQueryTypeMetadata;
+  capabilities: readonly string[];
+  filterFields: readonly string[];
+  orderFields: readonly string[];
+  aggregateFields: readonly string[];
+  groupByFields: readonly string[];
+  relationAxes: readonly DataQueryRelationAxisMetadata[];
+}
+
+/** GraphQL root field names emitted for one model data query surface. */
+export interface DataQueryRootMetadata {
+  listName?: string | null;
+  detailName?: string | null;
+  aggregateName?: string | null;
+  groupName?: string | null;
+}
+
+/** GraphQL type names owned or referenced by one data query surface. */
+export interface DataQueryTypeMetadata {
+  query?: string | null;
+  node: string;
+  filter?: string | null;
+  order?: string | null;
+  aggregate?: string | null;
+  grouped?: string | null;
+  groupedResult?: string | null;
+  groupKey?: string | null;
+  groupBySpec?: string | null;
+  groupableFieldEnum?: string | null;
+  having?: string | null;
+}
+
+/** Relation axis metadata from the generated backend data query contract. */
+export interface DataQueryRelationAxisMetadata {
+  field: string;
+  modelLabel: string;
+  publicIdField: string;
+  labelAxis?: string | null;
+}
+
 /** Metadata for one GraphQL object type. */
 export interface ModelMetadata {
   typeName: string;
   fields: Readonly<Record<string, ModelFieldMetadata>>;
   /** Schema-declared root operation fields that address this model type. */
   rootFields?: ModelRootFieldMetadata;
+  /** Backend-declared model data-query surface, when this type has one. */
+  dataQuery?: DataQuerySurfaceMetadata;
   /**
    * Inferred display field for records. Candidate order is title, name,
    * displayName, label, username, email, slug, then the first String scalar.
@@ -110,6 +166,7 @@ export interface ModelMetadata {
 /** Per-type field metadata parsed from one schema SDL. */
 export interface SchemaFieldMetadata {
   types: Readonly<Record<string, ModelMetadata>>;
+  dataQueries?: readonly DataQuerySurfaceMetadata[];
 }
 
 /** Empty metadata used when a schema is configured without SDL. */
@@ -122,8 +179,11 @@ const ModelMetadataContext = makeContext<SchemaFieldMetadata>("ModelMetadata");
  * carry their SDL description (the authored label) where present; the rendered
  * binding humanizes a description-less value into a display label.
  */
-export function fieldMetadataFromSDL(sdl: string): SchemaFieldMetadata {
-  return fieldMetadataFromSchema(buildSchema(sdl));
+export function fieldMetadataFromSDL(
+  sdl: string,
+  metadata?: AngeeSchemaMetadata,
+): SchemaFieldMetadata {
+  return fieldMetadataFromSchema(buildSchema(sdl), metadata);
 }
 
 /**
@@ -198,17 +258,31 @@ export function modelMetadataForLabel(
 }
 
 /** Derive object-field metadata from a built GraphQL schema. */
-export function fieldMetadataFromSchema(schema: GraphQLSchema): SchemaFieldMetadata {
+export function fieldMetadataFromSchema(
+  schema: GraphQLSchema,
+  metadata?: AngeeSchemaMetadata,
+): SchemaFieldMetadata {
   const types: Record<string, ModelMetadata> = {};
+  const dataQueries = metadata?.angee?.dataQueries ?? [];
+  validateDataQueryMetadata(schema, dataQueries);
+  const dataQueriesByType = dataQueriesByNodeType(dataQueries);
   const rootFields = rootFieldsByType(schema);
   for (const type of schemaObjectTypes(schema)) {
+    const dataQuery = dataQueriesByType[type.name];
     const filterInput = filterInputForType(schema, type);
     const groupKeyFields = groupKeyFieldsForType(schema, type);
+    const relationAxes = dataQuery ? relationAxesByField(dataQuery) : {};
     const fields = Object.fromEntries(
       Object.values(type.getFields()).map((field) => {
         const metadata = metadataForField(field.name, field.type, field.description);
         const relationFilter = metadata.kind === "relation"
-          ? relationFilterForField(field.name, filterInput, groupKeyFields)
+          ? relationFilterForField(
+              field.name,
+              filterInput,
+              groupKeyFields,
+              dataQuery,
+              relationAxes[field.name],
+            )
           : undefined;
         return [
           field.name,
@@ -220,14 +294,101 @@ export function fieldMetadataFromSchema(schema: GraphQLSchema): SchemaFieldMetad
       }),
     );
     const recordRepresentation = recordRepresentationFor(fields);
+    const modelRootFields = mergeRootFields(
+      rootFields[type.name],
+      dataQuery ? rootFieldsFromDataQuery(dataQuery) : undefined,
+    );
     types[type.name] = {
       typeName: type.name,
       fields,
-      ...(rootFields[type.name] ? { rootFields: rootFields[type.name] } : {}),
+      ...(modelRootFields ? { rootFields: modelRootFields } : {}),
+      ...(dataQuery ? { dataQuery } : {}),
       ...(recordRepresentation ? { recordRepresentation } : {}),
     };
   }
-  return { types };
+  return {
+    types,
+    ...(dataQueries.length > 0 ? { dataQueries } : {}),
+  };
+}
+
+function validateDataQueryMetadata(
+  schema: GraphQLSchema,
+  dataQueries: readonly DataQuerySurfaceMetadata[],
+): void {
+  const queryFields = schema.getQueryType()?.getFields();
+  for (const dataQuery of dataQueries) {
+    const nodeType = schema.getType(dataQuery.typeNames.node);
+    if (!nodeType || !isObjectType(nodeType)) {
+      throw new Error(
+        `GraphQL schema metadata for "${dataQuery.modelLabel}" references ` +
+          `missing object type "${dataQuery.typeNames.node}".`,
+      );
+    }
+    for (const [rootKind, rootName] of Object.entries(dataQuery.roots)) {
+      if (!rootName) continue;
+      if (!queryFields || !(rootName in queryFields)) {
+        throw new Error(
+          `GraphQL schema metadata for "${dataQuery.modelLabel}" references ` +
+            `missing Query field "${rootName}" (${rootKind}).`,
+        );
+      }
+    }
+    const groupBySpec = dataQuery.typeNames.groupBySpec;
+    if (dataQuery.roots.groupName && groupBySpec && !schema.getType(groupBySpec)) {
+      throw new Error(
+        `GraphQL schema metadata for "${dataQuery.modelLabel}" references ` +
+          `missing input type "${groupBySpec}".`,
+      );
+    }
+  }
+}
+
+function dataQueriesByNodeType(
+  dataQueries: readonly DataQuerySurfaceMetadata[],
+): Record<string, DataQuerySurfaceMetadata> {
+  return Object.fromEntries(
+    dataQueries.map((dataQuery) => [dataQuery.typeNames.node, dataQuery]),
+  );
+}
+
+function relationAxesByField(
+  dataQuery: DataQuerySurfaceMetadata,
+): Record<string, DataQueryRelationAxisMetadata> {
+  return Object.fromEntries(
+    dataQuery.relationAxes.map((axis) => [axis.field, axis]),
+  );
+}
+
+function rootFieldsFromDataQuery(
+  dataQuery: DataQuerySurfaceMetadata,
+): ModelRootFieldMetadata {
+  return withoutUndefined({
+    detail: dataQuery.roots.detailName ?? undefined,
+    list: dataQuery.roots.listName ?? undefined,
+    aggregate: dataQuery.roots.aggregateName ?? undefined,
+    groupBy: dataQuery.roots.groupName ?? undefined,
+    groupByInput: dataQuery.typeNames.groupBySpec ?? undefined,
+  });
+}
+
+function mergeRootFields(
+  inferred: ModelRootFieldMetadata | undefined,
+  generated: ModelRootFieldMetadata | undefined,
+): ModelRootFieldMetadata | undefined {
+  const merged = withoutUndefined({
+    ...(inferred ?? {}),
+    ...(generated ?? {}),
+  });
+  return Object.values(merged).some((value) => value !== undefined)
+    ? merged
+    : undefined;
+}
+
+function withoutUndefined<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, item]) => item !== undefined),
+  ) as T;
 }
 
 function rootFieldsByType(schema: GraphQLSchema): Record<string, ModelRootFieldMetadata> {
@@ -335,8 +496,38 @@ function relationFilterForField(
   fieldName: string,
   filterInput: GraphQLInputObjectType | null,
   groupKeyFields: ReadonlySet<string>,
+  dataQuery?: DataQuerySurfaceMetadata,
+  relationAxis?: DataQueryRelationAxisMetadata,
 ): ModelRelationFilterMetadata | undefined {
   const filterFields = filterInput?.getFields();
+  const inferred = inferredRelationFilterForField(
+    fieldName,
+    filterFields,
+    groupKeyFields,
+  );
+  if (!dataQuery || !relationAxis) return inferred;
+  const filterField = dataQuery.filterFields.includes(relationAxis.field)
+    ? relationAxis.field
+    : dataQuery.filterFields.includes(`${relationAxis.field}Id`)
+      ? `${relationAxis.field}Id`
+      : inferred?.field;
+  if (!filterField) return inferred;
+  const aggregateKey = relationAggregateKey(fieldName, groupKeyFields) ?? inferred?.aggregateKey;
+  const labelKey = relationAxis.labelAxis ?? inferred?.labelKey;
+  return {
+    field: filterField,
+    mode: "lookup",
+    lookup: relationAxis.publicIdField,
+    ...(aggregateKey ? { aggregateKey } : {}),
+    ...(labelKey ? { labelKey } : {}),
+  };
+}
+
+function inferredRelationFilterForField(
+  fieldName: string,
+  filterFields: ReturnType<GraphQLInputObjectType["getFields"]> | undefined,
+  groupKeyFields: ReadonlySet<string>,
+): ModelRelationFilterMetadata | undefined {
   if (!filterFields) return undefined;
   const aggregateKey = relationAggregateKey(fieldName, groupKeyFields);
   const labelKey = relationLabelKey(fieldName, groupKeyFields);

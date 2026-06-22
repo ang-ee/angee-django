@@ -1,7 +1,8 @@
-"""Tests for the GraphQL SDL owner (render / emit / drift / check)."""
+"""Tests for the GraphQL schema artifact owner (render / emit / drift / check)."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import cast
 
@@ -12,13 +13,19 @@ from angee.graphql.sdl import GraphQLSdl
 
 
 class _StubSchemas:
-    """Minimal stand-in exposing only ``render_sdl`` (what ``GraphQLSdl`` calls)."""
+    """Minimal stand-in exposing what ``GraphQLSdl`` calls."""
 
     def __init__(self, rendered: dict[str, str]) -> None:
         self._rendered = rendered
 
     def render_sdl(self) -> dict[str, str]:
         return dict(self._rendered)
+
+    def render_metadata(self) -> dict[str, dict[str, object]]:
+        return {
+            name: {"angee": {"dataQueries": [{"modelLabel": f"tests.{name.title()}"}]}}
+            for name in self._rendered
+        }
 
 
 def _sdl(tmp_path: Path, rendered: dict[str, str]) -> GraphQLSdl:
@@ -28,16 +35,22 @@ def _sdl(tmp_path: Path, rendered: dict[str, str]) -> GraphQLSdl:
 
 
 def test_emit_writes_each_schema(tmp_path: Path) -> None:
-    """``emit`` writes one ``<name>.graphql`` per rendered schema."""
+    """``emit`` writes SDL and metadata per rendered schema."""
 
     sdl = _sdl(tmp_path, {"public": "type Query { a: Int }\n", "console": "type Query { b: Int }\n"})
     sdl.emit()
     assert (tmp_path / "schemas" / "public.graphql").read_text(encoding="utf-8") == "type Query { a: Int }\n"
     assert (tmp_path / "schemas" / "console.graphql").read_text(encoding="utf-8") == "type Query { b: Int }\n"
+    assert json.loads((tmp_path / "schemas" / "public.metadata.json").read_text(encoding="utf-8")) == {
+        "angee": {"dataQueries": [{"modelLabel": "tests.Public"}]}
+    }
+    assert json.loads((tmp_path / "schemas" / "console.metadata.json").read_text(encoding="utf-8")) == {
+        "angee": {"dataQueries": [{"modelLabel": "tests.Console"}]}
+    }
 
 
 def test_emit_prunes_removed_schema_buckets(tmp_path: Path) -> None:
-    """``emit`` removes stale SDL files from the owned schema directory."""
+    """``emit`` removes stale files from the owned schema directory."""
 
     schema_dir = tmp_path / "schemas"
     _sdl(tmp_path, {"public": "type Query { a: Int }\n", "console": "type Query { b: Int }\n"}).emit()
@@ -49,7 +62,9 @@ def test_emit_prunes_removed_schema_buckets(tmp_path: Path) -> None:
     sdl.emit()
 
     assert (schema_dir / "public.graphql").exists()
+    assert (schema_dir / "public.metadata.json").exists()
     assert not (schema_dir / "console.graphql").exists()
+    assert not (schema_dir / "console.metadata.json").exists()
     sdl.check()
 
 
@@ -74,6 +89,7 @@ def test_emit_if_stale_prunes_removed_schema_buckets(tmp_path: Path) -> None:
 
     assert sdl.emit_if_stale() is True
     assert not (schema_dir / "console.graphql").exists()
+    assert not (schema_dir / "console.metadata.json").exists()
     sdl.check()
 
 
@@ -85,3 +101,14 @@ def test_check_raises_on_drift_and_passes_when_current(tmp_path: Path) -> None:
         sdl.check()
     sdl.emit()
     sdl.check()
+
+
+def test_check_raises_on_metadata_drift(tmp_path: Path) -> None:
+    """``check`` names stale metadata artifacts as schema drift."""
+
+    sdl = _sdl(tmp_path, {"public": "type Query { a: Int }\n"})
+    sdl.emit()
+    (tmp_path / "schemas" / "public.metadata.json").write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match=r"schemas/public\.metadata\.json"):
+        sdl.check()

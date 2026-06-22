@@ -514,7 +514,7 @@ requires-dist = [
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.12" },
     { name = "python-magic", specifier = ">=0.4.27" },
     { name = "pyyaml", specifier = ">=6" },
-    { name = "strawberry-django-aggregates", specifier = ">=0.5.0" },
+    { name = "strawberry-django-aggregates", specifier = ">=0.6.0" },
     { name = "strawberry-graphql", git = "ssh://git@github.com/ang-ee/strawberry.git?branch=codex%2Finput-object-extensions" },
     { name = "strawberry-graphql-django", git = "ssh://git@github.com/ang-ee/strawberry-django.git?branch=codex%2Finput-object-extensions" },
     { name = "tablib", specifier = ">=3" },
@@ -1895,16 +1895,16 @@ wheels = [
 
 [[package]]
 name = "strawberry-django-aggregates"
-version = "0.5.0"
+version = "0.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
     { name = "strawberry-graphql" },
     { name = "strawberry-graphql-django" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ba/fc/0b9a8d1b40d59d6f56e63af46e3da07e61915eaab7c8df861d6e2a5e8b10/strawberry_django_aggregates-0.5.0.tar.gz", hash = "sha256:b73161bb46abb58027b10c6bc1b7c6f2b08fb15251a661d99e204a7df51d4789", size = 147149, upload-time = "2026-06-17T15:44:09.746Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8f/af/f2de3600dce08e0cd5ce7b93f19b831737c74a4e1e92fe3ffbf59925382f/strawberry_django_aggregates-0.6.0.tar.gz", hash = "sha256:6a4cf8b9e496823163e277e46a1b4003edc151c2970baf4119449d8210d49993", size = 149197, upload-time = "2026-06-22T13:38:16.16Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c6/ba/56e531d245f136a6d6ccc0037102477cf54d3d2bcb316e2323a8919812bd/strawberry_django_aggregates-0.5.0-py3-none-any.whl", hash = "sha256:0570cf9ed341140419cf383931d5d8ca308a9ea4fa5b7bcddd2d802bc339ffac", size = 99957, upload-time = "2026-06-17T15:44:08.475Z" },
+    { url = "https://files.pythonhosted.org/packages/f5/74/5ea2f48fad8bb0e89f3f8ad50d4865ada55c4ddd6390be616a7fbbee2c17/strawberry_django_aggregates-0.6.0-py3-none-any.whl", hash = "sha256:18d8b0c0bba80acdc407ecb7a876a54976a584fd80bec1e0181bd01a829aeff5", size = 100696, upload-time = "2026-06-22T13:38:14.91Z" },
 ]
 
 [[package]]

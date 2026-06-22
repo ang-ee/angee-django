@@ -26,7 +26,7 @@ function createSchemaRuntime(
   for (const [name, options] of Object.entries(config)) {
     const schema = options.sdl ? buildSchema(options.sdl) : null;
     clients[name] = createUrqlClient(optionsWithSchemaDefaults(options, schema));
-    if (schema) metadata[name] = fieldMetadataFromSchema(schema);
+    if (schema) metadata[name] = fieldMetadataFromSchema(schema, options.metadata);
   }
   return { clients, metadata };
 }

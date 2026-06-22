@@ -130,6 +130,51 @@ def test_integration_groups_aggregate_runs_with_rebac_scope(
     assert grouped["results"] == [{"key": {"implClass": "NONE"}, "count": 1}]
 
 
+def test_console_data_query_metadata_declares_integration_surface() -> None:
+    """The composed console schema reports Integration's data-query contract."""
+
+    schemas = _schemas()
+    console_schema = schemas.build("console")
+    metadata = {
+        item.model_label: item
+        for item in console_schema.angee_data_queries
+    }["integrate.Integration"]
+
+    assert schemas.data_queries("console") == console_schema.angee_data_queries
+    assert metadata.roots.list_name == "integrations"
+    assert metadata.roots.detail_name == "integration"
+    assert metadata.roots.aggregate_name == "integration_aggregate"
+    assert metadata.roots.group_name == "integration_groups"
+    assert metadata.filter_fields == ("vendor", "impl_class", "status")
+    assert metadata.order_fields == ("vendor", "impl_class", "status", "created_at", "updated_at")
+    assert metadata.aggregate_fields == ("id",)
+    assert metadata.group_by_fields == ("impl_class", "vendor", "status")
+    assert metadata.capabilities == ("list", "detail", "aggregate", "groups", "filterEcho")
+    assert metadata.relation_axes[0].field == "vendor"
+    assert metadata.relation_axes[0].model_label == "integrate.Vendor"
+    assert metadata.relation_axes[0].public_id_field == "sqid"
+    serialized = console_schema._schema.extensions["angee"]["dataQueries"]
+    integration = {
+        item["modelLabel"]: item
+        for item in serialized
+    }["integrate.Integration"]
+    assert integration["roots"] == {
+        "listName": "integrations",
+        "detailName": "integration",
+        "aggregateName": "integrationAggregate",
+        "groupName": "integrationGroups",
+    }
+    assert integration["groupByFields"] == ["implClass", "vendor", "status"]
+    assert integration["relationAxes"] == [
+        {
+            "field": "vendor",
+            "modelLabel": "integrate.Vendor",
+            "publicIdField": "sqid",
+            "labelAxis": None,
+        }
+    ]
+
+
 def test_impl_choices_are_admin_only(integrate_console_tables: None) -> None:
     """Impl choice metadata is console data, so it is platform-admin gated."""
 
@@ -890,11 +935,17 @@ def integrate_console_tables(transactional_db: Any) -> Iterator[None]:
 def _schema() -> Any:
     """Build the merged iam + integrate ``console`` schema for these tests."""
 
+    return _schemas().build("console")
+
+
+def _schemas() -> GraphQLSchemas:
+    """Return the merged iam + integrate schema owner for these tests."""
+
     addons = [
         SchemaAddon({"console": {key: tuple(module.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}})
         for module in (iam_schema, integrate_schema)
     ]
-    return GraphQLSchemas(addons).build("console")
+    return GraphQLSchemas(addons)
 
 
 def _execute(

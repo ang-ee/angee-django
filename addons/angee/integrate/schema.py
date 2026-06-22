@@ -23,8 +23,8 @@ from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
 from angee.graphql.actions import ActionResult, action_target, resolve_action_target
-from angee.graphql.aggregates import rebac_aggregate_builder
 from angee.graphql.crud import crud
+from angee.graphql.data import data_query
 from angee.graphql.deletion import DeletePreview, delete_by_public_id
 from angee.graphql.ids import PublicID
 from angee.graphql.impl import ImplChoice
@@ -1327,15 +1327,24 @@ class IntegrationOrder:
     updated_at: auto
 
 
-_integration_aggregates = rebac_aggregate_builder(
-    model=Integration,
-    name_prefix="IntegrationAggregate",
+IntegrationDataQuery, _INTEGRATION_DATA_TYPES = data_query(
+    IntegrationType,
+    type_name="IntegrationDataQuery",
+    filters=IntegrationFilter,
+    order=IntegrationOrder,
+    list_name="integrations",
+    detail_name="integration",
+    aggregate_name="integration_aggregate",
+    group_name="integration_groups",
     aggregate_fields=["id"],
     group_by_fields=["impl_class", "vendor", "status"],
-    filter_type=IntegrationFilter,
-    pagination_style="offset",
     enable_filter_echo=True,
-).build()
+    permission_classes=_ADMIN_PERMISSION_CLASSES,
+    aggregate_kwargs={
+        "name_prefix": "IntegrationAggregate",
+        "pagination_style": "offset",
+    },
+)
 
 
 @strawberry.type
@@ -1349,17 +1358,6 @@ class IntegrateConsoleQuery:
         VendorType,
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
-    integrations: OffsetPaginated[IntegrationType] = strawberry_django.offset_paginated(
-        filters=IntegrationFilter,
-        order=IntegrationOrder,
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    integration: IntegrationType | None = detail(
-        IntegrationType,
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    integration_aggregate = _integration_aggregates.aggregate_field
-    integration_groups = _integration_aggregates.group_by_field
     webhook_subscriptions: OffsetPaginated[WebhookSubscriptionType] = strawberry_django.offset_paginated(
         permission_classes=_ADMIN_PERMISSION_CLASSES,
     )
@@ -1902,7 +1900,7 @@ class VCSActionMutation:
 # AngeeNode-decorated types infers as ``list[type[AngeeNode]]`` and trips mypy's
 # invariance check; ``list[type]`` widens it. (iam's inline lists are heterogeneous,
 # so they don't hit this.)
-_CONSOLE_TYPES: list[type] = [
+_CONSOLE_TYPES: list[object] = [
     OAuthClientType,
     CredentialOAuthClientType,
     ExternalAccountType,
@@ -1918,10 +1916,7 @@ _CONSOLE_TYPES: list[type] = [
     VendorType,
     ConnectedIntegrationType,
     IntegrationType,
-    _integration_aggregates.aggregate_type,
-    _integration_aggregates.grouped_type,
-    _integration_aggregates.grouped_result_type,
-    _integration_aggregates.group_key_type,
+    *_INTEGRATION_DATA_TYPES,
     WebhookSubscriptionType,
     VcsBridgeType,
     RepositoryType,
@@ -1951,7 +1946,13 @@ schemas = {
         # The impl-picker lookup (Integration.impl_class / VcsBridge.backend_class /
         # OAuthClient.provider_type live here); a generic framework query contributed
         # where its models do.
-        "query": [ConsoleImplChoicesQuery, IntegrateConnectionConsoleQuery, IntegrateConsoleQuery, VCSConsoleQuery],
+        "query": [
+            ConsoleImplChoicesQuery,
+            IntegrateConnectionConsoleQuery,
+            IntegrateConsoleQuery,
+            IntegrationDataQuery,
+            VCSConsoleQuery,
+        ],
         "mutation": [
             _OAUTH_CLIENT_MUTATION,
             IntegrateExternalAccountMutation,

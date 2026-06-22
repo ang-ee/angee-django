@@ -19,8 +19,8 @@ from rebac import system_context
 from strawberry import auto
 from strawberry_django.pagination import OffsetPaginated
 
-from angee.graphql.aggregates import rebac_aggregate_builder
 from angee.graphql.crud import crud
+from angee.graphql.data import data_query
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode, detail
 from angee.graphql.subscriptions import changes
@@ -489,14 +489,20 @@ class AffiliationFilter:
 # Count parties and sum their handle_count, grouped by created_at. Both are
 # non-gated read fields; kind is not an axis because it is the concrete child
 # type, not a column.
-_party_aggregates = rebac_aggregate_builder(
-    model=Party,
+PartyDataQuery, _PARTY_DATA_TYPES = data_query(
+    PartyType,
+    type_name="PartyDataQuery",
+    filters=PartyFilter,
+    order=PartyOrder,
+    list_name="parties",
+    detail_name="party",
+    aggregate_name="party_aggregate",
+    group_name="party_groups",
     aggregate_fields=["id", "handle_count"],
     group_by_fields=["created_at"],
-    filter_type=PartyFilter,
-    pagination_style="offset",
     enable_filter_echo=True,
-).build()
+    aggregate_kwargs={"pagination_style": "offset"},
+)
 
 # Group handles by their resolved contact. Following Odoo's read_group: group by
 # the party id (which owns the drill-down filter) and carry `party.display_name`
@@ -505,35 +511,33 @@ _party_aggregates = rebac_aggregate_builder(
 # relation filter input exposes only the public id (no `is_null`), so the
 # per-bucket drill-down cannot express the null-party bucket; unowned handles stay
 # in the flat, ungrouped list.
-_handle_aggregates = rebac_aggregate_builder(
-    model=Handle,
+HandleDataQuery, _HANDLE_DATA_TYPES = data_query(
+    HandleType,
+    type_name="HandleDataQuery",
+    filters=HandleFilter,
+    order=HandleOrder,
+    list_name="handles",
+    detail_name="handle",
+    aggregate_name="handle_aggregate",
+    group_name="handle_groups",
     aggregate_fields=["id"],
     group_by_fields=["party", "party__display_name"],
-    queryset=Handle.objects.filter(party__isnull=False),
-    filter_type=HandleFilter,
-    pagination_style="offset",
     enable_filter_echo=True,
-).build()
+    aggregate_kwargs={
+        "queryset": Handle.objects.filter(party__isnull=False),
+        "pagination_style": "offset",
+    },
+)
 
 
 @strawberry.type
 class PartiesQuery:
     """Public parties queries."""
 
-    parties: OffsetPaginated[PartyType] = strawberry_django.offset_paginated(
-        filters=PartyFilter,
-        order=PartyOrder,
-    )
-    party: PartyType | None = detail(PartyType)
     people: OffsetPaginated[PersonType] = strawberry_django.offset_paginated(filters=PersonFilter)
     person: PersonType | None = detail(PersonType)
     organizations: OffsetPaginated[OrganizationType] = strawberry_django.offset_paginated()
     organization: OrganizationType | None = detail(OrganizationType)
-    handles: OffsetPaginated[HandleType] = strawberry_django.offset_paginated(
-        filters=HandleFilter,
-        order=HandleOrder,
-    )
-    handle: HandleType | None = detail(HandleType)
     addresses: OffsetPaginated[AddressType] = strawberry_django.offset_paginated(
         filters=AddressFilter,
     )
@@ -546,26 +550,13 @@ class PartiesQuery:
     directory: DirectoryType | None = detail(DirectoryType)
     contact_folders: OffsetPaginated[ContactFolderType] = strawberry_django.offset_paginated()
     contact_folder: ContactFolderType | None = detail(ContactFolderType)
-    party_aggregate = _party_aggregates.aggregate_field
-    party_groups = _party_aggregates.group_by_field
-    handle_aggregate = _handle_aggregates.aggregate_field
-    handle_groups = _handle_aggregates.group_by_field
 
 
-_AGGREGATE_TYPES = [
-    _party_aggregates.aggregate_type,
-    _party_aggregates.grouped_type,
-    _party_aggregates.grouped_result_type,
-    _party_aggregates.group_key_type,
-    _handle_aggregates.aggregate_type,
-    _handle_aggregates.grouped_type,
-    _handle_aggregates.grouped_result_type,
-    _handle_aggregates.group_key_type,
-]
+_DATA_TYPES = [*_PARTY_DATA_TYPES, *_HANDLE_DATA_TYPES]
 
 
 _PARTIES_SCHEMA_BUCKET = {
-    "query": [PartiesQuery],
+    "query": [PartiesQuery, PartyDataQuery, HandleDataQuery],
     "mutation": [
         PartiesDirectoryMutation,
         crud(PartyType, update=PartyPatch, delete=True),
@@ -585,7 +576,7 @@ _PARTIES_SCHEMA_BUCKET = {
         AffiliationType,
         DirectoryType,
         ContactFolderType,
-        *_AGGREGATE_TYPES,
+        *_DATA_TYPES,
     ],
 }
 

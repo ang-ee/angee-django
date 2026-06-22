@@ -22,6 +22,7 @@ from strawberry.types.execution import ExecutionContext
 from strawberry.utils.str_converters import to_camel_case
 
 from angee.addons import resolve_addon_reference
+from angee.graphql.data.metadata import DataQueryMetadata, data_query_metadata, serialize_data_queries
 from angee.graphql.ids import assert_unique_sqid_prefixes
 from angee.graphql.introspection import (
     django_model,
@@ -62,6 +63,9 @@ def _unwrap_validation_error(exc: BaseException | None) -> ValidationError | Non
 
 class AngeeSchema(strawberry.Schema):
     """Strawberry schema that exposes stable REBAC denial codes."""
+
+    angee_data_queries: tuple[DataQueryMetadata, ...] = ()
+    """Data-query metadata carried by this built schema."""
 
     def process_errors(
         self,
@@ -242,6 +246,18 @@ class GraphQLSchemas:
 
         return self.build(name)._schema
 
+    def data_queries(self, name: str = DEFAULT_SCHEMA_NAME) -> tuple[DataQueryMetadata, ...]:
+        """Return model data-query metadata contributed to the named schema bucket."""
+
+        try:
+            parts = self.parts[name]
+        except KeyError as error:
+            available = ", ".join(self.names()) or "none"
+            raise ImproperlyConfigured(
+                f"GraphQL schema {name!r} has no contributions; available schemas: {available}"
+            ) from error
+        return self._data_queries_from_parts(parts)
+
     def _build(
         self,
         name: str,
@@ -263,6 +279,7 @@ class GraphQLSchemas:
         self._assert_rebac_managers(name, types)
         assert_unique_sqid_prefixes(types)
         self._describe_choice_enums(types)
+        data_queries = self._data_queries_from_parts(parts)
         schema = AngeeSchema(
             query=query,
             mutation=self._merge_root(name, "mutation", parts.mutation),
@@ -281,7 +298,33 @@ class GraphQLSchemas:
                 ],
             ),
         )
+        self._attach_data_query_metadata(schema, data_queries)
         return schema
+
+    def _data_queries_from_parts(
+        self,
+        parts: SchemaParts,
+    ) -> tuple[DataQueryMetadata, ...]:
+        """Return data-query metadata from normalized schema parts."""
+
+        metadata: list[DataQueryMetadata] = []
+        for surface in parts.query:
+            metadata.extend(data_query_metadata(surface))
+        return tuple(metadata)
+
+    def _attach_data_query_metadata(
+        self,
+        schema: AngeeSchema,
+        data_queries: tuple[DataQueryMetadata, ...],
+    ) -> None:
+        """Attach typed and serialized data-query metadata to a built schema."""
+
+        schema.angee_data_queries = data_queries
+        extensions = dict(schema._schema.extensions or {})
+        angee_extensions = dict(cast(dict[str, object], extensions.get("angee") or {}))
+        angee_extensions["dataQueries"] = serialize_data_queries(data_queries)
+        extensions["angee"] = angee_extensions
+        schema._schema.extensions = extensions
 
     def _schema_types(self, parts: SchemaParts) -> tuple[object, ...]:
         """Return concrete and native extension types registered with Strawberry."""
@@ -294,6 +337,17 @@ class GraphQLSchemas:
         """Return printed GraphQL SDL for every contributed schema."""
 
         return {name: self.build(name).as_str() for name in self.names()}
+
+    def render_metadata(self) -> dict[str, dict[str, object]]:
+        """Return JSON-safe schema metadata for every contributed schema."""
+
+        rendered: dict[str, dict[str, object]] = {}
+        for name in self.names():
+            extensions = self.graphql_schema(name).extensions or {}
+            rendered[name] = {
+                "angee": cast(dict[str, object], extensions.get("angee") or {}),
+            }
+        return rendered
 
     def _merge_root(
         self,
