@@ -20,6 +20,12 @@ import { RolesPage } from "./views/RolesPage";
 import { SchemaPage } from "./views/SchemaPage";
 import { UsersPage } from "./views/UsersPage";
 
+export {
+  IamLoginPage,
+  IAM_LOGIN_BACKGROUND_IMAGE_URLS,
+  type IamLoginPageProps,
+} from "./IamLoginPage";
+
 // One top-bar dropdown ("Roles" gathers the REBAC views) plus the "OIDC Providers"
 // item — the inbound sign-in provider admin (the OAuth login refinement; the OAuth
 // connect substrate moved to `@angee/integrate`). `TopMenu` renders a menu item with

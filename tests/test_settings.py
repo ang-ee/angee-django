@@ -473,6 +473,7 @@ def test_compose_settings_module_reads_settings_yaml(
     assert sys.path.index(str(tmp_path / "addons")) < sys.path.index(str(tmp_path))
     installed = _installed_paths(compose_settings.INSTALLED_APPS)
     assert "django_yamlconf" in installed
+    assert "django.contrib.staticfiles.apps.StaticFilesConfig" in installed
     assert "angee.resources.apps.ResourcesConfig" in installed
     assert installed.index("angee.compose.apps.ComposeConfig") < installed.index("angee.resources.apps.ResourcesConfig")
 
@@ -778,7 +779,11 @@ def test_defaults_module_seeds_compose_installed_app(tmp_path: Path) -> None:
         run_name="__test_defaults__",
     )
 
-    assert defaults["INSTALLED_APPS"] == ["angee.compose", "angee.resources"]
+    assert defaults["INSTALLED_APPS"] == [
+        "angee.compose",
+        "django.contrib.staticfiles",
+        "angee.resources",
+    ]
     assert defaults["USE_TZ"] is True
     assert defaults["DEFAULT_AUTO_FIELD"] == "django.db.models.BigAutoField"
     assert defaults["ANGEE_RUNTIME_MODULE"] == "runtime"

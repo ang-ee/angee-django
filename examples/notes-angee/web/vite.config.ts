@@ -31,6 +31,7 @@ export default defineConfig({
     proxy: {
       "/graphql/": { target: django, changeOrigin: false, ws: true },
       "/auth/csrf/": { target: django, changeOrigin: false },
+      "/static/": { target: django, changeOrigin: false },
       // The storage proxy upload/download endpoints are Django REST routes; scope
       // to the exact paths so the SPA's /storage page routes still hard-reload to
       // index.html (a file id is never "upload"/"download").

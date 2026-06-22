@@ -7,7 +7,7 @@ import {
 } from "@angee/base";
 import { describe, expect, test } from "vitest";
 
-import iam from "./index";
+import iam, { IAM_LOGIN_BACKGROUND_IMAGE_URLS } from "./index";
 
 describe("iam addon manifest", () => {
   test("registers the public login callback route", () => {
@@ -100,5 +100,17 @@ describe("iam addon manifest", () => {
     expect(oidc?.slot).toBe(formViewSectionsSlot("OAuthClient"));
     expect(oidc?.id).toBe("iam.oidc-login");
     expect(oidc?.content).toBeDefined();
+  });
+
+  test("publishes login backgrounds from the IAM static path", () => {
+    expect(IAM_LOGIN_BACKGROUND_IMAGE_URLS).toHaveLength(6);
+    expect([...IAM_LOGIN_BACKGROUND_IMAGE_URLS]).toEqual([
+      "/static/angee/iam/backgrounds/angee-children-build.webp",
+      "/static/angee/iam/backgrounds/angee-children-future.webp",
+      "/static/angee/iam/backgrounds/angee-future-city.webp",
+      "/static/angee/iam/backgrounds/angee-pond-walk.webp",
+      "/static/angee/iam/backgrounds/angee-vision-cinimatic.webp",
+      "/static/angee/iam/backgrounds/angee-vision-daytime.webp",
+    ]);
   });
 });

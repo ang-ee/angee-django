@@ -35,6 +35,7 @@ if isinstance(_configured_installed_apps, str):
     _configured_installed_apps = (_configured_installed_apps,)
 INSTALLED_APPS = [
     "angee.compose",
+    "django.contrib.staticfiles",
     *(entry for entry in _configured_installed_apps if entry != "angee.compose"),
 ]
 

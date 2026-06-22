@@ -80,12 +80,14 @@ artifacts = [
   "angee/**/*.yaml",
   "angee/**/*.yml",
   "angee/**/*.zed",
+  "angee/**/static/**/*",
   "addons/angee/**/*.csv",
   "addons/angee/**/*.pyi",
   "addons/angee/**/*.typed",
   "addons/angee/**/*.yaml",
   "addons/angee/**/*.yml",
   "addons/angee/**/*.zed",
+  "addons/angee/**/static/**/*",
 ]
 
 [tool.hatch.build.targets.sdist]

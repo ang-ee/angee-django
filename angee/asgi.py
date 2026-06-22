@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from django.apps import apps
+from django.conf import settings
 from django.core.asgi import get_asgi_application
 
 from angee.addons import addon_contribution
@@ -98,7 +99,7 @@ def _application() -> Any:
     protocol — Angee serves with uvicorn (see ``docs/stack.md``).
     """
 
-    django_asgi_app = get_asgi_application()
+    django_asgi_app = _staticfiles_app(get_asgi_application())
     _emit_dev_sdl()
     websocket_patterns = _websocket_urlpatterns()
     http_mounts = _http_mounts()
@@ -117,6 +118,16 @@ def _application() -> Any:
 
         mapping["websocket"] = AuthMiddlewareStack(URLRouter(websocket_patterns))
     return ProtocolTypeRouter(mapping)
+
+
+def _staticfiles_app(django_app: ASGIApp) -> ASGIApp:
+    """Serve addon static assets from Django in dev; production serves STATIC_ROOT."""
+
+    if not settings.DEBUG or not apps.is_installed("django.contrib.staticfiles"):
+        return django_app
+    from django.contrib.staticfiles.handlers import ASGIStaticFilesHandler
+
+    return ASGIStaticFilesHandler(django_app)
 
 
 def _http_app(django_app: ASGIApp, http_mounts: list[tuple[str, ASGIApp]]) -> ASGIApp:
