@@ -167,7 +167,7 @@ describe("integrate addon manifest", () => {
       "vcs",
       "repository",
       "source",
-      "integrateTemplate",
+      "integrate-template",
     ] as const) {
       expect(integrate.icons?.[name]).toBeDefined();
     }

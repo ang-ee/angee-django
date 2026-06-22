@@ -10,6 +10,7 @@ describe("resources addon manifest", () => {
     expect(menu?.id).toBe("resources");
     expect(menu?.parentId).toBe("platform");
     expect(menu?.label).toBe("Resources");
+    expect(menu?.icon).toBe("archive");
     expect(menu?.route).toBe("resources.ledger");
     // A single leaf section (no children) — renders as a link, not a dropdown.
     expect(menu?.children).toBeUndefined();

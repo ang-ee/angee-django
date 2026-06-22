@@ -104,7 +104,7 @@ const integrateMenu: readonly BaseMenuItem[] = [
         icon: "source",
         children: [
           { id: "integrate.sources", label: "Sources", icon: "source", route: "integrate.sources" },
-          { id: "integrate.templates", label: "Templates", icon: "integrateTemplate", route: "integrate.templates" },
+          { id: "integrate.templates", label: "Templates", icon: "integrate-template", route: "integrate.templates" },
           { id: "integrate.repositories", label: "Repositories", icon: "repository", route: "integrate.repositories" },
           { id: "integrate.vcs", label: "VCS Bridges", icon: "vcs", route: "integrate.vcs" },
         ],
@@ -142,7 +142,7 @@ const integrate = defineBaseAddon({
     vcs: GitFork,
     repository: FolderGit2,
     source: GitBranch,
-    integrateTemplate: LayoutTemplate,
+    "integrate-template": LayoutTemplate,
   },
 });
 

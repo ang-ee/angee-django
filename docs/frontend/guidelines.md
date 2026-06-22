@@ -95,7 +95,8 @@ hand-rolling a concern. TypeScript dependency setup belongs in `package.json`,
   `renderGlyph(icon)` slot adapter). A component never imports `lucide-react`
   directly: base glyphs live in `chrome/icon-registry.ts`; an addon contributes its
   own lucide components through the manifest `icons:` field (the registry seam), not
-  by rendering them.
+  by rendering them. Glyph ids are lowercase/kebab-case; the lookup normalizes
+  requested names to lowercase, so camelCase registry keys do not resolve.
 - Use shared page, view, form, table, widget, and shell primitives before adding
   new local state. Never hand-roll a data view (grid/list/group/board), form, or
   detail in an addon — compose the shared views (`ListView`/`RowsListView`/

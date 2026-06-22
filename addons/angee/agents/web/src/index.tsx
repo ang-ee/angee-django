@@ -50,7 +50,7 @@ const agentsMenu: readonly BaseMenuItem[] = [
         icon: "agent",
         children: [
           { id: "agents.agents", label: "Agents", icon: "agent", route: "agents.agents" },
-          { id: "agents.templates", label: "Templates", icon: "agentTemplate", route: "agents.templates" },
+          { id: "agents.templates", label: "Templates", icon: "agent-template", route: "agents.templates" },
         ],
       },
       {
@@ -59,25 +59,25 @@ const agentsMenu: readonly BaseMenuItem[] = [
         icon: "skill",
         children: [
           { id: "agents.skills", label: "Skills", icon: "skill", route: "agents.skills" },
-          { id: "agents.sources", label: "Sources", icon: "skillSource", route: "agents.sources" },
+          { id: "agents.sources", label: "Sources", icon: "skill-source", route: "agents.sources" },
         ],
       },
       {
         id: "agents.menu.mcp",
         label: "MCP",
-        icon: "mcpServer",
+        icon: "mcp-server",
         children: [
-          { id: "agents.mcp-servers", label: "Servers", icon: "mcpServer", route: "agents.mcp-servers" },
-          { id: "agents.mcp-tools", label: "Tools", icon: "mcpTool", route: "agents.mcp-tools" },
+          { id: "agents.mcp-servers", label: "Servers", icon: "mcp-server", route: "agents.mcp-servers" },
+          { id: "agents.mcp-tools", label: "Tools", icon: "mcp-tool", route: "agents.mcp-tools" },
         ],
       },
       {
         id: "agents.menu.inference",
         label: "Inference",
-        icon: "inferenceProvider",
+        icon: "inference-provider",
         children: [
-          { id: "agents.providers", label: "Providers", icon: "inferenceProvider", route: "agents.providers" },
-          { id: "agents.models", label: "Models", icon: "inferenceModel", route: "agents.models" },
+          { id: "agents.providers", label: "Providers", icon: "inference-provider", route: "agents.providers" },
+          { id: "agents.models", label: "Models", icon: "inference-model", route: "agents.models" },
         ],
       },
     ],
@@ -96,13 +96,13 @@ const agents = defineBaseAddon({
   icons: {
     // `agent` is a shared glyph owned by the base icon registry — reference it, don't
     // redefine it (the registry is fail-fast on re-registration).
-    agentTemplate: LayoutTemplate,
+    "agent-template": LayoutTemplate,
     skill: Sparkles,
-    skillSource: GitBranch,
-    mcpServer: Server,
-    mcpTool: Wrench,
-    inferenceProvider: Cpu,
-    inferenceModel: Box,
+    "skill-source": GitBranch,
+    "mcp-server": Server,
+    "mcp-tool": Wrench,
+    "inference-provider": Cpu,
+    "inference-model": Box,
   },
 });
 

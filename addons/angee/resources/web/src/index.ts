@@ -15,6 +15,7 @@ const resourcesMenu: readonly BaseMenuItem[] = [
     id: "resources",
     parentId: "platform",
     label: "Resources",
+    icon: "archive",
     route: "resources.ledger",
   },
 ];
