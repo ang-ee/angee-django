@@ -18,9 +18,10 @@ import {
   STACK_UP_MUTATION,
 } from "../../data/documents.daemon";
 import { useOperatorT } from "../../i18n";
-import { useOperatorAction, useOperatorSnapshot } from "../../data/transport";
+import { useOperatorAction } from "../../data/transport";
 import type { JobState } from "../../data/types";
 import { daemonRowsByName, type DaemonRow } from "../parts/daemon-rows";
+import { useOperatorRows } from "../parts/operator-rows";
 import { useRunDaemonAction } from "../parts/run-action";
 
 /** A stack lifecycle control: its label, tone, variables, and handler. */
@@ -38,9 +39,11 @@ type JobRowData = DaemonRow<JobState>;
 /** Operations pane: the daemon job list with run + stack lifecycle controls. */
 export function OperationsSection(): ReactNode {
   const t = useOperatorT();
-  const { snapshot, result, refetch } = useOperatorSnapshot({ operations: true });
+  const { rows, fetching, error, refetch } = useOperatorRows(
+    { operations: true },
+    (snapshot) => daemonRowsByName(snapshot.jobs),
+  );
   const { runJob, stackActions, runStack, busy } = useOperationActions(refetch);
-  const rows = daemonRowsByName(snapshot?.jobs ?? []);
 
   const columns = useMemo<readonly ListColumn<JobRowData>[]>(
     () => [
@@ -81,8 +84,8 @@ export function OperationsSection(): ReactNode {
       <RowsListView<JobRowData>
         rows={rows}
         columns={columns}
-        fetching={result.fetching}
-        error={snapshot ? null : result.error}
+        fetching={fetching}
+        error={error}
         emptyMessage={t("operator.operations.empty")}
       />
 

@@ -3,10 +3,14 @@ import {
   Skeleton,
   type ListColumn,
 } from "@angee/base";
-import { useMemo, type ReactNode } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
 import { useOperatorSnapshot } from "../../data/transport";
+import {
+  OperatorRowsList,
+  type OperatorRowsSelector,
+} from "../parts/operator-rows";
 import type { WorkspaceRef, WorkspaceSourceStatus } from "../../data/types";
 import { workspaceDetailPath } from "../../lib/paths";
 import { daemonRows, daemonRowsByName, type DaemonRow } from "../parts/daemon-rows";
@@ -29,11 +33,13 @@ export interface WorkspacesSectionProps {
 /** Workspaces pane: the daemon's worktree workspaces. Rows open the detail page. */
 export function WorkspacesSection({ names }: WorkspacesSectionProps = {}): ReactNode {
   const t = useOperatorT();
-  const { snapshot, result } = useOperatorSnapshot({ workspaces: true });
-  const rows = daemonRowsByName(
-    (snapshot?.workspaces ?? []).filter(
-      (workspace) => names === undefined || names.includes(workspace.name),
+  const selectRows = useCallback<OperatorRowsSelector<WorkspaceRowData>>(
+    (snapshot) => daemonRowsByName(
+      snapshot.workspaces.filter(
+        (workspace) => names === undefined || names.includes(workspace.name),
+      ),
     ),
+    [names],
   );
 
   const columns = useMemo<readonly ListColumn<WorkspaceRowData>[]>(
@@ -79,12 +85,11 @@ export function WorkspacesSection({ names }: WorkspacesSectionProps = {}): React
   );
 
   return (
-    <RowsListView<WorkspaceRowData>
-      rows={rows}
+    <OperatorRowsList<WorkspaceRowData>
+      sections={{ workspaces: true }}
+      selectRows={selectRows}
       columns={columns}
       rowHref={(workspace) => workspaceDetailPath(workspace.name)}
-      fetching={result.fetching}
-      error={snapshot ? null : result.error}
       emptyMessage={t("operator.workspaces.empty")}
     />
   );

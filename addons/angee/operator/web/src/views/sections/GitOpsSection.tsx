@@ -8,9 +8,9 @@ import {
 import { useMemo, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
-import { useOperatorSnapshot } from "../../data/transport";
 import type { GitOpsLink, GitOpsSummary } from "../../data/types";
 import type { DaemonRow } from "../parts/daemon-rows";
+import { useOperatorRows } from "../parts/operator-rows";
 import { StateTag } from "../parts/StateTag";
 
 interface SummaryTile {
@@ -33,13 +33,11 @@ type GitOpsRow = DaemonRow<GitOpsLink>;
 /** GitOps pane: a read-only topology summary above the per-link drift list. */
 export function GitOpsSection(): ReactNode {
   const t = useOperatorT();
-  const { snapshot, result } = useOperatorSnapshot({ gitOps: true });
-  const gitOps = snapshot?.gitOps ?? null;
-
-  const rows = useMemo<readonly GitOpsRow[]>(
-    () => gitOps?.links ?? [],
-    [gitOps],
+  const { snapshot, rows, fetching, error } = useOperatorRows(
+    { gitOps: true },
+    (snapshot) => snapshot.gitOps?.links ?? [],
   );
+  const gitOps = snapshot?.gitOps ?? null;
 
   const columns = useMemo<readonly ListColumn<GitOpsRow>[]>(
     () => [
@@ -107,8 +105,8 @@ export function GitOpsSection(): ReactNode {
         rows={rows}
         columns={columns}
         groupOptions={groupOptions}
-        fetching={result.fetching}
-        error={snapshot ? null : result.error}
+        fetching={fetching}
+        error={error}
         emptyMessage={t("operator.gitops.links.empty")}
       />
     </div>

@@ -1,11 +1,11 @@
-import { RowsListView, type ListColumn } from "@angee/base";
+import { type ListColumn } from "@angee/base";
 import { useMemo, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
-import { useOperatorSnapshot } from "../../data/transport";
 import type { SourceState } from "../../data/types";
 import { sourceDetailPath } from "../../lib/paths";
 import { daemonRowsByName, type DaemonRow } from "../parts/daemon-rows";
+import { OperatorRowsList } from "../parts/operator-rows";
 import { StateTag } from "../parts/StateTag";
 
 type SourceRowData = DaemonRow<SourceState>;
@@ -13,8 +13,6 @@ type SourceRowData = DaemonRow<SourceState>;
 /** Sources pane: cached git/local sources with a drift readout. Rows open the source detail page. */
 export function SourcesSection(): ReactNode {
   const t = useOperatorT();
-  const { snapshot, result } = useOperatorSnapshot({ sources: true });
-  const rows = daemonRowsByName(snapshot?.sources ?? []);
 
   const columns = useMemo<readonly ListColumn<SourceRowData>[]>(
     () => [
@@ -62,12 +60,11 @@ export function SourcesSection(): ReactNode {
   );
 
   return (
-    <RowsListView<SourceRowData>
-      rows={rows}
+    <OperatorRowsList<SourceRowData>
+      sections={{ sources: true }}
+      selectRows={(snapshot) => daemonRowsByName(snapshot.sources)}
       columns={columns}
       rowHref={(source) => sourceDetailPath(source.name)}
-      fetching={result.fetching}
-      error={snapshot ? null : result.error}
       emptyMessage={t("operator.sources.empty")}
     />
   );

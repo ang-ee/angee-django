@@ -13,9 +13,10 @@ import {
   SECRET_DELETE_MUTATION,
   SECRET_SET_MUTATION,
 } from "../../data/documents.daemon";
-import { useOperatorAction, useOperatorSnapshot } from "../../data/transport";
+import { useOperatorAction } from "../../data/transport";
 import type { SecretRef } from "../../data/types";
 import { daemonRowsByName, type DaemonRow } from "../parts/daemon-rows";
+import { useOperatorRows } from "../parts/operator-rows";
 import { useRunDaemonAction } from "../parts/run-action";
 
 type SecretRowData = DaemonRow<SecretRef>;
@@ -24,9 +25,11 @@ type SecretRowData = DaemonRow<SecretRef>;
 export function SecretsSection(): ReactNode {
   const t = useOperatorT();
   const prompt = usePrompt();
-  const { snapshot, result, refetch } = useOperatorSnapshot({ secrets: true });
+  const { rows, fetching, error, refetch } = useOperatorRows(
+    { secrets: true },
+    (snapshot) => daemonRowsByName(snapshot.secrets),
+  );
   const { setSecret, deleteSecret, busy } = useSecretActions(refetch);
-  const rows = daemonRowsByName(snapshot?.secrets ?? []);
 
   // The set form is a prompt (a form surface), not a panel crammed above the list.
   // A row's name pre-fills it; the toolbar action collects an arbitrary name.
@@ -148,8 +151,8 @@ export function SecretsSection(): ReactNode {
           {t("operator.secrets.form.title")}
         </Button>
       }
-      fetching={result.fetching}
-      error={snapshot ? null : result.error}
+      fetching={fetching}
+      error={error}
       emptyMessage={t("operator.secrets.empty")}
     />
   );

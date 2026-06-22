@@ -1,13 +1,16 @@
 import {
-  RowsListView,
   Skeleton,
   type DataToolbarGroupOption,
   type ListColumn,
 } from "@angee/base";
-import { useMemo, type ReactNode } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
 import { useOperatorSnapshot } from "../../data/transport";
+import {
+  OperatorRowsList,
+  type OperatorRowsSelector,
+} from "../parts/operator-rows";
 import type { ServiceState } from "../../data/types";
 import { serviceDetailPath } from "../../lib/paths";
 import { daemonRowsByName, type DaemonRow } from "../parts/daemon-rows";
@@ -26,11 +29,13 @@ export interface ServicesSectionProps {
 /** Services pane: the daemon service list. Rows open the service detail page. */
 export function ServicesSection({ names }: ServicesSectionProps = {}): ReactNode {
   const t = useOperatorT();
-  const { snapshot, result } = useOperatorSnapshot({ services: true });
-  const rows = daemonRowsByName(
-    (snapshot?.services ?? []).filter(
-      (service) => names === undefined || names.includes(service.name),
+  const selectRows = useCallback<OperatorRowsSelector<ServiceRowData>>(
+    (snapshot) => daemonRowsByName(
+      snapshot.services.filter(
+        (service) => names === undefined || names.includes(service.name),
+      ),
     ),
+    [names],
   );
 
   const columns = useMemo<readonly ListColumn<ServiceRowData>[]>(
@@ -68,13 +73,12 @@ export function ServicesSection({ names }: ServicesSectionProps = {}): ReactNode
   );
 
   return (
-    <RowsListView<ServiceRowData>
-      rows={rows}
+    <OperatorRowsList<ServiceRowData>
+      sections={{ services: true }}
+      selectRows={selectRows}
       columns={columns}
       groupOptions={groupOptions}
       rowHref={(service) => serviceDetailPath(service.name)}
-      fetching={result.fetching}
-      error={snapshot ? null : result.error}
       emptyMessage={t("operator.services.empty")}
     />
   );

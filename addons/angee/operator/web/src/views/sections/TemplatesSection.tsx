@@ -1,16 +1,15 @@
 import {
   Badge,
   Code,
-  RowsListView,
   type DataToolbarGroupOption,
   type ListColumn,
 } from "@angee/base";
 import { useMemo, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
-import { useOperatorSnapshot } from "../../data/transport";
 import type { TemplateDescriptor } from "../../data/types";
 import { daemonRows, type DaemonRow } from "../parts/daemon-rows";
+import { OperatorRowsList } from "../parts/operator-rows";
 
 type TemplateRow = DaemonRow<TemplateDescriptor>;
 
@@ -19,8 +18,6 @@ const MAX_INPUT_CHIPS = 6;
 /** Templates pane: the addable template catalog, grouped by kind. */
 export function TemplatesSection(): ReactNode {
   const t = useOperatorT();
-  const { snapshot, result } = useOperatorSnapshot({ templates: true });
-  const rows = daemonRows(snapshot?.templates ?? [], (template) => template.ref);
 
   const columns = useMemo<readonly ListColumn<TemplateRow>[]>(
     () => [
@@ -62,12 +59,13 @@ export function TemplatesSection(): ReactNode {
   );
 
   return (
-    <RowsListView<TemplateRow>
-      rows={rows}
+    <OperatorRowsList<TemplateRow>
+      sections={{ templates: true }}
+      selectRows={(snapshot) =>
+        daemonRows(snapshot.templates, (template) => template.ref)
+      }
       columns={columns}
       groupOptions={groupOptions}
-      fetching={result.fetching}
-      error={snapshot ? null : result.error}
       emptyMessage={t("operator.templates.empty.title")}
     />
   );
