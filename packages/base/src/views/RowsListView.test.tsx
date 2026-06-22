@@ -9,7 +9,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import type { ReactElement } from "react";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { parseFlatSearch, stringifyFlatSearch } from "../createApp";
 import { DataViewProvider } from "./data-view-context";
@@ -173,5 +173,46 @@ describe("RowsListView filters", () => {
 
     expect(await screen.findByText("Claude")).toBeTruthy();
     expect(screen.getByText("GPT")).toBeTruthy();
+  });
+});
+
+describe("RowsListView selection", () => {
+  test("renders caller bulk actions for selected local rows", async () => {
+    const action = vi.fn();
+    renderInRouter(
+      <RowsListView<Item>
+        rows={ROWS}
+        columns={columns}
+        selectable
+        bulkActions={(selectedIds) => (
+          <button type="button" onClick={() => action([...selectedIds])}>
+            Archive selected
+          </button>
+        )}
+      />,
+    );
+
+    fireEvent.click(
+      (await screen.findAllByLabelText("Select row"))[0] as HTMLElement,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Archive selected" }));
+
+    expect(action).toHaveBeenCalledWith(["1"]);
+  });
+
+  test("switches to gallery cards without losing row selection", async () => {
+    renderInRouter(
+      <RowsListView<Item>
+        rows={ROWS}
+        columns={columns}
+        selectable
+        gallery={{ title: "name", subtitle: "region" }}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Grid view" }));
+    fireEvent.click(await screen.findByLabelText("Select Alpha"));
+
+    expect(screen.getByText("1 selected")).toBeTruthy();
   });
 });

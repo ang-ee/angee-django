@@ -7,11 +7,6 @@ import {
   type UseAggregateOptions,
 } from "@angee/sdk";
 
-import {
-  ControlBand,
-  controlBandItemClassName,
-} from "../shell/ControlBand";
-import { DataToolbar } from "../toolbars";
 import type { PagerState } from "../ui/pager";
 import { BoardView } from "./BoardView";
 import {
@@ -39,12 +34,11 @@ import {
 } from "./grouped-list-utils";
 import {
   FlatListBody,
-  ListLoadingFooter,
-  SelectionBar,
   dataViewGroupToAggregateDimension,
   groupMeasuresFromColumns,
   type FlatListBodyProps,
 } from "./ListInternals";
+import { DataViewListShell } from "./DataViewListShell";
 import type { ListViewProps } from "./list-view-types";
 import {
   activeFilterIdsFor,
@@ -373,161 +367,61 @@ function ListViewBody<TRow extends Row = Row>({
   );
 
   return (
-    <>
-      <ControlBand>
-        <DataToolbar
-          className={controlBandItemClassName}
-          actions={toolbarActions}
-          pager={toolbarPager}
-          view={grouping ? dataView.state.view : undefined}
-          group={grouping ? dataView.state.group : undefined}
-          groupStack={grouping ? dataView.state.groupStack : undefined}
-          groupOptions={toolbarGroupOptions}
-          filterOptions={filterOptions}
-          filterFields={filterFields}
-          customFilterChips={customFilterChips}
-          favorites={dataView.savedFavorites}
-          activeFilterIds={activeFilterIds}
-          filterText={filterText}
-          createLabel={createLabel ?? createLabelForModel(model)}
-          onCreate={onCreate}
-          onClearGroup={grouping ? () => dataView.setGroupStack([]) : undefined}
-          onGroupStackChange={grouping ? dataView.setGroupStack : undefined}
-          onViewChange={grouping ? dataView.setView : undefined}
-          onPageChange={setPage}
-          onPageSizeChange={dataView.setPageSize}
-          onCustomFilterAdd={(customFilter) =>
-            dataView.setFilter(
-              addCustomFilterToFilter(dataView.state.filter, customFilter),
-            )
-          }
-          onCustomFilterRemove={(id) =>
-            dataView.setFilter(removeCustomFilter(dataView.state.filter, id))
-          }
-          onFavoriteSave={dataView.saveFavorite}
-          onFavoriteSelect={dataView.applyFavorite}
-          pagerSubject={groupedListMode ? "Groups" : undefined}
-          pagerTotalUnit={groupedListMode ? "groups" : undefined}
-          onFilterToggle={(id) =>
-            dataView.setFilter(
-              nextFacetFilter(dataView.state.filter, filterOptions, id),
-            )
-          }
-          onFilterTextChange={(value) =>
-            dataView.setFilter(nextTextFilter(dataView.state.filter, value, textFilterField))
-          }
-        />
-      </ControlBand>
-      <div
-        className={[
-          "min-h-0 overflow-hidden bg-sheet",
-          className,
-        ]
-          .filter(Boolean)
-          .join(" ")}
-      >
-        {surface.selectedIds.size > 0 ? (
-          <SelectionBar
-            count={surface.selectedIds.size}
-            onClear={dataView.clearSelectedIds}
-            onDelete={
-              bulkDelete.canDelete ? bulkDelete.deleteInitiate : undefined
-            }
-            deletePending={bulkDelete.isPending}
-          />
-        ) : null}
-        {groupedListMode ? (
-          <GroupedListBody
-            model={model}
-            columns={resolvedColumns}
-            table={surface.table}
-            tableColumns={surface.tableColumns}
-            columnVisibility={surface.columnVisibility}
-            visibleColumnCount={surface.visibleColumnCount}
-            visibleFields={surface.visibleFields}
-            onVisibleFieldToggle={surface.toggleVisibleField}
-            dataView={dataView}
-            groupDimensions={groupDimensions}
-            modelMetadata={modelMetadata}
-            requestedFields={surface.requestedFields}
-            mergedFilter={surface.mergedFilter}
-            sortOrder={surface.sortOrder}
-            order={order}
-            interactive={interactive}
-            rowHref={rowHref}
-            onRowClick={onRowClick}
-            emptyMessage={emptyContent}
-            onPagerStateChange={handleGroupPagerStateChange}
-            onListStateChange={onListStateChange}
-          />
-        ) : surface.list.error ? (
-          <div className="px-3 py-6 text-13 text-danger-text">
-            {surface.list.error.message}
-          </div>
-        ) : grouping && dataView.state.view === "board" ? (
-          <BoardView
-            columns={resolvedColumns}
-            groups={surface.groupedRows}
-            dataView={dataView}
-            selectedIds={surface.selectedIds}
-            interactive={interactive}
-            fetching={surface.list.fetching}
-            emptyMessage={emptyContent}
-            rowHref={rowHref}
-            onRowClick={onRowClick}
-            cardActions={cardActions}
-            cardActionContext={cardActionContext}
-          />
-        ) : flatMeasures.length > 0 ? (
-          <FlatListBodyWithAggregate
-            model={model}
-            filter={surface.mergedFilter}
-            measures={flatMeasures}
-            columns={resolvedColumns}
-            table={surface.table}
-            rowModels={surface.rowModels}
-            listItems={surface.listItems}
-            tableScrollRef={surface.tableScrollRef}
-            rowVirtualizer={surface.rowVirtualizer}
-            visibleColumnCount={surface.visibleColumnCount}
-            allPageSelected={surface.allPageSelected}
-            somePageSelected={surface.somePageSelected}
-            onPageSelectionChange={surface.setPageSelection}
-            visibleFields={surface.visibleFields}
-            onVisibleFieldToggle={surface.toggleVisibleField}
-            dataView={dataView}
-            interactive={interactive}
-            rowHref={rowHref}
-            onRowClick={onRowClick}
-            emptyMessage={emptyContent}
-            fetching={surface.list.fetching}
-          />
-        ) : (
-          <FlatListBody
-            columns={resolvedColumns}
-            table={surface.table}
-            rowModels={surface.rowModels}
-            listItems={surface.listItems}
-            tableScrollRef={surface.tableScrollRef}
-            rowVirtualizer={surface.rowVirtualizer}
-            visibleColumnCount={surface.visibleColumnCount}
-            allPageSelected={surface.allPageSelected}
-            somePageSelected={surface.somePageSelected}
-            onPageSelectionChange={surface.setPageSelection}
-            visibleFields={surface.visibleFields}
-            onVisibleFieldToggle={surface.toggleVisibleField}
-            dataView={dataView}
-            interactive={interactive}
-            rowHref={rowHref}
-            onRowClick={onRowClick}
-            emptyMessage={emptyContent}
-            fetching={surface.list.fetching}
-          />
-        )}
-        {!groupedListMode && surface.list.fetching && surface.rowModels.length > 0 ? (
-          <ListLoadingFooter />
-        ) : null}
-        {bulkDelete.isPreviewOpen && bulkDelete.previewState ? (
+    <DataViewListShell
+      className={className}
+      toolbar={{
+        actions: toolbarActions,
+        pager: toolbarPager,
+        view: grouping ? dataView.state.view : undefined,
+        group: grouping ? dataView.state.group : undefined,
+        groupStack: grouping ? dataView.state.groupStack : undefined,
+        groupOptions: toolbarGroupOptions,
+        filterOptions,
+        filterFields,
+        customFilterChips,
+        favorites: dataView.savedFavorites,
+        activeFilterIds,
+        filterText,
+        createLabel: createLabel ?? createLabelForModel(model),
+        onCreate,
+        onClearGroup: grouping ? () => dataView.setGroupStack([]) : undefined,
+        onGroupStackChange: grouping ? dataView.setGroupStack : undefined,
+        onViewChange: grouping ? dataView.setView : undefined,
+        onPageChange: setPage,
+        onPageSizeChange: dataView.setPageSize,
+        onCustomFilterAdd: (customFilter) =>
+          dataView.setFilter(
+            addCustomFilterToFilter(dataView.state.filter, customFilter),
+          ),
+        onCustomFilterRemove: (id) =>
+          dataView.setFilter(removeCustomFilter(dataView.state.filter, id)),
+        onFavoriteSave: dataView.saveFavorite,
+        onFavoriteSelect: dataView.applyFavorite,
+        pagerSubject: groupedListMode ? "Groups" : undefined,
+        pagerTotalUnit: groupedListMode ? "groups" : undefined,
+        onFilterToggle: (id) =>
+          dataView.setFilter(
+            nextFacetFilter(dataView.state.filter, filterOptions, id),
+          ),
+        onFilterTextChange: (value) =>
+          dataView.setFilter(
+            nextTextFilter(dataView.state.filter, value, textFilterField),
+          ),
+      }}
+      selection={{
+        count: surface.selectedIds.size,
+        onClear: dataView.clearSelectedIds,
+        onDelete: bulkDelete.canDelete ? bulkDelete.deleteInitiate : undefined,
+        deletePending: bulkDelete.isPending,
+      }}
+      error={groupedListMode ? null : surface.list.error}
+      loadingFooter={
+        !groupedListMode
+        && surface.list.fetching
+        && surface.rowModels.length > 0
+      }
+      overlays={
+        bulkDelete.isPreviewOpen && bulkDelete.previewState ? (
           <DeletePreviewDialog
             preview={bulkDelete.previewState}
             recordCount={bulkDelete.previewRecordCount}
@@ -537,9 +431,94 @@ function ListViewBody<TRow extends Row = Row>({
             onConfirm={bulkDelete.onConfirm}
             onCancel={bulkDelete.onCancel}
           />
-        ) : null}
-      </div>
-    </>
+        ) : null
+      }
+    >
+      {groupedListMode ? (
+        <GroupedListBody
+          model={model}
+          columns={resolvedColumns}
+          table={surface.table}
+          tableColumns={surface.tableColumns}
+          columnVisibility={surface.columnVisibility}
+          visibleColumnCount={surface.visibleColumnCount}
+          visibleFields={surface.visibleFields}
+          onVisibleFieldToggle={surface.toggleVisibleField}
+          dataView={dataView}
+          groupDimensions={groupDimensions}
+          modelMetadata={modelMetadata}
+          requestedFields={surface.requestedFields}
+          mergedFilter={surface.mergedFilter}
+          sortOrder={surface.sortOrder}
+          order={order}
+          interactive={interactive}
+          rowHref={rowHref}
+          onRowClick={onRowClick}
+          emptyMessage={emptyContent}
+          onPagerStateChange={handleGroupPagerStateChange}
+          onListStateChange={onListStateChange}
+        />
+      ) : grouping && dataView.state.view === "board" ? (
+        <BoardView
+          columns={resolvedColumns}
+          groups={surface.groupedRows}
+          dataView={dataView}
+          selectedIds={surface.selectedIds}
+          interactive={interactive}
+          fetching={surface.list.fetching}
+          emptyMessage={emptyContent}
+          rowHref={rowHref}
+          onRowClick={onRowClick}
+          cardActions={cardActions}
+          cardActionContext={cardActionContext}
+        />
+      ) : flatMeasures.length > 0 ? (
+        <FlatListBodyWithAggregate
+          model={model}
+          filter={surface.mergedFilter}
+          measures={flatMeasures}
+          columns={resolvedColumns}
+          table={surface.table}
+          rowModels={surface.rowModels}
+          listItems={surface.listItems}
+          tableScrollRef={surface.tableScrollRef}
+          rowVirtualizer={surface.rowVirtualizer}
+          visibleColumnCount={surface.visibleColumnCount}
+          allPageSelected={surface.allPageSelected}
+          somePageSelected={surface.somePageSelected}
+          onPageSelectionChange={surface.setPageSelection}
+          visibleFields={surface.visibleFields}
+          onVisibleFieldToggle={surface.toggleVisibleField}
+          dataView={dataView}
+          interactive={interactive}
+          rowHref={rowHref}
+          onRowClick={onRowClick}
+          emptyMessage={emptyContent}
+          fetching={surface.list.fetching}
+        />
+      ) : (
+        <FlatListBody
+          columns={resolvedColumns}
+          table={surface.table}
+          rowModels={surface.rowModels}
+          listItems={surface.listItems}
+          tableScrollRef={surface.tableScrollRef}
+          rowVirtualizer={surface.rowVirtualizer}
+          visibleColumnCount={surface.visibleColumnCount}
+          allPageSelected={surface.allPageSelected}
+          somePageSelected={surface.somePageSelected}
+          onPageSelectionChange={surface.setPageSelection}
+          visibleFields={surface.visibleFields}
+          onVisibleFieldToggle={surface.toggleVisibleField}
+          dataView={dataView}
+          interactive={interactive}
+          rowHref={rowHref}
+          onRowClick={onRowClick}
+          emptyMessage={emptyContent}
+          fetching={surface.list.fetching}
+        />
+      )}
+    </DataViewListShell>
   );
 }
 

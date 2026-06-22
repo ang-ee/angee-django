@@ -5,11 +5,6 @@ import { Glyph } from "../chrome/Glyph";
 import type { DndPayload } from "../lib/dnd";
 import { GalleryView } from "./GalleryView";
 import {
-  ControlBand,
-  controlBandItemClassName,
-} from "../shell/ControlBand";
-import {
-  DataToolbar,
   type DataToolbarFilterField,
   type DataToolbarFilterOption,
   type DataToolbarGroupOption,
@@ -34,10 +29,9 @@ import {
 } from "./data-view-surface";
 import {
   FlatListBody,
-  ListLoadingFooter,
-  SelectionBar,
   type ListColumn,
 } from "./ListInternals";
+import { DataViewListShell } from "./DataViewListShell";
 import type { ListEmptyState } from "./list-view-types";
 import {
   activeFilterIdsFor,
@@ -229,121 +223,99 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   const interactive = Boolean(onRowClick || rowHref);
 
   return (
-    <>
-      <ControlBand>
-        <DataToolbar
-          className={controlBandItemClassName}
-          actions={toolbarActions}
-          viewSwitcher={
-            gallery ? (
-              <RowLayoutSwitcher layout={layout} onLayoutChange={setLayout} />
-            ) : undefined
-          }
-          pager={toolbarPager}
-          group={groupingEnabled ? dataView.state.group : undefined}
-          groupStack={groupingEnabled ? dataView.state.groupStack : undefined}
-          groupOptions={groupingEnabled ? toolbarGroupOptions : undefined}
-          filterOptions={filterOptions}
-          filterFields={filterFields}
-          customFilterChips={customFilterChips}
-          favorites={dataView.savedFavorites}
-          activeFilterIds={activeFilterIds}
-          filterText={filterText}
-          onClearGroup={groupingEnabled ? () => dataView.setGroupStack([]) : undefined}
-          onGroupStackChange={groupingEnabled ? dataView.setGroupStack : undefined}
-          onPageChange={dataView.setPage}
-          onPageSizeChange={dataView.setPageSize}
-          onCustomFilterAdd={(customFilter) =>
-            dataView.setFilter(
-              addCustomFilterToFilter(dataView.state.filter, customFilter),
-            )
-          }
-          onCustomFilterRemove={(id) =>
-            dataView.setFilter(removeCustomFilter(dataView.state.filter, id))
-          }
-          onFavoriteSave={dataView.saveFavorite}
-          onFavoriteSelect={dataView.applyFavorite}
-          onFilterToggle={(id) =>
-            dataView.setFilter(
-              nextFacetFilter(dataView.state.filter, filterOptions, id),
-            )
-          }
-          onFilterTextChange={(value) =>
-            dataView.setFilter(nextRowTextFilter(dataView.state.filter, value))
-          }
-        />
-      </ControlBand>
-      <div
-        className={[
-          "min-h-0 overflow-hidden bg-sheet",
-          className,
-        ]
-          .filter(Boolean)
-          .join(" ")}
-      >
-        {selectable && surface.selectedIds.size > 0 ? (
-          <SelectionBar
-            count={surface.selectedIds.size}
-            onClear={dataView.clearSelectedIds}
-            actions={bulkActions?.(
-              surface.selectedIds,
-              dataView.clearSelectedIds,
-            )}
-          />
-        ) : null}
-        {error ? (
-          <div className="px-3 py-6 text-13 text-danger-text">
-            {error.message}
-          </div>
-        ) : gallery && layout === "grid" ? (
-          <GalleryView<TRow>
-            rows={surface.rowModels.map((model) => model.original)}
-            imageField={gallery.image}
-            titleField={gallery.title}
-            subtitleField={gallery.subtitle}
-            renderCard={gallery.renderCard}
-            cardHref={rowHref}
-            onCardClick={onRowClick}
-            draggableRow={draggableRow}
-            selectedIds={selectable ? surface.selectedIds : undefined}
-            onToggleSelected={
-              selectable ? dataView.toggleSelectedId : undefined
+    <DataViewListShell
+      className={className}
+      toolbar={{
+        actions: toolbarActions,
+        viewSwitcher: gallery ? (
+          <RowLayoutSwitcher layout={layout} onLayoutChange={setLayout} />
+        ) : undefined,
+        pager: toolbarPager,
+        group: groupingEnabled ? dataView.state.group : undefined,
+        groupStack: groupingEnabled ? dataView.state.groupStack : undefined,
+        groupOptions: groupingEnabled ? toolbarGroupOptions : undefined,
+        filterOptions,
+        filterFields,
+        customFilterChips,
+        favorites: dataView.savedFavorites,
+        activeFilterIds,
+        filterText,
+        onClearGroup: groupingEnabled ? () => dataView.setGroupStack([]) : undefined,
+        onGroupStackChange: groupingEnabled ? dataView.setGroupStack : undefined,
+        onPageChange: dataView.setPage,
+        onPageSizeChange: dataView.setPageSize,
+        onCustomFilterAdd: (customFilter) =>
+          dataView.setFilter(
+            addCustomFilterToFilter(dataView.state.filter, customFilter),
+          ),
+        onCustomFilterRemove: (id) =>
+          dataView.setFilter(removeCustomFilter(dataView.state.filter, id)),
+        onFavoriteSave: dataView.saveFavorite,
+        onFavoriteSelect: dataView.applyFavorite,
+        onFilterToggle: (id) =>
+          dataView.setFilter(
+            nextFacetFilter(dataView.state.filter, filterOptions, id),
+          ),
+        onFilterTextChange: (value) =>
+          dataView.setFilter(nextRowTextFilter(dataView.state.filter, value)),
+      }}
+      selection={
+        selectable
+          ? {
+              count: surface.selectedIds.size,
+              onClear: dataView.clearSelectedIds,
+              actions: surface.selectedIds.size > 0
+                ? bulkActions?.(surface.selectedIds, dataView.clearSelectedIds)
+                : undefined,
             }
-            fetching={fetching}
-            emptyMessage={emptyMessage}
-            emptyState={emptyState}
-          />
-        ) : (
-          <FlatListBody
-            columns={columns}
-            table={surface.table}
-            rowModels={surface.rowModels}
-            listItems={surface.listItems}
-            expandedKeys={surface.expandedKeys}
-            onToggleGroup={surface.toggleGroup}
-            tableScrollRef={surface.tableScrollRef}
-            rowVirtualizer={surface.rowVirtualizer}
-            visibleColumnCount={surface.visibleColumnCount}
-            allPageSelected={surface.allPageSelected}
-            somePageSelected={surface.somePageSelected}
-            onPageSelectionChange={surface.setPageSelection}
-            visibleFields={surface.visibleFields}
-            onVisibleFieldToggle={surface.toggleVisibleField}
-            dataView={dataView}
-            interactive={interactive}
-            selectable={selectable}
-            rowHref={rowHref}
-            onRowClick={onRowClick}
-            draggableRow={draggableRow}
-            emptyMessage={emptyContent}
-            fetching={fetching}
-          />
-        )}
-        {fetching && surface.rowModels.length > 0 ? (
-          <ListLoadingFooter />
-        ) : null}
-      </div>
-    </>
+          : undefined
+      }
+      error={error}
+      loadingFooter={fetching && surface.rowModels.length > 0}
+    >
+      {gallery && layout === "grid" ? (
+        <GalleryView<TRow>
+          rows={surface.rowModels.map((model) => model.original)}
+          imageField={gallery.image}
+          titleField={gallery.title}
+          subtitleField={gallery.subtitle}
+          renderCard={gallery.renderCard}
+          cardHref={rowHref}
+          onCardClick={onRowClick}
+          draggableRow={draggableRow}
+          selectedIds={selectable ? surface.selectedIds : undefined}
+          onToggleSelected={selectable ? dataView.toggleSelectedId : undefined}
+          fetching={fetching}
+          emptyMessage={emptyMessage}
+          emptyState={emptyState}
+        />
+      ) : (
+        <FlatListBody
+          columns={columns}
+          table={surface.table}
+          rowModels={surface.rowModels}
+          listItems={surface.listItems}
+          expandedKeys={surface.expandedKeys}
+          onToggleGroup={surface.toggleGroup}
+          tableScrollRef={surface.tableScrollRef}
+          rowVirtualizer={surface.rowVirtualizer}
+          visibleColumnCount={surface.visibleColumnCount}
+          allPageSelected={surface.allPageSelected}
+          somePageSelected={surface.somePageSelected}
+          onPageSelectionChange={surface.setPageSelection}
+          visibleFields={surface.visibleFields}
+          onVisibleFieldToggle={surface.toggleVisibleField}
+          dataView={dataView}
+          interactive={interactive}
+          selectable={selectable}
+          rowHref={rowHref}
+          onRowClick={onRowClick}
+          draggableRow={draggableRow}
+          emptyMessage={emptyContent}
+          fetching={fetching}
+        />
+      )}
+    </DataViewListShell>
   );
 }
 
