@@ -214,6 +214,24 @@ class Handle(SqidMixin, AuditMixin, AngeeModel):
 
         return self.value
 
+    @property
+    def resolved_confidence(self) -> float | None:
+        """Confidence of the link that resolved this handle's owner.
+
+        ``party`` is materialised from the winning :class:`PartyHandle` (see
+        :meth:`PartyHandleManager.resolve`) and ``(party, handle)`` is unique, so
+        the link matching the resolved ``party`` is that winner — its score is the
+        resolution confidence. ``None`` when the handle is unowned or, under
+        actor-scoped loading, the resolving link is not readable by the actor.
+        """
+
+        if self.party_id is None:
+            return None
+        for link in self.party_links.all():
+            if link.party_id == self.party_id:
+                return link.confidence
+        return None
+
 
 class PartyHandle(SqidMixin, AuditMixin, AngeeModel):
     """A confidence-bearing link between a party and one of its handles.

@@ -60,6 +60,8 @@ import {
   TABLE_SCROLL_STYLE,
   alignOf,
   bucketValueLabels,
+  groupLabelDimension,
+  groupLabelOrderField,
   formatMeasure,
   groupMeasuresFromColumns,
   groupOrderByForSort,
@@ -265,9 +267,19 @@ function GroupLevel<TRow extends Row>({
   const t = useBaseT();
   const axis = axes[0];
   const currentGroup = groups[0];
+  // Carry the relation's display label alongside the id (Odoo's
+  // `(id, display_name)`): one extra group axis so the bucket key holds the name
+  // for the header, while the id axis still owns the drill-down filter.
+  const labelDimension = React.useMemo(
+    () => (axis && currentGroup ? groupLabelDimension(currentGroup, modelMetadata) : null),
+    [axis, currentGroup, modelMetadata],
+  );
   const dimensions = React.useMemo(
-    () => (axis ? [axis] : []),
-    [axis],
+    () => {
+      if (!axis) return [];
+      return labelDimension ? [axis, labelDimension] : [axis];
+    },
+    [axis, labelDimension],
   );
   const remainingAxes = React.useMemo(() => axes.slice(1), [axes]);
   const remainingGroups = React.useMemo(() => groups.slice(1), [groups]);
@@ -275,8 +287,19 @@ function GroupLevel<TRow extends Row>({
   const levelPage = depth === 0 ? page : localPage;
   const levelEnabled = enabled && dimensions.length > 0;
   const groupOrderBy = React.useMemo(
-    () => groupOrderByForSort(dataView.state.sort, currentGroup),
-    [currentGroup, dataView.state.sort],
+    () => {
+      const sorted = groupOrderByForSort(dataView.state.sort, currentGroup);
+      if (sorted) return sorted;
+      // No explicit sort: order a relation group by its display label so the
+      // headers read alphabetically by name instead of by the opaque id.
+      const labelOrderField = currentGroup
+        ? groupLabelOrderField(currentGroup, modelMetadata)
+        : undefined;
+      return labelOrderField
+        ? [{ field: labelOrderField, direction: "ASC" as const }]
+        : undefined;
+    },
+    [currentGroup, dataView.state.sort, modelMetadata],
   );
   const groupAggregation = useResourceGroupBy(model, {
     dimensions,

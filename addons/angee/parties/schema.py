@@ -119,6 +119,15 @@ class HandleType(AngeeNode):
     created_at: auto
     updated_at: auto
 
+    @strawberry_django.field(only=["party_id"], prefetch_related="party_links")
+    def confidence(self) -> float | None:
+        """Confidence of the link that resolved this handle's owner (null if unowned).
+
+        The rule lives on the model; the prefetch keeps it a single query per page.
+        """
+
+        return cast("Any", self).resolved_confidence
+
 
 @strawberry_django.type(PartyHandle)
 class PartyHandleType(AngeeNode):
@@ -433,8 +442,15 @@ class PersonFilter:
 
 @strawberry_django.filter_type(Handle, lookups=True)
 class HandleFilter:
-    """Field lookups accepted when filtering the handles connection."""
+    """Field lookups accepted when filtering the handles connection.
 
+    ``value`` and ``display_name`` are the searchable text columns: the toolbar's
+    free-text search targets the record representation (``display_name``), and
+    ``value`` is the handle itself (the email/phone/handle string).
+    """
+
+    value: auto
+    display_name: auto
     party: auto
     platform: auto
     is_own: auto
@@ -482,6 +498,23 @@ _party_aggregates = rebac_aggregate_builder(
     enable_filter_echo=True,
 ).build()
 
+# Group handles by their resolved contact. Following Odoo's read_group: group by
+# the party id (which owns the drill-down filter) and carry `party.display_name`
+# in each bucket so the header shows the contact's name, not the raw id. The two
+# axes yield the same buckets (id → name is 1:1). Scoped to owned handles: the
+# relation filter input exposes only the public id (no `is_null`), so the
+# per-bucket drill-down cannot express the null-party bucket; unowned handles stay
+# in the flat, ungrouped list.
+_handle_aggregates = rebac_aggregate_builder(
+    model=Handle,
+    aggregate_fields=["id"],
+    group_by_fields=["party", "party__display_name"],
+    queryset=Handle.objects.filter(party__isnull=False),
+    filter_type=HandleFilter,
+    pagination_style="offset",
+    enable_filter_echo=True,
+).build()
+
 
 @strawberry.type
 class PartiesQuery:
@@ -515,6 +548,8 @@ class PartiesQuery:
     contact_folder: ContactFolderType | None = detail(ContactFolderType)
     party_aggregate = _party_aggregates.aggregate_field
     party_groups = _party_aggregates.group_by_field
+    handle_aggregate = _handle_aggregates.aggregate_field
+    handle_groups = _handle_aggregates.group_by_field
 
 
 _AGGREGATE_TYPES = [
@@ -522,6 +557,10 @@ _AGGREGATE_TYPES = [
     _party_aggregates.grouped_type,
     _party_aggregates.grouped_result_type,
     _party_aggregates.group_key_type,
+    _handle_aggregates.aggregate_type,
+    _handle_aggregates.grouped_type,
+    _handle_aggregates.grouped_result_type,
+    _handle_aggregates.group_key_type,
 ]
 
 

@@ -885,6 +885,42 @@ export function dataViewGroupToAggregateDimension(
   };
 }
 
+/**
+ * The extra group-by dimension that carries a relation group's display label —
+ * the same bucket grouped by `<relation>__<label>` so the related record's name
+ * rides along with its id (Odoo's `(id, display_name)`). `null` when the model
+ * registers no label axis for the relation, in which case the group labels by id.
+ */
+export function groupLabelDimension(
+  group: DataViewGroup,
+  metadata: ModelMetadata | null,
+): GroupByDimension | null {
+  const labelKey = groupLabelKey(group, metadata);
+  return labelKey ? { field: graphQLEnumValue(labelKey), key: labelKey } : null;
+}
+
+function groupLabelKey(
+  group: DataViewGroup,
+  metadata: ModelMetadata | null,
+): string | undefined {
+  const field = group.aggregateField;
+  if (!field) return undefined;
+  return metadata?.fields[field]?.relationFilter?.labelKey;
+}
+
+/**
+ * The group-order field that sorts a relation group by its display label rather
+ * than the opaque id the buckets key on, so names read alphabetically. `undefined`
+ * when the relation has no label axis (the group then orders by id as before).
+ */
+export function groupLabelOrderField(
+  group: DataViewGroup,
+  metadata: ModelMetadata | null,
+): string | undefined {
+  const labelKey = groupLabelKey(group, metadata);
+  return labelKey ? fieldToSnake(labelKey) : undefined;
+}
+
 export function groupOrderByForSort(
   sort: DataViewContextValue["state"]["sort"],
   group: DataViewGroup | undefined,
@@ -916,6 +952,11 @@ export function bucketValueLabels(
   metadata: ModelMetadata | null = null,
 ): string[] {
   return groupStack.map((group) => {
+    const labelKey = groupLabelKey(group, metadata);
+    if (labelKey) {
+      const label = bucket.key?.[labelKey];
+      if (label != null && label !== "") return String(label);
+    }
     const value = bucket.key?.[aggregateKeyField(group)];
     return groupKey(value, group, metadata);
   });

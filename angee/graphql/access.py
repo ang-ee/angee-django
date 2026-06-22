@@ -18,8 +18,27 @@ from angee.graphql.events import ChangeEvent, ChangePayload
 def assert_no_gated_read_fields(
     model: type[models.Model], field_names: Iterable[str], owner: str, reason: str
 ) -> None:
-    if gated := sorted(gated_read_fields(model) & set(field_names)):
+    if gated := sorted(name for name in set(field_names) if _is_gated_read_axis(model, name)):
         raise ImproperlyConfigured(f"{model._meta.label}: {owner} {gated} are field-gated reads; {reason}")
+
+
+def _is_gated_read_axis(model: type[models.Model], axis: str) -> bool:
+    """Whether a (possibly relation-leaf) group-by axis reads a field-gated column.
+
+    A dotted axis (``party__display_name``) is never a field on ``model``, so it
+    would slip past a same-model check; walk its forward to-one relations to the
+    leaf model and gate-check the leaf there — a gated read reached through a
+    relation leaks owner-only values into bucket keys exactly as a direct one does.
+    """
+
+    *path, leaf = axis.split("__")
+    leaf_model: type[models.Model] = model
+    for step in path:
+        related = getattr(leaf_model._meta.get_field(step), "related_model", None)
+        if related is None:
+            return False
+        leaf_model = related
+    return leaf in gated_read_fields(leaf_model)
 
 
 class ChangeReadGate:

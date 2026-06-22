@@ -44,6 +44,10 @@ export interface ModelRelationFilterMetadata {
   mode: ModelRelationFilterMode;
   lookup?: string;
   aggregateKey?: string;
+  /** Group-key field carrying the related record's display label, when the model
+   * registers a `<relation>__<label>` group axis (e.g. `party_DisplayName`). Lets
+   * a relation group show the contact's name, not its id (Odoo's read_group). */
+  labelKey?: string;
 }
 
 /** Metadata for one GraphQL object field, derived from the printed SDL. */
@@ -335,6 +339,7 @@ function relationFilterForField(
   const filterFields = filterInput?.getFields();
   if (!filterFields) return undefined;
   const aggregateKey = relationAggregateKey(fieldName, groupKeyFields);
+  const labelKey = relationLabelKey(fieldName, groupKeyFields);
   for (const name of [fieldName, `${fieldName}Id`]) {
     const filterField = filterFields[name];
     const shape = filterField ? relationFilterShape(filterField.type) : null;
@@ -343,6 +348,7 @@ function relationFilterForField(
         field: name,
         ...shape,
         ...(aggregateKey ? { aggregateKey } : {}),
+        ...(labelKey ? { labelKey } : {}),
       };
     }
   }
@@ -356,6 +362,24 @@ function relationAggregateKey(
   const idKey = `${fieldName}Id`;
   if (groupKeyFields.has(idKey)) return idKey;
   return groupKeyFields.has(fieldName) ? fieldName : undefined;
+}
+
+/**
+ * The group-key field carrying a relation's display label, when the model
+ * registers a `<relation>__<label>` group axis. Strawberry camel-cases that path
+ * to `<relation>_<Label>` (e.g. `party__display_name` → `party_DisplayName`) —
+ * the `<relation>Id` axis has no underscore, so a `<relation>_`-prefixed key is a
+ * relation leaf. Returns it only when exactly one exists: with several leaves the
+ * intended label is ambiguous, so the group falls back to labelling by id rather
+ * than silently picking a schema-order-dependent one.
+ */
+function relationLabelKey(
+  fieldName: string,
+  groupKeyFields: ReadonlySet<string>,
+): string | undefined {
+  const prefix = `${fieldName}_`;
+  const leaves = [...groupKeyFields].filter((key) => key.startsWith(prefix));
+  return leaves.length === 1 ? leaves[0] : undefined;
 }
 
 function relationFilterShape(

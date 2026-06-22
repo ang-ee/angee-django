@@ -239,6 +239,36 @@ describe("fieldMetadataFromSDL", () => {
       lookup: "sqid",
     });
   });
+
+  test("captures a relation's label axis (one leaf) and skips it when ambiguous", () => {
+    const metadata = fieldMetadataFromSDL(/* GraphQL */ `
+      type ProviderType { id: ID! name: String! }
+      type ModelType { id: ID! provider: ProviderType ambiguous: ProviderType }
+      type ModelTypeOffsetPaginated { results: [ModelType!]! }
+      input DjangoModelFilterInput { sqid: ID! }
+      input ModelFilter { provider: DjangoModelFilterInput ambiguous: DjangoModelFilterInput }
+      input ModelAggregateGroupBySpec { field: String! }
+      type ModelAggregateGroupKey {
+        providerId: ID
+        provider_DisplayName: String
+        ambiguousId: ID
+        ambiguous_DisplayName: String
+        ambiguous_Email: String
+      }
+      type ModelAggregateGrouped { key: ModelAggregateGroupKey! count: Int! }
+      type ModelAggregateGroupedResult { results: [ModelAggregateGrouped!]! }
+      type Query {
+        models(filters: ModelFilter): ModelTypeOffsetPaginated!
+        modelGroups(groupBy: [ModelAggregateGroupBySpec!]!, filter: ModelFilter): ModelAggregateGroupedResult!
+      }
+    `);
+
+    const fields = required(metadata.types.ModelType).fields;
+    // Exactly one `provider_*` group-key leaf → that is the display-label axis.
+    expect(required(fields.provider).relationFilter?.labelKey).toBe("provider_DisplayName");
+    // Two `ambiguous_*` leaves → ambiguous, so no label axis (group labels by id).
+    expect(required(fields.ambiguous).relationFilter?.labelKey).toBeUndefined();
+  });
 });
 
 function required<T>(value: T | null | undefined): T {

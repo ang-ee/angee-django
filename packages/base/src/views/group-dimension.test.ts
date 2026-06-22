@@ -2,10 +2,37 @@
 
 import { describe, expect, test } from "vitest";
 
+import type { ModelMetadata } from "@angee/sdk";
+
 import {
+  bucketValueLabels,
   dataViewGroupToAggregateDimension,
+  groupLabelDimension,
+  groupLabelOrderField,
   groupOrderField,
 } from "./ListInternals";
+
+// A model whose `party` relation registers a `party__display_name` label axis.
+const PARTY_LABEL_METADATA = {
+  fields: {
+    party: {
+      name: "party",
+      kind: "relation",
+      relationFilter: {
+        field: "party",
+        mode: "lookup",
+        aggregateKey: "partyId",
+        labelKey: "party_DisplayName",
+      },
+    },
+  },
+} as unknown as ModelMetadata;
+
+const PARTY_GROUP = {
+  field: "party.displayName",
+  aggregateField: "party",
+  aggregateKey: "partyId",
+};
 
 describe("dataViewGroupToAggregateDimension", () => {
   test("maps a plain field to its uppercase enum + verbatim key", () => {
@@ -84,5 +111,40 @@ describe("groupOrderField", () => {
         aggregateKey: "vendorId",
       }),
     ).toBe("vendor");
+  });
+});
+
+describe("relation group display label (Odoo (id, display_name))", () => {
+  test("groupLabelDimension carries the registered label axis", () => {
+    expect(groupLabelDimension(PARTY_GROUP, PARTY_LABEL_METADATA)).toEqual({
+      field: "PARTY__DISPLAY_NAME",
+      key: "party_DisplayName",
+    });
+  });
+
+  test("groupLabelDimension is null without a label axis", () => {
+    expect(groupLabelDimension(PARTY_GROUP, null)).toBeNull();
+    expect(groupLabelDimension({ field: "status" }, PARTY_LABEL_METADATA)).toBeNull();
+  });
+
+  test("groupLabelOrderField sorts by the label's `__` path, not the id", () => {
+    expect(groupLabelOrderField(PARTY_GROUP, PARTY_LABEL_METADATA)).toBe(
+      "party__display_name",
+    );
+    expect(groupLabelOrderField(PARTY_GROUP, null)).toBeUndefined();
+  });
+
+  test("bucketValueLabels renders the carried name, not the raw id", () => {
+    const bucket = { key: { partyId: "4422", party_DisplayName: "PRG Iva" }, count: 1 };
+    expect(bucketValueLabels(bucket, [PARTY_GROUP], PARTY_LABEL_METADATA)).toEqual([
+      "PRG Iva",
+    ]);
+  });
+
+  test("bucketValueLabels needs the label axis to render the carried name", () => {
+    const bucket = { key: { partyId: "pty_abc", party_DisplayName: "PRG Iva" }, count: 1 };
+    // Without metadata there is no label key, so the carried name is not used —
+    // the header falls back to the id key (the pre-Odoo behaviour).
+    expect(bucketValueLabels(bucket, [PARTY_GROUP], null)).not.toEqual(["PRG Iva"]);
   });
 });

@@ -44,6 +44,33 @@ class AngeeAggregateBuilder(AggregateBuilder):
         related_model = field.remote_field.model
         return self._echo_field_filter(fp, {PUBLIC_ID_FIELD_NAME: public_id_for(related_model, value)})
 
+    def _echo_bucket_filter(
+        self,
+        key_kwargs: dict[str, Any],
+        spec: list[tuple[str, Any]],
+    ) -> dict[str, Any]:
+        """Drop label-only relation-leaf axes before echoing the bucket filter.
+
+        A relation-leaf axis (e.g. ``party__display_name``) is carried only to
+        label the bucket with the related record's name — Odoo's
+        ``(id, display_name)`` pair. When the same relation is also grouped by its
+        id (``party``), that FK axis owns the drill-down filter and the label axis
+        contributes no clause, so it is dropped here: echoing it would fail (a
+        to-one relation leaf has no flat filter field) and would be redundant.
+        """
+
+        direct_relations = {
+            fp
+            for fp, _ in spec
+            if "__" not in fp and getattr(self.model._meta.get_field(fp), "many_to_one", False)
+        }
+        echo_spec = [
+            (fp, grain)
+            for fp, grain in spec
+            if "__" not in fp or fp.split("__", 1)[0] not in direct_relations
+        ]
+        return super()._echo_bucket_filter(key_kwargs, echo_spec)
+
 
 def rebac_aggregate_builder(
     *,
