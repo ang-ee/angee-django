@@ -11,7 +11,6 @@ from __future__ import annotations
 from typing import Any
 
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
-from django.contrib.auth.models import Group as DjangoGroup
 from django.contrib.auth.models import UnicodeUsernameValidator
 from django.db import models
 from django.utils import timezone
@@ -20,19 +19,8 @@ from rebac.managers import RebacManager
 from rebac.permissions_mixin import RebacPermissionsMixin
 from rebac.roles import grant, revoke
 
-from angee.base.mixins import SqidMixin, SqidProxyMixin
+from angee.base.mixins import SqidMixin
 from angee.base.models import AngeeModel
-
-
-class Group(SqidProxyMixin, DjangoGroup):
-    """Sqid-addressable proxy over Django's auth group table."""
-
-    sqid_prefix = "grp_"
-
-    class Meta:
-        """Django model options for the IAM group proxy."""
-
-        proxy = True
 
 
 class UserManager(RebacManager, BaseUserManager):

@@ -19,6 +19,7 @@ from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.models import AnonymousUser
+from django.contrib.auth.models import Group as DjangoGroup
 from django.db import transaction
 from django.db.models import QuerySet
 from rebac import (
@@ -47,6 +48,7 @@ from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
+from angee.base.models import SqidPublicIdentity
 from angee.graphql.data import data_query
 from angee.graphql.deletion import DeletePreview, delete_by_public_id
 from angee.graphql.ids import PublicID, require_instance_for_id
@@ -84,7 +86,9 @@ def _iam_model(name: str) -> type[Any]:
 
 
 User = _iam_model("User")
-Group = _iam_model("Group")
+Group = DjangoGroup
+GROUP_PUBLIC_IDENTITY = SqidPublicIdentity(prefix="grp_", model_label="iam.Group")
+"""Public data identity for Django auth groups exposed by IAM."""
 
 _IAM_OVERVIEW_DEFAULT_PEEK_LIMIT = 6
 _IAM_OVERVIEW_MAX_PEEK_LIMIT = 100
@@ -154,10 +158,16 @@ class CurrentUserType(AngeeNode):
 
 
 @strawberry_django.type(Group)
-class GroupType(AngeeNode):
+class GroupType:
     """GraphQL projection of Django auth groups with Angee public ids."""
 
     name: auto
+
+    @strawberry.field(description="The public ID of this object.")
+    def id(self) -> PublicID:
+        """Return this group row's IAM public id."""
+
+        return PublicID(GROUP_PUBLIC_IDENTITY.public_id_from_pk(cast(Any, self).pk))
 
 
 @strawberry.type
@@ -842,6 +852,7 @@ GroupDataQuery, _GROUP_DATA_TYPES = data_query(
     enable_filter_echo=True,
     permission_classes=_ADMIN_PERMISSION_CLASSES,
     aggregate_kwargs={"name_prefix": "GroupAggregate", "pagination_style": "offset"},
+    public_identity=GROUP_PUBLIC_IDENTITY,
 )
 
 

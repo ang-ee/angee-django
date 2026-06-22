@@ -181,10 +181,10 @@ Ninth public-identity guardrail slice completed on 2026-06-22:
 - [x] Make `data_query(...)` fail fast unless the model exposes an Angee sqid
       identity, with a named raw-pk compatibility flag for the IAM source-test
       auth.User fallback only.
-- [x] Add `SqidProxyMixin` for Django proxy models, because Django forbids
-      field-bearing abstract bases on proxies.
-- [x] Expose Django auth `Group` through an IAM-owned proxy model with `grp_`
-      public ids.
+- [x] Add `SqidPublicIdentity` for third-party Django models that Angee exposes
+      through data surfaces without owning their migration state.
+- [x] Expose Django auth `Group` through IAM-owned schema metadata with `grp_`
+      public ids, without source-addon IAM migrations.
 - [x] Promote auth groups to an IAM console `data_query(...)` surface and a
       React `DataPage`/`GroupListView` page under Users. Django auth
       permissions stay unexposed because REBAC owns authorization semantics.

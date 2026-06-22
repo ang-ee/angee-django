@@ -108,17 +108,21 @@ def make_data_query_metadata(
     group_by_spec_type: type | None = None,
     groupable_field_enum: type | None = None,
     having_type: type | None = None,
+    model_label: str | None = None,
+    public_id_field: str = PUBLIC_ID_FIELD_NAME,
 ) -> DataQueryMetadata:
     """Build metadata for a generated data-query class."""
 
+    exposed_model_label = model_label or model._meta.label
+    app_label, model_name = _model_label_parts(exposed_model_label, model)
     return DataQueryMetadata(
         query_type=query_type,
         node_type=node_type,
         model=model,
-        model_label=model._meta.label,
-        app_label=model._meta.app_label,
-        model_name=model._meta.model_name,
-        public_id_field=PUBLIC_ID_FIELD_NAME,
+        model_label=exposed_model_label,
+        app_label=app_label,
+        model_name=model_name,
+        public_id_field=public_id_field,
         roots=roots,
         type_names=DataQueryTypeNames(
             query=_type_name(query_type),
@@ -252,11 +256,7 @@ def _relation_axes(
 ) -> tuple[DataRelationAxisMetadata, ...]:
     """Return direct FK group axes with their related model and optional label axis."""
 
-    label_axes = {
-        path.split("__", 1)[0]: path
-        for path in group_by_fields
-        if "__" in path
-    }
+    label_axes = {path.split("__", 1)[0]: path for path in group_by_fields if "__" in path}
     relation_axes: list[DataRelationAxisMetadata] = []
     for path in group_by_fields:
         if "__" in path:
@@ -297,3 +297,15 @@ def _type_name(surface: type) -> str:
     if definition is not None:
         return str(definition.name)
     return surface_name(surface)
+
+
+def _model_label_parts(
+    model_label: str,
+    model: type[models.Model],
+) -> tuple[str, str]:
+    """Return metadata app/model names for a public model label."""
+
+    if model_label == model._meta.label:
+        return model._meta.app_label, model._meta.model_name
+    app_label, object_name = model_label.split(".", 1)
+    return app_label, object_name.lower()

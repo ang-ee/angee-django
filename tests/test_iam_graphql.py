@@ -1174,22 +1174,32 @@ def test_console_schema_exposes_user_change_subscription(
 
 
 @pytest.mark.django_db
-def test_iam_group_proxy_model_is_sqid_addressable() -> None:
-    """The IAM auth-group proxy satisfies the public data identity contract."""
+def test_iam_group_public_identity_is_sqid_addressable() -> None:
+    """The IAM auth-group data surface satisfies the public identity contract."""
 
     group = iam_schema.Group.objects.create(name="Operators")
+    group_id = iam_schema.GROUP_PUBLIC_IDENTITY.public_id_from_pk(group.pk)
 
-    assert is_public_data_model(iam_schema.Group)
-    assert public_id_of(group).startswith("grp_")
-    assert public_id_for(iam_schema.Group, group.pk) == group.sqid
-    assert instance_from_public_id(iam_schema.Group, group.sqid).pk == group.pk
+    assert not is_public_data_model(iam_schema.Group)
+    assert public_id_of(group) == str(group.pk)
+    assert group_id.startswith("grp_")
+    assert public_id_for(iam_schema.Group, group.pk, public_identity=iam_schema.GROUP_PUBLIC_IDENTITY) == group_id
+    assert (
+        instance_from_public_id(
+            iam_schema.Group,
+            group_id,
+            public_identity=iam_schema.GROUP_PUBLIC_IDENTITY,
+        ).pk
+        == group.pk
+    )
 
 
 @pytest.mark.django_db
-def test_iam_group_data_query_uses_proxy_sqids() -> None:
+def test_iam_group_data_query_uses_public_identity_sqids() -> None:
     """The IAM auth-group catalogue surfaces list and detail rows by public sqids."""
 
     group = iam_schema.Group.objects.create(name="Operators")
+    group_id = iam_schema.GROUP_PUBLIC_IDENTITY.public_id_from_pk(group.pk)
     admin = User.objects.create_superuser(
         username="auth-catalogue-admin",
         email="auth-catalogue-admin@example.com",
@@ -1214,13 +1224,13 @@ def test_iam_group_data_query_uses_proxy_sqids() -> None:
               group(id: $groupId) { id name }
             }
             """,
-            {"groupId": group.sqid},
+            {"groupId": group_id},
             user=admin,
         )
     )
 
-    assert {"id": group.sqid, "name": "Operators"} in data["groups"]["results"]
-    assert data["group"] == {"id": group.sqid, "name": "Operators"}
+    assert {"id": group_id, "name": "Operators"} in data["groups"]["results"]
+    assert data["group"] == {"id": group_id, "name": "Operators"}
 
 
 def test_my_connected_accounts_are_scoped_to_session_user(

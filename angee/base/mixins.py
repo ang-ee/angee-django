@@ -8,9 +8,7 @@ from typing import Any, ClassVar
 import reversion
 from django.conf import settings
 from django.db import models
-from django_sqids.field import DEFAULT_ALPHABET
 from rebac import app_settings, current_actor
-from sqids import Sqids
 
 from angee.base.fields import SqidField
 
@@ -91,77 +89,6 @@ class SqidMixin(models.Model):
         if not isinstance(field, SqidField):
             return ""
         return field.public_id_from_value(value)
-
-
-class SqidProxyMixin:
-    """Add sqid public identity behavior to a Django proxy model.
-
-    Django forbids field-bearing abstract bases on proxy models, so proxies
-    cannot inherit ``SqidMixin``. This mixin gives them the same public-id
-    methods with no model fields and no database changes.
-    """
-
-    sqid_prefix: ClassVar[str] = ""
-    """Public-id prefix for ``sqid`` (e.g. ``"grp_"``); empty means no prefix."""
-
-    sqid_min_length: ClassVar[int] = 8
-    """Minimum encoded id length for proxy-model sqids."""
-
-    sqid_alphabet: ClassVar[str | None] = None
-    """Optional sqids alphabet; defaults to django-sqids settings."""
-
-    @property
-    def sqid(self) -> str:
-        """Return the public sqid encoded from this proxy row's primary key."""
-
-        return type(self).public_id_from_pk(getattr(self, "pk", None))
-
-    def public_id_value(self) -> Any:
-        """Return the raw public identifier value for this proxy instance."""
-
-        return self.sqid
-
-    @classmethod
-    def public_id_lookup(cls, value: str) -> dict[str, Any]:
-        """Return the Django lookup for this proxy model's public identifier."""
-
-        pk = cls._meta.pk
-        return {pk.name: cls.public_id_to_pk(value)} if pk is not None else {}
-
-    @classmethod
-    def public_id_from_pk(cls, value: Any) -> str:
-        """Return the public id encoded from this proxy model's primary key."""
-
-        if value in (None, ""):
-            return ""
-        encoded_value = cls._sqid_codec().encode([int(value)])
-        return f"{cls.public_id_prefix()}{encoded_value}" if encoded_value is not None else ""
-
-    @classmethod
-    def public_id_to_pk(cls, value: str) -> int | None:
-        """Decode one proxy sqid to the backing primary-key value."""
-
-        prefix = cls.public_id_prefix()
-        raw_value = value
-        if prefix:
-            if not value.startswith(prefix):
-                return None
-            raw_value = value[len(prefix) :]
-        decoded = cls._sqid_codec().decode(raw_value)
-        return decoded[0] if len(decoded) == 1 else None
-
-    @classmethod
-    def public_id_prefix(cls) -> str:
-        """Return the canonical prefix used by this proxy model."""
-
-        return SqidField._canonical_prefix(cls.sqid_prefix)
-
-    @classmethod
-    def _sqid_codec(cls) -> Sqids:
-        """Return the sqids codec for this proxy model."""
-
-        alphabet = cls.sqid_alphabet or getattr(settings, "DJANGO_SQIDS_ALPHABET", None) or DEFAULT_ALPHABET
-        return Sqids(min_length=cls.sqid_min_length, alphabet=alphabet)
 
 
 class AuditMixin(models.Model):

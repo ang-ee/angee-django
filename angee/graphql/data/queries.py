@@ -10,7 +10,8 @@ import strawberry_django
 from django.core.exceptions import ImproperlyConfigured
 from strawberry_django.pagination import OffsetPaginated
 
-from angee.base.models import is_public_data_model
+from angee.base.models import SqidPublicIdentity, is_public_data_model
+from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.aggregates import data_aggregate_builder
 from angee.graphql.data.metadata import (
     DataQueryRoots,
@@ -43,6 +44,8 @@ def data_query(
     list_kwargs: dict[str, Any] | None = None,
     aggregate_kwargs: dict[str, Any] | None = None,
     allow_raw_pk_compat: bool = False,
+    public_identity: SqidPublicIdentity | None = None,
+    model_label: str | None = None,
 ) -> tuple[type, tuple[object, ...]]:
     """Return a Strawberry query type plus generated data helper types.
 
@@ -56,6 +59,7 @@ def data_query(
         node,
         model,
         allow_raw_pk_compat=allow_raw_pk_compat,
+        public_identity=public_identity,
     )
     singular = name or model._meta.model_name
     list_options = dict(list_kwargs or {})
@@ -97,6 +101,7 @@ def data_query(
         namespace[detail_attr] = detail(
             node,
             permission_classes=permission_classes,
+            public_identity=public_identity,
         )
 
     if include_aggregate or include_groups:
@@ -168,6 +173,8 @@ def data_query(
         group_by_spec_type=group_by_spec_type,
         groupable_field_enum=groupable_field_enum,
         having_type=having_type,
+        model_label=model_label or (public_identity.model_label if public_identity is not None else None),
+        public_id_field=public_identity.public_id_field if public_identity is not None else PUBLIC_ID_FIELD_NAME,
     )
     return attach_data_query_metadata(query, metadata), tuple(generated_types)
 
@@ -183,9 +190,12 @@ def _require_public_data_identity(
     model: type,
     *,
     allow_raw_pk_compat: bool,
+    public_identity: SqidPublicIdentity | None,
 ) -> None:
     """Fail fast when a model-backed public data surface lacks an sqid."""
 
+    if public_identity is not None:
+        return
     if is_public_data_model(model):
         return
     if allow_raw_pk_compat:

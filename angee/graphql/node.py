@@ -14,7 +14,7 @@ from strawberry.utils.await_maybe import AwaitableOrValue
 from strawberry_django.relay import DjangoCursorConnection
 from typing_extensions import Self
 
-from angee.base.models import public_id_of
+from angee.base.models import SqidPublicIdentity, instance_from_public_id, public_id_of
 from angee.graphql.ids import PublicID, instance_for_id
 from angee.graphql.introspection import django_model
 
@@ -60,6 +60,7 @@ def detail(
     node: type,
     *,
     permission_classes: list[type] | None = None,
+    public_identity: SqidPublicIdentity | None = None,
 ) -> Any:
     """Return a typed detail root field addressed by a public id."""
 
@@ -68,6 +69,8 @@ def detail(
     def resolve(id: PublicID) -> Any | None:
         """Return the row addressed by the public id."""
 
+        if public_identity is not None:
+            return instance_from_public_id(model, str(id), public_identity=public_identity)
         return instance_for_id(model, id)
 
     resolve.__annotations__ = {

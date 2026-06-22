@@ -3,19 +3,23 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Self, TypeVar, cast
 
+from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from django.db.models.utils import make_model_tuple
+from django_sqids.field import DEFAULT_ALPHABET
 from rebac import RebacMixin, SubjectRef, check_new, current_actor, to_object_ref
 from rebac.actors import is_sudo as ambient_is_sudo
 from rebac.errors import MissingActorError, PermissionDenied
 from rebac.managers import RebacManager, RebacQuerySet
 from rebac.resources import model_resource_type
+from sqids import Sqids
 
 from angee.base.fields import SqidField
-from angee.base.mixins import SqidMixin, SqidProxyMixin, TimestampMixin
+from angee.base.mixins import SqidMixin, TimestampMixin
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
@@ -217,6 +221,54 @@ class AngeeDataModel(SqidMixin, AngeeModel):
         abstract = True
 
 
+@dataclass(frozen=True, slots=True)
+class SqidPublicIdentity:
+    """Sqid public identity for a model Angee does not own with a field."""
+
+    prefix: str
+    model_label: str | None = None
+    public_id_field: str = "sqid"
+    min_length: int = 8
+    alphabet: str | None = None
+
+    def public_id_from_pk(self, value: Any) -> str:
+        """Return the public id encoded from a primary-key value."""
+
+        if value in (None, ""):
+            return ""
+        encoded_value = self._codec().encode([int(value)])
+        return f"{self.canonical_prefix}{encoded_value}" if encoded_value is not None else ""
+
+    def public_id_to_pk(self, value: str) -> int | None:
+        """Decode one public id to the backing primary-key value."""
+
+        raw_value = value
+        if self.canonical_prefix:
+            if not value.startswith(self.canonical_prefix):
+                return None
+            raw_value = value[len(self.canonical_prefix) :]
+        decoded = self._codec().decode(raw_value)
+        return decoded[0] if len(decoded) == 1 else None
+
+    def public_id_lookup(self, model: type[models.Model], value: str) -> dict[str, Any]:
+        """Return a Django lookup for ``value`` against ``model``."""
+
+        pk = model._meta.pk
+        return {pk.name: self.public_id_to_pk(value)} if pk is not None else {}
+
+    @property
+    def canonical_prefix(self) -> str:
+        """Return the canonical Angee sqid prefix."""
+
+        return SqidField._canonical_prefix(self.prefix)
+
+    def _codec(self) -> Sqids:
+        """Return the sqids codec for this identity."""
+
+        alphabet = self.alphabet or getattr(settings, "DJANGO_SQIDS_ALPHABET", None) or DEFAULT_ALPHABET
+        return Sqids(min_length=self.min_length, alphabet=alphabet)
+
+
 def public_data_id_field(model: type[models.Model]) -> SqidField | None:
     """Return the sqid field that makes ``model`` safe for public data surfaces."""
 
@@ -236,8 +288,6 @@ def public_data_id_prefix(model: type[models.Model]) -> str:
     field = public_data_id_field(model)
     if field is not None:
         return field.prefix
-    if issubclass(model, SqidProxyMixin):
-        return model.public_id_prefix()
     return ""
 
 
@@ -247,8 +297,6 @@ def public_data_id_owner(model: type[models.Model]) -> type[models.Model] | None
     field = public_data_id_field(model)
     if field is not None:
         return cast(type[models.Model], field.model)
-    if issubclass(model, SqidProxyMixin):
-        return model
     return None
 
 
@@ -272,6 +320,7 @@ def instance_from_public_id(
     value: str,
     *,
     queryset: models.QuerySet[_ModelT] | None = None,
+    public_identity: SqidPublicIdentity | None = None,
 ) -> _ModelT | None:
     """Return ``model`` instance addressed by Angee or Django public ID."""
 
@@ -280,7 +329,11 @@ def instance_from_public_id(
     if callable(resolver):
         return cast(_ModelT | None, resolver(value))
 
-    return _instance_from_public_id_queryset(active_queryset, value)
+    return _instance_from_public_id_queryset(
+        active_queryset,
+        value,
+        public_identity=public_identity,
+    )
 
 
 def public_id_of(instance: models.Model) -> str:
@@ -292,11 +345,18 @@ def public_id_of(instance: models.Model) -> str:
     return str(value)
 
 
-def public_id_for(model: type[models.Model], pk: Any) -> str:
+def public_id_for(
+    model: type[models.Model],
+    pk: Any,
+    *,
+    public_identity: SqidPublicIdentity | None = None,
+) -> str:
     """Return the public id for ``model`` when only its primary key is known."""
 
     if pk in (None, ""):
         return ""
+    if public_identity is not None:
+        return public_identity.public_id_from_pk(pk)
     resolver = getattr(model, "public_id_from_pk", None)
     if callable(resolver):
         return str(resolver(pk))
@@ -315,6 +375,8 @@ def _relationship_subject(value: Any) -> SubjectRef:
 def _instance_from_public_id_queryset(
     queryset: models.QuerySet[_ModelT],
     value: str,
+    *,
+    public_identity: SqidPublicIdentity | None = None,
 ) -> _ModelT | None:
     """Return the row addressed by ``value`` using ``queryset`` as the owner."""
 
@@ -322,8 +384,9 @@ def _instance_from_public_id_queryset(
         return None
 
     try:
-        instance = queryset.filter(**_public_id_lookup(queryset.model, value)).first()
-    except (TypeError, ValueError):
+        lookup = _public_id_lookup(queryset.model, value, public_identity=public_identity)
+        instance = queryset.filter(**lookup).first()
+    except TypeError, ValueError:
         return None
     return cast(_ModelT | None, instance)
 
@@ -338,7 +401,7 @@ async def _ainstance_from_public_id_queryset(
         return None
     try:
         instance = await queryset.filter(**_public_id_lookup(queryset.model, value)).afirst()
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return cast(_ModelT | None, instance)
 
@@ -346,9 +409,13 @@ async def _ainstance_from_public_id_queryset(
 def _public_id_lookup(
     model: type[models.Model],
     value: str,
+    *,
+    public_identity: SqidPublicIdentity | None = None,
 ) -> dict[str, Any]:
     """Return the model-owned lookup for one public id value."""
 
+    if public_identity is not None:
+        return public_identity.public_id_lookup(model, value)
     lookup = getattr(model, "public_id_lookup", None)
     if callable(lookup):
         return dict(lookup(value))
