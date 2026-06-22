@@ -1,17 +1,23 @@
-import { useMemo, type ReactElement } from "react";
+import { type ReactElement } from "react";
 
 import {
+  AuthoredRowsList,
   Code,
-  RowsListView,
   type ListColumn,
 } from "@angee/base";
-import { useAuthoredQuery } from "@angee/sdk";
+import type { DocumentData } from "@angee/sdk";
 
 import { IamRoles } from "../documents";
 import {
   roleRows,
   type IAMRoleRow,
 } from "../identity-rows";
+
+type IamRolesResult = DocumentData<typeof IamRoles>;
+
+function selectRows(data: IamRolesResult | undefined): readonly IAMRoleRow[] {
+  return roleRows(data?.roles ?? []);
+}
 
 const roleColumns: readonly ListColumn<IAMRoleRow>[] = [
   {
@@ -28,15 +34,11 @@ const roleColumns: readonly ListColumn<IAMRoleRow>[] = [
 ];
 
 export function RolesPage(): ReactElement {
-  const query = useAuthoredQuery(IamRoles);
-  const rows = useMemo(() => roleRows(query.data?.roles ?? []), [query.data]);
-
   return (
-    <RowsListView
-      rows={rows}
+    <AuthoredRowsList
+      document={IamRoles}
+      selectRows={selectRows}
       columns={roleColumns}
-      fetching={query.fetching}
-      error={query.error}
       defaultGroup={{ field: "namespace" }}
       pageSize={50}
     />

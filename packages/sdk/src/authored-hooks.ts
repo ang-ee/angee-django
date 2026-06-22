@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import type { TypedDocumentNode } from "@urql/core";
 
 import { useDocumentMutation } from "./document-mutation";
@@ -13,6 +13,7 @@ import {
   type DocumentSubscriptionRun,
 } from "./document-subscription";
 import { useStableArray, useStableVariables } from "./stable-deps";
+import type { Row } from "./resource-result";
 import type { DocumentData, DocumentVariables } from "./typed-document";
 
 type AuthoredDocument = TypedDocumentNode<unknown, any>;
@@ -34,6 +35,23 @@ export interface AuthoredQueryResult<TData> {
   refetch: () => void;
 }
 
+export type AuthoredStringIdRow = Row & { id: string };
+
+export interface AuthoredRowsOptions<
+  TDocument extends AuthoredDocument,
+  TRow extends AuthoredStringIdRow,
+> extends AuthoredQueryOptions {
+  variables?: AuthoredVariables<TDocument>;
+  selectRows: (data: DocumentData<TDocument> | undefined) => readonly TRow[];
+}
+
+export interface AuthoredRowsResult<
+  TData,
+  TRow extends AuthoredStringIdRow,
+> extends AuthoredQueryResult<TData> {
+  rows: readonly TRow[];
+}
+
 /** Run a generated authored query document — the escape hatch for bespoke reads. */
 export function useAuthoredQuery<TDocument extends AuthoredDocument>(
   document: TDocument,
@@ -51,6 +69,23 @@ export function useAuthoredQuery<TDocument extends AuthoredDocument>(
     error: run.error,
     refetch: run.refetch,
   };
+}
+
+/** Run an authored query and project its bespoke result into id-bearing rows. */
+export function useAuthoredRows<
+  TDocument extends AuthoredDocument,
+  TRow extends AuthoredStringIdRow,
+>(
+  document: TDocument,
+  options: AuthoredRowsOptions<TDocument, TRow>,
+): AuthoredRowsResult<DocumentData<TDocument>, TRow> {
+  const { variables, selectRows, ...queryOptions } = options;
+  const query = useAuthoredQuery(document, variables, queryOptions);
+  const rows = useMemo(
+    () => selectRows(query.data),
+    [query.data, selectRows],
+  );
+  return { ...query, rows };
 }
 
 export type AuthoredMutate<TDocument extends AuthoredDocument> = (

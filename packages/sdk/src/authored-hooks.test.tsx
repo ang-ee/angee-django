@@ -5,7 +5,11 @@ import { fetchExchange, type TypedDocumentNode } from "@urql/core";
 import { parse } from "graphql";
 import { describe, expect, test, vi } from "vitest";
 
-import { useAuthoredMutation, useAuthoredQuery } from "./authored-hooks";
+import {
+  useAuthoredMutation,
+  useAuthoredQuery,
+  useAuthoredRows,
+} from "./authored-hooks";
 import { GraphQLClientProvider } from "./graphql-provider";
 import {
   RelayInvalidationProvider,
@@ -122,6 +126,26 @@ describe("useAuthoredQuery", () => {
     act(() => result.current.invalidate(["notes.Note"]));
     expect(fetch).not.toHaveBeenCalled();
     expect(bodies).toHaveLength(0);
+  });
+});
+
+describe("useAuthoredRows", () => {
+  test("projects an authored result into rows and preserves query state", async () => {
+    const { fetch } = mockTransport({ notes: [{ id: "note-1", title: "Hello" }] });
+    const document = typedDocument<
+      { notes: Array<{ id: string; title: string }> },
+      { limit: number }
+    >("query notes($limit: Int!) { notes(limit: $limit) { id title } }");
+    const { result } = renderHook(
+      () => useAuthoredRows(document, {
+        variables: { limit: 5 },
+        selectRows: (data) => data?.notes ?? [],
+      }),
+      { wrapper: wrapperWith(fetch) },
+    );
+    await waitFor(() => expect(result.current.fetching).toBe(false));
+    expect(result.current.rows).toEqual([{ id: "note-1", title: "Hello" }]);
+    expect(result.current.data?.notes).toHaveLength(1);
   });
 });
 

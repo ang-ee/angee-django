@@ -59,6 +59,25 @@ vi.mock("@angee/sdk", async (importOriginal) => {
       }
       return { data: undefined, fetching: false, error: null, refetch: vi.fn() };
     },
+    useAuthoredRows: (document: unknown, options: unknown) => {
+      if (documentName(document) === "IamGrants") {
+        sdkMocks.grantQueryOptions = options;
+        const rowOptions = options as {
+          selectRows: (data: unknown) => readonly unknown[];
+        };
+        return {
+          ...sdkMocks.grants,
+          rows: rowOptions.selectRows(sdkMocks.grants.data),
+        };
+      }
+      return {
+        data: undefined,
+        rows: [],
+        fetching: false,
+        error: null,
+        refetch: vi.fn(),
+      };
+    },
     useAuthoredMutation: (_document: unknown, options: unknown) => {
       sdkMocks.revokeOptions = options;
       return [sdkMocks.revokeRole, sdkMocks.revokeState];
@@ -104,9 +123,10 @@ describe("IAM identity views", () => {
         role: "iam/admin",
       }),
     );
-    expect(sdkMocks.grantQueryOptions).toEqual({
-      models: ["rebac.RelationshipRegistry"],
-    });
+    const grantQueryOptions = sdkMocks.grantQueryOptions as {
+      models?: readonly string[];
+    };
+    expect(grantQueryOptions.models).toEqual(["rebac.RelationshipRegistry"]);
     expect(sdkMocks.revokeOptions).toEqual({
       invalidateModels: ["rebac.RelationshipRegistry"],
       shouldInvalidate: expect.any(Function),

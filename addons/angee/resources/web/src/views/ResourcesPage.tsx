@@ -1,11 +1,17 @@
-import { useMemo, type ReactElement } from "react";
+import { type ReactElement } from "react";
 
-import { Code, RowsListView, type ListColumn } from "@angee/base";
-import { useAuthoredQuery } from "@angee/sdk";
+import { AuthoredRowsList, Code, type ListColumn } from "@angee/base";
+import type { DocumentData } from "@angee/sdk";
 
 import { ResourceLedger } from "../documents";
 import { useResourcesT } from "../i18n";
 import { resourceRows, type ResourceRow } from "../lib/rows";
+
+type ResourceLedgerResult = DocumentData<typeof ResourceLedger>;
+
+function selectRows(data: ResourceLedgerResult | undefined): readonly ResourceRow[] {
+  return resourceRows(data?.resourceLedger ?? []);
+}
 
 function columns(t: (key: string) => string): readonly ListColumn<ResourceRow>[] {
   return [
@@ -44,18 +50,12 @@ function columns(t: (key: string) => string): readonly ListColumn<ResourceRow>[]
 
 export function ResourcesPage(): ReactElement {
   const t = useResourcesT();
-  const query = useAuthoredQuery(ResourceLedger);
-  const rows = useMemo(
-    () => resourceRows(query.data?.resourceLedger ?? []),
-    [query.data],
-  );
 
   return (
-    <RowsListView
-      rows={rows}
+    <AuthoredRowsList
+      document={ResourceLedger}
+      selectRows={selectRows}
       columns={columns(t)}
-      fetching={query.fetching}
-      error={query.error}
       defaultGroup={{ field: "tier" }}
       pageSize={100}
       emptyMessage={t("resources.empty.ledger")}

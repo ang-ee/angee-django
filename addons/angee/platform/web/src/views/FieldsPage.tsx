@@ -1,18 +1,20 @@
-import { useMemo, type ReactElement } from "react";
+import { useCallback, type ReactElement } from "react";
 import { parseAsString, useQueryState } from "nuqs";
 
 import {
-  RowsListView,
+  AuthoredRowsList,
   type DataToolbarGroupOption,
   type ListColumn,
 } from "@angee/base";
-import { useAuthoredQuery } from "@angee/sdk";
+import type { DocumentData } from "@angee/sdk";
 
 import { PlatformExplorer } from "../documents";
 import { usePlatformT } from "../i18n";
 import { TextRouteLink } from "../lib/cells";
 import { addonDetailPath, modelDetailPath } from "../lib/paths";
 import { fieldRows, type FieldRow } from "../lib/rows";
+
+type PlatformExplorerResult = DocumentData<typeof PlatformExplorer>;
 
 function columns(t: (key: string) => string): readonly ListColumn<FieldRow>[] {
   return [
@@ -60,23 +62,21 @@ function groupOptions(t: (key: string) => string): readonly DataToolbarGroupOpti
 
 export function FieldsPage(): ReactElement {
   const t = usePlatformT();
-  const query = useAuthoredQuery(PlatformExplorer);
   const [modelScope] = useQueryState("model", parseAsString);
   const [addonScope] = useQueryState("addon", parseAsString);
-  const rows = useMemo(() => {
-    let all = fieldRows(query.data?.platformExplorer?.models ?? []);
+  const selectRows = useCallback((data: PlatformExplorerResult | undefined) => {
+    let all = fieldRows(data?.platformExplorer?.models ?? []);
     if (modelScope) all = all.filter((row) => row.model === modelScope);
     if (addonScope) all = all.filter((row) => row.addonId === addonScope);
     return all;
-  }, [query.data, modelScope, addonScope]);
+  }, [modelScope, addonScope]);
 
   return (
-    <RowsListView
-      rows={rows}
+    <AuthoredRowsList
+      document={PlatformExplorer}
+      selectRows={selectRows}
       columns={columns(t)}
       groupOptions={groupOptions(t)}
-      fetching={query.fetching}
-      error={query.error}
       defaultGroup={modelScope ? null : { field: "model" }}
       pageSize={100}
       emptyMessage={t("platform.empty.fields")}

@@ -198,10 +198,15 @@ export {
 } from "./aggregate-extract";
 
 // Authored (bespoke) operations.
+export type { TypedDocumentNode } from "@urql/core";
 export {
   useAuthoredQuery,
+  useAuthoredRows,
   useAuthoredMutation,
   useAuthoredSubscription,
+  type AuthoredRowsOptions,
+  type AuthoredRowsResult,
+  type AuthoredStringIdRow,
   type AuthoredQueryOptions,
   type AuthoredQueryResult,
   type AuthoredMutate,

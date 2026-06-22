@@ -6,16 +6,16 @@ import {
 
 import {
   Alert,
+  AuthoredRowsList,
   Button,
   Code,
-  RowsListView,
   useConfirm,
   type ListColumn,
 } from "@angee/base";
 import {
   errorMessage,
   useAuthoredMutation,
-  useAuthoredQuery,
+  type DocumentData,
 } from "@angee/sdk";
 
 import {
@@ -31,6 +31,13 @@ import { IAM_LIST_LIMIT } from "../list-config";
 import { useIamT } from "../i18n";
 
 const GRANT_MODEL = "rebac.RelationshipRegistry";
+const GRANT_QUERY_OPTIONS = { models: [GRANT_MODEL] } as const;
+
+type IamGrantsResult = DocumentData<typeof IamGrants>;
+
+function selectRows(data: IamGrantsResult | undefined): readonly IAMGrantRow[] {
+  return grantRows(data?.grants.results ?? []);
+}
 
 export function GrantsPage(): ReactElement {
   const t = useIamT();
@@ -39,19 +46,12 @@ export function GrantsPage(): ReactElement {
     () => ({ pagination: { offset: 0, limit: IAM_LIST_LIMIT } }),
     [],
   );
-  const query = useAuthoredQuery(IamGrants, variables, {
-    models: [GRANT_MODEL],
-  });
   const [revokeRole, revokeState] = useAuthoredMutation(IamRevokeRole, {
     invalidateModels: [GRANT_MODEL],
     shouldInvalidate: (result) => result?.revokeRole === true,
   });
   const [pendingGrantId, setPendingGrantId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const rows = useMemo(
-    () => grantRows(query.data?.grants.results ?? []),
-    [query.data],
-  );
 
   async function revoke(row: IAMGrantRow): Promise<void> {
     const confirmed = await confirm({
@@ -139,11 +139,12 @@ export function GrantsPage(): ReactElement {
           {actionError}
         </Alert>
       ) : null}
-      <RowsListView
-        rows={rows}
+      <AuthoredRowsList
+        document={IamGrants}
+        variables={variables}
+        queryOptions={GRANT_QUERY_OPTIONS}
+        selectRows={selectRows}
         columns={grantColumns}
-        fetching={query.fetching}
-        error={query.error}
         defaultGroup={{ field: "namespace" }}
         pageSize={50}
       />

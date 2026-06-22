@@ -1,13 +1,13 @@
-import { useMemo, type ReactElement } from "react";
+import { useCallback, useMemo, type ReactElement } from "react";
 
 import {
+  AuthoredRowsList,
   Badge,
   Code,
-  RowsListView,
   type DataToolbarGroupOption,
   type ListColumn,
 } from "@angee/base";
-import { useAuthoredQuery } from "@angee/sdk";
+import type { DocumentData } from "@angee/sdk";
 
 import {
   IamRelationships,
@@ -19,6 +19,8 @@ import {
 } from "../identity-rows";
 import { IAM_LIST_LIMIT } from "../list-config";
 import { useIamT } from "../i18n";
+
+type IamRelationshipsResult = DocumentData<typeof IamRelationships>;
 
 export function RelationshipsPage(): ReactElement {
   const t = useIamT();
@@ -83,18 +85,18 @@ export function RelationshipsPage(): ReactElement {
     () => ({ pagination: { offset: 0, limit: IAM_LIST_LIMIT } }),
     [],
   );
-  const query = useAuthoredQuery(IamRelationships, variables);
-  const rows = useMemo(
-    () => relationshipRows(query.data?.relationships.results ?? []),
-    [query.data],
+  const selectRows = useCallback(
+    (data: IamRelationshipsResult | undefined) =>
+      relationshipRows(data?.relationships.results ?? []),
+    [],
   );
 
   return (
-    <RowsListView
-      rows={rows}
+    <AuthoredRowsList
+      document={IamRelationships}
+      variables={variables}
+      selectRows={selectRows}
       columns={relationshipColumns}
-      fetching={query.fetching}
-      error={query.error}
       groupOptions={relationshipGroupOptions}
       defaultGroup={{ field: "resourceType" }}
       pageSize={50}

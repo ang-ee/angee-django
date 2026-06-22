@@ -1,19 +1,25 @@
-import { useMemo, type ReactElement } from "react";
+import { type ReactElement } from "react";
 
 import {
+  AuthoredRowsList,
   Badge,
   Code,
-  RowsListView,
   type DataToolbarGroupOption,
   type ListColumn,
 } from "@angee/base";
-import { useAuthoredQuery } from "@angee/sdk";
+import type { DocumentData } from "@angee/sdk";
 
 import { PlatformExplorer } from "../documents";
 import { usePlatformT } from "../i18n";
 import { LinkedChips, TextRouteLink } from "../lib/cells";
 import { addonDetailPath, fieldsPath, modelsPath } from "../lib/paths";
 import { addonRows, type AddonRow } from "../lib/rows";
+
+type PlatformExplorerResult = DocumentData<typeof PlatformExplorer>;
+
+function selectRows(data: PlatformExplorerResult | undefined): readonly AddonRow[] {
+  return addonRows(data?.platformExplorer?.addons ?? []);
+}
 
 const shortName = (id: string): string => id.split(".").pop() ?? id;
 
@@ -90,19 +96,13 @@ function groupOptions(t: (key: string) => string): readonly DataToolbarGroupOpti
 
 export function AddonsPage(): ReactElement {
   const t = usePlatformT();
-  const query = useAuthoredQuery(PlatformExplorer);
-  const rows = useMemo(
-    () => addonRows(query.data?.platformExplorer?.addons ?? []),
-    [query.data],
-  );
 
   return (
-    <RowsListView
-      rows={rows}
+    <AuthoredRowsList
+      document={PlatformExplorer}
+      selectRows={selectRows}
       columns={columns(t)}
       groupOptions={groupOptions(t)}
-      fetching={query.fetching}
-      error={query.error}
       defaultGroup={{ field: "namespace" }}
       pageSize={50}
       emptyMessage={t("platform.empty.addons")}
