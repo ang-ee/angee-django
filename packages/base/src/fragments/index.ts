@@ -22,6 +22,14 @@ export {
 } from "./DataLens";
 export { DialogForm, type DialogFormProps } from "./DialogForm";
 export {
+  DetailSection,
+  DetailSurface,
+  detailSurfaceVariants,
+  type DetailSectionProps,
+  type DetailSurfaceEmptyState,
+  type DetailSurfaceProps,
+} from "./DetailSurface";
+export {
   DirtyPill,
   type DirtyPillProps,
   type DirtyPillState,

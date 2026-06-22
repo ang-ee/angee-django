@@ -1,14 +1,4 @@
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  Code,
-  EmptyState,
-  LoadingPanel,
-  MetaGrid,
-  RecordHeader,
-} from "@angee/base";
+import { Code, DetailSection, DetailSurface } from "@angee/base";
 import { type ReactElement } from "react";
 import { useParams } from "@tanstack/react-router";
 
@@ -28,77 +18,91 @@ export function SourceDetail(): ReactElement {
 
   const source = (snapshot?.sources ?? []).find((candidate) => candidate.name === name) ?? null;
 
-  if (result.fetching && !snapshot) {
-    return <LoadingPanel message={t("operator.sources.loading")} />;
-  }
-  if (!source) {
-    return (
-      <EmptyState
-        fill
-        icon="share"
-        title={t("operator.sources.detail.notFound")}
-        description={name}
-      />
-    );
-  }
-
   return (
-    <div className="flex min-h-0 flex-col gap-4 p-4">
-      <RecordHeader
-        title={source.name}
-        meta={
+    <DetailSurface
+      loading={result.fetching && !snapshot}
+      loadingMessage={t("operator.sources.loading")}
+      empty={
+        !source
+          ? {
+              icon: "share",
+              title: t("operator.sources.detail.notFound"),
+              description: name,
+            }
+          : null
+      }
+      title={source?.name}
+      meta={
+        source ? (
           <>
             <StateTag state={source.state ?? "unknown"} />
             <span className="text-fg-muted">{source.kind}</span>
           </>
-        }
-      />
-
-      <RowActions
-        actions={actions}
-        busy={busy}
-        subject={source}
-        className="flex flex-wrap gap-1"
-      />
-
-      <Card>
-        <CardHeader>
-          <CardTitle>{t("operator.sources.detail.overview")}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <MetaGrid
-            rows={[
-              [t("operator.sources.column.kind"), source.kind],
-              [t("operator.sources.column.status"), <StateTag state={source.state ?? "unknown"} />],
-              [t("operator.sources.column.branch"), source.branch ?? "—"],
-              [
-                t("operator.sources.column.aheadBehind"),
-                <span className="tabular-nums">↑{source.ahead ?? 0} ↓{source.behind ?? 0}</span>,
-              ],
-              [
-                t("operator.sources.column.dirty"),
-                source.dirty ? t("operator.sources.dirty") : t("operator.sources.clean"),
-              ],
-              [t("operator.sources.detail.upstream"), source.upstream ?? "—"],
-              [
-                t("operator.sources.detail.currentRef"),
-                source.currentRef ? <Code truncate>{source.currentRef}</Code> : "—",
-              ],
-              [
-                t("operator.sources.detail.pushed"),
-                source.pushed ? t("operator.gitops.pushed.yes") : t("operator.gitops.pushed.no"),
-              ],
-              [t("operator.sources.detail.path"), <Code truncate>{source.path}</Code>],
-              ...(source.error
-                ? ([[
+        ) : null
+      }
+      actions={
+        source ? (
+          <RowActions
+            actions={actions}
+            busy={busy}
+            subject={source}
+            className="flex flex-wrap gap-1"
+          />
+        ) : undefined
+      }
+    >
+      {source ? (
+        <DetailSection
+          title={t("operator.sources.detail.overview")}
+          rows={[
+            [t("operator.sources.column.kind"), source.kind],
+            [
+              t("operator.sources.column.status"),
+              <StateTag state={source.state ?? "unknown"} />,
+            ],
+            [t("operator.sources.column.branch"), source.branch ?? "—"],
+            [
+              t("operator.sources.column.aheadBehind"),
+              <span className="tabular-nums">
+                ↑{source.ahead ?? 0} ↓{source.behind ?? 0}
+              </span>,
+            ],
+            [
+              t("operator.sources.column.dirty"),
+              source.dirty
+                ? t("operator.sources.dirty")
+                : t("operator.sources.clean"),
+            ],
+            [t("operator.sources.detail.upstream"), source.upstream ?? "—"],
+            [
+              t("operator.sources.detail.currentRef"),
+              source.currentRef ? (
+                <Code truncate>{source.currentRef}</Code>
+              ) : (
+                "—"
+              ),
+            ],
+            [
+              t("operator.sources.detail.pushed"),
+              source.pushed
+                ? t("operator.gitops.pushed.yes")
+                : t("operator.gitops.pushed.no"),
+            ],
+            [
+              t("operator.sources.detail.path"),
+              <Code truncate>{source.path}</Code>,
+            ],
+            ...(source.error
+              ? ([
+                  [
                     t("operator.sources.detail.error"),
                     <span className="text-danger-text">{source.error}</span>,
-                  ]] as const)
-                : []),
-            ]}
-          />
-        </CardContent>
-      </Card>
-    </div>
+                  ],
+                ] as const)
+              : []),
+          ]}
+        />
+      ) : null}
+    </DetailSurface>
   );
 }

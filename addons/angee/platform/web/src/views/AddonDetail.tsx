@@ -1,19 +1,7 @@
 import { type ReactElement } from "react";
 import { useParams } from "@tanstack/react-router";
 
-import {
-  Badge,
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  Code,
-  EmptyState,
-  LoadingPanel,
-  MetaGrid,
-  MetricStrip,
-  RecordHeader,
-} from "@angee/base";
+import { Badge, Code, DetailSection, DetailSurface } from "@angee/base";
 
 import { usePlatformT } from "../i18n";
 import {
@@ -35,70 +23,96 @@ export function AddonDetail(): ReactElement {
     usePlatformAddon(id);
   const go = useRouteNavigate();
 
-  if (fetching && !addon) {
-    return <LoadingPanel message={t("platform.detail.addon.loading")} />;
-  }
-  if (!addon) {
-    return <EmptyState fill icon="list" title={t("platform.detail.addon.notFound")} description={id} />;
-  }
-
   return (
-    <div className="flex flex-col gap-4 p-4">
-      <RecordHeader
-        title={addon.label}
-        meta={
+    <DetailSurface
+      loading={fetching && !addon}
+      loadingMessage={t("platform.detail.addon.loading")}
+      empty={
+        !addon
+          ? {
+              icon: "list",
+              title: t("platform.detail.addon.notFound"),
+              description: id,
+            }
+          : null
+      }
+      title={addon?.label}
+      meta={
+        addon ? (
           <>
             <Code tone="muted">{addon.id}</Code>
             <Badge tone="neutral">{addon.namespace}</Badge>
-            <Badge tone={addon.kind === "required" ? "info" : "neutral"}>{addon.kind}</Badge>
+            <Badge tone={addon.kind === "required" ? "info" : "neutral"}>
+              {addon.kind}
+            </Badge>
           </>
-        }
-      />
-
-      <MetricStrip
-        metrics={[
-          {
-            label: t("platform.col.models"),
-            value: addon.modelCount,
-            icon: "grid",
-            href: addon.modelCount ? modelsPath({ addon: addon.id }) : undefined,
-            onNavigate: go,
-          },
-          {
-            label: t("platform.col.fields"),
-            value: addon.fieldCount,
-            icon: "columns",
-            href: addon.fieldCount ? fieldsPath({ addon: addon.id }) : undefined,
-            onNavigate: go,
-          },
-          { label: t("platform.col.resources"), value: addon.resourceCount, icon: "files" },
-        ]}
-      />
-
-      <Card>
-        <CardHeader><CardTitle>{t("platform.detail.dependencies")}</CardTitle></CardHeader>
-        <CardContent>
-          <MetaGrid
+        ) : null
+      }
+      metrics={
+        addon
+          ? [
+              {
+                label: t("platform.col.models"),
+                value: addon.modelCount,
+                icon: "grid",
+                href: addon.modelCount
+                  ? modelsPath({ addon: addon.id })
+                  : undefined,
+                onNavigate: go,
+              },
+              {
+                label: t("platform.col.fields"),
+                value: addon.fieldCount,
+                icon: "columns",
+                href: addon.fieldCount
+                  ? fieldsPath({ addon: addon.id })
+                  : undefined,
+                onNavigate: go,
+              },
+              {
+                label: t("platform.col.resources"),
+                value: addon.resourceCount,
+                icon: "files",
+              },
+            ]
+          : undefined
+      }
+    >
+      {addon ? (
+        <>
+          <DetailSection
+            title={t("platform.detail.dependencies")}
             rows={[
-              [t("platform.col.dependsOn"), <LinkedChips items={dependsOn} href={addonDetailPath} format={shortName} />],
-              [t("platform.col.dependedBy"), <LinkedChips items={dependedBy} href={addonDetailPath} format={shortName} />],
+              [
+                t("platform.col.dependsOn"),
+                <LinkedChips
+                  items={dependsOn}
+                  href={addonDetailPath}
+                  format={shortName}
+                />,
+              ],
+              [
+                t("platform.col.dependedBy"),
+                <LinkedChips
+                  items={dependedBy}
+                  href={addonDetailPath}
+                  format={shortName}
+                />,
+              ],
             ]}
           />
-        </CardContent>
-      </Card>
 
-      {modelLabels.length ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>
-              {t("platform.detail.modelsWithCount", { count: modelLabels.length })}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <LinkedChips items={modelLabels} href={modelDetailPath} />
-          </CardContent>
-        </Card>
+          {modelLabels.length ? (
+            <DetailSection
+              title={t("platform.detail.modelsWithCount", {
+                count: modelLabels.length,
+              })}
+            >
+              <LinkedChips items={modelLabels} href={modelDetailPath} />
+            </DetailSection>
+          ) : null}
+        </>
       ) : null}
-    </div>
+    </DetailSurface>
   );
 }

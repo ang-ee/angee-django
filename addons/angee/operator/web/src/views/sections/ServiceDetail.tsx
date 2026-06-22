@@ -1,15 +1,4 @@
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  Code,
-  EmptyState,
-  LoadingPanel,
-  MetaGrid,
-  RecordHeader,
-  TextLink,
-} from "@angee/base";
+import { Code, DetailSection, DetailSurface, TextLink } from "@angee/base";
 import { type ReactElement } from "react";
 import { useParams } from "@tanstack/react-router";
 import { useQuery } from "urql";
@@ -37,53 +26,56 @@ export function ServiceDetail(): ReactElement {
   const service = (snapshot?.services ?? []).find((candidate) => candidate.name === name) ?? null;
   const resolved = endpoint.data?.serviceEndpoint ?? null;
 
-  if (result.fetching && !snapshot) {
-    return <LoadingPanel message={t("operator.services.loading")} />;
-  }
-  if (!service) {
-    return (
-      <EmptyState
-        fill
-        icon="server"
-        title={t("operator.services.detail.notFound")}
-        description={name}
-      />
-    );
-  }
-
   return (
-    <div className="flex min-h-0 flex-col gap-4 p-4">
-      <RecordHeader
-        title={service.name}
-        meta={
+    <DetailSurface
+      loading={result.fetching && !snapshot}
+      loadingMessage={t("operator.services.loading")}
+      empty={
+        !service
+          ? {
+              icon: "server",
+              title: t("operator.services.detail.notFound"),
+              description: name,
+            }
+          : null
+      }
+      title={service?.name}
+      meta={
+        service ? (
           <>
             <StateTag state={service.status} />
             <span className="text-fg-muted">{service.runtime}</span>
           </>
-        }
-      />
-
-      <RowActions
-        actions={actions}
-        busy={busy}
-        subject={service}
-        className="flex flex-wrap gap-1"
-      />
-
-      <Card>
-        <CardHeader>
-          <CardTitle>{t("operator.services.detail.overview")}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <MetaGrid
+        ) : null
+      }
+      actions={
+        service ? (
+          <RowActions
+            actions={actions}
+            busy={busy}
+            subject={service}
+            className="flex flex-wrap gap-1"
+          />
+        ) : undefined
+      }
+    >
+      {service ? (
+        <>
+          <DetailSection
+            title={t("operator.services.detail.overview")}
             rows={[
               [t("operator.services.column.runtime"), service.runtime],
-              [t("operator.services.column.status"), <StateTag state={service.status} />],
+              [
+                t("operator.services.column.status"),
+                <StateTag state={service.status} />,
+              ],
               [t("operator.services.column.health"), service.health ?? "—"],
               [
                 t("operator.services.detail.endpoint"),
                 resolved?.url ? (
-                  <TextLink href={resolved.url} target="_blank">{resolved.url}</TextLink>
+                  <TextLink href={resolved.url} target="_blank">
+                    {resolved.url}
+                  </TextLink>
                 ) : (
                   "—"
                 ),
@@ -98,10 +90,10 @@ export function ServiceDetail(): ReactElement {
               ],
             ]}
           />
-        </CardContent>
-      </Card>
 
-      <ServiceLogs name={service.name} />
-    </div>
+          <ServiceLogs name={service.name} />
+        </>
+      ) : null}
+    </DetailSurface>
   );
 }
