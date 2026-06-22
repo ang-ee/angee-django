@@ -3,9 +3,11 @@ import {
   Action,
   Column,
   DataPage,
+  Facet,
   Field,
   Form,
   Group,
+  GroupListView,
   List,
   useRecordActionMutation,
 } from "@angee/base";
@@ -16,7 +18,8 @@ import { useIntegrateT } from "../i18n";
 const MODEL = "integrate.Source";
 
 const sourceList = (
-  <List model={MODEL}>
+  <List model={MODEL} list={GroupListView}>
+    <Facet field="repository" label="Repository" labelField="name" />
     <Column field="kind" />
     <Column field="ref" />
     <Column field="path" />

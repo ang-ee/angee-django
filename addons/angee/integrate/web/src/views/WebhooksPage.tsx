@@ -6,6 +6,7 @@ import {
   Field,
   Form,
   Group,
+  GroupListView,
   List,
   recordActionId,
   useRecordActionMutation,
@@ -20,7 +21,7 @@ import { RotateWebhookSecret } from "../documents";
 const MODEL = "integrate.WebhookSubscription";
 
 const webhookList = (
-  <List model={MODEL}>
+  <List model={MODEL} list={GroupListView}>
     <Column field="targetUrl" />
     <Column field="enabled" />
     <Column field="lastDeliveryStatus" />

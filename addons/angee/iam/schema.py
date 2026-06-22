@@ -47,9 +47,10 @@ from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
+from angee.graphql.data import data_query
 from angee.graphql.deletion import DeletePreview, delete_by_public_id
 from angee.graphql.ids import PublicID, require_instance_for_id
-from angee.graphql.node import AngeeNode, detail
+from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_display_label as _user_display_label
 from angee.iam.identity import user_principal
@@ -400,8 +401,12 @@ def _validate_role(value: str) -> ObjectRef:
 def _relationship_rows() -> QuerySet[Any]:
     """Return active relationship rows in stable order."""
 
-    return active_relationship_model().objects.all().order_by(
-        *_relationship_ordering(include_relation=True),
+    return (
+        active_relationship_model()
+        .objects.all()
+        .order_by(
+            *_relationship_ordering(include_relation=True),
+        )
     )
 
 
@@ -529,10 +534,7 @@ def _permission_schema() -> list[IAMResourceSchemaType]:
         relations = [
             IAMRelationType(
                 name=relation.name,
-                allowed_subject_types=[
-                    _schema_allowed_subject_name(allowed)
-                    for allowed in relation.allowed_subjects
-                ],
+                allowed_subject_types=[_schema_allowed_subject_name(allowed) for allowed in relation.allowed_subjects],
             )
             for relation in sorted(definition.relations, key=lambda item: item.name)
         ]
@@ -562,9 +564,7 @@ def _iam_overview(peek_limit: int) -> IAMOverviewType:
         grant_rows = list(_permission_hub_grant_rows())
         privileged_role_refs = _privileged_role_refs()
         privileged_grants = [
-            row
-            for row in grant_rows
-            if _role_ref(str(row.resource_type), str(row.resource_id)) in privileged_role_refs
+            row for row in grant_rows if _role_ref(str(row.resource_type), str(row.resource_id)) in privileged_role_refs
         ]
         unassigned_queryset = _unassigned_user_queryset(grant_rows)
         unassigned_users = list(unassigned_queryset[:peek_limit])
@@ -625,10 +625,7 @@ def _unassigned_user_queryset(grants: list[Any]) -> QuerySet[Any]:
 def _user_subject_lookup() -> str:
     """Return the User field lookup used by REBAC actor subject ids."""
 
-    subject_id_attr = str(
-        getattr(User._meta, "rebac_id_attr", None)
-        or app_settings.REBAC_USER_ID_ATTR
-    )
+    subject_id_attr = str(getattr(User._meta, "rebac_id_attr", None) or app_settings.REBAC_USER_ID_ATTR)
     if subject_id_attr == "pk":
         pk = User._meta.pk
         return pk.name if pk is not None else "pk"
@@ -766,6 +763,47 @@ def _user_graphql_type_name() -> str:
     return str(cast(Any, UserType).__strawberry_definition__.name)
 
 
+@strawberry_django.filter_type(User, lookups=True)
+class UserFilter:
+    """Field lookups accepted when filtering the admin users list."""
+
+    username: auto
+    email: auto
+    first_name: auto
+    last_name: auto
+    is_staff: auto
+    is_active: auto
+
+
+@strawberry_django.order_type(User)
+class UserOrder:
+    """Orderings accepted by the admin users list."""
+
+    username: auto
+    email: auto
+    first_name: auto
+    last_name: auto
+    is_staff: auto
+    is_active: auto
+
+
+UserDataQuery, _USER_DATA_TYPES = data_query(
+    UserType,
+    type_name="UserDataQuery",
+    filters=UserFilter,
+    order=UserOrder,
+    list_name="users",
+    detail_name="user",
+    aggregate_name="user_aggregate",
+    group_name="user_groups",
+    aggregate_fields=["id"],
+    group_by_fields=["is_staff", "is_active"],
+    enable_filter_echo=True,
+    permission_classes=_ADMIN_PERMISSION_CLASSES,
+    aggregate_kwargs={"name_prefix": "UserAggregate", "pagination_style": "offset"},
+)
+
+
 @strawberry.type
 class IAMQuery:
     """Session-backed IAM queries."""
@@ -787,14 +825,6 @@ class IAMQuery:
 @strawberry.type
 class IAMConsoleQuery:
     """Admin IAM user and permission-hub queries."""
-
-    users: OffsetPaginated[UserType] = strawberry_django.offset_paginated(
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    user: UserType | None = detail(
-        UserType,
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
 
     @strawberry.field(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def roles(self) -> list[IAMRoleType]:
@@ -970,7 +1000,7 @@ schemas = {
         ],
     },
     "console": {
-        "query": [IAMQuery, IAMConsoleQuery],
+        "query": [IAMQuery, IAMConsoleQuery, UserDataQuery],
         "mutation": [
             IAMMutation,
             IAMUserMutation,
@@ -988,6 +1018,7 @@ schemas = {
             IAMResourceSchemaType,
             IAMOverviewNamespaceType,
             IAMOverviewType,
+            *_USER_DATA_TYPES,
             IAMRelationshipType,
         ],
     },

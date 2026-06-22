@@ -108,6 +108,43 @@ def test_data_query_builds_native_model_data_roots() -> None:
     assert metadata.type_names.group_by_spec == "GroupGroupBySpec"
 
 
+@pytest.mark.django_db
+def test_data_query_forwards_list_kwargs_resolver() -> None:
+    """Generated list roots keep resolver-owned querysets from their caller."""
+
+    @strawberry_django.type(Group)
+    class GroupResolverType:
+        name: auto
+
+    def visible_groups(info: strawberry.Info) -> object:
+        del info
+        return Group.objects.filter(name="visible")
+
+    query, generated_types = data_query(
+        GroupResolverType,
+        type_name="GroupResolverQuery",
+        list_name="groups",
+        include_detail=False,
+        include_aggregate=False,
+        include_groups=False,
+        list_kwargs={"resolver": visible_groups},
+    )
+
+    Group.objects.create(name="visible")
+    Group.objects.create(name="hidden")
+
+    schema = strawberry.Schema(query=query, types=list(generated_types))
+    result = schema.execute_sync("{ groups { totalCount results { name } } }")
+
+    assert result.errors is None
+    assert result.data == {
+        "groups": {
+            "totalCount": 1,
+            "results": [{"name": "visible"}],
+        }
+    }
+
+
 def test_data_query_requires_explicit_list_name() -> None:
     """Model list root names are public schema, so they must be declared."""
 

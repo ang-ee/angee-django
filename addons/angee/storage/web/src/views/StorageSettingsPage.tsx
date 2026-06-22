@@ -5,6 +5,7 @@ import {
   DrawerDataPage,
   Field,
   Form,
+  GroupListView,
   List,
 } from "@angee/base";
 import { useStorageT } from "../i18n";
@@ -28,7 +29,7 @@ export function StorageSettingsPage(): ReactElement {
         description={t("storage.settings.drives.description")}
       >
         <DrawerDataPage model={DRIVE_MODEL} hideCreate>
-          <List model={DRIVE_MODEL} order={{ name: "ASC" }}>
+          <List model={DRIVE_MODEL} list={GroupListView} order={{ name: "ASC" }}>
             <Column field="name" />
             <Column field="slug" />
             <Column field="prefix" />
@@ -49,7 +50,7 @@ export function StorageSettingsPage(): ReactElement {
         description={t("storage.settings.backends.description")}
       >
         <DrawerDataPage model={BACKEND_MODEL}>
-          <List model={BACKEND_MODEL} order={{ label: "ASC" }}>
+          <List model={BACKEND_MODEL} list={GroupListView} order={{ label: "ASC" }}>
             <Column field="label" />
             <Column field="slug" />
             <Column field="backendClass" />

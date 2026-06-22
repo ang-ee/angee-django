@@ -18,8 +18,9 @@ from strawberry_django.pagination import OffsetPaginated
 
 from angee.base.models import public_id_for
 from angee.graphql.crud import crud
+from angee.graphql.data import data_query
 from angee.graphql.ids import PublicID, instance_for_id
-from angee.graphql.node import AngeeNode, detail
+from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_display_label, user_public_id
 from angee.storage import exceptions
@@ -192,6 +193,17 @@ class FolderFilter:
     smart_kind: auto
     drive: auto
     parent: auto
+
+
+@strawberry_django.order_type(Folder)
+class FolderOrder:
+    """Orderings accepted by the folders list."""
+
+    name: auto
+    is_virtual: auto
+    smart_kind: auto
+    created_at: auto
+    updated_at: auto
 
 
 @strawberry_django.filter_type(Drive, lookups=True)
@@ -391,29 +403,77 @@ _STORAGE_ADMIN_CLASSES: list[type[BasePermission]] = [StorageAdminPermission]
 class StorageQuery:
     """Storage queries shared by the public and console schemas."""
 
-    drives: OffsetPaginated[DriveType] = strawberry_django.offset_paginated(
-        filters=DriveFilter, order=DriveOrder
-    )
-    drive: DriveType | None = detail(DriveType)
-    folders: OffsetPaginated[FolderType] = strawberry_django.offset_paginated(filters=FolderFilter)
-    files: OffsetPaginated[FileType] = strawberry_django.offset_paginated(filters=FileFilter, order=FileOrder)
-    file: FileType | None = detail(FileType)
     mime_types: OffsetPaginated[MimeTypeType] = strawberry_django.offset_paginated()
 
 
-@strawberry.type
-class StorageConsoleQuery:
-    """Admin-only storage queries."""
-
-    backends: OffsetPaginated[BackendType] = strawberry_django.offset_paginated(
-        filters=BackendFilter,
-        order=BackendOrder,
-        permission_classes=_STORAGE_ADMIN_CLASSES,
-    )
-    backend: BackendType | None = detail(
-        BackendType,
-        permission_classes=_STORAGE_ADMIN_CLASSES,
-    )
+DriveDataQuery, _DRIVE_DATA_TYPES = data_query(
+    DriveType,
+    type_name="DriveDataQuery",
+    filters=DriveFilter,
+    order=DriveOrder,
+    list_name="drives",
+    detail_name="drive",
+    aggregate_name="drive_aggregate",
+    group_name="drive_groups",
+    aggregate_fields=["id"],
+    group_by_fields=["is_archived", "created_at"],
+    enable_filter_echo=True,
+    aggregate_kwargs={"name_prefix": "DriveAggregate", "pagination_style": "offset"},
+)
+FolderDataQuery, _FOLDER_DATA_TYPES = data_query(
+    FolderType,
+    type_name="FolderDataQuery",
+    filters=FolderFilter,
+    order=FolderOrder,
+    list_name="folders",
+    detail_name="folder",
+    aggregate_name="folder_aggregate",
+    group_name="folder_groups",
+    aggregate_fields=["id"],
+    group_by_fields=[
+        "drive",
+        "drive__name",
+        "is_virtual",
+        "smart_kind",
+    ],
+    enable_filter_echo=True,
+    aggregate_kwargs={"name_prefix": "FolderAggregate", "pagination_style": "offset"},
+)
+FileDataQuery, _FILE_DATA_TYPES = data_query(
+    FileType,
+    type_name="FileDataQuery",
+    filters=FileFilter,
+    order=FileOrder,
+    list_name="files",
+    detail_name="file",
+    aggregate_name="file_aggregate",
+    group_name="file_groups",
+    aggregate_fields=["id", "size_bytes"],
+    group_by_fields=[
+        "drive",
+        "drive__name",
+        "upload_state",
+        "is_trashed",
+        "updated_at",
+    ],
+    enable_filter_echo=True,
+    aggregate_kwargs={"name_prefix": "FileAggregate", "pagination_style": "offset"},
+)
+BackendDataQuery, _BACKEND_DATA_TYPES = data_query(
+    BackendType,
+    type_name="BackendDataQuery",
+    filters=BackendFilter,
+    order=BackendOrder,
+    list_name="backends",
+    detail_name="backend",
+    aggregate_name="backend_aggregate",
+    group_name="backend_groups",
+    aggregate_fields=["id"],
+    group_by_fields=["backend_class", "is_default", "is_archived"],
+    enable_filter_echo=True,
+    permission_classes=_STORAGE_ADMIN_CLASSES,
+    aggregate_kwargs={"name_prefix": "BackendAggregate", "pagination_style": "offset"},
+)
 
 
 @strawberry.type
@@ -531,16 +591,25 @@ _SHARED_TYPES = [
     FileType,
     FileUploadBeginPayload,
     FileUploadFinalizePayload,
+    *_DRIVE_DATA_TYPES,
+    *_FOLDER_DATA_TYPES,
+    *_FILE_DATA_TYPES,
 ]
 
 schemas = {
     "public": {
-        "query": [StorageQuery],
+        "query": [StorageQuery, DriveDataQuery, FolderDataQuery, FileDataQuery],
         "mutation": [StorageMutation, _FILE_MUTATION, _FOLDER_MUTATION],
         "types": [*_SHARED_TYPES],
     },
     "console": {
-        "query": [StorageQuery, StorageConsoleQuery],
+        "query": [
+            StorageQuery,
+            DriveDataQuery,
+            FolderDataQuery,
+            FileDataQuery,
+            BackendDataQuery,
+        ],
         "mutation": [
             StorageMutation,
             StorageConsoleMutation,
@@ -550,6 +619,6 @@ schemas = {
             _BACKEND_MUTATION,
         ],
         "subscription": [changes(File, field="fileChanged")],
-        "types": [*_SHARED_TYPES, BackendType],
+        "types": [*_SHARED_TYPES, BackendType, *_BACKEND_DATA_TYPES],
     },
 }

@@ -1,10 +1,10 @@
 import * as React from "react";
-import { Column, DataPage, Field, Form, List } from "@angee/base";
+import { Column, DataPage, Field, Form, GroupListView, List } from "@angee/base";
 
 const MODEL = "integrate.Vendor";
 
 const vendorList = (
-  <List model={MODEL}>
+  <List model={MODEL} list={GroupListView}>
     <Column field="slug" />
     <Column field="displayName" />
     <Column field="websiteUrl" />

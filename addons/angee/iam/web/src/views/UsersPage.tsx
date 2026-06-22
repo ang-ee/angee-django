@@ -1,12 +1,21 @@
 import * as React from "react";
-import { Action, Column, DataPage, Field, Form, Group, List } from "@angee/base";
+import {
+  Action,
+  Column,
+  DataPage,
+  Field,
+  Form,
+  Group,
+  GroupListView,
+  List,
+} from "@angee/base";
 
 import { useIamT } from "../i18n";
 
 const MODEL = "User";
 
 const userList = (
-  <List model={MODEL}>
+  <List model={MODEL} list={GroupListView}>
     <Column field="username" />
     <Column field="email" />
     <Column field="isStaff" />

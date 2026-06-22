@@ -153,6 +153,27 @@ Seventh frontend page-parity slice completed on 2026-06-22:
 - [x] Make thread Channel an explicit relation facet because it is a useful
       filter/group axis but is not displayed as a list column.
 
+Eighth all-addon adoption slice completed on 2026-06-22:
+
+- [x] Teach `data_query(...)` to forward list-root options such as custom
+      resolvers, so generated data roots can keep resolver-owned querysets
+      (`credential_health`, account health) without hand-written list fields.
+- [x] Promote the remaining model-backed addon catalogue/admin pages onto
+      `data_query(...)`: agents, skills, MCP servers/tools, inference providers,
+      OAuth clients, external accounts, credential health, vendors, webhooks,
+      VCS bridges, repositories, sources, templates, IAM users, storage
+      drives/backends, knowledge vaults/pages, parties organizations, and
+      directories.
+- [x] Switch every top-level model-backed addon `<List>` to `GroupListView` and
+      keep relation quick filters explicit and low-cardinality. Static daemon,
+      introspection, graph, file-explorer, and detail-tab row surfaces remain on
+      `RowsListView` because they are not top-level data-query pages.
+- [x] Avoid nullable relation axes as default groups until the backend owner has
+      explicit null-filter echo semantics; nullable relations remain ordinary
+      form/list filters.
+- [x] Add a focused regression test proving `data_query(...)` forwards a custom
+      list resolver to the generated paginated root.
+
 Current local verification:
 
 - [x] `uv run python -m pytest tests/test_aggregates.py -q`
@@ -208,6 +229,14 @@ Current local verification:
 - [x] `pnpm --filter @angee/parties typecheck`
 - [x] `pnpm --filter @angee/messaging typecheck`
 - [x] `pnpm --filter @angee/base test -- page relation-facet`
+- [x] `uv run ruff format angee/graphql/data/queries.py addons/angee/agents/schema.py addons/angee/iam/schema.py addons/angee/integrate/schema.py addons/angee/knowledge/schema.py addons/angee/parties/schema.py addons/angee/storage/schema.py`
+- [x] `uv run ruff check angee/graphql/data/queries.py addons/angee/agents/schema.py addons/angee/iam/schema.py addons/angee/integrate/schema.py addons/angee/knowledge/schema.py addons/angee/parties/schema.py addons/angee/storage/schema.py`
+- [x] `uv run examples/notes-angee/manage.py schema`
+- [x] `uv run examples/notes-angee/manage.py schema --check`
+- [x] `pnpm codegen`
+- [x] `pnpm --filter @angee/agents --filter @angee/integrate --filter @angee/iam --filter @angee/parties --filter @angee/storage --filter @angee/knowledge typecheck`
+- [x] `uv run pytest tests/test_aggregates.py tests/test_integrate_graphql.py tests/test_agents_graphql.py tests/test_parties_graphql.py tests/test_iam_graphql.py tests/test_knowledge_graphql.py tests/test_storage.py`
+- [x] `pnpm --filter @angee/base test -- src/views/relation-facet.test.tsx src/views/DataPage.test.tsx src/views/group-dimension.test.ts`
 
 ## North Star
 

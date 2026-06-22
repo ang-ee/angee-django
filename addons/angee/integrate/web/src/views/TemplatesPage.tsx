@@ -5,9 +5,11 @@ import {
   ControlBandProvider,
   DataPage,
   DrawerDataPage,
+  Facet,
   Field,
   Form,
   Group,
+  GroupListView,
   List,
   NEW_RECORD_ID,
   useRecordActionMutation,
@@ -26,7 +28,8 @@ const TEMPLATE_KIND_OPTIONS = [
 ];
 
 const templateList = (
-  <List model={TEMPLATE_MODEL} pageSize={50}>
+  <List model={TEMPLATE_MODEL} list={GroupListView} pageSize={50}>
+    <Facet field="source" label="Source" labelField="path" />
     <Column field="kind" />
     <Column field="name" />
     <Column field="path" />
@@ -36,7 +39,8 @@ const templateList = (
 );
 
 const templateSourceList = (
-  <List model={SOURCE_MODEL} pageSize={50}>
+  <List model={SOURCE_MODEL} list={GroupListView} pageSize={50}>
+    <Facet field="repository" label="Repository" labelField="name" />
     <Column field="repository.name" header="Repository" />
     <Column field="path" />
     <Column field="ref" />

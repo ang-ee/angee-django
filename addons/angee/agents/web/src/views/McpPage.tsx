@@ -1,5 +1,15 @@
 import * as React from "react";
-import { Column, DataPage, Field, Form, Group, List, useEnumOptions } from "@angee/base";
+import {
+  Column,
+  DataPage,
+  Facet,
+  Field,
+  Form,
+  Group,
+  GroupListView,
+  List,
+  useEnumOptions,
+} from "@angee/base";
 
 import { useAgentsT } from "../i18n";
 
@@ -12,7 +22,7 @@ export function McpServersPage(): React.ReactElement {
   const transportOptions = useEnumOptions(SERVER_MODEL, "transport");
   return (
     <DataPage model={SERVER_MODEL} placement="inline" routed>
-      <List model={SERVER_MODEL}>
+      <List model={SERVER_MODEL} list={GroupListView}>
         <Column field="name" />
         <Column field="placement" />
         <Column field="transport" />
@@ -36,7 +46,8 @@ export function McpServersPage(): React.ReactElement {
 export function McpToolsPage(): React.ReactElement {
   return (
     <DataPage model={TOOL_MODEL} placement="inline" routed>
-      <List model={TOOL_MODEL}>
+      <List model={TOOL_MODEL} list={GroupListView}>
+        <Facet field="server" label="Server" labelField="name" />
         <Column field="name" />
         <Column field="enabled" />
         <Column field="updatedAt" />

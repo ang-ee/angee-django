@@ -3,9 +3,11 @@ import {
   Action,
   Column,
   DataPage,
+  Facet,
   Field,
   Form,
   Group,
+  GroupListView,
   List,
   useRecordActionMutation,
 } from "@angee/base";
@@ -31,7 +33,8 @@ export function SourcesPage(): React.ReactElement {
       filter={{ kind: { exact: "skill" } }}
       createDefaults={SKILL_DEFAULTS}
     >
-      <List model={MODEL} pageSize={50}>
+      <List model={MODEL} list={GroupListView} pageSize={50}>
+        <Facet field="repository" label="Repository" labelField="name" />
         <Column field="path" />
         <Column field="ref" />
         <Column field="lastSyncedAt" />

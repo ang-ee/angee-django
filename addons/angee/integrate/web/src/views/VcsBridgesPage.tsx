@@ -3,8 +3,10 @@ import {
   Action,
   Column,
   DataPage,
+  Facet,
   Field,
   Form,
+  GroupListView,
   List,
   useEnumOptions,
   useImplPrefill,
@@ -40,7 +42,8 @@ export function VcsBridgesPage(): React.ReactElement {
 
   return (
     <DataPage model={MODEL} placement="inline" routed>
-      <List model={MODEL}>
+      <List model={MODEL} list={GroupListView}>
+        <Facet field="vendor" label="Vendor" labelField="displayName" />
         <Column field="displayName" />
         <Column field="backendClass" header={t("integrate.vcs.backendClass")} />
         <Column

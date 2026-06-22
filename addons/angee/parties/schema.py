@@ -245,9 +245,7 @@ class PartiesDirectoryMutation:
                 name=f"CardDAV — {name}",
                 material={"username": username, "password": password},
             )
-            vendor, _created = vendor_model.objects.get_or_create(
-                slug="carddav", defaults={"display_name": "CardDAV"}
-            )
+            vendor, _created = vendor_model.objects.get_or_create(slug="carddav", defaults={"display_name": "CardDAV"})
             directory = Directory.objects.create(
                 vendor=vendor,
                 owner=user,
@@ -457,6 +455,28 @@ class PersonOrder:
     updated_at: auto
 
 
+@strawberry_django.filter_type(Organization, lookups=True)
+class OrganizationFilter:
+    """Field lookups accepted when filtering the organizations list."""
+
+    display_name: auto
+    legal_name: auto
+    domain: auto
+    created_at: auto
+    updated_at: auto
+
+
+@strawberry_django.order_type(Organization)
+class OrganizationOrder:
+    """Orderings accepted by the organizations connection."""
+
+    display_name: auto
+    legal_name: auto
+    domain: auto
+    created_at: auto
+    updated_at: auto
+
+
 @strawberry_django.filter_type(Handle, lookups=True)
 class HandleFilter:
     """Field lookups accepted when filtering the handles connection.
@@ -503,6 +523,29 @@ class AffiliationFilter:
     created_at: auto
 
 
+@strawberry_django.filter_type(Directory, lookups=True)
+class DirectoryFilter:
+    """Field lookups accepted when filtering contact directories."""
+
+    display_name: auto
+    backend_class: auto
+    status: auto
+    last_sync_status: auto
+    last_sync_completed_at: auto
+    updated_at: auto
+
+
+@strawberry_django.order_type(Directory)
+class DirectoryOrder:
+    """Orderings accepted by the contact directories list."""
+
+    display_name: auto
+    backend_class: auto
+    status: auto
+    last_sync_completed_at: auto
+    updated_at: auto
+
+
 # Count parties and sum their handle_count, grouped by created_at. Both are
 # non-gated read fields; kind is not an axis because it is the concrete child
 # type, not a column.
@@ -539,6 +582,21 @@ PersonDataQuery, _PERSON_DATA_TYPES = data_query(
     aggregate_kwargs={"pagination_style": "offset"},
 )
 
+OrganizationDataQuery, _ORGANIZATION_DATA_TYPES = data_query(
+    OrganizationType,
+    type_name="OrganizationDataQuery",
+    filters=OrganizationFilter,
+    order=OrganizationOrder,
+    list_name="organizations",
+    detail_name="organization",
+    aggregate_name="organization_aggregate",
+    group_name="organization_groups",
+    aggregate_fields=["id"],
+    group_by_fields=["domain", "created_at"],
+    enable_filter_echo=True,
+    aggregate_kwargs={"pagination_style": "offset"},
+)
+
 # Group handles by their resolved contact. Following Odoo's read_group: group by
 # the party id (which owns the drill-down filter) and carry `party.display_name`
 # in each bucket so the header shows the contact's name, not the raw id. The two
@@ -564,13 +622,26 @@ HandleDataQuery, _HANDLE_DATA_TYPES = data_query(
     },
 )
 
+DirectoryDataQuery, _DIRECTORY_DATA_TYPES = data_query(
+    DirectoryType,
+    type_name="DirectoryDataQuery",
+    filters=DirectoryFilter,
+    order=DirectoryOrder,
+    list_name="directories",
+    detail_name="directory",
+    aggregate_name="directory_aggregate",
+    group_name="directory_groups",
+    aggregate_fields=["id", "last_sync_items"],
+    group_by_fields=["backend_class", "status", "last_sync_status"],
+    enable_filter_echo=True,
+    aggregate_kwargs={"pagination_style": "offset"},
+)
+
 
 @strawberry.type
 class PartiesQuery:
     """Public parties queries."""
 
-    organizations: OffsetPaginated[OrganizationType] = strawberry_django.offset_paginated()
-    organization: OrganizationType | None = detail(OrganizationType)
     addresses: OffsetPaginated[AddressType] = strawberry_django.offset_paginated(
         filters=AddressFilter,
     )
@@ -579,17 +650,28 @@ class PartiesQuery:
         filters=AffiliationFilter,
     )
     affiliation: AffiliationType | None = detail(AffiliationType)
-    directories: OffsetPaginated[DirectoryType] = strawberry_django.offset_paginated()
-    directory: DirectoryType | None = detail(DirectoryType)
     contact_folders: OffsetPaginated[ContactFolderType] = strawberry_django.offset_paginated()
     contact_folder: ContactFolderType | None = detail(ContactFolderType)
 
 
-_DATA_TYPES = [*_PARTY_DATA_TYPES, *_PERSON_DATA_TYPES, *_HANDLE_DATA_TYPES]
+_DATA_TYPES = [
+    *_PARTY_DATA_TYPES,
+    *_PERSON_DATA_TYPES,
+    *_ORGANIZATION_DATA_TYPES,
+    *_HANDLE_DATA_TYPES,
+    *_DIRECTORY_DATA_TYPES,
+]
 
 
 _PARTIES_SCHEMA_BUCKET = {
-    "query": [PartiesQuery, PartyDataQuery, PersonDataQuery, HandleDataQuery],
+    "query": [
+        PartiesQuery,
+        PartyDataQuery,
+        PersonDataQuery,
+        OrganizationDataQuery,
+        HandleDataQuery,
+        DirectoryDataQuery,
+    ],
     "mutation": [
         PartiesDirectoryMutation,
         crud(PartyType, update=PartyPatch, delete=True),

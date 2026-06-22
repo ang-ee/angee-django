@@ -6,6 +6,7 @@ import {
   Field,
   Form,
   Group,
+  GroupListView,
   List,
   recordActionId,
   type ActionContext,
@@ -18,7 +19,7 @@ import { IntegrateRevealCredential } from "../documents.console";
 const MODEL = "Credential";
 
 const credentialList = (
-  <List model={MODEL}>
+  <List model={MODEL} list={GroupListView}>
     <Column field="displayName" />
     <Column field="kind" />
     <Column field="status" widget="statusBadge" />

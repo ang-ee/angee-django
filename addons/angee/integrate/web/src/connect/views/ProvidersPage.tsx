@@ -6,6 +6,7 @@ import {
   Field,
   Form,
   Group,
+  GroupListView,
   List,
   recordActionId,
   useEnumOptions,
@@ -27,7 +28,7 @@ import { connectCallbackRedirectUri } from "../redirects";
 const MODEL = "OAuthClient";
 
 const providerList = (
-  <List model={MODEL}>
+  <List model={MODEL} list={GroupListView}>
     <Column field="slug" />
     <Column field="displayName" />
     <Column field="environment" />

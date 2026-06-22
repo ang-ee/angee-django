@@ -1,5 +1,14 @@
 import * as React from "react";
-import { Column, DataPage, Field, Form, Group, List } from "@angee/base";
+import {
+  Column,
+  DataPage,
+  Facet,
+  Field,
+  Form,
+  Group,
+  GroupListView,
+  List,
+} from "@angee/base";
 
 import { useIntegrateT } from "../i18n";
 import { AddRepositoryControl } from "./AddRepositoryControl";
@@ -7,7 +16,8 @@ import { AddRepositoryControl } from "./AddRepositoryControl";
 const MODEL = "integrate.Repository";
 
 const repositoryList = (
-  <List model={MODEL}>
+  <List model={MODEL} list={GroupListView}>
+    <Facet field="vcsBridge" label="VCS bridge" labelField="displayName" />
     <Column field="org" />
     <Column field="name" />
     <Column field="visibility" widget="statusBadge" />

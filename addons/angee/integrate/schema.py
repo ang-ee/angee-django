@@ -29,7 +29,7 @@ from angee.graphql.deletion import DeletePreview, delete_by_public_id
 from angee.graphql.ids import PublicID
 from angee.graphql.impl import ImplChoice
 from angee.graphql.impl import impl_choices as resolve_impl_choices
-from angee.graphql.node import AngeeNode, detail
+from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_from_public_id as _user_from_public_id
 from angee.iam.identity import user_principal as _user_principal
@@ -504,6 +504,143 @@ def _console_credentials(info: strawberry.Info) -> Any:
     return cast(Any, Credential.objects).console_credentials()
 
 
+@strawberry_django.filter_type(OAuthClient, lookups=True)
+class OAuthClientFilter:
+    """Field lookups accepted when filtering OAuth clients."""
+
+    slug: auto
+    provider_type: auto
+    environment: auto
+    display_name: auto
+    is_enabled: auto
+    updated_at: auto
+
+
+@strawberry_django.order_type(OAuthClient)
+class OAuthClientOrder:
+    """Orderings accepted by the OAuth clients list."""
+
+    slug: auto
+    environment: auto
+    display_name: auto
+    is_enabled: auto
+    created_at: auto
+    updated_at: auto
+
+
+@strawberry_django.filter_type(ExternalAccount, lookups=True)
+class ExternalAccountFilter:
+    """Field lookups accepted when filtering external accounts."""
+
+    oauth_client: auto
+    external_id: auto
+    email: auto
+    display_name: auto
+    status: auto
+    updated_at: auto
+
+
+@strawberry_django.order_type(ExternalAccount)
+class ExternalAccountOrder:
+    """Orderings accepted by the external accounts list."""
+
+    oauth_client: auto
+    external_id: auto
+    email: auto
+    display_name: auto
+    status: auto
+    created_at: auto
+    updated_at: auto
+
+
+@strawberry_django.filter_type(Credential, lookups=True)
+class CredentialFilter:
+    """Field lookups accepted when filtering credential health."""
+
+    oauth_client: auto
+    external_account: auto
+    kind: auto
+    name: auto
+    status: auto
+    last_refresh_status: auto
+    updated_at: auto
+
+
+@strawberry_django.order_type(Credential)
+class CredentialOrder:
+    """Orderings accepted by the credential health list."""
+
+    oauth_client: auto
+    kind: auto
+    name: auto
+    status: auto
+    expires_at: auto
+    created_at: auto
+    updated_at: auto
+
+
+OAuthClientDataQuery, _OAUTH_CLIENT_DATA_TYPES = data_query(
+    OAuthClientType,
+    type_name="OAuthClientDataQuery",
+    filters=OAuthClientFilter,
+    order=OAuthClientOrder,
+    list_name="oauth_clients",
+    detail_name="oauth_client",
+    aggregate_name="oauth_client_aggregate",
+    group_name="oauth_client_groups",
+    aggregate_fields=["id"],
+    group_by_fields=["provider_type", "environment", "is_enabled"],
+    enable_filter_echo=True,
+    permission_classes=_ADMIN_PERMISSION_CLASSES,
+    list_kwargs={"resolver": _console_oauth_clients},
+    aggregate_kwargs={
+        "queryset": cast(Any, OAuthClient.objects).console_oauth_clients(),
+        "name_prefix": "OAuthClientAggregate",
+        "pagination_style": "offset",
+    },
+)
+ExternalAccountDataQuery, _EXTERNAL_ACCOUNT_DATA_TYPES = data_query(
+    ExternalAccountType,
+    type_name="ExternalAccountDataQuery",
+    filters=ExternalAccountFilter,
+    order=ExternalAccountOrder,
+    list_name="external_accounts",
+    detail_name="external_account",
+    aggregate_name="external_account_aggregate",
+    group_name="external_account_groups",
+    aggregate_fields=["id"],
+    group_by_fields=["oauth_client", "oauth_client__display_name", "status"],
+    enable_filter_echo=True,
+    permission_classes=_ADMIN_PERMISSION_CLASSES,
+    list_kwargs={"resolver": _console_external_accounts},
+    aggregate_kwargs={
+        "queryset": cast(Any, ExternalAccount.objects).console_external_accounts(),
+        "name_prefix": "ExternalAccountAggregate",
+        "pagination_style": "offset",
+    },
+)
+CredentialDataQuery, _CREDENTIAL_DATA_TYPES = data_query(
+    CredentialType,
+    type_name="CredentialDataQuery",
+    filters=CredentialFilter,
+    order=CredentialOrder,
+    list_name="credential_health",
+    detail_name="credential",
+    aggregate_name="credential_aggregate",
+    group_name="credential_groups",
+    aggregate_fields=["id"],
+    group_by_fields=["kind", "status", "last_refresh_status"],
+    enable_filter_echo=True,
+    permission_classes=_ADMIN_PERMISSION_CLASSES,
+    list_kwargs={"resolver": _console_credentials},
+    aggregate_kwargs={
+        "queryset": cast(Any, Credential.objects).console_credentials(),
+        "name_prefix": "CredentialAggregate",
+        "pagination_style": "offset",
+    },
+)
+
+
 def _oauth_client_from_id(oauth_client_id: PublicID) -> Any:
     """Return the OAuth client addressed by one public GraphQL id."""
 
@@ -933,42 +1070,10 @@ class ConnectionMutation:
                 # pre_delete guard can veto (a passwordless user's last sign-in), rolling
                 # this back — we must not revoke a token whose local credential we keep.
                 transaction.on_commit(lambda: _revoke_remote_oauth_token(credential))
-                deleted, _details = (
-                    Credential.objects.filter(pk=credential.pk).with_action("delete").delete()
-                )
+                deleted, _details = Credential.objects.filter(pk=credential.pk).with_action("delete").delete()
             return UnlinkAccountResult(ok=deleted > 0)
         except OAuthFlowError as error:
             return UnlinkAccountResult(ok=False, error=error.public_message, error_code=error.code)
-
-
-@strawberry.type
-class IntegrateConnectionConsoleQuery:
-    """Admin OAuth client, external account, and credential queries."""
-
-    oauth_clients: OffsetPaginated[OAuthClientType] = strawberry_django.offset_paginated(
-        resolver=_console_oauth_clients,
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    oauth_client: OAuthClientType | None = detail(
-        OAuthClientType,
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    external_accounts: OffsetPaginated[ExternalAccountType] = strawberry_django.offset_paginated(
-        resolver=_console_external_accounts,
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    external_account: ExternalAccountType | None = detail(
-        ExternalAccountType,
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    credential_health: OffsetPaginated[CredentialType] = strawberry_django.offset_paginated(
-        resolver=_console_credentials,
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    credential: CredentialType | None = detail(
-        CredentialType,
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
 
 
 _OAUTH_CLIENT_MUTATION = crud(
@@ -1008,11 +1113,14 @@ class IntegrateExternalAccountMutation:
     def update_external_account(self, data: ExternalAccountPatch) -> ExternalAccountType:
         """Update one external account's scalar identity fields."""
 
-        with action_target(
-            ExternalAccount,
-            data.id,
-            reason="integrate.graphql.external_account.update",
-        ) as account, transaction.atomic():
+        with (
+            action_target(
+                ExternalAccount,
+                data.id,
+                reason="integrate.graphql.external_account.update",
+            ) as account,
+            transaction.atomic(),
+        ):
             for field in ("email", "display_name", "avatar_url", "status"):
                 value = getattr(data, field)
                 if value is not strawberry.UNSET:
@@ -1070,11 +1178,14 @@ class IntegrateCredentialMutation:
     def update_credential(self, data: CredentialPatch) -> CredentialType:
         """Update one credential's status."""
 
-        with action_target(
-            Credential,
-            data.id,
-            reason="integrate.graphql.credential.update",
-        ) as credential, transaction.atomic():
+        with (
+            action_target(
+                Credential,
+                data.id,
+                reason="integrate.graphql.credential.update",
+            ) as credential,
+            transaction.atomic(),
+        ):
             if data.status is not strawberry.UNSET and data.status is not None:
                 credential.status = data.status
                 credential.save(update_fields=["status", "updated_at"])
@@ -1273,6 +1384,49 @@ class WebhookSubscriptionPatch:
     enabled: bool | None = strawberry.UNSET
 
 
+@strawberry_django.filter_type(Vendor, lookups=True)
+class VendorFilter:
+    """Field lookups accepted when filtering vendors."""
+
+    slug: auto
+    display_name: auto
+    updated_at: auto
+
+
+@strawberry_django.order_type(Vendor)
+class VendorOrder:
+    """Orderings accepted by the vendors list."""
+
+    slug: auto
+    display_name: auto
+    created_at: auto
+    updated_at: auto
+
+
+@strawberry_django.filter_type(WebhookSubscription, lookups=True)
+class WebhookSubscriptionFilter:
+    """Field lookups accepted when filtering webhook subscriptions."""
+
+    owner: auto
+    integration_filter: auto
+    target_url: auto
+    enabled: auto
+    last_delivery_status: auto
+    updated_at: auto
+
+
+@strawberry_django.order_type(WebhookSubscription)
+class WebhookSubscriptionOrder:
+    """Orderings accepted by the webhook subscriptions list."""
+
+    target_url: auto
+    enabled: auto
+    last_delivery_at: auto
+    consecutive_failures: auto
+    created_at: auto
+    updated_at: auto
+
+
 @strawberry.input
 class IntegrationInput:
     """Fields accepted when creating an integration.
@@ -1327,6 +1481,24 @@ class IntegrationOrder:
     updated_at: auto
 
 
+VendorDataQuery, _VENDOR_DATA_TYPES = data_query(
+    VendorType,
+    type_name="VendorDataQuery",
+    filters=VendorFilter,
+    order=VendorOrder,
+    list_name="vendors",
+    detail_name="vendor",
+    aggregate_name="vendor_aggregate",
+    group_name="vendor_groups",
+    aggregate_fields=["id"],
+    group_by_fields=["created_at"],
+    enable_filter_echo=True,
+    permission_classes=_ADMIN_PERMISSION_CLASSES,
+    aggregate_kwargs={
+        "name_prefix": "VendorAggregate",
+        "pagination_style": "offset",
+    },
+)
 IntegrationDataQuery, _INTEGRATION_DATA_TYPES = data_query(
     IntegrationType,
     type_name="IntegrationDataQuery",
@@ -1345,26 +1517,24 @@ IntegrationDataQuery, _INTEGRATION_DATA_TYPES = data_query(
         "pagination_style": "offset",
     },
 )
-
-
-@strawberry.type
-class IntegrateConsoleQuery:
-    """Admin integration catalogue and integration queries."""
-
-    vendors: OffsetPaginated[VendorType] = strawberry_django.offset_paginated(
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    vendor: VendorType | None = detail(
-        VendorType,
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    webhook_subscriptions: OffsetPaginated[WebhookSubscriptionType] = strawberry_django.offset_paginated(
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    webhook_subscription: WebhookSubscriptionType | None = detail(
-        WebhookSubscriptionType,
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
+WebhookSubscriptionDataQuery, _WEBHOOK_SUBSCRIPTION_DATA_TYPES = data_query(
+    WebhookSubscriptionType,
+    type_name="WebhookSubscriptionDataQuery",
+    filters=WebhookSubscriptionFilter,
+    order=WebhookSubscriptionOrder,
+    list_name="webhook_subscriptions",
+    detail_name="webhook_subscription",
+    aggregate_name="webhook_subscription_aggregate",
+    group_name="webhook_subscription_groups",
+    aggregate_fields=["id", "consecutive_failures"],
+    group_by_fields=["enabled", "last_delivery_status"],
+    enable_filter_echo=True,
+    permission_classes=_ADMIN_PERMISSION_CLASSES,
+    aggregate_kwargs={
+        "name_prefix": "WebhookSubscriptionAggregate",
+        "pagination_style": "offset",
+    },
+)
 
 
 _VENDOR_MUTATION = crud(
@@ -1377,6 +1547,7 @@ _VENDOR_MUTATION = crud(
     write_context="integrate.graphql.vendor",
 )
 """Admin vendor CRUD: const-admin gated by ``PlatformAdminPermission``, written elevated."""
+
 
 @strawberry.type
 class IntegrationCreateMutation:
@@ -1708,6 +1879,90 @@ class SourcePatch:
     path: str | None = strawberry.UNSET
 
 
+@strawberry_django.filter_type(VcsBridge, lookups=True)
+class VcsBridgeFilter:
+    """Field lookups accepted when filtering VCS bridges."""
+
+    vendor: auto
+    backend_class: auto
+    status: auto
+    last_sync_status: auto
+    updated_at: auto
+
+
+@strawberry_django.order_type(VcsBridge)
+class VcsBridgeOrder:
+    """Orderings accepted by the VCS bridge list."""
+
+    vendor: auto
+    backend_class: auto
+    status: auto
+    last_sync_completed_at: auto
+    created_at: auto
+    updated_at: auto
+
+
+@strawberry_django.filter_type(Repository, lookups=True)
+class RepositoryFilter:
+    """Field lookups accepted when filtering repositories."""
+
+    vcs_bridge: auto
+    org: auto
+    name: auto
+    visibility: auto
+    archived: auto
+    updated_at: auto
+
+
+@strawberry_django.order_type(Repository)
+class RepositoryOrder:
+    """Orderings accepted by the repositories list."""
+
+    vcs_bridge: auto
+    org: auto
+    name: auto
+    visibility: auto
+    archived: auto
+    created_at: auto
+    updated_at: auto
+
+
+@strawberry_django.order_type(Source)
+class SourceOrder:
+    """Orderings accepted by the sources list."""
+
+    repository: auto
+    kind: auto
+    ref: auto
+    path: auto
+    last_synced_at: auto
+    created_at: auto
+    updated_at: auto
+
+
+@strawberry_django.filter_type(Template, lookups=True)
+class TemplateFilter:
+    """Field lookups accepted when filtering templates."""
+
+    source: auto
+    name: auto
+    kind: auto
+    path: auto
+    updated_at: auto
+
+
+@strawberry_django.order_type(Template)
+class TemplateOrder:
+    """Orderings accepted by the templates list."""
+
+    source: auto
+    name: auto
+    kind: auto
+    path: auto
+    created_at: auto
+    updated_at: auto
+
+
 def _repo_candidate(descriptor: Any) -> RepoCandidate:
     """Project a host ``RepoDescriptor`` into a typeahead candidate."""
 
@@ -1723,39 +1978,95 @@ def _repo_candidate(descriptor: Any) -> RepoCandidate:
     )
 
 
+VcsBridgeDataQuery, _VCS_BRIDGE_DATA_TYPES = data_query(
+    VcsBridgeType,
+    type_name="VcsBridgeDataQuery",
+    filters=VcsBridgeFilter,
+    order=VcsBridgeOrder,
+    list_name="vcs_bridges",
+    detail_name="vcs_bridge",
+    aggregate_name="vcs_bridge_aggregate",
+    group_name="vcs_bridge_groups",
+    aggregate_fields=["id"],
+    group_by_fields=[
+        "vendor",
+        "vendor__display_name",
+        "backend_class",
+        "status",
+        "last_sync_status",
+    ],
+    enable_filter_echo=True,
+    permission_classes=_ADMIN_PERMISSION_CLASSES,
+    aggregate_kwargs={
+        "name_prefix": "VcsBridgeAggregate",
+        "pagination_style": "offset",
+    },
+)
+RepositoryDataQuery, _REPOSITORY_DATA_TYPES = data_query(
+    RepositoryType,
+    type_name="RepositoryDataQuery",
+    filters=RepositoryFilter,
+    order=RepositoryOrder,
+    list_name="repositories",
+    detail_name="repository",
+    aggregate_name="repository_aggregate",
+    group_name="repository_groups",
+    aggregate_fields=["id"],
+    group_by_fields=[
+        "vcs_bridge",
+        "vcs_bridge__backend_class",
+        "org",
+        "visibility",
+        "archived",
+    ],
+    enable_filter_echo=True,
+    permission_classes=_ADMIN_PERMISSION_CLASSES,
+    aggregate_kwargs={
+        "name_prefix": "RepositoryAggregate",
+        "pagination_style": "offset",
+    },
+)
+SourceDataQuery, _SOURCE_DATA_TYPES = data_query(
+    SourceType,
+    type_name="SourceDataQuery",
+    filters=SourceFilter,
+    order=SourceOrder,
+    list_name="sources",
+    detail_name="source",
+    aggregate_name="source_aggregate",
+    group_name="source_groups",
+    aggregate_fields=["id"],
+    group_by_fields=["repository", "repository__name", "kind", "last_synced_at"],
+    enable_filter_echo=True,
+    permission_classes=_ADMIN_PERMISSION_CLASSES,
+    aggregate_kwargs={
+        "name_prefix": "SourceAggregate",
+        "pagination_style": "offset",
+    },
+)
+TemplateDataQuery, _TEMPLATE_DATA_TYPES = data_query(
+    TemplateType,
+    type_name="TemplateDataQuery",
+    filters=TemplateFilter,
+    order=TemplateOrder,
+    list_name="templates",
+    detail_name="template",
+    aggregate_name="template_aggregate",
+    group_name="template_groups",
+    aggregate_fields=["id"],
+    group_by_fields=["source", "source__path", "kind", "updated_at"],
+    enable_filter_echo=True,
+    permission_classes=_ADMIN_PERMISSION_CLASSES,
+    aggregate_kwargs={
+        "name_prefix": "TemplateAggregate",
+        "pagination_style": "offset",
+    },
+)
+
+
 @strawberry.type
 class VCSConsoleQuery:
     """Admin VCS inventory queries."""
-
-    vcs_bridges: OffsetPaginated[VcsBridgeType] = strawberry_django.offset_paginated(
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    vcs_bridge: VcsBridgeType | None = detail(
-        VcsBridgeType,
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    repositories: OffsetPaginated[RepositoryType] = strawberry_django.offset_paginated(
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    repository: RepositoryType | None = detail(
-        RepositoryType,
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    sources: OffsetPaginated[SourceType] = strawberry_django.offset_paginated(
-        filters=SourceFilter,
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    source: SourceType | None = detail(
-        SourceType,
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    templates: OffsetPaginated[TemplateType] = strawberry_django.offset_paginated(
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    template: TemplateType | None = detail(
-        TemplateType,
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
 
     @strawberry.field(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def search_repositories(self, vcs_bridge_id: PublicID, query: str) -> list[RepoCandidate]:
@@ -1802,11 +2113,14 @@ class VcsBridgeUpdateMutation:
         """Update a VCS child row, rematerializing backend defaults on backend change."""
 
         backend_changed = False
-        with action_target(
-            VcsBridge,
-            data.id,
-            reason="integrate.graphql.vcs_bridge.update",
-        ) as bridge, transaction.atomic():
+        with (
+            action_target(
+                VcsBridge,
+                data.id,
+                reason="integrate.graphql.vcs_bridge.update",
+            ) as bridge,
+            transaction.atomic(),
+        ):
             provided = apply_integration_patch_fields(
                 bridge,
                 data,
@@ -1914,14 +2228,23 @@ _CONSOLE_TYPES: list[object] = [
     UnlinkAccountResult,
     RevealedCredentialSecret,
     VendorType,
+    *_VENDOR_DATA_TYPES,
     ConnectedIntegrationType,
     IntegrationType,
     *_INTEGRATION_DATA_TYPES,
     WebhookSubscriptionType,
+    *_WEBHOOK_SUBSCRIPTION_DATA_TYPES,
+    *_OAUTH_CLIENT_DATA_TYPES,
+    *_EXTERNAL_ACCOUNT_DATA_TYPES,
+    *_CREDENTIAL_DATA_TYPES,
     VcsBridgeType,
+    *_VCS_BRIDGE_DATA_TYPES,
     RepositoryType,
+    *_REPOSITORY_DATA_TYPES,
     SourceType,
+    *_SOURCE_DATA_TYPES,
     TemplateType,
+    *_TEMPLATE_DATA_TYPES,
     RepoCandidate,
 ]
 
@@ -1948,9 +2271,16 @@ schemas = {
         # where its models do.
         "query": [
             ConsoleImplChoicesQuery,
-            IntegrateConnectionConsoleQuery,
-            IntegrateConsoleQuery,
+            OAuthClientDataQuery,
+            ExternalAccountDataQuery,
+            CredentialDataQuery,
+            VendorDataQuery,
             IntegrationDataQuery,
+            WebhookSubscriptionDataQuery,
+            VcsBridgeDataQuery,
+            RepositoryDataQuery,
+            SourceDataQuery,
+            TemplateDataQuery,
             VCSConsoleQuery,
         ],
         "mutation": [

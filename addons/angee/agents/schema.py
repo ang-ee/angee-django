@@ -22,7 +22,6 @@ from django.db import transaction
 from rebac import current_actor, system_context
 from strawberry import auto
 from strawberry.scalars import JSON
-from strawberry_django.pagination import OffsetPaginated
 
 from angee.agents import provisioning
 from angee.agents.autoconfig import SETTINGS as _AGENTS_SETTINGS
@@ -33,7 +32,7 @@ from angee.graphql.actions import ActionResult, action_target, resolve_action_ta
 from angee.graphql.crud import crud
 from angee.graphql.data import data_query
 from angee.graphql.ids import PublicID
-from angee.graphql.node import AngeeNode, detail
+from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.schema import UserType
@@ -404,6 +403,95 @@ class AgentOrder:
     name: auto
     lifecycle: auto
     runtime_status: auto
+    created_at: auto
+    updated_at: auto
+
+
+@strawberry_django.filter_type(Skill, lookups=True)
+class SkillFilter:
+    """Field lookups accepted when filtering the discovered skills list."""
+
+    source: auto
+    name: auto
+    path: auto
+    updated_at: auto
+
+
+@strawberry_django.order_type(Skill)
+class SkillOrder:
+    """Orderings accepted by the discovered skills list."""
+
+    source: auto
+    name: auto
+    path: auto
+    created_at: auto
+    updated_at: auto
+
+
+@strawberry_django.filter_type(MCPServer, lookups=True)
+class MCPServerFilter:
+    """Field lookups accepted when filtering MCP servers."""
+
+    name: auto
+    placement: auto
+    transport: auto
+    credential: auto
+    updated_at: auto
+
+
+@strawberry_django.order_type(MCPServer)
+class MCPServerOrder:
+    """Orderings accepted by the MCP servers list."""
+
+    name: auto
+    placement: auto
+    transport: auto
+    created_at: auto
+    updated_at: auto
+
+
+@strawberry_django.filter_type(MCPTool, lookups=True)
+class MCPToolFilter:
+    """Field lookups accepted when filtering MCP tools."""
+
+    server: auto
+    name: auto
+    enabled: auto
+    updated_at: auto
+
+
+@strawberry_django.order_type(MCPTool)
+class MCPToolOrder:
+    """Orderings accepted by the MCP tools list."""
+
+    server: auto
+    name: auto
+    enabled: auto
+    created_at: auto
+    updated_at: auto
+
+
+@strawberry_django.filter_type(InferenceProvider, lookups=True)
+class InferenceProviderFilter:
+    """Field lookups accepted when filtering inference providers."""
+
+    vendor: auto
+    owner: auto
+    backend_class: auto
+    status: auto
+    name: auto
+    updated_at: auto
+
+
+@strawberry_django.order_type(InferenceProvider)
+class InferenceProviderOrder:
+    """Orderings accepted by the inference providers list."""
+
+    vendor: auto
+    backend_class: auto
+    status: auto
+    name: auto
+    created_at: auto
     updated_at: auto
 
 
@@ -434,6 +522,96 @@ class InferenceModelOrder:
     updated_at: auto
 
 
+AgentDataQuery, _AGENT_DATA_TYPES = data_query(
+    AgentType,
+    type_name="AgentDataQuery",
+    filters=AgentFilter,
+    order=AgentOrder,
+    list_name="agents",
+    detail_name="agent",
+    aggregate_name="agent_aggregate",
+    group_name="agent_groups",
+    aggregate_fields=["id"],
+    group_by_fields=["is_template", "lifecycle", "runtime_status", "updated_at"],
+    enable_filter_echo=True,
+    permission_classes=_ADMIN_PERMISSION_CLASSES,
+    aggregate_kwargs={
+        "name_prefix": "AgentAggregate",
+        "pagination_style": "offset",
+    },
+)
+SkillDataQuery, _SKILL_DATA_TYPES = data_query(
+    SkillType,
+    type_name="SkillDataQuery",
+    filters=SkillFilter,
+    order=SkillOrder,
+    list_name="skills",
+    detail_name="skill",
+    aggregate_name="skill_aggregate",
+    group_name="skill_groups",
+    aggregate_fields=["id"],
+    group_by_fields=["source", "source__path", "updated_at"],
+    enable_filter_echo=True,
+    permission_classes=_ADMIN_PERMISSION_CLASSES,
+    aggregate_kwargs={
+        "name_prefix": "SkillAggregate",
+        "pagination_style": "offset",
+    },
+)
+MCPServerDataQuery, _MCP_SERVER_DATA_TYPES = data_query(
+    MCPServerType,
+    type_name="MCPServerDataQuery",
+    filters=MCPServerFilter,
+    order=MCPServerOrder,
+    list_name="mcp_servers",
+    detail_name="mcp_server",
+    aggregate_name="mcp_server_aggregate",
+    group_name="mcp_server_groups",
+    aggregate_fields=["id"],
+    group_by_fields=["placement", "transport"],
+    enable_filter_echo=True,
+    permission_classes=_ADMIN_PERMISSION_CLASSES,
+    aggregate_kwargs={
+        "name_prefix": "MCPServerAggregate",
+        "pagination_style": "offset",
+    },
+)
+MCPToolDataQuery, _MCP_TOOL_DATA_TYPES = data_query(
+    MCPToolType,
+    type_name="MCPToolDataQuery",
+    filters=MCPToolFilter,
+    order=MCPToolOrder,
+    list_name="mcp_tools",
+    detail_name="mcp_tool",
+    aggregate_name="mcp_tool_aggregate",
+    group_name="mcp_tool_groups",
+    aggregate_fields=["id"],
+    group_by_fields=["server", "server__name", "enabled", "updated_at"],
+    enable_filter_echo=True,
+    permission_classes=_ADMIN_PERMISSION_CLASSES,
+    aggregate_kwargs={
+        "name_prefix": "MCPToolAggregate",
+        "pagination_style": "offset",
+    },
+)
+InferenceProviderDataQuery, _INFERENCE_PROVIDER_DATA_TYPES = data_query(
+    InferenceProviderType,
+    type_name="InferenceProviderDataQuery",
+    filters=InferenceProviderFilter,
+    order=InferenceProviderOrder,
+    list_name="inference_providers",
+    detail_name="inference_provider",
+    aggregate_name="inference_provider_aggregate",
+    group_name="inference_provider_groups",
+    aggregate_fields=["id"],
+    group_by_fields=["backend_class", "status", "vendor", "vendor__display_name"],
+    enable_filter_echo=True,
+    permission_classes=_ADMIN_PERMISSION_CLASSES,
+    aggregate_kwargs={
+        "name_prefix": "InferenceProviderAggregate",
+        "pagination_style": "offset",
+    },
+)
 InferenceModelDataQuery, _INFERENCE_MODEL_DATA_TYPES = data_query(
     InferenceModelType,
     type_name="InferenceModelDataQuery",
@@ -452,37 +630,6 @@ InferenceModelDataQuery, _INFERENCE_MODEL_DATA_TYPES = data_query(
         "pagination_style": "offset",
     },
 )
-
-
-@strawberry.type
-class AgentsConsoleQuery:
-    """Admin agent-catalogue queries."""
-
-    agents: OffsetPaginated[AgentType] = strawberry_django.offset_paginated(
-        filters=AgentFilter,
-        order=AgentOrder,
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    agent: AgentType | None = detail(AgentType, permission_classes=_ADMIN_PERMISSION_CLASSES)
-    skills: OffsetPaginated[SkillType] = strawberry_django.offset_paginated(
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    skill: SkillType | None = detail(SkillType, permission_classes=_ADMIN_PERMISSION_CLASSES)
-    mcp_servers: OffsetPaginated[MCPServerType] = strawberry_django.offset_paginated(
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    mcp_server: MCPServerType | None = detail(MCPServerType, permission_classes=_ADMIN_PERMISSION_CLASSES)
-    mcp_tools: OffsetPaginated[MCPToolType] = strawberry_django.offset_paginated(
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    mcp_tool: MCPToolType | None = detail(MCPToolType, permission_classes=_ADMIN_PERMISSION_CLASSES)
-    inference_providers: OffsetPaginated[InferenceProviderType] = strawberry_django.offset_paginated(
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-    inference_provider: InferenceProviderType | None = detail(
-        InferenceProviderType,
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
 
 _AGENT_MUTATION = crud(
     AgentType,
@@ -579,11 +726,14 @@ class InferenceProviderUpdateMutation:
         """Update a provider, rematerializing backend defaults when the backend changes."""
 
         backend_changed = False
-        with action_target(
-            InferenceProvider,
-            data.id,
-            reason="agents.graphql.inference_provider.update",
-        ) as provider, transaction.atomic():
+        with (
+            action_target(
+                InferenceProvider,
+                data.id,
+                reason="agents.graphql.inference_provider.update",
+            ) as provider,
+            transaction.atomic(),
+        ):
             provided = apply_integration_patch_fields(
                 provider,
                 data,
@@ -822,13 +972,25 @@ _CONSOLE_TYPES: list[object] = [
     MCPToolType,
     AgentType,
     AgentChatEndpoint,
+    *_AGENT_DATA_TYPES,
+    *_SKILL_DATA_TYPES,
+    *_MCP_SERVER_DATA_TYPES,
+    *_MCP_TOOL_DATA_TYPES,
+    *_INFERENCE_PROVIDER_DATA_TYPES,
     *_INFERENCE_MODEL_DATA_TYPES,
 ]
 
 
 schemas = {
     "console": {
-        "query": [AgentsConsoleQuery, InferenceModelDataQuery],
+        "query": [
+            AgentDataQuery,
+            SkillDataQuery,
+            MCPServerDataQuery,
+            MCPToolDataQuery,
+            InferenceProviderDataQuery,
+            InferenceModelDataQuery,
+        ],
         "mutation": [
             _AGENT_MUTATION,
             InferenceProviderCreateMutation,

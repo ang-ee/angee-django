@@ -1,12 +1,21 @@
 import * as React from "react";
-import { Action, Column, DataPage, Field, Form, Group, List } from "@angee/base";
+import {
+  Action,
+  Column,
+  DataPage,
+  Field,
+  Form,
+  Group,
+  GroupListView,
+  List,
+} from "@angee/base";
 
 import { useIntegrateT } from "../../i18n";
 
 const MODEL = "ExternalAccount";
 
 const accountList = (
-  <List model={MODEL}>
+  <List model={MODEL} list={GroupListView}>
     <Column field="providerLabel" />
     <Column field="externalId" />
     <Column field="email" />

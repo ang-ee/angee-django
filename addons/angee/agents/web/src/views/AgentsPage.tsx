@@ -10,6 +10,7 @@ import {
   Form,
   Glyph,
   Group,
+  GroupListView,
   List,
   useRecordActionMutation,
   useToast,
@@ -211,7 +212,7 @@ function AgentDataPage({
       recordTabs={recordTabs}
       returning={isTemplate ? undefined : ["lifecycle", "runtimeStatus", "workspace", "service"]}
     >
-      <List model={MODEL} pageSize={50}>
+      <List model={MODEL} list={GroupListView} pageSize={50}>
         <Column field="name" />
         <Column field="lifecycle" widget="statusBadge" />
         <Column field="runtimeStatus" widget="colorDot" />

@@ -5,6 +5,7 @@ import {
   DrawerDataPage,
   Field,
   Form,
+  GroupListView,
   List,
 } from "@angee/base";
 import { useKnowledgeT } from "../i18n";
@@ -30,7 +31,7 @@ export function KnowledgeSettingsPage(): ReactElement {
         </p>
       </header>
       <DrawerDataPage model={VAULT_MODEL}>
-        <List model={VAULT_MODEL} order={{ name: "ASC" }}>
+        <List model={VAULT_MODEL} list={GroupListView} order={{ name: "ASC" }}>
           <Column field="name" />
           <Column field="ownerLabel" />
           <Column field="updatedAt" />

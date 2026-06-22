@@ -3,6 +3,7 @@ import {
   Action,
   Column,
   DataPage,
+  Facet,
   Field,
   Form,
   Group,
@@ -42,7 +43,8 @@ export function InferenceProvidersPage(): React.ReactElement {
         canConnectRecord(row) ? <ProviderConnectButton row={row} refresh={context.refresh} /> : null
       }
     >
-      <List model={PROVIDER_MODEL}>
+      <List model={PROVIDER_MODEL} list={GroupListView}>
+        <Facet field="vendor" label="Vendor" labelField="displayName" />
         <Column field="name" />
         <Column field="backendClass" />
         <Column field="status" widget="statusBadge" />
@@ -136,6 +138,7 @@ export function InferenceModelsPage(): React.ReactElement {
         groupOptions={groupOptions}
         defaultGroups={defaultGroups}
       >
+        <Facet field="provider" label={t("agents.inference.provider")} labelField="name" />
         <Column field="name" />
         <Column field="provider.name" header={t("agents.inference.provider")} />
         <Column field="displayName" />

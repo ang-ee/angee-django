@@ -10,12 +10,12 @@ from django.apps import apps
 from django.db.models import F
 from rebac import system_context
 from strawberry import auto
-from strawberry_django.pagination import OffsetPaginated
 
 from angee.base.models import public_id_for
 from angee.graphql.crud import crud
+from angee.graphql.data import data_query
 from angee.graphql.ids import PublicID, require_instance_for_id
-from angee.graphql.node import AngeeNode, detail
+from angee.graphql.node import AngeeNode
 from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_display_label, user_public_id
@@ -261,20 +261,34 @@ class PageOrder:
     updated_at: auto
 
 
-@strawberry.type
-class KnowledgeQuery:
-    """Actor-scoped knowledge queries."""
-
-    vaults: OffsetPaginated[VaultType] = strawberry_django.offset_paginated(
-        filters=VaultFilter,
-        order=VaultOrder,
-    )
-    vault: VaultType | None = detail(VaultType)
-    pages: OffsetPaginated[PageType] = strawberry_django.offset_paginated(
-        filters=PageFilter,
-        order=PageOrder,
-    )
-    page: PageType | None = detail(PageType)
+VaultDataQuery, _VAULT_DATA_TYPES = data_query(
+    VaultType,
+    type_name="VaultDataQuery",
+    filters=VaultFilter,
+    order=VaultOrder,
+    list_name="vaults",
+    detail_name="vault",
+    aggregate_name="vault_aggregate",
+    group_name="vault_groups",
+    aggregate_fields=["id"],
+    group_by_fields=["updated_at"],
+    enable_filter_echo=True,
+    aggregate_kwargs={"name_prefix": "VaultAggregate", "pagination_style": "offset"},
+)
+PageDataQuery, _PAGE_DATA_TYPES = data_query(
+    PageType,
+    type_name="PageDataQuery",
+    filters=PageFilter,
+    order=PageOrder,
+    list_name="pages",
+    detail_name="page",
+    aggregate_name="page_aggregate",
+    group_name="page_groups",
+    aggregate_fields=["id"],
+    group_by_fields=["vault", "vault__name", "kind", "updated_at"],
+    enable_filter_echo=True,
+    aggregate_kwargs={"name_prefix": "PageAggregate", "pagination_style": "offset"},
+)
 
 
 @strawberry.type
@@ -351,13 +365,25 @@ def _as_id(public_id: str | None) -> strawberry.ID | None:
 
 
 _KNOWLEDGE_SCHEMA_BUCKET = {
-    "query": [KnowledgeQuery, revisions(MarkdownPageType, name="markdownPage")],
+    "query": [
+        VaultDataQuery,
+        PageDataQuery,
+        revisions(MarkdownPageType, name="markdownPage"),
+    ],
     "mutation": [
         KnowledgeMutation,
         crud(VaultType, update=VaultPatch, delete=True),
         crud(PageType, update=PagePatch, delete=True),
     ],
-    "types": [VaultType, PageType, MarkdownPageType, BacklinkType, PageBodyPayload],
+    "types": [
+        VaultType,
+        PageType,
+        MarkdownPageType,
+        BacklinkType,
+        PageBodyPayload,
+        *_VAULT_DATA_TYPES,
+        *_PAGE_DATA_TYPES,
+    ],
 }
 
 

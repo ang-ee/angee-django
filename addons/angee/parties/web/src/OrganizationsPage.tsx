@@ -1,10 +1,10 @@
 import * as React from "react";
-import { Column, DataPage, Field, Form, Group, List } from "@angee/base";
+import { Column, DataPage, Field, Form, Group, GroupListView, List } from "@angee/base";
 
 const MODEL = "parties.Organization";
 
 const organizationsList = (
-  <List model={MODEL}>
+  <List model={MODEL} list={GroupListView}>
     <Column field="displayName" />
     <Column field="domain" />
     <Column field="createdAt" />

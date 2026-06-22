@@ -39,6 +39,7 @@ def data_query(
     include_aggregate: bool = True,
     include_groups: bool = True,
     permission_classes: list[type] | None = None,
+    list_kwargs: dict[str, Any] | None = None,
     aggregate_kwargs: dict[str, Any] | None = None,
 ) -> tuple[type, tuple[object, ...]]:
     """Return a Strawberry query type plus generated data helper types.
@@ -50,6 +51,7 @@ def data_query(
 
     model = django_model(node)
     singular = name or model._meta.model_name
+    list_options = dict(list_kwargs or {})
     aggregate_options = dict(aggregate_kwargs or {})
     annotations: dict[str, Any] = {}
     namespace: dict[str, Any] = {
@@ -72,16 +74,14 @@ def data_query(
 
     if include_list:
         if list_name is None:
-            raise ImproperlyConfigured(
-                f"data_query({surface_name(node)}) needs list_name "
-                "when include_list=True"
-            )
+            raise ImproperlyConfigured(f"data_query({surface_name(node)}) needs list_name when include_list=True")
         list_attr = list_name
         annotations[list_attr] = OffsetPaginated[node]
         namespace[list_attr] = strawberry_django.offset_paginated(
             filters=filters,
             order=order,
             permission_classes=permission_classes,
+            **list_options,
         )
 
     if include_detail:
@@ -95,13 +95,11 @@ def data_query(
     if include_aggregate or include_groups:
         if not aggregate_fields and include_aggregate:
             raise ImproperlyConfigured(
-                f"data_query({surface_name(node)}) needs aggregate_fields "
-                "when include_aggregate=True"
+                f"data_query({surface_name(node)}) needs aggregate_fields when include_aggregate=True"
             )
         if not group_by_fields and include_groups:
             raise ImproperlyConfigured(
-                f"data_query({surface_name(node)}) needs group_by_fields "
-                "when include_groups=True"
+                f"data_query({surface_name(node)}) needs group_by_fields when include_groups=True"
             )
         built = data_aggregate_builder(
             model=model,
@@ -136,9 +134,7 @@ def data_query(
             namespace[group_attr] = built.group_by_field
 
     if not annotations:
-        raise ImproperlyConfigured(
-            f"data_query({surface_name(node)}) needs at least one field"
-        )
+        raise ImproperlyConfigured(f"data_query({surface_name(node)}) needs at least one field")
 
     query_name = type_name or f"{_type_stem(singular)}DataQuery"
     query = type(query_name, (), namespace)

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Column, DataPage, Field, Form, List } from "@angee/base";
+import { Column, DataPage, Facet, Field, Form, GroupListView, List } from "@angee/base";
 
 const MODEL = "agents.Skill";
 
@@ -9,7 +9,8 @@ const MODEL = "agents.Skill";
 export function SkillsPage(): React.ReactElement {
   return (
     <DataPage model={MODEL} placement="inline" hideCreate>
-      <List model={MODEL}>
+      <List model={MODEL} list={GroupListView}>
+        <Facet field="source" label="Source" labelField="path" />
         <Column field="name" />
         <Column field="description" />
         <Column field="path" />

@@ -11,6 +11,7 @@ import {
   Form,
   Glyph,
   Group,
+  GroupListView,
   Input,
   List,
   useRecordActionMutation,
@@ -23,7 +24,7 @@ import { ConnectCardDavDirectory } from "./documents.console";
 const MODEL = "parties.Directory";
 
 const directoryList = (
-  <List model={MODEL}>
+  <List model={MODEL} list={GroupListView}>
     <Column field="displayName" header="Name" />
     <Column field="status" widget="statusBadge" />
     <Column field="backendClass" />
