@@ -7,8 +7,6 @@ import {
   Group,
   GroupListView,
   List,
-  useRelationFacet,
-  type DataToolbarGroupOption,
 } from "@angee/base";
 
 const MODEL = "parties.Handle";
@@ -22,14 +20,9 @@ const MODEL = "parties.Handle";
  * Person's Handles tab.
  */
 export function HandlesPage(): React.ReactElement {
-  const partyFacet = useRelationFacet(MODEL, { field: "party", label: "Contact" });
-  const groupOptions = React.useMemo<readonly DataToolbarGroupOption[]>(
-    () => (partyFacet.groupOption ? [partyFacet.groupOption] : []),
-    [partyFacet.groupOption],
-  );
   return (
     <DataPage model={MODEL} placement="inline" routed hideCreate>
-      <List model={MODEL} list={GroupListView} groupOptions={groupOptions}>
+      <List model={MODEL} list={GroupListView}>
         <Column field="value" />
         <Column field="platform" />
         <Column field="label" />

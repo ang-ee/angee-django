@@ -125,6 +125,7 @@ export {
 } from "./record-action";
 export {
   useRelationFacet,
+  useRelationFacetsForColumns,
   type RelationFacet,
   type RelationFacetOptions,
 } from "./relation-facet";

@@ -58,6 +58,7 @@ import {
   mergeGroupOptions,
   nextFacetFilter,
   nextTextFilter,
+  resolveDataViewGroup,
   removeCustomFilter,
   resolveTextFilterField,
   textFilterValue,
@@ -161,10 +162,17 @@ function ListViewBody<TRow extends Row = Row>({
     () => columnsWithMetadataDefaults(columns, modelMetadata),
     [columns, modelMetadata],
   );
-  const activeDefaultGroup = defaultGroupForView(
+  const rawActiveDefaultGroup = defaultGroupForView(
     defaultGroup,
     defaultGroups,
     dataView.state.view,
+  );
+  const activeDefaultGroup = React.useMemo(
+    () =>
+      rawActiveDefaultGroup
+        ? resolveDataViewGroup(rawActiveDefaultGroup, modelMetadata)
+        : null,
+    [modelMetadata, rawActiveDefaultGroup],
   );
   const handledDefaultGroupRef = React.useRef<DataViewGroup | null>(null);
   React.useEffect(() => {

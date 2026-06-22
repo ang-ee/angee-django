@@ -9,8 +9,6 @@ import {
   GroupListView,
   List,
   useRelationFacet,
-  type DataToolbarFilterField,
-  type DataToolbarFilterOption,
   type DataToolbarGroupOption,
 } from "@angee/base";
 
@@ -22,34 +20,23 @@ const DEFAULT_GROUPS = { list: { field: "status" } } as const;
 
 /**
  * The inbox: cross-thread "smart aggregation" over messages. Sender / channel /
- * thread are shared `useRelationFacet`s (the same SDL-derived facet any relation
- * gets), and the list groups by status / thread — composed on `DataPage` +
- * `GroupListView`, not a hand-rolled inbox. Messages arrive via channel sync, so
- * the list creates nothing; status is the one human-editable field.
+ * thread relation facets ride the shared model-driven data view. Sender/thread
+ * come from their visible relation columns; channel stays explicit because this
+ * inbox does not render it as a column. The list groups by status/thread —
+ * composed on `DataPage` + `GroupListView`, not a hand-rolled inbox. Messages
+ * arrive via channel sync, so the list creates nothing; status is the one
+ * human-editable field.
  */
 export function MessagesPage(): React.ReactElement {
-  const senderFacet = useRelationFacet(MODEL, { field: "sender", label: "Sender", labelField: "value" });
   // Channel has no string title of its own, so label the facet by its displayName
   // (the operator-given name, vendor-derived when unset) rather than the default id.
   const channelFacet = useRelationFacet(MODEL, { field: "channel", label: "Channel", labelField: "displayName" });
-  const threadFacet = useRelationFacet(MODEL, { field: "thread", label: "Thread", labelField: "subject" });
-
-  const filters = React.useMemo<readonly DataToolbarFilterOption[]>(
-    () => [...senderFacet.filters, ...channelFacet.filters, ...threadFacet.filters],
-    [senderFacet.filters, channelFacet.filters, threadFacet.filters],
-  );
-  const filterFields = React.useMemo<readonly DataToolbarFilterField[]>(
-    () => [...senderFacet.filterFields, ...channelFacet.filterFields, ...threadFacet.filterFields],
-    [senderFacet.filterFields, channelFacet.filterFields, threadFacet.filterFields],
-  );
   const groupOptions = React.useMemo<readonly DataToolbarGroupOption[]>(
     () => [
-      ...(threadFacet.groupOption ? [threadFacet.groupOption] : []),
-      ...(senderFacet.groupOption ? [senderFacet.groupOption] : []),
       ...(channelFacet.groupOption ? [channelFacet.groupOption] : []),
       { id: "status", label: "Status", group: { field: "status" } },
     ],
-    [threadFacet.groupOption, senderFacet.groupOption, channelFacet.groupOption],
+    [channelFacet.groupOption],
   );
 
   return (
@@ -57,8 +44,8 @@ export function MessagesPage(): React.ReactElement {
       <List
         model={MODEL}
         list={GroupListView}
-        filters={filters}
-        filterFields={filterFields}
+        filters={channelFacet.filters}
+        filterFields={channelFacet.filterFields}
         groupOptions={groupOptions}
         defaultGroups={DEFAULT_GROUPS}
       >

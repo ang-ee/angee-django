@@ -8,7 +8,6 @@ import {
   Group,
   GroupListView,
   List,
-  useRelationFacet,
   useRecordActionMutation,
   useEnumOptions,
   useImplPrefill,
@@ -106,13 +105,8 @@ function ProviderConnectButton({
 export function InferenceModelsPage(): React.ReactElement {
   const t = useAgentsT();
   const modelUseOptions = useEnumOptions(MODEL_MODEL, "modelUse");
-  const providerFacet = useRelationFacet(MODEL_MODEL, {
-    field: "provider",
-    label: t("agents.inference.provider"),
-  });
   const groupOptions = React.useMemo<readonly DataToolbarGroupOption[]>(
     () => [
-      ...(providerFacet.groupOption ? [providerFacet.groupOption] : []),
       {
         id: "modelUse",
         label: t("agents.inference.capability"),
@@ -124,16 +118,14 @@ export function InferenceModelsPage(): React.ReactElement {
         group: { field: "status" },
       },
     ],
-    [providerFacet.groupOption, t],
+    [t],
   );
   const defaultGroups = React.useMemo(
     () => ({
       list: { field: "modelUse" },
-      ...(providerFacet.groupOption
-        ? { board: providerFacet.groupOption.group }
-        : {}),
+      board: { field: "provider.name" },
     }),
-    [providerFacet.groupOption],
+    [],
   );
 
   return (
@@ -141,8 +133,6 @@ export function InferenceModelsPage(): React.ReactElement {
       <List
         model={MODEL_MODEL}
         list={GroupListView}
-        filters={providerFacet.filters}
-        filterFields={providerFacet.filterFields}
         groupOptions={groupOptions}
         defaultGroups={defaultGroups}
       >

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { DISABLED_DOCUMENTS } from "./disabled-documents";
+import { useGraphQLDataSource } from "./data";
 import { useDocumentMutation } from "./document-mutation";
 import { useDocumentQuery } from "./document-query";
 import { useModelRootFields } from "./model-metadata";
@@ -21,7 +22,6 @@ import {
 } from "./resource-result";
 import {
   assembleDetailDocument,
-  assembleListDocument,
   assembleMutationDocument,
   assembleRevisionsDocument,
   clampPageSize,
@@ -95,18 +95,17 @@ export function useResourceList<TName extends ResourceTypeName = ResourceTypeNam
   const stableFields = useStableArray(fields);
   const withFilter = filter !== undefined;
   const withOrder = order !== undefined;
-  const rootFields = useModelRootFields(modelLabel);
-  const active = enabled && Boolean(modelLabel) && rootFields !== null;
+  const source = useGraphQLDataSource(modelLabel);
+  const active = enabled && Boolean(modelLabel) && source.canQuery;
 
   const document = useMemo(
     () =>
-      rootFields
-        ? assembleListDocument(modelLabel, stableFields, rootFields, {
-            withFilter,
-            withOrder,
-          })
-        : DISABLED_DOCUMENTS.query,
-    [modelLabel, rootFields, stableFields, withFilter, withOrder],
+      source.listDocument({
+        fields: stableFields,
+        ...(withFilter ? { filter: {} } : {}),
+        ...(withOrder ? { order: {} } : {}),
+      }),
+    [source, stableFields, withFilter, withOrder],
   );
 
   const resetKey = useStableVariables({
@@ -145,11 +144,14 @@ export function useResourceList<TName extends ResourceTypeName = ResourceTypeNam
     });
   }, [controlledPage, initial, resetKey]);
 
-  const variables = useStableVariables({
-    pagination: { offset: (currentPage - 1) * size, limit: size },
-    ...(withFilter ? { filters: filter } : {}),
-    ...(withOrder ? { order } : {}),
-  });
+  const variables = useStableVariables(
+    source.listVariables({
+      page: currentPage,
+      pageSize: size,
+      ...(withFilter ? { filter } : {}),
+      ...(withOrder ? { order } : {}),
+    }),
+  );
 
   const run = useDocumentQuery(document, variables, active);
   // Register so a change event (and post-write invalidation) refresh this list —

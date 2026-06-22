@@ -59,6 +59,69 @@ Second schema/SDK slice completed on 2026-06-22:
 - [x] Keep SDL inference as the compatibility fallback for tests, story fixtures,
       and non-Angee schemas.
 
+Third frontend SDK source slice completed on 2026-06-22:
+
+- [x] Add `packages/sdk/src/data/query.ts` as the first headless `DataQuery`
+      owner for fields, filters, order, groups, measures, pagination, and
+      selection identity.
+- [x] Add `GraphQLDataSource` as the single SDK owner that maps data-query list,
+      aggregate, and group requests to GraphQL documents and variables.
+- [x] Refactor `useResourceList`, `useResourceAggregate`, and
+      `useResourceGroupBy` so they delegate document/variable shape to the
+      shared GraphQL data source.
+- [x] Export the data-query/data-source surface from `@angee/sdk`.
+- [x] Verify the notes example remains composed through `DataPage`, `List`,
+      `GroupListView`, and `Form`; no note-local list data path was needed for
+      this slice.
+- [x] Move `DataViewState`, `Filter`, search serialization, favorites, and
+      group/filter helper tests from `@angee/base` into `@angee/sdk`, leaving
+      base's `data-view-model.ts` as a compatibility re-export.
+- [x] Add `LocalRowsDataSource` in `@angee/sdk` for static/local row filtering,
+      sorting, pagination, free-text search, and relation public-id matching.
+- [x] Refactor `useRowsDataViewSurface` so `@angee/base` delegates local-row
+      query mechanics to the SDK and keeps only presentation/table state.
+- [x] Teach base filter/group option builders to consume generated
+      `dataQuery.filterFields` and `dataQuery.groupByFields`, so model-backed
+      pages such as notes inherit capability-driven toolbar options without
+      local declarations for hidden filterable/groupable fields.
+- [x] Teach base group-option derivation to turn relation display columns such as
+      `party.displayName` into label-aware aggregate groups from relation
+      metadata, and remove the handles page's local relation-group glue.
+
+Fourth frontend facet slice completed on 2026-06-22:
+
+- [x] Add SDK multi-facet support: one aliased grouped aggregate document can now
+      fetch several facet buckets in one operation, with bucket counts and
+      backend-echoed filters.
+- [x] Add `useResourceFacets(...)` as the headless React owner for resource
+      facet buckets, option value/label extraction, counts, and canonical
+      server filter echoes.
+- [x] Refactor base `useRelationFacet(...)` to prefer grouped backend facet
+      buckets for relation filters and to fall back to related-row lists only
+      when a schema lacks the relation group axis.
+- [x] Keep relation facets label-aware by reusing the same
+      id-axis + label-axis mapping as grouped lists (`provider` +
+      `provider__name`, Odoo-style `(id, display_name)`).
+- [x] Add `useRelationFacetsForColumns(...)` as the base hook for the next
+      deletion slice, but keep it opt-in. A visible relation column should not
+      automatically dump every related record into the toolbar's quick filters.
+
+Fifth frontend auto-facet deletion slice completed on 2026-06-22:
+
+- [x] Add an SDK `useGraphQLProviderAvailable()` hook so optional framework
+      reads can stay inert in static/no-provider surfaces while required
+      resource reads still use the normal GraphQL provider contract.
+- [x] Keep `ListView` relation behavior group-first: visible relation columns
+      contribute label-aware group options, but not automatic quick filters.
+      High-cardinality relations such as contacts are a bad quick-filter UX.
+- [x] Teach default relation groups to resolve through the same metadata path as
+      toolbar group options, so pages can seed defaults with `provider.name`
+      without repeating `aggregateField`/`aggregateKey`.
+- [x] Delete folder relation-facet glue from the parties `PeoplePage`.
+- [x] Delete provider relation-facet glue from the agents inference models page.
+- [x] Delete sender/thread relation-facet glue from the messaging inbox; channel
+      remains explicit because that relation is not visible as a column.
+
 Current local verification:
 
 - [x] `uv run python -m pytest tests/test_aggregates.py -q`
@@ -79,6 +142,30 @@ Current local verification:
 - [x] `uv run examples/notes-angee/manage.py schema --check`
 - [x] `pnpm --filter @angee/sdk typecheck`
 - [x] `pnpm --filter @angee-example/notes-host typecheck`
+- [x] `pnpm --filter @angee/sdk test -- graphql-source aggregates resource-hooks`
+- [x] `pnpm --filter @angee/sdk test -- view-state graphql-source aggregates resource-hooks`
+- [x] `pnpm --filter @angee/sdk test -- local-source view-state graphql-source aggregates resource-hooks`
+- [x] `pnpm --filter @angee/base typecheck`
+- [x] `pnpm --filter @angee/base test -- DataPage GroupedList ListView AggregatePanel`
+- [x] `pnpm --filter @angee/base test -- RowsListView DataPage GroupedList ListView AggregatePanel`
+- [x] `pnpm --filter @angee/base test -- model-metadata-defaults DataPage ListView RowsListView`
+- [x] `pnpm --filter @angee/parties typecheck`
+- [x] `pnpm --filter @angee/sdk test -- facets graphql-source aggregates resource-hooks`
+- [x] `pnpm --filter @angee/sdk typecheck`
+- [x] `pnpm --filter @angee/base test -- relation-facet`
+- [x] `pnpm --filter @angee/base typecheck`
+- [x] `pnpm --filter @angee/agents typecheck`
+- [x] `pnpm --filter @angee/messaging typecheck`
+- [x] `pnpm --filter @angee/parties typecheck`
+- [x] `pnpm --filter @angee-example/notes-host typecheck`
+- [x] `pnpm --filter @angee/base test -- relation-facet model-metadata-defaults DataPage DeleteBulkFlow`
+- [x] `pnpm --filter @angee/base typecheck`
+- [x] `pnpm --filter @angee/sdk typecheck`
+- [x] `pnpm --filter @angee/agents typecheck`
+- [x] `pnpm --filter @angee/messaging typecheck`
+- [x] `pnpm --filter @angee/parties typecheck`
+- [x] `pnpm --filter @angee-example/notes-host typecheck`
+- [x] `pnpm --filter @angee/sdk test -- facets graphql-source aggregates resource-hooks`
 
 ## North Star
 
@@ -327,6 +414,8 @@ through Angee's stack:
 - [ ] Raw `pk` compatibility leaks into frontend relation filter handling.
 - [ ] Addon pages can still bypass the shared data-view owner and lose standard
       affordances.
+- [x] Resource list, aggregate, and group hooks now share one SDK
+      `GraphQLDataSource` owner for GraphQL document and variable shape.
 
 ## Target Package Shape
 
@@ -569,14 +658,18 @@ Done when:
 
 ## Phase 2: SDK Data Core
 
-- [ ] Add `packages/sdk/src/data/query.ts`.
-- [ ] Move or mirror `DataViewState` and `Filter` into SDK-owned types.
+- [x] Add `packages/sdk/src/data/query.ts`.
+- [x] Move or mirror `DataViewState` and `Filter` into SDK-owned types.
 - [ ] Implement URL serialization compatible with current search params.
 - [ ] Implement GraphQL filter variable serialization.
-- [ ] Implement client-side evaluation for local rows.
+- [x] Implement client-side evaluation for local rows.
 - [ ] Add capability metadata reader.
-- [ ] Add `GraphQLDataSource` wrapping current resource hooks/document builders.
-- [ ] Add `LocalRowsDataSource` replacing `RowsListView` bespoke semantics.
+- [x] Add `GraphQLDataSource` wrapping current resource hooks/document builders.
+- [x] Add `LocalRowsDataSource` replacing `RowsListView` bespoke semantics.
+- [x] Add unit tests for GraphQL data-source document/variable mapping and
+      pagination policy.
+- [x] Add unit tests for local row filtering, sorting, paging, text search, and
+      public-id relation lookup.
 - [ ] Add unit tests for filter algebra and query serialization.
 - [ ] Add parity tests comparing local and GraphQL-style filtering semantics.
 
@@ -601,7 +694,8 @@ Backend:
 
 Frontend:
 
-- [ ] Wire notes page to capability-driven group/filter/facet options.
+- [x] Wire notes page to capability-driven group/filter options.
+- [ ] Wire notes page to server-backed facet options/counts.
 - [ ] Keep notes page on `GroupListView`.
 - [ ] Remove note-local group/filter declarations that metadata can supply.
 - [ ] Verify grouped list: status groups, updated date groups, word-count
@@ -868,9 +962,18 @@ Decision rule:
 - [ ] Implement Phase 1 in a compatibility-preserving way.
 - [ ] Implement Phase 1A model contract validation or decide its exact slice
       ordering.
-- [ ] Migrate notes backend to the new contract.
-- [ ] Implement the minimum SDK capability reader needed by notes.
-- [ ] Migrate notes frontend to capability-driven groups/facets.
+- [x] Migrate notes backend to the initial `data_query(...)` contract surface.
+- [x] Implement the minimum SDK metadata reader needed by notes.
+- [x] Add the first SDK `DataQuery`/`GraphQLDataSource` owner and route the
+      existing list/aggregate/group hooks through it.
+- [x] Promote base `DataViewState` and filter algebra into the SDK `DataQuery`
+      owner.
+- [x] Implement `LocalRowsDataSource` so static/daemon row views stop carrying a
+      separate filter/sort/group implementation.
+- [x] Migrate notes frontend to capability-driven groups/filter fields where
+      generated metadata can own them.
+- [ ] Migrate notes frontend to server-backed facets once facet metadata/source
+      exists.
 - [ ] Verify notes end to end.
 - [ ] Review the first slice with this question: did the framework owner get
       stronger and did notes get thinner?

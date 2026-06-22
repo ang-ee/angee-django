@@ -66,12 +66,21 @@ export function GraphQLProvider(props: {
   }
   return createElement(ModelMetadataProvider, {
     metadata,
-    children: createElement(UrqlProvider, { value: client }, props.children),
+    children: GraphQLProviderAvailableContext.Provider({
+      value: true,
+      children: ActiveGraphQLClientContext.Provider({
+        value: client,
+        children: createElement(UrqlProvider, { value: client }, props.children),
+      }),
+    }),
   });
 }
 
 const ResetContext = makeContext<() => void>("GraphQLClientReset");
 const ClientsContext = makeContext<Record<string, Client>>("GraphQLClients");
+const ActiveGraphQLClientContext = makeContext<Client>("ActiveGraphQLClient");
+const GraphQLProviderAvailableContext =
+  makeContext<boolean>("GraphQLProviderAvailable");
 const SchemaMetadataContext =
   makeContext<Record<string, SchemaFieldMetadata>>("GraphQLSchemaMetadata");
 
@@ -128,4 +137,14 @@ export function useResetClient(): () => void {
  */
 export function useSchemaClients(): Record<string, Client> {
   return ClientsContext.useMaybe() ?? NO_CLIENTS;
+}
+
+/** Whether the current subtree is inside Angee's active GraphQL provider. */
+export function useGraphQLProviderAvailable(): boolean {
+  return GraphQLProviderAvailableContext.useMaybe() ?? false;
+}
+
+/** The active schema's urql client, or null outside Angee's GraphQL provider. */
+export function useActiveGraphQLClientMaybe(): Client | null {
+  return ActiveGraphQLClientContext.useMaybe();
 }

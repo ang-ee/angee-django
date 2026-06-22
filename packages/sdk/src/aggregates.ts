@@ -6,27 +6,24 @@ import {
   type AggregateBucket,
   type AggregateMeasure,
 } from "./aggregate-extract";
-import { DISABLED_DOCUMENTS } from "./disabled-documents";
+import {
+  dataQueryGroupField,
+  dataQueryGroupKey,
+  useGraphQLDataSource,
+  type DataQueryGroup,
+  type DataQueryGroupOrder,
+} from "./data";
 import { useDocumentQuery } from "./document-query";
-import { useModelRootFields } from "./model-metadata";
 import { useRegisterModelRefetch } from "./relay-invalidation";
 import {
-  useStableArray,
   useStableMeasures,
+  useStableValue,
   useStableVariables,
 } from "./stable-deps";
-import {
-  assembleAggregateDocument,
-  assembleGroupByDocument,
-} from "./selection";
 import type {
   ResourceFilter,
   ResourceTypeName,
 } from "./resource-types";
-
-// Stable empty variables for the ungrouped query, so the hook does not re-run on
-// every render.
-const NO_VARIABLES: Record<string, unknown> = {};
 
 /** A filter accepted as the model's generated input or any record. */
 type Filter<TName extends ResourceTypeName> =
@@ -56,21 +53,19 @@ export function useResourceAggregate<
   const { enabled = true, filter, measures } = options;
   const withFilter = filter !== undefined;
   const stableMeasures = useStableMeasures(measures);
-  const rootFields = useModelRootFields(modelLabel);
-  const active = enabled && Boolean(modelLabel) && rootFields !== null;
+  const source = useGraphQLDataSource(modelLabel);
+  const active = enabled && Boolean(modelLabel) && source.canQuery;
 
   const document = useMemo(
     () =>
-      rootFields
-        ? assembleAggregateDocument(modelLabel, rootFields, {
-            withFilter,
-            measures: stableMeasures,
-          })
-        : DISABLED_DOCUMENTS.query,
-    [modelLabel, rootFields, stableMeasures, withFilter],
+      source.aggregateDocument({
+        ...(withFilter ? { filter: {} } : {}),
+        measures: stableMeasures,
+      }),
+    [source, stableMeasures, withFilter],
   );
   const variables = useStableVariables(
-    withFilter ? { filter: filter as Record<string, unknown> } : NO_VARIABLES,
+    source.aggregateVariables(withFilter ? { filter } : undefined),
   );
   const run = useDocumentQuery(document, variables, active);
   // Register so a change event (and post-write invalidation) refresh this
@@ -78,7 +73,7 @@ export function useResourceAggregate<
   // normalized cache can't see on its own.
   useRegisterModelRefetch(modelLabel, run.refetch, active);
   return {
-    aggregate: autoExtractAggregate(run.data, rootFields?.aggregate ?? ""),
+    aggregate: autoExtractAggregate(run.data, source.rootFields?.aggregate ?? ""),
     fetching: run.fetching,
     error: run.error,
     refetch: run.refetch,
@@ -90,16 +85,9 @@ export function useResourceAggregate<
  * (`"STATUS"`), and `key` is the field selected from the returned group key
  * (`"status"`).
  */
-export interface GroupByDimension {
-  field: string;
-  key?: string;
-  granularity?: string;
-}
+export type GroupByDimension = DataQueryGroup;
 
-export interface GroupByOrder {
-  field: string;
-  direction: "ASC" | "DESC";
-}
+export type GroupByOrder = DataQueryGroupOrder;
 
 export interface UseGroupByOptions<
   TName extends ResourceTypeName = ResourceTypeName,
@@ -112,11 +100,11 @@ export interface UseGroupByOptions<
 }
 
 function dimensionField(dimension: GroupByDimension): string {
-  return dimension.field;
+  return dataQueryGroupField(dimension);
 }
 
 function dimensionKey(dimension: GroupByDimension): string {
-  return dimension.key ?? dimension.field;
+  return dataQueryGroupKey(dimension);
 }
 
 /**
@@ -129,16 +117,6 @@ export function bucketKey(
   dimension: GroupByDimension,
 ): unknown {
   return bucket.key?.[dimensionKey(dimension)] ?? null;
-}
-
-function paginationVariables(
-  page: number | undefined,
-  pageSize: number | undefined,
-): Record<string, number> | undefined {
-  if (pageSize === undefined) return undefined;
-  const safePage = Math.max(1, Math.floor(page ?? 1));
-  const limit = Math.max(1, Math.floor(pageSize));
-  return { offset: (safePage - 1) * limit, limit };
 }
 
 /** Grouped totals for a model: one bucket per distinct group key. */
@@ -166,57 +144,58 @@ export function useResourceGroupBy<
     withFilterEcho = false,
   } = options;
   const withFilter = filter !== undefined;
-  const rootFields = useModelRootFields(modelLabel);
+  const source = useGraphQLDataSource(modelLabel);
   const active =
-    enabled && Boolean(modelLabel) && dimensions.length > 0 && rootFields !== null;
-  const keyFields = useStableArray(dimensions.map(dimensionKey));
+    enabled && Boolean(modelLabel) && dimensions.length > 0 && source.canQuery;
   const stableMeasures = useStableMeasures(measures);
-  const groupBy = useMemo(
-    () =>
-      dimensions.map((dimension) => ({
-        field: dimensionField(dimension),
-        ...(dimension.granularity
-          ? { granularity: dimension.granularity }
-          : {}),
-      })),
-    [dimensions],
+  const groups = useStableValue<readonly GroupByDimension[]>(
+    dimensions.map((dimension) => ({
+      field: dimensionField(dimension),
+      ...(dimension.key ? { key: dimension.key } : {}),
+      ...(dimension.granularity
+        ? { granularity: dimension.granularity }
+        : {}),
+    })),
+    [],
   );
-  const orderVariables = useStableVariables(
-    orderBy === undefined ? undefined : { orderBy },
+  const stableOrderBy = useStableValue<readonly GroupByOrder[]>(orderBy, []);
+  const withOrderBy = orderBy !== undefined;
+  const variables = useStableVariables(
+    source.groupByVariables({
+      groups,
+      page,
+      pageSize,
+      measures: stableMeasures,
+      ...(withFilter ? { filter } : {}),
+      ...(withOrderBy ? { groupOrder: stableOrderBy } : {}),
+    }),
   );
-  const withOrderBy = orderVariables.orderBy !== undefined;
-  const variables = useStableVariables({
-    groupBy,
-    pagination: paginationVariables(page, pageSize) ?? null,
-    ...(withFilter ? { filter } : {}),
-    ...(withOrderBy ? { orderBy: orderVariables.orderBy } : {}),
-  });
 
   const document = useMemo(
     () =>
-      rootFields
-        ? assembleGroupByDocument(modelLabel, rootFields, {
-            keyFields,
-            measures: stableMeasures,
-            withFilter,
-            withOrderBy,
-            withFilterEcho,
-          })
-        : DISABLED_DOCUMENTS.query,
+      source.groupByDocument(
+        {
+          groups,
+          measures: stableMeasures,
+          ...(withFilter ? { filter: {} } : {}),
+          ...(withOrderBy ? { groupOrder: stableOrderBy } : {}),
+        },
+        { withFilterEcho },
+      ),
     [
-      modelLabel,
-      rootFields,
-      keyFields,
+      source,
+      groups,
       stableMeasures,
       withFilter,
       withOrderBy,
+      stableOrderBy,
       withFilterEcho,
     ],
   );
 
   const run = useDocumentQuery(document, variables, active);
   useRegisterModelRefetch(modelLabel, run.refetch, active);
-  const result = autoExtractGroupBy(run.data, rootFields?.groupBy ?? "");
+  const result = autoExtractGroupBy(run.data, source.rootFields?.groupBy ?? "");
   return {
     count: result.count,
     totalCount: result.totalCount,

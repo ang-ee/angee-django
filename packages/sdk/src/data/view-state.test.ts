@@ -6,7 +6,7 @@ import {
   dataViewFavoritesFromJson,
   dataViewSearchToState,
   dataViewStateToSearch,
-} from "./data-view-model";
+} from "./view-state";
 
 describe("data-view model", () => {
   test("round-trips flat URL search state", () => {

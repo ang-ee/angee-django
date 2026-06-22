@@ -7,8 +7,6 @@ import {
   Group,
   List,
   RowsListView,
-  useRelationFacet,
-  type DataToolbarGroupOption,
   type ListColumn,
   type RecordPanelContext,
   type RecordTabDescriptor,
@@ -142,25 +140,15 @@ const peopleForm = (
 
 /**
  * People (the person-kind contacts): full create/edit/list/detail, browsable by
- * folder. The folder facet is the shared `useRelationFacet` over the `folder`
- * relation — the same SDL-derived facet any model with a to-one relation gets, so
- * the folder navigation is reusable rather than a bespoke parties widget. The
- * detail carries the contact's handles, addresses, and affiliations as tabs.
+ * folder. The folder navigation comes from the shared model-driven list: the
+ * visible `folder.name` relation column plus generated metadata supplies the
+ * relation facet/group affordances. The detail carries the contact's handles,
+ * addresses, and affiliations as tabs.
  */
 export function PeoplePage(): React.ReactElement {
-  const folderFacet = useRelationFacet(MODEL, { field: "folder", label: "Folder" });
-  const groupOptions = React.useMemo<readonly DataToolbarGroupOption[]>(
-    () => (folderFacet.groupOption ? [folderFacet.groupOption] : []),
-    [folderFacet.groupOption],
-  );
   return (
     <DataPage model={MODEL} placement="inline" routed recordTabs={personRecordTabs}>
-      <List
-        model={MODEL}
-        filters={folderFacet.filters}
-        filterFields={folderFacet.filterFields}
-        groupOptions={groupOptions}
-      >
+      <List model={MODEL}>
         <Column field="displayName" />
         <Column field="folder.name" header="Folder" />
         <Column field="givenName" />

@@ -5,6 +5,7 @@ import {
   buildFilterFields,
   buildFilterOptions,
   buildGroupOptions,
+  resolveDataViewGroup,
 } from "./list-view-utils";
 import {
   columnsWithMetadataDefaults,
@@ -28,8 +29,26 @@ const NOTE_METADATA: ModelMetadata = {
         { value: "ACTIVE" },
       ],
     },
+    isStarred: { name: "isStarred", kind: "scalar", scalar: "Boolean" },
+    createdAt: { name: "createdAt", kind: "scalar", scalar: "DateTime" },
     updatedAt: { name: "updatedAt", kind: "scalar", scalar: "DateTime" },
     wordCount: { name: "wordCount", kind: "scalar", scalar: "Int" },
+  },
+  dataQuery: {
+    modelLabel: "notes.Note",
+    appLabel: "notes",
+    modelName: "note",
+    publicIdField: "sqid",
+    roots: {},
+    typeNames: {
+      node: "NoteType",
+    },
+    capabilities: ["list", "filter", "order", "aggregate", "groups"],
+    filterFields: ["status", "isStarred", "title", "updatedAt"],
+    orderFields: ["title", "status", "updatedAt", "createdAt", "wordCount"],
+    aggregateFields: ["id", "wordCount"],
+    groupByFields: ["status", "updatedAt", "createdAt"],
+    relationAxes: [],
   },
 };
 
@@ -152,6 +171,12 @@ describe("SDL metadata defaults", () => {
         label: "Updated At",
         type: "datetime",
       },
+      {
+        id: "isStarred",
+        field: "isStarred",
+        label: "Is Starred",
+        type: "boolean",
+      },
     ]);
 
     expect(buildFilterOptions(resolvedColumns, [], filterFields)).toEqual([
@@ -188,6 +213,87 @@ describe("SDL metadata defaults", () => {
         group: { field: "updatedAt", granularity: "day" },
         type: "date",
         granularities: ["year", "quarter", "month", "week", "day"],
+      },
+      {
+        id: "createdAt",
+        label: "Created",
+        group: { field: "createdAt", granularity: "day" },
+        type: "date",
+        granularities: ["year", "quarter", "month", "week", "day"],
+      },
+    ]);
+  });
+
+  test("derives relation label group options from data-query relation metadata", () => {
+    const handleMetadata: ModelMetadata = {
+      typeName: "HandleType",
+      fields: {
+        party: {
+          name: "party",
+          kind: "relation",
+          label: "Contact",
+          relationTarget: "PartyType",
+          relationFilter: {
+            field: "party",
+            mode: "lookup",
+            aggregateKey: "partyId",
+            labelKey: "party_DisplayName",
+          },
+        },
+      },
+      dataQuery: {
+        modelLabel: "parties.Handle",
+        appLabel: "parties",
+        modelName: "handle",
+        publicIdField: "sqid",
+        roots: {},
+        typeNames: { node: "HandleType" },
+        capabilities: ["list", "groups"],
+        filterFields: ["party"],
+        orderFields: [],
+        aggregateFields: ["id"],
+        groupByFields: ["party", "party_DisplayName"],
+        relationAxes: [],
+      },
+    };
+
+    expect(
+      buildGroupOptions(
+        [{ field: "party.displayName", header: "Contact" }],
+        handleMetadata,
+        null,
+      ),
+    ).toEqual([
+      {
+        id: "party.displayName",
+        label: "Contact",
+        group: {
+          field: "party.displayName",
+          aggregateField: "party",
+          aggregateKey: "partyId",
+        },
+        type: "value",
+      },
+    ]);
+    expect(
+      resolveDataViewGroup({ field: "party.displayName" }, handleMetadata),
+    ).toEqual({
+      field: "party.displayName",
+      aggregateField: "party",
+      aggregateKey: "partyId",
+    });
+    expect(
+      buildGroupOptions([], handleMetadata, { field: "party.displayName" }),
+    ).toEqual([
+      {
+        id: "party.displayName",
+        label: "Contact",
+        group: {
+          field: "party.displayName",
+          aggregateField: "party",
+          aggregateKey: "partyId",
+        },
+        type: "value",
       },
     ]);
   });

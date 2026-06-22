@@ -48,12 +48,34 @@ export function buildGroupOptions<TRow extends Row>(
   };
 
   for (const defaultGroup of defaultGroupList(defaultGroups)) {
-    const field = metadata?.fields[defaultGroup.field];
-    const type = dateGroupType(defaultGroup.field, field) ? "date" : "value";
+    const resolvedGroup = resolveDataViewGroup(defaultGroup, metadata);
+    if (!groupAllowedByDataQuery(resolvedGroup, metadata)) continue;
+    const field = metadata?.fields[resolvedGroup.field];
+    const type = dateGroupType(resolvedGroup.field, field) ? "date" : "value";
     addOption({
-      id: defaultGroup.field,
-      label: groupLabel(defaultGroup.field, field),
-      group: defaultGroup,
+      id: resolvedGroup.field,
+      label: relationGroupLabel(resolvedGroup, metadata)
+        ?? groupLabel(resolvedGroup.field, field),
+      group: resolvedGroup,
+      type,
+      ...(type === "date" ? { granularities: DATE_GROUP_GRANULARITIES } : {}),
+    });
+  }
+
+  const dataQueryGroupByFields = metadata?.dataQuery?.groupByFields ?? [];
+  for (const fieldName of dataQueryGroupByFields) {
+    if (!metadata) continue;
+    const field = metadata.fields[fieldName];
+    if (!field) continue;
+    if (field.kind === "relation") continue;
+    const type = dateGroupType(fieldName, field) ? "date" : "value";
+    addOption({
+      id: fieldName,
+      label: groupLabel(fieldName, field),
+      group: {
+        field: fieldName,
+        ...(type === "date" ? { granularity: "day" as const } : {}),
+      },
       type,
       ...(type === "date" ? { granularities: DATE_GROUP_GRANULARITIES } : {}),
     });
@@ -61,6 +83,12 @@ export function buildGroupOptions<TRow extends Row>(
 
   for (const column of columns) {
     const field = metadata?.fields[column.field];
+    const relationGroup = relationGroupOptionForColumn(column, metadata);
+    if (relationGroup && groupAllowedByDataQuery(relationGroup.group, metadata)) {
+      addOption(relationGroup);
+      continue;
+    }
+    if (!groupAllowedByDataQuery({ field: column.field }, metadata)) continue;
     if (dateGroupType(column.field, field)) {
       addOption({
         id: column.field,
@@ -86,6 +114,68 @@ export function buildGroupOptions<TRow extends Row>(
   return options;
 }
 
+function relationGroupOptionForColumn<TRow extends Row>(
+  column: ColumnDescriptor<TRow>,
+  metadata: ModelMetadata | null,
+): DataToolbarGroupOption | null {
+  const group = relationGroupForFieldPath(column.field, metadata);
+  if (!group) return null;
+  const [relationField] = column.field.split(".");
+  const field = relationField ? metadata?.fields[relationField] : undefined;
+  return {
+    id: column.field,
+    label: fieldLabel(relationField ?? column.field, field, column.header),
+    group,
+    type: "value",
+  };
+}
+
+function relationGroupForFieldPath(
+  fieldPath: string,
+  metadata: ModelMetadata | null,
+): DataViewGroup | null {
+  const [relationField, labelField, ...rest] = fieldPath.split(".");
+  if (!relationField || !labelField || rest.length > 0) return null;
+  const field = metadata?.fields[relationField];
+  const filter = field?.relationFilter;
+  if (field?.kind !== "relation" || !filter?.aggregateKey) return null;
+  return {
+    field: fieldPath,
+    aggregateField: filter.field,
+    aggregateKey: filter.aggregateKey,
+  };
+}
+
+function relationGroupLabel(
+  group: DataViewGroup,
+  metadata: ModelMetadata | null,
+): ReactNode | null {
+  if (!group.aggregateField) return null;
+  const [relationField, labelField, ...rest] = group.field.split(".");
+  if (!relationField || !labelField || rest.length > 0) return null;
+  const field = metadata?.fields[relationField];
+  return field?.kind === "relation" ? fieldLabel(relationField, field) : null;
+}
+
+export function resolveDataViewGroup(
+  group: DataViewGroup,
+  metadata: ModelMetadata | null,
+): DataViewGroup {
+  if (group.aggregateField && group.aggregateKey) return group;
+  const relationGroup = relationGroupForFieldPath(group.field, metadata);
+  return relationGroup ? { ...group, ...relationGroup } : group;
+}
+
+function groupAllowedByDataQuery(
+  group: DataViewGroup,
+  metadata: ModelMetadata | null,
+): boolean {
+  const groupByFields = metadata?.dataQuery?.groupByFields;
+  if (!groupByFields) return true;
+  const aggregateField = group.aggregateField ?? group.field;
+  return groupByFields.includes(aggregateField) || groupByFields.includes(group.field);
+}
+
 function defaultGroupList(
   defaultGroups: DataViewGroup | readonly DataViewGroup[] | null | undefined,
 ): readonly DataViewGroup[] {
@@ -104,15 +194,19 @@ export function buildFilterOptions<TRow extends Row>(
   rows: readonly TRow[],
   fields: readonly DataToolbarFilterField[],
 ): readonly DataToolbarFilterOption[] {
-  const filterFields = new Map(fields.map((field) => [field.field ?? field.id, field]));
-  return columns.flatMap((column) => {
-    const filterField = filterFields.get(column.field);
+  const columnsByField = new Map(columns.map((column) => [column.field, column]));
+  return fields.flatMap((filterField) => {
     if (filterField?.type !== "selection") return [];
-    return selectionOptions(column, rows, filterField).map((option) => ({
-      id: `${column.field}:${option.value}`,
+    const field = filterField.field ?? filterField.id;
+    const column = columnsByField.get(field);
+    const options = column
+      ? selectionOptions(column, rows, filterField)
+      : filterField.options ?? [];
+    return options.map((option) => ({
+      id: `${field}:${option.value}`,
       label: option.label,
       chipLabel: option.label,
-      filter: { [column.field]: { exact: option.value } },
+      filter: { [field]: { exact: option.value } },
     }));
   });
 }
@@ -135,48 +229,75 @@ export function buildFilterFields<TRow extends Row>(
   metadata: ModelMetadata | null,
 ): readonly DataToolbarFilterField[] {
   const fields: DataToolbarFilterField[] = [];
-  for (const column of columns) {
-    const field = metadata?.fields[column.field];
-    const filterType = filterFieldType(column, field);
-    if (!filterType) continue;
+  const seen = new Set<string>();
+  const addField = (
+    fieldName: string,
+    column: ColumnDescriptor<TRow> | undefined,
+  ) => {
+    if (seen.has(fieldName) || !filterAllowedByDataQuery(fieldName, metadata)) {
+      return;
+    }
+    const field = metadata?.fields[fieldName];
+    const filterType = filterFieldType(fieldName, column, field);
+    if (!filterType) return;
+    seen.add(fieldName);
     if (filterType === "selection") {
       const options = enumOptions(field);
       fields.push({
-        id: column.field,
-        field: column.field,
-        label: fieldLabel(column.field, field, column.header),
+        id: fieldName,
+        field: fieldName,
+        label: fieldLabel(fieldName, field, column?.header),
         type: "selection",
         options: options.length > 0
           ? options
-          : statusValues(column, rows).map((value) => ({
-              value,
-              label: statusLabel(value),
-            })),
+          : column
+            ? statusValues(column, rows).map((value) => ({
+                value,
+                label: statusLabel(value),
+              }))
+            : [],
       });
-      continue;
+      return;
     }
     fields.push({
-      id: column.field,
-      field: column.field,
-      label: fieldLabel(column.field, field, column.header),
+      id: fieldName,
+      field: fieldName,
+      label: fieldLabel(fieldName, field, column?.header),
       type: filterType,
     });
+  };
+  for (const column of columns) {
+    addField(column.field, column);
+  }
+  for (const fieldName of metadata?.dataQuery?.filterFields ?? []) {
+    addField(fieldName, undefined);
   }
   return fields;
 }
 
 function filterFieldType<TRow extends Row>(
-  column: ColumnDescriptor<TRow>,
+  fieldName: string,
+  column: ColumnDescriptor<TRow> | undefined,
   field: ModelFieldMetadata | undefined,
 ): DataToolbarFilterField["type"] | null {
   if (field?.kind === "enum") return "selection";
   if (field?.kind === "scalar" && field.scalar === "String") return "text";
+  if (field?.kind === "scalar" && field.scalar === "Boolean") return "boolean";
+  if (field?.kind === "scalar" && (field.scalar === "Int" || field.scalar === "Float")) return "number";
   if (field?.kind === "scalar" && field.scalar === "DateTime") return "datetime";
   if (field?.kind === "scalar" && field.scalar === "Date") return "date";
-  if (column.field === DEFAULT_TEXT_FILTER_FIELD) return "text";
-  if (looksLikeDateField(column.field)) return "datetime";
-  if (supportsChoiceFacet(column, null)) return "selection";
+  if (fieldName === DEFAULT_TEXT_FILTER_FIELD) return "text";
+  if (looksLikeDateField(fieldName)) return "datetime";
+  if (column && supportsChoiceFacet(column, null)) return "selection";
   return null;
+}
+
+function filterAllowedByDataQuery(
+  fieldName: string,
+  metadata: ModelMetadata | null,
+): boolean {
+  const filterFields = metadata?.dataQuery?.filterFields;
+  return !filterFields || filterFields.includes(fieldName);
 }
 
 function dateGroupType(

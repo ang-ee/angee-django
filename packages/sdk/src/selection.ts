@@ -167,6 +167,24 @@ export interface AssembleGroupByDocumentOptions {
   withFilterEcho?: boolean;
 }
 
+export interface AssembleFacetDocumentSpec {
+  /** Select these fields from this facet row's `key` object. */
+  keyFields: readonly string[];
+  /** Select these aggregate measures from every facet bucket. */
+  measures?: readonly AggregateMeasure[];
+  /** Declare this facet's `$orderBy<N>` variable and pass it to the grouped field. */
+  withOrderBy?: boolean;
+}
+
+export interface AssembleFacetsDocumentOptions {
+  /** One aliased grouped result field per requested facet. */
+  facets: readonly AssembleFacetDocumentSpec[];
+  /** Declare shared `$filter: <Type>Filter` and pass it to every facet. */
+  withFilter?: boolean;
+  /** Select each grouped row's echoed list filter when the backend exposes it. */
+  withFilterEcho?: boolean;
+}
+
 export interface AssembleAggregateDocumentOptions {
   /** Declare `$filter: <Type>Filter` and pass it to the aggregate field. */
   withFilter?: boolean;
@@ -303,6 +321,56 @@ export function assembleGroupByDocument(
     `totalCount results { ${resultSelection} } ` +
     `pageInfo { offset limit } } }`
   );
+}
+
+/**
+ * Multi-facet grouped document. Each facet is the same grouped root field under
+ * a stable alias (`facet0`, `facet1`, …), so one request can fetch the counts
+ * needed to render a toolbar's choice facets without issuing one query per
+ * relation. A shared filter scopes every facet to the current data view state.
+ */
+export function assembleFacetsDocument(
+  modelLabel: string,
+  rootFields: ModelRootFieldMetadata,
+  options: AssembleFacetsDocumentOptions,
+): string {
+  const typeName = typeNameForModel(modelLabel);
+  const field = requireRootField(modelLabel, rootFields, "groupBy");
+  const groupByInput = assertName(rootFields.groupByInput ?? `${typeName}GroupBySpec`);
+  const declared = options.facets.flatMap((facet, index) => {
+    const variables = [
+      `$groupBy${index}: [${groupByInput}!]!`,
+      `$pagination${index}: OffsetPaginationInput`,
+    ];
+    if (facet.withOrderBy) {
+      const groupOrderInput = assertName(
+        rootFields.groupOrderInput ?? `${typeName}GroupOrder`,
+      );
+      variables.push(`$orderBy${index}: [${groupOrderInput}!]`);
+    }
+    return variables;
+  });
+  if (options.withFilter) declared.push(`$filter: ${typeName}Filter`);
+  const facets = options.facets.map((facet, index) => {
+    const keyFields = [...new Set(facet.keyFields.map(assertName))];
+    const keySelection = keyFields.length > 0 ? keyFields.join(" ") : "__typename";
+    const measureSelection = aggregateMeasureSelection(facet.measures);
+    const args = [`groupBy: $groupBy${index}`, `pagination: $pagination${index}`];
+    if (options.withFilter) args.push("filter: $filter");
+    if (facet.withOrderBy) args.push(`orderBy: $orderBy${index}`);
+    const resultSelection = [
+      `key { ${keySelection} }`,
+      "count",
+      ...(options.withFilterEcho ? ["filter"] : []),
+      ...(measureSelection ? [measureSelection] : []),
+    ].join(" ");
+    return (
+      `facet${index}: ${field}(${args.join(", ")}) { ` +
+      `totalCount results { ${resultSelection} } ` +
+      `pageInfo { offset limit } }`
+    );
+  });
+  return `query ${field}Facets(${declared.join(", ")}) { ${facets.join(" ")} }`;
 }
 
 function aggregateSelection(measures: readonly AggregateMeasure[] | undefined): string {

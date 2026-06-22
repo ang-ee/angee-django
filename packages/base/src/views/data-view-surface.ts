@@ -12,6 +12,7 @@ import {
   type Virtualizer,
 } from "@tanstack/react-virtual";
 import {
+  createLocalRowsDataSource,
   useResourceList,
   rowPublicId,
   type ModelMetadata,
@@ -25,7 +26,6 @@ import type { DataViewContextValue } from "./data-view-context";
 import { useExpandedKeys } from "./grouped-list-utils";
 import {
   Filter,
-  type DataViewFilter,
   type DataViewGroup,
   type DataViewResourceOrder,
 } from "./data-view-model";
@@ -45,6 +45,7 @@ import type { ColumnDescriptor } from "./page";
 type ListFilter = UseResourceListOptions<ResourceTypeName>["filter"];
 
 export type StringIdRow = Row & { id: string };
+export { nextRowTextFilter, rowTextFilterValue } from "@angee/sdk";
 
 export interface ListViewState<TRow extends Row = Row> {
   rows: readonly TRow[];
@@ -251,52 +252,62 @@ export function useRowsDataViewSurface<
 }: UseRowsDataViewSurfaceProps<TRow>): RowsDataViewSurface<TRow> {
   useSyncPageSize(dataView, pageSize);
 
-  const filteredRows = React.useMemo(
-    () => applyClientFilter(rows, columns, dataView.state.filter),
-    [columns, dataView.state.filter, rows],
+  const source = React.useMemo(
+    () => createLocalRowsDataSource(rows),
+    [rows],
   );
-  const sortedRows = React.useMemo(
-    () => sortClientRows(filteredRows, dataView.state.sort),
-    [dataView.state.sort, filteredRows],
+  const textFields = React.useMemo(
+    () => columns.map((column) => column.field),
+    [columns],
   );
-  const pageCount = Math.max(
-    1,
-    Math.ceil(sortedRows.length / dataView.state.pageSize),
+  const localPage = React.useMemo(
+    () =>
+      source.query({
+        filter: dataView.state.filter,
+        sort: dataView.state.sort,
+        page: dataView.state.page,
+        pageSize: dataView.state.pageSize,
+        textFields,
+      }),
+    [
+      dataView.state.filter,
+      dataView.state.page,
+      dataView.state.pageSize,
+      dataView.state.sort,
+      source,
+      textFields,
+    ],
   );
-  const page = Math.min(dataView.state.page, pageCount);
 
   React.useEffect(() => {
-    if (dataView.state.page > pageCount) dataView.setPage(pageCount);
-  }, [dataView.setPage, dataView.state.page, pageCount]);
+    if (dataView.state.page > localPage.pageCount) {
+      dataView.setPage(localPage.pageCount);
+    }
+  }, [dataView.setPage, dataView.state.page, localPage.pageCount]);
 
-  const pageRows = React.useMemo(
-    () =>
-      sortedRows.slice(
-        (page - 1) * dataView.state.pageSize,
-        page * dataView.state.pageSize,
-      ),
-    [dataView.state.pageSize, page, sortedRows],
-  );
+  const pageRows = localPage.rows;
   const listState = React.useMemo<RowsListState<TRow>>(
     () => ({
       rows: pageRows,
-      total: sortedRows.length,
-      page,
-      pageSize: dataView.state.pageSize,
-      pageCount,
-      hasNext: page < pageCount,
-      hasPrev: page > 1,
+      total: localPage.total,
+      page: localPage.page,
+      pageSize: localPage.pageSize,
+      pageCount: localPage.pageCount,
+      hasNext: localPage.hasNext,
+      hasPrev: localPage.hasPrev,
       fetching,
       error,
     }),
     [
-      dataView.state.pageSize,
       error,
       fetching,
-      page,
-      pageCount,
+      localPage.hasNext,
+      localPage.hasPrev,
+      localPage.page,
+      localPage.pageCount,
+      localPage.pageSize,
+      localPage.total,
       pageRows,
-      sortedRows.length,
     ],
   );
   React.useEffect(() => {
@@ -460,129 +471,6 @@ function modelRowId<TRow extends Row>(row: TRow, index: number): string {
 
 function stringRowId<TRow extends StringIdRow>(row: TRow): string {
   return row.id;
-}
-
-const ROWS_TEXT_FILTER_KEY = "q";
-
-function applyClientFilter<TRow extends Row>(
-  rows: readonly TRow[],
-  columns: readonly ColumnDescriptor<TRow>[],
-  filter: DataViewFilter,
-): readonly TRow[] {
-  const text = rowTextFilterValue(filter).trim().toLowerCase();
-  const filters = Object.entries(filter).filter(
-    ([field]) => field !== ROWS_TEXT_FILTER_KEY,
-  );
-  if (!text && filters.length === 0) return rows;
-  return rows.filter((row) => {
-    if (
-      text
-      && !columns.some((column) =>
-        String(readPath(row, column.field) ?? "")
-          .toLowerCase()
-          .includes(text),
-      )
-    ) {
-      return false;
-    }
-    return filters.every(([field, lookup]) =>
-      matchesClientLookup(readPath(row, field), lookup),
-    );
-  });
-}
-
-export function rowTextFilterValue(filter: DataViewFilter): string {
-  const value = filter[ROWS_TEXT_FILTER_KEY];
-  return typeof value === "string" ? value : "";
-}
-
-export function nextRowTextFilter(
-  filter: DataViewFilter,
-  value: string,
-): DataViewFilter {
-  const next = { ...filter };
-  const trimmed = value.trim();
-  if (trimmed) next[ROWS_TEXT_FILTER_KEY] = trimmed;
-  else delete next[ROWS_TEXT_FILTER_KEY];
-  return next;
-}
-
-function matchesClientLookup(value: unknown, lookup: unknown): boolean {
-  if (!lookup || typeof lookup !== "object" || Array.isArray(lookup)) {
-    return value === lookup;
-  }
-  const record = lookup as Record<string, unknown>;
-  if ("sqid" in record) return relationPublicId(value) === record.sqid;
-  if ("pk" in record) return relationPublicId(value) === record.pk;
-  if ("exact" in record) return value === record.exact;
-  if (Array.isArray(record.inList)) return record.inList.includes(value);
-  if (typeof record.isNull === "boolean") return (value == null) === record.isNull;
-  if ("iExact" in record) {
-    return String(value ?? "").toLowerCase() === String(record.iExact ?? "").toLowerCase();
-  }
-  if ("contains" in record) {
-    return String(value ?? "").includes(String(record.contains ?? ""));
-  }
-  if (typeof record.iContains === "string") {
-    return String(value ?? "")
-      .toLowerCase()
-      .includes(record.iContains.toLowerCase());
-  }
-  if ("startsWith" in record) {
-    return String(value ?? "").startsWith(String(record.startsWith ?? ""));
-  }
-  if ("iStartsWith" in record) {
-    return String(value ?? "")
-      .toLowerCase()
-      .startsWith(String(record.iStartsWith ?? "").toLowerCase());
-  }
-  if ("endsWith" in record) {
-    return String(value ?? "").endsWith(String(record.endsWith ?? ""));
-  }
-  if ("iEndsWith" in record) {
-    return String(value ?? "")
-      .toLowerCase()
-      .endsWith(String(record.iEndsWith ?? "").toLowerCase());
-  }
-  if ("gt" in record && compareClientValues(value, record.gt) <= 0) return false;
-  if ("gte" in record && compareClientValues(value, record.gte) < 0) return false;
-  if ("lt" in record && compareClientValues(value, record.lt) >= 0) return false;
-  if ("lte" in record && compareClientValues(value, record.lte) > 0) return false;
-  return true;
-}
-
-function relationPublicId(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-  const record = value as Record<string, unknown>;
-  return record.sqid ?? record.id ?? record.pk ?? value;
-}
-
-function sortClientRows<TRow extends Row>(
-  rows: readonly TRow[],
-  sort: DataViewContextValue["state"]["sort"],
-): readonly TRow[] {
-  if (!sort) return rows;
-  const direction = sort.dir === "asc" ? 1 : -1;
-  return [...rows].sort((left, right) =>
-    compareClientValues(readPath(left, sort.field), readPath(right, sort.field))
-    * direction,
-  );
-}
-
-function compareClientValues(left: unknown, right: unknown): number {
-  if (left == null && right == null) return 0;
-  if (left == null) return -1;
-  if (right == null) return 1;
-  if (typeof left === "number" && typeof right === "number") {
-    return left - right;
-  }
-  if (typeof left === "boolean" && typeof right === "boolean") {
-    return Number(left) - Number(right);
-  }
-  return String(left).localeCompare(String(right), undefined, {
-    numeric: true,
-    sensitivity: "base",
-  });
 }
 
 function groupRows<TRow extends Row>(
