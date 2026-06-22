@@ -7,6 +7,7 @@ import type {
   ActionResult,
 } from "./Action";
 import type { ColumnDescriptor, ColumnProps } from "./Column";
+import type { FacetDescriptor, FacetProps } from "./Facet";
 import type { FieldDescriptor, FieldProps } from "./Field";
 import type { GroupDescriptor, GroupProps } from "./Group";
 import type { TabDescriptor, TabProps } from "./Tab";
@@ -23,6 +24,7 @@ export {
   type ColumnAggregate,
   type PageColumnAlign,
 } from "./Column";
+export { Facet } from "./Facet";
 export {
   Field,
   fieldWidgetId,
@@ -45,6 +47,8 @@ export type {
   ActionResult,
   ColumnDescriptor,
   ColumnProps,
+  FacetDescriptor,
+  FacetProps,
   FieldDescriptor,
   FieldProps,
   GroupDescriptor,
@@ -149,6 +153,23 @@ function columnDescriptor<
     ...(props.align !== undefined ? { align: props.align } : {}),
     ...(props.render !== undefined ? { render: props.render } : {}),
     ...(props.tone !== undefined ? { tone: props.tone } : {}),
+  }));
+}
+
+function facetDescriptor(props: FacetProps): FacetDescriptor {
+  return cachedDescriptor(facetDescriptorCache, props, () => ({
+    field: props.field,
+    ...(props.label !== undefined ? { label: props.label } : {}),
+    ...(props.filterField !== undefined
+      ? { filterField: props.filterField }
+      : {}),
+    ...(props.filterMode !== undefined ? { filterMode: props.filterMode } : {}),
+    ...(props.aggregateKey !== undefined
+      ? { aggregateKey: props.aggregateKey }
+      : {}),
+    ...(props.labelField !== undefined ? { labelField: props.labelField } : {}),
+    ...(props.pageSize !== undefined ? { pageSize: props.pageSize } : {}),
+    ...(props.group !== undefined ? { group: props.group } : {}),
   }));
 }
 
@@ -259,12 +280,37 @@ function cachedChildDescriptors<TDescriptor>(
   return descriptors;
 }
 
+export function parsePageFacets(children: ReactNode): FacetDescriptor[] {
+  return cachedChildDescriptors(facetListCache, children, () => {
+    const facets = pageChildren(children).flatMap((child) => {
+      const props = pageElementProps<FacetProps>(child, "facet");
+      return props ? [facetDescriptor(props)] : [];
+    });
+    return assertUniqueDescriptor(facets, (facet) => facet.field, "facet field");
+  });
+}
+
+export function mergePageFacets(
+  explicit: readonly FacetDescriptor[] | undefined,
+  declared: readonly FacetDescriptor[],
+): readonly FacetDescriptor[] {
+  if (!explicit || explicit.length === 0) return declared;
+  if (declared.length === 0) return explicit;
+  return assertUniqueDescriptor(
+    [...explicit, ...declared],
+    (facet) => facet.field,
+    "facet field",
+  );
+}
+
 const columnDescriptorCache = new WeakMap<object, unknown>();
+const facetDescriptorCache = new WeakMap<object, unknown>();
 const fieldDescriptorCache = new WeakMap<object, unknown>();
 const groupDescriptorCache = new WeakMap<object, unknown>();
 const actionDescriptorCache = new WeakMap<object, unknown>();
 const tabDescriptorCache = new WeakMap<object, unknown>();
 const columnListCache = new WeakMap<object, unknown>();
+const facetListCache = new WeakMap<object, unknown>();
 const fieldListCache = new WeakMap<object, unknown>();
 const groupListCache = new WeakMap<object, unknown>();
 const actionListCache = new WeakMap<object, unknown>();

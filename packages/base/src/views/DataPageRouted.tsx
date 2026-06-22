@@ -3,6 +3,7 @@ import {
   useMatches,
   useNavigate,
   useRouter,
+  useRouterState,
   type AnyRoute,
   type AnyRouteMatch,
 } from "@tanstack/react-router";
@@ -49,10 +50,14 @@ export function RoutedRecordController<TRow extends Row = Row>({
     [recordRouteFullPath],
   );
   const navigate = useNavigate();
+  const searchSuffix = useRouterState({
+    select: (state) => searchSuffixFromHref(state.location.href),
+  });
   const onSelect = React.useCallback(
     (id: string | null) => {
       void navigate({
         to: recordPath(basePath, id === null ? newRecordId : id),
+        search: (prev: Record<string, unknown>) => prev,
       });
     },
     [basePath, navigate, newRecordId],
@@ -66,9 +71,9 @@ export function RoutedRecordController<TRow extends Row = Row>({
   const rowHref = React.useCallback(
     (row: TRow) => {
       const id = rowPublicId(row);
-      return id ? recordPath(basePath, id) : basePath;
+      return appendSearch(id ? recordPath(basePath, id) : basePath, searchSuffix);
     },
-    [basePath],
+    [basePath, searchSuffix],
   );
 
   if (!recordParamName) {
@@ -121,4 +126,17 @@ function normalizeRoutePath(path: string): string {
 export function recordPath(basePath: string, id: string): string {
   if (basePath === "/") return `/${encodeURIComponent(id)}`;
   return `${basePath}/${encodeURIComponent(id)}`;
+}
+
+function appendSearch(path: string, searchSuffix: string): string {
+  return searchSuffix ? `${path}${searchSuffix}` : path;
+}
+
+function searchSuffixFromHref(href: string): string {
+  const queryStart = href.indexOf("?");
+  if (queryStart < 0) return "";
+  const hashStart = href.indexOf("#", queryStart);
+  return hashStart < 0
+    ? href.slice(queryStart)
+    : href.slice(queryStart, hashStart);
 }

@@ -4,12 +4,14 @@ import {
   Action,
   Column,
   columnTone,
+  Facet,
   Field,
   fieldWidgetId,
   Group,
   isRelationIdField,
   parsePageActions,
   parsePageColumns,
+  parsePageFacets,
   parsePageFields,
   parsePageGroups,
 } from "./index";
@@ -45,6 +47,7 @@ describe("columnTone", () => {
 describe("page element markers", () => {
   test("render null because parent views own rendering", () => {
     expect(Column({ field: "title" })).toBeNull();
+    expect(Facet({ field: "provider" })).toBeNull();
     expect(Field({ name: "title" })).toBeNull();
     expect(Group({ label: "Details" })).toBeNull();
     expect(Action({ id: "delete", label: "Delete" })).toBeNull();
@@ -84,6 +87,23 @@ describe("page element markers", () => {
       header: "Updated",
       align: "right",
     });
+  });
+
+  test("parse relation facet markers", () => {
+    const facets = parsePageFacets(
+      <>
+        <Facet field="provider" label="Provider" labelField="name" />
+        <Column field="title" />
+      </>,
+    );
+
+    expect(facets).toEqual([
+      {
+        field: "provider",
+        label: "Provider",
+        labelField: "name",
+      },
+    ]);
   });
 
   test("parse fields recursively through groups", () => {
@@ -200,6 +220,15 @@ describe("page element markers", () => {
         </>,
       ),
     ).toThrow("Duplicate page field name: title");
+
+    expect(() =>
+      parsePageFacets(
+        <>
+          <Facet field="provider" />
+          <Facet field="provider" />
+        </>,
+      ),
+    ).toThrow("Duplicate page facet field: provider");
 
     expect(() =>
       parsePageActions(

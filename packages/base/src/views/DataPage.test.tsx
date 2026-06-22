@@ -47,6 +47,7 @@ import { GroupListView } from "./GroupListView";
 import {
   Action,
   Column,
+  Facet,
   Field,
   Group,
 } from "./page";
@@ -393,6 +394,7 @@ describe("DataPage", () => {
             emptyMessage="No matching notes."
             filters={[{ id: "active", label: "Active", filter: {} }]}
           >
+            <Facet field="author" label="Author" labelField="displayName" />
             <Column field="title" header="Title" />
             <Column
               field="wordCount"
@@ -418,6 +420,9 @@ describe("DataPage", () => {
     ]);
     expect(captured.current?.filters).toEqual([
       { id: "active", label: "Active", filter: {} },
+    ]);
+    expect(captured.current?.facets).toEqual([
+      { field: "author", label: "Author", labelField: "displayName" },
     ]);
     expect(captured.current?.createLabel).toBe("Add note");
     expect(captured.current?.emptyMessage).toBe("No matching notes.");
@@ -496,6 +501,22 @@ describe("DataPage", () => {
         </DataPage>
       ),
       message: /DataPage and its List child both declare "columns"/,
+    },
+    {
+      name: "facets plus List facet child",
+      element: (
+        <DataPage
+          model="notes.Note"
+          formFields={formFields}
+          facets={[{ field: "author" }]}
+        >
+          <List>
+            <Facet field="provider" />
+            <Column field="title" />
+          </List>
+        </DataPage>
+      ),
+      message: /DataPage and its List child both declare "facets"/,
     },
     {
       name: "duplicate List children",
@@ -1038,6 +1059,52 @@ describe("DataPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Open First" }));
     expect(onSelect).toHaveBeenCalledWith("note-1");
+  });
+
+  test("uses the grouped leaf query for record navigation", async () => {
+    function Harness(): ReactElement {
+      const [recordId, setRecordId] = useState<string | null>(null);
+      return (
+        <DataPage
+          model="notes.Note"
+          columns={columns}
+          formFields={formFields}
+          list={GroupListView}
+          recordId={recordId}
+          onSelect={setRecordId}
+        />
+      );
+    }
+
+    render(
+      <TestUrlState searchParams="?group=status&pageSize=2">
+        <Harness />
+      </TestUrlState>,
+    );
+
+    const activeGroup = await screen.findByRole("button", { name: /Active/ });
+    fireEvent.click(activeGroup);
+    fireEvent.click(await screen.findByRole("button", { name: "Open Second" }));
+
+    const pager = await screen.findByRole("navigation", {
+      name: "Record navigation",
+    });
+    expect(pager.textContent?.replace(/\s+/g, " ").trim()).toContain(
+      "2 / 2",
+    );
+
+    fireEvent.click(
+      within(pager).getByRole("button", { name: "Previous record" }),
+    );
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("navigation", { name: "Record navigation" })
+          .textContent?.replace(/\s+/g, " ")
+          .trim(),
+      ).toContain("1 / 2"),
+    );
+    expect(await screen.findByDisplayValue("First")).toBeTruthy();
   });
 
   test("renders grouped list aggregate measures and a grand total footer", async () => {

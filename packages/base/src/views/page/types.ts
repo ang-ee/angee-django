@@ -7,6 +7,7 @@ import {
 
 export type PageElementKind =
   | "column"
+  | "facet"
   | "field"
   | "group"
   | "action"

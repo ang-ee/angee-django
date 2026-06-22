@@ -11,7 +11,9 @@ import type {
 } from "./data-view-model";
 import {
   PAGE_ELEMENT_SLOT,
+  mergePageFacets,
   parsePageColumns,
+  parsePageFacets,
   requirePageColumns,
   requirePageModel,
 } from "./page";
@@ -42,7 +44,7 @@ export interface ListProps<TRow extends Row = Row>
    * match.
    */
   model?: string;
-  /** Column element declarations for this list. */
+  /** Column and facet element declarations for this list. */
   children?: React.ReactNode;
   /** Group seeded by grouping-capable list renderers. */
   defaultGroup?: DataViewGroup | null;
@@ -55,6 +57,7 @@ export interface ListProps<TRow extends Row = Row>
 function ListComponentImpl<TRow extends Row = Row>({
   model,
   children,
+  facets: explicitFacets,
   list: Collection = ListView as ListComponent<TRow>,
   ...props
 }: ListProps<TRow>): React.ReactElement {
@@ -63,12 +66,14 @@ function ListComponentImpl<TRow extends Row = Row>({
     "List",
     parsePageColumns<TRow>(children),
   );
+  const facets = mergePageFacets(explicitFacets, parsePageFacets(children));
 
   return (
     <Collection
       {...props}
       model={resolvedModel}
       columns={columns}
+      facets={facets}
     />
   );
 }

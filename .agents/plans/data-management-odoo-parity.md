@@ -122,6 +122,30 @@ Fifth frontend auto-facet deletion slice completed on 2026-06-22:
 - [x] Delete sender/thread relation-facet glue from the messaging inbox; channel
       remains explicit because that relation is not visible as a column.
 
+Sixth frontend declarative-facet slice completed on 2026-06-22:
+
+- [x] Add a declarative `<Facet />` page element beside `<Column />`, parsed by
+      the same cached page DSL and accepted by `List`/`DataPage`.
+- [x] Teach `ListView` to resolve declared relation facets centrally through one
+      model-level facet query and merge those filters/group options with the
+      existing toolbar option owners.
+- [x] Replace the messaging channel `useRelationFacet(...)` hook glue with
+      `<Facet field="channel" label="Channel" labelField="displayName" />`.
+- [x] Keep visible relation columns group-first only; quick filters remain
+      explicit opt-ins for high-cardinality relations.
+- [x] Preserve parent collection search params when opening routed detail/form
+      records, so record Prev/Next walks the filtered/sorted parent query rather
+      than losing context and showing only `/ total`.
+- [x] Preserve grouped leaf query scope when opening a record from an expanded
+      group, so detail/form Prev/Next walks that bucket's filter/page instead of
+      the top-level group page or flat collection.
+- [x] Promote `parties.Person` from a plain paginated root to a full
+      `data_query(...)` surface while keeping the public `people` / `person`
+      roots stable.
+- [x] Switch the parties People page to `GroupListView` and make Folder an
+      explicit relation facet, so the toolbar has useful filters/group-by
+      without dumping every contact into quick filters.
+
 Current local verification:
 
 - [x] `uv run python -m pytest tests/test_aggregates.py -q`
@@ -166,6 +190,15 @@ Current local verification:
 - [x] `pnpm --filter @angee/parties typecheck`
 - [x] `pnpm --filter @angee-example/notes-host typecheck`
 - [x] `pnpm --filter @angee/sdk test -- facets graphql-source aggregates resource-hooks`
+- [x] `pnpm --filter @angee/base test -- page relation-facet DataPage`
+- [x] `pnpm --filter @angee/base typecheck`
+- [x] `pnpm --filter @angee/messaging typecheck`
+- [x] `pnpm --filter @angee/base test -- DataPage.routed DataPage`
+- [x] `pnpm --filter @angee/base typecheck`
+- [x] `uv run python -m pytest tests/test_parties_graphql.py`
+- [x] `uv run ruff check addons/angee/parties/schema.py tests/test_parties_graphql.py`
+- [x] `uv run examples/notes-angee/manage.py schema --check`
+- [x] `pnpm --filter @angee/parties typecheck`
 
 ## North Star
 
@@ -400,9 +433,10 @@ through Angee's stack:
 - [ ] Public row identity is scattered: many models use `SqidMixin`, but
       `AngeeModel` still has a raw-`pk` public-id fallback and some runtime
       models are not visibly sqid-backed.
-- [ ] Frontend group/filter/facet options are partly inferred from columns and
-      partly hand-wired in addons.
-- [ ] Relation facets are built by page hooks such as `useRelationFacet`.
+- [ ] Frontend group/filter/facet options are partly inferred from columns,
+      declarative facets, and some remaining addon group defaults.
+- [x] Addon relation facets no longer use page hooks such as
+      `useRelationFacet`; relation quick filters are declarative opt-ins.
 - [ ] Selection options can be inferred from only the current page's rows.
 - [ ] `RowsListView` has local filtering/sorting/grouping code that only mirrors
       a subset of server semantics.
@@ -730,12 +764,12 @@ Done when:
 
 ## Phase 5: Server-Backed Facets
 
-- [ ] Add backend facet query support using grouped aggregates.
-- [ ] Add SDK facet hooks/data-source calls.
+- [x] Add backend facet query support using grouped aggregates.
+- [x] Add SDK facet hooks/data-source calls.
 - [ ] Implement facet-neutralized filters.
 - [ ] Replace page-row-derived selection options.
-- [ ] Replace most `useRelationFacet` usage with metadata-driven facets.
-- [ ] Support relation label display and public-id filters.
+- [x] Replace most `useRelationFacet` usage with metadata-driven facets.
+- [x] Support relation label display and public-id filters.
 - [ ] Support facet search for large relation sets.
 - [ ] Add tests for enum, relation, date, and boolean facets.
 
@@ -796,7 +830,7 @@ that the data contract now owns.
 
 - [ ] `InferenceModel` data contract for provider, publisher, model use, status,
       context window, max output tokens.
-- [ ] Replace provider relation facet hook with metadata-driven relation facet.
+- [x] Replace provider relation facet hook with metadata-driven relation facet.
 - [ ] Add contracts for agent catalogue/list surfaces where model-backed.
 - [ ] Verify agent pages keep shared list/group/board affordances.
 
@@ -805,7 +839,7 @@ that the data contract now owns.
 - [ ] `Message` data contract for thread, sender, channel, status, platform,
       direction, sent date.
 - [ ] `Thread` data contract for channel, modality, visibility, last message date.
-- [ ] Replace sender/channel/thread `useRelationFacet` hand-wiring.
+- [x] Replace sender/channel/thread `useRelationFacet` hand-wiring.
 - [ ] Verify nested groups and relation labels.
 
 ### Parties
@@ -813,7 +847,7 @@ that the data contract now owns.
 - [ ] `Party` data contract for created date, handle counts, folders where
       applicable.
 - [ ] `Handle` data contract for party relation plus display label.
-- [ ] Replace party relation facet wiring.
+- [x] Replace party relation facet wiring.
 - [ ] Verify null-party handling remains explicit and safe.
 
 ### Storage

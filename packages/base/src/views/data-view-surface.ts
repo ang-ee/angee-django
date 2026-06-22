@@ -56,6 +56,14 @@ export interface ListViewState<TRow extends Row = Row> {
   hasNext: boolean;
   hasPrev: boolean;
   fetching: boolean;
+  navigationScope?: ListViewNavigationScope;
+}
+
+export interface ListViewNavigationScope {
+  filter: ListFilter | undefined;
+  order: UseResourceListOptions<ResourceTypeName>["order"];
+  page: number;
+  pageSize: number;
 }
 
 export interface UseDataViewSurfaceProps<TRow extends Row = Row> {
@@ -147,6 +155,7 @@ export function useSyncPageSize(
 
 export function useResourceListState<TRow extends Row = Row>(
   list: UseResourceListResult,
+  navigationScope?: ListViewNavigationScope,
 ): ListViewState<TRow> {
   const rows = list.rows as readonly TRow[];
   return React.useMemo<ListViewState<TRow>>(
@@ -159,6 +168,7 @@ export function useResourceListState<TRow extends Row = Row>(
       hasNext: list.hasNext,
       hasPrev: list.hasPrev,
       fetching: list.fetching,
+      ...(navigationScope ? { navigationScope } : {}),
     }),
     [
       rows,
@@ -169,6 +179,7 @@ export function useResourceListState<TRow extends Row = Row>(
       list.hasNext,
       list.hasPrev,
       list.fetching,
+      navigationScope,
     ],
   );
 }

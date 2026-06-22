@@ -125,8 +125,10 @@ export {
 } from "./record-action";
 export {
   useRelationFacet,
+  useRelationFacets,
   useRelationFacetsForColumns,
   type RelationFacet,
+  type RelationFacets,
   type RelationFacetOptions,
 } from "./relation-facet";
 export { enumValueLabel, statusLabel } from "./ListInternals";
@@ -136,13 +138,16 @@ export type { StringIdRow } from "./data-view-surface";
 export {
   Action,
   Column,
+  Facet,
   Field,
   Group,
   Tab,
+  mergePageFacets,
   pageChildren,
   pageElementProps,
   parsePageActions,
   parsePageColumns,
+  parsePageFacets,
   parsePageFields,
   parsePageGroups,
   parsePageTabs,
@@ -157,6 +162,8 @@ export type {
   ColumnAggregate,
   ColumnDescriptor,
   ColumnProps,
+  FacetDescriptor,
+  FacetProps,
   FieldDescriptor,
   FieldProps,
   GroupDescriptor,

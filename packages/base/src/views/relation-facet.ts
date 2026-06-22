@@ -9,6 +9,7 @@ import {
   type ModelRelationFilterMode,
   type ResourceFacetSpec,
   type Row,
+  type SchemaFieldMetadata,
 } from "@angee/sdk";
 
 import type {
@@ -27,36 +28,26 @@ import {
   relationFieldInfo,
   type RelationFieldInfo,
 } from "./model-metadata-defaults";
-import type { ColumnDescriptor } from "./page";
+import type { ColumnDescriptor, FacetDescriptor } from "./page";
 import { useRelationOptions } from "./relation-options";
 
 const RELATION_FACET_OPTION_LIMIT = 200;
 const EMPTY_FILTER_OPTIONS: readonly DataToolbarFilterOption[] = [];
 const EMPTY_FILTER_FIELDS: readonly DataToolbarFilterField[] = [];
+const EMPTY_GROUP_OPTIONS: readonly DataToolbarGroupOption[] = [];
 const EMPTY_FACET_SPECS: readonly ResourceFacetSpec[] = [];
+const EMPTY_RELATION_FACET_OPTIONS: readonly RelationFacetOptions[] = [];
 const EMPTY_RELATION_FACETS: Pick<RelationFacet, "filters" | "filterFields"> = {
   filters: EMPTY_FILTER_OPTIONS,
   filterFields: EMPTY_FILTER_FIELDS,
 };
+const EMPTY_DECLARED_RELATION_FACETS: RelationFacets = {
+  filters: EMPTY_FILTER_OPTIONS,
+  filterFields: EMPTY_FILTER_FIELDS,
+  groupOptions: EMPTY_GROUP_OPTIONS,
+};
 
-export interface RelationFacetOptions {
-  /** Relation field on the current model, e.g. `provider`. */
-  field: string;
-  /** Toolbar label; defaults to the relation field name. */
-  label?: React.ReactNode;
-  /** Filter field accepted by the current model filter input; defaults to SDL metadata. */
-  filterField?: string;
-  /** Filter value shape; defaults to SDL metadata, then lookup for explicit fields. */
-  filterMode?: ModelRelationFilterMode;
-  /** Aggregate bucket key returned by the API; defaults to SDL metadata. */
-  aggregateKey?: string;
-  /** Related-record display field; defaults to the related model representation. */
-  labelField?: string;
-  /** Related rows fetched for the facet picker. */
-  pageSize?: number;
-  /** Custom group axis; `false` suppresses group option generation. */
-  group?: DataViewGroup | false;
-}
+export type RelationFacetOptions = FacetDescriptor;
 
 export interface RelationFacet {
   filters: readonly DataToolbarFilterOption[];
@@ -64,11 +55,25 @@ export interface RelationFacet {
   groupOption?: DataToolbarGroupOption;
 }
 
+export interface RelationFacets {
+  filters: readonly DataToolbarFilterOption[];
+  filterFields: readonly DataToolbarFilterField[];
+  groupOptions: readonly DataToolbarGroupOption[];
+}
+
 interface ColumnRelationFacet {
   id: string;
   label: React.ReactNode;
   filter: ModelRelationFilterMetadata;
   spec: ResourceFacetSpec;
+}
+
+interface DeclaredRelationFacet {
+  id: string;
+  label: React.ReactNode;
+  filter: ModelRelationFilterMetadata;
+  groupOption?: DataToolbarGroupOption;
+  spec?: ResourceFacetSpec;
 }
 
 /** Build toolbar filters/groups for a to-one relation using schema metadata. */
@@ -188,6 +193,85 @@ export function useRelationFacet(
   );
 }
 
+/** Build declared relation facets in one GraphQL facet query for a model list. */
+export function useRelationFacets(
+  model: string,
+  options: readonly RelationFacetOptions[] | undefined =
+    EMPTY_RELATION_FACET_OPTIONS,
+): RelationFacets {
+  const schemaMetadata = useSchemaFieldMetadata();
+  const modelMetadata = useModelMetadata(model);
+  const canQueryFacets = useGraphQLProviderAvailable();
+  const facetOptions = options ?? EMPTY_RELATION_FACET_OPTIONS;
+  const facets = React.useMemo(
+    () => relationFacetDeclarations(facetOptions, modelMetadata, schemaMetadata),
+    [facetOptions, modelMetadata, schemaMetadata],
+  );
+  const facetSpecs = React.useMemo(
+    () => facets.flatMap((facet) => facet.spec ? [facet.spec] : []),
+    [facets],
+  );
+  const facetQuery = useResourceFacets(model, {
+    facets: facetSpecs,
+    enabled: canQueryFacets && facetSpecs.length > 0,
+  });
+  const filters = React.useMemo<readonly DataToolbarFilterOption[]>(
+    () =>
+      canQueryFacets
+        ? facets.flatMap((facet) => {
+            const result = facetQuery.facets[facet.id];
+            return (result?.options ?? []).map((option) => ({
+              id: `${facet.filter.field}:${option.value}`,
+              label: option.label,
+              chipLabel: option.label,
+              filter: option.filter
+                ? (option.filter as DataViewFilter)
+                : relationFacetFilter(facet.filter, option.value),
+            }));
+          })
+        : EMPTY_FILTER_OPTIONS,
+    [canQueryFacets, facetQuery.facets, facets],
+  );
+  const filterFields = React.useMemo<readonly DataToolbarFilterField[]>(
+    () =>
+      canQueryFacets
+        ? facets.flatMap((facet) => {
+            const result = facetQuery.facets[facet.id];
+            if (
+              facet.filter.mode !== "lookup"
+              || !isToolbarLookup(facet.filter.lookup)
+            ) {
+              return [];
+            }
+            return [{
+              id: facet.filter.field,
+              field: facet.filter.field,
+              label: facet.label,
+              type: "selection",
+              options: (result?.options ?? []).map((option) => ({
+                value: option.value,
+                label: option.label,
+              })),
+            }];
+          })
+        : EMPTY_FILTER_FIELDS,
+    [canQueryFacets, facetQuery.facets, facets],
+  );
+  const groupOptions = React.useMemo<readonly DataToolbarGroupOption[]>(
+    () =>
+      facets.flatMap((facet) => facet.groupOption ? [facet.groupOption] : []),
+    [facets],
+  );
+
+  return React.useMemo(
+    () =>
+      facets.length > 0
+        ? { filters, filterFields, groupOptions }
+        : EMPTY_DECLARED_RELATION_FACETS,
+    [facets.length, filterFields, filters, groupOptions],
+  );
+}
+
 /** Build relation filter facets for visible relation columns in one model list. */
 export function useRelationFacetsForColumns<TRow extends Row>(
   model: string,
@@ -252,6 +336,67 @@ export function useRelationFacetsForColumns<TRow extends Row>(
 
 function isToolbarLookup(lookup: string | undefined): boolean {
   return lookup === undefined || lookup === "exact" || lookup === "inList";
+}
+
+function relationFacetDeclarations(
+  options: readonly RelationFacetOptions[],
+  modelMetadata: ModelMetadata | null,
+  schemaMetadata: SchemaFieldMetadata,
+): readonly DeclaredRelationFacet[] {
+  const facets: DeclaredRelationFacet[] = [];
+  const seen = new Set<string>();
+  for (const option of options) {
+    const facet = relationFacetDeclaration(option, modelMetadata, schemaMetadata);
+    if (!facet || seen.has(facet.id)) continue;
+    seen.add(facet.id);
+    facets.push(facet);
+  }
+  return facets;
+}
+
+function relationFacetDeclaration(
+  options: RelationFacetOptions,
+  modelMetadata: ModelMetadata | null,
+  schemaMetadata: SchemaFieldMetadata,
+): DeclaredRelationFacet | null {
+  const {
+    aggregateKey: optionAggregateKey,
+    field,
+    filterField: optionFilterField,
+    filterMode: optionFilterMode,
+    group,
+    label: optionLabel,
+    labelField: optionLabelField,
+    pageSize = RELATION_FACET_OPTION_LIMIT,
+  } = options;
+  const relation = relationFieldInfo(field, modelMetadata, schemaMetadata);
+  if (!relation) return null;
+  const filter = relationFilterConfig(relation.filter, {
+    field: optionFilterField,
+    mode: optionFilterMode,
+  });
+  if (!filter) return null;
+  const aggregateKey = optionAggregateKey ?? filter.aggregateKey;
+  const label = optionLabel ?? relationLabel(field);
+  const groupOption = relationGroupOption({
+    aggregateKey,
+    field,
+    group,
+    labelField: optionLabelField,
+    relation,
+    label,
+  });
+  const [spec] = relationFacetSpecs(groupOption?.group, modelMetadata, {
+    id: filter.field,
+    pageSize,
+  });
+  return {
+    id: filter.field,
+    label,
+    filter,
+    ...(groupOption ? { groupOption } : {}),
+    ...(spec ? { spec } : {}),
+  };
 }
 
 function relationFilterConfig(

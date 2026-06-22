@@ -35,9 +35,14 @@ import {
   useDataView,
   useDataViewMaybe,
 } from "./data-view-context";
-import { useResourceListState, useSyncPageSize } from "./data-view-surface";
+import {
+  useResourceListState,
+  useSyncPageSize,
+  type ListViewNavigationScope,
+} from "./data-view-surface";
 import {
   Filter,
+  stableSerialize,
   type DataViewDefaultGroups,
   type DataViewGroup,
   type DataViewKind,
@@ -45,12 +50,15 @@ import {
 import {
   parsePageActions,
   parsePageColumns,
+  parsePageFacets,
   parsePageFields,
   parsePageGroups,
+  mergePageFacets,
   pageChildren,
   pageElementProps,
   requirePageColumns,
   type ActionDescriptor,
+  type FacetDescriptor,
   type GroupDescriptor,
 } from "./page";
 
@@ -112,6 +120,7 @@ export interface DataPageProps<TRow extends Row = Row> {
   /** List options forwarded to `ListView`. */
   filter?: ListViewProps<TRow>["filter"];
   filters?: ListViewProps<TRow>["filters"];
+  facets?: ListViewProps<TRow>["facets"];
   filterFields?: ListViewProps<TRow>["filterFields"];
   groupOptions?: ListViewProps<TRow>["groupOptions"];
   order?: ListViewProps<TRow>["order"];
@@ -157,6 +166,7 @@ interface DataPageDeclarations<TRow extends Row = Row> {
 interface DataPageListDeclaration<TRow extends Row = Row> {
   props: ListProps<TRow>;
   columns: readonly ListColumn<TRow>[];
+  facets: readonly FacetDescriptor[];
 }
 
 interface DataPageFormDeclaration {
@@ -283,6 +293,7 @@ function DataPageBody<TRow extends Row = Row>({
   placement = "inline",
   filter,
   filters,
+  facets,
   filterFields,
   groupOptions,
   order,
@@ -313,10 +324,14 @@ function DataPageBody<TRow extends Row = Row>({
   const resolvedFormGroups = declarations.form?.groups ?? formGroups;
   const resolvedFormActions = declarations.form?.actions ?? EMPTY_ACTIONS;
   const ResolvedListComponent = declarations.list?.props.list ?? ListRenderer;
+  const resolvedFacets = declarations.list
+    ? mergePageFacets(facets, declarations.list.facets)
+    : facets;
   const listRenderProps = {
     fields,
     filter,
     filters,
+    facets: resolvedFacets,
     filterFields,
     groupOptions,
     order,
@@ -339,6 +354,8 @@ function DataPageBody<TRow extends Row = Row>({
   const dataView = useDataView();
   const [listState, setListState] =
     React.useState<ListViewState<TRow> | null>(null);
+  const [recordNavigationScope, setRecordNavigationScope] =
+    React.useState<ListViewNavigationScope | null>(null);
   const [pendingNavigation, setPendingNavigation] =
     React.useState<PendingRecordNavigation | null>(null);
 
@@ -352,9 +369,19 @@ function DataPageBody<TRow extends Row = Row>({
       setListState((current) =>
         listStatesEqual(current, next) ? current : next,
       );
+      setRecordNavigationScope((current) =>
+        navigationScopesEqual(current, next.navigationScope ?? null)
+          ? current
+          : (next.navigationScope ?? null),
+      );
     },
     [],
   );
+  React.useEffect(() => {
+    if (open) return;
+    setRecordNavigationScope(null);
+    setPendingNavigation(null);
+  }, [open]);
 
   const handleSaved = React.useCallback(
     (row: Row) => {
@@ -391,6 +418,19 @@ function DataPageBody<TRow extends Row = Row>({
     }
   }, [handleSelectRecord, listState, pendingNavigation]);
 
+  const setRecordNavigationPage = React.useCallback(
+    (page: number) => {
+      if (recordNavigationScope) {
+        setRecordNavigationScope((current) =>
+          current ? { ...current, page } : current,
+        );
+        return;
+      }
+      dataView.setPage(page);
+    },
+    [dataView.setPage, recordNavigationScope],
+  );
+
   const recordNavigation = React.useMemo(
     () =>
       buildRecordNavigation({
@@ -398,15 +438,15 @@ function DataPageBody<TRow extends Row = Row>({
         listState,
         recordId: resolvedRecordId,
         onSelect: handleSelectRecord,
-        setPage: dataView.setPage,
+        setPage: setRecordNavigationPage,
         setPendingNavigation,
       }),
     [
-      dataView.setPage,
       handleSelectRecord,
       listState,
       resolvedCreating,
       resolvedRecordId,
+      setRecordNavigationPage,
     ],
   );
 
@@ -473,6 +513,7 @@ function DataPageBody<TRow extends Row = Row>({
       filter={listRenderProps.filter}
       order={listRenderProps.order}
       pageSize={listRenderProps.pageSize}
+      navigationScope={recordNavigationScope}
       dataView={dataView}
       onListStateChange={handleListStateChange}
     />
@@ -579,6 +620,7 @@ function dataPageListDeclaration<TRow extends Row>(
   const declaration = {
     props,
     columns: requirePageColumns("List", parsePageColumns<TRow>(props.children)),
+    facets: mergePageFacets(props.facets, parsePageFacets(props.children)),
   };
   listDeclarationCache.set(props, declaration);
   return declaration;
@@ -616,6 +658,11 @@ function validateDataPageDeclarations<TRow extends Row>(
         "onListStateChange",
       ],
     });
+    if (declarations.list.facets.length > 0 && hasOwnDefined(props, "facets")) {
+      throw new Error(
+        `DataPage and its List child both declare "facets".`,
+      );
+    }
   }
   if (declarations.form) {
     validateNestedDeclaration({
@@ -712,6 +759,7 @@ function listElementRenderProps<TRow extends Row>(
 }> {
   const {
     children: _children,
+    facets: _facets,
     list: _list,
     model: _model,
     onCreate: _onCreate,
@@ -795,6 +843,7 @@ function ListStateProbe<TRow extends Row>({
   filter,
   order,
   pageSize,
+  navigationScope,
   dataView,
   onListStateChange,
 }: {
@@ -804,10 +853,11 @@ function ListStateProbe<TRow extends Row>({
   filter?: ListViewProps<TRow>["filter"];
   order?: ListViewProps<TRow>["order"];
   pageSize?: number;
+  navigationScope: ListViewNavigationScope | null;
   dataView: ReturnType<typeof useDataView>;
   onListStateChange: (state: ListViewState<TRow>) => void;
 }): null {
-  useSyncPageSize(dataView, pageSize);
+  useSyncPageSize(dataView, navigationScope ? undefined : pageSize);
 
   const requestedFields = React.useMemo(() => {
     const paths = new Set<string>(["id"]);
@@ -820,14 +870,25 @@ function ListStateProbe<TRow extends Row>({
     [dataView.state.filter, filter],
   );
   const sortOrder = dataView.state.resourceOrder();
+  const activeFilter = navigationScope ? navigationScope.filter : mergedFilter;
+  const activeOrder = navigationScope
+    ? navigationScope.order
+    : (sortOrder ?? order);
+  const activePage = navigationScope ? navigationScope.page : dataView.state.page;
+  const activePageSize = navigationScope
+    ? navigationScope.pageSize
+    : dataView.state.pageSize;
   const list = useResourceList(model, {
     fields: requestedFields,
-    filter: mergedFilter,
-    order: sortOrder ?? order,
-    pageSize: dataView.state.pageSize,
-    page: dataView.state.page,
+    filter: activeFilter,
+    order: activeOrder,
+    pageSize: activePageSize,
+    page: activePage,
   });
-  const listState = useResourceListState<TRow>(list);
+  const listState = useResourceListState<TRow>(
+    list,
+    navigationScope ?? undefined,
+  );
   React.useEffect(() => {
     onListStateChange(listState);
   }, [listState, onListStateChange]);
@@ -1020,7 +1081,27 @@ function listStatesEqual<TRow extends Row>(
     left.pageCount === right.pageCount &&
     left.hasNext === right.hasNext &&
     left.hasPrev === right.hasPrev &&
-    left.fetching === right.fetching
+    left.fetching === right.fetching &&
+    navigationScopesEqual(
+      left.navigationScope ?? null,
+      right.navigationScope ?? null,
+    )
+  );
+}
+
+function navigationScopesEqual(
+  left: ListViewNavigationScope | null,
+  right: ListViewNavigationScope | null,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return (
+    left.page === right.page &&
+    left.pageSize === right.pageSize &&
+    stableSerialize(left.filter ?? null) ===
+      stableSerialize(right.filter ?? null) &&
+    stableSerialize(left.order ?? null) ===
+      stableSerialize(right.order ?? null)
   );
 }
 

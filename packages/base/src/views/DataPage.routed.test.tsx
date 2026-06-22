@@ -191,6 +191,49 @@ describe("DataPage", () => {
       expect(await screen.findByDisplayValue("First")).toBeTruthy();
     });
 
+    test("preserves collection search when opening routed records", async () => {
+      const updates: URL[] = [];
+      const captured: { current: ListViewProps<Row> | null } = { current: null };
+      const CapturingList: ListComponent<Row> = (props) => {
+        captured.current = props;
+        return (
+          <button
+            type="button"
+            onClick={() => props.onRowClick?.(sdkMocks.rows[1]!)}
+          >
+            Open second
+          </button>
+        );
+      };
+
+      render(
+        <TestRecordRoutes
+          initialPath="/notes?filter=active&page=2"
+          onUrlUpdate={(url) => updates.push(url)}
+        >
+          <DataPage
+            model="notes.Note"
+            columns={columns}
+            formFields={formFields}
+            list={CapturingList}
+            routed
+          />
+        </TestRecordRoutes>,
+      );
+
+      await screen.findByRole("button", { name: "Open second" });
+      const href = captured.current?.rowHref?.({ id: "note 2", title: "Second" });
+      expect(href).toBe("/notes/note%202?filter=active&page=2");
+
+      fireEvent.click(screen.getByRole("button", { name: "Open second" }));
+      await waitFor(() => {
+        const latest = updates.at(-1);
+        expect(latest?.pathname).toBe("/notes/note-2");
+        expect(latest?.searchParams.get("filter")).toBe("active");
+        expect(latest?.searchParams.get("page")).toBe("2");
+      });
+    });
+
     test("rejects routed mode mixed with controlled record props", () => {
       expect(() =>
         render(

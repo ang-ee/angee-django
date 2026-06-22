@@ -40,6 +40,10 @@ import {
 } from "../ui/table";
 import type { DataViewContextValue } from "./data-view-context";
 import {
+  useResourceListState,
+  type ListViewState,
+} from "./data-view-surface";
+import {
   Filter,
   stableSerialize,
   type DataViewGroup,
@@ -102,6 +106,7 @@ export interface GroupedListBodyProps<TRow extends Row> {
   emptyMessage: ListEmptyContent;
   modelMetadata?: ModelMetadata | null;
   onPagerStateChange: (state: GroupPagerState) => void;
+  onListStateChange?: (state: ListViewState<TRow>) => void;
 }
 
 export function GroupedListBody<TRow extends Row>({
@@ -125,6 +130,7 @@ export function GroupedListBody<TRow extends Row>({
   emptyMessage,
   modelMetadata = null,
   onPagerStateChange,
+  onListStateChange,
 }: GroupedListBodyProps<TRow>): React.ReactElement {
   const colSpan = Math.max(1, visibleColumnCount + 1);
   const measures = React.useMemo(
@@ -193,6 +199,7 @@ export function GroupedListBody<TRow extends Row>({
             emptyMessage={emptyMessage}
             modelMetadata={modelMetadata}
             onPagerStateChange={handlePagerStateChange}
+            onListStateChange={onListStateChange}
           />
           {measures.length > 0 ? (
             <GroupMeasureFooter
@@ -223,6 +230,7 @@ interface GroupRenderProps<TRow extends Row> {
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
   modelMetadata?: ModelMetadata | null;
+  onListStateChange?: (state: ListViewState<TRow>) => void;
 }
 
 interface GroupLevelProps<TRow extends Row> extends GroupRenderProps<TRow> {
@@ -263,6 +271,7 @@ function GroupLevel<TRow extends Row>({
   rowHref,
   onRowClick,
   modelMetadata = null,
+  onListStateChange,
 }: GroupLevelProps<TRow>): React.ReactElement | null {
   const t = useBaseT();
   const axis = axes[0];
@@ -431,6 +440,7 @@ function GroupLevel<TRow extends Row>({
             page={pageByKey[key] ?? 1}
             onToggle={toggleExpanded}
             onPageChange={setGroupPage}
+            onListStateChange={onListStateChange}
           />
         );
       })}
@@ -587,6 +597,7 @@ interface GroupSectionProps<TRow extends Row> extends GroupRenderProps<TRow> {
   bodyId?: string;
   onToggle: (key: string) => void;
   onPageChange: (key: string, page: number) => void;
+  onListStateChange?: (state: ListViewState<TRow>) => void;
 }
 
 function GroupSection<TRow extends Row>({
@@ -617,6 +628,7 @@ function GroupSection<TRow extends Row>({
   bodyId,
   onToggle,
   onPageChange,
+  onListStateChange,
 }: GroupSectionProps<TRow>): React.ReactElement {
   const headerId = React.useId();
   const regionId = React.useId();
@@ -702,6 +714,7 @@ function GroupSection<TRow extends Row>({
           onRowClick={onRowClick}
           emptyMessage={emptyMessage}
           modelMetadata={modelMetadata}
+          onListStateChange={onListStateChange}
         />
       ) : (
         <LeafGroupSection
@@ -724,6 +737,7 @@ function GroupSection<TRow extends Row>({
           rowHref={rowHref}
           onRowClick={onRowClick}
           onPageChange={onPageChange}
+          onListStateChange={onListStateChange}
         />
       )}
     </>
@@ -740,6 +754,7 @@ interface BranchGroupSectionProps<TRow extends Row> extends GroupRenderProps<TRo
   expanded: boolean;
   regionId: string;
   emptyMessage: ListEmptyContent;
+  onListStateChange?: (state: ListViewState<TRow>) => void;
 }
 
 function BranchGroupSection<TRow extends Row>({
@@ -764,6 +779,7 @@ function BranchGroupSection<TRow extends Row>({
   rowHref,
   onRowClick,
   modelMetadata = null,
+  onListStateChange,
 }: BranchGroupSectionProps<TRow>): React.ReactElement | null {
   return (
     <GroupLevel
@@ -789,6 +805,7 @@ function BranchGroupSection<TRow extends Row>({
       onRowClick={onRowClick}
       emptyMessage={emptyMessage}
       modelMetadata={modelMetadata}
+      onListStateChange={onListStateChange}
     />
   );
 }
@@ -859,6 +876,7 @@ interface LeafGroupSectionProps<TRow extends Row> extends GroupRenderProps<TRow>
   page: number;
   regionId: string;
   onPageChange: (key: string, page: number) => void;
+  onListStateChange?: (state: ListViewState<TRow>) => void;
 }
 
 function LeafGroupSection<TRow extends Row>({
@@ -881,6 +899,7 @@ function LeafGroupSection<TRow extends Row>({
   rowHref,
   onRowClick,
   onPageChange,
+  onListStateChange,
 }: LeafGroupSectionProps<TRow>): React.ReactElement | null {
   const t = useBaseT();
   const pageCount = Math.max(
@@ -896,6 +915,22 @@ function LeafGroupSection<TRow extends Row>({
     pageSize: GROUPED_LIST_ITEM_PAGE_SIZE,
     enabled: expanded,
   });
+  const navigationScope = React.useMemo(
+    () => ({
+      filter,
+      order: sortOrder ?? order,
+      page: currentPage,
+      pageSize: GROUPED_LIST_ITEM_PAGE_SIZE,
+    }),
+    [currentPage, filter, order, sortOrder],
+  );
+  const listState = useResourceListState<TRow>(list, navigationScope);
+  const handleRecordOpen = React.useCallback(
+    (row: TRow) => {
+      onListStateChange?.(listState);
+    },
+    [listState, onListStateChange],
+  );
   const rows = list.rows as readonly TRow[];
   // Lazy per-group fetches need row models here; parent visibility is read-only.
   const table = useReactTable<TRow>({
@@ -942,6 +977,7 @@ function LeafGroupSection<TRow extends Row>({
             interactive={interactive}
             rowHref={rowHref}
             onRowClick={onRowClick}
+            onRecordOpen={handleRecordOpen}
           />
         ))
       )}

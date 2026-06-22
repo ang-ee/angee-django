@@ -65,6 +65,7 @@ import {
 } from "./list-view-utils";
 import { columnsWithMetadataDefaults } from "./model-metadata-defaults";
 import type { ColumnDescriptor } from "./page";
+import { useRelationFacets } from "./relation-facet";
 import { useBulkDelete } from "./useBulkDelete";
 
 export type { ListViewState } from "./data-view-surface";
@@ -135,6 +136,7 @@ function ListViewBody<TRow extends Row = Row>({
   fields,
   filter,
   filters: explicitFilters,
+  facets,
   filterFields: explicitFilterFields,
   groupOptions: explicitGroupOptions,
   order,
@@ -162,6 +164,7 @@ function ListViewBody<TRow extends Row = Row>({
     () => columnsWithMetadataDefaults(columns, modelMetadata),
     [columns, modelMetadata],
   );
+  const declaredFacets = useRelationFacets(model, facets);
   const rawActiveDefaultGroup = defaultGroupForView(
     defaultGroup,
     defaultGroups,
@@ -267,11 +270,15 @@ function ListViewBody<TRow extends Row = Row>({
     surface.list.pageSize,
     surface.list.total,
   ]);
+  const explicitAndFacetGroupOptions = React.useMemo(
+    () => mergeGroupOptions(explicitGroupOptions, declaredFacets.groupOptions),
+    [declaredFacets.groupOptions, explicitGroupOptions],
+  );
   const toolbarGroupOptions = React.useMemo(
     () =>
       grouping
         ? mergeGroupOptions(
-            explicitGroupOptions,
+            explicitAndFacetGroupOptions,
             buildGroupOptions(
               resolvedColumns,
               modelMetadata,
@@ -282,7 +289,7 @@ function ListViewBody<TRow extends Row = Row>({
     [
       defaultGroup,
       defaultGroups,
-      explicitGroupOptions,
+      explicitAndFacetGroupOptions,
       grouping,
       modelMetadata,
       resolvedColumns,
@@ -296,13 +303,21 @@ function ListViewBody<TRow extends Row = Row>({
     () => buildFilterOptions(resolvedColumns, surface.rows, inferredFilterFields),
     [inferredFilterFields, resolvedColumns, surface.rows],
   );
+  const explicitAndFacetFilters = React.useMemo(
+    () => mergeFilterOptions(explicitFilters, declaredFacets.filters),
+    [declaredFacets.filters, explicitFilters],
+  );
   const filterOptions = React.useMemo(
-    () => mergeFilterOptions(explicitFilters, inferredFilterOptions),
-    [explicitFilters, inferredFilterOptions],
+    () => mergeFilterOptions(explicitAndFacetFilters, inferredFilterOptions),
+    [explicitAndFacetFilters, inferredFilterOptions],
+  );
+  const explicitAndFacetFilterFields = React.useMemo(
+    () => mergeFilterFields(explicitFilterFields, declaredFacets.filterFields),
+    [declaredFacets.filterFields, explicitFilterFields],
   );
   const filterFields = React.useMemo(
-    () => mergeFilterFields(explicitFilterFields, inferredFilterFields),
-    [explicitFilterFields, inferredFilterFields],
+    () => mergeFilterFields(explicitAndFacetFilterFields, inferredFilterFields),
+    [explicitAndFacetFilterFields, inferredFilterFields],
   );
   const activeFilterIds = activeFilterIdsFor(
     dataView.state.filter,
@@ -423,6 +438,7 @@ function ListViewBody<TRow extends Row = Row>({
             onRowClick={onRowClick}
             emptyMessage={emptyContent}
             onPagerStateChange={handleGroupPagerStateChange}
+            onListStateChange={onListStateChange}
           />
         ) : surface.list.error ? (
           <div className="px-3 py-6 text-13 text-danger-text">

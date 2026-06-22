@@ -435,6 +435,23 @@ class PersonFilter:
     """Field lookups accepted when filtering the people list (incl. the folder facet)."""
 
     display_name: auto
+    given_name: auto
+    family_name: auto
+    nickname: auto
+    folder: auto
+    birthday: auto
+    anniversary: auto
+    created_at: auto
+    updated_at: auto
+
+
+@strawberry_django.order_type(Person)
+class PersonOrder:
+    """Orderings accepted by the people connection."""
+
+    display_name: auto
+    given_name: auto
+    family_name: auto
     folder: auto
     created_at: auto
     updated_at: auto
@@ -504,6 +521,24 @@ PartyDataQuery, _PARTY_DATA_TYPES = data_query(
     aggregate_kwargs={"pagination_style": "offset"},
 )
 
+# People is the editable concrete contact surface. Keep the public roots
+# (`people` / `person`) identical to the old plain paginated fields, but let the
+# shared data-query owner advertise filters, ordering, aggregate, and group-by.
+PersonDataQuery, _PERSON_DATA_TYPES = data_query(
+    PersonType,
+    type_name="PersonDataQuery",
+    filters=PersonFilter,
+    order=PersonOrder,
+    list_name="people",
+    detail_name="person",
+    aggregate_name="person_aggregate",
+    group_name="person_groups",
+    aggregate_fields=["id"],
+    group_by_fields=["folder", "folder__name", "created_at"],
+    enable_filter_echo=True,
+    aggregate_kwargs={"pagination_style": "offset"},
+)
+
 # Group handles by their resolved contact. Following Odoo's read_group: group by
 # the party id (which owns the drill-down filter) and carry `party.display_name`
 # in each bucket so the header shows the contact's name, not the raw id. The two
@@ -534,8 +569,6 @@ HandleDataQuery, _HANDLE_DATA_TYPES = data_query(
 class PartiesQuery:
     """Public parties queries."""
 
-    people: OffsetPaginated[PersonType] = strawberry_django.offset_paginated(filters=PersonFilter)
-    person: PersonType | None = detail(PersonType)
     organizations: OffsetPaginated[OrganizationType] = strawberry_django.offset_paginated()
     organization: OrganizationType | None = detail(OrganizationType)
     addresses: OffsetPaginated[AddressType] = strawberry_django.offset_paginated(
@@ -552,11 +585,11 @@ class PartiesQuery:
     contact_folder: ContactFolderType | None = detail(ContactFolderType)
 
 
-_DATA_TYPES = [*_PARTY_DATA_TYPES, *_HANDLE_DATA_TYPES]
+_DATA_TYPES = [*_PARTY_DATA_TYPES, *_PERSON_DATA_TYPES, *_HANDLE_DATA_TYPES]
 
 
 _PARTIES_SCHEMA_BUCKET = {
-    "query": [PartiesQuery, PartyDataQuery, HandleDataQuery],
+    "query": [PartiesQuery, PartyDataQuery, PersonDataQuery, HandleDataQuery],
     "mutation": [
         PartiesDirectoryMutation,
         crud(PartyType, update=PartyPatch, delete=True),

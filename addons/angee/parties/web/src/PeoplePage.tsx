@@ -2,9 +2,11 @@ import * as React from "react";
 import {
   Column,
   DataPage,
+  Facet,
   Field,
   Form,
   Group,
+  GroupListView,
   List,
   RowsListView,
   type ListColumn,
@@ -148,7 +150,8 @@ const peopleForm = (
 export function PeoplePage(): React.ReactElement {
   return (
     <DataPage model={MODEL} placement="inline" routed recordTabs={personRecordTabs}>
-      <List model={MODEL}>
+      <List model={MODEL} list={GroupListView}>
+        <Facet field="folder" label="Folder" labelField="name" />
         <Column field="displayName" />
         <Column field="folder.name" header="Folder" />
         <Column field="givenName" />

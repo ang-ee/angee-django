@@ -3,13 +3,12 @@ import {
   Action,
   Column,
   DataPage,
+  Facet,
   Field,
   Form,
   Group,
   GroupListView,
   List,
-  useRelationFacet,
-  type DataToolbarGroupOption,
 } from "@angee/base";
 
 const MODEL = "messaging.Message";
@@ -17,38 +16,27 @@ const MODEL = "messaging.Message";
 // Default the inbox to a by-status grouping. Hoisted to a stable reference so the
 // list does not re-seed its grouping on every render.
 const DEFAULT_GROUPS = { list: { field: "status" } } as const;
+const GROUP_OPTIONS = [
+  { id: "status", label: "Status", group: { field: "status" } },
+] as const;
 
 /**
- * The inbox: cross-thread "smart aggregation" over messages. Sender / channel /
- * thread relation facets ride the shared model-driven data view. Sender/thread
- * come from their visible relation columns; channel stays explicit because this
- * inbox does not render it as a column. The list groups by status/thread —
- * composed on `DataPage` + `GroupListView`, not a hand-rolled inbox. Messages
- * arrive via channel sync, so the list creates nothing; status is the one
- * human-editable field.
+ * The inbox: cross-thread "smart aggregation" over messages. Channel is an
+ * explicit high-cardinality facet because it is useful here but not rendered as
+ * a column. The list groups by status/channel through `DataPage` +
+ * `GroupListView`, not a hand-rolled inbox. Messages arrive via channel sync,
+ * so the list creates nothing; status is the one human-editable field.
  */
 export function MessagesPage(): React.ReactElement {
-  // Channel has no string title of its own, so label the facet by its displayName
-  // (the operator-given name, vendor-derived when unset) rather than the default id.
-  const channelFacet = useRelationFacet(MODEL, { field: "channel", label: "Channel", labelField: "displayName" });
-  const groupOptions = React.useMemo<readonly DataToolbarGroupOption[]>(
-    () => [
-      ...(channelFacet.groupOption ? [channelFacet.groupOption] : []),
-      { id: "status", label: "Status", group: { field: "status" } },
-    ],
-    [channelFacet.groupOption],
-  );
-
   return (
     <DataPage model={MODEL} placement="inline" routed hideCreate>
       <List
         model={MODEL}
         list={GroupListView}
-        filters={channelFacet.filters}
-        filterFields={channelFacet.filterFields}
-        groupOptions={groupOptions}
+        groupOptions={GROUP_OPTIONS}
         defaultGroups={DEFAULT_GROUPS}
       >
+        <Facet field="channel" label="Channel" labelField="displayName" />
         <Column field="subject" />
         <Column field="sender.value" header="Sender" />
         <Column field="thread.subject" header="Thread" />

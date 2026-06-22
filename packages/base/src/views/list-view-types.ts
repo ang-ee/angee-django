@@ -12,7 +12,7 @@ import type {
   DataToolbarGroupOption,
 } from "../toolbars";
 import type { ListViewState } from "./data-view-surface";
-import type { ColumnDescriptor } from "./page";
+import type { ColumnDescriptor, FacetDescriptor } from "./page";
 
 export interface CardActionContext {
   /** Re-pull the collection backing the board/list surface. */
@@ -50,6 +50,8 @@ export interface ListViewProps<TRow extends Row = Row> {
   filter?: UseResourceListOptions<ResourceTypeName>["filter"];
   /** Favorite or quick filters shown in the list toolbar. */
   filters?: readonly DataToolbarFilterOption[];
+  /** Relation facets exposed as quick filters and group-by axes. */
+  facets?: readonly FacetDescriptor[];
   /** Fields available to the toolbar's custom filter editor. */
   filterFields?: readonly DataToolbarFilterField[];
   /** Fields available to the toolbar's group-by editor. */

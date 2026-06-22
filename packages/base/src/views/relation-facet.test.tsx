@@ -12,6 +12,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import {
   useRelationFacet,
+  useRelationFacets,
   useRelationFacetsForColumns,
 } from "./relation-facet";
 
@@ -156,6 +157,55 @@ describe("useRelationFacet", () => {
         aggregateKey: "providerId",
       },
     });
+  });
+
+  test("builds declared list facets in one model query", () => {
+    const { result } = renderHook(
+      () =>
+        useRelationFacets("agents.InferenceModel", [
+          { field: "provider", label: "Provider" },
+        ]),
+      { wrapper: Metadata },
+    );
+
+    expect(sdkMocks.facets).toHaveBeenCalledWith("agents.InferenceModel", {
+      facets: [{
+        id: "provider",
+        groups: [
+          { field: "PROVIDER", key: "providerId" },
+          { field: "PROVIDER__NAME", key: "provider_Name" },
+        ],
+        valueKey: "providerId",
+        labelKey: "provider_Name",
+        groupOrder: [{ field: "provider__name", direction: "ASC" }],
+        pageSize: 200,
+      }],
+      enabled: true,
+    });
+    expect(result.current.filters).toEqual([
+      {
+        id: "provider:provider-anthropic",
+        label: "Anthropic",
+        chipLabel: "Anthropic",
+        filter: { provider: { sqid: "provider-anthropic" } },
+      },
+      {
+        id: "provider:provider-openai",
+        label: "OpenAI",
+        chipLabel: "OpenAI",
+        filter: { provider: { sqid: "provider-openai" } },
+      },
+    ]);
+    expect(result.current.filterFields).toEqual([]);
+    expect(result.current.groupOptions).toEqual([{
+      id: "provider.name",
+      label: "Provider",
+      group: {
+        field: "provider.name",
+        aggregateField: "provider",
+        aggregateKey: "providerId",
+      },
+    }]);
   });
 
   test("keeps filter input and aggregate bucket keys separate", () => {

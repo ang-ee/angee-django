@@ -549,6 +549,7 @@ export function RecordRow<TRow extends Row>({
   selectable = true,
   rowHref,
   onRowClick,
+  onRecordOpen,
   draggableRow,
 }: {
   row: TableRowModel<TRow>;
@@ -557,6 +558,7 @@ export function RecordRow<TRow extends Row>({
   selectable?: boolean;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
+  onRecordOpen?: (row: TRow) => void;
   draggableRow?: (row: TRow) => DndPayload | null;
 }): React.ReactElement {
   const dragProps = dragSourceProps(draggableRow?.(row.original) ?? null);
@@ -568,6 +570,7 @@ export function RecordRow<TRow extends Row>({
         dataView={dataView}
         selectable={selectable}
         href={href}
+        onRecordOpen={onRecordOpen}
         dragProps={dragProps}
       />
     );
@@ -579,6 +582,7 @@ export function RecordRow<TRow extends Row>({
       interactive={interactive}
       selectable={selectable}
       onRowClick={onRowClick}
+      onRecordOpen={onRecordOpen}
       dragProps={dragProps}
     />
   );
@@ -589,12 +593,14 @@ function LinkedRecordRow<TRow extends Row>({
   dataView,
   selectable,
   href,
+  onRecordOpen,
   dragProps,
 }: {
   row: TableRowModel<TRow>;
   dataView: DataViewContextValue;
   selectable: boolean;
   href: string;
+  onRecordOpen?: (row: TRow) => void;
   dragProps?: DragSourceProps;
 }): React.ReactElement {
   const t = useBaseT();
@@ -609,9 +615,10 @@ function LinkedRecordRow<TRow extends Row>({
         return;
       }
       event.preventDefault();
+      onRecordOpen?.(row.original);
       void navigate({ to: href });
     },
-    [href, navigate],
+    [href, navigate, onRecordOpen, row.original],
   );
   return (
     <TableRow
@@ -626,6 +633,7 @@ function LinkedRecordRow<TRow extends Row>({
           return;
         }
         event.preventDefault();
+        onRecordOpen?.(row.original);
         void navigate({ to: href });
       }}
     >
@@ -660,6 +668,7 @@ function PlainRecordRow<TRow extends Row>({
   interactive,
   selectable,
   onRowClick,
+  onRecordOpen,
   dragProps,
 }: {
   row: TableRowModel<TRow>;
@@ -667,6 +676,7 @@ function PlainRecordRow<TRow extends Row>({
   interactive: boolean;
   selectable: boolean;
   onRowClick?: (row: TRow) => void;
+  onRecordOpen?: (row: TRow) => void;
   dragProps?: DragSourceProps;
 }): React.ReactElement {
   const t = useBaseT();
@@ -677,7 +687,10 @@ function PlainRecordRow<TRow extends Row>({
       {...dragProps}
       interactive={interactive}
       data-selected={selected ? "" : undefined}
-      onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+      onClick={onRowClick ? () => {
+        onRecordOpen?.(row.original);
+        onRowClick(row.original);
+      } : undefined}
     >
       {selectable ? (
         <TableCell className="w-8">
@@ -704,6 +717,7 @@ function PlainRecordRow<TRow extends Row>({
               aria-label={`Open ${rowActionLabelForTableColumn(cell.column, row.original)}`}
               onClick={(event) => {
                 event.stopPropagation();
+                onRecordOpen?.(row.original);
                 onRowClick(row.original);
               }}
             >
