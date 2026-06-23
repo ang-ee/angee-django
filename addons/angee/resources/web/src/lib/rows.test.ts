@@ -17,7 +17,8 @@ describe("resource ledger row projector", () => {
       },
     ]);
     expect(row?.id).toBe("1");
-    expect(row?.source).toBe("angee.storage");
+    expect(row?.sourceAddon).toBe("angee.storage");
+    expect(row?.sourcePath).toBe("drives.yaml");
     expect(row?.hash).toBe("0123456789ab");
     expect(row?.loaded).toBe("Jun 17, 2026, 9:30 AM");
   });

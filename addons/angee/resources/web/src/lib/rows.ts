@@ -4,8 +4,8 @@ import type { ResourceLedgerRowData } from "../documents";
 
 export interface ResourceRow extends Record<string, unknown> {
   id: string;
-  source: string;
-  path: string;
+  sourceAddon: string;
+  sourcePath: string;
   tier: string;
   target: string;
   targetId: string;
@@ -18,8 +18,8 @@ export function resourceRows(
 ): ResourceRow[] {
   return ledger.map((row) => ({
     id: row.id,
-    source: row.sourceAddon,
-    path: row.sourcePath,
+    sourceAddon: row.sourceAddon,
+    sourcePath: row.sourcePath,
     tier: row.tier,
     target: row.targetModel,
     targetId: row.targetId,

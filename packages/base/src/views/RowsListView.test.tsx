@@ -1,6 +1,12 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import {
   RouterProvider,
   createMemoryHistory,
@@ -91,6 +97,44 @@ describe("RowsListView grouping", () => {
 });
 
 describe("RowsListView filters", () => {
+  test("exposes caller-declared local row fields through custom filters", async () => {
+    renderInRouter(
+      <RowsListView<Item>
+        rows={ROWS}
+        columns={columns}
+        filterFields={[
+          {
+            id: "region",
+            field: "region",
+            label: "Region",
+            type: "selection",
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Filter and favorites" }),
+    );
+    expect(screen.getByText("No filters")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "East" })).toBeNull();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Add custom filter" }),
+    );
+    expect(screen.getByLabelText("Filter field").textContent).toContain("Region");
+    expect(screen.getByLabelText("Filter operator").textContent).toContain("is");
+
+    fireEvent.change(screen.getByLabelText("Filter value"), {
+      target: { value: "East" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    expect(screen.getByText("Alpha")).toBeTruthy();
+    expect(screen.getByText("Beta")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText("Gamma")).toBeNull());
+  });
+
   test("matches relation public-id lookup filters against local row objects", async () => {
     renderInRouter(
       <DataViewProvider initialState={{ filter: { provider: { sqid: "ipr_anthropic" } } }}>

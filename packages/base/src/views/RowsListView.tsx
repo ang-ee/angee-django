@@ -198,6 +198,10 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
     () => buildFilterFields(columns, surface.sourceRows, null),
     [columns, surface.sourceRows],
   );
+  const filterFields = React.useMemo(
+    () => mergeFilterFields(explicitFilterFields, inferredFilterFields),
+    [explicitFilterFields, inferredFilterFields],
+  );
   const inferredFilterOptions = React.useMemo(
     () => buildFilterOptions(columns, surface.sourceRows, inferredFilterFields),
     [columns, inferredFilterFields, surface.sourceRows],
@@ -205,10 +209,6 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   const filterOptions = React.useMemo(
     () => mergeFilterOptions(explicitFilters, inferredFilterOptions),
     [explicitFilters, inferredFilterOptions],
-  );
-  const filterFields = React.useMemo(
-    () => mergeFilterFields(explicitFilterFields, inferredFilterFields),
-    [explicitFilterFields, inferredFilterFields],
   );
   const activeFilterIds = activeFilterIdsFor(
     dataView.state.filter,
