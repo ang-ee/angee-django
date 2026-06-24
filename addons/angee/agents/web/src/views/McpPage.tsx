@@ -50,13 +50,13 @@ export function McpToolsPage(): React.ReactElement {
         <Facet field="server" label="Server" labelField="name" />
         <Column field="name" />
         <Column field="enabled" />
-        <Column field="updatedAt" />
+        <Column field="updated_at" />
       </List>
       <Form model={TOOL_MODEL}>
         <Field name="server" createOnly />
         <Field name="name" title />
         <Field name="description" />
-        <Field name="inputSchema" widget="json" />
+        <Field name="input_schema" widget="json" />
         <Field name="enabled" />
       </Form>
     </DataPage>

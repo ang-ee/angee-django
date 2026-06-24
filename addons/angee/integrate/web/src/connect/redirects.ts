@@ -28,10 +28,10 @@ export function connectCallbackPathForRecord(
   record: Record<string, unknown>,
 ): string | undefined {
   return [
-    record.backendClass,
-    record.implClass,
+    record.backend_class,
+    record.impl_class,
     nestedValue(record.vendor, "slug"),
-    nestedValue(record.vendor, "displayName"),
+    nestedValue(record.vendor, "display_name"),
   ].some(isAnthropicConnectRecord)
     ? CONNECT_CALLBACK_FALLBACK_PATH
     : undefined;

@@ -38,6 +38,10 @@ export class NotesPage extends PageObject {
   get groupHeaders(): Locator {
     return this.page.locator('tbody tr [aria-expanded]');
   }
+  /** Group-header rows, including the visible bucket label and aggregate cells. */
+  get groupHeaderRows(): Locator {
+    return this.page.locator("tbody tr:has([aria-expanded])");
+  }
   /** The group-header disclosure for the group whose row contains `label`. */
   groupHeader(label: string): Locator {
     return this.page

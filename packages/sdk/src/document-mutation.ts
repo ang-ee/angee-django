@@ -1,8 +1,6 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import type { AnyVariables, DocumentInput } from "@urql/core";
 import { useMutation as useUrqlMutation } from "urql";
-
-import { useBusyRun } from "./use-busy-run";
 
 export interface DocumentMutationRun<TData, TVariables> {
   /** Run the mutation; resolves to `result.data`, throwing on a GraphQL error. */
@@ -29,14 +27,19 @@ export function useDocumentMutation<
   TVariables extends AnyVariables = Record<string, unknown>,
 >(document: DocumentInput<TData, TVariables>): DocumentMutationRun<TData, TVariables> {
   const [state, run] = useUrqlMutation<TData, TVariables>(document);
-  const busy = useBusyRun();
+  const [inFlight, setInFlight] = useState(0);
   const execute = useCallback(
-    (variables: TVariables): Promise<TData | undefined> => busy.run(async () => {
-      const result = await run(variables);
-      if (result.error) throw result.error;
-      return result.data ?? undefined;
-    }),
-    [busy.run, run],
+    async (variables: TVariables): Promise<TData | undefined> => {
+      setInFlight((current) => current + 1);
+      try {
+        const result = await run(variables);
+        if (result.error) throw result.error;
+        return result.data ?? undefined;
+      } finally {
+        setInFlight((current) => Math.max(0, current - 1));
+      }
+    },
+    [run],
   );
-  return { execute, fetching: busy.busy, error: state.error ?? null };
+  return { execute, fetching: inFlight > 0, error: state.error ?? null };
 }

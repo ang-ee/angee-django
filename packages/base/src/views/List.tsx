@@ -1,5 +1,5 @@
 import * as React from "react";
-import type { Row } from "@angee/sdk";
+import type { Row } from "@angee/data";
 
 import {
   ListView,
@@ -8,6 +8,7 @@ import {
 import type {
   DataViewDefaultGroups,
   DataViewGroup,
+  DataViewKind,
 } from "./data-view-model";
 import {
   PAGE_ELEMENT_SLOT,
@@ -20,6 +21,7 @@ import {
 
 export type ListComponent<TRow extends Row = Row> = React.ComponentType<
   ListViewProps<TRow> & {
+    defaultView?: DataViewKind;
     defaultGroup?: DataViewGroup | null;
     defaultGroups?: DataViewDefaultGroups;
   }
@@ -46,6 +48,8 @@ export interface ListProps<TRow extends Row = Row>
   model?: string;
   /** Column and facet element declarations for this list. */
   children?: React.ReactNode;
+  /** Initial collection view for grouping-capable list renderers. */
+  defaultView?: DataViewKind;
   /** Group seeded by grouping-capable list renderers. */
   defaultGroup?: DataViewGroup | null;
   /** Per-view group defaults seeded by grouping-capable list renderers. */

@@ -1,8 +1,10 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  defineAngeeSchemaMetadata,
   fieldMetadataFromSDL,
   modelMetadataForLabel,
+  type DataResourceMetadata,
 } from "./model-metadata";
 
 const SDL = /* GraphQL */ `
@@ -47,6 +49,57 @@ const SDL = /* GraphQL */ `
     noteRevisions(id: ID!): [NoteRevision!]!
   }
 `;
+
+describe("defineAngeeSchemaMetadata", () => {
+  test("narrows generated JSON metadata after validating the resource shape", () => {
+    const generatedKind = "scalar" as string;
+    const metadata = defineAngeeSchemaMetadata({
+      angee: {
+        resources: [
+          {
+            ...resource({
+              modelLabel: "notes.Note",
+              node: "NoteType",
+              roots: { list: "notes" },
+            }),
+            fields: [
+              {
+                ...fieldResource("title"),
+                kind: generatedKind,
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(metadata.angee?.resources?.[0]?.fields?.[0]?.kind).toBe("scalar");
+  });
+
+  test("rejects invalid generated field kinds", () => {
+    expect(() =>
+      defineAngeeSchemaMetadata({
+        angee: {
+          resources: [
+            {
+              ...resource({
+                modelLabel: "notes.Note",
+                node: "NoteType",
+                roots: { list: "notes" },
+              }),
+              fields: [
+                {
+                  ...fieldResource("title"),
+                  kind: "computed",
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    ).toThrow(/fields\[0\]\.kind/);
+  });
+});
 
 describe("fieldMetadataFromSDL", () => {
   const metadata = fieldMetadataFromSDL(SDL);
@@ -97,7 +150,32 @@ describe("fieldMetadataFromSDL", () => {
     );
   });
 
-  test("captures schema-declared root fields for model types", () => {
+  test("does not infer model roots from raw SDL", () => {
+    expect(required(metadata.types.NoteType).rootFields).toBeUndefined();
+  });
+
+  test("uses generated resource metadata as authoritative model roots", () => {
+    const metadata = fieldMetadataFromSDL(SDL, {
+      angee: {
+        resources: [
+          resource({
+            modelLabel: "notes.Note",
+            node: "NoteType",
+            roots: {
+              list: "notes",
+              revisions: "noteRevisions",
+            },
+            typeNames: {
+              query: "NoteDataQuery",
+              revision: "NoteRevision",
+            },
+            capabilities: ["list", "revisions"],
+            revisionFields: ["createdAt", "comment", "body"],
+          }),
+        ],
+      },
+    });
+
     expect(required(metadata.types.NoteType).rootFields).toEqual({
       list: "notes",
       revisions: "noteRevisions",
@@ -105,7 +183,7 @@ describe("fieldMetadataFromSDL", () => {
     });
   });
 
-  test("captures the create input's required (non-null, no-default) fields", () => {
+  test("uses generated resource metadata for writable fields", () => {
     const writeMetadata = fieldMetadataFromSDL(/* GraphQL */ `
       type WidgetType { id: ID! name: String! }
       input WidgetInput { name: String! count: Int color: String! }
@@ -115,16 +193,62 @@ describe("fieldMetadataFromSDL", () => {
         createWidget(data: WidgetInput!): WidgetType!
         updateWidget(data: WidgetPatch!): WidgetType!
       }
-    `);
+    `, {
+      angee: {
+        resources: [
+          resource({
+            modelLabel: "widgets.Widget",
+            node: "WidgetType",
+            roots: {
+              detail: "widget",
+              create: "createWidget",
+              update: "updateWidget",
+            },
+            typeNames: {
+              createInput: "WidgetInput",
+              updateInput: "WidgetPatch",
+            },
+            capabilities: ["detail", "create", "update"],
+            createFields: ["name", "count", "color"],
+            requiredCreateFields: ["name", "color"],
+            updateFields: ["name", "count"],
+            fields: [
+              fieldResource("name", {
+                scalar: "String",
+                creatable: true,
+                updatable: true,
+                requiredOnCreate: true,
+              }),
+              fieldResource("count", {
+                scalar: "Int",
+                creatable: true,
+                updatable: true,
+              }),
+              fieldResource("color", {
+                scalar: "String",
+                creatable: true,
+                requiredOnCreate: true,
+              }),
+            ],
+          }),
+        ],
+      },
+    });
     const root = required(writeMetadata.types.WidgetType).rootFields;
     expect(root?.create).toBe("createWidget");
     expect(root?.createFields).toEqual(["name", "count", "color"]);
     expect(root?.requiredCreateFields).toEqual(["name", "color"]);
     expect(root?.update).toBe("updateWidget");
     expect(root?.updateFields).toEqual(["name", "count"]);
+    expect(required(writeMetadata.types.WidgetType).fields.name).toMatchObject({
+      readable: true,
+      creatable: true,
+      updatable: true,
+      requiredOnCreate: true,
+    });
   });
 
-  test("matches conventional delete roots for generated model names", () => {
+  test("uses generated metadata for irregular create/update/delete-preview roots", () => {
     const writeMetadata = fieldMetadataFromSDL(/* GraphQL */ `
       type DeletePreview { totalDeletedCount: Int! }
       type VcsBridgeType { id: ID! displayName: String! }
@@ -138,9 +262,36 @@ describe("fieldMetadataFromSDL", () => {
       type Mutation {
         createVcsBridge(data: VcsBridgeInput!): VcsBridgeType!
         updateVcsBridge(data: VcsBridgePatch!): VcsBridgeType!
+        delete_vcs_bridges_by_pk(id: String!): VcsBridgeType
         deleteVcsBridge(id: ID!, confirm: Boolean = false): DeletePreview!
       }
-    `);
+    `, {
+      angee: {
+        resources: [
+          resource({
+            modelLabel: "integrate.VcsBridge",
+            node: "VcsBridgeType",
+            roots: {
+              list: "vcsBridges",
+              detail: "vcsBridge",
+              create: "createVcsBridge",
+              update: "updateVcsBridge",
+              delete: "delete_vcs_bridges_by_pk",
+              deletePreview: "deleteVcsBridge",
+            },
+            typeNames: {
+              query: "VcsBridgeDataQuery",
+              createInput: "VcsBridgeInput",
+              updateInput: "VcsBridgePatch",
+              deletePayload: "DeletePreview",
+            },
+            capabilities: ["list", "detail", "create", "update", "delete", "deletePreview"],
+            createFields: ["vendor"],
+            updateFields: ["webhookSecret"],
+          }),
+        ],
+      },
+    });
 
     expect(
       required(modelMetadataForLabel(writeMetadata, "integrate.VcsBridge")).rootFields,
@@ -151,11 +302,12 @@ describe("fieldMetadataFromSDL", () => {
       createFields: ["vendor"],
       update: "updateVcsBridge",
       updateFields: ["webhookSecret"],
-      delete: "deleteVcsBridge",
+      delete: "delete_vcs_bridges_by_pk",
+      deletePreview: "deleteVcsBridge",
     });
   });
 
-  test("captures grouped aggregate roots with prefixed aggregate types", () => {
+  test("uses generated metadata for grouped aggregate roots", () => {
     const metadata = fieldMetadataFromSDL(/* GraphQL */ `
       type IntegrationType { id: ID! status: String! }
       type NoteType { id: ID! title: String! }
@@ -165,20 +317,59 @@ describe("fieldMetadataFromSDL", () => {
       input IntegrationAggregateGroupOrder { field: String! }
       input NoteGroupBySpec { field: String! }
       type IntegrationAggregateAggregate { count: Int! }
-      type IntegrationAggregateGrouped { key: String count: Int! }
-      type IntegrationAggregateGroupedResult {
-        results: [IntegrationAggregateGrouped!]!
+      type IntegrationGroupKey { status: String }
+      type IntegrationAggregateGrouped {
+        key: IntegrationGroupKey!
+        aggregate: IntegrationAggregateAggregate!
       }
-      type NoteGrouped { key: String count: Int! }
-      type NoteGroupedResult { results: [NoteGrouped!]! }
+      type NoteAggregate { count: Int! }
+      type NoteGroupKey { title: String }
+      type NoteGrouped { key: NoteGroupKey! aggregate: NoteAggregate! }
       type Query {
         integrations: [IntegrationType!]!
         notes: [NoteType!]!
         integrationAggregate(filter: IntegrationFilter = null): IntegrationAggregateAggregate!
-        integrationGroups(groupBy: [IntegrationAggregateGroupBySpec!]!, filter: IntegrationFilter = null, orderBy: [IntegrationAggregateGroupOrder!] = null): IntegrationAggregateGroupedResult!
-        noteGroups(groupBy: [NoteGroupBySpec!]!, filter: NoteFilter = null): NoteGroupedResult!
+        integrationGroups(groupBy: [IntegrationAggregateGroupBySpec!]!, filter: IntegrationFilter = null, orderBy: [IntegrationAggregateGroupOrder!] = null): [IntegrationAggregateGrouped!]!
+        noteGroups(groupBy: [NoteGroupBySpec!]!, filter: NoteFilter = null): [NoteGrouped!]!
       }
-    `);
+    `, {
+      angee: {
+        resources: [
+          resource({
+            modelLabel: "integrate.Integration",
+            node: "IntegrationType",
+            roots: {
+              list: "integrations",
+              aggregate: "integrationAggregate",
+              groups: "integrationGroups",
+            },
+            typeNames: {
+              query: "IntegrationDataQuery",
+              filter: "IntegrationFilter",
+              groupBySpec: "IntegrationAggregateGroupBySpec",
+              groupKey: "IntegrationGroupKey",
+              groupOrder: "IntegrationAggregateGroupOrder",
+            },
+            capabilities: ["list", "aggregate", "groups"],
+          }),
+          resource({
+            modelLabel: "notes.Note",
+            node: "NoteType",
+            roots: {
+              list: "notes",
+              groups: "noteGroups",
+            },
+            typeNames: {
+              query: "NoteDataQuery",
+              filter: "NoteFilter",
+              groupBySpec: "NoteGroupBySpec",
+              groupKey: "NoteGroupKey",
+            },
+            capabilities: ["list", "groups"],
+          }),
+        ],
+      },
+    });
 
     expect(required(metadata.types.IntegrationType).rootFields).toMatchObject({
       list: "integrations",
@@ -194,7 +385,7 @@ describe("fieldMetadataFromSDL", () => {
     });
   });
 
-  test("captures relation filter contracts from filter inputs", () => {
+  test("uses generated resource type names for relation filter contracts", () => {
     const metadata = fieldMetadataFromSDL(/* GraphQL */ `
       type ProviderType { id: ID! name: String! }
       type ModelType {
@@ -218,7 +409,29 @@ describe("fieldMetadataFromSDL", () => {
         models(filters: ModelFilter): ModelTypeOffsetPaginated!
         modelGroups(groupBy: [ModelAggregateGroupBySpec!]!, filter: ModelFilter): ModelAggregateGroupedResult!
       }
-    `);
+    `, {
+      angee: {
+        resources: [
+          resource({
+            modelLabel: "demo.Model",
+            node: "ModelType",
+            roots: {
+              list: "models",
+              groups: "modelGroups",
+            },
+            typeNames: {
+              query: "ModelDataQuery",
+              filter: "ModelFilter",
+              groupBySpec: "ModelAggregateGroupBySpec",
+              groupKey: "ModelAggregateGroupKey",
+            },
+            capabilities: ["list", "groups"],
+            filterFields: ["provider", "publisher", "drive"],
+            groupByFields: ["provider", "publisher"],
+          }),
+        ],
+      },
+    });
 
     const fields = required(metadata.types.ModelType).fields;
     expect(required(fields.provider).relationFilter).toEqual({
@@ -240,7 +453,7 @@ describe("fieldMetadataFromSDL", () => {
     });
   });
 
-  test("captures a relation's label axis (one leaf) and skips it when ambiguous", () => {
+  test("uses generated resource type names for relation label axes", () => {
     const metadata = fieldMetadataFromSDL(/* GraphQL */ `
       type ProviderType { id: ID! name: String! }
       type ModelType { id: ID! provider: ProviderType ambiguous: ProviderType }
@@ -261,7 +474,29 @@ describe("fieldMetadataFromSDL", () => {
         models(filters: ModelFilter): ModelTypeOffsetPaginated!
         modelGroups(groupBy: [ModelAggregateGroupBySpec!]!, filter: ModelFilter): ModelAggregateGroupedResult!
       }
-    `);
+    `, {
+      angee: {
+        resources: [
+          resource({
+            modelLabel: "demo.Model",
+            node: "ModelType",
+            roots: {
+              list: "models",
+              groups: "modelGroups",
+            },
+            typeNames: {
+              query: "ModelDataQuery",
+              filter: "ModelFilter",
+              groupBySpec: "ModelAggregateGroupBySpec",
+              groupKey: "ModelAggregateGroupKey",
+            },
+            capabilities: ["list", "groups"],
+            filterFields: ["provider", "ambiguous"],
+            groupByFields: ["provider", "provider_DisplayName", "ambiguous", "ambiguous_DisplayName", "ambiguous_Email"],
+          }),
+        ],
+      },
+    });
 
     const fields = required(metadata.types.ModelType).fields;
     // Exactly one `provider_*` group-key leaf → that is the display-label axis.
@@ -270,41 +505,44 @@ describe("fieldMetadataFromSDL", () => {
     expect(required(fields.ambiguous).relationFilter?.labelKey).toBeUndefined();
   });
 
-  test("uses generated data-query metadata as authoritative model roots", () => {
+  test("uses generated resource metadata as authoritative model roots", () => {
     const metadata = fieldMetadataFromSDL(
       /* GraphQL */ `
         type IntegrationType { id: ID! status: String! }
         type IntegrationAggregateAggregate { count: Int! }
         input IntegrationAggregateGroupBySpec { field: String! }
-        type IntegrationAggregateGrouped { key: String count: Int! }
-        type IntegrationAggregateGroupedResult {
-          results: [IntegrationAggregateGrouped!]!
+        type IntegrationGroupKey { status: String }
+        type IntegrationAggregateGrouped {
+          key: IntegrationGroupKey!
+          aggregate: IntegrationAggregateAggregate!
         }
         type Query {
           integrations: [IntegrationType!]!
           integration(id: ID!): IntegrationType
           integrationAggregate: IntegrationAggregateAggregate!
-          integrationGroups(groupBy: [IntegrationAggregateGroupBySpec!]!): IntegrationAggregateGroupedResult!
+          integrationGroups(groupBy: [IntegrationAggregateGroupBySpec!]!): [IntegrationAggregateGrouped!]!
         }
       `,
       {
         angee: {
-          dataQueries: [
+          resources: [
             {
+              schemaName: "public",
               modelLabel: "integrate.Integration",
               appLabel: "integrate",
               modelName: "integration",
               publicIdField: "sqid",
               roots: {
-                listName: "integrations",
-                detailName: "integration",
-                aggregateName: "integrationAggregate",
-                groupName: "integrationGroups",
+                list: "integrations",
+                detail: "integration",
+                aggregate: "integrationAggregate",
+                groups: "integrationGroups",
               },
               typeNames: {
                 query: "IntegrationDataQuery",
                 node: "IntegrationType",
                 groupBySpec: "IntegrationAggregateGroupBySpec",
+                groupKey: "IntegrationGroupKey",
               },
               capabilities: ["list", "detail", "aggregate", "groups"],
               filterFields: ["vendor", "status"],
@@ -326,8 +564,8 @@ describe("fieldMetadataFromSDL", () => {
       groupBy: "integrationGroups",
       groupByInput: "IntegrationAggregateGroupBySpec",
     });
-    expect(integration.dataQuery?.modelLabel).toBe("integrate.Integration");
-    expect(metadata.dataQueries?.[0]?.modelLabel).toBe("integrate.Integration");
+    expect(integration.resource?.modelLabel).toBe("integrate.Integration");
+    expect(metadata.resources?.[0]?.modelLabel).toBe("integrate.Integration");
   });
 
   test("fails fast when generated metadata drifts from the SDL", () => {
@@ -339,15 +577,16 @@ describe("fieldMetadataFromSDL", () => {
         `,
         {
           angee: {
-            dataQueries: [
+            resources: [
               {
+                schemaName: "public",
                 modelLabel: "integrate.Integration",
                 appLabel: "integrate",
                 modelName: "integration",
                 publicIdField: "sqid",
                 roots: {
-                  listName: "integrations",
-                  groupName: "missingGroups",
+                  list: "integrations",
+                  groups: "missingGroups",
                 },
                 typeNames: {
                   query: "IntegrationDataQuery",
@@ -381,10 +620,11 @@ describe("fieldMetadataFromSDL", () => {
         input LegacyRelationFilterInput { pk: ID! }
         input ModelFilter { provider: LegacyRelationFilterInput }
         input ModelAggregateGroupBySpec { field: String! }
-        type ModelAggregateGroupKey {
-          providerId: ID
-          provider_DisplayName: String
-        }
+      type ModelAggregateGroupKey {
+        providerId: ID
+        provider_DisplayName: String
+        implClass: String
+      }
         type ModelAggregateGrouped { key: ModelAggregateGroupKey! count: Int! }
         type ModelAggregateGroupedResult { results: [ModelAggregateGrouped!]! }
         type Query {
@@ -394,27 +634,47 @@ describe("fieldMetadataFromSDL", () => {
       `,
       {
         angee: {
-          dataQueries: [
+          resources: [
             {
+              schemaName: "public",
               modelLabel: "demo.Model",
               appLabel: "demo",
               modelName: "model",
               publicIdField: "sqid",
               roots: {
-                listName: "models",
-                groupName: "modelGroups",
+                list: "models",
+                groups: "modelGroups",
               },
               typeNames: {
                 query: "ModelDataQuery",
                 node: "ModelType",
                 filter: "ModelFilter",
                 groupBySpec: "ModelAggregateGroupBySpec",
+                groupKey: "ModelAggregateGroupKey",
               },
               capabilities: ["list", "groups", "filterEcho"],
               filterFields: ["provider"],
-              orderFields: [],
+              orderFields: ["implClass"],
               aggregateFields: ["id"],
               groupByFields: ["provider", "implClass"],
+              groupDimensions: [
+                {
+                  field: "provider",
+                  input: "PROVIDER",
+                  key: "providerId",
+                  kind: "relation",
+                  scalar: "ID",
+                },
+                {
+                  field: "implClass",
+                  input: "IMPL_CLASS",
+                  key: "implClass",
+                  kind: "column",
+                  scalar: "String",
+                },
+              ],
+              defaultMeasures: [{ op: "count" }],
+              defaultSort: [{ field: "implClass", direction: "ASC" }],
               relationAxes: [
                 {
                   field: "provider",
@@ -443,13 +703,255 @@ describe("fieldMetadataFromSDL", () => {
       aggregateKey: "providerId",
       labelKey: "provider_DisplayName",
     });
-    expect(required(metadata.types.ModelType).dataQuery?.groupAliases).toEqual([
+    expect(required(metadata.types.ModelType).resource?.groupAliases).toEqual([
       {
         field: "implCategory",
         aggregateField: "implClass",
         aggregateKey: "implClass",
       },
     ]);
+    expect(required(metadata.types.ModelType).resource?.groupDimensions).toEqual([
+      {
+        field: "provider",
+        input: "PROVIDER",
+        key: "providerId",
+        kind: "relation",
+        scalar: "ID",
+      },
+      {
+        field: "implClass",
+        input: "IMPL_CLASS",
+        key: "implClass",
+        kind: "column",
+        scalar: "String",
+      },
+    ]);
+    expect(required(metadata.types.ModelType).resource?.defaultMeasures).toEqual([
+      { op: "count" },
+    ]);
+    expect(required(metadata.types.ModelType).resource?.defaultSort).toEqual([
+      { field: "implClass", direction: "ASC" },
+    ]);
+  });
+
+  test("rejects generated default sort fields missing from order metadata", () => {
+    expect(() =>
+      fieldMetadataFromSDL(
+        /* GraphQL */ `
+          type ModelType { id: ID! status: String! }
+          type Query { models: [ModelType!]! }
+        `,
+        {
+          angee: {
+            resources: [
+              resource({
+                modelLabel: "demo.Model",
+                node: "ModelType",
+                roots: { list: "models" },
+                typeNames: { query: "ModelDataQuery" },
+                capabilities: ["list"],
+                orderFields: ["status"],
+                defaultSort: [{ field: "missing", direction: "ASC" }],
+              }),
+            ],
+          },
+        },
+      )
+    ).toThrow(/default sort field "missing", but it is not sortable/);
+  });
+
+  test("rejects generated group dimensions missing from the group key type", () => {
+    expect(() =>
+      fieldMetadataFromSDL(
+        /* GraphQL */ `
+          type ModelType { id: ID! status: String! }
+          input ModelAggregateGroupBySpec { field: String! }
+          type ModelAggregateGroupKey { status: String }
+          type ModelAggregateGrouped { key: ModelAggregateGroupKey! count: Int! }
+          type ModelAggregateGroupedResult { results: [ModelAggregateGrouped!]! }
+          type Query {
+            models: [ModelType!]!
+            modelGroups(groupBy: [ModelAggregateGroupBySpec!]!): ModelAggregateGroupedResult!
+          }
+        `,
+        {
+          angee: {
+            resources: [
+              resource({
+                modelLabel: "demo.Model",
+                node: "ModelType",
+                roots: {
+                  list: "models",
+                  groups: "modelGroups",
+                },
+                typeNames: {
+                  query: "ModelDataQuery",
+                  groupBySpec: "ModelAggregateGroupBySpec",
+                  groupKey: "ModelAggregateGroupKey",
+                },
+                capabilities: ["list", "groups"],
+                groupByFields: ["status"],
+                groupDimensions: [
+                  {
+                    field: "status",
+                    input: "STATUS",
+                    key: "missingStatus",
+                    kind: "column",
+                    scalar: "String",
+                  },
+                ],
+              }),
+            ],
+          },
+        },
+      )
+    ).toThrow(/missing group key field "missingStatus"/);
+  });
+
+  test("accepts typed Hasura/NDC group key metadata", () => {
+    const metadata = fieldMetadataFromSDL(
+      /* GraphQL */ `
+        type ModelType { id: ID! status: String! updated_at: String! }
+        enum Granularity { MONTH }
+        enum ModelGroupableField { STATUS UPDATED_AT }
+        input ModelGroupBySpec { field: ModelGroupableField! granularity: Granularity }
+        type BucketRange { from: String! to: String! }
+        type ModelGroupKey {
+          status: String
+          updated_at: String
+          updated_at_month: String
+          updated_at_month_range: BucketRange
+        }
+        type models_aggregate_fields { count: Int! }
+        type models_group {
+          key: ModelGroupKey!
+          aggregate: models_aggregate_fields!
+        }
+        type Query {
+          models: [ModelType!]!
+          models_groups(group_by: [ModelGroupBySpec!]!): [models_group!]!
+        }
+      `,
+      {
+        angee: {
+          resources: [
+            resource({
+              modelLabel: "demo.Model",
+              node: "ModelType",
+              roots: {
+                list: "models",
+                groups: "models_groups",
+              },
+              typeNames: {
+                query: "models_Query",
+                groupBySpec: "ModelGroupBySpec",
+                groupKey: "ModelGroupKey",
+                grouped: "models_group",
+              },
+              capabilities: ["list", "groups"],
+              groupByFields: ["status", "updated_at"],
+              groupDimensions: [
+                {
+                  field: "status",
+                  input: "STATUS",
+                  key: "status",
+                  kind: "column",
+                  scalar: "String",
+                },
+                {
+                  field: "updated_at",
+                  input: "UPDATED_AT",
+                  key: "updated_at",
+                  kind: "column",
+                  scalar: "DateTime",
+                  extractions: [
+                    {
+                      input: "MONTH",
+                      key: "updated_at_month",
+                      rangeKey: "updated_at_month_range",
+                      name: "month",
+                    },
+                  ],
+                },
+              ],
+            }),
+          ],
+        },
+      },
+    );
+
+    expect(required(metadata.types.ModelType).resource?.groupDimensions).toEqual([
+      {
+        field: "status",
+        input: "STATUS",
+        key: "status",
+        kind: "column",
+        scalar: "String",
+      },
+      {
+        field: "updated_at",
+        input: "UPDATED_AT",
+        key: "updated_at",
+        kind: "column",
+        scalar: "DateTime",
+        extractions: [
+          {
+            input: "MONTH",
+            key: "updated_at_month",
+            rangeKey: "updated_at_month_range",
+            name: "month",
+          },
+        ],
+      },
+    ]);
+  });
+
+  test("rejects grouped resources missing their typed group key", () => {
+    expect(() =>
+      fieldMetadataFromSDL(
+        /* GraphQL */ `
+          type ModelType { id: ID! status: String! }
+          enum ModelGroupableField { STATUS }
+          input ModelGroupBySpec { field: ModelGroupableField! }
+          type models_aggregate_fields { count: Int! }
+          type models_group { key: String! aggregate: models_aggregate_fields! }
+          type Query {
+            models: [ModelType!]!
+            models_groups(group_by: [ModelGroupBySpec!]!): [models_group!]!
+          }
+        `,
+        {
+          angee: {
+            resources: [
+              resource({
+                modelLabel: "demo.Model",
+                node: "ModelType",
+                roots: {
+                  list: "models",
+                  groups: "models_groups",
+                },
+                typeNames: {
+                  query: "models_Query",
+                  groupBySpec: "ModelGroupBySpec",
+                  groupKey: "MissingGroupKey",
+                },
+                capabilities: ["list", "groups"],
+                groupByFields: ["status"],
+                groupDimensions: [
+                  {
+                    field: "status",
+                    input: "STATUS",
+                    key: "status",
+                    kind: "column",
+                    scalar: "String",
+                  },
+                ],
+              }),
+            ],
+          },
+        },
+      )
+    ).toThrow(/missing object type "MissingGroupKey"/);
   });
 
   test("rejects generated group aliases missing from the node type", () => {
@@ -461,13 +963,14 @@ describe("fieldMetadataFromSDL", () => {
         `,
         {
           angee: {
-            dataQueries: [
+            resources: [
               {
+                schemaName: "public",
                 modelLabel: "demo.Model",
                 appLabel: "demo",
                 modelName: "model",
                 publicIdField: "sqid",
-                roots: { listName: "models" },
+                roots: { list: "models" },
                 typeNames: {
                   query: "ModelDataQuery",
                   node: "ModelType",
@@ -497,4 +1000,60 @@ describe("fieldMetadataFromSDL", () => {
 function required<T>(value: T | null | undefined): T {
   if (value == null) throw new Error("Expected fixture value to exist.");
   return value;
+}
+
+type ResourceFixture = Omit<
+  Partial<DataResourceMetadata>,
+  "roots" | "typeNames"
+> & {
+  modelLabel: string;
+  node: string;
+  roots?: DataResourceMetadata["roots"];
+  typeNames?: Partial<DataResourceMetadata["typeNames"]>;
+};
+
+function resource({
+  node,
+  roots = {},
+  typeNames = {},
+  ...metadata
+}: ResourceFixture): DataResourceMetadata {
+  const [appLabel = "", objectName = ""] = metadata.modelLabel.split(".");
+  return {
+    schemaName: "public",
+    appLabel,
+    modelName: objectName.toLowerCase(),
+    publicIdField: "sqid",
+    capabilities: [],
+    filterFields: [],
+    orderFields: [],
+    aggregateFields: [],
+    groupByFields: [],
+    relationAxes: [],
+    ...metadata,
+    roots,
+    typeNames: {
+      node,
+      ...typeNames,
+    },
+  };
+}
+
+function fieldResource(
+  name: string,
+  metadata: Partial<NonNullable<DataResourceMetadata["fields"]>[number]> = {},
+): NonNullable<DataResourceMetadata["fields"]>[number] {
+  return {
+    name,
+    kind: "scalar",
+    readable: true,
+    filterable: false,
+    sortable: false,
+    aggregatable: false,
+    groupable: false,
+    creatable: false,
+    updatable: false,
+    requiredOnCreate: false,
+    ...metadata,
+  };
 }

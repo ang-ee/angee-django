@@ -1,10 +1,10 @@
 import * as React from "react";
-import { errorMessage, rowPublicId, type Row } from "@angee/sdk";
+import { rowPublicId, type Row } from "@angee/data";
 
 import { Button } from "../ui/button";
 import { DropdownMenu } from "../ui/dropdown-menu";
 import { Glyph } from "../chrome/Glyph";
-import { useConfirm, usePrompt, useToast } from "../feedback";
+import { errorMessage, useConfirm, usePrompt, useToast } from "../feedback";
 import type { ActionDescriptor } from "./page";
 
 export interface RecordDeleteAction {

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import strawberry
+import strawberry_django
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from rebac import system_context
@@ -13,18 +14,22 @@ from strawberry.annotation import StrawberryAnnotation
 from strawberry.extensions.field_extension import FieldExtension, SyncExtensionResolver
 from strawberry.types import Info
 from strawberry_django.mutations import resolvers as mutation_resolvers
-from strawberry_django.mutations.fields import (
-    DjangoCreateMutation,
-    DjangoUpdateMutation,
-    get_pk,
-    get_vdata,
-)
+from strawberry_django.mutations.fields import DjangoUpdateMutation, get_pk, get_vdata
 from strawberry_django.permissions import filter_with_perms
 
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
+from angee.graphql.data.metadata import (
+    DataResourceRoots,
+    DataResourceTypeNames,
+    attach_data_resource_metadata,
+    make_data_resource_metadata,
+    resource_type_name,
+    resource_wire_field_name,
+)
 from angee.graphql.deletion import DeletePreview, delete_by_public_id
-from angee.graphql.ids import PublicID, coerce_relation_public_ids, require_instance_for_id
+from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.introspection import django_model, surface_name
+from angee.graphql.writes import write_queryset
 
 
 class _SystemContextWrite(FieldExtension):
@@ -88,7 +93,7 @@ def crud(
         add(
             "create",
             node,
-            _create_mutation(
+            strawberry_django.mutations.create(
                 create,
                 permission_classes=permission_classes,
                 extensions=write_extensions(),
@@ -119,85 +124,88 @@ def crud(
         raise ImproperlyConfigured(f"crud({surface_name(node)}) needs at least one of create, update, or delete")
     type_name = f"{singular[:1].upper()}{singular[1:]}Mutation"
     surface = type(type_name, (), namespace)
-    return strawberry.type(surface)
+    surface = strawberry.type(surface)
+    return attach_data_resource_metadata(
+        surface,
+        make_data_resource_metadata(
+            model=model,
+            node_type=node,
+            roots=DataResourceRoots(
+                create_name=resource_wire_field_name(surface, f"create_{singular}") if create is not None else None,
+                update_name=resource_wire_field_name(surface, f"update_{singular}") if update is not None else None,
+                delete_preview_name=resource_wire_field_name(surface, f"delete_{singular}") if delete else None,
+            ),
+            type_names=DataResourceTypeNames(
+                node=resource_type_name(node),
+                create_input=resource_type_name(create),
+                update_input=resource_type_name(update),
+                delete_payload=resource_type_name(DeletePreview) if delete else None,
+            ),
+            create_input_type=create,
+            update_input_type=update,
+            capabilities=tuple(
+                name
+                for name, enabled in (
+                    ("create", create is not None),
+                    ("update", update is not None),
+                    ("deletePreview", delete),
+                )
+                if enabled
+            ),
+        ),
+    )
 
 
-class _AngeeMutationCloneMixin:
-    """Preserve Angee's public key field settings through Strawberry cloning."""
+def _write_queryset(model: type[models.Model]) -> models.QuerySet[models.Model]:
+    """Return a write-target queryset: REBAC row scope kept, field-read redaction off.
 
-    def __copy__(self) -> Any:
-        new_field = super().__copy__()
-        new_field.key_attr = self.key_attr
-        new_field.argument_name = self.argument_name
-        return new_field
+    Both the update apply and the delete-to-history step read the in-memory
+    instance, so the write target must load every column (redaction off) while
+    staying row-scoped. REBAC models expose this as ``for_write()``; plain Django
+    models have no field redaction and use their default manager.
+    """
 
-
-class _AngeeCreateMutation(_AngeeMutationCloneMixin, DjangoCreateMutation):
-    """Create mutation whose relation IDs are public sqids."""
-
-    def create(self, data: dict[str, Any], *, info: Info) -> Any:
-        model = self.django_model
-        assert model is not None
-        return mutation_resolvers.create(
-            info,
-            model,
-            coerce_relation_public_ids(model, data),
-            key_attr=self.key_attr,
-            full_clean=self.full_clean,
-        )
+    return write_queryset(model)
 
 
-class _AngeeUpdateMutation(_AngeeMutationCloneMixin, DjangoUpdateMutation):
-    """Update mutation whose write target is loaded without field redaction."""
+class _AngeeUpdateMutation(DjangoUpdateMutation):
+    """Update mutation that loads the write target through ``_write_queryset``.
 
-    def instance_level_update(
-        self,
-        info: Info,
-        kwargs: dict[str, Any],
-        data: Any,
-    ) -> Any:
+    The stock ``instance_level_update`` resolves the public-id-addressed write
+    target through ``get_with_perms``/``_default_manager.get`` (and the bulk
+    branch through ``get_queryset``), neither of which applies the REBAC
+    redaction-off write scope. Resolving an update target must read every column
+    to mutate it, so field-read redaction must stay off (a redacted column would
+    overwrite the stored value on save) while row scope stays on. This override
+    is the single seam that pins both branches to ``_write_queryset``; input
+    parsing, the ``update`` apply, and m2m handling stay the stock library's.
+    """
+
+    def instance_level_update(self, info: Info, kwargs: dict[str, Any], data: Any) -> Any:
         model = self.django_model
         assert model is not None
 
         vdata = get_vdata(data)
         pk = get_pk(vdata, key_attr=self.key_attr)
+        write_target = _write_queryset(model)
 
         if pk not in (None, UNSET):  # noqa: PLR6201
-            instance = _resolve_for_write(model, pk, key_attr=self.key_attr)
+            instance: Any = require_instance_for_id(model, pk, queryset=write_target)
         else:
-            instance = filter_with_perms(
-                self.get_queryset(
-                    queryset=_write_queryset(model),
-                    info=info,
-                    **kwargs,
-                ),
-                info,
-            )
+            instance = filter_with_perms(self.get_queryset(queryset=write_target, info=info, **kwargs), info)
 
-        return self.update(
-            info,
-            instance,
-            coerce_relation_public_ids(model, mutation_resolvers.parse_input(info, vdata, key_attr=self.key_attr)),
-        )
+        return self.update(info, instance, mutation_resolvers.parse_input(info, vdata, key_attr=self.key_attr))
 
 
-def _create_mutation(
-    input_type: type,
-    *,
-    permission_classes: list[type] | None,
-    extensions: list[FieldExtension] | None,
-) -> _AngeeCreateMutation:
-    """Return Angee's Strawberry-Django create field."""
+def _delete_resolver(model: type[models.Model]) -> Any:
+    """Return a mutation resolver that previews then deletes by public id."""
 
-    return _AngeeCreateMutation(
-        input_type,
-        python_name=None,
-        django_name=None,
-        graphql_name=None,
-        type_annotation=StrawberryAnnotation.from_annotation(None),
-        permission_classes=permission_classes or [],
-        extensions=extensions or (),
-    )
+    def delete(id: PublicID, confirm: bool = False) -> DeletePreview:
+        """Delete one model instance by public id when unblocked."""
+
+        return delete_by_public_id(model, str(id), confirm=confirm, queryset=_write_queryset(model))
+
+    return delete
 
 
 def _update_mutation(
@@ -206,7 +214,7 @@ def _update_mutation(
     permission_classes: list[type] | None,
     extensions: list[FieldExtension] | None,
 ) -> _AngeeUpdateMutation:
-    """Return Angee's Strawberry-Django update field."""
+    """Return Angee's Strawberry-Django update field keyed by the public id."""
 
     return _AngeeUpdateMutation(
         input_type,
@@ -218,51 +226,3 @@ def _update_mutation(
         permission_classes=permission_classes or [],
         extensions=extensions or (),
     )
-
-
-def _write_queryset(model: type[models.Model]) -> models.QuerySet[models.Model]:
-    """Return a write-target queryset that preserves row scope, not redaction."""
-
-    queryset = model._default_manager.all()
-    on_field_deny = getattr(queryset, "on_field_deny", None)
-    if callable(on_field_deny):
-        queryset = on_field_deny("allow")
-    return queryset
-
-
-def _resolve_for_write(
-    model: type[models.Model],
-    key: Any,
-    *,
-    key_attr: str | None,
-) -> models.Model:
-    """Return a write-ready instance addressed by mutation input."""
-
-    queryset = _write_queryset(model)
-    if key_attr in (None, "id", PUBLIC_ID_FIELD_NAME):
-        return require_instance_for_id(model, key, queryset=queryset)
-    else:
-        assert key_attr is not None
-        try:
-            instance = queryset.filter(**{key_attr: key}).first()
-        except (TypeError, ValueError):
-            instance = None
-    if instance is None:
-        raise ValueError(f"{model._meta.object_name} {key!r} was not found")
-    return instance
-
-
-def _delete_resolver(model: type[models.Model]) -> Any:
-    """Return a mutation resolver that previews then deletes."""
-
-    def delete(id: PublicID, confirm: bool = False) -> DeletePreview:
-        """Delete one model instance by public id when unblocked."""
-
-        return delete_by_public_id(
-            model,
-            str(id),
-            confirm=confirm,
-            queryset=_write_queryset(model),
-        )
-
-    return delete

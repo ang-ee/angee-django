@@ -23,7 +23,7 @@ const handleColumns: readonly ListColumn<RelatedRow>[] = [
   { field: "platform" },
   { field: "value", render: (row) => <span className="font-medium text-fg">{String(row.value ?? "")}</span> },
   { field: "label" },
-  { field: "isPreferred", header: "Preferred", render: (row) => (row.isPreferred ? "Yes" : "") },
+  { field: "is_preferred", header: "Preferred", render: (row) => (row.is_preferred ? "Yes" : "") },
 ];
 
 const addressColumns: readonly ListColumn<RelatedRow>[] = [
@@ -36,9 +36,9 @@ const addressColumns: readonly ListColumn<RelatedRow>[] = [
 
 const affiliationColumns: readonly ListColumn<RelatedRow>[] = [
   {
-    field: "organizationName",
+    field: "organization_name",
     header: "Organization",
-    render: (row) => <span className="font-medium text-fg">{String(row.organizationName ?? "")}</span>,
+    render: (row) => <span className="font-medium text-fg">{String(row.organization_name ?? "")}</span>,
   },
   { field: "title" },
   { field: "role" },
@@ -67,7 +67,7 @@ function PartyRelatedTab({
       recordId={recordId}
       model={model}
       fields={fields}
-      filterFor={(id) => ({ party: { sqid: id } })}
+      filterFor={(id) => ({ party: { _eq: id } })}
       columns={columns}
       emptyMessage={emptyMessage}
     />
@@ -82,7 +82,7 @@ const personRecordTabs: readonly RecordTabDescriptor[] = [
       <PartyRelatedTab
         {...context}
         model="parties.Handle"
-        fields={["id", "platform", "value", "label", "isPreferred"]}
+        fields={["id", "platform", "value", "label", "is_preferred"]}
         columns={handleColumns}
         emptyMessage="No handles for this contact yet."
       />
@@ -95,7 +95,7 @@ const personRecordTabs: readonly RecordTabDescriptor[] = [
       <PartyRelatedTab
         {...context}
         model="parties.Address"
-        fields={["id", "label", "street", "city", "region", "postalCode", "country"]}
+        fields={["id", "label", "street", "city", "region", "postal_code", "country"]}
         columns={addressColumns}
         emptyMessage="No addresses for this contact yet."
       />
@@ -108,7 +108,7 @@ const personRecordTabs: readonly RecordTabDescriptor[] = [
       <PartyRelatedTab
         {...context}
         model="parties.Affiliation"
-        fields={["id", "organizationName", "title", "role", "department"]}
+        fields={["id", "organization_name", "title", "role", "department"]}
         columns={affiliationColumns}
         emptyMessage="No affiliations for this contact yet."
       />
@@ -118,14 +118,14 @@ const personRecordTabs: readonly RecordTabDescriptor[] = [
 
 const peopleForm = (
   <Form model={MODEL}>
-    <Field name="displayName" title />
+    <Field name="display_name" title />
     <Group label="Name" columns={2}>
-      <Field name="givenName" label="Given name" />
-      <Field name="familyName" label="Family name" />
-      <Field name="additionalName" label="Middle name" />
+      <Field name="given_name" label="Given name" />
+      <Field name="family_name" label="Family name" />
+      <Field name="additional_name" label="Middle name" />
       <Field name="nickname" label="Nickname" />
-      <Field name="namePrefix" label="Prefix" />
-      <Field name="nameSuffix" label="Suffix" />
+      <Field name="name_prefix" label="Prefix" />
+      <Field name="name_suffix" label="Suffix" />
     </Group>
     <Group label="Details" columns={2}>
       <Field name="birthday" label="Birthday" />
@@ -148,11 +148,11 @@ export function PeoplePage(): React.ReactElement {
     <DataPage model={MODEL} placement="inline" routed recordTabs={personRecordTabs}>
       <List model={MODEL} list={GroupListView}>
         <Facet field="folder" label="Folder" labelField="name" />
-        <Column field="displayName" />
+        <Column field="display_name" />
         <Column field="folder.name" header="Folder" />
-        <Column field="givenName" />
-        <Column field="familyName" />
-        <Column field="createdAt" />
+        <Column field="given_name" />
+        <Column field="family_name" />
+        <Column field="created_at" />
       </List>
       {peopleForm}
     </DataPage>

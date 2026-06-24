@@ -30,20 +30,6 @@ vi.mock("@angee/sdk", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/sdk")>();
   return {
     ...actual,
-    useAuth: () => ({
-      user: {
-        id: "user_1",
-        name: "Ada Lovelace",
-        email: "ada@example.com",
-      },
-      status: "authenticated" as const,
-      hasRole: () => false,
-    }),
-    useLogout: () => ({
-      logout: vi.fn(async () => true),
-      fetching: false,
-      error: null,
-    }),
     // Three apps: a domain app "Notes" (with two sections), a sibling domain app
     // "Ops", and a platform app "Admin" (with two sections). The rail switches
     // apps and clusters platform apps at the bottom; a domain app shows its
@@ -73,6 +59,27 @@ vi.mock("@angee/sdk", async (importOriginal) => {
         ],
       },
     ],
+  };
+});
+
+vi.mock("@angee/data", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/data")>();
+  return {
+    ...actual,
+    useAuth: () => ({
+      user: {
+        id: "user_1",
+        name: "Ada Lovelace",
+        email: "ada@example.com",
+      },
+      status: "authenticated" as const,
+      hasRole: () => false,
+    }),
+    useLogout: () => ({
+      logout: vi.fn(async () => true),
+      fetching: false,
+      error: null,
+    }),
   };
 });
 

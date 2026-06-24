@@ -1,11 +1,12 @@
 import * as React from "react";
 import {
-  useGraphQLProviderAvailable,
-  useResourceFacets,
+  useAngeeFacets,
+  type FacetRequestSpec,
+  type ResourceFacetOption,
+} from "@angee/data";
+import {
   type ModelFieldMetadata,
   type ModelMetadata,
-  type ResourceFacetOption,
-  type ResourceFacetSpec,
 } from "@angee/sdk";
 
 import type {
@@ -13,9 +14,11 @@ import type {
   DataToolbarFilterOption,
 } from "../toolbars";
 import type { DataViewFilter, DataViewGroup } from "./data-view-model";
+import { facetRequestSpec } from "./facet-query";
 import {
   dataViewGroupToAggregateDimension,
   groupKey,
+  hasuraGroupDimension,
 } from "./ListInternals";
 import { groupLabel } from "./model-metadata-defaults";
 import type { ColumnDescriptor } from "./page";
@@ -38,61 +41,63 @@ export interface ScalarFacetDeclaration {
   field: string;
   label: React.ReactNode;
   group: DataViewGroup;
-  spec: ResourceFacetSpec;
+  spec: FacetRequestSpec;
+  neutralizeFilterFields: readonly string[];
 }
 
-/** Build server-backed scalar choice facets from the model's data-query metadata. */
+/** Build server-backed scalar choice facets from the model's resource metadata. */
 export function useScalarFacets<TRow extends object>(
-  model: string,
+  _model: string,
   columns: readonly ColumnDescriptor<TRow>[],
   metadata: ModelMetadata | null,
   activeFilter?: DataViewFilter,
 ): ScalarFacets {
-  const canQueryFacets = useGraphQLProviderAvailable();
   const facets = React.useMemo(
     () => scalarFacetDeclarations(columns, metadata),
     [columns, metadata],
   );
+  const resource = metadata?.resource ?? null;
   const facetSpecs = React.useMemo(
-    () => facets.map((facet) => facet.spec),
-    [facets],
+    () =>
+      facets.map((facet) =>
+        facetRequestSpec(
+          facet.spec,
+          activeFilter,
+          facet.neutralizeFilterFields,
+        )),
+    [activeFilter, facets],
   );
-  const facetQuery = useResourceFacets(model, {
+  const facetQuery = useAngeeFacets(resource, {
     facets: facetSpecs,
-    ...(activeFilter !== undefined ? { filter: activeFilter } : {}),
-    enabled: canQueryFacets && facetSpecs.length > 0,
+    enabled: resource !== null && facetSpecs.length > 0,
   });
   const filters = React.useMemo<readonly DataToolbarFilterOption[]>(
     () =>
-      canQueryFacets
-        ? facets.flatMap((facet) => {
-            const result = facetQuery.facets[facet.id];
-            return (result?.options ?? []).map((option) =>
-              scalarFilterOption(facet, option, metadata),
-            );
-          })
-        : EMPTY_FILTER_OPTIONS,
-    [canQueryFacets, facetQuery.facets, facets, metadata],
+      facets.flatMap((facet) => {
+        const result = facetQuery.facets[facet.id];
+        return (result?.options ?? []).map((option) =>
+          scalarFilterOption(facet, option, metadata),
+        );
+      }),
+    [facetQuery.facets, facets, metadata],
   );
   const filterFields = React.useMemo<readonly DataToolbarFilterField[]>(
     () =>
-      canQueryFacets
-        ? facets.flatMap((facet) => {
-            const result = facetQuery.facets[facet.id];
-            if (!result || result.options.length === 0) return [];
-            return [{
-              id: facet.field,
-              field: facet.field,
-              label: facet.label,
-              type: "selection",
-              options: result.options.map((option) => ({
-                value: option.value,
-                label: scalarFacetOptionLabel(facet, option, metadata),
-              })),
-            }];
-          })
-        : EMPTY_FILTER_FIELDS,
-    [canQueryFacets, facetQuery.facets, facets, metadata],
+      facets.flatMap((facet) => {
+        const result = facetQuery.facets[facet.id];
+        if (!result || result.options.length === 0) return [];
+        return [{
+          id: facet.field,
+          field: facet.field,
+          label: facet.label,
+          type: "selection",
+          options: result.options.map((option) => ({
+            value: option.value,
+            label: scalarFacetOptionLabel(facet, option, metadata),
+          })),
+        }];
+      }),
+    [facetQuery.facets, facets, metadata],
   );
 
   return React.useMemo(
@@ -114,9 +119,7 @@ function scalarFilterOption(
     id: `${facet.field}:${option.value}`,
     label,
     chipLabel: label,
-    filter: option.filter
-      ? (option.filter as DataViewFilter)
-      : { [facet.field]: { exact: option.value } },
+    filter: { [facet.field]: { exact: option.value } },
   };
 }
 
@@ -133,14 +136,14 @@ export function scalarFacetDeclarations<TRow extends object>(
   columns: readonly ColumnDescriptor<TRow>[],
   metadata: ModelMetadata | null,
 ): readonly ScalarFacetDeclaration[] {
-  if (!metadata?.dataQuery) return [];
-  const filterable = new Set(metadata.dataQuery.filterFields);
-  const groupable = new Set(metadata.dataQuery.groupByFields);
+  if (!metadata?.resource) return [];
+  const filterable = new Set(metadata.resource.filterFields);
+  const groupable = new Set(metadata.resource.groupByFields);
   const columnsByField = new Map(columns.map((column) => [column.field, column]));
   const facets: ScalarFacetDeclaration[] = [];
   const seen = new Set<string>();
 
-  for (const alias of metadata.dataQuery.groupAliases ?? []) {
+  for (const alias of metadata.resource.groupAliases ?? []) {
     if (!filterable.has(alias.aggregateField)) continue;
     if (!groupable.has(alias.aggregateField)) continue;
     const field = metadata.fields[alias.aggregateField];
@@ -155,7 +158,7 @@ export function scalarFacetDeclarations<TRow extends object>(
     });
   }
 
-  for (const fieldName of metadata.dataQuery.filterFields) {
+  for (const fieldName of metadata.resource.filterFields) {
     if (!groupable.has(fieldName) || seen.has(fieldName)) continue;
     const field = metadata.fields[fieldName];
     if (!isCategoricalScalar(field, columnsByField.get(fieldName))) continue;
@@ -173,7 +176,8 @@ function addScalarFacet(
   group: DataViewGroup,
   options: { labelField?: string } = {},
 ): void {
-  const identity = dataViewGroupToAggregateDimension(group);
+  const identity = dataViewGroupToAggregateDimension(group, metadata);
+  const dimension = hasuraGroupDimension(identity);
   const labelField = options.labelField ?? fieldName;
   const label = groupLabel(labelField, metadata.fields[labelField]);
   seen.add(fieldName);
@@ -184,11 +188,11 @@ function addScalarFacet(
     group,
     spec: {
       id: fieldName,
-      groups: [identity],
-      ...(identity.key ? { valueKey: identity.key } : {}),
-      neutralizeFilterFields: [fieldName],
+      dimensions: [dimension],
+      ...(dimension.key ? { valueKey: dimension.key } : {}),
       pageSize: SCALAR_FACET_OPTION_LIMIT,
     },
+    neutralizeFilterFields: [fieldName],
   });
 }
 

@@ -40,7 +40,7 @@ import type {
   ResourceTypeName,
   UseResourceListOptions,
   UseResourceListResult,
-} from "@angee/sdk";
+} from "@angee/data";
 
 const sdkMocks = vi.hoisted(() => ({
   rows: [
@@ -62,6 +62,27 @@ vi.mock("@angee/sdk", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/sdk")>();
   return {
     ...actual,
+    useWidget: () => undefined,
+  };
+});
+
+vi.mock("@angee/data", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/data")>();
+  return {
+    ...actual,
+    useResourceMutation: () => [
+      sdkMocks.mutate,
+      { fetching: false, error: null },
+    ],
+    useResourceRecord: (model: string, id: string | null, options: unknown) => {
+      sdkMocks.recordCalls.push({ model, id, options });
+      return {
+        record: sdkMocks.rows.find((row) => row.id === id) ?? null,
+        fetching: false,
+        error: null,
+        refetch: vi.fn(),
+      };
+    },
     useResourceList: (
       _model: string,
       options: UseResourceListOptions<ResourceTypeName>,
@@ -87,32 +108,12 @@ vi.mock("@angee/sdk", async (importOriginal) => {
         refetch: vi.fn(),
       };
     },
-    useResourceRecord: (model: string, id: string | null, options: unknown) => {
-      sdkMocks.recordCalls.push({ model, id, options });
-      return {
-        record: sdkMocks.rows.find((row) => row.id === id) ?? null,
-        fetching: false,
-        error: null,
-        refetch: vi.fn(),
-      };
-    },
-    useResourceMutation: () => [
-      sdkMocks.mutate,
-      { fetching: false, error: null },
-    ],
-    useResourceGroupBy: () => ({
-      count: 0,
-      totalCount: 0,
-      buckets: [],
+    useAngeeFacets: () => ({
+      facets: {},
       fetching: false,
       error: null,
+      refetch: vi.fn(),
     }),
-    useResourceAggregate: () => ({
-      aggregate: null,
-      fetching: false,
-      error: null,
-    }),
-    useWidget: () => undefined,
   };
 });
 

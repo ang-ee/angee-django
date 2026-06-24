@@ -29,7 +29,6 @@ export type {
   CommitRef,
   MutationResult,
   WorkspaceCreateInput,
-  ServiceCreateInput,
   KeyValueInput,
 } from "../__generated__/operator";
 

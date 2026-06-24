@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { defineConfig, mergeConfig, type UserConfig } from "vitest/config";
+import { defineConfig, mergeConfig, type ViteUserConfig } from "vitest/config";
 import type { InlineConfig } from "vitest/node";
 
 // The `@angee/gql/<schema>` alias for test runs. Vitest does not read tsconfig
@@ -43,12 +43,12 @@ const webDefaults = defineConfig({
 });
 
 export function defineAngeePackageVitestConfig(
-  config: UserConfig = {},
-): UserConfig {
+  config: ViteUserConfig = {},
+): ViteUserConfig {
   return mergeConfig(packageDefaults, config);
 }
 
-export interface AngeeWebVitestConfig extends UserConfig {
+export interface AngeeWebVitestConfig extends ViteUserConfig {
   test?: InlineConfig & {
     /** Package-specific test globs appended after the shared `src/**` defaults. */
     extraInclude?: string[];
@@ -58,7 +58,7 @@ export interface AngeeWebVitestConfig extends UserConfig {
 export function defineAngeeWebVitestConfig({
   test,
   ...config
-}: AngeeWebVitestConfig = {}): UserConfig {
+}: AngeeWebVitestConfig = {}): ViteUserConfig {
   const { extraInclude = [], ...testConfig } = test ?? {};
   const include = extraInclude.length ? extraInclude : testConfig.include;
   return mergeConfig(

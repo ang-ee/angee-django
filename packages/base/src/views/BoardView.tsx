@@ -3,7 +3,7 @@
 import * as React from "react";
 import type { Row as TableRowModel } from "@tanstack/react-table";
 import { useNavigate } from "@tanstack/react-router";
-import type { Row } from "@angee/sdk";
+import type { Row } from "@angee/data";
 
 import { useBaseT } from "../i18n";
 import { type Tone } from "../lib/tones";

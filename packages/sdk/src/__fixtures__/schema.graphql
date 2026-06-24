@@ -252,11 +252,11 @@ type DeletePreview {
 type Viewer implements Node {
   id: ID!
   username: String!
-  firstName: String!
-  lastName: String!
+  first_name: String!
+  last_name: String!
   email: String!
-  isStaff: Boolean!
-  isActive: Boolean!
+  is_staff: Boolean!
+  is_active: Boolean!
   preferences: JSON!
 }
 

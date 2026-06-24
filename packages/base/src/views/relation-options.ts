@@ -2,9 +2,9 @@ import * as React from "react";
 import {
   useResourceList,
   rowPublicId,
-  type Row,
   type UseResourceListResult,
-} from "@angee/sdk";
+  type Row,
+} from "@angee/data";
 
 import type { RelationOption } from "../widgets/RelationField";
 import type { RelationFieldInfo } from "./model-metadata-defaults";

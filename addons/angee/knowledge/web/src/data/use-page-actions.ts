@@ -1,4 +1,5 @@
-import { rowPublicId, useBusyRun, useResourceMutation } from "@angee/sdk";
+import { useResourceMutation } from "@angee/data";
+import { rowPublicId, useBusyRun } from "@angee/base";
 
 export interface PageActions {
   busy: boolean;

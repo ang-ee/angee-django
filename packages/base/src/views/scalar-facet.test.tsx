@@ -1,43 +1,39 @@
 // @vitest-environment happy-dom
 
 import { renderHook } from "@testing-library/react";
-import type {
-  ModelMetadata,
-  ResourceFacetOption,
-} from "@angee/sdk";
+import type { ResourceFacetOption } from "@angee/data";
+import type { ModelMetadata } from "@angee/sdk";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { scalarFacetDeclarations, useScalarFacets } from "./scalar-facet";
 
-const sdkMocks = vi.hoisted(() => ({
+const dataMocks = vi.hoisted(() => ({
   facets: vi.fn(),
 }));
 
-vi.mock("@angee/sdk", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/sdk")>();
+vi.mock("@angee/data", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/data")>();
   return {
     ...actual,
-    useGraphQLProviderAvailable: () => true,
-    useResourceFacets: sdkMocks.facets,
+    useAngeeFacets: dataMocks.facets,
   };
 });
 
 beforeEach(() => {
-  sdkMocks.facets.mockReturnValue(resourceFacets({
+  dataMocks.facets.mockReset();
+  dataMocks.facets.mockReturnValue(resourceFacets({
     status: [
       {
         value: "DRAFT",
         label: "DRAFT",
         count: 2,
         key: { status: "DRAFT" },
-        filter: { status: { exact: "DRAFT" } },
       },
       {
         value: "ACTIVE",
         label: "ACTIVE",
         count: 1,
         key: { status: "ACTIVE" },
-        filter: { status: { exact: "ACTIVE" } },
       },
     ],
     source: [
@@ -46,14 +42,13 @@ beforeEach(() => {
         label: "api",
         count: 1,
         key: { source: "api" },
-        filter: { source: { exact: "api" } },
       },
     ],
   }));
 });
 
 describe("useScalarFacets", () => {
-  test("queries categorical scalar facets from data-query metadata", () => {
+  test("queries categorical scalar facets from resource metadata", () => {
     const { result } = renderHook(() =>
       useScalarFacets(
         "notes.Note",
@@ -68,27 +63,26 @@ describe("useScalarFacets", () => {
         { title: { iContains: "release" }, status: { exact: "DRAFT" } },
       ));
 
-    expect(sdkMocks.facets).toHaveBeenCalledWith("notes.Note", {
+    expect(dataMocks.facets).toHaveBeenCalledWith(NOTE_METADATA.resource, {
       facets: [
         {
           id: "status",
-          groups: [{ field: "STATUS", key: "status" }],
+          dimensions: [{ input: "STATUS", key: "status" }],
           valueKey: "status",
-          neutralizeFilterFields: ["status"],
           pageSize: 200,
+          where: { title: { _ilike: "release" } },
         },
         {
           id: "source",
-          groups: [{ field: "SOURCE", key: "source" }],
+          dimensions: [{ input: "SOURCE", key: "source" }],
           valueKey: "source",
-          neutralizeFilterFields: ["source"],
           pageSize: 200,
+          where: {
+            title: { _ilike: "release" },
+            status: { _eq: "DRAFT" },
+          },
         },
       ],
-      filter: {
-        title: { iContains: "release" },
-        status: { exact: "DRAFT" },
-      },
       enabled: true,
     });
     expect(result.current.filters).toEqual([
@@ -145,11 +139,11 @@ describe("useScalarFacets", () => {
         },
         spec: {
           id: "implClass",
-          groups: [{ field: "IMPL_CLASS", key: "implClass" }],
+          dimensions: [{ input: "IMPL_CLASS", key: "implClass" }],
           valueKey: "implClass",
-          neutralizeFilterFields: ["implClass"],
           pageSize: 200,
         },
+        neutralizeFilterFields: ["implClass"],
       },
     ]);
   });
@@ -173,7 +167,8 @@ const NOTE_METADATA: ModelMetadata = {
     wordCount: { name: "wordCount", kind: "scalar", scalar: "Int" },
     updatedAt: { name: "updatedAt", kind: "scalar", scalar: "DateTime" },
   },
-  dataQuery: {
+  resource: {
+    schemaName: "public",
     modelLabel: "notes.Note",
     appLabel: "notes",
     modelName: "note",
@@ -185,6 +180,35 @@ const NOTE_METADATA: ModelMetadata = {
     orderFields: [],
     aggregateFields: ["id", "wordCount"],
     groupByFields: ["status", "source", "wordCount", "updatedAt"],
+    groupDimensions: [
+      {
+        field: "status",
+        input: "STATUS",
+        key: "status",
+        kind: "column",
+      },
+      {
+        field: "source",
+        input: "SOURCE",
+        key: "source",
+        kind: "column",
+        scalar: "String",
+      },
+      {
+        field: "wordCount",
+        input: "WORD_COUNT",
+        key: "wordCount",
+        kind: "column",
+        scalar: "Int",
+      },
+      {
+        field: "updatedAt",
+        input: "UPDATED_AT",
+        key: "updatedAt",
+        kind: "column",
+        scalar: "DateTime",
+      },
+    ],
     relationAxes: [],
   },
 };
@@ -205,7 +229,8 @@ const INTEGRATION_METADATA: ModelMetadata = {
       values: [{ value: "NONE", description: "None" }],
     },
   },
-  dataQuery: {
+  resource: {
+    schemaName: "console",
     modelLabel: "integrate.Integration",
     appLabel: "integrate",
     modelName: "integration",
@@ -217,6 +242,14 @@ const INTEGRATION_METADATA: ModelMetadata = {
     orderFields: [],
     aggregateFields: ["id"],
     groupByFields: ["implClass"],
+    groupDimensions: [
+      {
+        field: "implClass",
+        input: "IMPL_CLASS",
+        key: "implClass",
+        kind: "column",
+      },
+    ],
     relationAxes: [],
     groupAliases: [
       {

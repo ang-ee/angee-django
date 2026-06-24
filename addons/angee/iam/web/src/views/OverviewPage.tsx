@@ -19,8 +19,9 @@ import {
   MiniCard,
   Select,
   SurfacePanel,
+  errorMessage,
 } from "@angee/base";
-import { errorMessage, useAuthoredMutation, useAuthoredQuery } from "@angee/sdk";
+import { useAuthoredMutation, useAuthoredQuery } from "@angee/sdk";
 
 import {
   IamGrantRole,
@@ -50,7 +51,7 @@ export function OverviewPage(): ReactElement {
     [],
   );
   const listVars = useMemo<IAMUsersVariables>(
-    () => ({ pagination: { offset: 0, limit: IAM_LIST_LIMIT } }),
+    () => ({ offset: 0, limit: IAM_LIST_LIMIT }),
     [],
   );
   const overview = useAuthoredQuery(IamOverview, overviewVars);
@@ -60,7 +61,7 @@ export function OverviewPage(): ReactElement {
   const overviewFacts = overview.data?.iamOverview;
   const roles = useMemo(() => roleRows(overview.data?.roles ?? []), [overview.data]);
   const users = useMemo(
-    () => [...(usersQuery.data?.users.results ?? [])],
+    () => [...(usersQuery.data?.users ?? [])],
     [usersQuery.data],
   );
   const privileged = useMemo(
@@ -85,7 +86,7 @@ export function OverviewPage(): ReactElement {
     () => users.map((user) => ({ value: user.id, label: userLabel(user) })),
     [users],
   );
-  const userTotalCount = usersQuery.data?.users.totalCount ?? 0;
+  const userTotalCount = usersQuery.data?.users_aggregate.aggregate?.count ?? 0;
   const usersTruncated = userTotalCount > IAM_LIST_LIMIT;
   const privilegedTotal = overviewFacts?.privilegedGrantCount ?? privileged.length;
   const unassignedTotal = overviewFacts?.unassignedUserCount ?? unassigned.length;

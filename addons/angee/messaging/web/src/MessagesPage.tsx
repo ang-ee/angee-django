@@ -32,12 +32,12 @@ export function MessagesPage(): React.ReactElement {
         list={GroupListView}
         defaultGroups={DEFAULT_GROUPS}
       >
-        <Facet field="channel" label="Channel" labelField="displayName" />
+        <Facet field="channel" label="Channel" labelField="display_name" />
         <Column field="subject" />
         <Column field="sender.value" header="Sender" />
         <Column field="thread.subject" header="Thread" />
         <Column field="status" widget="statusBadge" />
-        <Column field="sentAt" />
+        <Column field="sent_at" />
       </List>
       <Form model={MODEL}>
         <Field name="subject" readOnly />
@@ -48,8 +48,8 @@ export function MessagesPage(): React.ReactElement {
         <Group label="Envelope" columns={2}>
           <Field name="platform" readOnly />
           <Field name="direction" readOnly />
-          <Field name="sentAt" readOnly />
-          <Field name="externalId" readOnly />
+          <Field name="sent_at" readOnly />
+          <Field name="external_id" readOnly />
         </Group>
         <Field name="preview" readOnly />
         <Action

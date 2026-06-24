@@ -13,7 +13,8 @@ import {
   useScopedTreeExplorer,
   type WikilinkResolver,
 } from "@angee/base";
-import { useAuthoredQuery, useResourceRecord } from "@angee/sdk";
+import { useResourceRecord } from "@angee/data";
+import { useAuthoredQuery } from "@angee/sdk";
 
 import {
   KnowledgePage as KnowledgePageQuery,
@@ -50,14 +51,14 @@ const KNOWLEDGE_LIST_LIMIT = 500;
 export function KnowledgePage(): ReactElement {
   const t = useKnowledgeT();
   const variables = useMemo(
-    () => ({ pagination: { offset: 0, limit: KNOWLEDGE_LIST_LIMIT } }),
+    () => ({ offset: 0, limit: KNOWLEDGE_LIST_LIMIT }),
     [],
   );
   const vaultsQuery = useAuthoredQuery(KnowledgeVaults, variables);
   const pagesQuery = useAuthoredQuery(KnowledgePages, variables);
 
-  const vaults = vaultsQuery.data?.vaults.results ?? [];
-  const pages = pagesQuery.data?.pages.results ?? [];
+  const vaults = vaultsQuery.data?.vaults ?? [];
+  const pages = pagesQuery.data?.pages ?? [];
 
   // The open page is route state: `/knowledge/$id` reads that page into the
   // content + aside; `/knowledge` is the empty reader.
@@ -82,7 +83,7 @@ export function KnowledgePage(): ReactElement {
   const detailQuery = useAuthoredQuery(KnowledgePageQuery, detailVariables, {
     enabled: openPageId !== null,
   });
-  const detail = detailQuery.data?.page ?? null;
+  const detail = detailQuery.data?.pages_by_pk ?? null;
 
   // A page write retitles its tree node; refetch the navigator set.
   const handleSaved = useCallback(() => {

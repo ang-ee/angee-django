@@ -120,8 +120,74 @@ def agents_console_tables(transactional_db: Any) -> Iterator[None]:
                     schema_editor.delete_model(model)
 
 
-def test_agent_update_sets_many_to_many_skills(agents_console_tables: None) -> None:
-    """`updateAgent` with a `skills` id list replaces the agent's skill membership."""
+def test_agent_hasura_insert_update_and_delete(agents_console_tables: None) -> None:
+    """Agent row writes use the generated Hasura mutation roots."""
+
+    admin = _platform_admin("agt-hasura-admin")
+    console = _schema()
+
+    created = _data(
+        _execute(
+            console,
+            """
+            mutation CreateAgent($owner: ID!) {
+              insert_agents_one(object: {name: "Composer", owner: $owner, lifecycle: "draft"}) {
+                id
+                name
+                lifecycle
+                is_template
+                owner { username }
+              }
+            }
+            """,
+            {"owner": str(admin.pk)},
+            user=admin,
+        )
+    )["insert_agents_one"]
+    assert created == {
+        "id": created["id"],
+        "name": "Composer",
+        "lifecycle": "DRAFT",
+        "is_template": False,
+        "owner": {"username": "agt-hasura-admin"},
+    }
+
+    updated = _data(
+        _execute(
+            console,
+            """
+            mutation Rename($id: String!) {
+              update_agents_by_pk(pk_columns: {id: $id}, _set: {name: "Renamed", lifecycle: "ready"}) {
+                name
+                lifecycle
+              }
+            }
+            """,
+            {"id": created["id"]},
+            user=admin,
+        )
+    )["update_agents_by_pk"]
+    assert updated == {"name": "Renamed", "lifecycle": "READY"}
+
+    deleted = _data(
+        _execute(
+            console,
+            """
+            mutation Delete($id: String!) {
+              delete_agents_by_pk(id: $id) { id name }
+            }
+            """,
+            {"id": created["id"]},
+            user=admin,
+        )
+    )["delete_agents_by_pk"]
+    assert deleted == {"id": created["id"], "name": "Renamed"}
+    with system_context(reason="test.agents.hasura_delete.verify"):
+        assert not Agent.objects.filter(sqid=created["id"]).exists()
+
+
+def test_agent_hasura_update_sets_many_to_many_skills(agents_console_tables: None) -> None:
+    """Generated Hasura updates replace agent skill membership through relation arrays."""
 
     admin = _platform_admin("agt-m2m-admin")
     skill_a, skill_b, agent = _seed_agent_and_skills(admin)
@@ -131,8 +197,8 @@ def test_agent_update_sets_many_to_many_skills(agents_console_tables: None) -> N
         _execute(
             console,
             """
-            mutation Attach($id: ID!, $skills: [ID!]) {
-              updateAgent(data: {id: $id, skills: $skills}) {
+            mutation Attach($id: String!, $skills: [ID!]) {
+              update_agents_by_pk(pk_columns: {id: $id}, _set: {skills: $skills}) {
                 skills { name }
               }
             }
@@ -143,17 +209,22 @@ def test_agent_update_sets_many_to_many_skills(agents_console_tables: None) -> N
             },
             user=admin,
         )
-    )["updateAgent"]
+    )["update_agents_by_pk"]
     assert sorted(node["name"] for node in result["skills"]) == ["Alpha", "Beta"]
 
     with system_context(reason="test.agents.m2m.verify"):
         assert sorted(agent.skills.values_list("name", flat=True)) == ["Alpha", "Beta"]
 
-    # An empty list clears the membership.
     _data(
         _execute(
             console,
-            "mutation Clear($id: ID!) { updateAgent(data: {id: $id, skills: []}) { skills { name } } }",
+            """
+            mutation Clear($id: String!) {
+              update_agents_by_pk(pk_columns: {id: $id}, _set: {skills: []}) {
+                skills { name }
+              }
+            }
+            """,
             {"id": _public_id(agent.sqid)},
             user=admin,
         )
@@ -170,14 +241,14 @@ def test_agent_update_is_platform_admin_gated(agents_console_tables: None) -> No
     with system_context(reason="test.agents.crud.seed"):
         agent = Agent.objects.create(name="Scratch", owner=admin)
     update = """
-        mutation Rename($id: ID!) {
-          updateAgent(data: {id: $id, name: "Renamed"}) { name }
+        mutation Rename($id: String!) {
+          update_agents_by_pk(pk_columns: {id: $id}, _set: {name: "Renamed"}) { name }
         }
     """
     agent_id = _public_id(agent.sqid)
 
     assert _execute(console := _schema(), update, {"id": agent_id}, user=plain).errors is not None
-    renamed = _data(_execute(console, update, {"id": agent_id}, user=admin))["updateAgent"]
+    renamed = _data(_execute(console, update, {"id": agent_id}, user=admin))["update_agents_by_pk"]
     assert renamed == {"name": "Renamed"}
 
 
@@ -210,24 +281,20 @@ def test_inference_models_query_accepts_provider_sqid_filter(agents_console_tabl
         _execute(
             _schema(),
             """
-            query ModelsForProvider($provider: ID!) {
-              inferenceModels(filters: {provider: {sqid: $provider}}, order: {name: ASC}) {
-                totalCount
-                results {
-                  name
-                  provider { name }
-                }
+            query ModelsForProvider($provider: String!) {
+              rows: inference_models(where: {provider: {_eq: $provider}}) {
+                name
+                provider { name }
               }
             }
             """,
             {"provider": _public_id(provider_a.sqid)},
             user=admin,
         )
-    )["inferenceModels"]
+    )["rows"]
 
-    assert result["totalCount"] == 2
-    assert [row["name"] for row in result["results"]] == ["claude-opus-4-8", "claude-sonnet-4-6"]
-    assert {row["provider"]["name"] for row in result["results"]} == {"Anthropic"}
+    assert sorted(row["name"] for row in result) == ["claude-opus-4-8", "claude-sonnet-4-6"]
+    assert {row["provider"]["name"] for row in result} == {"Anthropic"}
 
 
 def test_inference_model_groups_aggregate_runs_for_provider_and_capability(
@@ -248,43 +315,51 @@ def test_inference_model_groups_aggregate_runs_for_provider_and_capability(
             _schema(),
             """
             query InferenceModelGroups(
-              $byUse: [InferenceModelAggregateGroupBySpec!]!
-              $byProvider: [InferenceModelAggregateGroupBySpec!]!
+              $byUse: [InferenceModelTypeGroupBySpec!]!
+              $byProvider: [InferenceModelTypeGroupBySpec!]!
             ) {
-              byUse: inferenceModelGroups(groupBy: $byUse, pagination: {offset: 0, limit: 10}) {
-                totalCount
-                results {
-                  key { modelUse }
-                  count
-                  filter
-                }
+              byUse: inference_models_groups(group_by: $byUse, limit: 10) {
+                key { model_use }
+                aggregate { count }
               }
-              byProvider: inferenceModelGroups(groupBy: $byProvider, pagination: {offset: 0, limit: 10}) {
-                totalCount
-                results {
-                  key { providerId }
-                  count
-                  filter
-                }
+              byProvider: inference_models_groups(group_by: $byProvider, limit: 10) {
+                key { provider_id provider__name }
+                aggregate { count }
               }
             }
             """,
             {
                 "byUse": [{"field": "MODEL_USE"}],
-                "byProvider": [{"field": "PROVIDER"}],
+                "byProvider": [{"field": "PROVIDER"}, {"field": "PROVIDER__NAME"}],
             },
             user=admin,
         )
     )
 
-    assert grouped["byUse"]["totalCount"] == 2
-    assert sorted(grouped["byUse"]["results"], key=lambda row: row["key"]["modelUse"]) == [
-        {"key": {"modelUse": "CHAT"}, "count": 2, "filter": {"modelUse": {"exact": "CHAT"}}},
-        {"key": {"modelUse": "EMBEDDING"}, "count": 1, "filter": {"modelUse": {"exact": "EMBEDDING"}}},
+    assert sorted(grouped["byUse"], key=lambda row: row["key"]["model_use"]) == [
+        {"key": {"model_use": "CHAT"}, "aggregate": {"count": 2}},
+        {"key": {"model_use": "EMBEDDING"}, "aggregate": {"count": 1}},
     ]
-    assert grouped["byProvider"]["totalCount"] == 2
-    provider_filters = {row["filter"]["provider"]["sqid"] for row in grouped["byProvider"]["results"]}
-    assert provider_filters == {provider_a.sqid, provider_b.sqid}
+    provider_groups = {
+        row["key"]["provider_id"]: row
+        for row in grouped["byProvider"]
+    }
+    assert provider_groups == {
+        str(provider_a.pk): {
+            "key": {
+                "provider_id": str(provider_a.pk),
+                "provider__name": "Anthropic",
+            },
+            "aggregate": {"count": 2},
+        },
+        str(provider_b.pk): {
+            "key": {
+                "provider_id": str(provider_b.pk),
+                "provider__name": "Manual",
+            },
+            "aggregate": {"count": 1},
+        },
+    }
 
 
 def test_create_inference_provider_creates_child_row(agents_console_tables: None) -> None:
@@ -306,9 +381,9 @@ def test_create_inference_provider_creates_child_row(agents_console_tables: None
             }
           ) {
             name
-            baseUrl
-            backendClass
-            credentialEnv
+            base_url
+            backend_class
+            credential_env
             status
           }
         }
@@ -327,9 +402,9 @@ def test_create_inference_provider_creates_child_row(agents_console_tables: None
     )["createInferenceProvider"]
     assert created == {
         "name": "Provider",
-        "baseUrl": "https://api.example.test",
-        "backendClass": "MANUAL",
-        "credentialEnv": "MODEL_API_KEY",
+        "base_url": "https://api.example.test",
+        "backend_class": "MANUAL",
+        "credential_env": "MODEL_API_KEY",
         "status": "DRAFT",
     }
     with system_context(reason="test.agents.provider_mti.verify"):
@@ -366,11 +441,11 @@ def test_update_inference_provider_backend_rematerializes_defaults(agents_consol
     mutation = """
         mutation UpdateProvider($id: ID!, $account: ID!) {
           updateInferenceProvider(data: {id: $id, backendClass: "anthropic", account: $account}) {
-            backendClass
+            backend_class
             name
-            credentialEnv
+            credential_env
             vendor { slug }
-            account { externalId }
+            account { external_id }
           }
         }
     """
@@ -385,11 +460,11 @@ def test_update_inference_provider_backend_rematerializes_defaults(agents_consol
     )["updateInferenceProvider"]
 
     assert updated == {
-        "backendClass": "ANTHROPIC",
+        "backend_class": "ANTHROPIC",
         "name": "Anthropic",
-        "credentialEnv": "ANTHROPIC_API_KEY",
+        "credential_env": "ANTHROPIC_API_KEY",
         "vendor": {"slug": "anthropic"},
-        "account": {"externalId": "agt-provider-update-ext"},
+        "account": {"external_id": "agt-provider-update-ext"},
     }
     provider.refresh_from_db()
     assert provider.vendor_id == anthropic.pk
@@ -480,10 +555,10 @@ def test_create_mcp_server_keeps_defaults_for_omitted_optionals(agents_console_t
     created = _data(
         _execute(
             _schema(),
-            'mutation { createMcpServer(data: {name: "Local MCP"}) { name placement config } }',
+            'mutation { insert_mcp_servers_one(object: {name: "Local MCP"}) { name placement config } }',
             user=admin,
         )
-    )["createMcpServer"]
+    )["insert_mcp_servers_one"]
     assert created == {"name": "Local MCP", "placement": "EXTERNAL", "config": {}}
 
 

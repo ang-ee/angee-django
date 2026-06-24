@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode } from "react";
-import type { Row } from "@angee/sdk";
+import type { Row } from "@angee/data";
 
 import { useBaseT } from "../i18n";
 import { cn } from "../lib/cn";

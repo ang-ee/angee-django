@@ -26,11 +26,13 @@ import {
 } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
+  type DeletePreview,
+  type UseResourceListResult,
+  type Row,
+} from "@angee/data";
+import {
   AppRuntimeProvider,
   ModelMetadataProvider,
-  type DeletePreview,
-  type Row,
-  type UseResourceListResult,
 } from "@angee/sdk";
 
 import { baseIcons } from "../chrome/icon-registry";
@@ -51,6 +53,17 @@ vi.mock("@angee/sdk", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/sdk")>();
   return {
     ...actual,
+  };
+});
+
+vi.mock("@angee/data", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/data")>();
+  return {
+    ...actual,
+    useResourceMutation: () => [
+      sdkMocks.mutate,
+      { fetching: false, error: null },
+    ],
     useResourceList: (): UseResourceListResult => ({
       rows: sdkMocks.rows,
       total: sdkMocks.rows.length,
@@ -69,10 +82,14 @@ vi.mock("@angee/sdk", async (importOriginal) => {
       prevPage: vi.fn(),
       lastPage: vi.fn(),
     }),
-    useResourceMutation: () => [
-      sdkMocks.mutate,
-      { fetching: false, error: null },
-    ],
+    useAngeeFacets: () => ({
+      fetching: false,
+      error: null,
+      filters: [],
+      filterFields: [],
+      groupOptions: [],
+      refetch: vi.fn(),
+    }),
   };
 });
 

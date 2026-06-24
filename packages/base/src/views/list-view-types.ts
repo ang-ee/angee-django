@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
 import type {
   ResourceTypeName,
-  Row,
   UseResourceListOptions,
-} from "@angee/sdk";
+  Row,
+} from "@angee/data";
 import type { ButtonVariant } from "../ui/button";
 
 import type {

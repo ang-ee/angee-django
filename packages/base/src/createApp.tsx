@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { Refine } from "@refinedev/core";
 import {
   type AnyRoute,
   type AnyRouter,
@@ -20,21 +21,33 @@ import {
 } from "@tanstack/react-router";
 import { NuqsAdapter } from "nuqs/adapters/tanstack-router";
 import {
-  AppRuntimeProvider,
   AuthProvider,
+  UserPreferencesProvider,
+  createAngeeAuthProvider,
+  createAngeeHasuraDataProviders,
+  createAngeeHasuraLiveProvider,
+  createAngeeI18nProvider,
+  refineResourcesFromAngeeSchemaMetadata,
+  tanStackRouterProvider,
+  useRuntimeAuthState,
+  useUserPreferences,
+  type AngeeHasuraSchemaConfig,
+} from "@angee/data";
+import {
+  AppRuntimeProvider,
   GraphQLClientProvider,
   GraphQLProvider,
   RelayInvalidationProvider,
-  UserPreferencesProvider,
   changeSubscriptionFields,
   composeAddons,
+  defineAngeeSchemaMetadata,
   mergeSlotContributions,
   useMenus,
-  useRuntimeAuthState,
+  useResetClient,
   useSchemaClients,
-  useUserPreferences,
   type AddonManifest,
   type AddonRoute,
+  type AngeeSchemaMetadata,
   type AngeeUrqlClientOptions,
   type AppRuntime,
   type ComposedMenuItem,
@@ -124,7 +137,7 @@ export interface CreateAppInput {
   addons: readonly BaseAddon[];
   shells: Record<string, ShellConfig>;
   /** One client config per named schema (url, ws endpoint, cache). */
-  schemas: Record<string, AngeeUrqlClientOptions>;
+  schemas: Record<string, AngeeAppSchemaConfig>;
   /** Schema bound to the app subtree's reads. Defaults to `public`. */
   defaultSchema?: string;
   /** Schema carrying the change subscriptions. Defaults to `console`. */
@@ -134,6 +147,18 @@ export interface CreateAppInput {
   /** Host-level UI slot contributions, merged with the addons'. */
   slots?: readonly SlotContribution[];
 }
+
+export type AngeeAppSchemaConfig =
+  Omit<AngeeUrqlClientOptions, "metadata"> &
+  Omit<AngeeHasuraSchemaConfig, "metadata"> & {
+    /** Generated schema metadata imported from emitted JSON. */
+    metadata?: unknown;
+  };
+
+type NormalizedAngeeAppSchemaConfig =
+  Omit<AngeeAppSchemaConfig, "metadata"> & {
+    metadata?: AngeeSchemaMetadata;
+  };
 
 export interface AngeeApp {
   router: AnyRouter;
@@ -181,13 +206,28 @@ export function createApp(input: CreateAppInput): AngeeApp {
     previews: composed.previews,
     routesByModel: modelRouteIndex(routes),
   };
-
   const defaultSchema = input.defaultSchema ?? "public";
   const subscriptionSchema = input.subscriptionSchema ?? "console";
+  const schemas = normalizeSchemaConfigs(input.schemas);
+  const refineResources = refineResourcesForSchemas(
+    schemas,
+    runtime.routesByModel,
+  );
+  const refineDataProviders = createAngeeHasuraDataProviders(
+    schemas,
+    defaultSchema,
+  );
+  const refineLiveProvider = createLiveProviderForSchema(
+    schemas,
+    subscriptionSchema,
+  );
+  const authSchema = authSchemaNameForSchemas(schemas, defaultSchema);
+  const refineI18nProvider = createAngeeI18nProvider(runtime.i18n);
+
   // Only the models the subscription schema actually publishes a change event for
   // get a live subscription; blind-subscribing an undefined `<model>Changed` errors
   // server-side. Absent an SDL we keep the prior behaviour (subscribe to all).
-  const subscriptionSdl = input.schemas[subscriptionSchema]?.sdl;
+  const subscriptionSdl = schemas[subscriptionSchema]?.sdl;
   const availableChangeFields = subscriptionSdl
     ? changeSubscriptionFields(subscriptionSdl)
     : undefined;
@@ -195,6 +235,48 @@ export function createApp(input: CreateAppInput): AngeeApp {
     resolvePath(input.home, pathByName) ??
     routes.find((route) => route.shell !== "public")?.path ??
     "/";
+
+  function RootOutlet(): ReactNode {
+    const resetClient = useResetClient();
+    const refineAuthProvider = useMemo(
+      () => {
+        const schema = schemas[authSchema];
+        if (!schema) {
+          throw new Error(`No GraphQL schema config for auth schema "${authSchema}".`);
+        }
+        return createAngeeAuthProvider({
+          ...schema,
+          onAuthChange: resetClient,
+        });
+      },
+      [resetClient],
+    );
+    return (
+      <NuqsAdapter>
+        <Refine
+          authProvider={refineAuthProvider}
+          dataProvider={refineDataProviders}
+          i18nProvider={refineI18nProvider}
+          liveProvider={refineLiveProvider}
+          resources={refineResources}
+          routerProvider={tanStackRouterProvider}
+          options={{
+            liveMode: refineLiveProvider ? "auto" : "off",
+            syncWithLocation: false,
+          }}
+        >
+          <AppFrame
+            authSchema={authSchema}
+            runtime={runtime}
+            subscriptionSchema={subscriptionSchema}
+            availableChangeFields={availableChangeFields}
+          >
+            <Outlet />
+          </AppFrame>
+        </Refine>
+      </NuqsAdapter>
+    );
+  }
 
   const rootRoute = createRootRoute({ component: RootOutlet });
 
@@ -241,20 +323,75 @@ export function createApp(input: CreateAppInput): AngeeApp {
       const root = createRoot(element);
       root.render(
         <StrictMode>
-          <GraphQLClientProvider config={input.schemas} schema={defaultSchema}>
-            <AppFrame
-              runtime={runtime}
-              subscriptionSchema={subscriptionSchema}
-              availableChangeFields={availableChangeFields}
-            >
-              <RouterProvider router={router} />
-            </AppFrame>
+          <GraphQLClientProvider config={schemas} schema={defaultSchema}>
+            <RouterProvider router={router} />
           </GraphQLClientProvider>
         </StrictMode>,
       );
       return root;
     },
   };
+}
+
+function refineResourcesForSchemas(
+  schemas: Readonly<Record<string, NormalizedAngeeAppSchemaConfig>>,
+  routesByModel: Readonly<Record<string, string>>,
+) {
+  return Object.values(schemas).flatMap((schema) =>
+    refineResourcesFromAngeeSchemaMetadata(schema.metadata, {
+      pathsByModel: routesByModel,
+    }),
+  );
+}
+
+function normalizeSchemaConfigs(
+  schemas: Readonly<Record<string, AngeeAppSchemaConfig>>,
+): Record<string, NormalizedAngeeAppSchemaConfig> {
+  return Object.fromEntries(
+    Object.entries(schemas).map(([name, schema]) => [
+      name,
+      normalizeSchemaConfig(schema),
+    ]),
+  );
+}
+
+function normalizeSchemaConfig(
+  schema: AngeeAppSchemaConfig,
+): NormalizedAngeeAppSchemaConfig {
+  const { metadata, ...config } = schema;
+  return {
+    ...config,
+    ...(metadata == null ? {} : { metadata: defineAngeeSchemaMetadata(metadata) }),
+  };
+}
+
+function createLiveProviderForSchema(
+  schemas: Readonly<Record<string, NormalizedAngeeAppSchemaConfig>>,
+  subscriptionSchema: string,
+) {
+  const schema = schemas[subscriptionSchema];
+  if (!schema?.live) return undefined;
+  const liveOptions = schema.live === true
+    ? {
+        url: schema.url,
+        wsEndpoint: schema.wsEndpoint,
+      }
+    : schema.live;
+  return createAngeeHasuraLiveProvider({
+    ...liveOptions,
+    resources: schema.metadata?.angee?.resources ?? [],
+  });
+}
+
+function authSchemaNameForSchemas(
+  schemas: Readonly<Record<string, NormalizedAngeeAppSchemaConfig>>,
+  defaultSchema: string,
+): string {
+  if (schemas.public) return "public";
+  if (schemas[defaultSchema]) return defaultSchema;
+  const first = Object.keys(schemas).sort(compareCodePoint)[0];
+  if (!first) throw new Error("createApp requires at least one schema.");
+  return first;
 }
 
 // Keep search values flat and unquoted so login next round-trips raw and
@@ -285,11 +422,13 @@ export function stringifyFlatSearch(search: Record<string, unknown>): string {
  * runtime and auth state to every route.
  */
 function AppFrame({
+  authSchema,
   runtime,
   subscriptionSchema,
   availableChangeFields,
   children,
 }: {
+  authSchema: string;
   runtime: AppRuntime;
   subscriptionSchema: string;
   availableChangeFields?: ReadonlySet<string>;
@@ -306,20 +445,14 @@ function AppFrame({
             availableChangeFields={availableChangeFields}
           >
             <AuthProvider auth={auth}>
-              <UserPreferencesProvider>{children}</UserPreferencesProvider>
+              <UserPreferencesProvider dataProviderName={authSchema}>
+                {children}
+              </UserPreferencesProvider>
             </AuthProvider>
           </RelayInvalidationProvider>
         </ToastProvider>
       </ModalsHost>
     </AppRuntimeProvider>
-  );
-}
-
-function RootOutlet(): ReactNode {
-  return (
-    <NuqsAdapter>
-      <Outlet />
-    </NuqsAdapter>
   );
 }
 

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 import strawberry
 import strawberry_django
 from django.core.exceptions import ImproperlyConfigured
+from django.db import models
 from strawberry_django.pagination import OffsetPaginated
 
 from angee.base.models import SqidPublicIdentity, is_public_data_model
@@ -78,17 +79,16 @@ def data_query(
     group_attr: str | None = None
     aggregate_type: type | None = None
     grouped_type: type | None = None
-    grouped_result_type: type | None = None
     group_key_type: type | None = None
     group_by_spec_type: type | None = None
-    groupable_field_enum: type | None = None
+    group_order_input_type: type | None = None
     having_type: type | None = None
 
     if include_list:
         if list_name is None:
             raise ImproperlyConfigured(f"data_query({surface_name(node)}) needs list_name when include_list=True")
         list_attr = list_name
-        annotations[list_attr] = OffsetPaginated[node]
+        annotations[list_attr] = cast(Any, OffsetPaginated)[node]
         namespace[list_attr] = strawberry_django.offset_paginated(
             filters=filters,
             order=order,
@@ -124,10 +124,9 @@ def data_query(
         ).build()
         aggregate_type = built.aggregate_type
         grouped_type = built.grouped_type
-        grouped_result_type = built.grouped_result_type
         group_key_type = built.group_key_type
         group_by_spec_type = built.group_by_spec
-        groupable_field_enum = built.groupable_field_enum
+        group_order_input_type = _argument_named_type(built.group_by_field, "order_by")
         having_type = built.having_input
         generated_types.extend(
             [
@@ -170,10 +169,9 @@ def data_query(
         enable_filter_echo=enable_filter_echo,
         aggregate_type=aggregate_type,
         grouped_type=grouped_type,
-        grouped_result_type=grouped_result_type,
         group_key_type=group_key_type,
         group_by_spec_type=group_by_spec_type,
-        groupable_field_enum=groupable_field_enum,
+        group_order_input_type=group_order_input_type,
         having_type=having_type,
         model_label=model_label or (public_identity.model_label if public_identity is not None else None),
         public_id_field=public_identity.public_id_field if public_identity is not None else PUBLIC_ID_FIELD_NAME,
@@ -187,9 +185,28 @@ def _type_stem(name: str) -> str:
     return "".join(part[:1].upper() + part[1:] for part in name.split("_"))
 
 
+def _argument_named_type(field: Any, python_name: str) -> type | None:
+    """Return the named Python type backing one generated Strawberry field argument."""
+
+    for argument in getattr(field, "arguments", ()):
+        if getattr(argument, "python_name", None) != python_name:
+            continue
+        return _unwrap_named_type(getattr(argument, "type", None))
+    return None
+
+
+def _unwrap_named_type(value: Any) -> type | None:
+    """Return the named type under Strawberry optional/list wrappers."""
+
+    current = value
+    while hasattr(current, "of_type"):
+        current = current.of_type
+    return current if isinstance(current, type) else None
+
+
 def _require_public_data_identity(
     node: type,
-    model: type,
+    model: type[models.Model],
     *,
     allow_raw_pk_compat: bool,
     public_identity: SqidPublicIdentity | None,

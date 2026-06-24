@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 import strawberry
 import strawberry_django
@@ -12,12 +12,13 @@ from rebac import system_context
 from strawberry import auto
 
 from angee.base.models import public_id_for
-from angee.graphql.crud import crud
-from angee.graphql.data import data_query
+from angee.graphql.data import AngeeHasuraWriteBackend, hasura_resource, public_pk_decoder
+from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
+from angee.graphql.writes import write_queryset
 from angee.iam.identity import user_display_label, user_public_id
 from angee.knowledge.models import StaleBodyError, UnsupportedPageKindError
 
@@ -169,51 +170,6 @@ class PageType(AngeeNode):
         ]
 
 
-@strawberry.input
-class VaultInput:
-    """Fields accepted when creating a vault."""
-
-    name: str
-    description: str = ""
-    icon: str = ""
-    accent: str = ""
-
-
-@strawberry.input
-class VaultPatch:
-    """Fields accepted when updating a vault."""
-
-    id: PublicID
-    name: str | None = strawberry.UNSET
-    description: str | None = strawberry.UNSET
-    icon: str | None = strawberry.UNSET
-    accent: str | None = strawberry.UNSET
-
-
-@strawberry.input
-class PageInput:
-    """Fields accepted when creating a page."""
-
-    vault: PublicID
-    title: str
-    kind: str = Page.Kind.NOTE
-    parent: PublicID | None = None
-    icon: str = ""
-
-
-@strawberry.input
-class PagePatch:
-    """Fields accepted when updating a page."""
-
-    id: PublicID
-    title: str | None = strawberry.UNSET
-    kind: str | None = strawberry.UNSET
-    icon: str | None = strawberry.UNSET
-    # Reparent (move) within the vault — null lifts the page to the root. The
-    # REBAC `parent->write` gate authorises the destination.
-    parent: PublicID | None = strawberry.UNSET
-
-
 @strawberry.type
 class PageBodyPayload:
     """Result of a markdown body write."""
@@ -221,126 +177,122 @@ class PageBodyPayload:
     ok: bool
     markdown: MarkdownPageType | None = None
     error: str | None = None
-    error_code: str | None = None
+    error_code: str | None = strawberry.field(name="error_code", default=None)
 
 
-@strawberry_django.filter_type(Vault, lookups=True)
-class VaultFilter:
-    """Field lookups accepted when filtering the vaults connection."""
+def _resource_queryset(model: type[Any], info: strawberry.Info) -> Any:
+    """Return the row-scoped queryset for one knowledge resource."""
 
-    name: auto
-    updated_at: auto
-
-
-@strawberry_django.order_type(Vault)
-class VaultOrder:
-    """Orderings accepted by the vaults connection."""
-
-    name: auto
-    created_at: auto
-    updated_at: auto
+    del info
+    return model.objects.all()
 
 
-@strawberry_django.filter_type(Page, lookups=True)
-class PageFilter:
-    """Field lookups accepted when filtering the pages connection."""
+def _resource_aggregate_queryset(model: type[Any], info: strawberry.Info) -> Any:
+    """Return the queryset safe for permission-naive aggregate math."""
 
-    vault: auto
-    title: auto
-    kind: auto
-    updated_at: auto
+    queryset = _resource_queryset(model, info)
+    scoped = getattr(queryset, "scoped_for_aggregate", None)
+    return scoped() if callable(scoped) else queryset
 
 
-@strawberry_django.order_type(Page)
-class PageOrder:
-    """Orderings accepted by the pages connection."""
+class VaultWriteBackend(AngeeHasuraWriteBackend):
+    """Write semantics for vaults: create belongs to the manager factory."""
 
-    title: auto
-    kind: auto
-    created_at: auto
-    updated_at: auto
+    def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+        """Create a vault owned by the requesting user."""
+
+        user = getattr(info.context.request, "user", None)
+        return Vault._default_manager.create_for(user, **data)
 
 
-VaultDataQuery, _VAULT_DATA_TYPES = data_query(
+class PageWriteBackend(AngeeHasuraWriteBackend):
+    """Write semantics for pages: create belongs to the manager factory."""
+
+    def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+        """Create a page in a vault the requesting user can write."""
+
+        del info
+        vault = require_instance_for_id(Vault, data["vault"])
+        parent = None
+        if data.get("parent") is not None:
+            parent = require_instance_for_id(Page, data["parent"])
+        payload = dict(data)
+        payload.pop("vault", None)
+        payload.pop("parent", None)
+        return Page._default_manager.create_in(vault, parent=parent, **payload)
+
+
+_VAULT_RESOURCE = hasura_resource(
     VaultType,
-    type_name="VaultDataQuery",
-    filters=VaultFilter,
-    order=VaultOrder,
-    list_name="vaults",
-    detail_name="vault",
-    aggregate_name="vault_aggregate",
-    group_name="vault_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["updated_at"],
-    enable_filter_echo=True,
-    aggregate_kwargs={"name_prefix": "VaultAggregate", "pagination_style": "offset"},
+    model=Vault,
+    name="vaults",
+    filterable=["id", "name", "updated_at"],
+    sortable=["name", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["updated_at"],
+    insertable=["name", "description", "icon", "accent"],
+    updatable=["name", "description", "icon", "accent"],
+    get_queryset=lambda info: _resource_queryset(Vault, info),
+    get_aggregate_queryset=lambda info: _resource_aggregate_queryset(Vault, info),
+    write_backend=VaultWriteBackend(Vault),
+    id_decode=public_pk_decoder(Vault),
 )
-PageDataQuery, _PAGE_DATA_TYPES = data_query(
+_PAGE_RESOURCE = hasura_resource(
     PageType,
-    type_name="PageDataQuery",
-    filters=PageFilter,
-    order=PageOrder,
-    list_name="pages",
-    detail_name="page",
-    aggregate_name="page_aggregate",
-    group_name="page_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["vault", "vault__name", "kind", "updated_at"],
-    enable_filter_echo=True,
-    aggregate_kwargs={"name_prefix": "PageAggregate", "pagination_style": "offset"},
+    model=Page,
+    name="pages",
+    filterable=["id", "vault", "title", "kind", "updated_at"],
+    sortable=["title", "kind", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["vault", "vault__name", "kind", "updated_at"],
+    insertable=["vault", "title", "kind", "parent", "icon"],
+    updatable=["title", "kind", "icon", "parent"],
+    field_id_decode={
+        "vault": public_pk_decoder(Vault),
+        "parent": public_pk_decoder(Page),
+    },
+    get_queryset=lambda info: _resource_queryset(Page, info),
+    get_aggregate_queryset=lambda info: _resource_aggregate_queryset(Page, info),
+    write_backend=PageWriteBackend(Page, public_id_fields={"parent": Page}),
+    id_decode=public_pk_decoder(Page),
 )
 
 
 @strawberry.type
 class KnowledgeMutation:
-    """Create and body-write mutations that preflight their REBAC gate.
+    """Markdown body writes that belong to the Knowledge domain."""
 
-    Updates and deletes ride the row-scoped ``crud`` surfaces below; the
-    operations here address rows that do not exist yet, so they dispatch to
-    the manager factories that own the ``check_new`` preflight.
-    """
+    @strawberry.mutation(name="delete_vault")
+    def delete_vault(self, id: PublicID, confirm: bool = False) -> DeletePreview:
+        """Return or apply the authored vault cascade delete preview."""
 
-    @strawberry.mutation
-    def create_vault(self, info: strawberry.Info, data: VaultInput) -> VaultType:
-        """Create a vault owned by the requesting user."""
-
-        user = getattr(info.context.request, "user", None)
-        return cast(
-            VaultType,
-            Vault._default_manager.create_for(
-                user,
-                name=data.name,
-                description=data.description,
-                icon=data.icon,
-                accent=data.accent,
-            ),
+        return delete_by_public_id(
+            Vault,
+            str(id),
+            confirm=confirm,
+            queryset=write_queryset(Vault),
         )
 
-    @strawberry.mutation
-    def create_page(self, data: PageInput) -> PageType:
-        """Create a page in a vault the requesting user can write."""
+    @strawberry.mutation(name="delete_page")
+    def delete_page(self, id: PublicID, confirm: bool = False) -> DeletePreview:
+        """Return or apply the authored page cascade delete preview."""
 
-        vault = require_instance_for_id(Vault, data.vault)
-        parent = None
-        if data.parent is not None:
-            parent = require_instance_for_id(Page, data.parent)
-        return cast(
-            PageType,
-            Page._default_manager.create_in(
-                vault,
-                parent=parent,
-                title=data.title,
-                kind=data.kind,
-                icon=data.icon,
-            ),
+        return delete_by_public_id(
+            Page,
+            str(id),
+            confirm=confirm,
+            queryset=write_queryset(Page),
         )
 
-    @strawberry.mutation
+    @strawberry.mutation(name="update_page_body")
     def update_page_body(
         self,
         page: PublicID,
         body: str,
-        expected_hash: str | None = None,
+        expected_hash: Annotated[
+            str | None,
+            strawberry.argument(name="expected_hash"),
+        ] = None,
     ) -> PageBodyPayload:
         """Write a page's markdown body, last-write-wins with a stale guard."""
 
@@ -358,6 +310,20 @@ class KnowledgeMutation:
         return PageBodyPayload(ok=True, markdown=cast(MarkdownPageType, markdown))
 
 
+KnowledgeMutation = attach_delete_preview_metadata(
+    KnowledgeMutation,
+    model=Vault,
+    node=VaultType,
+    field="delete_vault",
+)
+KnowledgeMutation = attach_delete_preview_metadata(
+    KnowledgeMutation,
+    model=Page,
+    node=PageType,
+    field="delete_page",
+)
+
+
 def _as_id(public_id: str | None) -> strawberry.ID | None:
     """Return one optional public id as a GraphQL ID."""
 
@@ -366,14 +332,14 @@ def _as_id(public_id: str | None) -> strawberry.ID | None:
 
 _KNOWLEDGE_SCHEMA_BUCKET = {
     "query": [
-        VaultDataQuery,
-        PageDataQuery,
+        _VAULT_RESOURCE.query,
+        _PAGE_RESOURCE.query,
         revisions(MarkdownPageType, name="markdownPage"),
     ],
     "mutation": [
         KnowledgeMutation,
-        crud(VaultType, update=VaultPatch, delete=True),
-        crud(PageType, update=PagePatch, delete=True),
+        _VAULT_RESOURCE.mutation,
+        _PAGE_RESOURCE.mutation,
     ],
     "types": [
         VaultType,
@@ -381,8 +347,8 @@ _KNOWLEDGE_SCHEMA_BUCKET = {
         MarkdownPageType,
         BacklinkType,
         PageBodyPayload,
-        *_VAULT_DATA_TYPES,
-        *_PAGE_DATA_TYPES,
+        *_VAULT_RESOURCE.types,
+        *_PAGE_RESOURCE.types,
     ],
 }
 

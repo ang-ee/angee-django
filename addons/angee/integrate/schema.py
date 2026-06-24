@@ -14,6 +14,7 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import IntegrityError, transaction
 from django.utils import timezone
@@ -23,9 +24,13 @@ from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
 from angee.graphql.actions import ActionResult, action_target, resolve_action_target
-from angee.graphql.crud import crud
-from angee.graphql.data import data_query
-from angee.graphql.deletion import DeletePreview, delete_by_public_id
+from angee.graphql.data import (
+    AngeeHasuraWriteBackend,
+    declared_hasura_resource_fields,
+    hasura_resource,
+    public_pk_decoder,
+)
+from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
 from angee.graphql.impl import ImplChoice
 from angee.graphql.impl import impl_choices as resolve_impl_choices
@@ -55,6 +60,7 @@ VcsBridge = apps.get_model("integrate", "VcsBridge")
 Repository = apps.get_model("integrate", "Repository")
 Source = apps.get_model("integrate", "Source")
 Template = apps.get_model("integrate", "Template")
+User = get_user_model()
 
 
 @strawberry.type
@@ -258,73 +264,6 @@ class OAuthClientType(AngeeNode):
 
 
 @strawberry.input
-class OAuthClientInput:
-    """Admin-write fields accepted when creating an OAuth client (base, connect)."""
-
-    display_name: str
-    client_id: str
-    slug: str
-    provider_type: str = "generic_oauth2"
-    icon: str = ""
-    client_secret: str = ""
-    environment: str = "prod"
-    discovery_url: str = ""
-    authorize_endpoint: str = ""
-    token_endpoint: str = ""
-    revoke_endpoint: str = ""
-    userinfo_endpoint: str = ""
-    manual_redirect_uri: str = ""
-    token_request_format: str = "form"
-    is_enabled: bool = True
-    scopes_catalogue: list[str] = strawberry.field(default_factory=list)
-    default_scopes: list[str] = strawberry.field(default_factory=list)
-    supports_refresh: bool = True
-    refresh_rotates: bool = False
-    supports_pkce: bool = True
-    max_refresh_age_seconds: int | None = None
-    authorize_params: JSON = strawberry.field(default_factory=dict)
-    token_params: JSON = strawberry.field(default_factory=dict)
-    external_id_claim: str = "sub"
-    email_claim: str = "email"
-    display_name_claim: str = ""
-    avatar_url_claim: str = ""
-
-
-@strawberry.input
-class OAuthClientPatch:
-    """Admin-write fields accepted when updating an OAuth client."""
-
-    id: PublicID
-    slug: str | None = strawberry.UNSET
-    provider_type: str | None = strawberry.UNSET
-    icon: str | None = strawberry.UNSET
-    display_name: str | None = strawberry.UNSET
-    client_id: str | None = strawberry.UNSET
-    client_secret: str | None = strawberry.UNSET
-    environment: str | None = strawberry.UNSET
-    discovery_url: str | None = strawberry.UNSET
-    authorize_endpoint: str | None = strawberry.UNSET
-    token_endpoint: str | None = strawberry.UNSET
-    revoke_endpoint: str | None = strawberry.UNSET
-    userinfo_endpoint: str | None = strawberry.UNSET
-    manual_redirect_uri: str | None = strawberry.UNSET
-    token_request_format: str | None = strawberry.UNSET
-    is_enabled: bool | None = strawberry.UNSET
-    scopes_catalogue: list[str] | None = strawberry.UNSET
-    default_scopes: list[str] | None = strawberry.UNSET
-    supports_refresh: bool | None = strawberry.UNSET
-    refresh_rotates: bool | None = strawberry.UNSET
-    supports_pkce: bool | None = strawberry.UNSET
-    max_refresh_age_seconds: int | None = strawberry.UNSET
-    authorize_params: JSON | None = strawberry.UNSET
-    token_params: JSON | None = strawberry.UNSET
-    external_id_claim: str | None = strawberry.UNSET
-    email_claim: str | None = strawberry.UNSET
-    display_name_claim: str | None = strawberry.UNSET
-    avatar_url_claim: str | None = strawberry.UNSET
-
-
-@strawberry.input
 class ExternalAccountInput:
     """Fields accepted when manually linking an external account."""
 
@@ -335,17 +274,6 @@ class ExternalAccountInput:
     display_name: str = ""
     avatar_url: str = ""
     status: str = "active"
-
-
-@strawberry.input
-class ExternalAccountPatch:
-    """Admin-write fields accepted when updating an external account (scalars only)."""
-
-    id: PublicID
-    email: str | None = strawberry.UNSET
-    display_name: str | None = strawberry.UNSET
-    avatar_url: str | None = strawberry.UNSET
-    status: str | None = strawberry.UNSET
 
 
 @strawberry.input
@@ -364,14 +292,6 @@ class CredentialInput:
     private_key: str = ""
     username: str = ""
     password: str = ""
-
-
-@strawberry.input
-class CredentialPatch:
-    """Admin-write fields accepted when updating a credential."""
-
-    id: PublicID
-    status: str | None = strawberry.UNSET
 
 
 @strawberry.type
@@ -504,140 +424,141 @@ def _console_credentials(info: strawberry.Info) -> Any:
     return cast(Any, Credential.objects).console_credentials()
 
 
-@strawberry_django.filter_type(OAuthClient, lookups=True)
-class OAuthClientFilter:
-    """Field lookups accepted when filtering OAuth clients."""
+def _aggregate_queryset(queryset: Any) -> Any:
+    """Return the aggregate-safe variant of one REBAC queryset when available."""
 
-    slug: auto
-    provider_type: auto
-    environment: auto
-    display_name: auto
-    is_enabled: auto
-    updated_at: auto
+    scoped = getattr(queryset, "scoped_for_aggregate", None)
+    return scoped() if callable(scoped) else queryset
 
 
-@strawberry_django.order_type(OAuthClient)
-class OAuthClientOrder:
-    """Orderings accepted by the OAuth clients list."""
-
-    slug: auto
-    environment: auto
-    display_name: auto
-    is_enabled: auto
-    created_at: auto
-    updated_at: auto
+_OAUTH_CLIENT_EXTENSION_INSERT_FIELDS = declared_hasura_resource_fields(
+    OAuthClient,
+    "hasura_insertable_fields",
+)
+_OAUTH_CLIENT_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(
+    OAuthClient,
+    "hasura_updatable_fields",
+)
 
 
-@strawberry_django.filter_type(ExternalAccount, lookups=True)
-class ExternalAccountFilter:
-    """Field lookups accepted when filtering external accounts."""
-
-    oauth_client: auto
-    external_id: auto
-    email: auto
-    display_name: auto
-    status: auto
-    updated_at: auto
-
-
-@strawberry_django.order_type(ExternalAccount)
-class ExternalAccountOrder:
-    """Orderings accepted by the external accounts list."""
-
-    oauth_client: auto
-    external_id: auto
-    email: auto
-    display_name: auto
-    status: auto
-    created_at: auto
-    updated_at: auto
-
-
-@strawberry_django.filter_type(Credential, lookups=True)
-class CredentialFilter:
-    """Field lookups accepted when filtering credential health."""
-
-    oauth_client: auto
-    external_account: auto
-    kind: auto
-    name: auto
-    status: auto
-    last_refresh_status: auto
-    updated_at: auto
-
-
-@strawberry_django.order_type(Credential)
-class CredentialOrder:
-    """Orderings accepted by the credential health list."""
-
-    oauth_client: auto
-    kind: auto
-    name: auto
-    status: auto
-    expires_at: auto
-    created_at: auto
-    updated_at: auto
-
-
-OAuthClientDataQuery, _OAUTH_CLIENT_DATA_TYPES = data_query(
+_OAUTH_CLIENT_RESOURCE = hasura_resource(
     OAuthClientType,
-    type_name="OAuthClientDataQuery",
-    filters=OAuthClientFilter,
-    order=OAuthClientOrder,
-    list_name="oauth_clients",
-    detail_name="oauth_client",
-    aggregate_name="oauth_client_aggregate",
-    group_name="oauth_client_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["provider_type", "environment", "is_enabled"],
-    enable_filter_echo=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    list_kwargs={"resolver": _console_oauth_clients},
-    aggregate_kwargs={
-        "queryset": cast(Any, OAuthClient.objects).console_oauth_clients(),
-        "name_prefix": "OAuthClientAggregate",
-        "pagination_style": "offset",
-    },
+    model=OAuthClient,
+    name="oauth_clients",
+    filterable=["id", "slug", "provider_type", "environment", "display_name", "is_enabled", "updated_at"],
+    sortable=["slug", "environment", "display_name", "is_enabled", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["provider_type", "environment", "is_enabled"],
+    insertable=[
+        "display_name",
+        "client_id",
+        "slug",
+        "provider_type",
+        "icon",
+        "client_secret",
+        "environment",
+        "discovery_url",
+        "authorize_endpoint",
+        "token_endpoint",
+        "revoke_endpoint",
+        "userinfo_endpoint",
+        "manual_redirect_uri",
+        "token_request_format",
+        "is_enabled",
+        "scopes_catalogue",
+        "default_scopes",
+        "supports_refresh",
+        "refresh_rotates",
+        "supports_pkce",
+        "max_refresh_age_seconds",
+        "authorize_params",
+        "token_params",
+        "external_id_claim",
+        "email_claim",
+        "display_name_claim",
+        "avatar_url_claim",
+        *_OAUTH_CLIENT_EXTENSION_INSERT_FIELDS,
+    ],
+    updatable=[
+        "slug",
+        "provider_type",
+        "icon",
+        "display_name",
+        "client_id",
+        "client_secret",
+        "environment",
+        "discovery_url",
+        "authorize_endpoint",
+        "token_endpoint",
+        "revoke_endpoint",
+        "userinfo_endpoint",
+        "manual_redirect_uri",
+        "token_request_format",
+        "is_enabled",
+        "scopes_catalogue",
+        "default_scopes",
+        "supports_refresh",
+        "refresh_rotates",
+        "supports_pkce",
+        "max_refresh_age_seconds",
+        "authorize_params",
+        "token_params",
+        "external_id_claim",
+        "email_claim",
+        "display_name_claim",
+        "avatar_url_claim",
+        *_OAUTH_CLIENT_EXTENSION_UPDATE_FIELDS,
+    ],
+    get_queryset=_console_oauth_clients,
+    get_aggregate_queryset=lambda info: _aggregate_queryset(_console_oauth_clients(info)),
+    write_backend=AngeeHasuraWriteBackend(OAuthClient),
+    id_decode=public_pk_decoder(OAuthClient),
 )
-ExternalAccountDataQuery, _EXTERNAL_ACCOUNT_DATA_TYPES = data_query(
+_EXTERNAL_ACCOUNT_RESOURCE = hasura_resource(
     ExternalAccountType,
-    type_name="ExternalAccountDataQuery",
-    filters=ExternalAccountFilter,
-    order=ExternalAccountOrder,
-    list_name="external_accounts",
-    detail_name="external_account",
-    aggregate_name="external_account_aggregate",
-    group_name="external_account_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["oauth_client", "oauth_client__display_name", "status"],
-    enable_filter_echo=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    list_kwargs={"resolver": _console_external_accounts},
-    aggregate_kwargs={
-        "queryset": cast(Any, ExternalAccount.objects).console_external_accounts(),
-        "name_prefix": "ExternalAccountAggregate",
-        "pagination_style": "offset",
-    },
+    model=ExternalAccount,
+    name="external_accounts",
+    filterable=["id", "oauth_client", "external_id", "email", "display_name", "status", "updated_at"],
+    sortable=["oauth_client", "external_id", "email", "display_name", "status", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["oauth_client", "oauth_client__display_name", "status"],
+    insert=False,
+    delete=False,
+    updatable=["email", "display_name", "avatar_url", "status"],
+    field_id_decode={"oauth_client": public_pk_decoder(OAuthClient)},
+    get_queryset=_console_external_accounts,
+    get_aggregate_queryset=lambda info: _aggregate_queryset(_console_external_accounts(info)),
+    write_backend=AngeeHasuraWriteBackend(ExternalAccount),
+    id_decode=public_pk_decoder(ExternalAccount),
 )
-CredentialDataQuery, _CREDENTIAL_DATA_TYPES = data_query(
+_CREDENTIAL_RESOURCE = hasura_resource(
     CredentialType,
-    type_name="CredentialDataQuery",
-    filters=CredentialFilter,
-    order=CredentialOrder,
-    list_name="credential_health",
-    detail_name="credential",
-    aggregate_name="credential_aggregate",
-    group_name="credential_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["kind", "status", "last_refresh_status"],
-    enable_filter_echo=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    list_kwargs={"resolver": _console_credentials},
-    aggregate_kwargs={
-        "queryset": cast(Any, Credential.objects).console_credentials(),
-        "name_prefix": "CredentialAggregate",
-        "pagination_style": "offset",
+    model=Credential,
+    name="credentials",
+    filterable=[
+        "id",
+        "oauth_client",
+        "external_account",
+        "kind",
+        "name",
+        "status",
+        "last_refresh_status",
+        "updated_at",
+    ],
+    sortable=["oauth_client", "kind", "name", "status", "expires_at", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["kind", "status", "last_refresh_status"],
+    insert=False,
+    delete=False,
+    updatable=["status"],
+    field_id_decode={
+        "oauth_client": public_pk_decoder(OAuthClient),
+        "external_account": public_pk_decoder(ExternalAccount),
     },
+    get_queryset=_console_credentials,
+    get_aggregate_queryset=lambda info: _aggregate_queryset(_console_credentials(info)),
+    write_backend=AngeeHasuraWriteBackend(Credential),
+    id_decode=public_pk_decoder(Credential),
 )
 
 
@@ -1076,18 +997,6 @@ class ConnectionMutation:
             return UnlinkAccountResult(ok=False, error=error.public_message, error_code=error.code)
 
 
-_OAUTH_CLIENT_MUTATION = crud(
-    OAuthClientType,
-    create=OAuthClientInput,
-    update=OAuthClientPatch,
-    delete=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    name="oauth_client",
-    write_context="integrate.graphql.oauth_client",
-)
-"""Admin OAuth-client CRUD: const-admin gated by ``PlatformAdminPermission``, written elevated."""
-
-
 @strawberry.type
 class IntegrateExternalAccountMutation:
     """Admin mutations for manually linked external identities."""
@@ -1109,26 +1018,7 @@ class IntegrateExternalAccountMutation:
         )
         return cast(ExternalAccountType, account)
 
-    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def update_external_account(self, data: ExternalAccountPatch) -> ExternalAccountType:
-        """Update one external account's scalar identity fields."""
-
-        with (
-            action_target(
-                ExternalAccount,
-                data.id,
-                reason="integrate.graphql.external_account.update",
-            ) as account,
-            transaction.atomic(),
-        ):
-            for field in ("email", "display_name", "avatar_url", "status"):
-                value = getattr(data, field)
-                if value is not strawberry.UNSET:
-                    setattr(account, field, value)
-            account.save()
-        return cast(ExternalAccountType, account)
-
-    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    @strawberry.mutation(name="delete_external_account", permission_classes=_ADMIN_PERMISSION_CLASSES)
     def delete_external_account(self, id: PublicID, confirm: bool = False) -> DeletePreview:
         """Revoke the owner grant, then delete the account (owner is a REBAC tuple)."""
 
@@ -1174,24 +1064,7 @@ class IntegrateCredentialMutation:
         )
         return cast(CredentialType, credential)
 
-    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def update_credential(self, data: CredentialPatch) -> CredentialType:
-        """Update one credential's status."""
-
-        with (
-            action_target(
-                Credential,
-                data.id,
-                reason="integrate.graphql.credential.update",
-            ) as credential,
-            transaction.atomic(),
-        ):
-            if data.status is not strawberry.UNSET and data.status is not None:
-                credential.status = data.status
-                credential.save(update_fields=["status", "updated_at"])
-        return cast(CredentialType, credential)
-
-    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    @strawberry.mutation(name="delete_credential", permission_classes=_ADMIN_PERMISSION_CLASSES)
     def delete_credential(self, id: PublicID, confirm: bool = False) -> DeletePreview:
         """Best-effort remote revoke, then delete the credential when unblocked."""
 
@@ -1202,6 +1075,20 @@ class IntegrateCredentialMutation:
             confirm=confirm,
             before_delete=_revoke_remote_oauth_token,
         )
+
+
+IntegrateExternalAccountMutation = attach_delete_preview_metadata(
+    IntegrateExternalAccountMutation,
+    model=ExternalAccount,
+    node=ExternalAccountType,
+    field="delete_external_account",
+)
+IntegrateCredentialMutation = attach_delete_preview_metadata(
+    IntegrateCredentialMutation,
+    model=Credential,
+    node=CredentialType,
+    field="delete_credential",
+)
 
 
 @strawberry_django.type(Vendor)
@@ -1298,29 +1185,6 @@ class ConnectedIntegrationType(AngeeNode):
         return cast(Any, self).display_label
 
 
-@strawberry.input
-class VendorInput:
-    """Fields accepted when creating a vendor."""
-
-    display_name: str
-    slug: str
-    website_url: str = ""
-    icon: str = ""
-    description: str = ""
-
-
-@strawberry.input
-class VendorPatch:
-    """Fields accepted when updating a vendor."""
-
-    id: PublicID
-    slug: str | None = strawberry.UNSET
-    display_name: str | None = strawberry.UNSET
-    website_url: str | None = strawberry.UNSET
-    icon: str | None = strawberry.UNSET
-    description: str | None = strawberry.UNSET
-
-
 @strawberry_django.type(WebhookSubscription)
 class WebhookSubscriptionType(AngeeNode):
     """Admin projection of an outbound webhook subscription.
@@ -1343,235 +1207,90 @@ class WebhookSubscriptionType(AngeeNode):
     updated_at: auto
 
 
-@strawberry.input
-class WebhookSubscriptionInput:
-    """Fields accepted when creating a webhook subscription."""
-
-    owner: PublicID
-    target_url: str
-    secret: str
-    event_kinds: JSON | None = None
-    impl_app_filter: JSON | None = None
-    integration_filter: PublicID | None = None
-    enabled: bool = True
-
-
-@strawberry.input
-class WebhookSubscriptionPatch:
-    """Fields accepted when updating a webhook subscription."""
-
-    id: PublicID
-    target_url: str | None = strawberry.UNSET
-    secret: str | None = strawberry.UNSET
-    event_kinds: JSON | None = strawberry.UNSET
-    impl_app_filter: JSON | None = strawberry.UNSET
-    integration_filter: PublicID | None = strawberry.UNSET
-    enabled: bool | None = strawberry.UNSET
-
-
-@strawberry_django.filter_type(Vendor, lookups=True)
-class VendorFilter:
-    """Field lookups accepted when filtering vendors."""
-
-    slug: auto
-    display_name: auto
-    updated_at: auto
-
-
-@strawberry_django.order_type(Vendor)
-class VendorOrder:
-    """Orderings accepted by the vendors list."""
-
-    slug: auto
-    display_name: auto
-    created_at: auto
-    updated_at: auto
-
-
-@strawberry_django.filter_type(WebhookSubscription, lookups=True)
-class WebhookSubscriptionFilter:
-    """Field lookups accepted when filtering webhook subscriptions."""
-
-    owner: auto
-    integration_filter: auto
-    target_url: auto
-    enabled: auto
-    last_delivery_status: auto
-    updated_at: auto
-
-
-@strawberry_django.order_type(WebhookSubscription)
-class WebhookSubscriptionOrder:
-    """Orderings accepted by the webhook subscriptions list."""
-
-    target_url: auto
-    enabled: auto
-    last_delivery_at: auto
-    consecutive_failures: auto
-    created_at: auto
-    updated_at: auto
-
-
-@strawberry.input
-class IntegrationInput:
-    """Fields accepted when creating an integration.
-
-    FK public ids resolve to instances via the GraphQL write boundary (like storage's
-    ``DriveInput.backend``); ``owner`` is field-backed REBAC, so writing it
-    derives the owner tuple.
-    """
-
-    vendor: PublicID
-    owner: PublicID
-    credential: PublicID | None = None
-    account: PublicID | None = strawberry.UNSET
-    impl_class: str | None = strawberry.UNSET
-    status: str | None = strawberry.UNSET
-
-
-@strawberry.input
-class IntegrationPatch:
-    """Fields accepted when updating an integration."""
-
-    id: PublicID
-    vendor: PublicID | None = strawberry.UNSET
-    credential: PublicID | None = strawberry.UNSET
-    account: PublicID | None = strawberry.UNSET
-    owner: PublicID | None = strawberry.UNSET
-    status: str | None = strawberry.UNSET
-
-
-@strawberry_django.filter_type(Integration, lookups=True)
-class IntegrationFilter:
-    """Field lookups accepted when filtering the integrations list.
-
-    The grouped integrations view needs filter echo for each server aggregate
-    axis so expanded buckets can page their rows through the normal list root.
-    Keep this to direct model fields; relation-path axes cannot echo filters.
-    """
-
-    vendor: auto
-    impl_class: auto
-    status: auto
-
-
-@strawberry_django.order_type(Integration)
-class IntegrationOrder:
-    """Orderings accepted by the integrations connection."""
-
-    vendor: auto
-    impl_class: auto
-    status: auto
-    created_at: auto
-    updated_at: auto
-
-
-VendorDataQuery, _VENDOR_DATA_TYPES = data_query(
+_VENDOR_RESOURCE = hasura_resource(
     VendorType,
-    type_name="VendorDataQuery",
-    filters=VendorFilter,
-    order=VendorOrder,
-    list_name="vendors",
-    detail_name="vendor",
-    aggregate_name="vendor_aggregate",
-    group_name="vendor_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["created_at"],
-    enable_filter_echo=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    aggregate_kwargs={
-        "name_prefix": "VendorAggregate",
-        "pagination_style": "offset",
-    },
+    model=Vendor,
+    name="vendors",
+    filterable=["id", "slug", "display_name", "updated_at"],
+    sortable=["slug", "display_name", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["created_at"],
+    insertable=["display_name", "slug", "website_url", "icon", "description"],
+    updatable=["slug", "display_name", "website_url", "icon", "description"],
+    get_queryset=lambda info: Vendor.objects.all(),
+    get_aggregate_queryset=lambda info: _aggregate_queryset(Vendor.objects.all()),
+    write_backend=AngeeHasuraWriteBackend(Vendor),
+    id_decode=public_pk_decoder(Vendor),
 )
-IntegrationDataQuery, _INTEGRATION_DATA_TYPES = data_query(
+_INTEGRATION_RESOURCE = hasura_resource(
     IntegrationType,
-    type_name="IntegrationDataQuery",
-    filters=IntegrationFilter,
-    order=IntegrationOrder,
-    list_name="integrations",
-    detail_name="integration",
-    aggregate_name="integration_aggregate",
-    group_name="integration_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["impl_class", "vendor", "vendor__display_name", "status"],
-    group_aliases={"impl_category": "impl_class"},
-    enable_filter_echo=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    aggregate_kwargs={
-        "name_prefix": "IntegrationAggregate",
-        "pagination_style": "offset",
+    model=Integration,
+    name="integrations",
+    filterable=["id", "vendor", "impl_class", "status", "updated_at"],
+    sortable=["vendor", "impl_class", "status", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["impl_class", "vendor", "vendor__display_name", "status"],
+    insertable=["vendor", "owner", "credential", "account", "impl_class", "status"],
+    updatable=["vendor", "credential", "account", "owner", "status"],
+    field_id_decode={
+        "vendor": public_pk_decoder(Vendor),
+        "owner": public_pk_decoder(User),
+        "credential": public_pk_decoder(Credential),
+        "account": public_pk_decoder(ExternalAccount),
     },
+    get_queryset=lambda info: Integration.objects.all(),
+    get_aggregate_queryset=lambda info: _aggregate_queryset(Integration.objects.all()),
+    write_backend=AngeeHasuraWriteBackend(
+        Integration,
+        public_id_fields={
+            "vendor": Vendor,
+            "owner": User,
+            "credential": Credential,
+            "account": ExternalAccount,
+        },
+    ),
+    id_decode=public_pk_decoder(Integration),
 )
-WebhookSubscriptionDataQuery, _WEBHOOK_SUBSCRIPTION_DATA_TYPES = data_query(
+_WEBHOOK_SUBSCRIPTION_RESOURCE = hasura_resource(
     WebhookSubscriptionType,
-    type_name="WebhookSubscriptionDataQuery",
-    filters=WebhookSubscriptionFilter,
-    order=WebhookSubscriptionOrder,
-    list_name="webhook_subscriptions",
-    detail_name="webhook_subscription",
-    aggregate_name="webhook_subscription_aggregate",
-    group_name="webhook_subscription_groups",
-    aggregate_fields=["id", "consecutive_failures"],
-    group_by_fields=["enabled", "last_delivery_status"],
-    enable_filter_echo=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    aggregate_kwargs={
-        "name_prefix": "WebhookSubscriptionAggregate",
-        "pagination_style": "offset",
+    model=WebhookSubscription,
+    name="webhook_subscriptions",
+    filterable=[
+        "id",
+        "owner",
+        "integration_filter",
+        "target_url",
+        "enabled",
+        "last_delivery_status",
+        "updated_at",
+    ],
+    sortable=[
+        "target_url",
+        "enabled",
+        "last_delivery_at",
+        "consecutive_failures",
+        "created_at",
+        "updated_at",
+    ],
+    aggregatable=["id", "consecutive_failures"],
+    groupable=["enabled", "last_delivery_status"],
+    insertable=["owner", "target_url", "secret", "event_kinds", "impl_app_filter", "integration_filter", "enabled"],
+    updatable=["target_url", "secret", "event_kinds", "impl_app_filter", "integration_filter", "enabled"],
+    field_id_decode={
+        "owner": public_pk_decoder(User),
+        "integration_filter": public_pk_decoder(Integration),
     },
+    get_queryset=lambda info: WebhookSubscription.objects.all(),
+    get_aggregate_queryset=lambda info: _aggregate_queryset(WebhookSubscription.objects.all()),
+    write_backend=AngeeHasuraWriteBackend(
+        WebhookSubscription,
+        public_id_fields={
+            "owner": User,
+            "integration_filter": Integration,
+        },
+    ),
+    id_decode=public_pk_decoder(WebhookSubscription),
 )
-
-
-_VENDOR_MUTATION = crud(
-    VendorType,
-    create=VendorInput,
-    update=VendorPatch,
-    delete=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    name="vendor",
-    write_context="integrate.graphql.vendor",
-)
-"""Admin vendor CRUD: const-admin gated by ``PlatformAdminPermission``, written elevated."""
-
-
-@strawberry.type
-class IntegrationCreateMutation:
-    """Admin create for a generic Integration parent row."""
-
-    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def create_integration(self, data: IntegrationInput) -> IntegrationType:
-        """Create a draft integration parent row."""
-
-        impl_value = None if data.impl_class is strawberry.UNSET else data.impl_class
-        impl_key = Integration.impl_key_for("impl_class", impl_value, default="none")
-        attrs = integration_create_attrs(data, reason="integrate.graphql.integration.create")
-        attrs["impl_class"] = impl_key
-        with system_context(reason="integrate.graphql.integration.create"):
-            integration = Integration.objects.create(**attrs)
-        return cast(IntegrationType, integration)
-
-
-_INTEGRATION_MUTATION = crud(
-    IntegrationType,
-    update=IntegrationPatch,
-    delete=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    name="integration",
-    write_context="integrate.graphql.integration",
-)
-"""Admin integration update/delete; generic create writes the parent row only."""
-
-_WEBHOOK_MUTATION = crud(
-    WebhookSubscriptionType,
-    create=WebhookSubscriptionInput,
-    update=WebhookSubscriptionPatch,
-    delete=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    name="webhook_subscription",
-    write_context="integrate.graphql.webhook_subscription",
-)
-"""Admin outbound-webhook CRUD: secret is write-only; written elevated."""
 
 
 @strawberry.type
@@ -1776,19 +1495,6 @@ class SourceType(AngeeNode):
     updated_at: auto
 
 
-@strawberry_django.filter_type(Source, lookups=True)
-class SourceFilter:
-    """Field lookups accepted when filtering the sources list.
-
-    ``kind`` lets a consumer surface scope a list to its own source kind (e.g. the
-    agents console filtering to ``skill`` sources).
-    """
-
-    kind: auto
-    ref: auto
-    repository: auto
-
-
 @strawberry_django.type(Template)
 class TemplateType(AngeeNode):
     """Admin projection of one discovered template."""
@@ -1845,110 +1551,6 @@ class VcsBridgePatch:
     webhook_secret: str | None = strawberry.UNSET
 
 
-@strawberry.input
-class SourceInput:
-    """Fields accepted when creating a source."""
-
-    repository: PublicID
-    kind: str
-    ref: str = ""
-    path: str = ""
-
-
-@strawberry.input
-class SourcePatch:
-    """Fields accepted when updating a source."""
-
-    id: PublicID
-    kind: str | None = strawberry.UNSET
-    ref: str | None = strawberry.UNSET
-    path: str | None = strawberry.UNSET
-
-
-@strawberry_django.filter_type(VcsBridge, lookups=True)
-class VcsBridgeFilter:
-    """Field lookups accepted when filtering VCS bridges."""
-
-    vendor: auto
-    backend_class: auto
-    status: auto
-    last_sync_status: auto
-    updated_at: auto
-
-
-@strawberry_django.order_type(VcsBridge)
-class VcsBridgeOrder:
-    """Orderings accepted by the VCS bridge list."""
-
-    vendor: auto
-    backend_class: auto
-    status: auto
-    last_sync_completed_at: auto
-    created_at: auto
-    updated_at: auto
-
-
-@strawberry_django.filter_type(Repository, lookups=True)
-class RepositoryFilter:
-    """Field lookups accepted when filtering repositories."""
-
-    vcs_bridge: auto
-    org: auto
-    name: auto
-    visibility: auto
-    archived: auto
-    updated_at: auto
-
-
-@strawberry_django.order_type(Repository)
-class RepositoryOrder:
-    """Orderings accepted by the repositories list."""
-
-    vcs_bridge: auto
-    org: auto
-    name: auto
-    visibility: auto
-    archived: auto
-    created_at: auto
-    updated_at: auto
-
-
-@strawberry_django.order_type(Source)
-class SourceOrder:
-    """Orderings accepted by the sources list."""
-
-    repository: auto
-    kind: auto
-    ref: auto
-    path: auto
-    last_synced_at: auto
-    created_at: auto
-    updated_at: auto
-
-
-@strawberry_django.filter_type(Template, lookups=True)
-class TemplateFilter:
-    """Field lookups accepted when filtering templates."""
-
-    source: auto
-    name: auto
-    kind: auto
-    path: auto
-    updated_at: auto
-
-
-@strawberry_django.order_type(Template)
-class TemplateOrder:
-    """Orderings accepted by the templates list."""
-
-    source: auto
-    name: auto
-    kind: auto
-    path: auto
-    created_at: auto
-    updated_at: auto
-
-
 def _repo_candidate(descriptor: Any) -> RepoCandidate:
     """Project a host ``RepoDescriptor`` into a typeahead candidate."""
 
@@ -1964,89 +1566,72 @@ def _repo_candidate(descriptor: Any) -> RepoCandidate:
     )
 
 
-VcsBridgeDataQuery, _VCS_BRIDGE_DATA_TYPES = data_query(
+_VCS_BRIDGE_RESOURCE = hasura_resource(
     VcsBridgeType,
-    type_name="VcsBridgeDataQuery",
-    filters=VcsBridgeFilter,
-    order=VcsBridgeOrder,
-    list_name="vcs_bridges",
-    detail_name="vcs_bridge",
-    aggregate_name="vcs_bridge_aggregate",
-    group_name="vcs_bridge_groups",
-    aggregate_fields=["id"],
-    group_by_fields=[
-        "vendor",
-        "vendor__display_name",
-        "backend_class",
-        "status",
-        "last_sync_status",
-    ],
-    enable_filter_echo=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    aggregate_kwargs={
-        "name_prefix": "VcsBridgeAggregate",
-        "pagination_style": "offset",
-    },
+    model=VcsBridge,
+    name="vcs_bridges",
+    filterable=["id", "vendor", "backend_class", "status", "last_sync_status", "updated_at"],
+    sortable=["vendor", "backend_class", "status", "last_sync_completed_at", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["vendor", "vendor__display_name", "backend_class", "status", "last_sync_status"],
+    insert=False,
+    update=False,
+    delete=True,
+    field_id_decode={"vendor": public_pk_decoder(Vendor)},
+    get_queryset=lambda info: VcsBridge.objects.all(),
+    get_aggregate_queryset=lambda info: _aggregate_queryset(VcsBridge.objects.all()),
+    write_backend=AngeeHasuraWriteBackend(VcsBridge),
+    id_decode=public_pk_decoder(VcsBridge),
 )
-RepositoryDataQuery, _REPOSITORY_DATA_TYPES = data_query(
+_REPOSITORY_RESOURCE = hasura_resource(
     RepositoryType,
-    type_name="RepositoryDataQuery",
-    filters=RepositoryFilter,
-    order=RepositoryOrder,
-    list_name="repositories",
-    detail_name="repository",
-    aggregate_name="repository_aggregate",
-    group_name="repository_groups",
-    aggregate_fields=["id"],
-    group_by_fields=[
-        "vcs_bridge",
-        "vcs_bridge__backend_class",
-        "org",
-        "visibility",
-        "archived",
-    ],
-    enable_filter_echo=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    aggregate_kwargs={
-        "name_prefix": "RepositoryAggregate",
-        "pagination_style": "offset",
-    },
+    model=Repository,
+    name="repositories",
+    filterable=["id", "vcs_bridge", "org", "name", "visibility", "archived", "updated_at"],
+    sortable=["vcs_bridge", "org", "name", "visibility", "archived", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["vcs_bridge", "vcs_bridge__backend_class", "org", "visibility", "archived"],
+    insert=False,
+    update=False,
+    delete=True,
+    field_id_decode={"vcs_bridge": public_pk_decoder(VcsBridge)},
+    get_queryset=lambda info: Repository.objects.all(),
+    get_aggregate_queryset=lambda info: _aggregate_queryset(Repository.objects.all()),
+    write_backend=AngeeHasuraWriteBackend(Repository),
+    id_decode=public_pk_decoder(Repository),
 )
-SourceDataQuery, _SOURCE_DATA_TYPES = data_query(
+_SOURCE_RESOURCE = hasura_resource(
     SourceType,
-    type_name="SourceDataQuery",
-    filters=SourceFilter,
-    order=SourceOrder,
-    list_name="sources",
-    detail_name="source",
-    aggregate_name="source_aggregate",
-    group_name="source_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["repository", "repository__name", "kind", "last_synced_at"],
-    enable_filter_echo=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    aggregate_kwargs={
-        "name_prefix": "SourceAggregate",
-        "pagination_style": "offset",
-    },
+    model=Source,
+    name="sources",
+    filterable=["id", "repository", "kind", "ref", "updated_at"],
+    sortable=["repository", "kind", "ref", "path", "last_synced_at", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["repository", "repository__name", "kind", "last_synced_at"],
+    insertable=["repository", "kind", "ref", "path"],
+    updatable=["kind", "ref", "path"],
+    field_id_decode={"repository": public_pk_decoder(Repository)},
+    get_queryset=lambda info: Source.objects.all(),
+    get_aggregate_queryset=lambda info: _aggregate_queryset(Source.objects.all()),
+    write_backend=AngeeHasuraWriteBackend(Source, public_id_fields={"repository": Repository}),
+    id_decode=public_pk_decoder(Source),
 )
-TemplateDataQuery, _TEMPLATE_DATA_TYPES = data_query(
+_TEMPLATE_RESOURCE = hasura_resource(
     TemplateType,
-    type_name="TemplateDataQuery",
-    filters=TemplateFilter,
-    order=TemplateOrder,
-    list_name="templates",
-    detail_name="template",
-    aggregate_name="template_aggregate",
-    group_name="template_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["source", "source__path", "kind", "updated_at"],
-    enable_filter_echo=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    aggregate_kwargs={
-        "name_prefix": "TemplateAggregate",
-        "pagination_style": "offset",
-    },
+    model=Template,
+    name="templates",
+    filterable=["id", "source", "name", "kind", "path", "updated_at"],
+    sortable=["source", "name", "kind", "path", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["source", "source__path", "kind", "updated_at"],
+    insert=False,
+    update=False,
+    delete=False,
+    field_id_decode={"source": public_pk_decoder(Source)},
+    get_queryset=lambda info: Template.objects.all(),
+    get_aggregate_queryset=lambda info: _aggregate_queryset(Template.objects.all()),
+    write_backend=AngeeHasuraWriteBackend(Template),
+    id_decode=public_pk_decoder(Template),
 )
 
 
@@ -2126,36 +1711,6 @@ class VcsBridgeUpdateMutation:
         return cast(VcsBridgeType, bridge)
 
 
-_VCS_BRIDGE_MUTATION = crud(
-    VcsBridgeType,
-    delete=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    name="vcs_bridge",
-    write_context="integrate.graphql.vcs_bridge",
-)
-"""Admin VCS bridge CRUD: webhook_secret is write-only; written elevated."""
-
-_SOURCE_MUTATION = crud(
-    SourceType,
-    create=SourceInput,
-    update=SourcePatch,
-    delete=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    name="source",
-    write_context="integrate.graphql.source",
-)
-"""Admin source CRUD: FK input resolves via strawberry-django; written elevated."""
-
-_REPOSITORY_MUTATION = crud(
-    RepositoryType,
-    delete=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    name="repository",
-    write_context="integrate.graphql.repository",
-)
-"""Admin repository delete: rows arrive via ``addRepository``/``discoverRepositories``."""
-
-
 @strawberry.type
 class VCSActionMutation:
     """Operational actions on a VCS bridge and its inventory."""
@@ -2214,23 +1769,23 @@ _CONSOLE_TYPES: list[object] = [
     UnlinkAccountResult,
     RevealedCredentialSecret,
     VendorType,
-    *_VENDOR_DATA_TYPES,
+    *_VENDOR_RESOURCE.types,
     ConnectedIntegrationType,
     IntegrationType,
-    *_INTEGRATION_DATA_TYPES,
+    *_INTEGRATION_RESOURCE.types,
     WebhookSubscriptionType,
-    *_WEBHOOK_SUBSCRIPTION_DATA_TYPES,
-    *_OAUTH_CLIENT_DATA_TYPES,
-    *_EXTERNAL_ACCOUNT_DATA_TYPES,
-    *_CREDENTIAL_DATA_TYPES,
+    *_WEBHOOK_SUBSCRIPTION_RESOURCE.types,
+    *_OAUTH_CLIENT_RESOURCE.types,
+    *_EXTERNAL_ACCOUNT_RESOURCE.types,
+    *_CREDENTIAL_RESOURCE.types,
     VcsBridgeType,
-    *_VCS_BRIDGE_DATA_TYPES,
+    *_VCS_BRIDGE_RESOURCE.types,
     RepositoryType,
-    *_REPOSITORY_DATA_TYPES,
+    *_REPOSITORY_RESOURCE.types,
     SourceType,
-    *_SOURCE_DATA_TYPES,
+    *_SOURCE_RESOURCE.types,
     TemplateType,
-    *_TEMPLATE_DATA_TYPES,
+    *_TEMPLATE_RESOURCE.types,
     RepoCandidate,
 ]
 
@@ -2257,32 +1812,33 @@ schemas = {
         # where its models do.
         "query": [
             ConsoleImplChoicesQuery,
-            OAuthClientDataQuery,
-            ExternalAccountDataQuery,
-            CredentialDataQuery,
-            VendorDataQuery,
-            IntegrationDataQuery,
-            WebhookSubscriptionDataQuery,
-            VcsBridgeDataQuery,
-            RepositoryDataQuery,
-            SourceDataQuery,
-            TemplateDataQuery,
+            _OAUTH_CLIENT_RESOURCE.query,
+            _EXTERNAL_ACCOUNT_RESOURCE.query,
+            _CREDENTIAL_RESOURCE.query,
+            _VENDOR_RESOURCE.query,
+            _INTEGRATION_RESOURCE.query,
+            _WEBHOOK_SUBSCRIPTION_RESOURCE.query,
+            _VCS_BRIDGE_RESOURCE.query,
+            _REPOSITORY_RESOURCE.query,
+            _SOURCE_RESOURCE.query,
+            _TEMPLATE_RESOURCE.query,
             VCSConsoleQuery,
         ],
         "mutation": [
-            _OAUTH_CLIENT_MUTATION,
+            _OAUTH_CLIENT_RESOURCE.mutation,
+            _EXTERNAL_ACCOUNT_RESOURCE.mutation,
+            _CREDENTIAL_RESOURCE.mutation,
+            _VENDOR_RESOURCE.mutation,
+            _INTEGRATION_RESOURCE.mutation,
+            _WEBHOOK_SUBSCRIPTION_RESOURCE.mutation,
+            _VCS_BRIDGE_RESOURCE.mutation,
+            _REPOSITORY_RESOURCE.mutation,
+            _SOURCE_RESOURCE.mutation,
             IntegrateExternalAccountMutation,
             IntegrateCredentialMutation,
             ConnectionMutation,
-            _VENDOR_MUTATION,
-            IntegrationCreateMutation,
-            _INTEGRATION_MUTATION,
-            _WEBHOOK_MUTATION,
             VcsBridgeCreateMutation,
             VcsBridgeUpdateMutation,
-            _VCS_BRIDGE_MUTATION,
-            _SOURCE_MUTATION,
-            _REPOSITORY_MUTATION,
             IntegrationCredentialMutation,
             IntegrationActionMutation,
             WebhookActionMutation,

@@ -19,7 +19,8 @@ import {
   useChatterContent,
 } from "@angee/base";
 import { AgentChatterPane } from "@angee/agents";
-import { useModelMetadata, useResourceRecord, useResourceRevisions } from "@angee/sdk";
+import { useResourceRecord, useResourceRevisions } from "@angee/data";
+import { useModelMetadata } from "@angee/sdk";
 import { useParams } from "@tanstack/react-router";
 
 const MODEL = "notes.Note";
@@ -27,16 +28,16 @@ const MODEL = "notes.Note";
 const NOTE_RESOURCE_TYPE = "notes/note";
 
 const NOTE_DEFAULT_GROUPS = {
-  list: { field: "updatedAt", granularity: "month" },
+  list: { field: "updated_at", granularity: "month" },
   board: { field: "status" },
 } satisfies DataViewDefaultGroups;
 
 // Created/updated timestamps + word count feed the record subtitle (id · created
 // · updated · words); they are queried but kept out of the field grid.
 const RECORD_SUBTITLE_FIELDS: readonly string[] = [
-  "createdAt",
-  "updatedAt",
-  "wordCount",
+  "created_at",
+  "updated_at",
+  "word_count",
 ];
 
 const noteList = (
@@ -44,7 +45,7 @@ const noteList = (
     model={MODEL}
     list={GroupListView}
     defaultGroups={NOTE_DEFAULT_GROUPS}
-    order={{ updatedAt: "DESC" }}
+    order={{ updated_at: "DESC" }}
     emptyState={{
       icon: "agent",
       title: "No notes yet",
@@ -59,8 +60,8 @@ const noteList = (
     <Column field="title" />
     <Column field="tags" sortable={false} />
     <Column field="status" widget="statusBadge" />
-    <Column field="wordCount" align="right" aggregate="sum" />
-    <Column field="updatedAt" />
+    <Column field="word_count" align="right" aggregate="sum" />
+    <Column field="updated_at" />
   </List>
 );
 
@@ -69,8 +70,8 @@ const noteForm = (
     <Field name="title" widget="text" title />
     <Field name="status" widget="statusbar" />
     <Group label="Details" columns={2}>
-      <Field name="createdByLabel" label="Owner" widget="userRef" readOnly />
-      <Field name="reminderAt" label="Reminder" widget="datetime" />
+      <Field name="created_by_label" label="Owner" widget="userRef" readOnly />
+      <Field name="reminder_at" label="Reminder" widget="datetime" />
       <Field name="tags" widget="tagInput" />
     </Group>
     <Field name="body" widget="markdown.editor" />

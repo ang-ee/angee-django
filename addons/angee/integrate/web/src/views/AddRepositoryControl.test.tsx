@@ -146,9 +146,7 @@ function renderControl(): ReturnType<typeof render> {
 
 function integrationsData(): unknown {
   return {
-    vcsBridges: {
-      results: [{ id: VCS_ID, displayName: "github (active)" }],
-    },
+    vcs_bridges: [{ id: VCS_ID, display_name: "github (active)" }],
   };
 }
 

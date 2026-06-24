@@ -17,6 +17,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
 from rebac import current_actor, system_context
@@ -29,8 +30,7 @@ from angee.agents.context import render_view_context
 from angee.agents.models import RuntimeStatus
 from angee.base.mixins import actor_user_id
 from angee.graphql.actions import ActionResult, action_target, resolve_action_target
-from angee.graphql.crud import crud
-from angee.graphql.data import data_query
+from angee.graphql.data import AngeeHasuraWriteBackend, hasura_resource, pin_snake_wire_names, public_pk_decoder
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
@@ -58,6 +58,12 @@ MCPServer = apps.get_model("agents", "MCPServer")
 MCPTool = apps.get_model("agents", "MCPTool")
 Agent = apps.get_model("agents", "Agent")
 Integration = apps.get_model("integrate", "Integration")
+Vendor = apps.get_model("integrate", "Vendor")
+Credential = apps.get_model("integrate", "Credential")
+ExternalAccount = apps.get_model("integrate", "ExternalAccount")
+Source = apps.get_model("integrate", "Source")
+Template = apps.get_model("integrate", "Template")
+User = get_user_model()
 
 
 @strawberry_django.type(InferenceProvider)
@@ -90,6 +96,9 @@ class IntegrationInferenceProviderExtension:
             return cast(InferenceProviderType, cast(Any, self).inferenceprovider)
         except ObjectDoesNotExist:
             return None
+
+
+pin_snake_wire_names(IntegrationInferenceProviderExtension)
 
 
 @strawberry_django.type(InferenceModel)
@@ -250,397 +259,202 @@ class InferenceProviderPatch:
     config: JSON | None = strawberry.UNSET
 
 
-@strawberry.input
-class InferenceModelInput:
-    """Fields accepted when creating a catalogue model."""
+def _aggregate_queryset(queryset: Any) -> Any:
+    """Return the aggregate-safe variant of one REBAC queryset when available."""
 
-    provider: PublicID
-    name: str
-    publisher: PublicID | None = None
-    display_name: str = ""
-    description: str = ""
-    model_use: str = "chat"
-    is_default: bool = False
-    context_window: int = 0
-    max_output_tokens: int | None = None
-    # UNSET over non-null columns (see InferenceProviderInput); the nullable
-    # ``publisher``/``max_output_tokens`` FKs/ints keep ``None``.
-    status: str | None = strawberry.UNSET
-    capabilities: JSON | None = strawberry.UNSET
-    config: JSON | None = strawberry.UNSET
+    scoped = getattr(queryset, "scoped_for_aggregate", None)
+    return scoped() if callable(scoped) else queryset
 
 
-@strawberry.input
-class InferenceModelPatch:
-    """Fields accepted when updating a catalogue model."""
-
-    id: PublicID
-    name: str | None = strawberry.UNSET
-    publisher: PublicID | None = strawberry.UNSET
-    display_name: str | None = strawberry.UNSET
-    description: str | None = strawberry.UNSET
-    model_use: str | None = strawberry.UNSET
-    is_default: bool | None = strawberry.UNSET
-    status: str | None = strawberry.UNSET
-    context_window: int | None = strawberry.UNSET
-    max_output_tokens: int | None = strawberry.UNSET
-    capabilities: JSON | None = strawberry.UNSET
-    config: JSON | None = strawberry.UNSET
-
-
-@strawberry.input
-class MCPServerInput:
-    """Fields accepted when creating an MCP server."""
-
-    name: str
-    description: str = ""
-    placement: str = "external"
-    transport: str = "http"
-    url: str = ""
-    credential: PublicID | None = None
-    config: JSON | None = strawberry.UNSET  # UNSET over the non-null column (see InferenceProviderInput).
-
-
-@strawberry.input
-class MCPServerPatch:
-    """Fields accepted when updating an MCP server."""
-
-    id: PublicID
-    name: str | None = strawberry.UNSET
-    description: str | None = strawberry.UNSET
-    placement: str | None = strawberry.UNSET
-    transport: str | None = strawberry.UNSET
-    url: str | None = strawberry.UNSET
-    credential: PublicID | None = strawberry.UNSET
-    config: JSON | None = strawberry.UNSET
-
-
-@strawberry.input
-class MCPToolInput:
-    """Fields accepted when creating an MCP tool."""
-
-    server: PublicID
-    name: str
-    description: str = ""
-    input_schema: JSON | None = strawberry.UNSET  # UNSET over the non-null column.
-    enabled: bool = True
-
-
-@strawberry.input
-class MCPToolPatch:
-    """Fields accepted when updating an MCP tool."""
-
-    id: PublicID
-    name: str | None = strawberry.UNSET
-    description: str | None = strawberry.UNSET
-    input_schema: JSON | None = strawberry.UNSET
-    enabled: bool | None = strawberry.UNSET
-
-
-@strawberry.input
-class AgentInput:
-    """Fields accepted when creating an agent.
-
-    ``owner`` is field-backed REBAC, so writing it derives the owner tuple. M2M skill
-    and MCP selections are set on the agent's update (``skills``/``mcpServers``/``mcpTools``
-    on ``AgentPatch``), not at create.
-    """
-
-    name: str
-    owner: PublicID
-    description: str = ""
-    is_template: bool = False
-    instructions: str = ""
-    model: PublicID | None = None
-    inference_credential: PublicID | None = None
-    service_template: PublicID | None = None
-    workspace_template: PublicID | None = None
-    # UNSET over non-null columns (see InferenceProviderInput); the nullable FKs above keep None.
-    service_inputs: JSON | None = strawberry.UNSET
-    workspace_inputs: JSON | None = strawberry.UNSET
-    # Only the lifecycle is client-writable; ``runtime_status`` is operator-observed.
-    lifecycle: str | None = strawberry.UNSET
-
-
-@strawberry.input
-class AgentPatch:
-    """Fields accepted when updating an agent."""
-
-    id: PublicID
-    name: str | None = strawberry.UNSET
-    description: str | None = strawberry.UNSET
-    is_template: bool | None = strawberry.UNSET
-    instructions: str | None = strawberry.UNSET
-    model: PublicID | None = strawberry.UNSET
-    inference_credential: PublicID | None = strawberry.UNSET
-    skills: list[PublicID] | None = strawberry.UNSET
-    mcp_servers: list[PublicID] | None = strawberry.UNSET
-    mcp_tools: list[PublicID] | None = strawberry.UNSET
-    service_template: PublicID | None = strawberry.UNSET
-    workspace_template: PublicID | None = strawberry.UNSET
-    service_inputs: JSON | None = strawberry.UNSET
-    workspace_inputs: JSON | None = strawberry.UNSET
-    lifecycle: str | None = strawberry.UNSET
-
-
-@strawberry_django.filter_type(Agent, lookups=True)
-class AgentFilter:
-    """Field lookups accepted when filtering the agents list.
-
-    ``is_template`` drives the Agents-vs-Templates split — one model, two list tabs.
-    """
-
-    name: auto
-    is_template: auto
-    lifecycle: auto
-    runtime_status: auto
-
-
-@strawberry_django.order_type(Agent)
-class AgentOrder:
-    """Orderings accepted by the agents list."""
-
-    name: auto
-    lifecycle: auto
-    runtime_status: auto
-    created_at: auto
-    updated_at: auto
-
-
-@strawberry_django.filter_type(Skill, lookups=True)
-class SkillFilter:
-    """Field lookups accepted when filtering the discovered skills list."""
-
-    source: auto
-    name: auto
-    path: auto
-    updated_at: auto
-
-
-@strawberry_django.order_type(Skill)
-class SkillOrder:
-    """Orderings accepted by the discovered skills list."""
-
-    source: auto
-    name: auto
-    path: auto
-    created_at: auto
-    updated_at: auto
-
-
-@strawberry_django.filter_type(MCPServer, lookups=True)
-class MCPServerFilter:
-    """Field lookups accepted when filtering MCP servers."""
-
-    name: auto
-    placement: auto
-    transport: auto
-    credential: auto
-    updated_at: auto
-
-
-@strawberry_django.order_type(MCPServer)
-class MCPServerOrder:
-    """Orderings accepted by the MCP servers list."""
-
-    name: auto
-    placement: auto
-    transport: auto
-    created_at: auto
-    updated_at: auto
-
-
-@strawberry_django.filter_type(MCPTool, lookups=True)
-class MCPToolFilter:
-    """Field lookups accepted when filtering MCP tools."""
-
-    server: auto
-    name: auto
-    enabled: auto
-    updated_at: auto
-
-
-@strawberry_django.order_type(MCPTool)
-class MCPToolOrder:
-    """Orderings accepted by the MCP tools list."""
-
-    server: auto
-    name: auto
-    enabled: auto
-    created_at: auto
-    updated_at: auto
-
-
-@strawberry_django.filter_type(InferenceProvider, lookups=True)
-class InferenceProviderFilter:
-    """Field lookups accepted when filtering inference providers."""
-
-    vendor: auto
-    owner: auto
-    backend_class: auto
-    status: auto
-    name: auto
-    updated_at: auto
-
-
-@strawberry_django.order_type(InferenceProvider)
-class InferenceProviderOrder:
-    """Orderings accepted by the inference providers list."""
-
-    vendor: auto
-    backend_class: auto
-    status: auto
-    name: auto
-    created_at: auto
-    updated_at: auto
-
-
-@strawberry_django.filter_type(InferenceModel, lookups=True)
-class InferenceModelFilter:
-    """Field lookups accepted when filtering the inference model catalogue."""
-
-    provider: auto
-    publisher: auto
-    name: auto
-    display_name: auto
-    model_use: auto
-    is_default: auto
-    status: auto
-
-
-@strawberry_django.order_type(InferenceModel)
-class InferenceModelOrder:
-    """Orderings accepted by the inference model catalogue."""
-
-    provider: auto
-    publisher: auto
-    name: auto
-    display_name: auto
-    model_use: auto
-    is_default: auto
-    status: auto
-    updated_at: auto
-
-
-AgentDataQuery, _AGENT_DATA_TYPES = data_query(
+_AGENT_RESOURCE = hasura_resource(
     AgentType,
-    type_name="AgentDataQuery",
-    filters=AgentFilter,
-    order=AgentOrder,
-    list_name="agents",
-    detail_name="agent",
-    aggregate_name="agent_aggregate",
-    group_name="agent_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["is_template", "lifecycle", "runtime_status", "updated_at"],
-    enable_filter_echo=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    aggregate_kwargs={
-        "name_prefix": "AgentAggregate",
-        "pagination_style": "offset",
+    model=Agent,
+    name="agents",
+    filterable=["id", "owner", "model", "name", "is_template", "lifecycle", "runtime_status", "updated_at"],
+    sortable=["name", "is_template", "lifecycle", "runtime_status", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["is_template", "lifecycle", "runtime_status", "updated_at"],
+    insertable=[
+        "name",
+        "owner",
+        "description",
+        "is_template",
+        "instructions",
+        "model",
+        "inference_credential",
+        "skills",
+        "mcp_servers",
+        "mcp_tools",
+        "service_template",
+        "workspace_template",
+        "service_inputs",
+        "workspace_inputs",
+        "lifecycle",
+    ],
+    updatable=[
+        "name",
+        "description",
+        "is_template",
+        "instructions",
+        "model",
+        "inference_credential",
+        "skills",
+        "mcp_servers",
+        "mcp_tools",
+        "service_template",
+        "workspace_template",
+        "service_inputs",
+        "workspace_inputs",
+        "lifecycle",
+    ],
+    field_id_decode={
+        "owner": public_pk_decoder(User),
+        "model": public_pk_decoder(InferenceModel),
+        "inference_credential": public_pk_decoder(Credential),
+        "skills": public_pk_decoder(Skill),
+        "mcp_servers": public_pk_decoder(MCPServer),
+        "mcp_tools": public_pk_decoder(MCPTool),
+        "service_template": public_pk_decoder(Template),
+        "workspace_template": public_pk_decoder(Template),
     },
+    get_queryset=lambda info: Agent.objects.all(),
+    get_aggregate_queryset=lambda info: _aggregate_queryset(Agent.objects.all()),
+    write_backend=AngeeHasuraWriteBackend(
+        Agent,
+        public_id_fields={
+            "owner": User,
+            "model": InferenceModel,
+            "inference_credential": Credential,
+            "skills": Skill,
+            "mcp_servers": MCPServer,
+            "mcp_tools": MCPTool,
+            "service_template": Template,
+            "workspace_template": Template,
+        },
+    ),
+    id_decode=public_pk_decoder(Agent),
 )
-SkillDataQuery, _SKILL_DATA_TYPES = data_query(
+_SKILL_RESOURCE = hasura_resource(
     SkillType,
-    type_name="SkillDataQuery",
-    filters=SkillFilter,
-    order=SkillOrder,
-    list_name="skills",
-    detail_name="skill",
-    aggregate_name="skill_aggregate",
-    group_name="skill_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["source", "source__path", "updated_at"],
-    enable_filter_echo=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    aggregate_kwargs={
-        "name_prefix": "SkillAggregate",
-        "pagination_style": "offset",
-    },
-)
-MCPServerDataQuery, _MCP_SERVER_DATA_TYPES = data_query(
-    MCPServerType,
-    type_name="MCPServerDataQuery",
-    filters=MCPServerFilter,
-    order=MCPServerOrder,
-    list_name="mcp_servers",
-    detail_name="mcp_server",
-    aggregate_name="mcp_server_aggregate",
-    group_name="mcp_server_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["placement", "transport"],
-    enable_filter_echo=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    aggregate_kwargs={
-        "name_prefix": "MCPServerAggregate",
-        "pagination_style": "offset",
-    },
-)
-MCPToolDataQuery, _MCP_TOOL_DATA_TYPES = data_query(
-    MCPToolType,
-    type_name="MCPToolDataQuery",
-    filters=MCPToolFilter,
-    order=MCPToolOrder,
-    list_name="mcp_tools",
-    detail_name="mcp_tool",
-    aggregate_name="mcp_tool_aggregate",
-    group_name="mcp_tool_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["server", "server__name", "enabled", "updated_at"],
-    enable_filter_echo=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    aggregate_kwargs={
-        "name_prefix": "MCPToolAggregate",
-        "pagination_style": "offset",
-    },
-)
-InferenceProviderDataQuery, _INFERENCE_PROVIDER_DATA_TYPES = data_query(
-    InferenceProviderType,
-    type_name="InferenceProviderDataQuery",
-    filters=InferenceProviderFilter,
-    order=InferenceProviderOrder,
-    list_name="inference_providers",
-    detail_name="inference_provider",
-    aggregate_name="inference_provider_aggregate",
-    group_name="inference_provider_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["backend_class", "status", "vendor", "vendor__display_name"],
-    enable_filter_echo=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    aggregate_kwargs={
-        "name_prefix": "InferenceProviderAggregate",
-        "pagination_style": "offset",
-    },
-)
-InferenceModelDataQuery, _INFERENCE_MODEL_DATA_TYPES = data_query(
-    InferenceModelType,
-    type_name="InferenceModelDataQuery",
-    filters=InferenceModelFilter,
-    order=InferenceModelOrder,
-    list_name="inference_models",
-    detail_name="inference_model",
-    aggregate_name="inference_model_aggregate",
-    group_name="inference_model_groups",
-    aggregate_fields=["id", "context_window", "max_output_tokens"],
-    group_by_fields=["provider", "provider__name", "model_use", "status"],
-    enable_filter_echo=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    aggregate_kwargs={
-        "name_prefix": "InferenceModelAggregate",
-        "pagination_style": "offset",
-    },
-)
-
-_AGENT_MUTATION = crud(
-    AgentType,
-    create=AgentInput,
-    update=AgentPatch,
+    model=Skill,
+    name="skills",
+    filterable=["id", "source", "name", "path", "updated_at"],
+    sortable=["source", "name", "path", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["source", "source__path", "updated_at"],
+    insert=False,
+    update=False,
     delete=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    name="agent",
-    write_context="agents.graphql.agent",
+    field_id_decode={"source": public_pk_decoder(Source)},
+    get_queryset=lambda info: Skill.objects.all(),
+    get_aggregate_queryset=lambda info: _aggregate_queryset(Skill.objects.all()),
+    write_backend=AngeeHasuraWriteBackend(Skill),
+    id_decode=public_pk_decoder(Skill),
 )
-"""Admin agent CRUD: owner is field-backed REBAC; written elevated."""
+_MCP_SERVER_RESOURCE = hasura_resource(
+    MCPServerType,
+    model=MCPServer,
+    name="mcp_servers",
+    filterable=["id", "name", "placement", "transport", "credential", "updated_at"],
+    sortable=["name", "placement", "transport", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["placement", "transport"],
+    insertable=["name", "description", "placement", "transport", "url", "credential", "config"],
+    updatable=["name", "description", "placement", "transport", "url", "credential", "config"],
+    field_id_decode={"credential": public_pk_decoder(Credential)},
+    get_queryset=lambda info: MCPServer.objects.all(),
+    get_aggregate_queryset=lambda info: _aggregate_queryset(MCPServer.objects.all()),
+    write_backend=AngeeHasuraWriteBackend(MCPServer, public_id_fields={"credential": Credential}),
+    id_decode=public_pk_decoder(MCPServer),
+)
+_MCP_TOOL_RESOURCE = hasura_resource(
+    MCPToolType,
+    model=MCPTool,
+    name="mcp_tools",
+    filterable=["id", "server", "name", "enabled", "updated_at"],
+    sortable=["server", "name", "enabled", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["server", "server__name", "enabled", "updated_at"],
+    insertable=["server", "name", "description", "input_schema", "enabled"],
+    updatable=["name", "description", "input_schema", "enabled"],
+    field_id_decode={"server": public_pk_decoder(MCPServer)},
+    get_queryset=lambda info: MCPTool.objects.all(),
+    get_aggregate_queryset=lambda info: _aggregate_queryset(MCPTool.objects.all()),
+    write_backend=AngeeHasuraWriteBackend(MCPTool, public_id_fields={"server": MCPServer}),
+    id_decode=public_pk_decoder(MCPTool),
+)
+_INFERENCE_PROVIDER_RESOURCE = hasura_resource(
+    InferenceProviderType,
+    model=InferenceProvider,
+    name="inference_providers",
+    filterable=["id", "vendor", "owner", "backend_class", "status", "name", "updated_at"],
+    sortable=["vendor", "backend_class", "status", "name", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["backend_class", "status", "vendor", "vendor__display_name"],
+    insert=False,
+    update=False,
+    delete=True,
+    field_id_decode={
+        "vendor": public_pk_decoder(Vendor),
+        "owner": public_pk_decoder(User),
+        "credential": public_pk_decoder(Credential),
+        "account": public_pk_decoder(ExternalAccount),
+    },
+    get_queryset=lambda info: InferenceProvider.objects.all(),
+    get_aggregate_queryset=lambda info: _aggregate_queryset(InferenceProvider.objects.all()),
+    write_backend=AngeeHasuraWriteBackend(InferenceProvider),
+    id_decode=public_pk_decoder(InferenceProvider),
+)
+_INFERENCE_MODEL_RESOURCE = hasura_resource(
+    InferenceModelType,
+    model=InferenceModel,
+    name="inference_models",
+    filterable=["id", "provider", "publisher", "name", "display_name", "model_use", "is_default", "status"],
+    sortable=["provider", "publisher", "name", "display_name", "model_use", "is_default", "status", "updated_at"],
+    aggregatable=["id", "context_window", "max_output_tokens"],
+    groupable=["provider", "provider__name", "model_use", "status"],
+    insertable=[
+        "provider",
+        "publisher",
+        "name",
+        "display_name",
+        "description",
+        "model_use",
+        "is_default",
+        "status",
+        "context_window",
+        "max_output_tokens",
+        "capabilities",
+        "config",
+    ],
+    updatable=[
+        "publisher",
+        "name",
+        "display_name",
+        "description",
+        "model_use",
+        "is_default",
+        "status",
+        "context_window",
+        "max_output_tokens",
+        "capabilities",
+        "config",
+    ],
+    field_id_decode={
+        "provider": public_pk_decoder(InferenceProvider),
+        "publisher": public_pk_decoder(Vendor),
+    },
+    get_queryset=lambda info: InferenceModel.objects.all(),
+    get_aggregate_queryset=lambda info: _aggregate_queryset(InferenceModel.objects.all()),
+    write_backend=AngeeHasuraWriteBackend(
+        InferenceModel,
+        public_id_fields={
+            "provider": InferenceProvider,
+            "publisher": Vendor,
+        },
+    ),
+    id_decode=public_pk_decoder(InferenceModel),
+)
 
 
 def _provider_oauth_client(provider: Any) -> Any:
@@ -758,59 +572,6 @@ class InferenceProviderUpdateMutation:
                 provider.materialize_impl_defaults("backend_class", provided=frozenset(provided))
             provider.save()
         return cast(InferenceProviderType, provider)
-
-
-_INFERENCE_PROVIDER_MUTATION = crud(
-    InferenceProviderType,
-    delete=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    name="inference_provider",
-    write_context="agents.graphql.inference_provider",
-)
-"""Admin inference-provider delete; create/update validate backend ownership explicitly."""
-
-_INFERENCE_MODEL_MUTATION = crud(
-    InferenceModelType,
-    create=InferenceModelInput,
-    update=InferenceModelPatch,
-    delete=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    name="inference_model",
-    write_context="agents.graphql.inference_model",
-)
-"""Admin catalogue-model CRUD: rows also arrive via ``refreshProviderModels``."""
-
-_MCP_SERVER_MUTATION = crud(
-    MCPServerType,
-    create=MCPServerInput,
-    update=MCPServerPatch,
-    delete=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    name="mcp_server",
-    write_context="agents.graphql.mcp_server",
-)
-"""Admin MCP-server CRUD: written elevated."""
-
-_MCP_TOOL_MUTATION = crud(
-    MCPToolType,
-    create=MCPToolInput,
-    update=MCPToolPatch,
-    delete=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    name="mcp_tool",
-    write_context="agents.graphql.mcp_tool",
-)
-"""Admin MCP-tool CRUD: FK input resolves via strawberry-django; written elevated."""
-
-_SKILL_MUTATION = crud(
-    SkillType,
-    delete=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    name="skill",
-    write_context="agents.graphql.skill",
-)
-"""Admin skill delete: rows arrive via source discovery; removal is inventory cleanup
-(re-discovered on the next source sync). No create/update — the source owns the data."""
 
 
 def _mint_session(agent: Any) -> dict[str, Any]:
@@ -972,35 +733,35 @@ _CONSOLE_TYPES: list[object] = [
     MCPToolType,
     AgentType,
     AgentChatEndpoint,
-    *_AGENT_DATA_TYPES,
-    *_SKILL_DATA_TYPES,
-    *_MCP_SERVER_DATA_TYPES,
-    *_MCP_TOOL_DATA_TYPES,
-    *_INFERENCE_PROVIDER_DATA_TYPES,
-    *_INFERENCE_MODEL_DATA_TYPES,
+    *_AGENT_RESOURCE.types,
+    *_SKILL_RESOURCE.types,
+    *_MCP_SERVER_RESOURCE.types,
+    *_MCP_TOOL_RESOURCE.types,
+    *_INFERENCE_PROVIDER_RESOURCE.types,
+    *_INFERENCE_MODEL_RESOURCE.types,
 ]
 
 
 schemas = {
     "console": {
         "query": [
-            AgentDataQuery,
-            SkillDataQuery,
-            MCPServerDataQuery,
-            MCPToolDataQuery,
-            InferenceProviderDataQuery,
-            InferenceModelDataQuery,
+            _AGENT_RESOURCE.query,
+            _SKILL_RESOURCE.query,
+            _MCP_SERVER_RESOURCE.query,
+            _MCP_TOOL_RESOURCE.query,
+            _INFERENCE_PROVIDER_RESOURCE.query,
+            _INFERENCE_MODEL_RESOURCE.query,
         ],
         "mutation": [
-            _AGENT_MUTATION,
+            _AGENT_RESOURCE.mutation,
             InferenceProviderCreateMutation,
             InferenceProviderConnectMutation,
             InferenceProviderUpdateMutation,
-            _INFERENCE_PROVIDER_MUTATION,
-            _INFERENCE_MODEL_MUTATION,
-            _MCP_SERVER_MUTATION,
-            _MCP_TOOL_MUTATION,
-            _SKILL_MUTATION,
+            _SKILL_RESOURCE.mutation,
+            _MCP_SERVER_RESOURCE.mutation,
+            _MCP_TOOL_RESOURCE.mutation,
+            _INFERENCE_PROVIDER_RESOURCE.mutation,
+            _INFERENCE_MODEL_RESOURCE.mutation,
             InferenceActionMutation,
             AgentActionMutation,
         ],

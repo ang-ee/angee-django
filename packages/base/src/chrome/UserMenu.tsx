@@ -1,6 +1,6 @@
 import { type ReactElement } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { useAuth, useLogout } from "@angee/sdk";
+import { useAuth, useLogout } from "@angee/data";
 
 import { useBaseT } from "../i18n";
 import { cn } from "../lib/cn";

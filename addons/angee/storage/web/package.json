@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@angee/base": "workspace:*",
+    "@angee/data": "workspace:*",
     "@angee/sdk": "workspace:*",
     "@vidstack/react": "^1.12.13",
     "heic-to": "^1.2.1",

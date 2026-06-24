@@ -1,6 +1,6 @@
 import * as React from "react";
-import { Button, Glyph, usePrompt, useToast } from "@angee/base";
-import { errorMessage, useAuthoredMutation } from "@angee/sdk";
+import { Button, Glyph, errorMessage, usePrompt, useToast } from "@angee/base";
+import { useAuthoredMutation } from "@angee/sdk";
 
 import { useIntegrateT } from "../i18n";
 import { IntegrateConnectAccountComplete } from "./documents.public";

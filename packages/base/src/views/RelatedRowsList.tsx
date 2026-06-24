@@ -3,7 +3,7 @@ import {
   useResourceList,
   type ResourceTypeName,
   type UseResourceListOptions,
-} from "@angee/sdk";
+} from "@angee/data";
 
 import {
   RowsListView,

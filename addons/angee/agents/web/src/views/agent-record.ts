@@ -1,4 +1,4 @@
-import type { Row } from "@angee/sdk";
+import type { Row } from "@angee/data";
 
 /** Read a string field off the boundary record (`Record<string, unknown>`), or "". */
 export function stringField(record: Row | null, key: string): string {
@@ -7,11 +7,11 @@ export function stringField(record: Row | null, key: string): string {
 }
 
 // The agent carries two state axes, each reading as its UPPERCASE enum name:
-// `lifecycle` is the provision journey and `runtimeStatus` is observed health.
+// `lifecycle` is the provision journey and `runtime_status` is observed health.
 export function agentLifecycle(record: Row | null): string {
   return stringField(record, "lifecycle").toUpperCase();
 }
 
 export function agentRuntime(record: Row | null): string {
-  return stringField(record, "runtimeStatus").toUpperCase();
+  return stringField(record, "runtime_status").toUpperCase();
 }

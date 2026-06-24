@@ -9,16 +9,18 @@ import {
   Group,
   GroupListView,
   List,
+  rowPublicId,
   useRecordActionMutation,
   useEnumOptions,
   useImplPrefill,
+  type Row,
 } from "@angee/base";
 import {
   canConnectRecord,
   ConnectOAuthButton,
   connectCallbackPathForRecord,
 } from "@angee/integrate";
-import { rowPublicId, useAuthoredMutation, type Row } from "@angee/sdk";
+import { useAuthoredMutation } from "@angee/sdk";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { ConnectInferenceProvider } from "../documents";
@@ -30,8 +32,8 @@ const MODEL_MODEL = "agents.InferenceModel";
 export function InferenceProvidersPage(): React.ReactElement {
   const t = useAgentsT();
   const [refreshModels] = useRecordActionMutation<ActionFieldName>("refreshProviderModels");
-  const backendClassOptions = useEnumOptions(PROVIDER_MODEL, "backendClass");
-  const backendClassPrefill = useImplPrefill(PROVIDER_MODEL, "backendClass");
+  const backendClassOptions = useEnumOptions(PROVIDER_MODEL, "backend_class");
+  const backendClassPrefill = useImplPrefill(PROVIDER_MODEL, "backend_class");
 
   return (
     <DataPage
@@ -43,18 +45,18 @@ export function InferenceProvidersPage(): React.ReactElement {
       }
     >
       <List model={PROVIDER_MODEL} list={GroupListView}>
-        <Facet field="vendor" label="Vendor" labelField="displayName" />
+        <Facet field="vendor" label="Vendor" labelField="display_name" />
         <Column field="name" />
-        <Column field="backendClass" />
+        <Column field="backend_class" />
         <Column field="status" widget="statusBadge" />
-        <Column field="credential.displayName" header={t("agents.inference.credential")} />
+        <Column field="credential.display_name" header={t("agents.inference.credential")} />
       </List>
       <Form model={PROVIDER_MODEL}>
         <Field name="name" title />
         <Group label={t("agents.inference.backend")} columns={2}>
           <Field name="owner" />
           <Field
-            name="backendClass"
+            name="backend_class"
             widget="select"
             options={backendClassOptions}
             prefill={backendClassPrefill}
@@ -65,8 +67,8 @@ export function InferenceProvidersPage(): React.ReactElement {
           <Field name="status" widget="statusbar" />
         </Group>
         <Group label={t("agents.inference.provider")} columns={2}>
-          <Field name="baseUrl" />
-          <Field name="credentialEnv" />
+          <Field name="base_url" />
+          <Field name="credential_env" />
         </Group>
         <Field name="config" widget="json" />
         <Action id="refresh-models" label={t("agents.inference.refreshModels")} icon="refresh" run={refreshModels} />
@@ -105,10 +107,10 @@ function ProviderConnectButton({
 
 export function InferenceModelsPage(): React.ReactElement {
   const t = useAgentsT();
-  const modelUseOptions = useEnumOptions(MODEL_MODEL, "modelUse");
+  const modelUseOptions = useEnumOptions(MODEL_MODEL, "model_use");
   const defaultGroups = React.useMemo(
     () => ({
-      list: { field: "modelUse" },
+      list: { field: "model_use" },
       board: { field: "provider.name" },
     }),
     [],
@@ -124,21 +126,21 @@ export function InferenceModelsPage(): React.ReactElement {
         <Facet field="provider" label={t("agents.inference.provider")} labelField="name" />
         <Column field="name" />
         <Column field="provider.name" header={t("agents.inference.provider")} />
-        <Column field="displayName" />
-        <Column field="modelUse" />
+        <Column field="display_name" />
+        <Column field="model_use" />
         <Column field="status" widget="statusBadge" />
       </List>
       <Form model={MODEL_MODEL}>
         <Field name="name" title />
-        <Field name="displayName" />
+        <Field name="display_name" />
         <Group label={t("agents.inference.catalogue")} columns={2}>
           <Field name="provider" createOnly />
           <Field name="publisher" />
-          <Field name="modelUse" widget="select" options={modelUseOptions} createOnly />
+          <Field name="model_use" widget="select" options={modelUseOptions} createOnly />
           <Field name="status" widget="statusbar" />
-          <Field name="isDefault" />
-          <Field name="contextWindow" />
-          <Field name="maxOutputTokens" />
+          <Field name="is_default" />
+          <Field name="context_window" />
+          <Field name="max_output_tokens" />
         </Group>
         <Field name="description" />
         <Field name="capabilities" widget="json" />

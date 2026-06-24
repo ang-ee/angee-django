@@ -1,14 +1,18 @@
 import * as React from "react";
+import { useModelMetadata } from "@angee/sdk";
 import {
-  bucketKey,
-  useResourceAggregate,
-  useResourceGroupBy,
-  type GroupByDimension,
-} from "@angee/sdk";
+  useAngeeAggregate,
+  useAngeeGroupBy,
+  type AggregateBucket,
+} from "@angee/data";
 
 import { useBaseT } from "../i18n";
 import { CountBadge } from "../ui/badge";
 import { Skeleton, SkeletonStatus } from "../ui/skeleton";
+import {
+  hasuraGroupDimension,
+  type GroupByDimension,
+} from "./ListInternals";
 
 /** One grouped dimension plus how to label it in the panel header. */
 export interface AggregateDimension extends GroupByDimension {
@@ -43,11 +47,17 @@ export function AggregatePanel({
 }: AggregatePanelProps): React.ReactElement {
   const t = useBaseT();
   const grouped = dimensions.length > 0;
-  const group = useResourceGroupBy(model, {
-    dimensions,
+  const metadata = useModelMetadata(model);
+  const resource = requireDataResource(model, metadata);
+  const groupDimensions = React.useMemo(
+    () => dimensions.map(hasuraGroupDimension),
+    [dimensions],
+  );
+  const group = useAngeeGroupBy(resource, {
+    dimensions: groupDimensions,
     enabled: grouped,
   });
-  const ungrouped = useResourceAggregate(model, { enabled: !grouped });
+  const ungrouped = useAngeeAggregate(resource, { enabled: !grouped });
 
   const fetching = grouped ? group.fetching : ungrouped.fetching;
   const error = grouped ? group.error : ungrouped.error;
@@ -112,6 +122,24 @@ export function AggregatePanel({
       )}
     </div>
   );
+}
+
+function bucketKey(
+  bucket: AggregateBucket,
+  dimension: GroupByDimension,
+): unknown {
+  return bucket.key?.[dimension.key ?? dimension.field] ?? null;
+}
+
+function requireDataResource(
+  model: string,
+  metadata: ReturnType<typeof useModelMetadata>,
+): NonNullable<NonNullable<ReturnType<typeof useModelMetadata>>["resource"]> {
+  const resource = metadata?.resource;
+  if (!resource) {
+    throw new Error(`Model "${model}" has no data resource metadata.`);
+  }
+  return resource;
 }
 
 function AggregateSkeleton({

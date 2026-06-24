@@ -113,7 +113,7 @@ describe("IAM overview page", () => {
     loading.unmount();
 
     sdkMocks.users.fetching = false;
-    sdkMocks.users.data = usersData({ totalCount: 0, results: [] });
+    sdkMocks.users.data = usersData({ totalCount: 0, users: [] });
     renderInRouter(<OverviewPage />);
 
     expect((await selectTrigger("Principal")).hasAttribute("disabled")).toBe(
@@ -125,7 +125,7 @@ describe("IAM overview page", () => {
     sdkMocks.overview.data = overviewData();
     sdkMocks.users.data = usersData({
       totalCount: 501,
-      results: [userData({ id: ALICE_PUBLIC_ID })],
+      users: [userData({ id: ALICE_PUBLIC_ID })],
     });
 
     renderInRouter(<OverviewPage />);
@@ -162,7 +162,7 @@ describe("IAM overview page", () => {
     });
     sdkMocks.users.data = usersData({
       totalCount: 1,
-      results: [userData({ id: ALICE_PUBLIC_ID })],
+      users: [userData({ id: ALICE_PUBLIC_ID })],
     });
 
     renderInRouter(<OverviewPage />);
@@ -178,7 +178,7 @@ describe("IAM overview page", () => {
     sdkMocks.overview.data = overviewData();
     sdkMocks.users.data = usersData({
       totalCount: 1,
-      results: [userData({ id: ALICE_PUBLIC_ID })],
+      users: [userData({ id: ALICE_PUBLIC_ID })],
     });
     sdkMocks.grantRole.mockResolvedValue({ grantRole: true });
 
@@ -213,7 +213,7 @@ describe("IAM overview page", () => {
     sdkMocks.overview.data = overviewData();
     sdkMocks.users.data = usersData({
       totalCount: 1,
-      results: [staleUser],
+      users: [staleUser],
     });
     sdkMocks.grantRole.mockResolvedValue({ grantRole: true });
 
@@ -278,15 +278,17 @@ function overviewData(overrides: Record<string, unknown> = {}): unknown {
 
 function usersData({
   totalCount,
-  results,
+  users,
 }: {
   totalCount: number;
-  results: unknown[];
+  users: unknown[];
 }): unknown {
   return {
-    users: {
-      totalCount,
-      results,
+    users,
+    users_aggregate: {
+      aggregate: {
+        count: totalCount,
+      },
     },
   };
 }
@@ -302,20 +304,20 @@ function userData({
 }): {
   id: string;
   username: string;
-  firstName: string;
-  lastName: string;
+  first_name: string;
+  last_name: string;
   email: string;
-  isStaff: boolean;
-  isActive: boolean;
+  is_staff: boolean;
+  is_active: boolean;
 } {
   return {
     id,
     username,
-    firstName: "",
-    lastName: "",
+    first_name: "",
+    last_name: "",
     email,
-    isStaff: false,
-    isActive: true,
+    is_staff: false,
+    is_active: true,
   };
 }
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { errorMessage } from "@angee/sdk";
 
+import { errorMessage } from "../feedback";
 import { Alert } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";

@@ -39,11 +39,12 @@ export function useServiceActions(refetch: () => void): {
     destroy.result.fetching;
 
   const actions = useMemo<readonly ServiceRowAction[]>(() => {
-    const named = (
+    const named = <V extends Record<string, unknown>>(
       field: string,
       label: string,
       variant: ServiceRowAction["variant"],
-      run: (variables: { name: string }) => Promise<object>,
+      run: (variables: V) => Promise<object>,
+      variablesFor: (service: ServiceState) => V,
       dangerous = false,
     ): ServiceRowAction => ({
       label,
@@ -62,15 +63,27 @@ export function useServiceActions(refetch: () => void): {
           await runDaemon({
             run,
             field,
-            variables: { name: service.name },
+            variables: variablesFor(service),
             label,
           });
         })();
       },
     });
     return [
-      named("serviceStart", t("operator.services.start"), "secondary", start.run),
-      named("serviceRestart", t("operator.services.restart"), "ghost", restart.run),
+      named(
+        "serviceStart",
+        t("operator.services.start"),
+        "secondary",
+        start.run,
+        (service) => ({ name: service.name }),
+      ),
+      named(
+        "serviceRestart",
+        t("operator.services.restart"),
+        "ghost",
+        restart.run,
+        (service) => ({ name: service.name }),
+      ),
       {
         label: t("operator.services.recreate"),
         variant: "ghost",
@@ -87,8 +100,21 @@ export function useServiceActions(refetch: () => void): {
           });
         },
       },
-      named("serviceStop", t("operator.services.stop"), "ghost", stop.run),
-      named("serviceDestroy", t("operator.services.destroy"), "ghost", destroy.run, true),
+      named(
+        "serviceStop",
+        t("operator.services.stop"),
+        "ghost",
+        stop.run,
+        (service) => ({ name: service.name }),
+      ),
+      named(
+        "delete_services_by_pk",
+        t("operator.services.destroy"),
+        "ghost",
+        destroy.run,
+        (service) => ({ id: service.id }),
+        true,
+      ),
     ] satisfies readonly ServiceRowAction[];
   }, [confirm, destroy.run, recreate.run, restart.run, runDaemon, start.run, stop.run, t]);
 

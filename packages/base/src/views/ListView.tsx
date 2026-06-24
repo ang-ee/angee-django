@@ -1,11 +1,12 @@
 import * as React from "react";
 import {
-  useResourceAggregate,
+  hasuraWhereFromAngeeFilter,
+  useAngeeAggregate,
+} from "@angee/data";
+import {
   useModelMetadata,
-  type ResourceTypeName,
-  type Row,
-  type UseAggregateOptions,
 } from "@angee/sdk";
+import type { Row } from "@angee/data";
 
 import type { PagerState } from "../ui/pager";
 import { BoardView } from "./BoardView";
@@ -36,7 +37,9 @@ import {
   FlatListBody,
   dataViewGroupToAggregateDimension,
   groupMeasuresFromColumns,
+  hasuraMeasuresFromGroupMeasures,
   type FlatListBodyProps,
+  type GroupMeasure,
 } from "./ListInternals";
 import { DataViewListShell } from "./DataViewListShell";
 import type { ListViewProps } from "./list-view-types";
@@ -57,6 +60,7 @@ import {
   removeCustomFilter,
   resolveTextFilterField,
   textFilterValue,
+  validDataViewGroupStack,
 } from "./list-view-utils";
 import { columnsWithMetadataDefaults } from "./model-metadata-defaults";
 import type { ColumnDescriptor } from "./page";
@@ -79,6 +83,7 @@ export type {
 // GroupListView is a superset of the lean list: it owns the grouping-only
 // defaults (seeded here, their sole owner — DataPage just forwards them).
 export type GroupListViewProps<TRow extends Row = Row> = ListViewProps<TRow> & {
+  defaultView?: DataViewKind;
   defaultGroup?: DataViewGroup | null;
   defaultGroups?: DataViewDefaultGroups;
 };
@@ -109,8 +114,9 @@ function ListViewShell<TRow extends Row = Row>(
   const initialState = React.useMemo(
     () => ({
       pageSize: props.pageSize,
+      view: props.defaultView,
     }),
-    [props.pageSize],
+    [props.defaultView, props.pageSize],
   );
   if (dataView) return <ListViewBody {...props} dataView={dataView} />;
   return (
@@ -183,6 +189,31 @@ function ListViewBody<TRow extends Row = Row>({
         : null,
     [modelMetadata, rawActiveDefaultGroup],
   );
+  const validDefaultGroupStack = React.useMemo(
+    () =>
+      activeDefaultGroup
+        ? validDataViewGroupStack([activeDefaultGroup], modelMetadata)
+        : EMPTY_GROUP_STACK,
+    [activeDefaultGroup, modelMetadata],
+  );
+  const validCurrentGroupStack = React.useMemo(
+    () => validDataViewGroupStack(dataView.state.groupStack, modelMetadata),
+    [dataView.state.groupStack, modelMetadata],
+  );
+  const hasInvalidGroupStack =
+    grouping
+    && !dataViewGroupStacksEqual(dataView.state.groupStack, validCurrentGroupStack);
+  const effectiveGroupStack = React.useMemo(() => {
+    if (!grouping) return EMPTY_GROUP_STACK;
+    if (validCurrentGroupStack.length > 0) return validCurrentGroupStack;
+    return hasInvalidGroupStack ? validDefaultGroupStack : dataView.state.groupStack;
+  }, [
+    dataView.state.groupStack,
+    grouping,
+    hasInvalidGroupStack,
+    validCurrentGroupStack,
+    validDefaultGroupStack,
+  ]);
   const handledDefaultGroupRef = React.useRef<DataViewGroup | null>(null);
   React.useEffect(() => {
     if (!grouping || !activeDefaultGroup) {
@@ -212,13 +243,28 @@ function ListViewBody<TRow extends Row = Row>({
     dataView.state.group,
     grouping,
   ]);
+  React.useEffect(() => {
+    if (!grouping || !hasInvalidGroupStack) return;
+    if (dataViewGroupStacksEqual(dataView.state.groupStack, effectiveGroupStack)) {
+      return;
+    }
+    dataView.setGroupStack(effectiveGroupStack);
+  }, [
+    dataView.setGroupStack,
+    dataView.state.groupStack,
+    effectiveGroupStack,
+    grouping,
+    hasInvalidGroupStack,
+  ]);
 
   const groupDimensions = React.useMemo(
     () =>
       grouping
-        ? dataView.state.groupStack.map(dataViewGroupToAggregateDimension)
+        ? effectiveGroupStack.map((group) =>
+            dataViewGroupToAggregateDimension(group, modelMetadata)
+          )
         : [],
-    [dataView.state.groupStack, grouping],
+    [effectiveGroupStack, grouping, modelMetadata],
   );
   const groupedListMode =
     grouping && dataView.state.view === "list" && groupDimensions.length > 0;
@@ -231,7 +277,7 @@ function ListViewBody<TRow extends Row = Row>({
     pageSize,
     dataView,
     modelMetadata,
-    groupStack: grouping ? undefined : EMPTY_GROUP_STACK,
+    groupStack: grouping ? effectiveGroupStack : EMPTY_GROUP_STACK,
     enabled: !groupedListMode,
     onListStateChange,
   });
@@ -373,8 +419,8 @@ function ListViewBody<TRow extends Row = Row>({
         actions: toolbarActions,
         pager: toolbarPager,
         view: grouping ? dataView.state.view : undefined,
-        group: grouping ? dataView.state.group : undefined,
-        groupStack: grouping ? dataView.state.groupStack : undefined,
+        group: grouping ? effectiveGroupStack[0] ?? null : undefined,
+        groupStack: grouping ? effectiveGroupStack : undefined,
         groupOptions: toolbarGroupOptions,
         filterOptions,
         filterFields,
@@ -445,6 +491,7 @@ function ListViewBody<TRow extends Row = Row>({
           visibleFields={surface.visibleFields}
           onVisibleFieldToggle={surface.toggleVisibleField}
           dataView={dataView}
+          groupStack={effectiveGroupStack}
           groupDimensions={groupDimensions}
           modelMetadata={modelMetadata}
           requestedFields={surface.requestedFields}
@@ -476,6 +523,7 @@ function ListViewBody<TRow extends Row = Row>({
         <FlatListBodyWithAggregate
           model={model}
           filter={surface.mergedFilter}
+          modelMetadata={modelMetadata}
           measures={flatMeasures}
           columns={resolvedColumns}
           table={surface.table}
@@ -525,19 +573,38 @@ function ListViewBody<TRow extends Row = Row>({
 function FlatListBodyWithAggregate<TRow extends Row>({
   model,
   filter,
+  modelMetadata,
   measures,
   ...props
 }: FlatListBodyProps<TRow> & {
   model: string;
-  filter: UseAggregateOptions<ResourceTypeName>["filter"];
-  measures: UseAggregateOptions<ResourceTypeName>["measures"];
+  filter: Record<string, unknown> | undefined;
+  modelMetadata: ReturnType<typeof useModelMetadata>;
+  measures: readonly GroupMeasure[];
 }): React.ReactElement {
-  const aggregate = useResourceAggregate(model, {
-    filter,
-    measures,
-    enabled: Boolean(measures?.length),
+  const resource = requireDataResource(model, modelMetadata);
+  const where = React.useMemo(() => hasuraWhereFromAngeeFilter(filter), [filter]);
+  const queryMeasures = React.useMemo(
+    () => hasuraMeasuresFromGroupMeasures(measures, modelMetadata),
+    [measures, modelMetadata],
+  );
+  const aggregate = useAngeeAggregate(resource, {
+    where,
+    measures: queryMeasures,
+    enabled: queryMeasures.length > 0,
   });
   return <FlatListBody {...props} footerAggregate={aggregate.aggregate} />;
+}
+
+function requireDataResource(
+  model: string,
+  metadata: ReturnType<typeof useModelMetadata>,
+): NonNullable<NonNullable<ReturnType<typeof useModelMetadata>>["resource"]> {
+  const resource = metadata?.resource;
+  if (!resource) {
+    throw new Error(`Model "${model}" has no data resource metadata.`);
+  }
+  return resource;
 }
 
 function defaultGroupForView(
@@ -565,4 +632,17 @@ function defaultGroupsForToolbar(
     if (group) groups.push(group);
   }
   return groups;
+}
+
+function dataViewGroupStacksEqual(
+  left: readonly DataViewGroup[],
+  right: readonly DataViewGroup[],
+): boolean {
+  return (
+    left.length === right.length
+    && left.every((group, index) => {
+      const other = right[index];
+      return other !== undefined && dataViewGroupsEqual(group, other);
+    })
+  );
 }

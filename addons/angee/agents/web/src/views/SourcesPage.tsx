@@ -37,7 +37,7 @@ export function SourcesPage(): React.ReactElement {
         <Facet field="repository" label="Repository" labelField="name" />
         <Column field="path" />
         <Column field="ref" />
-        <Column field="lastSyncedAt" />
+        <Column field="last_synced_at" />
       </List>
       <Form model={MODEL}>
         {/* repository + kind are fixed at create. `kind` is `createOnly` (not
@@ -49,7 +49,7 @@ export function SourcesPage(): React.ReactElement {
           <Field name="ref" />
         </Group>
         <Field name="path" />
-        <Field name="lastSyncedAt" readOnly />
+        <Field name="last_synced_at" readOnly />
         <Action id="refresh" label={t("agents.sources.refreshSkills")} icon="refresh" run={refresh} />
       </Form>
     </DataPage>

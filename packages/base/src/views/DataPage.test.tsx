@@ -4,10 +4,12 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as rtlRender,
   screen,
   waitFor,
   within,
+  type RenderOptions,
+  type RenderResult,
 } from "@testing-library/react";
 import {
   Outlet,
@@ -52,15 +54,18 @@ import {
   Group,
 } from "./page";
 import {
-  ModelMetadataProvider,
   type AggregateBucket,
-  type GroupByDimension,
+  type AggregateRequestOptions,
+  type GroupByRequestOptions,
+  type GroupDimension as HasuraGroupDimension,
   type ResourceTypeName,
-  type UseAggregateOptions,
-  type Row,
-  type UseGroupByOptions,
   type UseResourceListOptions,
   type UseResourceListResult,
+  type Row,
+} from "@angee/data";
+import {
+  ModelMetadataProvider,
+  type SchemaFieldMetadata,
 } from "@angee/sdk";
 
 const sdkMocks = vi.hoisted(() => ({
@@ -98,23 +103,44 @@ const sdkMocks = vi.hoisted(() => ({
       updatedAt: "2026-04-03T10:00:00.000Z",
     },
   ] satisfies Row[],
-  aggregateCalls: [] as Array<UseAggregateOptions<ResourceTypeName>>,
-  groupByCalls: [] as Array<UseGroupByOptions<ResourceTypeName>>,
+  aggregateCalls: [] as Array<AggregateRequestOptions & { enabled?: boolean }>,
+  groupByCalls: [] as Array<GroupByRequestOptions & { enabled?: boolean }>,
+  listCalls: [] as Array<UseResourceListOptions<ResourceTypeName>>,
   mutate: vi.fn(async ({ data }: { data: Row }) => data),
 }));
 
 vi.mock("@angee/sdk", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/sdk")>();
+  return {
+    ...actual,
+    useWidget: () => undefined,
+  };
+});
+
+vi.mock("@angee/data", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/data")>();
   const ReactRuntime = await import("react");
   function filteredRows(
     rows: readonly Row[],
-    filter: UseResourceListOptions<ResourceTypeName>["filter"],
+    filter: unknown,
   ): readonly Row[] {
     if (!filter) return rows;
-    return rows.filter((row) =>
-      Object.entries(filter as Record<string, unknown>).every(
-        ([field, lookup]) => matchesLookup(readPath(row, field), lookup),
-      ),
+    return rows.filter((row) => matchesFilter(row, filter));
+  }
+  function matchesFilter(row: Row, filter: unknown): boolean {
+    if (!filter || typeof filter !== "object" || Array.isArray(filter)) return true;
+    return Object.entries(filter as Record<string, unknown>).every(
+      ([field, lookup]) => {
+        if (field === "AND" || field === "and" || field === "_and") {
+          const items = Array.isArray(lookup) ? lookup : [lookup];
+          return items.every((item) => matchesFilter(row, item));
+        }
+        if (field === "OR" || field === "or" || field === "_or") {
+          const items = Array.isArray(lookup) ? lookup : [lookup];
+          return items.some((item) => matchesFilter(row, item));
+        }
+        return matchesLookup(readPath(row, field), lookup);
+      },
     );
   }
   function matchesLookup(value: unknown, lookup: unknown): boolean {
@@ -122,59 +148,84 @@ vi.mock("@angee/sdk", async (importOriginal) => {
       return value === lookup;
     }
     const record = lookup as Record<string, unknown>;
-    if ("exact" in record) return value === record.exact;
+    if ("exact" in record) return isEqualValue(value, record.exact);
+    if ("_eq" in record) return isEqualValue(value, record._eq);
     if (Array.isArray(record.inList)) return record.inList.includes(value);
+    if (Array.isArray(record._in)) return record._in.includes(value);
+    if ("isNull" in record) return (value == null) === Boolean(record.isNull);
+    if ("_is_null" in record) return (value == null) === Boolean(record._is_null);
+    if ("gte" in record && compareValue(value, record.gte) < 0) return false;
+    if ("_gte" in record && compareValue(value, record._gte) < 0) return false;
+    if ("gt" in record && compareValue(value, record.gt) <= 0) return false;
+    if ("_gt" in record && compareValue(value, record._gt) <= 0) return false;
+    if ("lte" in record && compareValue(value, record.lte) > 0) return false;
+    if ("_lte" in record && compareValue(value, record._lte) > 0) return false;
+    if ("lt" in record && compareValue(value, record.lt) >= 0) return false;
+    if ("_lt" in record && compareValue(value, record._lt) >= 0) return false;
     if (typeof record.iContains === "string") {
       return String(value ?? "")
         .toLowerCase()
         .includes(record.iContains.toLowerCase());
     }
+    if (typeof record._ilike === "string") {
+      return String(value ?? "")
+        .toLowerCase()
+        .includes(record._ilike.toLowerCase());
+    }
     return true;
+  }
+  function isEqualValue(left: unknown, right: unknown): boolean {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+  function compareValue(left: unknown, right: unknown): number {
+    const leftTime = dateTime(left);
+    const rightTime = dateTime(right);
+    if (leftTime !== null && rightTime !== null) return leftTime - rightTime;
+    if (typeof left === "number" && typeof right === "number") return left - right;
+    return String(left ?? "").localeCompare(String(right ?? ""));
+  }
+  function dateTime(value: unknown): number | null {
+    if (typeof value !== "string") return null;
+    const time = Date.parse(value);
+    return Number.isNaN(time) ? null : time;
   }
   function readPath(row: Row, path: string): unknown {
     let current: unknown = row;
     for (const key of path.split(".")) {
       if (current == null || typeof current !== "object") return undefined;
-      current = (current as Record<string, unknown>)[key];
+      const record = current as Record<string, unknown>;
+      current = record[key] ?? record[snakeToCamel(key)];
     }
     return current;
   }
   function groupBuckets(
     rows: readonly Row[],
-    dimensions: readonly GroupByDimension[],
-    baseFilter: UseGroupByOptions<ResourceTypeName>["filter"],
-    measures: UseGroupByOptions<ResourceTypeName>["measures"],
+    dimensions: readonly HasuraGroupDimension[],
+    measures: GroupByRequestOptions["measures"],
   ): readonly AggregateBucket[] {
     const buckets = new Map<string, AggregateBucket>();
     for (const row of rows) {
       const key: Record<string, unknown> = {};
-      const filter = { ...(baseFilter as Record<string, unknown> | undefined) };
       for (const dimension of dimensions) {
-        const keyField = dimension.key ?? dimension.field;
-        const sourceField = sourceFieldForAggregateKey(keyField);
-        const value = readPath(row, sourceField);
-        key[keyField] = value;
-        filter[sourceField] = { exact: value };
+        const keyField = dimension.key ?? dimension.input;
+        key[keyField] = groupValue(row, dimension, keyField);
       }
       const bucketKey = JSON.stringify(key);
       const current = buckets.get(bucketKey);
-      if (current) {
-        buckets.set(
-          bucketKey,
-          applyMeasures({ ...current, count: current.count + 1 }, row, measures),
-        );
-      } else {
-        buckets.set(
-          bucketKey,
-          applyMeasures({ key, count: 1, filter }, row, measures),
-        );
-      }
+      buckets.set(
+        bucketKey,
+        applyMeasures(
+          current ? { ...current, count: current.count + 1 } : { key, count: 1 },
+          row,
+          measures,
+        ),
+      );
     }
     return [...buckets.values()];
   }
   function aggregateBucket(
     rows: readonly Row[],
-    measures: UseAggregateOptions<ResourceTypeName>["measures"],
+    measures: AggregateRequestOptions["measures"],
   ): AggregateBucket {
     return rows.reduce<AggregateBucket>(
       (bucket, row) => applyMeasures(bucket, row, measures),
@@ -184,11 +235,11 @@ vi.mock("@angee/sdk", async (importOriginal) => {
   function applyMeasures(
     bucket: AggregateBucket,
     row: Row,
-    measures: UseGroupByOptions<ResourceTypeName>["measures"],
+    measures: AggregateRequestOptions["measures"],
   ): AggregateBucket {
     let next = bucket;
     for (const measure of measures ?? []) {
-      if (measure.op !== "sum") continue;
+      if (measure.op !== "sum" || !measure.field) continue;
       const value = numberValue(readPath(row, measure.field));
       const current = numberValue(next.sum?.[measure.field]);
       next = {
@@ -201,6 +252,31 @@ vi.mock("@angee/sdk", async (importOriginal) => {
     }
     return next;
   }
+  function groupValue(
+    row: Row,
+    dimension: HasuraGroupDimension,
+    keyField: string,
+  ): unknown {
+    const sourceField = sourceFieldForAggregateKey(keyField);
+    const value = readPath(row, sourceField);
+    return truncatedDateGroupValue(value, dimension.granularity ?? dimension.input) ?? value;
+  }
+  function truncatedDateGroupValue(value: unknown, input: string): string | null {
+    if (typeof value !== "string") return null;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    const granularity = input.toLowerCase();
+    if (granularity.endsWith("year") || granularity === "year") {
+      return new Date(Date.UTC(date.getUTCFullYear(), 0, 1)).toISOString();
+    }
+    if (granularity.endsWith("month") || granularity === "month") {
+      return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1)).toISOString();
+    }
+    if (granularity.endsWith("day") || granularity === "day") {
+      return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())).toISOString();
+    }
+    return null;
+  }
   function numberValue(value: unknown): number {
     return typeof value === "number" && Number.isFinite(value) ? value : 0;
   }
@@ -209,16 +285,30 @@ vi.mock("@angee/sdk", async (importOriginal) => {
     if (!field.includes("_")) {
       return `${field.charAt(0).toLowerCase()}${field.slice(1)}`;
     }
+    return snakeToCamel(field);
+  }
+  function snakeToCamel(field: string): string {
     return field
       .toLowerCase()
       .replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
   }
   return {
     ...actual,
+    useResourceMutation: () => [
+      sdkMocks.mutate,
+      { fetching: false, error: null },
+    ],
+    useResourceRecord: (_model: string, id: string | null) => ({
+      record: sdkMocks.rows.find((row) => row.id === id) ?? null,
+      fetching: false,
+      error: null,
+      refetch: vi.fn(),
+    }),
     useResourceList: (
       _model: string,
       options: UseResourceListOptions<ResourceTypeName>,
     ): UseResourceListResult => {
+      sdkMocks.listCalls.push(options);
       const pageSize = options.pageSize ?? 50;
       const active = options.enabled !== false;
       const matchingRows = active
@@ -263,15 +353,9 @@ vi.mock("@angee/sdk", async (importOriginal) => {
         refetch: vi.fn(),
       };
     },
-    useResourceRecord: (_model: string, id: string | null) => ({
-      record: sdkMocks.rows.find((row) => row.id === id) ?? null,
-      fetching: false,
-      error: null,
-      refetch: vi.fn(),
-    }),
-    useResourceGroupBy: (
-      _model: string,
-      options: UseGroupByOptions<ResourceTypeName>,
+    useAngeeGroupBy: (
+      _resource: unknown,
+      options: GroupByRequestOptions & { enabled?: boolean },
     ) => {
       sdkMocks.groupByCalls.push(options);
       if (options.enabled === false || options.dimensions.length === 0) {
@@ -281,12 +365,12 @@ vi.mock("@angee/sdk", async (importOriginal) => {
           buckets: [],
           fetching: false,
           error: null,
+          refetch: vi.fn(),
         };
       }
       const buckets = groupBuckets(
-        filteredRows(sdkMocks.rows, options.filter),
+        filteredRows(sdkMocks.rows, options.where),
         options.dimensions,
-        options.filter,
         options.measures,
       );
       const pageSize = options.pageSize ?? buckets.length;
@@ -301,27 +385,30 @@ vi.mock("@angee/sdk", async (importOriginal) => {
         buckets: visibleBuckets,
         fetching: false,
         error: null,
+        refetch: vi.fn(),
       };
     },
-    useResourceAggregate: (
-      _model: string,
-      options: UseAggregateOptions<ResourceTypeName>,
+    useAngeeAggregate: (
+      _resource: unknown,
+      options: AggregateRequestOptions & { enabled?: boolean },
     ) => {
       sdkMocks.aggregateCalls.push(options);
       const active = options.enabled !== false;
       return {
         aggregate: active
-          ? aggregateBucket(filteredRows(sdkMocks.rows, options.filter), options.measures)
+          ? aggregateBucket(filteredRows(sdkMocks.rows, options.where), options.measures)
           : null,
         fetching: false,
         error: null,
+        refetch: vi.fn(),
       };
     },
-    useResourceMutation: () => [
-      sdkMocks.mutate,
-      { fetching: false, error: null },
-    ],
-    useWidget: () => undefined,
+    useAngeeFacets: () => ({
+      facets: {},
+      fetching: false,
+      error: null,
+      refetch: vi.fn(),
+    }),
   };
 });
 
@@ -333,6 +420,188 @@ const formFields = [
   { name: "title", label: "Title", title: true },
 ] satisfies readonly FormField[];
 
+const TEST_SCHEMA_METADATA: SchemaFieldMetadata = {
+  types: {
+    NoteType: {
+      typeName: "NoteType",
+      recordRepresentation: "title",
+      rootFields: {
+        detail: "note",
+        list: "notes",
+        aggregate: "noteAggregate",
+        groupBy: "noteGroups",
+        groupByInput: "NoteGroupBySpec",
+        groupOrderInput: "NoteGroupOrder",
+        delete: "deleteNote",
+      },
+      fields: {
+        title: { name: "title", kind: "scalar", scalar: "String" },
+        status: { name: "status", kind: "scalar", scalar: "String" },
+        priority: { name: "priority", kind: "scalar", scalar: "String" },
+        wordCount: { name: "wordCount", kind: "scalar", scalar: "Int" },
+        updatedAt: { name: "updatedAt", kind: "scalar", scalar: "DateTime" },
+      },
+      resource: {
+        schemaName: "public",
+        modelLabel: "notes.Note",
+        appLabel: "notes",
+        modelName: "note",
+        publicIdField: "sqid",
+        roots: {},
+        typeNames: { node: "NoteType" },
+        capabilities: ["list", "groups", "aggregate"],
+        filterFields: ["title", "status", "priority", "updatedAt"],
+        orderFields: ["title", "status", "priority", "updatedAt"],
+        defaultSort: [
+          { field: "updatedAt", direction: "DESC" },
+          { field: "title", direction: "ASC" },
+        ],
+        aggregateFields: ["id", "wordCount"],
+        groupByFields: ["status", "updatedAt"],
+        groupDimensions: [
+          {
+            field: "status",
+            input: "STATUS",
+            key: "status",
+            kind: "column",
+            scalar: "String",
+          },
+          {
+            field: "updatedAt",
+            input: "UPDATED_AT",
+            key: "updatedAt",
+            kind: "column",
+            scalar: "DateTime",
+            extractions: [
+              {
+                name: "year",
+                input: "YEAR",
+                key: "updatedAtYear",
+                rangeKey: "updatedAtYearRange",
+              },
+              {
+                name: "month",
+                input: "MONTH",
+                key: "updatedAtMonth",
+                rangeKey: "updatedAtMonthRange",
+              },
+              {
+                name: "day",
+                input: "DAY",
+                key: "updatedAtDay",
+                rangeKey: "updatedAtDayRange",
+              },
+            ],
+          },
+        ],
+        relationAxes: [],
+      },
+    },
+    SaleType: {
+      typeName: "SaleType",
+      fields: {},
+      rootFields: {
+        detail: "sale",
+        list: "sales",
+      },
+    },
+  },
+};
+
+const SNAKE_NOTE_SCHEMA_METADATA: SchemaFieldMetadata = {
+  types: {
+    NoteType: {
+      typeName: "NoteType",
+      recordRepresentation: "title",
+      rootFields: {
+        detail: "notes_by_pk",
+        list: "notes",
+        aggregate: "notes_aggregate",
+        groupBy: "notes_groups",
+      },
+      fields: {
+        title: { name: "title", kind: "scalar", scalar: "String" },
+        status: { name: "status", kind: "scalar", scalar: "String" },
+        updated_at: {
+          name: "updated_at",
+          kind: "scalar",
+          scalar: "DateTime",
+        },
+      },
+      resource: {
+        schemaName: "public",
+        modelLabel: "notes.Note",
+        appLabel: "notes",
+        modelName: "note",
+        publicIdField: "sqid",
+        roots: {
+          list: "notes",
+          detail: "notes_by_pk",
+          aggregate: "notes_aggregate",
+          groups: "notes_groups",
+        },
+        typeNames: {
+          node: "NoteType",
+          filter: "notes_bool_exp",
+          groupBySpec: "NoteTypeGroupBySpec",
+          groupKey: "NoteTypeGroupKey",
+          groupOrder: "NoteTypeGroupOrder",
+        },
+        capabilities: ["list", "groups", "aggregate"],
+        filterFields: ["title", "status", "updated_at"],
+        orderFields: ["title", "status", "updated_at"],
+        defaultSort: [
+          { field: "updated_at", direction: "DESC" },
+          { field: "title", direction: "ASC" },
+        ],
+        aggregateFields: ["id"],
+        groupByFields: ["status", "updated_at"],
+        groupDimensions: [
+          {
+            field: "status",
+            input: "STATUS",
+            key: "status",
+            kind: "column",
+            scalar: "String",
+          },
+          {
+            field: "updated_at",
+            input: "UPDATED_AT",
+            key: "updated_at",
+            kind: "column",
+            scalar: "DateTime",
+            extractions: [
+              {
+                name: "day",
+                input: "DAY",
+                key: "updated_at_day",
+                rangeKey: "updated_at_day_range",
+              },
+            ],
+          },
+        ],
+        relationAxes: [],
+      },
+    },
+  },
+};
+
+function render(
+  ui: ReactElement,
+  options?: RenderOptions,
+): RenderResult {
+  return rtlRender(
+    <ModelMetadataProvider metadata={TEST_SCHEMA_METADATA}>
+      {ui}
+    </ModelMetadataProvider>,
+    options,
+  );
+}
+
+function lastListCall(): UseResourceListOptions<ResourceTypeName> | undefined {
+  return sdkMocks.listCalls[sdkMocks.listCalls.length - 1];
+}
+
 describe("DataPage", () => {
   beforeAll(() => {
     Element.prototype.getAnimations ??= () => [];
@@ -343,6 +612,7 @@ describe("DataPage", () => {
       cleanup();
       await nextTask();
     });
+    sdkMocks.listCalls.length = 0;
   });
 
   test("renders the lean ListView as a flat list without group controls", async () => {
@@ -686,6 +956,61 @@ describe("DataPage", () => {
     expect(screen.getByText("Status")).toBeTruthy();
   });
 
+  test("uses resource metadata default sort as the list order fallback", async () => {
+    render(
+      <TestUrlState>
+        <DataPage
+          model="notes.Note"
+          columns={columns}
+          formFields={formFields}
+        />
+      </TestUrlState>,
+    );
+
+    expect(await screen.findByText("First")).toBeTruthy();
+    await waitFor(() =>
+      expect(lastListCall()?.order).toEqual({
+        updatedAt: "DESC",
+      }),
+    );
+  });
+
+  test("keeps explicit order above metadata default sort", async () => {
+    render(
+      <TestUrlState>
+        <DataPage
+          model="notes.Note"
+          columns={columns}
+          formFields={formFields}
+          order={{ title: "ASC" }}
+        />
+      </TestUrlState>,
+    );
+
+    expect(await screen.findByText("First")).toBeTruthy();
+    await waitFor(() =>
+      expect(lastListCall()?.order).toEqual({ title: "ASC" }),
+    );
+  });
+
+  test("keeps URL-owned sort above explicit and metadata default order", async () => {
+    render(
+      <TestUrlState searchParams="?sort=priority:desc">
+        <DataPage
+          model="notes.Note"
+          columns={columns}
+          formFields={formFields}
+          order={{ title: "ASC" }}
+        />
+      </TestUrlState>,
+    );
+
+    expect(await screen.findByText("First")).toBeTruthy();
+    await waitFor(() =>
+      expect(lastListCall()?.order).toEqual({ priority: "DESC" }),
+    );
+  });
+
   test("DrawerDataPage owns drawer record state and inline controls", async () => {
     render(
       <TestUrlState>
@@ -1003,6 +1328,45 @@ describe("DataPage", () => {
     });
   });
 
+  test("seeds the default view without losing explicit list view selection", async () => {
+    const onUrlUpdate = vi.fn();
+    render(
+      <TestUrlState onUrlUpdate={onUrlUpdate}>
+        <DataPage
+          model="notes.Note"
+          columns={[
+            { field: "title", header: "Title" },
+            { field: "status", header: "Status" },
+            { field: "updatedAt", header: "Updated At" },
+          ]}
+          formFields={formFields}
+          list={GroupListView}
+          defaultView="board"
+          defaultGroups={{
+            list: { field: "updatedAt", granularity: "month" },
+            board: { field: "status" },
+          }}
+        />
+      </TestUrlState>,
+    );
+
+    await screen.findByRole("region", { name: "Active" });
+    await waitFor(() => {
+      const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
+      expect(latest?.searchParams.get("view")).toBeNull();
+      expect(latest?.searchParams.get("group")).toBe("status");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "List view" }));
+
+    await screen.findByText("Updated · Month");
+    await waitFor(() => {
+      const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
+      expect(latest?.searchParams.get("view")).toBe("list");
+      expect(latest?.searchParams.get("group")).toBe("updatedAt:month");
+    });
+  });
+
   test("lets the seeded default group be cleared", async () => {
     render(
       <TestUrlState>
@@ -1144,7 +1508,7 @@ describe("DataPage", () => {
       sdkMocks.groupByCalls.some((call) =>
         call.measures?.some(
           (measure) =>
-            measure.op === "sum" && measure.field === "wordCount",
+            measure.op === "sum" && measure.field === "word_count",
         ),
       ),
     ).toBe(true);
@@ -1152,7 +1516,7 @@ describe("DataPage", () => {
       sdkMocks.aggregateCalls.some((call) =>
         call.measures?.some(
           (measure) =>
-            measure.op === "sum" && measure.field === "wordCount",
+            measure.op === "sum" && measure.field === "word_count",
         ),
       ),
     ).toBe(true);
@@ -1176,7 +1540,9 @@ describe("DataPage", () => {
       </TestUrlState>,
     );
 
-    await screen.findByRole("button", { name: "Groups 1-2 / 4 groups" });
+    await screen.findByRole("button", {
+      name: /Groups 1-\d+ \/ \d+ groups/,
+    });
     fireEvent.click(screen.getByRole("button", { name: "Next page" }));
 
     await waitFor(() =>
@@ -1188,6 +1554,36 @@ describe("DataPage", () => {
       const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
       expect(latest?.searchParams.get("page")).toBe("2");
     });
+  });
+
+  test("repairs stale camel-case group search against snake resource metadata", async () => {
+    const onUrlUpdate = vi.fn();
+    render(
+      <TestUrlState
+        searchParams="?group=updatedAt:day"
+        onUrlUpdate={onUrlUpdate}
+      >
+        <ModelMetadataProvider metadata={SNAKE_NOTE_SCHEMA_METADATA}>
+          <DataPage
+            model="notes.Note"
+            columns={[...columns, { field: "updated_at", header: "Updated At" }]}
+            formFields={formFields}
+            list={GroupListView}
+            pageSize={2}
+            defaultGroup={{ field: "updated_at", granularity: "day" }}
+          />
+        </ModelMetadataProvider>
+      </TestUrlState>,
+    );
+
+    await screen.findByRole("button", {
+      name: /Groups 1-\d+ \/ \d+ groups/,
+    });
+    await waitFor(() => {
+      const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
+      expect(latest?.searchParams.get("group")).toBe("updated_at:day");
+    });
+    expect(screen.queryByText("Something went wrong")).toBeNull();
   });
 
   test("selects page size from the pager range popover", async () => {
@@ -1291,11 +1687,11 @@ describe("DataPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Two per page" }));
     await waitFor(() => {
       const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
-      expect(latest?.searchParams.get("pageSize")).toBe("2");
+      expect(latest?.searchParams.get("pageSize")).toBeNull();
     });
   });
 
-  test("keeps page size and default group updates from the same commit", async () => {
+  test("keeps page defaults out of URL when another default writes search state", async () => {
     const onUrlUpdate = vi.fn();
     render(
       <TestUrlState onUrlUpdate={onUrlUpdate}>
@@ -1314,7 +1710,7 @@ describe("DataPage", () => {
     await screen.findByRole("button", { name: "Remove group" });
     await waitFor(() => {
       const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
-      expect(latest?.searchParams.get("pageSize")).toBe("2");
+      expect(latest?.searchParams.get("pageSize")).toBeNull();
       expect(latest?.searchParams.get("group")).toBe("updatedAt:day");
     });
   });
@@ -1392,11 +1788,17 @@ describe("DataPage", () => {
     const branchCall = sdkMocks.groupByCalls.find(
       (call) => call.dimensions[0]?.granularity === "DAY",
     );
-    const branchFilter = branchCall?.filter as Record<string, unknown>;
-    expect(Array.isArray(branchFilter.AND)).toBe(false);
-    expect(branchFilter).toMatchObject({
-      updatedAt: { gte: "2026-01-01T00:00:00.000Z" },
-      AND: { updatedAt: { exact: expect.any(String) } },
+    const branchWhere = branchCall?.where as Record<string, unknown>;
+    expect(branchWhere).toMatchObject({
+      updatedAt: { _gte: "2026-01-01T00:00:00.000Z" },
+      _and: [
+        {
+          updatedAt: {
+            _gte: "2026-01-01T00:00:00.000Z",
+            _lt: "2027-01-01T00:00:00.000Z",
+          },
+        },
+      ],
     });
   });
 

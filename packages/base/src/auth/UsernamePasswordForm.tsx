@@ -1,6 +1,7 @@
 import { useId, useState, type FormEvent, type ReactNode } from "react";
-import { errorMessage, useLoginWithPassword } from "@angee/sdk";
+import { useLoginWithPassword } from "@angee/data";
 
+import { errorMessage } from "../feedback";
 import { useBaseT } from "../i18n";
 import { Button } from "../ui/button";
 import { FieldControl, FieldLabel, FieldRoot } from "../ui/field";

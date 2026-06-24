@@ -12,16 +12,18 @@ import {
   type VisibilityState,
 } from "@tanstack/react-table";
 import {
-  useResourceAggregate,
-  useResourceGroupBy,
+  hasuraWhereFromAngeeFilter,
+  useAngeeAggregate,
+  useAngeeGroupBy,
   useResourceList,
-  rowPublicId,
   type AggregateBucket,
-  type GroupByDimension,
-  type ModelMetadata,
   type ResourceTypeName,
-  type Row,
   type UseResourceListOptions,
+  rowPublicId,
+  type Row,
+} from "@angee/data";
+import {
+  type ModelMetadata,
 } from "@angee/sdk";
 import { Glyph } from "../chrome/Glyph";
 import { useBaseT } from "../i18n";
@@ -48,7 +50,6 @@ import {
   Filter,
   stableSerialize,
   type DataViewGroup,
-  type DataViewResourceOrder,
 } from "./data-view-model";
 import {
   groupPagerStatesEqual,
@@ -64,14 +65,16 @@ import {
   RecordRow,
   TABLE_SCROLL_STYLE,
   alignOf,
+  bucketFilterForGroup,
   bucketValueLabels,
   groupLabelDimension,
-  groupLabelOrderField,
   formatMeasure,
   groupMeasuresFromColumns,
-  groupOrderByForSort,
+  hasuraMeasuresFromGroupMeasures,
+  hasuraGroupDimension,
   groupFieldLabel,
   measureValue,
+  type GroupByDimension,
   type GroupMeasure,
   type VisibleFieldOption,
 } from "./ListInternals";
@@ -81,6 +84,7 @@ import type { ListEmptyContent } from "./list-view-types";
 const GROUPED_LIST_ITEM_PAGE_SIZE = 20;
 
 type ListFilter = UseResourceListOptions<ResourceTypeName>["filter"];
+type ListOrder = UseResourceListOptions<ResourceTypeName>["order"];
 
 function formatPagerNumber(value: number): string {
   return value.toLocaleString();
@@ -96,10 +100,11 @@ export interface GroupedListBodyProps<TRow extends Row> {
   visibleFields?: readonly VisibleFieldOption[];
   onVisibleFieldToggle?: (id: string, visible: boolean) => void;
   dataView: DataViewContextValue;
+  groupStack: readonly DataViewGroup[];
   groupDimensions: readonly GroupByDimension[];
   requestedFields: readonly string[];
   mergedFilter: ListFilter;
-  sortOrder: DataViewResourceOrder | undefined;
+  sortOrder: ListOrder | undefined;
   order: UseResourceListOptions<ResourceTypeName>["order"];
   interactive: boolean;
   rowHref?: (row: TRow) => string;
@@ -120,6 +125,7 @@ export function GroupedListBody<TRow extends Row>({
   visibleFields = [],
   onVisibleFieldToggle,
   dataView,
+  groupStack,
   groupDimensions,
   requestedFields,
   mergedFilter,
@@ -138,10 +144,19 @@ export function GroupedListBody<TRow extends Row>({
     () => groupMeasuresFromColumns(columns),
     [columns],
   );
+  const queryMeasures = React.useMemo(
+    () => hasuraMeasuresFromGroupMeasures(measures, modelMetadata),
+    [measures, modelMetadata],
+  );
+  const resource = requireDataResource(model, modelMetadata);
+  const where = React.useMemo(
+    () => hasuraWhereFromAngeeFilter(mergedFilter),
+    [mergedFilter],
+  );
   const visibleColumns = table.getVisibleLeafColumns();
-  const grandTotal = useResourceAggregate(model, {
-    filter: mergedFilter,
-    measures,
+  const grandTotal = useAngeeAggregate(resource, {
+    where,
+    measures: queryMeasures,
     enabled: groupDimensions.length > 0 && measures.length > 0,
   });
   const [topPagerState, setTopPagerState] =
@@ -180,9 +195,9 @@ export function GroupedListBody<TRow extends Row>({
           </TableHeader>
           <GroupLevel
             model={model}
-            measures={measures}
+            measures={queryMeasures}
             axes={groupDimensions}
-            groups={dataView.state.groupStack}
+            groups={groupStack}
             filter={mergedFilter}
             depth={0}
             page={dataView.state.page}
@@ -207,7 +222,7 @@ export function GroupedListBody<TRow extends Row>({
           {measures.length > 0 ? (
             <GroupMeasureFooter
               table={table}
-              measures={measures}
+              measures={queryMeasures}
               aggregate={grandTotal.aggregate}
             />
           ) : null}
@@ -228,7 +243,7 @@ interface GroupRenderProps<TRow extends Row> {
   colSpan: number;
   dataView: DataViewContextValue;
   requestedFields: readonly string[];
-  sortOrder: DataViewResourceOrder | undefined;
+  sortOrder: ListOrder | undefined;
   order: UseResourceListOptions<ResourceTypeName>["order"];
   interactive: boolean;
   rowHref?: (row: TRow) => string;
@@ -300,44 +315,37 @@ function GroupLevel<TRow extends Row>({
   const [localPage, setLocalPage] = React.useState(1);
   const levelPage = depth === 0 ? page : localPage;
   const levelEnabled = enabled && dimensions.length > 0;
-  const groupOrderBy = React.useMemo(
-    () => {
-      const sorted = groupOrderByForSort(dataView.state.sort, currentGroup);
-      if (sorted) return sorted;
-      // No explicit sort: order a relation group by its display label so the
-      // headers read alphabetically by name instead of by the opaque id.
-      const labelOrderField = currentGroup
-        ? groupLabelOrderField(currentGroup, modelMetadata)
-        : undefined;
-      return labelOrderField
-        ? [{ field: labelOrderField, direction: "ASC" as const }]
-        : undefined;
-    },
-    [currentGroup, dataView.state.sort, modelMetadata],
+  const resource = requireDataResource(model, modelMetadata);
+  const where = React.useMemo(
+    () => hasuraWhereFromAngeeFilter(filter),
+    [filter],
   );
-  const groupAggregation = useResourceGroupBy(model, {
-    dimensions,
-    filter,
+  const hasuraDimensions = React.useMemo(
+    () => dimensions.map(hasuraGroupDimension),
+    [dimensions],
+  );
+  const groupAggregation = useAngeeGroupBy(resource, {
+    dimensions: hasuraDimensions,
+    where,
     measures,
-    orderBy: groupOrderBy,
     page: levelPage,
     pageSize,
-    withFilterEcho: true,
     enabled: levelEnabled,
   });
+  const groupTotal = groupAggregation.totalCount ?? groupAggregation.buckets.length;
 
   React.useEffect(() => {
     if (depth !== 0 || !onPagerStateChange) return;
     onPagerStateChange({
-      total: groupAggregation.totalCount,
+      total: groupTotal,
       fetching: groupAggregation.fetching,
-      error: groupAggregation.error,
+      error: errorFromUnknown(groupAggregation.error),
     });
   }, [
     depth,
     groupAggregation.error,
     groupAggregation.fetching,
-    groupAggregation.totalCount,
+    groupTotal,
     onPagerStateChange,
   ]);
 
@@ -351,9 +359,9 @@ function GroupLevel<TRow extends Row>({
   }, [depth, enabled, scopeKey]);
   React.useEffect(() => {
     if (depth === 0 || !enabled) return;
-    const pageCount = Math.max(1, Math.ceil(groupAggregation.totalCount / pageSize));
+    const pageCount = Math.max(1, Math.ceil(groupTotal / pageSize));
     setLocalPage((current) => Math.min(current, pageCount));
-  }, [depth, enabled, groupAggregation.totalCount, pageSize]);
+  }, [depth, enabled, groupTotal, pageSize]);
 
   // expandedKeys (shared hook) and pageByKey are intentionally not pruned; old
   // entries restore state when groups reappear.
@@ -407,7 +415,7 @@ function GroupLevel<TRow extends Row>({
 
   const pageCount = Math.max(
     1,
-    Math.ceil(groupAggregation.totalCount / pageSize),
+    Math.ceil(groupTotal / pageSize),
   );
   const currentPage = Math.min(levelPage, pageCount);
 
@@ -450,13 +458,13 @@ function GroupLevel<TRow extends Row>({
           />
         );
       })}
-      {depth > 0 && groupAggregation.totalCount > 0 ? (
+      {depth > 0 && groupTotal > 0 ? (
         <SubGroupPager
           label={currentGroup ? groupFieldLabel(currentGroup.field) : "Sub-group"}
           colSpan={colSpan}
           page={currentPage}
           pageSize={pageSize}
-          total={groupAggregation.totalCount}
+          total={groupTotal}
           onPageChange={setLevelPage}
         />
       ) : null}
@@ -639,12 +647,16 @@ function GroupSection<TRow extends Row>({
 }: GroupSectionProps<TRow>): React.ReactElement {
   const headerId = React.useId();
   const regionId = React.useId();
-  const expandable = bucket.filter !== undefined && bucket.filter !== null;
+  const bucketFilter = React.useMemo(
+    () => bucketFilterForGroup(bucket, group, modelMetadata),
+    [bucket, group, modelMetadata],
+  );
+  const expandable = bucketFilter !== undefined;
   const active = expanded && expandable;
   const label = bucketLabel(bucket, group, modelMetadata);
   const cumulativeFilter = React.useMemo(
-    () => Filter.combine(parentFilter, bucket.filter),
-    [bucket.filter, parentFilter],
+    () => Filter.combine(parentFilter, bucketFilter),
+    [bucketFilter, parentFilter],
   );
   const branch = remainingAxes.length > 0;
   const measuresByColumn = React.useMemo(
@@ -1026,6 +1038,26 @@ function LeafGroupSection<TRow extends Row>({
 
 function stableBucketKey(bucket: AggregateBucket): string {
   return stableSerialize(bucket.key ?? null);
+}
+
+function requireDataResource(
+  model: string,
+  metadata: ModelMetadata | null,
+): NonNullable<ModelMetadata["resource"]> {
+  const resource = metadata?.resource;
+  if (!resource) {
+    throw new Error(`Model "${model}" has no data resource metadata.`);
+  }
+  return resource;
+}
+
+function errorFromUnknown(error: unknown): Error | null {
+  if (!error) return null;
+  if (error instanceof Error) return error;
+  const message = typeof error === "object" && "message" in error
+    ? String((error as { message?: unknown }).message)
+    : String(error);
+  return new Error(message);
 }
 
 function bucketLabel(

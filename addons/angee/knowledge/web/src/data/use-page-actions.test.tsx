@@ -14,33 +14,32 @@ const sdk = vi.hoisted(() => {
   };
 });
 
-vi.mock("@angee/sdk", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/sdk")>();
-  return {
-    ...actual,
-    useBusyRun: vi.fn((onChanged?: () => void) => ({
-      busy: false,
-      run: async <T,>(task: () => Promise<T>) => {
-        const result = await task();
-        onChanged?.();
-        return result;
-      },
-    })),
-    useResourceMutation: vi.fn(
-      (modelLabel: string, action: string, options: Record<string, unknown> = {}) => {
-        const calls: unknown[] = [];
-        sdk.resourceMutations.push({ action, calls, modelLabel, options });
-        return [
-          vi.fn(async (variables: unknown) => {
-            calls.push(variables);
-            return { id: "pag_new", title: "New page" };
-          }),
-          { error: null, fetching: false },
-        ];
-      },
-    ),
-  };
-});
+vi.mock("@angee/base", () => ({
+  useBusyRun: vi.fn((onChanged?: () => void) => ({
+    busy: false,
+    run: async <T,>(task: () => Promise<T>) => {
+      const result = await task();
+      onChanged?.();
+      return result;
+    },
+  })),
+}));
+
+vi.mock("@angee/data", () => ({
+  useResourceMutation: vi.fn(
+    (modelLabel: string, action: string, options: Record<string, unknown> = {}) => {
+      const calls: unknown[] = [];
+      sdk.resourceMutations.push({ action, calls, modelLabel, options });
+      return [
+        vi.fn(async (variables: unknown) => {
+          calls.push(variables);
+          return { id: "pag_new", title: "New page" };
+        }),
+        { error: null, fetching: false },
+      ];
+    },
+  ),
+}));
 
 import { usePageActions } from "./use-page-actions";
 
@@ -49,7 +48,7 @@ describe("knowledge page actions", () => {
     sdk.resourceMutations.length = 0;
   });
 
-  test("uses SDK CRUD mutations and preserves returned page id", async () => {
+  test("uses resource mutations and preserves returned page id", async () => {
     const onChanged = vi.fn();
     const { result } = renderHook(() => usePageActions({ onChanged }));
     const [createPage, deletePage, updatePage] = sdk.resourceMutations;

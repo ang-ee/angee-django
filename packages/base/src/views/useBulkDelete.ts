@@ -1,14 +1,13 @@
 import * as React from "react";
 import {
-  errorMessage,
-  useModelRootFields,
   useResourceMutation,
   type DeletePreview,
   type DeletePreviewGroup,
   type DeletePreviewNode,
-} from "@angee/sdk";
+} from "@angee/data";
+import { useModelRootFields } from "@angee/sdk";
 
-import { useToast } from "../feedback";
+import { errorMessage, useToast } from "../feedback";
 
 const BULK_DELETE_PREVIEW_LIMIT = 25;
 

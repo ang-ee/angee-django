@@ -13,15 +13,15 @@ interface RevisionsResult {
   refetch: () => void;
 }
 
-const sdkMocks = vi.hoisted(() => ({
+const dataMocks = vi.hoisted(() => ({
   useResourceRevisions: vi.fn(),
 }));
 
-vi.mock("@angee/sdk", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/sdk")>();
+vi.mock("@angee/data", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/data")>();
   return {
     ...actual,
-    useResourceRevisions: sdkMocks.useResourceRevisions,
+    useResourceRevisions: dataMocks.useResourceRevisions,
   };
 });
 
@@ -31,12 +31,12 @@ describe("RevisionsTab", () => {
   });
 
   beforeEach(() => {
-    sdkMocks.useResourceRevisions.mockReset();
-    sdkMocks.useResourceRevisions.mockReturnValue(revisionsResult());
+    dataMocks.useResourceRevisions.mockReset();
+    dataMocks.useResourceRevisions.mockReturnValue(revisionsResult());
   });
 
   test("renders the loading state", () => {
-    sdkMocks.useResourceRevisions.mockReturnValue(
+    dataMocks.useResourceRevisions.mockReturnValue(
       revisionsResult({ fetching: true }),
     );
 
@@ -46,7 +46,7 @@ describe("RevisionsTab", () => {
   });
 
   test("renders the error state", () => {
-    sdkMocks.useResourceRevisions.mockReturnValue(
+    dataMocks.useResourceRevisions.mockReturnValue(
       revisionsResult({ error: new Error("Revision query failed") }),
     );
 
@@ -63,7 +63,7 @@ describe("RevisionsTab", () => {
   });
 
   test("renders revision entries", () => {
-    sdkMocks.useResourceRevisions.mockReturnValue(
+    dataMocks.useResourceRevisions.mockReturnValue(
       revisionsResult({
         revisions: [
           {

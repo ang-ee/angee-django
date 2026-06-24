@@ -13,7 +13,6 @@ import {
   type DocumentSubscriptionRun,
 } from "./document-subscription";
 import { useStableArray, useStableVariables } from "./stable-deps";
-import type { Row } from "./resource-result";
 import type { DocumentData, DocumentVariables } from "./typed-document";
 
 type AuthoredDocument = TypedDocumentNode<unknown, any>;
@@ -35,7 +34,7 @@ export interface AuthoredQueryResult<TData> {
   refetch: () => void;
 }
 
-export type AuthoredStringIdRow = Row & { id: string };
+export type AuthoredStringIdRow = Record<string, unknown> & { id: string };
 
 export interface AuthoredRowsOptions<
   TDocument extends AuthoredDocument,

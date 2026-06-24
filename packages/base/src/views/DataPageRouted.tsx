@@ -7,7 +7,7 @@ import {
   type AnyRoute,
   type AnyRouteMatch,
 } from "@tanstack/react-router";
-import { rowPublicId, type Row } from "@angee/sdk";
+import { rowPublicId, type Row } from "@angee/data";
 
 import type { DataPageRecordController } from "./DataPage";
 

@@ -21,9 +21,9 @@ import {
   AppRuntimeProvider,
   ModelMetadataProvider,
   type AppRuntime,
-  type Row,
   type SchemaFieldMetadata,
 } from "@angee/sdk";
+import type { Row } from "@angee/data";
 import { useMemo, useState, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -49,6 +49,25 @@ vi.mock("@angee/sdk", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/sdk")>();
   return {
     ...actual,
+  };
+});
+
+vi.mock("@angee/data", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/data")>();
+  return {
+    ...actual,
+    useResourceMutation: (
+      _model: string,
+      action: string,
+      options?: { fields?: readonly string[]; enabled?: boolean },
+    ) => {
+      sdkMocks.mutationAction = action;
+      sdkMocks.mutationOptions = options;
+      return [
+        sdkMocks.mutate,
+        { fetching: false, error: null },
+      ];
+    },
     useResourceRecord: (
       _model: string,
       _id: string | null,
@@ -61,18 +80,6 @@ vi.mock("@angee/sdk", async (importOriginal) => {
         error: null,
         refetch: vi.fn(),
       };
-    },
-    useResourceMutation: (
-      _model: string,
-      action: string,
-      options?: { fields?: readonly string[]; enabled?: boolean },
-    ) => {
-      sdkMocks.mutationAction = action;
-      sdkMocks.mutationOptions = options;
-      return [
-        sdkMocks.mutate,
-        { fetching: false, error: null },
-      ];
     },
   };
 });

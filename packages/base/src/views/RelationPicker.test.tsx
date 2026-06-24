@@ -17,8 +17,8 @@ import {
 import {
   AppRuntimeProvider,
   ModelMetadataProvider,
-  type Row,
 } from "@angee/sdk";
+import type { Row } from "@angee/data";
 import { type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -35,13 +35,20 @@ vi.mock("@angee/sdk", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/sdk")>();
   return {
     ...actual,
+  };
+});
+
+vi.mock("@angee/data", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/data")>();
+  return {
+    ...actual,
+    useResourceMutation: () => [sdkMocks.mutate, { fetching: false, error: null }],
     useResourceRecord: () => ({
       record: sdkMocks.record,
       fetching: false,
       error: null,
       refetch: vi.fn(),
     }),
-    useResourceMutation: () => [sdkMocks.mutate, { fetching: false, error: null }],
   };
 });
 

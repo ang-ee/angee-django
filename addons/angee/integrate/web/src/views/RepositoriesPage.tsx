@@ -17,12 +17,12 @@ const MODEL = "integrate.Repository";
 
 const repositoryList = (
   <List model={MODEL} list={GroupListView}>
-    <Facet field="vcsBridge" label="VCS bridge" labelField="displayName" />
+    <Facet field="vcs_bridge" label="VCS bridge" labelField="display_name" />
     <Column field="org" />
     <Column field="name" />
     <Column field="visibility" widget="statusBadge" />
-    <Column field="defaultBranch" />
-    <Column field="webUrl" />
+    <Column field="default_branch" />
+    <Column field="web_url" />
   </List>
 );
 
@@ -47,18 +47,18 @@ export function RepositoriesPage(): React.ReactElement {
           never hand-created or edited, so the detail is read-only; DataPage
           still wires the per-record delete (the only Repository mutation). */}
       <Form model={MODEL}>
-        <Field name="vcsBridge" readOnly />
+        <Field name="vcs_bridge" readOnly />
         <Group label={t("integrate.repositories.repository")} columns={2}>
           <Field name="org" readOnly />
           <Field name="name" readOnly />
-          <Field name="defaultBranch" readOnly />
+          <Field name="default_branch" readOnly />
           <Field name="visibility" readOnly />
         </Group>
         <Group label={t("integrate.repositories.remote")} columns={2}>
           <Field name="remote" readOnly />
-          <Field name="sshRemote" readOnly />
+          <Field name="ssh_remote" readOnly />
         </Group>
-        <Field name="webUrl" readOnly />
+        <Field name="web_url" readOnly />
         <Field name="archived" readOnly />
       </Form>
     </DataPage>

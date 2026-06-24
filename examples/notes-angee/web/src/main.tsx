@@ -49,7 +49,7 @@ createApp({
   },
   schemas: {
     public: { url: "/graphql/public/", sdl: publicSDL, metadata: publicMetadata },
-    console: { url: "/graphql/console/", sdl: consoleSDL, metadata: consoleMetadata },
+    console: { url: "/graphql/console/", sdl: consoleSDL, metadata: consoleMetadata, live: true },
   },
   // The console is the primary surface, so it is the default schema; the public
   // login shell pins itself back to the public client above.

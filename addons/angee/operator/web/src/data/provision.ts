@@ -1,5 +1,5 @@
 // Provisioning primitives owned by the operator runtime: the daemon's template
-// ref + answer-list shapes (it owns those formats) and typed create/destroy
+// ref + answer-list shapes (it owns those formats) and typed Hasura resource
 // hooks over `useOperatorAction`. A consumer (e.g. the agents console) composes
 // these to render something into the daemon without decoding the daemon itself.
 
@@ -58,17 +58,17 @@ export function toAnswerList(inputs: unknown): KeyValueInput[] {
   }));
 }
 
-/** Render a workspace template into a new worktree workspace. */
+/** Render a workspace template through the daemon's workspace resource insert. */
 export function useWorkspaceCreate(): OperatorActionHook<typeof WORKSPACE_CREATE_MUTATION> {
   return useOperatorAction(WORKSPACE_CREATE_MUTATION);
 }
 
-/** Render a service template into an existing workspace. */
+/** Render a service template through the daemon's service resource insert. */
 export function useServiceCreate(): OperatorActionHook<typeof SERVICE_CREATE_MUTATION> {
   return useOperatorAction(SERVICE_CREATE_MUTATION);
 }
 
-/** Tear a workspace (and its services) down. */
+/** Delete a workspace resource through the daemon. */
 export function useWorkspaceDestroy(): OperatorActionHook<typeof WORKSPACE_DESTROY_MUTATION> {
   return useOperatorAction(WORKSPACE_DESTROY_MUTATION);
 }

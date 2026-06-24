@@ -39,7 +39,7 @@ export function BacklinksPanel({
       </h3>
       {backlinks.map((backlink) => (
         <button
-          key={`${backlink.page}:${backlink.displayText}`}
+          key={`${backlink.page}:${backlink.display_text}`}
           type="button"
           className="flex min-w-0 flex-col gap-0.5 rounded-md px-2 py-1.5 text-left outline-none transition-colors hover:bg-inset focus-visible:focus-ring"
           onClick={() => onOpen(backlink.page)}
@@ -48,9 +48,9 @@ export function BacklinksPanel({
             <Glyph decorative name="note" className="text-fg-muted" />
             <span className="truncate">{backlink.title}</span>
           </span>
-          {backlink.displayText ? (
+          {backlink.display_text ? (
             <span className="truncate pl-6 text-2xs text-fg-muted">
-              {backlink.displayText}
+              {backlink.display_text}
             </span>
           ) : null}
         </button>

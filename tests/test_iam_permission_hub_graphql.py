@@ -38,10 +38,7 @@ def test_permission_hub_queries_are_admin_only(
     queries = [
         """
         query {
-          users(pagination: {limit: 10}) {
-            totalCount
-            results { username }
-          }
+          users(limit: 10) { username }
         }
         """,
         """
@@ -222,9 +219,9 @@ def test_iam_overview_aggregates_do_not_depend_on_paginated_rows(
             _schema("console"),
             """
             query {
-              users(pagination: {limit: 1}) {
-                totalCount
-                results { username }
+              users(limit: 1) { username }
+              users_aggregate {
+                aggregate { count }
               }
               grants(pagination: {limit: 1}) {
                 totalCount
@@ -258,9 +255,9 @@ def test_iam_overview_aggregates_do_not_depend_on_paginated_rows(
     )
 
     overview = data["iamOverview"]
-    assert len(data["users"]["results"]) == 1
+    assert len(data["users"]) == 1
     assert len(data["grants"]["results"]) == 1
-    assert data["users"]["totalCount"] == 506
+    assert data["users_aggregate"]["aggregate"]["count"] == 506
     assert data["grants"]["totalCount"] == 3
     assert overview["userCount"] == 506
     assert overview["roleCount"] == 2
@@ -486,7 +483,7 @@ def test_role_refs_are_current_user_only(
             public_schema,
             """
             query {
-              currentUser { username roleRefs }
+              currentUser { username role_refs }
             }
             """,
             user=alice,
@@ -495,13 +492,13 @@ def test_role_refs_are_current_user_only(
 
     assert data["currentUser"] == {
         "username": "hub-alice",
-        "roleRefs": ["angee/role:alice_only"],
+        "role_refs": ["angee/role:alice_only"],
     }
     public_sdl = public_schema.as_str()
     assert "users(" not in public_sdl
     assert "grants(" not in public_sdl
     assert "relationships(" not in public_sdl
-    assert "roleRefs" not in _type_block(public_sdl, "UserType")
+    assert "role_refs" not in _type_block(public_sdl, "UserType")
 
 
 @pytest.fixture()

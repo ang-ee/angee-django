@@ -34,7 +34,7 @@ const templateList = (
     <Column field="name" />
     <Column field="path" />
     <Column field="source.ref" header="Source" />
-    <Column field="updatedAt" />
+    <Column field="updated_at" />
   </List>
 );
 
@@ -44,7 +44,7 @@ const templateSourceList = (
     <Column field="repository.name" header="Repository" />
     <Column field="path" />
     <Column field="ref" />
-    <Column field="lastSyncedAt" />
+    <Column field="last_synced_at" />
   </List>
 );
 
@@ -88,7 +88,7 @@ export function TemplatesPage(): React.ReactElement {
               <Field name="ref" />
             </Group>
             <Field name="path" />
-            <Field name="lastSyncedAt" readOnly />
+            <Field name="last_synced_at" readOnly />
             <Action
               id="syncTemplates"
               label={t("integrate.templateSources.sync")}

@@ -6,11 +6,11 @@ import {
   Input,
   RelationField,
   Spinner,
+  errorMessage,
   useDebounce,
   type RelationOption,
 } from "@angee/base";
 import {
-  errorMessage,
   useAuthoredMutation,
   useAuthoredQuery,
   type DocumentVariables,
@@ -56,7 +56,8 @@ type VcsBridgeVariables = DocumentVariables<typeof IntegrateVcsBridges>;
 type SearchRepositoryVariables = DocumentVariables<typeof IntegrateSearchRepositories>;
 
 const BRIDGE_VARS: VcsBridgeVariables = {
-  pagination: { offset: 0, limit: BRIDGE_LIMIT },
+  limit: BRIDGE_LIMIT,
+  offset: 0,
 };
 
 function AddRepositoryDialog({
@@ -72,10 +73,10 @@ function AddRepositoryDialog({
   });
   const bridgeOptions = React.useMemo<readonly RelationOption[]>(
     () =>
-      (bridgesQuery.data?.vcsBridges.results ?? []).map(
+      (bridgesQuery.data?.vcs_bridges ?? []).map(
         (bridge) => ({
           value: bridge.id,
-          label: bridge.displayName,
+          label: bridge.display_name,
         }),
       ),
     [bridgesQuery.data],

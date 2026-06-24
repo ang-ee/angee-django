@@ -19,6 +19,15 @@ class OAuthClientOidc(AngeeModel):
     """
 
     extends = "integrate.OAuthClient"
+    hasura_insertable_fields = (
+        "issuer",
+        "jwks_uri",
+        "login_enabled",
+        "link_on_email_match",
+        "create_on_login",
+        "allowed_email_domains",
+    )
+    hasura_updatable_fields = hasura_insertable_fields
 
     issuer = models.URLField(blank=True)
     jwks_uri = models.URLField(blank=True)

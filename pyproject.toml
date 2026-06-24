@@ -16,12 +16,13 @@ dependencies = [
   "django-reversion>=5.1",
   "django-simple-history>=3.7",
   "django-sqids>=0.1",
-  "django-zed-rebac[strawberry-django]>=0.11",
+  "django-zed-rebac[strawberry-django]>=0.12",
   "django>=6.0",
   "pyjwt[crypto]>=2.12",
   "pyyaml>=6",
   "strawberry-graphql>=0.270",
-  "strawberry-django-aggregates>=0.6.0",
+  "strawberry-django-aggregates>=0.7.0",
+  "strawberry-django-hasura>=0.2.0",
   "strawberry-graphql-django>=0.86",
   "tablib>=3",
   "django-choices-field>=4.0.0",
@@ -60,11 +61,13 @@ dev = [
 cache-dir = ".angee/caches/uv"
 
 [tool.uv.sources]
-# Developing against the Angee Strawberry forks while input-object extension fixes
-# land upstream; keep these branch pins explicit so every environment resolves the
-# same GraphQL behavior.
+# Developing against the Angee Strawberry forks. strawberry-django is on
+# `hotfix-angee-django` = `codex/input-object-extensions` + upstream/main + two
+# upstream bug fixes (DEFAULT_PK_FIELD_NAME mutation lookups, #927; __copy__
+# dropping key_attr/argument_name). strawberry core stays on codex — the fixes are
+# strawberry-django-only. Keep pins explicit so every environment resolves identically.
 strawberry-graphql = { git = "ssh://git@github.com/ang-ee/strawberry.git", branch = "codex/input-object-extensions" }
-strawberry-graphql-django = { git = "ssh://git@github.com/ang-ee/strawberry-django.git", branch = "codex/input-object-extensions" }
+strawberry-graphql-django = { git = "ssh://git@github.com/ang-ee/strawberry-django.git", branch = "hotfix-angee-django" }
 
 [tool.hatch.build.targets.wheel]
 # Two source roots merge into the one `angee` PEP 420 namespace: the framework

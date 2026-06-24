@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import type { ModelMetadata, Row } from "@angee/sdk";
+import type { Row } from "@angee/data";
+import type { ModelMetadata } from "@angee/sdk";
 
 import {
   buildFilterFields,
@@ -34,7 +35,8 @@ const NOTE_METADATA: ModelMetadata = {
     updatedAt: { name: "updatedAt", kind: "scalar", scalar: "DateTime" },
     wordCount: { name: "wordCount", kind: "scalar", scalar: "Int" },
   },
-  dataQuery: {
+  resource: {
+    schemaName: "public",
     modelLabel: "notes.Note",
     appLabel: "notes",
     modelName: "note",
@@ -236,7 +238,8 @@ describe("SDL metadata defaults", () => {
           values: [],
         },
       },
-      dataQuery: {
+      resource: {
+        schemaName: "public",
         modelLabel: "support.Ticket",
         appLabel: "support",
         modelName: "ticket",
@@ -318,7 +321,8 @@ describe("SDL metadata defaults", () => {
           },
         },
       },
-      dataQuery: {
+      resource: {
+        schemaName: "public",
         modelLabel: "parties.Handle",
         appLabel: "parties",
         modelName: "handle",
@@ -375,7 +379,7 @@ describe("SDL metadata defaults", () => {
     ]);
   });
 
-  test("derives scalar group alias options from data-query metadata", () => {
+  test("derives scalar group alias options from resource metadata", () => {
     const integrationMetadata: ModelMetadata = {
       typeName: "IntegrationType",
       fields: {
@@ -394,7 +398,8 @@ describe("SDL metadata defaults", () => {
         },
         status: { name: "status", kind: "scalar", scalar: "String", label: "Status" },
       },
-      dataQuery: {
+      resource: {
+        schemaName: "console",
         modelLabel: "integrate.Integration",
         appLabel: "integrate",
         modelName: "integration",

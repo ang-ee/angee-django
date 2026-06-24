@@ -7,10 +7,12 @@ import {
   Group,
   GroupListView,
   List,
+  rowPublicId,
   useEnumOptions,
   useImplPrefill,
+  type Row,
 } from "@angee/base";
-import { rowPublicId, useAuthoredMutation, type Row } from "@angee/sdk";
+import { useAuthoredMutation } from "@angee/sdk";
 
 import { canConnectRecord, ConnectOAuthButton } from "../connect/ConnectOAuthButton";
 import { connectCallbackPathForRecord } from "../connect/redirects";
@@ -22,8 +24,8 @@ const CONNECT_NEXT = "/integrate";
 
 export function IntegrationsPage(): React.ReactElement {
   const t = useIntegrateT();
-  const implClassOptions = useEnumOptions(MODEL, "implClass");
-  const implClassPrefill = useImplPrefill(MODEL, "implClass");
+  const implClassOptions = useEnumOptions(MODEL, "impl_class");
+  const implClassPrefill = useImplPrefill(MODEL, "impl_class");
 
   const cardActions = React.useCallback(
     (row: Row, context: { refresh: () => void }) =>
@@ -44,27 +46,27 @@ export function IntegrationsPage(): React.ReactElement {
         model={MODEL}
         list={GroupListView}
         defaultGroups={{
-          list: { field: "implCategory" },
-          board: { field: "implCategory" },
+          list: { field: "impl_class" },
+          board: { field: "impl_class" },
         }}
       >
-        <Column field="displayName" />
-        <Column field="implLabel" header={t("integrate.col.implementation")} />
-        <Column field="vendor.displayName" header={t("integrate.col.vendor")} />
+        <Column field="display_name" />
+        <Column field="impl_label" header={t("integrate.col.implementation")} />
+        <Column field="vendor.display_name" header={t("integrate.col.vendor")} />
         <Column field="status" widget="statusBadge" />
         <Column
-          field="credential.displayName"
+          field="credential.display_name"
           header={t("integrate.col.credential")}
         />
-        <Column field="lastError" header={t("integrate.col.lastError")} />
+        <Column field="last_error" header={t("integrate.col.lastError")} />
       </List>
       <Form model={MODEL} layout="tabs">
-        <Field name="displayName" title readOnly />
+        <Field name="display_name" title readOnly />
         <Group label={t("integrate.integrations.identity")} columns={2}>
           <Field name="owner" createOnly />
           <Field name="vendor" createOnly />
           <Field
-            name="implClass"
+            name="impl_class"
             label={t("integrate.integrations.implClass")}
             widget="select"
             options={implClassOptions}
@@ -78,11 +80,11 @@ export function IntegrationsPage(): React.ReactElement {
           <Field name="account" editOnly />
         </Group>
         <Group label={t("integrate.integrations.runtime")} columns={2}>
-          <Field name="lastUsedAt" readOnly />
-          <Field name="lastUsedStatus" readOnly />
-          <Field name="useCount24h" readOnly />
-          <Field name="errorCount24h" readOnly />
-          <Field name="lastError" readOnly />
+          <Field name="last_used_at" readOnly />
+          <Field name="last_used_status" readOnly />
+          <Field name="use_count_24h" readOnly />
+          <Field name="error_count_24h" readOnly />
+          <Field name="last_error" readOnly />
         </Group>
       </Form>
     </DataPage>

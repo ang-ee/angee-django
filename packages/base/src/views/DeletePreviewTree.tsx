@@ -1,5 +1,5 @@
 import * as React from "react";
-import type { DeletePreviewNode } from "@angee/sdk";
+import type { DeletePreviewNode } from "@angee/data";
 
 import { Glyph } from "../chrome/Glyph";
 

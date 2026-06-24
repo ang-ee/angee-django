@@ -22,7 +22,14 @@ from strawberry.types.execution import ExecutionContext
 from strawberry.utils.str_converters import to_camel_case
 
 from angee.addons import resolve_addon_reference
-from angee.graphql.data.metadata import DataQueryMetadata, data_query_metadata, serialize_data_queries
+from angee.graphql.data.metadata import (
+    DataQueryMetadata,
+    DataResourceMetadata,
+    data_query_metadata,
+    data_resource_metadata,
+    merge_data_resources,
+    serialize_data_resources,
+)
 from angee.graphql.ids import assert_unique_sqid_prefixes
 from angee.graphql.introspection import (
     django_model,
@@ -66,6 +73,9 @@ class AngeeSchema(strawberry.Schema):
 
     angee_data_queries: tuple[DataQueryMetadata, ...] = ()
     """Data-query metadata carried by this built schema."""
+
+    angee_resources: tuple[DataResourceMetadata, ...] = ()
+    """Model resource metadata carried by this built schema."""
 
     def process_errors(
         self,
@@ -258,6 +268,18 @@ class GraphQLSchemas:
             ) from error
         return self._data_queries_from_parts(parts)
 
+    def resources(self, name: str = DEFAULT_SCHEMA_NAME) -> tuple[DataResourceMetadata, ...]:
+        """Return model resource metadata contributed to the named schema bucket."""
+
+        try:
+            parts = self.parts[name]
+        except KeyError as error:
+            available = ", ".join(self.names()) or "none"
+            raise ImproperlyConfigured(
+                f"GraphQL schema {name!r} has no contributions; available schemas: {available}"
+            ) from error
+        return self._data_resources_from_parts(parts)
+
     def _build(
         self,
         name: str,
@@ -280,6 +302,7 @@ class GraphQLSchemas:
         assert_unique_sqid_prefixes(types)
         self._describe_choice_enums(types)
         data_queries = self._data_queries_from_parts(parts)
+        resources = self._data_resources_from_parts(parts)
         schema = AngeeSchema(
             query=query,
             mutation=self._merge_root(name, "mutation", parts.mutation),
@@ -298,7 +321,7 @@ class GraphQLSchemas:
                 ],
             ),
         )
-        self._attach_data_query_metadata(schema, data_queries)
+        self._attach_schema_metadata(schema, name=name, data_queries=data_queries, resources=resources)
         return schema
 
     def _data_queries_from_parts(
@@ -312,17 +335,32 @@ class GraphQLSchemas:
             metadata.extend(data_query_metadata(surface))
         return tuple(metadata)
 
-    def _attach_data_query_metadata(
+    def _data_resources_from_parts(
+        self,
+        parts: SchemaParts,
+    ) -> tuple[DataResourceMetadata, ...]:
+        """Return merged resource metadata from normalized schema parts."""
+
+        metadata: list[DataResourceMetadata] = []
+        for surface in (*parts.query, *parts.mutation, *parts.subscription):
+            metadata.extend(data_resource_metadata(surface))
+        return merge_data_resources(tuple(metadata))
+
+    def _attach_schema_metadata(
         self,
         schema: AngeeSchema,
+        *,
+        name: str,
         data_queries: tuple[DataQueryMetadata, ...],
+        resources: tuple[DataResourceMetadata, ...],
     ) -> None:
-        """Attach typed and serialized data-query metadata to a built schema."""
+        """Attach typed and serialized Angee metadata to a built schema."""
 
         schema.angee_data_queries = data_queries
+        schema.angee_resources = resources
         extensions = dict(schema._schema.extensions or {})
         angee_extensions = dict(cast(dict[str, object], extensions.get("angee") or {}))
-        angee_extensions["dataQueries"] = serialize_data_queries(data_queries)
+        angee_extensions["resources"] = serialize_data_resources(resources, schema_name=name)
         extensions["angee"] = angee_extensions
         schema._schema.extensions = extensions
 

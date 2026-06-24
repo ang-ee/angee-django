@@ -14,7 +14,8 @@ from django.db import transaction
 from strawberry import auto
 
 import angee.graphql.deletion as deletion_module
-from angee.graphql.crud import _create_mutation, _delete_resolver, _update_mutation, crud
+from angee.graphql.crud import _delete_resolver, _update_mutation, crud
+from angee.graphql.data.metadata import data_resource_metadata
 from angee.graphql.deletion import DeletePreview, DeletePreviewGroup, delete_by_public_id
 
 
@@ -68,6 +69,26 @@ def test_crud_only_includes_requested_operations() -> None:
     assert _field_names(crud(GroupType, create=GroupInput)) == ["create_group"]
 
 
+def test_crud_metadata_declares_writable_fields() -> None:
+    """CRUD contributes backend-owned write capability metadata."""
+
+    surface = crud(GroupType, create=GroupInput, update=GroupPatch, delete=True)
+    metadata = data_resource_metadata(surface)[0]
+    field = {item.name: item for item in metadata.fields}["name"]
+
+    assert metadata.roots.create_name == "createGroup"
+    assert metadata.roots.update_name == "updateGroup"
+    assert metadata.roots.delete_preview_name == "deleteGroup"
+    assert metadata.capabilities == ("create", "update", "deletePreview")
+    assert metadata.create_fields == ("name",)
+    assert metadata.required_create_fields == ("name",)
+    assert metadata.update_fields == ("name",)
+    assert field.readable is True
+    assert field.creatable is True
+    assert field.updatable is True
+    assert field.required_on_create is True
+
+
 def test_crud_name_overrides_the_singular() -> None:
     """An explicit name renames every field's subject."""
 
@@ -111,9 +132,14 @@ def test_crud_fields_merge_into_a_schema() -> None:
 
 
 def test_crud_mutation_clone_preserves_public_key_settings() -> None:
-    """Strawberry field cloning keeps Angee's raw-sqid write settings."""
+    """Strawberry field cloning keeps Angee's raw-sqid write settings.
 
-    create = _create_mutation(GroupInput, permission_classes=None, extensions=None)
+    The stock ``DjangoMutationCUD.__copy__`` preserves ``key_attr``/``argument_name``,
+    so the create field (built straight from the library factory) and Angee's update
+    field both survive Strawberry's clone-on-reuse with their public-id keying intact.
+    """
+
+    create = strawberry_django.mutations.create(GroupInput)
     create.key_attr = "sqid"
     create.argument_name = "payload"
     copied_create = copy(create)

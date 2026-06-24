@@ -44,12 +44,10 @@ export const RotateWebhookSecret = graphql(`
 
 /** VCS bridges for the add-repository dialog's bridge picker. */
 export const IntegrateVcsBridges = graphql(`
-  query IntegrateVcsBridges($pagination: OffsetPaginationInput) {
-    vcsBridges(pagination: $pagination) {
-      results {
-        id
-        displayName
-      }
+  query IntegrateVcsBridges($limit: Int, $offset: Int) {
+    vcs_bridges(limit: $limit, offset: $offset) {
+      id
+      display_name
     }
   }
 `);
@@ -85,9 +83,9 @@ export const IntegrateDiscoverRepositories = graphql(`
   }
 `);
 
-/** Selection result for one `vcsBridges.results` item (the picker option). */
+/** Selection result for one `vcs_bridges` item (the picker option). */
 export type VcsBridgeOption =
-  DocumentType<typeof IntegrateVcsBridges>["vcsBridges"]["results"][number];
+  DocumentType<typeof IntegrateVcsBridges>["vcs_bridges"][number];
 
 /** One host repository candidate the add typeahead lists (the SDL `RepoCandidate`). */
 export type RepoCandidate = DocumentType<

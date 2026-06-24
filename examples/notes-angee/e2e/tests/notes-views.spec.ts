@@ -2,15 +2,15 @@ import { test, expect, roleStatePath } from "@angee/e2e";
 
 import { NotesPage } from "../pages/notes-page";
 
-const UPDATED_DAY_URL = "/notes?group=updatedAt:day";
+const UPDATED_DAY_URL = "/notes?group=updated_at:day";
 
 /**
  * The data-view features added this cycle: column sortability gated to orderable
- * fields, sorting the grouped field reordering the groups, column-aligned
- * aggregate totals, and the toolbar rendered as a flush control band.
+ * fields, date-bucket drill-down, column-aligned aggregate totals, and the
+ * toolbar rendered as a flush control band.
  * Group-specific assertions opt into Updated·Day through the URL.
  */
-test.describe("notes views — sort, group order, aggregates, control band", () => {
+test.describe("notes views — sort, date drill-down, aggregates, control band", () => {
   test.use({ storageState: roleStatePath("alice") });
 
   test("only orderable columns expose a sort control, and sorting raises no GraphQL error", async ({ page }) => {
@@ -50,30 +50,27 @@ test.describe("notes views — sort, group order, aggregates, control band", () 
     expect(errors, errors.join(" | ")).toHaveLength(0);
   });
 
-  test("sorting the grouped field reorders the groups (oldest vs newest first)", async ({ page }) => {
+  test("date buckets drill down through granular range filters", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("console", (m) => {
+      const text = m.text();
+      if (/GraphQL|not defined by type|oneOf|Something went wrong/i.test(text)) {
+        errors.push(text);
+      }
+    });
     const notes = new NotesPage(page);
     await page.goto(UPDATED_DAY_URL);
     await expect(notes.groupHeaders.first()).toBeVisible({ timeout: 25000 });
+    await expect(notes.recordRows).toHaveCount(0);
 
-    const firstGroupLabel = async () =>
-      (await notes.groupHeaders.first().innerText()).replace(/\s+/g, " ").trim();
+    const bucketLabel = await notes.groupHeaders.first().getAttribute("aria-label");
+    expect(bucketLabel ?? "").toMatch(/[A-Za-z]+\s+\d{1,2},\s+\d{4}/);
+    await notes.groupHeaders.first().click();
+    await notes.recordRows.first().waitFor({ state: "visible", timeout: 12000 });
 
-    const updatedAtSort = page
-      .getByRole("columnheader", { name: /Updated At/i })
-      .first()
-      .getByRole("button")
-      .first();
-
-    await updatedAtSort.click(); // ascending → oldest day first
-    await expect(notes.groupHeaders.first()).toBeVisible();
-    await page.waitForTimeout(1200);
-    const ascFirst = await firstGroupLabel();
-
-    await updatedAtSort.click(); // descending → newest day first
-    await page.waitForTimeout(1200);
-    const descFirst = await firstGroupLabel();
-
-    expect(ascFirst).not.toEqual(descFirst);
+    expect(await notes.recordRows.count()).toBeGreaterThan(0);
+    await expect(page.getByText("Something went wrong")).toHaveCount(0);
+    expect(errors, errors.join(" | ")).toHaveLength(0);
   });
 
   test("numeric aggregates render in the measure column, not the group header", async ({ page }) => {

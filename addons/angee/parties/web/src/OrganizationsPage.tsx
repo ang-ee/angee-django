@@ -5,17 +5,17 @@ const MODEL = "parties.Organization";
 
 const organizationsList = (
   <List model={MODEL} list={GroupListView}>
-    <Column field="displayName" />
+    <Column field="display_name" />
     <Column field="domain" />
-    <Column field="createdAt" />
+    <Column field="created_at" />
   </List>
 );
 
 const organizationsForm = (
   <Form model={MODEL}>
-    <Field name="displayName" title />
+    <Field name="display_name" title />
     <Group label="Details" columns={2}>
-      <Field name="legalName" label="Legal name" />
+      <Field name="legal_name" label="Legal name" />
       <Field name="domain" label="Domain" />
     </Group>
     <Field name="notes" />

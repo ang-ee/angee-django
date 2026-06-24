@@ -3,7 +3,7 @@ import type {
   DeletePreview,
   DeletePreviewGroup,
   DeletePreviewNode,
-} from "@angee/sdk";
+} from "@angee/data";
 
 import { Glyph } from "../chrome/Glyph";
 import { useBaseT } from "../i18n";

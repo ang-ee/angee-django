@@ -1,6 +1,6 @@
 import { useMemo, type ReactElement, type ReactNode } from "react";
 import { format } from "date-fns";
-import type { Row } from "@angee/sdk";
+import type { Row } from "@angee/data";
 
 import { cn } from "../lib/cn";
 import { TimelineEntry } from "../fragments/TimelineEntry";

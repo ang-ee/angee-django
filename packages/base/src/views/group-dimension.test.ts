@@ -5,16 +5,23 @@ import { describe, expect, test } from "vitest";
 import type { ModelMetadata } from "@angee/sdk";
 
 import {
+  bucketFilterForGroup,
   bucketValueLabels,
   dataViewGroupToAggregateDimension,
   groupLabelDimension,
-  groupLabelOrderField,
-  groupOrderField,
 } from "./ListInternals";
+import { validDataViewGroupStack } from "./list-view-utils";
 
-// A model whose `party` relation registers a `party__display_name` label axis.
-const PARTY_LABEL_METADATA = {
+// A model whose resource artifact owns group dimensions, including a relation
+// label axis for `party__display_name`.
+const GROUP_METADATA = {
+  typeName: "ExampleType",
   fields: {
+    status: {
+      name: "status",
+      kind: "enum",
+      values: [{ value: "ACTIVE" }, { value: "IN_REVIEW" }],
+    },
     party: {
       name: "party",
       kind: "relation",
@@ -26,6 +33,67 @@ const PARTY_LABEL_METADATA = {
       },
     },
   },
+  resource: {
+    groupDimensions: [
+      {
+        field: "status",
+        input: "SERVER_STATUS",
+        key: "serverStatus",
+        kind: "column",
+        scalar: "String",
+      },
+      {
+        field: "createdAt",
+        input: "CREATED_AT",
+        key: "createdAt",
+        kind: "column",
+        scalar: "DateTime",
+        extractions: [
+          {
+            name: "month",
+            input: "MONTH",
+            key: "createdAtMonth",
+            rangeKey: "createdAtMonthRange",
+          },
+        ],
+      },
+      {
+        field: "oauthClient_IsEnabled",
+        input: "OAUTH_CLIENT__IS_ENABLED",
+        key: "oauthClient_IsEnabled",
+        kind: "column",
+        scalar: "Boolean",
+      },
+      {
+        field: "vendor",
+        input: "VENDOR",
+        key: "vendorId",
+        kind: "relation",
+        scalar: "ID",
+      },
+      {
+        field: "party",
+        input: "PARTY",
+        key: "partyId",
+        kind: "relation",
+        scalar: "ID",
+      },
+      {
+        field: "party_DisplayName",
+        input: "PARTY__DISPLAY_NAME",
+        key: "party_DisplayName",
+        kind: "column",
+        scalar: "String",
+      },
+      {
+        field: "metadata",
+        input: "METADATA",
+        key: "metadata",
+        kind: "column",
+        scalar: "JSON",
+      },
+    ],
+  },
 } as unknown as ModelMetadata;
 
 const PARTY_GROUP = {
@@ -34,16 +102,42 @@ const PARTY_GROUP = {
   aggregateKey: "partyId",
 };
 
+const HASURA_SNAKE_METADATA = {
+  typeName: "NoteType",
+  fields: {},
+  resource: {
+    filterFields: ["updated_at"],
+    groupByFields: ["updated_at"],
+    groupDimensions: [
+      {
+        field: "updated_at",
+        input: "UPDATED_AT",
+        key: "updated_at",
+        kind: "column",
+        scalar: "DateTime",
+        extractions: [
+          {
+            name: "month",
+            input: "MONTH",
+            key: "updated_at_month",
+            rangeKey: "updated_at_month_range",
+          },
+        ],
+      },
+    ],
+  },
+} as unknown as ModelMetadata;
+
 describe("dataViewGroupToAggregateDimension", () => {
-  test("maps a plain field to its uppercase enum + verbatim key", () => {
-    expect(dataViewGroupToAggregateDimension({ field: "status" })).toEqual({
-      field: "STATUS",
-      key: "status",
+  test("uses backend group dimension metadata verbatim", () => {
+    expect(dataViewGroupToAggregateDimension({ field: "status" }, GROUP_METADATA)).toEqual({
+      field: "SERVER_STATUS",
+      key: "serverStatus",
     });
   });
 
-  test("snake-cases a camelCase field for the enum, keeps the key verbatim", () => {
-    expect(dataViewGroupToAggregateDimension({ field: "createdAt" })).toEqual({
+  test("uses backend metadata for camelCase field dimensions", () => {
+    expect(dataViewGroupToAggregateDimension({ field: "createdAt" }, GROUP_METADATA)).toEqual({
       field: "CREATED_AT",
       key: "createdAt",
     });
@@ -54,7 +148,10 @@ describe("dataViewGroupToAggregateDimension", () => {
     // `oauth_client__is_enabled`; the group key reads the camel field while the
     // backend groupable-field enum is the double-underscore SNAKE_UPPER form.
     expect(
-      dataViewGroupToAggregateDimension({ field: "oauthClient_IsEnabled" }),
+      dataViewGroupToAggregateDimension(
+        { field: "oauthClient_IsEnabled" },
+        GROUP_METADATA,
+      ),
     ).toEqual({
       field: "OAUTH_CLIENT__IS_ENABLED",
       key: "oauthClient_IsEnabled",
@@ -67,7 +164,7 @@ describe("dataViewGroupToAggregateDimension", () => {
         field: "vendor.displayName",
         aggregateField: "vendor",
         aggregateKey: "vendorId",
-      }),
+      }, GROUP_METADATA),
     ).toEqual({
       field: "VENDOR",
       key: "vendorId",
@@ -79,44 +176,51 @@ describe("dataViewGroupToAggregateDimension", () => {
       dataViewGroupToAggregateDimension({
         field: "createdAt",
         granularity: "month",
-      }),
+      }, GROUP_METADATA),
     ).toEqual({
       field: "CREATED_AT",
       key: "createdAtMonth",
       granularity: "MONTH",
+      rangeKey: "createdAtMonthRange",
     });
   });
-});
 
-describe("groupOrderField", () => {
-  test("snake-cases a plain field for the order-by axis", () => {
-    expect(groupOrderField({ field: "createdAt" })).toBe("created_at");
-    expect(groupOrderField({ field: "status" })).toBe("status");
-  });
+  test("accepts camel-case date groups for Hasura snake-case dimensions", () => {
+    const group = { field: "updatedAt", granularity: "month" as const };
 
-  test("emits the Django `__` path for a to-one relation axis", () => {
-    // The sort path shares `fieldToSnake` with the group enum; ordering by a
-    // relation-path group axis must emit the same `oauth_client__is_enabled`
-    // path the group-by query uses, not a single-underscore collapse.
-    expect(groupOrderField({ field: "oauthClient_IsEnabled" })).toBe(
-      "oauth_client__is_enabled",
-    );
-  });
-
-  test("orders by the aggregate axis when it differs from the row field", () => {
+    expect(validDataViewGroupStack([group], HASURA_SNAKE_METADATA)).toEqual([
+      { field: "updated_at", granularity: "month" },
+    ]);
+    expect(dataViewGroupToAggregateDimension(group, HASURA_SNAKE_METADATA)).toEqual({
+      field: "UPDATED_AT",
+      key: "updated_at_month",
+      granularity: "MONTH",
+      rangeKey: "updated_at_month_range",
+    });
     expect(
-      groupOrderField({
-        field: "vendor.displayName",
-        aggregateField: "vendor",
-        aggregateKey: "vendorId",
-      }),
-    ).toBe("vendor");
+      bucketFilterForGroup(
+        { key: { updated_at_month: "2026-02-01 00:00:00+00:00" }, count: 2 },
+        group,
+        HASURA_SNAKE_METADATA,
+      ),
+    ).toEqual({
+      updated_at: {
+        gte: "2026-02-01T00:00:00.000Z",
+        lt: "2026-03-01T00:00:00.000Z",
+      },
+    });
+  });
+
+  test("fails fast when a grouped axis is not in resource metadata", () => {
+    expect(() =>
+      dataViewGroupToAggregateDimension({ field: "missing" }, GROUP_METADATA)
+    ).toThrow('group dimension "missing"');
   });
 });
 
 describe("relation group display label (Odoo (id, display_name))", () => {
   test("groupLabelDimension carries the registered label axis", () => {
-    expect(groupLabelDimension(PARTY_GROUP, PARTY_LABEL_METADATA)).toEqual({
+    expect(groupLabelDimension(PARTY_GROUP, GROUP_METADATA)).toEqual({
       field: "PARTY__DISPLAY_NAME",
       key: "party_DisplayName",
     });
@@ -124,27 +228,69 @@ describe("relation group display label (Odoo (id, display_name))", () => {
 
   test("groupLabelDimension is null without a label axis", () => {
     expect(groupLabelDimension(PARTY_GROUP, null)).toBeNull();
-    expect(groupLabelDimension({ field: "status" }, PARTY_LABEL_METADATA)).toBeNull();
-  });
-
-  test("groupLabelOrderField sorts by the label's `__` path, not the id", () => {
-    expect(groupLabelOrderField(PARTY_GROUP, PARTY_LABEL_METADATA)).toBe(
-      "party__display_name",
-    );
-    expect(groupLabelOrderField(PARTY_GROUP, null)).toBeUndefined();
+    expect(groupLabelDimension({ field: "status" }, GROUP_METADATA)).toBeNull();
   });
 
   test("bucketValueLabels renders the carried name, not the raw id", () => {
     const bucket = { key: { partyId: "4422", party_DisplayName: "PRG Iva" }, count: 1 };
-    expect(bucketValueLabels(bucket, [PARTY_GROUP], PARTY_LABEL_METADATA)).toEqual([
+    expect(bucketValueLabels(bucket, [PARTY_GROUP], GROUP_METADATA)).toEqual([
       "PRG Iva",
     ]);
   });
 
-  test("bucketValueLabels needs the label axis to render the carried name", () => {
+  test("bucketValueLabels needs resource metadata for grouped buckets", () => {
     const bucket = { key: { partyId: "pty_abc", party_DisplayName: "PRG Iva" }, count: 1 };
-    // Without metadata there is no label key, so the carried name is not used —
-    // the header falls back to the id key (the pre-Odoo behaviour).
-    expect(bucketValueLabels(bucket, [PARTY_GROUP], null)).not.toEqual(["PRG Iva"]);
+    expect(() => bucketValueLabels(bucket, [PARTY_GROUP], null)).toThrow(
+      'group dimension "party"',
+    );
+  });
+});
+
+describe("bucketFilterForGroup", () => {
+  test("turns date granularity buckets into range filters", () => {
+    expect(
+      bucketFilterForGroup(
+        { key: { createdAtMonth: "2026-02-01 00:00:00+00:00" }, count: 2 },
+        { field: "createdAt", granularity: "month" },
+        GROUP_METADATA,
+      ),
+    ).toEqual({
+      createdAt: {
+        gte: "2026-02-01T00:00:00.000Z",
+        lt: "2026-03-01T00:00:00.000Z",
+      },
+    });
+  });
+
+  test("keeps empty date buckets expandable as null filters", () => {
+    expect(
+      bucketFilterForGroup(
+        { key: { createdAtMonth: "" }, count: 1 },
+        { field: "createdAt", granularity: "month" },
+        GROUP_METADATA,
+      ),
+    ).toEqual({ createdAt: { isNull: true } });
+  });
+
+  test("parses structured JSON bucket values for containment drill-down", () => {
+    expect(
+      bucketFilterForGroup(
+        { key: { metadata: "{\"kind\":\"note\",\"flags\":[\"pinned\"]}" }, count: 1 },
+        { field: "metadata" },
+        GROUP_METADATA,
+      ),
+    ).toEqual({
+      metadata: { jsonContains: { kind: "note", flags: ["pinned"] } },
+    });
+  });
+
+  test("normalizes enum key buckets to write-side filter values", () => {
+    expect(
+      bucketFilterForGroup(
+        { key: { serverStatus: "IN_REVIEW" }, count: 1 },
+        { field: "status" },
+        GROUP_METADATA,
+      ),
+    ).toEqual({ status: "in_review" });
   });
 });

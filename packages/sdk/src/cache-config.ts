@@ -7,7 +7,6 @@ import {
 import { relayPagination } from "@urql/exchange-graphcache/extras";
 import type { KeyingConfig, ResolverConfig } from "@urql/exchange-graphcache";
 
-import { rowPublicId } from "./resource-result";
 import { schemaObjectTypes } from "./schema-object-types";
 
 /**
@@ -32,11 +31,15 @@ function isPublicNode(type: GraphQLObjectType): boolean {
     && type.getInterfaces().some((iface) => iface.name === "Node");
 }
 
+function publicNodeId(data: Record<string, unknown>): string | null {
+  return typeof data.id === "string" ? data.id : null;
+}
+
 export function cacheConfigFromSchema(schema: GraphQLSchema): CacheConfig {
   const keys: KeyingConfig = {};
   for (const type of schemaObjectTypes(schema)) {
     keys[type.name] = isPublicNode(type)
-      ? (data) => rowPublicId(data)
+      ? (data) => publicNodeId(data)
       : () => null;
   }
 

@@ -899,6 +899,7 @@ const FILTER_OPERATOR_LABEL = {
   isNotNull: "is not empty",
   iExact: "is",
   contains: "contains",
+  jsonContains: "contains",
   iContains: "contains",
   startsWith: "starts with",
   iStartsWith: "starts with",

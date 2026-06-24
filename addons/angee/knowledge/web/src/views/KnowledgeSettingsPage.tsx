@@ -14,9 +14,8 @@ const VAULT_MODEL = "knowledge.Vault";
 
 /**
  * The knowledge admin console: a managed list of vaults whose record form opens
- * in a drawer. Create / edit / delete are gated server-side (a vault is owned by
- * its creator; `createVault` preflights the gate). Vaults carry no immutable
- * fields, so the form is plain full CRUD.
+ * in a drawer. Create / edit / delete are gated server-side. Vaults carry no
+ * immutable fields, so the form is plain full CRUD.
  */
 export function KnowledgeSettingsPage(): ReactElement {
   const t = useKnowledgeT();
@@ -33,8 +32,8 @@ export function KnowledgeSettingsPage(): ReactElement {
       <DrawerDataPage model={VAULT_MODEL}>
         <List model={VAULT_MODEL} list={GroupListView} order={{ name: "ASC" }}>
           <Column field="name" />
-          <Column field="ownerLabel" />
-          <Column field="updatedAt" />
+          <Column field="owner_label" />
+          <Column field="updated_at" />
         </List>
         <Form model={VAULT_MODEL}>
           <Field name="name" widget="text" title />

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { revisionSnapshot, useResourceRevisions } from "@angee/sdk";
+import { revisionSnapshot, useResourceRevisions } from "@angee/data";
 
 import { useBaseT } from "../i18n";
 import { EmptyState } from "../fragments/EmptyState";

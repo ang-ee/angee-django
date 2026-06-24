@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { Row } from "@angee/sdk";
+import type { Row } from "@angee/data";
 
 import type { PromptOptions } from "../../feedback";
 import { PAGE_ELEMENT_SLOT } from "./types";

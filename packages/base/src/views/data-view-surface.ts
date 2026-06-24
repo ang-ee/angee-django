@@ -12,14 +12,16 @@ import {
   type Virtualizer,
 } from "@tanstack/react-virtual";
 import {
-  createLocalRowsDataSource,
   useResourceList,
-  rowPublicId,
-  type ModelMetadata,
   type ResourceTypeName,
-  type Row,
   type UseResourceListOptions,
   type UseResourceListResult,
+  rowPublicId,
+  type Row,
+} from "@angee/data";
+import {
+  type DataResourceDefaultSortMetadata,
+  type ModelMetadata,
 } from "@angee/sdk";
 
 import type { DataViewContextValue } from "./data-view-context";
@@ -27,8 +29,12 @@ import { useExpandedKeys } from "./grouped-list-utils";
 import {
   Filter,
   type DataViewGroup,
-  type DataViewResourceOrder,
 } from "./data-view-model";
+import {
+  createLocalRowsDataSource,
+  nextRowTextFilter,
+  rowTextFilterValue,
+} from "./local-rows";
 import {
   GROUP_ROW_HEIGHT,
   RECORD_ROW_HEIGHT,
@@ -43,9 +49,10 @@ import {
 import type { ColumnDescriptor } from "./page";
 
 type ListFilter = UseResourceListOptions<ResourceTypeName>["filter"];
+type ListOrder = UseResourceListOptions<ResourceTypeName>["order"];
 
 export type StringIdRow = Row & { id: string };
-export { nextRowTextFilter, rowTextFilterValue } from "@angee/sdk";
+export { nextRowTextFilter, rowTextFilterValue };
 
 export interface ListViewState<TRow extends Row = Row> {
   rows: readonly TRow[];
@@ -128,7 +135,7 @@ export interface DataViewSurface<TRow extends Row = Row>
   rows: readonly TRow[];
   requestedFields: readonly string[];
   mergedFilter: ListFilter;
-  sortOrder: DataViewResourceOrder | undefined;
+  sortOrder: ListOrder | undefined;
 }
 
 export interface RowsDataViewSurface<TRow extends StringIdRow = StringIdRow>
@@ -211,13 +218,16 @@ export function useDataViewSurface<TRow extends Row = Row>({
     [dataView.state.filter, filter],
   );
   const sortOrder = React.useMemo(
-    () => dataView.state.resourceOrder(),
-    [dataView.state.sort],
+    () =>
+      dataView.state.resourceOrder()
+      ?? order
+      ?? defaultResourceOrder(modelMetadata),
+    [dataView.state.sort, modelMetadata, order],
   );
   const list = useResourceList(model, {
     fields: requestedFields,
     filter: mergedFilter,
-    order: sortOrder ?? order,
+    order: sortOrder,
     pageSize: dataView.state.pageSize,
     page: dataView.state.page,
     enabled,
@@ -478,6 +488,22 @@ function useDataViewPresentationSurface<TRow extends Row>({
 
 function modelRowId<TRow extends Row>(row: TRow, index: number): string {
   return rowPublicId(row) ?? String(index);
+}
+
+function defaultResourceOrder(
+  modelMetadata: ModelMetadata | null | undefined,
+): ListOrder | undefined {
+  // The current resource-hook order input is single-field; keep the full
+  // metadata defaultSort for Hasura/refine, but project the primary term here.
+  const [sort] = modelMetadata?.resource?.defaultSort ?? [];
+  if (!sort) return undefined;
+  return { [sort.field]: defaultSortDirection(sort) };
+}
+
+function defaultSortDirection(
+  sort: DataResourceDefaultSortMetadata,
+): "ASC" | "DESC" {
+  return sort.direction.toUpperCase() === "DESC" ? "DESC" : "ASC";
 }
 
 function stringRowId<TRow extends StringIdRow>(row: TRow): string {

@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any, TypeVar, cast
+from typing import Any, TypeVar
 
 import strawberry
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
-from strawberry import UNSET
 from strawberry.types import get_object_definition
 from strawberry_django.utils.typing import get_django_definition
 
@@ -54,31 +52,6 @@ def require_instance_for_id(
     return instance
 
 
-def coerce_relation_public_ids(
-    model: type[models.Model],
-    data: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Resolve FK/M2M public-id inputs into model instances before Django writes.
-
-    Strawberry-Django owns the mutation execution, validation, and m2m application.
-    Its parser still treats plain string relation inputs as database primary keys,
-    so Angee resolves public ids at the GraphQL boundary and hands the library the
-    model instances it already accepts natively.
-    """
-
-    coerced = dict(data)
-    fields = {field.name: field for field in model._meta.get_fields()}
-    for name, value in list(coerced.items()):
-        if value in (None, UNSET):  # noqa: PLR6201
-            continue
-        field = fields.get(name)
-        if isinstance(field, models.ForeignKey):
-            coerced[name] = _coerce_relation_value(cast(type[models.Model], field.remote_field.model), value)
-        elif isinstance(field, models.ManyToManyField):
-            coerced[name] = _coerce_relation_list(cast(type[models.Model], field.remote_field.model), value)
-    return coerced
-
-
 def assert_unique_sqid_prefixes(types: tuple[object, ...]) -> None:
     """Fail schema build when two public model owners declare the same sqid prefix."""
 
@@ -104,24 +77,6 @@ def assert_unique_sqid_prefixes(types: tuple[object, ...]) -> None:
                     f"Sqid prefix {left!r} overlaps with {right!r}; exposed public-id "
                     "prefixes must not be prefixes of one another"
                 )
-
-
-def _coerce_relation_value(model: type[models.Model], value: Any) -> Any:
-    """Return a model instance for a scalar public id, preserving nested inputs."""
-
-    if isinstance(value, models.Model):
-        return value
-    if isinstance(value, str):
-        return require_instance_for_id(model, value)
-    return value
-
-
-def _coerce_relation_list(model: type[models.Model], value: Any) -> Any:
-    """Resolve scalar ids inside list-style relation inputs."""
-
-    if isinstance(value, list):
-        return [_coerce_relation_value(model, item) for item in value]
-    return value
 
 
 def _exposed_models(types: tuple[object, ...]) -> tuple[type[models.Model], ...]:

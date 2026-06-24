@@ -10,6 +10,7 @@ definition auth/user {
     // user with REBAC_SUPERUSER_BYPASS off, through relationships alone.
     relation admin: angee/role // rebac:const=admin
 
+    permission create = admin->member
     permission read = admin->member
     permission write = admin->member
     permission delete = admin->member

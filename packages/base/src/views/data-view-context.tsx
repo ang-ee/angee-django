@@ -112,7 +112,10 @@ function RouteDataViewProvider({
         search: (current) => {
           const currentState = dataViewSearchToState(current, initialState);
           const next = currentState.reduce(action);
-          return mergeDataViewSearch(current, dataViewStateToSearch(next));
+          return mergeDataViewSearch(
+            current,
+            dataViewStateToSearch(next, initialState),
+          );
         },
         // View-state writes replace history so filter/sort/page churn does not
         // spam Back; selection churn stays local.

@@ -1,3 +1,5 @@
+import type { AngeeSchemaMetadata } from "./model-metadata";
+
 export const TEST_SCHEMA_SDL = /* GraphQL */ `
   directive @oneOf on INPUT_OBJECT
 
@@ -168,3 +170,59 @@ export const TEST_SCHEMA_SDL = /* GraphQL */ `
     deleteSale(id: ID!, confirm: Boolean! = false): DeletePreview!
   }
 `;
+
+export const TEST_SCHEMA_METADATA: AngeeSchemaMetadata = {
+  angee: {
+    resources: [
+      {
+        schemaName: "public",
+        modelLabel: "Sale",
+        appLabel: "",
+        modelName: "sale",
+        publicIdField: "sqid",
+        roots: {
+          detail: "sale",
+          list: "sales",
+          aggregate: "saleAggregate",
+          groups: "saleGroups",
+          revisions: "saleRevisions",
+          create: "createSale",
+          update: "updateSale",
+          deletePreview: "deleteSale",
+        },
+        typeNames: {
+          node: "Sale",
+          filter: "SaleFilter",
+          order: "SaleOrder",
+          aggregate: "SaleAggregate",
+          groupKey: "SaleGroupKey",
+          groupBySpec: "SaleGroupBySpec",
+          groupOrder: "SaleGroupOrder",
+          createInput: "SaleInput",
+          updateInput: "SalePatch",
+          deletePayload: "DeletePreview",
+          revision: "SaleRevision",
+        },
+        capabilities: [
+          "list",
+          "detail",
+          "aggregate",
+          "groups",
+          "revisions",
+          "create",
+          "update",
+          "deletePreview",
+        ],
+        filterFields: ["title", "state"],
+        orderFields: ["title", "state"],
+        aggregateFields: ["id", "amount"],
+        groupByFields: ["state", "createdAt"],
+        createFields: ["title"],
+        updateFields: ["title"],
+        requiredCreateFields: ["title"],
+        revisionFields: ["createdAt", "comment", "title"],
+        relationAxes: [],
+      },
+    ],
+  },
+};

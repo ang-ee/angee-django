@@ -40,7 +40,7 @@ export function PageEditor({
     {
       title: detail.title,
       body: detail.markdown?.body ?? "",
-      bodyHash: detail.markdown?.bodyHash ?? "",
+      bodyHash: detail.markdown?.body_hash ?? "",
     },
     onSaved,
   );
@@ -134,13 +134,13 @@ function SaveBadge({
 
 function metaLine(detail: KnowledgePageDetail, t: Translate): string {
   const parts = [
-    detail.createdByLabel ?? "—",
-    formatBaseDate(detail.updatedAt) || "—",
+    detail.created_by_label ?? "—",
+    formatBaseDate(detail.updated_at) || "—",
   ];
   if (detail.markdown) {
     parts.push(
       t("knowledge.editor.wordCount", {
-        count: detail.markdown.wordCount.toLocaleString(),
+        count: detail.markdown.word_count.toLocaleString(),
       }),
     );
   }

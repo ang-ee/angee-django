@@ -14,7 +14,7 @@ export function SkillsPage(): React.ReactElement {
         <Column field="name" />
         <Column field="description" />
         <Column field="path" />
-        <Column field="updatedAt" />
+        <Column field="updated_at" />
       </List>
       <Form model={MODEL}>
         <Field name="name" title readOnly />

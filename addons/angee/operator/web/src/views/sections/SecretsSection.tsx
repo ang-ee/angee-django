@@ -176,8 +176,8 @@ function useSecretActions(refetch: () => void): {
     (name: string, value: string): Promise<boolean> =>
       runDaemon({
         run: set.run,
-        field: "secretSet",
-        variables: { name, value },
+        field: "insert_secrets_one",
+        variables: { object: { name, value } },
         label: t("operator.secrets.set.label"),
       }),
     [runDaemon, set.run, t],
@@ -195,8 +195,8 @@ function useSecretActions(refetch: () => void): {
         if (!ok) return;
         await runDaemon({
           run: remove.run,
-          field: "secretDelete",
-          variables: { name: secret.name },
+          field: "delete_secrets_by_pk",
+          variables: { id: secret.id },
           label: t("operator.secrets.delete.label"),
         });
       })();

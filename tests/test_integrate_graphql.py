@@ -1,4 +1,4 @@
-"""Tests for the integrate console GraphQL CRUD surfaces.
+"""Tests for the integrate console GraphQL resource and action surfaces.
 
 The integrate console references iam types (``IntegrationType.credential`` /
 ``account`` / ``owner``), so these tests build one ``console`` schema folding both
@@ -6,12 +6,10 @@ the iam and integrate addon ``console`` parts — the same shape the composer
 assembles at runtime — and run over the concrete iam + integrate test tables.
 
 Harness note: source-addon tests stand in Django's default auth user for the
-swappable iam ``User`` (it has no ``sqid``). The create mutations take an
-``owner: ID`` that Angee resolves through ``UserType``'s public id, which the
-stand-in user lacks — so the owner-bearing *create*
-path is exercised by building rows through the model managers (as ``runtime``
-would resolve them) and asserting CRUD over those rows. ``createWebhookSubscription``'s
-write-only ``secret`` is covered by the SDL invariant plus the read-back row.
+swappable iam ``User`` (it has no ``sqid``). In this source-addon harness,
+``owner: ID`` falls back to the Django pk; runtime projects still pass the iam
+user public id. Webhook ``secret`` remains write-only: accepted by the Hasura
+input and absent from the output projection.
 """
 
 from __future__ import annotations
@@ -73,27 +71,27 @@ def test_integration_node_resolves_nested_relations(
         _execute(
             console_schema,
             """
-            query Integration($id: ID!) {
-              integration(id: $id) {
+            query Integration($id: String!) {
+              integrations_by_pk(id: $id) {
                 status
                 vendor { slug }
-                credential { displayName }
+                credential { display_name }
                 owner { username }
-                account { externalId }
+                account { external_id }
               }
             }
             """,
             {"id": _public_id(conn)},
             user=admin,
         )
-    )["integration"]
+    )["integrations_by_pk"]
     assert resolved == {
         "status": "ACTIVE",
         "vendor": {"slug": "conn-node"},
         # ``make_integration`` builds the OAuth client with ``display_name=slug.title()``,
         # and an OAuth credential's label is its provider's display name (set on create by
         # ``CredentialManager._oauth_credential_name``).
-        "credential": {"displayName": "Conn-Node"},
+        "credential": {"display_name": "Conn-Node"},
         "owner": {"username": "conn-node-owner"},
         "account": None,
     }
@@ -106,20 +104,17 @@ def test_integration_groups_aggregate_runs_with_rebac_scope(
 
     admin = _platform_admin("conn-groups-admin")
     integration = make_integration("conn-groups")
-    vendor_id = _public_id(integration.vendor)
+    vendor_pk = str(integration.vendor_id)
     console_schema = _schema()
 
     grouped = _data(
         _execute(
             console_schema,
             """
-            query IntegrationGroups($groupBy: [IntegrationAggregateGroupBySpec!]!) {
-              integrationGroups(groupBy: $groupBy, pagination: {offset: 0, limit: 10}) {
-                totalCount
-                results {
-                  key { implClass vendorId vendor_DisplayName }
-                  count
-                }
+            query IntegrationGroups($groupBy: [IntegrationTypeGroupBySpec!]!) {
+              integrations_groups(group_by: $groupBy, limit: 10) {
+                key { vendor_id vendor__display_name impl_class }
+                aggregate { count }
               }
             }
             """,
@@ -128,78 +123,121 @@ def test_integration_groups_aggregate_runs_with_rebac_scope(
                     {"field": "VENDOR"},
                     {"field": "VENDOR__DISPLAY_NAME"},
                     {"field": "IMPL_CLASS"},
-                ]
+                ],
             },
             user=admin,
         )
-    )["integrationGroups"]
-    assert grouped["totalCount"] == 1
-    assert grouped["results"] == [
+    )["integrations_groups"]
+    assert grouped == [
         {
             "key": {
-                "implClass": "NONE",
-                "vendorId": vendor_id,
-                "vendor_DisplayName": "Conn-Groups",
+                "vendor_id": vendor_pk,
+                "vendor__display_name": "Conn-Groups",
+                "impl_class": "NONE",
             },
-            "count": 1,
+            "aggregate": {"count": 1},
         }
     ]
 
 
-def test_console_data_query_metadata_declares_integration_surface() -> None:
-    """The composed console schema reports Integration's data-query contract."""
+def test_console_resource_metadata_declares_integration_surface() -> None:
+    """The composed console schema reports Integration's Hasura resource contract."""
 
     schemas = _schemas()
     console_schema = schemas.build("console")
     metadata = {
         item.model_label: item
-        for item in console_schema.angee_data_queries
+        for item in console_schema.angee_resources
     }["integrate.Integration"]
 
-    assert schemas.data_queries("console") == console_schema.angee_data_queries
+    assert schemas.resources("console") == console_schema.angee_resources
     assert metadata.roots.list_name == "integrations"
-    assert metadata.roots.detail_name == "integration"
-    assert metadata.roots.aggregate_name == "integration_aggregate"
-    assert metadata.roots.group_name == "integration_groups"
-    assert metadata.filter_fields == ("vendor", "impl_class", "status")
+    assert metadata.roots.detail_name == "integrations_by_pk"
+    assert metadata.roots.aggregate_name == "integrations_aggregate"
+    assert metadata.roots.group_name == "integrations_groups"
+    assert metadata.roots.create_name == "insert_integrations_one"
+    assert metadata.roots.update_name == "update_integrations_by_pk"
+    assert metadata.roots.delete_name == "delete_integrations_by_pk"
+    assert metadata.filter_fields == ("id", "vendor", "impl_class", "status", "updated_at")
     assert metadata.order_fields == ("vendor", "impl_class", "status", "created_at", "updated_at")
     assert metadata.aggregate_fields == ("id",)
     assert metadata.group_by_fields == ("impl_class", "vendor", "vendor__display_name", "status")
-    assert metadata.capabilities == ("list", "detail", "aggregate", "groups", "filterEcho")
+    assert {
+        dimension.field: (dimension.input, dimension.key, dimension.kind, dimension.scalar)
+        for dimension in metadata.group_dimensions
+    } == {
+        "impl_class": ("IMPL_CLASS", "impl_class", "column", None),
+        "vendor": ("VENDOR", "vendor_id", "relation", "ID"),
+        "vendor__display_name": ("VENDOR__DISPLAY_NAME", "vendor__display_name", "column", None),
+        "status": ("STATUS", "status", "column", None),
+    }
+    assert metadata.default_measures[0].op == "count"
+    assert metadata.aggregate_measures == ()
+    assert metadata.capabilities == ("list", "detail", "aggregate", "groups", "create", "update", "delete", "changes")
     assert metadata.relation_axes[0].field == "vendor"
     assert metadata.relation_axes[0].model_label == "integrate.Vendor"
     assert metadata.relation_axes[0].public_id_field == "sqid"
     assert metadata.relation_axes[0].label_axis == "vendor__display_name"
-    assert metadata.group_aliases[0].field == "impl_category"
-    assert metadata.group_aliases[0].aggregate_field == "impl_class"
-    assert metadata.group_aliases[0].aggregate_key == "impl_class"
-    serialized = console_schema._schema.extensions["angee"]["dataQueries"]
+    assert metadata.group_aliases == ()
+    serialized = console_schema._schema.extensions["angee"]["resources"]
     integration = {
         item["modelLabel"]: item
         for item in serialized
     }["integrate.Integration"]
-    assert integration["roots"] == {
-        "listName": "integrations",
-        "detailName": "integration",
-        "aggregateName": "integrationAggregate",
-        "groupName": "integrationGroups",
+    assert integration["schemaName"] == "console"
+    assert integration["roots"]["list"] == "integrations"
+    assert integration["roots"]["detail"] == "integrations_by_pk"
+    assert integration["roots"]["aggregate"] == "integrations_aggregate"
+    assert integration["roots"]["groups"] == "integrations_groups"
+    assert integration["roots"]["create"] == "insert_integrations_one"
+    assert integration["roots"]["update"] == "update_integrations_by_pk"
+    assert integration["roots"]["delete"] == "delete_integrations_by_pk"
+    assert integration["roots"]["changes"] == "integrationChanged"
+    assert integration["capabilities"] == [
+        "list",
+        "detail",
+        "aggregate",
+        "groups",
+        "create",
+        "update",
+        "delete",
+        "changes",
+    ]
+    assert integration["groupByFields"] == ["impl_class", "vendor", "vendor__display_name", "status"]
+    assert {
+        dimension["field"]: (
+            dimension["input"],
+            dimension["key"],
+            dimension["kind"],
+            dimension["scalar"],
+        )
+        for dimension in integration["groupDimensions"]
+    } == {
+        "impl_class": ("IMPL_CLASS", "impl_class", "column", None),
+        "vendor": ("VENDOR", "vendor_id", "relation", "ID"),
+        "vendor__display_name": ("VENDOR__DISPLAY_NAME", "vendor__display_name", "column", None),
+        "status": ("STATUS", "status", "column", None),
     }
-    assert integration["groupByFields"] == ["implClass", "vendor", "vendor_DisplayName", "status"]
+    assert integration["defaultMeasures"] == [{"op": "count", "field": None, "input": None}]
+    assert integration["aggregateMeasures"] == []
     assert integration["relationAxes"] == [
         {
             "field": "vendor",
             "modelLabel": "integrate.Vendor",
             "publicIdField": "sqid",
-            "labelAxis": "vendor_DisplayName",
+            "labelAxis": "vendor__display_name",
         }
     ]
-    assert integration["groupAliases"] == [
-        {
-            "field": "implCategory",
-            "aggregateField": "implClass",
-            "aggregateKey": "implClass",
-        }
-    ]
+    assert integration["groupAliases"] == []
+    assert integration["updateFields"] == ["vendor", "credential", "account", "owner", "status"]
+    status_field = {field["name"]: field for field in integration["fields"]}["status"]
+    assert status_field["kind"] == "enum"
+    assert status_field["widget"] == "select"
+    assert status_field["readable"] is True
+    assert status_field["filterable"] is True
+    assert status_field["sortable"] is True
+    assert status_field["groupable"] is True
+    assert status_field["updatable"] is True
 
 
 def test_impl_choices_are_admin_only(integrate_console_tables: None) -> None:
@@ -246,8 +284,8 @@ def test_update_integration_rejects_impl_class_patch(integrate_console_tables: N
     result = _execute(
         console_schema,
         """
-        mutation UpdateIntegration($id: ID!) {
-          updateIntegration(data: {id: $id, implClass: "stub"}) {
+        mutation UpdateIntegration($id: String!) {
+          update_integrations_by_pk(pk_columns: {id: $id}, _set: {impl_class: "stub"}) {
             status
           }
         }
@@ -257,7 +295,7 @@ def test_update_integration_rejects_impl_class_patch(integrate_console_tables: N
     )
 
     assert result.errors is not None
-    assert "implClass" in result.errors[0].message
+    assert "impl_class" in result.errors[0].message
 
 
 def test_create_integration_rejects_child_backend_key(integrate_console_tables: None) -> None:
@@ -273,7 +311,7 @@ def test_create_integration_rejects_child_backend_key(integrate_console_tables: 
         console_schema,
         """
         mutation CreateIntegration($vendor: ID!, $owner: ID!) {
-          createIntegration(data: {vendor: $vendor, owner: $owner, implClass: "stub"}) {
+          insert_integrations_one(object: {vendor: $vendor, owner: $owner, impl_class: "stub"}) {
             id
           }
         }
@@ -286,7 +324,7 @@ def test_create_integration_rejects_child_backend_key(integrate_console_tables: 
     )
 
     assert result.errors is not None
-    assert "ANGEE_INTEGRATION_IMPLS" in result.errors[0].message
+    assert "impl_class" in result.errors[0].message
     with system_context(reason="test.integrate.vcs_parent_create.verify"):
         assert not Integration.objects.filter(owner=owner, vendor=vendor).exists()
 
@@ -341,16 +379,14 @@ def test_integration_update_delete_are_admin_only(
     conn = make_integration("conn-crud")
     console_schema = _schema()
 
-    # ``createIntegration`` is admin gated: the permission check fires before any FK
-    # input resolution, so a non-admin is denied regardless of the owner id supplied.
-    # (The full create write path needs an iam ``User`` with a public id, which
-    # the source-addon stand-in auth user lacks — see the module docstring.)
+    # Hasura create is still REBAC-gated; the deliberately bogus relation ids
+    # only need to prove a plain user cannot create through the generic root.
     owner_id = str(conn.owner.pk)
     assert _execute(
         console_schema,
         """
         mutation CreateIntegration($owner: ID!) {
-          createIntegration(data: {owner: $owner, vendor: $owner, credential: $owner}) {
+          insert_integrations_one(object: {owner: $owner, vendor: $owner, credential: $owner}) {
             status
           }
         }
@@ -361,8 +397,8 @@ def test_integration_update_delete_are_admin_only(
 
     integration_id = _public_id(conn)
     update_integration = """
-        mutation UpdateIntegration($id: ID!) {
-          updateIntegration(data: {id: $id, status: "disabled"}) {
+        mutation UpdateIntegration($id: String!) {
+          update_integrations_by_pk(pk_columns: {id: $id}, _set: {status: "disabled"}) {
             status
             vendor { slug }
           }
@@ -373,14 +409,13 @@ def test_integration_update_delete_are_admin_only(
 
     updated = _data(
         _execute(console_schema, update_integration, {"id": integration_id}, user=admin)
-    )["updateIntegration"]
+    )["update_integrations_by_pk"]
     assert updated == {"status": "DISABLED", "vendor": {"slug": "conn-crud"}}
 
     delete_integration = """
-        mutation DeleteIntegration($id: ID!) {
-          deleteIntegration(id: $id, confirm: true) {
-            hasBlockers
-            totalDeletedCount
+        mutation DeleteIntegration($id: String!) {
+          delete_integrations_by_pk(id: $id) {
+            id
           }
         }
     """
@@ -389,9 +424,8 @@ def test_integration_update_delete_are_admin_only(
 
     deleted = _data(
         _execute(console_schema, delete_integration, {"id": integration_id}, user=admin)
-    )["deleteIntegration"]
-    assert deleted["hasBlockers"] is False
-    assert deleted["totalDeletedCount"] >= 1
+    )["delete_integrations_by_pk"]
+    assert deleted["id"] == integration_id
     with system_context(reason="test.integrate.integration_crud.after_delete"):
         assert not Integration.objects.filter(pk=conn.pk).exists()
 
@@ -404,10 +438,10 @@ def test_webhook_crud_secret_write_only(
     console_schema = _schema()
     console_sdl = console_schema.as_str()
     # ``secret`` is accepted on the input but never rendered on the output type.
-    assert "secret" in _sdl_block(console_sdl, "input WebhookSubscriptionInput")
+    assert "secret" in _sdl_block(console_sdl, "input webhook_subscriptions_insert_input")
     assert "secret" not in _sdl_block(console_sdl, "type WebhookSubscriptionType")
     # The create mutation is contributed to the console mutation root.
-    assert "createWebhookSubscription(" in _sdl_block(console_sdl, "type Mutation")
+    assert "insert_webhook_subscriptions_one(" in _sdl_block(console_sdl, "type Mutation")
 
     plain = User.objects.create_user(username="webhook-plain", email="plain@example.com")
     admin = _platform_admin("webhook-admin")
@@ -417,8 +451,10 @@ def test_webhook_crud_secret_write_only(
         console_schema,
         """
         mutation CreateWebhook($owner: ID!) {
-          createWebhookSubscription(data: {owner: $owner, targetUrl: "https://hooks.example/x", secret: "s"}) {
-            targetUrl
+          insert_webhook_subscriptions_one(
+            object: {owner: $owner, target_url: "https://hooks.example/x", secret: "s"}
+          ) {
+            target_url
           }
         }
         """,
@@ -439,11 +475,11 @@ def test_webhook_crud_secret_write_only(
         _execute(
             console_schema,
             """
-            query Webhook($id: ID!) {
-              webhookSubscription(id: $id) {
-                targetUrl
+            query Webhook($id: String!) {
+              webhook_subscriptions_by_pk(id: $id) {
+                target_url
                 enabled
-                eventKinds
+                event_kinds
                 owner { username }
               }
             }
@@ -451,19 +487,19 @@ def test_webhook_crud_secret_write_only(
             {"id": subscription_id},
             user=admin,
         )
-    )["webhookSubscription"]
+    )["webhook_subscriptions_by_pk"]
     assert read_back == {
-        "targetUrl": "https://hooks.example.test/events",
+        "target_url": "https://hooks.example.test/events",
         "enabled": True,
-        "eventKinds": [_BRIDGE_SYNCED],
+        "event_kinds": [_BRIDGE_SYNCED],
         "owner": {"username": "webhook-owner"},
     }
     # Querying the absent ``secret`` field is a schema error, proving it is write-only.
     secret_query = _execute(
         console_schema,
         """
-        query Webhook($id: ID!) {
-          webhookSubscription(id: $id) { secret }
+        query Webhook($id: String!) {
+          webhook_subscriptions_by_pk(id: $id) { secret }
         }
         """,
         {"id": subscription_id},
@@ -473,10 +509,9 @@ def test_webhook_crud_secret_write_only(
     assert "secret" in secret_query.errors[0].message
 
     delete_webhook = """
-        mutation DeleteWebhook($id: ID!) {
-          deleteWebhookSubscription(id: $id, confirm: true) {
-            hasBlockers
-            totalDeletedCount
+        mutation DeleteWebhook($id: String!) {
+          delete_webhook_subscriptions_by_pk(id: $id) {
+            id
           }
         }
     """
@@ -485,9 +520,8 @@ def test_webhook_crud_secret_write_only(
 
     deleted = _data(
         _execute(console_schema, delete_webhook, {"id": subscription_id}, user=admin)
-    )["deleteWebhookSubscription"]
-    assert deleted["hasBlockers"] is False
-    assert deleted["totalDeletedCount"] >= 1
+    )["delete_webhook_subscriptions_by_pk"]
+    assert deleted["id"] == subscription_id
     with system_context(reason="test.integrate.webhook_crud.after_delete"):
         assert not WebhookSubscription.objects.filter(pk=subscription.pk).exists()
 
@@ -764,7 +798,7 @@ def test_update_integration_status_accepts_the_lowercase_value(
     """A `set`-action status patch sends the lowercase model value and reads back the enum.
 
     The console form's "Disable" action sends ``status: "disabled"`` through the
-    generated ``updateIntegration``; this locks that the String patch persists the
+    generated ``update_integrations_by_pk``; this locks that the String patch persists the
     value and the output enum serializes it as the uppercase name.
     """
 
@@ -774,11 +808,15 @@ def test_update_integration_status_accepts_the_lowercase_value(
     result = _data(
         _execute(
             console_schema,
-            'mutation($id: ID!){ updateIntegration(data: {id: $id, status: "disabled"}){ status } }',
+            """
+            mutation($id: String!) {
+              update_integrations_by_pk(pk_columns: {id: $id}, _set: {status: "disabled"}) { status }
+            }
+            """,
             {"id": _public_id(conn)},
             user=admin,
         )
-    )["updateIntegration"]
+    )["update_integrations_by_pk"]
     assert result["status"] == "DISABLED"
     with system_context(reason="test.integrate.status.verify"):
         conn.refresh_from_db()
@@ -796,11 +834,15 @@ def test_update_integration_status_accepts_the_graphql_enum_name(
     result = _data(
         _execute(
             console_schema,
-            'mutation($id: ID!){ updateIntegration(data: {id: $id, status: "DRAFT"}){ status } }',
+            """
+            mutation($id: String!) {
+              update_integrations_by_pk(pk_columns: {id: $id}, _set: {status: "DRAFT"}) { status }
+            }
+            """,
             {"id": _public_id(conn)},
             user=admin,
         )
-    )["updateIntegration"]
+    )["update_integrations_by_pk"]
     assert result["status"] == "DRAFT"
     with system_context(reason="test.integrate.status_enum.verify"):
         conn.refresh_from_db()
@@ -823,7 +865,7 @@ def test_create_vcs_bridge_creates_child_row(
               createVcsBridge(
                 data: {vendor: $vendor, owner: $owner, backendClass: "stub", config: {stub_repos: []}}
               ) {
-                backendClass
+                backend_class
                 status
                 config
               }
@@ -837,7 +879,7 @@ def test_create_vcs_bridge_creates_child_row(
         )
     )["createVcsBridge"]
 
-    assert result == {"backendClass": "STUB", "status": "DRAFT", "config": {"stub_repos": []}}
+    assert result == {"backend_class": "STUB", "status": "DRAFT", "config": {"stub_repos": []}}
 
 
 def test_update_vcs_bridge_accepts_backend_class(
@@ -854,7 +896,7 @@ def test_update_vcs_bridge_accepts_backend_class(
             """
             mutation UpdateVcs($id: ID!) {
               updateVcsBridge(data: {id: $id, backendClass: "local"}) {
-                backendClass
+                backend_class
                 config
               }
             }
@@ -865,7 +907,7 @@ def test_update_vcs_bridge_accepts_backend_class(
     )["updateVcsBridge"]
 
     assert result == {
-        "backendClass": "LOCAL",
+        "backend_class": "LOCAL",
         "config": {
             "local_default_branch": "main",
             "local_org": "local",

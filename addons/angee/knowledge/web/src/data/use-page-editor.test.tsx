@@ -14,9 +14,12 @@ vi.mock("@angee/sdk", async (importOriginal) => {
   return {
     ...actual,
     useAuthoredMutation: sdkMocks.useAuthoredMutation,
-    useResourceMutation: sdkMocks.useResourceMutation,
   };
 });
+
+vi.mock("@angee/data", () => ({
+  useResourceMutation: sdkMocks.useResourceMutation,
+}));
 
 import { usePageEditor } from "./use-page-editor";
 
@@ -29,9 +32,9 @@ describe("usePageEditor", () => {
     sdkMocks.useResourceMutation.mockReset();
     sdkMocks.updatePage.mockResolvedValue({ id: "pag_1", title: "Updated" });
     sdkMocks.updateBody.mockResolvedValue({
-      updatePageBody: {
+      update_page_body: {
         ok: true,
-        markdown: { bodyHash: "hash-next" },
+        markdown: { body_hash: "hash-next" },
       },
     });
     sdkMocks.useResourceMutation.mockImplementation(() => [
@@ -79,7 +82,7 @@ describe("usePageEditor", () => {
     expect(sdkMocks.updateBody).toHaveBeenCalledWith({
       page: "pag_1",
       body: "Latest draft",
-      expectedHash: "hash-old",
+      expected_hash: "hash-old",
     });
     expect(onSaved).toHaveBeenCalledTimes(1);
     expect(result.current.status).toBe("saved");
@@ -140,7 +143,7 @@ describe("usePageEditor", () => {
     expect(sdkMocks.updateBody).toHaveBeenCalledWith({
       page: "pag_2",
       body: "Leaving now",
-      expectedHash: "hash-old",
+      expected_hash: "hash-old",
     });
     expect(onSaved).toHaveBeenCalledTimes(1);
   });

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from typing import Any, cast
 
 import reversion
@@ -53,7 +52,7 @@ class IAMGraphQLTests(TransactionTestCase):
             mutation {
               login(username: "alice", password: "alice") {
                 ok
-                user { username isStaff }
+                user { username is_staff }
               }
             }
             """
@@ -64,15 +63,15 @@ class IAMGraphQLTests(TransactionTestCase):
             {
                 "login": {
                     "ok": True,
-                    "user": {"username": "alice", "isStaff": True},
+                    "user": {"username": "alice", "is_staff": True},
                 }
             },
         )
 
-        current = self.graphql("query { currentUser { username isStaff } }")
+        current = self.graphql("query { currentUser { username is_staff } }")
         self.assertEqual(
             current["data"],
-            {"currentUser": {"username": "alice", "isStaff": True}},
+            {"currentUser": {"username": "alice", "is_staff": True}},
         )
 
         logged_out = self.graphql("mutation { logout }")
@@ -94,45 +93,44 @@ class IAMGraphQLTests(TransactionTestCase):
         page = self.graphql(
             """
             query {
-              notes(pagination: { limit: 10 }) {
-                totalCount
-                results {
-                  id
-                  title
-                  tags
-                  wordCount
-                }
+              notes(limit: 10) {
+                id
+                title
+                tags
+                word_count
               }
+              notes_aggregate { aggregate { count } }
             }
             """
         )
 
         notes = page["data"]["notes"]
-        self.assertGreaterEqual(notes["totalCount"], 3)
-        welcome = next(node for node in notes["results"] if node["title"] == "Welcome to Angee")
+        self.assertGreaterEqual(page["data"]["notes_aggregate"]["aggregate"]["count"], 3)
+        welcome = next(node for node in notes if node["title"] == "Welcome to Angee")
         public_id = welcome["id"]
         self.assertEqual(public_id, self.welcome.sqid)
         self.assertIn("backend", welcome["tags"])
-        self.assertGreater(welcome["wordCount"], 0)
+        self.assertGreater(welcome["word_count"], 0)
 
         by_id = self.graphql(
             """
-            query NoteByID($id: ID!) {
-              note(id: $id) { id title }
+            query NoteByID($id: String!) {
+              notes_by_pk(id: $id) { id title }
             }
             """,
             {"id": public_id},
         )
         self.assertEqual(
-            by_id["data"]["note"],
+            by_id["data"]["notes_by_pk"],
             {"id": public_id, "title": "Welcome to Angee"},
         )
 
         updated = self.graphql(
             """
-            mutation UpdateNote($id: ID!) {
-              updateNote(
-                data: {id: $id, title: "Welcome through Public ID"}
+            mutation UpdateNote($id: String!) {
+              update_notes_by_pk(
+                pk_columns: {id: $id},
+                _set: {title: "Welcome through Public ID"}
               ) {
                 id
                 title
@@ -142,7 +140,7 @@ class IAMGraphQLTests(TransactionTestCase):
             {"id": public_id},
         )
         self.assertEqual(
-            updated["data"]["updateNote"],
+            updated["data"]["update_notes_by_pk"],
             {"id": public_id, "title": "Welcome through Public ID"},
         )
 
@@ -153,12 +151,10 @@ class IAMGraphQLTests(TransactionTestCase):
             alice,
             """
             query {
-              notes(pagination: { limit: 20 }) {
-                results { title status }
-              }
+              notes(limit: 20) { title status }
             }
             """,
-        )["data"]["notes"]["results"]
+        )["data"]["notes"]
 
         planning = next(node for node in page if node["title"] == "Quarterly planning")
         self.assertEqual(planning["status"], "IN_REVIEW")
@@ -170,32 +166,31 @@ class IAMGraphQLTests(TransactionTestCase):
             alice,
             """
             query {
-              notes(pagination: { limit: 20 }) {
-                results { id title createdBy updatedBy }
-              }
+              notes(limit: 20) { id title created_by updated_by }
             }
             """,
-        )["data"]["notes"]["results"]
+        )["data"]["notes"]
         planning = next(node for node in alice_notes if node["title"] == "Quarterly planning")
 
-        self.assertEqual(planning["createdBy"], self.alice.public_id)
-        self.assertEqual(planning["updatedBy"], self.admin.public_id)
-        self.assertIsInstance(planning["createdBy"], str)
-        self.assertIsInstance(planning["updatedBy"], str)
-        self.assertTrue(planning["createdBy"])
-        self.assertTrue(planning["updatedBy"])
+        self.assertEqual(planning["created_by"], self.alice.public_id)
+        self.assertEqual(planning["updated_by"], self.admin.public_id)
+        self.assertIsInstance(planning["created_by"], str)
+        self.assertIsInstance(planning["updated_by"], str)
+        self.assertTrue(planning["created_by"])
+        self.assertTrue(planning["updated_by"])
 
         updated = self.post(
             alice,
             """
-            mutation UpdateNote($id: ID!) {
-              updateNote(
-                data: {id: $id, title: "Quarterly planning updated"}
+            mutation UpdateNote($id: String!) {
+              update_notes_by_pk(
+                pk_columns: {id: $id},
+                _set: {title: "Quarterly planning updated"}
               ) {
                 id
                 title
-                createdBy
-                updatedBy
+                created_by
+                updated_by
               }
             }
             """,
@@ -203,12 +198,12 @@ class IAMGraphQLTests(TransactionTestCase):
         )
 
         self.assertEqual(
-            updated["data"]["updateNote"],
+            updated["data"]["update_notes_by_pk"],
             {
                 "id": planning["id"],
                 "title": "Quarterly planning updated",
-                "createdBy": self.alice.public_id,
-                "updatedBy": self.alice.public_id,
+                "created_by": self.alice.public_id,
+                "updated_by": self.alice.public_id,
             },
         )
 
@@ -227,19 +222,18 @@ class IAMGraphQLTests(TransactionTestCase):
         notes = self.graphql(
             """
             query {
-              notes(pagination: { limit: 100 }) {
-                results { id title }
-              }
+              notes(limit: 100) { id title }
             }
             """
-        )["data"]["notes"]["results"]
+        )["data"]["notes"]
         target = next(node for node in notes if node["title"] == "Admin update target")
 
         updated = self.graphql(
             """
-            mutation UpdateNote($id: ID!) {
-              updateNote(
-                data: {id: $id, title: "Admin updated target"}
+            mutation UpdateNote($id: String!) {
+              update_notes_by_pk(
+                pk_columns: {id: $id},
+                _set: {title: "Admin updated target"}
               ) {
                 id
                 title
@@ -250,7 +244,7 @@ class IAMGraphQLTests(TransactionTestCase):
         )
 
         self.assertEqual(
-            updated["data"]["updateNote"],
+            updated["data"]["update_notes_by_pk"],
             {
                 "id": target["id"],
                 "title": "Admin updated target",
@@ -266,29 +260,27 @@ class IAMGraphQLTests(TransactionTestCase):
         notes = self.graphql(
             """
             query {
-              notes(pagination: { limit: 100 }) {
-                results {
-                  title
-                  createdBy
-                  createdByLabel
-                  updatedBy
-                  updatedByLabel
-                }
+              notes(limit: 100) {
+                title
+                created_by
+                created_by_label
+                updated_by
+                updated_by_label
               }
             }
             """
-        )["data"]["notes"]["results"]
+        )["data"]["notes"]
         named = next(node for node in notes if node["title"] == self.named_note.title)
         planning = next(node for node in notes if node["title"] == "Quarterly planning")
 
-        self.assertEqual(named["createdBy"], self.named_owner.public_id)
-        self.assertEqual(named["createdByLabel"], "Named Owner")
-        self.assertEqual(named["updatedBy"], self.bob.public_id)
-        self.assertEqual(named["updatedByLabel"], "bob")
-        self.assertEqual(planning["createdBy"], self.alice.public_id)
-        self.assertEqual(planning["createdByLabel"], "alice")
-        self.assertEqual(planning["updatedBy"], self.admin.public_id)
-        self.assertEqual(planning["updatedByLabel"], "admin")
+        self.assertEqual(named["created_by"], self.named_owner.public_id)
+        self.assertEqual(named["created_by_label"], "Named Owner")
+        self.assertEqual(named["updated_by"], self.bob.public_id)
+        self.assertEqual(named["updated_by_label"], "bob")
+        self.assertEqual(planning["created_by"], self.alice.public_id)
+        self.assertEqual(planning["created_by_label"], "alice")
+        self.assertEqual(planning["updated_by"], self.admin.public_id)
+        self.assertEqual(planning["updated_by_label"], "admin")
 
         note_type = self.graphql(
             """
@@ -307,10 +299,10 @@ class IAMGraphQLTests(TransactionTestCase):
             for field in note_type["fields"]
         }
 
-        self.assertEqual(fields["createdBy"], {"kind": "SCALAR", "name": "ID"})
-        self.assertEqual(fields["updatedBy"], {"kind": "SCALAR", "name": "ID"})
-        self.assertEqual(fields["createdByLabel"], {"kind": "SCALAR", "name": "String"})
-        self.assertEqual(fields["updatedByLabel"], {"kind": "SCALAR", "name": "String"})
+        self.assertEqual(fields["created_by"], {"kind": "SCALAR", "name": "ID"})
+        self.assertEqual(fields["updated_by"], {"kind": "SCALAR", "name": "ID"})
+        self.assertEqual(fields["created_by_label"], {"kind": "SCALAR", "name": "String"})
+        self.assertEqual(fields["updated_by_label"], {"kind": "SCALAR", "name": "String"})
         self.assertNotIn("user", fields)
         self.assertNotIn("email", fields)
         self.assertNotIn("isStaff", fields)
@@ -379,31 +371,25 @@ class IAMGraphQLTests(TransactionTestCase):
             alice,
             """
             query {
-              notes(pagination: { offset: 0, limit: 1 }) {
-                totalCount
-                pageInfo { offset limit }
-                results { title }
-              }
+              notes(offset: 0, limit: 1) { title }
+              notes_aggregate { aggregate { count } }
             }
             """,
-        )["data"]["notes"]
+        )["data"]
         second_page = self.post(
             alice,
             """
             query {
-              notes(pagination: { offset: 1, limit: 1 }) {
-                results { title }
-              }
+              notes(offset: 1, limit: 1) { title }
             }
             """,
         )["data"]["notes"]
 
         # Meta.ordering is ("-updated_at", "title", "sqid"); offset pages
         # follow that order without overlap.
-        self.assertEqual(first_page["results"][0]["title"], ordered[0])
-        self.assertEqual(first_page["pageInfo"], {"offset": 0, "limit": 1})
-        self.assertGreater(first_page["totalCount"], 1)
-        self.assertEqual(second_page["results"][0]["title"], ordered[1])
+        self.assertEqual(first_page["notes"][0]["title"], ordered[0])
+        self.assertGreater(first_page["notes_aggregate"]["aggregate"]["count"], 1)
+        self.assertEqual(second_page[0]["title"], ordered[1])
 
     def test_note_aggregate_counts_are_actor_scoped(self) -> None:
         self.graphql(
@@ -418,16 +404,14 @@ class IAMGraphQLTests(TransactionTestCase):
         data = self.graphql(
             """
             query {
-              total: noteAggregate { count }
-              byStatus: noteGroups(groupBy: [{field: STATUS}]) {
-                totalCount
-                results { key { status } count }
+              total: notes_aggregate { aggregate { count } }
+              byStatus: notes_groups(group_by: [{field: STATUS}]) {
+                key { status }
+                aggregate { count }
               }
-              byMonth: noteGroups(
-                groupBy: [{field: UPDATED_AT, granularity: MONTH}]
-              ) {
-                totalCount
-                results { key { updatedAtMonth } count }
+              byMonth: notes_groups(group_by: [{field: UPDATED_AT, granularity: MONTH}]) {
+                key { updated_at_month updated_at_month_range { from to } }
+                aggregate { count }
               }
             }
             """
@@ -440,38 +424,40 @@ class IAMGraphQLTests(TransactionTestCase):
 
         # Ungrouped total is actor-scoped to alice's visible demo rows.
         self.assertGreaterEqual(expected_total, 52)
-        self.assertEqual(data["total"]["count"], expected_total)
+        self.assertEqual(data["total"]["aggregate"]["count"], expected_total)
 
-        # group-by status: groups paginate (totalCount) and carry typed enum
-        # keys, matching the schema's NoteStatus group key.
-        self.assertEqual(data["byStatus"]["totalCount"], len(expected_status_counts))
+        # group-by status carries typed keys and per-group aggregate values.
+        self.assertEqual(len(data["byStatus"]), len(expected_status_counts))
         self.assertEqual(
-            {row["key"]["status"]: row["count"] for row in data["byStatus"]["results"]},
+            {
+                _dimension(row, "status"): row["aggregate"]["count"]
+                for row in data["byStatus"]
+            },
             expected_status_counts,
         )
 
         # group-by a date granularity (month) buckets the same scoped rows.
-        self.assertGreaterEqual(data["byMonth"]["totalCount"], 1)
+        self.assertGreaterEqual(len(data["byMonth"]), 1)
         self.assertEqual(
-            sum(row["count"] for row in data["byMonth"]["results"]),
+            sum(row["aggregate"]["count"] for row in data["byMonth"]),
             expected_total,
         )
-        self.assertTrue(data["byMonth"]["results"][0]["key"]["updatedAtMonth"])
+        self.assertTrue(_dimension(data["byMonth"][0], "updated_at_month"))
 
     def test_note_aggregates_accept_the_note_filter_input(self) -> None:
         self.graphql('mutation { login(username: "alice", password: "alice") { ok } }')
         data = self.graphql(
             """
             query {
-              total: noteAggregate(filter: {status: {exact: DRAFT}}) {
-                count
+              total: notes_aggregate(where: {status: {_eq: "draft"}}) {
+                aggregate { count }
               }
-              byStatus: noteGroups(
-                groupBy: [{field: STATUS}],
-                filter: {status: {exact: DRAFT}}
+              byStatus: notes_groups(
+                group_by: [{field: STATUS}],
+                where: {status: {_eq: "draft"}}
               ) {
-                totalCount
-                results { key { status } count }
+                key { status }
+                aggregate { count }
               }
             }
             """
@@ -483,93 +469,27 @@ class IAMGraphQLTests(TransactionTestCase):
         )
 
         self.assertGreater(expected_total, 0)
-        self.assertEqual(data["total"]["count"], expected_total)
-        self.assertEqual(data["byStatus"]["totalCount"], 1)
-        self.assertEqual(
-            data["byStatus"]["results"],
-            [{"key": {"status": "DRAFT"}, "count": expected_total}],
-        )
-
-    def test_note_group_filter_round_trips_to_scoped_notes_query(self) -> None:
-        alice = Client()
-        self.login(alice, "alice")
-
-        bucket = self.post(
-            alice,
-            """
-            query {
-              noteGroups(
-                groupBy: [
-                  {field: STATUS},
-                  {field: UPDATED_AT, granularity: DAY}
-                ],
-                pagination: {limit: 1}
-              ) {
-                results {
-                  key {
-                    status
-                    updatedAtDay
-                    updatedAtDayRange { from to }
-                  }
-                  filter
-                  count
-                }
-              }
-            }
-            """,
-        )["data"]["noteGroups"]["results"][0]
-
-        rows = self.post(
-            alice,
-            """
-            query BucketRows($filter: NoteFilter) {
-              notes(filters: $filter, pagination: {limit: 100}) {
-                results { status updatedAt }
-              }
-            }
-            """,
-            {"filter": bucket["filter"]},
-        )["data"]["notes"]["results"]
-        start = _parse_datetime(bucket["key"]["updatedAtDayRange"]["from"])
-        end = _parse_datetime(bucket["key"]["updatedAtDayRange"]["to"])
-
-        self.assertGreater(len(rows), 0)
-        self.assertEqual(
-            bucket["filter"],
-            {
-                "status": {"exact": bucket["key"]["status"]},
-                "updatedAt": {
-                    "gte": bucket["key"]["updatedAtDayRange"]["from"],
-                    "lt": bucket["key"]["updatedAtDayRange"]["to"],
-                },
-            },
-        )
-        self.assertTrue(
-            all(
-                row["status"] == bucket["key"]["status"]
-                and start <= _parse_datetime(row["updatedAt"]) < end
-                for row in rows
-            )
-        )
+        self.assertEqual(data["total"]["aggregate"]["count"], expected_total)
+        self.assertEqual(len(data["byStatus"]), 1)
+        self.assertEqual(_dimension(data["byStatus"][0], "status"), "DRAFT")
+        self.assertEqual(data["byStatus"][0]["aggregate"]["count"], expected_total)
 
     def test_platform_admin_sees_every_users_notes(self) -> None:
         self.login(self.client, "admin")
         data = self.graphql(
             """
             query {
-              notes(pagination: { limit: 100 }) {
-                totalCount
-                results { createdBy }
-              }
+              notes(limit: 100) { created_by }
+              notes_aggregate { aggregate { count } }
             }
             """
-        )["data"]["notes"]
+        )["data"]
         with system_context(reason="test"):
             total = Note.objects.count()
 
-        self.assertEqual(data["totalCount"], total)
+        self.assertEqual(data["notes_aggregate"]["aggregate"]["count"], total)
         self.assertGreaterEqual(
-            {node["createdBy"] for node in data["results"]},
+            {node["created_by"] for node in data["notes"]},
             {
                 self.admin.public_id,
                 self.alice.public_id,
@@ -580,26 +500,24 @@ class IAMGraphQLTests(TransactionTestCase):
     def test_note_groups_paginate_with_offset(self) -> None:
         self.graphql('mutation { login(username: "alice", password: "alice") { ok } }')
         query = """
-            query Page($p: OffsetPaginationInput) {
-              noteGroups(groupBy: [{field: STATUS}], pagination: $p) {
-                totalCount
-                results { key { status } count }
+            query Page($limit: Int!, $offset: Int!) {
+              notes_groups(group_by: [{field: STATUS}], limit: $limit, offset: $offset) {
+                key { status }
+                aggregate { count }
               }
             }
         """
-        page0 = self.graphql(query, {"p": {"offset": 0, "limit": 1}})["data"]
-        page1 = self.graphql(query, {"p": {"offset": 1, "limit": 1}})["data"]
+        page0 = self.graphql(query, {"offset": 0, "limit": 1})["data"]
+        page1 = self.graphql(query, {"offset": 1, "limit": 1})["data"]
 
-        # One status group per offset page; totalCount is page-stable and
-        # matches the distinct statuses among alice's scoped notes.
+        # One status group per offset page; the distinct status count is owned
+        # by the aggregate queryset and the groups root pages over that list.
         groups = Note.objects.as_user(self.alice).values("status").distinct().count()
         self.assertGreaterEqual(groups, 2)
-        self.assertEqual(page0["noteGroups"]["totalCount"], groups)
-        self.assertEqual(page1["noteGroups"]["totalCount"], groups)
-        self.assertEqual(len(page0["noteGroups"]["results"]), 1)
-        self.assertEqual(len(page1["noteGroups"]["results"]), 1)
-        first = page0["noteGroups"]["results"][0]["key"]["status"]
-        second = page1["noteGroups"]["results"][0]["key"]["status"]
+        self.assertEqual(len(page0["notes_groups"]), 1)
+        self.assertEqual(len(page1["notes_groups"]), 1)
+        first = _dimension(page0["notes_groups"][0], "status")
+        second = _dimension(page1["notes_groups"][0], "status")
         self.assertNotEqual(first, second)
 
     def test_owner_gated_flag_is_not_an_aggregate_group_by_axis(self) -> None:
@@ -613,15 +531,13 @@ class IAMGraphQLTests(TransactionTestCase):
             Client(),
             """
             query {
-              noteGroups(groupBy: [{field: IS_STARRED}]) {
-                totalCount
-              }
+              notes_groups(group_by: [{field: IS_STARRED}]) { aggregate { count } }
             }
             """,
         )
 
         self.assertIn("errors", payload)
-        self.assertIsNone((payload.get("data") or {}).get("noteGroups"))
+        self.assertIsNone((payload.get("data") or {}).get("notes_groups"))
         message = payload["errors"][0]["message"].lower()
         self.assertIn("is_starred", message)
 
@@ -645,16 +561,16 @@ class IAMGraphQLTests(TransactionTestCase):
         # bob's scope hides alice's note even when addressed by public id.
         scoped_out = self.post(
             bob,
-            "query NoteByID($id: ID!) { note(id: $id) { id } }",
+            "query NoteByID($id: String!) { notes_by_pk(id: $id) { id } }",
             {"id": welcome_id},
         )
-        self.assertEqual(scoped_out["data"]["note"], None)
+        self.assertEqual(scoped_out["data"]["notes_by_pk"], None)
 
     def test_anonymous_mutation_is_denied_with_a_code(self) -> None:
         anonymous = Client()
         payload = self.post(
             anonymous,
-            'mutation { createNote(data: {title: "x"}) { id } }',
+            'mutation { insert_notes_one(object: {title: "x"}) { id } }',
         )
 
         self.assertEqual(
@@ -683,14 +599,15 @@ class IAMGraphQLTests(TransactionTestCase):
             client,
             """
             query {
-              notes(pagination: { limit: 20 }) {
-                totalCount
-                results { id title }
-              }
+              notes(limit: 20) { id title }
+              notes_aggregate { aggregate { count } }
             }
             """,
         )
-        return cast(dict[str, Any], page["data"]["notes"])
+        return {
+            "totalCount": page["data"]["notes_aggregate"]["aggregate"]["count"],
+            "results": page["data"]["notes"],
+        }
 
     def graphql(
         self,
@@ -719,8 +636,7 @@ class IAMGraphQLTests(TransactionTestCase):
         self.assertEqual(response.status_code, 200)
         return cast(dict[str, Any], json.loads(response.content))
 
+def _dimension(group: dict[str, Any], key: str) -> str:
+    """Return a named typed group key value."""
 
-def _parse_datetime(value: str) -> datetime:
-    """Return the datetime encoded by a GraphQL DateTime string."""
-
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return cast(str, group["key"][key])

@@ -57,7 +57,7 @@ const STORAGE_LIST_LIMIT = 500;
 export function StoragePage(): ReactElement {
   const t = useStorageT();
   const variables = useMemo(
-    () => ({ pagination: { offset: 0, limit: STORAGE_LIST_LIMIT } }),
+    () => ({ offset: 0, limit: STORAGE_LIST_LIMIT }),
     [],
   );
   const drivesQuery = useAuthoredQuery(StorageDrives, variables);
@@ -66,10 +66,10 @@ export function StoragePage(): ReactElement {
   // Admin-only catalogue for the inline drive-create form's backend picker.
   const backendsQuery = useAuthoredQuery(StorageBackends, variables);
 
-  const drives = drivesQuery.data?.drives.results ?? [];
-  const folders = foldersQuery.data?.folders.results ?? [];
-  const files = filesQuery.data?.files.results ?? [];
-  const backends = backendsQuery.data?.backends.results ?? [];
+  const drives = drivesQuery.data?.drives ?? [];
+  const folders = foldersQuery.data?.folders ?? [];
+  const files = filesQuery.data?.files ?? [];
+  const backends = backendsQuery.data?.backends ?? [];
 
   // The open file is route state: `/storage/$id` swaps the content to the detail
   // form and the aside to that file's larger preview; `/storage` is the list.
@@ -345,8 +345,8 @@ function FilePreview({ file }: { file: StorageFile | null }): ReactElement {
   const previewFile: PreviewFile = {
     url: file.url,
     name: file.filename,
-    mime: file.mimeType?.mimeType ?? null,
-    size: file.sizeBytes,
+    mime: file.mime_type?.mime_type ?? null,
+    size: file.size_bytes,
   };
   return (
     <div className="h-full overflow-auto p-3">

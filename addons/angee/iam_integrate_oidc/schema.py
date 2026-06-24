@@ -20,6 +20,7 @@ from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
+from angee.graphql.data import pin_snake_wire_names
 from angee.iam.permissions import request_from_info as _request
 from angee.iam.permissions import session_user as _session_user
 from angee.iam.schema import UserType
@@ -291,32 +292,7 @@ class OAuthClientOidcExtension:
         return cast(list[str], cast(Any, self).allowed_email_domain_values)
 
 
-@strawberry.input(name="OAuthClientInput", extend=True)
-class OAuthClientOidcInput:
-    """OIDC login write fields added to integrate's OAuth client create input.
-
-    Native Strawberry input extension keeps ``integrate`` OIDC-agnostic while the
-    console create mutation receives these fields on its ``OAuthClientInput`` value.
-    """
-
-    issuer: str = ""
-    jwks_uri: str = ""
-    login_enabled: bool = False
-    link_on_email_match: bool = False
-    create_on_login: bool = False
-    allowed_email_domains: list[str] = strawberry.field(default_factory=list)
-
-
-@strawberry.input(name="OAuthClientPatch", extend=True)
-class OAuthClientOidcPatch:
-    """OIDC login write fields added to integrate's OAuth client update input."""
-
-    issuer: str | None = strawberry.UNSET
-    jwks_uri: str | None = strawberry.UNSET
-    login_enabled: bool | None = strawberry.UNSET
-    link_on_email_match: bool | None = strawberry.UNSET
-    create_on_login: bool | None = strawberry.UNSET
-    allowed_email_domains: list[str] | None = strawberry.UNSET
+pin_snake_wire_names(OAuthClientOidcExtension)
 
 
 _PUBLIC_TYPES: list[type] = [
@@ -341,7 +317,6 @@ schemas = {
         "mutation": [OidcLoginMutation],
         "types": _CONSOLE_TYPES,
         "type_extensions": [OAuthClientOidcExtension],
-        "input_extensions": [OAuthClientOidcInput, OAuthClientOidcPatch],
     },
 }
 """GraphQL contributions installed by the OIDC login addon."""

@@ -17,11 +17,14 @@ import type {
   AggregateBucket,
   AggregateMeasure,
   AggregateMeasureOperator,
-  GroupByDimension,
-  GroupByOrder,
+  GroupDimension as HasuraGroupDimension,
+  Row,
+} from "@angee/data";
+import type {
+  DataResourceGroupDimensionMetadata,
+  DataResourceGroupExtractionMetadata,
   ModelEnumValueMetadata,
   ModelMetadata,
-  Row,
 } from "@angee/sdk";
 import { format } from "date-fns";
 import { Spinner } from "../ui/spinner";
@@ -52,7 +55,11 @@ import {
 import { useResolvedWidget } from "../widgets";
 import { dateFromUnknown } from "../widgets/date-format";
 import type { DataViewContextValue } from "./data-view-context";
-import type { DataViewGroup } from "./data-view-model";
+import type {
+  DataViewFilter,
+  DataViewFilterValue,
+  DataViewGroup,
+} from "./data-view-model";
 import type {
   ListEmptyAction,
   ListEmptyContent,
@@ -75,6 +82,13 @@ export interface VisibleFieldOption {
   disabled?: boolean;
 }
 
+export interface GroupByDimension {
+  field: string;
+  key?: string;
+  granularity?: string;
+  rangeKey?: string;
+}
+
 export type RowGroup<TRow extends Row> = {
   key: string;
   label: string | null;
@@ -85,6 +99,7 @@ export type RowGroup<TRow extends Row> = {
 };
 
 export interface GroupMeasure extends AggregateMeasure {
+  field: string;
   columnId: string;
   label: string;
   unit: string;
@@ -878,13 +893,26 @@ function estimatedListHeight<TRow extends Row>(
 
 export function dataViewGroupToAggregateDimension(
   group: DataViewGroup,
+  metadata: ModelMetadata | null,
 ): GroupByDimension {
+  const dimension = groupDimensionForGroup(group, metadata);
+  const extraction = groupExtractionForGroup(dimension, group);
   return {
-    field: graphQLEnumValue(group.aggregateField ?? group.field),
-    key: group.aggregateKey ?? aggregateKeyField(group),
-    ...(group.granularity
-      ? { granularity: group.granularity.toUpperCase() }
-      : {}),
+    field: dimension.input,
+    key: extraction?.key ?? dimension.key,
+    ...(extraction ? { granularity: extraction.input } : {}),
+    ...(extraction?.rangeKey ? { rangeKey: extraction.rangeKey } : {}),
+  };
+}
+
+export function hasuraGroupDimension(
+  dimension: GroupByDimension,
+): HasuraGroupDimension {
+  return {
+    input: dimension.field,
+    key: dimension.key ?? dimension.field,
+    ...(dimension.granularity ? { granularity: dimension.granularity } : {}),
+    ...(dimension.rangeKey ? { rangeKey: dimension.rangeKey } : {}),
   };
 }
 
@@ -899,7 +927,9 @@ export function groupLabelDimension(
   metadata: ModelMetadata | null,
 ): GroupByDimension | null {
   const labelKey = groupLabelKey(group, metadata);
-  return labelKey ? { field: graphQLEnumValue(labelKey), key: labelKey } : null;
+  if (!labelKey) return null;
+  const dimension = groupDimensionForField(labelKey, metadata);
+  return { field: dimension.input, key: dimension.key };
 }
 
 function groupLabelKey(
@@ -911,42 +941,59 @@ function groupLabelKey(
   return metadata?.fields[field]?.relationFilter?.labelKey;
 }
 
-/**
- * The group-order field that sorts a relation group by its display label rather
- * than the opaque id the buckets key on, so names read alphabetically. `undefined`
- * when the relation has no label axis (the group then orders by id as before).
- */
-export function groupLabelOrderField(
+function groupDimensionForGroup(
   group: DataViewGroup,
   metadata: ModelMetadata | null,
-): string | undefined {
-  const labelKey = groupLabelKey(group, metadata);
-  return labelKey ? fieldToSnake(labelKey) : undefined;
+): DataResourceGroupDimensionMetadata {
+  return groupDimensionForField(group.aggregateField ?? group.field, metadata);
 }
 
-export function groupOrderByForSort(
-  sort: DataViewContextValue["state"]["sort"],
-  group: DataViewGroup | undefined,
-): readonly GroupByOrder[] | undefined {
-  if (!sort || !group || sort.field !== group.field) return undefined;
-  return [
-    {
-      field: groupOrderField(group),
-      direction: sort.dir === "asc" ? "ASC" : "DESC",
-    },
-  ];
+function groupDimensionForField(
+  field: string,
+  metadata: ModelMetadata | null,
+): DataResourceGroupDimensionMetadata {
+  const dimension = resourceGroupDimensionForField(field, metadata);
+  if (!dimension) {
+    const model = metadata?.typeName ?? "unknown model";
+    throw new Error(
+      `Resource metadata for ${model} does not declare group dimension "${field}".`,
+    );
+  }
+  return dimension;
 }
 
-export function groupOrderField(group: DataViewGroup): string {
-  const field = fieldToSnake(group.aggregateField ?? group.field);
-  return group.granularity ? `${field}_${group.granularity}` : field;
+export function resourceGroupDimensionForField(
+  field: string,
+  metadata: ModelMetadata | null,
+): DataResourceGroupDimensionMetadata | undefined {
+  const dimensions = metadata?.resource?.groupDimensions ?? [];
+  const snakeField = fieldToSnake(field);
+  return dimensions.find((candidate) =>
+    candidate.field === field ||
+    candidate.key === field ||
+    fieldToSnake(candidate.field) === snakeField ||
+    fieldToSnake(candidate.key) === snakeField
+  );
 }
 
-function aggregateKeyField(group: DataViewGroup): string {
-  if (group.aggregateKey) return group.aggregateKey;
-  return group.granularity
-    ? `${group.field}${titleCase(group.granularity).replace(/\s+/g, "")}`
-    : group.field;
+function groupExtractionForGroup(
+  dimension: DataResourceGroupDimensionMetadata,
+  group: DataViewGroup,
+): DataResourceGroupExtractionMetadata | null {
+  if (!group.granularity) return null;
+  const requested = group.granularity.toUpperCase();
+  const extraction = dimension.extractions?.find(
+    (candidate) =>
+      candidate.name === group.granularity
+      || candidate.input === requested,
+  );
+  if (!extraction) {
+    throw new Error(
+      `Resource metadata for group dimension "${dimension.field}" does not ` +
+        `declare extraction "${group.granularity}".`,
+    );
+  }
+  return extraction;
 }
 
 export function bucketValueLabels(
@@ -957,12 +1004,231 @@ export function bucketValueLabels(
   return groupStack.map((group) => {
     const labelKey = groupLabelKey(group, metadata);
     if (labelKey) {
-      const label = bucket.key?.[labelKey];
+      const label = bucket.key?.[groupDimensionForField(labelKey, metadata).key];
       if (label != null && label !== "") return String(label);
     }
-    const value = bucket.key?.[aggregateKeyField(group)];
+    const dimension = dataViewGroupToAggregateDimension(group, metadata);
+    const value = bucket.key?.[dimension.key ?? dimension.field];
     return groupKey(value, group, metadata);
   });
+}
+
+export function bucketFilterForGroup(
+  bucket: AggregateBucket,
+  group: DataViewGroup | undefined,
+  metadata: ModelMetadata | null,
+): DataViewFilter | undefined {
+  if (!group) return {};
+  const dimensionMetadata = groupDimensionForGroup(group, metadata);
+  const dimension = dataViewGroupToAggregateDimension(group, metadata);
+  const value = bucket.key?.[dimension.key ?? dimension.field];
+  if (value === undefined) return undefined;
+  const filter = filterTargetForGroup(group, metadata);
+
+  if (isNullBucketValue(value, dimensionMetadata)) {
+    return { [filter.field]: { isNull: true } };
+  }
+
+  if (group.granularity && isDateScalar(dimensionMetadata.scalar)) {
+    const extraction = groupExtractionForGroup(dimensionMetadata, group);
+    const rangeValue = extraction?.rangeKey ? bucket.key?.[extraction.rangeKey] : undefined;
+    const range = bucketRangeFilter(rangeValue, dimensionMetadata.scalar)
+      ?? bucketDateRange(value, extraction?.name ?? group.granularity, dimensionMetadata.scalar);
+    return range ? { [filter.field]: range } : undefined;
+  }
+
+  return bucketEqualityFilter(
+    filter,
+    jsonBucketValue(value, dimensionMetadata),
+    dimensionMetadata,
+    group,
+    metadata,
+  );
+}
+
+function filterTargetForGroup(
+  group: DataViewGroup,
+  metadata: ModelMetadata | null,
+): { field: string; lookup?: string } {
+  const aggregateField = group.aggregateField ?? group.field;
+  const relationFilter =
+    metadata?.fields[group.field]?.relationFilter ??
+    metadata?.fields[aggregateField]?.relationFilter;
+  if (relationFilter) {
+    return {
+      field: relationFilter.field,
+      ...(relationFilter.mode === "lookup"
+        ? { lookup: relationFilter.lookup ?? "exact" }
+        : {}),
+    };
+  }
+  const filterFields = metadata?.resource?.filterFields ?? [];
+  if (filterFields.includes(aggregateField)) return { field: aggregateField };
+  const snakeField = fieldToSnake(aggregateField);
+  return { field: filterFields.includes(snakeField) ? snakeField : aggregateField };
+}
+
+function bucketEqualityFilter(
+  filter: { field: string; lookup?: string },
+  value: unknown,
+  dimension: DataResourceGroupDimensionMetadata,
+  group: DataViewGroup,
+  metadata: ModelMetadata | null,
+): DataViewFilter {
+  const filterValue = enumBucketValue(value, group, metadata);
+  if (filter.lookup) return { [filter.field]: { [filter.lookup]: filterValue } };
+  if (dimension.scalar === "JSON") {
+    return { [filter.field]: { jsonContains: filterValue as DataViewFilterValue } };
+  }
+  return { [filter.field]: filterValue as DataViewFilter[string] };
+}
+
+function enumBucketValue(
+  value: unknown,
+  group: DataViewGroup,
+  metadata: ModelMetadata | null,
+): unknown {
+  if (typeof value !== "string") return value;
+  const field = group.aggregateField ?? group.field;
+  if (metadata?.fields[field]?.kind !== "enum") return value;
+  return value.toLowerCase();
+}
+
+function isNullBucketValue(
+  value: unknown,
+  dimension: DataResourceGroupDimensionMetadata,
+): boolean {
+  return value === null || (value === "" && isDateScalar(dimension.scalar));
+}
+
+function isDateScalar(scalar: string | null | undefined): scalar is "Date" | "DateTime" {
+  return scalar === "Date" || scalar === "DateTime";
+}
+
+function jsonBucketValue(
+  value: unknown,
+  dimension: DataResourceGroupDimensionMetadata,
+): unknown {
+  if (dimension.scalar !== "JSON" || typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed || !/^[\[{"]|^(true|false|null|-?\d)/.test(trimmed)) {
+    return value;
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+}
+
+function bucketRangeFilter(
+  value: unknown,
+  scalar: "Date" | "DateTime",
+): DataViewFilter[string] | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const range = value as Record<string, unknown>;
+  const from = dateBucketBoundary(range.from, scalar);
+  const to = dateBucketBoundary(range.to, scalar);
+  return from && to ? { gte: from, lt: to } : null;
+}
+
+function dateBucketBoundary(
+  value: unknown,
+  scalar: "Date" | "DateTime",
+): string | null {
+  const date = dateBucketStart(value);
+  return date ? formatDateBoundary(date, scalar) : null;
+}
+
+function bucketDateRange(
+  value: unknown,
+  granularity: string,
+  scalar: "Date" | "DateTime",
+): DataViewFilter[string] | null {
+  const start = dateBucketStart(value);
+  if (!start) return null;
+  const end = addGranularity(start, granularity);
+  if (!end) return null;
+  return {
+    gte: formatDateBoundary(start, scalar),
+    lt: formatDateBoundary(end, scalar),
+  };
+}
+
+function dateBucketStart(value: unknown): Date | null {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value === "number") {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const normalized = normalizeDateBucketValue(trimmed);
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function normalizeDateBucketValue(value: string): string {
+  const withTimeSeparator = value.replace(
+    /^(\d{4}-\d{2}-\d{2})\s+(\d)/,
+    "$1T$2",
+  );
+  if (/^\d{4}-\d{2}-\d{2}$/.test(withTimeSeparator)) {
+    return `${withTimeSeparator}T00:00:00.000Z`;
+  }
+  if (
+    /^\d{4}-\d{2}-\d{2}T/.test(withTimeSeparator) &&
+    !/(Z|[+-]\d{2}:?\d{2})$/.test(withTimeSeparator)
+  ) {
+    return `${withTimeSeparator}Z`;
+  }
+  return withTimeSeparator;
+}
+
+function addGranularity(date: Date, granularity: string): Date | null {
+  const next = new Date(date.getTime());
+  switch (granularity) {
+    case "year":
+      next.setUTCFullYear(next.getUTCFullYear() + 1);
+      return next;
+    case "quarter":
+      next.setUTCMonth(next.getUTCMonth() + 3);
+      return next;
+    case "month":
+      next.setUTCMonth(next.getUTCMonth() + 1);
+      return next;
+    case "week":
+      next.setUTCDate(next.getUTCDate() + 7);
+      return next;
+    case "day":
+      next.setUTCDate(next.getUTCDate() + 1);
+      return next;
+    case "hour":
+      next.setUTCHours(next.getUTCHours() + 1);
+      return next;
+    case "minute":
+      next.setUTCMinutes(next.getUTCMinutes() + 1);
+      return next;
+    case "second":
+      next.setUTCSeconds(next.getUTCSeconds() + 1);
+      return next;
+    default:
+      return null;
+  }
+}
+
+function formatDateBoundary(date: Date, scalar: "Date" | "DateTime"): string {
+  if (scalar === "Date") {
+    return [
+      date.getUTCFullYear(),
+      String(date.getUTCMonth() + 1).padStart(2, "0"),
+      String(date.getUTCDate()).padStart(2, "0"),
+    ].join("-");
+  }
+  return date.toISOString();
 }
 
 export function groupKey(
@@ -1105,6 +1371,32 @@ export function groupMeasuresFromColumns<TRow extends Row>(
   return measures;
 }
 
+export function hasuraMeasuresFromGroupMeasures(
+  measures: readonly GroupMeasure[],
+  metadata: ModelMetadata | null,
+): readonly GroupMeasure[] {
+  if (measures.length === 0) return measures;
+  return measures.map((measure) => {
+    const input = hasuraMeasureInput(measure, metadata);
+    return input === measure.field
+      ? measure
+      : { ...measure, field: input, input };
+  });
+}
+
+function hasuraMeasureInput(
+  measure: Pick<GroupMeasure, "op" | "field">,
+  metadata: ModelMetadata | null,
+): string {
+  const snakeField = fieldToSnake(measure.field);
+  const declared = metadata?.resource?.aggregateMeasures?.find(
+    (candidate) =>
+      candidate.op === measure.op &&
+      (candidate.field === measure.field || candidate.field === snakeField),
+  );
+  return declared?.input ?? declared?.field ?? snakeField;
+}
+
 function isMeasureOperator(
   aggregate: ColumnAggregate | undefined,
 ): aggregate is AggregateMeasureOperator {
@@ -1136,6 +1428,7 @@ export function measureValue(
   bucket: AggregateBucket,
   measure: Pick<GroupMeasure, "op" | "field">,
 ): unknown {
+  if (measure.op === "count") return bucket.count;
   return bucket[measure.op]?.[measure.field];
 }
 
@@ -1207,11 +1500,7 @@ function isInteractiveTarget(target: EventTarget): boolean {
     );
 }
 
-function graphQLEnumValue(field: string): string {
-  return fieldToSnake(field).toUpperCase();
-}
-
-function fieldToSnake(field: string): string {
+export function fieldToSnake(field: string): string {
   return field
     // A `_<Capital>` is Strawberry's camel form of a Django `__` relation
     // path (e.g. `oauthClient_IsEnabled` ← `oauth_client__is_enabled`):

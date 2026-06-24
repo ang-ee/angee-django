@@ -12,12 +12,12 @@ const mocks = vi.hoisted(() => ({
   record: {
     id: "agent-1",
     lifecycle: "DRAFT",
-    runtimeStatus: "ERROR",
-    lastError: "operator POST workspaces: HTTP 409: workspace demo-agent conflicts: already exists",
+    runtime_status: "ERROR",
+    last_error: "operator POST workspaces: HTTP 409: workspace demo-agent conflicts: already exists",
     workspace: "",
     service: "",
-    workspaceTemplate: { path: "workspaces/agent-default" },
-    serviceTemplate: { id: "service-template-1" },
+    workspace_template: { path: "workspaces/agent-default" },
+    service_template: { id: "service-template-1" },
   },
   workspaceStatus: null as {
     error?: string | null;
@@ -34,6 +34,13 @@ vi.mock("@angee/sdk", async (importOriginal) => {
       (_namespace: string, messages: Record<string, string>) =>
       (key: string): string =>
         messages[key] ?? key,
+  };
+});
+
+vi.mock("@angee/data", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/data")>();
+  return {
+    ...actual,
     useResourceRecord: () => ({
       fetching: false,
       record: mocks.record,
@@ -91,8 +98,8 @@ vi.mock("@angee/operator/runtime", () => ({
 beforeEach(() => {
   // A failed provision that rolled back: lifecycle reset to DRAFT, run state ERROR.
   mocks.record.lifecycle = "DRAFT";
-  mocks.record.runtimeStatus = "ERROR";
-  mocks.record.lastError =
+  mocks.record.runtime_status = "ERROR";
+  mocks.record.last_error =
     "operator POST workspaces: HTTP 409: workspace demo-agent conflicts: already exists";
   mocks.record.workspace = "";
   mocks.record.service = "";
@@ -108,14 +115,14 @@ describe("AgentProvisioning", () => {
     render(<AgentProvisioning agentId="agent-1" pane="service" />);
 
     expect(screen.queryByRole("heading", { name: "Service" })).toBeNull();
-    expect(screen.getByText(String(mocks.record.lastError))).toBeTruthy();
+    expect(screen.getByText(String(mocks.record.last_error))).toBeTruthy();
     expect(screen.getByText(intro)).toBeTruthy();
   });
 
   test("renders the service row first and service logs underneath", () => {
     mocks.record.lifecycle = "READY";
-    mocks.record.runtimeStatus = "RUNNING";
-    mocks.record.lastError = "";
+    mocks.record.runtime_status = "RUNNING";
+    mocks.record.last_error = "";
     mocks.record.service = "agent-demo-agent";
     const logsTitle = enAgentsMessages["agents.provisioning.serviceLogs"] ?? "Service logs";
 
@@ -128,8 +135,8 @@ describe("AgentProvisioning", () => {
 
   test("renders the workspace row and source git status without workspace logs", () => {
     mocks.record.lifecycle = "READY";
-    mocks.record.runtimeStatus = "RUNNING";
-    mocks.record.lastError = "";
+    mocks.record.runtime_status = "RUNNING";
+    mocks.record.last_error = "";
     mocks.record.workspace = "agent-demo-workspace";
     mocks.workspaceStatus = {
       sources: [

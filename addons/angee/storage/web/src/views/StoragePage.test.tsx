@@ -223,20 +223,16 @@ beforeEach(() => {
   }
   sdkMocks.useAuthoredQuery.mockImplementation((document) => {
     if (document === StorageDrives) {
-      return queryResult("drives", { drives: { results: storageData.drives } });
+      return queryResult("drives", { drives: storageData.drives });
     }
     if (document === StorageFolders) {
-      return queryResult("folders", {
-        folders: { results: storageData.folders },
-      });
+      return queryResult("folders", { folders: storageData.folders });
     }
     if (document === StorageFiles) {
-      return queryResult("files", { files: { results: storageData.files } });
+      return queryResult("files", { files: storageData.files });
     }
     if (document === StorageBackends) {
-      return queryResult("backends", {
-        backends: { results: storageData.backends },
-      });
+      return queryResult("backends", { backends: storageData.backends });
     }
     throw new Error("Unexpected storage query document");
   });
@@ -361,8 +357,8 @@ function folder(id: string, name: string, drive: string) {
     id,
     name,
     description: "",
-    isVirtual: false,
-    smartKind: null,
+    is_virtual: false,
+    smart_kind: null,
     drive,
     parent: null,
   };
@@ -379,20 +375,20 @@ function file(
     id,
     filename,
     title: "",
-    sizeBytes: 128,
-    contentHash: "hash",
-    uploadState: "ready",
-    isTrashed: false,
-    updatedAt,
-    createdByLabel: "Alex",
+    size_bytes: 128,
+    content_hash: "hash",
+    upload_state: "ready",
+    is_trashed: false,
+    updated_at: updatedAt,
+    created_by_label: "Alex",
     url: `/files/${id}`,
     drive,
     folder: folderId,
-    mimeType: {
-      mimeType: "text/plain",
+    mime_type: {
+      mime_type: "text/plain",
       category: "text",
       label: "Text",
-      iconKey: "file",
+      icon_key: "file",
     },
   };
 }

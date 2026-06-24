@@ -6,17 +6,17 @@ const MODEL = "integrate.Vendor";
 const vendorList = (
   <List model={MODEL} list={GroupListView}>
     <Column field="slug" />
-    <Column field="displayName" />
-    <Column field="websiteUrl" />
+    <Column field="display_name" />
+    <Column field="website_url" />
   </List>
 );
 
 const vendorForm = (
   <Form model={MODEL}>
-    <Field name="displayName" title />
+    <Field name="display_name" title />
     <Field name="slug" widget="slug" />
     <Field name="icon" />
-    <Field name="websiteUrl" />
+    <Field name="website_url" />
     <Field name="description" />
   </Form>
 );

@@ -54,17 +54,19 @@ export const IamOverview = graphql(`
 `);
 
 export const IamUsers = graphql(`
-  query IamUsers($pagination: OffsetPaginationInput) {
-    users(pagination: $pagination) {
-      totalCount
-      results {
-        id
-        username
-        firstName
-        lastName
-        email
-        isStaff
-        isActive
+  query IamUsers($limit: Int = 500, $offset: Int = 0) {
+    users(limit: $limit, offset: $offset, order_by: [{ username: asc }]) {
+      id
+      username
+      first_name
+      last_name
+      email
+      is_staff
+      is_active
+    }
+    users_aggregate {
+      aggregate {
+        count
       }
     }
   }

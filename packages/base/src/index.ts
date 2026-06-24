@@ -40,6 +40,12 @@ export {
 // The stack's debounce owner (docs/stack.md), re-exported so addons reuse it
 // without re-declaring the dependency.
 export { useDebounce, useDebouncedCallback } from "use-debounce";
+export {
+  rowPublicId,
+  type PageInfo,
+  type PageResult,
+  type Row,
+} from "@angee/data";
 
 // i18n — the base namespace translator.
 export { useBaseT, enBaseMessages } from "./i18n";

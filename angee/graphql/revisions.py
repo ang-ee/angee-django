@@ -14,6 +14,15 @@ from strawberry.scalars import JSON
 
 from angee.base.mixins import RevisionMixin
 from angee.graphql.access import assert_no_gated_read_fields
+from angee.graphql.data.metadata import (
+    DataResourceRoots,
+    DataResourceTypeNames,
+    attach_data_resource_metadata,
+    make_data_resource_metadata,
+    resource_type_name,
+    resource_wire_field_name,
+    resource_wire_field_names,
+)
 from angee.graphql.ids import PublicID, instance_for_id
 from angee.graphql.introspection import django_model, surface_name
 
@@ -52,6 +61,20 @@ def revisions(
     type_name = f"{_type_stem(singular)}RevisionQuery"
     surface = type(type_name, (), namespace)
     typed_surface = strawberry.type(surface)
+    attach_data_resource_metadata(
+        typed_surface,
+        make_data_resource_metadata(
+            model=model,
+            node_type=node,
+            roots=DataResourceRoots(revisions_name=resource_wire_field_name(typed_surface, attr)),
+            type_names=DataResourceTypeNames(
+                node=resource_type_name(node),
+                revision=resource_type_name(revision_type),
+            ),
+            revision_fields=resource_wire_field_names(revision_type, exclude=("id",)),
+            capabilities=("revisions",),
+        ),
+    )
     _SURFACE_CACHE[cache_key] = typed_surface
     return typed_surface
 

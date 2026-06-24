@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import type { ModelFieldMetadata, ModelMetadata, Row } from "@angee/sdk";
+import type { Row } from "@angee/data";
+import type { ModelFieldMetadata, ModelMetadata } from "@angee/sdk";
 
 import { dedupeBy } from "../lib/dedupe";
 import type {
@@ -23,7 +24,9 @@ import {
   groupFieldLabel,
   looksLikeDateField,
   readPath,
+  resourceGroupDimensionForField,
   statusLabel,
+  fieldToSnake,
 } from "./ListInternals";
 import type { ColumnDescriptor } from "./page";
 import {
@@ -49,7 +52,7 @@ export function buildGroupOptions<TRow extends Row>(
 
   for (const defaultGroup of defaultGroupList(defaultGroups)) {
     const resolvedGroup = resolveDataViewGroup(defaultGroup, metadata);
-    if (!groupAllowedByDataQuery(resolvedGroup, metadata)) continue;
+    if (!groupAllowedByResource(resolvedGroup, metadata)) continue;
     const field = metadata?.fields[resolvedGroup.field];
     const type = dateGroupType(resolvedGroup.field, field) ? "date" : "value";
     addOption({
@@ -62,15 +65,15 @@ export function buildGroupOptions<TRow extends Row>(
     });
   }
 
-  const dataQueryGroupByFields = metadata?.dataQuery?.groupByFields ?? [];
-  const groupAliases = metadata?.dataQuery?.groupAliases ?? [];
+  const resourceGroupByFields = metadata?.resource?.groupByFields ?? [];
+  const groupAliases = metadata?.resource?.groupAliases ?? [];
   const aliasedAggregateFields = new Set(
     groupAliases.map((alias) => alias.aggregateField),
   );
   for (const alias of groupAliases) {
     if (!metadata) continue;
     const group = groupAliasToDataViewGroup(alias);
-    if (!groupAllowedByDataQuery(group, metadata)) continue;
+    if (!groupAllowedByResource(group, metadata)) continue;
     const field = metadata.fields[alias.field];
     if (!field) continue;
     const type = dateGroupType(alias.field, field) ? "date" : "value";
@@ -82,7 +85,7 @@ export function buildGroupOptions<TRow extends Row>(
       ...(type === "date" ? { granularities: DATE_GROUP_GRANULARITIES } : {}),
     });
   }
-  for (const fieldName of dataQueryGroupByFields) {
+  for (const fieldName of resourceGroupByFields) {
     if (!metadata) continue;
     if (aliasedAggregateFields.has(fieldName)) continue;
     const field = metadata.fields[fieldName];
@@ -104,11 +107,11 @@ export function buildGroupOptions<TRow extends Row>(
   for (const column of columns) {
     const field = metadata?.fields[column.field];
     const relationGroup = relationGroupOptionForColumn(column, metadata);
-    if (relationGroup && groupAllowedByDataQuery(relationGroup.group, metadata)) {
+    if (relationGroup && groupAllowedByResource(relationGroup.group, metadata)) {
       addOption(relationGroup);
       continue;
     }
-    if (!groupAllowedByDataQuery({ field: column.field }, metadata)) continue;
+    if (!groupAllowedByResource({ field: column.field }, metadata)) continue;
     if (dateGroupType(column.field, field)) {
       addOption({
         id: column.field,
@@ -181,18 +184,35 @@ export function resolveDataViewGroup(
   group: DataViewGroup,
   metadata: ModelMetadata | null,
 ): DataViewGroup {
-  if (group.aggregateField && group.aggregateKey) return group;
+  if (group.aggregateField && group.aggregateKey) {
+    return canonicalDataViewGroup(group, metadata);
+  }
   const aliasGroup = groupAliasForField(group.field, metadata);
-  if (aliasGroup) return { ...group, ...aliasGroup };
+  if (aliasGroup) return canonicalDataViewGroup({ ...group, ...aliasGroup }, metadata);
   const relationGroup = relationGroupForFieldPath(group.field, metadata);
-  return relationGroup ? { ...group, ...relationGroup } : group;
+  return canonicalDataViewGroup(
+    relationGroup ? { ...group, ...relationGroup } : group,
+    metadata,
+  );
+}
+
+export function validDataViewGroupStack(
+  groupStack: readonly DataViewGroup[],
+  metadata: ModelMetadata | null,
+): readonly DataViewGroup[] {
+  return groupStack.flatMap((group) => {
+    const resolvedGroup = resolveDataViewGroup(group, metadata);
+    return groupSupportedByResource(resolvedGroup, metadata)
+      ? [resolvedGroup]
+      : [];
+  });
 }
 
 function groupAliasForField(
   field: string,
   metadata: ModelMetadata | null,
 ): DataViewGroup | null {
-  const alias = metadata?.dataQuery?.groupAliases?.find((item) => item.field === field);
+  const alias = metadata?.resource?.groupAliases?.find((item) => item.field === field);
   return alias ? groupAliasToDataViewGroup(alias) : null;
 }
 
@@ -208,14 +228,63 @@ function groupAliasToDataViewGroup(alias: {
   };
 }
 
-function groupAllowedByDataQuery(
+function canonicalDataViewGroup(
+  group: DataViewGroup,
+  metadata: ModelMetadata | null,
+): DataViewGroup {
+  const dimension = resourceGroupDimensionForField(
+    group.aggregateField ?? group.field,
+    metadata,
+  );
+  if (!dimension) return group;
+  if (group.aggregateField) {
+    return dimension.field === group.aggregateField
+      ? group
+      : { ...group, aggregateField: dimension.field };
+  }
+  return dimension.field === group.field ? group : { ...group, field: dimension.field };
+}
+
+function groupAllowedByResource(
   group: DataViewGroup,
   metadata: ModelMetadata | null,
 ): boolean {
-  const groupByFields = metadata?.dataQuery?.groupByFields;
+  const groupByFields = metadata?.resource?.groupByFields;
   if (!groupByFields) return true;
   const aggregateField = group.aggregateField ?? group.field;
-  return groupByFields.includes(aggregateField) || groupByFields.includes(group.field);
+  const dimension =
+    resourceGroupDimensionForField(aggregateField, metadata)
+    ?? resourceGroupDimensionForField(group.field, metadata);
+  if (dimension) return groupByFields.includes(dimension.field);
+  const aggregateSnake = fieldToSnake(aggregateField);
+  const fieldSnake = fieldToSnake(group.field);
+  return groupByFields.some((field) =>
+    field === aggregateField ||
+    field === group.field ||
+    field === aggregateSnake ||
+    field === fieldSnake ||
+    fieldToSnake(field) === aggregateSnake ||
+    fieldToSnake(field) === fieldSnake
+  );
+}
+
+function groupSupportedByResource(
+  group: DataViewGroup,
+  metadata: ModelMetadata | null,
+): boolean {
+  if (!groupAllowedByResource(group, metadata)) return false;
+  const dimensions = metadata?.resource?.groupDimensions;
+  if (!dimensions) return true;
+  const dimension =
+    resourceGroupDimensionForField(group.aggregateField ?? group.field, metadata)
+    ?? resourceGroupDimensionForField(group.field, metadata);
+  if (!dimension) return false;
+  if (!group.granularity) return true;
+  const requested = group.granularity.toUpperCase();
+  return (dimension.extractions ?? []).some(
+    (extraction) =>
+      extraction.name === group.granularity || extraction.input === requested,
+  );
 }
 
 function defaultGroupList(
@@ -276,7 +345,7 @@ export function buildFilterFields<TRow extends Row>(
     fieldName: string,
     column: ColumnDescriptor<TRow> | undefined,
   ) => {
-    if (seen.has(fieldName) || !filterAllowedByDataQuery(fieldName, metadata)) {
+    if (seen.has(fieldName) || !filterAllowedByResource(fieldName, metadata)) {
       return;
     }
     const field = metadata?.fields[fieldName];
@@ -311,7 +380,7 @@ export function buildFilterFields<TRow extends Row>(
   for (const column of columns) {
     addField(column.field, column);
   }
-  for (const fieldName of metadata?.dataQuery?.filterFields ?? []) {
+  for (const fieldName of metadata?.resource?.filterFields ?? []) {
     addField(fieldName, undefined);
   }
   return fields;
@@ -334,11 +403,11 @@ function filterFieldType<TRow extends Row>(
   return null;
 }
 
-function filterAllowedByDataQuery(
+function filterAllowedByResource(
   fieldName: string,
   metadata: ModelMetadata | null,
 ): boolean {
-  const filterFields = metadata?.dataQuery?.filterFields;
+  const filterFields = metadata?.resource?.filterFields;
   return !filterFields || filterFields.includes(fieldName);
 }
 
@@ -587,6 +656,7 @@ function operatorLabel(operator: DataViewLookupOperator): string {
     case "isNull":
       return "is";
     case "contains":
+    case "jsonContains":
     case "iContains":
       return "contains";
     case "startsWith":

@@ -12,18 +12,18 @@ import {
   Group,
   GroupListView,
   List,
+  errorMessage,
   useRecordActionMutation,
   useToast,
   type RecordToolbarContext,
   type RecordTabDescriptor,
+  type Row,
 } from "@angee/base";
 import {
-  errorMessage,
   useActionMutation,
   useModelInvalidation,
-  useResourceRecord,
-  type Row,
 } from "@angee/sdk";
+import { useResourceRecord } from "@angee/data";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useAgentsT } from "../i18n";
@@ -37,7 +37,7 @@ const MODEL = "agents.Agent";
 // Just what the chat gate needs: a running, service-backed agent gets the chat panel.
 // (`sqid` is not a GraphQL field — the agent's public id is carried by `id` for
 // the view envelope; see below.)
-const CHAT_FIELDS = ["id", "runtimeStatus", "service"] as const;
+const CHAT_FIELDS = ["id", "runtime_status", "service"] as const;
 
 function canProvisionAgent(record: Row | null): boolean {
   // Provision a fresh or torn-down agent, or retry one whose last operation errored.
@@ -166,9 +166,9 @@ function useAgentLabels(): AgentLabels {
   };
 }
 
-// One model, two list tabs: the server-side ``isTemplate`` filter is the only
+// One model, two list tabs: the server-side ``is_template`` filter is the only
 // difference between Agents and Templates, and a create on either tab defaults
-// ``isTemplate`` to match. A real agent renders into the operator; a template is a
+// ``is_template`` to match. A real agent renders into the operator; a template is a
 // reusable blueprint, so only the Agents detail carries the Provision/Chat record
 // tabs beside the Overview form.
 function AgentDataPage({
@@ -207,16 +207,16 @@ function AgentDataPage({
       model={MODEL}
       placement="inline"
       routed
-      filter={{ isTemplate: { exact: isTemplate } }}
-      createDefaults={{ isTemplate }}
+      filter={{ is_template: { exact: isTemplate } }}
+      createDefaults={{ is_template: isTemplate }}
       recordTabs={recordTabs}
-      returning={isTemplate ? undefined : ["lifecycle", "runtimeStatus", "workspace", "service"]}
+      returning={isTemplate ? undefined : ["lifecycle", "runtime_status", "workspace", "service"]}
     >
       <List model={MODEL} list={GroupListView} pageSize={50}>
         <Column field="name" />
         <Column field="lifecycle" widget="statusBadge" />
-        <Column field="runtimeStatus" widget="colorDot" />
-        <Column field="updatedAt" />
+        <Column field="runtime_status" widget="colorDot" />
+        <Column field="updated_at" />
       </List>
       <Form
         model={MODEL}
@@ -256,15 +256,15 @@ function AgentDataPage({
         <Group label={labels.modelTemplates} columns={2}>
           <Field name="model" />
           <Field name="owner" createOnly />
-          <Field name="serviceTemplate" />
-          <Field name="workspaceTemplate" />
+          <Field name="service_template" />
+          <Field name="workspace_template" />
         </Group>
         <Group label={labels.provisioningInputs} columns={2}>
-          <Field name="serviceInputs" widget="json" />
-          <Field name="workspaceInputs" widget="json" />
+          <Field name="service_inputs" widget="json" />
+          <Field name="workspace_inputs" widget="json" />
         </Group>
         <Group columns={1}>
-          <Field name="isTemplate" />
+          <Field name="is_template" />
         </Group>
       </Form>
     </DataPage>

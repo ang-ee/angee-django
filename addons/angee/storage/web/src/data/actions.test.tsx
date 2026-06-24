@@ -23,6 +23,9 @@ vi.mock("@angee/sdk", () => ({
     }),
     { error: null, fetching: false },
   ]),
+}));
+
+vi.mock("@angee/base", () => ({
   useBusyRun: vi.fn((onChanged?: () => void) => ({
     busy: false,
     run: async <T,>(task: () => Promise<T>) => {
@@ -31,6 +34,9 @@ vi.mock("@angee/sdk", () => ({
       return result;
     },
   })),
+}));
+
+vi.mock("@angee/data", () => ({
   useResourceMutation: vi.fn(
     (modelLabel: string, action: string, options: Record<string, unknown> = {}) => {
       const calls: unknown[] = [];
@@ -55,7 +61,7 @@ describe("storage file/folder actions", () => {
     sdk.resourceMutations.length = 0;
   });
 
-  test("file actions use SDK CRUD mutations and confirm soft deletes", async () => {
+  test("file actions use resource mutations and confirm soft deletes", async () => {
     const onChanged = vi.fn();
     const { result } = renderHook(() => useFileActions({ onChanged }));
     const [deleteFile, updateFile] = sdk.resourceMutations;
@@ -88,7 +94,7 @@ describe("storage file/folder actions", () => {
     expect(onChanged).toHaveBeenCalledTimes(4);
   });
 
-  test("folder actions use SDK CRUD mutations and confirm removes", async () => {
+  test("folder actions use resource mutations and confirm removes", async () => {
     const { result } = renderHook(() => useFolderActions());
     const [createFolder, updateFolder, deleteFolder] = sdk.resourceMutations;
 

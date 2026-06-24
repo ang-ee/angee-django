@@ -1,9 +1,9 @@
 import * as React from "react";
 import {
-  useResourceList,
   rowPublicId,
+  useResourceList,
   type Row,
-} from "@angee/sdk";
+} from "@angee/data";
 import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
 import { DataViewSwitcher } from "../toolbars";
@@ -125,6 +125,7 @@ export interface DataPageProps<TRow extends Row = Row> {
   groupOptions?: ListViewProps<TRow>["groupOptions"];
   order?: ListViewProps<TRow>["order"];
   pageSize?: number;
+  defaultView?: DataViewKind;
   defaultGroup?: DataViewGroup | null;
   defaultGroups?: DataViewDefaultGroups;
   fields?: ListViewProps<TRow>["fields"];
@@ -188,6 +189,7 @@ export interface DataPageRecordController<TRow extends Row = Row> {
 /** A collection list with an open-record form for one model. */
 export function DataPage<TRow extends Row = Row>({
   pageSize,
+  defaultView,
   defaultGroup,
   defaultGroups,
   children,
@@ -198,18 +200,21 @@ export function DataPage<TRow extends Row = Row>({
     {
       ...props,
       pageSize,
+      defaultView,
       defaultGroup,
       defaultGroups,
     },
     declarations,
   );
   const initialPageSize = declarations.list?.props.pageSize ?? pageSize;
+  const initialDefaultView = declarations.list?.props.defaultView ?? defaultView;
   const dataView = useDataViewMaybe();
   const initialState = React.useMemo(
     () => ({
       pageSize: initialPageSize,
+      view: initialDefaultView,
     }),
-    [initialPageSize],
+    [initialDefaultView, initialPageSize],
   );
   const content = props.routed ? (
     <RoutedRecordController<TRow> newRecordId={NEW_RECORD_ID}>
@@ -217,6 +222,7 @@ export function DataPage<TRow extends Row = Row>({
         <DataPageBody
           {...props}
           pageSize={pageSize}
+          defaultView={defaultView}
           defaultGroup={defaultGroup}
           defaultGroups={defaultGroups}
           declarations={declarations}
@@ -228,6 +234,7 @@ export function DataPage<TRow extends Row = Row>({
     <DataPageBody
       {...props}
       pageSize={pageSize}
+      defaultView={defaultView}
       defaultGroup={defaultGroup}
       defaultGroups={defaultGroups}
       declarations={declarations}
@@ -298,6 +305,7 @@ function DataPageBody<TRow extends Row = Row>({
   groupOptions,
   order,
   pageSize,
+  defaultView,
   defaultGroup,
   defaultGroups,
   fields,
@@ -336,6 +344,7 @@ function DataPageBody<TRow extends Row = Row>({
     groupOptions,
     order,
     pageSize,
+    defaultView,
     defaultGroup,
     defaultGroups,
     rowHref: resolvedRowHref,
@@ -754,6 +763,7 @@ function requiredFormFields(
 function listElementRenderProps<TRow extends Row>(
   props: ListProps<TRow>,
 ): Partial<ListViewProps<TRow> & {
+  defaultView?: DataViewKind;
   defaultGroup?: DataViewGroup | null;
   defaultGroups?: DataViewDefaultGroups;
 }> {

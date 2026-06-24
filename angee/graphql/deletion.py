@@ -18,6 +18,15 @@ from rebac import current_actor, system_context
 from rebac.resources import model_resource_type
 
 from angee.base.models import public_id_of
+from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
+from angee.graphql.data.metadata import (
+    DataResourceRoots,
+    DataResourceTypeNames,
+    attach_data_resource_metadata,
+    make_data_resource_metadata,
+    resource_type_name,
+    resource_wire_field_name,
+)
 from angee.graphql.ids import require_instance_for_id
 
 _PREVIEW_LEAF_LIMIT = 50
@@ -207,6 +216,36 @@ def delete_by_public_id(
                 before_delete(instance)
             instance.delete()
     return preview
+
+
+def attach_delete_preview_metadata(
+    surface: type,
+    *,
+    model: type[models.Model],
+    node: type,
+    field: str,
+    model_label: str | None = None,
+    public_id_field: str = PUBLIC_ID_FIELD_NAME,
+) -> type:
+    """Attach resource metadata for one authored cascade-preview mutation."""
+
+    return attach_data_resource_metadata(
+        surface,
+        make_data_resource_metadata(
+            model=model,
+            model_label=model_label,
+            public_id_field=public_id_field,
+            node_type=node,
+            roots=DataResourceRoots(
+                delete_preview_name=resource_wire_field_name(surface, field),
+            ),
+            type_names=DataResourceTypeNames(
+                node=resource_type_name(node),
+                delete_payload=resource_type_name(DeletePreview),
+            ),
+            capabilities=("deletePreview",),
+        ),
+    )
 
 
 @dataclass(slots=True)

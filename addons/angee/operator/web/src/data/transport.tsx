@@ -1,6 +1,5 @@
-import { Alert, EmptyState, LoadingPanel } from "@angee/base";
+import { Alert, EmptyState, LoadingPanel, errorMessage } from "@angee/base";
 import {
-  errorMessage,
   useDocumentSubscription,
   useSchemaClients,
   type DocumentData,

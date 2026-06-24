@@ -33,14 +33,14 @@ export function StorageSettingsPage(): ReactElement {
             <Column field="name" />
             <Column field="slug" />
             <Column field="prefix" />
-            <Column field="isArchived" widget="booleanBadge" />
+            <Column field="is_archived" widget="booleanBadge" />
           </List>
           <Form model={DRIVE_MODEL}>
             <Field name="name" widget="text" title />
             <Field name="slug" createOnly />
             <Field name="prefix" />
             <Field name="description" widget="textarea" />
-            <Field name="isArchived" label={t("storage.settings.archived")} widget="switch" />
+            <Field name="is_archived" label={t("storage.settings.archived")} widget="switch" />
           </Form>
         </DrawerDataPage>
       </Section>
@@ -53,17 +53,17 @@ export function StorageSettingsPage(): ReactElement {
           <List model={BACKEND_MODEL} list={GroupListView} order={{ label: "ASC" }}>
             <Column field="label" />
             <Column field="slug" />
-            <Column field="backendClass" />
-            <Column field="isDefault" widget="booleanBadge" />
-            <Column field="isArchived" widget="booleanBadge" />
+            <Column field="backend_class" />
+            <Column field="is_default" widget="booleanBadge" />
+            <Column field="is_archived" widget="booleanBadge" />
           </List>
           <Form model={BACKEND_MODEL}>
             <Field name="label" widget="text" title />
             <Field name="slug" createOnly />
-            <Field name="backendClass" label={t("storage.settings.backendClass")} />
-            <Field name="backendConfig" label={t("storage.settings.config")} widget="json" />
-            <Field name="isDefault" label={t("storage.settings.default")} widget="switch" />
-            <Field name="isArchived" label={t("storage.settings.archived")} widget="switch" editOnly />
+            <Field name="backend_class" label={t("storage.settings.backendClass")} />
+            <Field name="backend_config" label={t("storage.settings.config")} widget="json" />
+            <Field name="is_default" label={t("storage.settings.default")} widget="switch" />
+            <Field name="is_archived" label={t("storage.settings.archived")} widget="switch" editOnly />
           </Form>
         </DrawerDataPage>
       </Section>

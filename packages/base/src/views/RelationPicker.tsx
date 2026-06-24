@@ -1,6 +1,6 @@
 import { useState, type ReactElement, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { rowPublicId } from "@angee/sdk";
+import { rowPublicId } from "@angee/data";
 
 import { Glyph } from "../chrome/Glyph";
 import { useBaseT } from "../i18n";

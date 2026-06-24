@@ -15,6 +15,7 @@ export const OperatorMutationResultFields = graphql(`
 
 export const OperatorServiceStateFields = graphql(`
   fragment OperatorServiceStateFields on ServiceState {
+    id
     name
     runtime
     status
@@ -24,6 +25,7 @@ export const OperatorServiceStateFields = graphql(`
 
 export const OperatorWorkspaceRefFields = graphql(`
   fragment OperatorWorkspaceRefFields on WorkspaceRef {
+    id
     name
     path
     template
@@ -76,6 +78,7 @@ export const OperatorWorkspaceStatusFields = graphql(`
 
 export const OperatorSourceStateFields = graphql(`
   fragment OperatorSourceStateFields on SourceState {
+    id
     name
     slot
     kind
@@ -136,6 +139,7 @@ export const OperatorGitOpsTopologyFields = graphql(`
 
 export const OperatorJobStateFields = graphql(`
   fragment OperatorJobStateFields on JobState {
+    id
     name
     runtime
   }
@@ -143,6 +147,7 @@ export const OperatorJobStateFields = graphql(`
 
 export const OperatorTemplateDescriptorFields = graphql(`
   fragment OperatorTemplateDescriptorFields on TemplateDescriptor {
+    id
     ref
     kind
     name
@@ -161,6 +166,7 @@ export const OperatorTemplateDescriptorFields = graphql(`
 
 export const OperatorSecretRefFields = graphql(`
   fragment OperatorSecretRefFields on SecretRef {
+    id
     name
     declared
     hasValue
@@ -285,13 +291,12 @@ export const SERVICE_RESTART_MUTATION = graphql(`
   }
 `);
 
-// `serviceDestroy` stops and removes a service from the stack, leaving the
-// workspace it mounts intact: the escape hatch for an orphaned service entry
-// (a later `serviceCreate` over the same name 409s until it is destroyed).
+// Delete the service resource through the daemon's Hasura-shaped root. The
+// daemon owns the side effects (stop/remove) behind that resource mutation.
 export const SERVICE_DESTROY_MUTATION = graphql(`
-  mutation OperatorServiceDestroy($name: String!) {
-    serviceDestroy(name: $name) {
-      ...OperatorMutationResultFields
+  mutation OperatorServiceDestroy($id: String!) {
+    delete_services_by_pk(id: $id) {
+      ...OperatorServiceStateFields
     }
   }
 `);
@@ -319,31 +324,31 @@ export const SERVICE_ENDPOINT_QUERY = graphql(`
   }
 `);
 
-// Render a service template into an existing workspace. `input.template` is the
+// Render a service template into an existing workspace. `object.template` is the
 // daemon's own template ref (from the `templates` listing) — the daemon owns its
 // format, so resolve it from there rather than constructing it.
 export const SERVICE_CREATE_MUTATION = graphql(`
-  mutation OperatorServiceCreate($input: ServiceCreateInput!) {
-    serviceCreate(input: $input) {
+  mutation OperatorServiceCreate($object: services_insert_input!) {
+    insert_services_one(object: $object) {
       ...OperatorServiceStateFields
     }
   }
 `);
 
-// Render a workspace template into a new worktree workspace. `input.template` is
+// Render a workspace template into a new worktree workspace. `object.template` is
 // the daemon's own template ref (see SERVICE_CREATE_MUTATION).
 export const WORKSPACE_CREATE_MUTATION = graphql(`
-  mutation OperatorWorkspaceCreate($input: WorkspaceCreateInput!) {
-    workspaceCreate(input: $input) {
+  mutation OperatorWorkspaceCreate($object: workspaces_insert_input!) {
+    insert_workspaces_one(object: $object) {
       ...OperatorWorkspaceRefFields
     }
   }
 `);
 
 export const WORKSPACE_DESTROY_MUTATION = graphql(`
-  mutation OperatorWorkspaceDestroy($name: String!, $purge: Boolean) {
-    workspaceDestroy(name: $name, purge: $purge) {
-      ...OperatorMutationResultFields
+  mutation OperatorWorkspaceDestroy($id: String!) {
+    delete_workspaces_by_pk(id: $id) {
+      ...OperatorWorkspaceRefFields
     }
   }
 `);
@@ -444,21 +449,20 @@ export const JOB_RUN_MUTATION = graphql(`
   }
 `);
 
-// `secretSet` returns the updated `SecretRef`; the daemon has no secret scope.
+// Set a secret through the daemon's Hasura-shaped insert root; the daemon owns
+// the write semantics for declared and ad hoc secrets.
 export const SECRET_SET_MUTATION = graphql(`
-  mutation OperatorSecretSet($name: String!, $value: String!) {
-    secretSet(name: $name, value: $value) {
-      name
-      declared
-      hasValue
+  mutation OperatorSecretSet($object: secrets_insert_input!) {
+    insert_secrets_one(object: $object) {
+      ...OperatorSecretRefFields
     }
   }
 `);
 
 export const SECRET_DELETE_MUTATION = graphql(`
-  mutation OperatorSecretDelete($name: String!) {
-    secretDelete(name: $name) {
-      ...OperatorMutationResultFields
+  mutation OperatorSecretDelete($id: String!) {
+    delete_secrets_by_pk(id: $id) {
+      ...OperatorSecretRefFields
     }
   }
 `);

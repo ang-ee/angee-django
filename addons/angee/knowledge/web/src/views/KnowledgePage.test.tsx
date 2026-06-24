@@ -25,7 +25,6 @@ vi.mock("@tanstack/react-router", () => ({
 
 vi.mock("@angee/sdk", () => ({
   useAuthoredQuery: sdkMocks.useAuthoredQuery,
-  useResourceRecord: sdkMocks.useResourceRecord,
   useNamespaceT: (
     _namespace: string,
     messages: Record<string, string>,
@@ -37,6 +36,14 @@ vi.mock("@angee/sdk", () => ({
     return message;
   },
 }));
+
+vi.mock("@angee/data", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/data")>();
+  return {
+    ...actual,
+    useResourceRecord: sdkMocks.useResourceRecord,
+  };
+});
 
 vi.mock("@angee/base", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/base")>();
@@ -184,16 +191,16 @@ beforeEach(() => {
   sdkMocks.useAuthoredQuery.mockImplementation((document) => {
     if (document === KnowledgeVaults) {
       return queryResult("vaults", {
-        vaults: { results: knowledgeData.vaults },
+        vaults: knowledgeData.vaults,
       });
     }
     if (document === KnowledgePages) {
-      return queryResult("pages", { pages: { results: knowledgeData.pages } });
+      return queryResult("pages", { pages: knowledgeData.pages });
     }
     if (document === KnowledgePageQuery) {
       const pageId = routerMocks.params.id ?? "";
       return queryResult("detail", {
-        page: knowledgeData.details[pageId] ?? null,
+        pages_by_pk: knowledgeData.details[pageId] ?? null,
       });
     }
     throw new Error("Unexpected knowledge query document");
@@ -317,8 +324,8 @@ function page(id: string, title: string, kind: string, vault: string) {
     icon: null,
     vault,
     parent: null,
-    updatedAt: "2025-01-01T00:00:00Z",
-    createdByLabel: "Alex",
+    updated_at: "2025-01-01T00:00:00Z",
+    created_by_label: "Alex",
   };
 }
 
@@ -327,8 +334,8 @@ function detail(id: string, title: string, vault: string) {
     ...page(id, title, "note", vault),
     markdown: {
       body: "Hello",
-      bodyHash: "hash",
-      wordCount: 1,
+      body_hash: "hash",
+      word_count: 1,
     },
     backlinks: [],
   };

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useDebouncedCallback } from "@angee/base";
-import { useAuthoredMutation, useResourceMutation } from "@angee/sdk";
+import { useResourceMutation } from "@angee/data";
+import { useAuthoredMutation } from "@angee/sdk";
 
 import { KnowledgeUpdatePageBody } from "./documents";
 
@@ -62,11 +63,11 @@ export function usePageEditor(
         const data = await updateBody({
           page: pageId,
           body: next,
-          expectedHash: bodyHashRef.current || null,
+          expected_hash: bodyHashRef.current || null,
         });
-        const payload = data?.updatePageBody;
+        const payload = data?.update_page_body;
         if (payload?.ok && payload.markdown) {
-          bodyHashRef.current = payload.markdown.bodyHash;
+          bodyHashRef.current = payload.markdown.body_hash;
           setSafeStatus("saved");
           onSavedRef.current();
         } else {

@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 
-import { errorMessage, useAuthoredMutation } from "@angee/sdk";
+import { errorMessage } from "@angee/base";
+import { useAuthoredMutation } from "@angee/sdk";
 
 import { useStorageT } from "../i18n";
 import { StorageFileUploadBegin, StorageFileUploadFinalize } from "./documents";
@@ -51,8 +52,8 @@ export interface StorageUpload {
 }
 
 /**
- * The upload protocol as a hook: per file, SHA-256 → `fileUploadBegin` →
- * (proxy) `PUT` the bytes → `fileUploadFinalize`, with a dedup short-circuit.
+ * The upload protocol as a hook: per file, SHA-256 → `file_upload_begin` →
+ * (proxy) `PUT` the bytes → `file_upload_finalize`, with a dedup short-circuit.
  * Each file is a `task` whose status drives the UI; `onUploaded` fires once the
  * batch settles so the caller can refetch.
  */
@@ -78,14 +79,14 @@ export function useStorageUpload(
         const begun = await beginUpload({
           input: {
             filename: file.name,
-            mimeType: file.type || DEFAULT_MIME,
-            sizeBytes: file.size,
+            mime_type: file.type || DEFAULT_MIME,
+            size_bytes: file.size,
             drive: target.driveId,
             folder: target.folderId ?? null,
-            contentHash,
+            content_hash: contentHash,
           },
         });
-        const payload = begun?.fileUploadBegin;
+        const payload = begun?.file_upload_begin;
         if (!payload || payload.error) {
           patch(taskId, {
             status: "failed",
@@ -98,7 +99,7 @@ export function useStorageUpload(
           return;
         }
         patch(taskId, { status: "uploading" });
-        const response = await fetch(payload.uploadUrl, {
+        const response = await fetch(payload.upload_url, {
           method: "PUT",
           body: file,
           credentials: "include",
@@ -114,11 +115,11 @@ export function useStorageUpload(
         const finalized = await finalizeUpload({
           input: {
             file: payload.file?.id ?? "",
-            contentHash,
-            sizeBytes: file.size,
+            content_hash: contentHash,
+            size_bytes: file.size,
           },
         });
-        const result = finalized?.fileUploadFinalize;
+        const result = finalized?.file_upload_finalize;
         if (!result || result.error) {
           patch(taskId, {
             status: "failed",

@@ -28,8 +28,8 @@ export function VcsBridgesPage(): React.ReactElement {
   const t = useIntegrateT();
   const [sync] = useRecordActionMutation<ActionFieldName>("syncVcsBridge");
   const [discover] = useAuthoredMutation(IntegrateDiscoverRepositories);
-  const backendClassOptions = useEnumOptions(MODEL, "backendClass");
-  const backendClassPrefill = useImplPrefill(MODEL, "backendClass");
+  const backendClassOptions = useEnumOptions(MODEL, "backend_class");
+  const backendClassPrefill = useImplPrefill(MODEL, "backend_class");
 
   const discoverRepositories = React.useCallback(
     async (id: string) => {
@@ -43,21 +43,21 @@ export function VcsBridgesPage(): React.ReactElement {
   return (
     <DataPage model={MODEL} placement="inline" routed>
       <List model={MODEL} list={GroupListView}>
-        <Facet field="vendor" label="Vendor" labelField="displayName" />
-        <Column field="displayName" />
-        <Column field="backendClass" header={t("integrate.vcs.backendClass")} />
+        <Facet field="vendor" label="Vendor" labelField="display_name" />
+        <Column field="display_name" />
+        <Column field="backend_class" header={t("integrate.vcs.backendClass")} />
         <Column
           field="status"
           header={t("integrate.col.status")}
           widget="statusBadge"
         />
-        <Column field="lastSyncCompletedAt" />
+        <Column field="last_sync_completed_at" />
       </List>
       <Form model={MODEL}>
         <Field name="owner" />
         <Field name="vendor" />
         <Field
-          name="backendClass"
+          name="backend_class"
           widget="select"
           options={backendClassOptions}
           prefill={backendClassPrefill}
@@ -65,7 +65,7 @@ export function VcsBridgesPage(): React.ReactElement {
         <Field name="credential" />
         <Field name="status" widget="statusbar" />
         <Field name="config" widget="json" />
-        <Field name="lastSyncStatus" readOnly />
+        <Field name="last_sync_status" readOnly />
         {/* Write-only signing secret — set on create, never read back. */}
         <Field name="webhookSecret" widget="text" kind="string" createOnly />
         <Action id="sync" label={t("integrate.action.syncNow")} icon="refresh" run={sync} />

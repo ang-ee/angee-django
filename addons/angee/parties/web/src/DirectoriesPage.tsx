@@ -14,9 +14,10 @@ import {
   GroupListView,
   Input,
   List,
+  errorMessage,
   useRecordActionMutation,
 } from "@angee/base";
-import { errorMessage, useAuthoredMutation } from "@angee/sdk";
+import { useAuthoredMutation } from "@angee/sdk";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { ConnectCardDavDirectory } from "./documents.console";
@@ -25,12 +26,12 @@ const MODEL = "parties.Directory";
 
 const directoryList = (
   <List model={MODEL} list={GroupListView}>
-    <Column field="displayName" header="Name" />
+    <Column field="display_name" header="Name" />
     <Column field="status" widget="statusBadge" />
-    <Column field="backendClass" />
-    <Column field="lastSyncStatus" />
-    <Column field="lastSyncItems" />
-    <Column field="lastSyncCompletedAt" />
+    <Column field="backend_class" />
+    <Column field="last_sync_status" />
+    <Column field="last_sync_items" />
+    <Column field="last_sync_completed_at" />
   </List>
 );
 
@@ -48,14 +49,14 @@ export function DirectoriesPage(): React.ReactElement {
     <DataPage model={MODEL} placement="inline" routed hideCreate toolbarActions={<ConnectCardDav />}>
       {directoryList}
       <Form model={MODEL}>
-        <Field name="displayName" title readOnly />
+        <Field name="display_name" title readOnly />
         <Field name="status" readOnly />
-        <Field name="backendClass" readOnly />
+        <Field name="backend_class" readOnly />
         <Field name="config" readOnly />
         <Group label="Last sync" columns={2}>
-          <Field name="lastSyncStatus" readOnly />
-          <Field name="lastSyncItems" readOnly />
-          <Field name="lastSyncCompletedAt" readOnly />
+          <Field name="last_sync_status" readOnly />
+          <Field name="last_sync_items" readOnly />
+          <Field name="last_sync_completed_at" readOnly />
         </Group>
         <Action id="sync" label="Sync now" icon="refresh" run={sync} />
       </Form>

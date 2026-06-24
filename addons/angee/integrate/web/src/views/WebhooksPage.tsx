@@ -22,9 +22,9 @@ const MODEL = "integrate.WebhookSubscription";
 
 const webhookList = (
   <List model={MODEL} list={GroupListView}>
-    <Column field="targetUrl" />
+    <Column field="target_url" />
     <Column field="enabled" />
-    <Column field="lastDeliveryStatus" />
+    <Column field="last_delivery_status" />
   </List>
 );
 
@@ -65,12 +65,12 @@ export function WebhooksPage(): React.ReactElement {
     <DataPage model={MODEL} placement="inline" routed>
       {webhookList}
       <Form model={MODEL}>
-        <Field name="targetUrl" title />
+        <Field name="target_url" title />
         <Field name="enabled" />
         <Group label={t("integrate.webhooks.filters")} columns={2}>
-          <Field name="eventKinds" widget="tagInput" />
-          <Field name="implAppFilter" widget="tagInput" />
-          <Field name="integrationFilter" />
+          <Field name="event_kinds" widget="tagInput" />
+          <Field name="impl_app_filter" widget="tagInput" />
+          <Field name="integration_filter" />
         </Group>
         {/* Write-only signing key — set on create, never read back from the server. */}
         <Field name="secret" widget="text" kind="string" createOnly />

@@ -4,14 +4,13 @@ import { test, expect, roleStatePath, GraphQLClient } from "@angee/e2e";
 import { NotesPage } from "../pages/notes-page";
 
 const NOTES_QUERY = `query Notes {
-  notes {
-    totalCount
-    results { id title }
-  }
+  notes { id title }
+  notes_aggregate { aggregate { count } }
 }`;
 
 interface NotesData {
-  notes: { totalCount: number; results: { id: string; title: string }[] };
+  notes: { id: string; title: string }[];
+  notes_aggregate: { aggregate: { count: number } };
 }
 
 // Stable curated notes from the demo seed (`resources load demo`), all owned by
@@ -22,16 +21,13 @@ const ALICE_ANCHORS = ["Quarterly planning", "Reading list", "Welcome to Angee"]
 
 function notesByTitleQuery(title: string): string {
   // Titles here are trusted test constants with no embedded quotes.
-  return `query { notes(filters: { title: { exact: "${title}" } }) {
-    totalCount
-    results { id title }
-  } }`;
+  return `query { notes(where: { title: { _eq: "${title}" } }) { id title } }`;
 }
 
 async function noteIds(request: APIRequestContext): Promise<Set<string>> {
   const result = await new GraphQLClient(request).query<NotesData>(NOTES_QUERY);
   expect(result.errors).toBeUndefined();
-  return new Set((result.data?.notes.results ?? []).map((note) => note.id));
+  return new Set((result.data?.notes ?? []).map((note) => note.id));
 }
 
 test.describe("alice — authenticated", () => {
@@ -50,14 +46,14 @@ test.describe("alice — authenticated", () => {
     // raw record count here.
     const result = await api.query<NotesData>(NOTES_QUERY);
     expect(result.errors).toBeUndefined();
-    expect(result.data?.notes.totalCount).toBeGreaterThan(0);
+    expect(result.data?.notes_aggregate.aggregate.count).toBeGreaterThan(0);
   });
 
   test("her REBAC scope includes the curated shared notes", async ({ api }) => {
     for (const anchor of ALICE_ANCHORS) {
       const result = await api.query<NotesData>(notesByTitleQuery(anchor));
       expect(result.errors).toBeUndefined();
-      const titles = (result.data?.notes.results ?? []).map((note) => note.title);
+      const titles = (result.data?.notes ?? []).map((note) => note.title);
       expect(titles).toContain(anchor);
     }
   });
@@ -83,10 +79,10 @@ test.describe("per-user isolation", () => {
 
 test.describe("anonymous — denied", () => {
   test("creating a note without a session is denied", async ({ api }) => {
-    const result = await api.query<{ createNote: { id: string } | null }>(
-      'mutation { createNote(data: { title: "x" }) { id } }',
+    const result = await api.query<{ insert_notes_one: { id: string } | null }>(
+      'mutation { insert_notes_one(object: { title: "x" }) { id } }',
     );
-    expect(result.data?.createNote ?? null).toBeNull();
+    expect(result.data?.insert_notes_one ?? null).toBeNull();
     const codes = (result.errors ?? []).map((error) => error.extensions?.code);
     expect(codes).toContain("PERMISSION_DENIED");
   });

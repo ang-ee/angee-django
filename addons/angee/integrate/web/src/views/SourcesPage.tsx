@@ -23,7 +23,7 @@ const sourceList = (
     <Column field="kind" />
     <Column field="ref" />
     <Column field="path" />
-    <Column field="lastSyncedAt" />
+    <Column field="last_synced_at" />
   </List>
 );
 
@@ -47,7 +47,7 @@ export function SourcesPage(): React.ReactElement {
           <Field name="ref" />
         </Group>
         <Field name="path" />
-        <Field name="lastSyncedAt" readOnly />
+        <Field name="last_synced_at" readOnly />
         <Action id="refresh" label={t("integrate.action.refresh")} icon="refresh" run={refresh} />
       </Form>
     </DataPage>

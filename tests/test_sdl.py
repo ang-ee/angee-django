@@ -23,7 +23,7 @@ class _StubSchemas:
 
     def render_metadata(self) -> dict[str, dict[str, object]]:
         return {
-            name: {"angee": {"dataQueries": [{"modelLabel": f"tests.{name.title()}"}]}}
+            name: {"angee": {"resources": [{"modelLabel": f"tests.{name.title()}"}]}}
             for name in self._rendered
         }
 
@@ -42,10 +42,10 @@ def test_emit_writes_each_schema(tmp_path: Path) -> None:
     assert (tmp_path / "schemas" / "public.graphql").read_text(encoding="utf-8") == "type Query { a: Int }\n"
     assert (tmp_path / "schemas" / "console.graphql").read_text(encoding="utf-8") == "type Query { b: Int }\n"
     assert json.loads((tmp_path / "schemas" / "public.metadata.json").read_text(encoding="utf-8")) == {
-        "angee": {"dataQueries": [{"modelLabel": "tests.Public"}]}
+        "angee": {"resources": [{"modelLabel": "tests.Public"}]}
     }
     assert json.loads((tmp_path / "schemas" / "console.metadata.json").read_text(encoding="utf-8")) == {
-        "angee": {"dataQueries": [{"modelLabel": "tests.Console"}]}
+        "angee": {"resources": [{"modelLabel": "tests.Console"}]}
     }
 
 

@@ -8,7 +8,8 @@ import {
   useWorkspaceStatus,
   type WorkspaceStatusResult,
 } from "@angee/operator/runtime";
-import { useResourceRecord, type Row } from "@angee/sdk";
+import { useResourceRecord } from "@angee/data";
+import type { Row } from "@angee/data";
 
 import { useAgentsT } from "../i18n";
 import { agentLifecycle, agentRuntime, stringField } from "./agent-record";
@@ -18,22 +19,22 @@ const AGENT_MODEL = "agents.Agent";
 const PROVISION_FIELDS = [
   "id",
   "lifecycle",
-  "runtimeStatus",
-  "lastError",
+  "runtime_status",
+  "last_error",
   "workspace",
   "service",
-  "serviceTemplate.id",
-  "workspaceTemplate.path",
+  "service_template.id",
+  "workspace_template.path",
 ] as const;
 
 interface AgentProvisionRecord extends Row {
   lifecycle?: string | null;
-  runtimeStatus?: string | null;
-  lastError?: string | null;
+  runtime_status?: string | null;
+  last_error?: string | null;
   workspace?: string | null;
   service?: string | null;
-  serviceTemplate?: { id?: string | null } | null;
-  workspaceTemplate?: { path?: string | null } | null;
+  service_template?: { id?: string | null } | null;
+  workspace_template?: { path?: string | null } | null;
 }
 
 export type AgentProvisioningPane = "service" | "workspace";
@@ -59,11 +60,11 @@ export function AgentProvisioning({
   const service = stringField(agent, "service");
   const lifecycle = agentLifecycle(agent);
   const active = isLifecycleActive(lifecycle);
-  const expectsService = Boolean(agent?.serviceTemplate);
+  const expectsService = Boolean(agent?.service_template);
   const missingRenderedInstances =
     agentRuntime(agent) === "RUNNING" && (!workspace || (expectsService && !service));
   const showRuntime = active || Boolean(workspace) || missingRenderedInstances;
-  const hasWorkspaceTemplate = Boolean(agent?.workspaceTemplate?.path);
+  const hasWorkspaceTemplate = Boolean(agent?.workspace_template?.path);
 
   // No poll: `agents.Agent` declares `changes(Agent, field="agentChanged")`, so the
   // record auto-invalidates live through the change subscription; workspace state
@@ -80,8 +81,8 @@ export function AgentProvisioning({
         </p>
       ) : (
         <>
-          {agent.lastError ? (
-            <p className="text-13 text-danger-text">{String(agent.lastError)}</p>
+          {agent.last_error ? (
+            <p className="text-13 text-danger-text">{String(agent.last_error)}</p>
           ) : null}
           {showRuntime ? (
             <OperatorTransportProvider>

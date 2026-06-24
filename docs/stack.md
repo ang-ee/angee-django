@@ -30,6 +30,7 @@ Dependency changes must update this file in the same change.
 | strawberry-django | GraphQL types, resolvers, dataloaders, schema printing | Merge addon schema parts into named schemas, `crud`/`changes` shortcuts, emit SDL, serve per name |
 | django-choices-field | Enum-backed model fields | `StateField` semantic wrapper |
 | strawberry-django-aggregates | Aggregation and group-by resolvers | Addon-level `AggregateBuilder` wiring (per addon, e.g. notes) |
+| strawberry-django-hasura | Expose Django models in the Hasura GraphQL dialect (`_bool_exp`/`_aggregate`/`x_by_pk`/`_set`) | Composes it as the per-model data-resource emitter (`hasura_resource`) |
 | channels + uvicorn | ASGI/WebSocket transport and serving | GraphQL subscription mounting; uvicorn serves the composed ASGI app and sends the lifespan that enters the MCP mount's `http_app` lifespan (`angee.asgi`) |
 | django-zed-rebac | REBAC engine, actor scoping, relationship storage, local and SpiceDB-compatible backends | Per-addon schema merge, reserved roles, actor resolver |
 | django-sqids | Opaque external IDs | `SqidMixin`, `SqidField` (NULL-safe decode on joins), GraphQL boundary scalar |
@@ -54,15 +55,17 @@ Dependency changes must update this file in the same change.
 |---|---|---|
 | React 19 | View library | Component conventions |
 | TypeScript >= 6 | Language and type system | Branded boundary types |
-| urql React 5 + @urql/core 6 | GraphQL client, normalized cache, subscriptions | Provider stack and invalidation wiring; consumes generated `TypedDocumentNode`s |
-| graphql-ws 6 | GraphQL WebSocket lifecycle | Connection params and retry policy |
+| @refinedev/core | Resource registry, standard data hooks, react-query cache/invalidation, auth/i18n/live provider contracts | `@angee/data` maps emitted `angee.resources` metadata to refine resources; `createApp` mounts named providers and the TanStack Router binding |
+| @refinedev/hasura + graphql-request 5 + graphql 15 | Hasura GraphQL data provider (`_bool_exp`, `order_by`, `_aggregate`, `_by_pk`, `_set`) and authored `meta.gqlQuery` / `meta.gqlMutation` execution | `@angee/data` pins `idType: "String"` and `namingConvention: "hasura-default"`, uses refine-compatible GraphQL document ASTs, and applies Angee session/CSRF or service auth at the transport boundary |
+| graphql-ws 5 | GraphQL WebSocket lifecycle for the Hasura live provider and temporary authored transports | Endpoint derivation, connection params, and retry policy |
+| urql React 5 + @urql/core 6 | Transitional authored-operation transport during the refine migration | Legacy provider stack and invalidation wiring until the remaining SDK data modules move to refine/codegen |
 | GraphQL Code Generator (client-preset) + @graphql-typed-document-node/core | Generated TypeScript schema and operation types from emitted Django SDL and daemon-owned SDL, as `TypedDocumentNode` documents | Each project web package owns a `codegen` script that emits `runtime/gql/<schema>` from `runtime/schemas/<schema>.graphql`, routed to a Django schema by document filename (`documents.ts`/`documents.console.ts` → console, `documents.public.ts` → public); the operator web package owns a separate daemon client-preset run from `schema/operator.graphql` scanning only `documents.daemon.ts`; authored operations carry no hand-written result/variables types |
 | TanStack Router | Type-safe routing and search params | `defineAddon` to `createApp` route composition and flat URL search codec |
-| TanStack Form | Form state | `FormView` binding |
-| TanStack Table | Columns, sort, filter, grouping, selection | `ListView` and `BoardView` bindings |
+| @refinedev/react-hook-form + react-hook-form + @hookform/resolvers + zod | Form state, submit lifecycle, and validation binding | `FormView` keeps Angee's declarative rendered DSL while delegating state/validation to refine/react-hook-form |
+| TanStack Form | Transitional current `FormView` engine during the refine migration | Removed once `FormView` is rebound to `@refinedev/react-hook-form` |
+| @refinedev/react-table + TanStack Table | Server-backed table state, sort/filter/pagination bridge, columns, grouping, selection | `ListView` and `BoardView` keep Angee's rendered controls and domain view modes while delegating standard table/data mechanics |
 | TanStack Virtual | Row and column virtualization | Long-list wiring |
 | nuqs | Type-safe URL query state | Remaining chrome query state such as top-menu tabs |
-| valibot | Schema validation | Server-emitted schema binding |
 | i18next | Runtime i18n | Per-addon namespace convention |
 | date-fns | Date and relative-time formatting | Date and timestamp widgets |
 | use-debounce | Debounced React values and callbacks | Search and filter inputs |
@@ -78,6 +81,23 @@ Dependency changes must update this file in the same change.
 | heic-to | Client-side HEIC/HEIF decode to a displayable image (current libheif-wasm) | storage HEIC previewer |
 | pnpm | JavaScript dependency resolution and workspaces | Workspace layout |
 | Node >= 22.13 | JavaScript build runtime | Project runtime |
+
+## Hasura Dialect Rule
+
+`strawberry-django-hasura`, the operator daemon SDL, `@refinedev/hasura`, and
+`@angee/data` share one Hasura-default wire contract. Grouped resources must keep
+the DDN/NDC-preview shape:
+`<resource>_groups(group_by, where, having, order_by, limit, offset): [<resource>_group!]!`,
+with each group returning a typed `key: <Model>GroupKey!` and the free
+`aggregate: <Model>Aggregate!`. The stock `<resource>_aggregate` root remains
+the unmodified refine/Hasura aggregate surface; grouped roots are authored
+operations owned by the dialect adapters.
+
+Future grouped features such as bucket ordering, bucket predicates, additional
+date extraction, or JSON drill-down operators must be added at the dialect
+owners together: the Django adapter, operator SDL, emitted resource metadata,
+and the `@angee/data` authored operation helpers. Do not add frontend-only group
+semantics or local provider dialects.
 
 ## Rendered Binding
 

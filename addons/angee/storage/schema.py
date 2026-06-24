@@ -11,14 +11,13 @@ from django.apps import apps
 from django.urls import reverse
 from rebac import ObjectRef, current_actor, system_context
 from rebac.backends import backend as rebac_backend
-from strawberry import UNSET, auto
+from strawberry import auto
 from strawberry.permission import BasePermission
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
 from angee.base.models import public_id_for
-from angee.graphql.crud import crud
-from angee.graphql.data import data_query
+from angee.graphql.data import AngeeHasuraWriteBackend, hasura_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, instance_for_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
@@ -161,102 +160,17 @@ class FileType(AngeeNode):
         return str(row.download_url())
 
 
-@strawberry_django.filter_type(File, lookups=True)
-class FileFilter:
-    """Field lookups accepted when filtering the files list."""
-
-    filename: auto
-    title: auto
-    upload_state: auto
-    is_trashed: auto
-    updated_at: auto
-    drive: auto
-    folder: auto
-
-
-@strawberry_django.order_type(File)
-class FileOrder:
-    """Orderings accepted by the files list."""
-
-    filename: auto
-    size_bytes: auto
-    created_at: auto
-    updated_at: auto
-
-
-@strawberry_django.filter_type(Folder, lookups=True)
-class FolderFilter:
-    """Field lookups accepted when filtering the folders list."""
-
-    name: auto
-    is_virtual: auto
-    smart_kind: auto
-    drive: auto
-    parent: auto
-
-
-@strawberry_django.order_type(Folder)
-class FolderOrder:
-    """Orderings accepted by the folders list."""
-
-    name: auto
-    is_virtual: auto
-    smart_kind: auto
-    created_at: auto
-    updated_at: auto
-
-
-@strawberry_django.filter_type(Drive, lookups=True)
-class DriveFilter:
-    """Field lookups accepted when filtering the drives list."""
-
-    slug: auto
-    name: auto
-    is_archived: auto
-
-
-@strawberry_django.order_type(Drive)
-class DriveOrder:
-    """Orderings accepted by the drives list."""
-
-    slug: auto
-    name: auto
-    created_at: auto
-    updated_at: auto
-
-
-@strawberry_django.filter_type(Backend, lookups=True)
-class BackendFilter:
-    """Field lookups accepted when filtering the backends list."""
-
-    slug: auto
-    label: auto
-    backend_class: auto
-    is_default: auto
-    is_archived: auto
-
-
-@strawberry_django.order_type(Backend)
-class BackendOrder:
-    """Orderings accepted by the backends list."""
-
-    slug: auto
-    label: auto
-    created_at: auto
-    updated_at: auto
-
-
 @strawberry.input
 class FileUploadBeginInput:
     """Fields accepted when reserving an upload."""
 
     filename: str
-    mime_type: str = ""
-    size_bytes: int = 0
+    mime_type: str = strawberry.field(name="mime_type", default="")
+    size_bytes: int = strawberry.field(name="size_bytes", default=0)
     drive: PublicID | None = None
-    drive_slug: str = ""
+    drive_slug: str = strawberry.field(name="drive_slug", default="")
     folder: PublicID | None = None
-    content_hash: str = ""
+    content_hash: str = strawberry.field(name="content_hash", default="")
 
 
 @strawberry.type
@@ -271,10 +185,10 @@ class FileUploadBeginPayload:
 
     method: str = ""
     file: FileType | None = None
-    upload_url: str = ""
-    upload_token: str = ""
+    upload_url: str = strawberry.field(name="upload_url", default="")
+    upload_token: str = strawberry.field(name="upload_token", default="")
     error: str | None = None
-    error_code: str | None = None
+    error_code: str | None = strawberry.field(name="error_code", default=None)
 
 
 @strawberry.input
@@ -282,8 +196,8 @@ class FileUploadFinalizeInput:
     """Fields accepted when finalizing an upload."""
 
     file: PublicID
-    content_hash: str
-    size_bytes: int
+    content_hash: str = strawberry.field(name="content_hash")
+    size_bytes: int = strawberry.field(name="size_bytes")
 
 
 @strawberry.type
@@ -292,83 +206,7 @@ class FileUploadFinalizePayload:
 
     file: FileType | None = None
     error: str | None = None
-    error_code: str | None = None
-
-
-@strawberry.input
-class FilePatch:
-    """Fields accepted when updating a file."""
-
-    id: PublicID
-    filename: str | None = UNSET
-    title: str | None = UNSET
-    folder: PublicID | None = UNSET
-    metadata: JSON | None = UNSET
-
-
-@strawberry.input
-class FolderInput:
-    """Fields accepted when creating a folder."""
-
-    drive: PublicID
-    name: str
-    parent: PublicID | None = None
-    description: str = ""
-
-
-@strawberry.input
-class FolderPatch:
-    """Fields accepted when updating a folder."""
-
-    id: PublicID
-    name: str | None = UNSET
-    description: str | None = UNSET
-    parent: PublicID | None = UNSET
-
-
-@strawberry.input
-class DriveInput:
-    """Fields accepted when creating a drive."""
-
-    backend: PublicID
-    slug: str
-    name: str
-    description: str = ""
-    prefix: str = ""
-
-
-@strawberry.input
-class DrivePatch:
-    """Fields accepted when updating a drive."""
-
-    id: PublicID
-    name: str | None = UNSET
-    description: str | None = UNSET
-    prefix: str | None = UNSET
-    is_archived: bool | None = UNSET
-
-
-@strawberry.input
-class BackendInput:
-    """Fields accepted when registering a storage backend."""
-
-    slug: str
-    label: str
-    backend_class: str
-    backend_config: JSON | None = None
-    is_default: bool = False
-
-
-@strawberry.input
-class BackendPatch:
-    """Fields accepted when updating a storage backend."""
-
-    id: PublicID
-    label: str | None = UNSET
-    backend_class: str | None = UNSET
-    backend_config: JSON | None = UNSET
-    is_default: bool | None = UNSET
-    is_archived: bool | None = UNSET
+    error_code: str | None = strawberry.field(name="error_code", default=None)
 
 
 class StorageAdminPermission(BasePermission):
@@ -406,73 +244,116 @@ class StorageQuery:
     mime_types: OffsetPaginated[MimeTypeType] = strawberry_django.offset_paginated()
 
 
-DriveDataQuery, _DRIVE_DATA_TYPES = data_query(
+def _resource_queryset(model: type[Any], info: strawberry.Info) -> Any:
+    """Return the row-scoped queryset for one storage resource."""
+
+    del info
+    return model.objects.all()
+
+
+def _resource_aggregate_queryset(model: type[Any], info: strawberry.Info) -> Any:
+    """Return the queryset safe for permission-naive aggregate math."""
+
+    queryset = _resource_queryset(model, info)
+    scoped = getattr(queryset, "scoped_for_aggregate", None)
+    return scoped() if callable(scoped) else queryset
+
+
+class FolderWriteBackend(AngeeHasuraWriteBackend):
+    """Write semantics for folders: create belongs to the manager factory."""
+
+    def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+        """Create a real folder through ``Folder.objects.create_in_drive``."""
+
+        del info
+        try:
+            return Folder.objects.create_in_drive(
+                drive_id=str(data["drive"]),
+                name=str(data["name"]),
+                parent_id=str(data.get("parent") or ""),
+                description=str(data.get("description") or ""),
+            )
+        except exceptions.UploadError as error:
+            raise ValueError(str(error)) from error
+
+
+_DRIVE_RESOURCE = hasura_resource(
     DriveType,
-    type_name="DriveDataQuery",
-    filters=DriveFilter,
-    order=DriveOrder,
-    list_name="drives",
-    detail_name="drive",
-    aggregate_name="drive_aggregate",
-    group_name="drive_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["is_archived", "created_at"],
-    enable_filter_echo=True,
-    aggregate_kwargs={"name_prefix": "DriveAggregate", "pagination_style": "offset"},
+    model=Drive,
+    name="drives",
+    filterable=["id", "slug", "name", "is_archived", "backend"],
+    sortable=["slug", "name", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["is_archived", "created_at"],
+    insertable=["backend", "slug", "name", "description", "prefix"],
+    updatable=["name", "description", "prefix", "is_archived"],
+    field_id_decode={"backend": public_pk_decoder(Backend)},
+    get_queryset=lambda info: _resource_queryset(Drive, info),
+    get_aggregate_queryset=lambda info: _resource_aggregate_queryset(Drive, info),
+    write_backend=AngeeHasuraWriteBackend(Drive, public_id_fields={"backend": Backend}),
+    id_decode=public_pk_decoder(Drive),
 )
-FolderDataQuery, _FOLDER_DATA_TYPES = data_query(
+_FOLDER_RESOURCE = hasura_resource(
     FolderType,
-    type_name="FolderDataQuery",
-    filters=FolderFilter,
-    order=FolderOrder,
-    list_name="folders",
-    detail_name="folder",
-    aggregate_name="folder_aggregate",
-    group_name="folder_groups",
-    aggregate_fields=["id"],
-    group_by_fields=[
-        "drive",
-        "drive__name",
-        "is_virtual",
-        "smart_kind",
-    ],
-    enable_filter_echo=True,
-    aggregate_kwargs={"name_prefix": "FolderAggregate", "pagination_style": "offset"},
+    model=Folder,
+    name="folders",
+    filterable=["id", "name", "is_virtual", "smart_kind", "drive", "parent"],
+    sortable=["name", "is_virtual", "smart_kind", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["drive", "drive__name", "is_virtual", "smart_kind"],
+    insertable=["drive", "name", "parent", "description"],
+    updatable=["name", "description", "parent"],
+    field_id_decode={
+        "drive": public_pk_decoder(Drive),
+        "parent": public_pk_decoder(Folder),
+    },
+    get_queryset=lambda info: _resource_queryset(Folder, info),
+    get_aggregate_queryset=lambda info: _resource_aggregate_queryset(Folder, info),
+    write_backend=FolderWriteBackend(Folder, public_id_fields={"parent": Folder}),
+    id_decode=public_pk_decoder(Folder),
 )
-FileDataQuery, _FILE_DATA_TYPES = data_query(
+_FILE_RESOURCE = hasura_resource(
     FileType,
-    type_name="FileDataQuery",
-    filters=FileFilter,
-    order=FileOrder,
-    list_name="files",
-    detail_name="file",
-    aggregate_name="file_aggregate",
-    group_name="file_groups",
-    aggregate_fields=["id", "size_bytes"],
-    group_by_fields=[
-        "drive",
-        "drive__name",
+    model=File,
+    name="files",
+    filterable=[
+        "id",
+        "filename",
+        "title",
         "upload_state",
         "is_trashed",
         "updated_at",
+        "drive",
+        "folder",
     ],
-    enable_filter_echo=True,
-    aggregate_kwargs={"name_prefix": "FileAggregate", "pagination_style": "offset"},
+    sortable=["filename", "size_bytes", "created_at", "updated_at"],
+    aggregatable=["id", "size_bytes"],
+    groupable=["drive", "drive__name", "upload_state", "is_trashed", "updated_at"],
+    insert=False,
+    updatable=["filename", "title", "folder", "metadata"],
+    field_id_decode={
+        "drive": public_pk_decoder(Drive),
+        "folder": public_pk_decoder(Folder),
+    },
+    get_queryset=lambda info: _resource_queryset(File, info),
+    get_aggregate_queryset=lambda info: _resource_aggregate_queryset(File, info),
+    write_backend=AngeeHasuraWriteBackend(File, public_id_fields={"folder": Folder}),
+    id_decode=public_pk_decoder(File),
 )
-BackendDataQuery, _BACKEND_DATA_TYPES = data_query(
+_BACKEND_RESOURCE = hasura_resource(
     BackendType,
-    type_name="BackendDataQuery",
-    filters=BackendFilter,
-    order=BackendOrder,
-    list_name="backends",
-    detail_name="backend",
-    aggregate_name="backend_aggregate",
-    group_name="backend_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["backend_class", "is_default", "is_archived"],
-    enable_filter_echo=True,
-    permission_classes=_STORAGE_ADMIN_CLASSES,
-    aggregate_kwargs={"name_prefix": "BackendAggregate", "pagination_style": "offset"},
+    model=Backend,
+    name="backends",
+    filterable=["id", "slug", "label", "backend_class", "is_default", "is_archived"],
+    sortable=["slug", "label", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["backend_class", "is_default", "is_archived"],
+    insertable=["slug", "label", "backend_class", "backend_config", "is_default"],
+    updatable=["label", "backend_class", "backend_config", "is_default", "is_archived"],
+    get_queryset=lambda info: _resource_queryset(Backend, info),
+    get_aggregate_queryset=lambda info: _resource_aggregate_queryset(Backend, info),
+    write_backend=AngeeHasuraWriteBackend(Backend),
+    id_decode=public_pk_decoder(Backend),
 )
 
 
@@ -480,7 +361,7 @@ BackendDataQuery, _BACKEND_DATA_TYPES = data_query(
 class StorageMutation:
     """Upload protocol and folder mutations shared by both schemas."""
 
-    @strawberry.mutation
+    @strawberry.mutation(name="file_upload_begin")
     def file_upload_begin(self, input: FileUploadBeginInput) -> FileUploadBeginPayload:
         """Reserve a draft file and tell the client where to send bytes."""
 
@@ -502,7 +383,7 @@ class StorageMutation:
         upload_url = f"{reverse('storage_upload')}?{urlencode({'token': token})}"
         return FileUploadBeginPayload(method="proxy", file=row, upload_url=upload_url, upload_token=token)
 
-    @strawberry.mutation
+    @strawberry.mutation(name="file_upload_finalize")
     def file_upload_finalize(self, input: FileUploadFinalizeInput) -> FileUploadFinalizePayload:
         """Verify uploaded bytes and return the READY row."""
 
@@ -515,22 +396,7 @@ class StorageMutation:
             return FileUploadFinalizePayload(error=str(error), error_code=error.code)
         return FileUploadFinalizePayload(file=row)
 
-    @strawberry.mutation
-    def create_folder(self, data: FolderInput) -> FolderType:
-        """Create a real folder; the gate and insert live on the manager."""
-
-        try:
-            folder = Folder.objects.create_in_drive(
-                drive_id=str(data.drive),
-                name=data.name,
-                parent_id=str(data.parent) if data.parent else "",
-                description=data.description,
-            )
-        except exceptions.UploadError as error:
-            raise ValueError(str(error)) from error
-        return cast(FolderType, folder)
-
-    @strawberry.mutation
+    @strawberry.mutation(name="restore_file")
     def restore_file(self, id: PublicID) -> FileType | None:
         """Pull one file out of the Trash smart folder."""
 
@@ -545,7 +411,10 @@ class StorageMutation:
 class StorageConsoleMutation:
     """Admin-only storage mutations."""
 
-    @strawberry.mutation(permission_classes=_STORAGE_ADMIN_CLASSES)
+    @strawberry.mutation(
+        name="purge_file",
+        permission_classes=_STORAGE_ADMIN_CLASSES,
+    )
     def purge_file(self, id: PublicID) -> bool:
         """Permanently delete one file row and its backend object."""
 
@@ -557,33 +426,6 @@ class StorageConsoleMutation:
         return True
 
 
-_FILE_MUTATION = crud(FileType, update=FilePatch, delete=True)
-"""File update plus soft-delete (``delete`` trashes; ``purgeFile`` is the real delete)."""
-
-_FOLDER_MUTATION = crud(FolderType, update=FolderPatch, delete=True)
-"""Folder rename/move/delete; creation is the gated ``createFolder`` mutation."""
-
-_DRIVE_MUTATION = crud(
-    DriveType,
-    create=DriveInput,
-    update=DrivePatch,
-    delete=True,
-    permission_classes=_STORAGE_ADMIN_CLASSES,
-    write_context="storage.graphql.drive",
-)
-"""Admin drive CRUD: storage-admin gated, written elevated (const-admin create)."""
-
-_BACKEND_MUTATION = crud(
-    BackendType,
-    create=BackendInput,
-    update=BackendPatch,
-    delete=True,
-    permission_classes=_STORAGE_ADMIN_CLASSES,
-    write_context="storage.graphql.backend",
-)
-"""Admin backend CRUD: same elevated storage-admin shape as drives."""
-
-
 _SHARED_TYPES = [
     MimeTypeType,
     DriveType,
@@ -591,34 +433,43 @@ _SHARED_TYPES = [
     FileType,
     FileUploadBeginPayload,
     FileUploadFinalizePayload,
-    *_DRIVE_DATA_TYPES,
-    *_FOLDER_DATA_TYPES,
-    *_FILE_DATA_TYPES,
+    *_DRIVE_RESOURCE.types,
+    *_FOLDER_RESOURCE.types,
+    *_FILE_RESOURCE.types,
 ]
 
 schemas = {
     "public": {
-        "query": [StorageQuery, DriveDataQuery, FolderDataQuery, FileDataQuery],
-        "mutation": [StorageMutation, _FILE_MUTATION, _FOLDER_MUTATION],
+        "query": [
+            StorageQuery,
+            _DRIVE_RESOURCE.query,
+            _FOLDER_RESOURCE.query,
+            _FILE_RESOURCE.query,
+        ],
+        "mutation": [
+            StorageMutation,
+            _FILE_RESOURCE.mutation,
+            _FOLDER_RESOURCE.mutation,
+        ],
         "types": [*_SHARED_TYPES],
     },
     "console": {
         "query": [
             StorageQuery,
-            DriveDataQuery,
-            FolderDataQuery,
-            FileDataQuery,
-            BackendDataQuery,
+            _DRIVE_RESOURCE.query,
+            _FOLDER_RESOURCE.query,
+            _FILE_RESOURCE.query,
+            _BACKEND_RESOURCE.query,
         ],
         "mutation": [
             StorageMutation,
             StorageConsoleMutation,
-            _FILE_MUTATION,
-            _FOLDER_MUTATION,
-            _DRIVE_MUTATION,
-            _BACKEND_MUTATION,
+            _FILE_RESOURCE.mutation,
+            _FOLDER_RESOURCE.mutation,
+            _DRIVE_RESOURCE.mutation,
+            _BACKEND_RESOURCE.mutation,
         ],
         "subscription": [changes(File, field="fileChanged")],
-        "types": [*_SHARED_TYPES, BackendType, *_BACKEND_DATA_TYPES],
+        "types": [*_SHARED_TYPES, BackendType, *_BACKEND_RESOURCE.types],
     },
 }

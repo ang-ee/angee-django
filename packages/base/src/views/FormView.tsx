@@ -4,15 +4,16 @@ import { useBlocker } from "@tanstack/react-router";
 import {
   publicIdLabel,
   rowPublicId,
-  useFormOverride,
   useResourceMutation,
   useResourceRecord,
+  type Row,
+} from "@angee/data";
+import {
+  useFormOverride,
   useModelMetadata,
   useSchemaFieldMetadata,
   useSlot,
-  validationErrorsFromError,
   type ModelMetadata,
-  type Row,
 } from "@angee/sdk";
 
 import { Button } from "../ui/button";
@@ -31,6 +32,7 @@ import { Tabs } from "../ui/tabs";
 import { ControlBand } from "../shell/ControlBand";
 import { cn } from "../lib/cn";
 import { SlotOutlet } from "../lib/slot-outlet";
+import { validationErrorsFromError } from "./validation-errors";
 import {
   slugify,
   useResolvedWidget,

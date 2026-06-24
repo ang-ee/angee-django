@@ -1,4 +1,5 @@
-import { useBusyRun, useResourceMutation } from "@angee/sdk";
+import { useResourceMutation } from "@angee/data";
+import { useBusyRun } from "@angee/base";
 
 export interface FolderActions {
   busy: boolean;
@@ -15,8 +16,9 @@ export interface FolderActions {
 }
 
 /**
- * Folder write verbs over the gated `createFolder` and the folder CRUD
- * mutations; `onChanged` fires after each so the navigator can refetch its tree.
+ * Folder write verbs over the Hasura resource mutations; folder creation is
+ * backed by the storage manager factory server-side. `onChanged` fires after
+ * each so the navigator can refetch its tree.
  */
 export function useFolderActions(
   options: { onChanged?: () => void } = {},

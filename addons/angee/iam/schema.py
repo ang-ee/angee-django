@@ -48,16 +48,18 @@ from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
-from angee.base.models import SqidPublicIdentity
-from angee.graphql.data import data_query
-from angee.graphql.deletion import DeletePreview, delete_by_public_id
-from angee.graphql.ids import PublicID, require_instance_for_id
+from angee.base.models import SqidPublicIdentity, instance_from_public_id
+from angee.graphql.data import hasura_resource, pin_snake_wire_names
+from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
+from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
+from angee.graphql.writes import write_queryset
 from angee.iam.identity import user_display_label as _user_display_label
 from angee.iam.identity import user_principal
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import request_from_info as _request
+from angee.iam.permissions import require_platform_admin
 
 
 def _has_module_spec(dotted_path: str) -> bool:
@@ -155,6 +157,9 @@ class CurrentUserType(AngeeNode):
         """
 
         return sorted(str(role) for role in rebac_roles_of(cast(Any, self)))
+
+
+pin_snake_wire_names(CurrentUserType)
 
 
 @strawberry_django.type(Group)
@@ -319,33 +324,6 @@ class LoginPayload:
 
     ok: bool
     user: UserType | None = None
-
-
-@strawberry.input
-class UserInput:
-    """Admin-write fields accepted when creating a user. ``password`` is write-only."""
-
-    username: str
-    password: str
-    email: str = ""
-    first_name: str = ""
-    last_name: str = ""
-    is_staff: bool = False
-    is_active: bool = True
-
-
-@strawberry.input
-class UserPatch:
-    """Admin-write fields accepted when updating a user. ``password`` re-hashes when set."""
-
-    id: PublicID
-    username: str | None = strawberry.UNSET
-    password: str | None = strawberry.UNSET
-    email: str | None = strawberry.UNSET
-    first_name: str | None = strawberry.UNSET
-    last_name: str | None = strawberry.UNSET
-    is_staff: bool | None = strawberry.UNSET
-    is_active: bool | None = strawberry.UNSET
 
 
 def _relationship_ordering(*, include_relation: bool = False) -> tuple[str, ...]:
@@ -781,78 +759,193 @@ def _user_graphql_type_name() -> str:
     return str(cast(Any, UserType).__strawberry_definition__.name)
 
 
-@strawberry_django.filter_type(User, lookups=True)
-class UserFilter:
-    """Field lookups accepted when filtering the admin users list."""
+def _user_resource_id_column() -> str:
+    """Return the ORM column backing the public ``users`` id argument."""
 
-    username: auto
-    email: auto
-    first_name: auto
-    last_name: auto
-    is_staff: auto
-    is_active: auto
+    # Bare source tests can load this schema before the composer emits the
+    # runtime sqid-bearing IAM user model. That fallback is a source-test model
+    # boundary, not a public API compatibility layer.
+    return "sqid" if _runtime_iam_models_built() else "pk"
 
 
-@strawberry_django.order_type(User)
-class UserOrder:
-    """Orderings accepted by the admin users list."""
+def _admin_user_queryset(info: strawberry.Info) -> QuerySet[Any]:
+    """Return the admin-scoped user queryset for console resources."""
 
-    username: auto
-    email: auto
-    first_name: auto
-    last_name: auto
-    is_staff: auto
-    is_active: auto
+    require_platform_admin(info)
+    return cast(QuerySet[Any], User.objects.all())
 
 
-@strawberry_django.filter_type(Group, lookups=True)
-class GroupFilter:
-    """Field lookups accepted when filtering Django auth groups."""
+def _admin_user_aggregate_queryset(info: strawberry.Info) -> QuerySet[Any]:
+    """Return the user queryset safe for aggregate and grouped math."""
 
-    name: auto
-
-
-@strawberry_django.order_type(Group)
-class GroupOrder:
-    """Orderings accepted by the auth groups list."""
-
-    name: auto
+    queryset = _admin_user_queryset(info)
+    scoped = getattr(queryset, "scoped_for_aggregate", None)
+    return cast(QuerySet[Any], scoped() if callable(scoped) else queryset)
 
 
-UserDataQuery, _USER_DATA_TYPES = data_query(
+def _admin_group_queryset(info: strawberry.Info) -> QuerySet[Any]:
+    """Return the admin-scoped Django auth-group catalogue queryset."""
+
+    require_platform_admin(info)
+    return cast(QuerySet[Any], Group.objects.all())
+
+
+def _user_for_resource_id(value: str, queryset: QuerySet[Any]) -> Any:
+    """Return one user addressed by the Hasura resource id boundary."""
+
+    if _user_resource_id_column() == "sqid":
+        instance = instance_from_public_id(User, str(value), queryset=queryset)
+    else:
+        instance = queryset.filter(pk=value).first()
+    if instance is None:
+        raise ValueError(f"User {value!r} was not found")
+    return instance
+
+
+def _group_pk_from_public_id(value: Any) -> int | None:
+    """Decode the IAM group public id to its Django primary key."""
+
+    return GROUP_PUBLIC_IDENTITY.public_id_to_pk(str(value))
+
+
+def _group_for_resource_id(value: str, queryset: QuerySet[Any]) -> Any:
+    """Return one Django auth group addressed by its IAM public id."""
+
+    instance = instance_from_public_id(
+        Group,
+        str(value),
+        queryset=queryset,
+        public_identity=GROUP_PUBLIC_IDENTITY,
+    )
+    if instance is None:
+        raise ValueError(f"Group {value!r} was not found")
+    return instance
+
+
+def _delete_instance(instance: Any) -> Any | None:
+    """Delete ``instance`` in Hasura ``delete_<res>_by_pk`` form."""
+
+    preview = DeletePreview.from_instance(instance)
+    if preview.has_blockers:
+        return None
+    pk = instance.pk
+    instance.delete()
+    instance.pk = pk
+    return instance
+
+
+def _delete_user_preview(value: str, *, confirm: bool) -> DeletePreview:
+    """Return or apply the authored user cascade delete preview."""
+
+    with transaction.atomic():
+        instance = _user_for_resource_id(str(value), write_queryset(User))
+        preview = DeletePreview.from_instance(instance)
+        if confirm and not preview.has_blockers:
+            instance.delete()
+        return preview
+
+
+class IAMUserWriteBackend:
+    """Admin write semantics for the Hasura ``users`` resource."""
+
+    def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+        """Create one user through Django's password-hashing manager."""
+
+        require_platform_admin(info)
+        payload = dict(data)
+        password = payload.pop("password")
+        with transaction.atomic():
+            return User.objects.create_user(password=password, **payload)
+
+    def update(self, info: strawberry.Info, pk: str, data: dict[str, Any]) -> Any:
+        """Patch one user, hashing ``password`` when supplied."""
+
+        require_platform_admin(info)
+        payload = dict(data)
+        password = payload.pop("password", None)
+        with transaction.atomic():
+            user = _user_for_resource_id(pk, write_queryset(User))
+            for field, value in payload.items():
+                setattr(user, field, value)
+            if password:
+                user.set_password(password)
+            user.save()
+            return user
+
+    def delete(self, info: strawberry.Info, pk: str) -> Any | None:
+        """Delete one user by public id and return the deleted row."""
+
+        require_platform_admin(info)
+        with transaction.atomic():
+            return _delete_instance(_user_for_resource_id(pk, write_queryset(User)))
+
+
+class IAMGroupWriteBackend:
+    """Admin write semantics for the Hasura ``groups`` resource."""
+
+    def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+        """Create one Django auth group."""
+
+        require_platform_admin(info)
+        with transaction.atomic():
+            group = Group(**data)
+            group.full_clean()
+            group.save()
+            return group
+
+    def update(self, info: strawberry.Info, pk: str, data: dict[str, Any]) -> Any:
+        """Patch one Django auth group."""
+
+        require_platform_admin(info)
+        with transaction.atomic():
+            group = _group_for_resource_id(pk, Group.objects.all())
+            for field, value in data.items():
+                setattr(group, field, value)
+            group.full_clean()
+            group.save()
+            return group
+
+    def delete(self, info: strawberry.Info, pk: str) -> Any | None:
+        """Delete one Django auth group by public id."""
+
+        require_platform_admin(info)
+        with transaction.atomic():
+            return _delete_instance(_group_for_resource_id(pk, Group.objects.all()))
+
+
+_USER_RESOURCE = hasura_resource(
     UserType,
-    type_name="UserDataQuery",
-    filters=UserFilter,
-    order=UserOrder,
-    list_name="users",
-    detail_name="user",
-    aggregate_name="user_aggregate",
-    group_name="user_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["is_staff", "is_active"],
-    enable_filter_echo=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    aggregate_kwargs={"name_prefix": "UserAggregate", "pagination_style": "offset"},
-    # Bare source tests use django.contrib.auth.User before the composer emits iam.User.
-    allow_raw_pk_compat=not _runtime_iam_models_built(),
+    model=User,
+    name="users",
+    filterable=["id", "username", "email", "first_name", "last_name", "is_staff", "is_active"],
+    sortable=["username", "email", "first_name", "last_name", "is_staff", "is_active"],
+    aggregatable=["id"],
+    groupable=["is_staff", "is_active"],
+    writable=["username", "password", "email", "first_name", "last_name", "is_staff", "is_active"],
+    get_queryset=_admin_user_queryset,
+    get_aggregate_queryset=_admin_user_aggregate_queryset,
+    write_backend=IAMUserWriteBackend(),
+    id_column=_user_resource_id_column(),
+    model_label="iam.User",
 )
 
 
-GroupDataQuery, _GROUP_DATA_TYPES = data_query(
+_GROUP_RESOURCE = hasura_resource(
     GroupType,
-    type_name="GroupDataQuery",
-    filters=GroupFilter,
-    order=GroupOrder,
-    list_name="groups",
-    detail_name="group",
-    aggregate_name="group_aggregate",
-    group_name="group_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["name"],
-    enable_filter_echo=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    aggregate_kwargs={"name_prefix": "GroupAggregate", "pagination_style": "offset"},
-    public_identity=GROUP_PUBLIC_IDENTITY,
+    model=Group,
+    name="groups",
+    filterable=["id", "name"],
+    sortable=["name"],
+    aggregatable=["id"],
+    groupable=["name"],
+    writable=["name"],
+    get_queryset=_admin_group_queryset,
+    get_aggregate_queryset=_admin_group_queryset,
+    write_backend=IAMGroupWriteBackend(),
+    id_decode=_group_pk_from_public_id,
+    id_column="pk",
+    model_label="iam.Group",
+    public_id_field="id",
 )
 
 
@@ -966,50 +1059,23 @@ class IAMMutation:
 
 
 @strawberry.type
-class IAMUserMutation:
-    """Admin CRUD for users; ``password`` is write-only and hashed via ``set_password``."""
+class IAMUserDeletePreviewMutation:
+    """Authored cascade delete preview for users."""
 
-    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def create_user(self, data: UserInput) -> UserType:
-        """Create one user with a hashed password."""
+    @strawberry.mutation(name="delete_user")
+    def delete_user(self, info: strawberry.Info, id: PublicID, confirm: bool = False) -> DeletePreview:
+        """Preview or confirm deletion of one user by public id."""
 
-        with system_context(reason="iam.graphql.user.create"), transaction.atomic():
-            user = User.objects.create_user(
-                data.username,
-                email=data.email,
-                password=data.password,
-                first_name=data.first_name,
-                last_name=data.last_name,
-                is_staff=data.is_staff,
-                is_active=data.is_active,
-            )
-        return cast(UserType, user)
+        require_platform_admin(info)
+        return _delete_user_preview(str(id), confirm=confirm)
 
-    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def update_user(self, data: UserPatch) -> UserType:
-        """Update one user; re-hash the password only when a new one is supplied."""
 
-        with system_context(reason="iam.graphql.user.update"), transaction.atomic():
-            user = require_instance_for_id(User, data.id, queryset=User._default_manager.all())
-            for field in ("username", "email", "first_name", "last_name", "is_staff", "is_active"):
-                value = getattr(data, field)
-                if value is not strawberry.UNSET:
-                    setattr(user, field, value)
-            if data.password is not strawberry.UNSET and data.password:
-                user.set_password(data.password)
-            user.save()
-        return cast(UserType, user)
-
-    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def delete_user(self, id: PublicID, confirm: bool = False) -> DeletePreview:
-        """Delete one user when unblocked."""
-
-        return delete_by_public_id(
-            User,
-            str(id),
-            reason="iam.graphql.user.delete",
-            confirm=confirm,
-        )
+IAMUserDeletePreviewMutation = attach_delete_preview_metadata(
+    IAMUserDeletePreviewMutation,
+    model=User,
+    node=UserType,
+    field="delete_user",
+)
 
 
 @strawberry.type
@@ -1055,12 +1121,14 @@ schemas = {
         "query": [
             IAMQuery,
             IAMConsoleQuery,
-            UserDataQuery,
-            GroupDataQuery,
+            _USER_RESOURCE.query,
+            _GROUP_RESOURCE.query,
         ],
         "mutation": [
             IAMMutation,
-            IAMUserMutation,
+            _USER_RESOURCE.mutation,
+            _GROUP_RESOURCE.mutation,
+            IAMUserDeletePreviewMutation,
             IAMPermissionHubMutation,
         ],
         "subscription": [changes(User, field="userChanged")],
@@ -1076,8 +1144,8 @@ schemas = {
             IAMResourceSchemaType,
             IAMOverviewNamespaceType,
             IAMOverviewType,
-            *_USER_DATA_TYPES,
-            *_GROUP_DATA_TYPES,
+            *_USER_RESOURCE.types,
+            *_GROUP_RESOURCE.types,
             IAMRelationshipType,
         ],
     },
