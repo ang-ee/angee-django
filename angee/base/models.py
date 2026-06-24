@@ -32,11 +32,6 @@ class AngeeQuerySet(RebacQuerySet[_ModelT]):
 
         return _instance_from_public_id_queryset(self, value)
 
-    async def afrom_public_id(self, value: str) -> _ModelT | None:
-        """Async :meth:`from_public_id` — resolves on the event loop, row-scoped."""
-
-        return await _ainstance_from_public_id_queryset(self, value)
-
     def apply_ambient_scope(self) -> Self:
         """Eagerly apply REBAC row scope using the queryset or ambient actor."""
 
@@ -138,12 +133,6 @@ class AngeeModel(TimestampMixin, RebacMixin):
         abstract = True
 
     @classmethod
-    def get_composition_label(cls) -> str:
-        """Return this model's normalized composition label."""
-
-        return cls._meta.label_lower
-
-    @classmethod
     def is_runtime_model(cls) -> bool:
         """Return whether this model class declares itself as a runtime model."""
 
@@ -226,8 +215,6 @@ class SqidPublicIdentity:
     """Sqid public identity for a model Angee does not own with a field."""
 
     prefix: str
-    model_label: str | None = None
-    public_id_field: str = "sqid"
     min_length: int = 8
     alphabet: str | None = None
 
@@ -306,15 +293,6 @@ def is_public_data_model(model: type[models.Model]) -> bool:
     return public_data_id_owner(model) is not None
 
 
-def public_id_value_of(instance: models.Model) -> Any:
-    """Return the model-owned public id value for ``instance`` if available."""
-
-    resolver = getattr(instance, "public_id_value", None)
-    if callable(resolver):
-        return resolver()
-    return instance.pk
-
-
 def instance_from_public_id(
     model: type[_ModelT],
     value: str,
@@ -325,10 +303,6 @@ def instance_from_public_id(
     """Return ``model`` instance addressed by Angee or Django public ID."""
 
     active_queryset = queryset if queryset is not None else model._default_manager.all()
-    resolver = getattr(active_queryset, "from_public_id", None)
-    if callable(resolver):
-        return cast(_ModelT | None, resolver(value))
-
     return _instance_from_public_id_queryset(
         active_queryset,
         value,
@@ -339,7 +313,8 @@ def instance_from_public_id(
 def public_id_of(instance: models.Model) -> str:
     """Return the Angee public ID or Django primary key for ``instance``."""
 
-    value = public_id_value_of(instance)
+    resolver = getattr(instance, "public_id_value", None)
+    value = resolver() if callable(resolver) else instance.pk
     if value in (None, ""):
         return ""
     return str(value)
@@ -386,21 +361,6 @@ def _instance_from_public_id_queryset(
     try:
         lookup = _public_id_lookup(queryset.model, value, public_identity=public_identity)
         instance = queryset.filter(**lookup).first()
-    except TypeError, ValueError:
-        return None
-    return cast(_ModelT | None, instance)
-
-
-async def _ainstance_from_public_id_queryset(
-    queryset: models.QuerySet[_ModelT],
-    value: str,
-) -> _ModelT | None:
-    """Async mirror of :func:`_instance_from_public_id_queryset`."""
-
-    if value == "":
-        return None
-    try:
-        instance = await queryset.filter(**_public_id_lookup(queryset.model, value)).afirst()
     except TypeError, ValueError:
         return None
     return cast(_ModelT | None, instance)

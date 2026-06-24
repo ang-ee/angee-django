@@ -50,7 +50,7 @@ def prepend_import_paths(paths: Iterable[Path]) -> None:
 # Reloads reuse the module object, so remove previously composed Django settings
 # before rebuilding the namespace from the current project contract.
 for setting in list(globals()):
-    if setting == _autoconfig.YAMLCONF_ATTRIBUTES or (not setting.startswith("_") and setting.isupper()):
+    if setting == _autoconfig.YAMLCONF_ATTRIBUTES or _autoconfig.is_setting_name(setting):
         globals().pop(setting, None)
 
 # 1. Find the project root and project settings module.
@@ -137,7 +137,7 @@ for attribute in getattr(project_settings, _autoconfig.YAMLCONF_ATTRIBUTES, {}).
             continue
         try:
             source_path = str(resolve_path(str(source)))
-        except (ImproperlyConfigured, OSError, TypeError, ValueError):
+        except ImproperlyConfigured, OSError, TypeError, ValueError:
             source_path = str(source)
         if source_path not in allowed_yamlconf_sources:
             raise ImproperlyConfigured(f"Unexpected django-yamlconf source {source!r}")
@@ -146,7 +146,7 @@ for attribute in getattr(project_settings, _autoconfig.YAMLCONF_ATTRIBUTES, {}).
 seed = {
     name: value
     for name, value in vars(project_settings).items()
-    if not name.startswith("_") and name.isupper() and name not in yamlconf_predefined_settings
+    if _autoconfig.is_setting_name(name) and name not in yamlconf_predefined_settings
 }
 seed.setdefault("BASE_DIR", project_dir)
 
@@ -158,7 +158,7 @@ globals().update(
             init_globals=seed,
             run_name=f"{defaults_settings_module}.__effective__",
         ).items()
-        if (name == _autoconfig.YAMLCONF_ATTRIBUTES or (not name.startswith("_") and name.isupper()))
+        if (name == _autoconfig.YAMLCONF_ATTRIBUTES or _autoconfig.is_setting_name(name))
         and name not in yamlconf_predefined_settings
     }
 )

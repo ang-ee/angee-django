@@ -22,27 +22,6 @@ DATA_RESOURCE_METADATA_ATTR = "__angee_data_resource__"
 """Attribute attached to schema surfaces that contribute model resource metadata."""
 
 _FILTER_CONTROL_FIELDS = frozenset({"AND", "OR", "NOT", "DISTINCT", "and", "or", "not", "distinct"})
-_GROUP_EXTRACTIONS = (
-    ("year", "YEAR", "year", "year_range"),
-    ("quarter", "QUARTER", "quarter", "quarter_range"),
-    ("month", "MONTH", "month", "month_range"),
-    ("week", "WEEK", "week", "week_range"),
-    ("day", "DAY", "day", "day_range"),
-    ("hour", "HOUR", "hour", "hour_range"),
-    ("minute", "MINUTE", "minute", "minute_range"),
-    ("second", "SECOND", "second", "second_range"),
-    ("year_number", "YEAR_NUMBER", "year_number", None),
-    ("quarter_number", "QUARTER_NUMBER", "quarter_number", None),
-    ("month_number", "MONTH_NUMBER", "month_number", None),
-    ("iso_week_number", "ISO_WEEK_NUMBER", "iso_week_number", None),
-    ("day_of_year", "DAY_OF_YEAR", "day_of_year", None),
-    ("day_of_month", "DAY_OF_MONTH", "day_of_month", None),
-    ("day_of_week", "DAY_OF_WEEK", "day_of_week", None),
-    ("hour_number", "HOUR_NUMBER", "hour_number", None),
-    ("minute_number", "MINUTE_NUMBER", "minute_number", None),
-    ("second_number", "SECOND_NUMBER", "second_number", None),
-)
-_FRONTEND_MEASURE_OPS = ("sum", "avg", "min", "max")
 
 _RESOURCE_CAPABILITY_ORDER = (
     "list",
@@ -316,13 +295,6 @@ def make_data_resource_metadata(
     order_fields = _require_unique(exposed_model_label, "order field", order_fields)
     aggregate_fields = _require_unique(exposed_model_label, "aggregate field", aggregate_fields)
     group_by_fields = _require_unique(exposed_model_label, "group axis", group_by_fields)
-    if roots.aggregate_name is not None:
-        if not aggregate_measures:
-            aggregate_measures = _aggregate_measures(model, aggregate_fields)
-        if not default_measures:
-            default_measures = (DataAggregateMeasureMetadata(op="count"),)
-    if roots.group_name is not None and not group_dimensions:
-        group_dimensions = _group_dimensions(model, group_by_fields)
     if roots.group_name is not None and not relation_axes:
         relation_axes = _relation_axes(model, group_by_fields)
     if order_fields and not default_sort:
@@ -1024,35 +996,6 @@ def _field_kind(
     return "scalar"
 
 
-def _field_scalar(field: models.Field[Any, Any] | None, kind: str) -> str | None:
-    """Return the scalar family represented by ``field`` when known."""
-
-    if kind in {"relation", "enum"}:
-        return None
-    if kind == "list" and (field is None or field.is_relation):
-        return None
-    if field is None:
-        return None
-    if isinstance(field, models.BooleanField):
-        return "Boolean"
-    if isinstance(field, models.IntegerField):
-        return "Int"
-    if isinstance(field, (models.DecimalField, models.FloatField)):
-        return "Float"
-    if isinstance(field, models.DateTimeField):
-        return "DateTime"
-    if isinstance(field, models.DateField):
-        return "Date"
-    if isinstance(field, models.JSONField):
-        return "JSON"
-    if isinstance(field, (models.CharField, models.TextField)):
-        return "String"
-    raise ImproperlyConfigured(
-        f"resource metadata for {field.model._meta.label} cannot classify unsupported "
-        f"field '{field.name}' ({field.__class__.__name__})."
-    )
-
-
 def _field_widget(field: models.Field[Any, Any] | None, kind: str) -> str | None:
     """Return the default rendered widget owned by the model field shape."""
 
@@ -1079,105 +1022,6 @@ def _field_widget(field: models.Field[Any, Any] | None, kind: str) -> str | None
     if isinstance(field, models.JSONField):
         return "json"
     return None
-
-
-def _group_dimensions(
-    model: type[models.Model],
-    group_by_fields: tuple[str, ...],
-) -> tuple[DataGroupDimensionMetadata, ...]:
-    """Return backend-owned grouped bucket dimensions."""
-
-    return tuple(_group_dimension(model, path) for path in group_by_fields)
-
-
-def _group_dimension(
-    model: type[models.Model],
-    path: str,
-) -> DataGroupDimensionMetadata:
-    """Return one group dimension declaration."""
-
-    field = _require_model_field_for_path(model, path, purpose="group axis")
-    key = _group_key_path(field, path)
-    kind = "relation" if field is not None and _is_to_one_relation(field) else "column"
-    scalar = "ID" if kind == "relation" else _field_scalar(field, _field_kind(field, None))
-    return DataGroupDimensionMetadata(
-        field=path,
-        input=_group_input_name(path),
-        key=key,
-        kind=kind,
-        scalar=scalar,
-        extractions=_group_extractions(field, key),
-    )
-
-
-def _group_input_name(path: str) -> str:
-    """Return the generated groupable enum value for one model field path."""
-
-    return path.replace(".", "__").upper()
-
-
-def _group_key_path(
-    field: models.Field[Any, Any] | None,
-    path: str,
-) -> str:
-    """Return the grouped result key field path for one grouping axis."""
-
-    if "__" not in path and field is not None and _is_to_one_relation(field):
-        return f"{path}_id"
-    return path.replace(".", "__")
-
-
-def _group_extractions(
-    field: models.Field[Any, Any] | None,
-    key: str,
-) -> tuple[DataGroupExtractionMetadata, ...]:
-    """Return supported extraction functions for a group axis."""
-
-    if not isinstance(field, (models.DateField, models.DateTimeField)):
-        return ()
-    return tuple(
-        DataGroupExtractionMetadata(
-            name=name,
-            input=input_name,
-            key=f"{key}_{key_suffix}",
-            range_key=f"{key}_{range_suffix}" if range_suffix is not None else None,
-        )
-        for name, input_name, key_suffix, range_suffix in _GROUP_EXTRACTIONS
-    )
-
-
-def _aggregate_measures(
-    model: type[models.Model],
-    aggregate_fields: tuple[str, ...],
-) -> tuple[DataAggregateMeasureMetadata, ...]:
-    """Return aggregate measures consumed by the frontend measure extractors."""
-
-    measures: list[DataAggregateMeasureMetadata] = []
-    for path in aggregate_fields:
-        field = _require_model_field_for_path(model, path, purpose="aggregate measure")
-        if getattr(field, "primary_key", False):
-            continue
-        ops = _measure_ops_for_field(field)
-        if not ops:
-            raise ImproperlyConfigured(
-                f"resource metadata for {model._meta.label} declares unsupported aggregate "
-                f"measure field path '{path}' ({field.__class__.__name__})."
-            )
-        measures.extend(
-            DataAggregateMeasureMetadata(op=op, field=path, input=_group_input_name(path))
-            for op in ops
-        )
-    return tuple(measures)
-
-
-def _measure_ops_for_field(field: models.Field[Any, Any]) -> tuple[str, ...]:
-    """Return frontend-supported aggregate operators for one Django field."""
-
-    if isinstance(field, (models.IntegerField, models.DecimalField, models.FloatField)):
-        return _FRONTEND_MEASURE_OPS
-    if isinstance(field, (models.DateField, models.DateTimeField)):
-        return ("min", "max")
-    return ()
 
 
 def _default_sort(

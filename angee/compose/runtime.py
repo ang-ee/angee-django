@@ -14,7 +14,7 @@ import importlib
 import inspect
 from collections.abc import Iterable
 from pathlib import Path
-from typing import cast
+from typing import NamedTuple, cast
 
 from django.apps import AppConfig, apps
 from django.conf import settings
@@ -28,6 +28,16 @@ from angee.fs import write_atomic
 
 GENERATED_SENTINEL = "# ANGEE GENERATED RUNTIME - DO NOT EDIT"
 """Sentinel required before destructive runtime cleanup."""
+
+
+class ModelContributions(NamedTuple):
+    """Abstract source models one addon contributes, split by composition role."""
+
+    owned: tuple[type[models.Model], ...]
+    """Models emitted as concrete runtime classes under the addon's label."""
+
+    extensions: tuple[type[models.Model], ...]
+    """Same-row extensions that merge fields into another addon's model."""
 
 
 class Runtime:
@@ -61,6 +71,7 @@ class Runtime:
         self.addons = tuple(addons)
         self.runtime_dir = runtime_dir
         self.runtime_module = runtime_module
+        self._contributions = tuple((addon, self.model_contributions(addon)) for addon in self.addons)
         self.sources_by_label = self._sources_by_label()
         self.source_models_by_composition_label = self._source_models_by_composition_label()
         self._check_runtime_parent_targets()
@@ -285,7 +296,7 @@ class Runtime:
             extension_bases = tuple(
                 base
                 for extension in self.extensions.get(
-                    model_class.get_composition_label(),
+                    model_class._meta.label_lower,
                     (),
                 )
                 for base in extension.get_extension_bases()
@@ -381,8 +392,7 @@ class Runtime:
                         decorators.append(decorator)
                     elif previous != decorator:
                         raise ImproperlyConfigured(
-                            f"{model_class._meta.label} composes conflicting "
-                            f"decorators for {decorator.import_path!r}"
+                            f"{model_class._meta.label} composes conflicting decorators for {decorator.import_path!r}"
                         )
         return tuple(decorators)
 
@@ -392,10 +402,7 @@ class Runtime:
     ) -> list[str]:
         """Return import lines for model decorators."""
 
-        return [
-            f"import {self._model_decorator_module(decorator)}"
-            for decorator in decorators
-        ]
+        return [f"import {self._model_decorator_module(decorator)}" for decorator in decorators]
 
     def _model_decorator_source(
         self,
@@ -406,10 +413,7 @@ class Runtime:
         """Return one emitted class decorator line."""
 
         parts = [repr(arg) for arg in decorator.args]
-        parts.extend(
-            f"{name}={value!r}"
-            for name, value in decorator.kwargs
-        )
+        parts.extend(f"{name}={value!r}" for name, value in decorator.kwargs)
         for name, attr in decorator.kwargs_from_model:
             found, value = self._composed_model_attr(
                 model_class,
@@ -418,8 +422,7 @@ class Runtime:
             )
             if not found:
                 raise ImproperlyConfigured(
-                    f"{model_class._meta.label} decorator {decorator.import_path!r} "
-                    f"requires model attribute {attr!r}"
+                    f"{model_class._meta.label} decorator {decorator.import_path!r} requires model attribute {attr!r}"
                 )
             parts.append(f"{name}={value!r}")
         return f"@{decorator.import_path}({', '.join(parts)})"
@@ -442,9 +445,7 @@ class Runtime:
 
         module, _separator, name = decorator.import_path.rpartition(".")
         if not module or not name:
-            raise ImproperlyConfigured(
-                f"Model decorator import path must be dotted: {decorator.import_path!r}"
-            )
+            raise ImproperlyConfigured(f"Model decorator import path must be dotted: {decorator.import_path!r}")
         return module
 
     def _history_source(
@@ -468,16 +469,17 @@ class Runtime:
         """Return same-row model extensions grouped by target composition label."""
 
         grouped: dict[str, list[type[AngeeModel]]] = {}
-        for extension in (extension for addon in self.addons for extension in self.model_contributions(addon)[1]):
-            extension_model = cast(type[AngeeModel], extension)
-            target = extension_model.get_extension_target()
-            if target is None:
-                continue
-            if target not in self.source_models_by_composition_label:
-                raise ImproperlyConfigured(
-                    f"{extension.__module__}.{extension.__name__} extends unknown model {target!r}"
-                )
-            grouped.setdefault(target, []).append(extension_model)
+        for _addon, contributions in self._contributions:
+            for extension in contributions.extensions:
+                extension_model = cast(type[AngeeModel], extension)
+                target = extension_model.get_extension_target()
+                if target is None:
+                    continue
+                if target not in self.source_models_by_composition_label:
+                    raise ImproperlyConfigured(
+                        f"{extension.__module__}.{extension.__name__} extends unknown model {target!r}"
+                    )
+                grouped.setdefault(target, []).append(extension_model)
         return {target: tuple(classes) for target, classes in grouped.items()}
 
     def _check_runtime_parent_targets(self) -> None:
@@ -498,7 +500,7 @@ class Runtime:
 
         for source_models in self.sources_by_label.values():
             for model_class in source_models:
-                label = model_class.get_composition_label()
+                label = model_class._meta.label_lower
                 owners: dict[str, type[models.Model]] = {}
                 bases = (
                     *(base for extension in self.extensions.get(label, ()) for base in extension.get_extension_bases()),
@@ -519,9 +521,9 @@ class Runtime:
         """Return source models grouped by emitted runtime app label."""
 
         grouped: dict[str, list[type[AngeeModel]]] = {}
-        for addon in self.addons:
+        for addon, contributions in self._contributions:
             models_for_label = grouped.setdefault(addon.label, [])
-            models_for_label.extend(cast(type[AngeeModel], model) for model in self.model_contributions(addon)[0])
+            models_for_label.extend(cast(type[AngeeModel], model) for model in contributions.owned)
         return {label: tuple(source_models) for label, source_models in sorted(grouped.items()) if source_models}
 
     def _source_models_by_composition_label(self) -> dict[str, type[AngeeModel]]:
@@ -530,7 +532,7 @@ class Runtime:
         models_by_label: dict[str, type[AngeeModel]] = {}
         for source_models in self.sources_by_label.values():
             for model_class in source_models:
-                label = model_class.get_composition_label()
+                label = model_class._meta.label_lower
                 previous = models_by_label.setdefault(label, model_class)
                 if previous is not model_class:
                     raise ImproperlyConfigured(
@@ -605,10 +607,7 @@ class Runtime:
     def _has_preserved_migrations(self) -> bool:
         """Return whether cleanup will leave migration files behind."""
 
-        return any(
-            path.is_file() and self._is_preserved_migration_path(path)
-            for path in self.runtime_dir.rglob("*")
-        )
+        return any(path.is_file() and self._is_preserved_migration_path(path) for path in self.runtime_dir.rglob("*"))
 
     def _class_import(
         self,
@@ -640,9 +639,7 @@ class Runtime:
 
         target = model_class.get_extension_target()
         if target is None:
-            raise ImproperlyConfigured(
-                f"{model_class.__module__}.{model_class.__name__} has no runtime parent target"
-            )
+            raise ImproperlyConfigured(f"{model_class.__module__}.{model_class.__name__} has no runtime parent target")
         parent = self.source_models_by_composition_label[target]
         if parent._meta.app_label == label:
             return None
@@ -739,7 +736,7 @@ class Runtime:
     def model_contributions(
         self,
         app_config: AppConfig,
-    ) -> tuple[tuple[type[models.Model], ...], tuple[type[models.Model], ...]]:
+    ) -> ModelContributions:
         """Return source models and extensions declared by one Django app config.
 
         Runtime owns this scan because addons deliberately remain plain Django
@@ -753,7 +750,7 @@ class Runtime:
         if source is None and module_has_submodule(app_config.module, "models"):
             source = importlib.import_module(f"{app_config.name}.models")
         if source is None:
-            return (), ()
+            return ModelContributions((), ())
         for value in source.__dict__.values():
             if not inspect.isclass(value):
                 continue
@@ -778,7 +775,7 @@ class Runtime:
                     models_owned.append(model_class)
                 else:
                     extensions.append(model_class)
-        return (
+        return ModelContributions(
             tuple(sorted(models_owned, key=lambda cls: cls._meta.object_name)),
             tuple(extensions),
         )

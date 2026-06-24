@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from typing import Any
 
 from django.apps import AppConfig
@@ -60,7 +60,7 @@ def addon_contribution(
     contribution = getattr(module, attr, None)
     if contribution is None:
         return []
-    value = contribution() if allow_callable and isinstance(contribution, Callable) else contribution
+    value = contribution() if allow_callable and callable(contribution) else contribution
     if not isinstance(value, Iterable):
         suffix = "iterable or callable" if allow_callable else "iterable"
         raise ImproperlyConfigured(f"{module_path}.{attr} must be {suffix}")

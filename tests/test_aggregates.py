@@ -9,9 +9,10 @@ from typing import NewType
 import pytest
 import strawberry
 import strawberry_django
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from strawberry import auto
+from strawberry_django_aggregates.errors import GroupByFieldNotAllowed
 
 from angee.base.models import AngeeDataModel
 from angee.graphql.data import hasura_resource
@@ -256,24 +257,6 @@ def test_data_resource_metadata_rejects_multiple_relation_label_axes() -> None:
         )
 
 
-def test_data_resource_metadata_rejects_unknown_group_axis_path() -> None:
-    """Group axes must resolve to a concrete model field path."""
-
-    @strawberry_django.type(ResourceThing)
-    class ResourceThingUnknownGroupType:
-        name: auto
-
-    with pytest.raises(ImproperlyConfigured, match="unknown group axis field path 'name__missing'"):
-        make_data_resource_metadata(
-            model=ResourceThing,
-            roots=DataResourceRoots(list_name="things", group_name="things_groups"),
-            type_names=DataResourceTypeNames(node="ResourceThingUnknownGroupType"),
-            capabilities=("list", "groups"),
-            node_type=ResourceThingUnknownGroupType,
-            group_by_fields=("name__missing",),
-        )
-
-
 def test_data_resource_metadata_rejects_duplicate_group_axes() -> None:
     """Duplicate backend group declarations must fail before artifact emission."""
 
@@ -289,25 +272,6 @@ def test_data_resource_metadata_rejects_duplicate_group_axes() -> None:
             capabilities=("list", "groups"),
             node_type=ResourceThingDuplicateGroupType,
             group_by_fields=("name", "name"),
-        )
-
-
-@pytest.mark.parametrize("path", ["related_parents", "related_parents__name"])
-def test_data_resource_metadata_rejects_to_many_group_axis_path(path: str) -> None:
-    """Grouped bucket axes cannot point at to-many relations."""
-
-    @strawberry_django.type(ResourceChild)
-    class ResourceChildToManyType:
-        name: auto
-
-    with pytest.raises(ImproperlyConfigured, match=f"unsupported to-many group axis field path '{path}'"):
-        make_data_resource_metadata(
-            model=ResourceChild,
-            roots=DataResourceRoots(list_name="children", group_name="children_groups"),
-            type_names=DataResourceTypeNames(node="ResourceChildToManyType"),
-            capabilities=("list", "groups"),
-            node_type=ResourceChildToManyType,
-            group_by_fields=(path,),
         )
 
 
@@ -505,29 +469,6 @@ def test_data_resource_metadata_rejects_unsupported_surface_scalar() -> None:
         )
 
 
-def test_data_resource_metadata_rejects_unsupported_group_axis_field_class() -> None:
-    """Group dimensions must fail on field classes the metadata cannot classify."""
-
-    @strawberry_django.type(ResourceTimedThing)
-    class ResourceTimedThingType(AngeeNode):
-        @strawberry.field
-        def label(self) -> str:
-            return "timed"
-
-    with pytest.raises(
-        ImproperlyConfigured,
-        match="cannot classify unsupported field 'duration' \\(DurationField\\)",
-    ):
-        make_data_resource_metadata(
-            model=ResourceTimedThing,
-            roots=DataResourceRoots(list_name="timedThings", group_name="timedThings_groups"),
-            type_names=DataResourceTypeNames(node="ResourceTimedThingType"),
-            capabilities=("list", "groups"),
-            node_type=ResourceTimedThingType,
-            group_by_fields=("duration",),
-        )
-
-
 def test_data_resource_metadata_marks_to_many_node_fields_as_lists() -> None:
     """Resource fields must not describe to-many object lists as to-one relations."""
 
@@ -554,61 +495,50 @@ def test_data_resource_metadata_marks_to_many_node_fields_as_lists() -> None:
     assert fields["relatedParents"].widget is None
 
 
-def test_data_resource_metadata_rejects_unknown_aggregate_measure_path() -> None:
-    """Aggregate measures must resolve to a concrete model field path."""
+@pytest.mark.parametrize(
+    ("groupable", "aggregatable"),
+    [
+        pytest.param(["name__missing"], ["id"], id="unknown-group-path"),
+        pytest.param(["related_parents"], ["id"], id="to-many-group-axis"),
+        pytest.param(["name"], ["id", "name__missing"], id="unknown-measure-path"),
+        pytest.param(["name"], ["id", "related_parents__name"], id="to-many-measure-path"),
+    ],
+)
+def test_hasura_resource_rejects_unresolvable_axis_paths(
+    groupable: list[str],
+    aggregatable: list[str],
+) -> None:
+    """A group/aggregate axis path that does not resolve to a column fails the build.
 
-    @strawberry_django.type(ResourceThing)
-    class ResourceThingUnknownMeasureType:
-        name: auto
-
-    with pytest.raises(ImproperlyConfigured, match="unknown aggregate measure field path 'name__missing'"):
-        make_data_resource_metadata(
-            model=ResourceThing,
-            roots=DataResourceRoots(list_name="things", aggregate_name="things_aggregate"),
-            type_names=DataResourceTypeNames(node="ResourceThingUnknownMeasureType"),
-            capabilities=("list", "aggregate"),
-            node_type=ResourceThingUnknownMeasureType,
-            aggregate_fields=("name__missing",),
-        )
-
-
-def test_data_resource_metadata_rejects_unsupported_aggregate_measure_field_class() -> None:
-    """Non-PK aggregate fields must map to a supported frontend measure family."""
-
-    @strawberry_django.type(ResourceThing)
-    class ResourceThingTextMeasureType:
-        name: auto
-
-    with pytest.raises(
-        ImproperlyConfigured,
-        match="unsupported aggregate measure field path 'name' \\(CharField\\)",
-    ):
-        make_data_resource_metadata(
-            model=ResourceThing,
-            roots=DataResourceRoots(list_name="things", aggregate_name="things_aggregate"),
-            type_names=DataResourceTypeNames(node="ResourceThingTextMeasureType"),
-            capabilities=("list", "aggregate"),
-            node_type=ResourceThingTextMeasureType,
-            aggregate_fields=("name",),
-        )
-
-
-def test_data_resource_metadata_rejects_to_many_aggregate_measure_path() -> None:
-    """Aggregate measures cannot traverse through to-many relations."""
+    Path resolution is owned by ``strawberry-django-aggregates`` (unknown and
+    to-many measure paths) and Angee's groupable guard (to-many group axes);
+    either way the misconfiguration fails fast at build time rather than emitting
+    a broken resource.
+    """
 
     @strawberry_django.type(ResourceChild)
-    class ResourceChildToManyMeasureType:
+    class ResourceChildResourceType(AngeeNode):
         name: auto
 
-    with pytest.raises(
-        ImproperlyConfigured,
-        match="unsupported to-many aggregate measure field path 'related_parents__name'",
-    ):
-        make_data_resource_metadata(
+    write_backend = type(
+        "NoopWriteBackend",
+        (),
+        {
+            "create": lambda self, info, data: None,
+            "update": lambda self, info, pk, data: None,
+            "delete": lambda self, info, pk: None,
+        },
+    )()
+    with pytest.raises((ImproperlyConfigured, FieldDoesNotExist, GroupByFieldNotAllowed)):
+        hasura_resource(
+            ResourceChildResourceType,
             model=ResourceChild,
-            roots=DataResourceRoots(list_name="children", aggregate_name="children_aggregate"),
-            type_names=DataResourceTypeNames(node="ResourceChildToManyMeasureType"),
-            capabilities=("list", "aggregate"),
-            node_type=ResourceChildToManyMeasureType,
-            aggregate_fields=("related_parents__name",),
+            name="children",
+            filterable=["id", "name"],
+            sortable=["name"],
+            aggregatable=aggregatable,
+            groupable=groupable,
+            get_queryset=lambda info: ResourceChild.objects.all(),
+            write_backend=write_backend,
+            id_decode=lambda value: value,
         )

@@ -89,7 +89,7 @@ def _iam_model(name: str) -> type[Any]:
 
 User = _iam_model("User")
 Group = DjangoGroup
-GROUP_PUBLIC_IDENTITY = SqidPublicIdentity(prefix="grp_", model_label="iam.Group")
+GROUP_PUBLIC_IDENTITY = SqidPublicIdentity(prefix="grp_")
 """Public data identity for Django auth groups exposed by IAM."""
 
 _IAM_OVERVIEW_DEFAULT_PEEK_LIMIT = 6

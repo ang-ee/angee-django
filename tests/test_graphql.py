@@ -560,18 +560,14 @@ def test_validation_errors_surface_per_field_extensions() -> None:
     assert plain_extensions["formErrors"] == ["Something went wrong."]
 
 
-def test_graphql_identity_exports_public_node_and_connection() -> None:
-    """The framework exposes one public node and cursor connection seam."""
+def test_graphql_identity_exports_public_node() -> None:
+    """The framework exposes one public node seam."""
 
-    from strawberry_django.relay import DjangoCursorConnection
-
-    from angee.graphql.node import AngeeConnection as Connection
     from angee.graphql.node import AngeeNode
 
     definition = strawberry.types.get_object_definition(AngeeNode)
     assert definition is not None
     assert definition.name == "Node"
-    assert issubclass(Connection, DjangoCursorConnection)
 
 
 def test_rebac_graphql_types_require_rebac_default_manager() -> None:

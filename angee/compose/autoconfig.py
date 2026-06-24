@@ -48,6 +48,18 @@ def setting_name(attribute_name: str) -> str:
     return attribute_name.split(":", maxsplit=1)[0].split(".", maxsplit=1)[0]
 
 
+def is_setting_name(name: str) -> bool:
+    """Return whether ``name`` is a top-level Django setting (public, all-caps).
+
+    The one owner of the rule that decides which namespace entries the composer
+    treats as Django settings. The ``YAMLCONF_ATTRIBUTES`` provenance sentinel
+    is exported alongside settings but is not itself a setting name, so callers
+    that carry it forward OR it in explicitly.
+    """
+
+    return not name.startswith("_") and name.isupper()
+
+
 class AutoConfig:
     """Apply addon autoconfig modules to a settings namespace."""
 
@@ -104,9 +116,7 @@ class AutoConfig:
 
         names = {YAMLCONF_ATTRIBUTES} | {setting_name(key) for key in attributes} | set(env_attributes)
         for name in names:
-            if (name == YAMLCONF_ATTRIBUTES or (not name.startswith("_") and name.isupper())) and hasattr(
-                settings_module, name
-            ):
+            if (name == YAMLCONF_ATTRIBUTES or is_setting_name(name)) and hasattr(settings_module, name):
                 self.namespace[str(name)] = getattr(settings_module, name)
 
 
