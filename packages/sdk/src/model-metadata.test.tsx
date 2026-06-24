@@ -166,7 +166,7 @@ describe("fieldMetadataFromSDL", () => {
               revisions: "noteRevisions",
             },
             typeNames: {
-              query: "NoteDataQuery",
+              query: "NoteResourceQuery",
               revision: "NoteRevision",
             },
             capabilities: ["list", "revisions"],
@@ -280,7 +280,7 @@ describe("fieldMetadataFromSDL", () => {
               deletePreview: "deleteVcsBridge",
             },
             typeNames: {
-              query: "VcsBridgeDataQuery",
+              query: "VcsBridgeResourceQuery",
               createInput: "VcsBridgeInput",
               updateInput: "VcsBridgePatch",
               deletePayload: "DeletePreview",
@@ -344,7 +344,7 @@ describe("fieldMetadataFromSDL", () => {
               groups: "integrationGroups",
             },
             typeNames: {
-              query: "IntegrationDataQuery",
+              query: "IntegrationResourceQuery",
               filter: "IntegrationFilter",
               groupBySpec: "IntegrationAggregateGroupBySpec",
               groupKey: "IntegrationGroupKey",
@@ -360,7 +360,7 @@ describe("fieldMetadataFromSDL", () => {
               groups: "noteGroups",
             },
             typeNames: {
-              query: "NoteDataQuery",
+              query: "NoteResourceQuery",
               filter: "NoteFilter",
               groupBySpec: "NoteGroupBySpec",
               groupKey: "NoteGroupKey",
@@ -420,7 +420,7 @@ describe("fieldMetadataFromSDL", () => {
               groups: "modelGroups",
             },
             typeNames: {
-              query: "ModelDataQuery",
+              query: "ModelResourceQuery",
               filter: "ModelFilter",
               groupBySpec: "ModelAggregateGroupBySpec",
               groupKey: "ModelAggregateGroupKey",
@@ -485,7 +485,7 @@ describe("fieldMetadataFromSDL", () => {
               groups: "modelGroups",
             },
             typeNames: {
-              query: "ModelDataQuery",
+              query: "ModelResourceQuery",
               filter: "ModelFilter",
               groupBySpec: "ModelAggregateGroupBySpec",
               groupKey: "ModelAggregateGroupKey",
@@ -539,7 +539,7 @@ describe("fieldMetadataFromSDL", () => {
                 groups: "integrationGroups",
               },
               typeNames: {
-                query: "IntegrationDataQuery",
+                query: "IntegrationResourceQuery",
                 node: "IntegrationType",
                 groupBySpec: "IntegrationAggregateGroupBySpec",
                 groupKey: "IntegrationGroupKey",
@@ -589,7 +589,7 @@ describe("fieldMetadataFromSDL", () => {
                   groups: "missingGroups",
                 },
                 typeNames: {
-                  query: "IntegrationDataQuery",
+                  query: "IntegrationResourceQuery",
                   node: "IntegrationType",
                 },
                 capabilities: ["list", "groups"],
@@ -646,7 +646,7 @@ describe("fieldMetadataFromSDL", () => {
                 groups: "modelGroups",
               },
               typeNames: {
-                query: "ModelDataQuery",
+                query: "ModelResourceQuery",
                 node: "ModelType",
                 filter: "ModelFilter",
                 groupBySpec: "ModelAggregateGroupBySpec",
@@ -748,7 +748,7 @@ describe("fieldMetadataFromSDL", () => {
                 modelLabel: "demo.Model",
                 node: "ModelType",
                 roots: { list: "models" },
-                typeNames: { query: "ModelDataQuery" },
+                typeNames: { query: "ModelResourceQuery" },
                 capabilities: ["list"],
                 orderFields: ["status"],
                 defaultSort: [{ field: "missing", direction: "ASC" }],
@@ -785,7 +785,7 @@ describe("fieldMetadataFromSDL", () => {
                   groups: "modelGroups",
                 },
                 typeNames: {
-                  query: "ModelDataQuery",
+                  query: "ModelResourceQuery",
                   groupBySpec: "ModelAggregateGroupBySpec",
                   groupKey: "ModelAggregateGroupKey",
                 },
@@ -972,7 +972,7 @@ describe("fieldMetadataFromSDL", () => {
                 publicIdField: "sqid",
                 roots: { list: "models" },
                 typeNames: {
-                  query: "ModelDataQuery",
+                  query: "ModelResourceQuery",
                   node: "ModelType",
                 },
                 capabilities: ["list", "groups"],

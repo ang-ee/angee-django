@@ -1213,7 +1213,7 @@ def test_iam_group_public_identity_is_sqid_addressable() -> None:
 
 
 @pytest.mark.django_db
-def test_iam_group_data_query_uses_public_identity_sqids() -> None:
+def test_iam_group_hasura_resource_uses_public_identity_sqids() -> None:
     """The IAM auth-group catalogue surfaces list and detail rows by public sqids."""
 
     group = iam_schema.Group.objects.create(name="Operators")

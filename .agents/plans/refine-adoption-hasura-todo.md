@@ -247,8 +247,9 @@ Integrate resources (`OAuthClient`/`ExternalAccount`/`Credential`/`Vendor`/
 (`Party`/`Person`/`Organization`/`Handle`/`Address`/`Affiliation`/`Folder`/
 `Directory`), and Messaging resources (`Channel`/`Message`/`Thread`) now use
 `hasura_resource(...)`. Repo-wide search confirms no addon schema still calls
-`data_query(...)` or generic `crud(...)`; remaining occurrences are the core
-compatibility primitives and tests.
+`data_query(...)` or generic `crud(...)`; the old core `data_query(...)` and
+aggregate-builder compatibility primitives have been removed, with surviving
+metadata coverage retargeted to `hasura_resource(...)` / resource metadata.
 
 Owner prep:
 
@@ -259,6 +260,8 @@ Owner prep:
   bucket composition facts.
 - [x] Add focused bridge tests proving list/by-pk/aggregate/mutation roots and
   input/type names land in `angee.resources`.
+- [x] Delete the old `data_query(...)` / aggregate-builder compatibility layer
+  after all addons moved to `hasura_resource(...)`.
 
 Per model checklist:
 

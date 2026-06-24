@@ -112,7 +112,6 @@ def test_public_resource_metadata_declares_people_surface() -> None:
     """The composed public schema reports Person's Hasura resource contract."""
 
     schema = _schema("public")
-    assert schema.angee_data_queries == ()
     metadata = {
         item.model_label: item
         for item in schema.angee_resources

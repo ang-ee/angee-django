@@ -85,7 +85,6 @@ def test_console_resource_metadata_declares_message_surface() -> None:
     """The composed console schema reports Message's Hasura resource contract."""
 
     schema = _schema()
-    assert schema.angee_data_queries == ()
     metadata = {
         item.model_label: item
         for item in schema.angee_resources

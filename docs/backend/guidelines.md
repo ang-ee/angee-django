@@ -146,11 +146,11 @@ Rules that follow from the layering:
   field-level resolver glue. They bind to composed runtime models and compose
   library primitives (`strawberry-django`, `crud`, `changes`, aggregate builders)
   instead of reimplementing ORM, permission, or serialization behavior.
-- Model-backed `data_query(...)` surfaces require sqid public identity. Use
+- Model-backed `hasura_resource(...)` surfaces expose sqid public identity. Use
   `AngeeDataModel`/`SqidMixin` for concrete rows. For third-party Django models
-  that Angee exposes but does not own, pass an explicit sqid public identity to
-  the data surface instead of creating source-addon migration state. A raw
-  primary-key compatibility path must be explicit and source-test-only.
+  that Angee exposes but does not own, pass an explicit sqid public identity
+  decoder to the resource instead of creating source-addon migration state. A
+  raw primary-key compatibility path must be explicit and source-test-only.
 - Management commands stay thin. They parse CLI arguments, load settings/context,
   and call the owner. Command modules should not contain reusable business logic,
   import generated runtime models directly, or duplicate resource/composer/schema

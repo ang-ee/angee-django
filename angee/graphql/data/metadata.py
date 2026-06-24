@@ -18,9 +18,6 @@ from strawberry.utils.str_converters import to_camel_case
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.introspection import surface_field_names, surface_name
 
-DATA_QUERY_METADATA_ATTR = "__angee_data_query__"
-"""Attribute attached to generated data-query root classes."""
-
 DATA_RESOURCE_METADATA_ATTR = "__angee_data_resource__"
 """Attribute attached to schema surfaces that contribute model resource metadata."""
 
@@ -96,32 +93,6 @@ _RESOURCE_FIELD_SCALARS = frozenset({"ID", "String", "Boolean", "Int", "Float", 
 _RESOURCE_FIELD_WIDGETS = frozenset(
     {"select", "many2one", "tagInput", "switch", "integer", "float", "datetime", "date", "json"}
 )
-
-
-@dataclass(frozen=True, slots=True)
-class DataQueryRoots:
-    """GraphQL root field names emitted for one model data surface."""
-
-    list_name: str | None = None
-    detail_name: str | None = None
-    aggregate_name: str | None = None
-    group_name: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class DataQueryTypeNames:
-    """GraphQL type names owned or referenced by one data query surface."""
-
-    query: str
-    node: str
-    filter: str | None = None
-    order: str | None = None
-    aggregate: str | None = None
-    grouped: str | None = None
-    group_key: str | None = None
-    group_by_spec: str | None = None
-    group_order: str | None = None
-    having: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,34 +210,6 @@ class DataResourceFieldMetadata:
 
 
 @dataclass(frozen=True, slots=True)
-class DataQueryMetadata:
-    """Internal metadata for one Angee model data query surface."""
-
-    query_type: type
-    node_type: type
-    model: type[models.Model]
-    model_label: str
-    app_label: str
-    model_name: str
-    public_id_field: str
-    roots: DataQueryRoots
-    type_names: DataQueryTypeNames
-    capabilities: tuple[str, ...]
-    filter_fields: tuple[str, ...]
-    order_fields: tuple[str, ...]
-    aggregate_fields: tuple[str, ...]
-    group_by_fields: tuple[str, ...]
-    group_dimensions: tuple[DataGroupDimensionMetadata, ...]
-    aggregate_measures: tuple[DataAggregateMeasureMetadata, ...]
-    default_measures: tuple[DataAggregateMeasureMetadata, ...]
-    default_sort: tuple[DataDefaultSortMetadata, ...]
-    relation_axes: tuple[DataRelationAxisMetadata, ...]
-    group_aliases: tuple[DataGroupAliasMetadata, ...]
-    filter_type: type | None = None
-    order_type: type | None = None
-
-
-@dataclass(frozen=True, slots=True)
 class DataResourceMetadata:
     """Internal metadata for one Angee model data resource."""
 
@@ -296,19 +239,6 @@ class DataResourceMetadata:
     node_type: type | None = None
     filter_type: type | None = None
     order_type: type | None = None
-
-
-def data_query_metadata(surface: object) -> tuple[DataQueryMetadata, ...]:
-    """Return data-query metadata attached to ``surface``."""
-
-    metadata = getattr(surface, DATA_QUERY_METADATA_ATTR, None)
-    if metadata is None:
-        return ()
-    if isinstance(metadata, DataQueryMetadata):
-        return (metadata,)
-    if isinstance(metadata, tuple) and all(isinstance(item, DataQueryMetadata) for item in metadata):
-        return metadata
-    return ()
 
 
 def data_resource_metadata(surface: object) -> tuple[DataResourceMetadata, ...]:
@@ -347,88 +277,6 @@ def resource_type_name(surface: type | None) -> str | None:
     """Return the GraphQL type name for ``surface`` when present."""
 
     return _optional_type_name(surface)
-
-
-def make_data_query_metadata(
-    *,
-    query_type: type,
-    node_type: type,
-    model: type[models.Model],
-    roots: DataQueryRoots,
-    filter_type: type | None,
-    order_type: type | None,
-    aggregate_fields: tuple[str, ...],
-    group_by_fields: tuple[str, ...],
-    group_aliases: tuple[tuple[str, str], ...],
-    enable_filter_echo: bool,
-    aggregate_type: type | None = None,
-    grouped_type: type | None = None,
-    group_key_type: type | None = None,
-    group_by_spec_type: type | None = None,
-    group_order_input_type: type | None = None,
-    having_type: type | None = None,
-    model_label: str | None = None,
-    public_id_field: str = PUBLIC_ID_FIELD_NAME,
-) -> DataQueryMetadata:
-    """Build metadata for a generated data-query class."""
-
-    exposed_model_label = model_label or model._meta.label
-    app_label, model_name = _model_label_parts(exposed_model_label, model)
-    filter_fields = _require_unique(
-        exposed_model_label,
-        "filter field",
-        _input_fields(filter_type),
-    )
-    order_fields = _require_unique(
-        exposed_model_label,
-        "order field",
-        _input_fields(order_type),
-    )
-    aggregate_fields = _require_unique(
-        exposed_model_label,
-        "aggregate field",
-        aggregate_fields,
-    )
-    group_by_fields = _require_unique(
-        exposed_model_label,
-        "group axis",
-        group_by_fields,
-    )
-    return DataQueryMetadata(
-        query_type=query_type,
-        node_type=node_type,
-        model=model,
-        model_label=exposed_model_label,
-        app_label=app_label,
-        model_name=model_name,
-        public_id_field=public_id_field,
-        roots=roots,
-        type_names=DataQueryTypeNames(
-            query=_type_name(query_type),
-            node=_type_name(node_type),
-            filter=_optional_type_name(filter_type),
-            order=_optional_type_name(order_type),
-            aggregate=_optional_type_name(aggregate_type),
-            grouped=_optional_type_name(grouped_type),
-            group_key=_optional_type_name(group_key_type),
-            group_by_spec=_optional_type_name(group_by_spec_type),
-            group_order=_optional_type_name(group_order_input_type),
-            having=_optional_type_name(having_type),
-        ),
-        capabilities=_capabilities(roots, enable_filter_echo),
-        filter_fields=filter_fields,
-        order_fields=order_fields,
-        aggregate_fields=aggregate_fields,
-        group_by_fields=group_by_fields,
-        group_dimensions=_group_dimensions(model, group_by_fields),
-        aggregate_measures=_aggregate_measures(model, aggregate_fields),
-        default_measures=(DataAggregateMeasureMetadata(op="count"),),
-        default_sort=_default_sort(model, order_fields),
-        relation_axes=_relation_axes(model, group_by_fields),
-        group_aliases=_group_aliases(node_type, model, group_by_fields, group_aliases),
-        filter_type=filter_type,
-        order_type=order_type,
-    )
 
 
 def make_data_resource_metadata(
@@ -540,67 +388,6 @@ def make_data_resource_metadata(
     )
 
 
-def data_resource_from_data_query(metadata: DataQueryMetadata) -> DataResourceMetadata:
-    """Return the resource-level projection of a data-query contribution."""
-
-    filter_fields = _surface_wire_field_names(metadata.filter_type, metadata.filter_fields)
-    order_fields = _surface_wire_field_names(metadata.order_type, metadata.order_fields)
-    aggregate_fields = _wire_paths(metadata.aggregate_fields)
-    group_by_fields = _wire_paths(metadata.group_by_fields)
-    group_dimensions = _wire_group_dimensions(metadata.group_dimensions)
-    aggregate_measures = _wire_aggregate_measures(metadata.aggregate_measures)
-    default_measures = _wire_aggregate_measures(metadata.default_measures)
-    default_sort = _wire_default_sort(metadata.default_sort)
-    relation_axes = _wire_relation_axes(metadata.relation_axes)
-    return make_data_resource_metadata(
-        model=metadata.model,
-        model_label=metadata.model_label,
-        public_id_field=metadata.public_id_field,
-        node_type=metadata.node_type,
-        filter_type=metadata.filter_type,
-        order_type=metadata.order_type,
-        roots=DataResourceRoots(
-            list_name=_surface_wire_field_name(metadata.query_type, metadata.roots.list_name),
-            detail_name=_surface_wire_field_name(metadata.query_type, metadata.roots.detail_name),
-            aggregate_name=_surface_wire_field_name(metadata.query_type, metadata.roots.aggregate_name),
-            group_name=_surface_wire_field_name(metadata.query_type, metadata.roots.group_name),
-        ),
-        type_names=DataResourceTypeNames(
-            query=metadata.type_names.query,
-            node=metadata.type_names.node,
-            filter=metadata.type_names.filter,
-            order=metadata.type_names.order,
-            aggregate=metadata.type_names.aggregate,
-            grouped=metadata.type_names.grouped,
-            group_key=metadata.type_names.group_key,
-            group_by_spec=metadata.type_names.group_by_spec,
-            group_order=metadata.type_names.group_order,
-            having=metadata.type_names.having,
-        ),
-        capabilities=metadata.capabilities,
-        filter_fields=filter_fields,
-        order_fields=order_fields,
-        aggregate_fields=aggregate_fields,
-        group_by_fields=group_by_fields,
-        group_dimensions=group_dimensions,
-        aggregate_measures=aggregate_measures,
-        default_measures=default_measures,
-        default_sort=default_sort,
-        relation_axes=relation_axes,
-        group_aliases=_wire_group_aliases(metadata.group_aliases),
-    )
-
-
-def attach_data_query_metadata(
-    query_type: type,
-    metadata: DataQueryMetadata,
-) -> type:
-    """Attach data-query metadata to a generated Strawberry query class."""
-
-    setattr(query_type, DATA_QUERY_METADATA_ATTR, metadata)
-    return attach_data_resource_metadata(query_type, data_resource_from_data_query(metadata))
-
-
 def attach_data_resource_metadata(
     surface: type,
     metadata: DataResourceMetadata,
@@ -632,14 +419,6 @@ def serialize_data_resources(
     """Return a JSON-safe schema-extension payload for resource metadata."""
 
     return [_serialize_data_resource(item, schema_name=schema_name) for item in metadata]
-
-
-def serialize_data_queries(
-    metadata: tuple[DataQueryMetadata, ...],
-) -> list[dict[str, object]]:
-    """Return a JSON-safe schema-extension payload for data-query metadata."""
-
-    return [_serialize_data_query(item) for item in metadata]
 
 
 def _serialize_data_resource(metadata: DataResourceMetadata, *, schema_name: str) -> dict[str, object]:
@@ -763,99 +542,6 @@ def _serialize_data_resource(metadata: DataResourceMetadata, *, schema_name: str
                 "field": alias.field,
                 "aggregateField": alias.aggregate_field,
                 "aggregateKey": alias.aggregate_key,
-            }
-            for alias in metadata.group_aliases
-        ],
-    }
-
-
-def _serialize_data_query(metadata: DataQueryMetadata) -> dict[str, object]:
-    """Return one JSON-safe data-query metadata mapping."""
-
-    return {
-        "modelLabel": metadata.model_label,
-        "appLabel": metadata.app_label,
-        "modelName": metadata.model_name,
-        "publicIdField": metadata.public_id_field,
-        "roots": {
-            "listName": _wire_name_or_none(metadata.roots.list_name),
-            "detailName": _wire_name_or_none(metadata.roots.detail_name),
-            "aggregateName": _wire_name_or_none(metadata.roots.aggregate_name),
-            "groupName": _wire_name_or_none(metadata.roots.group_name),
-        },
-        "typeNames": {
-            "query": metadata.type_names.query,
-            "node": metadata.type_names.node,
-            "filter": metadata.type_names.filter,
-            "order": metadata.type_names.order,
-            "aggregate": metadata.type_names.aggregate,
-            "grouped": metadata.type_names.grouped,
-            "groupKey": metadata.type_names.group_key,
-            "groupBySpec": metadata.type_names.group_by_spec,
-            "groupOrder": metadata.type_names.group_order,
-            "having": metadata.type_names.having,
-        },
-        "capabilities": list(metadata.capabilities),
-        "filterFields": [_wire_name(field) for field in metadata.filter_fields],
-        "orderFields": [_wire_name(field) for field in metadata.order_fields],
-        "aggregateFields": [_wire_name(field) for field in metadata.aggregate_fields],
-        "groupByFields": [_wire_name(field) for field in metadata.group_by_fields],
-        "groupDimensions": [
-            {
-                "field": dimension.field,
-                "input": dimension.input,
-                "key": dimension.key,
-                "kind": dimension.kind,
-                "scalar": dimension.scalar,
-                "extractions": [
-                    {
-                        "name": extraction.name,
-                        "input": extraction.input,
-                        "key": extraction.key,
-                        "rangeKey": extraction.range_key,
-                    }
-                    for extraction in dimension.extractions
-                ],
-            }
-            for dimension in metadata.group_dimensions
-        ],
-        "aggregateMeasures": [
-            {
-                "op": measure.op,
-                "field": measure.field,
-                "input": measure.input,
-            }
-            for measure in metadata.aggregate_measures
-        ],
-        "defaultMeasures": [
-            {
-                "op": measure.op,
-                "field": measure.field,
-                "input": measure.input,
-            }
-            for measure in metadata.default_measures
-        ],
-        "defaultSort": [
-            {
-                "field": sort.field,
-                "direction": sort.direction,
-            }
-            for sort in metadata.default_sort
-        ],
-        "relationAxes": [
-            {
-                "field": _wire_name(axis.field),
-                "modelLabel": axis.model_label,
-                "publicIdField": axis.public_id_field,
-                "labelAxis": _wire_name_or_none(axis.label_axis),
-            }
-            for axis in metadata.relation_axes
-        ],
-        "groupAliases": [
-            {
-                "field": _wire_name(alias.field),
-                "aggregateField": _wire_name(alias.aggregate_field),
-                "aggregateKey": _wire_name(alias.aggregate_key),
             }
             for alias in metadata.group_aliases
         ],
@@ -1057,26 +743,6 @@ def _merge_resource_fields(
     return tuple(by_name[name] for name in order)
 
 
-def _capabilities(
-    roots: DataQueryRoots,
-    enable_filter_echo: bool,
-) -> tuple[str, ...]:
-    """Return stable capability names for roots present on the data query."""
-
-    capabilities: list[str] = []
-    if roots.list_name is not None:
-        capabilities.append("list")
-    if roots.detail_name is not None:
-        capabilities.append("detail")
-    if roots.aggregate_name is not None:
-        capabilities.append("aggregate")
-    if roots.group_name is not None:
-        capabilities.append("groups")
-    if enable_filter_echo and roots.group_name is not None:
-        capabilities.append("filterEcho")
-    return tuple(capabilities)
-
-
 def _input_fields(surface: type | None) -> tuple[str, ...]:
     """Return declared input fields, excluding Strawberry-Django filter controls."""
 
@@ -1176,14 +842,6 @@ def _resource_fields(
             )
         )
     return tuple(fields)
-
-
-def _surface_wire_field_names(surface: type | None, names: tuple[str, ...]) -> tuple[str, ...]:
-    """Return GraphQL wire names for ``names`` on ``surface`` when possible."""
-
-    if surface is None:
-        return _wire_paths(names)
-    return tuple(_surface_wire_field_name(surface, name) or _wire_name(name) for name in names)
 
 
 def _surface_wire_field_name(surface: type | None, name: str | None) -> str | None:
@@ -1328,104 +986,6 @@ def _strawberry_type_is_object(value: object | None) -> bool:
     except TypeError:
         pass
     return _surface_type_name(value) == "UNRESOLVED"
-
-
-def _wire_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
-    """Return legacy GraphQL wire names for model field paths."""
-
-    return tuple(_wire_name(path) for path in paths)
-
-
-def _wire_relation_axes(
-    axes: tuple[DataRelationAxisMetadata, ...],
-) -> tuple[DataRelationAxisMetadata, ...]:
-    """Return relation axis metadata in GraphQL wire names."""
-
-    return tuple(
-        DataRelationAxisMetadata(
-            field=_wire_name(axis.field),
-            model_label=axis.model_label,
-            public_id_field=axis.public_id_field,
-            label_axis=_wire_name_or_none(axis.label_axis),
-        )
-        for axis in axes
-    )
-
-
-def _wire_group_aliases(
-    aliases: tuple[DataGroupAliasMetadata, ...],
-) -> tuple[DataGroupAliasMetadata, ...]:
-    """Return group alias metadata in GraphQL wire names."""
-
-    return tuple(
-        DataGroupAliasMetadata(
-            field=_wire_name(alias.field),
-            aggregate_field=_wire_name(alias.aggregate_field),
-            aggregate_key=_wire_name(alias.aggregate_key),
-        )
-        for alias in aliases
-    )
-
-
-def _wire_group_dimensions(
-    dimensions: tuple[DataGroupDimensionMetadata, ...],
-) -> tuple[DataGroupDimensionMetadata, ...]:
-    """Return group dimensions in GraphQL wire names."""
-
-    return tuple(
-        DataGroupDimensionMetadata(
-            field=_wire_name(dimension.field),
-            input=dimension.input,
-            key=_wire_name(dimension.key),
-            kind=dimension.kind,
-            scalar=dimension.scalar,
-            extractions=tuple(
-                DataGroupExtractionMetadata(
-                    name=extraction.name,
-                    input=extraction.input,
-                    key=_wire_name(extraction.key),
-                    range_key=_wire_name_or_none(extraction.range_key),
-                )
-                for extraction in dimension.extractions
-            ),
-        )
-        for dimension in dimensions
-    )
-
-
-def _wire_aggregate_measures(
-    measures: tuple[DataAggregateMeasureMetadata, ...],
-) -> tuple[DataAggregateMeasureMetadata, ...]:
-    """Return aggregate measure metadata in GraphQL wire names."""
-
-    return tuple(
-        DataAggregateMeasureMetadata(
-            op=measure.op,
-            field=_wire_name_or_none(measure.field),
-            input=measure.input,
-        )
-        for measure in measures
-    )
-
-
-def _wire_default_sort(
-    sorts: tuple[DataDefaultSortMetadata, ...],
-) -> tuple[DataDefaultSortMetadata, ...]:
-    """Return default sort metadata in GraphQL wire names."""
-
-    return tuple(
-        DataDefaultSortMetadata(
-            field=_wire_name(sort.field),
-            direction=sort.direction,
-        )
-        for sort in sorts
-    )
-
-
-def _wire_name_or_none(value: str | None) -> str | None:
-    """Return a GraphQL wire field name for ``value`` when present."""
-
-    return None if value is None else _wire_name(value)
 
 
 def _wire_name(value: str) -> str:
@@ -1600,8 +1160,8 @@ def _aggregate_measures(
         ops = _measure_ops_for_field(field)
         if not ops:
             raise ImproperlyConfigured(
-                f"data_query({model._meta.label}) declares unsupported aggregate measure "
-                f"field path '{path}' ({field.__class__.__name__})."
+                f"resource metadata for {model._meta.label} declares unsupported aggregate "
+                f"measure field path '{path}' ({field.__class__.__name__})."
             )
         measures.extend(
             DataAggregateMeasureMetadata(op=op, field=path, input=_group_input_name(path))
@@ -1631,11 +1191,12 @@ def _default_sort(
     for term in model._meta.ordering:
         if not isinstance(term, str):
             raise ImproperlyConfigured(
-                f"data_query({model._meta.label}) cannot expose non-string default ordering {term!r}."
+                f"resource metadata for {model._meta.label} cannot expose non-string "
+                f"default ordering {term!r}."
             )
         if term == "?":
             raise ImproperlyConfigured(
-                f"data_query({model._meta.label}) cannot expose random default ordering."
+                f"resource metadata for {model._meta.label} cannot expose random default ordering."
             )
         field = term[1:] if term.startswith("-") else term
         if field not in orderable:
@@ -1682,43 +1243,6 @@ def _relation_axes(
     return tuple(relation_axes)
 
 
-def _group_aliases(
-    node_type: type,
-    model: type[models.Model],
-    group_by_fields: tuple[str, ...],
-    group_aliases: tuple[tuple[str, str], ...],
-) -> tuple[DataGroupAliasMetadata, ...]:
-    """Return validated group aliases declared by a data-query surface."""
-
-    node_fields = set(surface_field_names(node_type))
-    aliases: list[DataGroupAliasMetadata] = []
-    seen: set[str] = set()
-    for field, aggregate_field in group_aliases:
-        if field in seen:
-            raise ImproperlyConfigured(
-                f"data_query({model._meta.label}) declares duplicate group alias '{field}'."
-            )
-        seen.add(field)
-        if field not in node_fields:
-            raise ImproperlyConfigured(
-                f"data_query({model._meta.label}) group alias '{field}' is not a field on "
-                f"{surface_name(node_type)}."
-            )
-        if aggregate_field not in group_by_fields:
-            raise ImproperlyConfigured(
-                f"data_query({model._meta.label}) group alias '{field}' targets "
-                f"non-groupable aggregate axis '{aggregate_field}'."
-            )
-        aliases.append(
-            DataGroupAliasMetadata(
-                field=field,
-                aggregate_field=aggregate_field,
-                aggregate_key=aggregate_field,
-            )
-        )
-    return tuple(aliases)
-
-
 def _relation_label_axes(
     model: type[models.Model],
     group_by_fields: tuple[str, ...],
@@ -1739,13 +1263,13 @@ def _relation_label_axes(
             continue
         if relation not in direct_axes:
             raise ImproperlyConfigured(
-                f"data_query({model._meta.label}) relation label axis '{path}' "
+                f"resource metadata for {model._meta.label} relation label axis '{path}' "
                 f"requires matching direct relation group axis '{relation}'."
             )
         existing = label_axes.get(relation)
         if existing is not None and existing != path:
             raise ImproperlyConfigured(
-                f"data_query({model._meta.label}) relation group axis '{relation}' "
+                f"resource metadata for {model._meta.label} relation group axis '{relation}' "
                 f"declares multiple label axes: '{existing}' and '{path}'."
             )
         label_axes[relation] = path
@@ -1777,24 +1301,27 @@ def _require_model_field_for_path(
     for part in path.replace(".", "__").split("__"):
         if current_model is None:
             raise ImproperlyConfigured(
-                f"data_query({model._meta.label}) declares unknown {purpose} field path '{path}'."
+                f"resource metadata for {model._meta.label} declares unknown {purpose} "
+                f"field path '{path}'."
             )
         try:
             field = current_model._meta.get_field(part)
         except FieldDoesNotExist:
             raise ImproperlyConfigured(
-                f"data_query({model._meta.label}) declares unknown {purpose} field path '{path}'."
+                f"resource metadata for {model._meta.label} declares unknown {purpose} "
+                f"field path '{path}'."
             ) from None
         if _is_to_many_relation(field):
             raise ImproperlyConfigured(
-                f"data_query({model._meta.label}) declares unsupported to-many {purpose} field path '{path}'."
+                f"resource metadata for {model._meta.label} declares unsupported to-many "
+                f"{purpose} field path '{path}'."
             )
         remote_field = getattr(field, "remote_field", None)
         related_model = getattr(remote_field, "model", None)
         current_model = related_model if isinstance(related_model, type) else None
     if field is None:
         raise ImproperlyConfigured(
-            f"data_query({model._meta.label}) declares unknown {purpose} field path '{path}'."
+            f"resource metadata for {model._meta.label} declares unknown {purpose} field path '{path}'."
         )
     return field
 
