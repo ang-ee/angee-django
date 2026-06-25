@@ -17,8 +17,10 @@ from strawberry.utils.str_converters import to_camel_case
 
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.introspection import (
+    FieldPathError,
     is_to_many_relation,
     is_to_one_relation,
+    require_field_for_path,
     surface_field_names,
     surface_name,
 )
@@ -1117,31 +1119,16 @@ def _require_model_field_for_path(
 ) -> models.Field[Any, Any]:
     """Return a concrete model field for ``path`` or fail at metadata emission."""
 
-    current_model: type[models.Model] | None = model
-    field: models.Field[Any, Any] | None = None
-    for part in path.replace(".", "__").split("__"):
-        if current_model is None:
-            raise ImproperlyConfigured(
-                f"resource metadata for {model._meta.label} declares unknown {purpose} field path '{path}'."
-            )
-        try:
-            field = current_model._meta.get_field(part)
-        except FieldDoesNotExist:
-            raise ImproperlyConfigured(
-                f"resource metadata for {model._meta.label} declares unknown {purpose} field path '{path}'."
-            ) from None
-        if is_to_many_relation(field):
+    try:
+        return require_field_for_path(model, path)
+    except FieldPathError as error:
+        if error.to_many:
             raise ImproperlyConfigured(
                 f"resource metadata for {model._meta.label} declares unsupported to-many {purpose} field path '{path}'."
-            )
-        remote_field = getattr(field, "remote_field", None)
-        related_model = getattr(remote_field, "model", None)
-        current_model = related_model if isinstance(related_model, type) else None
-    if field is None:
+            ) from None
         raise ImproperlyConfigured(
             f"resource metadata for {model._meta.label} declares unknown {purpose} field path '{path}'."
-        )
-    return field
+        ) from None
 
 
 def _optional_type_name(surface: type | None) -> str | None:

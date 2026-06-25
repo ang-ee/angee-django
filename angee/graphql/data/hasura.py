@@ -35,7 +35,11 @@ from angee.graphql.data.metadata import (
 )
 from angee.graphql.deletion import delete_by_public_id
 from angee.graphql.ids import require_instance_for_id
-from angee.graphql.introspection import is_to_one_relation
+from angee.graphql.introspection import (
+    FieldPathError,
+    is_to_one_relation,
+    require_field_for_path,
+)
 from angee.graphql.writes import write_queryset
 
 
@@ -640,27 +644,12 @@ def _require_group_field(
 ) -> models.Field[Any, Any]:
     """Resolve a groupable to-one Django field path for metadata emission."""
 
-    current_model: type[models.Model] | None = model
-    field: models.Field[Any, Any] | None = None
-    for part in path.replace(".", "__").split("__"):
-        if current_model is None:
-            break
-        try:
-            field = current_model._meta.get_field(part)
-        except FieldDoesNotExist:
-            field = None
-            break
-        if getattr(field, "many_to_many", False) or getattr(field, "one_to_many", False):
-            field = None
-            break
-        remote_field = getattr(field, "remote_field", None)
-        related_model = getattr(remote_field, "model", None)
-        current_model = related_model if isinstance(related_model, type) else None
-    if field is None:
+    try:
+        return require_field_for_path(model, path)
+    except FieldPathError:
         raise ImproperlyConfigured(
             f"hasura_model_resource({model._meta.label}) declares unknown groupable field path {path!r}."
-        )
-    return field
+        ) from None
 
 
 def _group_input_name(path: str) -> str:
