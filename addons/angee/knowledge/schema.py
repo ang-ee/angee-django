@@ -24,6 +24,7 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
+from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_display_label, user_public_id
 from angee.knowledge.models import StaleBodyError, UnsupportedPageKindError
 
@@ -90,7 +91,7 @@ class BacklinkType:
 
 
 @strawberry_django.type(Page)
-class PageType(AngeeNode):
+class PageType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of a page."""
 
     title: auto
@@ -123,18 +124,6 @@ class PageType(AngeeNode):
         """Return the parent page's public id, if the page has one."""
 
         return to_public_id(Page, cast(Any, self).parent_id)
-
-    @strawberry_django.field(only=["created_by_id"])
-    def created_by(self) -> strawberry.ID | None:
-        """Return the creator's public id without exposing the user object."""
-
-        return optional_public_id(user_public_id(cast(Any, self).created_by_id))
-
-    @strawberry_django.field(only=["created_by_id"])
-    def created_by_label(self) -> str | None:
-        """Return the creator's display label — no user object exposed."""
-
-        return user_display_label(cast(Any, self).created_by_id)
 
     @strawberry_django.field(only=["id"])
     def markdown(self) -> MarkdownPageType | None:
