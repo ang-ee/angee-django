@@ -1,8 +1,19 @@
 {
   "compilerOptions": {
-    // Framework-repo fixture wiring: base addon packages typecheck against the
-    // notes example project's generated typed-document modules. A downstream
-    // project's own web package should point `@angee/gql/*` at its runtime/gql.
+    // Framework-repo fixture wiring ONLY. Base addon packages
+    // (`addons/angee/*/web`) extend this base and typecheck against the notes
+    // example project's generated typed-document modules — the canonical
+    // in-repo project that owns a `runtime/gql/`. This single wildcard entry is
+    // the `@angee/gql/<schema>` resolution contract: `@angee/gql/*` ->
+    // `<project>/runtime/gql/*` (so `…/<schema>` and `…/<schema>/actions` both
+    // resolve through it).
+    //
+    // A downstream/own project does NOT inherit this fixture path: its own web
+    // `tsconfig.json` declares its project-relative `@angee/gql/*` ->
+    // `../runtime/gql/*` (TS `paths` fully override, they do not merge), which
+    // shadows this fixture for that project. See
+    // `examples/notes-angee/web/tsconfig.json` for the canonical example of a
+    // project supplying its own resolution.
     "paths": {
       "@angee/gql/*": ["./examples/notes-angee/runtime/gql/*"]
     },

@@ -28,30 +28,53 @@ const scalars = {
 
 // Roots that author operations for the notes example project: framework frontend
 // packages, framework addon web packages in this monorepo, this project's
-// consumer addons, and the app layout itself. Another project owns its own
-// web-package codegen config with the same filename convention but roots that
-// match its install layout.
-const DOCUMENT_ROOTS = [
-  "../../../packages/*/src",
+// consumer addons, and the app layout itself. These monorepo-layout globs are
+// the DEFAULT — they match the in-repo example's workspace layout.
+//
+// A downstream project installs its addons under `node_modules` instead, so it
+// overrides the roots without forking this file: set the
+// `ANGEE_CODEGEN_DOCUMENT_ROOTS` env var (a list separated by the OS path
+// delimiter `:` / `;`, or by commas) to its own layout, e.g.
+// `node_modules/@angee/*/web/src:./addons/*/*/web/src:./src`. A project that
+// prefers a checked-in config can instead pass roots through its own
+// `codegen.{public,console}.ts` (see `schemaCodegen`'s `documentRoots` option).
+// The roots are sorted so an env-supplied list emits a deterministic glob set.
+const DEFAULT_DOCUMENT_ROOTS = [
   "../../../addons/angee/*/web/src",
+  "../../../packages/*/src",
   "../addons/*/*/web/src",
   "./src",
-] as const;
+];
 
-function documentGlobs(name: "public" | "console"): string[] {
+function documentRootsFromEnv(): string[] | undefined {
+  const raw = process.env.ANGEE_CODEGEN_DOCUMENT_ROOTS?.trim();
+  if (!raw) return undefined;
+  return raw
+    .split(/[,;:]/)
+    .map((root) => root.trim())
+    .filter((root) => root.length > 0);
+}
+
+function documentGlobs(name: "public" | "console", roots: string[]): string[] {
   const files =
     name === "public"
       ? ["documents.public.ts"]
       : ["documents.ts", "documents.console.ts"];
-  return DOCUMENT_ROOTS.flatMap((root) =>
-    files.map((file) => `${root}/**/${file}`),
-  );
+  return [...roots]
+    .sort()
+    .flatMap((root) => files.map((file) => `${root}/**/${file}`));
 }
 
-export function schemaCodegen(name: "public" | "console"): CodegenConfig {
+export function schemaCodegen(
+  name: "public" | "console",
+  // Effective document roots, highest precedence first: an explicit override
+  // (a downstream project's own codegen.{public,console}.ts), then the
+  // `ANGEE_CODEGEN_DOCUMENT_ROOTS` env var, then the monorepo defaults.
+  documentRoots: string[] = documentRootsFromEnv() ?? DEFAULT_DOCUMENT_ROOTS,
+): CodegenConfig {
   return {
     schema: `../runtime/schemas/${name}.graphql`,
-    documents: documentGlobs(name),
+    documents: documentGlobs(name, documentRoots),
     // Pre-migration (no tagged operations yet) must still emit the factory.
     ignoreNoDocuments: true,
     generates: {
