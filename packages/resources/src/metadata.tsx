@@ -313,13 +313,24 @@ export function schemaFieldMetadataFromDataResources(
     );
     const rootFields = rootFieldsFromResource(resource);
     const recordRepresentation = recordRepresentationFor(fields);
-    types[typeName] = {
+    const entry: ModelMetadata = {
       typeName,
       fields,
       rootFields,
       resource,
       ...(recordRepresentation ? { recordRepresentation } : {}),
     };
+    types[typeName] = entry;
+    // Also index by the model-label-derived type name so `modelMetadataForLabel`
+    // resolves a resource whose node type does not follow the `<Model>Type`
+    // convention (e.g. a computed `hasura_pydantic_resource` named
+    // `PlatformAddonRow` for `platform.Addon`). The label is the lookup key the
+    // data view passes (`ListView resource="platform.Addon"`); the node name is a
+    // schema detail.
+    const labelTypeName = `${typeNameForModel(resource.modelLabel)}Type`;
+    if (labelTypeName !== typeName && !types[labelTypeName]) {
+      types[labelTypeName] = entry;
+    }
   }
   return {
     types,

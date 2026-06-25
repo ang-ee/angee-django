@@ -4,6 +4,10 @@ import {
   refineResourceName,
   refineResourcesFromDataResources,
 } from "./resources";
+import {
+  modelMetadataForLabel,
+  schemaFieldMetadataFromDataResources,
+} from "./metadata";
 import type { DataResourceMetadata } from "./metadata";
 
 describe("refine resource metadata", () => {
@@ -41,6 +45,25 @@ describe("refine resource metadata", () => {
     });
 
     expect(mapped?.list).toBe("/notes");
+  });
+
+  test("resolves a resource by model label even when its node type does not follow the <Model>Type convention", () => {
+    // A computed `hasura_pydantic_resource` names its node after the pydantic
+    // class (`PlatformAddonRow`), not `<Model>Type`; the data view still resolves
+    // it by the model label it passes to `useModelMetadata`.
+    const computed: DataResourceMetadata = {
+      ...resource(),
+      modelLabel: "platform.Addon",
+      modelName: "Addon",
+      typeNames: { node: "PlatformAddonRow" },
+    };
+    const metadata = schemaFieldMetadataFromDataResources([computed]);
+
+    expect(modelMetadataForLabel(metadata, "platform.Addon")?.resource).toBe(
+      computed,
+    );
+    // The node type name stays addressable too (relation/aggregate joins use it).
+    expect(metadata.types.PlatformAddonRow?.resource).toBe(computed);
   });
 });
 

@@ -6,9 +6,9 @@ import {
 
 import {
   Alert,
-  AuthoredRowsList,
   Button,
   Code,
+  ListView,
   errorMessage,
   useConfirm,
   type ListColumn,
@@ -16,36 +16,30 @@ import {
 import {
   useAuthoredMutation,
 } from "@angee/data";
-import type { DocumentData } from "@angee/refine";
 
-import {
-  IamGrants,
-  IamRevokeRole,
-  type IAMGrantsVariables,
-} from "../documents";
-import {
-  grantRows,
-  type IAMGrantRow,
-} from "../identity-rows";
-import { IAM_LIST_LIMIT } from "../list-config";
+import { IamRevokeRole } from "../documents";
 import { useIamT } from "../i18n";
 
-const GRANT_MODEL = "rebac.RelationshipRegistry";
-const GRANT_QUERY_OPTIONS = { models: [GRANT_MODEL] } as const;
-
-type IamGrantsResult = DocumentData<typeof IamGrants>;
-
-function selectRows(data: IamGrantsResult | undefined): readonly IAMGrantRow[] {
-  return grantRows(data?.grants.results ?? []);
+// The `iam.Grant` Hasura resource row (`hasura_pydantic_resource`,
+// `addons/angee/iam/schema.py`): direct user role-grant tuples, fetched +
+// grouped client-side by ListView's client row model. The revoke stays an
+// authored single-row mutation (`revoke_role(principal_id, role)`) rendered as a
+// per-row action column.
+interface GrantResourceRow extends Record<string, unknown> {
+  id: string;
+  principal_id: string;
+  principal_ref: string;
+  principal_label: string;
+  role: string;
+  role_name: string;
+  namespace: string;
 }
+
+const GRANT_MODEL = "rebac.RelationshipRegistry";
 
 export function GrantsPage(): ReactElement {
   const t = useIamT();
   const confirm = useConfirm();
-  const variables = useMemo<IAMGrantsVariables>(
-    () => ({ pagination: { offset: 0, limit: IAM_LIST_LIMIT } }),
-    [],
-  );
   const [revoke_role, revokeState] = useAuthoredMutation(IamRevokeRole, {
     invalidateModels: [GRANT_MODEL],
     shouldInvalidate: (result) => result?.revoke_role === true,
@@ -53,7 +47,7 @@ export function GrantsPage(): ReactElement {
   const [pendingGrantId, setPendingGrantId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  async function revoke(row: IAMGrantRow): Promise<void> {
+  async function revoke(row: GrantResourceRow): Promise<void> {
     const confirmed = await confirm({
       title: t("iam.grants.revoke.title"),
       body: t("iam.grants.revoke.body", { role: row.role, principal: row.principal_label }),
@@ -79,7 +73,7 @@ export function GrantsPage(): ReactElement {
     }
   }
 
-  const grantColumns = useMemo<readonly ListColumn<IAMGrantRow>[]>(
+  const grantColumns = useMemo<readonly ListColumn<GrantResourceRow>[]>(
     () => [
       {
         field: "principal_label",
@@ -88,7 +82,7 @@ export function GrantsPage(): ReactElement {
           <span className="flex min-w-0 flex-col">
             <span className="truncate text-13 text-fg">{row.principal_label}</span>
             <Code truncate tone="muted" className="text-2xs">
-              {row.principalRef}
+              {row.principal_ref}
             </Code>
           </span>
         ),
@@ -98,7 +92,7 @@ export function GrantsPage(): ReactElement {
         header: t("iam.grants.column.role"),
         render: (row) => (
           <div className="min-w-0">
-            <div className="truncate font-medium text-fg">{row.roleName}</div>
+            <div className="truncate font-medium text-fg">{row.role_name}</div>
             <Code truncate tone="muted">
               {row.role}
             </Code>
@@ -139,11 +133,8 @@ export function GrantsPage(): ReactElement {
           {actionError}
         </Alert>
       ) : null}
-      <AuthoredRowsList
-        document={IamGrants}
-        variables={variables}
-        queryOptions={GRANT_QUERY_OPTIONS}
-        selectRows={selectRows}
+      <ListView<GrantResourceRow>
+        resource="iam.Grant"
         columns={grantColumns}
         defaultGroup={{ field: "namespace" }}
         pageSize={50}

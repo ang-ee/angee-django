@@ -86,33 +86,6 @@ export const IamGrants = graphql(`
   }
 `);
 
-export const IamRelationships = graphql(`
-  query IamRelationships(
-    $resource_type: String
-    $subject_type: String
-    $relation: String
-    $pagination: OffsetPaginationInput
-  ) {
-    relationships(
-      resource_type: $resource_type
-      subject_type: $subject_type
-      relation: $relation
-      pagination: $pagination
-    ) {
-      total_count
-      results {
-        resource_type
-        resource_id
-        relation
-        subject_type
-        subject_id
-        subject_relation
-        caveat_name
-      }
-    }
-  }
-`);
-
 export const IamRebacSchema = graphql(`
   query IamRebacSchema {
     rebac_schema {
@@ -154,12 +127,6 @@ export type IAMUsersVariables = DocumentVariables<typeof IamUsers>;
 export type IAMGrant = DocumentType<typeof IamGrants>["grants"]["results"][number];
 
 export type IAMGrantsVariables = DocumentVariables<typeof IamGrants>;
-
-/** One `relationships.results` row, derived from the `IamRelationships` selection. */
-export type IAMRelationship =
-  DocumentType<typeof IamRelationships>["relationships"]["results"][number];
-
-export type IAMRelationshipsVariables = DocumentVariables<typeof IamRelationships>;
 
 /** One `rebac_schema` resource entry, derived from the `IamRebacSchema` selection. */
 export type IAMResourceSchema =

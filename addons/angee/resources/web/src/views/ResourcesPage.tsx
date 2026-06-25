@@ -1,78 +1,65 @@
 import { type ReactElement } from "react";
 
 import {
-  AuthoredRowsList,
   Code,
+  ListView,
+  formatDateTime,
   type ResourceToolbarFilterField,
-  type ResourceToolbarGroupOption,
   type ListColumn,
 } from "@angee/base";
-import type { DocumentData } from "@angee/refine";
 
-import { ResourceLedger } from "../documents";
 import { useResourcesT } from "../i18n";
-import { resourceRows, type ResourceRow } from "../lib/rows";
 
-type ResourceLedgerResult = DocumentData<typeof ResourceLedger>;
-
-function selectRows(data: ResourceLedgerResult | undefined): readonly ResourceRow[] {
-  return resourceRows(data?.resource_ledger ?? []);
+// The `resources.Resource` Hasura resource (`hasura_model_resource` over the
+// import ledger, `addons/angee/resources/schema.py`): a real queryset, so a
+// server row model — list/filter/sort resolve server-side. The ledger exposes no
+// groupable axis, so the page does not group.
+interface ResourceLedgerResourceRow extends Record<string, unknown> {
+  id: string;
+  source_addon: string;
+  source_path: string;
+  tier: string;
+  target_model: string;
+  target_id: string;
+  content_hash: string;
+  loaded_at: string;
 }
 
-function columns(t: (key: string) => string): readonly ListColumn<ResourceRow>[] {
+function columns(t: (key: string) => string): readonly ListColumn<ResourceLedgerResourceRow>[] {
   return [
     {
-      field: "sourceAddon",
+      field: "source_addon",
       header: t("resources.col.source"),
       render: (row) => (
         <span className="flex min-w-0 flex-col">
-          <span className="font-medium text-fg">{row.sourceAddon}</span>
-          <span className="truncate text-2xs text-fg-muted">{row.sourcePath}</span>
+          <span className="font-medium text-fg">{row.source_addon}</span>
+          <span className="truncate text-2xs text-fg-muted">{row.source_path}</span>
         </span>
       ),
     },
     { field: "tier", header: t("resources.col.tier") },
     {
-      field: "target",
+      field: "target_model",
       header: t("resources.col.target"),
       render: (row) => (
         <span className="flex min-w-0 flex-col">
-          <Code truncate>{row.target}</Code>
-          {row.targetId ? (
-            <span className="truncate text-2xs text-fg-muted">{row.targetId}</span>
+          <Code truncate>{row.target_model}</Code>
+          {row.target_id ? (
+            <span className="truncate text-2xs text-fg-muted">{row.target_id}</span>
           ) : null}
         </span>
       ),
     },
     {
-      field: "hash",
+      field: "content_hash",
       header: t("resources.col.hash"),
       sortable: false,
-      render: (row) => <Code truncate tone="muted">{row.hash}</Code>,
-    },
-    { field: "loaded", header: t("resources.col.loaded") },
-  ];
-}
-
-function groupOptions(t: (key: string) => string): readonly ResourceToolbarGroupOption[] {
-  return [
-    {
-      id: "sourceAddon",
-      label: t("resources.col.sourceAddon"),
-      group: { field: "sourceAddon" },
-      type: "value",
+      render: (row) => <Code truncate tone="muted">{row.content_hash.slice(0, 12)}</Code>,
     },
     {
-      id: "sourcePath",
-      label: t("resources.col.sourcePath"),
-      group: { field: "sourcePath" },
-      type: "value",
-    },
-    {
-      id: "tier",
-      label: t("resources.col.tier"),
-      group: { field: "tier" },
-      type: "value",
+      field: "loaded_at",
+      header: t("resources.col.loaded"),
+      render: (row) => <>{formatDateTime(row.loaded_at)}</>,
     },
   ];
 }
@@ -80,14 +67,14 @@ function groupOptions(t: (key: string) => string): readonly ResourceToolbarGroup
 function filterFields(t: (key: string) => string): readonly ResourceToolbarFilterField[] {
   return [
     {
-      id: "sourceAddon",
-      field: "sourceAddon",
+      id: "source_addon",
+      field: "source_addon",
       label: t("resources.col.sourceAddon"),
       type: "text",
     },
     {
-      id: "sourcePath",
-      field: "sourcePath",
+      id: "source_path",
+      field: "source_path",
       label: t("resources.col.sourcePath"),
       type: "text",
     },
@@ -109,13 +96,11 @@ export function ResourcesPage(): ReactElement {
   const t = useResourcesT();
 
   return (
-    <AuthoredRowsList
-      document={ResourceLedger}
-      selectRows={selectRows}
+    <ListView<ResourceLedgerResourceRow>
+      resource="resources.Resource"
       columns={columns(t)}
-      groupOptions={groupOptions(t)}
       filterFields={filterFields(t)}
-      defaultGroup={{ field: "tier" }}
+      order={{ source_addon: "ASC" }}
       pageSize={100}
       emptyMessage={t("resources.empty.ledger")}
     />
