@@ -4,6 +4,7 @@ import { useAuth, useLogout } from "@angee/data";
 
 import { useBaseT } from "../i18n";
 import { cn } from "../lib/cn";
+import { avatarInitials } from "../ui/avatar";
 import {
   DropdownMenu,
   type DropdownMenuPositionerProps,
@@ -47,7 +48,7 @@ export function UserMenu({
           className,
         )}
       >
-        {initials(displayName)}
+        {avatarInitials(displayName)}
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Positioner side={side} align={align} sideOffset={sideOffset}>
@@ -72,13 +73,4 @@ export function UserMenu({
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
   );
-}
-
-function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  const letters =
-    parts.length >= 2
-      ? `${parts[0]?.[0] ?? ""}${parts[1]?.[0] ?? ""}`
-      : name.slice(0, 2);
-  return letters.toUpperCase() || "U";
 }
