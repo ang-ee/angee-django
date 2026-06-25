@@ -287,12 +287,6 @@ def public_data_id_owner(model: type[models.Model]) -> type[models.Model] | None
     return None
 
 
-def is_public_data_model(model: type[models.Model]) -> bool:
-    """Return whether ``model`` exposes Angee's public data identity contract."""
-
-    return public_data_id_owner(model) is not None
-
-
 def instance_from_public_id(
     model: type[_ModelT],
     value: str,

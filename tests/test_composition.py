@@ -12,8 +12,8 @@ from angee.base.models import (
     AngeeDataModel,
     AngeeModel,
     instance_from_public_id,
-    is_public_data_model,
     public_data_id_field,
+    public_data_id_owner,
     public_id_for,
     public_id_of,
 )
@@ -66,7 +66,7 @@ def test_angee_data_model_carries_the_public_data_identity_contract() -> None:
     """AngeeDataModel is the canonical base for sqid-backed data rows."""
 
     assert issubclass(AngeeDataModel, AngeeModel)
-    assert is_public_data_model(PublicIdThing)
+    assert public_data_id_owner(PublicIdThing) is not None
     assert public_data_id_field(PublicIdThing).name == "sqid"
 
 

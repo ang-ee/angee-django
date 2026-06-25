@@ -27,7 +27,7 @@ from rebac.roles import grant
 
 from angee.base.models import (
     instance_from_public_id,
-    is_public_data_model,
+    public_data_id_owner,
     public_id_for,
     public_id_of,
 )
@@ -1198,7 +1198,7 @@ def test_iam_group_public_identity_is_sqid_addressable() -> None:
     group = iam_schema.Group.objects.create(name="Operators")
     group_id = iam_schema.GROUP_PUBLIC_IDENTITY.public_id_from_pk(group.pk)
 
-    assert not is_public_data_model(iam_schema.Group)
+    assert public_data_id_owner(iam_schema.Group) is None
     assert public_id_of(group) == str(group.pk)
     assert group_id.startswith("grp_")
     assert public_id_for(iam_schema.Group, group.pk, public_identity=iam_schema.GROUP_PUBLIC_IDENTITY) == group_id
