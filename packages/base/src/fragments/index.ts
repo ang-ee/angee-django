@@ -131,7 +131,14 @@ export {
   type SectionTabItem,
   type SectionTabsProps,
 } from "./SectionTabs";
-export { SurfacePanel, type SurfacePanelProps } from "./SurfacePanel";
+export {
+  SettingsSection,
+  SettingsShell,
+  SurfacePanel,
+  type SettingsSectionProps,
+  type SettingsShellProps,
+  type SurfacePanelProps,
+} from "./SurfacePanel";
 export {
   SurfaceHeader,
   surfaceHeaderVariants,

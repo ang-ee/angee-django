@@ -1,4 +1,4 @@
-import { type ReactElement, type ReactNode } from "react";
+import { type ReactElement } from "react";
 
 import {
   Column,
@@ -6,6 +6,8 @@ import {
   Field,
   Form,
   List,
+  SettingsSection,
+  SettingsShell,
 } from "@angee/base";
 import { useStorageT } from "../i18n";
 
@@ -22,8 +24,8 @@ const BACKEND_MODEL = "storage.Backend";
 export function StorageSettingsPage(): ReactElement {
   const t = useStorageT();
   return (
-    <div className="mx-auto flex w-full max-w-[1100px] flex-col gap-10 px-6 py-6 sm:px-8">
-      <Section
+    <SettingsShell maxWidth="1100" gap="10">
+      <SettingsSection
         title={t("storage.settings.drives.title")}
         description={t("storage.settings.drives.description")}
       >
@@ -42,9 +44,9 @@ export function StorageSettingsPage(): ReactElement {
             <Field name="is_archived" label={t("storage.settings.archived")} widget="switch" />
           </Form>
         </DrawerResourceList>
-      </Section>
+      </SettingsSection>
 
-      <Section
+      <SettingsSection
         title={t("storage.settings.backends.title")}
         description={t("storage.settings.backends.description")}
       >
@@ -65,28 +67,7 @@ export function StorageSettingsPage(): ReactElement {
             <Field name="is_archived" label={t("storage.settings.archived")} widget="switch" editOnly />
           </Form>
         </DrawerResourceList>
-      </Section>
-    </div>
-  );
-}
-
-/** One titled admin section wrapping a managed table. */
-function Section({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description: string;
-  children: ReactNode;
-}): ReactElement {
-  return (
-    <section className="grid gap-3">
-      <header className="grid gap-0.5">
-        <h2 className="text-15 font-semibold text-fg">{title}</h2>
-        <p className="text-13 text-fg-muted">{description}</p>
-      </header>
-      {children}
-    </section>
+      </SettingsSection>
+    </SettingsShell>
   );
 }

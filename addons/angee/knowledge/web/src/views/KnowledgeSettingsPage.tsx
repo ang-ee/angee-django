@@ -6,6 +6,8 @@ import {
   Field,
   Form,
   List,
+  SettingsSection,
+  SettingsShell,
 } from "@angee/base";
 import { useKnowledgeT } from "../i18n";
 
@@ -19,15 +21,11 @@ const VAULT_MODEL = "knowledge.Vault";
 export function KnowledgeSettingsPage(): ReactElement {
   const t = useKnowledgeT();
   return (
-    <div className="mx-auto flex w-full max-w-[1100px] flex-col gap-6 px-6 py-6 sm:px-8">
-      <header className="grid gap-0.5">
-        <h2 className="text-15 font-semibold text-fg">
-          {t("knowledge.settings.title")}
-        </h2>
-        <p className="text-13 text-fg-muted">
-          {t("knowledge.settings.description")}
-        </p>
-      </header>
+    <SettingsShell maxWidth="1100" gap="6">
+      <SettingsSection
+        title={t("knowledge.settings.title")}
+        description={t("knowledge.settings.description")}
+      />
       <DrawerResourceList resource={VAULT_MODEL}>
         <List resource={VAULT_MODEL} order={{ name: "ASC" }}>
           <Column field="name" />
@@ -41,6 +39,6 @@ export function KnowledgeSettingsPage(): ReactElement {
           <Field name="accent" />
         </Form>
       </DrawerResourceList>
-    </div>
+    </SettingsShell>
   );
 }

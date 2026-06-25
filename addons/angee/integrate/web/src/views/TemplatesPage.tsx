@@ -11,6 +11,8 @@ import {
   Group,
   List,
   REFINE_CREATE_ID,
+  SettingsSection,
+  SettingsShell,
   useRecordActionMutation,
 } from "@angee/base";
 import type { ActionFieldName } from "@angee/gql/console/actions";
@@ -56,8 +58,8 @@ export function TemplatesPage(): React.ReactElement {
   );
 
   return (
-    <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-8 px-6 py-6 sm:px-8">
-      <Section title={t("integrate.templateSources.title")}>
+    <SettingsShell maxWidth="1200" gap="8">
+      <SettingsSection title={t("integrate.templateSources.title")}>
         <DrawerResourceList
           resource={SOURCE_MODEL}
           filter={{ kind: { exact: TEMPLATE_SOURCE_KIND } }}
@@ -87,9 +89,9 @@ export function TemplatesPage(): React.ReactElement {
             />
           </Form>
         </DrawerResourceList>
-      </Section>
+      </SettingsSection>
 
-      <Section title={t("integrate.templates.title")}>
+      <SettingsSection title={t("integrate.templates.title")}>
         <ControlBandProvider host={undefined}>
           <ResourceList resource={TEMPLATE_MODEL} placement="inline" routed hideCreate>
             {templateList}
@@ -104,22 +106,7 @@ export function TemplatesPage(): React.ReactElement {
             </Form>
           </ResourceList>
         </ControlBandProvider>
-      </Section>
-    </div>
-  );
-}
-
-function Section({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}): React.ReactElement {
-  return (
-    <section className="grid gap-3">
-      <h2 className="text-15 font-semibold text-fg">{title}</h2>
-      {children}
-    </section>
+      </SettingsSection>
+    </SettingsShell>
   );
 }
