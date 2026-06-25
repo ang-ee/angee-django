@@ -6,7 +6,6 @@ import {
   Field,
   Form,
   Group,
-  ListView,
   List,
   recordActionId,
   type ActionContext,

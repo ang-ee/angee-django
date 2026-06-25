@@ -11,7 +11,6 @@ import {
   Field,
   Form,
   Group,
-  ListView,
   List,
   useRecordActionMutation,
   useEnumOptions,

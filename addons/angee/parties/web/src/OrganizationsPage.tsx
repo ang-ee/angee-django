@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Column, ResourceList, Field, Form, Group, ListView, List } from "@angee/base";
+import { Column, ResourceList, Field, Form, Group, List } from "@angee/base";
 
 const MODEL = "parties.Organization";
 

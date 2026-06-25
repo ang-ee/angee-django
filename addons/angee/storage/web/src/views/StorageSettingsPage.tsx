@@ -5,7 +5,6 @@ import {
   DrawerResourceList,
   Field,
   Form,
-  ListView,
   List,
 } from "@angee/base";
 import { useStorageT } from "../i18n";

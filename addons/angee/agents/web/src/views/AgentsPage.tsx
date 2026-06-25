@@ -18,7 +18,6 @@ import {
   Form,
   Glyph,
   Group,
-  ListView,
   List,
   errorMessage,
   useRecordActionMutation,

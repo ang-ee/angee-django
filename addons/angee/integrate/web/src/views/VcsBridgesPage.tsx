@@ -6,7 +6,6 @@ import {
   Facet,
   Field,
   Form,
-  ListView,
   List,
   useEnumOptions,
   useImplPrefill,

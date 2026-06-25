@@ -5,7 +5,6 @@ import {
   DrawerResourceList,
   Field,
   Form,
-  ListView,
   List,
 } from "@angee/base";
 import { useKnowledgeT } from "../i18n";

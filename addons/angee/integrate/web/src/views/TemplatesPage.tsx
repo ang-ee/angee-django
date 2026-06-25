@@ -9,7 +9,6 @@ import {
   Field,
   Form,
   Group,
-  ListView,
   List,
   REFINE_CREATE_ID,
   useRecordActionMutation,
