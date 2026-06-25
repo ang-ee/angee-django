@@ -1,15 +1,11 @@
 export {
   useAuthoredMutation,
   useAuthoredQuery,
-  useAuthoredRows,
   type AuthoredMutate,
   type AuthoredMutationOptions,
   type AuthoredOperationOptions,
   type AuthoredQueryOptions,
   type AuthoredQueryResult,
-  type AuthoredRowsOptions,
-  type AuthoredRowsResult,
-  type AuthoredStringIdRow,
 } from "./authored-hooks";
 export {
   ANONYMOUS_AUTH,

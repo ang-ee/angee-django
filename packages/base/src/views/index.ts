@@ -26,10 +26,6 @@ export {
   type RelatedRowsListProps,
 } from "./RelatedRowsList";
 export {
-  AuthoredRowsList,
-  type AuthoredRowsListProps,
-} from "./AuthoredRowsList";
-export {
   RelationPicker,
   type RelationPickerProps,
   type RelationCreateConfig,

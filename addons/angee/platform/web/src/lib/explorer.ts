@@ -1,11 +1,9 @@
-import { useCallback, useMemo } from "react";
+import { useMemo } from "react";
 
 import type { GraphViewEdge, GraphViewNode } from "@angee/base";
 import {
   useAuthoredQuery,
-  useAuthoredRows,
   type AuthoredQueryResult,
-  type AuthoredRowsResult,
 } from "@angee/data";
 import type { DocumentData } from "@angee/refine";
 
@@ -16,12 +14,8 @@ import {
   type PlatformModelData,
 } from "../documents";
 import {
-  fieldRows,
   modelGraphEdges,
   modelGraphNodes,
-  modelRows,
-  type FieldRow,
-  type ModelRow,
 } from "./rows";
 
 export type PlatformExplorerResult = DocumentData<typeof PlatformExplorer>;
@@ -31,15 +25,6 @@ const EMPTY_EXPLORER: PlatformExplorerData = {
   models: [],
   edges: [],
 };
-
-export interface PlatformModelRowsScope {
-  addon?: string | null;
-}
-
-export interface PlatformFieldRowsScope {
-  model?: string | null;
-  addon?: string | null;
-}
 
 export interface PlatformModelGraphScope {
   model?: string | null;
@@ -88,24 +73,6 @@ function explorerOrEmpty(
 
 function sortedUnique(values: readonly string[]): string[] {
   return [...new Set(values)].sort();
-}
-
-export function selectPlatformModelRows(
-  data: PlatformExplorerResult | undefined,
-  scope: PlatformModelRowsScope = {},
-): readonly ModelRow[] {
-  const rows = modelRows(explorerOrEmpty(data).models);
-  return scope.addon ? rows.filter((row) => row.addonId === scope.addon) : rows;
-}
-
-export function selectPlatformFieldRows(
-  data: PlatformExplorerResult | undefined,
-  scope: PlatformFieldRowsScope = {},
-): readonly FieldRow[] {
-  let rows = fieldRows(explorerOrEmpty(data).models);
-  if (scope.model) rows = rows.filter((row) => row.model === scope.model);
-  if (scope.addon) rows = rows.filter((row) => row.addonId === scope.addon);
-  return rows;
 }
 
 export function selectPlatformAddonDetail(
@@ -161,35 +128,6 @@ export function usePlatformExplorer(): PlatformExplorerQuery {
     ...query,
     explorer: query.data?.platform_explorer ?? null,
   };
-}
-
-export function usePlatformModelRows({
-  addon,
-}: PlatformModelRowsScope = {}): AuthoredRowsResult<
-  PlatformExplorerResult,
-  ModelRow
-> {
-  const selectRows = useCallback(
-    (data: PlatformExplorerResult | undefined) =>
-      selectPlatformModelRows(data, { addon }),
-    [addon],
-  );
-  return useAuthoredRows(PlatformExplorer, { selectRows });
-}
-
-export function usePlatformFieldRows({
-  model,
-  addon,
-}: PlatformFieldRowsScope = {}): AuthoredRowsResult<
-  PlatformExplorerResult,
-  FieldRow
-> {
-  const selectRows = useCallback(
-    (data: PlatformExplorerResult | undefined) =>
-      selectPlatformFieldRows(data, { model, addon }),
-    [model, addon],
-  );
-  return useAuthoredRows(PlatformExplorer, { selectRows });
 }
 
 export function usePlatformAddon(

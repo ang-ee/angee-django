@@ -51,23 +51,6 @@ export interface AuthoredQueryResult<TData> {
   refetch: () => void;
 }
 
-export type AuthoredStringIdRow = Record<string, unknown> & { id: string };
-
-export interface AuthoredRowsOptions<
-  TDocument extends AuthoredDocument,
-  TRow extends AuthoredStringIdRow,
-> extends AuthoredQueryOptions {
-  variables?: AuthoredVariables<TDocument>;
-  selectRows: (data: DocumentData<TDocument> | undefined) => readonly TRow[];
-}
-
-export interface AuthoredRowsResult<
-  TData,
-  TRow extends AuthoredStringIdRow,
-> extends AuthoredQueryResult<TData> {
-  rows: readonly TRow[];
-}
-
 export function useAuthoredQuery<TDocument extends AuthoredDocument>(
   document: TDocument,
   variables?: AuthoredVariables<TDocument>,
@@ -102,22 +85,6 @@ export function useAuthoredQuery<TDocument extends AuthoredDocument>(
     error: run.query.error as Error | null,
     refetch,
   };
-}
-
-export function useAuthoredRows<
-  TDocument extends AuthoredDocument,
-  TRow extends AuthoredStringIdRow,
->(
-  document: TDocument,
-  options: AuthoredRowsOptions<TDocument, TRow>,
-): AuthoredRowsResult<DocumentData<TDocument>, TRow> {
-  const { variables, selectRows, ...queryOptions } = options;
-  const query = useAuthoredQuery(document, variables, queryOptions);
-  const rows = useMemo(
-    () => selectRows(query.data),
-    [query.data, selectRows],
-  );
-  return { ...query, rows };
 }
 
 export type AuthoredMutate<TDocument extends AuthoredDocument> = (

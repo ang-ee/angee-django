@@ -12,10 +12,8 @@ import type {
 } from "../documents";
 import {
   selectPlatformAddonDetail,
-  selectPlatformFieldRows,
   selectPlatformModelDetail,
   selectPlatformModelGraph,
-  selectPlatformModelRows,
   usePlatformAddon,
   usePlatformExplorer,
   type PlatformExplorerResult,
@@ -35,22 +33,6 @@ vi.mock("@angee/data", async (importOriginal) => {
       }
       return sdkMocks.query;
     },
-    useAuthoredRows: (
-      _document: unknown,
-      options: {
-        selectRows: (
-          data: PlatformExplorerResult | undefined,
-        ) => readonly unknown[];
-      },
-    ) => {
-      if (!sdkMocks.query) {
-        throw new Error("Missing mocked platform explorer query.");
-      }
-      return {
-        ...sdkMocks.query,
-        rows: options.selectRows(sdkMocks.query.data),
-      };
-    },
   };
 });
 
@@ -59,31 +41,6 @@ beforeEach(() => {
 });
 
 describe("platform explorer selectors", () => {
-  test("filters model rows by addon scope", () => {
-    const rows = selectPlatformModelRows(explorerResult(), {
-      addon: "angee.iam",
-    });
-
-    expect(rows.map((row) => row.id)).toEqual(["iam.user"]);
-  });
-
-  test("intersects field rows by model and addon scopes", () => {
-    const data = explorerResult();
-
-    expect(
-      selectPlatformFieldRows(data, {
-        model: "iam.user",
-        addon: "angee.iam",
-      }).map((row) => row.id),
-    ).toEqual(["iam.user.id", "iam.user.created_by"]);
-    expect(
-      selectPlatformFieldRows(data, {
-        model: "iam.user",
-        addon: "angee.resources",
-      }),
-    ).toEqual([]);
-  });
-
   test("projects addon dependency detail from known platform addons", () => {
     const detail = selectPlatformAddonDetail(explorerResult(), "angee.iam");
 
@@ -116,8 +73,6 @@ describe("platform explorer selectors", () => {
   test("treats a null explorer payload as an empty platform surface", () => {
     const data: PlatformExplorerResult = { platform_explorer: null };
 
-    expect(selectPlatformModelRows(data)).toEqual([]);
-    expect(selectPlatformFieldRows(data)).toEqual([]);
     expect(selectPlatformAddonDetail(data, "angee.iam").addon).toBeUndefined();
     expect(selectPlatformModelGraph(data).nodes).toEqual([]);
   });
