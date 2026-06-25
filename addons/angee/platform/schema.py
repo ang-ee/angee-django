@@ -17,11 +17,10 @@ import strawberry
 from django.apps import AppConfig, apps
 from django.db.models import Model
 from pydantic import BaseModel
-from rebac import ObjectRef, current_actor
-from rebac.backends import backend
-from rebac.field_visibility import check_field_access
+from rebac import ObjectRef
 
 from angee.addons import is_angee_addon
+from angee.graphql.access import actor_can_read
 from angee.graphql.data import hasura_pydantic_resource
 
 _EXPLORER = ObjectRef("platform/explorer", "default")
@@ -113,15 +112,7 @@ def platform_can_read() -> bool:
     role.
     """
 
-    actor = current_actor()
-    if actor is None:
-        return False
-    return check_field_access(
-        backend(),
-        subject=actor,
-        action="read",
-        resource=_EXPLORER,
-    ).allowed
+    return actor_can_read(_EXPLORER)
 
 
 def _addons() -> list[AppConfig]:

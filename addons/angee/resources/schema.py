@@ -18,11 +18,10 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db.models import QuerySet
-from rebac import ObjectRef, current_actor
-from rebac.backends import backend
-from rebac.field_visibility import check_field_access
+from rebac import ObjectRef
 from strawberry import auto
 
+from angee.graphql.access import actor_can_read
 from angee.graphql.data import hasura_model_resource
 
 _EXPLORER = ObjectRef("platform/explorer", "default")
@@ -59,15 +58,7 @@ def _platform_can_read() -> bool:
     console.
     """
 
-    actor = current_actor()
-    if actor is None:
-        return False
-    return check_field_access(
-        backend(),
-        subject=actor,
-        action="read",
-        resource=_EXPLORER,
-    ).allowed
+    return actor_can_read(_EXPLORER)
 
 
 def _ledger_queryset(info: strawberry.Info) -> QuerySet[Any]:

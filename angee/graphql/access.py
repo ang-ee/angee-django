@@ -7,12 +7,29 @@ from typing import Any
 
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
-from rebac import ObjectRef, SubjectRef
+from rebac import ObjectRef, SubjectRef, current_actor
 from rebac.backends import backend
 from rebac.field_visibility import check_field_access, gated_read_fields
 from rebac.resources import model_resource_type
 
 from angee.graphql.events import ChangeEvent, ChangePayload
+
+
+def actor_can_read(resource: ObjectRef) -> bool:
+    """Return whether the current actor holds ``read`` on ``resource``.
+
+    The GraphQL-layer read gate for surfaces that anchor visibility on a single
+    REBAC object rather than a per-model resource (e.g. the platform console's
+    ``platform/explorer`` anchor, the operator daemon's ``operator/connection``
+    anchor). Callers pass their own anchor as ``resource`` so each surface keeps
+    its anchor explicit; an actorless request (no authenticated subject) reads as
+    not allowed.
+    """
+
+    actor = current_actor()
+    if actor is None:
+        return False
+    return check_field_access(backend(), subject=actor, action="read", resource=resource).allowed
 
 
 def assert_no_gated_read_fields(
