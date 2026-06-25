@@ -11,10 +11,15 @@ from django.db.models import F
 from rebac import system_context
 from strawberry import auto
 
-from angee.base.models import public_id_for
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
-from angee.graphql.ids import PublicID, require_instance_for_id
+from angee.graphql.ids import (
+    PublicID,
+    optional_public_id,
+    require_instance_for_id,
+    require_public_id,
+    to_public_id,
+)
 from angee.graphql.node import AngeeNode
 from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
@@ -43,7 +48,7 @@ class VaultType(AngeeNode):
     def owner(self) -> strawberry.ID | None:
         """Return the owner's public id without exposing the user object."""
 
-        return _as_id(user_public_id(cast(Any, self).owner_id))
+        return optional_public_id(user_public_id(cast(Any, self).owner_id))
 
     @strawberry_django.field(only=["owner_id"])
     def owner_label(self) -> str | None:
@@ -66,7 +71,7 @@ class MarkdownPageType(AngeeNode):
     def page(self) -> strawberry.ID:
         """Return the owning page's public id."""
 
-        return strawberry.ID(public_id_for(Page, cast(Any, self).page_id))
+        return require_public_id(Page, cast(Any, self).page_id)
 
     @strawberry_django.field(only=["body"])
     def excerpt(self) -> str:
@@ -98,7 +103,7 @@ class PageType(AngeeNode):
     def vault(self) -> strawberry.ID:
         """Return the owning vault's public id without exposing the vault."""
 
-        return strawberry.ID(public_id_for(Vault, cast(Any, self).vault_id))
+        return require_public_id(Vault, cast(Any, self).vault_id)
 
     @strawberry_django.field(only=["vault_id"])
     def vault_label(self) -> str | None:
@@ -117,15 +122,13 @@ class PageType(AngeeNode):
     def parent(self) -> strawberry.ID | None:
         """Return the parent page's public id, if the page has one."""
 
-        if cast(Any, self).parent_id is None:
-            return None
-        return strawberry.ID(public_id_for(Page, cast(Any, self).parent_id))
+        return to_public_id(Page, cast(Any, self).parent_id)
 
     @strawberry_django.field(only=["created_by_id"])
     def created_by(self) -> strawberry.ID | None:
         """Return the creator's public id without exposing the user object."""
 
-        return _as_id(user_public_id(cast(Any, self).created_by_id))
+        return optional_public_id(user_public_id(cast(Any, self).created_by_id))
 
     @strawberry_django.field(only=["created_by_id"])
     def created_by_label(self) -> str | None:
@@ -162,7 +165,7 @@ class PageType(AngeeNode):
         )
         return [
             BacklinkType(
-                page=strawberry.ID(public_id_for(Page, row.source_page_id)),
+                page=require_public_id(Page, row.source_page_id),
                 title=str(row.source_title),
                 display_text=row.display_text,
             )
@@ -301,12 +304,6 @@ KnowledgeMutation = attach_delete_preview_metadata(
     node=PageType,
     field="delete_page",
 )
-
-
-def _as_id(public_id: str | None) -> strawberry.ID | None:
-    """Return one optional public id as a GraphQL ID."""
-
-    return None if public_id is None else strawberry.ID(public_id)
 
 
 _KNOWLEDGE_SCHEMA_BUCKET = {

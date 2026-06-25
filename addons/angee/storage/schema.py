@@ -16,10 +16,15 @@ from strawberry.permission import BasePermission
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
-from angee.base.models import public_id_for
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
-from angee.graphql.ids import PublicID, instance_for_id
+from angee.graphql.ids import (
+    PublicID,
+    instance_for_id,
+    optional_public_id,
+    require_public_id,
+    to_public_id,
+)
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
@@ -77,7 +82,7 @@ class DriveType(AngeeNode):
     def backend(self) -> strawberry.ID:
         """Return the parent backend's public id without exposing the row."""
 
-        return strawberry.ID(public_id_for(Backend, cast(Any, self).backend_id))
+        return require_public_id(Backend, cast(Any, self).backend_id)
 
 
 @strawberry_django.type(Folder)
@@ -95,15 +100,13 @@ class FolderType(AngeeNode):
     def drive(self) -> strawberry.ID | None:
         """Return the drive's public id; smart folders have none."""
 
-        drive_id = cast(Any, self).drive_id
-        return strawberry.ID(public_id_for(Drive, drive_id)) if drive_id else None
+        return to_public_id(Drive, cast(Any, self).drive_id)
 
     @strawberry_django.field(only=["parent_id"])
     def parent(self) -> strawberry.ID | None:
         """Return the parent folder's public id, if any."""
 
-        parent_id = cast(Any, self).parent_id
-        return strawberry.ID(public_id_for(Folder, parent_id)) if parent_id else None
+        return to_public_id(Folder, cast(Any, self).parent_id)
 
 
 @strawberry_django.type(File)
@@ -126,20 +129,19 @@ class FileType(AngeeNode):
     def drive(self) -> strawberry.ID:
         """Return the drive's public id without exposing the drive object."""
 
-        return strawberry.ID(public_id_for(Drive, cast(Any, self).drive_id))
+        return require_public_id(Drive, cast(Any, self).drive_id)
 
     @strawberry_django.field(only=["folder_id"])
     def folder(self) -> strawberry.ID | None:
         """Return the folder's public id, if the file is in one."""
 
-        folder_id = cast(Any, self).folder_id
-        return strawberry.ID(public_id_for(Folder, folder_id)) if folder_id else None
+        return to_public_id(Folder, cast(Any, self).folder_id)
 
     @strawberry_django.field(only=["created_by_id"])
     def created_by(self) -> strawberry.ID | None:
         """Return the uploader's public id without exposing the user object."""
 
-        return cast("strawberry.ID | None", user_public_id(cast(Any, self).created_by_id))
+        return optional_public_id(user_public_id(cast(Any, self).created_by_id))
 
     @strawberry_django.field(only=["created_by_id"])
     def created_by_label(self) -> str | None:

@@ -10,7 +10,12 @@ from django.db import models
 from strawberry.types import get_object_definition
 from strawberry_django.utils.typing import get_django_definition
 
-from angee.base.models import instance_from_public_id, public_data_id_owner, public_data_id_prefix
+from angee.base.models import (
+    instance_from_public_id,
+    public_data_id_owner,
+    public_data_id_prefix,
+    public_id_for,
+)
 
 PublicID = strawberry.ID
 """GraphQL ID scalar carrying an Angee public id, usually a model sqid."""
@@ -22,6 +27,29 @@ def public_id_value(value: Any) -> str:
     """Return ``value`` as the raw public id used at GraphQL boundaries."""
 
     return str(value or "")
+
+
+def to_public_id(model: type[models.Model], fk_id: Any) -> PublicID | None:
+    """Project a model foreign-key value to its public id, or ``None`` when unset."""
+
+    if fk_id is None:
+        return None
+    return PublicID(public_id_for(model, fk_id))
+
+
+def require_public_id(model: type[models.Model], fk_id: Any) -> PublicID:
+    """Project a required (non-null) model foreign-key value to its public id."""
+
+    public_id = to_public_id(model, fk_id)
+    if public_id is None:
+        raise ValueError(f"{model._meta.object_name} reference is unexpectedly unset")
+    return public_id
+
+
+def optional_public_id(value: str | None) -> PublicID | None:
+    """Wrap an optional already-resolved public id string as a GraphQL ID."""
+
+    return None if value is None else PublicID(value)
 
 
 def instance_for_id(

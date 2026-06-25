@@ -23,6 +23,7 @@ from angee.graphql.data import (
     hasura_model_resource,
     public_pk_decoder,
 )
+from angee.graphql.ids import optional_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_display_label, user_public_id
@@ -58,7 +59,7 @@ class PartyType(AngeeNode):
     def created_by(self) -> strawberry.ID | None:
         """Return the creator's public id without exposing the user object."""
 
-        return cast("strawberry.ID | None", user_public_id(cast(Any, self).created_by_id))
+        return optional_public_id(user_public_id(cast(Any, self).created_by_id))
 
     @strawberry_django.field(only=["created_by_id"])
     def created_by_label(self) -> str | None:
@@ -89,7 +90,7 @@ class PersonType(AngeeNode):
     def user(self) -> strawberry.ID | None:
         """Return the linked platform user's public id, when this person is one."""
 
-        return cast("strawberry.ID | None", user_public_id(cast(Any, self).user_id))
+        return optional_public_id(user_public_id(cast(Any, self).user_id))
 
 
 @strawberry_django.type(Organization)
