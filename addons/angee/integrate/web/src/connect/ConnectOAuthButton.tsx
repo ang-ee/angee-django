@@ -1,19 +1,17 @@
 import * as React from "react";
 import { Button, Glyph, errorMessage, usePrompt, useToast } from "@angee/base";
 import { useAuthoredMutation } from "@angee/data";
+import { type DocumentType } from "@angee/gql/console";
 
 import { useIntegrateT } from "../i18n";
+import { ConnectIntegration } from "../documents";
 import { IntegrateConnectAccountComplete } from "./documents.public";
 import { connectCallbackRedirectUri } from "./redirects";
 
-export interface OAuthConnectPayload {
-  attached?: boolean | null;
-  authorize_url?: string | null;
-  error?: string | null;
-  mode?: string | null;
-  state?: string | null;
-  redirect_uri?: string | null;
-}
+/** The OAuth connect-start payload, from the generated `connect_integration` result. */
+export type OAuthConnectPayload = NonNullable<
+  DocumentType<typeof ConnectIntegration>["connect_integration"]
+>;
 
 export interface ConnectOAuthButtonProps {
   label: string;
