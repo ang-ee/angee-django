@@ -21,14 +21,13 @@ from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
 from angee.graphql.ids import (
     PublicID,
     instance_for_id,
-    optional_public_id,
     require_public_id,
     to_public_id,
 )
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
-from angee.iam.identity import user_display_label, user_public_id
+from angee.iam.audit import AuthoredRefMixin
 from angee.storage import exceptions
 from angee.storage.models import UploadState
 
@@ -110,7 +109,7 @@ class FolderType(AngeeNode):
 
 
 @strawberry_django.type(File)
-class FileType(AngeeNode):
+class FileType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of a file row."""
 
     filename: auto
@@ -136,18 +135,6 @@ class FileType(AngeeNode):
         """Return the folder's public id, if the file is in one."""
 
         return to_public_id(Folder, cast(Any, self).folder_id)
-
-    @strawberry_django.field(only=["created_by_id"])
-    def created_by(self) -> strawberry.ID | None:
-        """Return the uploader's public id without exposing the user object."""
-
-        return optional_public_id(user_public_id(cast(Any, self).created_by_id))
-
-    @strawberry_django.field(only=["created_by_id"])
-    def created_by_label(self) -> str | None:
-        """Return the uploader's display label — no user object exposed."""
-
-        return user_display_label(cast(Any, self).created_by_id)
 
     @strawberry_django.field
     def url(self) -> str:
