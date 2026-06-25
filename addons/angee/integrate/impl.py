@@ -7,9 +7,10 @@ domain state belongs on real child models, not on descriptor-owned companion row
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from angee.base.impl import ImplBase
+from angee.integrate.connect import enabled_oauth_client_from_hint
 
 
 class IntegrationImpl(ImplBase):
@@ -18,12 +19,29 @@ class IntegrationImpl(ImplBase):
     category = "none"
     label = "Integration"
     icon = ""
-    oauth_client = ""
+    oauth_client: ClassVar[str] = ""
 
     def __init__(self, integration: Any) -> None:
         """Bind this implementation to its owning integration row."""
 
         self.integration = integration
+
+    def connect_oauth_client(self, owner_label: str) -> Any:
+        """Return the enabled OAuth client this integration connects through.
+
+        Falls back to the bound integration's vendor slug when the implementation
+        declares no ``oauth_client`` hint; the vendor slug also feeds the
+        ``{vendor}`` template.
+        """
+
+        vendor_slug = str(getattr(getattr(self.integration, "vendor", None), "slug", "") or "")
+        hint = str(self.oauth_client or "")
+        return enabled_oauth_client_from_hint(
+            hint or vendor_slug,
+            owner_label=owner_label,
+            reason="integrate.graphql.connect_integration.oauth_client",
+            vendor_slug=vendor_slug,
+        )
 
 
 class NullIntegrationImpl(IntegrationImpl):

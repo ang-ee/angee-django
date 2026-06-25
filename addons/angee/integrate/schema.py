@@ -678,15 +678,7 @@ def apply_integration_patch_fields(
 def _oauth_client_for_integration(integration: Any) -> Any:
     """Return the OAuth client this integration implementation connects through."""
 
-    impl = integration.impl
-    hint = str(getattr(impl, "oauth_client", "") or "")
-    vendor_slug = str(getattr(getattr(integration, "vendor", None), "slug", "") or "")
-    return _connect.enabled_oauth_client_from_hint(
-        hint or vendor_slug,
-        owner_label="Integration",
-        reason="integrate.graphql.connect_integration.oauth_client",
-        vendor_slug=vendor_slug,
-    )
+    return integration.impl.connect_oauth_client("Integration")
 
 
 def _current_user_integration(

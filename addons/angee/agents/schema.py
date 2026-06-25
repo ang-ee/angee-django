@@ -36,7 +36,6 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.schema import UserType
-from angee.integrate import connect as _connect
 from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.schema import (
     ConnectIntegrationResult,
@@ -434,13 +433,7 @@ _INFERENCE_MODEL_RESOURCE = hasura_model_resource(
 def _provider_oauth_client(provider: Any) -> Any:
     """Return the OAuth client selected by this provider's backend."""
 
-    vendor_slug = str(getattr(getattr(provider, "vendor", None), "slug", "") or "")
-    return _connect.enabled_oauth_client_from_hint(
-        getattr(provider.backend, "oauth_client", ""),
-        owner_label="Inference provider",
-        reason="agents.graphql.connect_inference_provider.oauth_client",
-        vendor_slug=vendor_slug,
-    )
+    return provider.backend.connect_oauth_client("Inference provider")
 
 
 @strawberry.type
