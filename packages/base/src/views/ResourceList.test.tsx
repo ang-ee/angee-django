@@ -468,7 +468,6 @@ function refineSnakeToCamel(field: string): string {
 }
 
 vi.mock("@refinedev/react-table", async () => {
-  const ReactRuntime = await import("react");
   const TanStackTable = await import("@tanstack/react-table");
   return {
     useTable: (options: {

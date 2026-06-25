@@ -4,7 +4,6 @@ import {
   type CheckboxRootProps as BaseCheckboxRootProps,
 } from "@base-ui/react/checkbox";
 import { Glyph } from "../chrome/Glyph";
-import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 
 export const checkboxVariants = tv({

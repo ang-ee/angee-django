@@ -3,7 +3,6 @@ import {
   ResourceList,
   EmptyState,
   Form,
-  ListView,
   List,
   Column,
   Field,

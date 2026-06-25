@@ -7,11 +7,8 @@ import type {
 import { tv, type VariantProps } from "../lib/variants";
 import {
   DialogBackdrop,
-  DialogBody,
   DialogClose,
   DialogDescription,
-  DialogFooter,
-  DialogHeader,
   DialogPortal,
   DialogRoot,
   DialogTitle,

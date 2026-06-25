@@ -33,7 +33,6 @@ import {
   refineSortersFromAngeeOrder,
   } from "@angee/refine";
 import {
-  isClientRowModel,
   refineResourceName,
 } from "@angee/resources";
 import type {

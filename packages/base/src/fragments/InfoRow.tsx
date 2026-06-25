@@ -1,6 +1,5 @@
 import * as React from "react";
 
-import { cn } from "../lib/cn";
 import { tv } from "../lib/variants";
 import { SectionEyebrow } from "../ui/section-eyebrow";
 

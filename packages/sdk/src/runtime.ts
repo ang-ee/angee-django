@@ -2,7 +2,6 @@ import { useCallback, useMemo } from "react";
 
 import type {
   ChatterContribution,
-  ComposedMenuItem,
   FormOverrideMap,
   PreviewContribution,
   SlotContribution,

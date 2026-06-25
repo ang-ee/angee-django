@@ -36,7 +36,6 @@ import type {
   ServiceState,
   JobState,
   SourceState,
-  WorkspaceSourceStatus,
   WorkspaceRef,
   TemplateDescriptor,
   SecretRef,

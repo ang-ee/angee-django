@@ -449,8 +449,3 @@ describe("resource metadata defaults", () => {
     });
   });
 });
-
-function required<T>(value: T | undefined): T {
-  if (value === undefined) throw new Error("Expected fixture value to exist.");
-  return value;
-}
