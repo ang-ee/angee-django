@@ -464,11 +464,6 @@ class Directory(Bridge):
         rebac_resource_type = "parties/directory"
         rebac_id_attr = "sqid"
 
-    def __str__(self) -> str:
-        """Return a stable directory label."""
-
-        return f"directory:{self.public_id}"
-
     @property
     def backend(self) -> DirectoryBackend:
         """Return this directory's selected backend, bound to this row."""

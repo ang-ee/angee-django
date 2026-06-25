@@ -1438,11 +1438,6 @@ class VcsBridge(Bridge):
         rebac_resource_type = "integrate/vcs_bridge"
         rebac_id_attr = "sqid"
 
-    def __str__(self) -> str:
-        """Return a stable VCS bridge label."""
-
-        return f"vcs:{self.public_id}"
-
     @property
     def backend(self) -> VCSBackend:
         """Return this bridge's selected VCS backend."""

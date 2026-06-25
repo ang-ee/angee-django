@@ -67,11 +67,6 @@ class Channel(Bridge):
         rebac_resource_type = "messaging/channel"
         rebac_id_attr = "sqid"
 
-    def __str__(self) -> str:
-        """Return a stable channel label."""
-
-        return f"channel:{self.public_id}"
-
     @property
     def backend(self) -> ChannelBackend:
         """Return this channel's selected backend, bound to this row."""

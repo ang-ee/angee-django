@@ -1088,8 +1088,26 @@ class VendorType(AngeeNode):
     updated_at: auto
 
 
+@strawberry.type
+class IntegrationLabelMixin:
+    """Project ``Integration.display_label`` as the ``display_name`` field for a type.
+
+    Compose alongside the node base, e.g. ``class ChannelType(IntegrationLabelMixin,
+    AngeeNode)``, to surface the operator label (falling back to ``Vendor
+    (status)``) on every ``Integration`` child type without re-declaring the
+    resolver. A ``@strawberry.type`` (not an interface): merges the field into the
+    concrete type without adding a GraphQL interface to the SDL.
+    """
+
+    @strawberry_django.field(only=["display_name", "vendor", "status"])
+    def display_name(self) -> str:
+        """Return the operator label, falling back to the vendor-derived one."""
+
+        return cast(Any, self).display_label
+
+
 @strawberry_django.type(Integration)
-class IntegrationType(AngeeNode):
+class IntegrationType(IntegrationLabelMixin, AngeeNode):
     """Admin projection of an integration.
 
     Exposes the catalogue/identity associations as nested relations so the
@@ -1120,12 +1138,6 @@ class IntegrationType(AngeeNode):
         except ObjectDoesNotExist:
             return None
 
-    @strawberry_django.field(only=["display_name", "vendor", "status"])
-    def display_name(self) -> str:
-        """Return the operator label, falling back to the vendor-derived one."""
-
-        return cast(Any, self).display_label
-
     @strawberry_django.field(only=["impl_class"], description="Implementation")
     def impl_category(self) -> str:
         """Return this integration implementation's board grouping category.
@@ -1149,7 +1161,7 @@ class IntegrationType(AngeeNode):
 
 
 @strawberry_django.type(Integration)
-class ConnectedIntegrationType(AngeeNode):
+class ConnectedIntegrationType(IntegrationLabelMixin, AngeeNode):
     """Public projection of a current-user integration connection."""
 
     vendor: VendorType
@@ -1162,12 +1174,6 @@ class ConnectedIntegrationType(AngeeNode):
     last_used_status: auto
     created_at: auto
     updated_at: auto
-
-    @strawberry_django.field(only=["display_name", "vendor", "status"])
-    def display_name(self) -> str:
-        """Return the operator label, falling back to the vendor-derived one."""
-
-        return cast(Any, self).display_label
 
 
 @strawberry_django.type(WebhookSubscription)

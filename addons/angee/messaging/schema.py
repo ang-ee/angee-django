@@ -8,8 +8,6 @@ reached through their message/thread owners.
 
 from __future__ import annotations
 
-from typing import Any, cast
-
 import strawberry
 import strawberry_django
 from django.apps import apps
@@ -18,6 +16,7 @@ from strawberry import auto
 from angee.graphql.data import hasura_model_resource, public_pk_decoder
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
+from angee.integrate.schema import IntegrationLabelMixin
 from angee.parties.schema import HandleType
 
 Integration = apps.get_model("integrate", "Integration")
@@ -34,7 +33,7 @@ MessageMetrics = apps.get_model("messaging", "MessageMetrics")
 
 
 @strawberry_django.type(Channel)
-class ChannelType(AngeeNode):
+class ChannelType(IntegrationLabelMixin, AngeeNode):
     """GraphQL projection of a connected message channel (e.g. an email account)."""
 
     backend_class: auto
@@ -45,12 +44,6 @@ class ChannelType(AngeeNode):
     last_sync_items: auto
     created_at: auto
     updated_at: auto
-
-    @strawberry_django.field(only=["display_name", "vendor", "status"])
-    def display_name(self) -> str:
-        """Return the channel's operator label so the inbox facet reads by name."""
-
-        return cast(Any, self).display_label
 
 
 @strawberry_django.type(Fragment)

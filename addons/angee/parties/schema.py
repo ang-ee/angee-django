@@ -29,6 +29,7 @@ from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, session_user
+from angee.integrate.schema import IntegrationLabelMixin
 
 Party = apps.get_model("parties", "Party")
 Person = apps.get_model("parties", "Person")
@@ -183,7 +184,7 @@ class ContactFolderType(AngeeNode):
 
 
 @strawberry_django.type(Directory)
-class DirectoryType(AngeeNode):
+class DirectoryType(IntegrationLabelMixin, AngeeNode):
     """GraphQL projection of a connected contacts directory (e.g. a CardDAV source)."""
 
     backend_class: auto
@@ -195,12 +196,6 @@ class DirectoryType(AngeeNode):
     last_sync_items: auto
     created_at: auto
     updated_at: auto
-
-    @strawberry_django.field(only=["display_name", "vendor", "status"])
-    def display_name(self) -> str:
-        """Return the operator-given directory name (the connect flow sets it)."""
-
-        return cast(Any, self).display_label
 
 
 @strawberry.type
