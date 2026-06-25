@@ -16,11 +16,13 @@ from __future__ import annotations
 import strawberry
 from django.apps import AppConfig, apps
 from django.db.models import Model
+from pydantic import BaseModel
 from rebac import ObjectRef, current_actor
 from rebac.backends import backend
 from rebac.field_visibility import check_field_access
 
 from angee.addons import is_angee_addon
+from angee.graphql.data import hasura_pydantic_resource
 
 _EXPLORER = ObjectRef("platform/explorer", "default")
 
@@ -282,10 +284,87 @@ def _build_explorer() -> PlatformExplorerData:
     return PlatformExplorerData(addons=addons_out, models=models_out, edges=edges_out)
 
 
+class PlatformAddonRow(BaseModel):
+    """Computed platform-explorer addon row (no Django table behind it).
+
+    The row-shape SSOT for the ``platform.Addon`` Hasura resource. Reverse
+    dependencies (``depended_by``) are resolved server-side across the whole
+    addon set, since a paginated client page cannot invert ``depends_on``.
+    """
+
+    id: str
+    label: str
+    namespace: str
+    kind: str
+    model_count: int
+    field_count: int
+    resource_count: int
+    depends_on: list[str]
+    depended_by: list[str]
+    model_labels: list[str]
+
+
+def _addon_rows() -> list[PlatformAddonRow]:
+    """Project composed addons as rows, resolving reverse dependencies."""
+
+    explorer = _build_explorer()
+    depended_by: dict[str, list[str]] = {}
+    for addon in explorer.addons:
+        for dependency in addon.depends_on:
+            depended_by.setdefault(dependency, []).append(addon.id)
+    return [
+        PlatformAddonRow(
+            id=addon.id,
+            label=addon.label,
+            namespace=addon.namespace,
+            kind=addon.kind,
+            model_count=addon.model_count,
+            field_count=addon.field_count,
+            resource_count=addon.resource_count,
+            depends_on=list(addon.depends_on),
+            depended_by=sorted(depended_by.get(addon.id, ())),
+            model_labels=list(addon.model_labels),
+        )
+        for addon in explorer.addons
+    ]
+
+
+def _addon_rows_for(info: strawberry.Info) -> list[PlatformAddonRow]:
+    """Row provider gated on the same platform-admin read as the explorer."""
+
+    del info
+    return _addon_rows() if platform_can_read() else []
+
+
+_ADDON_RESOURCE = hasura_pydantic_resource(
+    PlatformAddonRow,
+    name="platform_addons",
+    model_label="platform.Addon",
+    filterable=[
+        "id",
+        "label",
+        "namespace",
+        "kind",
+        "model_count",
+        "field_count",
+        "resource_count",
+    ],
+    sortable=[
+        "label",
+        "namespace",
+        "kind",
+        "model_count",
+        "field_count",
+        "resource_count",
+    ],
+    rows=_addon_rows_for,
+)
+
+
 schemas = {
     "console": {
-        "query": [PlatformQuery],
-        "types": [PlatformExplorerData],
+        "query": [PlatformQuery, _ADDON_RESOURCE.query],
+        "types": [PlatformExplorerData, *_ADDON_RESOURCE.types],
     },
 }
 """GraphQL contributions installed by the platform addon (console surface)."""

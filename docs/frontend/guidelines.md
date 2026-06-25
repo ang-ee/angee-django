@@ -123,6 +123,23 @@ hand-rolling a concern. TypeScript dependency setup belongs in `package.json`,
   action controls or hooks, but they do not own table mechanics, duplicate route
   params, cache state, bespoke loading/error surfaces, or local copies of shared
   resource-view state.
+- **The data view's client/server boundary is a row-model choice, not a fork.**
+  Where list operations (filter/sort/paginate/group) resolve follows the
+  established data-grid pattern — AG Grid's named *row models*, TanStack's
+  built-in client row models vs `manual*` flags (Angee's grid *is* TanStack
+  Table), MUI's `*Mode`. Choose the boundary by **dataset size, not data
+  origin**: default to **client-side for small, bounded, computed collections**
+  (one fetch, then filter/sort/paginate/group in the browser over the loaded
+  set), and **server-side for large model-backed resources** (Hasura
+  `where`/`order_by`/`limit` + the `_groups` aggregate). Grouping is a
+  client-side row model by default (it needs the whole set); the server
+  `_groups` surface is the escalation only when the data is too large to hold in
+  memory. A computed/non-model source is exposed **once** as a Hasura resource
+  (`hasura_pydantic_resource`) for the uniform fetch + metadata + MCP surface,
+  and its admin list processes client-side over the fetched set. Do not
+  hand-roll a separate client filter/sort/paginate engine — compose the grid's
+  owned row-model pipeline (`local-rows.ts` is the legacy hand-roll being retired
+  in favour of it).
 - A recipe's icon-button size keys are `iconSm`/`iconMd`/`iconLg` (one spelling
   across recipes). A default `size` is a visual contract — do not flip it without a
   requester (differing defaults like `Switch`/`ToggleGroup` `sm` vs `Toggle` `md`
