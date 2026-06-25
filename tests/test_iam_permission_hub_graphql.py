@@ -65,22 +65,6 @@ def test_permission_hub_queries_are_admin_only(
         """,
         """
         query {
-          relationships(pagination: {limit: 10}) {
-            total_count
-            results {
-              resource_type
-              resource_id
-              relation
-              subject_type
-              subject_id
-              subject_relation
-              caveat_name
-            }
-          }
-        }
-        """,
-        """
-        query {
           iam_overview {
             user_count
             role_count
@@ -99,6 +83,48 @@ def test_permission_hub_queries_are_admin_only(
 
         allowed = _execute(console_schema, query, user=admin)
         assert allowed.errors is None
+
+
+def test_relationships_resource_is_admin_scoped(
+    iam_permission_hub_tables: None,
+) -> None:
+    """The relationships Hasura resource lists rows for admins, empty otherwise.
+
+    Unlike the authored queries that raised for a non-admin, the read-only
+    relationship resource scopes through its ``get_queryset`` and returns the
+    empty set for a non-admin actor (no forbidden error) — the admin-only
+    console navigation already gates the surface.
+    """
+
+    plain = User.objects.create_user(username="rel-plain", email="rel-plain@example.com")
+    admin = _platform_admin("rel-admin")
+    grant(actor=admin, role="angee/role:auditor")
+    console_schema = _schema("console")
+    query = """
+        query {
+          relationships(limit: 50) {
+            id
+            resource_type
+            resource_id
+            relation
+            subject_type
+            subject_id
+            subject_relation
+            caveat_name
+          }
+        }
+    """
+
+    denied = _execute(console_schema, query, user=plain)
+    assert denied.errors is None
+    assert _data(denied)["relationships"] == []
+
+    allowed = _execute(console_schema, query, user=admin)
+    assert allowed.errors is None
+    rows = _data(allowed)["relationships"]
+    assert rows
+    assert any(row["relation"] == ROLE_RELATION for row in rows)
+    assert all(row["id"] for row in rows)
 
 
 def test_roles_query_excludes_role_types_missing_from_rebac_schema(

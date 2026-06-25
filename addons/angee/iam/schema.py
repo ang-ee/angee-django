@@ -259,6 +259,12 @@ class IAMRelationshipType:
     """Raw active REBAC relationship tuple."""
 
     @strawberry_django.field
+    def id(self) -> str:
+        """Return the relationship row's primary-key identity."""
+
+        return str(cast(Any, self).pk)
+
+    @strawberry_django.field
     def resource_type(self) -> str:
         """Return the relationship resource type."""
 
@@ -731,24 +737,18 @@ def _relation_role_refs(relation: Any) -> set[str]:
     return refs
 
 
-def _permission_relationships(
-    info: strawberry.Info,
-    *,
-    resource_type: str | None = None,
-    subject_type: str | None = None,
-    relation: str | None = None,
-) -> QuerySet[Any]:
-    """Return active relationship rows, optionally narrowed by core columns."""
+def _admin_relationship_queryset(info: strawberry.Info) -> QuerySet[Any]:
+    """Return active REBAC relationship rows scoped to platform admins.
 
-    del info
-    rows = _relationship_rows()
-    if resource_type:
-        rows = rows.filter(resource_type=resource_type)
-    if subject_type:
-        rows = rows.filter(subject_type=subject_type)
-    if relation:
-        rows = rows.filter(relation=relation)
-    return cast(QuerySet[Any], rows)
+    The Hasura ``relationships`` resource replaces the authored ``relationships``
+    query; like the other permission-hub surfaces it is admin-only, so a
+    non-admin actor reads the empty set (``.none()``) rather than a forbidden
+    error — admin-only navigation already gates the console.
+    """
+
+    if not _admin_actor(info):
+        return cast(QuerySet[Any], active_relationship_model().objects.none())
+    return _relationship_rows()
 
 
 def _user_graphql_type_name() -> str:
@@ -1065,6 +1065,30 @@ _GROUP_RESOURCE = hasura_model_resource(
 )
 
 
+# Filter/sort only on columns the active relationship store materializes as
+# direct concrete fields. The denormalized ``resource_type``/``subject_type``
+# strings live behind ``resource_fk``/``subject_fk`` in registry storage mode, so
+# they are not ORM-addressable single-field columns; ``relation`` and the caveat/
+# subject-relation columns are concrete in both storage modes.
+_RELATIONSHIP_FILTER_FIELDS = ("relation", "optional_subject_relation", "caveat_name")
+
+_RELATIONSHIP_RESOURCE = hasura_model_resource(
+    IAMRelationshipType,
+    model=active_relationship_model(),
+    name="relationships",
+    filterable=list(_RELATIONSHIP_FILTER_FIELDS),
+    sortable=list(_RELATIONSHIP_FILTER_FIELDS),
+    aggregatable=["id"],
+    get_queryset=_admin_relationship_queryset,
+    insert=False,
+    update=False,
+    delete=False,
+    id_decode=lambda value: value,
+    id_column="id",
+    model_label="iam.Relationship",
+)
+
+
 @strawberry.type
 class IAMQuery:
     """Session-backed IAM queries."""
@@ -1112,11 +1136,6 @@ class IAMConsoleQuery:
         """Return IAM dashboard aggregates and peek rows."""
 
         return _iam_overview(peek_limit)
-
-    relationships: OffsetPaginated[IAMRelationshipType] = strawberry_django.offset_paginated(
-        resolver=_permission_relationships,
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
 
 
 @strawberry.type
@@ -1241,6 +1260,7 @@ schemas = {
             _GROUP_RESOURCE.query,
             _ROLE_RESOURCE.query,
             _GRANT_RESOURCE.query,
+            _RELATIONSHIP_RESOURCE.query,
         ],
         "mutation": [
             IAMMutation,
@@ -1266,7 +1286,7 @@ schemas = {
             *_GROUP_RESOURCE.types,
             *_ROLE_RESOURCE.types,
             *_GRANT_RESOURCE.types,
-            IAMRelationshipType,
+            *_RELATIONSHIP_RESOURCE.types,
         ],
     },
 }
