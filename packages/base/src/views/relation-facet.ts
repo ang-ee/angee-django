@@ -30,7 +30,7 @@ import {
   hasuraGroupOrderForDimensions,
 } from "./ListInternals";
 import {
-  fieldLabel,
+  groupLabel,
   relationFieldInfo,
   type RelationFieldInfo,
 } from "./model-metadata-defaults";
@@ -185,7 +185,7 @@ function relationFacetDeclaration(
   });
   if (!filter) return null;
   const aggregateKey = optionAggregateKey ?? filter.aggregateKey;
-  const label = optionLabel ?? relationLabel(field);
+  const label = optionLabel ?? groupLabel(field, modelMetadata?.fields[field]);
   const groupOption = relationGroupOption({
     aggregateKey,
     field,
@@ -293,8 +293,4 @@ function relationGroupOption({
     label,
     group: optionGroup,
   };
-}
-
-function relationLabel(field: string): string {
-  return field.charAt(0).toUpperCase() + field.slice(1);
 }
