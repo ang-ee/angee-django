@@ -53,6 +53,7 @@ import {
   createLocalRowsDataSource,
   nextRowTextFilter,
   rowTextFilterValue,
+  useLocalRowsPage,
 } from "./local-rows";
 import {
   GROUP_ROW_HEIGHT,
@@ -511,38 +512,16 @@ export function useClientResourceViewSurface<TRow extends Row = Row>({
     }
   }, [totalRows, dataResource?.modelLabel, resourceName]);
 
-  const textFields = React.useMemo(
-    () => columns.map((column) => column.field),
-    [columns],
-  );
   const source = React.useMemo(
     () => createLocalRowsDataSource(allRows),
     [allRows],
   );
-  const localPage = React.useMemo(
-    () =>
-      source.query({
-        filter: mergedFilter,
-        sort: resourceView.state.sort,
-        page: resourceView.state.page,
-        pageSize: resourceView.state.pageSize,
-        textFields,
-      }),
-    [
-      source,
-      mergedFilter,
-      resourceView.state.page,
-      resourceView.state.pageSize,
-      resourceView.state.sort,
-      textFields,
-    ],
-  );
-
-  React.useEffect(() => {
-    if (resourceView.state.page > localPage.pageCount) {
-      resourceView.setPage(localPage.pageCount);
-    }
-  }, [resourceView.setPage, resourceView.state.page, localPage.pageCount]);
+  const localPage = useLocalRowsPage({
+    source,
+    columns,
+    resourceView,
+    filter: mergedFilter,
+  });
 
   const fetching = run.query.isFetching;
   const error = errorFromUnknown(run.query.error);
@@ -615,34 +594,12 @@ export function useRowsResourceViewSurface<
     () => createLocalRowsDataSource(rows),
     [rows],
   );
-  const textFields = React.useMemo(
-    () => columns.map((column) => column.field),
-    [columns],
-  );
-  const localPage = React.useMemo(
-    () =>
-      source.query({
-        filter: resourceView.state.filter,
-        sort: resourceView.state.sort,
-        page: resourceView.state.page,
-        pageSize: resourceView.state.pageSize,
-        textFields,
-      }),
-    [
-      resourceView.state.filter,
-      resourceView.state.page,
-      resourceView.state.pageSize,
-      resourceView.state.sort,
-      source,
-      textFields,
-    ],
-  );
-
-  React.useEffect(() => {
-    if (resourceView.state.page > localPage.pageCount) {
-      resourceView.setPage(localPage.pageCount);
-    }
-  }, [resourceView.setPage, resourceView.state.page, localPage.pageCount]);
+  const localPage = useLocalRowsPage({
+    source,
+    columns,
+    resourceView,
+    filter: resourceView.state.filter,
+  });
 
   const pageRows = localPage.rows;
   const listState = React.useMemo<RowsResourceListSnapshot<TRow>>(

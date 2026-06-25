@@ -1,3 +1,4 @@
+import * as React from "react";
 import {
   DEFAULT_PAGE_SIZE,
   clampPageSize,
@@ -5,10 +6,12 @@ import {
 import type {
   Row,
 } from "@angee/resources";
+import type { ResourceViewContextValue } from "./resource-view-context";
 import type {
   ResourceViewFilter,
   ResourceViewSort,
 } from "./resource-view-model";
+import type { ColumnDescriptor } from "./page";
 
 export interface LocalRowsQuery {
   filter?: ResourceViewFilter;
@@ -75,6 +78,60 @@ export function createLocalRowsDataSource<TRow extends Row>(
     },
     sortRows: localRowsSort,
   };
+}
+
+/**
+ * Compute the current in-browser page from a local rows source: derive the
+ * text-search fields from the columns, run the source query against the
+ * resource-view's sort/page/page-size plus the caller's ``filter``, and clamp
+ * the URL page back into range when it drifts past the new page count (e.g. a
+ * filter shrinks the result set). The shared owner for the two local-rows
+ * surfaces (client row-model and in-memory rows); each builds its own source —
+ * the page math, search-field derivation, and clamp effect live here. ``filter``
+ * is explicit so a surface can merge in its own facets (client) or pass the bare
+ * view filter (rows) without this hook inspecting the source.
+ */
+export function useLocalRowsPage<TRow extends Row>({
+  source,
+  columns,
+  resourceView,
+  filter,
+}: {
+  source: LocalRowsDataSource<TRow>;
+  columns: readonly ColumnDescriptor<TRow>[];
+  resourceView: ResourceViewContextValue;
+  filter: ResourceViewFilter | undefined;
+}): LocalRowsResult<TRow> {
+  const textFields = React.useMemo(
+    () => columns.map((column) => column.field),
+    [columns],
+  );
+  const localPage = React.useMemo(
+    () =>
+      source.query({
+        filter,
+        sort: resourceView.state.sort,
+        page: resourceView.state.page,
+        pageSize: resourceView.state.pageSize,
+        textFields,
+      }),
+    [
+      source,
+      filter,
+      resourceView.state.page,
+      resourceView.state.pageSize,
+      resourceView.state.sort,
+      textFields,
+    ],
+  );
+
+  React.useEffect(() => {
+    if (resourceView.state.page > localPage.pageCount) {
+      resourceView.setPage(localPage.pageCount);
+    }
+  }, [resourceView.setPage, resourceView.state.page, localPage.pageCount]);
+
+  return localPage;
 }
 
 export function rowTextFilterValue(filter: ResourceViewFilter): string {
