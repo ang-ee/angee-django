@@ -67,13 +67,7 @@ export const ConnectInferenceProvider = graphql(`
       redirect_uri: $redirectUri
       next: $next
     ) {
-      attached
-      authorize_url
-      error
-      mode
-      state
-      redirect_uri
-      integration { id status }
+      ...ConnectOAuthResultFields
     }
   }
 `);

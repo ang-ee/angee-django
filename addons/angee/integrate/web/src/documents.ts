@@ -6,6 +6,21 @@
 
 import { graphql, type DocumentType } from "@angee/gql/console";
 
+// The OAuth connect result shared by every `connect_*` mutation that returns a
+// `ConnectIntegrationResult` (integrate's `connect_integration`, agents'
+// `connect_inference_provider`). One owner for the selection; consumers spread it.
+// The client-preset resolves the fragment by name across both addons' `documents.ts`.
+export const ConnectOAuthResultFields = graphql(`
+  fragment ConnectOAuthResultFields on ConnectIntegrationResult {
+    attached
+    authorize_url
+    error
+    mode
+    state
+    redirect_uri
+  }
+`);
+
 export const ConnectIntegration = graphql(`
   mutation ConnectIntegration(
     $integrationId: ID!
@@ -17,16 +32,7 @@ export const ConnectIntegration = graphql(`
       redirect_uri: $redirectUri
       next: $next
     ) {
-      attached
-      authorize_url
-      error
-      mode
-      state
-      redirect_uri
-      integration {
-        id
-        status
-      }
+      ...ConnectOAuthResultFields
     }
   }
 `);
