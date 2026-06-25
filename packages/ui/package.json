@@ -59,6 +59,58 @@
     "./ui/*": {
       "types": "./src/ui/*.tsx",
       "import": "./src/ui/*.tsx"
+    },
+    "./widgets/index": {
+      "types": "./src/widgets/index.ts",
+      "import": "./src/widgets/index.ts"
+    },
+    "./widgets/codemirror-editor": {
+      "types": "./src/widgets/codemirror-editor.ts",
+      "import": "./src/widgets/codemirror-editor.ts"
+    },
+    "./widgets/date-format": {
+      "types": "./src/widgets/date-format.ts",
+      "import": "./src/widgets/date-format.ts"
+    },
+    "./widgets/label": {
+      "types": "./src/widgets/label.ts",
+      "import": "./src/widgets/label.ts"
+    },
+    "./widgets/markdown-codemirror": {
+      "types": "./src/widgets/markdown-codemirror.ts",
+      "import": "./src/widgets/markdown-codemirror.ts"
+    },
+    "./widgets/status-tones": {
+      "types": "./src/widgets/status-tones.ts",
+      "import": "./src/widgets/status-tones.ts"
+    },
+    "./widgets/types": {
+      "types": "./src/widgets/types.ts",
+      "import": "./src/widgets/types.ts"
+    },
+    "./widgets/*": {
+      "types": "./src/widgets/*.tsx",
+      "import": "./src/widgets/*.tsx"
+    },
+    "./feedback/index": {
+      "types": "./src/feedback/index.ts",
+      "import": "./src/feedback/index.ts"
+    },
+    "./feedback/error-message": {
+      "types": "./src/feedback/error-message.ts",
+      "import": "./src/feedback/error-message.ts"
+    },
+    "./feedback/refine-notification": {
+      "types": "./src/feedback/refine-notification.ts",
+      "import": "./src/feedback/refine-notification.ts"
+    },
+    "./feedback/use-busy-run": {
+      "types": "./src/feedback/use-busy-run.ts",
+      "import": "./src/feedback/use-busy-run.ts"
+    },
+    "./feedback/*": {
+      "types": "./src/feedback/*.tsx",
+      "import": "./src/feedback/*.tsx"
     }
   },
   "scripts": {
@@ -71,9 +123,20 @@
     "@angee/resources": "workspace:*",
     "@angee/sdk": "workspace:*",
     "@base-ui/react": "^1.5.0",
+    "@codemirror/commands": "^6.0.0",
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/lang-markdown": "^6.0.0",
+    "@codemirror/state": "^6.0.0",
+    "@codemirror/view": "^6.0.0",
+    "@refinedev/core": "^5.0.12",
     "cmdk": "^1.1.1",
+    "codemirror": "^6.0.0",
+    "date-fns": "^4.1.0",
     "lucide-react": "^1.17.0",
     "react-day-picker": "^10.0.1",
+    "react-json-view-lite": "^2.5.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.6.0",
     "tailwind-variants": "^3.2.0"
   },

@@ -1,3 +1,1 @@
-import { statusbarWidget } from "./statusbar";
-
-export const ribbonWidget = statusbarWidget;
+export * from "@angee/ui/widgets/ribbon";

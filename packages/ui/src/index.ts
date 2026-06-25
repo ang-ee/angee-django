@@ -66,3 +66,9 @@ export * from "./ui/scroll-area";
 export * from "./ui/toolbar";
 export * from "./ui/form-layout";
 export * from "./ui/upload-drop-target";
+
+// Widgets — the field renderers + the default widget registry — and the
+// feedback surface (modals, toasts, the Refine notification bridge). (Wave A.2:
+// relocated from `@angee/base`.)
+export * from "./widgets";
+export * from "./feedback";
