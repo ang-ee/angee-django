@@ -17,7 +17,6 @@ import {
   selectPlatformModelGraph,
   selectPlatformModelRows,
   usePlatformAddon,
-  usePlatformAddonRows,
   usePlatformExplorer,
   type PlatformExplorerResult,
 } from "./explorer";
@@ -132,17 +131,6 @@ describe("platform explorer hooks", () => {
 
     expect(result.current.explorer).toBeNull();
     expect(result.current.fetching).toBe(false);
-  });
-
-  test("projects authored addon rows through the platform owner", () => {
-    const { result } = renderHook(() => usePlatformAddonRows());
-
-    expect(result.current.rows.map((row) => row.id)).toEqual([
-      "angee.iam",
-      "angee.operator",
-      "angee.resources",
-    ]);
-    expect(result.current.error).toBeNull();
   });
 
   test("preserves loading state for missing detail records", () => {

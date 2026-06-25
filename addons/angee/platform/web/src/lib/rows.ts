@@ -1,7 +1,6 @@
 import type { GraphViewEdge, GraphViewNode } from "@angee/base";
 
 import type {
-  PlatformAddonData,
   PlatformEdgeData,
   PlatformModelData,
 } from "../documents";
@@ -14,51 +13,6 @@ function pushInto(index: Map<string, string[]>, key: string, value: string): voi
 
 function sortedUnique(values: readonly string[]): string[] {
   return [...new Set(values)].sort();
-}
-
-export interface AddonRow extends Record<string, unknown> {
-  id: string;
-  addon: string;
-  fullName: string;
-  namespace: string;
-  kind: string;
-  models: number;
-  fields: number;
-  resources: number;
-  dependsOn: string;
-  dependsOnList: readonly string[];
-  dependedBy: string;
-  dependedByList: readonly string[];
-}
-
-export function addonRows(addons: readonly PlatformAddonData[]): AddonRow[] {
-  // Only addon-to-addon edges link (a raw `depends_on` also names django/library
-  // apps, which have no detail page); reverse them into a depended-by index.
-  const ids = new Set(addons.map((addon) => addon.id));
-  const dependedBy = new Map<string, string[]>();
-  for (const addon of addons) {
-    for (const dep of addon.depends_on) {
-      if (ids.has(dep)) pushInto(dependedBy, dep, addon.id);
-    }
-  }
-  return addons.map((addon) => {
-    const dependsOnList = sortedUnique(addon.depends_on.filter((dep) => ids.has(dep)));
-    const dependedByList = sortedUnique(dependedBy.get(addon.id) ?? []);
-    return {
-      id: addon.id,
-      addon: addon.label,
-      fullName: addon.id,
-      namespace: addon.namespace,
-      kind: addon.kind,
-      models: addon.model_count,
-      fields: addon.field_count,
-      resources: addon.resource_count,
-      dependsOn: dependsOnList.join(", "),
-      dependsOnList,
-      dependedBy: dependedByList.join(", "),
-      dependedByList,
-    };
-  });
 }
 
 export interface ModelRow extends Record<string, unknown> {

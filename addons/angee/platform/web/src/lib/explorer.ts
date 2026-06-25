@@ -16,12 +16,10 @@ import {
   type PlatformModelData,
 } from "../documents";
 import {
-  addonRows,
   fieldRows,
   modelGraphEdges,
   modelGraphNodes,
   modelRows,
-  type AddonRow,
   type FieldRow,
   type ModelRow,
 } from "./rows";
@@ -90,12 +88,6 @@ function explorerOrEmpty(
 
 function sortedUnique(values: readonly string[]): string[] {
   return [...new Set(values)].sort();
-}
-
-export function selectPlatformAddonRows(
-  data: PlatformExplorerResult | undefined,
-): readonly AddonRow[] {
-  return addonRows(explorerOrEmpty(data).addons);
 }
 
 export function selectPlatformModelRows(
@@ -169,14 +161,6 @@ export function usePlatformExplorer(): PlatformExplorerQuery {
     ...query,
     explorer: query.data?.platform_explorer ?? null,
   };
-}
-
-export function usePlatformAddonRows(): AuthoredRowsResult<
-  PlatformExplorerResult,
-  AddonRow
-> {
-  const selectRows = useCallback(selectPlatformAddonRows, []);
-  return useAuthoredRows(PlatformExplorer, { selectRows });
 }
 
 export function usePlatformModelRows({

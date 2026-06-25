@@ -47,7 +47,7 @@ const platformRoutes: readonly BaseAddonRoute[] = [
   { name: "platform.models", path: "/platform/models", layout: "console", component: ModelsPage },
   { name: "platform.models.record", path: "/platform/models/$id", layout: "console", menu: "platform.models", component: ModelDetail },
   { name: "platform.fields", path: "/platform/fields", layout: "console", component: FieldsPage },
-  { name: "platform.addons", path: "/platform/addons", layout: "console", component: AddonsPage },
+  { name: "platform.addons", path: "/platform/addons", layout: "console", resource: "platform.Addon", component: AddonsPage },
   { name: "platform.addons.record", path: "/platform/addons/$id", layout: "console", menu: "platform.addons", component: AddonDetail },
 ];
 
