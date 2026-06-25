@@ -16,6 +16,7 @@ from strawberry_django_aggregates.errors import GroupByFieldNotAllowed
 
 from angee.base.models import AngeeDataModel
 from angee.graphql.data import hasura_model_resource
+from angee.graphql.data.hasura import _measure_ops_for_field
 from angee.graphql.data.metadata import (
     DataAggregateMeasureMetadata,
     DataResourceFieldMetadata,
@@ -95,6 +96,23 @@ class HasuraResourceThing(AngeeDataModel):
 
         app_label = "tests"
         ordering = ("-word_count", "name")
+
+
+class MeasureOpsThing(AngeeDataModel):
+    """Concrete model exercising every curated measure-op field family."""
+
+    sqid_prefix = "mot_"
+
+    count = models.IntegerField(default=0)
+    amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    ratio = models.FloatField(default=0.0)
+    on_date = models.DateField(null=True)
+    at_time = models.DateTimeField(null=True)
+
+    class Meta:
+        """Django model options for the test model."""
+
+        app_label = "tests"
 
 
 class ResourceThingMood(enum.Enum):
@@ -219,6 +237,30 @@ def test_hasura_resource_attaches_angee_resource_metadata() -> None:
     sdl = schema.as_str()
     assert "word_count" in sdl
     assert "wordCount" not in sdl
+
+
+def test_measure_ops_pin_the_curated_subset_per_field_family() -> None:
+    """Curated aggregate ops stay frozen so an upstream op-list change cannot widen them.
+
+    The op vocabulary per Django type is owned by ``default_operators_for``, but
+    Angee advertises only the curated ``(sum, avg, min, max)`` subset in curated
+    order. This pins the resolved output for every curated field family so a
+    widening upstream (or a curation drift) fails loudly instead of silently
+    growing the advertised ops / the order-sensitive ``aggregate_measures`` JSON.
+    """
+
+    expected = {
+        "count": ("sum", "avg", "min", "max"),
+        "amount": ("sum", "avg", "min", "max"),
+        "ratio": ("sum", "avg", "min", "max"),
+        "on_date": ("min", "max"),
+        "at_time": ("min", "max"),
+    }
+    resolved = {
+        name: _measure_ops_for_field(MeasureOpsThing._meta.get_field(name)) for name in expected
+    }
+
+    assert resolved == expected
 
 
 def test_data_resource_metadata_requires_direct_relation_axis_for_relation_label() -> None:

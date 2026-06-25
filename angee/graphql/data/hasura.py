@@ -9,6 +9,7 @@ import strawberry
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models, transaction
 from strawberry_django.mutations import resolvers as mutation_resolvers
+from strawberry_django_aggregates import default_operators_for
 from strawberry_django_aggregates.granularity import NumberGranularity, TimeGranularity
 from strawberry_django_hasura import (
     HasuraResource,
@@ -669,12 +670,24 @@ def _group_key_path(
     return path.replace(".", "__")
 
 
+#: The aggregate ops Angee advertises on the data surface, in metadata order
+#: (``aggregate_measures`` JSON is order-sensitive for ``schema --check``). This
+#: is Angee's curated subset; the op *vocabulary* per Django field type is owned
+#: upstream by ``default_operators_for`` — intersecting the two keeps the
+#: vocabulary from drifting while keeping the advertised subset an Angee decision.
+_ANGEE_CURATED_OPS: tuple[str, ...] = ("sum", "avg", "min", "max")
+
+
 def _measure_ops_for_field(field: models.Field[Any, Any]) -> tuple[str, ...]:
-    if isinstance(field, (models.IntegerField, models.DecimalField, models.FloatField)):
-        return ("sum", "avg", "min", "max")
-    if isinstance(field, (models.DateField, models.DateTimeField)):
-        return ("min", "max")
-    return ()
+    """Return Angee's advertised aggregate ops for one measurable field.
+
+    The valid-op vocabulary for the field's Django type is resolved upstream via
+    ``default_operators_for`` and then clipped to :data:`_ANGEE_CURATED_OPS`,
+    preserving curated order so emitted metadata stays byte-stable.
+    """
+
+    available = {op.value for op in default_operators_for(type(field).__name__)}
+    return tuple(op for op in _ANGEE_CURATED_OPS if op in available)
 
 
 def _scalar_for_field(field: models.Field[Any, Any]) -> str | None:
