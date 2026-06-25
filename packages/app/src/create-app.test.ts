@@ -3,7 +3,7 @@
 import { createElement, type ReactNode } from "react";
 import { cleanup, waitFor } from "@testing-library/react";
 import { useAuthoredQuery } from "@angee/data";
-import { useResourceRoute } from "@angee/sdk";
+import { useResourceRoute } from "@angee/ui/runtime";
 import { useParams } from "@tanstack/react-router";
 import { afterEach, describe, expect, test } from "vitest";
 
@@ -13,8 +13,8 @@ import {
   stringifyFlatSearch,
   type BaseAddon,
   type RefineLayoutChromeProps,
-} from "./createApp";
-import { MenuTree, type ChromeMenuItem } from "./chrome/menu-tree";
+} from "./create-app";
+import { MenuTree, type ChromeMenuItem } from "@angee/ui/chrome/menu-tree";
 import {
   captureChrome,
   chromeSnapshot,
@@ -24,7 +24,7 @@ import {
   resourceViewSearchToState,
   resourceViewStateToSearch,
   mergeResourceViewSearch,
-} from "./views/resource-view-model";
+} from "@angee/ui/views/resource-view-model";
 
 afterEach(() => cleanup());
 

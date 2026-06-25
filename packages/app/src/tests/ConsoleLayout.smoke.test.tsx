@@ -12,11 +12,11 @@ import {
 import { useMemo, type ReactNode, type SVGProps } from "react";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
-import { parseFlatSearch, stringifyFlatSearch } from "../createApp";
-import { setThemePreference, storedThemePreference } from "../lib/theme";
-import { ConsoleLayout } from "./ConsoleLayout";
-import { ControlBand } from "./ControlBand";
-import { useChatterContent } from "../communication";
+import { parseFlatSearch, stringifyFlatSearch } from "../create-app";
+import { setThemePreference, storedThemePreference } from "@angee/ui/lib/theme";
+import { ConsoleLayout } from "@angee/ui/layouts/ConsoleLayout";
+import { ControlBand } from "@angee/ui/layouts/ControlBand";
+import { useChatterContent } from "@angee/ui/communication/index";
 
 vi.mock("@angee/logo-react", () => ({
   AngeeLogo: ({ bgColor: _bgColor, geometry: _geometry, preset: _preset, ...props }: SVGProps<SVGSVGElement> & {

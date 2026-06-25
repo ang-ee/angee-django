@@ -1,0 +1,936 @@
+import {
+  ActiveGraphQLSchemaProvider,
+  createAngeeAccessControlProvider,
+  refineResourcesFromAngeeSchemaMetadata,
+  type RefineResourceMetadata,
+} from "@angee/resources";
+import {
+  StrictMode,
+  useEffect,
+  useMemo,
+  type ComponentType,
+  type ReactNode,
+  } from "react";
+import { createRoot,
+  type Root } from "react-dom/client";
+import { Refine,
+  type AuthProvider as RefineAuthProvider,
+  type ResourceProps } from "@refinedev/core";
+import {
+  type AnyRoute,
+  type AnyRouter,
+  Outlet,
+  RouterProvider,
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  redirect,
+  useNavigate,
+  } from "@tanstack/react-router";
+import { NuqsAdapter } from "nuqs/adapters/tanstack-router";
+import {
+  AuthProvider,
+  UserPreferencesProvider,
+  createAngeeAuthProvider,
+  createAngeeI18nProvider,
+  useRuntimeAuthState,
+  useUserPreferences,
+  type I18nResources,
+} from "@angee/data";
+import {
+  ModelMetadataProvider,
+  defineAngeeSchemaMetadata,
+  schemaFieldMetadataFromAngeeSchemaMetadata,
+  type AngeeSchemaMetadata,
+  type SchemaFieldMetadata,
+} from "@angee/resources";
+import {
+  OperationDocumentsProvider,
+  createAngeeHasuraDataProviders,
+  createAngeeHasuraLiveProvider,
+  tanStackRouterProvider,
+  type AngeeHasuraSchemaConfig,
+  type SchemaOperationDocuments,
+  } from "@angee/refine";
+import {
+  AppRuntimeProvider,
+  type AppRuntime,
+  type ComposedMenuItem,
+  type SlotContribution,
+  } from "@angee/ui/runtime";
+import {
+  composeAddons,
+  mergeSlotContributions,
+  type AddonManifest,
+  type AddonRoute,
+} from "./define-addon";
+import {
+  ModalsHost,
+  ToastProvider,
+  useRefineNotificationProvider,
+} from "@angee/ui/feedback/index";
+import { readAppRailPreferences } from "@angee/ui/chrome/app-rail-preferences";
+import { baseIcons } from "@angee/ui/chrome/icon-registry";
+import {
+  MenuTree,
+  type BaseMenuItem,
+  type ChromeMenuItem,
+  type ChromeMenuNode,
+} from "@angee/ui/chrome/menu-tree";
+import { useChromeMenuTree } from "@angee/ui/chrome/refine-menu";
+import { enBaseBundle } from "@angee/ui/i18n";
+import { type PreviewProvider } from "@angee/ui/preview/index";
+import { defaultWidgets } from "@angee/ui/widgets/index";
+
+/** A route that also carries the page component the chrome renders. */
+export interface BaseAddonRoute extends AddonRoute {
+  component?: ComponentType;
+  /**
+   * Menu item id whose trail seeds chrome for routes outside the menu, or
+   * disambiguates chrome derivation when multiple menu items target this route.
+   */
+  menu?: string;
+  title?: ReactNode;
+  icon?: string;
+}
+
+/** An addon manifest whose routes carry their page components. */
+export interface BaseAddon
+  extends Omit<AddonManifest, "routes" | "menus" | "previews"> {
+  routes?: readonly BaseAddonRoute[];
+  menus?: readonly BaseMenuItem[];
+  /**
+   * Full preview renderers. The SDK manifest tracks only the contribution id
+   * (for collision detection); the rendered binding owns `PreviewProvider`, so
+   * its addon authors the whole renderer here — `PreviewPane` reads it back.
+   */
+  previews?: readonly PreviewProvider[];
+}
+
+/**
+ * Declare a rendered (base-binding) addon — the one seam every addon's manifest
+ * goes through. The rendered analog of the SDK's headless `defineAddon`: it
+ * type-checks the literal against {@link BaseAddon} (routes carrying React
+ * components) and returns it unchanged, so addons `defineBaseAddon({...})`
+ * instead of annotating `const x: BaseAddon = {...}`.
+ */
+export function defineBaseAddon(addon: BaseAddon): BaseAddon {
+  return addon;
+}
+
+/** Props passed from the active route into a refine layout chrome component. */
+export interface RefineLayoutChromeProps {
+  children: ReactNode;
+}
+
+/** A refine layout registered with `createApp`: chrome, auth, and schema policy. */
+export interface RefineLayoutConfig {
+  /** Chrome wrapping route bodies (e.g. `ConsoleLayout`). */
+  chrome?: ComponentType<RefineLayoutChromeProps>;
+  /** Gate routes behind sign-in. Defaults to `true` for every layout but `public`. */
+  requireAuth?: boolean;
+  /**
+   * GraphQL schema this layout's routes read from; reads inside the layout inherit
+   * that client. Defaults to the app's `defaultSchema`, so the common console
+   * surface needs no override and only the public layout pins itself to `public`.
+   */
+  schema?: string;
+}
+
+export interface CreateAppInput {
+  addons: readonly BaseAddon[];
+  layouts: Record<string, RefineLayoutConfig>;
+  /** One client config per named schema (url, ws endpoint, cache). */
+  schemas: Record<string, AngeeAppSchemaConfig>;
+  /** Schema bound to the app subtree's reads. Defaults to `public`. */
+  defaultSchema?: string;
+  /** Schema carrying the change subscriptions. Defaults to `console`. */
+  subscriptionSchema?: string;
+  /** Where `/` redirects. Defaults to the first non-public route's path. */
+  home?: string;
+  /** Host-level UI slot contributions, merged with the addons'. */
+  slots?: readonly SlotContribution[];
+}
+
+export type AngeeAppSchemaConfig =
+  Omit<AngeeHasuraSchemaConfig, "metadata"> & {
+    /** Generated schema metadata imported from emitted JSON. */
+    metadata?: unknown;
+    /** Generated operation documents imported from emitted project codegen. */
+    operationDocuments?: SchemaOperationDocuments;
+  };
+
+type NormalizedAngeeAppSchemaConfig =
+  Omit<AngeeAppSchemaConfig, "metadata"> & {
+    metadata?: AngeeSchemaMetadata;
+    fieldMetadata: SchemaFieldMetadata;
+  };
+
+export interface AngeeApp {
+  router: AnyRouter;
+  mount(target: string | Element): Root;
+}
+
+/**
+ * `createApp` — the single composition root. It merges the addon manifests into
+ * one runtime (routes · route-resolved menus · widgets ·
+ * i18n · slots), owns the provider stack (GraphQL clients · runtime · live
+ * invalidation · auth), builds the router, and mounts one persistent layout
+ * route per refine layout. The host writes one
+ * `createApp({...}).mount(...)`.
+ */
+export function createApp(input: CreateAppInput): AngeeApp {
+  const composed = composeAddons([
+    { id: "base", icons: baseIcons },
+    ...input.addons,
+  ]);
+  const routes = composed.routes as readonly BaseAddonRoute[];
+  const pathByName = new Map(
+    routes.map((route) => [route.name, route.path]),
+  );
+  const routesByName = new Map(routes.map((route) => [route.name, route]));
+  const menus = resolveMenuRouteTargets(
+    composed.menus as readonly ChromeMenuItem[],
+    pathByName,
+  );
+  const menuTree = MenuTree.from(menus);
+
+  const routeResourceProjection = refineRouteResourceProjection(
+    routes,
+    menuTree,
+  );
+
+  const runtime: AppRuntime = {
+    widgets: { ...defaultWidgets, ...composed.widgets },
+    // Seed the base namespace under the merged addon bundles; an addon key wins.
+    i18n: mergeI18n(enBaseBundle, composed.i18n),
+    icons: composed.icons,
+    forms: composed.forms,
+    chatter: composed.chatter,
+    slots: mergeSlotContributions(composed.slots, input.slots ?? []),
+    // Built-in renderers are universal (PreviewPane always includes them); the
+    // runtime carries only addon-contributed providers.
+    previews: composed.previews,
+    routesByResource: resourceRouteIndex(routes),
+  };
+  const defaultSchema = input.defaultSchema ?? "public";
+  const subscriptionSchema = input.subscriptionSchema ?? "console";
+  const schemas = normalizeSchemaConfigs(input.schemas);
+  const operationDocuments = operationDocumentsForSchemas(schemas);
+  const refineResources = refineResourcesForSchemas(
+    schemas,
+    runtime.routesByResource,
+    routeResourceProjection.metadataByResource,
+  );
+  const refineResourceRegistry = [
+    ...refineResources,
+    ...routeResourceProjection.resources,
+  ];
+  const refineDataProviders = createAngeeHasuraDataProviders(
+    schemas,
+    defaultSchema,
+  );
+  const refineLiveProvider = createLiveProviderForSchema(
+    schemas,
+    subscriptionSchema,
+  );
+  const authSchema = authSchemaNameForSchemas(schemas, defaultSchema);
+  const refineAuthProvider = createAuthProviderForSchema(schemas, authSchema);
+  const refineI18nProvider = createAngeeI18nProvider(runtime.i18n);
+  const refineAccessControlProvider = createAngeeAccessControlProvider(
+    refineResourceRegistry,
+  );
+
+  const home =
+    resolvePath(input.home, pathByName) ??
+    routes.find((route) => route.layout !== "public")?.path ??
+    "/";
+
+  function RootOutlet(): ReactNode {
+    return (
+      <NuqsAdapter>
+        <OperationDocumentsProvider documents={operationDocuments}>
+          <AppRuntimeProvider runtime={runtime}>
+            <ModalsHost>
+              <ToastProvider>
+                <RefineRoot />
+              </ToastProvider>
+            </ModalsHost>
+          </AppRuntimeProvider>
+        </OperationDocumentsProvider>
+      </NuqsAdapter>
+    );
+  }
+
+  function RefineRoot(): ReactNode {
+    const refineNotificationProvider = useRefineNotificationProvider();
+    return (
+      <Refine
+        authProvider={refineAuthProvider}
+        accessControlProvider={refineAccessControlProvider}
+        dataProvider={refineDataProviders}
+        i18nProvider={refineI18nProvider}
+        liveProvider={refineLiveProvider}
+        notificationProvider={refineNotificationProvider}
+        resources={refineResourceRegistry}
+        routerProvider={tanStackRouterProvider}
+        options={{
+          liveMode: refineLiveProvider ? "auto" : "off",
+          syncWithLocation: false,
+        }}
+      >
+        <AppFrame
+          authSchema={authSchema}
+        >
+          <Outlet />
+        </AppFrame>
+      </Refine>
+    );
+  }
+
+  const rootRoute = createRootRoute({ component: RootOutlet });
+
+  const indexRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/",
+    component: () => <HomeRedirect fallback={home} />,
+  });
+
+  const layoutRoutes = createLayoutRoutes({
+    rootRoute,
+    layoutNames: layoutNamesForRoutes(input.layouts),
+    layouts: input.layouts,
+    schemas,
+    defaultSchema,
+    authProvider: refineAuthProvider,
+  });
+  createAddonRouteNodes({
+    routes,
+    routesByName,
+    layoutRoutes,
+  });
+
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([
+      indexRoute,
+      ...[...layoutRoutes.entries()]
+        .sort(([left], [right]) => compareCodePoint(left, right))
+        .map(([, route]) => route),
+    ]),
+    history: typeof window === "undefined" ? createMemoryHistory() : undefined,
+    parseSearch: parseFlatSearch,
+    stringifySearch: stringifyFlatSearch,
+    defaultPreload: false,
+  });
+
+  return {
+    router,
+    mount(target: string | Element): Root {
+      const element =
+        typeof target === "string" ? document.querySelector(target) : target;
+      if (!element) {
+        throw new Error(`createApp().mount: no element matched ${String(target)}`);
+      }
+      const root = createRoot(element);
+      root.render(
+        <StrictMode>
+          <RouterProvider router={router} />
+        </StrictMode>,
+      );
+      return root;
+    },
+  };
+}
+
+function refineResourcesForSchemas(
+  schemas: Readonly<Record<string, NormalizedAngeeAppSchemaConfig>>,
+  routesByResource: Readonly<Record<string, string>>,
+  metadataByResource: Readonly<Record<string, RefineResourceMetadata>>,
+) {
+  return Object.values(schemas).flatMap((schema) =>
+    refineResourcesFromAngeeSchemaMetadata(schema.metadata, {
+      pathsByResource: routesByResource,
+      metadataByResource,
+    }),
+  );
+}
+
+interface RefineRouteResourceProjection {
+  resources: readonly ResourceProps[];
+  metadataByResource: Readonly<Record<string, RefineResourceMetadata>>;
+}
+
+function refineRouteResourceProjection(
+  routes: readonly BaseAddonRoute[],
+  menuTree: MenuTree,
+): RefineRouteResourceProjection {
+  const resourcesByIdentifier = new Map<string, ResourceProps>();
+  const metadataByResource: Record<string, RefineResourceMetadata> = {};
+  const appRootIds = new Set(menuTree.roots.map((item) => item.id));
+
+  for (const node of menuTree.byId.values()) {
+    const trail = breadcrumbTrailFromMenuTrail(menuTree.trailFor(node.id));
+    trail.forEach((item, index) => {
+      addMenuRouteResource(
+        resourcesByIdentifier,
+        item,
+        trail[index - 1],
+        appRootIds.has(item.id),
+      );
+    });
+  }
+
+  for (const route of routes) {
+    if (!route.resource) continue;
+    const selected = menuNodeForRouteResource(route, menuTree);
+    const trail = selected
+      ? breadcrumbTrailFromMenuTrail(menuTree.trailFor(selected.id))
+      : [];
+    const leaf = trail.at(-1);
+    const parent = trail.length > 1 ? trail[trail.length - 2] : undefined;
+    metadataByResource[route.resource] = {
+      ...(leaf ? { label: leaf.displayLabel } : routeLabel(route)),
+      ...(leaf ? { icon: leaf.iconName } : routeIcon(route)),
+      ...(parent ? { parent: menuRouteResourceIdentifier(parent.id) } : {}),
+    };
+  }
+
+  return {
+    resources: [...resourcesByIdentifier.values()],
+    metadataByResource,
+  };
+}
+
+function addMenuRouteResource(
+  resourcesByIdentifier: Map<string, ResourceProps>,
+  item: ChromeMenuNode,
+  parent: ChromeMenuNode | undefined,
+  appRoot: boolean,
+): void {
+  const target = item.target;
+  if (!target || target === "#") return;
+  const identifier = menuRouteResourceIdentifier(item.id);
+  const existing = resourcesByIdentifier.get(identifier);
+  if (existing) {
+    if (appRoot) {
+      existing.meta = {
+        ...existing.meta,
+        appRoot: true,
+      };
+    }
+    return;
+  }
+  resourcesByIdentifier.set(identifier, {
+    name: identifier,
+    identifier,
+    list: refineRoutePathForTanStack(target),
+    meta: {
+      label: item.displayLabel,
+      icon: item.iconName,
+      menuId: item.id,
+      ...(appRoot ? { appRoot: true } : {}),
+      ...(item.description ? { description: item.description } : {}),
+      ...(item.group ? { group: item.group } : {}),
+      ...(item.sidebar !== undefined ? { sidebar: item.sidebar } : {}),
+      ...(item.status ? { status: item.status } : {}),
+      ...(item.tone ? { tone: item.tone } : {}),
+      ...(item.badge !== undefined ? { badge: item.badge } : {}),
+      ...(parent ? { parent: menuRouteResourceIdentifier(parent.id) } : {}),
+    },
+  });
+}
+
+function menuNodeForRouteResource(
+  route: BaseAddonRoute,
+  menuTree: MenuTree,
+): ChromeMenuNode | undefined {
+  if (route.menu) {
+    const selected = menuTree.byId.get(route.menu);
+    if (!selected) {
+      throw new Error(
+        `Route "${route.name}" references unknown menu item "${route.menu}".`,
+      );
+    }
+    const refs = menuTree.itemsForRoute(route.name);
+    if (refs.length > 0 && !refs.some((item) => item.id === selected.id)) {
+      throw new Error(
+        `Route "${route.name}" sets menu "${route.menu}", but that item does not reference the route.`,
+      );
+    }
+    return selected;
+  }
+  const refs = menuTree.itemsForRoute(route.name);
+  return refs.length === 1 ? refs[0] : undefined;
+}
+
+function menuRouteResourceIdentifier(menuId: string): string {
+  return `menu:${menuId}`;
+}
+
+function refineRoutePathForTanStack(path: string): string {
+  return path.replace(/(^|\/)\$([^/?#]+)/g, "$1:$2");
+}
+
+function routeLabel(route: BaseAddonRoute): RefineResourceMetadata {
+  return typeof route.title === "string" ? { label: route.title } : {};
+}
+
+function routeIcon(route: BaseAddonRoute): RefineResourceMetadata {
+  return route.icon ? { icon: route.icon } : {};
+}
+
+function normalizeSchemaConfigs(
+  schemas: Readonly<Record<string, AngeeAppSchemaConfig>>,
+): Record<string, NormalizedAngeeAppSchemaConfig> {
+  return Object.fromEntries(
+    Object.entries(schemas).map(([name, schema]) => [
+      name,
+      normalizeSchemaConfig(schema),
+    ]),
+  );
+}
+
+function normalizeSchemaConfig(
+  schema: AngeeAppSchemaConfig,
+): NormalizedAngeeAppSchemaConfig {
+  const { metadata, ...config } = schema;
+  const normalizedMetadata =
+    metadata == null ? undefined : defineAngeeSchemaMetadata(metadata);
+  return {
+    ...config,
+    fieldMetadata: schemaFieldMetadataFromAngeeSchemaMetadata(normalizedMetadata),
+    ...(normalizedMetadata == null ? {} : { metadata: normalizedMetadata }),
+  };
+}
+
+function operationDocumentsForSchemas(
+  schemas: Readonly<Record<string, NormalizedAngeeAppSchemaConfig>>,
+): Readonly<Record<string, SchemaOperationDocuments | undefined>> {
+  return Object.fromEntries(
+    Object.entries(schemas).map(([name, schema]) => [
+      name,
+      schema.operationDocuments,
+    ]),
+  );
+}
+
+function createLiveProviderForSchema(
+  schemas: Readonly<Record<string, NormalizedAngeeAppSchemaConfig>>,
+  subscriptionSchema: string,
+) {
+  const schema = schemas[subscriptionSchema];
+  if (!schema?.live) return undefined;
+  const liveOptions = schema.live === true
+    ? {
+        url: schema.url,
+      }
+    : schema.live;
+  return createAngeeHasuraLiveProvider({
+    ...liveOptions,
+    resources: schema.metadata?.angee?.resources ?? [],
+  });
+}
+
+function authSchemaNameForSchemas(
+  schemas: Readonly<Record<string, NormalizedAngeeAppSchemaConfig>>,
+  defaultSchema: string,
+): string {
+  if (schemas.public) return "public";
+  if (schemas[defaultSchema]) return defaultSchema;
+  const first = Object.keys(schemas).sort(compareCodePoint)[0];
+  if (!first) throw new Error("createApp requires at least one schema.");
+  return first;
+}
+
+function createAuthProviderForSchema(
+  schemas: Readonly<Record<string, NormalizedAngeeAppSchemaConfig>>,
+  authSchema: string,
+): RefineAuthProvider {
+  const schema = schemas[authSchema];
+  if (!schema) {
+    throw new Error(`No GraphQL schema config for auth schema "${authSchema}".`);
+  }
+  return createAngeeAuthProvider(schema);
+}
+
+// Keep search values flat and unquoted so login next round-trips raw and
+// resource-view values read like status:year.
+export function parseFlatSearch(searchStr: string): Record<string, string> {
+  const source = searchStr.startsWith("?") ? searchStr.slice(1) : searchStr;
+  const params = new URLSearchParams(source);
+  const search: Record<string, string> = {};
+  for (const [key, value] of params.entries()) {
+    search[key] = value;
+  }
+  return search;
+}
+
+export function stringifyFlatSearch(search: Record<string, unknown>): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(search)) {
+    if (value == null || value === "") continue;
+    params.set(key, String(value));
+  }
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+/**
+ * The provider frame inside the client pool: resolve the current actor, open the
+ * change subscriptions on the subscription schema's client, and expose the
+ * runtime and auth state to every route.
+ */
+function AppFrame({
+  authSchema,
+  children,
+}: {
+  authSchema: string;
+  children: ReactNode;
+}): ReactNode {
+  const { auth } = useRuntimeAuthState();
+  return (
+    <AuthProvider auth={auth}>
+      <UserPreferencesProvider dataProviderName={authSchema}>
+        {children}
+      </UserPreferencesProvider>
+    </AuthProvider>
+  );
+}
+
+function HomeRedirect({ fallback }: { fallback: string }): ReactNode {
+  const menuTree = useChromeMenuTree();
+  const { preferences } = useUserPreferences();
+  const target = useMemo(() => {
+    const defaultItemId = readAppRailPreferences(preferences).defaultItemId;
+    if (!defaultItemId) return fallback;
+    const item = menuTree
+      .railMenuItems()
+      .find((node) => node.id === defaultItemId);
+    return item?.target ?? fallback;
+  }, [fallback, menuTree, preferences]);
+  return <Redirect to={target} />;
+}
+
+function RefineLayoutRoute({
+  layoutName,
+  layouts,
+  schemas,
+  defaultSchema,
+}: {
+  layoutName: string;
+  layouts: Record<string, RefineLayoutConfig>;
+  schemas: Readonly<Record<string, NormalizedAngeeAppSchemaConfig>>;
+  defaultSchema: string;
+}): ReactNode {
+  const layout = layouts[layoutName];
+  const Chrome = layout?.chrome ?? PassthroughChrome;
+  const schemaName = layout?.schema ?? defaultSchema;
+  const schema = schemas[schemaName];
+  if (!schema) {
+    const known = Object.keys(schemas).join(", ") || "none";
+    throw new Error(
+      `No GraphQL schema config for layout "${layoutName}" schema ` +
+        `"${schemaName}"; configured schemas: ${known}.`,
+    );
+  }
+  const body = (
+    <Chrome>
+      <Outlet />
+    </Chrome>
+  );
+  // Bind the route to its layout's schema metadata/provider name for refine calls.
+  return (
+    <ActiveGraphQLSchemaProvider schema={schemaName}>
+      <ModelMetadataProvider metadata={schema.fieldMetadata}>
+        {body}
+      </ModelMetadataProvider>
+    </ActiveGraphQLSchemaProvider>
+  );
+}
+
+function createLayoutRoutes({
+  rootRoute,
+  layoutNames,
+  layouts,
+  schemas,
+  defaultSchema,
+  authProvider,
+}: {
+  rootRoute: AnyRoute;
+  layoutNames: readonly string[];
+  layouts: Record<string, RefineLayoutConfig>;
+  schemas: Readonly<Record<string, NormalizedAngeeAppSchemaConfig>>;
+  defaultSchema: string;
+  authProvider: RefineAuthProvider;
+}): Map<string, AnyRoute> {
+  const layoutRoutes = new Map<string, AnyRoute>();
+  for (const layoutName of layoutNames) {
+    const requireAuth = layoutRequiresAuth(layoutName, layouts);
+    layoutRoutes.set(
+      layoutName,
+      createRoute({
+        getParentRoute: () => rootRoute,
+        id: refineLayoutRouteId(layoutName),
+        ...(requireAuth
+          ? { beforeLoad: authBeforeLoad(authProvider) }
+          : {}),
+        component: () => (
+          <RefineLayoutRoute
+            layoutName={layoutName}
+            layouts={layouts}
+            schemas={schemas}
+            defaultSchema={defaultSchema}
+          />
+        ),
+      }),
+    );
+  }
+  return layoutRoutes;
+}
+
+function layoutRequiresAuth(
+  layoutName: string,
+  layouts: Record<string, RefineLayoutConfig>,
+): boolean {
+  return layouts[layoutName]?.requireAuth ?? layoutName !== "public";
+}
+
+function authBeforeLoad(authProvider: RefineAuthProvider) {
+  return async ({ location }: { location: { href: string } }): Promise<void> => {
+    const result = await authProvider.check();
+    if (result.authenticated) return;
+    throw redirect({
+      to: result.redirectTo ?? "/login",
+      search: { next: location.href },
+      replace: true,
+    });
+  };
+}
+
+function createAddonRouteNodes({
+  routes,
+  routesByName,
+  layoutRoutes,
+}: {
+  routes: readonly BaseAddonRoute[];
+  routesByName: ReadonlyMap<string, BaseAddonRoute>;
+  layoutRoutes: ReadonlyMap<string, AnyRoute>;
+}): void {
+  const routeNodes = new Map<string, AnyRoute>();
+  const childrenByParent = new Map<AnyRoute, Array<NamedRouteNode>>();
+
+  const buildRoute = (route: BaseAddonRoute): AnyRoute => {
+    const existing = routeNodes.get(route.name);
+    if (existing) return existing;
+    const parentManifestRoute = route.parent
+      ? routesByName.get(route.parent)
+      : undefined;
+    if (route.parent && !parentManifestRoute) {
+      throw new Error(
+        `Route "${route.name}" references unknown parent route "${route.parent}".`,
+      );
+    }
+    const parentNode = parentManifestRoute
+      ? buildRoute(parentManifestRoute)
+      : layoutRouteFor(route, layoutRoutes);
+    const node = createAddonRouteNode(
+      route,
+      parentNode,
+      parentManifestRoute,
+    );
+    routeNodes.set(route.name, node);
+    const children = childrenByParent.get(parentNode) ?? [];
+    children.push({ name: route.name, route: node });
+    childrenByParent.set(parentNode, children);
+    return node;
+  };
+
+  for (const route of [...routes].sort(compareRouteNames)) {
+    buildRoute(route);
+  }
+  for (const [parent, children] of childrenByParent) {
+    parent.addChildren(
+      children
+        .sort((a, b) => compareCodePoint(a.name, b.name))
+        .map((child) => child.route),
+    );
+  }
+}
+
+function layoutRouteFor(
+  route: BaseAddonRoute,
+  layoutRoutes: ReadonlyMap<string, AnyRoute>,
+): AnyRoute {
+  const layout = layoutRoutes.get(route.layout);
+  if (!layout) {
+    throw new Error(
+      `Route "${route.name}" references undeclared layout "${route.layout}".`,
+    );
+  }
+  return layout;
+}
+
+function createAddonRouteNode(
+  route: BaseAddonRoute,
+  parentNode: AnyRoute,
+  parentManifestRoute: BaseAddonRoute | undefined,
+): AnyRoute {
+  const Page = route.component;
+  return createRoute({
+    getParentRoute: () => parentNode,
+    path: routePathUnderParent(route, parentManifestRoute),
+    ...(Page ? { component: () => <Page /> } : {}),
+  });
+}
+
+interface NamedRouteNode {
+  name: string;
+  route: AnyRoute;
+}
+
+function layoutNamesForRoutes(layouts: Record<string, RefineLayoutConfig>): readonly string[] {
+  return Object.keys(layouts).sort(compareCodePoint);
+}
+
+function refineLayoutRouteId(layoutName: string): string {
+  return `_angee_layout_${layoutName}`;
+}
+
+function compareRouteNames(
+  left: BaseAddonRoute,
+  right: BaseAddonRoute,
+): number {
+  return compareCodePoint(left.name, right.name);
+}
+
+function compareCodePoint(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+function Redirect({ to }: { to: string }): ReactNode {
+  const navigate = useNavigate();
+  useEffect(() => {
+    void navigate({ to });
+  }, [to, navigate]);
+  return null;
+}
+
+export function PassthroughChrome({ children }: RefineLayoutChromeProps): ReactNode {
+  return <>{children}</>;
+}
+
+function resolveMenuRouteTargets(
+  items: readonly ComposedMenuItem[],
+  pathByName: ReadonlyMap<string, string>,
+): readonly ComposedMenuItem[] {
+  return items.map((item) => resolveMenuRouteTarget(item, pathByName));
+}
+
+function resolveMenuRouteTarget(
+  item: ComposedMenuItem,
+  pathByName: ReadonlyMap<string, string>,
+): ComposedMenuItem {
+  const itemId = item.id;
+  if (item.route && item.to !== undefined) {
+    throw new Error(
+      `Menu item "${itemId}" declares both route and to; use exactly one target owner.`,
+    );
+  }
+  const routePath = item.route ? pathByName.get(item.route) : undefined;
+  if (item.route && !routePath) {
+    throw new Error(
+      `Menu item "${itemId}" references unknown route "${item.route}".`,
+    );
+  }
+  return {
+    ...item,
+    to: routePath ?? item.to,
+    children: item.children
+      ? resolveMenuRouteTargets(item.children, pathByName)
+      : item.children,
+  };
+}
+
+function breadcrumbTrailFromMenuTrail(
+  trail: readonly ChromeMenuNode[],
+): readonly ChromeMenuNode[] {
+  const items: ChromeMenuNode[] = [];
+  for (const item of trail) {
+    const previous = items.at(-1);
+    if (
+      previous &&
+      previous.displayLabel === item.displayLabel &&
+      previous.target === item.target
+    ) {
+      items[items.length - 1] = item;
+      continue;
+    }
+    items.push(item);
+  }
+  return items;
+}
+
+/**
+ * Index each resource to the base path of the collection route that lists it (the
+ * `resource`-tagged route), for relation-follow navigation. A resource may be
+ * claimed by only one route — a second claim is a build-time error, matching the
+ * registry collision discipline elsewhere.
+ */
+function resourceRouteIndex(
+  routes: readonly BaseAddonRoute[],
+): Record<string, string> {
+  const byResource: Record<string, string> = {};
+  for (const route of routes) {
+    if (!route.resource) continue;
+    if (Object.prototype.hasOwnProperty.call(byResource, route.resource)) {
+      throw new Error(
+        `Route "${route.name}" claims resource "${route.resource}" already claimed by another route.`,
+      );
+    }
+    byResource[route.resource] = route.path;
+  }
+  return byResource;
+}
+
+function routePathUnderParent(
+  route: BaseAddonRoute,
+  parent: BaseAddonRoute | undefined,
+): string {
+  if (!parent) return route.path;
+  const parentPath = normalizeRoutePath(parent.path);
+  const childPath = normalizeRoutePath(route.path);
+  if (parentPath === childPath) return "";
+  if (parentPath === "/") return childPath.slice(1);
+  if (childPath.startsWith(`${parentPath}/`)) {
+    return childPath.slice(parentPath.length + 1);
+  }
+  return childPath.slice(1);
+}
+
+function normalizeRoutePath(path: string): string {
+  if (path === "/") return "/";
+  const withLeadingSlash = path.startsWith("/") ? path : `/${path}`;
+  return withLeadingSlash.replace(/\/+$/, "");
+}
+
+function resolvePath(
+  nameOrPath: string | undefined,
+  pathByName: Map<string, string>,
+): string | undefined {
+  if (!nameOrPath) return undefined;
+  return pathByName.get(nameOrPath) ?? nameOrPath;
+}
+
+function mergeI18n(base: I18nResources, over: I18nResources): I18nResources {
+  const merged: Record<string, Record<string, string>> = {};
+  for (const [namespace, messages] of Object.entries(base)) {
+    merged[namespace] = { ...messages };
+  }
+  for (const [namespace, messages] of Object.entries(over)) {
+    merged[namespace] = { ...(merged[namespace] ?? {}), ...messages };
+  }
+  return merged;
+}

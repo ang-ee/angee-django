@@ -23,6 +23,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@angee/app": "workspace:*",
     "@angee/data": "workspace:*",
     "@angee/logo-react": "^0.2.1",
     "@angee/refine": "workspace:*",

@@ -37,29 +37,29 @@ import { afterEach,
   vi } from "vitest";
 
 import { ModalsHost,
-  ToastProvider } from "../feedback";
+  ToastProvider } from "@angee/ui/feedback/index";
 import { parseFlatSearch,
-  stringifyFlatSearch } from "../createApp";
+  stringifyFlatSearch } from "../create-app";
 import { ResourceList,
-  DrawerResourceList } from "./ResourceList";
-import { Form } from "./Form";
-import type { FormField } from "./FormView";
+  DrawerResourceList } from "@angee/ui/views/ResourceList";
+import { Form } from "@angee/ui/views/Form";
+import type { FormField } from "@angee/ui/views/FormView";
 import {
   List,
   type ListComponent,
-  } from "./List";
+  } from "@angee/ui/views/List";
 import {
   ListView,
   type ListColumn,
   type ListViewProps,
-  } from "./ListView";
+  } from "@angee/ui/views/ListView";
 import {
   Action,
   Column,
   Facet,
   Field,
   Group,
-  } from "./page";
+  } from "@angee/ui/views/page/index";
 import {
   type AggregateBucket,
   type AggregateRequestOptions,
@@ -139,8 +139,8 @@ const sdkMocks = vi.hoisted(() => ({
   mutate: vi.fn(async ({ data }: { data: Row }) => data),
 }));
 
-vi.mock("@angee/sdk", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/sdk")>();
+vi.mock("@angee/ui/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/ui/runtime")>();
   return {
     ...actual,
     useWidget: () => undefined,

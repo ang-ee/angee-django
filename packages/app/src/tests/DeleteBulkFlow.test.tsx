@@ -45,16 +45,16 @@ import {
 } from "@angee/refine";
 import {
   AppRuntimeProvider,
-} from "@angee/sdk";
+} from "@angee/ui/runtime";
 import {
   type SchemaFieldMetadata,
 } from "@angee/resources";
 
-import { baseIcons } from "../chrome/icon-registry";
-import { parseFlatSearch, stringifyFlatSearch } from "../createApp";
-import { ToastProvider } from "../feedback";
-import { DeletePreviewTree } from "./DeletePreviewTree";
-import { ListView, type ListColumn } from "./ListView";
+import { baseIcons } from "@angee/ui/chrome/icon-registry";
+import { parseFlatSearch, stringifyFlatSearch } from "../create-app";
+import { ToastProvider } from "@angee/ui/feedback/index";
+import { DeletePreviewTree } from "@angee/ui/views/DeletePreviewTree";
+import { ListView, type ListColumn } from "@angee/ui/views/ListView";
 
 const sdkMocks = vi.hoisted(() => ({
   rows: [
@@ -64,8 +64,8 @@ const sdkMocks = vi.hoisted(() => ({
   mutate: vi.fn(),
 }));
 
-vi.mock("@angee/sdk", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/sdk")>();
+vi.mock("@angee/ui/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/ui/runtime")>();
   return {
     ...actual,
   };

@@ -24,9 +24,9 @@ import {
 import { useMemo, useRef, type ReactElement, type ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
-import { ModalsHost, ToastProvider } from "../feedback";
-import { parseFlatSearch, stringifyFlatSearch } from "../createApp";
-import { ListView, type ListColumn } from "./ListView";
+import { ModalsHost, ToastProvider } from "@angee/ui/feedback/index";
+import { parseFlatSearch, stringifyFlatSearch } from "../create-app";
+import { ListView, type ListColumn } from "@angee/ui/views/ListView";
 import {
   ModelMetadataProvider,
   type Row,

@@ -17,10 +17,10 @@ import {
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { parseFlatSearch, stringifyFlatSearch } from "../createApp";
-import { ResourceViewProvider } from "./resource-view-context";
-import { RowsListView } from "./RowsListView";
-import type { ListColumn } from "./ListInternals";
+import { parseFlatSearch, stringifyFlatSearch } from "../create-app";
+import { ResourceViewProvider } from "@angee/ui/views/resource-view-context";
+import { RowsListView } from "@angee/ui/views/RowsListView";
+import type { ListColumn } from "@angee/ui/views/ListInternals";
 
 afterEach(() => cleanup());
 

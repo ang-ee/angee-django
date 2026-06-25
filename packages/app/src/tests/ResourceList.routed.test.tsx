@@ -40,12 +40,12 @@ import type {
   SchemaFieldMetadata,
 } from "@angee/resources";
 
-import { parseFlatSearch, stringifyFlatSearch } from "../createApp";
-import { ModalsHost, ToastProvider } from "../feedback";
-import { ResourceList, REFINE_CREATE_ID } from "./ResourceList";
-import type { ListComponent } from "./List";
-import type { FormField } from "./FormView";
-import type { ListColumn, ListViewProps } from "./ListView";
+import { parseFlatSearch, stringifyFlatSearch } from "../create-app";
+import { ModalsHost, ToastProvider } from "@angee/ui/feedback/index";
+import { ResourceList, REFINE_CREATE_ID } from "@angee/ui/views/ResourceList";
+import type { ListComponent } from "@angee/ui/views/List";
+import type { FormField } from "@angee/ui/views/FormView";
+import type { ListColumn, ListViewProps } from "@angee/ui/views/ListView";
 import type {
   Row,
 } from "@angee/resources";
@@ -66,8 +66,8 @@ const sdkMocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("@angee/sdk", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/sdk")>();
+vi.mock("@angee/ui/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/ui/runtime")>();
   return {
     ...actual,
     useWidget: () => undefined,
