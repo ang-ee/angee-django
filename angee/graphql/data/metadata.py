@@ -16,7 +16,12 @@ from strawberry.types.enum import StrawberryEnumDefinition
 from strawberry.utils.str_converters import to_camel_case
 
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
-from angee.graphql.introspection import surface_field_names, surface_name
+from angee.graphql.introspection import (
+    is_to_many_relation,
+    is_to_one_relation,
+    surface_field_names,
+    surface_name,
+)
 
 DATA_RESOURCE_METADATA_ATTR = "__angee_data_resource__"
 """Attribute attached to schema surfaces that contribute model resource metadata."""
@@ -35,36 +40,6 @@ _RESOURCE_CAPABILITY_ORDER = (
     "delete",
     "deletePreview",
     "changes",
-)
-
-_RESOURCE_ROOT_FIELDS = (
-    "list_name",
-    "detail_name",
-    "aggregate_name",
-    "group_name",
-    "create_name",
-    "update_name",
-    "delete_name",
-    "delete_preview_name",
-    "revisions_name",
-    "changes_name",
-)
-
-_RESOURCE_TYPE_FIELDS = (
-    "query",
-    "node",
-    "filter",
-    "order",
-    "aggregate",
-    "grouped",
-    "group_key",
-    "group_by_spec",
-    "group_order",
-    "having",
-    "create_input",
-    "update_input",
-    "delete_payload",
-    "revision",
 )
 
 _RESOURCE_FIELD_KINDS = frozenset({"scalar", "enum", "relation", "list"})
@@ -97,8 +72,8 @@ class DataGroupAliasMetadata:
 class DataGroupBucketFilterValueMapMetadata:
     """One backend-owned group bucket value rewrite for drill-down filters."""
 
-    from_value: Any
-    to_value: Any
+    from_value: Any = dataclasses.field(metadata={"wire": "from"})
+    to_value: Any = dataclasses.field(metadata={"wire": "to"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,16 +135,16 @@ class DataDefaultSortMetadata:
 class DataResourceRoots:
     """GraphQL wire root names emitted for one model data resource."""
 
-    list_name: str | None = None
-    detail_name: str | None = None
-    aggregate_name: str | None = None
-    group_name: str | None = None
-    create_name: str | None = None
-    update_name: str | None = None
-    delete_name: str | None = None
-    delete_preview_name: str | None = None
-    revisions_name: str | None = None
-    changes_name: str | None = None
+    list_name: str | None = dataclasses.field(default=None, metadata={"wire": "list"})
+    detail_name: str | None = dataclasses.field(default=None, metadata={"wire": "detail"})
+    aggregate_name: str | None = dataclasses.field(default=None, metadata={"wire": "aggregate"})
+    group_name: str | None = dataclasses.field(default=None, metadata={"wire": "groups"})
+    create_name: str | None = dataclasses.field(default=None, metadata={"wire": "create"})
+    update_name: str | None = dataclasses.field(default=None, metadata={"wire": "update"})
+    delete_name: str | None = dataclasses.field(default=None, metadata={"wire": "delete"})
+    delete_preview_name: str | None = dataclasses.field(default=None, metadata={"wire": "deletePreview"})
+    revisions_name: str | None = dataclasses.field(default=None, metadata={"wire": "revisions"})
+    changes_name: str | None = dataclasses.field(default=None, metadata={"wire": "changes"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,7 +200,7 @@ class DataResourceFieldMetadata:
 class DataResourceMetadata:
     """Internal metadata for one Angee model data resource."""
 
-    model: type[models.Model]
+    model: type[models.Model] = dataclasses.field(metadata={"wire": False})
     model_label: str
     app_label: str
     model_name: str
@@ -248,9 +223,9 @@ class DataResourceMetadata:
     revision_fields: tuple[str, ...] = ()
     relation_axes: tuple[DataRelationAxisMetadata, ...] = ()
     group_aliases: tuple[DataGroupAliasMetadata, ...] = ()
-    node_type: type | None = None
-    filter_type: type | None = None
-    order_type: type | None = None
+    node_type: type | None = dataclasses.field(default=None, metadata={"wire": False})
+    filter_type: type | None = dataclasses.field(default=None, metadata={"wire": False})
+    order_type: type | None = dataclasses.field(default=None, metadata={"wire": False})
 
 
 def data_resource_metadata(surface: object) -> tuple[DataResourceMetadata, ...]:
@@ -429,162 +404,35 @@ def serialize_data_resources(
 def _serialize_data_resource(metadata: DataResourceMetadata, *, schema_name: str) -> dict[str, object]:
     """Return one JSON-safe resource metadata mapping."""
 
-    return {
-        "schemaName": schema_name,
-        "modelLabel": metadata.model_label,
-        "appLabel": metadata.app_label,
-        "modelName": metadata.model_name,
-        "publicIdField": metadata.public_id_field,
-        "roots": {
-            "list": metadata.roots.list_name,
-            "detail": metadata.roots.detail_name,
-            "aggregate": metadata.roots.aggregate_name,
-            "groups": metadata.roots.group_name,
-            "create": metadata.roots.create_name,
-            "update": metadata.roots.update_name,
-            "delete": metadata.roots.delete_name,
-            "deletePreview": metadata.roots.delete_preview_name,
-            "revisions": metadata.roots.revisions_name,
-            "changes": metadata.roots.changes_name,
-        },
-        "typeNames": {
-            "query": metadata.type_names.query,
-            "node": metadata.type_names.node,
-            "filter": metadata.type_names.filter,
-            "order": metadata.type_names.order,
-            "aggregate": metadata.type_names.aggregate,
-            "grouped": metadata.type_names.grouped,
-            "groupKey": metadata.type_names.group_key,
-            "groupBySpec": metadata.type_names.group_by_spec,
-            "groupOrder": metadata.type_names.group_order,
-            "having": metadata.type_names.having,
-            "createInput": metadata.type_names.create_input,
-            "updateInput": metadata.type_names.update_input,
-            "deletePayload": metadata.type_names.delete_payload,
-            "revision": metadata.type_names.revision,
-        },
-        "capabilities": list(metadata.capabilities),
-        "fields": [
-            {
-                "name": field.name,
-                "kind": field.kind,
-                "scalar": field.scalar,
-                "values": [
-                    {
-                        "value": value.value,
-                        "description": value.description,
-                    }
-                    for value in field.values
-                ],
-                "widget": field.widget,
-                "readable": field.readable,
-                "filterable": field.filterable,
-                "sortable": field.sortable,
-                "aggregatable": field.aggregatable,
-                "groupable": field.groupable,
-                "creatable": field.creatable,
-                "updatable": field.updatable,
-                "requiredOnCreate": field.required_on_create,
-                "relationModelLabel": field.relation_model_label,
-                "relationLabelAxis": field.relation_label_axis,
-            }
-            for field in metadata.fields
-        ],
-        "filterFields": list(metadata.filter_fields),
-        "orderFields": list(metadata.order_fields),
-        "aggregateFields": list(metadata.aggregate_fields),
-        "groupByFields": list(metadata.group_by_fields),
-        "groupDimensions": [
-            {
-                "field": dimension.field,
-                "input": dimension.input,
-                "key": dimension.key,
-                "kind": dimension.kind,
-                "scalar": dimension.scalar,
-                "filter": _serialize_group_bucket_filter(dimension.filter),
-                "extractions": [
-                    {
-                        "name": extraction.name,
-                        "input": extraction.input,
-                        "key": extraction.key,
-                        "rangeKey": extraction.range_key,
-                        "filter": _serialize_group_bucket_filter(extraction.filter),
-                    }
-                    for extraction in dimension.extractions
-                ],
-            }
-            for dimension in metadata.group_dimensions
-        ],
-        "aggregateMeasures": [
-            {
-                "op": measure.op,
-                "field": measure.field,
-                "input": measure.input,
-            }
-            for measure in metadata.aggregate_measures
-        ],
-        "defaultMeasures": [
-            {
-                "op": measure.op,
-                "field": measure.field,
-                "input": measure.input,
-            }
-            for measure in metadata.default_measures
-        ],
-        "defaultSort": [
-            {
-                "field": sort.field,
-                "direction": sort.direction,
-            }
-            for sort in metadata.default_sort
-        ],
-        "createFields": list(metadata.create_fields),
-        "updateFields": list(metadata.update_fields),
-        "requiredCreateFields": list(metadata.required_create_fields),
-        "revisionFields": list(metadata.revision_fields),
-        "relationAxes": [
-            {
-                "field": axis.field,
-                "modelLabel": axis.model_label,
-                "publicIdField": axis.public_id_field,
-                "labelAxis": axis.label_axis,
-            }
-            for axis in metadata.relation_axes
-        ],
-        "groupAliases": [
-            {
-                "field": alias.field,
-                "aggregateField": alias.aggregate_field,
-                "aggregateKey": alias.aggregate_key,
-            }
-            for alias in metadata.group_aliases
-        ],
-    }
+    return {"schemaName": schema_name, **_wire_dataclass(metadata)}
 
 
-def _serialize_group_bucket_filter(
-    metadata: DataGroupBucketFilterMetadata | None,
-) -> dict[str, object] | None:
-    """Return JSON-safe grouped bucket filter metadata."""
+def _wire_dataclass(instance: Any) -> dict[str, object]:
+    """Serialize one metadata dataclass through its own declared wire shape.
 
-    if metadata is None:
-        return None
-    return {
-        "kind": metadata.kind,
-        "field": metadata.field,
-        "valueKey": metadata.value_key,
-        "rangeKey": metadata.range_key,
-        "lookup": metadata.lookup,
-        "nullLookup": metadata.null_lookup,
-        "valueTransform": metadata.value_transform,
-        "valueMap": [
-            {
-                "from": item.from_value,
-                "to": item.to_value,
-            }
-            for item in metadata.value_map
-        ],
-    }
+    Each dataclass owns its wire mapping: a field serializes under its
+    ``to_camel_case`` name unless it declares a ``wire`` key in field metadata,
+    and fields marked ``{"wire": False}`` (the Python type handles) are omitted.
+    """
+
+    payload: dict[str, object] = {}
+    for field_def in dataclasses.fields(instance):
+        wire = field_def.metadata.get("wire", True)
+        if wire is False:
+            continue
+        key = wire if isinstance(wire, str) else _wire_name(field_def.name)
+        payload[key] = _wire_value(getattr(instance, field_def.name))
+    return payload
+
+
+def _wire_value(value: object) -> object:
+    """Return a JSON-safe wire value for one metadata field."""
+
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return _wire_dataclass(value)
+    if isinstance(value, (tuple, list)):
+        return [_wire_value(item) for item in value]
+    return value
 
 
 def _merge_data_resource(
@@ -639,8 +487,14 @@ def _merge_roots(
 
     return DataResourceRoots(
         **{
-            name: _merge_value(left, right, name, getattr(left.roots, name), getattr(right.roots, name))
-            for name in _RESOURCE_ROOT_FIELDS
+            field_def.name: _merge_value(
+                left,
+                right,
+                field_def.name,
+                getattr(left.roots, field_def.name),
+                getattr(right.roots, field_def.name),
+            )
+            for field_def in dataclasses.fields(DataResourceRoots)
         }
     )
 
@@ -653,8 +507,14 @@ def _merge_type_names(
 
     return DataResourceTypeNames(
         **{
-            name: _merge_value(left, right, name, getattr(left.type_names, name), getattr(right.type_names, name))
-            for name in _RESOURCE_TYPE_FIELDS
+            field_def.name: _merge_value(
+                left,
+                right,
+                field_def.name,
+                getattr(left.type_names, field_def.name),
+                getattr(right.type_names, field_def.name),
+            )
+            for field_def in dataclasses.fields(DataResourceTypeNames)
         }
     )
 
@@ -1084,7 +944,7 @@ def _field_kind(
 ) -> str:
     """Return a coarse field kind for resource metadata."""
 
-    if is_list or (field is not None and _is_to_many_relation(field)):
+    if is_list or (field is not None and is_to_many_relation(field)):
         return "list"
     if is_object or relation_axis is not None or (field is not None and field.is_relation):
         return "relation"
@@ -1169,7 +1029,7 @@ def _relation_axes(
             field = model._meta.get_field(path)
         except FieldDoesNotExist:
             continue
-        if not _is_to_one_relation(field):
+        if not is_to_one_relation(field):
             continue
         remote_field = getattr(field, "remote_field", None)
         related_model = getattr(remote_field, "model", None)
@@ -1202,7 +1062,7 @@ def _relation_label_axes(
             field = model._meta.get_field(relation)
         except FieldDoesNotExist:
             continue
-        if not _is_to_one_relation(field):
+        if not is_to_one_relation(field):
             continue
         if relation not in direct_axes:
             raise ImproperlyConfigured(
@@ -1217,18 +1077,6 @@ def _relation_label_axes(
             )
         label_axes[relation] = path
     return label_axes
-
-
-def _is_to_one_relation(field: models.Field[Any, Any]) -> bool:
-    """Return whether ``field`` is a forward to-one relation."""
-
-    return bool(getattr(field, "many_to_one", False) or getattr(field, "one_to_one", False))
-
-
-def _is_to_many_relation(field: models.Field[Any, Any]) -> bool:
-    """Return whether ``field`` represents a to-many relation path."""
-
-    return bool(getattr(field, "many_to_many", False) or getattr(field, "one_to_many", False))
 
 
 def _require_model_field_for_path(
@@ -1254,7 +1102,7 @@ def _require_model_field_for_path(
                 f"resource metadata for {model._meta.label} declares unknown {purpose} "
                 f"field path '{path}'."
             ) from None
-        if _is_to_many_relation(field):
+        if is_to_many_relation(field):
             raise ImproperlyConfigured(
                 f"resource metadata for {model._meta.label} declares unsupported to-many "
                 f"{purpose} field path '{path}'."

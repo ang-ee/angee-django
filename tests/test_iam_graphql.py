@@ -82,14 +82,14 @@ def test_available_connections_returns_only_enabled_oauth_clients_without_secret
             public_schema,
             """
             query {
-              availableConnections(pagination: {limit: 10}) {
-                totalCount
+              available_connections(pagination: {limit: 10}) {
+                total_count
                 results {
-                  oauthClientSqid
-                  oauthClientDisplayName
-                  oauthClientSlug
-                  oauthClientIcon
-                  isOidc
+                  oauth_client_sqid
+                  oauth_client_display_name
+                  oauth_client_slug
+                  oauth_client_icon
+                  is_oidc
                 }
               }
             }
@@ -97,10 +97,10 @@ def test_available_connections_returns_only_enabled_oauth_clients_without_secret
         )
     )
 
-    connections = data["availableConnections"]["results"]
-    assert data["availableConnections"]["totalCount"] == 1
-    assert [row["oauthClientSlug"] for row in connections] == ["enabled"]
-    assert connections[0]["isOidc"] is True
+    connections = data["available_connections"]["results"]
+    assert data["available_connections"]["total_count"] == 1
+    assert [row["oauth_client_slug"] for row in connections] == ["enabled"]
+    assert connections[0]["is_oidc"] is True
     assert "clientSecret" not in public_schema.as_str()
 
 
@@ -111,9 +111,9 @@ def test_available_connections_reads_client_columns_without_per_row_queries(
 
     query = """
         query {
-          availableConnections(pagination: {limit: 10}) {
-            totalCount
-            results { oauthClientSqid oauthClientSlug oauthClientDisplayName oauthClientIcon }
+          available_connections(pagination: {limit: 10}) {
+            total_count
+            results { oauth_client_sqid oauth_client_slug oauth_client_display_name oauth_client_icon }
           }
         }
     """
@@ -127,7 +127,7 @@ def test_available_connections_reads_client_columns_without_per_row_queries(
     with CaptureQueriesContext(connection) as three_rows:
         data = _data(_execute(public_schema, query))
 
-    assert data["availableConnections"]["totalCount"] == 3
+    assert data["available_connections"]["total_count"] == 3
     assert len(three_rows.captured_queries) == len(one_row.captured_queries)
 
 
@@ -141,13 +141,13 @@ def test_login_start_rejects_non_oidc_or_disabled_oauth_client(
     public_schema = _schema("public")
     query = """
         mutation LoginStart($oauthClientSqid: String!) {
-          loginStart(
-            oauthClientSqid: $oauthClientSqid,
-            redirectUri: "https://app.example/callback"
+          login_start(
+            oauth_client_sqid: $oauthClientSqid,
+            redirect_uri: "https://app.example/callback"
           ) {
             state
             error
-            errorCode
+            error_code
           }
         }
     """
@@ -155,9 +155,9 @@ def test_login_start_rejects_non_oidc_or_disabled_oauth_client(
     for oauth_client in (non_oidc, disabled):
         data = _data(_execute(public_schema, query, {"oauthClientSqid": oauth_client.sqid}))
 
-        assert data["loginStart"]["state"] == ""
-        assert "enabled for OIDC" in data["loginStart"]["error"]
-        assert data["loginStart"]["errorCode"] == "client_not_configured"
+        assert data["login_start"]["state"] == ""
+        assert "enabled for OIDC" in data["login_start"]["error"]
+        assert data["login_start"]["error_code"] == "client_not_configured"
 
 
 def test_login_start_returns_oidc_flow_error_payload(
@@ -179,14 +179,14 @@ def test_login_start_returns_oidc_flow_error_payload(
             public_schema,
             """
             mutation LoginStart($oauthClientSqid: String!) {
-              loginStart(
-                oauthClientSqid: $oauthClientSqid,
-                redirectUri: "https://app.example/callback"
+              login_start(
+                oauth_client_sqid: $oauthClientSqid,
+                redirect_uri: "https://app.example/callback"
               ) {
-                authorizeUrl
+                authorize_url
                 state
                 error
-                errorCode
+                error_code
               }
             }
             """,
@@ -194,11 +194,11 @@ def test_login_start_returns_oidc_flow_error_payload(
         )
     )
 
-    assert data["loginStart"] == {
-        "authorizeUrl": "",
+    assert data["login_start"] == {
+        "authorize_url": "",
         "state": "",
         "error": "missing_endpoint",
-        "errorCode": "missing_endpoint",
+        "error_code": "missing_endpoint",
     }
 
 
@@ -227,12 +227,12 @@ def test_login_complete_provisions_and_logs_in(
             public_schema,
             """
             mutation {
-              loginStart(
-                oauthClientSqid: "%s",
-                redirectUri: "https://app.example/callback",
+              login_start(
+                oauth_client_sqid: "%s",
+                redirect_uri: "https://app.example/callback",
                 next: "/after-login"
               ) {
-                authorizeUrl
+                authorize_url
                 state
               }
             }
@@ -240,7 +240,7 @@ def test_login_complete_provisions_and_logs_in(
             % oauth_client.sqid,
             request=request,
         )
-    )["loginStart"]
+    )["login_start"]
 
     def complete_login(
         selected_oauth_client: OAuthClient,
@@ -266,17 +266,17 @@ def test_login_complete_provisions_and_logs_in(
             public_schema,
             """
             mutation Complete($state: String!) {
-              loginComplete(
+              login_complete(
                 code: "code",
                 state: $state,
-                redirectUri: "https://app.example/callback"
+                redirect_uri: "https://app.example/callback"
               ) {
                 ok
                 intent
                 next
                 claims
                 error
-                errorCode
+                error_code
                 user { username }
               }
             }
@@ -286,13 +286,13 @@ def test_login_complete_provisions_and_logs_in(
         )
     )
 
-    assert completed["loginComplete"] == {
+    assert completed["login_complete"] == {
         "ok": True,
         "intent": "login",
         "next": "/after-login",
         "claims": {"sub": "sub-login", "email": "oidc@example.com"},
         "error": None,
-        "errorCode": None,
+        "error_code": None,
         "user": {"username": "oidc-user"},
     }
     assert request.session[SESSION_KEY] == str(user.pk)
@@ -313,9 +313,9 @@ def test_login_complete_returns_oidc_flow_error_payload(
             public_schema,
             """
             mutation {
-              loginStart(
-                oauthClientSqid: "%s",
-                redirectUri: "https://app.example/callback"
+              login_start(
+                oauth_client_sqid: "%s",
+                redirect_uri: "https://app.example/callback"
               ) {
                 state
               }
@@ -324,7 +324,7 @@ def test_login_complete_returns_oidc_flow_error_payload(
             % oauth_client.sqid,
             request=request,
         )
-    )["loginStart"]
+    )["login_start"]
 
     def complete_login(*args: Any, **kwargs: Any) -> Any:
         del args, kwargs
@@ -337,10 +337,10 @@ def test_login_complete_returns_oidc_flow_error_payload(
             public_schema,
             """
             mutation Complete($state: String!) {
-              loginComplete(
+              login_complete(
                 code: "bad-code",
                 state: $state,
-                redirectUri: "https://app.example/callback"
+                redirect_uri: "https://app.example/callback"
               ) {
                 ok
                 user { username }
@@ -348,7 +348,7 @@ def test_login_complete_returns_oidc_flow_error_payload(
                 next
                 claims
                 error
-                errorCode
+                error_code
               }
             }
             """,
@@ -357,14 +357,14 @@ def test_login_complete_returns_oidc_flow_error_payload(
         )
     )
 
-    assert completed["loginComplete"] == {
+    assert completed["login_complete"] == {
         "ok": False,
         "user": None,
         "intent": "login",
         "next": "/",
         "claims": None,
         "error": "bad token",
-        "errorCode": "invalid_id_token",
+        "error_code": "invalid_id_token",
     }
 
 
@@ -389,9 +389,9 @@ def test_link_account_complete_returns_account_claims_intent_and_coerced_next(
             public_schema,
             """
             mutation {
-              linkAccountStart(
-                oauthClientSqid: "%s",
-                redirectUri: "https://app.example/callback",
+              link_account_start(
+                oauth_client_sqid: "%s",
+                redirect_uri: "https://app.example/callback",
                 next: "https://evil.example/phish"
               ) {
                 state
@@ -401,7 +401,7 @@ def test_link_account_complete_returns_account_claims_intent_and_coerced_next(
             % oauth_client.sqid,
             request=request,
         )
-    )["linkAccountStart"]
+    )["link_account_start"]
 
     def complete_link(
         selected_oauth_client: OAuthClient,
@@ -429,18 +429,18 @@ def test_link_account_complete_returns_account_claims_intent_and_coerced_next(
             public_schema,
             """
             mutation Complete($state: String!) {
-              linkAccountComplete(
+              link_account_complete(
                 code: "code",
                 state: $state,
-                redirectUri: "https://app.example/callback"
+                redirect_uri: "https://app.example/callback"
               ) {
-                account { externalId }
+                account { external_id }
                 user { username }
                 intent
                 next
                 claims
                 error
-                errorCode
+                error_code
               }
             }
             """,
@@ -449,14 +449,14 @@ def test_link_account_complete_returns_account_claims_intent_and_coerced_next(
         )
     )
 
-    assert completed["linkAccountComplete"] == {
-        "account": {"externalId": "sub-link-rich"},
+    assert completed["link_account_complete"] == {
+        "account": {"external_id": "sub-link-rich"},
         "user": {"username": "link-user"},
         "intent": "link",
         "next": "/",
         "claims": {"sub": "sub-link-rich", "email": "link@example.com"},
         "error": None,
-        "errorCode": None,
+        "error_code": None,
     }
 
 
@@ -476,20 +476,20 @@ def test_connect_account_complete_surfaces_provider_error_message(
             public_schema,
             """
             mutation Start($id: ID!) {
-              connectAccountStart(
+              connect_account_start(
                 id: $id,
-                redirectUri: "https://app.example/callback"
+                redirect_uri: "https://app.example/callback"
               ) {
                 state
                 error
-                errorCode
+                error_code
               }
             }
             """,
             {"id": oauth_client_id},
             request=request,
         )
-    )["connectAccountStart"]
+    )["connect_account_start"]
 
     def complete_account_connect(
         selected_oauth_client: OAuthClient,
@@ -518,15 +518,15 @@ def test_connect_account_complete_surfaces_provider_error_message(
             public_schema,
             """
             mutation Complete($state: String!) {
-              connectAccountComplete(
+              connect_account_complete(
                 code: "code",
                 state: $state,
-                redirectUri: "https://app.example/callback"
+                redirect_uri: "https://app.example/callback"
               ) {
-                account { externalId }
-                credential { displayName }
+                account { external_id }
+                credential { display_name }
                 error
-                errorCode
+                error_code
               }
             }
             """,
@@ -536,11 +536,11 @@ def test_connect_account_complete_surfaces_provider_error_message(
     )
 
     assert start["error"] is None
-    assert completed["connectAccountComplete"] == {
+    assert completed["connect_account_complete"] == {
         "account": None,
         "credential": None,
         "error": "Rate limited. Please try again later.",
-        "errorCode": "token_exchange_failed",
+        "error_code": "token_exchange_failed",
     }
 
 
@@ -597,12 +597,12 @@ def test_oauth_client_crud_are_admin_only(
 
     external_account_mutation = """
         mutation CreateExternalAccount($oauthClient: ID!, $owner: String!) {
-          createExternalAccount(data: {
-            oauthClient: $oauthClient,
+          create_external_account(data: {
+            oauth_client: $oauthClient,
             owner: $owner,
-            externalId: "admin-sub",
+            external_id: "admin-sub",
             email: "admin@example.com",
-            displayName: "Admin OIDC",
+            display_name: "Admin OIDC",
             status: "active"
           }) {
             id
@@ -621,7 +621,7 @@ def test_oauth_client_crud_are_admin_only(
             {"oauthClient": oauth_client_id, "owner": str(admin.pk)},
             user=admin,
         )
-    )["createExternalAccount"]
+    )["create_external_account"]
     assert linked["external_id"] == "admin-sub"
     assert linked["email"] == "admin@example.com"
     assert linked["provider_slug"] == "console"
@@ -696,15 +696,15 @@ def test_reveal_credential_returns_the_secret_and_is_admin_only(
 
     create_credential = """
         mutation CreateCredential {
-          createCredential(data: {name: "GitHub PAT", kind: "static_token", apiKey: "ghp_secret_value"}) {
+          create_credential(data: {name: "GitHub PAT", kind: "static_token", api_key: "ghp_secret_value"}) {
             id
           }
         }
     """
-    credential_id = _data(_execute(console_schema, create_credential, user=admin))["createCredential"]["id"]
+    credential_id = _data(_execute(console_schema, create_credential, user=admin))["create_credential"]["id"]
 
-    reveal = "mutation Reveal($id: ID!) { revealCredential(id: $id) { secret } }"
-    revealed = _data(_execute(console_schema, reveal, {"id": credential_id}, user=admin))["revealCredential"]
+    reveal = "mutation Reveal($id: ID!) { reveal_credential(id: $id) { secret } }"
+    revealed = _data(_execute(console_schema, reveal, {"id": credential_id}, user=admin))["reveal_credential"]
     assert revealed["secret"] == "ghp_secret_value"
 
     # A non-admin cannot reveal another principal's secret.
@@ -811,7 +811,7 @@ def test_user_crud_create_update_delete_are_admin_only(
         console_schema,
         """
         mutation DeleteUser($id: ID!) {
-          delete_user(id: $id, confirm: true) { totalDeletedCount }
+          delete_user(id: $id, confirm: true) { total_deleted_count }
         }
         """,
         {"id": user_id},
@@ -824,8 +824,8 @@ def test_user_crud_create_update_delete_are_admin_only(
             """
             mutation DeleteUser($id: ID!) {
               delete_user(id: $id, confirm: true) {
-                hasBlockers
-                totalDeletedCount
+                has_blockers
+                total_deleted_count
               }
             }
             """,
@@ -833,8 +833,8 @@ def test_user_crud_create_update_delete_are_admin_only(
             user=admin,
         )
     )["delete_user"]
-    assert deleted["hasBlockers"] is False
-    assert deleted["totalDeletedCount"] >= 1
+    assert deleted["has_blockers"] is False
+    assert deleted["total_deleted_count"] >= 1
     with system_context(reason="test.iam.user_crud.delete"):
         assert not User.objects.filter(pk=user.pk).exists()
 
@@ -928,8 +928,8 @@ def test_external_account_update_delete_are_admin_only(
     delete_account = """
         mutation DeleteExternalAccount($id: ID!) {
           delete_external_account(id: $id, confirm: true) {
-            hasBlockers
-            totalDeletedCount
+            has_blockers
+            total_deleted_count
           }
         }
     """
@@ -939,8 +939,8 @@ def test_external_account_update_delete_are_admin_only(
     deleted = _data(
         _execute(console_schema, delete_account, {"id": account_id}, user=admin)
     )["delete_external_account"]
-    assert deleted["hasBlockers"] is False
-    assert deleted["totalDeletedCount"] >= 1
+    assert deleted["has_blockers"] is False
+    assert deleted["total_deleted_count"] >= 1
     with system_context(reason="test.iam.external_account.after_delete"):
         assert not ExternalAccount.objects.filter(pk=account.pk).exists()
         assert ExternalAccount.objects.owner_for(account) is None
@@ -957,11 +957,11 @@ def test_credential_crud_create_delete_are_admin_only(
     console_schema = _schema("console")
     create_credential = """
         mutation CreateCredential($user: ID!) {
-          createCredential(data: {
+          create_credential(data: {
             user: $user,
             name: "ci-token",
             kind: "static_token",
-            apiKey: "static-token-value"
+            api_key: "static-token-value"
           }) {
             kind
             name
@@ -976,7 +976,7 @@ def test_credential_crud_create_delete_are_admin_only(
 
     created = _data(
         _execute(console_schema, create_credential, variables, user=admin)
-    )["createCredential"]
+    )["create_credential"]
     assert created["name"] == "ci-token"
     # A provider-less static token reads its own name as the label.
     assert created["display_name"] == "ci-token"
@@ -991,8 +991,8 @@ def test_credential_crud_create_delete_are_admin_only(
     delete_credential = """
         mutation DeleteCredential($id: ID!) {
           delete_credential(id: $id, confirm: true) {
-            hasBlockers
-            totalDeletedCount
+            has_blockers
+            total_deleted_count
           }
         }
     """
@@ -1002,8 +1002,8 @@ def test_credential_crud_create_delete_are_admin_only(
     deleted = _data(
         _execute(console_schema, delete_credential, {"id": credential_id}, user=admin)
     )["delete_credential"]
-    assert deleted["hasBlockers"] is False
-    assert deleted["totalDeletedCount"] >= 1
+    assert deleted["has_blockers"] is False
+    assert deleted["total_deleted_count"] >= 1
     with system_context(reason="test.iam.credential_crud.delete"):
         assert not Credential.objects.filter(pk=credential.pk).exists()
 
@@ -1157,12 +1157,12 @@ def test_account_connect_schema_exposes_generic_flow_without_token_material(
     public_sdl = _schema("public").as_str()
     console_sdl = _schema("console").as_str()
 
-    assert "connectAccountStart(" in _sdl_block(public_sdl, "type Mutation")
-    assert "connectAccountComplete(" in _sdl_block(public_sdl, "type Mutation")
+    assert "connect_account_start(" in _sdl_block(public_sdl, "type Mutation")
+    assert "connect_account_complete(" in _sdl_block(public_sdl, "type Mutation")
     assert "credential: ConnectedCredentialType" in _sdl_block(public_sdl, "type ConnectAccountResult")
     assert "type CredentialType implements" not in public_sdl
-    assert "providerSlug" not in public_sdl
-    assert "oauthClient:" not in public_sdl
+    assert "provider_slug" not in public_sdl
+    assert "oauth_client:" not in public_sdl
     oauth_client_type = _sdl_block(console_sdl, "type OAuthClientType")
     oauth_client_insert = _sdl_block(console_sdl, "input oauth_clients_insert_input")
     oauth_client_set = _sdl_block(console_sdl, "input oauth_clients_set_input")
@@ -1175,8 +1175,8 @@ def test_account_connect_schema_exposes_generic_flow_without_token_material(
         assert field in oauth_client_oidc_extension
         assert field in oauth_client_insert
         assert field in oauth_client_set
-    assert "accessToken" not in public_sdl
-    assert "refreshToken" not in public_sdl
+    assert "access_token" not in public_sdl
+    assert "refresh_token" not in public_sdl
 
 
 def test_console_schema_exposes_user_change_subscription(
@@ -1291,11 +1291,11 @@ def test_my_connected_accounts_are_scoped_to_session_user(
             _schema("public"),
             """
             query {
-              myConnectedAccounts(pagination: {limit: 10}) {
+              my_connected_accounts(pagination: {limit: 10}) {
                 results {
-                  displayName
+                  display_name
                   status
-                  externalAccount { externalId email credentialStatus }
+                  external_account { external_id email credential_status }
                 }
               }
             }
@@ -1304,20 +1304,20 @@ def test_my_connected_accounts_are_scoped_to_session_user(
         )
     )
 
-    accounts = data["myConnectedAccounts"]["results"]
-    assert [row["externalAccount"]["externalId"] for row in accounts] == ["alice-ext"]
-    assert accounts[0]["displayName"] == "Scope (alice@vendor.example)"
-    assert accounts[0]["externalAccount"]["email"] == "alice@vendor.example"
-    assert accounts[0]["externalAccount"]["credentialStatus"] == "active"
+    accounts = data["my_connected_accounts"]["results"]
+    assert [row["external_account"]["external_id"] for row in accounts] == ["alice-ext"]
+    assert accounts[0]["display_name"] == "Scope (alice@vendor.example)"
+    assert accounts[0]["external_account"]["email"] == "alice@vendor.example"
+    assert accounts[0]["external_account"]["credential_status"] == "active"
 
     rich_account = _execute(
         _schema("public"),
         """
         query {
-          myConnectedAccounts(pagination: {limit: 10}) {
+          my_connected_accounts(pagination: {limit: 10}) {
             results {
-              oauthClient { displayName }
-              externalAccount { providerSlug }
+              oauth_client { display_name }
+              external_account { provider_slug }
             }
           }
         }
@@ -1361,10 +1361,10 @@ def test_disconnect_account_only_removes_callers_credential(
             _schema("public"),
             """
             mutation Disconnect($sqid: String!) {
-              disconnectAccount(externalAccountSqid: $sqid) {
+              disconnect_account(external_account_sqid: $sqid) {
                 ok
                 error
-                errorCode
+                error_code
               }
             }
             """,
@@ -1373,7 +1373,7 @@ def test_disconnect_account_only_removes_callers_credential(
         )
     )
 
-    assert data["disconnectAccount"] == {"ok": True, "error": None, "errorCode": None}
+    assert data["disconnect_account"] == {"ok": True, "error": None, "error_code": None}
     with system_context(reason="test assertions"):
         assert not Credential.objects.filter(user=alice, external_account=account).exists()
         assert Credential.objects.filter(user=bob, external_account=account).exists()
@@ -1422,10 +1422,10 @@ def test_disconnect_account_revokes_owner_so_oidc_login_is_blocked(
             _schema("public"),
             """
             mutation Disconnect($sqid: String!) {
-              disconnectAccount(externalAccountSqid: $sqid) {
+              disconnect_account(external_account_sqid: $sqid) {
                 ok
                 error
-                errorCode
+                error_code
               }
             }
             """,
@@ -1434,7 +1434,7 @@ def test_disconnect_account_revokes_owner_so_oidc_login_is_blocked(
         )
     )
 
-    assert data["disconnectAccount"] == {"ok": True, "error": None, "errorCode": None}
+    assert data["disconnect_account"] == {"ok": True, "error": None, "error_code": None}
     assert revoked_tokens == ["unlink-access"]
     with system_context(reason="test assertions"):
         assert ExternalAccount.objects.owner_for(account) is None
@@ -1473,10 +1473,10 @@ def test_disconnect_account_blocks_last_oidc_sign_in_method_for_passwordless_use
             _schema("public"),
             """
             mutation Disconnect($sqid: String!) {
-              disconnectAccount(externalAccountSqid: $sqid) {
+              disconnect_account(external_account_sqid: $sqid) {
                 ok
                 error
-                errorCode
+                error_code
               }
             }
             """,
@@ -1485,10 +1485,10 @@ def test_disconnect_account_blocks_last_oidc_sign_in_method_for_passwordless_use
         )
     )
 
-    assert data["disconnectAccount"] == {
+    assert data["disconnect_account"] == {
         "ok": False,
         "error": "only_sign_in_method",
-        "errorCode": "only_sign_in_method",
+        "error_code": "only_sign_in_method",
     }
     with system_context(reason="test assertions"):
         owner = ExternalAccount.objects.owner_for(account)
@@ -1550,13 +1550,13 @@ def test_discover_oauth_endpoints_is_admin_gated_and_validates_discovery_url(
     client = _oauth_client("discoverable", discovery_url="")
     oauth_client_id = str(client.sqid)
     console_schema = _schema("console")
-    discover = "mutation($id: ID!){ discoverOauthEndpoints(id: $id){ ok message } }"
+    discover = "mutation($id: ID!){ discover_oauth_endpoints(id: $id){ ok message } }"
 
     assert _execute(console_schema, discover, {"id": oauth_client_id}, user=plain).errors is not None
 
     result = _data(
         _execute(console_schema, discover, {"id": oauth_client_id}, user=admin)
-    )["discoverOauthEndpoints"]
+    )["discover_oauth_endpoints"]
     assert result["ok"] is False
     assert "discovery url" in result["message"].lower()
 

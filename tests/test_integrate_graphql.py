@@ -248,14 +248,14 @@ def test_impl_choices_are_admin_only(integrate_console_tables: None) -> None:
     admin = _platform_admin("impl-choices-admin")
     query = """
         query {
-          implChoices(model: "integrate.Integration", field: "implClass") {
+          impl_choices(model: "integrate.Integration", field: "implClass") {
             key
           }
         }
     """
 
     assert _execute(console_schema, query, user=plain).errors is not None
-    result = _data(_execute(console_schema, query, user=admin))["implChoices"]
+    result = _data(_execute(console_schema, query, user=admin))["impl_choices"]
     assert {"key": "none"} in result
 
     vcs_result = _data(
@@ -263,14 +263,14 @@ def test_impl_choices_are_admin_only(integrate_console_tables: None) -> None:
             console_schema,
             """
             query {
-              implChoices(model: "integrate.VcsBridge", field: "backendClass") {
+              impl_choices(model: "integrate.VcsBridge", field: "backendClass") {
                 key
               }
             }
             """,
             user=admin,
         )
-    )["implChoices"]
+    )["impl_choices"]
     assert {"key": "stub"} in vcs_result
 
 
@@ -546,9 +546,9 @@ def test_integration_action_mutations_are_admin_only(
     sub_id = str(subscription.sqid)
 
     denied = [
-        ("mutation($id: ID!){ syncIntegration(id: $id){ ok } }", {"id": conn_id}),
-        ("mutation($id: ID!){ testConnection(id: $id){ ok } }", {"id": conn_id}),
-        ("mutation($id: ID!){ rotateWebhookSecret(id: $id){ ok } }", {"id": sub_id}),
+        ("mutation($id: ID!){ sync_integration(id: $id){ ok } }", {"id": conn_id}),
+        ("mutation($id: ID!){ test_connection(id: $id){ ok } }", {"id": conn_id}),
+        ("mutation($id: ID!){ rotate_webhook_secret(id: $id){ ok } }", {"id": sub_id}),
     ]
     for query, variables in denied:
         assert _execute(console_schema, query, variables, user=plain).errors is not None
@@ -578,13 +578,13 @@ def test_create_integration_from_credential_is_authenticated_user_owned(
     credential_id = str(credential.sqid)
     mutation = """
         mutation Connect($credential: ID!) {
-          createIntegrationFromCredential(
+          create_integration_from_credential(
             credential: $credential
-            vendorSlug: "anthropic"
+            vendor_slug: "anthropic"
           ) {
             vendor { slug }
             owner { username }
-            credential { displayName }
+            credential { display_name }
           }
         }
     """
@@ -593,13 +593,13 @@ def test_create_integration_from_credential_is_authenticated_user_owned(
 
     created = _data(
         _execute(console_schema, mutation, {"credential": credential_id}, user=owner)
-    )["createIntegrationFromCredential"]
+    )["create_integration_from_credential"]
 
     assert created["vendor"] == {"slug": "anthropic"}
     assert created["owner"] == {"username": "credential-owner"}
     # The OAuth credential is labelled from its provider's display name on create
     # (``CredentialManager._oauth_credential_name``).
-    assert created["credential"]["displayName"] == "Anthropic"
+    assert created["credential"]["display_name"] == "Anthropic"
     with system_context(reason="test.integrate.credential_handoff.verify"):
         integration = Integration.objects.get(owner=owner, credential=credential)
         assert integration.vendor.slug == "anthropic"
@@ -617,11 +617,11 @@ def test_connect_integration_reuses_existing_row_with_enum_impl_class(
     )
     mutation = """
         mutation {
-          connectIntegration(vendorSlug: "connect-enum", implClass: "NONE") {
+          connect_integration(vendor_slug: "connect-enum", impl_class: "NONE") {
             attached
             error
             integration {
-              implClass
+              impl_class
               vendor { slug }
             }
           }
@@ -629,12 +629,12 @@ def test_connect_integration_reuses_existing_row_with_enum_impl_class(
     """
 
     for _attempt in range(2):
-        result = _data(_execute(console_schema, mutation, user=conn.owner))["connectIntegration"]
+        result = _data(_execute(console_schema, mutation, user=conn.owner))["connect_integration"]
         assert result == {
             "attached": True,
             "error": None,
             "integration": {
-                "implClass": "NONE",
+                "impl_class": "NONE",
                 "vendor": {"slug": "connect-enum"},
             },
         }
@@ -658,20 +658,20 @@ def test_connect_integration_uses_shared_oauth_client_error_code(
         Vendor.objects.create(slug="missing-oauth", display_name="Missing OAuth")
     mutation = """
         mutation {
-          connectIntegration(vendorSlug: "missing-oauth", implClass: "NONE") {
+          connect_integration(vendor_slug: "missing-oauth", impl_class: "NONE") {
             attached
             error
-            errorCode
+            error_code
           }
         }
     """
 
-    result = _data(_execute(console_schema, mutation, user=owner))["connectIntegration"]
+    result = _data(_execute(console_schema, mutation, user=owner))["connect_integration"]
 
     assert result == {
         "attached": False,
         "error": "Integration has no enabled OAuth client.",
-        "errorCode": "oauth_client_not_connectable",
+        "error_code": "oauth_client_not_connectable",
     }
 
 
@@ -687,7 +687,7 @@ def test_connect_integration_rejects_child_backend_key(integrate_console_tables:
         console_schema,
         """
         mutation {
-          connectIntegration(vendorSlug: "vcs-parent-connect", implClass: "STUB") {
+          connect_integration(vendor_slug: "vcs-parent-connect", impl_class: "STUB") {
             attached
           }
         }
@@ -712,11 +712,11 @@ def test_sync_integration_runs_for_an_admin(
     result = _data(
         _execute(
             console_schema,
-            "mutation($id: ID!){ syncIntegration(id: $id){ ok message } }",
+            "mutation($id: ID!){ sync_integration(id: $id){ ok message } }",
             {"id": _public_id(conn)},
             user=admin,
         )
-    )["syncIntegration"]
+    )["sync_integration"]
     # No bridge rows exist, so the eager sync finds nothing to run and reports success.
     assert result["ok"] is True
     assert "bridge" in result["message"].lower()
@@ -742,11 +742,11 @@ def test_rotate_webhook_secret_changes_the_stored_secret(
     result = _data(
         _execute(
             console_schema,
-            "mutation($id: ID!){ rotateWebhookSecret(id: $id){ ok secret } }",
+            "mutation($id: ID!){ rotate_webhook_secret(id: $id){ ok secret } }",
             {"id": sub_id},
             user=admin,
         )
-    )["rotateWebhookSecret"]
+    )["rotate_webhook_secret"]
     assert result["ok"] is True
     assert result["secret"] and result["secret"] != "original-secret"
     with system_context(reason="test.integrate.rotate.verify"):
@@ -780,11 +780,11 @@ def test_test_webhook_delivery_records_failure_status(
     result = _data(
         _execute(
             console_schema,
-            "mutation($id: ID!){ testWebhookDelivery(id: $id){ ok message } }",
+            "mutation($id: ID!){ test_webhook_delivery(id: $id){ ok message } }",
             {"id": str(subscription.sqid)},
             user=admin,
         )
-    )["testWebhookDelivery"]
+    )["test_webhook_delivery"]
 
     subscription.refresh_from_db()
     assert result == {"ok": False, "message": "Delivery failed: WebhookDeliveryError: service unavailable"}
@@ -862,8 +862,8 @@ def test_create_vcs_bridge_creates_child_row(
             console_schema,
             """
             mutation CreateVcs($vendor: ID!, $owner: ID!) {
-              createVcsBridge(
-                data: {vendor: $vendor, owner: $owner, backendClass: "stub", config: {stub_repos: []}}
+              create_vcs_bridge(
+                data: {vendor: $vendor, owner: $owner, backend_class: "stub", config: {stub_repos: []}}
               ) {
                 backend_class
                 status
@@ -877,7 +877,7 @@ def test_create_vcs_bridge_creates_child_row(
             },
             user=admin,
         )
-    )["createVcsBridge"]
+    )["create_vcs_bridge"]
 
     assert result == {"backend_class": "STUB", "status": "DRAFT", "config": {"stub_repos": []}}
 
@@ -895,7 +895,7 @@ def test_update_vcs_bridge_accepts_backend_class(
             console_schema,
             """
             mutation UpdateVcs($id: ID!) {
-              updateVcsBridge(data: {id: $id, backendClass: "local"}) {
+              update_vcs_bridge(data: {id: $id, backend_class: "local"}) {
                 backend_class
                 config
               }
@@ -904,7 +904,7 @@ def test_update_vcs_bridge_accepts_backend_class(
             {"id": _public_id(bridge.sqid)},
             user=admin,
         )
-    )["updateVcsBridge"]
+    )["update_vcs_bridge"]
 
     assert result == {
         "backend_class": "LOCAL",
@@ -936,7 +936,7 @@ def test_update_vcs_bridge_rejects_unknown_backend_class(
         console_schema,
         """
         mutation UpdateVcs($id: ID!) {
-          updateVcsBridge(data: {id: $id, backendClass: "none"}) {
+          update_vcs_bridge(data: {id: $id, backend_class: "none"}) {
             id
           }
         }
@@ -955,7 +955,7 @@ def test_update_vcs_bridge_rejects_unknown_backend_class(
 def test_update_vcs_bridge_rejects_parent_impl_class(
     integrate_console_tables: None,
 ) -> None:
-    """The VCS patch exposes backendClass, not the parent implClass."""
+    """The VCS patch exposes backend_class, not the parent impl_class."""
 
     console_schema = _schema()
     admin = _platform_admin("vcs-update-parent-impl-admin")
@@ -964,7 +964,7 @@ def test_update_vcs_bridge_rejects_parent_impl_class(
         console_schema,
         """
         mutation UpdateVcs($id: ID!) {
-          updateVcsBridge(data: {id: $id, implClass: "none"}) {
+          update_vcs_bridge(data: {id: $id, impl_class: "none"}) {
             id
           }
         }
@@ -974,7 +974,7 @@ def test_update_vcs_bridge_rejects_parent_impl_class(
     )
 
     assert result.errors is not None
-    assert "implClass" in result.errors[0].message
+    assert "impl_class" in result.errors[0].message
 
 
 @pytest.fixture()

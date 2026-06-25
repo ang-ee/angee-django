@@ -235,7 +235,6 @@ _VAULT_RESOURCE = hasura_resource(
     get_queryset=lambda info: _resource_queryset(Vault, info),
     get_aggregate_queryset=lambda info: _resource_aggregate_queryset(Vault, info),
     write_backend=VaultWriteBackend(Vault),
-    id_decode=public_pk_decoder(Vault),
 )
 _PAGE_RESOURCE = hasura_resource(
     PageType,
@@ -254,7 +253,6 @@ _PAGE_RESOURCE = hasura_resource(
     get_queryset=lambda info: _resource_queryset(Page, info),
     get_aggregate_queryset=lambda info: _resource_aggregate_queryset(Page, info),
     write_backend=PageWriteBackend(Page, public_id_fields={"parent": Page}),
-    id_decode=public_pk_decoder(Page),
 )
 
 

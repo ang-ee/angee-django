@@ -292,7 +292,7 @@ def test_delete_vault_previews_blast_radius(knowledge_tables: None) -> None:
             """
             mutation Preview($id: ID!) {
               delete_vault(id: $id) {
-                totalDeletedCount hasBlockers deleted { label count }
+                total_deleted_count has_blockers deleted { label count }
               }
             }
             """,
@@ -300,8 +300,8 @@ def test_delete_vault_previews_blast_radius(knowledge_tables: None) -> None:
             user=alice,
         )
     )["delete_vault"]
-    assert preview["totalDeletedCount"] >= 2
-    assert preview["hasBlockers"] is False
+    assert preview["total_deleted_count"] >= 2
+    assert preview["has_blockers"] is False
     assert {group["label"] for group in preview["deleted"]} >= {"vaults", "pages"}
     assert Vault.objects.as_user(alice).exists()
 
@@ -310,7 +310,7 @@ def test_delete_vault_previews_blast_radius(knowledge_tables: None) -> None:
             schema,
             """
             mutation Confirm($id: ID!) {
-              delete_vault(id: $id, confirm: true) { totalDeletedCount }
+              delete_vault(id: $id, confirm: true) { total_deleted_count }
             }
             """,
             {"id": vault_id},
@@ -326,7 +326,7 @@ def test_schema_exposes_revisions_and_subscriptions(knowledge_tables: None) -> N
     public_sdl = _schema("public").as_str()
     console_sdl = _schema("console").as_str()
 
-    assert "markdownPageRevisions(" in public_sdl
+    assert "markdownPage_revisions(" in public_sdl
     assert "pageChanged" not in public_sdl
     assert "pageChanged" in console_sdl
     assert "markdownPageChanged" in console_sdl

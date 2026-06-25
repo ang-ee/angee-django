@@ -450,12 +450,12 @@ def test_input_extension_merges_multiple_donors() -> None:
     result = schema.execute_sync(
         """
         mutation {
-          saveInput(data: {name: "base", first: "one", second: "two"})
+          save_input(data: {name: "base", first: "one", second: "two"})
         }
         """
     )
     assert result.errors is None
-    assert result.data == {"saveInput": "base:one:two"}
+    assert result.data == {"save_input": "base:one:two"}
 
 
 def test_input_extension_rejects_field_collision() -> None:
@@ -521,8 +521,8 @@ def test_denial_errors_get_graphql_codes() -> None:
 
     schema = GraphQLSchemas([addon(public={"query": [DenialQuery]})]).build("public")
 
-    missing_actor = schema.execute_sync("{ missingActor }")
-    denied = schema.execute_sync("{ permissionDenied }")
+    missing_actor = schema.execute_sync("{ missing_actor }")
+    denied = schema.execute_sync("{ permission_denied }")
 
     assert missing_actor.errors is not None
     assert denied.errors is not None
@@ -539,8 +539,8 @@ def test_validation_errors_surface_per_field_extensions() -> None:
 
     schema = GraphQLSchemas([addon(public={"query": [ValidationQuery]})]).build("public")
 
-    field_result = schema.execute_sync("{ fieldErrors }")
-    plain_result = schema.execute_sync("{ plainError }")
+    field_result = schema.execute_sync("{ field_errors }")
+    plain_result = schema.execute_sync("{ plain_error }")
 
     assert field_result.errors is not None
     extensions = field_result.errors[0].extensions
@@ -662,13 +662,13 @@ def test_revisions_query_surface_exposes_revision_mixin_versions() -> None:
 
     query_type = schema._schema.query_type
     assert query_type is not None
-    field = query_type.fields["revisionEntryRevisions"]
+    field = query_type.fields["revision_entry_revisions"]
     # Bounded surface: addressed by id, capped by a `first` argument.
     assert set(field.args) == {"id", "first"}
     projection = get_named_type(field.type)
     assert isinstance(projection, GraphQLObjectType)
     # Projects the model's revisioned field plus the revision metadata.
-    assert {"body", "createdAt", "comment"} <= set(projection.fields)
+    assert {"body", "created_at", "comment"} <= set(projection.fields)
 
 
 def test_revisions_rejects_field_gated_revision_fields(

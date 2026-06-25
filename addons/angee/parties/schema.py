@@ -17,7 +17,12 @@ from django.db import transaction
 from rebac import system_context
 from strawberry import auto
 
-from angee.graphql.data import AngeeHasuraWriteBackend, hasura_resource, public_pk_decoder
+from angee.graphql.data import (
+    AngeeHasuraWriteBackend,
+    aggregate_queryset,
+    hasura_resource,
+    public_pk_decoder,
+)
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_display_label, user_public_id
@@ -258,13 +263,6 @@ class PartiesDirectoryMutation:
         return cast(DirectoryType, directory)
 
 
-def _aggregate_queryset(queryset: Any) -> Any:
-    """Return the aggregate-safe variant of one REBAC queryset when available."""
-
-    scoped = getattr(queryset, "scoped_for_aggregate", None)
-    return scoped() if callable(scoped) else queryset
-
-
 _PARTY_RESOURCE = hasura_resource(
     PartyType,
     model=Party,
@@ -275,10 +273,6 @@ _PARTY_RESOURCE = hasura_resource(
     groupable=["created_at"],
     insert=False,
     updatable=["display_name", "notes"],
-    get_queryset=lambda info: Party.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(Party.objects.all()),
-    write_backend=AngeeHasuraWriteBackend(Party),
-    id_decode=public_pk_decoder(Party),
 )
 _PERSON_RESOURCE = hasura_resource(
     PersonType,
@@ -325,10 +319,6 @@ _PERSON_RESOURCE = hasura_resource(
     ],
     delete=False,
     field_id_decode={"folder": public_pk_decoder(Folder)},
-    get_queryset=lambda info: Person.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(Person.objects.all()),
-    write_backend=AngeeHasuraWriteBackend(Person),
-    id_decode=public_pk_decoder(Person),
 )
 _ORGANIZATION_RESOURCE = hasura_resource(
     OrganizationType,
@@ -341,10 +331,6 @@ _ORGANIZATION_RESOURCE = hasura_resource(
     insertable=["display_name", "notes", "legal_name", "domain"],
     updatable=["display_name", "notes", "legal_name", "domain"],
     delete=False,
-    get_queryset=lambda info: Organization.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(Organization.objects.all()),
-    write_backend=AngeeHasuraWriteBackend(Organization),
-    id_decode=public_pk_decoder(Organization),
 )
 _HANDLE_RESOURCE = hasura_resource(
     HandleType,
@@ -367,10 +353,8 @@ _HANDLE_RESOURCE = hasura_resource(
     insertable=["value", "platform", "external_id", "display_name", "label", "is_preferred", "party"],
     updatable=["value", "platform", "display_name", "label", "is_preferred", "party"],
     field_id_decode={"party": public_pk_decoder(Party)},
-    get_queryset=lambda info: Handle.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(Handle.objects.filter(party__isnull=False)),
+    get_aggregate_queryset=lambda info: aggregate_queryset(Handle.objects.filter(party__isnull=False)),
     write_backend=AngeeHasuraWriteBackend(Handle, public_id_fields={"party": Party}),
-    id_decode=public_pk_decoder(Handle),
 )
 _ADDRESS_RESOURCE = hasura_resource(
     AddressType,
@@ -403,10 +387,7 @@ _ADDRESS_RESOURCE = hasura_resource(
         "is_primary",
     ],
     field_id_decode={"party": public_pk_decoder(Party)},
-    get_queryset=lambda info: Address.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(Address.objects.all()),
     write_backend=AngeeHasuraWriteBackend(Address, public_id_fields={"party": Party}),
-    id_decode=public_pk_decoder(Address),
 )
 _AFFILIATION_RESOURCE = hasura_resource(
     AffiliationType,
@@ -436,10 +417,7 @@ _AFFILIATION_RESOURCE = hasura_resource(
         "party": public_pk_decoder(Party),
         "organization": public_pk_decoder(Party),
     },
-    get_queryset=lambda info: Affiliation.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(Affiliation.objects.all()),
     write_backend=AngeeHasuraWriteBackend(Affiliation, public_id_fields={"party": Party, "organization": Party}),
-    id_decode=public_pk_decoder(Affiliation),
 )
 _CONTACT_FOLDER_RESOURCE = hasura_resource(
     ContactFolderType,
@@ -452,10 +430,6 @@ _CONTACT_FOLDER_RESOURCE = hasura_resource(
     update=False,
     delete=False,
     field_id_decode={"directory": public_pk_decoder(Directory)},
-    get_queryset=lambda info: Folder.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(Folder.objects.all()),
-    write_backend=AngeeHasuraWriteBackend(Folder),
-    id_decode=public_pk_decoder(Folder),
 )
 _DIRECTORY_RESOURCE = hasura_resource(
     DirectoryType,
@@ -476,10 +450,6 @@ _DIRECTORY_RESOURCE = hasura_resource(
     insert=False,
     update=False,
     delete=False,
-    get_queryset=lambda info: Directory.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(Directory.objects.all()),
-    write_backend=AngeeHasuraWriteBackend(Directory),
-    id_decode=public_pk_decoder(Directory),
 )
 
 

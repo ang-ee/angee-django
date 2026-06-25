@@ -859,6 +859,126 @@ deleted or rewritten as a thin projection into refine. No compatibility fallback
   codegen still need the snake_case root cutover before the slice is complete.
   Plan-only change; no runtime gate required.
 
+## Backend Data-Layer DRY Pass (2026-06-24)
+
+Evidence: architecture-reviewer mapped 7 reinvention/DRY findings in
+`angee/graphql/data/{metadata,hasura}.py` (Angee re-deriving facts the dataclasses
+or the stack libraries already own). Executing highest-win-first, behavior-preserving
+slices verified by `schema --check` (the `runtime/schemas/*.metadata.json` oracle,
+emitted with `sort_keys=True` so only keys/values must match).
+
+- [x] Finding 5 — metadata dataclasses own their wire shape. Deleted the ~170-line
+  hand-transcribed JSON mirror (`_serialize_data_resource` body +
+  `_serialize_group_bucket_filter`) and the two hand-maintained field-name lists
+  (`_RESOURCE_ROOT_FIELDS`/`_RESOURCE_TYPE_FIELDS`). One recursive `_wire_dataclass`
+  serializer reads `dataclasses.fields()`; irregular wire keys (`group_name→groups`,
+  `from_value→from`, …) and non-wire type handles (`model`/`*_type`) ride
+  `field(metadata={"wire": ...})`; `_merge_roots`/`_merge_type_names` iterate the
+  dataclass field inventory. Net −145 lines in `metadata.py`.
+- [x] Finding 6 — `is_to_one_relation`/`is_to_many_relation` deduped into the shared
+  `angee.graphql.introspection` owner; both private copies in `metadata.py`/`hasura.py`
+  deleted.
+- [x] Finding 7 — node GraphQL prefix read from `resource_type_name(node)` (the node
+  is in hand) instead of `_node_type_name` suffix-scanning `resource.types` for a name
+  ending in `"Aggregate"`. Deleted `_node_type_name`.
+
+Verified: `ruff check` clean on the three files; `schema --check: ok` (metadata.json
+byte-identical); `test_schema_metadata`, `tests/test_parties_graphql.py`,
+`tests/test_storage.py` resource-metadata tests green. Net −154 lines across the
+data layer.
+
+- [x] Finding 4 — `hasura_resource(...)` defaults the four mechanical knobs from
+  `(node, model)`: `get_queryset` → `model.objects.all()`, `get_aggregate_queryset` →
+  `aggregate_queryset(read_queryset(info))` (the `scoped_for_aggregate` probe, now one
+  shared public helper replacing 6 copies), `write_backend` → `AngeeHasuraWriteBackend(model)`,
+  and `id_decode` → `public_pk_decoder(model)` gated on `id_column == "pk"`. Swept the
+  redundant kwargs from every plain call site across 7 addon `schema.py`; custom
+  backends (Folder/IAMUser/IAMGroup/Vault/Page), `public_id_fields=` write backends,
+  REBAC/console `get_queryset`, differing aggregate sources (parties Handle), and the
+  notes `id_column="sqid"` resource stay explicit. Net −125 in the addons.
+  `schema --check: ok` (byte-identical), ruff clean, storage/parties write tests green.
+
+Snake-case cutover — backend test gate (was missed earlier): the full backend suite
+after the sweep exposed 60 pre-existing failures from the checkpoint commit —
+`tests/test_{iam,iam_permission_hub,integrate,agents,knowledge,}graphql.py` still query
+camelCase roots/fields (`grantRole`→`grant_role`, `updateVcsBridge`→`update_vcs_bridge`,
+`missingActor`→`missing_actor`) that `hasura_config()` renamed to snake_case.
+`schema --check` is byte-identical with this pass, proving these are cutover collateral,
+not regressions from the DRY work. The symmetric backend-side fix (error-driven
+snake_case of the test query strings + response-key reads, `$vars`/Python keys left
+alone) landed across all 6 files: **`uv run pytest tests/` is now 552 passed, 0 failed**
+(was 60 failing); `schema --check: ok`, `ruff check` clean, whitespace clean. The
+snake-case cutover is now complete on both sides.
+
+Two cutover observations for the architect (tests match real schema, not forced):
+the revisions root is a HYBRID `markdownPage_revisions` (only the `_revisions` join was
+snake-cased, model prefix stayed camelCase), and subscription fields stayed camelCase
+(`pageChanged`, `userChanged`). `hasura_config()` did not reach those two surfaces —
+likely a cutover gap worth a deliberate decision.
+
+Remaining findings (deferred to the architect — not pure refactors):
+- Finding 2 (read group-key/bucket/range names off `group_by_alias` instead of
+  concatenating): behavior-preserving, BUT `group_by_alias` is NOT in the sibling
+  `strawberry-django-aggregates` public `__all__` — it lives in `compiler.py`. Importing
+  it would breach "cross boundaries only through declared contracts". The right fix is to
+  publish the alias contract from the sibling lib (strengthen the owner), then import —
+  a cross-repo change. Deferred.
+- Findings 1 + 3 (delegate aggregate operators to `default_operators_for`; collapse the
+  two scalar classifiers): these CHANGE the emitted artifact — Angee currently advertises
+  a curated op subset (sum/avg/min/max) and projects Decimal→`Float` into its own
+  frontend scalar vocabulary (`_RESOURCE_FIELD_SCALARS`). Delegating naively expands the
+  advertised ops and emits scalars Angee's own validation rejects. The real fix is
+  unifying the two Angee classifiers (DRY) and intersecting library ops with Angee's
+  curation — a product-surface decision, not a pure refactor.
+
+## Refine Rebuild — Independent Confirmation (2026-06-25)
+
+The ledger's "rebuilt on Refine" claims were self-reported and unverified. An
+independent, code-grounded architecture review (file:line evidence, not docs)
+CONFIRMS the rebuild is genuine for 9 of 10 generic concerns — all wired into one
+`<Refine>` root (`packages/base/src/createApp.tsx:267-280`):
+
+| Concern | Verdict | Evidence |
+|---|---|---|
+| list/table + page/sort/filter | RENTED | `useTable` + TanStack Table server mode, `resource-view-surface.ts:361` |
+| CRUD + cache | RENTED | `useList`/`useCustomMutation`, one react-query cache; `refine/provider.ts` |
+| form | RENTED | `useForm` (RHF), `FormView.tsx:433` |
+| routing | RENTED | TanStack Router + refine routerProvider, `refine/router.tsx:15` |
+| menu / breadcrumb | RENTED | `useMenu`/`useBreadcrumb`, `chrome/refine-menu.ts`, `Breadcrumb.tsx` |
+| auth | RENTED | authProvider + `useCan`, `createApp.tsx:268`, `useBulkDelete.ts:72` |
+| notifications | RENTED | `notificationProvider`, `createApp.tsx:273` |
+| live + invalidation | RENTED | `liveProvider` + `useInvalidate`; `urql` ABSENT from every app package |
+| **i18n** | **MIXED** | i18next wired but bypassed by a parallel translate path (see below) |
+
+The 53k-line `@angee/base` is NOT a reinvented framework: it is 41k non-test, and
+the bulk is legitimate rendering (`ui/` styled Base UI bindings, 9.8k) + domain view
+modes no library owns (Board/Gallery/Tree/Timeline/Graph). Drift scans (`role="grid"`,
+second `QueryClient`, raw `<table>` outside `ui/table.tsx`, data-polling `setInterval`)
+came back clean.
+
+Two genuine, ISOLATED reinventions remain — the real residual DRY debt:
+
+- [ ] **local-rows engine (HIGH)** — `packages/base/src/views/local-rows.ts`
+  hand-rolls a Hasura `_bool_exp` operator evaluator (`matchesLocalLookup:174-217` —
+  exact/inList/isNull/iContains/startsWith/gt/lt/AND/OR/NOT, the constitution's
+  forbidden "inspect-to-decide" smell) plus `localRowsSort` + `.slice()` pagination,
+  duplicating TanStack Table's client row models — which is ALREADY instantiated for
+  these very rows (`resource-view-surface.ts:554`). Serves the no-Hasura-backend
+  `RowsListView` (operator/platform/storage/messaging/parties). Fix: drive sort +
+  pagination through TanStack Table client row models; keep ONE filter-predicate
+  owner shared by server+client (the shared `ResourceViewFilter` codec is a real DRY
+  benefit — fix the owner, don't delete it).
+- [ ] **parallel i18n path (MEDIUM)** — every base component translates via
+  `useNamespaceT → interpolateMessage` (`sdk/runtime.ts:96-124`,
+  `data/i18n.ts:45-62`) which reads a second message store off `AppRuntime.i18n`
+  and spins up a throwaway i18next instance PER CALL; the wired `i18nProvider` /
+  refine `useTranslate` is used nowhere. Fix: route through one shared i18next
+  instance; preserve the deliberate bundle-fallback for provider-less embeds.
+
+Bottom line: the rebuild was genuinely done — not faked. The remaining work is these
+two targeted cleanups, NOT the physical package split (which is cosmetic by
+comparison).
+
 ## Open Owner Decisions
 
 - [ ] Whether Angee URL search remains the canonical user-facing state owner or

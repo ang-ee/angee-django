@@ -40,7 +40,8 @@ from django.core.exceptions import (
     SuspiciousFileOperation,
     ValidationError,
 )
-from django.core.files.base import ContentFile, File as DjangoFile
+from django.core.files.base import ContentFile
+from django.core.files.base import File as DjangoFile
 from django.db import IntegrityError, models, transaction
 from django.db.models import Q
 from django.urls import reverse

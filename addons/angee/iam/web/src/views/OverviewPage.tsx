@@ -220,11 +220,11 @@ export function OverviewPage(): ReactElement {
                   title={titleLabel(namespace.namespace)}
                   meta={
                     namespace.role_count === 1
-                      ? t("iam.overview.namespaces.role_count.one", { count: namespace.role_count.toLocaleString() })
-                      : t("iam.overview.namespaces.role_count.other", { count: namespace.role_count.toLocaleString() })
+                      ? t("iam.overview.namespaces.roleCount.one", { count: namespace.role_count.toLocaleString() })
+                      : t("iam.overview.namespaces.roleCount.other", { count: namespace.role_count.toLocaleString() })
                   }
                   primaryTag={{
-                    label: t("iam.overview.namespaces.grant_count", { count: namespace.grant_count.toLocaleString() }),
+                    label: t("iam.overview.namespaces.grantCount", { count: namespace.grant_count.toLocaleString() }),
                     tone: namespace.grant_count > 0 ? "brand" : "neutral",
                   }}
                 />

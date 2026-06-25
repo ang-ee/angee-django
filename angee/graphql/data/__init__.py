@@ -2,6 +2,7 @@
 
 from angee.graphql.data.hasura import (
     AngeeHasuraWriteBackend,
+    aggregate_queryset,
     attach_hasura_resource_metadata,
     declared_hasura_resource_fields,
     hasura_resource,
@@ -20,6 +21,7 @@ from angee.graphql.data.metadata import (
 
 __all__ = [
     "AngeeHasuraWriteBackend",
+    "aggregate_queryset",
     "DataRelationAxisMetadata",
     "DataResourceFieldMetadata",
     "DataResourceMetadata",

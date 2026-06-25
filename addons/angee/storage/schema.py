@@ -293,7 +293,6 @@ _DRIVE_RESOURCE = hasura_resource(
     get_queryset=lambda info: _resource_queryset(Drive, info),
     get_aggregate_queryset=lambda info: _resource_aggregate_queryset(Drive, info),
     write_backend=AngeeHasuraWriteBackend(Drive, public_id_fields={"backend": Backend}),
-    id_decode=public_pk_decoder(Drive),
 )
 _FOLDER_RESOURCE = hasura_resource(
     FolderType,
@@ -312,7 +311,6 @@ _FOLDER_RESOURCE = hasura_resource(
     get_queryset=lambda info: _resource_queryset(Folder, info),
     get_aggregate_queryset=lambda info: _resource_aggregate_queryset(Folder, info),
     write_backend=FolderWriteBackend(Folder, public_id_fields={"parent": Folder}),
-    id_decode=public_pk_decoder(Folder),
 )
 _FILE_RESOURCE = hasura_resource(
     FileType,
@@ -340,7 +338,6 @@ _FILE_RESOURCE = hasura_resource(
     get_queryset=lambda info: _resource_queryset(File, info),
     get_aggregate_queryset=lambda info: _resource_aggregate_queryset(File, info),
     write_backend=AngeeHasuraWriteBackend(File, public_id_fields={"folder": Folder}),
-    id_decode=public_pk_decoder(File),
 )
 _BACKEND_RESOURCE = hasura_resource(
     BackendType,
@@ -354,8 +351,6 @@ _BACKEND_RESOURCE = hasura_resource(
     updatable=["label", "backend_class", "backend_config", "is_default", "is_archived"],
     get_queryset=lambda info: _resource_queryset(Backend, info),
     get_aggregate_queryset=lambda info: _resource_aggregate_queryset(Backend, info),
-    write_backend=AngeeHasuraWriteBackend(Backend),
-    id_decode=public_pk_decoder(Backend),
 )
 
 

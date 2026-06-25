@@ -237,7 +237,7 @@ function ResourceTypeList({
         id={listboxId}
         className="max-h-[34rem] overflow-auto p-2"
         role="listbox"
-        aria-label={t("iam.schema.resource_typesLabel")}
+        aria-label={t("iam.schema.resourceTypesLabel")}
         onKeyDown={onKeyDown}
       >
         {resources.length > 0 ? (

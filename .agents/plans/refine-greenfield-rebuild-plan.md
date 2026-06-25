@@ -336,12 +336,16 @@ they delete old owners and map directly to the target packages above.
   `@angee/data/src/invalidation.ts` file is deleted.
 - [x] Move stable dependency helpers used by authored custom-operation hooks into
   physical `@angee/refine`; delete `@angee/data/src/stable-deps.ts`.
-- [ ] Finish the schema-wide Hasura snake-case cutover after the backend
-  `hasura_config()` seam: update authored public/console operation documents and
-  result accessors to snake_case roots (`available_connections`, `login_start`,
-  `login_complete`, `connect_account_start`, `connect_account_complete`, and any
-  further codegen failures), regenerate operation/codegen output, and run the
-  frontend gate. No camelCase compatibility aliases.
+- [x] Finish the schema-wide Hasura snake-case cutover after the backend
+  `hasura_config()` seam: authored public/console operation documents and result
+  accessors use snake_case roots (`available_connections`, `login_start`,
+  `login_complete`, `connect_account_start`, `connect_account_complete`); codegen
+  regenerates with no diff; the frontend gate is green. No camelCase aliases.
+  Collateral fix: a blanket `roleCount→role_count`/`modelCount→model_count` rename
+  had leaked into i18n keys (iam `OverviewPage`/`SchemaPage`) and stale platform
+  detail-test mocks (`usePlatformModel` returns `model`, not `resource`); both
+  corrected — wire names are snake_case, i18n keys/row shapes stay their own
+  vocabulary. `schema --check`, codegen, `pnpm typecheck`, and full `pnpm test` green.
 
 ## Governing patterns (the spec — every module obeys these)
 
@@ -632,10 +636,10 @@ Implementation order:
 6. After those owner folds, split metadata dataclass serialization/merge/
    validation responsibilities; do not polish the duplicate mirror first.
 
-- [ ] Finish the schema-wide Hasura snake-case cutover. The backend seam and
-  `pin_snake_wire_names` deletion belong here, but the checkbox is complete only
-  after authored frontend GraphQL documents/callers/codegen use snake_case roots
-  and the schema/codegen/typecheck gates pass.
+- [x] Finish the schema-wide Hasura snake-case cutover. Backend seam
+  (`hasura_config()`) and `pin_snake_wire_names` deletion landed; authored frontend
+  GraphQL documents/callers/codegen use snake_case roots; schema/codegen/typecheck
+  and full frontend test gates pass.
 - [ ] Read generated type roles, group-key/bucket-range/node-prefix/scalar names
   off `HasuraResource` + `strawberry-django-aggregates` owners instead of
   recomputing strings.

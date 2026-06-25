@@ -424,13 +424,6 @@ def _console_credentials(info: strawberry.Info) -> Any:
     return cast(Any, Credential.objects).console_credentials()
 
 
-def _aggregate_queryset(queryset: Any) -> Any:
-    """Return the aggregate-safe variant of one REBAC queryset when available."""
-
-    scoped = getattr(queryset, "scoped_for_aggregate", None)
-    return scoped() if callable(scoped) else queryset
-
-
 _OAUTH_CLIENT_EXTENSION_INSERT_FIELDS = declared_hasura_resource_fields(
     OAuthClient,
     "hasura_insertable_fields",
@@ -510,9 +503,6 @@ _OAUTH_CLIENT_RESOURCE = hasura_resource(
         *_OAUTH_CLIENT_EXTENSION_UPDATE_FIELDS,
     ],
     get_queryset=_console_oauth_clients,
-    get_aggregate_queryset=lambda info: _aggregate_queryset(_console_oauth_clients(info)),
-    write_backend=AngeeHasuraWriteBackend(OAuthClient),
-    id_decode=public_pk_decoder(OAuthClient),
 )
 _EXTERNAL_ACCOUNT_RESOURCE = hasura_resource(
     ExternalAccountType,
@@ -527,9 +517,6 @@ _EXTERNAL_ACCOUNT_RESOURCE = hasura_resource(
     updatable=["email", "display_name", "avatar_url", "status"],
     field_id_decode={"oauth_client": public_pk_decoder(OAuthClient)},
     get_queryset=_console_external_accounts,
-    get_aggregate_queryset=lambda info: _aggregate_queryset(_console_external_accounts(info)),
-    write_backend=AngeeHasuraWriteBackend(ExternalAccount),
-    id_decode=public_pk_decoder(ExternalAccount),
 )
 _CREDENTIAL_RESOURCE = hasura_resource(
     CredentialType,
@@ -556,9 +543,6 @@ _CREDENTIAL_RESOURCE = hasura_resource(
         "external_account": public_pk_decoder(ExternalAccount),
     },
     get_queryset=_console_credentials,
-    get_aggregate_queryset=lambda info: _aggregate_queryset(_console_credentials(info)),
-    write_backend=AngeeHasuraWriteBackend(Credential),
-    id_decode=public_pk_decoder(Credential),
 )
 
 
@@ -1217,10 +1201,6 @@ _VENDOR_RESOURCE = hasura_resource(
     groupable=["created_at"],
     insertable=["display_name", "slug", "website_url", "icon", "description"],
     updatable=["slug", "display_name", "website_url", "icon", "description"],
-    get_queryset=lambda info: Vendor.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(Vendor.objects.all()),
-    write_backend=AngeeHasuraWriteBackend(Vendor),
-    id_decode=public_pk_decoder(Vendor),
 )
 _INTEGRATION_RESOURCE = hasura_resource(
     IntegrationType,
@@ -1238,8 +1218,6 @@ _INTEGRATION_RESOURCE = hasura_resource(
         "credential": public_pk_decoder(Credential),
         "account": public_pk_decoder(ExternalAccount),
     },
-    get_queryset=lambda info: Integration.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(Integration.objects.all()),
     write_backend=AngeeHasuraWriteBackend(
         Integration,
         public_id_fields={
@@ -1249,7 +1227,6 @@ _INTEGRATION_RESOURCE = hasura_resource(
             "account": ExternalAccount,
         },
     ),
-    id_decode=public_pk_decoder(Integration),
 )
 _WEBHOOK_SUBSCRIPTION_RESOURCE = hasura_resource(
     WebhookSubscriptionType,
@@ -1280,8 +1257,6 @@ _WEBHOOK_SUBSCRIPTION_RESOURCE = hasura_resource(
         "owner": public_pk_decoder(User),
         "integration_filter": public_pk_decoder(Integration),
     },
-    get_queryset=lambda info: WebhookSubscription.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(WebhookSubscription.objects.all()),
     write_backend=AngeeHasuraWriteBackend(
         WebhookSubscription,
         public_id_fields={
@@ -1289,7 +1264,6 @@ _WEBHOOK_SUBSCRIPTION_RESOURCE = hasura_resource(
             "integration_filter": Integration,
         },
     ),
-    id_decode=public_pk_decoder(WebhookSubscription),
 )
 
 
@@ -1578,10 +1552,6 @@ _VCS_BRIDGE_RESOURCE = hasura_resource(
     update=False,
     delete=True,
     field_id_decode={"vendor": public_pk_decoder(Vendor)},
-    get_queryset=lambda info: VcsBridge.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(VcsBridge.objects.all()),
-    write_backend=AngeeHasuraWriteBackend(VcsBridge),
-    id_decode=public_pk_decoder(VcsBridge),
 )
 _REPOSITORY_RESOURCE = hasura_resource(
     RepositoryType,
@@ -1595,10 +1565,6 @@ _REPOSITORY_RESOURCE = hasura_resource(
     update=False,
     delete=True,
     field_id_decode={"vcs_bridge": public_pk_decoder(VcsBridge)},
-    get_queryset=lambda info: Repository.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(Repository.objects.all()),
-    write_backend=AngeeHasuraWriteBackend(Repository),
-    id_decode=public_pk_decoder(Repository),
 )
 _SOURCE_RESOURCE = hasura_resource(
     SourceType,
@@ -1611,10 +1577,7 @@ _SOURCE_RESOURCE = hasura_resource(
     insertable=["repository", "kind", "ref", "path"],
     updatable=["kind", "ref", "path"],
     field_id_decode={"repository": public_pk_decoder(Repository)},
-    get_queryset=lambda info: Source.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(Source.objects.all()),
     write_backend=AngeeHasuraWriteBackend(Source, public_id_fields={"repository": Repository}),
-    id_decode=public_pk_decoder(Source),
 )
 _TEMPLATE_RESOURCE = hasura_resource(
     TemplateType,
@@ -1628,10 +1591,6 @@ _TEMPLATE_RESOURCE = hasura_resource(
     update=False,
     delete=False,
     field_id_decode={"source": public_pk_decoder(Source)},
-    get_queryset=lambda info: Template.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(Template.objects.all()),
-    write_backend=AngeeHasuraWriteBackend(Template),
-    id_decode=public_pk_decoder(Template),
 )
 
 

@@ -15,7 +15,7 @@ import strawberry_django
 from django.apps import apps
 from strawberry import auto
 
-from angee.graphql.data import AngeeHasuraWriteBackend, hasura_resource, public_pk_decoder
+from angee.graphql.data import hasura_resource, public_pk_decoder
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.parties.schema import HandleType
@@ -156,13 +156,6 @@ class ReactionType(AngeeNode):
     created_at: auto
 
 
-def _aggregate_queryset(queryset: Any) -> Any:
-    """Return the aggregate-safe variant of one REBAC queryset when available."""
-
-    scoped = getattr(queryset, "scoped_for_aggregate", None)
-    return scoped() if callable(scoped) else queryset
-
-
 _CHANNEL_RESOURCE = hasura_resource(
     ChannelType,
     model=Channel,
@@ -182,10 +175,6 @@ _CHANNEL_RESOURCE = hasura_resource(
     insert=False,
     update=False,
     delete=False,
-    get_queryset=lambda info: Channel.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(Channel.objects.all()),
-    write_backend=AngeeHasuraWriteBackend(Channel),
-    id_decode=public_pk_decoder(Channel),
 )
 _MESSAGE_RESOURCE = hasura_resource(
     MessageType,
@@ -222,10 +211,6 @@ _MESSAGE_RESOURCE = hasura_resource(
         "channel": public_pk_decoder(Integration),
         "sender": public_pk_decoder(Handle),
     },
-    get_queryset=lambda info: Message.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(Message.objects.all()),
-    write_backend=AngeeHasuraWriteBackend(Message),
-    id_decode=public_pk_decoder(Message),
 )
 _THREAD_RESOURCE = hasura_resource(
     ThreadType,
@@ -238,10 +223,6 @@ _THREAD_RESOURCE = hasura_resource(
     insert=False,
     updatable=["subject", "visibility"],
     field_id_decode={"channel": public_pk_decoder(Integration)},
-    get_queryset=lambda info: Thread.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(Thread.objects.all()),
-    write_backend=AngeeHasuraWriteBackend(Thread),
-    id_decode=public_pk_decoder(Thread),
 )
 
 

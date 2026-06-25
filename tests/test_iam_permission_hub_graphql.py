@@ -49,16 +49,16 @@ def test_permission_hub_queries_are_admin_only(
         """
         query {
           grants(pagination: {limit: 10}) {
-            totalCount
-            results { principalId principalType role }
+            total_count
+            results { principal_id principal_type role }
           }
         }
         """,
         """
         query {
-          rebacSchema {
-            resourceType
-            relations { name allowedSubjectTypes }
+          rebac_schema {
+            resource_type
+            relations { name allowed_subject_types }
             permissions { name conditions { name } }
           }
         }
@@ -66,28 +66,28 @@ def test_permission_hub_queries_are_admin_only(
         """
         query {
           relationships(pagination: {limit: 10}) {
-            totalCount
+            total_count
             results {
-              resourceType
-              resourceId
+              resource_type
+              resource_id
               relation
-              subjectType
-              subjectId
-              subjectRelation
-              caveatName
+              subject_type
+              subject_id
+              subject_relation
+              caveat_name
             }
           }
         }
         """,
         """
         query {
-          iamOverview {
-            userCount
-            roleCount
-            grantCount
-            relationshipCount
-            privilegedGrantCount
-            unassignedUserCount
+          iam_overview {
+            user_count
+            role_count
+            grant_count
+            relationship_count
+            privileged_grant_count
+            unassigned_user_count
           }
         }
         """,
@@ -178,7 +178,7 @@ def test_grants_query_labels_principals_by_display_name(
             """
             query {
               grants(pagination: {limit: 50}) {
-                results { principalId principalLabel }
+                results { principal_id principal_label }
               }
             }
             """,
@@ -186,7 +186,7 @@ def test_grants_query_labels_principals_by_display_name(
         )
     )
     labels = {
-        row["principalId"]: row["principalLabel"]
+        row["principal_id"]: row["principal_label"]
         for row in data["grants"]["results"]
     }
     assert labels[str(named.pk)] == "Named Owner"
@@ -224,27 +224,27 @@ def test_iam_overview_aggregates_do_not_depend_on_paginated_rows(
                 aggregate { count }
               }
               grants(pagination: {limit: 1}) {
-                totalCount
+                total_count
                 results { role }
               }
-              iamOverview(peekLimit: 2) {
-                userCount
-                roleCount
-                grantCount
-                relationshipCount
-                privilegedGrantCount
-                unassignedUserCount
+              iam_overview(peek_limit: 2) {
+                user_count
+                role_count
+                grant_count
+                relationship_count
+                privileged_grant_count
+                unassigned_user_count
                 namespaces {
                   namespace
-                  roleCount
-                  grantCount
+                  role_count
+                  grant_count
                 }
-                privilegedGrants {
-                  principalId
-                  principalLabel
+                privileged_grants {
+                  principal_id
+                  principal_label
                   role
                 }
-                unassignedUsers {
+                unassigned_users {
                   username
                 }
               }
@@ -254,24 +254,24 @@ def test_iam_overview_aggregates_do_not_depend_on_paginated_rows(
         )
     )
 
-    overview = data["iamOverview"]
+    overview = data["iam_overview"]
     assert len(data["users"]) == 1
     assert len(data["grants"]["results"]) == 1
     assert data["users_aggregate"]["aggregate"]["count"] == 506
-    assert data["grants"]["totalCount"] == 3
-    assert overview["userCount"] == 506
-    assert overview["roleCount"] == 2
-    assert overview["grantCount"] == 3
-    assert overview["relationshipCount"] == 3
-    assert overview["privilegedGrantCount"] == 2
-    assert overview["unassignedUserCount"] == 503
+    assert data["grants"]["total_count"] == 3
+    assert overview["user_count"] == 506
+    assert overview["role_count"] == 2
+    assert overview["grant_count"] == 3
+    assert overview["relationship_count"] == 3
+    assert overview["privileged_grant_count"] == 2
+    assert overview["unassigned_user_count"] == 503
     assert overview["namespaces"] == [
-        {"namespace": "angee", "roleCount": 2, "grantCount": 3},
+        {"namespace": "angee", "role_count": 2, "grant_count": 3},
     ]
-    assert {row["role"] for row in overview["privilegedGrants"]} == {
+    assert {row["role"] for row in overview["privileged_grants"]} == {
         "angee/role:admin",
     }
-    assert [row["username"] for row in overview["unassignedUsers"]] == [
+    assert [row["username"] for row in overview["unassigned_users"]] == [
         "hub-overview-target-001",
         "hub-overview-target-002",
     ]
@@ -288,12 +288,12 @@ def test_permission_hub_mutations_are_admin_only(
     console_schema = _schema("console")
     grant_mutation = """
         mutation Grant($principalId: String!, $role: String!) {
-          grantRole(principalId: $principalId, role: $role)
+          grant_role(principal_id: $principalId, role: $role)
         }
     """
     revoke_mutation = """
         mutation Revoke($principalId: String!, $role: String!) {
-          revokeRole(principalId: $principalId, role: $role)
+          revoke_role(principal_id: $principalId, role: $role)
         }
     """
     variables = {
@@ -305,13 +305,13 @@ def test_permission_hub_mutations_are_admin_only(
     assert denied_grant.errors is not None
 
     granted = _data(_execute(console_schema, grant_mutation, variables, user=admin))
-    assert granted["grantRole"] is True
+    assert granted["grant_role"] is True
 
     denied_revoke = _execute(console_schema, revoke_mutation, variables, user=plain)
     assert denied_revoke.errors is not None
 
     revoked = _data(_execute(console_schema, revoke_mutation, variables, user=admin))
-    assert revoked["revokeRole"] is True
+    assert revoked["revoke_role"] is True
 
 
 def test_grant_role_then_revoke_role_writes_and_removes_role_tuple(
@@ -332,7 +332,7 @@ def test_grant_role_then_revoke_role_writes_and_removes_role_tuple(
             console_schema,
             """
             mutation Grant($principalId: String!, $role: String!) {
-              grantRole(principalId: $principalId, role: $role)
+              grant_role(principal_id: $principalId, role: $role)
             }
             """,
             variables,
@@ -340,7 +340,7 @@ def test_grant_role_then_revoke_role_writes_and_removes_role_tuple(
         )
     )
 
-    assert granted["grantRole"] is True
+    assert granted["grant_role"] is True
     assert _role_membership_exists(target, variables["role"])
 
     revoked = _data(
@@ -348,7 +348,7 @@ def test_grant_role_then_revoke_role_writes_and_removes_role_tuple(
             console_schema,
             """
             mutation Revoke($principalId: String!, $role: String!) {
-              revokeRole(principalId: $principalId, role: $role)
+              revoke_role(principal_id: $principalId, role: $role)
             }
             """,
             variables,
@@ -356,7 +356,7 @@ def test_grant_role_then_revoke_role_writes_and_removes_role_tuple(
         )
     )
 
-    assert revoked["revokeRole"] is True
+    assert revoked["revoke_role"] is True
     assert not _role_membership_exists(target, variables["role"])
 
 
@@ -382,7 +382,7 @@ def test_grant_role_accepts_user_public_id(
             console_schema,
             """
             mutation Grant($principalId: String!, $role: String!) {
-              grantRole(principalId: $principalId, role: $role)
+              grant_role(principal_id: $principalId, role: $role)
             }
             """,
             variables,
@@ -390,7 +390,7 @@ def test_grant_role_accepts_user_public_id(
         )
     )
 
-    assert granted["grantRole"] is True
+    assert granted["grant_role"] is True
     assert _role_membership_exists(target, variables["role"])
 
     revoked = _data(
@@ -398,7 +398,7 @@ def test_grant_role_accepts_user_public_id(
             console_schema,
             """
             mutation Revoke($principalId: String!, $role: String!) {
-              revokeRole(principalId: $principalId, role: $role)
+              revoke_role(principal_id: $principalId, role: $role)
             }
             """,
             variables,
@@ -406,7 +406,7 @@ def test_grant_role_accepts_user_public_id(
         )
     )
 
-    assert revoked["revokeRole"] is True
+    assert revoked["revoke_role"] is True
     assert not _role_membership_exists(target, variables["role"])
 
 
@@ -426,7 +426,7 @@ def test_grant_role_rejects_encoded_relay_id(
         console_schema,
         """
         mutation Grant($principalId: String!, $role: String!) {
-          grantRole(principalId: $principalId, role: $role)
+          grant_role(principal_id: $principalId, role: $role)
         }
         """,
         {
@@ -455,7 +455,7 @@ def test_revoke_role_returns_false_for_missing_membership(
             console_schema,
             """
             mutation Revoke($principalId: String!, $role: String!) {
-              revokeRole(principalId: $principalId, role: $role)
+              revoke_role(principal_id: $principalId, role: $role)
             }
             """,
             {"principalId": str(target.pk), "role": role},
@@ -463,7 +463,7 @@ def test_revoke_role_returns_false_for_missing_membership(
         )
     )
 
-    assert result["revokeRole"] is False
+    assert result["revoke_role"] is False
     assert not _role_membership_exists(target, role)
 
 

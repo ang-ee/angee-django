@@ -35,6 +35,7 @@ from angee.graphql.data.metadata import (
 )
 from angee.graphql.deletion import delete_by_public_id
 from angee.graphql.ids import require_instance_for_id
+from angee.graphql.introspection import is_to_one_relation
 from angee.graphql.writes import write_queryset
 
 
@@ -144,6 +145,41 @@ def public_pk_decoder(model: type[models.Model]) -> Callable[[Any], Any]:
     return lambda value: _public_pk(model, value)
 
 
+def aggregate_queryset(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
+    """Return the aggregate-safe variant of a REBAC queryset when available.
+
+    A REBAC-scoped queryset exposes ``scoped_for_aggregate`` to drop row-fanout
+    joins before aggregation; a plain queryset has no such method and is returned
+    unchanged. Resources with a custom aggregate source wrap it through here.
+    """
+
+    scoped = getattr(queryset, "scoped_for_aggregate", None)
+    return scoped() if callable(scoped) else queryset
+
+
+def _model_queryset(
+    model: type[models.Model],
+) -> Callable[[strawberry.Info], models.QuerySet[Any]]:
+    """Return the default unscoped read source for a model resource."""
+
+    def get_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
+        del info
+        return model.objects.all()
+
+    return get_queryset
+
+
+def _aggregate_queryset(
+    read_queryset: Callable[[strawberry.Info], models.QuerySet[Any]],
+) -> Callable[[strawberry.Info], models.QuerySet[Any]]:
+    """Return the default aggregate source derived from the read source."""
+
+    def get_aggregate_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
+        return aggregate_queryset(read_queryset(info))
+
+    return get_aggregate_queryset
+
+
 def declared_hasura_resource_fields(
     model: type[models.Model],
     attribute: str,
@@ -219,9 +255,9 @@ def hasura_resource(  # noqa: PLR0913 - mirrors the upstream declarative builder
     update: bool = True,
     delete: bool = True,
     field_id_decode: Mapping[str, Callable[[Any], Any]] | None = None,
-    get_queryset: Callable[[strawberry.Info], models.QuerySet[Any]],
+    get_queryset: Callable[[strawberry.Info], models.QuerySet[Any]] | None = None,
     get_aggregate_queryset: Callable[[strawberry.Info], models.QuerySet[Any]] | None = None,
-    write_backend: WriteBackend,
+    write_backend: WriteBackend | None = None,
     id_decode: Callable[[Any], Any] | None = None,
     id_column: str = "pk",
     model_label: str | None = None,
@@ -230,11 +266,18 @@ def hasura_resource(  # noqa: PLR0913 - mirrors the upstream declarative builder
     """Build a Hasura resource and attach Angee's model-resource metadata.
 
     ``strawberry-django-hasura`` owns the portable Hasura dialect mechanics.
-    This wrapper owns only the Angee seam around that resource: attaching the
-    Phase 1 ``angee.resources`` metadata contribution.
+    This wrapper owns the Angee seam around that resource: attaching the Phase 1
+    ``angee.resources`` metadata contribution, and defaulting the standard glue a
+    public-id model resource shares — base/aggregate querysets, the authorized
+    write backend, and the public-id ``id`` decoder. A caller overrides any knob
+    only where the resource's intent differs (REBAC-scoped reads, a custom write
+    backend, a non-``pk`` identity column).
     """
 
     resource_name = name or model.__name__.lower()
+    read_queryset = get_queryset or _model_queryset(model)
+    if id_decode is None and id_column == "pk":
+        id_decode = public_pk_decoder(model)
     resource = build_hasura_resource(
         node,
         model=model,
@@ -250,9 +293,9 @@ def hasura_resource(  # noqa: PLR0913 - mirrors the upstream declarative builder
         update=update,
         delete=delete,
         field_id_decode=field_id_decode,
-        get_queryset=get_queryset,
-        get_aggregate_queryset=get_aggregate_queryset,
-        write_backend=write_backend,
+        get_queryset=read_queryset,
+        get_aggregate_queryset=get_aggregate_queryset or _aggregate_queryset(read_queryset),
+        write_backend=write_backend or AngeeHasuraWriteBackend(model),
         id_decode=id_decode,
         id_column=id_column,
     )
@@ -291,7 +334,7 @@ def attach_hasura_resource_metadata(
 ) -> HasuraResource:
     """Attach Angee resource metadata to a built Hasura resource bundle."""
 
-    type_names = _ResourceTypes(resource, name)
+    type_names = _ResourceTypes(resource, name, node)
     attach_data_resource_metadata(
         resource.query,
         make_data_resource_metadata(
@@ -381,8 +424,8 @@ def attach_hasura_resource_metadata(
 class _ResourceTypes:
     """Named generated types carried by a ``HasuraResource`` bundle."""
 
-    def __init__(self, resource: HasuraResource, name: str) -> None:
-        node_name = _node_type_name(resource)
+    def __init__(self, resource: HasuraResource, name: str, node: type) -> None:
+        node_name = resource_type_name(node)
         self.aggregate_container_type = self._require(resource, f"{name}_aggregate")
         self.filter_type = self._require(resource, f"{name}_bool_exp")
         self.order_type = self._require(resource, f"{name}_order_by")
@@ -445,7 +488,7 @@ def _hasura_group_dimension(
 ) -> DataGroupDimensionMetadata:
     field = _require_group_field(model, path)
     key = _group_key_path(field, path)
-    is_relation = "__" not in path and _is_to_one_relation(field)
+    is_relation = "__" not in path and is_to_one_relation(field)
     filter_metadata = _hasura_group_bucket_filter(
         field,
         path,
@@ -591,16 +634,6 @@ def _hasura_aggregate_measures(
     return tuple(measures)
 
 
-def _node_type_name(resource: HasuraResource) -> str:
-    """Return the node GraphQL type prefix used by the aggregate builder."""
-
-    for item in resource.types:
-        name = resource_type_name(item)
-        if name and name.endswith("Aggregate") and not name.endswith("_aggregate"):
-            return name[: -len("Aggregate")]
-    raise ImproperlyConfigured("Hasura resource is missing the free aggregate type.")
-
-
 def _require_group_field(
     model: type[models.Model],
     path: str,
@@ -642,7 +675,7 @@ def _group_key_path(
 ) -> str:
     """Return the typed ``<Model>GroupKey`` field for one group axis."""
 
-    if "__" not in path and _is_to_one_relation(field):
+    if "__" not in path and is_to_one_relation(field):
         return f"{path}_id"
     return path.replace(".", "__")
 
@@ -653,13 +686,6 @@ def _measure_ops_for_field(field: models.Field[Any, Any]) -> tuple[str, ...]:
     if isinstance(field, (models.DateField, models.DateTimeField)):
         return ("min", "max")
     return ()
-
-
-def _is_to_one_relation(field: models.Field[Any, Any]) -> bool:
-    return bool(
-        getattr(field, "is_relation", False)
-        and (getattr(field, "many_to_one", False) or getattr(field, "one_to_one", False))
-    )
 
 
 def _scalar_for_field(field: models.Field[Any, Any]) -> str | None:

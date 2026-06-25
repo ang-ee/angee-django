@@ -10,7 +10,7 @@ from django.apps import apps
 from django.db import models
 from strawberry import auto
 
-from angee.graphql.data import AngeeHasuraWriteBackend, hasura_resource
+from angee.graphql.data import hasura_resource
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
@@ -110,7 +110,6 @@ _NOTE_RESOURCE = hasura_resource(
     writable=["title", "body", "status", "tags", "is_starred", "reminder_at"],
     get_queryset=_note_queryset,
     get_aggregate_queryset=_note_aggregate_queryset,
-    write_backend=AngeeHasuraWriteBackend(Note),
     id_column="sqid",
 )
 

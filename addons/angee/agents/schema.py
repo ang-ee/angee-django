@@ -259,13 +259,6 @@ class InferenceProviderPatch:
     config: JSON | None = strawberry.UNSET
 
 
-def _aggregate_queryset(queryset: Any) -> Any:
-    """Return the aggregate-safe variant of one REBAC queryset when available."""
-
-    scoped = getattr(queryset, "scoped_for_aggregate", None)
-    return scoped() if callable(scoped) else queryset
-
-
 _AGENT_RESOURCE = hasura_resource(
     AgentType,
     model=Agent,
@@ -317,8 +310,6 @@ _AGENT_RESOURCE = hasura_resource(
         "service_template": public_pk_decoder(Template),
         "workspace_template": public_pk_decoder(Template),
     },
-    get_queryset=lambda info: Agent.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(Agent.objects.all()),
     write_backend=AngeeHasuraWriteBackend(
         Agent,
         public_id_fields={
@@ -333,7 +324,6 @@ _AGENT_RESOURCE = hasura_resource(
         },
         delete_guard=lambda agent: agent.delete_blocker(),
     ),
-    id_decode=public_pk_decoder(Agent),
 )
 _SKILL_RESOURCE = hasura_resource(
     SkillType,
@@ -347,10 +337,6 @@ _SKILL_RESOURCE = hasura_resource(
     update=False,
     delete=True,
     field_id_decode={"source": public_pk_decoder(Source)},
-    get_queryset=lambda info: Skill.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(Skill.objects.all()),
-    write_backend=AngeeHasuraWriteBackend(Skill),
-    id_decode=public_pk_decoder(Skill),
 )
 _MCP_SERVER_RESOURCE = hasura_resource(
     MCPServerType,
@@ -363,10 +349,7 @@ _MCP_SERVER_RESOURCE = hasura_resource(
     insertable=["name", "description", "placement", "transport", "url", "credential", "config"],
     updatable=["name", "description", "placement", "transport", "url", "credential", "config"],
     field_id_decode={"credential": public_pk_decoder(Credential)},
-    get_queryset=lambda info: MCPServer.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(MCPServer.objects.all()),
     write_backend=AngeeHasuraWriteBackend(MCPServer, public_id_fields={"credential": Credential}),
-    id_decode=public_pk_decoder(MCPServer),
 )
 _MCP_TOOL_RESOURCE = hasura_resource(
     MCPToolType,
@@ -379,10 +362,7 @@ _MCP_TOOL_RESOURCE = hasura_resource(
     insertable=["server", "name", "description", "input_schema", "enabled"],
     updatable=["name", "description", "input_schema", "enabled"],
     field_id_decode={"server": public_pk_decoder(MCPServer)},
-    get_queryset=lambda info: MCPTool.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(MCPTool.objects.all()),
     write_backend=AngeeHasuraWriteBackend(MCPTool, public_id_fields={"server": MCPServer}),
-    id_decode=public_pk_decoder(MCPTool),
 )
 _INFERENCE_PROVIDER_RESOURCE = hasura_resource(
     InferenceProviderType,
@@ -401,10 +381,6 @@ _INFERENCE_PROVIDER_RESOURCE = hasura_resource(
         "credential": public_pk_decoder(Credential),
         "account": public_pk_decoder(ExternalAccount),
     },
-    get_queryset=lambda info: InferenceProvider.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(InferenceProvider.objects.all()),
-    write_backend=AngeeHasuraWriteBackend(InferenceProvider),
-    id_decode=public_pk_decoder(InferenceProvider),
 )
 _INFERENCE_MODEL_RESOURCE = hasura_resource(
     InferenceModelType,
@@ -445,8 +421,6 @@ _INFERENCE_MODEL_RESOURCE = hasura_resource(
         "provider": public_pk_decoder(InferenceProvider),
         "publisher": public_pk_decoder(Vendor),
     },
-    get_queryset=lambda info: InferenceModel.objects.all(),
-    get_aggregate_queryset=lambda info: _aggregate_queryset(InferenceModel.objects.all()),
     write_backend=AngeeHasuraWriteBackend(
         InferenceModel,
         public_id_fields={
@@ -454,7 +428,6 @@ _INFERENCE_MODEL_RESOURCE = hasura_resource(
             "publisher": Vendor,
         },
     ),
-    id_decode=public_pk_decoder(InferenceModel),
 )
 
 
