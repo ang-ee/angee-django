@@ -46,7 +46,14 @@ def session_user(info: strawberry.Info) -> Any:
 
 
 def is_platform_admin(user: Any) -> bool:
-    """Return whether ``user`` reaches IAM's platform-admin role."""
+    """Return whether ``user`` reaches IAM's platform-admin role.
+
+    SECURITY: evaluate this with the REAL request actor, never inside a
+    ``system_context``/sudo block. For a ``RebacManager`` user model the check is
+    ``User.objects.filter(pk=...).exists()``, and sudo bypasses the REBAC
+    ``auth/user`` read scoping — so under sudo this returns True for ANY
+    authenticated user. Gate first (outside sudo), then sudo only the data read.
+    """
 
     if not is_authenticated(user):
         return False
