@@ -3,7 +3,9 @@ import {
   Group as ResizableGroup,
   Panel as ResizablePanel,
   Separator as ResizableSeparator,
+  useDefaultLayout,
   type GroupProps as ResizableGroupProps,
+  type LayoutStorage,
   type Orientation as ResizableOrientation,
   type PanelProps as ResizablePanelProps,
   type SeparatorProps as ResizableSeparatorProps,
@@ -46,23 +48,86 @@ export type SplitPanesProps = Omit<
   SplitPanesRecipeProps & {
     className?: string;
     direction?: ResizableOrientation;
+    /**
+     * Persistence id for the pane layout. When set — and a browser `Storage`
+     * is reachable — the layout for this id is read on mount (`defaultLayout`)
+     * and saved after each resize (`onLayoutChanged`), so the panes reopen at
+     * their last sizes. With no id stored, or no id at all, the panes fall back
+     * to each `SplitPane`'s `defaultSize`.
+     */
+    autoSave?: string;
   };
+
+// react-resizable-panels persists through a `Storage` (localStorage by
+// default), which throws when referenced in SSR / non-browser or when access is
+// denied (privacy mode). Mirror the `themeStorage`/`favoriteStorage` guard so
+// persistence is simply skipped when no browser storage is reachable.
+function layoutStorage(): Storage | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// A `Group` that reads/writes its layout through the library's own persistence
+// owner. Split out so the `useDefaultLayout` hook (which touches `Storage`)
+// runs unconditionally and only when persistence is actually wired.
+function PersistentGroup({
+  storageId,
+  storage,
+  ...groupProps
+}: {
+  storageId: string;
+  storage: LayoutStorage;
+} & Omit<
+  ResizableGroupProps,
+  "defaultLayout" | "onLayoutChange" | "onLayoutChanged"
+>): React.ReactElement {
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
+    id: storageId,
+    storage,
+  });
+  return (
+    <ResizableGroup
+      defaultLayout={defaultLayout}
+      onLayoutChanged={onLayoutChanged}
+      {...groupProps}
+    />
+  );
+}
 
 export const SplitPanes = React.forwardRef<HTMLDivElement, SplitPanesProps>(
   function SplitPanes(
-    { className, direction = "horizontal", ...props },
+    { autoSave, className, direction = "horizontal", ...props },
     ref,
   ) {
     const styles = splitPanesVariants({ direction });
+    const storage = layoutStorage();
 
     return (
       <SplitPanesDirectionContext.Provider value={direction}>
-        <ResizableGroup
-          elementRef={ref}
-          orientation={direction}
-          className={styles.group({ className })}
-          {...props}
-        />
+        {autoSave != null && storage != null ? (
+          <PersistentGroup
+            // Remount per id so a different mode's stored layout (and each
+            // SplitPane's defaultSize) re-applies — both are mount-only.
+            key={autoSave}
+            storageId={autoSave}
+            storage={storage}
+            elementRef={ref}
+            orientation={direction}
+            className={styles.group({ className })}
+            {...props}
+          />
+        ) : (
+          <ResizableGroup
+            elementRef={ref}
+            orientation={direction}
+            className={styles.group({ className })}
+            {...props}
+          />
+        )}
       </SplitPanesDirectionContext.Provider>
     );
   },

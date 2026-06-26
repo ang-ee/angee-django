@@ -3,6 +3,7 @@ import {
   useBreadcrumb as useRefineBreadcrumb,
   type BreadcrumbsType,
 } from "@refinedev/core";
+import * as React from "react";
 import type { ReactElement } from "react";
 
 import { useBaseT } from "../i18n";
@@ -17,10 +18,45 @@ export interface BreadcrumbProps {
   className?: string;
 }
 
+const BreadcrumbLeafLabelContext = React.createContext<string | null>(null);
+const BreadcrumbLeafLabelSetterContext = React.createContext<
+  ((label: string | null) => void) | null
+>(null);
+
+export function BreadcrumbLabelProvider({
+  children,
+}: {
+  children: React.ReactNode;
+}): ReactElement {
+  const [leafLabel, setLeafLabel] = React.useState<string | null>(null);
+  return (
+    <BreadcrumbLeafLabelSetterContext.Provider value={setLeafLabel}>
+      <BreadcrumbLeafLabelContext.Provider value={leafLabel}>
+        {children}
+      </BreadcrumbLeafLabelContext.Provider>
+    </BreadcrumbLeafLabelSetterContext.Provider>
+  );
+}
+
+/** Let a route page replace the generic current crumb with its record label. */
+export function useBreadcrumbLeafLabel(label: string | null | undefined): void {
+  const setLeafLabel = React.useContext(BreadcrumbLeafLabelSetterContext);
+  React.useEffect(() => {
+    if (!setLeafLabel) return;
+    const next = label?.trim() ? label : null;
+    setLeafLabel(next);
+    return () => setLeafLabel(null);
+  }, [label, setLeafLabel]);
+}
+
 export function Breadcrumb({
   className,
 }: BreadcrumbProps): ReactElement {
-  const items = breadcrumbItemsFromRefine(useRefineBreadcrumb().breadcrumbs);
+  const leafLabel = React.useContext(BreadcrumbLeafLabelContext);
+  const items = breadcrumbItemsFromRefine(
+    useRefineBreadcrumb().breadcrumbs,
+    leafLabel,
+  );
   return <BreadcrumbTrail className={className} items={items} />;
 }
 
@@ -78,9 +114,11 @@ function itemKey(label: BreadcrumbItem["label"]): string {
 
 function breadcrumbItemsFromRefine(
   breadcrumbs: readonly BreadcrumbsType[],
+  leafLabel?: string | null,
 ): readonly BreadcrumbItem[] {
   return breadcrumbs.map((item) => ({
-    label: item.label,
+    label:
+      leafLabel && item === breadcrumbs.at(-1) ? leafLabel : item.label,
     ...(item.href ? { to: item.href } : {}),
   }));
 }

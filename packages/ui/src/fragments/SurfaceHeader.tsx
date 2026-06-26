@@ -11,9 +11,27 @@ export const surfaceHeaderVariants = tv({
     titleRow: "flex min-w-0 flex-wrap items-center gap-2",
     icon:
       "grid size-8 shrink-0 place-content-center rounded-md bg-brand-soft text-brand-soft-text [&_.glyph]:size-4 [&>svg]:size-4",
-    title: "min-w-0 truncate text-22 font-semibold leading-tight text-fg",
-    subtitle: "mt-1 max-w-prose text-13 leading-relaxed text-fg-muted",
+    title: "min-w-0 truncate font-semibold leading-tight text-fg",
+    subtitle: "text-fg-muted",
     actions: "flex shrink-0 flex-wrap items-center justify-end gap-2",
+  },
+  // Typography tracks `density` (which also drives PageHeader's padding/chrome),
+  // so `density="compact"` is one coherent "compact pane header" switch: page
+  // titling at `comfortable` (the default), pane-sized titling at `compact`.
+  variants: {
+    density: {
+      comfortable: {
+        title: "text-22",
+        subtitle: "mt-1 max-w-prose text-13 leading-relaxed",
+      },
+      compact: {
+        title: "text-15",
+        subtitle: "truncate text-13",
+      },
+    },
+  },
+  defaultVariants: {
+    density: "comfortable",
   },
 });
 
@@ -49,7 +67,7 @@ export const SurfaceHeader = React.forwardRef<HTMLElement, SurfaceHeaderProps>(
     },
     ref,
   ) {
-    const styles = surfaceHeaderVariants();
+    const styles = surfaceHeaderVariants({ density });
     const Heading = `h${headingLevel}` as SurfaceHeaderHeadingTag;
     const headerActions = actions ?? children;
 

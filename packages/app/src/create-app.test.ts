@@ -396,6 +396,50 @@ describe("createApp route menu refs", () => {
     }
   });
 
+  test("projects menu route record children into refine breadcrumbs", async () => {
+    const captured = await captureChrome({
+      path: "/files/file-1",
+      addons: [
+        {
+          id: "files",
+          routes: [
+            {
+              name: "files.home",
+              path: "/files",
+              layout: "console",
+              component: EmptyPage,
+            },
+            {
+              name: "files.record",
+              path: "/files/$id",
+              layout: "console",
+              parent: "files.home",
+            },
+          ],
+          menus: [
+            {
+              id: "files",
+              label: "Files",
+              route: "files.home",
+              icon: "files",
+            },
+          ],
+        },
+      ],
+    });
+
+    try {
+      expect(chromeSnapshot(captured.props())).toEqual({
+        breadcrumbs: [
+          { label: "Files", to: "/files" },
+          { label: "Show" },
+        ],
+      });
+    } finally {
+      captured.cleanup();
+    }
+  });
+
   test("collapses route-less menu groups that duplicate their leaf crumb", async () => {
     const menus: readonly ChromeMenuItem[] = [
       {

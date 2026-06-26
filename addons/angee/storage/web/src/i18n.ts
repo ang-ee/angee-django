@@ -14,8 +14,6 @@ export const enStorageMessages: Record<string, string> = {
   "storage.drives.emptyDescription": "No storage drives are available to you.",
   "storage.file.notFoundTitle": "File not found",
   "storage.file.notFoundDescription": "This file is no longer available.",
-  "storage.preview.emptyTitle": "Select a file",
-  "storage.preview.emptyDescription": "Choose a file from the list to preview it.",
   "storage.preview.unsupported": "No inline preview for this file type.",
   // Rich renderer (PDF / media / HEIC) loading and error surfaces.
   "storage.preview.loading": "Loading preview",
@@ -74,7 +72,11 @@ export const enStorageMessages: Record<string, string> = {
   "storage.file.download": "Download",
   "storage.file.restore": "Restore",
   "storage.file.trash": "Trash",
-  "storage.file.crumbFallback": "File",
+  "storage.file.detailsTab": "Details",
+  "storage.file.unknownType": "Unknown type",
+  // File preview pane header subtitle: mime label · formatted size (formatSize
+  // already carries the unit, e.g. "1.4 MB").
+  "storage.file.subtitle": "{type} · {size}",
 
   // File detail record form — section + field labels.
   "storage.file.details": "Details",

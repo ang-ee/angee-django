@@ -381,6 +381,8 @@ function refineRouteResourceProjection(
   const resourcesByIdentifier = new Map<string, ResourceProps>();
   const metadataByResource: Record<string, RefineResourceMetadata> = {};
   const appRootIds = new Set(menuTree.roots.map((item) => item.id));
+  const routesByName = new Map(routes.map((route) => [route.name, route]));
+  const childrenByParentName = childRoutesByParentName(routes);
 
   for (const node of menuTree.byId.values()) {
     const menuTrail = menuTree.trailFor(node.id);
@@ -390,6 +392,7 @@ function refineRouteResourceProjection(
         item,
         menuTrail[index - 1],
         appRootIds.has(item.id),
+        menuRouteShowPath(item, routesByName, childrenByParentName),
       );
     });
   }
@@ -420,6 +423,7 @@ function addMenuRouteResource(
   item: ChromeMenuNode,
   parent: ChromeMenuNode | undefined,
   appRoot: boolean,
+  showPath: string | undefined,
 ): void {
   const target = item.target;
   if (!target || target === "#") return;
@@ -438,6 +442,7 @@ function addMenuRouteResource(
     name: identifier,
     identifier,
     list: refineRoutePathForTanStack(target),
+    ...(showPath ? { show: refineRoutePathForTanStack(showPath) } : {}),
     meta: {
       label: item.displayLabel,
       icon: item.iconName,
@@ -475,6 +480,51 @@ function menuNodeForRouteResource(
   }
   const refs = menuTree.itemsForRoute(route.name);
   return refs.length === 1 ? refs[0] : undefined;
+}
+
+function childRoutesByParentName(
+  routes: readonly BaseAddonRoute[],
+): ReadonlyMap<string, readonly BaseAddonRoute[]> {
+  const children = new Map<string, BaseAddonRoute[]>();
+  for (const route of routes) {
+    if (!route.parent) continue;
+    children.set(route.parent, [...(children.get(route.parent) ?? []), route]);
+  }
+  return children;
+}
+
+function menuRouteShowPath(
+  item: ChromeMenuNode,
+  routesByName: ReadonlyMap<string, BaseAddonRoute>,
+  childrenByParentName: ReadonlyMap<string, readonly BaseAddonRoute[]>,
+): string | undefined {
+  const route = item.route ? routesByName.get(item.route) : undefined;
+  if (!route) return undefined;
+  const child = childrenByParentName
+    .get(route.name)
+    ?.find((candidate) => routeChildHasTrailingParam(candidate, route));
+  return child ? fullRoutePath(child, route) : undefined;
+}
+
+function routeChildHasTrailingParam(
+  route: BaseAddonRoute,
+  parent: BaseAddonRoute,
+): boolean {
+  const path = routePathUnderParent(route, parent);
+  const segment = normalizeRoutePath(path).split("/").at(-1);
+  return Boolean(segment?.startsWith("$"));
+}
+
+function fullRoutePath(
+  route: BaseAddonRoute,
+  parent: BaseAddonRoute | undefined,
+): string {
+  if (!parent) return normalizeRoutePath(route.path);
+  const childPath = routePathUnderParent(route, parent);
+  const parentPath = normalizeRoutePath(parent.path);
+  if (!childPath) return parentPath;
+  if (parentPath === "/") return normalizeRoutePath(`/${childPath}`);
+  return normalizeRoutePath(`${parentPath}/${childPath}`);
 }
 
 function menuRouteResourceIdentifier(menuId: string): string {

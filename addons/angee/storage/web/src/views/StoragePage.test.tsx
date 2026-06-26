@@ -1,6 +1,11 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const routerMocks = vi.hoisted(() => ({
@@ -10,6 +15,7 @@ const routerMocks = vi.hoisted(() => ({
 
 const sdkMocks = vi.hoisted(() => ({
   useAuthoredQuery: vi.fn(),
+  useBreadcrumbLeafLabel: vi.fn(),
   refetch: {
     backends: vi.fn(async () => undefined),
     drives: vi.fn(async () => undefined),
@@ -104,6 +110,24 @@ vi.mock("@angee/ui", async (importOriginal) => {
     SelectionBarAction: ({ children }: { children: React.ReactNode }) => (
       <button type="button">{children}</button>
     ),
+    Tabs: Object.assign(
+      ({
+        children,
+      }: {
+        children: React.ReactNode;
+      }) => <div data-testid="tabs">{children}</div>,
+      {
+        List: ({ children }: { children: React.ReactNode }) => (
+          <div data-testid="tabs-list">{children}</div>
+        ),
+        Tab: ({ children }: { children: React.ReactNode }) => (
+          <button type="button">{children}</button>
+        ),
+        Panel: ({ children }: { children: React.ReactNode }) => (
+          <section data-testid="tabs-panel">{children}</section>
+        ),
+      },
+    ),
     TreeView: ({
       rows,
       rowKey,
@@ -134,6 +158,7 @@ vi.mock("@angee/ui", async (importOriginal) => {
         ))}
       </div>
     ),
+    useBreadcrumbLeafLabel: sdkMocks.useBreadcrumbLeafLabel,
     useConfirm: () => async () => true,
   };
 });
@@ -186,8 +211,37 @@ vi.mock("./FileBrowserContent", () => ({
 }));
 
 vi.mock("./FileDetail", () => ({
-  FileDetail: ({ file }: { file: { id: string } }) => (
-    <section data-testid="file-detail" data-file-id={file.id} />
+  FileDetail: ({
+    file,
+    navigation,
+  }: {
+    file: { id: string };
+    navigation?: {
+      current?: number;
+      total: number;
+      onPrev?: () => void;
+      onNext?: () => void;
+    } | null;
+  }) => (
+    <section
+      data-testid="file-detail"
+      data-file-id={file.id}
+      data-current={navigation?.current ?? ""}
+      data-total={navigation?.total ?? ""}
+    >
+      <button
+        type="button"
+        data-testid="prev-file"
+        disabled={!navigation?.onPrev}
+        onClick={navigation?.onPrev}
+      />
+      <button
+        type="button"
+        data-testid="next-file"
+        disabled={!navigation?.onNext}
+        onClick={navigation?.onNext}
+      />
+    </section>
   ),
 }));
 
@@ -215,6 +269,7 @@ beforeEach(() => {
   storageData = makeStorageData();
   routerMocks.params = {};
   routerMocks.navigate.mockClear();
+  sdkMocks.useBreadcrumbLeafLabel.mockClear();
   for (const refetch of Object.values(sdkMocks.refetch)) {
     refetch.mockClear();
   }
@@ -246,15 +301,90 @@ describe("StoragePage explorer wiring", () => {
     render(<StoragePage />);
 
     expect(rootPickerValue()).toBe("drive-b");
-    expect(treeAttribute("data-row-ids")).toBe("__all__,__trash__,folder-b");
+    expect(treeAttribute("data-row-ids")).toBe(
+      "__all__,__trash__,folder-b,file-b",
+    );
+    expect(treeAttribute("data-selected")).toBe("file-b");
     expect(screen.getByTestId("file-detail").getAttribute("data-file-id")).toBe(
       "file-b",
     );
     expect(screen.getByTestId("preview-pane").textContent).toBe("beta.txt");
+    expect(sdkMocks.useBreadcrumbLeafLabel).toHaveBeenLastCalledWith("beta.txt");
+    expect(screen.queryByRole("button", { name: "Back to files" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open folder" })).toBeNull();
+  });
+
+  test("detail navigation follows the active file scope", () => {
+    routerMocks.params = { id: "file-a" };
+
+    render(<StoragePage />);
+
+    expect(screen.getByTestId("file-detail").getAttribute("data-current")).toBe(
+      "1",
+    );
+    expect(screen.getByTestId("file-detail").getAttribute("data-total")).toBe(
+      "2",
+    );
+
+    fireEvent.click(screen.getByTestId("next-file"));
+
+    expect(routerMocks.navigate).toHaveBeenLastCalledWith({
+      to: "/storage/file-a-folder",
+    });
+  });
+
+  test("detail navigation steps back and stops at the last file", () => {
+    routerMocks.params = { id: "file-a-folder" };
+
+    render(<StoragePage />);
+
+    const detail = screen.getByTestId("file-detail");
+    expect(detail.getAttribute("data-current")).toBe("2");
+    expect(detail.getAttribute("data-total")).toBe("2");
+    // The last file in the scope has no next step.
+    expect((screen.getByTestId("next-file") as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+
+    fireEvent.click(screen.getByTestId("prev-file"));
+
+    expect(routerMocks.navigate).toHaveBeenLastCalledWith({
+      to: "/storage/file-a",
+    });
+  });
+
+  test("detail navigation degrades when the open file is out of scope", () => {
+    // A trashed file isn't in the default (All files) scope, so it has no
+    // position in the pager — only the scope total, with paging disabled.
+    storageData = {
+      ...storageData,
+      files: [
+        ...storageData.files,
+        {
+          ...file("file-b-trashed", "old.txt", "drive-b", null, "2025-01-04T00:00:00Z"),
+          is_trashed: true,
+        },
+      ],
+    };
+    routerMocks.params = { id: "file-b-trashed" };
+
+    render(<StoragePage />);
+
+    const detail = screen.getByTestId("file-detail");
+    expect(detail.getAttribute("data-current")).toBe("");
+    expect(detail.getAttribute("data-total")).toBe("1");
+    expect((screen.getByTestId("prev-file") as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect((screen.getByTestId("next-file") as HTMLButtonElement).disabled).toBe(
+      true,
+    );
   });
 
   test("switching drives resets the folder scope and closes the detail route", () => {
     render(<StoragePage />);
+
+    expect(screen.queryByTestId("preview-pane")).toBeNull();
 
     fireEvent.click(screen.getByTestId("tree-row-folder-a"));
 
