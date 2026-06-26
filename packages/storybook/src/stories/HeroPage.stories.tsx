@@ -6,7 +6,7 @@ import {
   FormGrid,
   HeroPage,
   Input,
-} from "@angee/base";
+} from "@angee/ui";
 
 const meta = {
   title: "Layouts/HeroPage",

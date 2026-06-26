@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { MiniCard, Tag } from "@angee/base";
+import { MiniCard, Tag } from "@angee/ui";
 
 const meta = {
   title: "Fragments/MiniCard",

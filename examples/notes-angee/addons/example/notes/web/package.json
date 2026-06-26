@@ -11,9 +11,8 @@
   },
   "dependencies": {
     "@angee/agents": "workspace:*",
-    "@angee/base": "workspace:*",
-    "@angee/data": "workspace:*",
-    "@angee/sdk": "workspace:*",
+    "@angee/app": "workspace:*",
+    "@angee/ui": "workspace:*",
     "date-fns": "^4.1.0",
     "lucide-react": "^1.17.0"
   },

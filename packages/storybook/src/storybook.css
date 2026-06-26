@@ -1,5 +1,5 @@
 @import "tailwindcss";
-@import "@angee/base/styles.css";
+@import "@angee/ui/styles.css";
 
 @source "../../base/src/**/*.{ts,tsx}";
 @source "../.storybook/**/*.{ts,tsx,mjs,js}";

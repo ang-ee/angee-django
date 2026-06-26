@@ -2,7 +2,7 @@ import {
   OAuthCallback,
   type CallbackExchange,
   type OAuthCallbackCopy,
-} from "@angee/app";
+} from "@angee/app/auth";
 import { useAuthoredMutation } from "@angee/ui";
 import { useCallback, useMemo, type ReactNode } from "react";
 

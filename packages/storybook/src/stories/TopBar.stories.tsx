@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { ChatterProvider, TopBar } from "@angee/base";
+import { ChatterProvider, TopBar } from "@angee/ui";
 
 import { chromeMenuItems } from "./chrome-fixtures";
 

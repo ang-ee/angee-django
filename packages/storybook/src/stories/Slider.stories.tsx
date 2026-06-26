@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Slider } from "@angee/base";
+import { Slider } from "@angee/ui";
 
 const meta = {
   title: "Primitives/Slider",

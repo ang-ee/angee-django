@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Kbd } from "@angee/base";
+import { Kbd } from "@angee/ui";
 
 const meta = {
   title: "Primitives/Kbd",

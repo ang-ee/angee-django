@@ -12,13 +12,13 @@ import {
   Statusline,
   StatusSegment,
   StatuslineSpacer,
+  useResourceRevisions,
   type ChatterTab,
   type ResourceViewDefaultGroups,
   type RecordSmartButtonDescriptor,
   useChatterContent,
-} from "@angee/base";
+} from "@angee/ui";
 import { AgentChatterPane } from "@angee/agents";
-import { useResourceRevisions } from "@angee/data";
 import { useParams } from "@tanstack/react-router";
 
 const MODEL = "notes.Note";

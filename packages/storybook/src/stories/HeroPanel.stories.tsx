@@ -5,7 +5,7 @@ import {
   Glyph,
   HeroPanel,
   MetricStrip,
-} from "@angee/base";
+} from "@angee/ui";
 
 const meta = {
   title: "Fragments/HeroPanel",

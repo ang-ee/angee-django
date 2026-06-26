@@ -11,10 +11,10 @@ import { Refine,
 import {
   AppRuntimeProvider,
   type AppRuntime,
-  } from "@angee/sdk";
+  } from "@angee/ui";
 import {
   AuthProvider,
-} from "@angee/data";
+} from "@angee/refine";
 import {
   ActiveGraphQLSchemaProvider,
 } from "@angee/resources";
@@ -23,7 +23,7 @@ import {
   tanStackRouterProvider,
   type AngeeHasuraSchemaConfig,
 } from "@angee/refine";
-import { ToastProvider, baseIcons } from "@angee/base";
+import { ToastProvider, baseIcons } from "@angee/ui";
 import {
   Outlet,
   RouterProvider,

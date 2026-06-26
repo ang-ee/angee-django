@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Collapsible } from "@angee/base";
+import { Collapsible } from "@angee/ui";
 
 const meta = {
   title: "Primitives/Collapsible",

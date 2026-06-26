@@ -5,7 +5,7 @@ import {
   Button,
   Glyph,
   MarketingHero,
-} from "@angee/base";
+} from "@angee/ui";
 
 const meta = {
   title: "Fragments/MarketingHero",

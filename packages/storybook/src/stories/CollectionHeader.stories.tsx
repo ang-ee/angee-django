@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Button, CollectionHeader, Glyph } from "@angee/base";
+import { Button, CollectionHeader, Glyph } from "@angee/ui";
 
 const meta = {
   title: "Fragments/CollectionHeader",

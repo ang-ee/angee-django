@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { TextLink } from "@angee/base";
+import { TextLink } from "@angee/ui";
 
 const meta = {
   title: "Primitives/TextLink",

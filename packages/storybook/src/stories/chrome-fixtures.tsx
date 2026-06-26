@@ -3,7 +3,7 @@ import type {
   ChromeMenuItem,
   SpotlightCommand,
   TopMenuTab,
-} from "@angee/base";
+} from "@angee/ui";
 
 export const chromeMenuItems: readonly ChromeMenuItem[] = [
   {

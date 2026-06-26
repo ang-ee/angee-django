@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { ListView, type ListColumn } from "@angee/base";
+import { ListView, type ListColumn } from "@angee/ui";
 
 import { RuntimeFixture, jsonResponse, storySchema } from "./runtime-fixtures";
 

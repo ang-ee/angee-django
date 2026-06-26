@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { Button } from "@angee/base";
+import { Button } from "@angee/ui";
 
 /** The seeded demo logins available on the example backend. */
 const DEMO_LOGINS = [

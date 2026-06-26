@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { AppRuntimeProvider } from "@angee/sdk";
-import { baseIcons, defaultWidgets, type Tone, type WidgetField } from "@angee/base";
+import { AppRuntimeProvider } from "@angee/ui";
+import { baseIcons, defaultWidgets, type Tone, type WidgetField } from "@angee/ui";
 
 // The run-state axis the colorDot widget was built for: stopped/running/error/warning
 // → grey/green/red/amber, resolved from the shared STATUS_TONES vocabulary by value

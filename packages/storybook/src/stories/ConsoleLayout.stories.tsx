@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { ConsoleLayout } from "@angee/base";
+import { ConsoleLayout } from "@angee/ui";
 
 import { LayoutStoryBody } from "./chrome-fixtures";
 

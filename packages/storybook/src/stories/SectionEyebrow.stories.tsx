@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { SectionEyebrow } from "@angee/base";
+import { SectionEyebrow } from "@angee/ui";
 
 const meta = {
   title: "Primitives/SectionEyebrow",

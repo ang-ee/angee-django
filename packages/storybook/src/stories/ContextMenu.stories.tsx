@@ -1,6 +1,6 @@
 import * as React from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { ContextMenu, Glyph } from "@angee/base";
+import { ContextMenu, Glyph } from "@angee/ui";
 
 const meta = {
   title: "Primitives/ContextMenu",

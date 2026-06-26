@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { DirtyPill } from "@angee/base";
+import { DirtyPill } from "@angee/ui";
 
 const meta = {
   title: "Fragments/DirtyPill",

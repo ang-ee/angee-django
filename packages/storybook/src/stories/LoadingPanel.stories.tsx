@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { LoadingPanel } from "@angee/base";
+import { LoadingPanel } from "@angee/ui";
 
 const meta = {
   title: "Fragments/LoadingPanel",

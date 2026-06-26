@@ -1,6 +1,6 @@
 import * as React from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Command, Glyph, Kbd } from "@angee/base";
+import { Command, Glyph, Kbd } from "@angee/ui";
 
 const meta = {
   title: "Primitives/Command",

@@ -7,7 +7,7 @@ import {
   FormGrid,
   Input,
   Textarea,
-} from "@angee/base";
+} from "@angee/ui";
 
 const meta = {
   title: "Forms/FormLayout",

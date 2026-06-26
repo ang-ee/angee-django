@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { UserMenu } from "@angee/base";
+import { UserMenu } from "@angee/ui";
 
 const meta = {
   title: "Chrome/UserMenu",

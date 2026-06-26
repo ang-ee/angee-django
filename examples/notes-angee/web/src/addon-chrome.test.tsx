@@ -1,12 +1,12 @@
 // @vitest-environment happy-dom
 
-import type { BaseAddon, CreateAppInput } from "@angee/base";
+import type { BaseAddon, CreateAppInput } from "@angee/app";
 import {
   captureChrome,
   chromeSnapshotForRoute,
   testGraphQLFetch,
   type ChromeSnapshot,
-} from "@angee/base/testing";
+} from "@angee/app/testing";
 import { within } from "@testing-library/react";
 import notes from "@angee-example/notes-web";
 import iam from "@angee/iam";

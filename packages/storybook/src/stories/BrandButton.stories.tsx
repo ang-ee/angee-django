@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { BrandButton, BrandButtonGroup, Glyph } from "@angee/base";
+import { BrandButton, BrandButtonGroup, Glyph } from "@angee/ui";
 
 const meta = {
   title: "Fragments/BrandButton",

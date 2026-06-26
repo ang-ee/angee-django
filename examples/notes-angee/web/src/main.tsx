@@ -1,8 +1,5 @@
-import {
-  ConsoleLayout,
-  createApp,
-  defineBaseAddon,
-} from "@angee/base";
+import { createApp, defineBaseAddon } from "@angee/app";
+import { ConsoleLayout } from "@angee/ui";
 import notes from "@angee-example/notes-web";
 import agents from "@angee/agents";
 import iam, { IamLoginPage } from "@angee/iam";

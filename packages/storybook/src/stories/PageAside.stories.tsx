@@ -8,7 +8,7 @@ import {
   PageHeader,
   SectionNav,
   type SectionNavItem,
-} from "@angee/base";
+} from "@angee/ui";
 
 const navItems: readonly SectionNavItem[] = [
   { id: "overview", label: "Overview", href: "#overview", active: true },

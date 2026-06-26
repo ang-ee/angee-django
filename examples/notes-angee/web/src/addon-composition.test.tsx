@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { composeAddons, type ComposedMenuItem } from "@angee/sdk";
-import { baseIcons, defineBaseAddon, getIcon } from "@angee/base";
+import { composeAddons, defineBaseAddon } from "@angee/app";
+import { baseIcons, getIcon, type ComposedMenuItem } from "@angee/ui";
 import notes from "@angee-example/notes-web";
 import agents from "@angee/agents";
 import iam from "@angee/iam";

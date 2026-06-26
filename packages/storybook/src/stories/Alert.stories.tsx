@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Alert, Banner, Button, FILLS } from "@angee/base";
+import { Alert, Banner, Button, FILLS } from "@angee/ui";
 
 const meta = {
   title: "Primitives/Alert",

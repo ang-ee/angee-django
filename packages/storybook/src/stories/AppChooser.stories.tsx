@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { AppChooser } from "@angee/base";
+import { AppChooser } from "@angee/ui";
 
 import { appChooserItems } from "./chrome-fixtures";
 

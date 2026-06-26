@@ -10,7 +10,7 @@ import {
   SectionNav,
   Textarea,
   type SectionNavItem,
-} from "@angee/base";
+} from "@angee/ui";
 
 const sections: readonly SectionNavItem[] = [
   { id: "overview", label: "Overview", href: "#overview", active: true },

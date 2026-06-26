@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Systray } from "@angee/base";
+import { Systray } from "@angee/ui";
 
 const meta = {
   title: "Chrome/Systray",

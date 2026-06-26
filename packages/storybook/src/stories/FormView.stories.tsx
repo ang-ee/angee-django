@@ -3,7 +3,7 @@ import {
   FormView,
   type FormField,
   type GroupDescriptor,
-} from "@angee/base";
+} from "@angee/ui";
 
 import { RuntimeFixture, jsonResponse, storySchema } from "./runtime-fixtures";
 

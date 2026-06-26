@@ -10,7 +10,7 @@ import {
 import { Refine } from "@refinedev/core";
 import {
   AppRuntimeProvider,
-  } from "@angee/sdk";
+  } from "@angee/ui";
 import {
   ActiveGraphQLSchemaProvider,
 } from "@angee/resources";
@@ -18,7 +18,7 @@ import {
   createAngeeHasuraDataProviders,
   type AngeeHasuraSchemaConfig,
 } from "@angee/refine";
-import { ModalsHost, baseIcons, defaultWidgets } from "@angee/base";
+import { ModalsHost, baseIcons, defaultWidgets } from "@angee/ui";
 
 /**
  * Shared story fixtures for data-bound views (`ListView`/`FormView`). A view that

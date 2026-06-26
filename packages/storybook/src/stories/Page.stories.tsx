@@ -21,7 +21,7 @@ import {
   STATUS_TONES,
   stateToneFromValue,
   type SectionNavItem,
-} from "@angee/base";
+} from "@angee/ui";
 
 const navItems: readonly SectionNavItem[] = [
   { id: "all", label: "All notes", href: "#all", active: true },

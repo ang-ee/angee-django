@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Button, Drawer, DrawerContent } from "@angee/base";
+import { Button, Drawer, DrawerContent } from "@angee/ui";
 
 const meta = {
   title: "Primitives/Drawer",

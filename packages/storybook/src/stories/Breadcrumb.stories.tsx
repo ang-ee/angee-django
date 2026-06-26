@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Breadcrumb } from "@angee/base";
+import { Breadcrumb } from "@angee/ui";
 
 const meta = {
   title: "Chrome/Breadcrumb",

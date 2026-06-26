@@ -1,4 +1,5 @@
-import { defineBaseAddon, FORM_VIEW_RECORD_CHROME_SLOT } from "@angee/base";
+import { defineBaseAddon } from "@angee/app";
+import { FORM_VIEW_RECORD_CHROME_SLOT } from "@angee/ui";
 
 import { NotePage } from "./NotePage";
 import { RecordChrome } from "./RecordChrome";

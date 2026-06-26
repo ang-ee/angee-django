@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Avatar, Badge, MetadataPanel, Tag } from "@angee/base";
+import { Avatar, Badge, MetadataPanel, Tag } from "@angee/ui";
 
 const meta = {
   title: "Fragments/MetadataPanel",

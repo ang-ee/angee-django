@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Glyph, SectionTabs, type SectionTabItem } from "@angee/base";
+import { Glyph, SectionTabs, type SectionTabItem } from "@angee/ui";
 
 const items: readonly SectionTabItem[] = [
   { id: "overview", label: "Overview", href: "#overview", count: 3 },

@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { CommandPalette } from "@angee/base";
+import { CommandPalette } from "@angee/ui";
 
 const meta = {
   title: "Chrome/CommandPalette",

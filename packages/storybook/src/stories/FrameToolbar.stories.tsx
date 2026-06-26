@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { FrameToolbar, Glyph, Toolbar } from "@angee/base";
+import { FrameToolbar, Glyph, Toolbar } from "@angee/ui";
 
 const meta = {
   title: "Fragments/FrameToolbar",

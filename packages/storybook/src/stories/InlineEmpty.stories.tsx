@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { InlineEmpty } from "@angee/base";
+import { InlineEmpty } from "@angee/ui";
 
 const meta = {
   title: "Fragments/InlineEmpty",

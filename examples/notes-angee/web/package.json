@@ -13,7 +13,7 @@
   "dependencies": {
     "@angee-example/notes-web": "workspace:*",
     "@angee/agents": "workspace:*",
-    "@angee/base": "workspace:*",
+    "@angee/app": "workspace:*",
     "@angee/iam": "workspace:*",
     "@angee/integrate": "workspace:*",
     "@angee/knowledge": "workspace:*",
@@ -22,8 +22,8 @@
     "@angee/parties": "workspace:*",
     "@angee/platform": "workspace:*",
     "@angee/resources-addon": "workspace:*",
-    "@angee/sdk": "workspace:*",
     "@angee/storage": "workspace:*",
+    "@angee/ui": "workspace:*",
     "@graphql-typed-document-node/core": "^3.2.0",
     "@tanstack/react-router": "^1.170.8",
     "react": "^19.2.0",

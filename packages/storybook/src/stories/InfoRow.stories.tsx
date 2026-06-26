@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Button, InfoRow } from "@angee/base";
+import { Button, InfoRow } from "@angee/ui";
 
 const meta = {
   title: "Fragments/InfoRow",

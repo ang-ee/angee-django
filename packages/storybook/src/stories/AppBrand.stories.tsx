@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { AppBrand } from "@angee/base";
+import { AppBrand } from "@angee/ui";
 
 const meta = {
   title: "Chrome/AppBrand",
