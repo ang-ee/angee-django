@@ -30,7 +30,7 @@ from asgiref.sync import sync_to_async
 from django.core.exceptions import ImproperlyConfigured
 from django.db import close_old_connections
 from fastmcp.exceptions import ToolError
-from fastmcp.tools.tool import Tool, ToolResult
+from fastmcp.tools import Tool, ToolResult
 from graphql import (
     GraphQLEnumType,
     GraphQLInputObjectType,

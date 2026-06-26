@@ -35,7 +35,7 @@ dependencies = [
   # StreamableHTTP mount). uvicorn sends the ASGI lifespan that runs the mount's
   # session manager; [standard] adds WebSocket and --reload support for dev.
   "uvicorn[standard]>=0.30",
-  "fastmcp>=2.14.7,<2.15",
+  "fastmcp>=3.4.2,<4",
   "anthropic>=0.109.2",
   "openai>=2.43.0",
   "vobject>=0.9.9",

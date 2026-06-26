@@ -7,9 +7,3 @@ packages:
 allowBuilds:
   esbuild: true
   "@tailwindcss/oxide": true
-overrides:
-  # @assistant-ui/react@0.12.28 pins tap@^0.5.10 (→0.5.14) but lets store float to
-  # 0.2.16, whose peer is tap@^0.7.0 and which imports @assistant-ui/tap/react-shim
-  # — a subpath 0.5.14 doesn't export. Pin store to the last 0.2.x compatible with
-  # tap@0.5.14 (peer ^0.5.14) until the upstream version set realigns.
-  "@assistant-ui/store": "0.2.13"

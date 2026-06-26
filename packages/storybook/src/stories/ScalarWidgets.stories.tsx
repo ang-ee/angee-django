@@ -198,13 +198,13 @@ export const EditAndRead: Story = {
               initialValue="system"
               field={{ label: "Theme" }}
             />
-            <WidgetExample
+            <WidgetExample<unknown>
               kind="many2one"
               widget={defaultWidgets.many2one}
               initialValue="rec-1002"
               field={{ label: "Account", options: recordOptions }}
             />
-            <WidgetExample<readonly string[]>
+            <WidgetExample<readonly unknown[]>
               kind="many2many"
               widget={defaultWidgets.many2many}
               initialValue={["rec-1001", "rec-1003"]}

@@ -40,6 +40,7 @@ import {
   type TextMessagePartComponent,
   type ToolCallMessagePartComponent,
 } from "@assistant-ui/react";
+import { code } from "@streamdown/code";
 import { Streamdown } from "streamdown";
 
 import { useAcpRuntime } from "../useAcpRuntime";
@@ -357,7 +358,12 @@ const PlainText: TextMessagePartComponent = ({ text }) => (
 );
 
 const AssistantText: TextMessagePartComponent = ({ text }) => (
-  <Streamdown parseIncompleteMarkdown className="text-13 leading-relaxed">
+  <Streamdown
+    parseIncompleteMarkdown
+    plugins={{ code }}
+    lineNumbers={false}
+    className="text-13 leading-relaxed"
+  >
     {text}
   </Streamdown>
 );

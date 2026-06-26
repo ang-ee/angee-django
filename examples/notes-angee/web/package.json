@@ -25,20 +25,20 @@
     "@angee/storage": "workspace:*",
     "@angee/ui": "workspace:*",
     "@graphql-typed-document-node/core": "^3.2.0",
-    "@tanstack/react-router": "^1.170.8",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "@tanstack/react-router": "^1.170.16",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.0.0",
+    "@tailwindcss/vite": "^4.3.1",
     "@testing-library/react": "^16.1.0",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "@vitejs/plugin-react": "^6.0.2",
-    "happy-dom": "^20.9.0",
-    "tailwindcss": "^4.0.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "happy-dom": "^20.10.6",
+    "tailwindcss": "^4.3.1",
     "typescript": "^6.0.3",
-    "vite": "^8.0.14",
-    "vitest": "^4.1.7"
+    "vite": "^8.1.0",
+    "vitest": "^4.1.9"
   }
 }
