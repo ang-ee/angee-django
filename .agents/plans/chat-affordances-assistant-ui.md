@@ -17,6 +17,30 @@ rejected alternatives: `.agents/notes/chat-ui-library-evaluation.md`.
 > here and in the evaluation note continue to hold. No rewrite needed; ready to
 > execute.
 
+> **Update (2026-06-26): Phase 1 landed + system-context delivery refactored to
+> ACP-native, live-verified.** Phase 1 (Cancel + Copy) is committed and clean
+> (typecheck + 275 `@angee/ui` tests; Copy routed through the glyph registry per
+> review). Separately, `onNew` no longer string-prefixes context into the user's
+> text — it builds the prompt via the exported
+> `buildPromptBlocks(context, userText, capabilities)`, which emits context as its
+> OWN leading `ContentBlock`: an embedded ACP **`resource`** when the agent
+> advertises `promptCapabilities.embeddedContext`, else a plain `text` block,
+> followed by the user's text as a separate block. **Live-verified** against the
+> running `claude-code-acp` agent: it advertises `{ embeddedContext: true,
+> image: true }`, and an end-to-end send (resource context block + user text)
+> returns the note title with no errors. Consequences:
+> - **Phase 2 slash conflict is dissolved** — the user's text is its own block, so
+>   a leading `/command` stays at char 0; no architect escalation needed. (The
+>   separate question — does the agent invoke `/`-text as a command — is still a
+>   live-verify before building the palette.)
+> - **Phase 3 image attachments are confirmed supported** (`image: true`); they
+>   extend `buildPromptBlocks` (the one onNew chokepoint), appended after context.
+> - The invariant is relaxed from "a mandatory string-prefix on every send" to
+>   "context, when present, rides a separate native block through the single
+>   `onNew`/`buildPromptBlocks` chokepoint" — now **guarded** by regression tests
+>   in `useAcpRuntime.test.ts`. Phase 3 remains the only phase that may further
+>   edit `onNew`.
+
 Scope is `addons/angee/agents/web` + `packages/ui` (chat primitives). No backend
 schema change expected (call it out if a phase needs one).
 

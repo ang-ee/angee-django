@@ -16,8 +16,10 @@ import {
   PROTOCOL_VERSION,
   type Agent,
   type Client,
+  type ContentBlock,
   type McpServer,
   type NewSessionResponse,
+  type PromptCapabilities,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionNotification,
@@ -83,6 +85,9 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
   const connectionRef = React.useRef<Agent | null>(null);
   const transportRef = React.useRef<AcpTransport | null>(null);
   const sessionIdRef = React.useRef<string | null>(null);
+  // The agent's advertised prompt capabilities (from `initialize`), read by `onNew` to pick
+  // the native context-block shape; a ref so a fresh value never re-triggers the connect effect.
+  const promptCapabilitiesRef = React.useRef<PromptCapabilities | null>(null);
   const viewRef = React.useRef(view);
   viewRef.current = view;
 
@@ -115,6 +120,7 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
     setIsRunning(false);
     setMcpServers({});
     setModelHandle("");
+    promptCapabilitiesRef.current = null;
 
     const tearDown = (): void => {
       transportRef.current?.close();
@@ -140,11 +146,12 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
         connectionRef.current = connection;
         await transport.ready;
         if (!active) return;
-        await connection.initialize({
+        const init = await connection.initialize({
           protocolVersion: PROTOCOL_VERSION,
           clientCapabilities: {},
         });
         if (!active) return;
+        promptCapabilitiesRef.current = init.agentCapabilities?.promptCapabilities ?? null;
         // Straight to a session: Claude Code authenticates from its env token
         // (CLAUDE_CODE_OAUTH_TOKEN, synced at provision), and its ACP `authenticate`
         // method is not implemented — it advertises `claude-login` only as a terminal
@@ -208,7 +215,7 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
         const context = await fetchSystemContext(renderPrompt, agentId, viewRef.current);
         await connection.prompt({
           sessionId,
-          prompt: [{ type: "text", text: context === "" ? userText : `${context}\n\n${userText}` }],
+          prompt: buildPromptBlocks(context, userText, promptCapabilitiesRef.current),
         });
       } catch (caught) {
         setError(messageOf(caught, "The agent did not respond."));
@@ -355,6 +362,33 @@ export async function selectSessionModel(
     throw new Error(`The agent does not support selecting ${modelHandle} for this session.`);
   }
   await connection.setSessionModel({ sessionId: session.sessionId, modelId: modelHandle });
+}
+
+/** Opaque identifier for the embedded view-context resource (its content is inline). */
+const CONTEXT_RESOURCE_URI = "angee:///agent/system-context";
+
+/**
+ * Build the ACP prompt for one send: the rendered view context (when present) as its OWN
+ * leading `ContentBlock` — an embedded `resource` when the agent advertises `embeddedContext`,
+ * else a plain `text` block — followed by the user's text as a separate block. Context is
+ * never string-merged into the user's message, so the user's text (e.g. a leading `/command`)
+ * stays intact, using ACP's native resource-context mechanism when available.
+ */
+export function buildPromptBlocks(
+  context: string,
+  userText: string,
+  capabilities: PromptCapabilities | null,
+): ContentBlock[] {
+  const blocks: ContentBlock[] = [];
+  if (context !== "") {
+    blocks.push(
+      capabilities?.embeddedContext === true
+        ? { type: "resource", resource: { uri: CONTEXT_RESOURCE_URI, text: context, mimeType: "text/markdown" } }
+        : { type: "text", text: context },
+    );
+  }
+  blocks.push({ type: "text", text: userText });
+  return blocks;
 }
 
 /** Extract the plain text of a composer message. */

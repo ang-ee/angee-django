@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 
-import { selectSessionModel } from "./useAcpRuntime";
+import { buildPromptBlocks, selectSessionModel } from "./useAcpRuntime";
 
 describe("selectSessionModel", () => {
   test("switches from ACP default to the agent model handle", async () => {
@@ -74,6 +74,43 @@ describe("selectSessionModel", () => {
         "claude-opus-4-8",
       ),
     ).rejects.toThrow("claude-opus-4-8");
+  });
+});
+
+describe("buildPromptBlocks", () => {
+  // The system-context invariant: the rendered context is ALWAYS its own ContentBlock and is
+  // never string-merged into the user's message, so the user's text (e.g. a leading `/command`)
+  // stays intact. When the agent advertises `embeddedContext`, context uses ACP's native
+  // embedded `resource` block; otherwise it falls back to a plain leading `text` block.
+  test("embeds context as a leading resource block, user text as its own trailing block", () => {
+    expect(buildPromptBlocks("CTX", "hello", { embeddedContext: true })).toEqual([
+      {
+        type: "resource",
+        resource: { uri: "angee:///agent/system-context", text: "CTX", mimeType: "text/markdown" },
+      },
+      { type: "text", text: "hello" },
+    ]);
+  });
+
+  test("falls back to a leading text block when the agent lacks embeddedContext", () => {
+    const expected = [
+      { type: "text", text: "CTX" },
+      { type: "text", text: "hello" },
+    ];
+    expect(buildPromptBlocks("CTX", "hello", null)).toEqual(expected);
+    expect(buildPromptBlocks("CTX", "hello", { embeddedContext: false })).toEqual(expected);
+  });
+
+  test("omits the context block entirely when there is no context", () => {
+    expect(buildPromptBlocks("", "hello", { embeddedContext: true })).toEqual([
+      { type: "text", text: "hello" },
+    ]);
+  });
+
+  test("never merges context into the user text — a leading /command stays at the start of its own block", () => {
+    const blocks = buildPromptBlocks("CTX", "/clear keep this", { embeddedContext: true });
+    expect(blocks[blocks.length - 1]).toEqual({ type: "text", text: "/clear keep this" });
+    expect(JSON.stringify(blocks)).not.toContain("CTX\n\n/clear");
   });
 });
 
