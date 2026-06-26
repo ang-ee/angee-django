@@ -7,9 +7,10 @@ services:
   {{ service_name }}:
     runtime: container
     build:
-      # The operator installs the rendered docker/ at .angee/services/<name>/docker
-      # and requires the build context to resolve there.
-      context: ./.angee/services/{{ service_name }}/docker
+      # The operator installs the rendered docker/ at <root>/services/<name>/docker
+      # (root is ANGEE_ROOT, e.g. .angee) and requires the build context to
+      # resolve there, relative to the generated compose file at the root.
+      context: ./services/{{ service_name }}/docker
     mounts:
       - "workspace://{{ workspace_name }}:/workspace"
     env:
