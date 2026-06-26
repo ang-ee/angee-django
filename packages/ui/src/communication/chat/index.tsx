@@ -109,15 +109,15 @@ export function ChatBubble({ role, className, children, ...props }: ChatBubblePr
   );
 }
 
-export interface ChatBubbleActionsProps extends HTMLAttributes<HTMLDivElement> {
-  role?: ChatBubbleRole;
+export interface ChatBubbleActionsProps extends Omit<HTMLAttributes<HTMLDivElement>, "role"> {
+  role: ChatBubbleRole;
 }
 
 /** A presentational action row under a chat bubble (copy, etc.). Aligns with the bubble
  *  (assistant/system lead left, user trails right) and reveals on hover/focus of the
  *  enclosing `group` message. The assistant-ui ActionBar binding composes inside it. */
 export function ChatBubbleActions({
-  role = "assistant",
+  role,
   className,
   children,
   ...props

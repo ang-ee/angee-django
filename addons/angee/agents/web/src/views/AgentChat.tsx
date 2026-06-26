@@ -8,6 +8,7 @@ import {
   ChatHeader,
   ChatHeaderAction,
   ContextBlock,
+  Glyph,
   MessageReasoningFrame,
   PopoverContent,
   PopoverPortal,
@@ -28,7 +29,6 @@ import {
   type TextMessagePartComponent,
   type ToolCallMessagePartComponent,
 } from "@assistant-ui/react";
-import { Copy } from "lucide-react";
 import { Streamdown } from "streamdown";
 
 import { useAcpRuntime } from "../useAcpRuntime";
@@ -155,7 +155,7 @@ function AssistantMessage(): React.ReactElement {
             aria-label={t("agents.chat.copy")}
             className="inline-flex h-6 items-center gap-1 rounded px-2 text-2xs text-fg-muted hover:bg-inset"
           >
-            <Copy className="h-3 w-3" aria-hidden />
+            <Glyph name="copy" className="h-3 w-3" />
           </ActionBarPrimitive.Copy>
         </ActionBarPrimitive.Root>
       </ChatBubbleActions>
