@@ -41,7 +41,7 @@ import {
 } from "@angee/resources";
 import {
   OperationDocumentsProvider,
-  type DeletePreview,
+  extractDeletePreview,
 } from "@angee/refine";
 import {
   AppRuntimeProvider,
@@ -247,7 +247,14 @@ describe("bulk delete flow", () => {
   test("tree renders nested nodes collapsibly", () => {
     render(
       <TestLayout>
-        <DeletePreviewTree nodes={[previewFor("sale-1", "First sale").root]} />
+        <DeletePreviewTree
+          nodes={[
+            extractDeletePreview(
+              { sale: previewFor("sale-1", "First sale") },
+              "sale",
+            )!.root,
+          ]}
+        />
       </TestLayout>,
     );
 
@@ -263,10 +270,12 @@ describe("bulk delete flow", () => {
   });
 });
 
-function previewFor(id: string, objectLabel: string): DeletePreview {
+// The wire payload `extractDeletePreview` parses is snake_case (the schema's
+// Hasura naming); the views consume the camelCase shape it returns.
+function previewFor(id: string, objectLabel: string) {
   return {
-    totalDeletedCount: 3,
-    hasBlockers: false,
+    total_deleted_count: 3,
+    has_blockers: false,
     deleted: [
       { label: "sales", count: 1 },
       { label: "line items", count: 2 },
@@ -275,18 +284,18 @@ function previewFor(id: string, objectLabel: string): DeletePreview {
     blocked: [],
     root: {
       label: "sale",
-      objectLabel,
-      objectId: id,
+      object_label: objectLabel,
+      object_id: id,
       children: [
         {
           label: "line items",
-          objectLabel: "2 line items",
-          objectId: null,
+          object_label: "2 line items",
+          object_id: null,
           children: [
             {
               label: "line item",
-              objectLabel: "Line 1",
-              objectId: "line-1",
+              object_label: "Line 1",
+              object_id: "line-1",
               children: [],
             },
           ],

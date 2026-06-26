@@ -127,20 +127,20 @@ describe("Hasura custom operations", () => {
       extractDeletePreview(
         {
           delete_note: {
-            totalDeletedCount: 2,
-            hasBlockers: false,
+            total_deleted_count: 2,
+            has_blockers: false,
             deleted: [{ label: "notes", count: 1 }],
             updated: [],
             blocked: [],
             root: {
               label: "note",
-              objectLabel: "Draft",
-              objectId: "note_123",
+              object_label: "Draft",
+              object_id: "note_123",
               children: [
                 {
                   label: "comments",
-                  objectLabel: "1 comment",
-                  objectId: null,
+                  object_label: "1 comment",
+                  object_id: null,
                   children: [],
                 },
               ],

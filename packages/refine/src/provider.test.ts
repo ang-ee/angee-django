@@ -59,7 +59,7 @@ describe("Angee Hasura provider defaults", () => {
 
     expect(subscribe).toHaveBeenCalledWith(
       {
-        query: "subscription angee_noteChanged { noteChanged { model id action changedFields changedValues } }",
+        query: "subscription angee_noteChanged { noteChanged { model id action changedFields: changed_fields changedValues: changed_values } }",
       },
       expect.any(Object),
     );

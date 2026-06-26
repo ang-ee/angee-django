@@ -278,23 +278,26 @@ export function extractFacet(
   return facetResult(extractGroupBy(data, root), facet);
 }
 
+// The wire payload is snake_case (the schema's Hasura naming); this boundary
+// reads those keys and exposes the idiomatic camelCase `DeletePreview` domain
+// shape the views consume.
 export function extractDeletePreview(data: unknown, root: string): DeletePreview | null {
   const preview = fieldRecord(data, root);
   if (!preview) return null;
   const previewRoot = deletePreviewNode(preview.root);
   if (
-    typeof preview.totalDeletedCount !== "number" ||
-    typeof preview.hasBlockers !== "boolean" ||
+    typeof preview.total_deleted_count !== "number" ||
+    typeof preview.has_blockers !== "boolean" ||
     previewRoot === null
   ) {
     return null;
   }
   return {
-    totalDeletedCount: preview.totalDeletedCount,
+    totalDeletedCount: preview.total_deleted_count,
     deleted: deletePreviewGroups(preview.deleted),
     updated: deletePreviewGroups(preview.updated),
     blocked: deletePreviewGroups(preview.blocked),
-    hasBlockers: preview.hasBlockers,
+    hasBlockers: preview.has_blockers,
     root: previewRoot,
   };
 }
@@ -388,17 +391,17 @@ function deletePreviewNode(value: unknown): DeletePreviewNode | null {
   if (
     !isRecord(value) ||
     typeof value.label !== "string" ||
-    typeof value.objectLabel !== "string" ||
-    (value.objectId !== null &&
-      value.objectId !== undefined &&
-      typeof value.objectId !== "string")
+    typeof value.object_label !== "string" ||
+    (value.object_id !== null &&
+      value.object_id !== undefined &&
+      typeof value.object_id !== "string")
   ) {
     return null;
   }
   return {
     label: value.label,
-    objectLabel: value.objectLabel,
-    objectId: value.objectId ?? null,
+    objectLabel: value.object_label,
+    objectId: value.object_id ?? null,
     children: Array.isArray(value.children)
       ? value.children.flatMap((child) => {
           const node = deletePreviewNode(child);

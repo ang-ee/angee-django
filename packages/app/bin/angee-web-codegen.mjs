@@ -19,11 +19,11 @@ import {
 
 const AGGREGATE_MEASURE_OPERATORS = ["sum", "avg", "min", "max"];
 const DELETE_PREVIEW_SELECTION =
-  "totalDeletedCount hasBlockers " +
+  "total_deleted_count has_blockers " +
   "deleted { label count } updated { label count } blocked { label count } " +
-  "root { label objectLabel objectId " +
-  "children { label objectLabel objectId " +
-  "children { label objectLabel objectId } } }";
+  "root { label object_label object_id " +
+  "children { label object_label object_id " +
+  "children { label object_label object_id } } }";
 const SCALARS = {
   DateTime: "string",
   Date: "string",
@@ -318,14 +318,14 @@ function buildOperationDocuments(name, runtimeDir) {
     "",
     "export interface DeletePreviewNode {",
     "  label: string;",
-    "  objectLabel: string;",
-    "  objectId: string | null;",
+    "  object_label: string;",
+    "  object_id: string | null;",
     "  children: DeletePreviewNode[];",
     "}",
     "",
     "export interface DeletePreview {",
-    "  totalDeletedCount: number;",
-    "  hasBlockers: boolean;",
+    "  total_deleted_count: number;",
+    "  has_blockers: boolean;",
     "  deleted: DeletePreviewGroup[];",
     "  updated: DeletePreviewGroup[];",
     "  blocked: DeletePreviewGroup[];",
@@ -372,7 +372,7 @@ function buildOperationDocuments(name, runtimeDir) {
     "",
     "export type RevisionRecord = Record<string, unknown> & {",
     "  id: string;",
-    "  createdAt?: string;",
+    "  created_at?: string;",
     "  comment?: string | null;",
     "};",
     "",

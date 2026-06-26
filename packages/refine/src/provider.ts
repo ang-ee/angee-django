@@ -196,9 +196,12 @@ function resourcesByListRoot(
 
 function changeSubscriptionDocument(changesRoot: string): string {
   const root = assertGraphQLName(changesRoot);
+  // The schema's ChangeEvent fields are snake_case (Hasura naming); alias the
+  // multi-word ones to the camelCase keys `changeEventFromResult` reads.
   return (
     `subscription angee_${root} { ` +
-    `${root} { model id action changedFields changedValues } }`
+    `${root} { model id action ` +
+    `changedFields: changed_fields changedValues: changed_values } }`
   );
 }
 
