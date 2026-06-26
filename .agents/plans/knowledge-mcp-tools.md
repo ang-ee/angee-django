@@ -65,22 +65,29 @@ surface, per the compiler's convention).
 
 ## Design
 
-### 1. Markdown structure owner (new) — `knowledge/markdown_structure.py`
-Pure functions over body text (no Django), the single parser shared by the
-`outline` read field and the patch write path:
-- `parse_outline(body) -> list[OutlineEntry]` — ordered ATX headings
-  `(level, text, slug, line)`. (`OutlineEntry` = a frozen dataclass.)
-- `section_range(body, heading_path) -> (start, end)` — tail-match the heading's
-  ancestor path; **fail-fast**: `SectionNotFoundError` if none,
+### 1. Markdown structure ON THE MODEL — `MarkdownPage` staticmethods + `outline` property
+The body lives on `MarkdownPage`, so its structure behavior lives **on that
+class** (mirroring the existing `MarkdownPage.hash_body` staticmethod) — NOT as
+loose module functions. markdown-it-py block-token `.map` line spans back it. One
+owner shared by the `outline` read field and the patch write path:
+- `@staticmethod parse_outline(body) -> list[OutlineEntry]` — ordered ATX
+  headings `(level, text, slug, line)`.
+- `@property outline` → `MarkdownPage.parse_outline(self.body)` (instance ergonomic).
+- `@staticmethod section_range(body, heading_path) -> (start, end)` — tail-match
+  the heading's ancestor path; **fail-fast**: `SectionNotFoundError` if none,
   `AmbiguousMatchError` if >1. Range = heading line → next heading of
   same-or-higher level (children included).
-- `apply_section_op(body, heading_path, op, content) -> str` — splice the raw
-  line buffer for `op ∈ {replace, append, prepend}`. Never re-render.
-- `splice_unique(body, old, new) -> str` — exact-string, raises
-  `AmbiguousMatchError` on 0/≠1 matches (Claude Code's uniqueness invariant).
+- `@staticmethod spliced_section(body, heading_path, op, content) -> str` —
+  splice the raw line buffer for `op ∈ {replace, append, prepend}`. Never
+  re-render. `@staticmethod spliced_unique(body, old, new) -> str` — exact-string,
+  raises on 0/≠1 (uniqueness invariant).
 - Normalize CRLF on entry; keep one trailing blank before the next heading.
-Errors: `StructuredEditError(ValueError)` base, with `SectionNotFoundError` /
-`AmbiguousMatchError` subclasses (importable by `schema.py`).
+`OutlineEntry` = a frozen dataclass. Errors `StructuredEditError(ValueError)`
+base + `SectionNotFoundError`/`AmbiguousMatchError` stay **module-level** in
+`models.py` (consistent with `StaleBodyError`/`UnsupportedPageKindError`). The
+manager methods (§2) call these staticmethods. *(A custom `MarkdownField` is the
+future option if a second markdown-bearing sidecar appears — YAGNI for one body
+model.)*
 
 ### 2. Manager methods (new) — `MarkdownPageManager`
 Thin write-orchestrators (read current body → splice → `write_body(expected_hash=)`,
@@ -162,8 +169,7 @@ it to prove the seam.
 |---|---|
 | `pyproject.toml` + `uv.lock` | `uv add "markdown-it-py>=4.2"` |
 | `docs/stack.md` | one backend row (markdown-it-py: CommonMark tokenizer w/ source line spans) |
-| `addons/angee/knowledge/markdown_structure.py` | NEW pure-text owner (§1) |
-| `addons/angee/knowledge/models.py` | manager methods (§2) + import the text owner; errors |
+| `addons/angee/knowledge/models.py` | `MarkdownPage` structure staticmethods + `outline` property (§1); manager methods (§2); module-level errors |
 | `addons/angee/knowledge/retrieval.py` | NEW `RetrievalProvider`/`LexicalRetrievalProvider`/`HybridRetrievalProvider` (§4) |
 | `addons/angee/knowledge/models.py` (Vault) | `retrieval_class` ImplClassField + `retrieval` property |
 | `addons/angee/knowledge/autoconfig.py` | seed `ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES` (NEW file if absent) |
