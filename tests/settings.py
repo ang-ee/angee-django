@@ -47,6 +47,9 @@ ANGEE_INFERENCE_BACKEND_CLASSES = {
     "openai": "angee.agents_integrate_openai.backend.OpenAIInferenceBackend",
     "stub_inference": "tests.conftest.StubInferenceBackend",
 }
+ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES = {
+    "lexical": "angee.knowledge.retrieval.LexicalRetrievalBackend",
+}
 # Directory/channel backends each addon's autoconfig normally contributes; declared
 # here so the ImplClassField registries are non-empty at model-import time.
 ANGEE_DIRECTORY_BACKEND_CLASSES = {

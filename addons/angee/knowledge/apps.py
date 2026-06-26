@@ -16,6 +16,9 @@ class KnowledgeConfig(AppConfig):
     depends_on = ("angee.iam",)
     schemas = "schema.schemas"
     permissions = "permissions.zed"
+    # ``mcp_tools`` (never ``mcp``) so the module never shadows the third-party ``mcp``
+    # package; ``register`` adds the knowledge GraphQL-backed tools to the MCP server.
+    mcp_tools = "mcp_tools.register"
     resources = {
         "demo": (
             {

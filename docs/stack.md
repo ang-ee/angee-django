@@ -48,6 +48,7 @@ Dependency changes must update this file in the same change.
 | openai | OpenAI Python SDK — Chat Completions client, model catalogue, retries, typed SDK models | `agents_integrate_openai` maps Angee inference providers/models to the SDK and contributes the backend into `ANGEE_INFERENCE_BACKEND_CLASSES` |
 | python-magic | MIME detection from file bytes | Storage finalize detection (requires the system libmagic) |
 | vobject | vCard/iCalendar parse + serialise | `parties_integrate_carddav` parses CardDAV vCards into parties/handles/addresses (and serialises for round-trip) |
+| markdown-it-py | CommonMark tokenizer with source line spans (block token `.map`) | `knowledge` slices doc sections by heading without re-rendering — the `MarkdownPage` structure methods (`parse_outline`/`outline`, `section_range`, `spliced_section`, `spliced_unique`) shared by the `outline` read field and the section-anchored patch write |
 | uv | Python dependency resolution and workspaces | Workspace layout |
 
 ## Frontend

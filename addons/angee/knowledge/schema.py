@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from enum import Enum
 from typing import Annotated, Any, cast
 
 import strawberry
@@ -26,7 +28,13 @@ from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_display_label, user_public_id
-from angee.knowledge.models import StaleBodyError, UnsupportedPageKindError
+from angee.knowledge.models import (
+    AmbiguousMatchError,
+    SectionNotFoundError,
+    StaleBodyError,
+    StructuredEditError,
+    UnsupportedPageKindError,
+)
 
 Vault = apps.get_model("knowledge", "Vault")
 Page = apps.get_model("knowledge", "Page")
@@ -58,6 +66,15 @@ class VaultType(AngeeNode):
         return user_display_label(cast(Any, self).owner_id)
 
 
+@strawberry.type
+class OutlineEntryType:
+    """One ATX heading in a page body's outline."""
+
+    level: int
+    text: str
+    slug: str
+
+
 @strawberry_django.type(MarkdownPage)
 class MarkdownPageType(AngeeNode):
     """GraphQL projection of a page's markdown body sidecar."""
@@ -79,6 +96,20 @@ class MarkdownPageType(AngeeNode):
         """Return the leading body characters used for list previews."""
 
         return cast(str, cast(Any, self).excerpt)
+
+    @strawberry_django.field(only=["body"])
+    def outline(self) -> list[OutlineEntryType]:
+        """Return the body's heading outline, derived like :attr:`excerpt`.
+
+        Parsed through the body's own structure owner
+        (:meth:`MarkdownPage.parse_outline`) so the read field and the
+        section-patch write share one markdown parser.
+        """
+
+        return [
+            OutlineEntryType(level=entry.level, text=entry.text, slug=entry.slug)
+            for entry in MarkdownPage.parse_outline(cast(Any, self).body)
+        ]
 
 
 @strawberry.type
@@ -172,6 +203,44 @@ class PageBodyPayload:
     error_code: str | None = strawberry.field(name="error_code", default=None)
 
 
+@strawberry.enum
+class SectionOp(Enum):
+    """How :meth:`patch_page_section` splices content into a section.
+
+    The member value is the op token the markdown owner
+    (:meth:`MarkdownPage.spliced_section`) accepts; the upper-case member
+    name is the wire enum value.
+    """
+
+    REPLACE = "replace"
+    APPEND = "append"
+    PREPEND = "prepend"
+
+
+def _markdown_write_payload(write: Callable[[], Any]) -> PageBodyPayload:
+    """Run a markdown body write and map its domain errors to a payload.
+
+    The single owner of the knowledge body-write ``error -> error_code``
+    mapping, shared by every body mutation (``update_page_body``,
+    ``patch_page_section``, ``replace_page_text``). The structured-edit
+    subclasses surface their own sub-codes before the structural base.
+    """
+
+    try:
+        markdown = write()
+    except StaleBodyError as error:
+        return PageBodyPayload(ok=False, error=str(error), error_code="STALE_BODY")
+    except UnsupportedPageKindError as error:
+        return PageBodyPayload(ok=False, error=str(error), error_code="UNSUPPORTED_KIND")
+    except SectionNotFoundError as error:
+        return PageBodyPayload(ok=False, error=str(error), error_code="SECTION_NOT_FOUND")
+    except AmbiguousMatchError as error:
+        return PageBodyPayload(ok=False, error=str(error), error_code="AMBIGUOUS_MATCH")
+    except StructuredEditError as error:
+        return PageBodyPayload(ok=False, error=str(error), error_code="STRUCTURED_EDIT")
+    return PageBodyPayload(ok=True, markdown=cast(MarkdownPageType, markdown))
+
+
 class VaultWriteBackend(AngeeHasuraWriteBackend):
     """Write semantics for vaults: create belongs to the manager factory."""
 
@@ -229,6 +298,35 @@ _PAGE_RESOURCE = hasura_model_resource(
 )
 
 
+MAX_SEARCH_PAGE_SIZE = 100
+"""Upper bound on :meth:`KnowledgeQuery.search_pages` ``first`` — every backend inherits it."""
+
+
+@strawberry.type
+class KnowledgeQuery:
+    """Knowledge content queries that span the page/body join."""
+
+    @strawberry.field
+    def search_pages(self, vault: PublicID, query: str, first: int = 20) -> list[PageType]:
+        """Return actor-visible pages in ``vault`` matching ``query``.
+
+        The vault is both the search namespace and the selection point: this
+        resolves it (gating the actor's read), then delegates to its bound
+        :class:`~angee.knowledge.retrieval.RetrievalBackend` (default lexical),
+        so a semantic plugin can swap the strategy without editing this resolver.
+        Row scope is the backend's responsibility (``apply_ambient_scope``).
+
+        ``first`` is clamped here so every backend inherits the bound. The result is
+        a materialized list, so a nested ``markdown``/``backlinks``/``vault_label``
+        selection runs a per-page resolver — a bounded N+1 accepted now that ``first``
+        is capped (a dataloader is the future optimization, not v1's concern).
+        """
+
+        first = max(0, min(first, MAX_SEARCH_PAGE_SIZE))
+        target = require_instance_for_id(Vault, vault)
+        return cast("list[PageType]", list(target.retrieval.search(query, first=first)))
+
+
 @strawberry.type
 class KnowledgeMutation:
     """Markdown body writes that belong to the Knowledge domain."""
@@ -268,17 +366,81 @@ class KnowledgeMutation:
         """Write a page's markdown body, last-write-wins with a stale guard."""
 
         target = require_instance_for_id(Page, page)
-        try:
-            markdown = MarkdownPage._default_manager.write_body(
-                target,
-                body,
-                expected_hash=expected_hash,
+        return _markdown_write_payload(
+            lambda: MarkdownPage._default_manager.write_body(target, body, expected_hash=expected_hash)
+        )
+
+    @strawberry.mutation(name="patch_page_section")
+    def patch_page_section(
+        self,
+        page: PublicID,
+        heading_path: list[str],
+        op: SectionOp,
+        content: str,
+        expected_hash: Annotated[
+            str | None,
+            strawberry.argument(name="expected_hash"),
+        ] = None,
+    ) -> PageBodyPayload:
+        """Replace/append/prepend the section at ``heading_path`` in a page body.
+
+        Mirrors :meth:`update_page_body`: same ``PublicID`` resolution, same
+        :class:`PageBodyPayload`, same CAS via ``expected_hash``; the splice is
+        a fail-fast structured edit (``SECTION_NOT_FOUND``/``AMBIGUOUS_MATCH``).
+        """
+
+        target = require_instance_for_id(Page, page)
+        return _markdown_write_payload(
+            lambda: MarkdownPage._default_manager.patch_section(
+                target, heading_path, op.value, content, expected_hash=expected_hash
             )
-        except StaleBodyError as error:
-            return PageBodyPayload(ok=False, error=str(error), error_code="STALE_BODY")
-        except UnsupportedPageKindError as error:
-            return PageBodyPayload(ok=False, error=str(error), error_code="UNSUPPORTED_KIND")
-        return PageBodyPayload(ok=True, markdown=cast(MarkdownPageType, markdown))
+        )
+
+    @strawberry.mutation(name="replace_page_text")
+    def replace_page_text(
+        self,
+        page: PublicID,
+        old: str,
+        new: str,
+        expected_hash: Annotated[
+            str | None,
+            strawberry.argument(name="expected_hash"),
+        ] = None,
+    ) -> PageBodyPayload:
+        """Replace the single occurrence of ``old`` with ``new`` in a page body.
+
+        Mirrors :meth:`update_page_body`; uniqueness is enforced by the markdown
+        owner, so a non-unique or absent target fails fast with
+        ``AMBIGUOUS_MATCH``/``SECTION_NOT_FOUND`` before any write.
+        """
+
+        target = require_instance_for_id(Page, page)
+        return _markdown_write_payload(
+            lambda: MarkdownPage._default_manager.replace_unique(target, old, new, expected_hash=expected_hash)
+        )
+
+    @strawberry.mutation(name="append_to_page")
+    def append_to_page(
+        self,
+        page: PublicID,
+        content: str,
+        expected_hash: Annotated[
+            str | None,
+            strawberry.argument(name="expected_hash"),
+        ] = None,
+    ) -> PageBodyPayload:
+        """Append ``content`` to the end of a page body.
+
+        Mirrors :meth:`update_page_body`: same ``PublicID`` resolution, same
+        :class:`PageBodyPayload`, same CAS via ``expected_hash``; the markdown
+        owner joins ``content`` one blank line after the body (no markdown
+        re-rendered), so the section seam stays consistent.
+        """
+
+        target = require_instance_for_id(Page, page)
+        return _markdown_write_payload(
+            lambda: MarkdownPage._default_manager.append(target, content, expected_hash=expected_hash)
+        )
 
 
 KnowledgeMutation = attach_delete_preview_metadata(
@@ -297,6 +459,7 @@ KnowledgeMutation = attach_delete_preview_metadata(
 
 _KNOWLEDGE_SCHEMA_BUCKET = {
     "query": [
+        KnowledgeQuery,
         _VAULT_RESOURCE.query,
         _PAGE_RESOURCE.query,
         revisions(MarkdownPageType, name="markdownPage"),
@@ -310,6 +473,7 @@ _KNOWLEDGE_SCHEMA_BUCKET = {
         VaultType,
         PageType,
         MarkdownPageType,
+        OutlineEntryType,
         BacklinkType,
         PageBodyPayload,
         *_VAULT_RESOURCE.types,

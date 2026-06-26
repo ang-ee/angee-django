@@ -39,6 +39,7 @@ dependencies = [
   "anthropic>=0.109.2",
   "openai>=2.43.0",
   "vobject>=0.9.9",
+  "markdown-it-py>=4.2",
 ]
 
 [dependency-groups]

@@ -216,6 +216,144 @@ def test_update_page_body_reports_unsupported_kind(knowledge_tables: None) -> No
     assert payload["error_code"] == "UNSUPPORTED_KIND"
 
 
+def test_markdown_outline_field_lists_headings(knowledge_tables: None) -> None:
+    """The markdown sidecar exposes its body's ATX heading outline."""
+
+    alice = create_user("alice")
+    vault = vault_for(alice)
+    with actor_context(alice):
+        page = Page.objects.create_in(vault, title="Doc")
+        MarkdownPage.objects.write_body(page, "# Intro\n\nhi\n\n## Usage\n\nrun it\n")
+
+    detail = result_data(
+        execute_schema(
+            _schema("public"),
+            """
+            query Outline($id: String!) {
+              pages_by_pk(id: $id) {
+                markdown { outline { level text slug } }
+              }
+            }
+            """,
+            {"id": _public_id(page)},
+            user=alice,
+        )
+    )["pages_by_pk"]
+    assert detail["markdown"]["outline"] == [
+        {"level": 1, "text": "Intro", "slug": "intro"},
+        {"level": 2, "text": "Usage", "slug": "usage"},
+    ]
+
+
+def test_patch_page_section_round_trip_and_guards(knowledge_tables: None) -> None:
+    """Section patch splices the body, honours CAS, and fails fast on a miss."""
+
+    alice = create_user("alice")
+    vault = vault_for(alice)
+    with actor_context(alice):
+        page = Page.objects.create_in(vault, title="Doc")
+        markdown = MarkdownPage.objects.write_body(page, "# Intro\n\nold body\n")
+    schema = _schema("public")
+    page_id = _public_id(page)
+
+    patched = result_data(
+        execute_schema(
+            schema,
+            """
+            mutation Patch($page: ID!, $hash: String) {
+              patch_page_section(
+                page: $page, heading_path: ["Intro"], op: REPLACE,
+                content: "new body", expected_hash: $hash
+              ) {
+                ok error_code markdown { body }
+              }
+            }
+            """,
+            {"page": page_id, "hash": markdown.body_hash},
+            user=alice,
+        )
+    )["patch_page_section"]
+    assert patched["ok"] is True
+    assert "new body" in patched["markdown"]["body"]
+    assert "old body" not in patched["markdown"]["body"]
+
+    stale = result_data(
+        execute_schema(
+            schema,
+            """
+            mutation Stale($page: ID!) {
+              patch_page_section(
+                page: $page, heading_path: ["Intro"], op: APPEND,
+                content: "x", expected_hash: "stale"
+              ) { ok error_code }
+            }
+            """,
+            {"page": page_id},
+            user=alice,
+        )
+    )["patch_page_section"]
+    assert stale["ok"] is False
+    assert stale["error_code"] == "STALE_BODY"
+
+    missing = result_data(
+        execute_schema(
+            schema,
+            """
+            mutation Missing($page: ID!) {
+              patch_page_section(
+                page: $page, heading_path: ["Nope"], op: REPLACE, content: "x"
+              ) { ok error_code }
+            }
+            """,
+            {"page": page_id},
+            user=alice,
+        )
+    )["patch_page_section"]
+    assert missing["ok"] is False
+    assert missing["error_code"] == "SECTION_NOT_FOUND"
+
+
+def test_search_pages_matches_title_and_body_actor_scoped(knowledge_tables: None) -> None:
+    """search_pages spans title + body and only returns actor-visible pages."""
+
+    alice = create_user("alice")
+    bob = create_user("bob")
+    vault = vault_for(alice, name="Research")
+    with actor_context(alice):
+        Page.objects.create_in(vault, title="Octopus facts")
+        by_body = Page.objects.create_in(vault, title="Notes")
+        MarkdownPage.objects.write_body(by_body, "the octopus has three hearts")
+        Page.objects.create_in(vault, title="Unrelated")
+    schema = _schema("public")
+    vault_id = _public_id(vault)
+
+    rows = result_data(
+        execute_schema(
+            schema,
+            """
+            query Search($vault: ID!) {
+              search_pages(vault: $vault, query: "octopus") { title }
+            }
+            """,
+            {"vault": vault_id},
+            user=alice,
+        )
+    )["search_pages"]
+    assert {row["title"] for row in rows} == {"Octopus facts", "Notes"}
+
+    denied = execute_schema(
+        schema,
+        """
+        query Search($vault: ID!) {
+          search_pages(vault: $vault, query: "octopus") { title }
+        }
+        """,
+        {"vault": vault_id},
+        user=bob,
+    )
+    assert denied.errors is not None
+
+
 def test_page_backlinks_list_resolved_sources(knowledge_tables: None) -> None:
     """The page detail surface exposes resolved incoming wikilinks."""
 
