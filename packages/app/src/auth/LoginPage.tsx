@@ -8,14 +8,14 @@ import {
 import { useNavigate } from "@tanstack/react-router";
 import { AngeeLogo, AngeeLogoCube } from "@angee/logo-react";
 import "@angee/logo-react/style.css";
-import { useSlot } from "@angee/sdk";
+import { useSlot } from "@angee/ui/runtime";
 
-import { useBaseT } from "../i18n";
-import { cn } from "../lib/cn";
-import { SlotOutlet, slotEntriesHaveContent } from "../lib/slot-outlet";
+import { useBaseT } from "@angee/ui/i18n";
+import { cn } from "@angee/ui/lib/cn";
+import { SlotOutlet, slotEntriesHaveContent } from "@angee/ui/lib/slot-outlet";
 import { safeRedirectPath } from "./safe-redirect";
 import { UsernamePasswordForm } from "./UsernamePasswordForm";
-import { Button } from "../ui/button";
+import { Button } from "@angee/ui/ui/button";
 
 export const AUTH_LOGIN_METHOD_SLOT = "auth.login.method";
 export const AUTH_LOGIN_CARD_FOOTER_SLOT = "auth.login.card-footer";

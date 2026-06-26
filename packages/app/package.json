@@ -18,6 +18,10 @@
       "types": "./src/define-addon.ts",
       "import": "./src/define-addon.ts"
     },
+    "./auth": {
+      "types": "./src/auth/index.ts",
+      "import": "./src/auth/index.ts"
+    },
     "./testing": {
       "types": "./src/testing.tsx",
       "import": "./src/testing.tsx"
@@ -30,6 +34,7 @@
   },
   "dependencies": {
     "@angee/data": "workspace:*",
+    "@angee/logo-react": "^0.2.1",
     "@angee/refine": "workspace:*",
     "@angee/resources": "workspace:*",
     "@angee/ui": "workspace:*",

@@ -3,7 +3,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { AppRuntimeProvider, type AppRuntime } from "@angee/sdk";
+import { AppRuntimeProvider, type AppRuntime } from "@angee/ui/runtime";
 
 import {
   AUTH_LOGIN_CARD_FOOTER_SLOT,

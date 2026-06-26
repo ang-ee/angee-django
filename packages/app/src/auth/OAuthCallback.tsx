@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
-import { errorMessage } from "../feedback";
-import { Alert } from "../ui/alert";
-import { Button } from "../ui/button";
-import { Spinner } from "../ui/spinner";
+import { errorMessage } from "@angee/ui/feedback/index";
+import { Alert } from "@angee/ui/ui/alert";
+import { Button } from "@angee/ui/ui/button";
+import { Spinner } from "@angee/ui/ui/spinner";
 import { safeRedirectPath } from "./safe-redirect";
 
 /**

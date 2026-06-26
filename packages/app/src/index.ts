@@ -9,3 +9,7 @@ export * from "./create-app";
 
 // Addon composition API (headless manifest authoring + folding).
 export * from "./define-addon";
+
+// The login/OAuth-callback auth surface — app-shell pages the host mounts as
+// routes (the only consumers are addon web + the host, never a package below).
+export * from "./auth";

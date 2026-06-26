@@ -19,7 +19,7 @@
     "./styles.css": "./src/styles/index.css"
   },
   "scripts": {
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

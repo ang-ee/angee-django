@@ -1,10 +1,10 @@
 import { useId, useState, type FormEvent, type ReactNode } from "react";
 import { useLoginWithPassword } from "@angee/data";
 
-import { errorMessage } from "../feedback";
-import { useBaseT } from "../i18n";
-import { Button } from "../ui/button";
-import { FieldControl, FieldLabel, FieldRoot } from "../ui/field";
+import { errorMessage } from "@angee/ui/feedback/index";
+import { useBaseT } from "@angee/ui/i18n";
+import { Button } from "@angee/ui/ui/button";
+import { FieldControl, FieldLabel, FieldRoot } from "@angee/ui/ui/field";
 
 export interface UsernamePasswordFormProps {
   /** Called after a successful sign-in; the page handles the redirect. */

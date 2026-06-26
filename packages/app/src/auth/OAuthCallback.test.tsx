@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
 
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { AppRuntimeProvider } from "@angee/sdk";
+import { AppRuntimeProvider } from "@angee/ui/runtime";
 import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { baseIcons } from "../chrome";
+import { baseIcons } from "@angee/ui/chrome/icon-registry";
 import {
   OAuthCallback,
   type CallbackExchange,

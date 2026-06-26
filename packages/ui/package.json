@@ -12,6 +12,7 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts"
     },
+    "./styles.css": "./src/styles/index.css",
     "./lib": {
       "types": "./src/lib/index.ts",
       "import": "./src/lib/index.ts"
@@ -358,7 +359,8 @@
     "react-resizable-panels": "^4.11.1",
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.6.0",
-    "tailwind-variants": "^3.2.0"
+    "tailwind-variants": "^3.2.0",
+    "tw-animate-css": "^1.0.0"
   },
   "peerDependencies": {
     "@tanstack/react-router": "^1",

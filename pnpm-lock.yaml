@@ -672,6 +672,9 @@ importers:
       '@angee/data':
         specifier: workspace:*
         version: link:../data
+      '@angee/logo-react':
+        specifier: ^0.2.1
+        version: 0.2.1(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
       '@angee/refine':
         specifier: workspace:*
         version: link:../refine
@@ -1180,6 +1183,9 @@ importers:
       tailwind-variants:
         specifier: ^3.2.0
         version: 3.2.2(tailwind-merge@3.6.0)(tailwindcss@4.3.0)
+      tw-animate-css:
+        specifier: ^1.0.0
+        version: 1.4.0
     devDependencies:
       '@tanstack/react-query':
         specifier: ^5.101.0
