@@ -31,12 +31,6 @@ import { useAgentsT } from "../i18n";
 
 const PROVIDER_MODEL = "agents.InferenceProvider";
 const MODEL_MODEL = "agents.InferenceModel";
-const PROVIDER_PATCH_RELATION_FIELDS = new Set([
-  "vendor",
-  "owner",
-  "credential",
-  "account",
-]);
 
 export function InferenceProvidersPage(): React.ReactElement {
   const t = useAgentsT();
@@ -54,11 +48,14 @@ export function InferenceProvidersPage(): React.ReactElement {
       if (!context.id) {
         throw new Error("Inference provider updates require a saved record.");
       }
+      // `data` is FormView's already-normalized payload: relation fields arrive
+      // as flat public ids (FormView owns the {id} -> id flattening), so it maps
+      // straight onto the patch input. The cast only bridges FormSubmit's untyped
+      // `Record<string, unknown>` contract to the typed document variables.
       const variables: DocumentVariables<typeof UpdateInferenceProvider> = {
-        data: {
-          ...inferenceProviderPatchData(data),
-          id: context.id,
-        } as DocumentVariables<typeof UpdateInferenceProvider>["data"],
+        data: { ...data, id: context.id } as DocumentVariables<
+          typeof UpdateInferenceProvider
+        >["data"],
       };
       const result = await updateProvider(variables);
       return result?.update_inference_provider ?? null;
@@ -106,23 +103,6 @@ export function InferenceProvidersPage(): React.ReactElement {
       </Form>
     </ResourceList>
   );
-}
-
-function inferenceProviderPatchData(
-  data: Record<string, unknown>,
-): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(data).map(([field, value]) => [
-      field,
-      PROVIDER_PATCH_RELATION_FIELDS.has(field) ? relationInputId(value) : value,
-    ]),
-  );
-}
-
-function relationInputId(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-  const id = (value as { id?: unknown }).id;
-  return typeof id === "string" ? id : value;
 }
 
 function ProviderConnectButton({

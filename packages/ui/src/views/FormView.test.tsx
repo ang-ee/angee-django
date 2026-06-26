@@ -810,6 +810,64 @@ describe("FormView", () => {
     expect(sdkMocks.mutate).not.toHaveBeenCalled();
   });
 
+  test("hands a custom submit owner flat relation ids, not nested records", async () => {
+    // The detail read carries the relation as a nested {id} record.
+    sdkMocks.record = {
+      id: "client-1",
+      displayName: "Acme",
+      vendor: { id: "vendor-1", displayName: "Vendor One" },
+    };
+    const submit = vi.fn(
+      async (data: Record<string, unknown>, context: FormSubmitContext) => ({
+        ...sdkMocks.record,
+        ...data,
+        id: context.id,
+      }),
+    );
+    const relationFields = [
+      { name: "displayName", label: "Display Name", title: true },
+      {
+        name: "vendor",
+        label: "Vendor",
+        widget: "many2one",
+        options: [
+          { value: "vendor-1", label: "Vendor One" },
+          { value: "vendor-2", label: "Vendor Two" },
+        ],
+      },
+    ] satisfies readonly FormField[];
+
+    renderWithProviders(
+      <FormView
+        resource="OAuthClient"
+        id="client-1"
+        fields={relationFields}
+        submit={submit}
+      />,
+    );
+
+    // The widget resolves the nested {id} record to the flat option id, so the
+    // option label renders — proof the form holds "vendor-1", not the object.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Vendor/ }).textContent).toContain(
+        "Vendor One",
+      ),
+    );
+    fireEvent.change(screen.getByLabelText("Display Name"), {
+      target: { value: "Acme Renamed" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    // The custom owner receives FormView's normalized payload: the unchanged
+    // relation is dropped, never forwarded as a nested record to re-flatten.
+    expect(submit).toHaveBeenCalledWith(
+      { displayName: "Acme Renamed" },
+      expect.objectContaining({ id: "client-1", isCreate: false }),
+    );
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+  });
+
   test("does not offer save without a stock update root or custom submit", async () => {
     sdkMocks.record = { id: "provider-1", name: "Anthropic" };
     const resource = {

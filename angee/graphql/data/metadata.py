@@ -867,7 +867,9 @@ def _model_resource_field(
         kind=kind,
         scalar=scalar,
         values=(),
-        widget=None if scalar == "ID" else _field_widget(field, kind),
+        # `model_field_scalar` never yields "ID", so unlike the surface path the
+        # widget is always derived from the field kind here.
+        widget=_field_widget(field, kind),
         filterable=filterable,
         sortable=sortable,
         aggregatable=aggregatable,

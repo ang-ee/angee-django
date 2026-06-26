@@ -324,8 +324,11 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   name, which the String input rejects. On a create form pass `options` with
   lower-cased values (the member name is `key.upper()`, so
   `value.toLowerCase()`) and mark the field `createOnly`, so the read-side casing
-  never has to round-trip back through the select. For status verbs prefer an
-  `<Action set={{status:"disabled"}}>` over an editable status field.
+  never has to round-trip back through the select. To keep the field *editable*
+  instead, the `select`/`combobox` widgets reconcile the UPPERCASE read back to the
+  authored option via `canonicalOptionValue` (a case-insensitive unique match), so
+  lower-cased `options` round-trip correctly without `createOnly`. For status verbs
+  prefer an `<Action set={{status:"disabled"}}>` over an editable status field.
 - **A server-backed typeahead is not a `RelationField`** — `RelationField`/
   `RelationPicker` own their query state and filter a fixed `options` list
   client-side, so they cannot drive a remote search. For one (e.g. a host repo
