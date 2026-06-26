@@ -42,7 +42,12 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../feedback";
 import { defaultWidgets } from "../widgets";
 import { Form } from "./Form";
-import { FormView, formViewSectionsSlot, type FormField } from "./FormView";
+import {
+  FormView,
+  formViewSectionsSlot,
+  type FormField,
+  type FormSubmitContext,
+} from "./FormView";
 import {
   Action,
   Field,
@@ -51,6 +56,7 @@ import {
 
 const sdkMocks = vi.hoisted(() => ({
   record: null as Row | null,
+  listRows: [] as Row[],
   mutate: vi.fn(),
   recordSelection: undefined as readonly string[] | undefined,
   mutationAction: undefined as string | undefined,
@@ -150,7 +156,7 @@ vi.mock("@refinedev/core", async (importOriginal) => {
       };
     },
     useList: () => ({
-      result: { data: [], total: 0 },
+      result: { data: sdkMocks.listRows, total: sdkMocks.listRows.length },
       query: {
         isFetching: false,
         error: null,
@@ -294,6 +300,7 @@ describe("FormView", () => {
       wordCount: 3,
     };
     sdkMocks.mutate.mockReset();
+    sdkMocks.listRows = [];
     sdkMocks.recordSelection = undefined;
     sdkMocks.mutationAction = undefined;
     sdkMocks.mutationOptions = undefined;
@@ -741,6 +748,111 @@ describe("FormView", () => {
     });
   });
 
+  test("submits through a custom owner when the stock update root is absent", async () => {
+    sdkMocks.record = { id: "provider-1", name: "Anthropic" };
+    const resource = {
+      ...defaultResource("InferenceProviderType", "agents.InferenceProvider"),
+      roots: {
+        ...defaultResource("InferenceProviderType", "agents.InferenceProvider").roots,
+        update: null,
+      },
+      capabilities: ["list", "detail", "delete"],
+    } satisfies DataResourceMetadata;
+    const metadata: SchemaFieldMetadata = {
+      types: {
+        InferenceProviderType: {
+          typeName: "InferenceProviderType",
+          fields: {
+            name: { name: "name", kind: "scalar", scalar: "String" },
+          },
+          rootFields: {
+            list: "inference_providers",
+            detail: "inference_providers_by_pk",
+          },
+          resource,
+        },
+      },
+    };
+    const submit = vi.fn(
+      async (data: Record<string, unknown>, context: FormSubmitContext) => ({
+        ...sdkMocks.record,
+        ...data,
+        id: context.id,
+      }),
+    );
+
+    renderWithProviders(
+      <FormView
+        resource="agents.InferenceProvider"
+        id="provider-1"
+        fields={[{ name: "name", label: "Name", title: true }]}
+        submit={submit}
+      />,
+      metadata,
+    );
+
+    const name = await screen.findByLabelText("Name");
+    await waitFor(() =>
+      expect((name as HTMLInputElement).value).toBe("Anthropic"),
+    );
+    fireEvent.change(name, { target: { value: "Claude" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(submit).toHaveBeenCalledWith(
+      { name: "Claude" },
+      expect.objectContaining({
+        id: "provider-1",
+        isCreate: false,
+        resource: "agents.InferenceProvider",
+      }),
+    );
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+  });
+
+  test("does not offer save without a stock update root or custom submit", async () => {
+    sdkMocks.record = { id: "provider-1", name: "Anthropic" };
+    const resource = {
+      ...defaultResource("InferenceProviderType", "agents.InferenceProvider"),
+      roots: {
+        ...defaultResource("InferenceProviderType", "agents.InferenceProvider").roots,
+        update: null,
+      },
+      capabilities: ["list", "detail", "delete"],
+    } satisfies DataResourceMetadata;
+    const metadata: SchemaFieldMetadata = {
+      types: {
+        InferenceProviderType: {
+          typeName: "InferenceProviderType",
+          fields: {
+            name: { name: "name", kind: "scalar", scalar: "String" },
+          },
+          rootFields: {
+            list: "inference_providers",
+            detail: "inference_providers_by_pk",
+          },
+          resource,
+        },
+      },
+    };
+
+    renderWithProviders(
+      <FormView
+        resource="agents.InferenceProvider"
+        id="provider-1"
+        fields={[{ name: "name", label: "Name", title: true }]}
+      />,
+      metadata,
+    );
+
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText("Name") as HTMLInputElement).value,
+      ).toBe("Anthropic"),
+    );
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+  });
+
   test("does not require a mutation for a read-only detail form", async () => {
     sdkMocks.record = { id: "repo-1", name: "widgets", org: "acme" };
     renderWithProviders(
@@ -775,6 +887,130 @@ describe("FormView", () => {
     expect(sdkMocks.mutate).toHaveBeenCalledWith({
       data: { status: "ARCHIVED", id: "note-1" },
     });
+  });
+
+  test("canonicalizes enum read values to option values before update submit", async () => {
+    sdkMocks.record = {
+      id: "note-1",
+      title: "Anthropic",
+      backend_class: "ANTHROPIC",
+    };
+    function Harness(): ReactElement {
+      const [options, setOptions] = useState<typeof statusOptions>([]);
+      return (
+        <>
+          <button
+            type="button"
+            onClick={() =>
+              setOptions([
+                { value: "anthropic", label: "Anthropic" },
+                { value: "openai", label: "OpenAI" },
+              ])
+            }
+          >
+            load options
+          </button>
+          <FormView
+            resource="notes.Note"
+            id="note-1"
+            fields={[
+              { name: "title", label: "Title", title: true },
+              {
+                name: "backend_class",
+                label: "Backend Class",
+                widget: "select",
+                options,
+              },
+            ]}
+          />
+        </>
+      );
+    }
+
+    renderWithProviders(<Harness />);
+
+    const backendClass = await screen.findByRole("combobox", {
+      name: "Backend Class",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "load options" }));
+    await waitFor(() =>
+      expect(backendClass.textContent).toContain("Anthropic"),
+    );
+
+    fireEvent.change(screen.getByLabelText("Title"), {
+      target: { value: "Claude" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: { title: "Claude", id: "note-1" },
+    });
+  });
+
+  test("renders relation object values through metadata-owned relation options", async () => {
+    sdkMocks.record = {
+      id: "provider-1",
+      name: "Anthropic",
+      vendor: { id: "vnd_1" },
+    };
+    sdkMocks.listRows = [{ id: "vnd_1", display_name: "Anthropic Vendor" }];
+    const metadata: SchemaFieldMetadata = {
+      types: {
+        InferenceProviderType: {
+          typeName: "InferenceProviderType",
+          fields: {
+            name: { name: "name", kind: "scalar", scalar: "String" },
+            vendor: {
+              name: "vendor",
+              kind: "relation",
+              relationTarget: "VendorType",
+            },
+          },
+          rootFields: {
+            list: "inference_providers",
+            detail: "inference_provider",
+            update: "update_inference_provider",
+          },
+          resource: defaultResource("InferenceProviderType", "agents.InferenceProvider"),
+        },
+        VendorType: {
+          typeName: "VendorType",
+          recordRepresentation: "display_name",
+          fields: {
+            display_name: {
+              name: "display_name",
+              kind: "scalar",
+              scalar: "String",
+            },
+          },
+          rootFields: {
+            list: "vendors",
+            detail: "vendor",
+          },
+          resource: defaultResource("VendorType", "Vendor"),
+        },
+      },
+    };
+
+    renderWithProviders(
+      <FormView
+        resource="agents.InferenceProvider"
+        id="provider-1"
+        fields={[
+          { name: "name", label: "Name", title: true },
+          { name: "vendor", label: "Vendor" },
+        ]}
+      />,
+      metadata,
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Vendor: Anthropic Vendor" }),
+      ).toBeTruthy(),
+    );
+    expect(sdkMocks.recordSelection).toContain("vendor.id");
   });
 
   test("omits unselected option fields from create payloads", async () => {
@@ -1111,6 +1347,16 @@ describe("FormView", () => {
         "Vendor One",
       ),
     );
+    fireEvent.change(screen.getByLabelText("Display Name"), {
+      target: { value: "Acme Renamed" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: { displayName: "Acme Renamed", id: "client-1" },
+    });
+
     cleanup();
     sdkMocks.record = null;
     sdkMocks.mutate.mockReset();

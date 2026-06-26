@@ -60,6 +60,41 @@ def test_daemon_request_raises_typed_not_found(monkeypatch: pytest.MonkeyPatch) 
     assert str(raised.value) == 'operator POST destroy: HTTP 404: service "svc" is not declared'
 
 
+def test_resolve_template_ref_reads_collection_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The daemon's template REST list is a collection envelope, not a bare array."""
+
+    daemon = OperatorDaemon(
+        endpoint="http://op/graphql",
+        server_base="http://op",
+        admin_bearer="admin",
+        scope=(),
+        ttl="1h",
+    )
+
+    def fake_request(
+        self: OperatorDaemon,
+        method: str,
+        url: str,
+        payload: dict[str, object] | None = None,
+        *,
+        timeout: int = 60,
+    ) -> dict[str, object]:
+        del self, payload, timeout
+        assert method == "GET"
+        assert url == "http://op/templates"
+        return {
+            "nodes": [
+                {"name": "agent-default", "kind": "service", "ref": "services/wrong-kind"},
+                {"name": "agent-default", "kind": "workspace", "ref": "workspaces/agent-default"},
+            ],
+            "total_count": 2,
+        }
+
+    monkeypatch.setattr(OperatorDaemon, "_request", fake_request)
+
+    assert daemon.resolve_template_ref(name="agent-default", kind="workspace") == "workspaces/agent-default"
+
+
 # --- endpoint resolution ------------------------------------------------------
 #
 # The daemon resolves from Django settings only. Dev stack env and project YAML

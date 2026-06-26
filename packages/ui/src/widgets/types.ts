@@ -34,6 +34,25 @@ export function optionLabel(
   return options?.find((option) => option.value === value)?.label ?? value ?? "";
 }
 
+/**
+ * Match a scalar option value back to the authored option value. Direct matches
+ * win; a unique case-insensitive match covers GraphQL enum reads such as
+ * `ANTHROPIC` when mutation inputs use the lower-case value `anthropic`.
+ */
+export function canonicalOptionValue(
+  options: readonly WidgetOption[] | undefined,
+  value: unknown,
+): string | undefined {
+  if (typeof value !== "string" || !options || options.length === 0) {
+    return undefined;
+  }
+  const direct = options.find((option) => option.value === value);
+  if (direct) return direct.value;
+  const lower = value.toLowerCase();
+  const matches = options.filter((option) => option.value.toLowerCase() === lower);
+  return matches.length === 1 ? matches[0]?.value : undefined;
+}
+
 export function optionTextLabel(value: ReactNode): string | undefined;
 export function optionTextLabel(value: ReactNode, fallback: string): string;
 export function optionTextLabel(

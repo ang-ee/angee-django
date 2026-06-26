@@ -31,8 +31,11 @@ from angee.graphql.data.metadata import (
     DataResourceTypeNames,
     attach_data_resource_metadata,
     make_data_resource_metadata,
+    model_field_scalar,
+    model_resource_fields,
     resource_type_name,
     resource_wire_field_name,
+    resource_wire_field_names,
 )
 from angee.graphql.deletion import delete_by_public_id
 from angee.graphql.ids import require_instance_for_id
@@ -261,6 +264,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     write_backend: WriteBackend | None = None,
     id_decode: Callable[[Any], Any] | None = None,
     id_column: str = "pk",
+    declared_fields: Sequence[str] = (),
     model_label: str | None = None,
     public_id_field: str = PUBLIC_ID_FIELD_NAME,
     row_model: str = "server",
@@ -313,6 +317,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         insert=insert,
         update=update,
         delete=delete,
+        declared_fields=tuple(declared_fields),
         model_label=model_label,
         public_id_field=public_id_field,
         row_model=row_model,
@@ -332,6 +337,7 @@ def attach_hasura_resource_metadata(
     insert: bool = True,
     update: bool = True,
     delete: bool = True,
+    declared_fields: tuple[str, ...] = (),
     model_label: str | None = None,
     public_id_field: str = PUBLIC_ID_FIELD_NAME,
     row_model: str = "server",
@@ -339,6 +345,26 @@ def attach_hasura_resource_metadata(
     """Attach Angee resource metadata to a built Hasura resource bundle."""
 
     type_names = _ResourceTypes(resource, name, node)
+    create_fields = (
+        resource_wire_field_names(type_names.insert_input_type, exclude=("id",))
+        if insert
+        else ()
+    )
+    update_fields = (
+        resource_wire_field_names(type_names.set_input_type, exclude=("id",))
+        if update
+        else ()
+    )
+    fields = model_resource_fields(
+        model,
+        declared_fields,
+        filter_fields=filterable,
+        order_fields=sortable,
+        aggregate_fields=aggregatable,
+        group_by_fields=groupable,
+        create_fields=create_fields,
+        update_fields=update_fields,
+    )
     attach_data_resource_metadata(
         resource.query,
         make_data_resource_metadata(
@@ -374,6 +400,7 @@ def attach_hasura_resource_metadata(
             group_dimensions=_hasura_group_dimensions(model, groupable, filterable),
             aggregate_measures=_hasura_aggregate_measures(model, aggregatable),
             default_measures=(DataAggregateMeasureMetadata(op="count"),),
+            fields=fields,
             row_model=row_model,
         ),
     )
@@ -700,16 +727,7 @@ def _measure_ops_for_field(field: models.Field[Any, Any]) -> tuple[str, ...]:
 
 
 def _scalar_for_field(field: models.Field[Any, Any]) -> str | None:
-    if isinstance(field, models.BooleanField):
-        return "Boolean"
-    if isinstance(field, models.IntegerField):
-        return "Int"
-    if isinstance(field, (models.DecimalField, models.FloatField)):
-        return "Float"
-    if isinstance(field, models.DateTimeField):
-        return "DateTime"
-    if isinstance(field, models.DateField):
-        return "Date"
-    if isinstance(field, models.JSONField):
-        return "JSON"
-    return None
+    """Return the group-dimension key scalar for a field; String columns carry none."""
+
+    scalar = model_field_scalar(field)
+    return None if scalar == "String" else scalar

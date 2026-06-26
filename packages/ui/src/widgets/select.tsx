@@ -3,7 +3,12 @@ import type { ReactElement } from "react";
 import { useBaseT } from "../i18n";
 import { Select } from "../ui/select";
 import { widgetLabel } from "./label";
-import { optionLabel, type WidgetDefinition, type WidgetRenderProps } from "./types";
+import {
+  canonicalOptionValue,
+  optionLabel,
+  type WidgetDefinition,
+  type WidgetRenderProps,
+} from "./types";
 
 function SelectEdit({
   value,
@@ -13,9 +18,10 @@ function SelectEdit({
 }: WidgetRenderProps<string>): ReactElement {
   const t = useBaseT();
   const label = widgetLabel(field, t("select.label"));
+  const selected = canonicalOptionValue(field?.options, value) ?? value ?? "";
   return (
     <Select
-      value={value ?? ""}
+      value={selected}
       options={field?.options ?? []}
       readOnly={readOnly}
       disabled={readOnly}
@@ -30,7 +36,8 @@ function SelectRead({
   value,
   field,
 }: WidgetRenderProps<string>): ReactElement {
-  const label = optionLabel(field?.options, value);
+  const selected = canonicalOptionValue(field?.options, value) ?? value;
+  const label = optionLabel(field?.options, selected);
   return <span className="text-13 text-fg">{label}</span>;
 }
 

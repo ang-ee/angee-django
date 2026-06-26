@@ -824,11 +824,99 @@ def _resource_fields(
                 creatable=name in creatable,
                 updatable=name in updatable,
                 required_on_create=name in required_on_create,
-                relation_model_label=axis.model_label if axis is not None else None,
+                relation_model_label=_relation_model_label(model_field, axis),
                 relation_label_axis=axis.label_axis if axis is not None else None,
             )
         )
     return tuple(fields)
+
+
+def _model_resource_field(
+    model: type[models.Model],
+    name: str,
+    *,
+    relation_axis: DataRelationAxisMetadata | None,
+    filterable: bool,
+    sortable: bool,
+    aggregatable: bool,
+    groupable: bool,
+    creatable: bool,
+    updatable: bool,
+    required_on_create: bool,
+) -> DataResourceFieldMetadata:
+    try:
+        field = model._meta.get_field(name)
+    except FieldDoesNotExist as error:
+        raise ImproperlyConfigured(
+            f"resource metadata for {model._meta.label} declares unknown model field {name!r}."
+        ) from error
+    kind = _field_kind(field, relation_axis)
+    if kind in {"enum", "list"}:
+        raise ImproperlyConfigured(
+            f"resource metadata for {model._meta.label} cannot reconstruct {kind} field "
+            f"{name!r} from the model; the node surface owns its enum values and item shape."
+        )
+    scalar = None if kind == "relation" else model_field_scalar(field)
+    if scalar is None and kind == "scalar":
+        raise ImproperlyConfigured(
+            f"resource metadata for {model._meta.label} cannot classify model field "
+            f"{name!r} ({field.__class__.__name__})."
+        )
+    return DataResourceFieldMetadata(
+        name=name,
+        kind=kind,
+        scalar=scalar,
+        values=(),
+        widget=None if scalar == "ID" else _field_widget(field, kind),
+        filterable=filterable,
+        sortable=sortable,
+        aggregatable=aggregatable,
+        groupable=groupable,
+        creatable=creatable,
+        updatable=updatable,
+        required_on_create=required_on_create,
+        relation_model_label=_relation_model_label(field, relation_axis),
+        relation_label_axis=relation_axis.label_axis if relation_axis is not None else None,
+    )
+
+
+def _relation_model_label(
+    field: models.Field[Any, Any] | None,
+    relation_axis: DataRelationAxisMetadata | None,
+) -> str | None:
+    if relation_axis is not None:
+        return relation_axis.model_label
+    if field is None or not field.is_relation:
+        return None
+    remote_field = getattr(field, "remote_field", None)
+    remote_model = getattr(remote_field, "model", None)
+    meta = getattr(remote_model, "_meta", None)
+    return str(meta.label) if meta is not None else None
+
+
+def model_field_scalar(field: models.Field[Any, Any]) -> str | None:
+    """Return the GraphQL scalar a Django field's column type maps to, or None.
+
+    The single owner of Django-field-to-scalar classification, shared by the
+    model-derived resource field metadata and the Hasura group-dimension keys.
+    Relations, enums, and lists carry no scalar of their own; callers gate on kind.
+    """
+
+    if isinstance(field, models.BooleanField):
+        return "Boolean"
+    if isinstance(field, models.IntegerField):
+        return "Int"
+    if isinstance(field, (models.DecimalField, models.FloatField)):
+        return "Float"
+    if isinstance(field, models.DateTimeField):
+        return "DateTime"
+    if isinstance(field, models.DateField):
+        return "Date"
+    if isinstance(field, models.JSONField):
+        return "JSON"
+    if isinstance(field, (models.CharField, models.TextField, models.UUIDField)):
+        return "String"
+    return None
 
 
 def _surface_wire_field_name(surface: type | None, name: str | None) -> str | None:

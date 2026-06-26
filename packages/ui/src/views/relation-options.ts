@@ -55,7 +55,7 @@ export function useRelationOptions(
   const metadata = useModelMetadata(relation?.resource ?? "");
   const resource = metadata?.resource ?? null;
   const fields = React.useMemo(
-    () => refineFieldsFromPaths([labelField]),
+    () => refineFieldsFromPaths(["id", labelField]),
     [labelField],
   );
   const run = useList<RowRecord, HttpError>({

@@ -13,6 +13,7 @@ import {
   parseFlatSearch,
   stringifyFlatSearch,
   type BaseAddon,
+  type CreateAppInput,
   type RefineLayoutChromeProps,
 } from "./create-app";
 import { MenuTree, type ChromeMenuItem } from "@angee/ui/chrome/menu-tree";
@@ -27,6 +28,7 @@ import {
   resourceViewStateToSearch,
   mergeResourceViewSearch,
 } from "@angee/ui/views/resource-view-model";
+import type { DataResourceMetadata } from "@angee/resources";
 
 afterEach(() => cleanup());
 
@@ -497,6 +499,215 @@ describe("createApp route menu refs", () => {
       expect(tree.railMenuItems().map((item) => item.id)).toEqual(["agents"]);
       expect(tree.byId.get("agents")?.appRoot).toBe(true);
       expect(tree.byId.get("agents.home")?.appRoot).toBeUndefined();
+      expect(tree.trailFor("agents.home").map((item) => item.id)).toEqual([
+        "agents",
+        "agents.group",
+        "agents.home",
+      ]);
+      expect(tree.appSectionItems("/agents").map((item) => item.id)).toEqual([
+        "agents.group",
+      ]);
+    } finally {
+      captured.cleanup();
+    }
+  });
+
+  test("preserves same-label grouped app menus for top-nav rendering", async () => {
+    const captured = await captureChrome({
+      path: "/agents/skills",
+      addons: [
+        {
+          id: "agents",
+          routes: [
+            {
+              name: "agents.home",
+              path: "/agents",
+              layout: "console",
+              component: EmptyPage,
+            },
+            {
+              name: "agents.skills",
+              path: "/agents/skills",
+              layout: "console",
+              component: EmptyPage,
+            },
+            {
+              name: "agents.sources",
+              path: "/agents/sources",
+              layout: "console",
+              component: EmptyPage,
+            },
+          ],
+          menus: [
+            {
+              id: "agents",
+              label: "Agents",
+              children: [
+                {
+                  id: "agents.group",
+                  label: "Agents",
+                  children: [
+                    {
+                      id: "agents.home",
+                      label: "Agents",
+                      route: "agents.home",
+                    },
+                  ],
+                },
+                {
+                  id: "agents.skills.group",
+                  label: "Skills",
+                  children: [
+                    {
+                      id: "agents.skills",
+                      label: "Skills",
+                      route: "agents.skills",
+                    },
+                    {
+                      id: "agents.sources",
+                      label: "Sources",
+                      route: "agents.sources",
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    try {
+      const tree = MenuTree.from(captured.props().menus);
+
+      expect(tree.roots.map((item) => item.id)).toEqual(["agents"]);
+      expect(tree.appSectionItems("/agents/skills").map((item) => item.id)).toEqual([
+        "agents.group",
+        "agents.skills.group",
+      ]);
+      expect(tree.trailFor("agents.skills").map((item) => item.id)).toEqual([
+        "agents",
+        "agents.skills.group",
+        "agents.skills",
+      ]);
+      expect(chromeSnapshot(captured.props())).toEqual({
+        breadcrumbs: [
+          { label: "Agents", to: "/agents" },
+          { label: "Skills", to: "/agents/skills" },
+        ],
+      });
+    } finally {
+      captured.cleanup();
+    }
+  });
+
+  test("keeps authored menu order when schema resources attach under menu parents", async () => {
+    const captured = await captureChrome({
+      path: "/agents",
+      schemas: testSchemasWithConsoleResources([
+        testDataResource("agents.MCPServer"),
+        testDataResource("agents.InferenceProvider"),
+        testDataResource("agents.Agent"),
+        testDataResource("agents.Skill"),
+      ]),
+      addons: [
+        {
+          id: "agents",
+          routes: [
+            {
+              name: "agents.agents",
+              path: "/agents",
+              layout: "console",
+              component: EmptyPage,
+              resource: "agents.Agent",
+            },
+            {
+              name: "agents.skills",
+              path: "/agents/skills",
+              layout: "console",
+              component: EmptyPage,
+              resource: "agents.Skill",
+            },
+            {
+              name: "agents.mcp",
+              path: "/agents/mcp",
+              layout: "console",
+              component: EmptyPage,
+              resource: "agents.MCPServer",
+            },
+            {
+              name: "agents.inference",
+              path: "/agents/inference",
+              layout: "console",
+              component: EmptyPage,
+              resource: "agents.InferenceProvider",
+            },
+          ],
+          menus: [
+            {
+              id: "agents",
+              label: "Agents",
+              children: [
+                {
+                  id: "agents.menu.agents",
+                  label: "Agents",
+                  children: [
+                    {
+                      id: "agents.agents",
+                      label: "Agents",
+                      route: "agents.agents",
+                    },
+                  ],
+                },
+                {
+                  id: "agents.menu.skills",
+                  label: "Skills",
+                  children: [
+                    {
+                      id: "agents.skills",
+                      label: "Skills",
+                      route: "agents.skills",
+                    },
+                  ],
+                },
+                {
+                  id: "agents.menu.mcp",
+                  label: "MCP",
+                  children: [
+                    {
+                      id: "agents.mcp",
+                      label: "MCP",
+                      route: "agents.mcp",
+                    },
+                  ],
+                },
+                {
+                  id: "agents.menu.inference",
+                  label: "Inference",
+                  children: [
+                    {
+                      id: "agents.inference",
+                      label: "Inference",
+                      route: "agents.inference",
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    try {
+      const tree = MenuTree.from(captured.props().menus);
+
+      expect(tree.appSectionItems("/agents").map((item) => item.id)).toEqual([
+        "agents.menu.agents",
+        "agents.menu.skills",
+        "agents.menu.mcp",
+        "agents.menu.inference",
+      ]);
     } finally {
       captured.cleanup();
     }
@@ -883,6 +1094,45 @@ function testAppInput(
     schemas: TEST_SCHEMAS,
     defaultSchema: "console",
     subscriptionSchema: "console",
+  };
+}
+
+function testSchemasWithConsoleResources(
+  resources: readonly DataResourceMetadata[],
+): CreateAppInput["schemas"] {
+  return {
+    ...TEST_SCHEMAS,
+    console: {
+      ...TEST_SCHEMAS.console,
+      metadata: { angee: { resources } },
+    },
+  };
+}
+
+function testDataResource(modelLabel: string): DataResourceMetadata {
+  const modelName = modelLabel.split(".").at(-1) ?? modelLabel;
+  const list = `${modelName.toLowerCase()}s`;
+  return {
+    schemaName: "console",
+    modelLabel,
+    appLabel: modelLabel.includes(".") ? modelLabel.split(".")[0] ?? "" : "",
+    modelName,
+    publicIdField: "id",
+    roots: {
+      list,
+      detail: `${list}_by_pk`,
+      create: `insert_${list}_one`,
+      update: `update_${list}_by_pk`,
+      delete: `delete_${list}_by_pk`,
+    },
+    typeNames: { node: `${modelName}Type` },
+    capabilities: ["list", "detail", "create", "update", "delete"],
+    fields: [],
+    filterFields: [],
+    orderFields: [],
+    aggregateFields: [],
+    groupByFields: [],
+    relationAxes: [],
   };
 }
 

@@ -1101,9 +1101,19 @@ def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(
     with system_context(reason="test.agents.chat.seed"):
         model = InferenceModel.objects.create(
             provider=provider,
-            name="claude-opus-4-8",
+            name="anthropic/claude-opus-4-8",
+            config={"provider_model": "claude-opus-4-8", "broker_name": "anthropic"},
         )
-        agent = Agent.objects.create(name="Chatty", owner=admin, service="svc-chat", model=model)
+    agent = _provisionable_agent(
+        admin,
+        "Chatty",
+        slug="agt-chat-tpl",
+        service="svc-chat",
+        lifecycle="ready",
+        runtime_status="running",
+        model=model,
+    )
+    with system_context(reason="test.agents.chat.mcp.seed"):
         server = MCPServer.objects.create(name="notes", url="http://host.docker.internal:8101/mcp/notes/")
         agent.mcp_servers.add(server)
     agent_id = _public_id(agent.sqid)
@@ -1174,10 +1184,23 @@ def test_resolve_session_for_view_resolves_the_actors_running_agent(
     """
 
     admin = _platform_admin("agt-session-admin")
+    provider = _provider("agt-session-provider", name="P")
     with system_context(reason="test.agents.session.seed"):
-        Agent.objects.create(
-            name="Sidekick", owner=admin, service="svc-side", lifecycle="ready", runtime_status="running"
+        model = InferenceModel.objects.create(
+            provider=provider,
+            name="anthropic/claude-opus-4-8",
+            config={"provider_model": "claude-opus-4-8", "broker_name": "anthropic"},
         )
+    _provisionable_agent(
+        admin,
+        "Sidekick",
+        slug="agt-session-tpl",
+        service="svc-side",
+        lifecycle="ready",
+        runtime_status="running",
+        model=model,
+    )
+    with system_context(reason="test.agents.session.draft.seed"):
         # A draft agent for the same owner is not eligible (not running).
         Agent.objects.create(name="Draft", owner=admin)
 
@@ -1191,6 +1214,7 @@ def test_resolve_session_for_view_resolves_the_actors_running_agent(
 
     assert session["agent_name"] == "Sidekick"
     assert session["status"] == "running"
+    assert session["model_handle"] == "claude-opus-4-8"
 
     # A platform admin with no running agent gets null, not an error.
     other = _platform_admin("agt-session-none")
@@ -1395,6 +1419,51 @@ def test_provision_service_inputs_credential_drives_auth_mode(agents_console_tab
     }
     assert oauth_inputs["auth_mode"] == "oauth"
     assert oauth_inputs["model"] == "claude-opus-4-8"
+
+
+def test_claude_code_service_inputs_use_provider_model_name(agents_console_tables: None) -> None:
+    """Claude Code talks to Anthropic directly, so broker aliases render as provider ids."""
+
+    owner = User.objects.create_user(username="agt-cc-model-agent-owner", email="cc-model@example.com")
+    provider = _provider("agt-cc-model", name="Anthropic")
+    with system_context(reason="test.agents.provision_inputs.claude_code_model.seed"):
+        model = InferenceModel.objects.create(
+            provider=provider,
+            name="anthropic/claude-opus-4-8",
+            config={"provider_model": "claude-opus-4-8", "broker_name": "anthropic"},
+        )
+    agent = _provisionable_agent(
+        owner,
+        "Claude Code",
+        slug="agt-cc-model-tpl",
+        model=model,
+    )
+
+    with system_context(reason="test.agents.provision_inputs.claude_code_model"):
+        assert agent.provision_service_inputs()["model"] == "claude-opus-4-8"
+
+
+def test_opencode_service_inputs_keep_selected_broker_model(agents_console_tables: None) -> None:
+    """OpenCode expects the provider/model handle, so the selected catalogue row renders as-is."""
+
+    owner = User.objects.create_user(username="agt-oc-model-agent-owner", email="oc-model@example.com")
+    provider = _provider("agt-oc-model", name="Anthropic")
+    vcs = _vcs_bridge("agt-oc-model-tpl", config={"stub_repos": REPOS})
+    vcs.discover_repositories()
+    with system_context(reason="test.agents.provision_inputs.opencode_model"):
+        repository = Repository.objects.get(name="acme/widgets")
+        source = Source.objects.create(repository=repository, kind="template", path="templates")
+        service_template = Template.objects.create(
+            source=source, kind="service", name="opencode", path="services/opencode"
+        )
+        model = InferenceModel.objects.create(
+            provider=provider,
+            name="anthropic/claude-opus-4-8",
+            config={"provider_model": "claude-opus-4-8", "broker_name": "anthropic"},
+        )
+        agent = Agent.objects.create(name="OpenCode", owner=owner, service_template=service_template, model=model)
+
+        assert agent.provision_service_inputs()["model"] == "anthropic/claude-opus-4-8"
 
 
 def _provisionable_agent(owner: Any, name: str, *, slug: str, **agent_fields: Any) -> Any:

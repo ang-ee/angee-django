@@ -27,6 +27,7 @@ class OAuthClientOidc(AngeeModel):
         "create_on_login",
         "allowed_email_domains",
     )
+    hasura_readable_fields = hasura_insertable_fields
     hasura_updatable_fields = hasura_insertable_fields
 
     issuer = models.URLField(blank=True)

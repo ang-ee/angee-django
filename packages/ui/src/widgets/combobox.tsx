@@ -13,6 +13,7 @@ import {
 } from "../ui/select";
 import { widgetLabel } from "./label";
 import {
+  canonicalOptionValue,
   optionLabel,
   optionTextLabel,
   type WidgetDefinition,
@@ -34,11 +35,12 @@ function ComboboxEdit({
     () => filterOptions(options, query),
     [options, query],
   );
+  const selected = canonicalOptionValue(options, value) ?? value ?? "";
 
   return (
     <SelectPrimitive.Root
       items={visibleOptions}
-      value={value ?? ""}
+      value={selected}
       readOnly={readOnly}
       disabled={readOnly}
       onOpenChange={(open) => {
@@ -101,7 +103,8 @@ function ComboboxRead({
   value,
   field,
 }: WidgetRenderProps<string>): ReactElement {
-  const label = optionLabel(field?.options, value);
+  const selected = canonicalOptionValue(field?.options, value) ?? value;
+  const label = optionLabel(field?.options, selected);
   return <span className="text-13 text-fg">{label}</span>;
 }
 

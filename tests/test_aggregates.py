@@ -537,6 +537,33 @@ def test_data_resource_metadata_marks_to_many_node_fields_as_lists() -> None:
     assert fields["relatedParents"].widget is None
 
 
+def test_data_resource_metadata_marks_plain_relation_targets() -> None:
+    """Object relations expose their target model even when they are not group axes."""
+
+    @strawberry_django.type(ResourceParent)
+    class ResourceParentRelationType:
+        name: auto
+
+    @strawberry_django.type(ResourceChild)
+    class ResourceChildRelationType:
+        name: auto
+        parent: ResourceParentRelationType
+
+    resource = make_data_resource_metadata(
+        model=ResourceChild,
+        roots=DataResourceRoots(list_name="children"),
+        type_names=DataResourceTypeNames(node="ResourceChildRelationType"),
+        capabilities=("list",),
+        node_type=ResourceChildRelationType,
+    )
+    fields = {field.name: field for field in resource.fields}
+
+    assert fields["parent"].kind == "relation"
+    assert fields["parent"].widget == "many2one"
+    assert fields["parent"].relation_model_label == "tests.ResourceParent"
+    assert fields["parent"].relation_label_axis is None
+
+
 @pytest.mark.parametrize(
     ("groupable", "aggregatable"),
     [

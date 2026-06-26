@@ -238,7 +238,7 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
         related_name="published_models",
     )
     name = models.CharField(max_length=200)
-    """The wire identifier the provider expects (e.g. ``claude-opus-4-8``)."""
+    """The selectable runtime handle; ``config.provider_model`` carries the native provider id."""
     display_name = models.CharField(max_length=200, blank=True)
     description = models.TextField(blank=True)
     model_use = StateField(choices_enum=InferenceModelUse, default=InferenceModelUse.CHAT)
@@ -264,6 +264,14 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
         """Return the model's display label."""
 
         return self.display_name or self.name
+
+    @property
+    def provider_model_name(self) -> str:
+        """Return the provider-native model id for runtimes that talk to the provider directly."""
+
+        config = self.config if isinstance(self.config, Mapping) else {}
+        provider_model = str(config.get("provider_model") or "").strip()
+        return provider_model or self.name
 
     @property
     def credential(self) -> Any:
@@ -719,7 +727,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         structured: dict[str, str] = {}
         model = getattr(self, "model", None)
         if model is not None:
-            structured["model"] = model.name
+            structured["model"] = self.service_model_handle()
         # Advertise auth only when there is a usable secret to sync — otherwise the
         # rendered service would reference a ${secret.<name>} the operator never gets
         # (this must agree with the secret sync in the provision flow).
@@ -744,6 +752,17 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
             structured["mcp_env"] = mcp_env
         merged = {**(self.service_inputs or {}), **structured}
         return {key: str(value) for key, value in merged.items()}
+
+    def service_model_handle(self) -> str:
+        """Return the selected model handle in the current service runtime's convention."""
+
+        model = getattr(self, "model", None)
+        if model is None:
+            return ""
+        service_template = getattr(self, "service_template", None)
+        if getattr(service_template, "name", "") == "claude-code":
+            return str(getattr(model, "provider_model_name", "") or model.name)
+        return str(model.name)
 
     def mcp_config(self) -> dict[str, Any]:
         """Return the ``.mcp.json`` document for this agent's reachable MCP servers.

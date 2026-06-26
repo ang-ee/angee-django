@@ -232,9 +232,11 @@ export function createApp(input: CreateAppInput): AngeeApp {
     runtime.routesByResource,
     routeResourceProjection.metadataByResource,
   );
+  // Menu route resources seed refine's tree in authored addon/menu order; schema
+  // CRUD resources then attach under those parents without reordering sections.
   const refineResourceRegistry = [
-    ...refineResources,
     ...routeResourceProjection.resources,
+    ...refineResources,
   ];
   const refineDataProviders = mergeAddonDataProviders(
     createAngeeHasuraDataProviders(schemas, defaultSchema),
@@ -381,12 +383,12 @@ function refineRouteResourceProjection(
   const appRootIds = new Set(menuTree.roots.map((item) => item.id));
 
   for (const node of menuTree.byId.values()) {
-    const trail = breadcrumbTrailFromMenuTrail(menuTree.trailFor(node.id));
-    trail.forEach((item, index) => {
+    const menuTrail = menuTree.trailFor(node.id);
+    menuTrail.forEach((item, index) => {
       addMenuRouteResource(
         resourcesByIdentifier,
         item,
-        trail[index - 1],
+        menuTrail[index - 1],
         appRootIds.has(item.id),
       );
     });

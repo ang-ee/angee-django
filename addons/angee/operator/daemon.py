@@ -141,7 +141,7 @@ class OperatorDaemon:
         """
 
         descriptors = self._request("GET", f"{self._base()}/templates")
-        for descriptor in descriptors if isinstance(descriptors, list) else ():
+        for descriptor in _collection_items(descriptors):
             if not isinstance(descriptor, dict):
                 continue
             if descriptor.get("name") == name and (not kind or descriptor.get("kind") == kind):
@@ -291,6 +291,14 @@ class OperatorDaemon:
         if not path.endswith("/graphql"):
             path = f"{path}/graphql" if path else "/graphql"
         return urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
+
+
+def _collection_items(value: Any) -> tuple[Any, ...] | list[Any]:
+    """Return daemon collection nodes from the REST collection envelope."""
+
+    if isinstance(value, dict) and isinstance(value.get("nodes"), list):
+        return value["nodes"]
+    return ()
 
 
 def _daemon_error(error: urllib.error.HTTPError) -> str:

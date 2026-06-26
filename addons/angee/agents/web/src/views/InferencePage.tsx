@@ -15,6 +15,7 @@ import {
   useRecordActionMutation,
   useEnumOptions,
   useImplPrefill,
+  type FormSubmit,
   } from "@angee/ui";
 import {
   canConnectRecord,
@@ -22,13 +23,20 @@ import {
   } from "@angee/integrate";
 import { useAuthoredMutation,
 } from "@angee/ui";
+import type { DocumentVariables } from "@angee/refine";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
-import { ConnectInferenceProvider } from "../documents";
+import { ConnectInferenceProvider, UpdateInferenceProvider } from "../documents";
 import { useAgentsT } from "../i18n";
 
 const PROVIDER_MODEL = "agents.InferenceProvider";
 const MODEL_MODEL = "agents.InferenceModel";
+const PROVIDER_PATCH_RELATION_FIELDS = new Set([
+  "vendor",
+  "owner",
+  "credential",
+  "account",
+]);
 
 export function InferenceProvidersPage(): React.ReactElement {
   const t = useAgentsT();
@@ -36,8 +44,27 @@ export function InferenceProvidersPage(): React.ReactElement {
     "refresh_provider_models",
     { invalidateModels: [MODEL_MODEL] },
   );
+  const [updateProvider] = useAuthoredMutation(UpdateInferenceProvider, {
+    invalidateModels: [PROVIDER_MODEL, MODEL_MODEL],
+  });
   const backendClassOptions = useEnumOptions(PROVIDER_MODEL, "backend_class");
   const backendClassPrefill = useImplPrefill(PROVIDER_MODEL, "backend_class");
+  const submitProvider = React.useCallback<FormSubmit>(
+    async (data, context) => {
+      if (!context.id) {
+        throw new Error("Inference provider updates require a saved record.");
+      }
+      const variables: DocumentVariables<typeof UpdateInferenceProvider> = {
+        data: {
+          ...inferenceProviderPatchData(data),
+          id: context.id,
+        } as DocumentVariables<typeof UpdateInferenceProvider>["data"],
+      };
+      const result = await updateProvider(variables);
+      return result?.update_inference_provider ?? null;
+    },
+    [updateProvider],
+  );
 
   return (
     <ResourceList
@@ -55,7 +82,7 @@ export function InferenceProvidersPage(): React.ReactElement {
         <Column field="status" widget="statusBadge" />
         <Column field="credential.display_name" header={t("agents.inference.credential")} />
       </List>
-      <Form resource={PROVIDER_MODEL}>
+      <Form resource={PROVIDER_MODEL} submit={submitProvider}>
         <Field name="name" title />
         <Group label={t("agents.inference.backend")} columns={2}>
           <Field name="owner" />
@@ -79,6 +106,23 @@ export function InferenceProvidersPage(): React.ReactElement {
       </Form>
     </ResourceList>
   );
+}
+
+function inferenceProviderPatchData(
+  data: Record<string, unknown>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(data).map(([field, value]) => [
+      field,
+      PROVIDER_PATCH_RELATION_FIELDS.has(field) ? relationInputId(value) : value,
+    ]),
+  );
+}
+
+function relationInputId(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const id = (value as { id?: unknown }).id;
+  return typeof id === "string" ? id : value;
 }
 
 function ProviderConnectButton({

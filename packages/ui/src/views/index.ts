@@ -84,6 +84,8 @@ export {
   FORM_VIEW_SECTIONS_SLOT,
   formViewSectionsSlot,
   type FormViewProps,
+  type FormSubmit,
+  type FormSubmitContext,
   type FormField,
   type FieldKind,
   type RecordPanelContext,

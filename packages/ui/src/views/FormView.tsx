@@ -54,6 +54,7 @@ import {
   type WidgetDefinition,
   type WidgetField,
 } from "../widgets";
+import { canonicalOptionValue, relationValueId } from "../widgets/types";
 import { dateFromUnknown, formatDate } from "../widgets/date-format";
 import {
   fieldWidgetId,
@@ -144,6 +145,13 @@ export interface FormViewProps {
   defaultValues?: Record<string, unknown>;
   /** Called after a successful save. */
   onSaved?: (row: Row) => void;
+  /**
+   * Custom save owner for resources that do not expose the stock Hasura
+   * create/update root. Receives the same normalized mutation payload the stock
+   * refine submit path would send, and returns the saved row used to re-seed the
+   * form.
+   */
+  submit?: FormSubmit;
   /** Label used for the submit button. */
   submitLabel?: React.ReactNode;
   /**
@@ -185,6 +193,18 @@ export interface FormViewProps {
   /** Class name applied to the form root. */
   className?: string;
 }
+
+export interface FormSubmitContext {
+  resource: string;
+  id: string | null;
+  isCreate: boolean;
+  record: Row | null;
+}
+
+export type FormSubmit = (
+  data: Record<string, unknown>,
+  context: FormSubmitContext,
+) => Row | null | undefined | Promise<Row | null | undefined>;
 
 /**
  * Slot for record-level chrome (e.g. star/share/follow) rendered in the form
@@ -253,6 +273,7 @@ export function FormView({
   returning,
   defaultValues,
   onSaved,
+  submit,
   submitLabel,
   toolbarStart,
   toolbar,
@@ -464,8 +485,10 @@ export function FormView({
   const formReadOnly = React.useMemo(
     () =>
       recordUnavailable ||
+      (!submit &&
+        !Boolean(isCreate ? dataResource?.roots.create : dataResource?.roots.update)) ||
       (formFields.length > 0 && formFields.every((field) => field.readOnly)),
-    [formFields, recordUnavailable],
+    [dataResource, formFields, isCreate, recordUnavailable, submit],
   );
   const formIsDirty = form.formState.isDirty;
   const formIsDirtyRef = React.useRef(formIsDirty);
@@ -484,6 +507,36 @@ export function FormView({
       formIsDirtyRef.current = false;
     },
     [form],
+  );
+  const runSubmit = React.useCallback(
+    async (data: Values): Promise<Row | null> => {
+      if (submit) {
+        return (
+          (await submit(data, {
+            resource,
+            id: id ?? null,
+            isCreate,
+            record: displayRecord ?? null,
+          })) ?? null
+        );
+      }
+      const response = await form.refineCore.onFinish(data);
+      return (response?.data ?? null) as Row | null;
+    },
+    [displayRecord, form.refineCore, id, isCreate, resource, submit],
+  );
+  const commitSavedRecord = React.useCallback(
+    (saved: Row, options: { notify: boolean }): void => {
+      const savedValues = recordToValues(saved, formFields);
+      baselineValuesRef.current = savedValues;
+      setPatchedRecord(saved);
+      resetForm(savedValues);
+      // A reused, still-mounted create form starts each new record with a clean
+      // slug-derive state (no `id` change fires the create-reset effect here).
+      if (isCreate) manualSlugFieldsRef.current = new Set();
+      if (options.notify) onSaved?.(saved);
+    },
+    [formFields, isCreate, onSaved, resetForm],
   );
   const submitValues = React.useCallback(
     async (value: Values) => {
@@ -517,17 +570,9 @@ export function FormView({
         writableFields: writableFieldNames,
       });
       try {
-        const response = await form.refineCore.onFinish(data);
-        const saved = (response?.data ?? null) as Row | null;
+        const saved = await runSubmit(data);
         if (saved) {
-          const savedValues = recordToValues(saved, formFields);
-          baselineValuesRef.current = savedValues;
-          setPatchedRecord(saved);
-          resetForm(savedValues);
-          // A reused, still-mounted create form starts each new record with a clean
-          // slug-derive state (no `id` change fires the create-reset effect here).
-          if (isCreate) manualSlugFieldsRef.current = new Set();
-          onSaved?.(saved);
+          commitSavedRecord(saved, { notify: true });
         }
       } catch (error) {
         // Distribute Django field validation under each field; keep the banner
@@ -546,14 +591,13 @@ export function FormView({
     [
       dataResource,
       fieldByName,
-      form.refineCore,
       formFields,
       formReadOnly,
       isCreate,
-      onSaved,
-      resetForm,
+      commitSavedRecord,
       resource,
       requiredFieldNames,
+      runSubmit,
       writableFieldNames,
     ],
   );
@@ -570,19 +614,15 @@ export function FormView({
       if (formReadOnly) {
         throw new Error(`Resource mutation for "${resource}" is disabled.`);
       }
-      const response = await form.refineCore.onFinish(patch);
-      const saved = (response?.data ?? null) as Row | null;
+      const saved = await runSubmit(patch);
       if (saved) {
-        const savedValues = recordToValues(saved, formFields);
-        baselineValuesRef.current = savedValues;
-        setPatchedRecord(saved);
-        resetForm(savedValues);
+        commitSavedRecord(saved, { notify: false });
         setSaveError(null);
         setServerFieldErrors({});
       }
       return saved;
     },
-    [form.refineCore, formFields, formReadOnly, id, resetForm, resource],
+    [commitSavedRecord, formReadOnly, id, resource, runSubmit],
   );
 
   const patchRecord = React.useCallback(
@@ -636,19 +676,23 @@ export function FormView({
     // for the same id — a refetch landed with fresh server state (e.g. after a
     // record action). Keying off the reference (not a manual flag) means a stale
     // intervening render carrying the same record can't consume the re-seed.
-    if (
-      record &&
-      recordId &&
-      (seededIdRef.current !== recordId || seededRecordRef.current !== record)
-    ) {
+    if (record && recordId) {
+      const recordValues = recordToValues(record, formFields);
+      const recordChanged =
+        seededIdRef.current !== recordId || seededRecordRef.current !== record;
+      const cleanFieldShapeChanged =
+        !recordChanged &&
+        patchedRecord === null &&
+        !formIsDirtyRef.current &&
+        !formValuesEqual(recordValues, baselineValuesRef.current);
+      if (!recordChanged && !cleanFieldShapeChanged) return;
       seededIdRef.current = recordId;
       seededRecordRef.current = record;
-      const recordValues = recordToValues(record, formFields);
       baselineValuesRef.current = recordValues;
       resetForm(recordValues);
       setSaveError(null);
     }
-  }, [emptyValues, formFields, isCreate, record, resetForm]);
+  }, [emptyValues, formFields, isCreate, patchedRecord, record, resetForm]);
 
   const titleField = titleFieldFor(formFields, modelMetadata);
   const statusField = formFields.find(
@@ -1254,7 +1298,7 @@ function BoundFieldRow({
       >
         {relation ? (
           <RelationFieldWidget
-            value={typeof value === "string" ? value : null}
+            value={relationValueId(value) || null}
             onChange={onChange}
             readOnly={effectiveReadOnly}
             relation={relation}
@@ -1475,6 +1519,8 @@ function recordToValues(record: Row, fields: readonly FieldDescriptor[]): Values
 
 function recordFieldValue(record: Row, field: FieldDescriptor): unknown {
   const value = record[field.name];
+  const optionValue = canonicalOptionValue(field.options, value);
+  if (optionValue !== undefined) return optionValue;
   if (!isRelationIdField(field)) return value;
   if (typeof value === "string") return value;
   if (isRecord(value)) return rowPublicId(value) ?? value;
@@ -1515,19 +1561,25 @@ function mutationData(
     if (field.readOnly) continue;
     // A field hidden by its `showWhen` predicate is not part of the record.
     if (!isFieldVisible(field, values)) continue;
-    const next = values[field.name];
+    const next = mutationFieldValue(field, values[field.name]);
+    const baseline = mutationFieldValue(field, options.baseline[field.name]);
     if (isUnselectedOption(field, next)) continue;
     // Blank numeric create fields should let the GraphQL input default apply.
     // Sending "" fails Int/Float coercion, and sending null fails non-null fields
     // with defaults such as `Int! = 0`.
     if (options.isCreate && isEmptyNumericValue(field, next)) continue;
-    if (!options.isCreate && valuesEqual(next, options.baseline[field.name])) {
+    if (!options.isCreate && valuesEqual(next, baseline)) {
       continue;
     }
     data[field.name] = next;
   }
   if (!options.isCreate && options.id != null) data.id = options.id;
   return data;
+}
+
+function mutationFieldValue(field: FieldDescriptor, value: unknown): unknown {
+  if (isRelationIdField(field)) return relationValueId(value);
+  return value;
 }
 
 function emptyValue(field: FieldDescriptor): unknown {
@@ -1587,6 +1639,14 @@ function valuesEqual(left: unknown, right: unknown): boolean {
     left.length === right.length &&
     left.every((item, index) => valuesEqual(item, right[index]))
   );
+}
+
+function formValuesEqual(left: Values, right: Values): boolean {
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+  for (const key of keys) {
+    if (!valuesEqual(left[key], right[key])) return false;
+  }
+  return true;
 }
 
 function isRecord(value: unknown): value is Row {

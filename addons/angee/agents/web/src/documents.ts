@@ -72,6 +72,37 @@ export const ConnectInferenceProvider = graphql(`
   }
 `);
 
+export const UpdateInferenceProvider = graphql(`
+  mutation UpdateInferenceProvider($data: InferenceProviderPatch!) {
+    update_inference_provider(data: $data) {
+      id
+      display_name
+      name
+      owner {
+        id
+      }
+      backend_class
+      vendor {
+        id
+      }
+      credential {
+        id
+        display_name
+      }
+      account {
+        id
+        display_name
+      }
+      status
+      base_url
+      credential_env
+      config
+      created_at
+      updated_at
+    }
+  }
+`);
+
 // The view envelope the chat sends to `render_agent_prompt`: what the user is looking at.
 export interface AgentChatView extends Record<string, unknown> {
   kind: "record" | "list" | "dashboard";

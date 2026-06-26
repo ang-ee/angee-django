@@ -17,6 +17,7 @@ import pytest
 from django.apps import apps
 from django.contrib.auth import BACKEND_SESSION_KEY, SESSION_KEY, get_user_model
 from django.contrib.auth.models import AnonymousUser
+from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
 from django.db import connection
 from django.db.models.signals import pre_delete
@@ -31,6 +32,7 @@ from angee.base.models import (
     public_id_for,
     public_id_of,
 )
+from angee.graphql.data.metadata import model_resource_fields
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
@@ -1177,6 +1179,51 @@ def test_account_connect_schema_exposes_generic_flow_without_token_material(
         assert field in oauth_client_set
     assert "access_token" not in public_sdl
     assert "refresh_token" not in public_sdl
+
+
+def test_oauth_client_resource_metadata_includes_oidc_extension_fields(
+    iam_connection_tables: None,
+) -> None:
+    """Same-row OIDC extension fields keep their model-owned resource metadata."""
+
+    console_schema = _schema("console")
+    metadata = {item.model_label: item for item in console_schema.angee_resources}
+    oauth_client = metadata["integrate.OAuthClient"]
+    fields = {field.name: field for field in oauth_client.fields}
+
+    assert oauth_client.create_fields[-6:] == (
+        "issuer",
+        "jwks_uri",
+        "login_enabled",
+        "link_on_email_match",
+        "create_on_login",
+        "allowed_email_domains",
+    )
+    assert fields["issuer"].scalar == "String"
+    assert fields["jwks_uri"].scalar == "String"
+    for name in ("login_enabled", "link_on_email_match", "create_on_login"):
+        assert fields[name].scalar == "Boolean"
+        assert fields[name].widget == "switch"
+        assert fields[name].creatable is True
+        assert fields[name].updatable is True
+    assert fields["allowed_email_domains"].scalar == "JSON"
+    assert fields["allowed_email_domains"].widget == "json"
+
+
+def test_model_resource_fields_rejects_enum_declared_field() -> None:
+    """A declared enum column fails fast: its values are owned by the node surface."""
+
+    with pytest.raises(ImproperlyConfigured, match="cannot reconstruct enum"):
+        model_resource_fields(ExternalAccount, ("status",))
+
+
+def test_model_resource_fields_reconstructs_relation_target_label() -> None:
+    """A declared same-row relation keeps its target label, resolved from the model."""
+
+    (field,) = model_resource_fields(ExternalAccount, ("oauth_client",))
+    assert field.kind == "relation"
+    assert field.scalar is None
+    assert field.relation_model_label == OAuthClient._meta.label
 
 
 def test_console_schema_exposes_user_change_subscription(

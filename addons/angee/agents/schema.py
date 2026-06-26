@@ -196,8 +196,8 @@ class AgentChatEndpoint:
     ``token`` as a query parameter, which the central Caddy forward-auths against
     the operator. ``mcp_servers`` is the agent's rendered ``.mcp.json`` server map,
     so the chat session can advertise the same MCP servers the agent runs with.
-    ``model_handle`` is the selected agent model, used to select the ACP session
-    model explicitly after session creation.
+    ``model_handle`` is the selected agent model in the service runtime's convention,
+    used to select the ACP session model explicitly after session creation.
     """
 
     url: str
@@ -591,6 +591,7 @@ def _agent_for_view(view: dict[str, Any]) -> Any:
         return (
             Agent.objects.filter(owner_id=user_id, is_template=False, runtime_status=RuntimeStatus.RUNNING)
             .exclude(service="")
+            .select_related("model", "service_template")
             .order_by("-updated_at")
             .first()
         )
@@ -640,14 +641,19 @@ class AgentActionMutation:
         ``operatorConnection`` mints with — the session user.
         """
 
-        agent = resolve_action_target(Agent, id, reason="agents.graphql.agent_chat_endpoint", select_related=("model",))
+        agent = resolve_action_target(
+            Agent,
+            id,
+            reason="agents.graphql.agent_chat_endpoint",
+            select_related=("model", "service_template"),
+        )
         session = _mint_session(agent)
         return AgentChatEndpoint(
             url=session["url"],
             token=session["token"],
             expires_at=session["expires_at"],
             mcp_servers=session["mcp_servers"],
-            model_handle=str(agent.model.name) if agent.model is not None else "",
+            model_handle=str(agent.service_model_handle()),
         )
 
     @strawberry.mutation
@@ -668,7 +674,7 @@ class AgentActionMutation:
             agent_id=PublicID(str(agent.sqid)),
             agent_name=str(agent.name),
             status=str(agent.runtime_status),
-            model_handle=str(model) if model is not None else "",
+            model_handle=str(agent.service_model_handle()) if model is not None else "",
         )
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)

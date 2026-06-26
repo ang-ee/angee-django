@@ -9,6 +9,7 @@ const FIRST_CLIP =
   "[clip-path:polygon(0_0,calc(100%-12px)_0,100%_50%,calc(100%-12px)_100%,0_100%)]";
 const LAST_CLIP =
   "[clip-path:polygon(0_0,100%_0,100%_100%,0_100%,12px_50%)]";
+const STEP_OVERLAP = "-ml-2.5";
 
 function Statusbar({
   value,
@@ -47,7 +48,7 @@ function Statusbar({
             disabled={disabled}
             className={cn(
               "group relative inline-flex h-6 items-stretch p-px text-xs font-medium outline-none transition-colors focus-visible:focus-ring disabled:opacity-100",
-              index > 0 && "-ml-3",
+              index > 0 && STEP_OVERLAP,
               currentStep ? "z-20" : completed ? "z-10" : "z-0",
               clip,
               tone.border,
@@ -101,8 +102,8 @@ function statusStepTone(
   if (current) {
     return {
       border: "bg-brand",
-      fill: "bg-brand-soft text-brand-soft-text",
-      hover: "group-hover:bg-brand-soft",
+      fill: "bg-brand text-on-brand shadow-xs",
+      hover: "group-hover:bg-brand-hover",
     };
   }
   if (completed) {
