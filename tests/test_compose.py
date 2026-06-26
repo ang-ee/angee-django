@@ -21,6 +21,7 @@ from angee.compose.appgraph import AppGraph
 from angee.compose.apps import ComposeConfig
 from angee.compose.management.commands.angee import Command
 from angee.compose.runtime import Runtime
+from angee.compose.web import WebRuntime
 
 
 class DecoratedRevisionThing(RevisionMixin, AngeeModel):
@@ -74,6 +75,86 @@ def test_runtime_renders_resource_sources(tmp_path: Path) -> None:
     assert "app_label = 'resources'" in sources[Path("resources/models.py")]
     assert ".angee-manifest.json" not in {str(path) for path in sources}
     assert Path("permissions.zed") not in sources
+    assert Path("web/manifest.json") in sources
+    assert Path("web/tailwind.sources.css") in sources
+    # The composer is a pure package-graph projector: it emits the manifest and
+    # Tailwind sources, never schema-shaped TypeScript. `runtime/web/app.ts` and
+    # `runtime/gql/<schema>/*` are owned by the `angee-web-codegen` CLI.
+    assert Path("web/app.ts") not in sources
+    assert '"package": "@angee/resources-addon"' in sources[Path("web/manifest.json")]
+    assert '@source "../../web/node_modules/@angee/resources-addon/src";' in sources[Path("web/tailwind.sources.css")]
+
+
+def test_web_runtime_projects_addon_web_packages_in_composed_order() -> None:
+    """Addon web package declarations feed one generated web manifest."""
+
+    first = SimpleNamespace(name="tests.first", label="first", angee_web_package="@demo/first")
+    backend_only = SimpleNamespace(name="tests.backend", label="backend")
+    second = SimpleNamespace(name="tests.second", label="second", angee_web_package="@demo/second")
+
+    manifest = WebRuntime((first, backend_only, second)).manifest_json()
+
+    assert manifest.index('"package": "@demo/first"') < manifest.index('"package": "@demo/second"')
+    assert "tests.backend" not in manifest
+    # The composer holds no schema-name knowledge — the CLI discovers schemas
+    # from the SDL on disk — so the manifest carries no schema list.
+    assert '"schemas"' not in manifest
+
+
+def test_web_runtime_projects_external_codegen_entries() -> None:
+    """An addon's angee_web_codegen declaration projects into the manifest."""
+
+    daemon = SimpleNamespace(
+        name="tests.daemon",
+        label="daemon",
+        angee_web_package="@demo/daemon",
+        angee_web_codegen={
+            "schema": "operator",
+            "sdl": "schema/operator.graphql",
+            "documents": "documents.daemon.ts",
+            "types": True,
+        },
+    )
+
+    manifest = WebRuntime((daemon,)).manifest_json()
+
+    assert '"schema": "operator"' in manifest
+    assert '"package": "@demo/daemon"' in manifest
+    assert '"sdl": "schema/operator.graphql"' in manifest
+    assert '"documents": "documents.daemon.ts"' in manifest
+    assert '"app": "tests.daemon"' in manifest
+
+
+def test_web_runtime_rejects_codegen_without_web_package() -> None:
+    """An external codegen entry requires its addon to ship a web package."""
+
+    daemon = SimpleNamespace(
+        name="tests.daemon",
+        label="daemon",
+        angee_web_codegen={"schema": "operator", "sdl": "s.graphql", "documents": "d.ts"},
+    )
+
+    with pytest.raises(ImproperlyConfigured, match="requires the addon to declare angee_web_package"):
+        WebRuntime((daemon,))
+
+
+def test_web_runtime_rejects_duplicate_addon_web_packages() -> None:
+    """Two addons cannot claim the same web package identity."""
+
+    first = SimpleNamespace(name="tests.first", label="first", angee_web_package="@demo/shared")
+    second = SimpleNamespace(name="tests.second", label="second", angee_web_package="@demo/shared")
+
+    with pytest.raises(ImproperlyConfigured, match="Duplicate angee_web_package"):
+        WebRuntime((first, second))
+
+
+def test_web_runtime_rejects_invalid_package_names() -> None:
+    """The AppConfig package contract fails before a broken manifest is emitted."""
+
+    broken = SimpleNamespace(name="tests.broken", label="broken", angee_web_package="../broken")
+
+    with pytest.raises(ImproperlyConfigured, match="valid npm package name"):
+        WebRuntime((broken,))
 
 
 def test_runtime_configures_migrations_for_runtime_labels(tmp_path: Path, settings: Any) -> None:

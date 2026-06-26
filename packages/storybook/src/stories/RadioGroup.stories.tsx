@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { RadioGroup } from "@angee/base";
+import { RadioGroup } from "@angee/ui";
 
 const meta = {
   title: "Primitives/RadioGroup",

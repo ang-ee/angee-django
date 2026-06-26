@@ -1,13 +1,14 @@
-import { type ReactElement, type ReactNode } from "react";
+import { type ReactElement } from "react";
 
 import {
   Column,
-  DrawerDataPage,
+  DrawerResourceList,
   Field,
   Form,
-  GroupListView,
   List,
-} from "@angee/base";
+  SettingsSection,
+  SettingsShell,
+} from "@angee/ui";
 import { useStorageT } from "../i18n";
 
 const DRIVE_MODEL = "storage.Drive";
@@ -15,7 +16,7 @@ const BACKEND_MODEL = "storage.Backend";
 
 /**
  * The storage admin console: managed lists for drives and backends, each a
- * `DataPage` whose record form opens in a drawer. Both surfaces are
+ * `ResourceList` whose record form opens in a drawer. Both surfaces are
  * storage-admin gated server-side (the `backends` query and the drive/backend
  * mutations). Drives are edit-only here — creating one (which binds a backend)
  * lives in the file browser's drive switcher; backends are full CRUD.
@@ -23,71 +24,50 @@ const BACKEND_MODEL = "storage.Backend";
 export function StorageSettingsPage(): ReactElement {
   const t = useStorageT();
   return (
-    <div className="mx-auto flex w-full max-w-[1100px] flex-col gap-10 px-6 py-6 sm:px-8">
-      <Section
+    <SettingsShell maxWidth="1100" gap="10">
+      <SettingsSection
         title={t("storage.settings.drives.title")}
         description={t("storage.settings.drives.description")}
       >
-        <DrawerDataPage model={DRIVE_MODEL} hideCreate>
-          <List model={DRIVE_MODEL} list={GroupListView} order={{ name: "ASC" }}>
+        <DrawerResourceList resource={DRIVE_MODEL} hideCreate>
+          <List resource={DRIVE_MODEL} order={{ name: "ASC" }}>
             <Column field="name" />
             <Column field="slug" />
             <Column field="prefix" />
-            <Column field="isArchived" widget="booleanBadge" />
+            <Column field="is_archived" widget="booleanBadge" />
           </List>
-          <Form model={DRIVE_MODEL}>
+          <Form resource={DRIVE_MODEL}>
             <Field name="name" widget="text" title />
             <Field name="slug" createOnly />
             <Field name="prefix" />
             <Field name="description" widget="textarea" />
-            <Field name="isArchived" label={t("storage.settings.archived")} widget="switch" />
+            <Field name="is_archived" label={t("storage.settings.archived")} widget="switch" />
           </Form>
-        </DrawerDataPage>
-      </Section>
+        </DrawerResourceList>
+      </SettingsSection>
 
-      <Section
+      <SettingsSection
         title={t("storage.settings.backends.title")}
         description={t("storage.settings.backends.description")}
       >
-        <DrawerDataPage model={BACKEND_MODEL}>
-          <List model={BACKEND_MODEL} list={GroupListView} order={{ label: "ASC" }}>
+        <DrawerResourceList resource={BACKEND_MODEL}>
+          <List resource={BACKEND_MODEL} order={{ label: "ASC" }}>
             <Column field="label" />
             <Column field="slug" />
-            <Column field="backendClass" />
-            <Column field="isDefault" widget="booleanBadge" />
-            <Column field="isArchived" widget="booleanBadge" />
+            <Column field="backend_class" />
+            <Column field="is_default" widget="booleanBadge" />
+            <Column field="is_archived" widget="booleanBadge" />
           </List>
-          <Form model={BACKEND_MODEL}>
+          <Form resource={BACKEND_MODEL}>
             <Field name="label" widget="text" title />
             <Field name="slug" createOnly />
-            <Field name="backendClass" label={t("storage.settings.backendClass")} />
-            <Field name="backendConfig" label={t("storage.settings.config")} widget="json" />
-            <Field name="isDefault" label={t("storage.settings.default")} widget="switch" />
-            <Field name="isArchived" label={t("storage.settings.archived")} widget="switch" editOnly />
+            <Field name="backend_class" label={t("storage.settings.backendClass")} />
+            <Field name="backend_config" label={t("storage.settings.config")} widget="json" />
+            <Field name="is_default" label={t("storage.settings.default")} widget="switch" />
+            <Field name="is_archived" label={t("storage.settings.archived")} widget="switch" editOnly />
           </Form>
-        </DrawerDataPage>
-      </Section>
-    </div>
-  );
-}
-
-/** One titled admin section wrapping a managed table. */
-function Section({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description: string;
-  children: ReactNode;
-}): ReactElement {
-  return (
-    <section className="grid gap-3">
-      <header className="grid gap-0.5">
-        <h2 className="text-15 font-semibold text-fg">{title}</h2>
-        <p className="text-13 text-fg-muted">{description}</p>
-      </header>
-      {children}
-    </section>
+        </DrawerResourceList>
+      </SettingsSection>
+    </SettingsShell>
   );
 }

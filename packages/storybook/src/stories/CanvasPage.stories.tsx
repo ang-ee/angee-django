@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Button, CanvasPage } from "@angee/base";
+import { Button, CanvasPage } from "@angee/ui";
 
 const meta = {
   title: "Layouts/CanvasPage",

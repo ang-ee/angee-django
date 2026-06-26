@@ -325,11 +325,7 @@ class LinkManager(AngeeManager):
         pages = type(page)._base_manager
         links = self.model._base_manager
         with system_context(reason="knowledge.backlinks"), transaction.atomic():
-            resolved = dict(
-                pages.filter(vault_id=page.vault_id)
-                .exclude(pk=page.pk)
-                .values_list("title", "pk")
-            )
+            resolved = dict(pages.filter(vault_id=page.vault_id).exclude(pk=page.pk).values_list("title", "pk"))
             links.filter(source_page=page).delete()
             links.bulk_create(
                 [

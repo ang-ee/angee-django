@@ -7,7 +7,7 @@ import {
   RowsListView,
   useConfirm,
   type ListColumn,
-} from "@angee/base";
+} from "@angee/ui";
 import { useMemo, type ReactNode } from "react";
 
 import {

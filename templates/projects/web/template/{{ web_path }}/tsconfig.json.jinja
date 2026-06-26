@@ -1,0 +1,16 @@
+{
+  "extends": "{{ framework_tsconfig_base }}",
+  "compilerOptions": {
+    "types": ["vite/client"],
+    // This project owns its `runtime/gql/<schema>/` tree (its web package
+    // generates it via codegen), so it supplies its OWN project-relative
+    // `@angee/gql/*` resolution instead of inheriting the framework fixture path
+    // from the base config (TS `paths` override, they do not merge). The web
+    // package lives one level under the project root, so `runtime/gql` is one
+    // level up.
+    "paths": {
+      "@angee/gql/*": ["../runtime/gql/*"]
+    }
+  },
+  "include": ["src"]
+}

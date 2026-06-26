@@ -1,9 +1,25 @@
 // Bespoke custom operations for the integrate console. Model CRUD is model-driven
-// (DataPage reads the SDL); these are the non-CRUD operations a DataPage needs that
+// (ResourceList reads the SDL); these are the non-CRUD operations a ResourceList needs that
 // aren't single-id `{ ok, message }` actions. Single-id action mutations use
-// `useActionMutation(field)` at the call site — no document is authored here.
+// `useActionMutation(field)` from `@angee/ui` at the call site — no document is
+// authored here.
 
 import { graphql, type DocumentType } from "@angee/gql/console";
+
+// The OAuth connect result shared by every `connect_*` mutation that returns a
+// `ConnectIntegrationResult` (integrate's `connect_integration`, agents'
+// `connect_inference_provider`). One owner for the selection; consumers spread it.
+// The client-preset resolves the fragment by name across both addons' `documents.ts`.
+export const ConnectOAuthResultFields = graphql(`
+  fragment ConnectOAuthResultFields on ConnectIntegrationResult {
+    attached
+    authorize_url
+    error
+    mode
+    state
+    redirect_uri
+  }
+`);
 
 export const ConnectIntegration = graphql(`
   mutation ConnectIntegration(
@@ -11,58 +27,37 @@ export const ConnectIntegration = graphql(`
     $redirectUri: String!
     $next: String!
   ) {
-    connectIntegration(
-      integrationId: $integrationId
-      redirectUri: $redirectUri
+    connect_integration(
+      integration_id: $integrationId
+      redirect_uri: $redirectUri
       next: $next
     ) {
-      attached
-      authorizeUrl
-      error
-      mode
-      state
-      redirectUri
-      integration {
-        id
-        status
-      }
+      ...ConnectOAuthResultFields
     }
   }
 `);
 
 export const RotateWebhookSecret = graphql(`
   mutation RotateWebhookSecret($id: ID!) {
-    rotateWebhookSecret(id: $id) { ok secret }
+    rotate_webhook_secret(id: $id) { ok secret }
   }
 `);
 
-// --- VCS console: bridge picker, repo typeahead, and inventory actions ---
-// VcsBridge/Source CRUD and Repository delete stay model-driven (DataPage
-// reads the SDL). These are the bespoke reads the VCS views need: the bridge
-// picker for the add dialog, the repo search typeahead, and the bulk-discover
-// mutation whose variables do not match the single-id ActionResult helper.
-
-/** VCS bridges for the add-repository dialog's bridge picker. */
-export const IntegrateVcsBridges = graphql(`
-  query IntegrateVcsBridges($pagination: OffsetPaginationInput) {
-    vcsBridges(pagination: $pagination) {
-      results {
-        id
-        displayName
-      }
-    }
-  }
-`);
+// --- VCS console: repo typeahead and inventory actions ---
+// VcsBridge/Source CRUD and Repository delete stay model-driven (ResourceList
+// reads the SDL). These are the bespoke operations the VCS views need: the repo
+// search typeahead and inventory mutations whose variables do not match the
+// single-id ActionResult helper.
 
 /** The add typeahead: host repositories matching a typed query, not yet inventoried. */
 export const IntegrateSearchRepositories = graphql(`
   query IntegrateSearchRepositories($vcsBridgeId: ID!, $query: String!) {
-    searchRepositories(vcsBridgeId: $vcsBridgeId, query: $query) {
+    search_repositories(vcs_bridge_id: $vcsBridgeId, query: $query) {
       name
       org
-      defaultBranch
+      default_branch
       visibility
-      webUrl
+      web_url
     }
   }
 `);
@@ -70,7 +65,7 @@ export const IntegrateSearchRepositories = graphql(`
 /** Inventory one picked repository; returns the created row. */
 export const IntegrateAddRepository = graphql(`
   mutation IntegrateAddRepository($vcsBridgeId: ID!, $name: String!) {
-    addRepository(vcsBridgeId: $vcsBridgeId, name: $name) {
+    add_repository(vcs_bridge_id: $vcsBridgeId, name: $name) {
       id
       org
       name
@@ -81,15 +76,11 @@ export const IntegrateAddRepository = graphql(`
 /** Bulk-inventory every repository an account exposes. */
 export const IntegrateDiscoverRepositories = graphql(`
   mutation IntegrateDiscoverRepositories($vcsBridgeId: ID!, $org: String!) {
-    discoverRepositories(vcsBridgeId: $vcsBridgeId, org: $org) { ok message }
+    discover_repositories(vcs_bridge_id: $vcsBridgeId, org: $org) { ok message }
   }
 `);
-
-/** Selection result for one `vcsBridges.results` item (the picker option). */
-export type VcsBridgeOption =
-  DocumentType<typeof IntegrateVcsBridges>["vcsBridges"]["results"][number];
 
 /** One host repository candidate the add typeahead lists (the SDL `RepoCandidate`). */
 export type RepoCandidate = DocumentType<
   typeof IntegrateSearchRepositories
->["searchRepositories"][number];
+>["search_repositories"][number];

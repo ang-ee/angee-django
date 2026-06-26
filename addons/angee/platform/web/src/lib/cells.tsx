@@ -1,8 +1,8 @@
-import { Chip, TextLink } from "@angee/base";
+import { Chip, TextLink } from "@angee/ui";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useCallback, type ReactElement, type ReactNode } from "react";
 
-// In-app SPA navigation for a string href that may carry a `?model=`/`?addon=`
+// In-app SPA navigation for a string href that may carry a `?resource=`/`?addon=`
 // scope. TanStack `<Link>` owns client navigation; splitting the query out of the
 // href keeps one string-href API across `paths.ts` and every linked cell.
 function parseHref(href: string): { to: string; search: Record<string, string> } {
@@ -16,7 +16,7 @@ function parseHref(href: string): { to: string; search: Record<string, string> }
 }
 
 /**
- * A scope-aware in-app navigate that splits the `?model=`/`?addon=` query the
+ * A scope-aware in-app navigate that splits the `?resource=`/`?addon=` query the
  * same way the linked cells do — for navigable base surfaces that take an
  * `onNavigate(href)` callback (e.g. a `MetricStrip` tile's `href`).
  */

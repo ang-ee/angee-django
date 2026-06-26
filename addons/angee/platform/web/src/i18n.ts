@@ -1,4 +1,5 @@
-import { useNamespaceT, type MessageVars } from "@angee/sdk";
+import { useNamespaceT } from "@angee/ui";
+import { type MessageVars } from "@angee/refine";
 
 export const enPlatformMessages: Record<string, string> = {
   "platform.col.addon": "Addon",

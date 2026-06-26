@@ -8,36 +8,36 @@ import { graphql, type DocumentType } from "@angee/gql/console";
 
 export const PlatformExplorer = graphql(`
   query PlatformExplorer {
-    platformExplorer {
+    platform_explorer {
       addons {
         id
         label
         namespace
         kind
-        modelCount
-        fieldCount
-        resourceCount
-        dependsOn
-        modelLabels
+        model_count
+        field_count
+        resource_count
+        depends_on
+        model_labels
       }
       models {
         label
-        appLabel
-        modelName
-        verboseName
-        dbTable
-        addonId
-        addonLabel
-        resourceType
-        fieldCount
-        relationCount
-        dependsOn
+        app_label
+        model_name
+        verbose_name
+        db_table
+        addon_id
+        addon_label
+        resource_type
+        field_count
+        relation_count
+        depends_on
         fields {
           name
           attname
           kind
-          isRelation
-          relationTarget
+          is_relation
+          relation_target
           addon
         }
       }
@@ -46,15 +46,15 @@ export const PlatformExplorer = graphql(`
         source
         target
         kind
-        fieldName
+        field_name
       }
     }
   }
 `);
 
-/** The `platformExplorer` payload; `null` when the surface is unavailable. */
+/** The `platform_explorer` payload; `null` when the surface is unavailable. */
 export type PlatformExplorerData = NonNullable<
-  DocumentType<typeof PlatformExplorer>["platformExplorer"]
+  DocumentType<typeof PlatformExplorer>["platform_explorer"]
 >;
 
 export type PlatformAddonData = PlatformExplorerData["addons"][number];

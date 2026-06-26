@@ -37,11 +37,7 @@ def upload(request: HttpRequest) -> JsonResponse:
     # The explicit carriers win over the Authorization header — a client
     # PUTting to the provided upload_url with its normal bearer auth attached
     # must not have the JWT mistaken for the upload token.
-    token = (
-        request.headers.get(UPLOAD_TOKEN_HEADER, "")
-        or str(request.GET.get("token") or "")
-        or bearer_token(request)
-    )
+    token = request.headers.get(UPLOAD_TOKEN_HEADER, "") or str(request.GET.get("token") or "") or bearer_token(request)
     file_model = apps.get_model("storage", "File")
     try:
         row = file_model.objects.for_upload_token(token)
@@ -64,9 +60,7 @@ def download(request: HttpRequest, filename: str) -> HttpResponseBase:
 
     del filename  # cosmetic save-as name; the token identifies the file
     token = (
-        request.headers.get(DOWNLOAD_TOKEN_HEADER, "")
-        or str(request.GET.get("token") or "")
-        or bearer_token(request)
+        request.headers.get(DOWNLOAD_TOKEN_HEADER, "") or str(request.GET.get("token") or "") or bearer_token(request)
     )
     file_model = apps.get_model("storage", "File")
     try:

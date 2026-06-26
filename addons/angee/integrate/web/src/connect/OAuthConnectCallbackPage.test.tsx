@@ -1,21 +1,17 @@
 // @vitest-environment happy-dom
 
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { AppRuntimeProvider } from "@angee/sdk";
-import { baseIcons } from "@angee/base";
+import { AppRuntimeProvider, baseIcons } from "@angee/ui";
 import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { OAuthConnectCallbackPage } from "./OAuthConnectCallbackPage";
-import {
-  CONNECT_CALLBACK_FALLBACK_PATH,
-  CONNECT_CALLBACK_PATH,
-} from "./redirects";
+import { CONNECT_CALLBACK_PATH } from "./redirects";
 
 const mocks = vi.hoisted(() => ({ mutate: vi.fn() }));
 
-vi.mock("@angee/sdk", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/sdk")>();
+vi.mock("@angee/ui", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
     ...actual,
     useAuthoredMutation: () => [mocks.mutate, { fetching: false, error: null }],
@@ -44,7 +40,7 @@ describe("OAuthConnectCallbackPage", () => {
   test("treats a payload without an error as success and redirects to next", async () => {
     window.history.replaceState(null, "", "/integrate/oauth/callback?code=connect-ok&state=s1");
     mocks.mutate.mockResolvedValue({
-      connectAccountComplete: {
+      connect_account_complete: {
         next: "/integrate/accounts",
         error: null,
         account: null,
@@ -68,37 +64,10 @@ describe("OAuthConnectCallbackPage", () => {
     );
   });
 
-  test("completes the fallback callback with the fallback redirect URI", async () => {
-    window.history.replaceState(null, "", `${CONNECT_CALLBACK_FALLBACK_PATH}?code=connect-ok&state=s3`);
-    mocks.mutate.mockResolvedValue({
-      connectAccountComplete: {
-        next: "/integrate/accounts",
-        error: null,
-        account: null,
-        credential: null,
-      },
-    });
-
-    render(
-      <Runtime>
-        <OAuthConnectCallbackPage />
-      </Runtime>,
-    );
-
-    await waitFor(() => expect(vi.mocked(window.location.assign)).toHaveBeenCalledWith("/integrate/accounts"));
-    expect(mocks.mutate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        code: "connect-ok",
-        state: "s3",
-        redirectUri: `${window.location.origin}${CONNECT_CALLBACK_FALLBACK_PATH}`,
-      }),
-    );
-  });
-
   test("renders the provider error message when the payload carries an error", async () => {
     window.history.replaceState(null, "", "/integrate/oauth/callback?code=connect-bad&state=s2");
     mocks.mutate.mockResolvedValue({
-      connectAccountComplete: {
+      connect_account_complete: {
         next: "",
         error: "Rate limited",
         account: null,

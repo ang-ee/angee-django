@@ -150,7 +150,7 @@ class SDKInferenceBackend(InferenceBackend):
 
         try:
             return int(self._config_value(key, default=default))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return default
 
     def _config_string_list(self, key: str, *, default: Sequence[str]) -> tuple[str, ...]:

@@ -1,13 +1,12 @@
-import { useCallback, useMemo } from "react";
+import { useMemo } from "react";
 
-import type { GraphViewEdge, GraphViewNode } from "@angee/base";
 import {
   useAuthoredQuery,
-  useAuthoredRows,
   type AuthoredQueryResult,
-  type AuthoredRowsResult,
-  type DocumentData,
-} from "@angee/sdk";
+  type GraphViewEdge,
+  type GraphViewNode,
+} from "@angee/ui";
+import type { DocumentData } from "@angee/refine";
 
 import {
   PlatformExplorer,
@@ -16,14 +15,8 @@ import {
   type PlatformModelData,
 } from "../documents";
 import {
-  addonRows,
-  fieldRows,
   modelGraphEdges,
   modelGraphNodes,
-  modelRows,
-  type AddonRow,
-  type FieldRow,
-  type ModelRow,
 } from "./rows";
 
 export type PlatformExplorerResult = DocumentData<typeof PlatformExplorer>;
@@ -33,15 +26,6 @@ const EMPTY_EXPLORER: PlatformExplorerData = {
   models: [],
   edges: [],
 };
-
-export interface PlatformModelRowsScope {
-  addon?: string | null;
-}
-
-export interface PlatformFieldRowsScope {
-  model?: string | null;
-  addon?: string | null;
-}
 
 export interface PlatformModelGraphScope {
   model?: string | null;
@@ -85,35 +69,11 @@ export interface PlatformModelGraphResult
 function explorerOrEmpty(
   data: PlatformExplorerResult | undefined,
 ): PlatformExplorerData {
-  return data?.platformExplorer ?? EMPTY_EXPLORER;
+  return data?.platform_explorer ?? EMPTY_EXPLORER;
 }
 
 function sortedUnique(values: readonly string[]): string[] {
   return [...new Set(values)].sort();
-}
-
-export function selectPlatformAddonRows(
-  data: PlatformExplorerResult | undefined,
-): readonly AddonRow[] {
-  return addonRows(explorerOrEmpty(data).addons);
-}
-
-export function selectPlatformModelRows(
-  data: PlatformExplorerResult | undefined,
-  scope: PlatformModelRowsScope = {},
-): readonly ModelRow[] {
-  const rows = modelRows(explorerOrEmpty(data).models);
-  return scope.addon ? rows.filter((row) => row.addonId === scope.addon) : rows;
-}
-
-export function selectPlatformFieldRows(
-  data: PlatformExplorerResult | undefined,
-  scope: PlatformFieldRowsScope = {},
-): readonly FieldRow[] {
-  let rows = fieldRows(explorerOrEmpty(data).models);
-  if (scope.model) rows = rows.filter((row) => row.model === scope.model);
-  if (scope.addon) rows = rows.filter((row) => row.addonId === scope.addon);
-  return rows;
 }
 
 export function selectPlatformAddonDetail(
@@ -125,14 +85,14 @@ export function selectPlatformAddonDetail(
   const ids = new Set(addons.map((candidate) => candidate.id));
   return {
     addon,
-    dependsOn: sortedUnique((addon?.dependsOn ?? []).filter((dep) => ids.has(dep))),
+    dependsOn: sortedUnique((addon?.depends_on ?? []).filter((dep) => ids.has(dep))),
     dependedBy: id
       ? addons
-          .filter((candidate) => candidate.dependsOn.includes(id))
+          .filter((candidate) => candidate.depends_on.includes(id))
           .map((candidate) => candidate.id)
           .sort()
       : [],
-    modelLabels: sortedUnique(addon?.modelLabels ?? []),
+    modelLabels: sortedUnique(addon?.model_labels ?? []),
   };
 }
 
@@ -145,7 +105,7 @@ export function selectPlatformModelDetail(
     model: id ? models.find((candidate) => candidate.label === id) : undefined,
     dependedBy: id
       ? models
-          .filter((candidate) => candidate.dependsOn.includes(id))
+          .filter((candidate) => candidate.depends_on.includes(id))
           .map((candidate) => candidate.label)
           .sort()
       : [],
@@ -167,45 +127,8 @@ export function usePlatformExplorer(): PlatformExplorerQuery {
   const query = useAuthoredQuery(PlatformExplorer);
   return {
     ...query,
-    explorer: query.data?.platformExplorer ?? null,
+    explorer: query.data?.platform_explorer ?? null,
   };
-}
-
-export function usePlatformAddonRows(): AuthoredRowsResult<
-  PlatformExplorerResult,
-  AddonRow
-> {
-  const selectRows = useCallback(selectPlatformAddonRows, []);
-  return useAuthoredRows(PlatformExplorer, { selectRows });
-}
-
-export function usePlatformModelRows({
-  addon,
-}: PlatformModelRowsScope = {}): AuthoredRowsResult<
-  PlatformExplorerResult,
-  ModelRow
-> {
-  const selectRows = useCallback(
-    (data: PlatformExplorerResult | undefined) =>
-      selectPlatformModelRows(data, { addon }),
-    [addon],
-  );
-  return useAuthoredRows(PlatformExplorer, { selectRows });
-}
-
-export function usePlatformFieldRows({
-  model,
-  addon,
-}: PlatformFieldRowsScope = {}): AuthoredRowsResult<
-  PlatformExplorerResult,
-  FieldRow
-> {
-  const selectRows = useCallback(
-    (data: PlatformExplorerResult | undefined) =>
-      selectPlatformFieldRows(data, { model, addon }),
-    [model, addon],
-  );
-  return useAuthoredRows(PlatformExplorer, { selectRows });
 }
 
 export function usePlatformAddon(

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { Row } from "@angee/sdk";
+import type { Row } from "@angee/resources";
 
 import { canConnectRecord } from "../connect/ConnectOAuthButton";
 
@@ -17,7 +17,7 @@ describe("integration connect action visibility", () => {
     expect(
       canConnectRecord({
         status: "active",
-        credential: { displayName: "Anthropic Personal Plans" },
+        credential: { display_name: "Anthropic Personal Plans" },
       } as unknown as Row),
     ).toBe(false);
   });

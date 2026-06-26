@@ -1,6 +1,6 @@
 import { expect, type Locator, PageObject } from "@angee/e2e";
 
-/** The `/notes` data-view page: list/board, toolbar controls, and the pager. */
+/** The `/notes` resource-view page: list/board, toolbar controls, and the pager. */
 export class NotesPage extends PageObject {
   readonly path = "/notes";
 
@@ -37,6 +37,10 @@ export class NotesPage extends PageObject {
   /** A collapsed group-header disclosure in a grouped list. */
   get groupHeaders(): Locator {
     return this.page.locator('tbody tr [aria-expanded]');
+  }
+  /** Group-header rows, including the visible bucket label and aggregate cells. */
+  get groupHeaderRows(): Locator {
+    return this.page.locator("tbody tr:has([aria-expanded])");
   }
   /** The group-header disclosure for the group whose row contains `label`. */
   groupHeader(label: string): Locator {
@@ -159,7 +163,7 @@ export class NotesPage extends PageObject {
   get bodyEditor(): Locator {
     return this.page.locator(".cm-content").first();
   }
-  /** The view toolbar (shell control band) that hosts the dirty Save/Discard
+  /** The view toolbar (layout control band) that hosts the dirty Save/Discard
    *  plus the record pager + view switcher when a record is open. */
   get controlBand(): Locator {
     return this.page.locator(".area-control");

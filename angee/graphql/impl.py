@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 import strawberry
 from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from strawberry.scalars import JSON
+from strawberry.utils.str_converters import to_snake_case
 
 from angee.base.fields import ImplClassField
 
@@ -71,4 +71,4 @@ def _model_for_label(label: str) -> type[Any]:
 def _field_name(name: str) -> str:
     """Return the Django field name for a GraphQL/camel or model/snake field label."""
 
-    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+    return to_snake_case(name)

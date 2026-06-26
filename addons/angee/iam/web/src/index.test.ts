@@ -1,10 +1,10 @@
+import { AUTH_LOGIN_METHOD_SLOT } from "@angee/app/auth";
 import {
-  AUTH_LOGIN_METHOD_SLOT,
   formViewSectionsSlot,
   MenuTree,
   type BaseMenuItem,
   type ChromeMenuItem,
-} from "@angee/base";
+} from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import iam, { IAM_LOGIN_BACKGROUND_IMAGE_URLS } from "./index";
@@ -14,13 +14,13 @@ describe("iam addon manifest", () => {
     const route = iam.routes?.find((item) => item.name === "iam.login.callback");
     expect(route?.name).toBe("iam.login.callback");
     expect(route?.path).toBe("/sso/callback");
-    expect(route?.shell).toBe("public");
+    expect(route?.layout).toBe("public");
     expect(route?.component).toBeTypeOf("function");
   });
 
-  test("registers the console routes, with $id detail children for the DataPages", () => {
+  test("registers the console routes, with $id detail children for the ResourceLists", () => {
     const names = iam.routes?.map((route) => route.name) ?? [];
-    // The Users DataPage contributes a list + a `$id` record route. (OIDC login is
+    // The Users ResourceList contributes a list + a `$id` record route. (OIDC login is
     // now a tab on integrate's OAuth client form, not a separate iam page.)
     for (const name of [
       "iam.overview",

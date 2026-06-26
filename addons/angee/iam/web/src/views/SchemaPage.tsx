@@ -22,8 +22,9 @@ import {
   type GraphViewEdgeStyle,
   type GraphViewNode,
   type GraphViewNodeStyle,
-} from "@angee/base";
-import { useAuthoredQuery, type MessageVars } from "@angee/sdk";
+  useAuthoredQuery,
+} from "@angee/ui";
+import { type MessageVars } from "@angee/refine";
 
 import {
   IamRebacSchema,
@@ -38,7 +39,7 @@ type SchemaNodeKind = "resource" | "relation" | "permission";
 type SchemaEdgeKind = "contains" | "computed";
 
 interface SchemaNodeMeta extends Record<string, unknown> {
-  resourceType: string;
+  resource_type: string;
 }
 
 type SchemaGraphNode = GraphViewNode<SchemaNodeKind, SchemaNodeMeta>;
@@ -91,7 +92,7 @@ export function SchemaPage(): ReactElement {
   const query = useAuthoredQuery(IamRebacSchema);
   const [search, setSearch] = useState("");
   const resources = useMemo(
-    () => normalizeResources(query.data?.rebacSchema ?? []),
+    () => normalizeResources(query.data?.rebac_schema ?? []),
     [query.data],
   );
   const visibleResources = useMemo(
@@ -106,10 +107,10 @@ export function SchemaPage(): ReactElement {
     if (visibleResources.length === 0) return;
     if (
       !visibleResources.some(
-        (resource) => resource.resourceType === selectedResourceType,
+        (resource) => resource.resource_type === selectedResourceType,
       )
     ) {
-      setSelectedResourceType(visibleResources[0]?.resourceType ?? "");
+      setSelectedResourceType(visibleResources[0]?.resource_type ?? "");
     }
   }, [selectedResourceType, visibleResources]);
 
@@ -132,20 +133,20 @@ export function SchemaPage(): ReactElement {
 
   const selectedResource =
     visibleResources.find(
-      (resource) => resource.resourceType === selectedResourceType,
+      (resource) => resource.resource_type === selectedResourceType,
     )
     ?? visibleResources[0]
     ?? null;
   const selectedIndex = selectedResource
     ? visibleResources.findIndex(
-        (resource) => resource.resourceType === selectedResource.resourceType,
+        (resource) => resource.resource_type === selectedResource.resource_type,
       )
     : -1;
   const selectVisibleResource = (index: number, focus = false) => {
     const resource = visibleResources[index];
     if (!resource) return;
-    setSelectedResourceType(resource.resourceType);
-    if (focus) optionRefs.current.get(resource.resourceType)?.focus();
+    setSelectedResourceType(resource.resource_type);
+    if (focus) optionRefs.current.get(resource.resource_type)?.focus();
   };
   const handleResourceListboxKeyDown = (
     event: KeyboardEvent<HTMLDivElement>,
@@ -219,7 +220,7 @@ function ResourceTypeList({
   selectedResource: IAMResourceSchema | null;
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
   onSearchChange: (value: string) => void;
-  onSelect: (resourceType: string) => void;
+  onSelect: (resource_type: string) => void;
 }): ReactElement {
   const t = useIamT();
   return (
@@ -242,37 +243,37 @@ function ResourceTypeList({
         {resources.length > 0 ? (
           resources.map((resource) => (
             <Button
-              key={resource.resourceType}
+              key={resource.resource_type}
               ref={(node) => {
-                if (node) optionRefs.current.set(resource.resourceType, node);
-                else optionRefs.current.delete(resource.resourceType);
+                if (node) optionRefs.current.set(resource.resource_type, node);
+                else optionRefs.current.delete(resource.resource_type);
               }}
               type="button"
-              id={resourceOptionId(listboxId, resource.resourceType)}
+              id={resourceOptionId(listboxId, resource.resource_type)}
               role="option"
               aria-selected={
-                resource.resourceType === selectedResource?.resourceType
+                resource.resource_type === selectedResource?.resource_type
               }
               tabIndex={
-                resource.resourceType === selectedResource?.resourceType
+                resource.resource_type === selectedResource?.resource_type
                   ? 0
                   : -1
               }
               variant="ghost"
               className="h-auto w-full min-w-0 justify-between gap-3 whitespace-normal px-3 py-2 text-left data-[selected]:bg-brand-soft data-[selected]:text-brand-soft-text"
               data-selected={
-                resource.resourceType === selectedResource?.resourceType
+                resource.resource_type === selectedResource?.resource_type
                   ? ""
                   : undefined
               }
-              onClick={() => onSelect(resource.resourceType)}
+              onClick={() => onSelect(resource.resource_type)}
             >
               <span className="min-w-0">
                 <span className="block truncate text-13 font-medium">
-                  {resourceLabel(resource.resourceType)}
+                  {resourceLabel(resource.resource_type)}
                 </span>
                 <Code truncate tone="muted">
-                  {resource.resourceType}
+                  {resource.resource_type}
                 </Code>
               </span>
               <Badge>
@@ -297,12 +298,12 @@ function SchemaGraphCanvas({
 }: {
   resources: readonly IAMResourceSchema[];
   selectedResource: IAMResourceSchema | null;
-  onSelect: (resourceType: string) => void;
+  onSelect: (resource_type: string) => void;
 }): ReactElement {
   const t = useIamT();
   const graph = useMemo(
-    () => buildSchemaGraph(resources, selectedResource?.resourceType ?? "", t),
-    [resources, selectedResource?.resourceType, t],
+    () => buildSchemaGraph(resources, selectedResource?.resource_type ?? "", t),
+    [resources, selectedResource?.resource_type, t],
   );
 
   if (resources.length === 0) {
@@ -322,7 +323,7 @@ function SchemaGraphCanvas({
           </h2>
           {selectedResource ? (
             <Code className="mt-1" truncate tone="muted">
-              {selectedResource.resourceType}
+              {selectedResource.resource_type}
             </Code>
           ) : null}
         </div>
@@ -337,7 +338,7 @@ function SchemaGraphCanvas({
         edgeStyles={SCHEMA_EDGE_STYLES}
         className="h-[34rem]"
         onNodeClick={(node) => {
-          if (node.meta?.resourceType) onSelect(node.meta.resourceType);
+          if (node.meta?.resource_type) onSelect(node.meta.resource_type);
         }}
       />
     </section>
@@ -362,10 +363,10 @@ function SchemaInspector({
     <aside className="min-w-0 rounded-md border border-border-subtle bg-sheet">
       <header className="border-b border-border-subtle px-4 py-3">
         <h2 className="m-0 truncate text-sm font-semibold text-fg">
-          {resourceLabel(resource.resourceType)}
+          {resourceLabel(resource.resource_type)}
         </h2>
         <Code className="mt-1" truncate tone="muted">
-          {resource.resourceType}
+          {resource.resource_type}
         </Code>
       </header>
       <div className="grid gap-5 p-4">
@@ -392,7 +393,7 @@ function RelationList({
             title={titleLabel(relation.name)}
           >
             <ChipList
-              values={relation.allowedSubjectTypes}
+              values={relation.allowed_subject_types}
               empty={t("iam.schema.noSubjects")}
             />
           </InspectorRow>
@@ -525,18 +526,18 @@ function buildSchemaGraph(
   >();
 
   for (const resource of resources) {
-    const resourceId = resourceNodeId(resource.resourceType);
+    const resource_id = resourceNodeId(resource.resource_type);
     const relationIds = new Map<string, string>();
-    const highlighted = resource.resourceType === selectedResourceType;
+    const highlighted = resource.resource_type === selectedResourceType;
 
     nodes.push(
       schemaNode({
-        id: resourceId,
+        id: resource_id,
         kind: "resource",
-        resourceType: resource.resourceType,
+        resource_type: resource.resource_type,
         highlighted,
-        title: resourceLabel(resource.resourceType),
-        code: resource.resourceType,
+        title: resourceLabel(resource.resource_type),
+        code: resource.resource_type,
         detail: t("iam.schema.resourceDetail", {
           relations: resource.relations.length,
           permissions: resource.permissions.length,
@@ -545,25 +546,25 @@ function buildSchemaGraph(
     );
 
     for (const relation of resource.relations) {
-      const relationId = relationNodeId(resource.resourceType, relation.name);
+      const relationId = relationNodeId(resource.resource_type, relation.name);
       relationIds.set(relation.name, relationId);
       nodes.push(
         schemaNode({
           id: relationId,
           kind: "relation",
-          resourceType: resource.resourceType,
+          resource_type: resource.resource_type,
           highlighted,
           title: titleLabel(relation.name),
           code: relation.name,
           detail:
-            relation.allowedSubjectTypes.length === 1
-              ? t("iam.schema.subjectCount.one", { count: relation.allowedSubjectTypes.length })
-              : t("iam.schema.subjectCount.other", { count: relation.allowedSubjectTypes.length }),
+            relation.allowed_subject_types.length === 1
+              ? t("iam.schema.subjectCount.one", { count: relation.allowed_subject_types.length })
+              : t("iam.schema.subjectCount.other", { count: relation.allowed_subject_types.length }),
         }),
       );
       edges.push({
-        id: `contains:${resource.resourceType}:${relation.name}`,
-        source: resourceId,
+        id: `contains:${resource.resource_type}:${relation.name}`,
+        source: resource_id,
         target: relationId,
         kind: "contains",
         label: t("iam.schema.edge.contains"),
@@ -572,14 +573,14 @@ function buildSchemaGraph(
 
     for (const permission of resource.permissions) {
       const permissionId = permissionNodeId(
-        resource.resourceType,
+        resource.resource_type,
         permission.name,
       );
       nodes.push(
         schemaNode({
           id: permissionId,
           kind: "permission",
-          resourceType: resource.resourceType,
+          resource_type: resource.resource_type,
           highlighted,
           title: titleLabel(permission.name),
           code: permission.name,
@@ -602,7 +603,7 @@ function buildSchemaGraph(
           continue;
         }
         computedEdges.set(edgeKey, {
-          id: `computed:${resource.resourceType}:${relationName}:${permission.name}`,
+          id: `computed:${resource.resource_type}:${relationName}:${permission.name}`,
           source: relationId,
           target: permissionId,
           labels: [condition.name],
@@ -627,7 +628,7 @@ function buildSchemaGraph(
 function schemaNode({
   id,
   kind,
-  resourceType,
+  resource_type,
   highlighted,
   title,
   code,
@@ -635,7 +636,7 @@ function schemaNode({
 }: {
   id: string;
   kind: SchemaNodeKind;
-  resourceType: string;
+  resource_type: string;
   highlighted: boolean;
   title: string;
   code: string;
@@ -649,7 +650,7 @@ function schemaNode({
     detail,
     highlighted,
     meta: {
-      resourceType,
+      resource_type,
     },
   };
 }
@@ -673,7 +674,7 @@ function normalizeResources(
   resources: readonly IAMResourceSchema[],
 ): IAMResourceSchema[] {
   return [...resources]
-    .sort((left, right) => left.resourceType.localeCompare(right.resourceType))
+    .sort((left, right) => left.resource_type.localeCompare(right.resource_type))
     .map((resource) => ({
       ...resource,
       relations: [...resource.relations].sort((left, right) =>
@@ -694,11 +695,11 @@ function resourceMatches(resource: IAMResourceSchema, search: string): boolean {
   const term = search.trim().toLowerCase();
   if (!term) return true;
   return [
-    resource.resourceType,
-    resourceLabel(resource.resourceType),
+    resource.resource_type,
+    resourceLabel(resource.resource_type),
     ...resource.relations.flatMap((relation) => [
       relation.name,
-      ...relation.allowedSubjectTypes,
+      ...relation.allowed_subject_types,
     ]),
     ...resource.permissions.flatMap((permission) => [
       permission.name,
@@ -707,18 +708,18 @@ function resourceMatches(resource: IAMResourceSchema, search: string): boolean {
   ].some((value) => value.toLowerCase().includes(term));
 }
 
-function resourceNodeId(resourceType: string): string {
-  return `resource:${resourceType}`;
+function resourceNodeId(resource_type: string): string {
+  return `resource:${resource_type}`;
 }
 
-function relationNodeId(resourceType: string, relation: string): string {
-  return `relation:${resourceType}:${relation}`;
+function relationNodeId(resource_type: string, relation: string): string {
+  return `relation:${resource_type}:${relation}`;
 }
 
-function permissionNodeId(resourceType: string, permission: string): string {
-  return `permission:${resourceType}:${permission}`;
+function permissionNodeId(resource_type: string, permission: string): string {
+  return `permission:${resource_type}:${permission}`;
 }
 
-function resourceOptionId(listboxId: string, resourceType: string): string {
-  return `${listboxId}-${resourceType.replace(/[^a-zA-Z0-9_-]+/g, "-")}`;
+function resourceOptionId(listboxId: string, resource_type: string): string {
+  return `${listboxId}-${resource_type.replace(/[^a-zA-Z0-9_-]+/g, "-")}`;
 }

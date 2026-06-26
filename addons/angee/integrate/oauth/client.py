@@ -187,9 +187,7 @@ class OAuthClientProtocol:
         except OAuthFlowError as exc:
             if exc.code == TOKEN_EXCHANGE_FAILED:
                 client_label = str(
-                    getattr(self.oauth_client, "slug", "")
-                    or getattr(self.oauth_client, "client_id", "")
-                    or "unknown"
+                    getattr(self.oauth_client, "slug", "") or getattr(self.oauth_client, "client_id", "") or "unknown"
                 )
                 logger.warning(
                     "OAuth token request failed for %s: status=%s body=%r",
@@ -367,9 +365,7 @@ def _safe_error_body(value: Any) -> Any:
             "client_secret",
         }
         return {
-            str(key): "[redacted]"
-            if str(key).lower() in redacted_keys
-            else _safe_error_body(item)
+            str(key): "[redacted]" if str(key).lower() in redacted_keys else _safe_error_body(item)
             for key, item in value.items()
         }
     if isinstance(value, list):

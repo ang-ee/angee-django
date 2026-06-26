@@ -3,7 +3,7 @@ import type {
   ChromeMenuItem,
   SpotlightCommand,
   TopMenuTab,
-} from "@angee/base";
+} from "@angee/ui";
 
 export const chromeMenuItems: readonly ChromeMenuItem[] = [
   {
@@ -164,13 +164,13 @@ export const spotlightCommands: readonly SpotlightCommand[] = [
   },
 ];
 
-export function ShellStoryBody() {
+export function LayoutStoryBody() {
   return (
     <div className="grid gap-4 p-6">
       <section className="rounded-lg border border-border-subtle bg-sheet p-5">
         <div className="text-15 font-semibold text-fg">Notes workspace</div>
         <p className="mt-1 max-w-2xl text-13 text-fg-muted">
-          A dense shell body with enough surface area to verify rail, top bar,
+          A dense layout body with enough surface area to verify rail, top bar,
           breadcrumbs, and chatter placement.
         </p>
       </section>

@@ -1,10 +1,6 @@
-import {
-  AUTH_LOGIN_METHOD_SLOT,
-  defineBaseAddon,
-  formViewSectionsSlot,
-  type BaseAddonRoute,
-  type BaseMenuItem,
-} from "@angee/base";
+import { AUTH_LOGIN_METHOD_SLOT } from "@angee/app/auth";
+import { defineBaseAddon, type BaseAddonRoute } from "@angee/app";
+import { formViewSectionsSlot, type BaseMenuItem } from "@angee/ui";
 import { createElement } from "react";
 
 import { enIamMessages } from "./i18n";
@@ -64,17 +60,17 @@ const identityMenu: readonly BaseMenuItem[] = [
   },
 ];
 
-// Each model page is a routed DataPage: a list route + a `$id` detail child the
-// list page swaps to inline. `model` tags the collection route so relation fields
+// Each resource page is a routed ResourceList: a list route + a `$id` detail child the
+// list page swaps to inline. `resource` tags the collection route so relation fields
 // targeting it can "follow" to this detail page.
 const consolePage = (
   name: string,
   path: string,
   component: BaseAddonRoute["component"],
-  model?: string,
+  resource?: string,
 ): readonly BaseAddonRoute[] => [
-  { name, path, shell: "console", component, ...(model ? { model } : {}) },
-  { name: `${name}.record`, path: `${path}/$id`, shell: "console", parent: name },
+  { name, path, layout: "console", component, ...(resource ? { resource } : {}) },
+  { name: `${name}.record`, path: `${path}/$id`, layout: "console", parent: name },
 ];
 
 const iam = defineBaseAddon({
@@ -83,16 +79,16 @@ const iam = defineBaseAddon({
     {
       name: "iam.login.callback",
       path: LOGIN_CALLBACK_PATH,
-      shell: "public",
+      layout: "public",
       component: OAuthCallbackPage,
     },
-    { name: "iam.overview", path: "/iam", shell: "console", component: OverviewPage },
+    { name: "iam.overview", path: "/iam", layout: "console", component: OverviewPage },
     ...consolePage("iam.users", "/iam/users", UsersPage, "User"),
-    { name: "iam.roles", path: "/iam/roles", shell: "console", component: RolesPage },
+    { name: "iam.roles", path: "/iam/roles", layout: "console", resource: "iam.Role", component: RolesPage },
     ...consolePage("iam.groups", "/iam/groups", GroupsPage, "iam.Group"),
-    { name: "iam.grants", path: "/iam/grants", shell: "console", component: GrantsPage },
-    { name: "iam.relationships", path: "/iam/relationships", shell: "console", component: RelationshipsPage },
-    { name: "iam.schema", path: "/iam/schema", shell: "console", component: SchemaPage },
+    { name: "iam.grants", path: "/iam/grants", layout: "console", resource: "iam.Grant", component: GrantsPage },
+    { name: "iam.relationships", path: "/iam/relationships", layout: "console", resource: "iam.Relationship", component: RelationshipsPage },
+    { name: "iam.schema", path: "/iam/schema", layout: "console", component: SchemaPage },
   ],
   menus: identityMenu,
   i18n: { iam: enIamMessages },

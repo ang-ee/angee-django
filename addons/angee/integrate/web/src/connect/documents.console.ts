@@ -7,7 +7,7 @@ import { graphql } from "@angee/gql/console";
 
 export const IntegrateRevealCredential = graphql(`
   mutation IntegrateRevealCredential($id: ID!) {
-    revealCredential(id: $id) {
+    reveal_credential(id: $id) {
       secret
     }
   }

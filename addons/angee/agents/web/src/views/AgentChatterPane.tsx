@@ -1,6 +1,6 @@
 import * as React from "react";
-import { Card, CardContent, EmptyState, buttonVariants } from "@angee/base";
-import { useAuthoredMutation } from "@angee/sdk";
+import { Card, CardContent, EmptyState, buttonVariants } from "@angee/ui";
+import { useAuthoredMutation } from "@angee/ui";
 import { Link } from "@tanstack/react-router";
 
 import { useAgentsT } from "../i18n";
@@ -16,34 +16,34 @@ import { AgentChat } from "./AgentChat";
  * and renders the live ACP chat bound to the open record, so the agent sees what the user
  * is looking at and can read/edit it through its MCP tools. Shows a call-to-action when
  * the user has no running agent. Mount it in a host's chatter "agent" tab with the
- * current `{ model, recordId }`.
+ * current `{ resource, recordId }`.
  *
- * The agent is resolved once per `model` (v1 ignores the specific record), so navigating
+ * The agent is resolved once per `resource` (v1 ignores the specific record), so navigating
  * between records keeps the session and transcript; only the live `view` flows on to
  * `AgentChat` (driving the per-send `<system_context>`).
  */
 export function AgentChatterPane({
-  model,
+  resource,
   recordId,
 }: {
-  model: string;
+  resource: string;
   recordId?: string;
 }): React.ReactElement {
   const t = useAgentsT();
   const [resolveSession] = useAuthoredMutation(ResolveSessionForView);
 
-  // Resolved per model only — the agent doesn't depend on the open record in v1.
+  // Resolved per resource only — the agent doesn't depend on the open record in v1.
   const resolveView = React.useMemo<AgentChatView>(
-    () => ({ kind: "dashboard", type: model }),
-    [model],
+    () => ({ kind: "dashboard", type: resource }),
+    [resource],
   );
   // The live view that tracks the open record, passed to the chat for context.
   const liveView = React.useMemo<AgentChatView>(
     () =>
       recordId !== undefined
-        ? { kind: "record", type: model, sqid: recordId }
-        : { kind: "dashboard", type: model },
-    [model, recordId],
+        ? { kind: "record", type: resource, sqid: recordId }
+        : { kind: "dashboard", type: resource },
+    [resource, recordId],
   );
 
   const [session, setSession] = React.useState<AgentSession | null | "loading">("loading");
@@ -51,7 +51,7 @@ export function AgentChatterPane({
     let active = true;
     setSession("loading");
     void resolveSession({ view: resolveView }).then((data) => {
-      if (active) setSession(data?.resolveSessionForView ?? null);
+      if (active) setSession(data?.resolve_session_for_view ?? null);
     });
     return () => {
       active = false;
@@ -79,7 +79,7 @@ export function AgentChatterPane({
       />
     );
   }
-  return <AgentChat agentId={session.agentId} view={liveView} modelHandle={session.modelHandle} />;
+  return <AgentChat agentId={session.agent_id} view={liveView} modelHandle={session.model_handle} />;
 }
 
 function PaneMessage({ children }: { children: React.ReactNode }): React.ReactElement {

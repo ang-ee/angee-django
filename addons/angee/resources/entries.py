@@ -78,6 +78,7 @@ TEXT_FORMATS = {
 STRUCTURED_FORMATS = frozenset({"json", "yaml"})
 """Text formats that can carry ``_meta`` and ``rows`` envelopes."""
 
+
 def resource_manifest_for(app_config: AppConfig) -> dict[str, tuple[dict[str, Any], ...]]:
     """Return normalized resource declarations keyed by tier for one addon."""
 

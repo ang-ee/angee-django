@@ -2,7 +2,8 @@
 // active translations; these are the defaults used when a key is missing.
 // Components resolve them through `useKnowledgeT()` (below).
 
-import { useNamespaceT, type MessageVars } from "@angee/sdk";
+import { useNamespaceT } from "@angee/ui";
+import type { MessageVars } from "@angee/refine";
 
 export const enKnowledgeMessages: Record<string, string> = {
   "knowledge.loading": "Loading knowledge",

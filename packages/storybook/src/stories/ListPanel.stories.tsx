@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Button, Glyph, ListItem, ListPanel, Tag } from "@angee/base";
+import { Button, Glyph, ListItem, ListPanel, Tag } from "@angee/ui";
 
 const meta = {
   title: "Fragments/ListPanel",

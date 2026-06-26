@@ -1,4 +1,4 @@
-import type { DndPayload } from "@angee/base";
+import type { DndPayload } from "@angee/ui";
 
 import type { StorageFile, StorageFolder } from "./documents";
 
@@ -60,18 +60,18 @@ export function fileRows(
       (file) =>
         file.drive === driveId && inScope(file, scope),
     )
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
     .map((file) => ({
       id: file.id,
       name: file.title || file.filename,
       filename: file.filename,
-      mime: file.mimeType?.mimeType ?? "",
-      mimeLabel: file.mimeType?.label || file.mimeType?.mimeType || "—",
-      icon: file.mimeType?.iconKey || "file",
-      uploadState: file.uploadState,
-      sizeBytes: file.sizeBytes,
-      owner: file.createdByLabel ?? "—",
-      updatedAt: file.updatedAt,
+      mime: file.mime_type?.mime_type ?? "",
+      mimeLabel: file.mime_type?.label || file.mime_type?.mime_type || "—",
+      icon: file.mime_type?.icon_key || "file",
+      uploadState: file.upload_state,
+      sizeBytes: file.size_bytes,
+      owner: file.created_by_label ?? "—",
+      updatedAt: file.updated_at,
       url: file.url,
       drive: file.drive,
       folder: file.folder,
@@ -79,8 +79,8 @@ export function fileRows(
 }
 
 function inScope(file: StorageFile, scope: string): boolean {
-  if (scope === TRASH_SCOPE) return file.isTrashed;
-  if (file.isTrashed) return false;
+  if (scope === TRASH_SCOPE) return file.is_trashed;
+  if (file.is_trashed) return false;
   if (scope === ALL_SCOPE) return true;
   return file.folder === scope;
 }
@@ -104,7 +104,7 @@ export function folderTreeRows(
     { id: TRASH_SCOPE, name: "Trash", parent: "", icon: "trash" },
   ];
   for (const folder of folders) {
-    if (folder.isVirtual) continue;
+    if (folder.is_virtual) continue;
     if ((folder.drive ?? "") !== driveId) continue;
     rows.push({
       id: folder.id,

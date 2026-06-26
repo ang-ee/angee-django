@@ -12,9 +12,12 @@ schema, response projection, and operation document, then registers a FastMCP to
 
 Boundary conventions (the agent surface differs from the GraphQL wire):
 - ids are the public ``sqid``; a GraphQL ``id`` arg/field is exposed as ``sqid``.
-- field names are ``snake_case`` for the agent, ``camelCase`` on the wire.
-- a single input object (``createNote(data:)``) is flattened to top-level tool args.
-- an offset-paginated list exposes ``limit`` → ``pagination.limit`` and projects ``results``.
+- field names are ``snake_case`` for the agent; the compiler uses the schema's
+  actual wire name, whether camelCase or Hasura snake_case.
+- a single input object (``createNote(data:)`` / ``insert_notes_one(object:)``)
+  is flattened to top-level tool args.
+- an offset-paginated list exposes ``limit`` → ``pagination.limit`` and projects
+  ``results``; a Hasura list uses top-level ``limit`` and returns rows directly.
 """
 
 from __future__ import annotations
@@ -158,10 +161,14 @@ class _CompiledTool(Tool):
     payload_field: str
     node_type: str
     is_list: bool
+    list_result_field: str | None = None
     leaves: list[tuple[str, str, bool]]
     flatten_arg: str | None = None
+    flatten_fields: dict[str, str] = {}
     id_arg: str | None = None
+    id_arg_is_input: bool = False
     limit_arg: str | None = None
+    limit_wire_arg: str | None = None
     fixed: dict[str, Any] = {}
 
     async def run(self, arguments: dict[str, Any]) -> ToolResult:
@@ -170,7 +177,7 @@ class _CompiledTool(Tool):
         data = await execute_under_actor(self.schema_name, self.document, self._variables(arguments))
         payload = data.get(self.payload_field)
         if self.is_list:
-            rows = (payload or {}).get("results") or []
+            rows = ((payload or {}).get(self.list_result_field) if self.list_result_field else payload) or []
             return ToolResult(structured_content={"result": [self._project(row) for row in rows]})
         if payload is None:
             raise ValueError(f"{self.name}: no matching record.")
@@ -183,12 +190,18 @@ class _CompiledTool(Tool):
         sqid = args.pop("sqid", None)
         variables: dict[str, Any] = {}
         if self.limit_arg and self.limit_arg in args:
-            variables["pagination"] = {"limit": args.pop(self.limit_arg)}
+            value = args.pop(self.limit_arg)
+            if self.limit_wire_arg == "pagination":
+                variables["pagination"] = {"limit": value}
+            elif self.limit_wire_arg:
+                variables[self.limit_wire_arg] = value
         if self.id_arg and sqid is not None:
-            variables[self.id_arg] = str(sqid)
+            variables[self.id_arg] = {"id": str(sqid)} if self.id_arg_is_input else str(sqid)
         if self.flatten_arg:
-            obj: dict[str, Any] = {to_camel_case(key): value for key, value in args.items()}
-            if sqid is not None:
+            obj: dict[str, Any] = {
+                self.flatten_fields.get(key, to_camel_case(key)): value for key, value in args.items()
+            }
+            if sqid is not None and (not self.id_arg or "id" in self.flatten_fields.values()):
                 obj["id"] = str(sqid)
             variables[self.flatten_arg] = obj
         variables.update(self.fixed)
@@ -209,11 +222,24 @@ def _compile(spec: GraphQLTool) -> _CompiledTool:
 
     gc = GraphQLSchemas.from_discovery().graphql_schema(spec.schema)
     op_type, field = _root_field(gc, spec.operation)
-    node, is_list = _return_node(field.type)
-    leaves = [("sqid", "id", True) if name == "sqid" else (name, to_camel_case(name), False) for name in spec.fields]
+    node, is_list, list_result_field = _return_node(field.type)
+    leaves = [
+        ("sqid", "id", True) if name == "sqid" else (name, _wire_field(node, name), False) for name in spec.fields
+    ]
+    flatten_fields = _flatten_fields(field, spec)
+    id_arg_is_input = _id_arg_is_input(field, spec)
+    limit_wire_arg = _limit_wire_arg(field, spec)
     _validate(spec, field, node, leaves)
     parameters = _input_schema(field, spec)
-    document = _document(op_type, spec, field, leaves, is_list)
+    document = _document(
+        op_type,
+        spec,
+        field,
+        leaves,
+        is_list,
+        list_result_field,
+        limit_wire_arg,
+    )
     return _CompiledTool(
         name=spec.name,
         description=spec.description,
@@ -225,10 +251,14 @@ def _compile(spec: GraphQLTool) -> _CompiledTool:
         payload_field=spec.operation,
         node_type=node.name,
         is_list=is_list,
+        list_result_field=list_result_field,
         leaves=leaves,
         flatten_arg=spec.flatten,
+        flatten_fields=flatten_fields,
         id_arg=spec.id_arg,
+        id_arg_is_input=id_arg_is_input,
         limit_arg=spec.limit_arg,
+        limit_wire_arg=limit_wire_arg,
         fixed=spec.fixed,
     )
 
@@ -243,17 +273,53 @@ def _root_field(gc: Any, operation: str) -> tuple[str, Any]:
     raise ValueError(f"Operation {operation!r} is not a root field of the schema.")
 
 
-def _return_node(rtype: Any) -> tuple[Any, bool]:
-    """Unwrap the return type to its node type, flagging an offset-paginated list."""
+def _return_node(rtype: Any) -> tuple[Any, bool, str | None]:
+    """Unwrap the return type to its node type and list payload shape."""
 
     node = rtype.of_type if isinstance(rtype, GraphQLNonNull) else rtype
+    if isinstance(node, GraphQLList):
+        element = node.of_type
+        while isinstance(element, GraphQLNonNull | GraphQLList):
+            element = element.of_type
+        return element, True, None
     fields = getattr(node, "fields", {})
     if "results" in fields:
         element = fields["results"].type
         while isinstance(element, GraphQLNonNull | GraphQLList):
             element = element.of_type
-        return element, True
-    return node, False
+        return element, True, "results"
+    return node, False, None
+
+
+def _wire_field(node: Any, name: str) -> str:
+    """Return the schema-owned wire field for one agent snake_case field."""
+
+    return name if name in node.fields else to_camel_case(name)
+
+
+def _flatten_fields(field: Any, spec: GraphQLTool) -> dict[str, str]:
+    """Return agent-name → input-wire-name mapping for a flattened input."""
+
+    if spec.flatten is None:
+        return {}
+    input_fields = _unwrap(field.args[spec.flatten].type).fields
+    return {to_snake_case(name): name for name in input_fields}
+
+
+def _id_arg_is_input(field: Any, spec: GraphQLTool) -> bool:
+    """Return whether the configured id arg is an input object."""
+
+    if spec.id_arg is None:
+        return False
+    return isinstance(_unwrap(field.args[spec.id_arg].type), GraphQLInputObjectType)
+
+
+def _limit_wire_arg(field: Any, spec: GraphQLTool) -> str | None:
+    """Return the root argument that carries an agent ``limit`` value."""
+
+    if spec.limit_arg is None:
+        return None
+    return spec.limit_arg if spec.limit_arg in field.args else "pagination"
 
 
 def _validate(spec: GraphQLTool, field: Any, node: Any, leaves: list[tuple[str, str, bool]]) -> None:
@@ -270,7 +336,7 @@ def _validate(spec: GraphQLTool, field: Any, node: Any, leaves: list[tuple[str, 
         raise ImproperlyConfigured(
             f"MCP tool {spec.name!r}: {node.name} has no field(s) {unknown_fields} (projected by {spec.operation})."
         )
-    driven = [arg for arg in (("pagination" if spec.limit_arg else None), spec.id_arg, spec.flatten) if arg]
+    driven = [arg for arg in (_limit_wire_arg(field, spec), spec.id_arg, spec.flatten) if arg]
     driven += list(spec.fixed)
     unknown_args = [arg for arg in driven if arg not in field.args]
     if unknown_args:
@@ -300,15 +366,23 @@ def _input_schema(field: Any, spec: GraphQLTool) -> dict[str, Any]:
     return {"type": "object", "properties": properties, "required": required, "additionalProperties": False}
 
 
-def _document(op_type: str, spec: GraphQLTool, field: Any, leaves: list[tuple[str, str, bool]], is_list: bool) -> str:
+def _document(
+    op_type: str,
+    spec: GraphQLTool,
+    field: Any,
+    leaves: list[tuple[str, str, bool]],
+    is_list: bool,
+    list_result_field: str | None,
+    limit_wire_arg: str | None,
+) -> str:
     """Render the GraphQL operation document with variable defs and the selection set."""
 
-    used = [arg for arg in (("pagination" if spec.limit_arg else None), spec.id_arg, spec.flatten) if arg]
+    used = [arg for arg in (limit_wire_arg, spec.id_arg, spec.flatten) if arg]
     used += list(spec.fixed)
     var_defs = ", ".join(f"${arg}: {field.args[arg].type}" for arg in used)
     call_args = ", ".join(f"{arg}: ${arg}" for arg in used)
     selection = " ".join(wire for _key, wire, _is_id in leaves)
-    body = f"results {{ {selection} }}" if is_list else selection
+    body = f"{list_result_field} {{ {selection} }}" if list_result_field else selection
     call = f"{spec.operation}({call_args})" if call_args else spec.operation
     header = f"({var_defs})" if var_defs else ""
     return f"{op_type} {header} {{ {call} {{ {body} }} }}"

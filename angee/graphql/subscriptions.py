@@ -11,6 +11,13 @@ from django.db import models
 from rebac import current_actor
 
 from angee.graphql.access import ChangeReadGate
+from angee.graphql.data.metadata import (
+    DataResourceRoots,
+    DataResourceTypeNames,
+    attach_data_resource_metadata,
+    make_data_resource_metadata,
+    resource_wire_field_name,
+)
 from angee.graphql.events import ChangeEvent, ChangePayload
 from angee.graphql.publishing import change_group, connect_publishers
 
@@ -44,7 +51,16 @@ def changes(model: type[models.Model], *, field: str) -> type:
     namespace = {field: strawberry.subscription(resolver=resolve, name=field)}
     surface = type(f"{model.__name__}Subscription", (), namespace)
     surface.__doc__ = f"Live changes to {label}."
-    return strawberry.type(surface)
+    surface = strawberry.type(surface)
+    return attach_data_resource_metadata(
+        surface,
+        make_data_resource_metadata(
+            model=model,
+            roots=DataResourceRoots(changes_name=resource_wire_field_name(surface, field)),
+            type_names=DataResourceTypeNames(),
+            capabilities=("changes",),
+        ),
+    )
 
 
 async def _subscribe(

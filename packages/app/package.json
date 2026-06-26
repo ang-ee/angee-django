@@ -1,0 +1,76 @@
+{
+  "name": "@angee/app",
+  "version": "0.0.0",
+  "license": "AGPL-3.0-or-later",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "bin": {
+    "angee-web-codegen": "./bin/angee-web-codegen.mjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./create-app": {
+      "types": "./src/create-app.tsx",
+      "import": "./src/create-app.tsx"
+    },
+    "./define-addon": {
+      "types": "./src/define-addon.ts",
+      "import": "./src/define-addon.ts"
+    },
+    "./auth": {
+      "types": "./src/auth/index.ts",
+      "import": "./src/auth/index.ts"
+    },
+    "./testing": {
+      "types": "./src/testing.tsx",
+      "import": "./src/testing.tsx"
+    }
+  },
+  "scripts": {
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@angee/logo-react": "^0.2.1",
+    "@angee/refine": "workspace:*",
+    "@angee/resources": "workspace:*",
+    "@angee/ui": "workspace:*",
+    "@graphql-codegen/cli": "^7.1.1",
+    "@graphql-codegen/client-preset": "^6.0.1",
+    "@refinedev/core": "^5.0.12",
+    "graphql": "^16.14.0",
+    "nuqs": "^2.5.0"
+  },
+  "peerDependencies": {
+    "@tanstack/react-router": "^1",
+    "@testing-library/react": "^16.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@testing-library/react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@refinedev/react-hook-form": "^5.0.4",
+    "@refinedev/react-table": "^6.0.1",
+    "@tanstack/react-query": "^5.101.0",
+    "@tanstack/react-router": "^1.170.8",
+    "@tanstack/react-table": "^8.21.3",
+    "@testing-library/react": "^16.1.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "happy-dom": "^20.9.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-hook-form": "^7.80.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.7"
+  }
+}

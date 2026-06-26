@@ -6,7 +6,7 @@ import {
   Page,
   PageBody,
   PageHeader,
-} from "@angee/base";
+} from "@angee/ui";
 
 const meta = {
   title: "Page/PageHeader",

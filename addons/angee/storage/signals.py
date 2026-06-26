@@ -64,7 +64,7 @@ def create_trash_folder(
                 is_virtual=True,
                 defaults={"name": "Trash"},
             )
-    except (OperationalError, ProgrammingError):
+    except OperationalError, ProgrammingError:
         # A user created inside the migration window, before storage's own
         # migrations ran. Trash is a UI anchor, safe to create later.
         logger.warning("storage: skipped Trash folder for user %s (tables not ready)", instance.pk)

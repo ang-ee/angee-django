@@ -10,7 +10,7 @@ owns the detail — this page stays the map, not the territory.
 Angee is a platform for building **agent-native applications**: products that
 humans and agents operate together. It binds boring, proven libraries into one
 deterministic product surface so that the hard, repetitive problems — auth,
-permissions, data, deployment, gitops, UI shells — are solved once and inherited
+permissions, data, deployment, gitops, UI layouts — are solved once and inherited
 everywhere, instead of re-solved per project.
 
 Angee comes in two halves. Knowing which half owns what is the whole mental
@@ -104,7 +104,7 @@ works:
 - **Integrations** — connectors to outside systems and OAuth providers.
 - **Communications** — messaging and notification channels.
 - **CRM / PRM** — customer and partner relationship data models.
-- **UX with different shells** — public, app, and operator UI shells built from
+- **UX with different layouts** — public, app, and operator UI layouts built from
   one component system and themeable by tokens.
 
 ## How much of this is built today?
@@ -121,7 +121,7 @@ Concretely, today:
   Workspaces, secrets, ports, and gitops topology over CLI, REST, and GraphQL)
   and the framework core: composition (source models → `runtime/`), GraphQL via
   strawberry-django, relationship-based authorization (REBAC), aggregates,
-  tiered resources, history/revisions, and the React frontend (shells,
+  tiered resources, history/revisions, and the React frontend (layouts,
   list/board/form views).
 - **Being lifted in now.** The higher-level addons — agents, integrations,
   knowledge, storage, and communications. They already run in the team's other

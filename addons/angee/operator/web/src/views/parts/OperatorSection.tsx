@@ -1,4 +1,4 @@
-import { Alert, LoadingPanel } from "@angee/base";
+import { Alert, LoadingPanel } from "@angee/ui";
 import type { ReactNode } from "react";
 
 /**

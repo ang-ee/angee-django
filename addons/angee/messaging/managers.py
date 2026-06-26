@@ -35,9 +35,7 @@ if TYPE_CHECKING:
 # repeated signature); quote-linking it would join the whole corpus, so skip it.
 _BOILERPLATE_CUTOFF = 100
 
-_SUBJECT_PREFIX_RE = re.compile(
-    r"^\s*(?:re|fwd|fw|aw|sv|vs|ref|tr|rif)\s*(?:\[\d+\])?\s*:\s*", re.IGNORECASE
-)
+_SUBJECT_PREFIX_RE = re.compile(r"^\s*(?:re|fwd|fw|aw|sv|vs|ref|tr|rif)\s*(?:\[\d+\])?\s*:\s*", re.IGNORECASE)
 _WS_RE = re.compile(r"\s+")
 
 
@@ -144,9 +142,9 @@ class ThreadManager(AngeeManager):
         if references:
             ref_map = {
                 row.external_id: row
-                for row in message_model.objects.filter(
-                    platform=platform, external_id__in=references
-                ).select_related("thread")
+                for row in message_model.objects.filter(platform=platform, external_id__in=references).select_related(
+                    "thread"
+                )
             }
             for external_id in reversed(references):
                 row = ref_map.get(external_id)
@@ -196,9 +194,7 @@ class MessageManager(AngeeManager):
             if not parsed.external_id:
                 continue
             with transaction.atomic():
-                ingested.append(
-                    self._ingest_one(parsed, channel=channel, owner_id=owner_id, thread_model=thread_model)
-                )
+                ingested.append(self._ingest_one(parsed, channel=channel, owner_id=owner_id, thread_model=thread_model))
         # Quotation runs after the whole batch lands, so a message quoting a later
         # one in the same batch still links (an inline pass would miss it).
         edges = apps.get_model("messaging", "MessageEdge").objects

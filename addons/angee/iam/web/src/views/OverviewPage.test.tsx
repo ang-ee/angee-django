@@ -23,8 +23,7 @@ import {
   type ReactNode,
 } from "react";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
-import { AppRuntimeProvider } from "@angee/sdk";
-import { ModalsHost, baseIcons } from "@angee/base";
+import { AppRuntimeProvider, ModalsHost, baseIcons } from "@angee/ui";
 
 import { OverviewPage } from "./OverviewPage";
 import { documentName } from "./test-documents";
@@ -45,15 +44,15 @@ const sdkMocks = vi.hoisted(() => ({
     error: null as Error | null,
     refetch: vi.fn(),
   },
-  grantRole: vi.fn(),
+  grant_role: vi.fn(),
   grantState: {
     fetching: false,
     error: null as Error | null,
   },
 }));
 
-vi.mock("@angee/sdk", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/sdk")>();
+vi.mock("@angee/ui", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
     ...actual,
     useAuthoredQuery: (document: unknown) => {
@@ -67,7 +66,7 @@ vi.mock("@angee/sdk", async (importOriginal) => {
         refetch: vi.fn(),
       };
     },
-    useAuthoredMutation: () => [sdkMocks.grantRole, sdkMocks.grantState],
+    useAuthoredMutation: () => [sdkMocks.grant_role, sdkMocks.grantState],
   };
 });
 
@@ -97,7 +96,7 @@ describe("IAM overview page", () => {
     sdkMocks.users.fetching = false;
     sdkMocks.users.error = null;
     sdkMocks.users.refetch.mockReset();
-    sdkMocks.grantRole.mockReset();
+    sdkMocks.grant_role.mockReset();
     sdkMocks.grantState.fetching = false;
     sdkMocks.grantState.error = null;
   });
@@ -113,7 +112,7 @@ describe("IAM overview page", () => {
     loading.unmount();
 
     sdkMocks.users.fetching = false;
-    sdkMocks.users.data = usersData({ totalCount: 0, results: [] });
+    sdkMocks.users.data = usersData({ total_count: 0, users: [] });
     renderInRouter(<OverviewPage />);
 
     expect((await selectTrigger("Principal")).hasAttribute("disabled")).toBe(
@@ -124,8 +123,8 @@ describe("IAM overview page", () => {
   test("shows when the principal picker is capped", async () => {
     sdkMocks.overview.data = overviewData();
     sdkMocks.users.data = usersData({
-      totalCount: 501,
-      results: [userData({ id: ALICE_PUBLIC_ID })],
+      total_count: 501,
+      users: [userData({ id: ALICE_PUBLIC_ID })],
     });
 
     renderInRouter(<OverviewPage />);
@@ -137,22 +136,25 @@ describe("IAM overview page", () => {
 
   test("renders backend overview aggregates independently of the picker page", async () => {
     sdkMocks.overview.data = overviewData({
-      userCount: 506,
-      roleCount: 2,
-      grantCount: 3,
-      relationshipCount: 3,
-      privilegedGrantCount: 2,
-      unassignedUserCount: 503,
-      namespaces: [{ namespace: "angee", roleCount: 2, grantCount: 3 }],
-      privilegedGrants: [
+      user_count: 506,
+      role_count: 2,
+      grant_count: 3,
+      relationship_count: 3,
+      privileged_grant_count: 2,
+      unassigned_user_count: 503,
+      namespaces: [{ namespace: "angee", role_count: 2, grant_count: 3 }],
+      privileged_grants: [
         {
-          principalId: "1",
-          principalType: "auth/user",
-          principalLabel: "Admin User",
+          principal_id: "1",
+          principal_type: "auth/user",
+          principal_label: "Admin User",
+          principal_ref: "auth/user:1",
           role: "angee/role:admin",
+          role_name: "admin",
+          namespace: "angee",
         },
       ],
-      unassignedUsers: [
+      unassigned_users: [
         userData({
           id: STALE_PUBLIC_ID,
           username: "unassigned",
@@ -161,8 +163,8 @@ describe("IAM overview page", () => {
       ],
     });
     sdkMocks.users.data = usersData({
-      totalCount: 1,
-      results: [userData({ id: ALICE_PUBLIC_ID })],
+      total_count: 1,
+      users: [userData({ id: ALICE_PUBLIC_ID })],
     });
 
     renderInRouter(<OverviewPage />);
@@ -177,10 +179,10 @@ describe("IAM overview page", () => {
   test("submits the selected user's public id and renders the user label on success", async () => {
     sdkMocks.overview.data = overviewData();
     sdkMocks.users.data = usersData({
-      totalCount: 1,
-      results: [userData({ id: ALICE_PUBLIC_ID })],
+      total_count: 1,
+      users: [userData({ id: ALICE_PUBLIC_ID })],
     });
-    sdkMocks.grantRole.mockResolvedValue({ grantRole: true });
+    sdkMocks.grant_role.mockResolvedValue({ grant_role: true });
 
     renderInRouter(<OverviewPage />);
 
@@ -193,8 +195,8 @@ describe("IAM overview page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Grant" }));
 
     await waitFor(() =>
-      expect(sdkMocks.grantRole).toHaveBeenCalledWith({
-        principalId: ALICE_PUBLIC_ID,
+      expect(sdkMocks.grant_role).toHaveBeenCalledWith({
+        principal_id: ALICE_PUBLIC_ID,
         role: "angee/role:writer",
       }),
     );
@@ -212,10 +214,10 @@ describe("IAM overview page", () => {
     });
     sdkMocks.overview.data = overviewData();
     sdkMocks.users.data = usersData({
-      totalCount: 1,
-      results: [staleUser],
+      total_count: 1,
+      users: [staleUser],
     });
-    sdkMocks.grantRole.mockResolvedValue({ grantRole: true });
+    sdkMocks.grant_role.mockResolvedValue({ grant_role: true });
 
     renderInRouter(<OverviewPage />);
 
@@ -229,8 +231,8 @@ describe("IAM overview page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Grant" }));
 
     await waitFor(() =>
-      expect(sdkMocks.grantRole).toHaveBeenCalledWith({
-        principalId: STALE_PUBLIC_ID,
+      expect(sdkMocks.grant_role).toHaveBeenCalledWith({
+        principal_id: STALE_PUBLIC_ID,
         role: "angee/role:writer",
       }),
     );
@@ -261,32 +263,34 @@ function overviewData(overrides: Record<string, unknown> = {}): unknown {
         description: "",
       },
     ],
-    iamOverview: {
-      userCount: 1,
-      roleCount: 1,
-      grantCount: 0,
-      relationshipCount: 0,
-      privilegedGrantCount: 0,
-      unassignedUserCount: 1,
-      namespaces: [{ namespace: "angee", roleCount: 1, grantCount: 0 }],
-      privilegedGrants: [],
-      unassignedUsers: [],
+    iam_overview: {
+      user_count: 1,
+      role_count: 1,
+      grant_count: 0,
+      relationship_count: 0,
+      privileged_grant_count: 0,
+      unassigned_user_count: 1,
+      namespaces: [{ namespace: "angee", role_count: 1, grant_count: 0 }],
+      privileged_grants: [],
+      unassigned_users: [],
       ...overrides,
     },
   };
 }
 
 function usersData({
-  totalCount,
-  results,
+  total_count,
+  users,
 }: {
-  totalCount: number;
-  results: unknown[];
+  total_count: number;
+  users: unknown[];
 }): unknown {
   return {
-    users: {
-      totalCount,
-      results,
+    users,
+    users_aggregate: {
+      aggregate: {
+        count: total_count,
+      },
     },
   };
 }
@@ -302,20 +306,20 @@ function userData({
 }): {
   id: string;
   username: string;
-  firstName: string;
-  lastName: string;
+  first_name: string;
+  last_name: string;
   email: string;
-  isStaff: boolean;
-  isActive: boolean;
+  is_staff: boolean;
+  is_active: boolean;
 } {
   return {
     id,
     username,
-    firstName: "",
-    lastName: "",
+    first_name: "",
+    last_name: "",
     email,
-    isStaff: false,
-    isActive: true,
+    is_staff: false,
+    is_active: true,
   };
 }
 

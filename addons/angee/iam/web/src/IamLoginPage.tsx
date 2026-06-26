@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { LoginPage, type LoginPageProps } from "@angee/base";
+import { LoginPage, type LoginPageProps } from "@angee/app/auth";
 
 const LOGIN_BACKGROUND_ROTATION_MS = 15_000;
 

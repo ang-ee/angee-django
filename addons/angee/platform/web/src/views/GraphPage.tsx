@@ -6,7 +6,7 @@ import {
   GraphView,
   type GraphViewNode,
   type GraphViewNodeStyle,
-} from "@angee/base";
+} from "@angee/ui";
 
 import { usePlatformModelGraph } from "../lib/explorer";
 import { modelDetailPath } from "../lib/paths";

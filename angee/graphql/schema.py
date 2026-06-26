@@ -20,9 +20,15 @@ from strawberry.tools import merge_types
 from strawberry.types.base import get_object_definition
 from strawberry.types.execution import ExecutionContext
 from strawberry.utils.str_converters import to_camel_case
+from strawberry_django_hasura import hasura_config
 
 from angee.addons import resolve_addon_reference
-from angee.graphql.data.metadata import DataQueryMetadata, data_query_metadata, serialize_data_queries
+from angee.graphql.data.metadata import (
+    DataResourceMetadata,
+    data_resource_metadata,
+    merge_data_resources,
+    serialize_data_resources,
+)
 from angee.graphql.ids import assert_unique_sqid_prefixes
 from angee.graphql.introspection import (
     django_model,
@@ -64,8 +70,8 @@ def _unwrap_validation_error(exc: BaseException | None) -> ValidationError | Non
 class AngeeSchema(strawberry.Schema):
     """Strawberry schema that exposes stable REBAC denial codes."""
 
-    angee_data_queries: tuple[DataQueryMetadata, ...] = ()
-    """Data-query metadata carried by this built schema."""
+    angee_resources: tuple[DataResourceMetadata, ...] = ()
+    """Model resource metadata carried by this built schema."""
 
     def process_errors(
         self,
@@ -246,8 +252,8 @@ class GraphQLSchemas:
 
         return self.build(name)._schema
 
-    def data_queries(self, name: str = DEFAULT_SCHEMA_NAME) -> tuple[DataQueryMetadata, ...]:
-        """Return model data-query metadata contributed to the named schema bucket."""
+    def resources(self, name: str = DEFAULT_SCHEMA_NAME) -> tuple[DataResourceMetadata, ...]:
+        """Return model resource metadata contributed to the named schema bucket."""
 
         try:
             parts = self.parts[name]
@@ -256,7 +262,7 @@ class GraphQLSchemas:
             raise ImproperlyConfigured(
                 f"GraphQL schema {name!r} has no contributions; available schemas: {available}"
             ) from error
-        return self._data_queries_from_parts(parts)
+        return self._data_resources_from_parts(parts)
 
     def _build(
         self,
@@ -279,7 +285,7 @@ class GraphQLSchemas:
         self._assert_rebac_managers(name, types)
         assert_unique_sqid_prefixes(types)
         self._describe_choice_enums(types)
-        data_queries = self._data_queries_from_parts(parts)
+        resources = self._data_resources_from_parts(parts)
         schema = AngeeSchema(
             query=query,
             mutation=self._merge_root(name, "mutation", parts.mutation),
@@ -297,32 +303,35 @@ class GraphQLSchemas:
                     RebacDjangoOptimizerExtension,
                 ],
             ),
+            config=hasura_config(),
         )
-        self._attach_data_query_metadata(schema, data_queries)
+        self._attach_schema_metadata(schema, name=name, resources=resources)
         return schema
 
-    def _data_queries_from_parts(
+    def _data_resources_from_parts(
         self,
         parts: SchemaParts,
-    ) -> tuple[DataQueryMetadata, ...]:
-        """Return data-query metadata from normalized schema parts."""
+    ) -> tuple[DataResourceMetadata, ...]:
+        """Return merged resource metadata from normalized schema parts."""
 
-        metadata: list[DataQueryMetadata] = []
-        for surface in parts.query:
-            metadata.extend(data_query_metadata(surface))
-        return tuple(metadata)
+        metadata: list[DataResourceMetadata] = []
+        for surface in (*parts.query, *parts.mutation, *parts.subscription):
+            metadata.extend(data_resource_metadata(surface))
+        return merge_data_resources(tuple(metadata))
 
-    def _attach_data_query_metadata(
+    def _attach_schema_metadata(
         self,
         schema: AngeeSchema,
-        data_queries: tuple[DataQueryMetadata, ...],
+        *,
+        name: str,
+        resources: tuple[DataResourceMetadata, ...],
     ) -> None:
-        """Attach typed and serialized data-query metadata to a built schema."""
+        """Attach typed and serialized Angee metadata to a built schema."""
 
-        schema.angee_data_queries = data_queries
+        schema.angee_resources = resources
         extensions = dict(schema._schema.extensions or {})
         angee_extensions = dict(cast(dict[str, object], extensions.get("angee") or {}))
-        angee_extensions["dataQueries"] = serialize_data_queries(data_queries)
+        angee_extensions["resources"] = serialize_data_resources(resources, schema_name=name)
         extensions["angee"] = angee_extensions
         schema._schema.extensions = extensions
 

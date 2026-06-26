@@ -6,36 +6,37 @@ import {
   Input,
   RelationField,
   Spinner,
-  useDebounce,
-  type RelationOption,
-} from "@angee/base";
-import {
   errorMessage,
+  useRelationOptions,
   useAuthoredMutation,
   useAuthoredQuery,
-  type DocumentVariables,
-} from "@angee/sdk";
+} from "@angee/ui";
+import { useDebounce } from "use-debounce";
+import type { DocumentVariables } from "@angee/refine";
 
 import { useIntegrateT } from "../i18n";
 import {
   IntegrateAddRepository,
   IntegrateSearchRepositories,
-  IntegrateVcsBridges,
   type RepoCandidate,
 } from "../documents";
 
 /** The repository model whose list refetches after an add. */
 const REPOSITORY_MODEL = "integrate.Repository";
-// One safety-capped read of the bridge catalogue for the picker.
-const BRIDGE_LIMIT = 200;
+const VCS_BRIDGE_MODEL = "integrate.VcsBridge";
+const VCS_BRIDGE_RELATION = {
+  resource: VCS_BRIDGE_MODEL,
+  labelField: "display_name",
+  canCreate: false,
+};
 // Debounce keystrokes before hitting the host search API.
 const SEARCH_DEBOUNCE_MS = 250;
 
 /**
  * The "Add repository" affordance: a button (for the list toolbar slot) opening a
  * dialog that picks a VCS bridge and types a repository name like a foreign-key
- * field. Matches against `searchRepositories` (live host candidates, debounced) and
- * on pick inventories the row via `addRepository`, refreshing the repository list.
+ * field. Matches against `search_repositories` (live host candidates, debounced) and
+ * on pick inventories the row via `add_repository`, refreshing the repository list.
  * The dialog stays open so several repositories can be added in one sitting.
  */
 export function AddRepositoryControl(): React.ReactElement {
@@ -52,12 +53,7 @@ export function AddRepositoryControl(): React.ReactElement {
   );
 }
 
-type VcsBridgeVariables = DocumentVariables<typeof IntegrateVcsBridges>;
 type SearchRepositoryVariables = DocumentVariables<typeof IntegrateSearchRepositories>;
-
-const BRIDGE_VARS: VcsBridgeVariables = {
-  pagination: { offset: 0, limit: BRIDGE_LIMIT },
-};
 
 function AddRepositoryDialog({
   open,
@@ -67,19 +63,10 @@ function AddRepositoryDialog({
   onOpenChange: (open: boolean) => void;
 }): React.ReactElement {
   const t = useIntegrateT();
-  const bridgesQuery = useAuthoredQuery(IntegrateVcsBridges, BRIDGE_VARS, {
+  const { options: bridgeOptions } = useRelationOptions(VCS_BRIDGE_RELATION, {
     enabled: open,
+    sort: true,
   });
-  const bridgeOptions = React.useMemo<readonly RelationOption[]>(
-    () =>
-      (bridgesQuery.data?.vcsBridges.results ?? []).map(
-        (bridge) => ({
-          value: bridge.id,
-          label: bridge.displayName,
-        }),
-      ),
-    [bridgesQuery.data],
-  );
 
   const [pickedId, setPickedId] = React.useState<string | null>(null);
   // Auto-select when the account is unambiguous, so a single-bridge host
@@ -97,7 +84,7 @@ function AddRepositoryDialog({
   const searchQuery = useAuthoredQuery(IntegrateSearchRepositories, searchVars, {
     enabled: searchEnabled,
   });
-  const candidates = searchQuery.data?.searchRepositories ?? [];
+  const candidates = searchQuery.data?.search_repositories ?? [];
 
   const [addRepository] = useAuthoredMutation(IntegrateAddRepository, {
     invalidateModels: [REPOSITORY_MODEL],
@@ -247,7 +234,7 @@ function RepoCandidateList({
               <div className="min-w-0 flex-1">
                 <div className="truncate text-13 text-fg">{candidate.name}</div>
                 <div className="truncate text-12 text-fg-muted">
-                  {candidate.defaultBranch} · {candidate.visibility}
+                  {candidate.default_branch} · {candidate.visibility}
                 </div>
               </div>
               {isAdding ? (

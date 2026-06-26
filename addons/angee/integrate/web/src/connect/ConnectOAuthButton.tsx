@@ -1,25 +1,21 @@
 import * as React from "react";
-import { Button, Glyph, usePrompt, useToast } from "@angee/base";
-import { errorMessage, useAuthoredMutation } from "@angee/sdk";
+import { Button, Glyph, errorMessage, usePrompt, useToast, useAuthoredMutation } from "@angee/ui";
+import { type DocumentType } from "@angee/gql/console";
 
 import { useIntegrateT } from "../i18n";
+import { ConnectIntegration } from "../documents";
 import { IntegrateConnectAccountComplete } from "./documents.public";
 import { connectCallbackRedirectUri } from "./redirects";
 
-export interface OAuthConnectPayload {
-  attached?: boolean | null;
-  authorizeUrl?: string | null;
-  error?: string | null;
-  mode?: string | null;
-  state?: string | null;
-  redirectUri?: string | null;
-}
+/** The OAuth connect-start payload, from the generated `connect_integration` result. */
+export type OAuthConnectPayload = NonNullable<
+  DocumentType<typeof ConnectIntegration>["connect_integration"]
+>;
 
 export interface ConnectOAuthButtonProps {
   label: string;
   connectedTitle: string;
   startErrorTitle: string;
-  callbackPath?: string;
   next: string;
   start: (input: {
     redirectUri: string;
@@ -33,7 +29,6 @@ export function ConnectOAuthButton({
   label,
   connectedTitle,
   startErrorTitle,
-  callbackPath,
   next,
   start,
   onConnected,
@@ -50,7 +45,7 @@ export function ConnectOAuthButton({
     setStarting(true);
     try {
       const payload = await start({
-        redirectUri: connectCallbackRedirectUri(callbackPath),
+        redirectUri: connectCallbackRedirectUri(),
         next,
       });
       if (payload?.error) throw new Error(payload.error);
@@ -59,11 +54,11 @@ export function ConnectOAuthButton({
         toast.success({ title: connectedTitle });
         return;
       }
-      if (!payload?.authorizeUrl) {
+      if (!payload?.authorize_url) {
         throw new Error(startErrorTitle);
       }
       if (payload.mode !== "manual") {
-        window.location.assign(payload.authorizeUrl);
+        window.location.assign(payload.authorize_url);
         return;
       }
       const entered = await prompt({
@@ -71,7 +66,7 @@ export function ConnectOAuthButton({
         body: (
           <span>
             <a
-              href={payload.authorizeUrl}
+              href={payload.authorize_url}
               target="_blank"
               rel="noreferrer"
               className="underline"
@@ -95,15 +90,15 @@ export function ConnectOAuthButton({
         payload.state ?? "",
         t,
       );
-      if (!payload.redirectUri) {
+      if (!payload.redirect_uri) {
         throw new Error(t("integrate.providers.connect.stateIncomplete"));
       }
       const completed = await connectAccountComplete({
         code,
         state,
-        redirectUri: payload.redirectUri,
+        redirectUri: payload.redirect_uri,
       });
-      const done = completed?.connectAccountComplete;
+      const done = completed?.connect_account_complete;
       if (done?.error) throw new Error(done.error);
       onConnected();
       toast.success({ title: connectedTitle });

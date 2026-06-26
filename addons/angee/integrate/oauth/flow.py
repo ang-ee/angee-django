@@ -86,11 +86,7 @@ def consume_validated_state(
 
     record = state.consume(state_token)
     oauth_client_id = str(getattr(oauth_client, "sqid", getattr(oauth_client, "pk", "")))
-    if (
-        record.flow != expected_flow
-        or record.oauth_client_id != oauth_client_id
-        or record.redirect_uri != redirect_uri
-    ):
+    if record.flow != expected_flow or record.oauth_client_id != oauth_client_id or record.redirect_uri != redirect_uri:
         raise OAuthFlowError(INVALID_STATE, 400)
     return record
 
@@ -98,9 +94,7 @@ def consume_validated_state(
 def enabled_oauth_client(oauth_client_sqid: str) -> Any:
     """Return one enabled OAuth client addressed by sqid, or raise."""
 
-    queryset = _oauth_client_model().objects.system_context(
-        reason="integrate.oauth.flow.oauth_client"
-    )
+    queryset = _oauth_client_model().objects.system_context(reason="integrate.oauth.flow.oauth_client")
     oauth_client = instance_from_public_id(queryset.model, oauth_client_sqid, queryset=queryset)
     if oauth_client is None or not oauth_client.is_enabled:
         raise ValueError("OAuth client is not enabled.")

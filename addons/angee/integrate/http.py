@@ -164,9 +164,7 @@ class HttpClient:
     ) -> HttpResponse:
         """POST ``body`` to ``url`` and return the response."""
 
-        return self.request(
-            "POST", url, headers=headers, body=body, allow_private=allow_private, timeout=timeout
-        )
+        return self.request("POST", url, headers=headers, body=body, allow_private=allow_private, timeout=timeout)
 
     def request(
         self,

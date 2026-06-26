@@ -6,7 +6,7 @@ import {
   MetricGrid,
   Skeleton,
   type MetricGridTile,
-} from "@angee/base";
+} from "@angee/ui";
 import type { ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";

@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Avatar, AvatarStack, Glyph } from "@angee/base";
+import { Avatar, AvatarStack, Glyph } from "@angee/ui";
 
 const meta = {
   title: "Primitives/Avatar",

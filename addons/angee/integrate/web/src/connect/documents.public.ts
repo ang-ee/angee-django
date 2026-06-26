@@ -1,10 +1,10 @@
 // Bespoke account-connect mutations for the outbound connect-for-API surface
 // (OAuth account connect). Model CRUD for OAuthClient/ExternalAccount/Credential
-// is model-driven (DataPage reads the SDL); these are the non-CRUD operations the
+// is model-driven (ResourceList reads the SDL); these are the non-CRUD operations the
 // connect views invoke. The connect start/complete flow is served by the public
 // schema (it runs from public-facing pages); the console-only credential reveal
 // lives in `documents.console.ts`. Inbound OIDC login
-// (loginStart/availableConnections) lives in `@angee/iam`.
+// (`login_start`/`available_connections`) lives in `@angee/iam`.
 
 import { graphql } from "@angee/gql/public";
 
@@ -14,16 +14,16 @@ export const IntegrateConnectAccountStart = graphql(`
     $redirectUri: String!
     $next: String!
   ) {
-    connectAccountStart(
+    connect_account_start(
       id: $id
-      redirectUri: $redirectUri
+      redirect_uri: $redirectUri
       next: $next
     ) {
-      authorizeUrl
+      authorize_url
       error
       mode
       state
-      redirectUri
+      redirect_uri
     }
   }
 `);
@@ -34,11 +34,11 @@ export const IntegrateConnectAccountComplete = graphql(`
     $state: String!
     $redirectUri: String!
   ) {
-    connectAccountComplete(code: $code, state: $state, redirectUri: $redirectUri) {
+    connect_account_complete(code: $code, state: $state, redirect_uri: $redirectUri) {
       next
       error
-      account { id displayName }
-      credential { id displayName status }
+      account { id display_name }
+      credential { id display_name status }
     }
   }
 `);

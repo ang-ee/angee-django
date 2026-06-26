@@ -2,7 +2,7 @@ import {
   builtinPreviewProviders,
   displayMime,
   resolvePreviewProvider,
-} from "@angee/base";
+} from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import storage from "./index";

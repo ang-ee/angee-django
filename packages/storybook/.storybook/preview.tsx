@@ -1,14 +1,29 @@
-import type { Decorator, Preview } from "@storybook/react-vite";
+import {
+  ModelMetadataProvider,
+} from "@angee/resources";
+import type {
+  Decorator,
+  Preview } from "@storybook/react-vite";
 import { withThemeByDataAttribute } from "@storybook/addon-themes";
 import { NuqsTestingAdapter } from "nuqs/adapters/testing";
+import { Refine,
+  type ResourceProps } from "@refinedev/core";
+import {
+  AppRuntimeProvider,
+  type AppRuntime,
+  } from "@angee/ui";
 import {
   AuthProvider,
-  GraphQLClientProvider,
-  AppRuntimeProvider,
-  type AngeeUrqlClientOptions,
-  type AppRuntime,
-} from "@angee/sdk";
-import { ToastProvider, baseIcons } from "@angee/base";
+} from "@angee/refine";
+import {
+  ActiveGraphQLSchemaProvider,
+} from "@angee/resources";
+import {
+  createAngeeHasuraDataProviders,
+  tanStackRouterProvider,
+  type AngeeHasuraSchemaConfig,
+} from "@angee/refine";
+import { ToastProvider, baseIcons } from "@angee/ui";
 import {
   Outlet,
   RouterProvider,
@@ -22,13 +37,14 @@ import "../src/storybook.css";
 
 const previewRuntime = {
   icons: baseIcons,
-  menus: [
-    { id: "notes", label: "Notes", to: "/notes", icon: "notes" },
-    { id: "resources", label: "Resources", to: "/resources", icon: "archive" },
-    { id: "iam", label: "IAM", to: "/iam", icon: "auth" },
-    { id: "activity", label: "Activity", to: "/activity", icon: "activity" },
-  ],
 } satisfies Partial<AppRuntime>;
+
+const previewResources: ResourceProps[] = [
+  previewMenuResource("notes", "Notes", "/notes", "notes"),
+  previewMenuResource("resources", "Resources", "/resources", "archive"),
+  previewMenuResource("iam", "IAM", "/iam", "auth"),
+  previewMenuResource("activity", "Activity", "/activity", "activity"),
+];
 
 const previewAuth = {
   user: {
@@ -66,7 +82,12 @@ const previewSchemas = {
       });
     },
   },
-} satisfies Record<string, AngeeUrqlClientOptions>;
+} satisfies Record<string, AngeeHasuraSchemaConfig>;
+
+const previewDataProviders = createAngeeHasuraDataProviders(
+  previewSchemas,
+  "public",
+);
 
 const storybookRoutes = [
   "/",
@@ -100,19 +121,42 @@ const withAngeeProviders: Decorator = (Story) => {
   return (
     <AppRuntimeProvider runtime={previewRuntime}>
       <AuthProvider auth={previewAuth}>
-        <GraphQLClientProvider config={previewSchemas} schema="public">
-          <NuqsTestingAdapter>
-            <ToastProvider>
-              <div className="min-h-screen bg-canvas p-6 font-sans text-fg">
-                <RouterProvider router={router} />
-              </div>
-            </ToastProvider>
-          </NuqsTestingAdapter>
-        </GraphQLClientProvider>
+        <Refine
+          dataProvider={previewDataProviders}
+          resources={previewResources}
+          routerProvider={tanStackRouterProvider}
+          options={{ syncWithLocation: false }}
+        >
+          <ActiveGraphQLSchemaProvider schema="public">
+            <ModelMetadataProvider>
+              <NuqsTestingAdapter>
+                <ToastProvider>
+                  <div className="min-h-screen bg-canvas p-6 font-sans text-fg">
+                    <RouterProvider router={router} />
+                  </div>
+                </ToastProvider>
+              </NuqsTestingAdapter>
+            </ModelMetadataProvider>
+          </ActiveGraphQLSchemaProvider>
+        </Refine>
       </AuthProvider>
     </AppRuntimeProvider>
   );
 };
+
+function previewMenuResource(
+  id: string,
+  label: string,
+  list: string,
+  icon: string,
+): ResourceProps {
+  return {
+    name: `menu:${id}`,
+    identifier: `menu:${id}`,
+    list,
+    meta: { menuId: id, label, icon },
+  };
+}
 
 const preview: Preview = {
   parameters: {

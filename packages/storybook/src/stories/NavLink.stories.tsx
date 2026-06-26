@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { NavLink } from "@angee/base";
+import { NavLink } from "@angee/ui";
 
 const meta = {
   title: "Primitives/NavLink",

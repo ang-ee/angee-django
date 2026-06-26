@@ -5,7 +5,7 @@ import {
   isHeicMime,
   isImageMime,
   type ListColumn,
-} from "@angee/base";
+} from "@angee/ui";
 import type { ReactElement } from "react";
 
 import type { StorageFileRow } from "../data/file-rows";

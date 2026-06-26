@@ -1,6 +1,6 @@
 import { useState, type ReactElement } from "react";
 
-import { Button, Glyph, InlineTextAction } from "@angee/base";
+import { Button, Glyph, InlineTextAction } from "@angee/ui";
 
 import { useKnowledgeT } from "../i18n";
 
@@ -42,7 +42,7 @@ export function NewPageControl({
       }
       submitLabel={t("knowledge.newPage.create")}
       formClassName="items-center gap-1"
-      renderTrigger={({ busy: actionBusy }) => (
+      renderTrigger={({ busy: actionBusy, open }) => (
         <div className="flex items-center gap-1">
           <Button
             type="button"
@@ -50,7 +50,10 @@ export function NewPageControl({
             variant="ghost"
             className="flex-1 justify-start"
             disabled={actionBusy}
-            onClick={() => setKind("note")}
+            onClick={() => {
+              setKind("note");
+              open();
+            }}
           >
             <Glyph name="note" />
             {t("knowledge.newPage.newNote")}
@@ -61,7 +64,10 @@ export function NewPageControl({
             variant="ghost"
             aria-label={t("knowledge.newPage.newFolder")}
             disabled={actionBusy}
-            onClick={() => setKind("folder")}
+            onClick={() => {
+              setKind("folder");
+              open();
+            }}
           >
             <Glyph name="folder" />
           </Button>

@@ -1,5 +1,6 @@
-import type { BaseAddonRoute, BaseMenuItem } from "@angee/base";
-import { defineBaseAddon } from "@angee/base";
+import type { BaseAddonRoute } from "@angee/app";
+import { defineBaseAddon } from "@angee/app";
+import type { BaseMenuItem } from "@angee/ui";
 import { Box, Cpu, GitBranch, LayoutTemplate, Server, Sparkles, Wrench } from "lucide-react";
 
 import { enAgentsMessages } from "./i18n";
@@ -12,22 +13,22 @@ import { SourcesPage } from "./views/SourcesPage";
 const AGENTS_ID = "agents";
 
 const agentsRoutes: readonly BaseAddonRoute[] = [
-  { name: "agents.agents", path: "/agents", shell: "console", component: AgentsPage },
-  { name: "agents.agent", path: "/agents/$id", shell: "console", parent: "agents.agents" },
+  { name: "agents.agents", path: "/agents", layout: "console", component: AgentsPage, resource: "agents.Agent" },
+  { name: "agents.agent", path: "/agents/$id", layout: "console", parent: "agents.agents" },
   // Static segments outrank the `/agents/$id` param route.
-  { name: "agents.templates", path: "/agents/templates", shell: "console", component: TemplatesPage },
-  { name: "agents.template", path: "/agents/templates/$id", shell: "console", parent: "agents.templates" },
-  { name: "agents.skills", path: "/agents/skills", shell: "console", component: SkillsPage },
-  { name: "agents.sources", path: "/agents/sources", shell: "console", component: SourcesPage },
-  { name: "agents.source", path: "/agents/sources/$id", shell: "console", parent: "agents.sources" },
-  { name: "agents.mcp-servers", path: "/agents/mcp-servers", shell: "console", component: McpServersPage },
-  { name: "agents.mcp-server", path: "/agents/mcp-servers/$id", shell: "console", parent: "agents.mcp-servers" },
-  { name: "agents.mcp-tools", path: "/agents/mcp-tools", shell: "console", component: McpToolsPage },
-  { name: "agents.mcp-tool", path: "/agents/mcp-tools/$id", shell: "console", parent: "agents.mcp-tools" },
-  { name: "agents.providers", path: "/agents/providers", shell: "console", component: InferenceProvidersPage },
-  { name: "agents.provider", path: "/agents/providers/$id", shell: "console", parent: "agents.providers" },
-  { name: "agents.models", path: "/agents/models", shell: "console", component: InferenceModelsPage },
-  { name: "agents.model", path: "/agents/models/$id", shell: "console", parent: "agents.models" },
+  { name: "agents.templates", path: "/agents/templates", layout: "console", component: TemplatesPage },
+  { name: "agents.template", path: "/agents/templates/$id", layout: "console", parent: "agents.templates" },
+  { name: "agents.skills", path: "/agents/skills", layout: "console", component: SkillsPage, resource: "agents.Skill" },
+  { name: "agents.sources", path: "/agents/sources", layout: "console", component: SourcesPage },
+  { name: "agents.source", path: "/agents/sources/$id", layout: "console", parent: "agents.sources" },
+  { name: "agents.mcp-servers", path: "/agents/mcp-servers", layout: "console", component: McpServersPage, resource: "agents.MCPServer" },
+  { name: "agents.mcp-server", path: "/agents/mcp-servers/$id", layout: "console", parent: "agents.mcp-servers" },
+  { name: "agents.mcp-tools", path: "/agents/mcp-tools", layout: "console", component: McpToolsPage, resource: "agents.MCPTool" },
+  { name: "agents.mcp-tool", path: "/agents/mcp-tools/$id", layout: "console", parent: "agents.mcp-tools" },
+  { name: "agents.providers", path: "/agents/providers", layout: "console", component: InferenceProvidersPage, resource: "agents.InferenceProvider" },
+  { name: "agents.provider", path: "/agents/providers/$id", layout: "console", parent: "agents.providers" },
+  { name: "agents.models", path: "/agents/models", layout: "console", component: InferenceModelsPage, resource: "agents.InferenceModel" },
+  { name: "agents.model", path: "/agents/models/$id", layout: "console", parent: "agents.models" },
 ];
 
 // One rail (app) icon for the addon; its children are the top-bar menus, and a

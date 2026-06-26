@@ -1,8 +1,8 @@
 import {
   Skeleton,
-  type DataToolbarGroupOption,
+  type ResourceToolbarGroupOption,
   type ListColumn,
-} from "@angee/base";
+} from "@angee/ui";
 import { useCallback, useMemo, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
@@ -64,7 +64,7 @@ export function ServicesSection({ names }: ServicesSectionProps = {}): ReactNode
     [t],
   );
 
-  const groupOptions: readonly DataToolbarGroupOption[] = useMemo(
+  const groupOptions: readonly ResourceToolbarGroupOption[] = useMemo(
     () => [
       { id: "status", label: t("operator.services.column.status"), group: { field: "status" }, type: "value" },
       { id: "runtime", label: t("operator.services.column.runtime"), group: { field: "runtime" }, type: "value" },

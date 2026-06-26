@@ -1,28 +1,26 @@
-import { defineBaseAddon, FORM_VIEW_RECORD_CHROME_SLOT } from "@angee/base";
+import { defineBaseAddon } from "@angee/app";
+import { FORM_VIEW_RECORD_CHROME_SLOT } from "@angee/ui";
 
-import { NoteCrumb, NotePage } from "./NotePage";
+import { NotePage } from "./NotePage";
 import { RecordChrome } from "./RecordChrome";
 
 /** The notes addon: one console surface and a menu entry pointing at it. The
- * record route nests under the list route — `NotePage` reads its `$id` param
- * and the route's crumb resolves the note title. */
+ * record route nests under the list route — `NotePage` reads its `$id` param. */
 const notes = defineBaseAddon({
   id: "notes",
   routes: [
     {
       name: "notes.home",
       path: "/notes",
-      shell: "console",
+      layout: "console",
+      resource: "notes.Note",
       component: NotePage,
     },
     {
       name: "notes.record",
       path: "/notes/$id",
-      shell: "console",
+      layout: "console",
       parent: "notes.home",
-      crumb: (match) => (
-        <NoteCrumb id={String((match.params as { id?: string }).id ?? "")} />
-      ),
     },
   ],
   menus: [{ id: "notes", label: "Notes", route: "notes.home", icon: "notes" }],

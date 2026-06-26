@@ -1,4 +1,32 @@
-import { useAuthoredMutation, useBusyRun, useResourceMutation } from "@angee/sdk";
+import {
+  resourceOperationTarget,
+  type Row,
+} from "@angee/resources";
+import {
+  useCustomMutation,
+  useInvalidate,
+  useUpdate,
+  type BaseRecord,
+  type HttpError,
+  } from "@refinedev/core";
+import {
+  deletePreviewDocumentForResource,
+  deletePreviewRequest,
+  extractDeletePreview,
+  useOperationDocuments,
+  type DeletePreviewVariables,
+  } from "@angee/refine";
+import {
+  useAuthoredMutation,
+  useBusyRun,
+} from "@angee/ui";
+import {
+  refineResourceName,
+  useModelMetadata,
+} from "@angee/resources";
+import type {
+  DataResourceMetadata,
+} from "@angee/resources";
 
 import { StorageRestoreFile } from "./documents";
 
@@ -25,16 +53,31 @@ export function useFileActions(
   options: { onChanged?: () => void } = {},
 ): FileActions {
   const { onChanged } = options;
-  const [deleteFile] = useResourceMutation("storage.File", "delete");
+  const metadata = useModelMetadata(FILE_MODEL);
+  const resource = metadata?.resource ?? null;
+  const operationDocuments = useOperationDocuments();
+  const deleteFile =
+    useCustomMutation<BaseRecord, HttpError, DeletePreviewVariables>();
   const [restoreFile] = useAuthoredMutation(StorageRestoreFile);
-  const [updateFile] = useResourceMutation("storage.File", "update");
+  const updateFile = useUpdate<RowRecord, HttpError, Record<string, unknown>>({
+    resource: resource ? refineResourceName(resource) : "",
+    dataProviderName: resource?.schemaName,
+    invalidates: ["list", "many", "detail"],
+  });
+  const invalidate = useInvalidate();
   const { busy, run } = useBusyRun(onChanged);
 
   return {
     busy,
     trash: (id) =>
       run(async () => {
-        await deleteFile({ id, confirm: true });
+        await trashFile({
+          deleteFile,
+          invalidate,
+          operationDocuments,
+          resource,
+          id,
+        });
       }),
     restore: (id) =>
       run(async () => {
@@ -42,15 +85,77 @@ export function useFileActions(
       }),
     move: (id, folder) =>
       run(async () => {
-        await updateFile({ data: { id, folder } });
+        requireFileResource(resource);
+        await updateFile.mutateAsync({ id, values: { folder } });
       }),
     trashMany: (ids) =>
       run(async () => {
-        for (const id of ids) await deleteFile({ id, confirm: true });
+        for (const id of ids) {
+          await trashFile({
+            deleteFile,
+            invalidate,
+            operationDocuments,
+            resource,
+            id,
+          });
+        }
       }),
     restoreMany: (ids) =>
       run(async () => {
         for (const id of ids) await restoreFile({ id });
       }),
   };
+}
+
+const FILE_MODEL = "storage.File";
+
+type RowRecord = BaseRecord & Row;
+
+async function trashFile({
+  deleteFile,
+  invalidate,
+  operationDocuments,
+  resource,
+  id,
+}: {
+  deleteFile: ReturnType<typeof useCustomMutation<BaseRecord, HttpError, DeletePreviewVariables>>;
+  invalidate: ReturnType<typeof useInvalidate>;
+  operationDocuments: ReturnType<typeof useOperationDocuments>;
+  resource: DataResourceMetadata | null;
+  id: string;
+}): Promise<void> {
+  requireFileResource(resource);
+  const request = deletePreviewRequest(
+    resourceOperationTarget(resource, "deletePreview"),
+    { id, confirm: true },
+    {
+      document: deletePreviewDocumentForResource(
+        operationDocuments,
+        resource.schemaName,
+        resource.modelLabel,
+      ),
+    },
+  );
+  const response = await deleteFile.mutateAsync({
+    url: "",
+    method: "post",
+    values: { id, confirm: true },
+    dataProviderName: request.dataProviderName,
+    meta: request.meta,
+  });
+  void extractDeletePreview(response.data, request.root);
+  await invalidate({
+    resource: refineResourceName(resource),
+    dataProviderName: request.dataProviderName,
+    id,
+    invalidates: ["list", "many", "detail"],
+  });
+}
+
+function requireFileResource(
+  resource: DataResourceMetadata | null,
+): asserts resource is DataResourceMetadata {
+  if (!resource) {
+    throw new Error(`Resource metadata for "${FILE_MODEL}" is not available.`);
+  }
 }

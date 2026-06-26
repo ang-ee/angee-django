@@ -1,7 +1,7 @@
 import { type ReactElement } from "react";
 import { useParams } from "@tanstack/react-router";
 
-import { Badge, Code, DetailSection, DetailSurface } from "@angee/base";
+import { Badge, Code, DetailSection, DetailSurface } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
 import {
@@ -33,13 +33,13 @@ export function ModelDetail(): ReactElement {
             }
           : null
       }
-      title={model?.modelName}
+      title={model?.model_name}
       meta={
         model ? (
           <>
             <Code tone="muted">{model.label}</Code>
-            <RouterLink href={addonDetailPath(model.addonId)}>
-              <Badge tone="info">{model.addonLabel}</Badge>
+            <RouterLink href={addonDetailPath(model.addon_id)}>
+              <Badge tone="info">{model.addon_label}</Badge>
             </RouterLink>
           </>
         ) : null
@@ -49,21 +49,21 @@ export function ModelDetail(): ReactElement {
           ? [
               {
                 label: t("platform.col.fields"),
-                value: model.fieldCount,
+                value: model.field_count,
                 icon: "columns",
                 href: fieldsPath({ model: model.label }),
                 onNavigate: go,
               },
               {
                 label: t("platform.col.relations"),
-                value: model.relationCount,
+                value: model.relation_count,
                 icon: "share",
               },
               {
                 label: t("platform.col.addon"),
-                value: model.addonLabel,
+                value: model.addon_label,
                 icon: "grid",
-                href: addonDetailPath(model.addonId),
+                href: addonDetailPath(model.addon_id),
                 onNavigate: go,
               },
               {
@@ -82,12 +82,12 @@ export function ModelDetail(): ReactElement {
           <DetailSection
             title={t("platform.detail.definition")}
             rows={[
-              [t("platform.col.table"), <Code truncate>{model.dbTable}</Code>],
-              [t("platform.col.appLabel"), model.appLabel],
-              ...(model.resourceType
+              [t("platform.col.table"), <Code truncate>{model.db_table}</Code>],
+              [t("platform.col.appLabel"), model.app_label],
+              ...(model.resource_type
                 ? [[
                     t("platform.col.resourceType"),
-                    <Code truncate>{model.resourceType}</Code>,
+                    <Code truncate>{model.resource_type}</Code>,
                   ] as const]
                 : []),
             ]}
@@ -98,7 +98,7 @@ export function ModelDetail(): ReactElement {
             rows={[
               [
                 t("platform.col.dependsOn"),
-                <LinkedChips items={model.dependsOn} href={modelDetailPath} />,
+                <LinkedChips items={model.depends_on} href={modelDetailPath} />,
               ],
               [
                 t("platform.col.dependedBy"),

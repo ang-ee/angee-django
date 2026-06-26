@@ -100,9 +100,7 @@ class OAuthClientQuerySet(RebacQuerySet[Any]):
 
         return cast(
             OAuthClientQuerySet,
-            self.system_context(reason="integrate.graphql.connectable")
-            .filter(is_enabled=True)
-            .exclude(client_id=""),
+            self.system_context(reason="integrate.graphql.connectable").filter(is_enabled=True).exclude(client_id=""),
         )
 
     def console_oauth_clients(self) -> OAuthClientQuerySet:
@@ -808,9 +806,7 @@ class CredentialManager(RebacManager.from_queryset(CredentialQuerySet)):  # type
     def _oauth_credential_name(oauth_client: Any, external_account: Any | None) -> str:
         """Return a default label for an OAuth credential: the provider, plus its subject."""
 
-        label = str(
-            getattr(oauth_client, "display_name", "") or getattr(oauth_client, "slug", "") or "OAuth"
-        )
+        label = str(getattr(oauth_client, "display_name", "") or getattr(oauth_client, "slug", "") or "OAuth")
         subject = ""
         if external_account is not None:
             subject = str(
@@ -873,9 +869,7 @@ class CredentialManager(RebacManager.from_queryset(CredentialQuerySet)):  # type
             names = ", ".join(sorted(owned))
             raise ValueError(f"Credential field(s) are owned by the manager: {names}")
         update_values = handler.upsert_fields(material)
-        update_values.update(
-            _validated_manager_values(self.model, fields, allowed=self.caller_fields)
-        )
+        update_values.update(_validated_manager_values(self.model, fields, allowed=self.caller_fields))
         update_values["status"] = CredentialStatus.ACTIVE
         material_value = json.dumps(material, sort_keys=True, separators=(",", ":"))
         operation_values = {"kind": handler.kind, "material": material_value}
@@ -1003,11 +997,7 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
             return str(self.name)
         client = getattr(self, "oauth_client", None)
         if client is not None:
-            provider = str(
-                getattr(client, "slug", "")
-                or getattr(client, "display_name", "")
-                or "credential"
-            )
+            provider = str(getattr(client, "slug", "") or getattr(client, "display_name", "") or "credential")
             account = getattr(self, "external_account", None)
             subject = str(getattr(account, "external_id", "") or "") if account else ""
             return f"{provider}: {subject}" if subject else provider
@@ -1051,7 +1041,7 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
             return
         try:
             self._refresh_locked()
-        except (OAuthFlowError, ValueError):
+        except OAuthFlowError, ValueError:
             logger.warning("Credential %s refresh failed; using the existing token.", self.pk, exc_info=True)
             self._record_refresh_failure()
 
@@ -1067,16 +1057,8 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
         """
 
         with transaction.atomic():
-            locked = (
-                type(self)
-                .objects.sudo(reason="integrate.credential.refresh")
-                .select_for_update()
-                .get(pk=self.pk)
-            )
-            still_stale = (
-                locked.expires_at is not None
-                and locked.expires_at <= timezone.now() + _OAUTH_REFRESH_MARGIN
-            )
+            locked = type(self).objects.sudo(reason="integrate.credential.refresh").select_for_update().get(pk=self.pk)
+            still_stale = locked.expires_at is not None and locked.expires_at <= timezone.now() + _OAUTH_REFRESH_MARGIN
             if still_stale:
                 self.handler.refresh(locked)
         self.refresh_from_db()
@@ -1456,11 +1438,6 @@ class VcsBridge(Bridge):
         rebac_resource_type = "integrate/vcs_bridge"
         rebac_id_attr = "sqid"
 
-    def __str__(self) -> str:
-        """Return a stable VCS bridge label."""
-
-        return f"vcs:{self.public_id}"
-
     @property
     def backend(self) -> VCSBackend:
         """Return this bridge's selected VCS backend."""
@@ -1827,6 +1804,7 @@ class WebhookSubscriptionManager(RebacManager):
                 else:
                     errors += 1
         return {"delivered": delivered, "errors": errors}
+
 
 class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
     """Outbound webhook endpoint owned by one user."""

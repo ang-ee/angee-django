@@ -1,15 +1,15 @@
-import type { BaseMenuItem } from "@angee/base";
+import type { BaseMenuItem } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import knowledge from "./index";
 
 describe("knowledge addon manifest", () => {
-  test("registers the wiki route on the console shell with a component", () => {
+  test("registers the wiki route on the console layout with a component", () => {
     const routes = knowledge.routes ?? [];
     expect(routes).toHaveLength(3);
     expect(routes[0]?.name).toBe("knowledge.home");
     expect(routes[0]?.path).toBe("/knowledge");
-    expect(routes[0]?.shell).toBe("console");
+    expect(routes[0]?.layout).toBe("console");
     expect(routes[0]?.component).toBeTypeOf("function");
   });
 
@@ -22,14 +22,14 @@ describe("knowledge addon manifest", () => {
     expect(settings?.component).toBeTypeOf("function");
   });
 
-  test("nests the page reader route under the wiki with a crumb", () => {
+  test("nests the page reader route under the wiki resource route", () => {
     const record = (knowledge.routes ?? []).find(
       (route) => route.name === "knowledge.page",
     );
     expect(record?.path).toBe("/knowledge/$id");
     expect(record?.parent).toBe("knowledge.home");
     expect(record?.component).toBeUndefined();
-    expect(record?.crumb).toBeTypeOf("function");
+    expect(record?.layout).toBe("console");
   });
 
   test("exposes a Knowledge menu with a Vaults child", () => {

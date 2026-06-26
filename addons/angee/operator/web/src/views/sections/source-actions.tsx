@@ -32,7 +32,7 @@ export function useSourceActions(refetch: () => void): {
       field: string;
       label: string;
       variant: SourceRowAction["variant"];
-      run: (variables: { name: string }) => Promise<object>;
+      run: (variables: { name: string }) => Promise<object | undefined>;
     }[] = [
       { field: "sourceFetch", label: t("operator.sources.fetch"), variant: "secondary", run: fetchSource.run },
       { field: "sourcePull", label: t("operator.sources.pull"), variant: "ghost", run: pull.run },

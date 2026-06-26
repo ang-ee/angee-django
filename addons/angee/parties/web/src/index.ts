@@ -1,8 +1,5 @@
-import {
-  defineBaseAddon,
-  type BaseAddonRoute,
-  type BaseMenuItem,
-} from "@angee/base";
+import { defineBaseAddon, type BaseAddonRoute } from "@angee/app";
+import { type BaseMenuItem } from "@angee/ui";
 import { AtSign, Building2, Contact, Users } from "lucide-react";
 
 import { DirectoriesPage } from "./DirectoriesPage";
@@ -10,17 +7,17 @@ import { HandlesPage } from "./HandlesPage";
 import { OrganizationsPage } from "./OrganizationsPage";
 import { PeoplePage } from "./PeoplePage";
 
-// Each model page is a routed DataPage: a list route + a `$id` detail child the
-// list page swaps to inline. `model` tags the collection route so relation fields
+// Each resource page is a routed ResourceList: a list route + a `$id` detail child the
+// list page swaps to inline. `resource` tags the collection route so relation fields
 // targeting it can "follow" to this detail page.
 const consolePage = (
   name: string,
   path: string,
   component: BaseAddonRoute["component"],
-  model?: string,
+  resource?: string,
 ): readonly BaseAddonRoute[] => [
-  { name, path, shell: "console", component, ...(model ? { model } : {}) },
-  { name: `${name}.record`, path: `${path}/$id`, shell: "console", parent: name },
+  { name, path, layout: "console", component, ...(resource ? { resource } : {}) },
+  { name: `${name}.record`, path: `${path}/$id`, layout: "console", parent: name },
 ];
 
 // One rail root ("Parties") whose children are the People and Organizations

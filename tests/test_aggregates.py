@@ -1,29 +1,38 @@
-"""Tests for the REBAC-aware aggregate seam."""
+"""Tests for Hasura resource metadata and aggregate contracts."""
 
 from __future__ import annotations
+
+import enum
+import warnings
+from typing import NewType
 
 import pytest
 import strawberry
 import strawberry_django
-from django.contrib.auth.models import Group
-from django.core.exceptions import ImproperlyConfigured
-from django.db import connection, models
-from rebac import system_context
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
+from django.db import models
 from strawberry import auto
+from strawberry_django_aggregates.errors import GroupByFieldNotAllowed
 
-import angee.graphql.access as access
 from angee.base.models import AngeeDataModel
-from angee.graphql.aggregates import rebac_aggregate_builder
-from angee.graphql.data import data_query
-from angee.graphql.data.metadata import data_query_metadata
+from angee.graphql.data import hasura_model_resource
+from angee.graphql.data.hasura import _measure_ops_for_field
+from angee.graphql.data.metadata import (
+    DataAggregateMeasureMetadata,
+    DataResourceFieldMetadata,
+    DataResourceRoots,
+    DataResourceTypeNames,
+    make_data_resource_metadata,
+)
+from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from tests.conftest import SchemaAddon
 
 
-class DataQueryThing(AngeeDataModel):
-    """Concrete test model with the public identity data_query requires."""
+class ResourceThing(AngeeDataModel):
+    """Concrete test model used by resource metadata tests."""
 
-    sqid_prefix = "dqt_"
+    sqid_prefix = "rt_"
 
     name = models.CharField(max_length=64)
 
@@ -33,10 +42,10 @@ class DataQueryThing(AngeeDataModel):
         app_label = "tests"
 
 
-class DataQueryParent(AngeeDataModel):
+class ResourceParent(AngeeDataModel):
     """Concrete parent model used by relation group-axis tests."""
 
-    sqid_prefix = "dqp_"
+    sqid_prefix = "rp_"
 
     name = models.CharField(max_length=64)
 
@@ -46,13 +55,14 @@ class DataQueryParent(AngeeDataModel):
         app_label = "tests"
 
 
-class DataQueryChild(AngeeDataModel):
+class ResourceChild(AngeeDataModel):
     """Concrete child model used by relation group-axis tests."""
 
-    sqid_prefix = "dqc_"
+    sqid_prefix = "rc_"
 
     name = models.CharField(max_length=64)
-    parent = models.ForeignKey(DataQueryParent, on_delete=models.CASCADE, related_name="children")
+    parent = models.ForeignKey(ResourceParent, on_delete=models.CASCADE, related_name="children")
+    related_parents = models.ManyToManyField(ResourceParent, related_name="related_children")
 
     class Meta:
         """Django model options for the test model."""
@@ -60,362 +70,517 @@ class DataQueryChild(AngeeDataModel):
         app_label = "tests"
 
 
-def test_rebac_aggregate_builder_rejects_gated_group_by_axis(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A field-gated read column may not be an aggregate group-by axis.
+class ResourceTimedThing(AngeeDataModel):
+    """Concrete model with a field class not supported by resource metadata."""
 
-    Group-by axes become dict-row bucket keys that field-read redaction cannot
-    touch, so exposing a gated column would leak owner-only values. The builder
-    refuses it at construction time rather than relying on author discipline.
-    """
+    sqid_prefix = "rtt_"
 
-    monkeypatch.setattr(access, "gated_read_fields", lambda model: {"secret"})
+    duration = models.DurationField()
 
-    with pytest.raises(ImproperlyConfigured, match="field-gated"):
-        rebac_aggregate_builder(model=Group, group_by_fields=["name", "secret"])
+    class Meta:
+        """Django model options for the test model."""
+
+        app_label = "tests"
 
 
-def test_rebac_aggregate_builder_gate_walks_relation_leaf_axes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A relation-leaf axis (``content_type__model``) is gate-checked at its leaf.
+class HasuraResourceThing(AngeeDataModel):
+    """Concrete model used by Hasura resource metadata bridge tests."""
 
-    A dotted axis is never a field on the base model, so a same-model check is
-    blind to it — yet its value comes from the joined model's row, which row scope
-    never touches. The gate must walk the relation to the leaf model so a gated
-    read reached through a relation is refused exactly as a direct one is.
-    """
+    sqid_prefix = "hrt_"
 
-    from django.contrib.auth.models import Permission
-    from django.contrib.contenttypes.models import ContentType
+    name = models.CharField(max_length=64)
+    word_count = models.IntegerField(default=0)
 
-    monkeypatch.setattr(
-        access,
-        "gated_read_fields",
-        lambda model: {"model"} if model is ContentType else set(),
+    class Meta:
+        """Django model options for the test model."""
+
+        app_label = "tests"
+        ordering = ("-word_count", "name")
+
+
+class MeasureOpsThing(AngeeDataModel):
+    """Concrete model exercising every curated measure-op field family."""
+
+    sqid_prefix = "mot_"
+
+    count = models.IntegerField(default=0)
+    amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    ratio = models.FloatField(default=0.0)
+    on_date = models.DateField(null=True)
+    at_time = models.DateTimeField(null=True)
+
+    class Meta:
+        """Django model options for the test model."""
+
+        app_label = "tests"
+
+
+class ResourceThingMood(enum.Enum):
+    """Synthetic computed enum used by resource field metadata tests."""
+
+    HAPPY = "happy"
+
+
+ResourceThingMoodType = strawberry.enum(ResourceThingMood)
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", message="Passing a class to strawberry.scalar")
+    ResourceThingUnsupportedScalar = strawberry.scalar(
+        NewType("ResourceThingUnsupportedScalar", str),
+        serialize=str,
+        parse_value=str,
     )
 
-    with pytest.raises(ImproperlyConfigured, match="field-gated"):
-        rebac_aggregate_builder(model=Permission, group_by_fields=["content_type__model"])
 
-    # A non-gated leaf on the same relation passes (the leaf, not the path, is gated).
-    rebac_aggregate_builder(model=Permission, group_by_fields=["content_type__app_label"])
+def test_hasura_resource_attaches_angee_resource_metadata() -> None:
+    """The Hasura builder remains external while Angee owns resource metadata."""
 
-
-def test_data_query_builds_native_model_data_roots() -> None:
-    """The data-query helper emits a normal Strawberry query surface."""
-
-    @strawberry_django.type(DataQueryThing)
-    class DataQueryThingType:
+    @strawberry_django.type(HasuraResourceThing)
+    class HasuraResourceThingType(AngeeNode):
         name: auto
+        word_count: auto
 
-    @strawberry_django.filter_type(DataQueryThing, lookups=True)
-    class DataQueryThingFilter:
-        name: auto
-
-    @strawberry_django.order_type(DataQueryThing)
-    class DataQueryThingOrder:
-        name: auto
-
-    query, generated_types = data_query(
-        DataQueryThingType,
-        type_name="DataQueryThingQuery",
-        filters=DataQueryThingFilter,
-        order=DataQueryThingOrder,
-        list_name="things",
-        detail_name="thing",
-        aggregate_name="thing_aggregate",
-        group_name="thing_groups",
-        aggregate_fields=["id"],
-        group_by_fields=["name"],
+    write_backend = type(
+        "NoopWriteBackend",
+        (),
+        {
+            "create": lambda self, info, data: None,
+            "update": lambda self, info, pk, data: None,
+            "delete": lambda self, info, pk: None,
+        },
+    )()
+    resource = hasura_model_resource(
+        HasuraResourceThingType,
+        model=HasuraResourceThing,
+        name="things",
+        filterable=["id", "name", "word_count"],
+        sortable=["word_count", "name"],
+        aggregatable=["id", "word_count"],
+        groupable=["name"],
+        get_queryset=lambda info: HasuraResourceThing.objects.all(),
+        write_backend=write_backend,
+        id_decode=lambda value: value,
     )
-
-    schema = strawberry.Schema(query=query, types=list(generated_types))
-    sdl = schema.as_str()
-
-    assert "things(" in sdl
-    assert "thing(id: ID!" in sdl
-    assert "thingAggregate(" in sdl
-    assert "thingGroups(" in sdl
-    assert "input DataQueryThingGroupBySpec" in sdl
-
-    metadata = data_query_metadata(query)[0]
-    assert metadata.model_label == "tests.DataQueryThing"
-    assert metadata.roots.list_name == "things"
-    assert metadata.roots.detail_name == "thing"
-    assert metadata.roots.aggregate_name == "thing_aggregate"
-    assert metadata.roots.group_name == "thing_groups"
-    assert metadata.capabilities == ("list", "detail", "aggregate", "groups")
-    assert metadata.filter_fields == ("name",)
-    assert metadata.order_fields == ("name",)
-    assert metadata.aggregate_fields == ("id",)
-    assert metadata.group_by_fields == ("name",)
-    assert metadata.type_names.group_by_spec == "DataQueryThingGroupBySpec"
-
-
-def test_data_query_metadata_requires_direct_relation_axis_for_relation_label() -> None:
-    """A relation label axis only describes a bucket when the relation id axis exists."""
-
-    @strawberry_django.type(DataQueryChild)
-    class DataQueryChildInvalidRelationType:
-        name: auto
-
-    with pytest.raises(ImproperlyConfigured, match="requires matching direct relation"):
-        data_query(
-            DataQueryChildInvalidRelationType,
-            type_name="DataQueryChildInvalidRelationQuery",
-            list_name="children",
-            aggregate_fields=["id"],
-            group_by_fields=["parent__name"],
-        )
-
-
-def test_data_query_metadata_rejects_multiple_relation_label_axes() -> None:
-    """One direct relation bucket gets one label axis in metadata."""
-
-    @strawberry_django.type(DataQueryChild)
-    class DataQueryChildAmbiguousRelationType:
-        name: auto
-
-    with pytest.raises(ImproperlyConfigured, match="multiple label axes"):
-        data_query(
-            DataQueryChildAmbiguousRelationType,
-            type_name="DataQueryChildAmbiguousRelationQuery",
-            list_name="children",
-            aggregate_fields=["id"],
-            group_by_fields=["parent", "parent__name", "parent__created_at"],
-        )
-
-
-def test_data_query_metadata_declares_group_aliases() -> None:
-    """A display field can group through a declared backend aggregate axis."""
-
-    @strawberry_django.type(DataQueryThing)
-    class DataQueryThingAliasType:
-        name: auto
-
-    query, _generated_types = data_query(
-        DataQueryThingAliasType,
-        type_name="DataQueryThingAliasQuery",
-        list_name="things",
-        aggregate_fields=["id"],
-        group_by_fields=["name"],
-        group_aliases={"name": "name"},
-    )
-
-    metadata = data_query_metadata(query)[0]
-    assert metadata.group_aliases[0].field == "name"
-    assert metadata.group_aliases[0].aggregate_field == "name"
-    assert metadata.group_aliases[0].aggregate_key == "name"
-
-
-def test_data_query_metadata_rejects_group_aliases_without_node_field() -> None:
-    """A group alias must point at a real GraphQL node field."""
-
-    @strawberry_django.type(DataQueryChild)
-    class DataQueryChildMissingAliasType:
-        name: auto
-
-    with pytest.raises(ImproperlyConfigured, match="not a field"):
-        data_query(
-            DataQueryChildMissingAliasType,
-            type_name="DataQueryChildMissingAliasQuery",
-            list_name="children",
-            aggregate_fields=["id"],
-            group_by_fields=["name"],
-            group_aliases={"missing": "name"},
-        )
-
-
-def test_data_query_metadata_rejects_group_aliases_without_group_axis() -> None:
-    """A group alias cannot target an axis the backend does not group by."""
-
-    @strawberry_django.type(DataQueryChild)
-    class DataQueryChildBadAliasType:
-        name: auto
-
-    with pytest.raises(ImproperlyConfigured, match="non-groupable aggregate axis"):
-        data_query(
-            DataQueryChildBadAliasType,
-            type_name="DataQueryChildBadAliasQuery",
-            list_name="children",
-            aggregate_fields=["id"],
-            group_by_fields=["parent"],
-            group_aliases={"name": "created_at"},
-        )
-
-
-@pytest.mark.django_db(transaction=True)
-def test_data_query_groups_echo_public_relation_id() -> None:
-    """Grouped relation keys expose public ids while label axes expose display values."""
-
-    @strawberry_django.type(DataQueryChild)
-    class DataQueryChildRelationType:
-        name: auto
-
-    query, generated_types = data_query(
-        DataQueryChildRelationType,
-        type_name="DataQueryChildRelationQuery",
-        list_name="children",
-        detail_name="child",
-        aggregate_name="child_aggregate",
-        group_name="child_groups",
-        aggregate_fields=["id"],
-        group_by_fields=["parent", "parent__name"],
-    )
-
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(DataQueryParent)
-        schema_editor.create_model(DataQueryChild)
-
-    try:
-        parent = DataQueryParent.objects.create(name="Parent")
-        DataQueryChild.objects.create(parent=parent, name="Child")
-
-        schema = strawberry.Schema(query=query, types=list(generated_types))
-        with system_context(reason="test data query relation grouping"):
-            result = schema.execute_sync(
-                """
-                query($groupBy: [DataQueryChildGroupBySpec!]!) {
-                  childGroups(groupBy: $groupBy, pagination: {offset: 0, limit: 10}) {
-                    totalCount
-                    results {
-                      key { parentId parent_Name }
-                      count
-                    }
-                  }
-                }
-                """,
-                variable_values={"groupBy": [{"field": "PARENT"}, {"field": "PARENT__NAME"}]},
-            )
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(DataQueryChild)
-            schema_editor.delete_model(DataQueryParent)
-
-    assert result.errors is None
-    assert result.data == {
-        "childGroups": {
-            "totalCount": 1,
-            "results": [
-                {
-                    "key": {
-                        "parentId": parent.public_id,
-                        "parent_Name": "Parent",
-                    },
-                    "count": 1,
-                }
-            ],
-        }
-    }
-
-
-@pytest.mark.django_db(transaction=True)
-def test_data_query_forwards_list_kwargs_resolver() -> None:
-    """Generated list roots keep resolver-owned querysets from their caller."""
-
-    @strawberry_django.type(DataQueryThing)
-    class DataQueryThingResolverType:
-        name: auto
-
-    def visible_things(info: strawberry.Info) -> object:
-        del info
-        return DataQueryThing.objects.filter(name="visible")
-
-    query, generated_types = data_query(
-        DataQueryThingResolverType,
-        type_name="DataQueryThingResolverQuery",
-        list_name="things",
-        include_detail=False,
-        include_aggregate=False,
-        include_groups=False,
-        list_kwargs={"resolver": visible_things},
-    )
-
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(DataQueryThing)
-
-    try:
-        DataQueryThing.objects.create(name="visible")
-        DataQueryThing.objects.create(name="hidden")
-
-        schema = strawberry.Schema(query=query, types=list(generated_types))
-        with system_context(reason="test data query resolver"):
-            result = schema.execute_sync("{ things { totalCount results { name } } }")
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(DataQueryThing)
-
-    assert result.errors is None
-    assert result.data == {
-        "things": {
-            "totalCount": 1,
-            "results": [{"name": "visible"}],
-        }
-    }
-
-
-def test_data_query_requires_explicit_list_name() -> None:
-    """Model list root names are public schema, so they must be declared."""
-
-    @strawberry_django.type(DataQueryThing)
-    class DataQueryThingExplicitListType:
-        name: auto
-
-    with pytest.raises(ImproperlyConfigured, match="list_name"):
-        data_query(
-            DataQueryThingExplicitListType,
-            type_name="DataQueryThingExplicitListQuery",
-            aggregate_fields=["id"],
-            group_by_fields=["name"],
-        )
-
-
-def test_data_query_rejects_raw_pk_models() -> None:
-    """Public data surfaces must not silently fall back to Django primary keys."""
-
-    @strawberry_django.type(Group)
-    class RawPkGroupType:
-        name: auto
-
-    with pytest.raises(ImproperlyConfigured, match="sqid public id"):
-        data_query(
-            RawPkGroupType,
-            type_name="RawPkGroupQuery",
-            list_name="groups",
-            include_detail=False,
-            include_aggregate=False,
-            include_groups=False,
-        )
-
-
-def test_schema_owner_collects_data_query_metadata() -> None:
-    """GraphQLSchemas exposes data-query metadata by composed schema bucket."""
-
-    @strawberry_django.type(DataQueryThing)
-    class DataQueryThingOwnerType:
-        name: auto
-
-    query, generated_types = data_query(
-        DataQueryThingOwnerType,
-        type_name="DataQueryThingOwnerQuery",
-        list_name="things",
-        aggregate_fields=["id"],
-        group_by_fields=["name"],
-    )
-
-    schemas = GraphQLSchemas(
+    schema = GraphQLSchemas(
         [
             SchemaAddon(
                 {
                     "public": {
-                        "query": (query,),
-                        "types": tuple(generated_types),
+                        "query": [resource.query],
+                        "mutation": [resource.mutation],
+                        "types": [HasuraResourceThingType, *resource.types],
                     }
                 }
             )
         ]
+    ).build("public")
+    metadata = schema.angee_resources[0]
+    fields = {field.name: field for field in metadata.fields}
+
+    assert metadata.roots == DataResourceRoots(
+        list_name="things",
+        detail_name="things_by_pk",
+        aggregate_name="things_aggregate",
+        group_name="things_groups",
+        create_name="insert_things_one",
+        update_name="update_things_by_pk",
+        delete_name="delete_things_by_pk",
+    )
+    assert metadata.type_names == DataResourceTypeNames(
+        query="things_Query",
+        node="HasuraResourceThingType",
+        filter="things_bool_exp",
+        order="things_order_by",
+        aggregate="things_aggregate",
+        grouped="things_group",
+        group_key="HasuraResourceThingTypeGroupKey",
+        group_by_spec="HasuraResourceThingTypeGroupBySpec",
+        group_order="HasuraResourceThingTypeGroupOrder",
+        having="HasuraResourceThingTypeHaving",
+        create_input="things_insert_input",
+        update_input="things_set_input",
+    )
+    assert metadata.capabilities == (
+        "list",
+        "detail",
+        "aggregate",
+        "groups",
+        "create",
+        "update",
+        "delete",
+    )
+    assert metadata.filter_fields == ("id", "name", "word_count")
+    assert metadata.order_fields == ("word_count", "name")
+    assert metadata.aggregate_fields == ("id", "word_count")
+    assert metadata.group_by_fields == ("name",)
+    assert metadata.group_dimensions[0].field == "name"
+    assert metadata.group_dimensions[0].input == "NAME"
+    assert metadata.group_dimensions[0].key == "name"
+    assert metadata.aggregate_measures == (
+        DataAggregateMeasureMetadata(op="sum", field="word_count", input="word_count"),
+        DataAggregateMeasureMetadata(op="avg", field="word_count", input="word_count"),
+        DataAggregateMeasureMetadata(op="min", field="word_count", input="word_count"),
+        DataAggregateMeasureMetadata(op="max", field="word_count", input="word_count"),
+    )
+    assert metadata.default_measures[0].op == "count"
+    assert [(sort.field, sort.direction) for sort in metadata.default_sort] == [
+        ("word_count", "DESC"),
+        ("name", "ASC"),
+    ]
+    assert metadata.create_fields == ("name", "word_count")
+    assert metadata.update_fields == ("name", "word_count")
+    assert metadata.required_create_fields == ("name",)
+    assert fields["word_count"].filterable is True
+    assert fields["word_count"].sortable is True
+    assert fields["word_count"].aggregatable is True
+    assert fields["word_count"].creatable is True
+    assert fields["word_count"].updatable is True
+    sdl = schema.as_str()
+    assert "word_count" in sdl
+    assert "wordCount" not in sdl
+
+
+def test_measure_ops_pin_the_curated_subset_per_field_family() -> None:
+    """Curated aggregate ops stay frozen so an upstream op-list change cannot widen them.
+
+    The op vocabulary per Django type is owned by ``default_operators_for``, but
+    Angee advertises only the curated ``(sum, avg, min, max)`` subset in curated
+    order. This pins the resolved output for every curated field family so a
+    widening upstream (or a curation drift) fails loudly instead of silently
+    growing the advertised ops / the order-sensitive ``aggregate_measures`` JSON.
+    """
+
+    expected = {
+        "count": ("sum", "avg", "min", "max"),
+        "amount": ("sum", "avg", "min", "max"),
+        "ratio": ("sum", "avg", "min", "max"),
+        "on_date": ("min", "max"),
+        "at_time": ("min", "max"),
+    }
+    resolved = {
+        name: _measure_ops_for_field(MeasureOpsThing._meta.get_field(name)) for name in expected
+    }
+
+    assert resolved == expected
+
+
+def test_data_resource_metadata_requires_direct_relation_axis_for_relation_label() -> None:
+    """A relation label axis only describes a bucket when the relation id axis exists."""
+
+    @strawberry_django.type(ResourceChild)
+    class ResourceChildInvalidRelationType:
+        name: auto
+
+    with pytest.raises(ImproperlyConfigured, match="requires matching direct relation"):
+        make_data_resource_metadata(
+            model=ResourceChild,
+            roots=DataResourceRoots(list_name="children", group_name="children_groups"),
+            type_names=DataResourceTypeNames(node="ResourceChildInvalidRelationType"),
+            capabilities=("list", "groups"),
+            node_type=ResourceChildInvalidRelationType,
+            group_by_fields=("parent__name",),
+        )
+
+
+def test_data_resource_metadata_rejects_multiple_relation_label_axes() -> None:
+    """One direct relation bucket gets one label axis in metadata."""
+
+    @strawberry_django.type(ResourceChild)
+    class ResourceChildAmbiguousRelationType:
+        name: auto
+
+    with pytest.raises(ImproperlyConfigured, match="multiple label axes"):
+        make_data_resource_metadata(
+            model=ResourceChild,
+            roots=DataResourceRoots(list_name="children", group_name="children_groups"),
+            type_names=DataResourceTypeNames(node="ResourceChildAmbiguousRelationType"),
+            capabilities=("list", "groups"),
+            node_type=ResourceChildAmbiguousRelationType,
+            group_by_fields=("parent", "parent__name", "parent__created_at"),
+        )
+
+
+def test_data_resource_metadata_rejects_duplicate_group_axes() -> None:
+    """Duplicate backend group declarations must fail before artifact emission."""
+
+    @strawberry_django.type(ResourceThing)
+    class ResourceThingDuplicateGroupType:
+        name: auto
+
+    with pytest.raises(ImproperlyConfigured, match="duplicate group axis 'name'"):
+        make_data_resource_metadata(
+            model=ResourceThing,
+            roots=DataResourceRoots(list_name="things", group_name="things_groups"),
+            type_names=DataResourceTypeNames(node="ResourceThingDuplicateGroupType"),
+            capabilities=("list", "groups"),
+            node_type=ResourceThingDuplicateGroupType,
+            group_by_fields=("name", "name"),
+        )
+
+
+def test_data_resource_metadata_rejects_duplicate_field_metadata() -> None:
+    """Resource field metadata names are authoritative and must be unique."""
+
+    with pytest.raises(ImproperlyConfigured, match="duplicate resource field 'name'"):
+        make_data_resource_metadata(
+            model=ResourceThing,
+            roots=DataResourceRoots(list_name="things"),
+            type_names=DataResourceTypeNames(node="ResourceThingType"),
+            capabilities=("list",),
+            fields=(
+                DataResourceFieldMetadata(
+                    name="name",
+                    kind="scalar",
+                    readable=True,
+                    filterable=False,
+                    sortable=False,
+                    aggregatable=False,
+                    groupable=False,
+                    creatable=False,
+                    updatable=False,
+                    required_on_create=False,
+                ),
+                DataResourceFieldMetadata(
+                    name="name",
+                    kind="scalar",
+                    readable=True,
+                    filterable=False,
+                    sortable=False,
+                    aggregatable=False,
+                    groupable=False,
+                    creatable=False,
+                    updatable=False,
+                    required_on_create=False,
+                ),
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "message"),
+    [
+        (
+            DataResourceFieldMetadata(name="name", kind="unknown"),
+            "unsupported kind 'unknown'",
+        ),
+        (
+            DataResourceFieldMetadata(name="name", kind="scalar", scalar="Magic"),
+            "unsupported scalar 'Magic'",
+        ),
+        (
+            DataResourceFieldMetadata(name="name", kind="scalar", widget="slider"),
+            "unsupported widget 'slider'",
+        ),
+        (
+            DataResourceFieldMetadata(name="name", kind="relation", scalar="String"),
+            "cannot declare scalar 'String' for relation fields",
+        ),
+    ],
+)
+def test_data_resource_metadata_rejects_unsupported_explicit_field_metadata(
+    field: DataResourceFieldMetadata,
+    message: str,
+) -> None:
+    """Explicit field metadata must stay inside the generated artifact vocabulary."""
+
+    with pytest.raises(ImproperlyConfigured, match=message):
+        make_data_resource_metadata(
+            model=ResourceThing,
+            roots=DataResourceRoots(list_name="things"),
+            type_names=DataResourceTypeNames(node="ResourceThingType"),
+            capabilities=("list",),
+            fields=(field,),
+        )
+
+
+def test_data_resource_metadata_rejects_generated_duplicate_field_names() -> None:
+    """Generated resource field metadata must not emit duplicate wire names."""
+
+    @strawberry_django.type(ResourceThing)
+    class ResourceThingDuplicateFieldType:
+        name: auto
+
+        @strawberry.field(name="name")
+        def name_copy(self) -> str:
+            return self.name
+
+    with pytest.raises(ImproperlyConfigured, match="duplicate resource field 'name'"):
+        make_data_resource_metadata(
+            model=ResourceThing,
+            roots=DataResourceRoots(list_name="things"),
+            type_names=DataResourceTypeNames(node="ResourceThingDuplicateFieldType"),
+            capabilities=("list",),
+            node_type=ResourceThingDuplicateFieldType,
+        )
+
+
+def test_data_resource_metadata_marks_public_id_field_as_id_scalar() -> None:
+    """The GraphQL public id is an ID boundary, not the model's integer pk."""
+
+    @strawberry_django.type(ResourceThing)
+    class ResourceThingNodeType(AngeeNode):
+        name: auto
+
+    resource = make_data_resource_metadata(
+        model=ResourceThing,
+        roots=DataResourceRoots(list_name="things"),
+        type_names=DataResourceTypeNames(node="ResourceThingNodeType"),
+        capabilities=("list",),
+        node_type=ResourceThingNodeType,
+    )
+    fields = {field.name: field for field in resource.fields}
+
+    assert fields["id"].kind == "scalar"
+    assert fields["id"].scalar == "ID"
+    assert fields["id"].widget is None
+
+
+def test_data_resource_metadata_marks_computed_surface_enum_field() -> None:
+    """Strawberry enum surfaces own enum field classification."""
+
+    @strawberry_django.type(ResourceThing)
+    class ResourceThingComputedEnumType(AngeeNode):
+        name: auto
+
+        @strawberry.field
+        def mood(self) -> ResourceThingMoodType:
+            return ResourceThingMood.HAPPY
+
+    resource = make_data_resource_metadata(
+        model=ResourceThing,
+        roots=DataResourceRoots(list_name="things"),
+        type_names=DataResourceTypeNames(node="ResourceThingComputedEnumType"),
+        capabilities=("list",),
+        node_type=ResourceThingComputedEnumType,
+    )
+    fields = {field.name: field for field in resource.fields}
+
+    assert fields["mood"].kind == "enum"
+    assert fields["mood"].scalar is None
+
+
+def test_data_resource_metadata_marks_forward_object_field_as_relation() -> None:
+    """Unresolved object return types are relation-shaped, not scalar guesses."""
+
+    @strawberry_django.type(ResourceThing)
+    class ResourceThingForwardRelationType(AngeeNode):
+        name: auto
+
+        @strawberry.field
+        def parent(self) -> ResourceParentForwardTargetType | None:  # type: ignore[name-defined]
+            return None
+
+    resource = make_data_resource_metadata(
+        model=ResourceThing,
+        roots=DataResourceRoots(list_name="things"),
+        type_names=DataResourceTypeNames(node="ResourceThingForwardRelationType"),
+        capabilities=("list",),
+        node_type=ResourceThingForwardRelationType,
     )
 
-    assert tuple(item.model_label for item in schemas.data_queries("public")) == ("tests.DataQueryThing",)
+    @strawberry_django.type(ResourceParent)
+    class ResourceParentForwardTargetType(AngeeNode):
+        name: auto
+
+    fields = {field.name: field for field in resource.fields}
+
+    assert fields["parent"].kind == "relation"
+    assert fields["parent"].scalar is None
+
+
+def test_data_resource_metadata_rejects_unsupported_surface_scalar() -> None:
+    """Scalar resource fields must have a supported metadata scalar family."""
+
+    @strawberry_django.type(ResourceThing)
+    class ResourceThingUnsupportedScalarType(AngeeNode):
+        name: auto
+
+        @strawberry.field
+        def mystery(self) -> ResourceThingUnsupportedScalar:
+            return ResourceThingUnsupportedScalar("mystery")
+
+    with pytest.raises(
+        ImproperlyConfigured,
+        match="cannot classify GraphQL scalar for field 'mystery' \\(ResourceThingUnsupportedScalar\\)",
+    ):
+        make_data_resource_metadata(
+            model=ResourceThing,
+            roots=DataResourceRoots(list_name="things"),
+            type_names=DataResourceTypeNames(node="ResourceThingUnsupportedScalarType"),
+            capabilities=("list",),
+            node_type=ResourceThingUnsupportedScalarType,
+        )
+
+
+def test_data_resource_metadata_marks_to_many_node_fields_as_lists() -> None:
+    """Resource fields must not describe to-many object lists as to-one relations."""
+
+    @strawberry_django.type(ResourceParent)
+    class ResourceParentListFieldType:
+        name: auto
+
+    @strawberry_django.type(ResourceChild)
+    class ResourceChildListFieldType:
+        name: auto
+        related_parents: list[ResourceParentListFieldType]
+
+    resource = make_data_resource_metadata(
+        model=ResourceChild,
+        roots=DataResourceRoots(list_name="children"),
+        type_names=DataResourceTypeNames(node="ResourceChildListFieldType"),
+        capabilities=("list",),
+        node_type=ResourceChildListFieldType,
+    )
+    fields = {field.name: field for field in resource.fields}
+
+    assert fields["relatedParents"].kind == "list"
+    assert fields["relatedParents"].scalar is None
+    assert fields["relatedParents"].widget is None
+
+
+@pytest.mark.parametrize(
+    ("groupable", "aggregatable"),
+    [
+        pytest.param(["name__missing"], ["id"], id="unknown-group-path"),
+        pytest.param(["related_parents"], ["id"], id="to-many-group-axis"),
+        pytest.param(["name"], ["id", "name__missing"], id="unknown-measure-path"),
+        pytest.param(["name"], ["id", "related_parents__name"], id="to-many-measure-path"),
+    ],
+)
+def test_hasura_resource_rejects_unresolvable_axis_paths(
+    groupable: list[str],
+    aggregatable: list[str],
+) -> None:
+    """A group/aggregate axis path that does not resolve to a column fails the build.
+
+    Path resolution is owned by ``strawberry-django-aggregates`` (unknown and
+    to-many measure paths) and Angee's groupable guard (to-many group axes);
+    either way the misconfiguration fails fast at build time rather than emitting
+    a broken resource.
+    """
+
+    @strawberry_django.type(ResourceChild)
+    class ResourceChildResourceType(AngeeNode):
+        name: auto
+
+    write_backend = type(
+        "NoopWriteBackend",
+        (),
+        {
+            "create": lambda self, info, data: None,
+            "update": lambda self, info, pk, data: None,
+            "delete": lambda self, info, pk: None,
+        },
+    )()
+    with pytest.raises((ImproperlyConfigured, FieldDoesNotExist, GroupByFieldNotAllowed)):
+        hasura_model_resource(
+            ResourceChildResourceType,
+            model=ResourceChild,
+            name="children",
+            filterable=["id", "name"],
+            sortable=["name"],
+            aggregatable=aggregatable,
+            groupable=groupable,
+            get_queryset=lambda info: ResourceChild.objects.all(),
+            write_backend=write_backend,
+            id_decode=lambda value: value,
+        )

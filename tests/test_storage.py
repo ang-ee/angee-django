@@ -11,9 +11,11 @@ from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
 from django.core.management import call_command
 from django.db import connection
-from rebac import actor_context, system_context
+from rebac import actor_context, app_settings, system_context
+from rebac.errors import PermissionDenied
 from rebac.roles import grant
 
 from angee.storage import exceptions
@@ -255,6 +257,18 @@ def test_soft_delete_trash_restore_and_purge(tmp_path: Path, drive: Any) -> None
     assert not (tmp_path / storage_path).exists()
 
 
+def test_storage_resource_metadata_exposes_delete_previews() -> None:
+    """Storage's custom delete verbs are advertised to refine/resource actions."""
+
+    schema = addon_schema(storage_schema.schemas, "public")
+    resources = {item.model_label: item for item in schema.angee_resources}
+
+    assert resources["storage.File"].roots.delete_preview_name == "delete_file"
+    assert resources["storage.Folder"].roots.delete_preview_name == "delete_folder"
+    assert resources["storage.File"].type_names.delete_payload == "DeletePreview"
+    assert resources["storage.Folder"].type_names.delete_payload == "DeletePreview"
+
+
 @pytest.mark.django_db(transaction=True)
 def test_storage_graphql_custom_mutations_accept_public_ids(drive: Any) -> None:
     """Custom storage mutations resolve raw sqids at the GraphQL boundary."""
@@ -275,27 +289,27 @@ def test_storage_graphql_custom_mutations_accept_public_ids(drive: Any) -> None:
             schema,
             """
             mutation Finalize($input: FileUploadFinalizeInput!) {
-              fileUploadFinalize(input: $input) {
+              file_upload_finalize(input: $input) {
                 error
-                errorCode
-                file { id uploadState }
+                error_code
+                file { id upload_state }
               }
             }
             """,
             {
                 "input": {
                     "file": str(row.sqid),
-                    "contentHash": PNG_SHA256,
-                    "sizeBytes": len(PNG_BYTES),
+                    "content_hash": PNG_SHA256,
+                    "size_bytes": len(PNG_BYTES),
                 }
             },
             user=drive.alice,
         )
-    )["fileUploadFinalize"]
+    )["file_upload_finalize"]
     assert finalized == {
         "error": None,
-        "errorCode": None,
-        "file": {"id": str(row.sqid), "uploadState": "READY"},
+        "error_code": None,
+        "file": {"id": str(row.sqid), "upload_state": "READY"},
     }
 
     row.refresh_from_db()
@@ -307,14 +321,14 @@ def test_storage_graphql_custom_mutations_accept_public_ids(drive: Any) -> None:
             schema,
             """
             mutation Restore($id: ID!) {
-              restoreFile(id: $id) { id isTrashed }
+              restore_file(id: $id) { id is_trashed }
             }
             """,
             {"id": str(row.sqid)},
             user=drive.alice,
         )
-    )["restoreFile"]
-    assert restored == {"id": str(row.sqid), "isTrashed": False}
+    )["restore_file"]
+    assert restored == {"id": str(row.sqid), "is_trashed": False}
 
 
 @pytest.mark.django_db(transaction=True)
@@ -334,17 +348,86 @@ def test_storage_graphql_purge_accepts_public_id(tmp_path: Path, drive: Any) -> 
             addon_schema(storage_schema.schemas, "console"),
             """
             mutation Purge($id: ID!) {
-              purgeFile(id: $id)
+              purge_file(id: $id)
             }
             """,
             {"id": str(row.sqid)},
             user=admin,
         )
-    )["purgeFile"]
+    )["purge_file"]
 
     assert result is True
     assert not File._base_manager.filter(pk=row.pk).exists()
     assert not (tmp_path / storage_path).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_drive_gates_on_the_rebac_create_rule(drive: Any) -> None:
+    """The ``storage/drive`` ``create`` rule authorizes admins and denies others.
+
+    The de-elevated drive Hasura insert carries no GraphQL gate and no elevated write:
+    the id-less insert is authorized by ``create = admin->member + manager``
+    (mirroring ``storage/backend``) against the request actor. Tested at the model
+    owner so the create rule is isolated from FK-read redaction: the const-arrow
+    ``admin->member`` resolves without a per-object tuple, so a platform admin
+    creates while an unprivileged actor is denied with ``PermissionDenied`` and an
+    anonymous request resolves no actor. (The ``manager`` arm needs a per-object
+    ``manager`` tuple an id-less insert cannot carry — the same admin-only outcome
+    ``storage/backend`` already relies on.)
+    """
+
+    admin = get_user_model().objects.create_superuser(
+        username="storage-create-admin",
+        email="create-admin@example.com",
+        password="admin",
+    )
+    grant(actor=admin, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
+    stranger = get_user_model().objects.create_user(username="storage-create-bob", email="create-bob@example.com")
+
+    with actor_context(admin):
+        created = Drive._default_manager.create(backend=drive.backend, slug="admin-drive", name="Admin Drive")
+    assert created.pk is not None and str(created.created_by_id) == str(admin.pk)
+
+    with actor_context(stranger), pytest.raises(PermissionDenied):
+        Drive._default_manager.create(backend=drive.backend, slug="bob-drive", name="Bob Drive")
+    with actor_context(AnonymousUser()), pytest.raises(PermissionDenied):
+        Drive._default_manager.create(backend=drive.backend, slug="anon-drive", name="Anon Drive")
+    with system_context(reason="test drive create denial"):
+        assert not Drive._base_manager.filter(slug__in=["bob-drive", "anon-drive"]).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_drive_graphql_surface_is_de_elevated(drive: Any) -> None:
+    """The de-elevated console Hasura insert creates for a platform admin.
+
+    Proves removing the drive GraphQL ``permission_classes``/``write_context``
+    pair is safe: the admin's create flows through the stock strawberry-django
+    create (FK resolved by sqid) and the REBAC create signal authorizes the insert,
+    with no GraphQL gate and no elevated write.
+    """
+
+    admin = get_user_model().objects.create_superuser(
+        username="storage-graphql-create-admin",
+        email="gql-create-admin@example.com",
+        password="admin",
+    )
+    grant(actor=admin, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
+
+    created = result_data(
+        execute_schema(
+            addon_schema(storage_schema.schemas, "console"),
+            """
+            mutation CreateDrive($input: drives_insert_input!) {
+              insert_drives_one(object: $input) { id slug name }
+            }
+            """,
+            {"input": {"backend": str(drive.backend.sqid), "slug": "gql-drive", "name": "GQL Drive"}},
+            user=admin,
+        )
+    )["insert_drives_one"]
+    assert created["slug"] == "gql-drive"
+    with system_context(reason="test drive create graphql"):
+        assert Drive._base_manager.filter(slug="gql-drive").exists()
 
 
 @pytest.mark.django_db(transaction=True)

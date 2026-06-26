@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { ListView, type ListColumn } from "@angee/base";
+import { ListView, type ListColumn } from "@angee/ui";
 
 import { RuntimeFixture, jsonResponse, storySchema } from "./runtime-fixtures";
 
@@ -82,7 +82,7 @@ function ListFixture() {
     <RuntimeFixture schemas={storySchemas}>
       <div className="max-w-5xl">
         <ListView
-          model="notes.Note"
+          resource="notes.Note"
           columns={columns}
           createLabel="New note"
           onCreate={() => undefined}

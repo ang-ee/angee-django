@@ -169,9 +169,7 @@ class GitHubBackend(VCSBackend):
         if response.status == 404:
             raise FileNotFoundError(path)
         if not response.ok:
-            raise GitHubApiError(
-                f"GitHub API GET {path} returned HTTP {response.status}", status=response.status
-            )
+            raise GitHubApiError(f"GitHub API GET {path} returned HTTP {response.status}", status=response.status)
         return response.json()
 
     @staticmethod

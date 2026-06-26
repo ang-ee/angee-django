@@ -3,7 +3,7 @@ import {
   DataLens,
   type DataLensProjection,
   type DataLensVisual,
-} from "@angee/base";
+} from "@angee/ui";
 
 const rows = [
   { id: "api", name: "Production API", value: 42, tone: "success" },

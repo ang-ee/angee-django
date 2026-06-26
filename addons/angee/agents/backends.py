@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from angee.base.impl import ImplBase
+from angee.integrate.connect import enabled_oauth_client_from_hint
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +86,9 @@ class InferenceBackend(ImplBase):
     category = "inference"
     label = "Inference"
     icon = "sparkles"
+    # Vendor-neutral: a base backend never pins a product OAuth client. Provider
+    # connect is available only when a vendor backend addon sets this slug.
+    oauth_client: ClassVar[str] = ""
     defaults = {
         "name": "Manual",
         "status": "draft",
@@ -94,6 +98,21 @@ class InferenceBackend(ImplBase):
         """Bind this backend to its provider row."""
 
         self.provider = provider
+
+    def connect_oauth_client(self, owner_label: str) -> Any:
+        """Return the enabled OAuth client this backend connects its provider through.
+
+        The backend's ``oauth_client`` hint is the only source; an empty hint is not
+        connectable. The bound provider's vendor slug feeds the ``{vendor}`` template.
+        """
+
+        vendor_slug = str(getattr(getattr(self.provider, "vendor", None), "slug", "") or "")
+        return enabled_oauth_client_from_hint(
+            self.oauth_client,
+            owner_label=owner_label,
+            reason="agents.graphql.connect_inference_provider.oauth_client",
+            vendor_slug=vendor_slug,
+        )
 
     def list_models(self) -> Sequence[InferenceModelSpec]:
         """Return the provider's advertised models for catalogue upsert."""
@@ -106,6 +125,7 @@ class InferenceBackend(ImplBase):
         del request
         raise NotImplementedError("InferenceBackend subclasses must implement chat().")
 
+
 class ManualInferenceBackend(InferenceBackend):
     """Built-in backend with no client — its catalogue is curated by hand.
 
@@ -114,11 +134,8 @@ class ManualInferenceBackend(InferenceBackend):
     backend addon supplies the live-listing alternative.
     """
 
-    # Vendor-neutral: a base addon never pins a product OAuth client. Provider
-    # connect is available only when a vendor backend addon sets this slug.
     key = "manual"
     label = "Manual inference"
-    oauth_client = ""
 
     def list_models(self) -> Sequence[InferenceModelSpec]:
         """Return no models; the catalogue is maintained by hand on this backend."""

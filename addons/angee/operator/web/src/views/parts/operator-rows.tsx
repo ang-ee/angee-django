@@ -2,7 +2,7 @@ import {
   RowsListView,
   type RowsListViewProps,
   type StringIdRow,
-} from "@angee/base";
+} from "@angee/ui";
 import type { ReactElement } from "react";
 
 import {

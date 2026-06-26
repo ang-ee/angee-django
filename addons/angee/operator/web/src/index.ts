@@ -1,10 +1,11 @@
-import type {
-  BaseMenuItem,
-  BaseAddonRoute,
-} from "@angee/base";
-import { defineBaseAddon } from "@angee/base";
+import type { BaseMenuItem } from "@angee/ui";
+import { defineBaseAddon, type BaseAddonRoute } from "@angee/app";
 import { createElement, type ComponentType, type ReactNode } from "react";
 
+import {
+  createOperatorDataProvider,
+  OPERATOR_PROVIDER,
+} from "./data/operator-provider";
 import { OperatorTransportProvider } from "./data/transport";
 import { enOperatorBundleForMenu, enOperatorMessages } from "./i18n";
 import { OperatorGlyph } from "./OperatorGlyph";
@@ -54,71 +55,71 @@ const operatorRoutes: readonly BaseAddonRoute[] = [
   {
     name: "operator.overview",
     path: OPERATOR_ROOT_PATH,
-    shell: "console",
+    layout: "console",
     menu: OPERATOR_ID,
     component: operatorSectionRoute(OverviewSection),
   },
   {
     name: "operator.services",
     path: "/operator/services",
-    shell: "console",
+    layout: "console",
     component: operatorSectionRoute(ServicesSection),
   },
   {
     name: "operator.services.detail",
     path: "/operator/services/$name",
-    shell: "console",
+    layout: "console",
     menu: "operator.services",
     component: operatorSectionRoute(ServiceDetail),
   },
   {
     name: "operator.workspaces",
     path: "/operator/workspaces",
-    shell: "console",
+    layout: "console",
     component: operatorSectionRoute(WorkspacesSection),
   },
   {
     name: "operator.workspaces.detail",
     path: "/operator/workspaces/$name",
-    shell: "console",
+    layout: "console",
     menu: "operator.workspaces",
     component: operatorSectionRoute(WorkspaceDetail),
   },
   {
     name: "operator.sources",
     path: "/operator/sources",
-    shell: "console",
+    layout: "console",
     component: operatorSectionRoute(SourcesSection),
   },
   {
     name: "operator.sources.detail",
     path: "/operator/sources/$name",
-    shell: "console",
+    layout: "console",
     menu: "operator.sources",
     component: operatorSectionRoute(SourceDetail),
   },
   {
     name: "operator.gitops",
     path: "/operator/gitops",
-    shell: "console",
+    layout: "console",
     component: operatorSectionRoute(GitOpsSection),
   },
   {
     name: "operator.operations",
     path: "/operator/operations",
-    shell: "console",
+    layout: "console",
     component: operatorSectionRoute(OperationsSection),
   },
   {
     name: "operator.templates",
     path: "/operator/templates",
-    shell: "console",
+    layout: "console",
     component: operatorSectionRoute(TemplatesSection),
   },
   {
     name: "operator.secrets",
     path: "/operator/secrets",
-    shell: "console",
+    layout: "console",
     component: operatorSectionRoute(SecretsSection),
   },
 ];
@@ -190,6 +191,10 @@ const operator = defineBaseAddon({
     },
   },
   icons: { operator: OperatorGlyph },
+  // The daemon's GraphQL surface as a refine data provider, authed by the live
+  // bearer the token gate mints. `createApp` registers it alongside the
+  // schema-named providers, so panes read/write it via `dataProviderName`.
+  dataProviders: { [OPERATOR_PROVIDER]: createOperatorDataProvider() },
 });
 
 export default operator;

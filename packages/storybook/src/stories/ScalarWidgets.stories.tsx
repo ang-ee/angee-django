@@ -1,12 +1,12 @@
 import { useState, type ReactElement, type ReactNode } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { AppRuntimeProvider } from "@angee/sdk";
+import { AppRuntimeProvider } from "@angee/ui";
 import {
   baseIcons,
   defaultWidgets,
   type WidgetDefinition,
   type WidgetField,
-} from "@angee/base";
+} from "@angee/ui";
 
 const selectionOptions = [
   { value: "draft", label: "Draft" },

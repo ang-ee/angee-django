@@ -1,79 +1,87 @@
-import { useCallback, useMemo, type ReactElement } from "react";
+import { useMemo, type ReactElement } from "react";
 
 import {
-  AuthoredRowsList,
   Badge,
   Code,
-  type DataToolbarGroupOption,
+  ListView,
   type ListColumn,
-} from "@angee/base";
-import type { DocumentData } from "@angee/sdk";
+  type ResourceToolbarGroupOption,
+} from "@angee/ui";
 
-import {
-  IamRelationships,
-  type IAMRelationshipsVariables,
-} from "../documents";
-import {
-  relationshipRows,
-  type IAMRelationshipRow,
-} from "../identity-rows";
-import { IAM_LIST_LIMIT } from "../list-config";
 import { useIamT } from "../i18n";
 
-type IamRelationshipsResult = DocumentData<typeof IamRelationships>;
+// The `iam.Relationship` Hasura resource (`hasura_model_resource` over the active
+// REBAC relationship store, `addons/angee/iam/schema.py`, marked rowModel
+// "client"): the group axes are denormalized display strings on the node, not
+// RelationshipRegistry columns, so — like the original authored page — it fetches
+// the bounded admin tuple set once and filters/sorts/groups in the browser. The
+// `resource`/`subject` refs compose `<type>:<id>` in the cell.
+interface RelationshipResourceRow extends Record<string, unknown> {
+  id: string;
+  resource_type: string;
+  resource_id: string;
+  relation: string;
+  subject_type: string;
+  subject_id: string;
+  caveat_name: string;
+}
+
+const ref = (type: string, id: string): string => `${type}:${id}`;
+
+function relationshipGroupOptions(
+  t: (key: string) => string,
+): readonly ResourceToolbarGroupOption[] {
+  return [
+    {
+      id: "resource_type",
+      label: t("iam.relationships.column.resourceType"),
+      group: { field: "resource_type" },
+      type: "value",
+    },
+    {
+      id: "subject_type",
+      label: t("iam.relationships.column.subjectType"),
+      group: { field: "subject_type" },
+      type: "value",
+    },
+    {
+      id: "relation",
+      label: t("iam.relationships.column.relation"),
+      group: { field: "relation" },
+      type: "value",
+    },
+  ];
+}
 
 export function RelationshipsPage(): ReactElement {
   const t = useIamT();
-  const relationshipGroupOptions = useMemo<readonly DataToolbarGroupOption[]>(
+  const relationshipColumns = useMemo<readonly ListColumn<RelationshipResourceRow>[]>(
     () => [
       {
-        id: "resourceType",
-        label: t("iam.relationships.group.resourceType"),
-        group: { field: "resourceType" },
-        type: "value",
-      },
-      {
-        id: "subjectType",
-        label: t("iam.relationships.group.subjectType"),
-        group: { field: "subjectType" },
-        type: "value",
-      },
-      {
-        id: "relation",
-        label: t("iam.relationships.group.relation"),
-        group: { field: "relation" },
-        type: "value",
-      },
-    ],
-    [t],
-  );
-  const relationshipColumns = useMemo<readonly ListColumn<IAMRelationshipRow>[]>(
-    () => [
-      {
-        field: "resourceRef",
+        field: "resource_id",
         header: t("iam.relationships.column.resourceRef"),
-        render: (row) => <Code truncate>{row.resourceRef}</Code>,
+        render: (row) => <Code truncate>{ref(row.resource_type, row.resource_id)}</Code>,
       },
       {
-        field: "subjectRef",
+        field: "subject_id",
         header: t("iam.relationships.column.subjectRef"),
-        render: (row) => <Code truncate>{row.subjectRef}</Code>,
+        render: (row) => <Code truncate>{ref(row.subject_type, row.subject_id)}</Code>,
       },
-      { field: "resourceType", header: t("iam.relationships.column.resourceType") },
-      { field: "resourceId", header: t("iam.relationships.column.resourceId") },
+      { field: "resource_type", header: t("iam.relationships.column.resourceType") },
+      { field: "resource_id", header: t("iam.relationships.column.resourceId") },
       {
         field: "relation",
         header: t("iam.relationships.column.relation"),
         render: (row) => <Badge tone="info">{row.relation}</Badge>,
       },
-      { field: "subjectType", header: t("iam.relationships.column.subjectType") },
-      { field: "subjectId", header: t("iam.relationships.column.subjectId") },
+      { field: "subject_type", header: t("iam.relationships.column.subjectType") },
+      { field: "subject_id", header: t("iam.relationships.column.subjectId") },
       {
-        field: "caveatName",
+        field: "caveat_name",
         header: t("iam.relationships.column.caveat"),
         render: (row) =>
-          row.caveatName ? (
-            <Badge tone="warning">{row.caveatName}</Badge>
+          row.caveat_name ? (
+            <Badge tone="warning">{row.caveat_name}</Badge>
           ) : (
             <span className="text-fg-muted">-</span>
           ),
@@ -81,24 +89,13 @@ export function RelationshipsPage(): ReactElement {
     ],
     [t],
   );
-  const variables = useMemo<IAMRelationshipsVariables>(
-    () => ({ pagination: { offset: 0, limit: IAM_LIST_LIMIT } }),
-    [],
-  );
-  const selectRows = useCallback(
-    (data: IamRelationshipsResult | undefined) =>
-      relationshipRows(data?.relationships.results ?? []),
-    [],
-  );
 
   return (
-    <AuthoredRowsList
-      document={IamRelationships}
-      variables={variables}
-      selectRows={selectRows}
+    <ListView<RelationshipResourceRow>
+      resource="iam.Relationship"
       columns={relationshipColumns}
-      groupOptions={relationshipGroupOptions}
-      defaultGroup={{ field: "resourceType" }}
+      groupOptions={relationshipGroupOptions(t)}
+      defaultGroup={{ field: "resource_type" }}
       pageSize={50}
     />
   );

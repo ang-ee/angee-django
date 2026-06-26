@@ -1,21 +1,21 @@
 import * as React from "react";
-import { Column, DataPage, Field, Form, Group, GroupListView, List } from "@angee/base";
+import { Column, ResourceList, Field, Form, Group, List } from "@angee/ui";
 
 const MODEL = "parties.Organization";
 
 const organizationsList = (
-  <List model={MODEL} list={GroupListView}>
-    <Column field="displayName" />
+  <List resource={MODEL}>
+    <Column field="display_name" />
     <Column field="domain" />
-    <Column field="createdAt" />
+    <Column field="created_at" />
   </List>
 );
 
 const organizationsForm = (
-  <Form model={MODEL}>
-    <Field name="displayName" title />
+  <Form resource={MODEL}>
+    <Field name="display_name" title />
     <Group label="Details" columns={2}>
-      <Field name="legalName" label="Legal name" />
+      <Field name="legal_name" label="Legal name" />
       <Field name="domain" label="Domain" />
     </Group>
     <Field name="notes" />
@@ -25,9 +25,9 @@ const organizationsForm = (
 /** Organizations (the organisation-kind contacts): full create/edit/list/detail. */
 export function OrganizationsPage(): React.ReactElement {
   return (
-    <DataPage model={MODEL} placement="inline" routed>
+    <ResourceList resource={MODEL} placement="inline" routed>
       {organizationsList}
       {organizationsForm}
-    </DataPage>
+    </ResourceList>
   );
 }

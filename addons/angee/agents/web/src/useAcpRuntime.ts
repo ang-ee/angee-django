@@ -23,7 +23,8 @@ import {
   type SessionNotification,
 } from "@zed-industries/agent-client-protocol";
 import * as v from "valibot";
-import { useAuthoredMutation, type DocumentVariables } from "@angee/sdk";
+import { useAuthoredMutation } from "@angee/ui";
+import type { DocumentVariables } from "@angee/refine";
 
 import { messageOf } from "./acp-error";
 import { foldIntoLog, type ChatMessage } from "./acp-log";
@@ -131,8 +132,8 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
         const endpoint = await mintEndpoint({ id: agentId });
         if (!active) return;
         const validated = parseEndpoint(endpoint);
-        setMcpServers(validated.mcpServers);
-        setModelHandle(validated.modelHandle);
+        setMcpServers(validated.mcp_servers);
+        setModelHandle(validated.model_handle);
         const transport = openAcpTransport(validated.url, validated.token);
         transportRef.current = transport;
         const connection = new ClientSideConnection(() => makeClient(onUpdateRef), transport.stream);
@@ -151,14 +152,14 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
         // catch below surfaces, rather than hanging.
         const session = await connection.newSession({
           cwd: "/workspace",
-          mcpServers: toMcpServers(validated.mcpServers),
+          mcpServers: toMcpServers(validated.mcp_servers),
         });
         if (!active) return;
-        await selectSessionModel(connection, session, validated.modelHandle);
+        await selectSessionModel(connection, session, validated.model_handle);
         if (!active) return;
         sessionIdRef.current = session.sessionId;
         setStatus("ready");
-        scheduleRefresh(validated.expiresAt);
+        scheduleRefresh(validated.expires_at);
         // Only the *current* transport's close means the chat dropped — a scheduled
         // refresh closes the previous socket itself, and that close must not clobber the
         // freshly reconnected one.
@@ -173,7 +174,7 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
     };
 
     // Re-mint the token and reconnect a margin before it expires; an unparseable or past
-    // `expiresAt` simply skips the refresh, leaving the connect-once socket in place.
+    // `expires_at` simply skips the refresh, leaving the connect-once socket in place.
     const scheduleRefresh = (expiresAt: string): void => {
       const delay = Date.parse(expiresAt) - Date.now() - TOKEN_REFRESH_MARGIN_MS;
       if (Number.isNaN(delay) || delay <= 0) return;
@@ -302,7 +303,7 @@ function parseEndpoint(
   data: DocumentType<typeof AgentChatEndpointMutation> | undefined,
 ): AgentChatEndpoint {
   if (data === undefined) throw new Error("The agent chat endpoint is unavailable.");
-  return v.parse(AgentChatEndpointSchema, data.agentChatEndpoint);
+  return v.parse(AgentChatEndpointSchema, data.agent_chat_endpoint);
 }
 
 /** Render the `<system_context>` block for the current view, or "" on failure. */
@@ -315,7 +316,7 @@ async function fetchSystemContext(
 ): Promise<string> {
   try {
     const data = await renderPrompt({ id: agentId, view });
-    return data?.renderAgentPrompt ?? "";
+    return data?.render_agent_prompt ?? "";
   } catch {
     return "";
   }

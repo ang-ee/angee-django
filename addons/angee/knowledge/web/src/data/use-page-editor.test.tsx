@@ -1,20 +1,48 @@
 // @vitest-environment happy-dom
-import { act, renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import {
+  act,
+  renderHook } from "@testing-library/react";
+import type { ReactElement,
+  ReactNode } from "react";
+import { afterEach,
+  beforeEach,
+  describe,
+  expect,
+  test,
+  vi } from "vitest";
+import {
+  ModelMetadataProvider,
+} from "@angee/resources";
+import type {
+  SchemaFieldMetadata,
+} from "@angee/resources";
 
 const sdkMocks = vi.hoisted(() => ({
   updatePage: vi.fn(),
   updateBody: vi.fn(),
   useAuthoredMutation: vi.fn(),
-  useResourceMutation: vi.fn(),
+  useUpdate: vi.fn(),
 }));
 
-vi.mock("@angee/sdk", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/sdk")>();
+vi.mock("@angee/ui", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
     ...actual,
     useAuthoredMutation: sdkMocks.useAuthoredMutation,
-    useResourceMutation: sdkMocks.useResourceMutation,
+  };
+});
+
+vi.mock("@refinedev/core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@refinedev/core")>();
+  return {
+    ...actual,
+    useUpdate: (options: Record<string, unknown>) => {
+      sdkMocks.useUpdate(options);
+      return {
+        mutateAsync: sdkMocks.updatePage,
+        mutation: { isPending: false, error: null },
+      };
+    },
   };
 });
 
@@ -26,18 +54,14 @@ describe("usePageEditor", () => {
     sdkMocks.updatePage.mockReset();
     sdkMocks.updateBody.mockReset();
     sdkMocks.useAuthoredMutation.mockReset();
-    sdkMocks.useResourceMutation.mockReset();
+    sdkMocks.useUpdate.mockReset();
     sdkMocks.updatePage.mockResolvedValue({ id: "pag_1", title: "Updated" });
     sdkMocks.updateBody.mockResolvedValue({
-      updatePageBody: {
+      update_page_body: {
         ok: true,
-        markdown: { bodyHash: "hash-next" },
+        markdown: { body_hash: "hash-next" },
       },
     });
-    sdkMocks.useResourceMutation.mockImplementation(() => [
-      sdkMocks.updatePage,
-      { fetching: false, error: null },
-    ]);
     sdkMocks.useAuthoredMutation.mockImplementation((document: unknown) => {
       const operationName = graphqlOperationName(document);
       if (operationName === "KnowledgeUpdatePageBody") {
@@ -60,6 +84,7 @@ describe("usePageEditor", () => {
         { title: "Page", body: "Old body", bodyHash: "hash-old" },
         onSaved,
       ),
+      { wrapper: MetadataWrapper },
     );
 
     act(() => {
@@ -79,7 +104,7 @@ describe("usePageEditor", () => {
     expect(sdkMocks.updateBody).toHaveBeenCalledWith({
       page: "pag_1",
       body: "Latest draft",
-      expectedHash: "hash-old",
+      expected_hash: "hash-old",
     });
     expect(onSaved).toHaveBeenCalledTimes(1);
     expect(result.current.status).toBe("saved");
@@ -93,6 +118,7 @@ describe("usePageEditor", () => {
         { title: "Page", body: "Old body", bodyHash: "hash-old" },
         onSaved,
       ),
+      { wrapper: MetadataWrapper },
     );
 
     act(() => {
@@ -104,13 +130,16 @@ describe("usePageEditor", () => {
       await Promise.resolve();
     });
 
-    expect(sdkMocks.useResourceMutation).toHaveBeenCalledWith(
-      "knowledge.Page",
-      "update",
-      { fields: ["title"] },
+    expect(sdkMocks.useUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resource: "pages",
+        dataProviderName: "console",
+        invalidates: ["list", "many", "detail"],
+      }),
     );
     expect(sdkMocks.updatePage).toHaveBeenCalledWith({
-      data: { id: "pag_1", title: "Renamed page" },
+      id: "pag_1",
+      values: { title: "Renamed page" },
     });
     expect(onSaved).toHaveBeenCalledTimes(1);
     expect(result.current.status).toBe("saved");
@@ -124,6 +153,7 @@ describe("usePageEditor", () => {
         { title: "Page", body: "Old body", bodyHash: "hash-old" },
         onSaved,
       ),
+      { wrapper: MetadataWrapper },
     );
 
     act(() => {
@@ -140,7 +170,7 @@ describe("usePageEditor", () => {
     expect(sdkMocks.updateBody).toHaveBeenCalledWith({
       page: "pag_2",
       body: "Leaving now",
-      expectedHash: "hash-old",
+      expected_hash: "hash-old",
     });
     expect(onSaved).toHaveBeenCalledTimes(1);
   });
@@ -150,5 +180,52 @@ function graphqlOperationName(document: unknown): string {
   return (
     (document as { definitions?: Array<{ name?: { value?: string } }> })
       .definitions?.[0]?.name?.value ?? ""
+  );
+}
+
+const PAGE_METADATA: SchemaFieldMetadata = {
+  types: {
+    PageType: {
+      typeName: "PageType",
+      fields: {
+        title: { name: "title", kind: "scalar", scalar: "String" },
+      },
+      rootFields: {
+        detail: "page",
+        list: "pages",
+        update: "updatePage",
+      },
+      resource: {
+        schemaName: "console",
+        modelLabel: "knowledge.Page",
+        appLabel: "knowledge",
+        modelName: "Page",
+        publicIdField: "id",
+        roots: {
+          detail: "page",
+          list: "pages",
+          update: "updatePage",
+        },
+        typeNames: {
+          node: "PageType",
+          filter: "PageFilter",
+          order: "PageOrder",
+        },
+        capabilities: ["detail", "list", "update"],
+        filterFields: [],
+        orderFields: ["title"],
+        aggregateFields: [],
+        groupByFields: [],
+        relationAxes: [],
+      },
+    },
+  },
+};
+
+function MetadataWrapper({ children }: { children: ReactNode }): ReactElement {
+  return (
+    <ModelMetadataProvider metadata={PAGE_METADATA}>
+      {children}
+    </ModelMetadataProvider>
   );
 }

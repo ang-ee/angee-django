@@ -1,7 +1,6 @@
-import { errorMessage } from "@angee/sdk";
 import { useCallback } from "react";
 
-import { useToast, type ToastApi } from "@angee/base";
+import { errorMessage, useToast, type ToastApi } from "@angee/ui";
 
 /** A daemon mutation payload keyed by its single root field (shape varies by op). */
 export type DaemonActionData = Record<string, unknown>;
@@ -10,7 +9,7 @@ export type RunDaemonActionParams<
   Data extends object,
   V extends Record<string, unknown>,
 > = {
-  run: (variables: V) => Promise<Data>;
+  run: (variables: V) => Promise<Data | undefined>;
   /** The mutation's root field whose presence confirms the action ran. */
   field: string;
   variables: V;
@@ -36,9 +35,9 @@ export function useRunDaemonAction(refetch: () => void): BoundRunDaemonAction {
  * Run a daemon mutation safely for a section pane: run, surface failures as
  * toasts, and refetch. The daemon reports failure as a GraphQL error (the
  * transport rejects), not an `ok:false` payload — so any returned root field
- * counts as success, and a missing root field counts as failure rather than
- * silent success. Never leaves an unhandled rejection, so a click handler can
- * `void` it.
+ * counts as success, and a missing root field (or no payload at all) counts as
+ * failure rather than silent success. Never leaves an unhandled rejection, so a
+ * click handler can `void` it.
  */
 export async function runDaemonAction<
   Data extends object,
@@ -50,7 +49,7 @@ export async function runDaemonAction<
   let succeeded = true;
   try {
     const data = await run(variables);
-    if ((data as Record<string, unknown>)[field] == null) {
+    if (data == null || (data as Record<string, unknown>)[field] == null) {
       succeeded = false;
       toast.danger({ title: `${label} returned no result.` });
     }

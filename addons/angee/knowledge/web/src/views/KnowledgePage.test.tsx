@@ -10,7 +10,6 @@ const routerMocks = vi.hoisted(() => ({
 
 const sdkMocks = vi.hoisted(() => ({
   useAuthoredQuery: vi.fn(),
-  useResourceRecord: vi.fn(),
   refetch: {
     detail: vi.fn(async () => undefined),
     pages: vi.fn(async () => undefined),
@@ -23,25 +22,25 @@ vi.mock("@tanstack/react-router", () => ({
   useParams: () => routerMocks.params,
 }));
 
-vi.mock("@angee/sdk", () => ({
-  useAuthoredQuery: sdkMocks.useAuthoredQuery,
-  useResourceRecord: sdkMocks.useResourceRecord,
-  useNamespaceT: (
-    _namespace: string,
-    messages: Record<string, string>,
-  ) => (key: string, vars?: Record<string, string>) => {
-    let message = messages[key] ?? key;
-    for (const [name, value] of Object.entries(vars ?? {})) {
-      message = message.replace(`{${name}}`, value);
-    }
-    return message;
-  },
-}));
-
-vi.mock("@angee/base", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/base")>();
+// `@angee/data`, `@angee/sdk`, and `@angee/base` symbols now all resolve from
+// `@angee/ui`, so the three former module mocks fold into one (Vitest hoists one
+// factory per module id): `useAuthoredQuery` + `useNamespaceT` + the render
+// overrides, atop the real module.
+vi.mock("@angee/ui", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
     ...actual,
+    useAuthoredQuery: sdkMocks.useAuthoredQuery,
+    useNamespaceT: (
+      _namespace: string,
+      messages: Record<string, string>,
+    ) => (key: string, vars?: Record<string, string>) => {
+      let message = messages[key] ?? key;
+      for (const [name, value] of Object.entries(vars ?? {})) {
+        message = message.replace(`{${name}}`, value);
+      }
+      return message;
+    },
     EmptyState: ({ title }: { title: string }) => (
       <section data-testid="empty-state">{title}</section>
     ),
@@ -177,23 +176,19 @@ beforeEach(() => {
   for (const refetch of Object.values(sdkMocks.refetch)) {
     refetch.mockClear();
   }
-  sdkMocks.useResourceRecord.mockReturnValue({
-    fetching: false,
-    record: null,
-  });
   sdkMocks.useAuthoredQuery.mockImplementation((document) => {
     if (document === KnowledgeVaults) {
       return queryResult("vaults", {
-        vaults: { results: knowledgeData.vaults },
+        vaults: knowledgeData.vaults,
       });
     }
     if (document === KnowledgePages) {
-      return queryResult("pages", { pages: { results: knowledgeData.pages } });
+      return queryResult("pages", { pages: knowledgeData.pages });
     }
     if (document === KnowledgePageQuery) {
       const pageId = routerMocks.params.id ?? "";
       return queryResult("detail", {
-        page: knowledgeData.details[pageId] ?? null,
+        pages_by_pk: knowledgeData.details[pageId] ?? null,
       });
     }
     throw new Error("Unexpected knowledge query document");
@@ -317,8 +312,8 @@ function page(id: string, title: string, kind: string, vault: string) {
     icon: null,
     vault,
     parent: null,
-    updatedAt: "2025-01-01T00:00:00Z",
-    createdByLabel: "Alex",
+    updated_at: "2025-01-01T00:00:00Z",
+    created_by_label: "Alex",
   };
 }
 
@@ -327,8 +322,8 @@ function detail(id: string, title: string, vault: string) {
     ...page(id, title, "note", vault),
     markdown: {
       body: "Hello",
-      bodyHash: "hash",
-      wordCount: 1,
+      body_hash: "hash",
+      word_count: 1,
     },
     backlinks: [],
   };

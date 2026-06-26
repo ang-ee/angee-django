@@ -7,7 +7,7 @@ import {
   PageToolbar,
   SearchInput,
   Toolbar,
-} from "@angee/base";
+} from "@angee/ui";
 
 const meta = {
   title: "Page/PageToolbar",

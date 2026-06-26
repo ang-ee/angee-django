@@ -22,6 +22,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.contrib.auth.models import Group as DjangoGroup
 from django.db import transaction
 from django.db.models import QuerySet
+from pydantic import BaseModel
 from rebac import (
     ObjectRef,
     app_settings,
@@ -46,17 +47,18 @@ from rebac.roles import (
 from rebac.schema.ast import PermArrow, PermBinOp, PermNil, PermRef
 from strawberry import auto
 from strawberry.scalars import JSON
-from strawberry_django.pagination import OffsetPaginated
 
-from angee.base.models import SqidPublicIdentity
-from angee.graphql.data import data_query
-from angee.graphql.deletion import DeletePreview, delete_by_public_id
-from angee.graphql.ids import PublicID, require_instance_for_id
+from angee.base.models import SqidPublicIdentity, instance_from_public_id
+from angee.graphql.data import aggregate_queryset, hasura_model_resource, hasura_pydantic_resource
+from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
+from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
+from angee.graphql.writes import write_queryset
 from angee.iam.identity import user_display_label as _user_display_label
-from angee.iam.identity import user_principal
+from angee.iam.identity import user_label, user_principal
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
+from angee.iam.permissions import is_platform_admin, require_platform_admin
 from angee.iam.permissions import request_from_info as _request
 
 
@@ -87,7 +89,7 @@ def _iam_model(name: str) -> type[Any]:
 
 User = _iam_model("User")
 Group = DjangoGroup
-GROUP_PUBLIC_IDENTITY = SqidPublicIdentity(prefix="grp_", model_label="iam.Group")
+GROUP_PUBLIC_IDENTITY = SqidPublicIdentity(prefix="grp_")
 """Public data identity for Django auth groups exposed by IAM."""
 
 _IAM_OVERVIEW_DEFAULT_PEEK_LIMIT = 6
@@ -115,11 +117,17 @@ class UserType(AngeeNode):
     is_staff: auto
     is_active: auto
 
+    @strawberry_django.field(only=["first_name", "last_name", "username"])
+    def display_name(self) -> str:
+        """Return the user's human label, overriding the username Node default."""
+
+        return user_label(cast(Any, self))
+
     @strawberry_django.field
     def full_name(self) -> str:
         """Return the user's display name assembled by Django's auth contract."""
 
-        return str(cast(Any, self).get_full_name())
+        return user_label(cast(Any, self))
 
     @strawberry_django.field
     def preferences(self) -> JSON:
@@ -139,6 +147,12 @@ class CurrentUserType(AngeeNode):
     is_staff: auto
     is_active: auto
 
+    @strawberry_django.field(only=["first_name", "last_name", "username"])
+    def display_name(self) -> str:
+        """Return the user's human label, overriding the username Node default."""
+
+        return user_label(cast(Any, self))
+
     @strawberry_django.field
     def preferences(self) -> JSON:
         """Return the current user's private UI preference object."""
@@ -150,7 +164,7 @@ class CurrentUserType(AngeeNode):
         """Return direct REBAC role grants for the current session user.
 
         There is no synchronous dataloader idiom in this repo. Keep role refs on
-        the singleton ``currentUser`` path instead of exposing an N+1 admin-list
+        the singleton ``current_user`` path instead of exposing an N+1 admin-list
         field that can reveal another user's roles.
         """
 
@@ -203,11 +217,30 @@ class IAMGrantType:
         return _user_display_label(cast(Any, self).subject_id)
 
     @strawberry_django.field
+    def principal_ref(self) -> str:
+        """Return the canonical ``<type>:<id>`` principal ref."""
+
+        row = cast(Any, self)
+        return f"{row.subject_type}:{row.subject_id}"
+
+    @strawberry_django.field
     def role(self) -> str:
         """Return the canonical granted role ref."""
 
         row = cast(Any, self)
         return _role_ref(str(row.resource_type), str(row.resource_id))
+
+    @strawberry_django.field
+    def role_name(self) -> str:
+        """Return the short granted role id."""
+
+        return str(cast(Any, self).resource_id)
+
+    @strawberry_django.field
+    def namespace(self) -> str:
+        """Return the namespace portion of the granted role type."""
+
+        return _role_namespace(str(cast(Any, self).resource_type))
 
 
 @strawberry.type
@@ -254,6 +287,12 @@ class IAMOverviewNamespaceType:
 @strawberry_django.type(active_relationship_model())
 class IAMRelationshipType:
     """Raw active REBAC relationship tuple."""
+
+    @strawberry_django.field
+    def id(self) -> str:
+        """Return the relationship row's primary-key identity."""
+
+        return str(cast(Any, self).pk)
 
     @strawberry_django.field
     def resource_type(self) -> str:
@@ -319,33 +358,6 @@ class LoginPayload:
 
     ok: bool
     user: UserType | None = None
-
-
-@strawberry.input
-class UserInput:
-    """Admin-write fields accepted when creating a user. ``password`` is write-only."""
-
-    username: str
-    password: str
-    email: str = ""
-    first_name: str = ""
-    last_name: str = ""
-    is_staff: bool = False
-    is_active: bool = True
-
-
-@strawberry.input
-class UserPatch:
-    """Admin-write fields accepted when updating a user. ``password`` re-hashes when set."""
-
-    id: PublicID
-    username: str | None = strawberry.UNSET
-    password: str | None = strawberry.UNSET
-    email: str | None = strawberry.UNSET
-    first_name: str | None = strawberry.UNSET
-    last_name: str | None = strawberry.UNSET
-    is_staff: bool | None = strawberry.UNSET
-    is_active: bool | None = strawberry.UNSET
 
 
 def _relationship_ordering(*, include_relation: bool = False) -> tuple[str, ...]:
@@ -479,13 +491,6 @@ def _permission_hub_grant_rows() -> QuerySet[Any]:
         )
         .order_by(*_relationship_ordering()),
     )
-
-
-def _permission_hub_grants(info: strawberry.Info) -> QuerySet[Any]:
-    """Return direct user role-grant rows in stable order."""
-
-    del info
-    return _permission_hub_grant_rows()
 
 
 def _schema_role_resource_types() -> set[str]:
@@ -755,24 +760,18 @@ def _relation_role_refs(relation: Any) -> set[str]:
     return refs
 
 
-def _permission_relationships(
-    info: strawberry.Info,
-    *,
-    resource_type: str | None = None,
-    subject_type: str | None = None,
-    relation: str | None = None,
-) -> QuerySet[Any]:
-    """Return active relationship rows, optionally narrowed by core columns."""
+def _admin_relationship_queryset(info: strawberry.Info) -> QuerySet[Any]:
+    """Return active REBAC relationship rows scoped to platform admins.
 
-    del info
-    rows = _relationship_rows()
-    if resource_type:
-        rows = rows.filter(resource_type=resource_type)
-    if subject_type:
-        rows = rows.filter(subject_type=subject_type)
-    if relation:
-        rows = rows.filter(relation=relation)
-    return cast(QuerySet[Any], rows)
+    The Hasura ``relationships`` resource replaces the authored ``relationships``
+    query; like the other permission-hub surfaces it is admin-only, so a
+    non-admin actor reads the empty set (``.none()``) rather than a forbidden
+    error — admin-only navigation already gates the console.
+    """
+
+    if not _admin_actor(info):
+        return cast(QuerySet[Any], active_relationship_model().objects.none())
+    return _relationship_rows()
 
 
 def _user_graphql_type_name() -> str:
@@ -781,78 +780,353 @@ def _user_graphql_type_name() -> str:
     return str(cast(Any, UserType).__strawberry_definition__.name)
 
 
-@strawberry_django.filter_type(User, lookups=True)
-class UserFilter:
-    """Field lookups accepted when filtering the admin users list."""
+def _user_resource_id_column() -> str:
+    """Return the ORM column backing the public ``users`` id argument."""
 
-    username: auto
-    email: auto
-    first_name: auto
-    last_name: auto
-    is_staff: auto
-    is_active: auto
+    # Bare source tests can load this schema before the composer emits the
+    # runtime sqid-bearing IAM user model. That fallback is a source-test model
+    # boundary, not a public API compatibility layer.
+    return "sqid" if _runtime_iam_models_built() else "pk"
 
 
-@strawberry_django.order_type(User)
-class UserOrder:
-    """Orderings accepted by the admin users list."""
+def _admin_user_queryset(info: strawberry.Info) -> QuerySet[Any]:
+    """Return the admin-scoped user queryset for console resources."""
 
-    username: auto
-    email: auto
-    first_name: auto
-    last_name: auto
-    is_staff: auto
-    is_active: auto
+    require_platform_admin(info)
+    return cast(QuerySet[Any], User.objects.all())
 
 
-@strawberry_django.filter_type(Group, lookups=True)
-class GroupFilter:
-    """Field lookups accepted when filtering Django auth groups."""
+def _admin_user_aggregate_queryset(info: strawberry.Info) -> QuerySet[Any]:
+    """Return the user queryset safe for aggregate and grouped math."""
 
-    name: auto
-
-
-@strawberry_django.order_type(Group)
-class GroupOrder:
-    """Orderings accepted by the auth groups list."""
-
-    name: auto
+    return aggregate_queryset(_admin_user_queryset(info))
 
 
-UserDataQuery, _USER_DATA_TYPES = data_query(
-    UserType,
-    type_name="UserDataQuery",
-    filters=UserFilter,
-    order=UserOrder,
-    list_name="users",
-    detail_name="user",
-    aggregate_name="user_aggregate",
-    group_name="user_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["is_staff", "is_active"],
-    enable_filter_echo=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    aggregate_kwargs={"name_prefix": "UserAggregate", "pagination_style": "offset"},
-    # Bare source tests use django.contrib.auth.User before the composer emits iam.User.
-    allow_raw_pk_compat=not _runtime_iam_models_built(),
+def _admin_group_queryset(info: strawberry.Info) -> QuerySet[Any]:
+    """Return the admin-scoped Django auth-group catalogue queryset."""
+
+    require_platform_admin(info)
+    return cast(QuerySet[Any], Group.objects.all())
+
+
+def _user_for_resource_id(value: str, queryset: QuerySet[Any]) -> Any:
+    """Return one user addressed by the Hasura resource id boundary."""
+
+    if _user_resource_id_column() == "sqid":
+        instance = instance_from_public_id(User, str(value), queryset=queryset)
+    else:
+        instance = queryset.filter(pk=value).first()
+    if instance is None:
+        raise ValueError(f"User {value!r} was not found")
+    return instance
+
+
+def _group_pk_from_public_id(value: Any) -> int | None:
+    """Decode the IAM group public id to its Django primary key."""
+
+    return GROUP_PUBLIC_IDENTITY.public_id_to_pk(str(value))
+
+
+def _group_for_resource_id(value: str, queryset: QuerySet[Any]) -> Any:
+    """Return one Django auth group addressed by its IAM public id."""
+
+    instance = instance_from_public_id(
+        Group,
+        str(value),
+        queryset=queryset,
+        public_identity=GROUP_PUBLIC_IDENTITY,
+    )
+    if instance is None:
+        raise ValueError(f"Group {value!r} was not found")
+    return instance
+
+
+def _delete_instance(instance: Any) -> Any | None:
+    """Delete ``instance`` in Hasura ``delete_<res>_by_pk`` form."""
+
+    preview = DeletePreview.from_instance(instance)
+    if preview.has_blockers:
+        return None
+    pk = instance.pk
+    instance.delete()
+    instance.pk = pk
+    return instance
+
+
+def _delete_user_preview(value: str, *, confirm: bool) -> DeletePreview:
+    """Return or apply the authored user cascade delete preview."""
+
+    with transaction.atomic():
+        instance = _user_for_resource_id(str(value), write_queryset(User))
+        preview = DeletePreview.from_instance(instance)
+        if confirm and not preview.has_blockers:
+            instance.delete()
+        return preview
+
+
+class IAMUserWriteBackend:
+    """Admin write semantics for the Hasura ``users`` resource."""
+
+    def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+        """Create one user through Django's password-hashing manager."""
+
+        require_platform_admin(info)
+        payload = dict(data)
+        password = payload.pop("password")
+        with transaction.atomic():
+            return User.objects.create_user(password=password, **payload)
+
+    def update(self, info: strawberry.Info, pk: str, data: dict[str, Any]) -> Any:
+        """Patch one user, hashing ``password`` when supplied."""
+
+        require_platform_admin(info)
+        payload = dict(data)
+        password = payload.pop("password", None)
+        with transaction.atomic():
+            user = _user_for_resource_id(pk, write_queryset(User))
+            for field, value in payload.items():
+                setattr(user, field, value)
+            if password:
+                user.set_password(password)
+            user.save()
+            return user
+
+    def delete(self, info: strawberry.Info, pk: str) -> Any | None:
+        """Delete one user by public id and return the deleted row."""
+
+        require_platform_admin(info)
+        with transaction.atomic():
+            return _delete_instance(_user_for_resource_id(pk, write_queryset(User)))
+
+
+class IAMGroupWriteBackend:
+    """Admin write semantics for the Hasura ``groups`` resource."""
+
+    def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+        """Create one Django auth group."""
+
+        require_platform_admin(info)
+        with transaction.atomic():
+            group = Group(**data)
+            group.full_clean()
+            group.save()
+            return group
+
+    def update(self, info: strawberry.Info, pk: str, data: dict[str, Any]) -> Any:
+        """Patch one Django auth group."""
+
+        require_platform_admin(info)
+        with transaction.atomic():
+            group = _group_for_resource_id(pk, Group.objects.all())
+            for field, value in data.items():
+                setattr(group, field, value)
+            group.full_clean()
+            group.save()
+            return group
+
+    def delete(self, info: strawberry.Info, pk: str) -> Any | None:
+        """Delete one Django auth group by public id."""
+
+        require_platform_admin(info)
+        with transaction.atomic():
+            return _delete_instance(_group_for_resource_id(pk, Group.objects.all()))
+
+
+class IAMRoleRow(BaseModel):
+    """Computed IAM role row (no Django table behind it).
+
+    The row-shape SSOT for the ``iam.Role`` Hasura resource. Roles are deduped
+    from active role-relationship tuples and labelled from the REBAC schema AST
+    (the same computation the authored ``roles`` query exposed). ``IAMRoleType``
+    keys by the short ``resource_id`` (``role_id``), which is not unique across
+    namespaces; the row adds an explicit ``id`` (the canonical ``<namespace>/role:<id>``
+    ref) for by-pk addressing.
+    """
+
+    id: str
+    role_id: str
+    namespace: str
+    label: str
+    description: str = ""
+
+
+class IAMGrantRow(BaseModel):
+    """Computed IAM role-grant row (no Django table behind it).
+
+    The row-shape SSOT for the ``iam.Grant`` Hasura resource, projected from the
+    direct user role-grant tuples (the same rows the authored ``grants`` query
+    paginated). The principal/role pair is unique, so ``id`` is the
+    ``<principal_ref>:<role>`` composite for by-pk addressing.
+    """
+
+    id: str
+    principal_id: str
+    principal_type: str
+    principal_ref: str
+    principal_label: str
+    role: str
+    role_name: str
+    namespace: str
+
+
+def _role_rows() -> list[IAMRoleRow]:
+    """Project active tuple-derived roles as computed resource rows."""
+
+    return [
+        IAMRoleRow(
+            id=f"{role.namespace}{_ROLE_SUFFIX}:{role.id}",
+            role_id=role.id,
+            namespace=role.namespace,
+            label=role.label,
+            description=role.description,
+        )
+        for role in _permission_hub_roles()
+    ]
+
+
+def _grant_rows() -> list[IAMGrantRow]:
+    """Project direct user role-grant tuples as computed resource rows."""
+
+    rows: list[IAMGrantRow] = []
+    for row in _permission_hub_grant_rows():
+        resource_type = str(row.resource_type)
+        resource_id = str(row.resource_id)
+        subject_type = str(row.subject_type)
+        subject_id = str(row.subject_id)
+        principal_ref = f"{subject_type}:{subject_id}"
+        role = _role_ref(resource_type, resource_id)
+        rows.append(
+            IAMGrantRow(
+                id=f"{principal_ref}:{role}",
+                principal_id=subject_id,
+                principal_type=subject_type,
+                principal_ref=principal_ref,
+                principal_label=_user_display_label(subject_id) or principal_ref,
+                role=role,
+                role_name=resource_id,
+                namespace=_role_namespace(resource_type),
+            )
+        )
+    return rows
+
+
+def _admin_actor(info: strawberry.Info) -> bool:
+    """Return whether the request actor reaches IAM's platform-admin role."""
+
+    return is_platform_admin(getattr(_request(info), "user", None))
+
+
+def _role_rows_for(info: strawberry.Info) -> list[IAMRoleRow]:
+    """Row provider gated on the same platform-admin reach the authored query had.
+
+    The admin gate is evaluated BEFORE entering ``system_context``: sudo bypasses
+    the REBAC ``auth/user`` read scoping, so an in-sudo ``is_platform_admin``
+    resolves True for any authenticated user. Gate first under the real actor,
+    then sudo only the untyped tuple computation.
+    """
+
+    if not _admin_actor(info):
+        return []
+    with system_context(reason="iam.graphql.roles"):
+        return _role_rows()
+
+
+def _grant_rows_for(info: strawberry.Info) -> list[IAMGrantRow]:
+    """Row provider gated on the same platform-admin reach the authored query had.
+
+    Gate outside ``system_context`` for the same reason as
+    :func:`_role_rows_for` — sudo would defeat the REBAC user-read scoping and
+    grant any authenticated user admin reach.
+    """
+
+    if not _admin_actor(info):
+        return []
+    with system_context(reason="iam.graphql.grants"):
+        return _grant_rows()
+
+
+_ROLE_RESOURCE = hasura_pydantic_resource(
+    IAMRoleRow,
+    name="iam_roles",
+    model_label="iam.Role",
+    filterable=["id", "role_id", "namespace", "label", "description"],
+    sortable=["role_id", "namespace", "label"],
+    rows=_role_rows_for,
 )
 
 
-GroupDataQuery, _GROUP_DATA_TYPES = data_query(
+_GRANT_RESOURCE = hasura_pydantic_resource(
+    IAMGrantRow,
+    name="iam_grants",
+    model_label="iam.Grant",
+    filterable=["id", "principal_id", "principal_label", "role", "role_name", "namespace"],
+    sortable=["principal_label", "role", "role_name", "namespace"],
+    rows=_grant_rows_for,
+)
+
+
+_USER_RESOURCE = hasura_model_resource(
+    UserType,
+    model=User,
+    name="users",
+    filterable=["id", "username", "email", "first_name", "last_name", "is_staff", "is_active"],
+    sortable=["username", "email", "first_name", "last_name", "is_staff", "is_active"],
+    aggregatable=["id"],
+    groupable=["is_staff", "is_active"],
+    writable=["username", "password", "email", "first_name", "last_name", "is_staff", "is_active"],
+    get_queryset=_admin_user_queryset,
+    get_aggregate_queryset=_admin_user_aggregate_queryset,
+    write_backend=IAMUserWriteBackend(),
+    id_column=_user_resource_id_column(),
+    model_label="iam.User",
+)
+
+
+_GROUP_RESOURCE = hasura_model_resource(
     GroupType,
-    type_name="GroupDataQuery",
-    filters=GroupFilter,
-    order=GroupOrder,
-    list_name="groups",
-    detail_name="group",
-    aggregate_name="group_aggregate",
-    group_name="group_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["name"],
-    enable_filter_echo=True,
-    permission_classes=_ADMIN_PERMISSION_CLASSES,
-    aggregate_kwargs={"name_prefix": "GroupAggregate", "pagination_style": "offset"},
-    public_identity=GROUP_PUBLIC_IDENTITY,
+    model=Group,
+    name="groups",
+    filterable=["id", "name"],
+    sortable=["name"],
+    aggregatable=["id"],
+    groupable=["name"],
+    writable=["name"],
+    get_queryset=_admin_group_queryset,
+    get_aggregate_queryset=_admin_group_queryset,
+    write_backend=IAMGroupWriteBackend(),
+    id_decode=_group_pk_from_public_id,
+    id_column="pk",
+    model_label="iam.Group",
+    public_id_field="id",
+)
+
+
+# Filter/sort only on columns the active relationship store materializes as
+# direct concrete fields. The denormalized ``resource_type``/``subject_type``
+# strings live behind ``resource_fk``/``subject_fk`` in registry storage mode, so
+# they are not ORM-addressable single-field columns; ``relation`` and the caveat/
+# subject-relation columns are concrete in both storage modes.
+_RELATIONSHIP_FILTER_FIELDS = ("relation", "optional_subject_relation", "caveat_name")
+
+_RELATIONSHIP_RESOURCE = hasura_model_resource(
+    IAMRelationshipType,
+    model=active_relationship_model(),
+    name="relationships",
+    filterable=list(_RELATIONSHIP_FILTER_FIELDS),
+    sortable=list(_RELATIONSHIP_FILTER_FIELDS),
+    aggregatable=["id"],
+    get_queryset=_admin_relationship_queryset,
+    insert=False,
+    update=False,
+    delete=False,
+    id_decode=lambda value: value,
+    id_column="id",
+    model_label="iam.Relationship",
+    # The group axes (resource_type/subject_type/relation) are denormalized
+    # *display* strings on the node, not RelationshipRegistry columns, so there
+    # is no server _groups over them. Like the original authored page, fetch the
+    # (bounded, admin-only) tuple set once and group/filter/sort in the browser.
+    row_model="client",
 )
 
 
@@ -884,11 +1158,6 @@ class IAMConsoleQuery:
 
         return _permission_hub_roles()
 
-    grants: OffsetPaginated[IAMGrantType] = strawberry_django.offset_paginated(
-        resolver=_permission_hub_grants,
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
-
     @strawberry.field(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def rebac_schema(self) -> list[IAMResourceSchemaType]:
         """Return the installed REBAC schema projection."""
@@ -903,11 +1172,6 @@ class IAMConsoleQuery:
         """Return IAM dashboard aggregates and peek rows."""
 
         return _iam_overview(peek_limit)
-
-    relationships: OffsetPaginated[IAMRelationshipType] = strawberry_django.offset_paginated(
-        resolver=_permission_relationships,
-        permission_classes=_ADMIN_PERMISSION_CLASSES,
-    )
 
 
 @strawberry.type
@@ -966,50 +1230,23 @@ class IAMMutation:
 
 
 @strawberry.type
-class IAMUserMutation:
-    """Admin CRUD for users; ``password`` is write-only and hashed via ``set_password``."""
+class IAMUserDeletePreviewMutation:
+    """Authored cascade delete preview for users."""
 
-    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def create_user(self, data: UserInput) -> UserType:
-        """Create one user with a hashed password."""
+    @strawberry.mutation(name="delete_user")
+    def delete_user(self, info: strawberry.Info, id: PublicID, confirm: bool = False) -> DeletePreview:
+        """Preview or confirm deletion of one user by public id."""
 
-        with system_context(reason="iam.graphql.user.create"), transaction.atomic():
-            user = User.objects.create_user(
-                data.username,
-                email=data.email,
-                password=data.password,
-                first_name=data.first_name,
-                last_name=data.last_name,
-                is_staff=data.is_staff,
-                is_active=data.is_active,
-            )
-        return cast(UserType, user)
+        require_platform_admin(info)
+        return _delete_user_preview(str(id), confirm=confirm)
 
-    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def update_user(self, data: UserPatch) -> UserType:
-        """Update one user; re-hash the password only when a new one is supplied."""
 
-        with system_context(reason="iam.graphql.user.update"), transaction.atomic():
-            user = require_instance_for_id(User, data.id, queryset=User._default_manager.all())
-            for field in ("username", "email", "first_name", "last_name", "is_staff", "is_active"):
-                value = getattr(data, field)
-                if value is not strawberry.UNSET:
-                    setattr(user, field, value)
-            if data.password is not strawberry.UNSET and data.password:
-                user.set_password(data.password)
-            user.save()
-        return cast(UserType, user)
-
-    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def delete_user(self, id: PublicID, confirm: bool = False) -> DeletePreview:
-        """Delete one user when unblocked."""
-
-        return delete_by_public_id(
-            User,
-            str(id),
-            reason="iam.graphql.user.delete",
-            confirm=confirm,
-        )
+IAMUserDeletePreviewMutation = attach_delete_preview_metadata(
+    IAMUserDeletePreviewMutation,
+    model=User,
+    node=UserType,
+    field="delete_user",
+)
 
 
 @strawberry.type
@@ -1055,12 +1292,17 @@ schemas = {
         "query": [
             IAMQuery,
             IAMConsoleQuery,
-            UserDataQuery,
-            GroupDataQuery,
+            _USER_RESOURCE.query,
+            _GROUP_RESOURCE.query,
+            _ROLE_RESOURCE.query,
+            _GRANT_RESOURCE.query,
+            _RELATIONSHIP_RESOURCE.query,
         ],
         "mutation": [
             IAMMutation,
-            IAMUserMutation,
+            _USER_RESOURCE.mutation,
+            _GROUP_RESOURCE.mutation,
+            IAMUserDeletePreviewMutation,
             IAMPermissionHubMutation,
         ],
         "subscription": [changes(User, field="userChanged")],
@@ -1076,9 +1318,11 @@ schemas = {
             IAMResourceSchemaType,
             IAMOverviewNamespaceType,
             IAMOverviewType,
-            *_USER_DATA_TYPES,
-            *_GROUP_DATA_TYPES,
-            IAMRelationshipType,
+            *_USER_RESOURCE.types,
+            *_GROUP_RESOURCE.types,
+            *_ROLE_RESOURCE.types,
+            *_GRANT_RESOURCE.types,
+            *_RELATIONSHIP_RESOURCE.types,
         ],
     },
 }

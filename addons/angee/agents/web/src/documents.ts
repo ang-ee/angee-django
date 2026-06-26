@@ -1,8 +1,8 @@
 // Non-CRUD console operations the agents pages invoke. Model CRUD is derived from
-// the SDL by the DataPage; only bespoke *custom* operations are authored here as
+// the SDL by the ResourceList; only bespoke *custom* operations are authored here as
 // typed `graphql()` documents (no hand-written result types). Single-id
-// `{ ok, message }` action mutations use `useActionMutation(field)` at the call
-// site — no document is authored here.
+// `{ ok, message }` action mutations use `useActionMutation(field)` from
+// `@angee/ui` at the call site — no document is authored here.
 
 import { graphql, type DocumentType } from "@angee/gql/console";
 import * as v from "valibot";
@@ -14,17 +14,17 @@ import * as v from "valibot";
 // short-lived route token server-side (a side effect).
 export const AgentChatEndpointMutation = graphql(`
   mutation AgentChatEndpoint($id: ID!) {
-    agentChatEndpoint(id: $id) {
+    agent_chat_endpoint(id: $id) {
       url
       token
-      expiresAt
-      mcpServers
-      modelHandle
+      expires_at
+      mcp_servers
+      model_handle
     }
   }
 `);
 
-// One MCP server entry inside the endpoint's `mcpServers` map. The map crosses the
+// One MCP server entry inside the endpoint's `mcp_servers` map. The map crosses the
 // GraphQL `JSON` scalar, so its shape is opaque on the wire and must be parsed (not
 // asserted) at the network boundary — `AgentChatEndpointSchema` does that with valibot.
 const McpServerConfigSchema = v.object({
@@ -35,15 +35,15 @@ const McpServerConfigSchema = v.object({
 
 export type McpServerConfig = v.InferOutput<typeof McpServerConfigSchema>;
 
-// The endpoint payload, with the opaque `mcpServers` JSON map narrowed per entry. The
-// `agentChatEndpoint` mutation field is non-null server-side, so the wrapping data is
-// required; only `mcpServers` rides the JSON scalar and so is validated here.
+// The endpoint payload, with the opaque `mcp_servers` JSON map narrowed per entry. The
+// `agent_chat_endpoint` mutation field is non-null server-side, so the wrapping data is
+// required; only `mcp_servers` rides the JSON scalar and so is validated here.
 export const AgentChatEndpointSchema = v.object({
   url: v.string(),
   token: v.string(),
-  expiresAt: v.string(),
-  mcpServers: v.record(v.string(), McpServerConfigSchema),
-  modelHandle: v.string(),
+  expires_at: v.string(),
+  mcp_servers: v.record(v.string(), McpServerConfigSchema),
+  model_handle: v.string(),
 });
 
 export type AgentChatEndpoint = v.InferOutput<typeof AgentChatEndpointSchema>;
@@ -52,7 +52,7 @@ export type AgentChatEndpoint = v.InferOutput<typeof AgentChatEndpointSchema>;
 // each send and prefixed to the user's text, so the agent reads what the user sees.
 export const RenderAgentPrompt = graphql(`
   mutation RenderAgentPrompt($id: ID!, $view: JSON!) {
-    renderAgentPrompt(id: $id, view: $view)
+    render_agent_prompt(id: $id, view: $view)
   }
 `);
 
@@ -62,23 +62,17 @@ export const ConnectInferenceProvider = graphql(`
     $redirectUri: String!
     $next: String!
   ) {
-    connectInferenceProvider(
+    connect_inference_provider(
       id: $id
-      redirectUri: $redirectUri
+      redirect_uri: $redirectUri
       next: $next
     ) {
-      attached
-      authorizeUrl
-      error
-      mode
-      state
-      redirectUri
-      integration { id status }
+      ...ConnectOAuthResultFields
     }
   }
 `);
 
-// The view envelope the chat sends to `renderAgentPrompt`: what the user is looking at.
+// The view envelope the chat sends to `render_agent_prompt`: what the user is looking at.
 export interface AgentChatView extends Record<string, unknown> {
   kind: "record" | "list" | "dashboard";
   type: string;
@@ -88,20 +82,20 @@ export interface AgentChatView extends Record<string, unknown> {
 }
 
 // Resolve which agent serves the user's current view (the side chatter). Returns the
-// agent identity only — the client then mints its chat endpoint with `agentChatEndpoint`;
+// agent identity only — the client then mints its chat endpoint with `agent_chat_endpoint`;
 // `null` means the user has no running agent (the chatter shows a call-to-action).
 export const ResolveSessionForView = graphql(`
   mutation ResolveSessionForView($view: JSON!) {
-    resolveSessionForView(view: $view) {
-      agentId
-      agentName
+    resolve_session_for_view(view: $view) {
+      agent_id
+      agent_name
       status
-      modelHandle
+      model_handle
     }
   }
 `);
 
 /** The resolved running-agent identity for a view; `null` when none runs. */
 export type AgentSession = NonNullable<
-  DocumentType<typeof ResolveSessionForView>["resolveSessionForView"]
+  DocumentType<typeof ResolveSessionForView>["resolve_session_for_view"]
 >;

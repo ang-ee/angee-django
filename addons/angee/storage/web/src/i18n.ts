@@ -2,7 +2,8 @@
 // active translations; these are the defaults used when a key is missing.
 // Components resolve them through `useStorageT()` (below).
 
-import { useNamespaceT, type MessageVars } from "@angee/sdk";
+import { useNamespaceT } from "@angee/ui";
+import type { MessageVars } from "@angee/refine";
 
 export const enStorageMessages: Record<string, string> = {
   // Browser-level loading and empty states.

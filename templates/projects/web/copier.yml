@@ -1,0 +1,65 @@
+_min_copier_version: "9.0"
+_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+
+_angee:
+  schema: 1
+  kind: project
+  name: web
+  description: >-
+    Vite + React web package for a downstream Angee project. The composed
+    runtime graph owns frontend package discovery, Tailwind source scanning, app
+    addon/schema wiring, and typed GraphQL operation codegen through
+    `runtime/web/*` artifacts emitted by `manage.py angee build`.
+
+# Display title for the rendered SPA (index.html <title>).
+project_title:
+  type: str
+  default: Angee
+  help: Human title shown in the browser tab (index.html <title>).
+
+# npm package name for the rendered web package. Scoped to the project so it does
+# not collide with framework workspace packages.
+package_name:
+  type: str
+  default: "@app/web"
+  help: npm name for the rendered web package (its own private host package).
+
+# Path to the project's web package, relative to the project root — the directory
+# this template renders into. Mirrors the `web_path` input the dev stack passes to
+# `pnpm --dir <web_path> codegen`, so the codegen ownership lands in one place.
+web_path:
+  type: str
+  default: "web"
+  help: Path of the web package relative to the project root (matches the dev stack's web_path).
+
+# Relative path FROM the rendered web package TO the framework's tsconfig.base.json.
+# A downstream project consumes angee-django as a sibling checkout (the same model
+# as the dev stack's framework_path), so the base config is reached relatively.
+# The web tsconfig extends this and then declares its OWN project-relative
+# `@angee/gql/*` paths (TS `paths` fully override, they do not merge), so the
+# project resolves its own runtime/gql regardless of the fixture path the base
+# carries.
+framework_tsconfig_base:
+  type: str
+  default: "../../angee-django/tsconfig.base.json"
+  help: Relative path from the web package to angee-django's tsconfig.base.json (sibling-checkout layout by default).
+
+# Relative path FROM the rendered web package TO angee-django's `vitest.shared`
+# module (the framework owner of the web Vitest defaults — refine aliases, the
+# DOM-deps inline list, the test globs, and `gqlAliasFor`). The rendered config
+# imports `defineAngeeWebVitestConfig` + `gqlAliasFor` from here and supplies its
+# OWN project-relative gql alias, so the framework stays the single source of
+# truth for the defaults. Same sibling-checkout layout as framework_tsconfig_base.
+framework_vitest_shared:
+  type: str
+  default: "../../angee-django/vitest.shared"
+  help: Relative module path from the web package to angee-django's vitest.shared (sibling-checkout layout by default).
+
+# React major used for the @types/react* devDependencies. Kept as one input so the
+# rendered manifest pins a single React line.
+react_version:
+  type: str
+  default: "^19.2.0"
+  help: React (and react-dom) version range for the rendered package.

@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Glyph, SelectionBar } from "@angee/base";
+import { Glyph, SelectionBar } from "@angee/ui";
 
 const meta = {
   title: "Primitives/SelectionBar",

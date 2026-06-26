@@ -9,6 +9,14 @@ directive @defer(
   label: String
 ) on FRAGMENT_SPREAD | INLINE_FRAGMENT
 
+input Boolean_comparison_exp {
+  _eq: Boolean
+  _neq: Boolean
+  _in: [Boolean!]
+  _nin: [Boolean!]
+  _is_null: Boolean
+}
+
 type CommitRef {
   sha: String!
   parents: [String!]!
@@ -104,15 +112,49 @@ type GitOpsTopology {
   summary: GitOpsSummary!
 }
 
+enum Granularity {
+  YEAR
+  QUARTER
+  MONTH
+  WEEK
+  DAY
+  HOUR
+  MINUTE
+  SECOND
+  YEAR_NUMBER
+  QUARTER_NUMBER
+  MONTH_NUMBER
+  ISO_WEEK_NUMBER
+  DAY_OF_YEAR
+  DAY_OF_MONTH
+  DAY_OF_WEEK
+  HOUR_NUMBER
+  MINUTE_NUMBER
+  SECOND_NUMBER
+}
+
 type IngressStatus {
   type: String!
   domain: String
   routes: [RouteRef!]!
 }
 
+input Int_comparison_exp {
+  _eq: Int
+  _neq: Int
+  _gt: Int
+  _gte: Int
+  _lt: Int
+  _lte: Int
+  _in: [Int!]
+  _nin: [Int!]
+  _is_null: Boolean
+}
+
 scalar JSON
 
 type JobState {
+  id: ID!
   name: String!
   runtime: String!
 }
@@ -138,19 +180,19 @@ type Mutation {
   stackDestroy(purge: Boolean): MutationResult
   jobRun(name: String!, inputs: [KeyValueInput!]): String!
   serviceInit(input: ServiceInput!): MutationResult
-  serviceCreate(input: ServiceCreateInput!): ServiceState
-  serviceUpdate(name: String!, input: ServiceInput!): MutationResult
+  insert_services_one(object: services_insert_input!): ServiceState
+  update_services_by_pk(pk_columns: services_pk_columns_input!, _set: services_set_input!): ServiceState
+  delete_services_by_pk(id: String!): ServiceState
   serviceUp(name: String!): MutationResult
   serviceStart(name: String!): MutationResult
   serviceStop(name: String!): MutationResult
   serviceRestart(name: String!): MutationResult
-  serviceDestroy(name: String!): MutationResult
   sourceFetch(name: String!): SourceState
   sourcePull(name: String!): SourceState
   sourcePush(name: String!, ref: String): SourceState
-  workspaceCreate(input: WorkspaceCreateInput!): WorkspaceRef
-  workspaceUpdate(name: String!, input: WorkspaceUpdateInput!): WorkspaceRef
-  workspaceDestroy(name: String!, purge: Boolean): MutationResult
+  insert_workspaces_one(object: workspaces_insert_input!): WorkspaceRef
+  update_workspaces_by_pk(pk_columns: workspaces_pk_columns_input!, _set: workspaces_set_input!): WorkspaceRef
+  delete_workspaces_by_pk(id: String!): WorkspaceRef
   workspacePush(name: String!, ref: String): [SourceState!]!
   workspaceSyncBase(name: String!, method: String): [SourceState!]!
   workspaceSourceFetch(workspace: String!, slot: String!): WorkspaceSourceStatus
@@ -165,8 +207,9 @@ type Mutation {
   workspaceSourceRebaseAbort(workspace: String!, slot: String!): GitOpResult!
   workspaceSourceRebaseContinue(workspace: String!, slot: String!): GitOpResult!
   workspaceSourcePublish(workspace: String!, slot: String!, remote: String, branch: String): GitOpResult!
-  secretSet(name: String!, value: String!): SecretRef!
-  secretDelete(name: String!): MutationResult!
+  insert_secrets_one(object: secrets_insert_input!): SecretRef
+  update_secrets_by_pk(pk_columns: secrets_pk_columns_input!, _set: secrets_set_input!): SecretRef
+  delete_secrets_by_pk(id: String!): SecretRef
 }
 
 type MutationResult {
@@ -185,12 +228,26 @@ type Query {
   stackStatus: StackStatus
   serviceEndpoint(name: String!): ServiceEndpoint
   ingressStatus: IngressStatus
-  services: [ServiceState!]!
-  jobs: [JobState!]!
-  sources: [SourceState!]!
-  source(name: String!): SourceState
-  workspaces: [WorkspaceRef!]!
-  workspace(name: String!): WorkspaceRef
+  services(where: services_bool_exp, order_by: [services_order_by!], limit: Int, offset: Int): [ServiceState!]!
+  services_by_pk(id: String!): ServiceState
+  services_aggregate(where: services_bool_exp, order_by: [services_order_by!], limit: Int, offset: Int): services_aggregate!
+  jobs(where: jobs_bool_exp, order_by: [jobs_order_by!], limit: Int, offset: Int): [JobState!]!
+  jobs_by_pk(id: String!): JobState
+  jobs_aggregate(where: jobs_bool_exp, order_by: [jobs_order_by!], limit: Int, offset: Int): jobs_aggregate!
+  sources(where: sources_bool_exp, order_by: [sources_order_by!], limit: Int, offset: Int): [SourceState!]!
+  sources_by_pk(id: String!): SourceState
+  sources_aggregate(where: sources_bool_exp, order_by: [sources_order_by!], limit: Int, offset: Int): sources_aggregate!
+  workspaces(where: workspaces_bool_exp, order_by: [workspaces_order_by!], limit: Int, offset: Int): [WorkspaceRef!]!
+  workspaces_by_pk(id: String!): WorkspaceRef
+  workspaces_aggregate(where: workspaces_bool_exp, order_by: [workspaces_order_by!], limit: Int, offset: Int): workspaces_aggregate!
+  templates(where: templates_bool_exp, order_by: [templates_order_by!], limit: Int, offset: Int): [TemplateDescriptor!]!
+  templates_by_pk(id: String!): TemplateDescriptor
+  templates_aggregate(where: templates_bool_exp, order_by: [templates_order_by!], limit: Int, offset: Int): templates_aggregate!
+  secrets(where: secrets_bool_exp, order_by: [secrets_order_by!], limit: Int, offset: Int): [SecretRef!]!
+  secrets_by_pk(id: String!): SecretRef
+  secrets_aggregate(where: secrets_bool_exp, order_by: [secrets_order_by!], limit: Int, offset: Int): secrets_aggregate!
+  services_groups(group_by: [ServicesGroupBySpec!]!, where: services_bool_exp, having: ServicesHaving, order_by: [ServicesGroupOrder!], limit: Int, offset: Int): [services_group!]!
+  sources_groups(group_by: [SourcesGroupBySpec!]!, where: sources_bool_exp, having: SourcesHaving, order_by: [SourcesGroupOrder!], limit: Int, offset: Int): [sources_group!]!
   workspaceStatus(name: String!): WorkspaceStatus
   workspaceGit(name: String!): [SourceState!]!
   gitOpsTopology(withCommits: Int): GitOpsTopology
@@ -200,10 +257,6 @@ type Query {
   serviceLogs(name: String!, limit: Int): String!
   workspaceLogs(name: String!, limit: Int): String!
   mcpDescriptor: JSON
-  templates: [TemplateDescriptor!]!
-  template(ref: String!): TemplateDescriptor
-  secrets: [SecretRef!]!
-  secret(name: String!): SecretRef
   secretValue(name: String!): SecretValue
 }
 
@@ -213,6 +266,7 @@ type RouteRef {
 }
 
 type SecretRef {
+  id: ID!
   name: String!
   declared: Boolean!
   hasValue: Boolean!
@@ -225,14 +279,6 @@ type SecretRef {
 type SecretValue {
   name: String!
   value: String!
-}
-
-input ServiceCreateInput {
-  template: String!
-  workspace: String!
-  inputs: [KeyValueInput!]
-  name: String
-  start: Boolean
 }
 
 type ServiceEndpoint {
@@ -255,13 +301,48 @@ input ServiceInput {
 }
 
 type ServiceState {
+  id: ID!
   name: String!
   runtime: String!
   status: String!
   health: String
 }
 
+input ServicesGroupBySpec {
+  field: ServicesGroupableField!
+  granularity: Granularity
+}
+
+type ServicesGroupKey {
+  status: String
+  runtime: String
+  health: String
+}
+
+input ServicesGroupOrder {
+  field: String!
+  direction: order_by
+}
+
+enum ServicesGroupableField {
+  STATUS
+  RUNTIME
+  HEALTH
+}
+
+input ServicesHaving {
+  count_gt: Int
+  count_lt: Int
+  count_lte: Int
+  count_gte: Int
+  count_eq: Int
+  count_neq: Int
+  count_in: [Int!]
+  count_not_in: [Int!]
+}
+
 type SourceState {
+  id: ID!
   name: String!
   slot: String
   kind: String!
@@ -279,6 +360,107 @@ type SourceState {
   unpushedReason: String
   error: String
   commits: [CommitRef!]
+}
+
+input SourcesGroupBySpec {
+  field: SourcesGroupableField!
+  granularity: Granularity
+}
+
+type SourcesGroupKey {
+  kind: String
+  state: String
+  branch: String
+  dirty: Boolean
+  pushed: Boolean
+}
+
+input SourcesGroupOrder {
+  field: String!
+  direction: order_by
+}
+
+enum SourcesGroupableField {
+  KIND
+  STATE
+  BRANCH
+  DIRTY
+  PUSHED
+}
+
+input SourcesHaving {
+  count_gt: Int
+  count_lt: Int
+  count_lte: Int
+  count_gte: Int
+  count_eq: Int
+  count_neq: Int
+  count_in: [Int!]
+  count_not_in: [Int!]
+  sum_ahead_gt: Int
+  sum_ahead_lt: Int
+  sum_ahead_lte: Int
+  sum_ahead_gte: Int
+  sum_ahead_eq: Int
+  sum_ahead_neq: Int
+  sum_ahead_in: [Int!]
+  sum_ahead_not_in: [Int!]
+  sum_behind_gt: Int
+  sum_behind_lt: Int
+  sum_behind_lte: Int
+  sum_behind_gte: Int
+  sum_behind_eq: Int
+  sum_behind_neq: Int
+  sum_behind_in: [Int!]
+  sum_behind_not_in: [Int!]
+  avg_ahead_gt: Float
+  avg_ahead_lt: Float
+  avg_ahead_lte: Float
+  avg_ahead_gte: Float
+  avg_ahead_eq: Float
+  avg_ahead_neq: Float
+  avg_ahead_in: [Float!]
+  avg_ahead_not_in: [Float!]
+  avg_behind_gt: Float
+  avg_behind_lt: Float
+  avg_behind_lte: Float
+  avg_behind_gte: Float
+  avg_behind_eq: Float
+  avg_behind_neq: Float
+  avg_behind_in: [Float!]
+  avg_behind_not_in: [Float!]
+  min_ahead_gt: Int
+  min_ahead_lt: Int
+  min_ahead_lte: Int
+  min_ahead_gte: Int
+  min_ahead_eq: Int
+  min_ahead_neq: Int
+  min_ahead_in: [Int!]
+  min_ahead_not_in: [Int!]
+  min_behind_gt: Int
+  min_behind_lt: Int
+  min_behind_lte: Int
+  min_behind_gte: Int
+  min_behind_eq: Int
+  min_behind_neq: Int
+  min_behind_in: [Int!]
+  min_behind_not_in: [Int!]
+  max_ahead_gt: Int
+  max_ahead_lt: Int
+  max_ahead_lte: Int
+  max_ahead_gte: Int
+  max_ahead_eq: Int
+  max_ahead_neq: Int
+  max_ahead_in: [Int!]
+  max_ahead_not_in: [Int!]
+  max_behind_gt: Int
+  max_behind_lt: Int
+  max_behind_lte: Int
+  max_behind_gte: Int
+  max_behind_eq: Int
+  max_behind_neq: Int
+  max_behind_in: [Int!]
+  max_behind_not_in: [Int!]
 }
 
 input StackInitInput {
@@ -301,8 +483,6 @@ input StackRuntimeInput {
 
 """
 The stack overview aggregate — the root fields the web console reads as one.
-Mirrors the Query-root types so a client can subscribe to the whole snapshot
-and field-prune via its selection set.
 """
 type StackSnapshot {
   health: MutationResult
@@ -324,7 +504,30 @@ type StackStatus {
   workspaces: [WorkspaceRef!]!
 }
 
+input String_comparison_exp {
+  _eq: String
+  _neq: String
+  _gt: String
+  _gte: String
+  _lt: String
+  _lte: String
+  _in: [String!]
+  _nin: [String!]
+  _like: String
+  _nlike: String
+  _ilike: String
+  _nilike: String
+  _similar: String
+  _is_null: Boolean
+}
+
 type Subscription {
+  services(where: services_bool_exp, order_by: [services_order_by!], limit: Int, offset: Int): [ServiceState!]!
+  jobs(where: jobs_bool_exp, order_by: [jobs_order_by!], limit: Int, offset: Int): [JobState!]!
+  sources(where: sources_bool_exp, order_by: [sources_order_by!], limit: Int, offset: Int): [SourceState!]!
+  workspaces(where: workspaces_bool_exp, order_by: [workspaces_order_by!], limit: Int, offset: Int): [WorkspaceRef!]!
+  templates(where: templates_bool_exp, order_by: [templates_order_by!], limit: Int, offset: Int): [TemplateDescriptor!]!
+  secrets(where: secrets_bool_exp, order_by: [secrets_order_by!], limit: Int, offset: Int): [SecretRef!]!
   onGitOpsTopologyChange: GitOpsTopology!
   onServiceLogs(name: String!): String!
   onWorkspaceLogs(name: String!): String!
@@ -335,6 +538,7 @@ type Subscription {
 }
 
 type TemplateDescriptor {
+  id: ID!
   ref: String!
   kind: String!
   name: String
@@ -376,6 +580,7 @@ type WorkspaceMountRef {
 }
 
 type WorkspaceRef {
+  id: ID!
   name: String!
   path: String!
   template: String!
@@ -408,6 +613,7 @@ type WorkspaceSourceStatus {
 }
 
 type WorkspaceStatus {
+  id: ID!
   name: String!
   path: String!
   exists: Boolean!
@@ -431,7 +637,264 @@ type WorkspaceStatus {
   innerError: String
 }
 
-input WorkspaceUpdateInput {
+type jobs_aggregate {
+  aggregate: jobs_aggregate_fields
+  nodes: [JobState!]!
+}
+
+type jobs_aggregate_fields {
+  count: Int!
+}
+
+input jobs_bool_exp {
+  _and: [jobs_bool_exp!]
+  _or: [jobs_bool_exp!]
+  _not: jobs_bool_exp
+  id: String_comparison_exp
+  name: String_comparison_exp
+  runtime: String_comparison_exp
+}
+
+input jobs_order_by {
+  id: order_by
+  name: order_by
+  runtime: order_by
+}
+
+enum order_by {
+  asc
+  asc_nulls_first
+  asc_nulls_last
+  desc
+  desc_nulls_first
+  desc_nulls_last
+}
+
+type secrets_aggregate {
+  aggregate: secrets_aggregate_fields
+  nodes: [SecretRef!]!
+}
+
+type secrets_aggregate_fields {
+  count: Int!
+}
+
+input secrets_bool_exp {
+  _and: [secrets_bool_exp!]
+  _or: [secrets_bool_exp!]
+  _not: secrets_bool_exp
+  id: String_comparison_exp
+  name: String_comparison_exp
+  envVar: String_comparison_exp
+  declared: Boolean_comparison_exp
+  hasValue: Boolean_comparison_exp
+  required: Boolean_comparison_exp
+  generated: Boolean_comparison_exp
+}
+
+input secrets_insert_input {
+  name: String!
+  value: String!
+}
+
+input secrets_order_by {
+  id: order_by
+  name: order_by
+  envVar: order_by
+  declared: order_by
+  hasValue: order_by
+}
+
+input secrets_pk_columns_input {
+  id: String!
+}
+
+input secrets_set_input {
+  value: String
+}
+
+type services_aggregate {
+  aggregate: services_aggregate_fields
+  nodes: [ServiceState!]!
+}
+
+type services_aggregate_fields {
+  count: Int!
+}
+
+input services_bool_exp {
+  _and: [services_bool_exp!]
+  _or: [services_bool_exp!]
+  _not: services_bool_exp
+  id: String_comparison_exp
+  name: String_comparison_exp
+  runtime: String_comparison_exp
+  status: String_comparison_exp
+  health: String_comparison_exp
+}
+
+type services_group {
+  key: ServicesGroupKey!
+  aggregate: services_aggregate_fields!
+}
+
+input services_insert_input {
+  template: String!
+  workspace: String!
+  name: String
+  start: Boolean
   inputs: [KeyValueInput!]
+}
+
+input services_order_by {
+  id: order_by
+  name: order_by
+  runtime: order_by
+  status: order_by
+  health: order_by
+}
+
+input services_pk_columns_input {
+  id: String!
+}
+
+input services_set_input {
+  runtime: String
+  image: String
+  command: [String!]
+  mounts: [String!]
+  env: [KeyValueInput!]
+  ports: [String!]
+  workdir: String
+  start: Boolean
+}
+
+type sources_aggregate {
+  aggregate: sources_aggregate_fields
+  nodes: [SourceState!]!
+}
+
+type sources_aggregate_fields {
+  count: Int!
+  sum: sources_sum_fields
+  avg: sources_avg_fields
+  min: sources_min_fields
+  max: sources_max_fields
+}
+
+type sources_avg_fields {
+  ahead: Float
+  behind: Float
+}
+
+input sources_bool_exp {
+  _and: [sources_bool_exp!]
+  _or: [sources_bool_exp!]
+  _not: sources_bool_exp
+  id: String_comparison_exp
+  name: String_comparison_exp
+  kind: String_comparison_exp
+  state: String_comparison_exp
+  branch: String_comparison_exp
+  exists: Boolean_comparison_exp
+  dirty: Boolean_comparison_exp
+  pushed: Boolean_comparison_exp
+  ahead: Int_comparison_exp
+  behind: Int_comparison_exp
+}
+
+type sources_group {
+  key: SourcesGroupKey!
+  aggregate: sources_aggregate_fields!
+}
+
+type sources_max_fields {
+  ahead: Int
+  behind: Int
+}
+
+type sources_min_fields {
+  ahead: Int
+  behind: Int
+}
+
+input sources_order_by {
+  id: order_by
+  name: order_by
+  kind: order_by
+  state: order_by
+  branch: order_by
+  ahead: order_by
+  behind: order_by
+}
+
+type sources_sum_fields {
+  ahead: Int
+  behind: Int
+}
+
+type templates_aggregate {
+  aggregate: templates_aggregate_fields
+  nodes: [TemplateDescriptor!]!
+}
+
+type templates_aggregate_fields {
+  count: Int!
+}
+
+input templates_bool_exp {
+  _and: [templates_bool_exp!]
+  _or: [templates_bool_exp!]
+  _not: templates_bool_exp
+  id: String_comparison_exp
+  ref: String_comparison_exp
+  kind: String_comparison_exp
+  name: String_comparison_exp
+}
+
+input templates_order_by {
+  id: order_by
+  ref: order_by
+  kind: order_by
+  name: order_by
+}
+
+type workspaces_aggregate {
+  aggregate: workspaces_aggregate_fields
+  nodes: [WorkspaceRef!]!
+}
+
+type workspaces_aggregate_fields {
+  count: Int!
+}
+
+input workspaces_bool_exp {
+  _and: [workspaces_bool_exp!]
+  _or: [workspaces_bool_exp!]
+  _not: workspaces_bool_exp
+  id: String_comparison_exp
+  name: String_comparison_exp
+  template: String_comparison_exp
+}
+
+input workspaces_insert_input {
+  template: String!
+  name: String
   ttl: String
+  inputs: [KeyValueInput!]
+}
+
+input workspaces_order_by {
+  id: order_by
+  name: order_by
+  template: order_by
+}
+
+input workspaces_pk_columns_input {
+  id: String!
+}
+
+input workspaces_set_input {
+  ttl: String
+  inputs: [KeyValueInput!]
 }

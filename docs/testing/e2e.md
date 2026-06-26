@@ -29,11 +29,12 @@ or per-run isolation. It inherits them:
 | Seed data (alice/bob, notes) | `resources load demo` (a workspace job) | asserts against it |
 | Allocated ports | the operator's port pool | reads them from the env |
 | Browser profile / Playwright port | the workspace (`playwright` pool, `chrome` profile) | reused for a persistent browser (optional) |
-| Login | the GraphQL `login` mutation (owned by `@angee/sdk` transport) | calls it, persists `storageState` |
+| Login | the GraphQL `login` mutation (owned by the app auth/data provider seam) | calls it, persists `storageState` |
 
 This is the constitution's *find the owner* rule applied to testing: the
-workspace owns the environment, `resources` owns the seed, the SDK transport owns
-the login contract, and Playwright owns the browser. The harness only wires them.
+workspace owns the environment, `resources` owns the seed, the app auth/data
+provider seam owns the login contract, and Playwright owns the browser. The
+harness only wires them.
 
 ## What ships in the framework
 

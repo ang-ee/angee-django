@@ -18,6 +18,19 @@ class OperatorConfig(AppConfig):
 
     default = True
     angee_addon = True
+    angee_web_package = "@angee/operator"
+    # The daemon owns its GraphQL schema (refresh the committed SDL with
+    # `manage.py operator_schema`). It is not a Django Angee schema, so it joins
+    # the unified codegen as an external contribution: the composer deposits this
+    # SDL into runtime/schemas/operator.graphql and the `angee-web-codegen` CLI
+    # generates runtime/gql/operator/ (client preset + a bare `types` module the
+    # console re-exports) from the daemon document file.
+    angee_web_codegen = {
+        "schema": "operator",
+        "sdl": "schema/operator.graphql",
+        "documents": "documents.daemon.ts",
+        "types": True,
+    }
     name = "angee.operator"
     label = "operator"
     depends_on = ("angee.iam",)

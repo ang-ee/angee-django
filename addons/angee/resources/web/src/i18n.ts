@@ -1,4 +1,5 @@
-import { useNamespaceT, type MessageVars } from "@angee/sdk";
+import { useNamespaceT } from "@angee/ui";
+import type { MessageVars } from "@angee/refine";
 
 export const enResourcesMessages: Record<string, string> = {
   "resources.col.hash": "Hash",

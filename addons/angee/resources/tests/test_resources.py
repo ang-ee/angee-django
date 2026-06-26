@@ -620,9 +620,7 @@ def test_resource_manager_keeps_same_path_groups_addon_scoped(
         encoding="utf-8",
     )
     (beta_root / "resources" / "020_base.sharednote.yaml").write_text(
-        "- _xref: beta_note\n"
-        "  title: Beta note\n"
-        "  created_by: beta.beta_user\n",
+        "- _xref: beta_note\n  title: Beta note\n  created_by: beta.beta_user\n",
         encoding="utf-8",
     )
     alpha = addon(

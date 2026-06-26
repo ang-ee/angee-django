@@ -1,11 +1,11 @@
-import type { BaseAddonRoute, BaseMenuItem } from "@angee/base";
-import { defineBaseAddon } from "@angee/base";
+import type { BaseAddonRoute } from "@angee/app";
+import { defineBaseAddon } from "@angee/app";
+import type { BaseMenuItem } from "@angee/ui";
 import { ArchiveRestore, Download, HardDrive, Image, Pencil } from "lucide-react";
 
 import { enStorageMessages } from "./i18n";
 import { storagePreviews } from "./previews";
 import { StoragePage } from "./views/StoragePage";
-import { FileCrumb } from "./views/FileDetail";
 import { StorageSettingsPage } from "./views/StorageSettingsPage";
 
 const STORAGE_ID = "storage";
@@ -14,21 +14,17 @@ const storageRoutes: readonly BaseAddonRoute[] = [
   {
     name: "storage.files",
     path: "/storage",
-    shell: "console",
+    layout: "console",
     menu: STORAGE_ID,
     component: StoragePage,
   },
   {
-    // The file record nests under the list; `StoragePage` (the parent) reads the
-    // `$id` param and swaps its content to the detail form, so this route carries
-    // only the crumb.
+    // The file record nests under the list; `StoragePage` reads the `$id` param
+    // and swaps its content to the detail form.
     name: "storage.file",
     path: "/storage/$id",
-    shell: "console",
+    layout: "console",
     parent: "storage.files",
-    crumb: (match) => (
-      <FileCrumb id={String((match.params as { id?: string }).id ?? "")} />
-    ),
   },
   {
     // The drives/backends admin. A static `/storage/settings` outranks the
@@ -36,7 +32,7 @@ const storageRoutes: readonly BaseAddonRoute[] = [
     // resolves from the menu child that references it.
     name: "storage.settings",
     path: "/storage/settings",
-    shell: "console",
+    layout: "console",
     component: StorageSettingsPage,
   },
 ];

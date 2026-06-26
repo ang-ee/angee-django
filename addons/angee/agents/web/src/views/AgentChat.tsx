@@ -16,7 +16,7 @@ import {
   ToolFallback,
   chatComposerInputClassName,
   statusTone as resolveStatusTone,
-} from "@angee/base";
+} from "@angee/ui";
 import {
   AssistantRuntimeProvider,
   ComposerPrimitive,
@@ -35,7 +35,7 @@ import type { AgentChatView, McpServerConfig } from "../documents";
 /**
  * Chat with a running agent over ACP. The session is minted per `agentId`; the browser
  * speaks ACP to the agent's routed WebSocket through the operator's central Caddy. The
- * surface is the `@angee/base` chat primitives: a status header with a settings cog
+ * surface is the `@angee/ui` chat primitives: a status header with a settings cog
  * (model + MCP servers + the rendered `<system_context>`) and Clear/Reconnect, streamed
  * markdown replies, reasoning frames, and tool-call cards. `modelHandle` (when known)
  * labels the agent's model in the header subtitle + settings.

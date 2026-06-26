@@ -1,9 +1,9 @@
 import {
   Badge,
   Code,
-  type DataToolbarGroupOption,
+  type ResourceToolbarGroupOption,
   type ListColumn,
-} from "@angee/base";
+} from "@angee/ui";
 import { useMemo, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
@@ -53,7 +53,7 @@ export function TemplatesSection(): ReactNode {
     [t],
   );
 
-  const groupOptions: readonly DataToolbarGroupOption[] = useMemo(
+  const groupOptions: readonly ResourceToolbarGroupOption[] = useMemo(
     () => [{ id: "kind", label: t("operator.templates.column.kind"), group: { field: "kind" }, type: "value" }],
     [t],
   );

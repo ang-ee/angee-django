@@ -12,7 +12,7 @@ import {
   TableRow,
   STATUS_TONES,
   stateToneFromValue,
-} from "@angee/base";
+} from "@angee/ui";
 
 const records = [
   ["Q3 review brief", "Active"],

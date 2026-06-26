@@ -2,8 +2,8 @@ import {
   OAuthCallback,
   type CallbackExchange,
   type OAuthCallbackCopy,
-} from "@angee/base";
-import { useAuthoredMutation } from "@angee/sdk";
+} from "@angee/app/auth";
+import { useAuthoredMutation } from "@angee/ui";
 import { useCallback, useMemo, type ReactNode } from "react";
 
 import { IamLoginComplete } from "./documents.public";
@@ -30,7 +30,7 @@ export function OAuthCallbackPage(): ReactNode {
 
   const complete = useCallback<CallbackExchange>(
     async (args) => {
-      const payload = (await loginComplete(args))?.loginComplete;
+      const payload = (await loginComplete(args))?.login_complete;
       if (payload?.ok) return { ok: true, next: payload.next };
       return { ok: false, error: payload?.error ?? copy.failure };
     },

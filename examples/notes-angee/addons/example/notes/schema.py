@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import cast
 
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.db import models
 from strawberry import auto
 
-from angee.graphql.crud import crud
-from angee.graphql.data import data_query
+from angee.graphql.data import hasura_model_resource
+from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
+from angee.graphql.writes import write_queryset
 from angee.iam.identity import user_display_label, user_public_id
 
 Note = apps.get_model("notes", "Note")
@@ -60,78 +61,63 @@ class NoteType(AngeeNode):
         return user_display_label(self.updated_by_id)
 
 
-@strawberry.input
-class NoteInput:
-    """Fields accepted when creating a note."""
+def _note_queryset(info: strawberry.Info) -> models.QuerySet[Note]:
+    """Return the actor-scoped note queryset for row reads."""
 
-    title: str
-    body: str = ""
-    status: Note.Status = Note.Status.DRAFT
-    tags: list[str] = strawberry.field(default_factory=list)
-    is_starred: bool = False
-    reminder_at: datetime | None = None
+    del info
+    return Note.objects.all()
 
 
-@strawberry.input
-class NotePatch:
-    """Fields accepted when updating a note."""
+def _note_aggregate_queryset(info: strawberry.Info) -> models.QuerySet[Note]:
+    """Return the row-scoped queryset safe for aggregate/group math."""
 
-    id: PublicID
-    title: str | None = strawberry.UNSET
-    body: str | None = strawberry.UNSET
-    status: Note.Status | None = strawberry.UNSET
-    tags: list[str] | None = strawberry.UNSET
-    is_starred: bool | None = strawberry.UNSET
-    reminder_at: datetime | None = strawberry.UNSET
+    del info
+    return Note.objects.all().scoped_for_aggregate()
 
 
-@strawberry_django.filter_type(Note, lookups=True)
-class NoteFilter:
-    """Field lookups accepted when filtering the notes connection.
+@strawberry.type
+class NoteDeletePreviewMutation:
+    """Authored delete-preview operation for notes."""
 
-    Every grouped-aggregate axis (see ``group_by_fields`` below) needs a
-    matching field here so a bucket's ``filter`` echo can mirror it back as a
-    list-query filter; ``updated_at`` is therefore filterable as well as a
-    group axis.
-    """
+    @strawberry.mutation(name="delete_note")
+    def delete_note(self, id: PublicID, confirm: bool = False) -> DeletePreview:
+        """Preview or confirm deletion of one note by public id."""
 
-    status: auto
-    is_starred: auto
-    title: auto
-    updated_at: auto
-
-
-@strawberry_django.order_type(Note)
-class NoteOrder:
-    """Orderings accepted by the notes connection."""
-
-    title: auto
-    status: auto
-    updated_at: auto
-    created_at: auto
-    word_count: auto
+        return delete_by_public_id(
+            Note,
+            str(id),
+            confirm=confirm,
+            queryset=write_queryset(Note),
+        )
 
 
-NotesQuery, _NOTE_DATA_TYPES = data_query(
+NoteDeletePreviewMutation = attach_delete_preview_metadata(
+    NoteDeletePreviewMutation,
+    model=Note,
+    node=NoteType,
+    field="delete_note",
+)
+
+
+_NOTE_RESOURCE = hasura_model_resource(
     NoteType,
-    type_name="NotesQuery",
-    filters=NoteFilter,
-    order=NoteOrder,
-    list_name="notes",
-    detail_name="note",
-    aggregate_name="note_aggregate",
-    group_name="note_groups",
-    aggregate_fields=["id", "word_count"],
-    group_by_fields=["status", "updated_at"],
-    enable_filter_echo=True,
-    aggregate_kwargs={"pagination_style": "offset"},
+    model=Note,
+    name="notes",
+    filterable=["id", "title", "status", "tags", "is_starred", "updated_at"],
+    sortable=["title", "status", "updated_at", "created_at", "word_count"],
+    aggregatable=["id", "word_count"],
+    groupable=["status", "tags", "updated_at"],
+    writable=["title", "body", "status", "tags", "is_starred", "reminder_at"],
+    get_queryset=_note_queryset,
+    get_aggregate_queryset=_note_aggregate_queryset,
+    id_column="sqid",
 )
 
 
 _NOTE_SCHEMA_BUCKET = {
-    "query": [NotesQuery, revisions(NoteType)],
-    "mutation": [crud(NoteType, create=NoteInput, update=NotePatch, delete=True)],
-    "types": [NoteType, *_NOTE_DATA_TYPES],
+    "query": [_NOTE_RESOURCE.query, revisions(NoteType)],
+    "mutation": [_NOTE_RESOURCE.mutation, NoteDeletePreviewMutation],
+    "types": [NoteType, *_NOTE_RESOURCE.types],
 }
 
 

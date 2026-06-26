@@ -154,9 +154,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
         """Send one DAV request, following a single redirect, and assert it succeeded."""
 
         headers = {"Depth": depth, "Content-Type": "application/xml; charset=utf-8", **self._auth()}
-        response = self.http.request(
-            method, url, headers=headers, body=body.encode("utf-8"), allow_private=True
-        )
+        response = self.http.request(method, url, headers=headers, body=body.encode("utf-8"), allow_private=True)
         if response.status in _REDIRECT_STATUSES and _hops < 3:
             location = response.header("location")
             if location:
@@ -408,7 +406,7 @@ def _b64decode(text: str) -> bytes | None:
 
     try:
         return base64.b64decode("".join(text.split()), validate=True)
-    except (binascii.Error, ValueError):
+    except binascii.Error, ValueError:
         return None
 
 

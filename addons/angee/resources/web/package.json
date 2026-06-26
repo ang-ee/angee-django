@@ -1,5 +1,5 @@
 {
-  "name": "@angee/resources",
+  "name": "@angee/resources-addon",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -12,8 +12,9 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@angee/base": "workspace:*",
-    "@angee/sdk": "workspace:*"
+    "@angee/app": "workspace:*",
+    "@angee/refine": "workspace:*",
+    "@angee/ui": "workspace:*"
   },
   "peerDependencies": {
     "@tanstack/react-router": "^1",

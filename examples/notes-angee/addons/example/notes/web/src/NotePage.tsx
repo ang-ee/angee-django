@@ -1,25 +1,24 @@
 import * as React from "react";
 import {
-  DataPage,
+  ResourceList,
   EmptyState,
   Form,
-  GroupListView,
   List,
   Column,
   Field,
   Group,
-  NEW_RECORD_ID,
+  REFINE_CREATE_ID,
   RevisionsTab,
   Statusline,
   StatusSegment,
   StatuslineSpacer,
+  useResourceRevisions,
   type ChatterTab,
-  type DataViewDefaultGroups,
+  type ResourceViewDefaultGroups,
   type RecordSmartButtonDescriptor,
   useChatterContent,
-} from "@angee/base";
+} from "@angee/ui";
 import { AgentChatterPane } from "@angee/agents";
-import { useModelMetadata, useResourceRecord, useResourceRevisions } from "@angee/sdk";
 import { useParams } from "@tanstack/react-router";
 
 const MODEL = "notes.Note";
@@ -27,24 +26,23 @@ const MODEL = "notes.Note";
 const NOTE_RESOURCE_TYPE = "notes/note";
 
 const NOTE_DEFAULT_GROUPS = {
-  list: { field: "updatedAt", granularity: "month" },
+  list: { field: "updated_at", granularity: "month" },
   board: { field: "status" },
-} satisfies DataViewDefaultGroups;
+} satisfies ResourceViewDefaultGroups;
 
 // Created/updated timestamps + word count feed the record subtitle (id · created
 // · updated · words); they are queried but kept out of the field grid.
 const RECORD_SUBTITLE_FIELDS: readonly string[] = [
-  "createdAt",
-  "updatedAt",
-  "wordCount",
+  "created_at",
+  "updated_at",
+  "word_count",
 ];
 
 const noteList = (
   <List
-    model={MODEL}
-    list={GroupListView}
+    resource={MODEL}
     defaultGroups={NOTE_DEFAULT_GROUPS}
-    order={{ updatedAt: "DESC" }}
+    order={{ updated_at: "DESC" }}
     emptyState={{
       icon: "agent",
       title: "No notes yet",
@@ -59,39 +57,23 @@ const noteList = (
     <Column field="title" />
     <Column field="tags" sortable={false} />
     <Column field="status" widget="statusBadge" />
-    <Column field="wordCount" align="right" aggregate="sum" />
-    <Column field="updatedAt" />
+    <Column field="word_count" align="right" aggregate="sum" />
+    <Column field="updated_at" />
   </List>
 );
 
 const noteForm = (
-  <Form model={MODEL} returning={RECORD_SUBTITLE_FIELDS}>
+  <Form resource={MODEL} returning={RECORD_SUBTITLE_FIELDS}>
     <Field name="title" widget="text" title />
     <Field name="status" widget="statusbar" />
     <Group label="Details" columns={2}>
-      <Field name="createdByLabel" label="Owner" widget="userRef" readOnly />
-      <Field name="reminderAt" label="Reminder" widget="datetime" />
+      <Field name="created_by_label" label="Owner" widget="userRef" readOnly />
+      <Field name="reminder_at" label="Reminder" widget="datetime" />
       <Field name="tags" widget="tagInput" />
     </Group>
     <Field name="body" widget="markdown.editor" />
   </Form>
 );
-
-/** The record crumb for `/notes/$id` — resolves the note title from the cache. */
-export function NoteCrumb({ id }: { id: string }): React.ReactElement {
-  const isNew = id === NEW_RECORD_ID;
-  const metadata = useModelMetadata(MODEL);
-  const representationField = metadata?.recordRepresentation ?? "title";
-  const { fetching, record } = useResourceRecord(MODEL, isNew ? null : id, {
-    enabled: !isNew && id !== "",
-    fields: [representationField],
-  });
-  const value = record?.[representationField];
-  const title = typeof value === "string" ? value.trim() : "";
-  if (isNew) return <>New</>;
-  if (fetching) return <>…</>;
-  return <>{title || "Note"}</>;
-}
 
 /** The notes console page: a count-by-status panel above the data table. */
 export function NotePage(): React.ReactElement {
@@ -100,7 +82,7 @@ export function NotePage(): React.ReactElement {
   const params = useParams({ strict: false });
   const routeId =
     "id" in params && typeof params.id === "string" ? params.id : undefined;
-  const creating = routeId === NEW_RECORD_ID;
+  const creating = routeId === REFINE_CREATE_ID;
   const recordId = creating ? null : routeId;
   const activeRecordId =
     !creating && typeof recordId === "string" ? recordId : null;
@@ -115,7 +97,7 @@ export function NotePage(): React.ReactElement {
         icon: "agent",
         children: (
           <AgentChatterPane
-            model={NOTE_RESOURCE_TYPE}
+            resource={NOTE_RESOURCE_TYPE}
             recordId={activeRecordId ?? undefined}
           />
         ),
@@ -138,7 +120,7 @@ export function NotePage(): React.ReactElement {
         label: "Activity",
         icon: "activity",
         count: revisions.count,
-        children: <RevisionsTab model={MODEL} recordId={activeRecordId} />,
+        children: <RevisionsTab resource={MODEL} recordId={activeRecordId} />,
       },
     ] satisfies readonly ChatterTab[],
     [activeRecordId, revisions.count],
@@ -161,15 +143,15 @@ export function NotePage(): React.ReactElement {
   return (
     <div className="flex flex-col gap-4">
       {/* Open as a month-grouped list; board view switches to status lanes. */}
-      <DataPage
-        model={MODEL}
+      <ResourceList
+        resource={MODEL}
         recordSmartButtons={recordSmartButtons}
         placement="inline"
         routed
       >
         {noteList}
         {noteForm}
-      </DataPage>
+      </ResourceList>
       <Statusline>
         <StatusSegment icon="check" tone="success">
           Synced

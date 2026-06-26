@@ -3,7 +3,8 @@
 // `i18n.agents`. Keys are dotted by page. Metadata-driven field/column labels
 // live in the SDL, not here — only bespoke component copy is routed.
 
-import { useNamespaceT, type MessageVars } from "@angee/sdk";
+import { useNamespaceT } from "@angee/ui";
+import type { MessageVars } from "@angee/refine";
 
 export const enAgentsMessages: Record<string, string> = {
   // AgentsPage — bespoke form-section labels and record tabs.

@@ -105,9 +105,7 @@ def _preview_field_names(model: type[models.Model]) -> tuple[str, ...]:
     names = [
         field.name
         for field in model._meta.concrete_fields
-        if not field.is_relation
-        and not isinstance(field, EncryptedField)
-        and field.name not in _HOUSEKEEPING_FIELDS
+        if not field.is_relation and not isinstance(field, EncryptedField) and field.name not in _HOUSEKEEPING_FIELDS
     ]
     return tuple(names[:_PREVIEW_FIELD_CAP])
 

@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Button, EditorHeaderBar, Glyph, PageHeader } from "@angee/base";
+import { Button, EditorHeaderBar, Glyph, PageHeader } from "@angee/ui";
 
 const meta = {
   title: "Fragments/EditorHeaderBar",

@@ -44,6 +44,12 @@ definition storage/drive {
     relation admin:   angee/role // rebac:const=admin
     relation manager: storage/role:storage_admin#effective_member
 
+    // Drive creation is admin-only (mirrors storage/backend): the const-arrow
+    // `admin->member` resolves against the empty resource id the create signal
+    // supplies on insert — no per-object tuple — so a platform admin or storage
+    // admin is granted and every other actor is denied. The id-less insert gates
+    // here directly, with no GraphQL permission gate and no elevated write.
+    permission create = admin->member + manager
     permission read   = owner + editor + viewer + admin->member + manager
     permission write  = owner + editor + admin->member + manager
     permission delete = owner + admin->member + manager

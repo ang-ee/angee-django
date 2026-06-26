@@ -50,16 +50,16 @@ class NoteWordCountGraphQLTests(TransactionTestCase):
         data = self.graphql(
             """
             query {
-              noteGroups(groupBy: [{field: STATUS}]) {
-                results {
-                  key { status }
+              notes_groups(group_by: [{field: STATUS}]) {
+                key { status }
+                aggregate {
                   count
-                  sum { wordCount }
+                  sum { word_count }
                 }
               }
             }
             """
-        )["data"]["noteGroups"]
+        )["data"]["notes_groups"]
         expected = {
             str(row["status"]).upper(): str(row["word_count_sum"] or 0)
             for row in Note.objects.as_user(self.alice)
@@ -68,7 +68,10 @@ class NoteWordCountGraphQLTests(TransactionTestCase):
         }
 
         self.assertEqual(
-            {row["key"]["status"]: row["sum"]["wordCount"] for row in data["results"]},
+            {
+                _dimension(row, "status"): row["aggregate"]["sum"]["word_count"]
+                for row in data
+            },
             expected,
         )
 
@@ -76,13 +79,14 @@ class NoteWordCountGraphQLTests(TransactionTestCase):
         data = self.graphql(
             """
             query {
-              notes(pagination: {limit: 100}, order: {wordCount: ASC}) {
-                results { title wordCount }
+              notes(limit: 100, order_by: [{word_count: asc}]) {
+                title
+                word_count
               }
             }
             """
-        )["data"]["notes"]["results"]
-        counts = [node["wordCount"] for node in data]
+        )["data"]["notes"]
+        counts = [node["word_count"] for node in data]
 
         self.assertGreater(len(counts), 1)
         self.assertEqual(counts, sorted(counts))
@@ -119,3 +123,9 @@ class NoteWordCountGraphQLTests(TransactionTestCase):
         )
         self.assertEqual(response.status_code, 200)
         return cast(dict[str, Any], json.loads(response.content))
+
+
+def _dimension(group: dict[str, Any], key: str) -> str:
+    """Return a named typed group key value."""
+
+    return cast(str, group["key"][key])

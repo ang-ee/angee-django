@@ -1,4 +1,4 @@
-import type { DndPayload } from "@angee/base";
+import type { DndPayload } from "@angee/ui";
 
 import type { KnowledgePageRow } from "./documents";
 

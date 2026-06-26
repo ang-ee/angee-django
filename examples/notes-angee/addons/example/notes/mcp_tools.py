@@ -1,8 +1,9 @@
 """Notes tools for the MCP server — curated GraphQL operations over the public bucket.
 
-Each tool runs the same actor-scoped GraphQL operation a browser would (notes/note CRUD
-on the ``public`` schema bucket), so strawberry's ``RebacManager`` scoping and the crud
-create/write gates do the authorization — no hand-rolled ORM access or projection. The
+Each tool runs the same actor-scoped GraphQL operation a browser would (the
+Hasura-shaped notes resource on the ``public`` schema bucket), so strawberry's
+``RebacManager`` scoping and the Angee write backend do the authorization — no
+hand-rolled ORM access or projection. The
 :mod:`angee.mcp.graphql` engine derives each tool's input schema, response projection,
 and operation document from the schema; this module only declares which operations to
 expose and how to project them. ids are the public ``sqid``; fields are snake_case.
@@ -35,28 +36,29 @@ def register(server: FastMCP) -> None:
                 description="List the caller's notes, most-recently-updated first.",
             ),
             GraphQLTool(
-                operation="note",
+                operation="notes_by_pk",
                 name="read_note",
                 fields=_DETAIL,
                 id_arg="id",
                 description="Return one note in full by its public id (sqid).",
             ),
             GraphQLTool(
-                operation="createNote",
+                operation="insert_notes_one",
                 name="create_note",
                 fields=_DETAIL,
-                flatten="data",
+                flatten="object",
                 description="Create a note owned by the caller and return it.",
             ),
             GraphQLTool(
-                operation="updateNote",
+                operation="update_notes_by_pk",
                 name="update_note",
                 fields=_DETAIL,
-                flatten="data",
+                id_arg="pk_columns",
+                flatten="_set",
                 description="Update fields of a note the caller may write, and return it.",
             ),
             GraphQLTool(
-                operation="deleteNote",
+                operation="delete_note",
                 name="delete_note",
                 fields=("total_deleted_count",),
                 id_arg="id",

@@ -2,8 +2,8 @@ import {
   OAuthCallback,
   type CallbackExchange,
   type OAuthCallbackCopy,
-} from "@angee/base";
-import { useAuthoredMutation } from "@angee/sdk";
+} from "@angee/app/auth";
+import { useAuthoredMutation } from "@angee/ui";
 import { useCallback, useMemo, type ReactNode } from "react";
 
 import { useIntegrateT } from "../i18n";
@@ -32,7 +32,7 @@ export function OAuthConnectCallbackPage(): ReactNode {
 
   const complete = useCallback<CallbackExchange>(
     async (args) => {
-      const payload = (await connectAccountComplete(args))?.connectAccountComplete;
+      const payload = (await connectAccountComplete(args))?.connect_account_complete;
       if (payload && !payload.error) return { ok: true, next: payload.next };
       return { ok: false, error: payload?.error ?? copy.failure };
     },

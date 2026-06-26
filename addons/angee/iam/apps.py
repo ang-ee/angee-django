@@ -10,6 +10,7 @@ class IAMConfig(AppConfig):
 
     default = True
     angee_addon = True
+    angee_web_package = "@angee/iam"
     name = "angee.iam"
     label = "iam"
     depends_on = (

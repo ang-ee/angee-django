@@ -1,6 +1,6 @@
 import { useMemo, useRef, type ReactElement, type ReactNode } from "react";
 
-import { Button, Glyph, RowsListView, UploadDropTarget, cn } from "@angee/base";
+import { Button, Glyph, RowsListView, UploadDropTarget, cn } from "@angee/ui";
 
 import { useStorageT } from "../i18n";
 import { fileDragPayload, type StorageFileRow } from "../data/file-rows";

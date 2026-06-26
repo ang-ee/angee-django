@@ -99,5 +99,6 @@ before copying or forking a component.
 **Token** — a semantic styling value (Tailwind). Theme by overriding tokens rather
 than passing color props or one-off variants.
 
-**Rendered binding** — `@angee/base` is the single rendered (styled) binding;
-`@angee/sdk` stays headless.
+**Rendered binding** — the single rendered (styled) Angee binding over Refine
+state. During the package split this code lives in `@angee/base`; the target
+owner is `@angee/ui`.

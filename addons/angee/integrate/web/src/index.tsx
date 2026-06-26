@@ -1,5 +1,5 @@
-import type { BaseAddonRoute, BaseMenuItem } from "@angee/base";
-import { defineBaseAddon } from "@angee/base";
+import type { BaseMenuItem } from "@angee/ui";
+import { defineBaseAddon, type BaseAddonRoute } from "@angee/app";
 import {
   Cable,
   FolderGit2,
@@ -16,10 +16,7 @@ import { OAuthConnectCallbackPage } from "./connect/OAuthConnectCallbackPage";
 import { CredentialsPage } from "./connect/views/CredentialsPage";
 import { ExternalAccountsPage } from "./connect/views/ExternalAccountsPage";
 import { ProvidersPage } from "./connect/views/ProvidersPage";
-import {
-  CONNECT_CALLBACK_FALLBACK_PATH,
-  CONNECT_CALLBACK_PATH,
-} from "./connect/redirects";
+import { CONNECT_CALLBACK_PATH } from "./connect/redirects";
 import { enIntegrateMessages } from "./i18n";
 import { IntegrationsPage } from "./views/IntegrationsPage";
 import { RepositoriesPage } from "./views/RepositoriesPage";
@@ -44,19 +41,13 @@ const integrateRoutes: readonly BaseAddonRoute[] = [
 
   // --- Connect surface (outbound OAuth) -----------------------------------
   // The account-connect callback: the provider redirects back here after the user
-  // approves. It stays on the authenticated `console` shell (unlike the public
+  // approves. It stays on the authenticated `console` layout (unlike the public
   // sign-in callback) because the connect flow's actor is an already-signed-in
   // admin linking an outbound account — there is no pre-session bootstrap.
   {
     name: "integrate.connect.callback",
     path: CONNECT_CALLBACK_PATH,
-    shell: "console",
-    component: OAuthConnectCallbackPage,
-  },
-  {
-    name: "integrate.connect.callbackFallback",
-    path: CONNECT_CALLBACK_FALLBACK_PATH,
-    shell: "console",
+    layout: "console",
     component: OAuthConnectCallbackPage,
   },
   ...consoleRecordRoutes("integrate.providers", "integrate.provider", "/integrate/providers", ProvidersPage, "OAuthClient"),
@@ -69,11 +60,11 @@ function consoleRecordRoutes(
   detailName: string,
   path: string,
   component: BaseAddonRoute["component"],
-  model: string,
+  resource: string,
 ): readonly BaseAddonRoute[] {
   return [
-    { name, path, shell: "console", component, model },
-    { name: detailName, path: `${path}/$id`, shell: "console", parent: name },
+    { name, path, layout: "console", component, resource },
+    { name: detailName, path: `${path}/$id`, layout: "console", parent: name },
   ];
 }
 
@@ -153,9 +144,7 @@ export {
   type OAuthConnectPayload,
 } from "./connect/ConnectOAuthButton";
 export {
-  CONNECT_CALLBACK_FALLBACK_PATH,
   CONNECT_CALLBACK_PATH,
-  connectCallbackPathForRecord,
   connectCallbackRedirectUri,
   currentConnectCallbackRedirectUri,
 } from "./connect/redirects";

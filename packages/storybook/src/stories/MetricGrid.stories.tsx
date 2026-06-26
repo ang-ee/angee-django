@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { MetricGrid } from "@angee/base";
+import { MetricGrid } from "@angee/ui";
 
 const meta = {
   title: "Fragments/MetricGrid",

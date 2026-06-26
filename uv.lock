@@ -472,10 +472,12 @@ dependencies = [
     { name = "fastmcp" },
     { name = "mcp" },
     { name = "openai" },
+    { name = "pydantic" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "python-magic" },
     { name = "pyyaml" },
     { name = "strawberry-django-aggregates" },
+    { name = "strawberry-django-hasura" },
     { name = "strawberry-graphql" },
     { name = "strawberry-graphql-django" },
     { name = "tablib" },
@@ -507,16 +509,18 @@ requires-dist = [
     { name = "django-simple-history", specifier = ">=3.7" },
     { name = "django-sqids", specifier = ">=0.1" },
     { name = "django-yamlconf", specifier = ">=1.5.0" },
-    { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.11" },
+    { name = "django-zed-rebac", extras = ["strawberry-django"], editable = "../django-zed-rebac" },
     { name = "fastmcp", specifier = ">=2.14.7,<2.15" },
     { name = "mcp", specifier = ">=1.2" },
     { name = "openai", specifier = ">=2.43.0" },
+    { name = "pydantic", specifier = ">=2.13" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.12" },
     { name = "python-magic", specifier = ">=0.4.27" },
     { name = "pyyaml", specifier = ">=6" },
-    { name = "strawberry-django-aggregates", specifier = ">=0.6.0" },
+    { name = "strawberry-django-aggregates", editable = "../strawberry-django-aggregates" },
+    { name = "strawberry-django-hasura", editable = "../strawberry-django-hasura" },
     { name = "strawberry-graphql", git = "ssh://git@github.com/ang-ee/strawberry.git?branch=codex%2Finput-object-extensions" },
-    { name = "strawberry-graphql-django", git = "ssh://git@github.com/ang-ee/strawberry-django.git?branch=codex%2Finput-object-extensions" },
+    { name = "strawberry-graphql-django", git = "ssh://git@github.com/ang-ee/strawberry-django.git?branch=hotfix-angee-django" },
     { name = "tablib", specifier = ">=3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
     { name = "vobject", specifier = ">=0.9.9" },
@@ -618,20 +622,37 @@ wheels = [
 
 [[package]]
 name = "django-zed-rebac"
-version = "0.11.1"
-source = { registry = "https://pypi.org/simple" }
+version = "0.12.1"
+source = { editable = "../django-zed-rebac" }
 dependencies = [
     { name = "django" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/50/19/6153146cc0a74470a52461e9e43248142a4d13de1a6fbf4d48085adce59d/django_zed_rebac-0.11.1.tar.gz", hash = "sha256:1527d1f6c8f45e56917b8a7a3e746011435662553bdec40e73d02d7fb883d8e2", size = 224836, upload-time = "2026-06-15T13:42:50.174Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/29/96/f49dc17fd4582aaf4ef69645b9377e6dee2ba6d8f2e94d12c50de54b9981/django_zed_rebac-0.11.1-py3-none-any.whl", hash = "sha256:6c2159785ba3db5b6d25cf5d7a0a6b9ac8c7385d1936027883f4e6c23c16c4b3", size = 173302, upload-time = "2026-06-15T13:42:48.882Z" },
 ]
 
 [package.optional-dependencies]
 strawberry-django = [
     { name = "strawberry-graphql-django" },
 ]
+
+[package.metadata]
+requires-dist = [
+    { name = "authzed", marker = "extra == 'spicedb'", specifier = ">=0.13" },
+    { name = "cel-python", marker = "extra == 'caveats'", specifier = ">=0.1.5" },
+    { name = "channels", marker = "extra == 'strawberry'", specifier = ">=4.0" },
+    { name = "django", specifier = ">=6.0" },
+    { name = "django-stubs", extras = ["compatible-mypy"], marker = "extra == 'dev'", specifier = ">=5.1" },
+    { name = "django-stubs-ext", marker = "extra == 'dev'", specifier = ">=5.1" },
+    { name = "djangorestframework", marker = "extra == 'drf'", specifier = ">=3.14" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.27" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
+    { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1.350" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "pytest-django", marker = "extra == 'dev'", specifier = ">=4.8" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
+    { name = "strawberry-graphql", marker = "extra == 'strawberry'", specifier = ">=0.220" },
+    { name = "strawberry-graphql-django", marker = "extra == 'dev'", specifier = ">=0.86.0" },
+    { name = "strawberry-graphql-django", marker = "extra == 'strawberry-django'", specifier = ">=0.86.0" },
+]
+provides-extras = ["spicedb", "caveats", "drf", "mcp", "strawberry", "strawberry-django", "dev"]
 
 [[package]]
 name = "dnspython"
@@ -1895,16 +1916,57 @@ wheels = [
 
 [[package]]
 name = "strawberry-django-aggregates"
-version = "0.6.0"
-source = { registry = "https://pypi.org/simple" }
+version = "0.9.1"
+source = { editable = "../strawberry-django-aggregates" }
 dependencies = [
     { name = "django" },
     { name = "strawberry-graphql" },
     { name = "strawberry-graphql-django" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8f/af/f2de3600dce08e0cd5ce7b93f19b831737c74a4e1e92fe3ffbf59925382f/strawberry_django_aggregates-0.6.0.tar.gz", hash = "sha256:6a4cf8b9e496823163e277e46a1b4003edc151c2970baf4119449d8210d49993", size = 149197, upload-time = "2026-06-22T13:38:16.16Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f5/74/5ea2f48fad8bb0e89f3f8ad50d4865ada55c4ddd6390be616a7fbbee2c17/strawberry_django_aggregates-0.6.0-py3-none-any.whl", hash = "sha256:18d8b0c0bba80acdc407ecb7a876a54976a584fd80bec1e0181bd01a829aeff5", size = 100696, upload-time = "2026-06-22T13:38:14.91Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "django", specifier = ">=6.0" },
+    { name = "strawberry-graphql", specifier = ">=0.315.0" },
+    { name = "strawberry-graphql-django", specifier = ">=0.82.0" },
+]
+provides-extras = ["postgres"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "django-stubs", specifier = ">=5" },
+    { name = "mypy", specifier = ">=1.10" },
+    { name = "pytest", specifier = ">=8" },
+    { name = "pytest-django", specifier = ">=4" },
+    { name = "ruff", specifier = ">=0.6" },
+]
+
+[[package]]
+name = "strawberry-django-hasura"
+version = "0.3.0"
+source = { editable = "../strawberry-django-hasura" }
+dependencies = [
+    { name = "django" },
+    { name = "strawberry-django-aggregates" },
+    { name = "strawberry-graphql" },
+    { name = "strawberry-graphql-django" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "django", specifier = ">=6.0" },
+    { name = "strawberry-django-aggregates", specifier = ">=0.7.0" },
+    { name = "strawberry-graphql", specifier = ">=0.315.0" },
+    { name = "strawberry-graphql-django", specifier = ">=0.82.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "django-stubs", specifier = ">=5" },
+    { name = "mypy", specifier = ">=1.10" },
+    { name = "pytest", specifier = ">=8" },
+    { name = "pytest-django", specifier = ">=4" },
+    { name = "ruff", specifier = ">=0.6" },
 ]
 
 [[package]]
@@ -1921,8 +1983,8 @@ dependencies = [
 
 [[package]]
 name = "strawberry-graphql-django"
-version = "0.86.3"
-source = { git = "ssh://git@github.com/ang-ee/strawberry-django.git?branch=codex%2Finput-object-extensions#51551bc900c6d2ea596dc05faba488da09806395" }
+version = "0.86.4"
+source = { git = "ssh://git@github.com/ang-ee/strawberry-django.git?branch=hotfix-angee-django#8b2e2e06cbc4289ae190f40799c8b806b5788707" }
 dependencies = [
     { name = "asgiref" },
     { name = "django" },

@@ -2,24 +2,23 @@ import * as React from "react";
 import {
   Action,
   Column,
-  DataPage,
+  ResourceList,
   Facet,
   Field,
   Form,
   Group,
-  GroupListView,
+  ListView,
   List,
-  RelatedRowsList,
   type ListColumn,
   type RecordPanelContext,
   type RecordTabDescriptor,
   type StringIdRow,
-} from "@angee/base";
+} from "@angee/ui";
 
 const MODEL = "messaging.Thread";
 const MESSAGE_MODEL = "messaging.Message";
 
-const THREAD_MESSAGE_FIELDS = ["id", "subject", "preview", "status", "sentAt"];
+const THREAD_MESSAGE_FIELDS = ["id", "subject", "preview", "status", "sent_at"];
 
 type MessageRow = StringIdRow;
 
@@ -35,22 +34,23 @@ const threadMessageColumns: readonly ListColumn<MessageRow>[] = [
     render: (row) => <span className="text-fg-muted">{String(row.preview ?? "")}</span>,
   },
   { field: "status", widget: "statusBadge" },
-  { field: "sentAt" },
+  { field: "sent_at" },
 ];
 
 /**
- * The messages in a thread, listed on the thread's detail panel. The relation
- * lookup is `sqid` (the SDL filter for the FK), and the shared RowsListView owns
- * the fetching/error/empty states rather than a hand-rolled list.
+ * The messages in a thread, listed on the thread's detail panel. A local-scoped
+ * ListView over the messages resource, filtered to this thread by the Hasura
+ * relation ID comparison — the same shared list primitive the routed pages use,
+ * server-paginating the whole thread (no client-side first-page truncation).
  */
 function ThreadMessagesTab({ recordId }: RecordPanelContext): React.ReactElement {
   return (
-    <RelatedRowsList<MessageRow>
-      recordId={recordId}
-      model={MESSAGE_MODEL}
+    <ListView<MessageRow>
+      resource={MESSAGE_MODEL}
+      scope="local"
       fields={THREAD_MESSAGE_FIELDS}
-      filterFor={(id) => ({ thread: { sqid: id } })}
-      order={{ sentAt: "ASC" }}
+      filter={{ thread: { _eq: recordId } }}
+      order={{ sent_at: "ASC" }}
       columns={threadMessageColumns}
       rowHref={(row) => `/messaging/inbox/${row.id}`}
       emptyMessage="No messages in this thread yet."
@@ -69,15 +69,15 @@ const threadRecordTabs: readonly RecordTabDescriptor[] = [
  */
 export function ThreadsPage(): React.ReactElement {
   return (
-    <DataPage model={MODEL} placement="inline" routed hideCreate recordTabs={threadRecordTabs}>
-      <List model={MODEL} list={GroupListView}>
-        <Facet field="channel" label="Channel" labelField="displayName" />
+    <ResourceList resource={MODEL} placement="inline" routed hideCreate recordTabs={threadRecordTabs}>
+      <List resource={MODEL}>
+        <Facet field="channel" label="Channel" labelField="display_name" />
         <Column field="subject" />
         <Column field="modality" />
-        <Column field="messageCount" header="Messages" />
-        <Column field="lastMessageAt" />
+        <Column field="message_count" header="Messages" />
+        <Column field="last_message_at" />
       </List>
-      <Form model={MODEL}>
+      <Form resource={MODEL}>
         <Field name="subject" />
         <Group label="About" columns={2}>
           <Field name="platform" readOnly />
@@ -86,7 +86,7 @@ export function ThreadsPage(): React.ReactElement {
               input takes the lowercase value, so the change rides declarative
               verbs (which write the value) rather than an editable enum field. */}
           <Field name="visibility" readOnly />
-          <Field name="messageCount" readOnly />
+          <Field name="message_count" readOnly />
         </Group>
         <Action
           id="vis-private"
@@ -113,6 +113,6 @@ export function ThreadsPage(): React.ReactElement {
           visibleWhen={(record) => record.visibility !== "RESTRICTED"}
         />
       </Form>
-    </DataPage>
+    </ResourceList>
   );
 }

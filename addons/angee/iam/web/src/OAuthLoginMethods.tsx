@@ -1,5 +1,12 @@
-import { Alert, Button, Glyph, Spinner } from "@angee/base";
-import { errorMessage, useAuthoredMutation, useAuthoredQuery } from "@angee/sdk";
+import {
+  Alert,
+  Button,
+  Glyph,
+  Spinner,
+  errorMessage,
+  useAuthoredMutation,
+  useAuthoredQuery,
+} from "@angee/ui";
 import { useState, type ReactNode } from "react";
 
 import {
@@ -18,22 +25,22 @@ export function OAuthLoginMethods(): ReactNode {
   const [startingSqid, setStartingSqid] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
 
-  const connections = data?.availableConnections.results ?? [];
+  const connections = data?.available_connections.results ?? [];
 
   async function startLogin(connection: AvailableConnection): Promise<void> {
     setStartError(null);
-    setStartingSqid(connection.oauthClientSqid);
+    setStartingSqid(connection.oauth_client_sqid);
     try {
       const result = await loginStart({
-        oauthClientSqid: connection.oauthClientSqid,
+        oauthClientSqid: connection.oauth_client_sqid,
         redirectUri: loginCallbackRedirectUri(),
         next: loginNextFromLocation(),
       });
-      const payload = result?.loginStart;
-      if (payload?.authorizeUrl) {
+      const payload = result?.login_start;
+      if (payload?.authorize_url) {
         // Keep the buttons disabled while the full-page redirect lands, so a
         // double-click can't start a second flow during navigation.
-        window.location.assign(payload.authorizeUrl);
+        window.location.assign(payload.authorize_url);
         return;
       }
       setStartError(payload?.error ?? t("iam.login.startError"));
@@ -71,10 +78,10 @@ export function OAuthLoginMethods(): ReactNode {
       <div className="flex flex-col gap-2">
         {connections.map((connection) => {
           const label = connectionLabel(connection);
-          const active = startingSqid === connection.oauthClientSqid;
+          const active = startingSqid === connection.oauth_client_sqid;
           return (
             <Button
-              key={connection.oauthClientSqid}
+              key={connection.oauth_client_sqid}
               type="button"
               className="!h-11 w-full justify-start bg-sheet"
               disabled={startingSqid !== null}
@@ -113,8 +120,8 @@ function ProviderMark({ label }: { label: string }): ReactNode {
 
 function connectionLabel(connection: AvailableConnection): string {
   return (
-    connection.oauthClientDisplayName.trim() ||
-    connection.oauthClientSlug.trim() ||
+    connection.oauth_client_display_name.trim() ||
+    connection.oauth_client_slug.trim() ||
     "provider"
   );
 }

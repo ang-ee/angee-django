@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Button, ErrorBanner } from "@angee/base";
+import { Button, ErrorBanner } from "@angee/ui";
 
 const meta = {
   title: "Fragments/ErrorBanner",

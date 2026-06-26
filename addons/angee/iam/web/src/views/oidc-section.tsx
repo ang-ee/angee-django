@@ -1,5 +1,5 @@
-import { Field, Group } from "@angee/base";
-import type { Row } from "@angee/sdk";
+import { Field, Group } from "@angee/ui";
+import { type Row } from "@angee/resources";
 
 // iam owns the OIDC provider-type impls (GenericOidc, Google). The tab those impls
 // enable shows only when the OAuth client's provider_type is one of them — keeping
@@ -11,7 +11,7 @@ const OIDC_PROVIDER_TYPES = ["google", "generic_oidc"];
 
 function isOidcProvider(values: Row): boolean {
   return OIDC_PROVIDER_TYPES.includes(
-    String(values.providerType ?? "").trim().toLowerCase(),
+    String(values.provider_type ?? "").trim().toLowerCase(),
   );
 }
 
@@ -23,13 +23,13 @@ function isOidcProvider(values: Row): boolean {
  */
 export const oidcLoginSection = (
   <Group label="Sign-in (OIDC)" columns={2}>
-    <Field name="loginEnabled" widget="booleanBadge" showWhen={isOidcProvider} />
+    <Field name="login_enabled" widget="booleanBadge" showWhen={isOidcProvider} />
     <Field name="issuer" showWhen={isOidcProvider} />
-    <Field name="jwksUri" showWhen={isOidcProvider} />
-    <Field name="linkOnEmailMatch" showWhen={isOidcProvider} />
-    <Field name="createOnLogin" showWhen={isOidcProvider} />
+    <Field name="jwks_uri" showWhen={isOidcProvider} />
+    <Field name="link_on_email_match" showWhen={isOidcProvider} />
+    <Field name="create_on_login" showWhen={isOidcProvider} />
     <Field
-      name="allowedEmailDomains"
+      name="allowed_email_domains"
       widget="tagInput"
       showWhen={isOidcProvider}
     />

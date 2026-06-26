@@ -10,6 +10,7 @@ class NotesConfig(AppConfig):
 
     default = True
     angee_addon = True
+    angee_web_package = "@angee-example/notes-web"
     name = "example.notes"
     label = "notes"
     depends_on = (

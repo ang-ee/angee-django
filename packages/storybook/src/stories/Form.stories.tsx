@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Button, FormRoot, NumberField, RadioGroup } from "@angee/base";
+import { Button, FormRoot, NumberField, RadioGroup } from "@angee/ui";
 
 const meta = {
   title: "Primitives/Form",

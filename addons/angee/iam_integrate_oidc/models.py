@@ -19,6 +19,15 @@ class OAuthClientOidc(AngeeModel):
     """
 
     extends = "integrate.OAuthClient"
+    hasura_insertable_fields = (
+        "issuer",
+        "jwks_uri",
+        "login_enabled",
+        "link_on_email_match",
+        "create_on_login",
+        "allowed_email_domains",
+    )
+    hasura_updatable_fields = hasura_insertable_fields
 
     issuer = models.URLField(blank=True)
     jwks_uri = models.URLField(blank=True)
@@ -44,11 +53,7 @@ class OAuthClientOidc(AngeeModel):
     def allows_email_domain(self, email: str | None) -> bool:
         """Return whether ``email`` is allowed by this provider's login domain policy."""
 
-        allowed_domains = {
-            domain.strip().lower()
-            for domain in self.allowed_email_domain_values
-            if domain.strip()
-        }
+        allowed_domains = {domain.strip().lower() for domain in self.allowed_email_domain_values if domain.strip()}
         if not allowed_domains:
             return True
         if not email or "@" not in email:

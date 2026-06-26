@@ -6,7 +6,7 @@ import {
   FieldRow,
   Input,
   Textarea,
-} from "@angee/base";
+} from "@angee/ui";
 
 const meta = {
   title: "Fragments/DialogForm",

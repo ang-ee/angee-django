@@ -6,11 +6,15 @@ import {
   CardHeader,
   CardTitle,
   LogStream,
-} from "@angee/base";
-import { isFatalGraphQLWsCloseCode, type DocumentData } from "@angee/sdk";
+  useAuthoredQuery,
+} from "@angee/ui";
+import {
+  isFatalGraphQLWsCloseCode,
+} from "@angee/refine";
+import type { DocumentData } from "@angee/refine";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useQuery } from "urql";
 
+import { OPERATOR_PROVIDER } from "../../data/operator-provider";
 import { useOperatorT } from "../../i18n";
 import { useOperatorConnection, useOperatorSubscription } from "../../data/transport";
 import type {
@@ -54,11 +58,11 @@ export function useDaemonLogStream({
   streamSubscription: typeof WORKSPACE_LOGS_SUBSCRIPTION;
   streamField: keyof DocumentData<typeof WORKSPACE_LOGS_SUBSCRIPTION> & string;
 }): DaemonLogStream {
-  const [history] = useQuery({
-    query: historyQuery,
-    variables: { name: name ?? "", limit: HISTORY_LIMIT },
-    pause: !name,
-  });
+  const history = useAuthoredQuery(
+    historyQuery,
+    { name: name ?? "", limit: HISTORY_LIMIT },
+    { dataProviderName: OPERATOR_PROVIDER, enabled: Boolean(name) },
+  );
   const [live, setLive] = useState<readonly string[]>([]);
   const stream = useOperatorSubscription(
     streamSubscription,
@@ -82,8 +86,8 @@ export function useDaemonLogStream({
   return {
     lines,
     error: stream.error ?? history.error ?? null,
-    // "Live" means a frame has arrived — urql's `fetching` only means the
-    // subscription was requested, which would read Live before the socket connects.
+    // "Live" means a frame has arrived — the subscription's `fetching` only means
+    // it was requested, which would read Live before the socket connects.
     streaming: stream.data != null && stream.error == null,
   };
 }

@@ -10,7 +10,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@angee/base";
+} from "@angee/ui";
 
 const meta = {
   title: "Page/PageBody",

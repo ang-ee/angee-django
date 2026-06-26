@@ -1,22 +1,22 @@
 import * as React from "react";
-import { Column, DataPage, Field, Form, GroupListView, List } from "@angee/base";
+import { Column, ResourceList, Field, Form, List } from "@angee/ui";
 
 const MODEL = "integrate.Vendor";
 
 const vendorList = (
-  <List model={MODEL} list={GroupListView}>
+  <List resource={MODEL}>
     <Column field="slug" />
-    <Column field="displayName" />
-    <Column field="websiteUrl" />
+    <Column field="display_name" />
+    <Column field="website_url" />
   </List>
 );
 
 const vendorForm = (
-  <Form model={MODEL}>
-    <Field name="displayName" title />
+  <Form resource={MODEL}>
+    <Field name="display_name" title />
     <Field name="slug" widget="slug" />
     <Field name="icon" />
-    <Field name="websiteUrl" />
+    <Field name="website_url" />
     <Field name="description" />
   </Form>
 );
@@ -24,9 +24,9 @@ const vendorForm = (
 /** The third-party vendor catalogue. */
 export function VendorsPage(): React.ReactElement {
   return (
-    <DataPage model={MODEL} placement="inline" routed>
+    <ResourceList resource={MODEL} placement="inline" routed>
       {vendorList}
       {vendorForm}
-    </DataPage>
+    </ResourceList>
   );
 }

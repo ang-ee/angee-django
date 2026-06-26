@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { NumberField } from "@angee/base";
+import { NumberField } from "@angee/ui";
 
 const meta = {
   title: "Primitives/NumberField",

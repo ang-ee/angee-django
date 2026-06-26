@@ -1,4 +1,12 @@
 import * as React from "react";
+import type {
+  Row,
+} from "@angee/resources";
+import {
+  useOne,
+  type BaseRecord,
+  type HttpError,
+  } from "@refinedev/core";
 import {
   OperatorTransportProvider,
   ServiceLogs,
@@ -7,8 +15,16 @@ import {
   WorkspaceRow,
   useWorkspaceStatus,
   type WorkspaceStatusResult,
-} from "@angee/operator/runtime";
-import { useResourceRecord, type Row } from "@angee/sdk";
+  } from "@angee/operator/runtime";
+import {
+  refineFieldsFromPaths,
+  } from "@angee/refine";
+import {
+  refineResourceName,
+} from "@angee/resources";
+import {
+  useModelMetadata,
+} from "@angee/resources";
 
 import { useAgentsT } from "../i18n";
 import { agentLifecycle, agentRuntime, stringField } from "./agent-record";
@@ -18,22 +34,22 @@ const AGENT_MODEL = "agents.Agent";
 const PROVISION_FIELDS = [
   "id",
   "lifecycle",
-  "runtimeStatus",
-  "lastError",
+  "runtime_status",
+  "last_error",
   "workspace",
   "service",
-  "serviceTemplate.id",
-  "workspaceTemplate.path",
+  "service_template.id",
+  "workspace_template.path",
 ] as const;
 
 interface AgentProvisionRecord extends Row {
   lifecycle?: string | null;
-  runtimeStatus?: string | null;
-  lastError?: string | null;
+  runtime_status?: string | null;
+  last_error?: string | null;
   workspace?: string | null;
   service?: string | null;
-  serviceTemplate?: { id?: string | null } | null;
-  workspaceTemplate?: { path?: string | null } | null;
+  service_template?: { id?: string | null } | null;
+  workspace_template?: { path?: string | null } | null;
 }
 
 export type AgentProvisioningPane = "service" | "workspace";
@@ -50,20 +66,33 @@ export function AgentProvisioning({
   pane: AgentProvisioningPane;
 }): React.ReactElement {
   const t = useAgentsT();
-  const { record, fetching } = useResourceRecord(AGENT_MODEL, agentId, {
-    fields: [...PROVISION_FIELDS],
+  const metadata = useModelMetadata(AGENT_MODEL);
+  const resource = metadata?.resource ?? null;
+  const fields = React.useMemo(
+    () => refineFieldsFromPaths([...PROVISION_FIELDS]),
+    [],
+  );
+  const run = useOne<RowRecord, HttpError>({
+    resource: resource ? refineResourceName(resource) : "__angee_disabled__",
+    id: agentId,
+    dataProviderName: resource?.schemaName,
+    meta: { fields },
+    queryOptions: {
+      enabled: Boolean(agentId) && resource !== null,
+    },
   });
 
-  const agent = record as AgentProvisionRecord | null;
+  const agent = (run.result as AgentProvisionRecord | undefined) ?? null;
+  const fetching = run.query.isFetching;
   const workspace = stringField(agent, "workspace");
   const service = stringField(agent, "service");
   const lifecycle = agentLifecycle(agent);
   const active = isLifecycleActive(lifecycle);
-  const expectsService = Boolean(agent?.serviceTemplate);
+  const expectsService = Boolean(agent?.service_template);
   const missingRenderedInstances =
     agentRuntime(agent) === "RUNNING" && (!workspace || (expectsService && !service));
   const showRuntime = active || Boolean(workspace) || missingRenderedInstances;
-  const hasWorkspaceTemplate = Boolean(agent?.workspaceTemplate?.path);
+  const hasWorkspaceTemplate = Boolean(agent?.workspace_template?.path);
 
   // No poll: `agents.Agent` declares `changes(Agent, field="agentChanged")`, so the
   // record auto-invalidates live through the change subscription; workspace state
@@ -80,8 +109,8 @@ export function AgentProvisioning({
         </p>
       ) : (
         <>
-          {agent.lastError ? (
-            <p className="text-13 text-danger-text">{String(agent.lastError)}</p>
+          {agent.last_error ? (
+            <p className="text-13 text-danger-text">{String(agent.last_error)}</p>
           ) : null}
           {showRuntime ? (
             <OperatorTransportProvider>
@@ -110,6 +139,8 @@ export function AgentProvisioning({
     </div>
   );
 }
+
+type RowRecord = BaseRecord & Row;
 
 function AgentOperatorRuntime({
   expectsService,

@@ -10,7 +10,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import type { ListColumn } from "@angee/base";
+import type { ListColumn } from "@angee/ui";
 
 import type { OperatorSnapshotResult } from "../../data/transport";
 import type { OperatorSnapshot } from "../../data/types";

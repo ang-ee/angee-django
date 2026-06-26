@@ -36,10 +36,7 @@ class Command(BaseCommand):
     def handle(self, *args: Any, **options: Any) -> None:
         daemon = OperatorDaemon.from_settings()
         if daemon.admin_bearer is None or daemon.server_base is None:
-            raise CommandError(
-                "operator daemon URL/token not configured "
-                "(ANGEE_OPERATOR_URL / ANGEE_OPERATOR_TOKEN)"
-            )
+            raise CommandError("operator daemon URL/token not configured (ANGEE_OPERATOR_URL / ANGEE_OPERATOR_TOKEN)")
         # Wait for daemon readiness (the stack job runs once the service starts,
         # which may precede it actually serving), then fail loudly rather than
         # leave a stale contract masquerading as success.
@@ -50,9 +47,6 @@ class Command(BaseCommand):
                 break
             time.sleep(1.0)
         if sdl is None:
-            raise CommandError(
-                f"operator daemon unreachable after {options['retries']} attempts; "
-                "SDL not refreshed"
-            )
+            raise CommandError(f"operator daemon unreachable after {options['retries']} attempts; SDL not refreshed")
         SDL_PATH.write_text(sdl if sdl.endswith("\n") else f"{sdl}\n")
         self.stdout.write(self.style.SUCCESS(f"operator schema -> {SDL_PATH}"))

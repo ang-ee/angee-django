@@ -45,6 +45,33 @@ def session_user(info: strawberry.Info) -> Any:
     return user
 
 
+def is_platform_admin(user: Any) -> bool:
+    """Return whether ``user`` reaches IAM's platform-admin role.
+
+    SECURITY: evaluate this with the REAL request actor, never inside a
+    ``system_context``/sudo block. For a ``RebacManager`` user model the check is
+    ``User.objects.filter(pk=...).exists()``, and sudo bypasses the REBAC
+    ``auth/user`` read scoping — so under sudo this returns True for ANY
+    authenticated user. Gate first (outside sudo), then sudo only the data read.
+    """
+
+    if not is_authenticated(user):
+        return False
+    user_model = get_user_model()
+    if isinstance(user_model._default_manager, RebacManager):
+        return cast(bool, user_model.objects.filter(pk=cast(Any, user).pk).exists())
+    return bool(getattr(user, "is_superuser", False))
+
+
+def require_platform_admin(info: strawberry.Info) -> Any:
+    """Return the session user or raise when it lacks platform-admin reach."""
+
+    user = getattr(request_from_info(info), "user", None)
+    if not is_platform_admin(user):
+        raise PermissionDenied("Platform admin permission required.")
+    return user
+
+
 class PlatformAdminPermission(BasePermission):
     """Allow only actors that reach IAM's const-backed platform admin role."""
 
@@ -60,13 +87,7 @@ class PlatformAdminPermission(BasePermission):
         """Return whether the request user has platform-admin reach."""
 
         del source, kwargs
-        user = getattr(request_from_info(info), "user", None)
-        if not is_authenticated(user):
-            return False
-        user_model = get_user_model()
-        if isinstance(user_model._default_manager, RebacManager):
-            return cast(bool, user_model.objects.filter(pk=cast(Any, user).pk).exists())
-        return bool(getattr(user, "is_superuser", False))
+        return is_platform_admin(getattr(request_from_info(info), "user", None))
 
 
 ADMIN_PERMISSION_CLASSES: list[type[BasePermission]] = [PlatformAdminPermission]

@@ -1,4 +1,4 @@
-import { Button, Glyph } from "@angee/base";
+import { Button, Glyph } from "@angee/ui";
 import type { ReactElement } from "react";
 
 /**

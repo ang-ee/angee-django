@@ -1,29 +1,26 @@
 """GraphQL schema for the messaging addon — threads, messages, and the inbox.
 
-The console surface is read-heavy: messages arrive via channel sync, so the inbox
-is the ``Message`` aggregate grouped by thread / sender / channel / status / time
-(``data_query`` + the SDL-derived relation facets), and live updates
-ride ``changes``. Thread and message expose ``crud`` for human edits (status moves,
-deletes); parts/participants/metrics are read projections reached through their
-message/thread.
+Messages arrive through channel sync and the manager-owned ingest path; the
+console browses and moderates them through Hasura resources. Parts,
+participants, edges, reactions, and metrics remain nested read projections
+reached through their message/thread owners.
 """
 
 from __future__ import annotations
-
-from typing import Any, cast
 
 import strawberry
 import strawberry_django
 from django.apps import apps
 from strawberry import auto
-from strawberry_django.pagination import OffsetPaginated
 
-from angee.graphql.crud import crud
-from angee.graphql.data import data_query
-from angee.graphql.node import AngeeNode, detail
+from angee.graphql.data import hasura_model_resource, public_pk_decoder
+from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
+from angee.integrate.schema import IntegrationLabelMixin
 from angee.parties.schema import HandleType
 
+Integration = apps.get_model("integrate", "Integration")
+Handle = apps.get_model("parties", "Handle")
 Channel = apps.get_model("messaging", "Channel")
 Thread = apps.get_model("messaging", "Thread")
 Message = apps.get_model("messaging", "Message")
@@ -36,7 +33,7 @@ MessageMetrics = apps.get_model("messaging", "MessageMetrics")
 
 
 @strawberry_django.type(Channel)
-class ChannelType(AngeeNode):
+class ChannelType(IntegrationLabelMixin, AngeeNode):
     """GraphQL projection of a connected message channel (e.g. an email account)."""
 
     backend_class: auto
@@ -47,12 +44,6 @@ class ChannelType(AngeeNode):
     last_sync_items: auto
     created_at: auto
     updated_at: auto
-
-    @strawberry_django.field(only=["display_name", "vendor", "status"])
-    def display_name(self) -> str:
-        """Return the channel's operator label so the inbox facet reads by name."""
-
-        return cast(Any, self).display_label
 
 
 @strawberry_django.type(Fragment)
@@ -158,79 +149,44 @@ class ReactionType(AngeeNode):
     created_at: auto
 
 
-@strawberry_django.filter_type(Message, lookups=True)
-class MessageFilter:
-    """Field lookups + relation facets for the inbox."""
-
-    subject: auto
-    status: auto
-    platform: auto
-    direction: auto
-    thread: auto
-    channel: auto
-    sender: auto
-    sent_at: auto
-
-
-@strawberry_django.order_type(Message)
-class MessageOrder:
-    """Orderings accepted by the messages list."""
-
-    sent_at: auto
-    received_at: auto
-    created_at: auto
-
-
-@strawberry_django.filter_type(Thread, lookups=True)
-class ThreadFilter:
-    """Field lookups + relation facets for threads."""
-
-    subject: auto
-    platform: auto
-    modality: auto
-    visibility: auto
-    channel: auto
-    last_message_at: auto
-
-
-@strawberry_django.order_type(Thread)
-class ThreadOrder:
-    """Orderings accepted by the threads list."""
-
-    last_message_at: auto
-    message_count: auto
-    created_at: auto
-
-
-@strawberry.input
-class ThreadPatch:
-    """Human-editable thread fields."""
-
-    id: strawberry.ID
-    subject: str | None = strawberry.UNSET
-    visibility: str | None = strawberry.UNSET
-
-
-@strawberry.input
-class MessagePatch:
-    """Human-editable message fields (mostly moderation status)."""
-
-    id: strawberry.ID
-    status: str | None = strawberry.UNSET
-    subject: str | None = strawberry.UNSET
-
-
-MessageDataQuery, _MESSAGE_DATA_TYPES = data_query(
+_CHANNEL_RESOURCE = hasura_model_resource(
+    ChannelType,
+    model=Channel,
+    name="channels",
+    filterable=[
+        "id",
+        "display_name",
+        "backend_class",
+        "status",
+        "last_sync_status",
+        "last_sync_completed_at",
+        "updated_at",
+    ],
+    sortable=["display_name", "backend_class", "status", "last_sync_completed_at", "updated_at"],
+    aggregatable=["id", "last_sync_items"],
+    groupable=["backend_class", "status", "last_sync_status"],
+    insert=False,
+    update=False,
+    delete=False,
+)
+_MESSAGE_RESOURCE = hasura_model_resource(
     MessageType,
-    type_name="MessageDataQuery",
-    filters=MessageFilter,
-    order=MessageOrder,
-    list_name="messages",
-    detail_name="message",
-    aggregate_name="message_aggregate",
-    group_name="message_groups",
-    aggregate_fields=["id"],
-    group_by_fields=[
+    model=Message,
+    name="messages",
+    filterable=[
+        "id",
+        "subject",
+        "status",
+        "platform",
+        "direction",
+        "thread",
+        "channel",
+        "sender",
+        "sent_at",
+    ],
+    sortable=["sent_at", "received_at", "created_at"],
+    aggregatable=["id"],
+    groupable=[
         "thread",
         "thread__subject",
         "sender",
@@ -241,47 +197,45 @@ MessageDataQuery, _MESSAGE_DATA_TYPES = data_query(
         "platform",
         "sent_at",
     ],
-    enable_filter_echo=True,
-    aggregate_kwargs={
-        "name_prefix": "MessageAggregate",
-        "pagination_style": "offset",
+    insert=False,
+    updatable=["status", "subject"],
+    field_id_decode={
+        "thread": public_pk_decoder(Thread),
+        "channel": public_pk_decoder(Integration),
+        "sender": public_pk_decoder(Handle),
     },
 )
-ThreadDataQuery, _THREAD_DATA_TYPES = data_query(
+_THREAD_RESOURCE = hasura_model_resource(
     ThreadType,
-    type_name="ThreadDataQuery",
-    filters=ThreadFilter,
-    order=ThreadOrder,
-    list_name="threads",
-    detail_name="thread",
-    aggregate_name="thread_aggregate",
-    group_name="thread_groups",
-    aggregate_fields=["id", "message_count"],
-    group_by_fields=["channel", "channel__display_name", "modality", "visibility", "last_message_at"],
-    enable_filter_echo=True,
-    aggregate_kwargs={
-        "name_prefix": "ThreadAggregate",
-        "pagination_style": "offset",
-    },
+    model=Thread,
+    name="threads",
+    filterable=["id", "subject", "platform", "modality", "visibility", "channel", "last_message_at"],
+    sortable=["last_message_at", "message_count", "created_at"],
+    aggregatable=["id", "message_count"],
+    groupable=["channel", "channel__display_name", "modality", "visibility", "last_message_at"],
+    insert=False,
+    updatable=["subject", "visibility"],
+    field_id_decode={"channel": public_pk_decoder(Integration)},
 )
 
 
-@strawberry.type
-class MessagingQuery:
-    """Messaging queries — the inbox, threads, and channels."""
-
-    channels: OffsetPaginated[ChannelType] = strawberry_django.offset_paginated()
-    channel: ChannelType | None = detail(ChannelType)
-
-
-_DATA_TYPES = [*_MESSAGE_DATA_TYPES, *_THREAD_DATA_TYPES]
+_RESOURCE_TYPES = [
+    *_CHANNEL_RESOURCE.types,
+    *_MESSAGE_RESOURCE.types,
+    *_THREAD_RESOURCE.types,
+]
 
 
 _MESSAGING_SCHEMA_BUCKET = {
-    "query": [MessagingQuery, MessageDataQuery, ThreadDataQuery],
+    "query": [
+        _CHANNEL_RESOURCE.query,
+        _MESSAGE_RESOURCE.query,
+        _THREAD_RESOURCE.query,
+    ],
     "mutation": [
-        crud(ThreadType, update=ThreadPatch, delete=True),
-        crud(MessageType, update=MessagePatch, delete=True),
+        _CHANNEL_RESOURCE.mutation,
+        _MESSAGE_RESOURCE.mutation,
+        _THREAD_RESOURCE.mutation,
     ],
     "types": [
         ChannelType,
@@ -293,7 +247,7 @@ _MESSAGING_SCHEMA_BUCKET = {
         ParticipantType,
         ReactionType,
         MessageMetricsType,
-        *_DATA_TYPES,
+        *_RESOURCE_TYPES,
     ],
 }
 

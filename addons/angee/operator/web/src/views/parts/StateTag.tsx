@@ -1,4 +1,4 @@
-import { Badge, StatusDot, statusLabel, statusTone } from "@angee/base";
+import { Badge, StatusDot, statusLabel, statusTone } from "@angee/ui";
 import type * as React from "react";
 
 export interface StateTagProps {

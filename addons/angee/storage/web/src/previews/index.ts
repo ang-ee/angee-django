@@ -1,5 +1,5 @@
 import { lazy } from "react";
-import { isHeicMime, type PreviewProvider } from "@angee/base";
+import { isHeicMime, type PreviewProvider } from "@angee/ui";
 
 // Each renderer is lazy, so its heavy deps (react-pdf, vidstack, heic-to) only
 // load when that file kind is actually opened; `PreviewPane` supplies the

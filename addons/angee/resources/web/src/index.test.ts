@@ -1,4 +1,4 @@
-import type { BaseMenuItem } from "@angee/base";
+import type { BaseMenuItem } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import resources from "./index";
@@ -21,7 +21,7 @@ describe("resources addon manifest", () => {
     const route = resources.routes?.[0];
     expect(route?.name).toBe("resources.ledger");
     expect(route?.path).toBe("/platform/resources");
-    expect(route?.shell).toBe("console");
+    expect(route?.layout).toBe("console");
     expect(route?.component).toBeTypeOf("function");
   });
 });

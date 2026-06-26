@@ -19,11 +19,7 @@ def bridge_models() -> tuple[_Model, ...]:
 def _models_for(base: _Model) -> tuple[_Model, ...]:
     return tuple(
         sorted(
-            (
-                model
-                for model in apps.get_models()
-                if issubclass(model, base) and not model._meta.abstract
-            ),
+            (model for model in apps.get_models() if issubclass(model, base) and not model._meta.abstract),
             key=_model_key,
         )
     )

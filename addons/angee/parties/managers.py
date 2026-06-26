@@ -154,21 +154,27 @@ class PartyManager(AngeeManager):
 
             handles = [
                 handle_model.objects.upsert(
-                    platform="email", value=value, owner_id=owner_id, label=label,
-                    is_preferred=is_preferred, display_name=parsed.display_name,
+                    platform="email",
+                    value=value,
+                    owner_id=owner_id,
+                    label=label,
+                    is_preferred=is_preferred,
+                    display_name=parsed.display_name,
                 )
                 for value, label, is_preferred in parsed.emails
             ] + [
                 handle_model.objects.upsert(
-                    platform="phone", value=value, owner_id=owner_id, label=label,
-                    is_preferred=is_preferred, display_name=parsed.display_name,
+                    platform="phone",
+                    value=value,
+                    owner_id=owner_id,
+                    label=label,
+                    is_preferred=is_preferred,
+                    display_name=parsed.display_name,
                 )
                 for value, label, is_preferred in parsed.phones
             ]
             for handle in handles:
-                party_handle_model.objects.link(
-                    person, handle, confidence=1.0, source="carddav", owner_id=owner_id
-                )
+                party_handle_model.objects.link(person, handle, confidence=1.0, source="carddav", owner_id=owner_id)
 
             # Addresses and the affiliation carry no stable id, so mirror the parsed
             # set wholesale — idempotent because the result is exactly the source's.
@@ -241,9 +247,7 @@ class PartyManager(AngeeManager):
         if not stale_pks:
             return 0
         orphaned_handle_ids = list(
-            party_handle_model.objects.filter(party_id__in=stale_pks)
-            .values_list("handle_id", flat=True)
-            .distinct()
+            party_handle_model.objects.filter(party_id__in=stale_pks).values_list("handle_id", flat=True).distinct()
         )
         deleted, _by_model = self.filter(pk__in=stale_pks).delete()
         for handle in handle_model.objects.filter(pk__in=orphaned_handle_ids):

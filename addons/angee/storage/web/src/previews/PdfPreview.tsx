@@ -10,7 +10,7 @@ import {
   Glyph,
   LoadingPanel,
   type PreviewProviderProps,
-} from "@angee/base";
+} from "@angee/ui";
 
 import { useStorageT } from "../i18n";
 

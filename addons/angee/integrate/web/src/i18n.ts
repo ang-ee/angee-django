@@ -1,4 +1,5 @@
-import { useNamespaceT, type MessageVars } from "@angee/sdk";
+import { useNamespaceT } from "@angee/ui";
+import type { MessageVars } from "@angee/refine";
 
 // English fallback strings for the integrate addon's hard-coded UI copy. The host
 // runtime owns the active translations; these are the defaults used when a key is
@@ -8,7 +9,6 @@ export const enIntegrateMessages: Record<string, string> = {
   // Shared action verbs reused across the model-driven pages.
   "integrate.action.syncNow": "Sync now",
   "integrate.action.refresh": "Refresh",
-  "integrate.action.disable": "Disable",
 
   // Shared list/group column labels.
   "integrate.col.status": "Status",
@@ -51,7 +51,6 @@ export const enIntegrateMessages: Record<string, string> = {
   "integrate.webhooks.filters": "Filters",
   "integrate.webhooks.sendTest": "Send test event",
   "integrate.webhooks.rotateSecret": "Rotate secret",
-  "integrate.webhooks.enable": "Enable",
   "integrate.webhooks.rotateFailed": "Could not rotate the signing secret.",
   "integrate.webhooks.newSecretTitle": "New signing secret",
   "integrate.webhooks.newSecretBody": "Copy this now — it is shown only once.",
@@ -77,8 +76,6 @@ export const enIntegrateMessages: Record<string, string> = {
 
   // --- Connect surface (outbound OAuth: providers, accounts, credentials) ---
   // Cohesive block; relocatable to a future `iam_integrate_oidc/web` as a unit.
-  "integrate.revoke": "Revoke",
-
   // OAuth providers page — form-section labels and actions.
   "integrate.providers.group.client": "Client",
   "integrate.providers.group.endpoints": "Endpoints",
@@ -88,8 +85,6 @@ export const enIntegrateMessages: Record<string, string> = {
   "integrate.providers.group.oauthMetadata": "OAuth metadata",
   "integrate.providers.action.connect": "Connect account",
   "integrate.providers.action.discover": "Discover endpoints",
-  "integrate.providers.action.disable": "Disable",
-  "integrate.providers.action.enable": "Enable",
   "integrate.providers.discover.done": "Discovered endpoints.",
   "integrate.providers.discover.failed": "Discovery failed.",
   "integrate.providers.connect.startError": "Could not start account connection.",
@@ -114,15 +109,10 @@ export const enIntegrateMessages: Record<string, string> = {
   "integrate.credentials.reveal.body":
     "Copy it now — it is shown on request only and never kept in the form.",
   "integrate.credentials.reveal.secretLabel": "Secret",
-  "integrate.credentials.revoke.title": "Revoke this credential?",
-  "integrate.credentials.revoke.body": "Anything using it to authenticate will stop working.",
 
-  // External accounts page — form-section labels and revoke confirm.
+  // External accounts page — form-section labels.
   "integrate.externalAccounts.group.identity": "Identity",
   "integrate.externalAccounts.provider": "Provider",
-  "integrate.externalAccounts.revoke.title": "Revoke this account?",
-  "integrate.externalAccounts.revoke.body":
-    "The linked identity can no longer be used for API access.",
 
   // Account-connect callback page.
   "integrate.connectCallback.completing": "Connecting account...",

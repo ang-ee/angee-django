@@ -14,7 +14,7 @@ import "@vidstack/react/player/styles/default/theme.css";
 import "@vidstack/react/player/styles/default/layouts/video.css";
 import "@vidstack/react/player/styles/default/layouts/audio.css";
 
-import { type PreviewProviderProps } from "@angee/base";
+import { type PreviewProviderProps } from "@angee/ui";
 
 /** Inline player for `video/*` and `audio/*` files (vidstack). The mime it is
  * handed picks the layout — both matchers route here. */

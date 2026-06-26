@@ -1,9 +1,10 @@
-import type { BaseAddonRoute, BaseMenuItem } from "@angee/base";
-import { defineBaseAddon } from "@angee/base";
+import type { BaseAddonRoute } from "@angee/app";
+import { defineBaseAddon } from "@angee/app";
+import type { BaseMenuItem } from "@angee/ui";
 import { BookOpen, FileStack, FileText, Library } from "lucide-react";
 
 import { enKnowledgeMessages } from "./i18n";
-import { KnowledgePage, PageCrumb } from "./views/KnowledgePage";
+import { KnowledgePage } from "./views/KnowledgePage";
 import { KnowledgeSettingsPage } from "./views/KnowledgeSettingsPage";
 import { vaultCreateForm } from "./views/vault-form";
 
@@ -13,7 +14,7 @@ const knowledgeRoutes: readonly BaseAddonRoute[] = [
   {
     name: "knowledge.home",
     path: "/knowledge",
-    shell: "console",
+    layout: "console",
     menu: KNOWLEDGE_ID,
     component: KnowledgePage,
   },
@@ -22,19 +23,16 @@ const knowledgeRoutes: readonly BaseAddonRoute[] = [
     // `/knowledge/$id` page route, so it is a sibling, not a page id.
     name: "knowledge.settings",
     path: "/knowledge/settings",
-    shell: "console",
+    layout: "console",
     component: KnowledgeSettingsPage,
   },
   {
-    // The page reader nests under the wiki; `KnowledgePage` (the parent) reads
-    // the `$id` param and renders that page, so this route carries only the crumb.
+    // The page reader nests under the wiki; `KnowledgePage` reads the `$id`
+    // param and renders that page.
     name: "knowledge.page",
     path: "/knowledge/$id",
-    shell: "console",
+    layout: "console",
     parent: "knowledge.home",
-    crumb: (match) => (
-      <PageCrumb id={String((match.params as { id?: string }).id ?? "")} />
-    ),
   },
 ];
 

@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Chip, FILLS, TONES } from "@angee/base";
+import { Chip, FILLS, TONES } from "@angee/ui";
 
 const meta = {
   title: "Primitives/Chip",

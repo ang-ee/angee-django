@@ -7,7 +7,7 @@ import {
   PageToolbar,
   SectionNav,
   type SectionNavItem,
-} from "@angee/base";
+} from "@angee/ui";
 
 const items: readonly SectionNavItem[] = [
   { id: "overview", label: "Overview", href: "#overview", active: true },

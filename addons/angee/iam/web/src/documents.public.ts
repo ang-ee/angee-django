@@ -8,21 +8,21 @@ import { graphql, type DocumentType } from "@angee/gql/public";
 
 export const IamAvailableConnections = graphql(`
   query IamAvailableConnections {
-    availableConnections {
+    available_connections {
       results {
-        oauthClientSqid
-        oauthClientDisplayName
-        oauthClientSlug
-        oauthClientIcon
-        isOidc
+        oauth_client_sqid
+        oauth_client_display_name
+        oauth_client_slug
+        oauth_client_icon
+        is_oidc
       }
     }
   }
 `);
 
-/** One `availableConnections.results` item — a sign-in provider button. */
+/** One `available_connections.results` item — a sign-in provider button. */
 export type AvailableConnection =
-  DocumentType<typeof IamAvailableConnections>["availableConnections"]["results"][number];
+  DocumentType<typeof IamAvailableConnections>["available_connections"]["results"][number];
 
 export const IamLoginStart = graphql(`
   mutation IamLoginStart(
@@ -30,12 +30,12 @@ export const IamLoginStart = graphql(`
     $redirectUri: String!
     $next: String!
   ) {
-    loginStart(
-      oauthClientSqid: $oauthClientSqid
-      redirectUri: $redirectUri
+    login_start(
+      oauth_client_sqid: $oauthClientSqid
+      redirect_uri: $redirectUri
       next: $next
     ) {
-      authorizeUrl
+      authorize_url
       error
     }
   }
@@ -47,7 +47,7 @@ export const IamLoginComplete = graphql(`
     $state: String!
     $redirectUri: String!
   ) {
-    loginComplete(code: $code, state: $state, redirectUri: $redirectUri) {
+    login_complete(code: $code, state: $state, redirect_uri: $redirectUri) {
       ok
       next
       error

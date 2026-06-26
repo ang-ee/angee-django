@@ -1,4 +1,4 @@
-import { safeRedirectPath } from "@angee/base";
+import { safeRedirectPath } from "@angee/app/auth";
 
 export const LOGIN_CALLBACK_PATH = "/sso/callback";
 export const DEFAULT_NEXT_PATH = "/";

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Field } from "@angee/base";
+import { Field } from "@angee/ui";
 
 /**
  * The declarative create form for integrate credentials, registered as the

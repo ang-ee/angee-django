@@ -30,6 +30,8 @@ Dependency changes must update this file in the same change.
 | strawberry-django | GraphQL types, resolvers, dataloaders, schema printing | Merge addon schema parts into named schemas, `crud`/`changes` shortcuts, emit SDL, serve per name |
 | django-choices-field | Enum-backed model fields | `StateField` semantic wrapper |
 | strawberry-django-aggregates | Aggregation and group-by resolvers | Addon-level `AggregateBuilder` wiring (per addon, e.g. notes) |
+| strawberry-django-hasura | Expose Django models in the Hasura GraphQL dialect (`_bool_exp`/`_aggregate`/`x_by_pk`/`_set`), plus computed (non-model) sources via a `run_query` `RowSource` | Composes it as the model emitter (`hasura_model_resource`) and the pydantic computed-source emitter (`hasura_pydantic_resource`) |
+| pydantic | Typed model validation/parsing | Row-shape SSOT for computed (non-model) Hasura resources — the node + filter scalars derive from the pydantic model (`hasura_pydantic_resource`) |
 | channels + uvicorn | ASGI/WebSocket transport and serving | GraphQL subscription mounting; uvicorn serves the composed ASGI app and sends the lifespan that enters the MCP mount's `http_app` lifespan (`angee.asgi`) |
 | django-zed-rebac | REBAC engine, actor scoping, relationship storage, local and SpiceDB-compatible backends | Per-addon schema merge, reserved roles, actor resolver |
 | django-sqids | Opaque external IDs | `SqidMixin`, `SqidField` (NULL-safe decode on joins), GraphQL boundary scalar |
@@ -54,15 +56,15 @@ Dependency changes must update this file in the same change.
 |---|---|---|
 | React 19 | View library | Component conventions |
 | TypeScript >= 6 | Language and type system | Branded boundary types |
-| urql React 5 + @urql/core 6 | GraphQL client, normalized cache, subscriptions | Provider stack and invalidation wiring; consumes generated `TypedDocumentNode`s |
-| graphql-ws 6 | GraphQL WebSocket lifecycle | Connection params and retry policy |
-| GraphQL Code Generator (client-preset) + @graphql-typed-document-node/core | Generated TypeScript schema and operation types from emitted Django SDL and daemon-owned SDL, as `TypedDocumentNode` documents | Each project web package owns a `codegen` script that emits `runtime/gql/<schema>` from `runtime/schemas/<schema>.graphql`, routed to a Django schema by document filename (`documents.ts`/`documents.console.ts` → console, `documents.public.ts` → public); the operator web package owns a separate daemon client-preset run from `schema/operator.graphql` scanning only `documents.daemon.ts`; authored operations carry no hand-written result/variables types |
+| @refinedev/core | Resource registry, standard data hooks, react-query cache/invalidation, auth/i18n/live provider contracts | Angee projects emitted `angee.resources` metadata to refine resources and mounts one composed `<Refine>` root with named providers and the TanStack Router binding |
+| @refinedev/hasura + graphql-request 5 + graphql 15 | Hasura GraphQL data provider (`_bool_exp`, `order_by`, `_aggregate`, `_by_pk`, `_set`) and authored `meta.gqlQuery` / `meta.gqlMutation` execution | Angee pins `idType: "String"` and `namingConvention: "hasura-default"`, uses refine-compatible GraphQL document ASTs, and applies session/CSRF or service auth at the transport boundary |
+| graphql-ws 5 | GraphQL WebSocket lifecycle for the Hasura live provider and daemon-owned operator transport | Endpoint derivation, connection params, retry policy, and the operator daemon subscription + raw log socket transport — request/response now rides a Refine `operator` data provider, leaving only the intrinsically streaming surfaces on this ws transport |
+| GraphQL Code Generator (client-preset) + @graphql-typed-document-node/core | Generated TypeScript schema and operation types from emitted Django SDL and daemon-owned SDL, as `TypedDocumentNode` documents | `@angee/app` owns the one `angee-web-codegen` CLI: it reads `runtime/web/manifest.json`, generates each Django schema from `runtime/schemas/<schema>.graphql` (routing documents by filename: `documents.ts`/`documents.console.ts` → console, `documents.public.ts` → public), derives authored action/aggregate/group/delete-preview/revision documents, and emits the composed `runtime/web/app.ts`. The operator daemon joins the same pass as an external `angee_web_codegen` manifest entry — its committed SDL read straight from the operator package, scanning only `documents.daemon.ts`, with a bare `typescript` types module the console re-exports; authored operations carry no hand-written result/variables types |
 | TanStack Router | Type-safe routing and search params | `defineAddon` to `createApp` route composition and flat URL search codec |
-| TanStack Form | Form state | `FormView` binding |
-| TanStack Table | Columns, sort, filter, grouping, selection | `ListView` and `BoardView` bindings |
+| @refinedev/react-hook-form + react-hook-form + @hookform/resolvers + zod | Form state, submit lifecycle, and validation binding | `FormView` keeps Angee's declarative rendered DSL while delegating state/validation to refine/react-hook-form |
+| @refinedev/react-table + TanStack Table | Server-backed table state, sort/filter/pagination bridge, columns, grouping, selection | `ListView` and `BoardView` keep Angee's rendered controls and domain view modes while delegating standard table/data mechanics |
 | TanStack Virtual | Row and column virtualization | Long-list wiring |
 | nuqs | Type-safe URL query state | Remaining chrome query state such as top-menu tabs |
-| valibot | Schema validation | Server-emitted schema binding |
 | i18next | Runtime i18n | Per-addon namespace convention |
 | date-fns | Date and relative-time formatting | Date and timestamp widgets |
 | use-debounce | Debounced React values and callbacks | Search and filter inputs |
@@ -79,23 +81,52 @@ Dependency changes must update this file in the same change.
 | pnpm | JavaScript dependency resolution and workspaces | Workspace layout |
 | Node >= 22.13 | JavaScript build runtime | Project runtime |
 
+Chat-UI library choice: `@assistant-ui/react` owns the chat-UX surface (composed
+over ACP); CopilotKit and `@headlessui/react` were evaluated and rejected, and
+TanStack AI is a watch item — see `.agents/notes/chat-ui-library-evaluation.md`.
+
+## Hasura Dialect Rule
+
+`strawberry-django-hasura`, the operator daemon SDL, `@refinedev/hasura`, and
+Angee's refine/data glue share one Hasura-default wire contract. Because the
+daemon already speaks this contract, the operator web package consumes it as a
+Refine `operator` data provider (bearer-authed `createAngeeHasuraDataProvider`)
+for request/response, the same shape as the `console`/`public` providers; only
+its live subscriptions and the raw log socket stay on the daemon ws transport.
+Grouped
+resources must keep the DDN/NDC-preview shape:
+`<resource>_groups(group_by, where, having, order_by, limit, offset): [<resource>_group!]!`,
+with each group returning a typed `key: <Model>GroupKey!` and the free
+`aggregate: <Model>Aggregate!`. The stock `<resource>_aggregate` root remains
+the unmodified refine/Hasura aggregate surface; grouped roots are authored
+operations owned by the dialect adapters.
+
+Future grouped features such as bucket ordering, bucket predicates, additional
+date extraction, or JSON drill-down operators must be added at the dialect
+owners together: the Django adapter, operator SDL, emitted resource metadata,
+and the refine authored-operation helpers. Do not add frontend-only group
+semantics or local provider dialects.
+
 ## Rendered Binding
 
-`@angee/sdk` stays headless. `@angee/base` is the single rendered binding.
+Angee's frontend is Refine-native: the app composes one `<Refine>` root, resource
+metadata projects into refine resources, and the rendered binding owns only
+domain presentation over refine state. The active frontend owners are
+`@angee/app`, `@angee/refine`, `@angee/resources`, and `@angee/ui`.
 
 | Pick | Owns | Angee adds |
 |---|---|---|
 | @base-ui/react | Headless primitives: dialog, popover, menu, tabs, tooltip, field, toolbar, scroll area, and related UI | Styled binding and composition rules; controlled `open`/`onOpenChange` owns popover/dialog transition timing |
 | @floating-ui/react-dom | Floating-element positioning and virtual anchors | Popover and menu anchoring |
-| @angee/logo-react | Angee brand logo and cube marks | Brand lockup in the public shell |
+| @angee/logo-react | Angee brand logo and cube marks | Brand lockup in the public layout |
 | react-markdown + remark-gfm | Markdown rendering (GitHub-flavored) | Markdown widget preview |
 | tailwind-variants | Variant recipes with slots | Component recipes |
 | tw-animate-css | Tailwind 4 animation utilities | Motion tokens |
-| cmdk | Command menu | Spotlight shell surface |
+| cmdk | Command menu | Spotlight command surface |
 | react-day-picker | Calendar | Date widgets |
-| react-resizable-panels | Split panes | Shell and inspector layouts |
+| react-resizable-panels | Split panes | Layout and inspector panes |
 | CodeMirror 6 (+ @codemirror/lang-json) | Text / Markdown / JSON editor | Markdown and JSON widget editors (shared `useCodeMirrorEditor`) |
-| @xyflow/react | node/edge graph canvas | `@angee/base` `GraphView` shell |
+| @xyflow/react | node/edge graph canvas | `@angee/base` `GraphView` canvas |
 | @dagrejs/dagre | directed-graph layout | `@angee/base` `GraphView` node placement |
 | @dnd-kit | Drag and drop | Board and rail interactions |
 | Native browser drag/drop | File drag enter/leave/drop events and `DataTransfer.files` | `@angee/base` upload drop target primitive |
@@ -114,7 +145,8 @@ Dependency changes must update this file in the same change.
 | happy-dom | DOM environment for Vitest | Per-file env opt-in for hook and component tests |
 | @testing-library/react | React component and hook test rendering | Provider-wrapped render and hook harnesses |
 | Playwright | Browser tests | `@angee/e2e` harness: workspace-isolated runner, role `storageState` login, GraphQL `api` fixture, Page Object base (`docs/testing/e2e.md`) |
-| Storybook | Component workshop | `@angee/base` and addon previews |
+| @playwright/mcp | Interactive browser-driving for host coding agents | Repo-root `.mcp.json` server (npx-run, pinned), bound to the base stack's `chrome-profile` (`.angee/data/chrome`); the agent navigates to the stack's `ANGEE_UI_PORT` (`:5173`). Distinct from `@angee/e2e` (the deterministic test runner) and `agents.MCPServer` (the MCP config rendered for operator-provisioned product agents) |
+| Storybook | Component workshop | `@angee/ui` and addon previews |
 | GitHub Actions | CI | Build, lint, type, test gates |
 | Copier | Project and addon templates | Angee templates |
 
@@ -125,7 +157,7 @@ Dependency changes must update this file in the same change.
 | Yjs + Hocuspocus | Collaborative editing |
 | Celery + django-celery-beat | Queues and schedules |
 | pgvector / sqlite-vec / python-igraph / lightrag-hku | Vector search and graph RAG |
-| django-ninja + pydantic | Typed REST sidecars (callbacks, webhooks, health) |
+| django-ninja | Typed REST sidecars (callbacks, webhooks, health) — over the locked pydantic |
 | boto3 | S3-compatible storage backend (S3 / R2 / MinIO presigned IO) |
 | @xyflow/react | Graph and canvas (node/edge) views |
 | react-json-view-lite + ansi-to-react | JSON widget read tree, debug/log JSON + ANSI panels |

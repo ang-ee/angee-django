@@ -2,10 +2,10 @@ import {
   formatDate as formatBaseDate,
   statusTone as resolveStatusTone,
   type Tone,
-} from "@angee/base";
+} from "@angee/ui";
 
 // Presentational mappings for file rows: the upload-state → stage badge and a
-// date display. Byte sizes reuse `formatSize` from `@angee/base` (the preview
+// date display. Byte sizes reuse `formatSize` from `@angee/ui` (the preview
 // model owns it) — this module never re-coins it.
 
 export interface FileStage {

@@ -104,13 +104,13 @@ describe("platform detail surfaces", () => {
     routerMocks.params = { id: "angee.storage" };
     platformMocks.usePlatformAddon.mockReturnValue({
       addon: {
-        fieldCount: 7,
+        field_count: 7,
         id: "angee.storage",
         kind: "required",
         label: "Storage",
-        modelCount: 2,
+        model_count: 2,
         namespace: "angee",
-        resourceCount: 1,
+        resource_count: 1,
       },
       dependedBy: ["angee.operator"],
       dependsOn: ["angee.iam"],
@@ -139,16 +139,16 @@ describe("platform detail surfaces", () => {
       dependedBy: ["notes.Attachment"],
       fetching: false,
       model: {
-        addonId: "example.notes",
-        addonLabel: "Notes",
-        appLabel: "notes",
-        dbTable: "notes_note",
-        dependsOn: ["iam.User"],
-        fieldCount: 8,
+        addon_id: "example.notes",
+        addon_label: "Notes",
+        app_label: "notes",
+        db_table: "notes_note",
+        depends_on: ["iam.User"],
+        field_count: 8,
         label: "notes.Note",
-        modelName: "Note",
-        relationCount: 2,
-        resourceType: "notes.note",
+        model_name: "Note",
+        relation_count: 2,
+        resource_type: "notes.note",
       },
     });
 

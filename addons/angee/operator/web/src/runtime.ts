@@ -7,7 +7,6 @@
 
 export {
   OperatorTransportProvider,
-  useOperatorClient,
   useOperatorSnapshot,
   useOperatorAction,
   useOperatorSubscription,

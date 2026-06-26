@@ -12,11 +12,14 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@angee/base": "workspace:*",
+    "@angee/app": "workspace:*",
     "@angee/integrate": "workspace:*",
     "@angee/operator": "workspace:*",
-    "@angee/sdk": "workspace:*",
+    "@angee/refine": "workspace:*",
+    "@angee/resources": "workspace:*",
+    "@angee/ui": "workspace:*",
     "@assistant-ui/react": "^0.12.0",
+    "@refinedev/core": "^5.0.12",
     "@zed-industries/agent-client-protocol": "^0.4.5",
     "lucide-react": "^1.17.0",
     "streamdown": "^1.5.0",

@@ -21,7 +21,7 @@ import {
   STATUS_TONES,
   stateToneFromValue,
   type SectionNavItem,
-} from "@angee/base";
+} from "@angee/ui";
 
 const navItems: readonly SectionNavItem[] = [
   { id: "all", label: "All notes", href: "#all", active: true },
@@ -156,7 +156,7 @@ export const Frame: Story = {
 export const InContentRegion: Story = {
   name: "In Content Region",
   render: () => (
-    // Page is shell-agnostic: mounted inside the console content region, that
+    // Page is layout-agnostic: mounted inside the console content region, that
     // region owns the scroll and canvas background, so Page runs height="auto"
     // / overflow="visible" and never opens a second scroller.
     <div className="grid h-screen grid-rows-[auto_1fr] bg-inset">

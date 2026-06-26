@@ -3,89 +3,99 @@ import { parseAsString, useQueryState } from "nuqs";
 
 import {
   Code,
-  RowsListView,
-  type DataToolbarGroupOption,
+  ListView,
+  type ResourceToolbarGroupOption,
   type ListColumn,
-} from "@angee/base";
+} from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
 import { LinkedChips, TextRouteLink } from "../lib/cells";
-import { usePlatformModelRows } from "../lib/explorer";
 import { addonDetailPath, fieldsPath, modelDetailPath } from "../lib/paths";
-import { type ModelRow } from "../lib/rows";
 
-function columns(t: (key: string) => string): readonly ListColumn<ModelRow>[] {
+// The `platform.Model` Hasura resource row (`hasura_pydantic_resource`,
+// `addons/angee/platform/schema.py`): raw snake fields, fetched + grouped
+// client-side by ListView's client row model. The inverse `depended_by` is a
+// detail concern (the resource carries only `depends_on`).
+interface ModelResourceRow extends Record<string, unknown> {
+  id: string;
+  label: string;
+  model_name: string;
+  addon_id: string;
+  addon_label: string;
+  db_table: string;
+  field_count: number;
+  relation_count: number;
+  resource_type: string | null;
+  depends_on: readonly string[];
+}
+
+function columns(t: (key: string) => string): readonly ListColumn<ModelResourceRow>[] {
   return [
-  {
-    field: "model",
-    header: t("platform.col.model"),
-    render: (row) => (
-      <span className="flex min-w-0 flex-col">
-        <TextRouteLink href={modelDetailPath(row.id)} className="font-medium">
-          {row.model}
-        </TextRouteLink>
-        <span className="truncate text-2xs text-fg-muted">{row.id}</span>
-      </span>
-    ),
-  },
-  {
-    field: "addon",
-    header: t("platform.col.addon"),
-    render: (row) => (
-      <TextRouteLink href={addonDetailPath(row.addonId)}>{row.addon}</TextRouteLink>
-    ),
-  },
-  { field: "table", header: t("platform.col.table"), render: (row) => <Code truncate>{row.table}</Code> },
-  {
-    field: "fields",
-    header: t("platform.col.fields"),
-    render: (row) => (
-      <TextRouteLink href={fieldsPath({ model: row.id })}>{row.fields}</TextRouteLink>
-    ),
-  },
-  { field: "relations", header: t("platform.col.relations") },
-  {
-    field: "resourceType",
-    header: t("platform.col.resourceType"),
-    render: (row) => (row.resourceType ? <Code truncate>{row.resourceType}</Code> : null),
-  },
-  {
-    field: "dependsOn",
-    header: t("platform.col.dependsOn"),
-    sortable: false,
-    render: (row) => <LinkedChips items={row.dependsOnList} href={modelDetailPath} />,
-  },
-  {
-    field: "dependedBy",
-    header: t("platform.col.dependedBy"),
-    sortable: false,
-    render: (row) => <LinkedChips items={row.dependedByList} href={modelDetailPath} />,
-  },
+    {
+      field: "model_name",
+      header: t("platform.col.model"),
+      render: (row) => (
+        <span className="flex min-w-0 flex-col">
+          <TextRouteLink href={modelDetailPath(row.id)} className="font-medium">
+            {row.model_name}
+          </TextRouteLink>
+          <span className="truncate text-2xs text-fg-muted">{row.id}</span>
+        </span>
+      ),
+    },
+    {
+      field: "addon_label",
+      header: t("platform.col.addon"),
+      render: (row) => (
+        <TextRouteLink href={addonDetailPath(row.addon_id)}>{row.addon_label}</TextRouteLink>
+      ),
+    },
+    {
+      field: "db_table",
+      header: t("platform.col.table"),
+      render: (row) => <Code truncate>{row.db_table}</Code>,
+    },
+    {
+      field: "field_count",
+      header: t("platform.col.fields"),
+      render: (row) => (
+        <TextRouteLink href={fieldsPath({ model: row.id })}>{row.field_count}</TextRouteLink>
+      ),
+    },
+    { field: "relation_count", header: t("platform.col.relations") },
+    {
+      field: "resource_type",
+      header: t("platform.col.resourceType"),
+      render: (row) => (row.resource_type ? <Code truncate>{row.resource_type}</Code> : null),
+    },
+    {
+      field: "depends_on",
+      header: t("platform.col.dependsOn"),
+      sortable: false,
+      render: (row) => <LinkedChips items={row.depends_on} href={modelDetailPath} />,
+    },
   ];
 }
 
-function groupOptions(t: (key: string) => string): readonly DataToolbarGroupOption[] {
+function groupOptions(t: (key: string) => string): readonly ResourceToolbarGroupOption[] {
   return [
-    { id: "addon", label: t("platform.col.addon"), group: { field: "addon" }, type: "value" },
-    { id: "dependsOn", label: t("platform.col.dependsOn"), group: { field: "dependsOn" }, type: "value" },
-    { id: "dependedBy", label: t("platform.col.dependedBy"), group: { field: "dependedBy" }, type: "value" },
+    { id: "addon_label", label: t("platform.col.addon"), group: { field: "addon_label" }, type: "value" },
+    { id: "resource_type", label: t("platform.col.resourceType"), group: { field: "resource_type" }, type: "value" },
   ];
 }
 
 export function ModelsPage(): ReactElement {
   const t = usePlatformT();
   const [addonScope] = useQueryState("addon", parseAsString);
-  const { rows, fetching, error } = usePlatformModelRows({ addon: addonScope });
 
   return (
-    <RowsListView
-      rows={rows}
+    <ListView<ModelResourceRow>
+      resource="platform.Model"
       columns={columns(t)}
       groupOptions={groupOptions(t)}
-      defaultGroup={{ field: "addon" }}
+      filter={addonScope ? { addon_id: { exact: addonScope } } : undefined}
+      defaultGroup={addonScope ? null : { field: "addon_label" }}
       pageSize={50}
-      fetching={fetching}
-      error={error}
       emptyMessage={t("platform.empty.models")}
     />
   );

@@ -1,63 +1,42 @@
-import {
-  bearerAuth,
-  createUrqlClient,
-  graphQLWebSocketUrl,
-  isFatalGraphQLWsClose,
-} from "@angee/sdk";
-import { createClient as createWSClient } from "graphql-ws";
-import {
-  cacheExchange,
-  fetchExchange,
-  subscriptionExchange,
-  type Client,
-  type ExecutionResult,
-  type SubscriptionForwarder,
-} from "urql";
+import { createContext, useContext } from "react";
+import { graphQLWebSocketUrl, isFatalGraphQLWsClose } from "@angee/refine";
+import { createClient as createWSClient, type Client } from "graphql-ws";
 
 import type { OperatorConnectionInfo } from "./types";
 
-export function createOperatorClient(connection: OperatorConnectionInfo): Client {
-  // The SDK client factory owns transport and HTTP auth: bearerAuth carries the
-  // minted token on every fetch. The operator contributes a document cache and a
-  // graphql-ws subscription transport (bearer in connectionParams) reserved for
-  // future daemon streaming — today every operator op is a query/mutation over
-  // fetch. Canonical urql order: cache, subscription (forwards downstream), fetch.
-  return createUrqlClient({
-    url: connection.endpoint,
-    auth: bearerAuth(connection.token),
-    exchanges: [
-      cacheExchange,
-      subscriptionExchange({
-        forwardSubscription: subscriptionForwarder(connection),
-      }),
-      fetchExchange,
-    ],
-  });
-}
+/** The daemon graphql-ws client; carries the live subscriptions (snapshot, logs, status). */
+type OperatorWsClient = Client;
 
-function subscriptionForwarder(
+/**
+ * Build the daemon's graphql-ws client. Request/response rides the Refine
+ * `operator` data provider (`operator-provider.ts`); this client carries only the
+ * live subscriptions. The bearer is captured in the socket's `connectionParams`,
+ * so a token rotation rebuilds the client (the gate keys it on the token) —
+ * graphql-ws cannot swap connection params on a live socket.
+ */
+export function createOperatorClient(
   connection: OperatorConnectionInfo,
-): SubscriptionForwarder {
-  if (typeof WebSocket === "undefined") {
-    return () => ({ subscribe: () => ({ unsubscribe() {} }) });
-  }
-  const wsClient = createWSClient({
+): OperatorWsClient {
+  return createWSClient({
     url: graphQLWebSocketUrl(connection.endpoint),
     connectionParams: { authorization: `Bearer ${connection.token}` },
     lazy: true,
     shouldRetry: (event: unknown) => !isFatalGraphQLWsClose(event),
   });
-  return (request) => ({
-    subscribe(sink: {
-      next: (value: ExecutionResult) => void;
-      error: (error: unknown) => void;
-      complete: () => void;
-    }) {
-      const unsubscribe = wsClient.subscribe(
-        { ...request, query: request.query ?? "" },
-        sink,
-      );
-      return { unsubscribe };
-    },
-  });
+}
+
+const OperatorWsClientContext = createContext<OperatorWsClient | null>(null);
+
+/** Provide the daemon ws client to the subscription hooks (mounted by the gate). */
+export const OperatorWsClientProvider = OperatorWsClientContext.Provider;
+
+/** The daemon ws client for subscription hooks; throws outside the transport gate. */
+export function useOperatorWsClient(): OperatorWsClient {
+  const client = useContext(OperatorWsClientContext);
+  if (!client) {
+    throw new Error(
+      "useOperatorWsClient must be used inside OperatorTransportProvider.",
+    );
+  }
+  return client;
 }

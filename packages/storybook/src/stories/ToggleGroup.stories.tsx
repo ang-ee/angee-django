@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { SegmentedControl, ToggleGroup } from "@angee/base";
+import { SegmentedControl, ToggleGroup } from "@angee/ui";
 
 const meta = {
   title: "Primitives/ToggleGroup",

@@ -1,6 +1,6 @@
 import * as React from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Button, useToast, type ToastOptions } from "@angee/base";
+import { Button, useToast, type ToastOptions } from "@angee/ui";
 
 const meta = {
   title: "Primitives/Toast",

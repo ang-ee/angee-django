@@ -1,5 +1,5 @@
-import type { BaseMenuItem } from "@angee/base";
-import { useNamespaceT, type I18nResources, type MessageVars } from "@angee/sdk";
+import { useNamespaceT, type BaseMenuItem } from "@angee/ui";
+import type { I18nResources, MessageVars } from "@angee/refine";
 
 export function enOperatorBundleForMenu(
   menu: BaseMenuItem,

@@ -1,9 +1,9 @@
-import { Code, DetailSection, DetailSurface, TextLink } from "@angee/base";
+import { Code, DetailSection, DetailSurface, TextLink, useAuthoredQuery } from "@angee/ui";
 import { type ReactElement } from "react";
 import { useParams } from "@tanstack/react-router";
-import { useQuery } from "urql";
 
 import { SERVICE_ENDPOINT_QUERY } from "../../data/documents.daemon";
+import { OPERATOR_PROVIDER } from "../../data/operator-provider";
 import { useOperatorT } from "../../i18n";
 import { useOperatorSnapshot } from "../../data/transport";
 import { RowActions } from "../parts/RowActions";
@@ -18,11 +18,11 @@ export function ServiceDetail(): ReactElement {
   const name = "name" in params && typeof params.name === "string" ? params.name : undefined;
   const { snapshot, result, refetch } = useOperatorSnapshot({ services: true });
   const { actions, busy } = useServiceActions(refetch);
-  const [endpoint] = useQuery({
-    query: SERVICE_ENDPOINT_QUERY,
-    variables: { name: name ?? "" },
-    pause: !name,
-  });
+  const endpoint = useAuthoredQuery(
+    SERVICE_ENDPOINT_QUERY,
+    { name: name ?? "" },
+    { dataProviderName: OPERATOR_PROVIDER, enabled: Boolean(name) },
+  );
   const service = (snapshot?.services ?? []).find((candidate) => candidate.name === name) ?? null;
   const resolved = endpoint.data?.serviceEndpoint ?? null;
 

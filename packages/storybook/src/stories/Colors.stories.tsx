@@ -1,10 +1,10 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { FILLS, TONES, toneClass } from "@angee/base";
+import { FILLS, TONES, toneClass } from "@angee/ui";
 
 /**
  * The semantic-color system: two orthogonal axes — `tone` (the palette) ×
  * `variant` (the fill). Every cell below is `toneClass(tone, fill)`, the single
- * matrix owner in `@angee/base`, so this page can never drift from the code or
+ * matrix owner in `@angee/ui`, so this page can never drift from the code or
  * the design tokens. Toggle the theme in the toolbar to see both light and dark.
  */
 const meta = {

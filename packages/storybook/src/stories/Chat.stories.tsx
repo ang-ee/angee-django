@@ -10,7 +10,7 @@ import {
   MessageReasoningFrame,
   ToolFallback,
   chatComposerInputClassName,
-} from "@angee/base";
+} from "@angee/ui";
 
 const meta = {
   title: "Communication/Chat",

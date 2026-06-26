@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { TopMenu } from "@angee/base";
+import { TopMenu } from "@angee/ui";
 
 import { chromeMenuItems, topMenuTabs } from "./chrome-fixtures";
 

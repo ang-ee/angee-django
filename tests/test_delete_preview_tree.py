@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import pytest
 import strawberry
-import strawberry_django
 from django.db import connection, models
 
-from angee.graphql.crud import crud
+from angee.graphql.deletion import DeletePreview, delete_by_public_id
 
 
 @pytest.mark.django_db(transaction=True)
@@ -45,23 +44,23 @@ def test_delete_note_dry_run_returns_tree_and_confirm_deletes() -> None:
 
             return self.name
 
-    @strawberry_django.type(Note)
-    class NoteType:
-        """GraphQL type for the test note model."""
-
-        title: str
-
     @strawberry.type
     class Query:
         """Query root required by Strawberry schemas."""
 
         ok: bool = True
 
-    schema = strawberry.Schema(
-        query=Query,
-        mutation=crud(NoteType, delete=True, name="note"),
-        types=[NoteType],
-    )
+    @strawberry.type
+    class Mutation:
+        """Mutation root exposing the cascade-preview delete."""
+
+        @strawberry.mutation
+        def delete_note(self, id: strawberry.ID, confirm: bool = False) -> DeletePreview:
+            """Preview, then optionally delete, one note by id."""
+
+            return delete_by_public_id(Note, str(id), confirm=confirm)
+
+    schema = strawberry.Schema(query=Query, mutation=Mutation)
 
     with connection.schema_editor() as schema_editor:
         schema_editor.create_model(Note)

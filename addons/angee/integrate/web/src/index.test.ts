@@ -1,15 +1,15 @@
-import { MenuTree, type BaseMenuItem, type ChromeMenuItem } from "@angee/base";
+import { MenuTree, type BaseMenuItem, type ChromeMenuItem } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import integrate from "./index";
 
 describe("integrate addon manifest", () => {
-  test("registers the integrations landing on the console shell with a component", () => {
+  test("registers the integrations landing on the console layout with a component", () => {
     const integrations = (integrate.routes ?? []).find(
       (route) => route.name === "integrate.integrations",
     );
     expect(integrations?.path).toBe("/integrate");
-    expect(integrations?.shell).toBe("console");
+    expect(integrations?.layout).toBe("console");
     expect(integrations?.component).toBeTypeOf("function");
     // No `menu:` — the route-less root no longer references this route, so a
     // `menu` would mismatch (createApp throws "item does not reference the route").
@@ -115,22 +115,18 @@ describe("integrate addon manifest", () => {
     expect(credentials?.children).toBeUndefined();
   });
 
-  test("registers the account-connect callback on the console shell", () => {
+  test("registers the account-connect callback on the console layout", () => {
     const route = (integrate.routes ?? []).find(
       (item) => item.name === "integrate.connect.callback",
     );
-    const fallback = (integrate.routes ?? []).find(
-      (item) => item.name === "integrate.connect.callbackFallback",
-    );
     expect(route?.path).toBe("/integrate/oauth/callback");
-    expect(route?.shell).toBe("console");
+    expect(route?.layout).toBe("console");
     expect(route?.component).toBeTypeOf("function");
-    expect(fallback?.path).toBe("/callback");
-    expect(fallback?.shell).toBe("console");
-    expect(fallback?.component).toBe(route?.component);
     expect(
       (integrate.routes ?? []).some((item) =>
+        item.name === "integrate.connect.callbackFallback" ||
         item.name.startsWith("integrate.connect.callback.") ||
+        item.path === "/callback" ||
         item.path === "/iam/oauth/callback",
       ),
     ).toBe(false);

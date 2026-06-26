@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 
-import { Button, Glyph, InlineTextAction } from "@angee/base";
+import { Button, Glyph, InlineTextAction } from "@angee/ui";
 
 import { useStorageT } from "../i18n";
 

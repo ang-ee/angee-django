@@ -3,7 +3,7 @@ import {
   Action,
   Button,
   Column,
-  DataPage,
+  ResourceList,
   Dialog,
   Field,
   FieldLabel,
@@ -11,12 +11,12 @@ import {
   Form,
   Glyph,
   Group,
-  GroupListView,
   Input,
   List,
+  errorMessage,
   useRecordActionMutation,
-} from "@angee/base";
-import { errorMessage, useAuthoredMutation } from "@angee/sdk";
+  useAuthoredMutation,
+} from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { ConnectCardDavDirectory } from "./documents.console";
@@ -24,42 +24,42 @@ import { ConnectCardDavDirectory } from "./documents.console";
 const MODEL = "parties.Directory";
 
 const directoryList = (
-  <List model={MODEL} list={GroupListView}>
-    <Column field="displayName" header="Name" />
+  <List resource={MODEL}>
+    <Column field="display_name" header="Name" />
     <Column field="status" widget="statusBadge" />
-    <Column field="backendClass" />
-    <Column field="lastSyncStatus" />
-    <Column field="lastSyncItems" />
-    <Column field="lastSyncCompletedAt" />
+    <Column field="backend_class" />
+    <Column field="last_sync_status" />
+    <Column field="last_sync_items" />
+    <Column field="last_sync_completed_at" />
   </List>
 );
 
 /**
  * Connected contacts directories. The "Connect CardDAV" control opens a connect
  * dialog (one mutation creates the credential + directory); rows are model-driven
- * via DataPage, each detail carrying a declarative "Sync now" record action.
+ * via ResourceList, each detail carrying a declarative "Sync now" record action.
  * Directories are created through the connect flow and have no delete root, so the
  * form is read-only (`hideCreate`) and no delete affordance renders — a directory
  * is removed by deleting the integration, and its synced contacts by the source.
  */
 export function DirectoriesPage(): React.ReactElement {
-  const [sync] = useRecordActionMutation<ActionFieldName>("syncIntegration");
+  const [sync] = useRecordActionMutation<ActionFieldName>("sync_integration");
   return (
-    <DataPage model={MODEL} placement="inline" routed hideCreate toolbarActions={<ConnectCardDav />}>
+    <ResourceList resource={MODEL} placement="inline" routed hideCreate toolbarActions={<ConnectCardDav />}>
       {directoryList}
-      <Form model={MODEL}>
-        <Field name="displayName" title readOnly />
+      <Form resource={MODEL}>
+        <Field name="display_name" title readOnly />
         <Field name="status" readOnly />
-        <Field name="backendClass" readOnly />
+        <Field name="backend_class" readOnly />
         <Field name="config" readOnly />
         <Group label="Last sync" columns={2}>
-          <Field name="lastSyncStatus" readOnly />
-          <Field name="lastSyncItems" readOnly />
-          <Field name="lastSyncCompletedAt" readOnly />
+          <Field name="last_sync_status" readOnly />
+          <Field name="last_sync_items" readOnly />
+          <Field name="last_sync_completed_at" readOnly />
         </Group>
         <Action id="sync" label="Sync now" icon="refresh" run={sync} />
       </Form>
-    </DataPage>
+    </ResourceList>
   );
 }
 

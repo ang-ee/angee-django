@@ -22,9 +22,7 @@ class IAMIntegrateOidcConfig(AppConfig):
     permissions = "permissions.zed"
 
     resources = {
-        "install": (
-            {"path": "resources/install/010_integrate.oauthclient.yaml", "adopt": ["slug", "environment"]},
-        ),
+        "install": ({"path": "resources/install/010_integrate.oauthclient.yaml", "adopt": ["slug", "environment"]},),
         "demo": ({"path": "resources/demo/010_integrate.oauthclient.yaml", "adopt": ["slug", "environment"]},),
     }
 

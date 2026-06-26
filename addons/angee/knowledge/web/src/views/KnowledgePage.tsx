@@ -12,8 +12,8 @@ import {
   useConfirm,
   useScopedTreeExplorer,
   type WikilinkResolver,
-} from "@angee/base";
-import { useAuthoredQuery, useResourceRecord } from "@angee/sdk";
+} from "@angee/ui";
+import { useAuthoredQuery } from "@angee/ui";
 
 import {
   KnowledgePage as KnowledgePageQuery,
@@ -36,8 +36,6 @@ import { NewPageControl, type NewPageKind } from "./NewPageControl";
 import { PageEditor } from "./PageEditor";
 import { useKnowledgeT } from "../i18n";
 
-/** The Django model label backing the page crumb. */
-const PAGE_MODEL = "knowledge.Page";
 // One safety-capped read each of vaults/pages; the browser scopes the set
 // client-side so the navigator and reader share one fetch.
 const KNOWLEDGE_LIST_LIMIT = 500;
@@ -50,14 +48,14 @@ const KNOWLEDGE_LIST_LIMIT = 500;
 export function KnowledgePage(): ReactElement {
   const t = useKnowledgeT();
   const variables = useMemo(
-    () => ({ pagination: { offset: 0, limit: KNOWLEDGE_LIST_LIMIT } }),
+    () => ({ offset: 0, limit: KNOWLEDGE_LIST_LIMIT }),
     [],
   );
   const vaultsQuery = useAuthoredQuery(KnowledgeVaults, variables);
   const pagesQuery = useAuthoredQuery(KnowledgePages, variables);
 
-  const vaults = vaultsQuery.data?.vaults.results ?? [];
-  const pages = pagesQuery.data?.pages.results ?? [];
+  const vaults = vaultsQuery.data?.vaults ?? [];
+  const pages = pagesQuery.data?.pages ?? [];
 
   // The open page is route state: `/knowledge/$id` reads that page into the
   // content + aside; `/knowledge` is the empty reader.
@@ -82,7 +80,7 @@ export function KnowledgePage(): ReactElement {
   const detailQuery = useAuthoredQuery(KnowledgePageQuery, detailVariables, {
     enabled: openPageId !== null,
   });
-  const detail = detailQuery.data?.page ?? null;
+  const detail = detailQuery.data?.pages_by_pk ?? null;
 
   // A page write retitles its tree node; refetch the navigator set.
   const handleSaved = useCallback(() => {
@@ -182,7 +180,7 @@ export function KnowledgePage(): ReactElement {
           explorer.setRootId(value);
           closePage();
         }}
-        create={{ model: "Vault" }}
+        create={{ resource: "Vault" }}
         onCreated={(id) => {
           void vaultsQuery.refetch();
           explorer.setRootId(id);
@@ -244,16 +242,4 @@ export function KnowledgePage(): ReactElement {
       </Explorer>
     </WikilinkProvider>
   );
-}
-
-/** The record crumb for `/knowledge/$id` — the page's title. */
-export function PageCrumb({ id }: { id: string }): ReactElement {
-  const t = useKnowledgeT();
-  const { fetching, record } = useResourceRecord(PAGE_MODEL, id || null, {
-    enabled: id !== "",
-    fields: ["title"],
-  });
-  const title = typeof record?.title === "string" ? record.title.trim() : "";
-  if (fetching) return <>…</>;
-  return <>{title || t("knowledge.page.crumbFallback")}</>;
 }

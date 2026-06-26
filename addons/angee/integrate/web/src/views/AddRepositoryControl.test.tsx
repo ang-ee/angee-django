@@ -8,20 +8,18 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
-import { AppRuntimeProvider } from "@angee/sdk";
-import { baseIcons } from "@angee/base";
+import { AppRuntimeProvider, baseIcons } from "@angee/ui";
 
 import { AddRepositoryControl } from "./AddRepositoryControl";
 
-// The mocked SDK surface: the two reads (bridge catalogue, repo search), and the
-// add mutation options that declare which list should refresh after an add.
+const baseMocks = vi.hoisted(() => ({
+  bridgeOptions: [] as Array<{ value: string; label: string }>,
+  refetchBridges: vi.fn(),
+}));
+
+// The mocked authored-operation surface: repo search and add mutation. VCS bridge
+// options come from the shared refine-backed relation options owner.
 const sdkMocks = vi.hoisted(() => ({
-  integrations: {
-    data: undefined as unknown,
-    fetching: false,
-    error: null as Error | null,
-    refetch: vi.fn(),
-  },
   search: {
     data: undefined as unknown,
     fetching: false,
@@ -42,13 +40,16 @@ function operationName(document: unknown): string {
   return (definition as { name?: { value?: string } })?.name?.value ?? "";
 }
 
-vi.mock("@angee/sdk", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/sdk")>();
+vi.mock("@angee/ui", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
     ...actual,
+    useRelationOptions: () => ({
+      list: { fetching: false, refetch: baseMocks.refetchBridges },
+      options: baseMocks.bridgeOptions,
+    }),
     useAuthoredQuery: (document: unknown, variables: unknown) => {
       const name = operationName(document);
-      if (name === "IntegrateVcsBridges") return sdkMocks.integrations;
       if (name === "IntegrateSearchRepositories") {
         sdkMocks.lastSearchVars = variables;
         return sdkMocks.search;
@@ -79,7 +80,7 @@ describe("AddRepositoryControl typeahead", () => {
 
   afterEach(() => {
     cleanup();
-    sdkMocks.integrations.data = undefined;
+    baseMocks.bridgeOptions = [];
     sdkMocks.search.data = undefined;
     sdkMocks.search.fetching = false;
     sdkMocks.lastSearchVars = null;
@@ -88,7 +89,7 @@ describe("AddRepositoryControl typeahead", () => {
   });
 
   test("does not search until a repository name is typed", async () => {
-    sdkMocks.integrations.data = integrationsData();
+    baseMocks.bridgeOptions = bridgeOptions();
     sdkMocks.search.data = searchData();
 
     renderControl();
@@ -99,10 +100,10 @@ describe("AddRepositoryControl typeahead", () => {
   });
 
   test("searches the chosen integration and inventories a picked candidate", async () => {
-    sdkMocks.integrations.data = integrationsData();
+    baseMocks.bridgeOptions = bridgeOptions();
     sdkMocks.search.data = searchData();
     sdkMocks.addRepository.mockResolvedValue({
-      addRepository: { id: "repo_1", org: "acme", name: "acme/widgets" },
+      add_repository: { id: "repo_1", org: "acme", name: "acme/widgets" },
     });
 
     renderControl();
@@ -144,23 +145,19 @@ function renderControl(): ReturnType<typeof render> {
   );
 }
 
-function integrationsData(): unknown {
-  return {
-    vcsBridges: {
-      results: [{ id: VCS_ID, displayName: "github (active)" }],
-    },
-  };
+function bridgeOptions(): Array<{ value: string; label: string }> {
+  return [{ value: VCS_ID, label: "github (active)" }];
 }
 
 function searchData(): unknown {
   return {
-    searchRepositories: [
+    search_repositories: [
       {
         name: "acme/widgets",
         org: "acme",
-        defaultBranch: "main",
+        default_branch: "main",
         visibility: "private",
-        webUrl: "https://github.com/acme/widgets",
+        web_url: "https://github.com/acme/widgets",
       },
     ],
   };

@@ -1,4 +1,4 @@
-import type { BaseMenuItem } from "@angee/base";
+import type { BaseMenuItem } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import platform from "./index";
@@ -15,7 +15,7 @@ describe("platform addon manifest", () => {
       "/platform/addons/$id",
     ]);
     for (const route of routes) {
-      expect(route.shell).toBe("console");
+      expect(route.layout).toBe("console");
       expect(route.component).toBeTypeOf("function");
     }
   });

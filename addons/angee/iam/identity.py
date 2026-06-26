@@ -16,6 +16,12 @@ from rebac import app_settings, system_context
 from angee.base.models import instance_from_public_id, public_id_for
 
 
+def user_label(user: Any) -> str:
+    """Return any user model's human label from the Django auth contract."""
+
+    return str(user.get_full_name() or user.username)
+
+
 def user_public_id(user_id: Any) -> str | None:
     """Return a user's opaque public id without fetching the user row."""
 
@@ -40,14 +46,14 @@ def user_display_label(user_id: Any) -> str | None:
     with system_context(reason="iam.identity.user_label"):
         try:
             user = user_model.objects.filter(pk=user_id).only("first_name", "last_name", "username").first()
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             user = None
     if user is None:
         try:
             user = user_principal(str(user_id))
         except ValueError:
             return None
-    return str(user.get_full_name() or user.username)
+    return user_label(user)
 
 
 def user_principal(principal_id: str, *, graphql_type_name: str = "UserType") -> Any:
@@ -56,10 +62,7 @@ def user_principal(principal_id: str, *, graphql_type_name: str = "UserType") ->
     user_model = get_user_model()
     resolved_id = _user_principal_node_id(principal_id, graphql_type_name=graphql_type_name)
     lookups: list[dict[str, Any]] = []
-    subject_id_attr = str(
-        getattr(user_model._meta, "rebac_id_attr", None)
-        or app_settings.REBAC_USER_ID_ATTR
-    )
+    subject_id_attr = str(getattr(user_model._meta, "rebac_id_attr", None) or app_settings.REBAC_USER_ID_ATTR)
     lookups.append({subject_id_attr: resolved_id})
     public_lookup = getattr(user_model, "public_id_lookup", None)
     if callable(public_lookup):
@@ -78,7 +81,7 @@ def user_principal(principal_id: str, *, graphql_type_name: str = "UserType") ->
             tried.add(key)
             try:
                 user = user_model._default_manager.filter(**lookup).first()
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 continue
             if user is not None:
                 return user

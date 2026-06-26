@@ -1,0 +1,20 @@
+import { fileURLToPath } from "node:url";
+import {
+  defineAngeeWebVitestConfig,
+  gqlAliasFor,
+} from "{{ framework_vitest_shared }}";
+
+// This project owns its `runtime/gql/<schema>/` tree, so its tests resolve
+// `@angee/gql/<schema>` against its OWN runtime/gql (project-relative) rather
+// than the framework fixture default. Vitest does not read tsconfig `paths`, so
+// the alias is supplied explicitly here — the same shape this project declares in
+// its tsconfig/vite. The shared web defaults (refine aliases, DOM deps, test
+// globs) come from the framework owner so this config stays thin.
+export default defineAngeeWebVitestConfig({
+  gqlAlias: gqlAliasFor(
+    fileURLToPath(new URL("../runtime/gql/", import.meta.url)),
+  ),
+  test: {
+    extraInclude: ["*.test.ts"],
+  },
+});

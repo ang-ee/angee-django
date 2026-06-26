@@ -16,11 +16,12 @@ from __future__ import annotations
 import strawberry
 from django.apps import AppConfig, apps
 from django.db.models import Model
-from rebac import ObjectRef, current_actor
-from rebac.backends import backend
-from rebac.field_visibility import check_field_access
+from pydantic import BaseModel
+from rebac import ObjectRef
 
 from angee.addons import is_angee_addon
+from angee.graphql.access import actor_can_read
+from angee.graphql.data import hasura_pydantic_resource
 
 _EXPLORER = ObjectRef("platform/explorer", "default")
 
@@ -111,15 +112,7 @@ def platform_can_read() -> bool:
     role.
     """
 
-    actor = current_actor()
-    if actor is None:
-        return False
-    return check_field_access(
-        backend(),
-        subject=actor,
-        action="read",
-        resource=_EXPLORER,
-    ).allowed
+    return actor_can_read(_EXPLORER)
 
 
 def _addons() -> list[AppConfig]:
@@ -282,10 +275,255 @@ def _build_explorer() -> PlatformExplorerData:
     return PlatformExplorerData(addons=addons_out, models=models_out, edges=edges_out)
 
 
+class PlatformAddonRow(BaseModel):
+    """Computed platform-explorer addon row (no Django table behind it).
+
+    The row-shape SSOT for the ``platform.Addon`` Hasura resource. Reverse
+    dependencies (``depended_by``) are resolved server-side across the whole
+    addon set, since a paginated client page cannot invert ``depends_on``.
+    """
+
+    id: str
+    label: str
+    namespace: str
+    kind: str
+    model_count: int
+    field_count: int
+    resource_count: int
+    depends_on: list[str]
+    depended_by: list[str]
+    model_labels: list[str]
+
+
+def _addon_rows() -> list[PlatformAddonRow]:
+    """Project composed addons as rows, resolving reverse dependencies."""
+
+    explorer = _build_explorer()
+    depended_by: dict[str, list[str]] = {}
+    for addon in explorer.addons:
+        for dependency in addon.depends_on:
+            depended_by.setdefault(dependency, []).append(addon.id)
+    return [
+        PlatformAddonRow(
+            id=addon.id,
+            label=addon.label,
+            namespace=addon.namespace,
+            kind=addon.kind,
+            model_count=addon.model_count,
+            field_count=addon.field_count,
+            resource_count=addon.resource_count,
+            depends_on=list(addon.depends_on),
+            depended_by=sorted(depended_by.get(addon.id, ())),
+            model_labels=list(addon.model_labels),
+        )
+        for addon in explorer.addons
+    ]
+
+
+def _addon_rows_for(info: strawberry.Info) -> list[PlatformAddonRow]:
+    """Row provider gated on the same platform-admin read as the explorer."""
+
+    del info
+    return _addon_rows() if platform_can_read() else []
+
+
+_ADDON_RESOURCE = hasura_pydantic_resource(
+    PlatformAddonRow,
+    name="platform_addons",
+    model_label="platform.Addon",
+    filterable=[
+        "id",
+        "label",
+        "namespace",
+        "kind",
+        "model_count",
+        "field_count",
+        "resource_count",
+    ],
+    sortable=[
+        "label",
+        "namespace",
+        "kind",
+        "model_count",
+        "field_count",
+        "resource_count",
+    ],
+    rows=_addon_rows_for,
+)
+
+
+class PlatformModelRow(BaseModel):
+    """Computed platform-explorer model row (no Django table behind it).
+
+    The row-shape SSOT for the ``platform.Model`` Hasura resource. The strawberry
+    ``PlatformModel`` keys by ``label`` and carries no ``id``; the row adds an
+    explicit ``id`` (= ``label``) for by-pk addressing. The nested ``fields`` list
+    stays a detail concern (it is the ``platform.Field`` resource, flattened), so
+    it is dropped here in favour of the ``field_count``/``relation_count`` rollup.
+    """
+
+    id: str
+    label: str
+    app_label: str
+    model_name: str
+    verbose_name: str
+    db_table: str
+    addon_id: str
+    addon_label: str
+    resource_type: str | None
+    field_count: int
+    relation_count: int
+    depends_on: list[str]
+
+
+class PlatformFieldRow(BaseModel):
+    """Computed platform-explorer field row, flattened across all models.
+
+    The row-shape SSOT for the ``platform.Field`` Hasura resource. The strawberry
+    ``PlatformField`` is nested under one model; this row flattens every model's
+    fields into one collection, carrying the owning ``model`` label and ``addon``
+    context plus a synthetic ``id`` (``f"{model}.{name}"``) for by-pk addressing.
+    """
+
+    id: str
+    name: str
+    attname: str
+    kind: str
+    is_relation: bool
+    relation_target: str | None
+    model: str
+    addon: str
+
+
+def _model_rows() -> list[PlatformModelRow]:
+    """Project composed models as rows (the explorer's per-model rollup)."""
+
+    explorer = _build_explorer()
+    return [
+        PlatformModelRow(
+            id=model.label,
+            label=model.label,
+            app_label=model.app_label,
+            model_name=model.model_name,
+            verbose_name=model.verbose_name,
+            db_table=model.db_table,
+            addon_id=model.addon_id,
+            addon_label=model.addon_label,
+            resource_type=model.resource_type,
+            field_count=model.field_count,
+            relation_count=model.relation_count,
+            depends_on=list(model.depends_on),
+        )
+        for model in explorer.models
+    ]
+
+
+def _field_rows_flat() -> list[PlatformFieldRow]:
+    """Project every composed model's fields, flattened into one collection."""
+
+    explorer = _build_explorer()
+    return [
+        PlatformFieldRow(
+            id=f"{model.label}.{field.name}",
+            name=field.name,
+            attname=field.attname,
+            kind=field.kind,
+            is_relation=field.is_relation,
+            relation_target=field.relation_target,
+            model=model.label,
+            addon=field.addon,
+        )
+        for model in explorer.models
+        for field in model.fields
+    ]
+
+
+def _model_rows_for(info: strawberry.Info) -> list[PlatformModelRow]:
+    """Row provider gated on the same platform-admin read as the explorer."""
+
+    del info
+    return _model_rows() if platform_can_read() else []
+
+
+def _field_rows_for(info: strawberry.Info) -> list[PlatformFieldRow]:
+    """Row provider gated on the same platform-admin read as the explorer."""
+
+    del info
+    return _field_rows_flat() if platform_can_read() else []
+
+
+_MODEL_RESOURCE = hasura_pydantic_resource(
+    PlatformModelRow,
+    name="platform_models",
+    model_label="platform.Model",
+    filterable=[
+        "id",
+        "label",
+        "app_label",
+        "model_name",
+        "verbose_name",
+        "db_table",
+        "addon_id",
+        "addon_label",
+        "resource_type",
+        "field_count",
+        "relation_count",
+    ],
+    sortable=[
+        "label",
+        "app_label",
+        "model_name",
+        "verbose_name",
+        "db_table",
+        "addon_id",
+        "addon_label",
+        "field_count",
+        "relation_count",
+    ],
+    rows=_model_rows_for,
+)
+
+
+_FIELD_RESOURCE = hasura_pydantic_resource(
+    PlatformFieldRow,
+    name="platform_fields",
+    model_label="platform.Field",
+    filterable=[
+        "id",
+        "name",
+        "attname",
+        "kind",
+        "is_relation",
+        "relation_target",
+        "model",
+        "addon",
+    ],
+    sortable=[
+        "name",
+        "attname",
+        "kind",
+        "relation_target",
+        "model",
+        "addon",
+    ],
+    rows=_field_rows_for,
+)
+
+
 schemas = {
     "console": {
-        "query": [PlatformQuery],
-        "types": [PlatformExplorerData],
+        "query": [
+            PlatformQuery,
+            _ADDON_RESOURCE.query,
+            _MODEL_RESOURCE.query,
+            _FIELD_RESOURCE.query,
+        ],
+        "types": [
+            PlatformExplorerData,
+            *_ADDON_RESOURCE.types,
+            *_MODEL_RESOURCE.types,
+            *_FIELD_RESOURCE.types,
+        ],
     },
 }
 """GraphQL contributions installed by the platform addon (console surface)."""

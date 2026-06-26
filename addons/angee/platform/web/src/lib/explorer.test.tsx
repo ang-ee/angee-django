@@ -3,7 +3,7 @@
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import type { AuthoredQueryResult } from "@angee/sdk";
+import type { AuthoredQueryResult } from "@angee/ui";
 
 import type {
   PlatformAddonData,
@@ -12,12 +12,9 @@ import type {
 } from "../documents";
 import {
   selectPlatformAddonDetail,
-  selectPlatformFieldRows,
   selectPlatformModelDetail,
   selectPlatformModelGraph,
-  selectPlatformModelRows,
   usePlatformAddon,
-  usePlatformAddonRows,
   usePlatformExplorer,
   type PlatformExplorerResult,
 } from "./explorer";
@@ -26,8 +23,8 @@ const sdkMocks = vi.hoisted(() => ({
   query: null as AuthoredQueryResult<PlatformExplorerResult> | null,
 }));
 
-vi.mock("@angee/sdk", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/sdk")>();
+vi.mock("@angee/ui", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
     ...actual,
     useAuthoredQuery: () => {
@@ -35,22 +32,6 @@ vi.mock("@angee/sdk", async (importOriginal) => {
         throw new Error("Missing mocked platform explorer query.");
       }
       return sdkMocks.query;
-    },
-    useAuthoredRows: (
-      _document: unknown,
-      options: {
-        selectRows: (
-          data: PlatformExplorerResult | undefined,
-        ) => readonly unknown[];
-      },
-    ) => {
-      if (!sdkMocks.query) {
-        throw new Error("Missing mocked platform explorer query.");
-      }
-      return {
-        ...sdkMocks.query,
-        rows: options.selectRows(sdkMocks.query.data),
-      };
     },
   };
 });
@@ -60,31 +41,6 @@ beforeEach(() => {
 });
 
 describe("platform explorer selectors", () => {
-  test("filters model rows by addon scope", () => {
-    const rows = selectPlatformModelRows(explorerResult(), {
-      addon: "angee.iam",
-    });
-
-    expect(rows.map((row) => row.id)).toEqual(["iam.user"]);
-  });
-
-  test("intersects field rows by model and addon scopes", () => {
-    const data = explorerResult();
-
-    expect(
-      selectPlatformFieldRows(data, {
-        model: "iam.user",
-        addon: "angee.iam",
-      }).map((row) => row.id),
-    ).toEqual(["iam.user.id", "iam.user.created_by"]);
-    expect(
-      selectPlatformFieldRows(data, {
-        model: "iam.user",
-        addon: "angee.resources",
-      }),
-    ).toEqual([]);
-  });
-
   test("projects addon dependency detail from known platform addons", () => {
     const detail = selectPlatformAddonDetail(explorerResult(), "angee.iam");
 
@@ -97,7 +53,7 @@ describe("platform explorer selectors", () => {
   test("projects model reverse dependency detail", () => {
     const detail = selectPlatformModelDetail(explorerResult(), "iam.user");
 
-    expect(detail.model?.modelName).toBe("User");
+    expect(detail.model?.model_name).toBe("User");
     expect(detail.dependedBy).toEqual(["operator.task"]);
   });
 
@@ -115,10 +71,8 @@ describe("platform explorer selectors", () => {
   });
 
   test("treats a null explorer payload as an empty platform surface", () => {
-    const data: PlatformExplorerResult = { platformExplorer: null };
+    const data: PlatformExplorerResult = { platform_explorer: null };
 
-    expect(selectPlatformModelRows(data)).toEqual([]);
-    expect(selectPlatformFieldRows(data)).toEqual([]);
     expect(selectPlatformAddonDetail(data, "angee.iam").addon).toBeUndefined();
     expect(selectPlatformModelGraph(data).nodes).toEqual([]);
   });
@@ -126,23 +80,12 @@ describe("platform explorer selectors", () => {
 
 describe("platform explorer hooks", () => {
   test("exposes the nullable explorer payload", () => {
-    sdkMocks.query = queryResult({ platformExplorer: null });
+    sdkMocks.query = queryResult({ platform_explorer: null });
 
     const { result } = renderHook(() => usePlatformExplorer());
 
     expect(result.current.explorer).toBeNull();
     expect(result.current.fetching).toBe(false);
-  });
-
-  test("projects authored addon rows through the platform owner", () => {
-    const { result } = renderHook(() => usePlatformAddonRows());
-
-    expect(result.current.rows.map((row) => row.id)).toEqual([
-      "angee.iam",
-      "angee.operator",
-      "angee.resources",
-    ]);
-    expect(result.current.error).toBeNull();
   });
 
   test("preserves loading state for missing detail records", () => {
@@ -171,7 +114,7 @@ function queryResult(
 
 function explorerResult(): PlatformExplorerResult {
   return {
-    platformExplorer: {
+    platform_explorer: {
       addons,
       models,
       edges,
@@ -185,87 +128,87 @@ const addons: PlatformAddonData[] = [
     label: "iam",
     namespace: "angee",
     kind: "required",
-    modelCount: 2,
-    fieldCount: 3,
-    resourceCount: 1,
-    dependsOn: ["angee.resources", "django.contrib.auth"],
-    modelLabels: ["iam.user", "iam.group", "iam.user"],
+    model_count: 2,
+    field_count: 3,
+    resource_count: 1,
+    depends_on: ["angee.resources", "django.contrib.auth"],
+    model_labels: ["iam.user", "iam.group", "iam.user"],
   },
   {
     id: "angee.operator",
     label: "operator",
     namespace: "angee",
     kind: "optional",
-    modelCount: 1,
-    fieldCount: 1,
-    resourceCount: 0,
-    dependsOn: ["angee.iam"],
-    modelLabels: ["operator.task"],
+    model_count: 1,
+    field_count: 1,
+    resource_count: 0,
+    depends_on: ["angee.iam"],
+    model_labels: ["operator.task"],
   },
   {
     id: "angee.resources",
     label: "resources",
     namespace: "angee",
     kind: "required",
-    modelCount: 0,
-    fieldCount: 0,
-    resourceCount: 0,
-    dependsOn: [],
-    modelLabels: [],
+    model_count: 0,
+    field_count: 0,
+    resource_count: 0,
+    depends_on: [],
+    model_labels: [],
   },
 ];
 
 const models: PlatformModelData[] = [
   {
     label: "iam.user",
-    appLabel: "iam",
-    modelName: "User",
-    verboseName: "user",
-    dbTable: "iam_user",
-    addonId: "angee.iam",
-    addonLabel: "iam",
-    resourceType: "auth/user",
-    fieldCount: 2,
-    relationCount: 1,
-    dependsOn: [],
+    app_label: "iam",
+    model_name: "User",
+    verbose_name: "user",
+    db_table: "iam_user",
+    addon_id: "angee.iam",
+    addon_label: "iam",
+    resource_type: "auth/user",
+    field_count: 2,
+    relation_count: 1,
+    depends_on: [],
     fields: [
       {
         name: "id",
         attname: "id",
         kind: "BigAutoField",
-        isRelation: false,
-        relationTarget: null,
+        is_relation: false,
+        relation_target: null,
         addon: "iam",
       },
       {
         name: "created_by",
         attname: "created_by_id",
         kind: "ForeignKey",
-        isRelation: true,
-        relationTarget: "iam.user",
+        is_relation: true,
+        relation_target: "iam.user",
         addon: "iam",
       },
     ],
   },
   {
     label: "operator.task",
-    appLabel: "operator",
-    modelName: "Task",
-    verboseName: "task",
-    dbTable: "operator_task",
-    addonId: "angee.operator",
-    addonLabel: "operator",
-    resourceType: null,
-    fieldCount: 1,
-    relationCount: 1,
-    dependsOn: ["iam.user"],
+    app_label: "operator",
+    model_name: "Task",
+    verbose_name: "task",
+    db_table: "operator_task",
+    addon_id: "angee.operator",
+    addon_label: "operator",
+    resource_type: null,
+    field_count: 1,
+    relation_count: 1,
+    depends_on: ["iam.user"],
     fields: [
       {
         name: "owner",
         attname: "owner_id",
         kind: "ForeignKey",
-        isRelation: true,
-        relationTarget: "iam.user",
+        is_relation: true,
+        relation_target: "iam.user",
         addon: "operator",
       },
     ],
@@ -278,6 +221,6 @@ const edges: PlatformEdgeData[] = [
     source: "operator.task",
     target: "iam.user",
     kind: "relation",
-    fieldName: "owner",
+    field_name: "owner",
   },
 ];

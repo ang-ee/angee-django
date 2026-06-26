@@ -120,8 +120,120 @@ def agents_console_tables(transactional_db: Any) -> Iterator[None]:
                     schema_editor.delete_model(model)
 
 
-def test_agent_update_sets_many_to_many_skills(agents_console_tables: None) -> None:
-    """`updateAgent` with a `skills` id list replaces the agent's skill membership."""
+def test_agent_hasura_insert_update_and_delete(agents_console_tables: None) -> None:
+    """Agent row writes use the generated Hasura mutation roots."""
+
+    admin = _platform_admin("agt-hasura-admin")
+    console = _schema()
+
+    created = _data(
+        _execute(
+            console,
+            """
+            mutation CreateAgent($owner: ID!) {
+              insert_agents_one(object: {name: "Composer", owner: $owner, lifecycle: "draft"}) {
+                id
+                name
+                lifecycle
+                is_template
+                can_provision
+                can_deprovision
+                can_delete
+                owner { username }
+              }
+            }
+            """,
+            {"owner": str(admin.pk)},
+            user=admin,
+        )
+    )["insert_agents_one"]
+    assert created == {
+        "id": created["id"],
+        "name": "Composer",
+        "lifecycle": "DRAFT",
+        "is_template": False,
+        "can_provision": True,
+        "can_deprovision": False,
+        "can_delete": True,
+        "owner": {"username": "agt-hasura-admin"},
+    }
+
+    updated = _data(
+        _execute(
+            console,
+            """
+            mutation Rename($id: String!) {
+              update_agents_by_pk(pk_columns: {id: $id}, _set: {name: "Renamed", lifecycle: "deprovisioned"}) {
+                name
+                lifecycle
+                can_provision
+                can_deprovision
+                can_delete
+              }
+            }
+            """,
+            {"id": created["id"]},
+            user=admin,
+        )
+    )["update_agents_by_pk"]
+    assert updated == {
+        "name": "Renamed",
+        "lifecycle": "DEPROVISIONED",
+        "can_provision": True,
+        "can_deprovision": False,
+        "can_delete": True,
+    }
+
+    deleted = _data(
+        _execute(
+            console,
+            """
+            mutation Delete($id: String!) {
+              delete_agents_by_pk(id: $id) { id name }
+            }
+            """,
+            {"id": created["id"]},
+            user=admin,
+        )
+    )["delete_agents_by_pk"]
+    assert deleted == {"id": created["id"], "name": "Renamed"}
+    with system_context(reason="test.agents.hasura_delete.verify"):
+        assert not Agent.objects.filter(sqid=created["id"]).exists()
+
+
+def test_agent_hasura_delete_blocks_rendered_agents(agents_console_tables: None) -> None:
+    """Agent delete policy is enforced by the backend write owner, not only the UI."""
+
+    admin = _platform_admin("agt-delete-block-admin")
+    with system_context(reason="test.agents.delete_block.seed"):
+        agent = Agent.objects.create(
+            name="Rendered",
+            owner=admin,
+            workspace="ws-rendered",
+            service="svc-rendered",
+            lifecycle="ready",
+        )
+    agent_id = _public_id(agent.sqid)
+
+    result = _execute(
+        _schema(),
+        """
+        mutation Delete($id: String!) {
+          delete_agents_by_pk(id: $id) { id name }
+        }
+        """,
+        {"id": agent_id},
+        user=admin,
+    )
+
+    assert result.errors is not None
+    assert "Deprovision this agent before deleting it." in str(result.errors[0])
+    with system_context(reason="test.agents.delete_block.verify"):
+        assert Agent.objects.filter(pk=agent.pk).exists()
+
+
+def test_agent_hasura_update_sets_many_to_many_skills(agents_console_tables: None) -> None:
+    """Generated Hasura updates replace agent skill membership through relation arrays."""
 
     admin = _platform_admin("agt-m2m-admin")
     skill_a, skill_b, agent = _seed_agent_and_skills(admin)
@@ -131,8 +243,8 @@ def test_agent_update_sets_many_to_many_skills(agents_console_tables: None) -> N
         _execute(
             console,
             """
-            mutation Attach($id: ID!, $skills: [ID!]) {
-              updateAgent(data: {id: $id, skills: $skills}) {
+            mutation Attach($id: String!, $skills: [ID!]) {
+              update_agents_by_pk(pk_columns: {id: $id}, _set: {skills: $skills}) {
                 skills { name }
               }
             }
@@ -143,17 +255,22 @@ def test_agent_update_sets_many_to_many_skills(agents_console_tables: None) -> N
             },
             user=admin,
         )
-    )["updateAgent"]
+    )["update_agents_by_pk"]
     assert sorted(node["name"] for node in result["skills"]) == ["Alpha", "Beta"]
 
     with system_context(reason="test.agents.m2m.verify"):
         assert sorted(agent.skills.values_list("name", flat=True)) == ["Alpha", "Beta"]
 
-    # An empty list clears the membership.
     _data(
         _execute(
             console,
-            "mutation Clear($id: ID!) { updateAgent(data: {id: $id, skills: []}) { skills { name } } }",
+            """
+            mutation Clear($id: String!) {
+              update_agents_by_pk(pk_columns: {id: $id}, _set: {skills: []}) {
+                skills { name }
+              }
+            }
+            """,
             {"id": _public_id(agent.sqid)},
             user=admin,
         )
@@ -170,14 +287,14 @@ def test_agent_update_is_platform_admin_gated(agents_console_tables: None) -> No
     with system_context(reason="test.agents.crud.seed"):
         agent = Agent.objects.create(name="Scratch", owner=admin)
     update = """
-        mutation Rename($id: ID!) {
-          updateAgent(data: {id: $id, name: "Renamed"}) { name }
+        mutation Rename($id: String!) {
+          update_agents_by_pk(pk_columns: {id: $id}, _set: {name: "Renamed"}) { name }
         }
     """
     agent_id = _public_id(agent.sqid)
 
     assert _execute(console := _schema(), update, {"id": agent_id}, user=plain).errors is not None
-    renamed = _data(_execute(console, update, {"id": agent_id}, user=admin))["updateAgent"]
+    renamed = _data(_execute(console, update, {"id": agent_id}, user=admin))["update_agents_by_pk"]
     assert renamed == {"name": "Renamed"}
 
 
@@ -188,10 +305,10 @@ def test_refresh_provider_models_is_admin_gated(agents_console_tables: None) -> 
     plain = User.objects.create_user(username="agt-refresh-plain", email="plain@example.com")
     provider = _provider("agt-refresh", name="P")
     provider_id = _public_id(provider.sqid)
-    query = "mutation($id: ID!){ refreshProviderModels(id: $id){ ok message } }"
+    query = "mutation($id: ID!){ refresh_provider_models(id: $id){ ok message } }"
 
     assert _execute(console := _schema(), query, {"id": provider_id}, user=plain).errors is not None
-    result = _data(_execute(console, query, {"id": provider_id}, user=admin))["refreshProviderModels"]
+    result = _data(_execute(console, query, {"id": provider_id}, user=admin))["refresh_provider_models"]
     assert result["ok"] is True
 
 
@@ -210,24 +327,20 @@ def test_inference_models_query_accepts_provider_sqid_filter(agents_console_tabl
         _execute(
             _schema(),
             """
-            query ModelsForProvider($provider: ID!) {
-              inferenceModels(filters: {provider: {sqid: $provider}}, order: {name: ASC}) {
-                totalCount
-                results {
-                  name
-                  provider { name }
-                }
+            query ModelsForProvider($provider: String!) {
+              rows: inference_models(where: {provider: {_eq: $provider}}) {
+                name
+                provider { name }
               }
             }
             """,
             {"provider": _public_id(provider_a.sqid)},
             user=admin,
         )
-    )["inferenceModels"]
+    )["rows"]
 
-    assert result["totalCount"] == 2
-    assert [row["name"] for row in result["results"]] == ["claude-opus-4-8", "claude-sonnet-4-6"]
-    assert {row["provider"]["name"] for row in result["results"]} == {"Anthropic"}
+    assert sorted(row["name"] for row in result) == ["claude-opus-4-8", "claude-sonnet-4-6"]
+    assert {row["provider"]["name"] for row in result} == {"Anthropic"}
 
 
 def test_inference_model_groups_aggregate_runs_for_provider_and_capability(
@@ -248,43 +361,51 @@ def test_inference_model_groups_aggregate_runs_for_provider_and_capability(
             _schema(),
             """
             query InferenceModelGroups(
-              $byUse: [InferenceModelAggregateGroupBySpec!]!
-              $byProvider: [InferenceModelAggregateGroupBySpec!]!
+              $byUse: [InferenceModelTypeGroupBySpec!]!
+              $byProvider: [InferenceModelTypeGroupBySpec!]!
             ) {
-              byUse: inferenceModelGroups(groupBy: $byUse, pagination: {offset: 0, limit: 10}) {
-                totalCount
-                results {
-                  key { modelUse }
-                  count
-                  filter
-                }
+              byUse: inference_models_groups(group_by: $byUse, limit: 10) {
+                key { model_use }
+                aggregate { count }
               }
-              byProvider: inferenceModelGroups(groupBy: $byProvider, pagination: {offset: 0, limit: 10}) {
-                totalCount
-                results {
-                  key { providerId }
-                  count
-                  filter
-                }
+              byProvider: inference_models_groups(group_by: $byProvider, limit: 10) {
+                key { provider_id provider__name }
+                aggregate { count }
               }
             }
             """,
             {
                 "byUse": [{"field": "MODEL_USE"}],
-                "byProvider": [{"field": "PROVIDER"}],
+                "byProvider": [{"field": "PROVIDER"}, {"field": "PROVIDER__NAME"}],
             },
             user=admin,
         )
     )
 
-    assert grouped["byUse"]["totalCount"] == 2
-    assert sorted(grouped["byUse"]["results"], key=lambda row: row["key"]["modelUse"]) == [
-        {"key": {"modelUse": "CHAT"}, "count": 2, "filter": {"modelUse": {"exact": "CHAT"}}},
-        {"key": {"modelUse": "EMBEDDING"}, "count": 1, "filter": {"modelUse": {"exact": "EMBEDDING"}}},
+    assert sorted(grouped["byUse"], key=lambda row: row["key"]["model_use"]) == [
+        {"key": {"model_use": "CHAT"}, "aggregate": {"count": 2}},
+        {"key": {"model_use": "EMBEDDING"}, "aggregate": {"count": 1}},
     ]
-    assert grouped["byProvider"]["totalCount"] == 2
-    provider_filters = {row["filter"]["provider"]["sqid"] for row in grouped["byProvider"]["results"]}
-    assert provider_filters == {provider_a.sqid, provider_b.sqid}
+    provider_groups = {
+        row["key"]["provider_id"]: row
+        for row in grouped["byProvider"]
+    }
+    assert provider_groups == {
+        str(provider_a.pk): {
+            "key": {
+                "provider_id": str(provider_a.pk),
+                "provider__name": "Anthropic",
+            },
+            "aggregate": {"count": 2},
+        },
+        str(provider_b.pk): {
+            "key": {
+                "provider_id": str(provider_b.pk),
+                "provider__name": "Manual",
+            },
+            "aggregate": {"count": 1},
+        },
+    }
 
 
 def test_create_inference_provider_creates_child_row(agents_console_tables: None) -> None:
@@ -295,20 +416,20 @@ def test_create_inference_provider_creates_child_row(agents_console_tables: None
     console = _schema()
     mutation = """
         mutation CreateProvider($vendor: ID!, $owner: ID!) {
-          createInferenceProvider(
+          create_inference_provider(
             data: {
               vendor: $vendor
               owner: $owner
-              backendClass: "manual"
+              backend_class: "manual"
               name: "Provider"
-              baseUrl: "https://api.example.test"
-              credentialEnv: "MODEL_API_KEY"
+              base_url: "https://api.example.test"
+              credential_env: "MODEL_API_KEY"
             }
           ) {
             name
-            baseUrl
-            backendClass
-            credentialEnv
+            base_url
+            backend_class
+            credential_env
             status
           }
         }
@@ -324,12 +445,12 @@ def test_create_inference_provider_creates_child_row(agents_console_tables: None
             },
             user=admin,
         )
-    )["createInferenceProvider"]
+    )["create_inference_provider"]
     assert created == {
         "name": "Provider",
-        "baseUrl": "https://api.example.test",
-        "backendClass": "MANUAL",
-        "credentialEnv": "MODEL_API_KEY",
+        "base_url": "https://api.example.test",
+        "backend_class": "MANUAL",
+        "credential_env": "MODEL_API_KEY",
         "status": "DRAFT",
     }
     with system_context(reason="test.agents.provider_mti.verify"):
@@ -365,12 +486,12 @@ def test_update_inference_provider_backend_rematerializes_defaults(agents_consol
         )
     mutation = """
         mutation UpdateProvider($id: ID!, $account: ID!) {
-          updateInferenceProvider(data: {id: $id, backendClass: "anthropic", account: $account}) {
-            backendClass
+          update_inference_provider(data: {id: $id, backend_class: "anthropic", account: $account}) {
+            backend_class
             name
-            credentialEnv
+            credential_env
             vendor { slug }
-            account { externalId }
+            account { external_id }
           }
         }
     """
@@ -382,14 +503,14 @@ def test_update_inference_provider_backend_rematerializes_defaults(agents_consol
             {"id": _public_id(provider.sqid), "account": _public_id(account.sqid)},
             user=admin,
         )
-    )["updateInferenceProvider"]
+    )["update_inference_provider"]
 
     assert updated == {
-        "backendClass": "ANTHROPIC",
+        "backend_class": "ANTHROPIC",
         "name": "Anthropic",
-        "credentialEnv": "ANTHROPIC_API_KEY",
+        "credential_env": "ANTHROPIC_API_KEY",
         "vendor": {"slug": "anthropic"},
-        "account": {"externalId": "agt-provider-update-ext"},
+        "account": {"external_id": "agt-provider-update-ext"},
     }
     provider.refresh_from_db()
     assert provider.vendor_id == anthropic.pk
@@ -416,16 +537,16 @@ def test_connect_inference_provider_uses_provider_backend_oauth_client(agents_co
         )
     mutation = """
         mutation ConnectProvider($id: ID!) {
-          connectInferenceProvider(id: $id) {
+          connect_inference_provider(id: $id) {
             attached
             error
-            integration { status credential { displayName } }
+            integration { status credential { display_name } }
           }
         }
     """
 
     result = _data(_execute(_schema(), mutation, {"id": provider_id}, user=provider.owner))[
-        "connectInferenceProvider"
+        "connect_inference_provider"
     ]
 
     assert result == {
@@ -433,7 +554,7 @@ def test_connect_inference_provider_uses_provider_backend_oauth_client(agents_co
         "error": None,
         "integration": {
             "status": "ACTIVE",
-            "credential": {"displayName": "Anthropic Personal"},
+            "credential": {"display_name": "Anthropic Personal"},
         },
     }
     provider.refresh_from_db()
@@ -449,22 +570,22 @@ def test_connect_inference_provider_uses_shared_oauth_client_error_code(
     provider = _provider("agt-provider-missing-oauth", backend_class="anthropic", name="Anthropic")
     mutation = """
         mutation ConnectProvider($id: ID!) {
-          connectInferenceProvider(id: $id) {
+          connect_inference_provider(id: $id) {
             attached
             error
-            errorCode
+            error_code
           }
         }
     """
 
     result = _data(_execute(_schema(), mutation, {"id": _public_id(provider.sqid)}, user=provider.owner))[
-        "connectInferenceProvider"
+        "connect_inference_provider"
     ]
 
     assert result == {
         "attached": False,
         "error": "Inference provider has no enabled OAuth client.",
-        "errorCode": "oauth_client_not_connectable",
+        "error_code": "oauth_client_not_connectable",
     }
 
 
@@ -480,10 +601,10 @@ def test_create_mcp_server_keeps_defaults_for_omitted_optionals(agents_console_t
     created = _data(
         _execute(
             _schema(),
-            'mutation { createMcpServer(data: {name: "Local MCP"}) { name placement config } }',
+            'mutation { insert_mcp_servers_one(object: {name: "Local MCP"}) { name placement config } }',
             user=admin,
         )
-    )["createMcpServer"]
+    )["insert_mcp_servers_one"]
     assert created == {"name": "Local MCP", "placement": "EXTERNAL", "config": {}}
 
 
@@ -566,9 +687,9 @@ def test_provision_agent_renders_via_daemon_and_is_admin_gated(agents_console_ta
 
     monkeypatch.setattr(Agent, "mark_provisioned", mark_provisioned_with_recorded_service)
 
-    provision = "mutation($id: ID!){ provisionAgent(id: $id){ ok message } }"
+    provision = "mutation($id: ID!){ provision_agent(id: $id){ ok message } }"
     assert _execute(console := _schema(), provision, {"id": agent_id}, user=plain).errors is not None
-    result = _data(_execute(console, provision, {"id": agent_id}, user=admin))["provisionAgent"]
+    result = _data(_execute(console, provision, {"id": agent_id}, user=admin))["provision_agent"]
     assert result == {"ok": True, "message": "Provisioned “svc-bot”."}
     with system_context(reason="test.agents.render.verify_rendered"):
         agent.refresh_from_db()
@@ -594,9 +715,9 @@ def test_provision_agent_renders_via_daemon_and_is_admin_gated(agents_console_ta
     assert calls[4] == ("recorded_service", "svc-bot", "provisioning")
 
     # Deprovision tears down the workspace via the daemon and clears the record.
-    deprovision = "mutation($id: ID!){ deprovisionAgent(id: $id){ ok message } }"
+    deprovision = "mutation($id: ID!){ deprovision_agent(id: $id){ ok message } }"
     assert _execute(console, deprovision, {"id": agent_id}, user=plain).errors is not None
-    result = _data(_execute(console, deprovision, {"id": agent_id}, user=admin))["deprovisionAgent"]
+    result = _data(_execute(console, deprovision, {"id": agent_id}, user=admin))["deprovision_agent"]
     assert result == {"ok": True, "message": "Deprovisioned."}
     with system_context(reason="test.agents.render.verify_deprovisioned"):
         agent.refresh_from_db()
@@ -660,11 +781,11 @@ def test_provision_agent_failure_tears_down_workspace_and_records_error(
     result = _data(
         _execute(
             _schema(),
-            "mutation($id: ID!){ provisionAgent(id: $id){ ok message } }",
+            "mutation($id: ID!){ provision_agent(id: $id){ ok message } }",
             {"id": agent_id},
             user=admin,
         )
-    )["provisionAgent"]
+    )["provision_agent"]
     assert result["ok"] is False and "image build failed" in result["message"]
     assert recorded == [("ws-doomed", "provisioning")]
     assert destroyed == ["ws-doomed"]  # the orphaned workspace was torn back down
@@ -712,11 +833,11 @@ def test_deprovision_agent_treats_missing_operator_instances_as_gone(
     result = _data(
         _execute(
             _schema(),
-            "mutation($id: ID!){ deprovisionAgent(id: $id){ ok message } }",
+            "mutation($id: ID!){ deprovision_agent(id: $id){ ok message } }",
             {"id": agent_id},
             user=admin,
         )
-    )["deprovisionAgent"]
+    )["deprovision_agent"]
 
     assert result == {"ok": True, "message": "Deprovisioned."}
     assert calls == [("destroy_service", "svc-gone"), ("destroy_workspace", "ws-gone")]
@@ -754,11 +875,11 @@ def test_provision_agent_records_error_when_plan_resolution_fails(
     result = _data(
         _execute(
             _schema(),
-            "mutation($id: ID!){ provisionAgent(id: $id){ ok message } }",
+            "mutation($id: ID!){ provision_agent(id: $id){ ok message } }",
             {"id": agent_id},
             user=admin,
         )
-    )["provisionAgent"]
+    )["provision_agent"]
 
     assert result["ok"] is False and "credential is unreadable" in result["message"]
     with system_context(reason="test.agents.planfail.verify"):
@@ -807,9 +928,9 @@ def test_reprovision_agent_recreates_service_over_existing_workspace(
 
     monkeypatch.setattr(agents_provisioning, "OperatorDaemon", _FakeDaemon)
 
-    reprovision = "mutation($id: ID!){ reprovisionAgent(id: $id){ ok message } }"
+    reprovision = "mutation($id: ID!){ reprovision_agent(id: $id){ ok message } }"
     assert _execute(console := _schema(), reprovision, {"id": agent_id}, user=plain).errors is not None
-    result = _data(_execute(console, reprovision, {"id": agent_id}, user=admin))["reprovisionAgent"]
+    result = _data(_execute(console, reprovision, {"id": agent_id}, user=admin))["reprovision_agent"]
 
     assert result == {"ok": True, "message": "Recreated service “svc-new”."}
     # The old service is torn down before the recreate over the preserved workspace.
@@ -867,11 +988,11 @@ def test_reprovision_agent_failure_clears_destroyed_service_but_keeps_workspace(
     result = _data(
         _execute(
             _schema(),
-            "mutation($id: ID!){ reprovisionAgent(id: $id){ ok message } }",
+            "mutation($id: ID!){ reprovision_agent(id: $id){ ok message } }",
             {"id": agent_id},
             user=admin,
         )
-    )["reprovisionAgent"]
+    )["reprovision_agent"]
 
     assert result["ok"] is False and "service recreate failed" in result["message"]
     assert destroyed == ["svc-old"]  # destroyed before the recreate failed
@@ -917,11 +1038,11 @@ def test_provision_agent_refuses_when_inference_credential_has_no_secret(
     result = _data(
         _execute(
             _schema(),
-            "mutation($id: ID!){ provisionAgent(id: $id){ ok message } }",
+            "mutation($id: ID!){ provision_agent(id: $id){ ok message } }",
             {"id": agent_id},
             user=admin,
         )
-    )["provisionAgent"]
+    )["provision_agent"]
 
     assert result["ok"] is False and "inference credential" in result["message"]
     assert called == []  # refused before constructing the daemon / any render
@@ -1005,17 +1126,17 @@ def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(
 
     query = """
         mutation Chat($id: ID!) {
-          agentChatEndpoint(id: $id) { url token expiresAt mcpServers modelHandle }
+          agent_chat_endpoint(id: $id) { url token expires_at mcp_servers model_handle }
         }
     """
     assert _execute(console := _schema(), query, {"id": agent_id}, user=plain).errors is not None
-    endpoint = _data(_execute(console, query, {"id": agent_id}, user=admin))["agentChatEndpoint"]
+    endpoint = _data(_execute(console, query, {"id": agent_id}, user=admin))["agent_chat_endpoint"]
 
     assert endpoint["url"] == "wss://svc-chat.example.test/"
     assert endpoint["token"] == "jwt-route"
-    assert endpoint["expiresAt"] == "2026-06-15T00:00:00Z"
-    assert endpoint["modelHandle"] == "claude-opus-4-8"
-    assert endpoint["mcpServers"] == {
+    assert endpoint["expires_at"] == "2026-06-15T00:00:00Z"
+    assert endpoint["model_handle"] == "claude-opus-4-8"
+    assert endpoint["mcp_servers"] == {
         "notes": {"type": "http", "url": "http://host.docker.internal:8101/mcp/notes/"},
     }
     # The token is minted per actor (the session user, `auth/user:<id>`), scoped to the
@@ -1033,7 +1154,7 @@ def test_agent_chat_endpoint_errors_when_agent_not_running(agents_console_tables
         agent = Agent.objects.create(name="Idle", owner=admin)
     result = _execute(
         _schema(),
-        "mutation($id: ID!){ agentChatEndpoint(id: $id){ url } }",
+        "mutation($id: ID!){ agent_chat_endpoint(id: $id){ url } }",
         {"id": _public_id(agent.sqid)},
         user=admin,
     )
@@ -1062,19 +1183,25 @@ def test_resolve_session_for_view_resolves_the_actors_running_agent(
 
     mutation = """
         mutation Session($view: JSON!) {
-          resolveSessionForView(view: $view) { agentName status modelHandle }
+          resolve_session_for_view(view: $view) { agent_name status model_handle }
         }
     """
     view = {"kind": "record", "type": "notes/note", "sqid": "nte_x"}
-    session = _data(_execute(console := _schema(), mutation, {"view": view}, user=admin))["resolveSessionForView"]
+    session = _data(_execute(console := _schema(), mutation, {"view": view}, user=admin))["resolve_session_for_view"]
 
-    assert session["agentName"] == "Sidekick"
+    assert session["agent_name"] == "Sidekick"
     assert session["status"] == "running"
 
     # A platform admin with no running agent gets null, not an error.
     other = _platform_admin("agt-session-none")
-    none_session = _data(_execute(console, mutation, {"view": view}, user=other))["resolveSessionForView"]
+    none_session = _data(_execute(console, mutation, {"view": view}, user=other))["resolve_session_for_view"]
     assert none_session is None
+
+    # The side chatter is actor-scoped, not admin-scoped: a normal user with no
+    # running agent also gets null instead of a permission error.
+    viewer = User.objects.create_user(username="agt-session-viewer", email="viewer@example.com")
+    viewer_session = _data(_execute(console, mutation, {"view": view}, user=viewer))["resolve_session_for_view"]
+    assert viewer_session is None
 
 
 def test_provision_workspace_inputs_from_agent_fields(agents_console_tables: None) -> None:
@@ -1111,12 +1238,12 @@ def test_render_agent_prompt_builds_system_context_and_is_admin_gated(
         server = MCPServer.objects.create(name="Local Notes", url="http://x/mcp/notes/")
     agent_id = _public_id(agent.sqid)
     mutation = """
-        mutation Prompt($id: ID!, $view: JSON!) { renderAgentPrompt(id: $id, view: $view) }
+        mutation Prompt($id: ID!, $view: JSON!) { render_agent_prompt(id: $id, view: $view) }
     """
     view = {"kind": "record", "type": "agents/mcp_server", "sqid": str(server.sqid)}
 
     assert _execute(console := _schema(), mutation, {"id": agent_id, "view": view}, user=plain).errors is not None
-    rendered = _data(_execute(console, mutation, {"id": agent_id, "view": view}, user=admin))["renderAgentPrompt"]
+    rendered = _data(_execute(console, mutation, {"id": agent_id, "view": view}, user=admin))["render_agent_prompt"]
 
     assert rendered.startswith("<system_context>") and rendered.endswith("</system_context>")
     assert "record of agents/mcp_server" in rendered
@@ -1124,7 +1251,7 @@ def test_render_agent_prompt_builds_system_context_and_is_admin_gated(
     assert "MCP tool" in rendered
 
     # An empty envelope adds nothing.
-    empty = _data(_execute(console, mutation, {"id": agent_id, "view": {}}, user=admin))["renderAgentPrompt"]
+    empty = _data(_execute(console, mutation, {"id": agent_id, "view": {}}, user=admin))["render_agent_prompt"]
     assert empty == ""
 
 

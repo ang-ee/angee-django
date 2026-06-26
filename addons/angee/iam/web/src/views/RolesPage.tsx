@@ -1,43 +1,37 @@
 import { type ReactElement } from "react";
 
 import {
-  AuthoredRowsList,
   Code,
+  ListView,
   type ListColumn,
-} from "@angee/base";
-import type { DocumentData } from "@angee/sdk";
+} from "@angee/ui";
 
-import { IamRoles } from "../documents";
-import {
-  roleRows,
-  type IAMRoleRow,
-} from "../identity-rows";
-
-type IamRolesResult = DocumentData<typeof IamRoles>;
-
-function selectRows(data: IamRolesResult | undefined): readonly IAMRoleRow[] {
-  return roleRows(data?.roles ?? []);
+// The `iam.Role` Hasura resource row (`hasura_pydantic_resource`,
+// `addons/angee/iam/schema.py`): roles deduped from active role-relationship
+// tuples, fetched + grouped client-side by ListView's client row model.
+interface RoleResourceRow extends Record<string, unknown> {
+  id: string;
+  namespace: string;
+  label: string;
+  description: string;
 }
 
-const roleColumns: readonly ListColumn<IAMRoleRow>[] = [
+const roleColumns: readonly ListColumn<RoleResourceRow>[] = [
   {
     field: "namespace",
     render: (row) => <Code truncate>{row.namespace}</Code>,
   },
   {
     field: "label",
-    render: (row) => (
-      <span className="font-medium text-fg">{row.label}</span>
-    ),
+    render: (row) => <span className="font-medium text-fg">{row.label}</span>,
   },
   { field: "description", sortable: false },
 ];
 
 export function RolesPage(): ReactElement {
   return (
-    <AuthoredRowsList
-      document={IamRoles}
-      selectRows={selectRows}
+    <ListView<RoleResourceRow>
+      resource="iam.Role"
       columns={roleColumns}
       defaultGroup={{ field: "namespace" }}
       pageSize={50}

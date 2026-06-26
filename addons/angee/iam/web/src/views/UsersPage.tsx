@@ -2,24 +2,23 @@ import * as React from "react";
 import {
   Action,
   Column,
-  DataPage,
+  ResourceList,
   Field,
   Form,
   Group,
-  GroupListView,
   List,
-} from "@angee/base";
+} from "@angee/ui";
 
 import { useIamT } from "../i18n";
 
 const MODEL = "User";
 
 const userList = (
-  <List model={MODEL} list={GroupListView}>
+  <List resource={MODEL}>
     <Column field="username" />
     <Column field="email" />
-    <Column field="isStaff" />
-    <Column field="isActive" />
+    <Column field="is_staff" />
+    <Column field="is_active" />
   </List>
 );
 
@@ -27,16 +26,16 @@ const userList = (
 export function UsersPage(): React.ReactElement {
   const t = useIamT();
   const userForm = (
-    <Form model={MODEL}>
+    <Form resource={MODEL}>
       <Field name="username" title />
       <Group label={t("iam.users.group.profile")} columns={2}>
         <Field name="email" />
-        <Field name="firstName" />
-        <Field name="lastName" />
+        <Field name="first_name" />
+        <Field name="last_name" />
       </Group>
       <Group label={t("iam.users.group.access")} columns={2}>
-        <Field name="isStaff" />
-        <Field name="isActive" />
+        <Field name="is_staff" />
+        <Field name="is_active" />
       </Group>
       {/* Write-only: set on create, hashed server-side; password reset is separate. */}
       <Field name="password" widget="text" kind="string" createOnly />
@@ -60,21 +59,21 @@ export function UsersPage(): React.ReactElement {
         id="deactivate"
         label={t("iam.users.deactivate")}
         danger
-        set={{ isActive: false }}
-        visibleWhen={(record) => record.isActive === true}
+        set={{ is_active: false }}
+        visibleWhen={(record) => record.is_active === true}
       />
       <Action
         id="activate"
         label={t("iam.users.activate")}
-        set={{ isActive: true }}
-        visibleWhen={(record) => record.isActive === false}
+        set={{ is_active: true }}
+        visibleWhen={(record) => record.is_active === false}
       />
     </Form>
   );
   return (
-    <DataPage model={MODEL} placement="inline" routed>
+    <ResourceList resource={MODEL} placement="inline" routed>
       {userList}
       {userForm}
-    </DataPage>
+    </ResourceList>
   );
 }

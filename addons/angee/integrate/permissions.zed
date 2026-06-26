@@ -6,12 +6,12 @@
 definition integrate/oauth_client {
     relation admin: angee/role // rebac:const=admin
 
-    // Const-admin create can't gate an id-less insert (the sqid only exists
-    // post-insert, so the create check sees an empty resource id and denies
-    // everyone), so console creates run elevated (system_context) behind
-    // PlatformAdminPermission. Kept to document the admin-only intent.
+    // Const-arrow create resolves against the empty resource id the pre_save
+    // signal supplies on insert: it grants a member of the const admin role and
+    // denies everyone else, so the create signal gates console creates directly —
+    // no elevation, no GraphQL gate. Admin-only by design (OAuthClient holds
+    // OAuth secrets, projection-excluded).
     permission create = admin->member
-    // Admin-only by design: OAuthClient holds OAuth secrets (projection-excluded).
     permission read = admin->member
     permission write = admin->member
     permission delete = admin->member

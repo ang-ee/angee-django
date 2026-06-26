@@ -1,7 +1,7 @@
 // Bespoke console operation for connecting a CardDAV directory — a single action
 // that creates the Basic-auth credential + the Directory (two models), the
 // sanctioned multi-model-create shape. The directories list/detail are model-driven
-// (DataPage reads the SDL) and sync is the single-id `syncIntegration` action, so
+// (ResourceList reads the SDL) and sync is the single-id `sync_integration` action, so
 // neither needs a document here.
 
 import { graphql } from "@angee/gql/console";
@@ -13,7 +13,7 @@ export const ConnectCardDavDirectory = graphql(`
     $username: String!
     $password: String!
   ) {
-    connectCardDavDirectory(name: $name, serverUrl: $serverUrl, username: $username, password: $password) {
+    connect_card_dav_directory(name: $name, server_url: $serverUrl, username: $username, password: $password) {
       id
       status
     }

@@ -1,17 +1,16 @@
 import { type ReactElement } from "react";
 
-import { Button, Field, FormView, Glyph, Group, buttonVariants } from "@angee/base";
-import { useResourceRecord } from "@angee/sdk";
+import { Button, Field, FormView, Glyph, Group, buttonVariants } from "@angee/ui";
 
 import { useStorageT } from "../i18n";
 import type { StorageFile } from "../data/documents";
 import { useFileActions } from "../data/use-file-actions";
 
-/** The Django model label backing the file record form and its crumb. */
+/** The Django model label backing the file record form. */
 const FILE_MODEL = "storage.File";
 // created/updated feed the FormView record subtitle (id · created · updated);
 // they ride along in the record query but stay out of the field grid.
-const SUBTITLE_FIELDS = ["createdAt", "updatedAt"] as const;
+const SUBTITLE_FIELDS = ["created_at", "updated_at"] as const;
 
 export interface FileDetailProps {
   file: StorageFile;
@@ -34,11 +33,11 @@ export function FileDetail({
 }: FileDetailProps): ReactElement {
   const t = useStorageT();
   const actions = useFileActions({ onChanged });
-  const canDownload = !file.isTrashed && file.url !== "";
+  const canDownload = !file.is_trashed && file.url !== "";
 
   return (
     <FormView
-      model={FILE_MODEL}
+      resource={FILE_MODEL}
       id={file.id}
       returning={[...SUBTITLE_FIELDS]}
       submitLabel={t("storage.file.rename")}
@@ -57,7 +56,7 @@ export function FileDetail({
               {t("storage.file.download")}
             </a>
           ) : null}
-          {file.isTrashed ? (
+          {file.is_trashed ? (
             <Button
               type="button"
               size="sm"
@@ -86,22 +85,9 @@ export function FileDetail({
       <Field name="title" widget="text" title placeholder={file.filename} />
       <Group label={t("storage.file.details")} columns={2}>
         <Field name="filename" label={t("storage.file.filename")} readOnly />
-        <Field name="createdByLabel" label={t("storage.file.owner")} widget="userRef" readOnly />
-        <Field name="uploadState" label={t("storage.file.stage")} readOnly />
+        <Field name="created_by_label" label={t("storage.file.owner")} widget="userRef" readOnly />
+        <Field name="upload_state" label={t("storage.file.stage")} readOnly />
       </Group>
     </FormView>
   );
-}
-
-/** The record crumb for `/storage/$id` — the file's title (or stored filename). */
-export function FileCrumb({ id }: { id: string }): ReactElement {
-  const t = useStorageT();
-  const { fetching, record } = useResourceRecord(FILE_MODEL, id || null, {
-    enabled: id !== "",
-    fields: ["title", "filename"],
-  });
-  const title = typeof record?.title === "string" ? record.title.trim() : "";
-  const filename = typeof record?.filename === "string" ? record.filename : "";
-  if (fetching) return <>…</>;
-  return <>{title || filename || t("storage.file.crumbFallback")}</>;
 }

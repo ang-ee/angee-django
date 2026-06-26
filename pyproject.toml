@@ -16,12 +16,14 @@ dependencies = [
   "django-reversion>=5.1",
   "django-simple-history>=3.7",
   "django-sqids>=0.1",
-  "django-zed-rebac[strawberry-django]>=0.11",
+  "django-zed-rebac[strawberry-django]>=0.12",
   "django>=6.0",
+  "pydantic>=2.13",
   "pyjwt[crypto]>=2.12",
   "pyyaml>=6",
   "strawberry-graphql>=0.270",
-  "strawberry-django-aggregates>=0.6.0",
+  "strawberry-django-aggregates>=0.9.1",
+  "strawberry-django-hasura>=0.3.0",
   "strawberry-graphql-django>=0.86",
   "tablib>=3",
   "django-choices-field>=4.0.0",
@@ -60,11 +62,21 @@ dev = [
 cache-dir = ".angee/caches/uv"
 
 [tool.uv.sources]
-# Developing against the Angee Strawberry forks while input-object extension fixes
-# land upstream; keep these branch pins explicit so every environment resolves the
-# same GraphQL behavior.
+# Developing against the Angee Strawberry forks. strawberry-django is on
+# `hotfix-angee-django` = `codex/input-object-extensions` + upstream/main + two
+# upstream bug fixes (DEFAULT_PK_FIELD_NAME mutation lookups, #927; __copy__
+# dropping key_attr/argument_name). strawberry core stays on codex — the fixes are
+# strawberry-django-only. Keep pins explicit so every environment resolves identically.
 strawberry-graphql = { git = "ssh://git@github.com/ang-ee/strawberry.git", branch = "codex/input-object-extensions" }
-strawberry-graphql-django = { git = "ssh://git@github.com/ang-ee/strawberry-django.git", branch = "codex/input-object-extensions" }
+strawberry-graphql-django = { git = "ssh://git@github.com/ang-ee/strawberry-django.git", branch = "hotfix-angee-django" }
+# Dev against the local run_query branch; switch to a version pin after 0.3.0 is published.
+strawberry-django-hasura = { path = "../strawberry-django-hasura", editable = true }
+# Pinned to >=0.9.1 (group_by_alias is public as of 0.9.1, published). Local editable
+# source kept for now; drop this entry to consume the PyPI release.
+strawberry-django-aggregates = { path = "../strawberry-django-aggregates", editable = true }
+# Dev against the local rebac sibling for the evaluator_scope cross-context fix
+# (cleanup must not mask the real error); switch to a version pin once published.
+django-zed-rebac = { path = "../django-zed-rebac", editable = true }
 
 [tool.hatch.build.targets.wheel]
 # Two source roots merge into the one `angee` PEP 420 namespace: the framework

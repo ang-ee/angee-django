@@ -22,7 +22,7 @@ knowledge_schema = importlib.import_module("angee.knowledge.schema")
 
 
 def test_create_vault_and_page_flow(knowledge_tables: None) -> None:
-    """The custom create mutations persist actor-owned rows."""
+    """The Hasura insert mutations persist through Knowledge-owned factories."""
 
     alice = create_user("alice")
     schema = _schema("public")
@@ -32,34 +32,34 @@ def test_create_vault_and_page_flow(knowledge_tables: None) -> None:
             schema,
             """
             mutation {
-              createVault(data: {name: "Research", icon: "book"}) {
-                id name icon owner ownerLabel
+              insert_vaults_one(object: {name: "Research", icon: "book"}) {
+                id name icon owner owner_label
               }
             }
             """,
             user=alice,
         )
-    )["createVault"]
+    )["insert_vaults_one"]
     assert vault["name"] == "Research"
-    assert vault["ownerLabel"] == "alice"
+    assert vault["owner_label"] == "alice"
 
     page = result_data(
         execute_schema(
             schema,
             """
             mutation CreatePage($vault: ID!) {
-              createPage(data: {vault: $vault, title: "Reading list"}) {
-                id title kind vault vaultLabel parent createdByLabel
+              insert_pages_one(object: {vault: $vault, title: "Reading list"}) {
+                id title kind vault vault_label parent created_by_label
               }
             }
             """,
             {"vault": vault["id"]},
             user=alice,
         )
-    )["createPage"]
+    )["insert_pages_one"]
     assert page["title"] == "Reading list"
     assert page["kind"] == "note"
-    assert page["vaultLabel"] == "Research"
+    assert page["vault_label"] == "Research"
     assert page["parent"] is None
 
 
@@ -68,7 +68,7 @@ def test_anonymous_create_vault_is_denied_with_a_code(knowledge_tables: None) ->
 
     result = execute_schema(
         _schema("public"),
-        'mutation { createVault(data: {name: "x"}) { id } }',
+        'mutation { insert_vaults_one(object: {name: "x"}) { id } }',
     )
 
     assert result.errors is not None
@@ -95,14 +95,14 @@ def test_pages_query_is_actor_scoped_and_vault_filtered(knowledge_tables: None) 
         execute_schema(
             schema,
             """
-            query PagesIn($vault: ID!) {
-              pages(filters: {vault: {sqid: $vault}}) { results { title } }
+            query PagesIn($vault: String!) {
+              pages(where: {vault: {_eq: $vault}}) { title }
             }
             """,
             {"vault": _public_id(research)},
             user=alice,
         )
-    )["pages"]["results"]
+    )["pages"]
     assert [row["title"] for row in filtered] == ["Reading list"]
 
 
@@ -116,8 +116,8 @@ def test_detail_query_resolves_raw_sqid(knowledge_tables: None) -> None:
         execute_schema(
             _schema("public"),
             """
-            query Vault($id: ID!) {
-              vault(id: $id) {
+            query Vault($id: String!) {
+              vaults_by_pk(id: $id) {
                 id
                 name
               }
@@ -128,7 +128,7 @@ def test_detail_query_resolves_raw_sqid(knowledge_tables: None) -> None:
         )
     )
 
-    assert data["vault"] == {"id": str(vault.sqid), "name": "Node vault"}
+    assert data["vaults_by_pk"] == {"id": str(vault.sqid), "name": "Node vault"}
 
 
 def test_update_page_body_round_trip_and_stale_guard(knowledge_tables: None) -> None:
@@ -146,18 +146,18 @@ def test_update_page_body_round_trip_and_stale_guard(knowledge_tables: None) -> 
             schema,
             """
             mutation Write($page: ID!) {
-              updatePageBody(page: $page, body: "one two three") {
-                ok errorCode
-                markdown { bodyHash wordCount excerpt page }
+              update_page_body(page: $page, body: "one two three") {
+                ok error_code
+                markdown { body_hash word_count excerpt page }
               }
             }
             """,
             {"page": page_id},
             user=alice,
         )
-    )["updatePageBody"]
+    )["update_page_body"]
     assert written["ok"] is True
-    assert written["markdown"]["wordCount"] == 3
+    assert written["markdown"]["word_count"] == 3
     assert written["markdown"]["excerpt"] == "one two three"
 
     stale = result_data(
@@ -165,31 +165,31 @@ def test_update_page_body_round_trip_and_stale_guard(knowledge_tables: None) -> 
             schema,
             """
             mutation Stale($page: ID!) {
-              updatePageBody(page: $page, body: "other", expectedHash: "stale") {
-                ok errorCode markdown { id }
+              update_page_body(page: $page, body: "other", expected_hash: "stale") {
+                ok error_code markdown { id }
               }
             }
             """,
             {"page": page_id},
             user=alice,
         )
-    )["updatePageBody"]
+    )["update_page_body"]
     assert stale["ok"] is False
-    assert stale["errorCode"] == "STALE_BODY"
+    assert stale["error_code"] == "STALE_BODY"
 
     detail = result_data(
         execute_schema(
             schema,
             """
-            query Detail($id: ID!) {
-              page(id: $id) { title markdown { wordCount } }
+            query Detail($id: String!) {
+              pages_by_pk(id: $id) { title markdown { word_count } }
             }
             """,
             {"id": page_id},
             user=alice,
         )
-    )["page"]
-    assert detail["markdown"]["wordCount"] == 3
+    )["pages_by_pk"]
+    assert detail["markdown"]["word_count"] == 3
 
 
 def test_update_page_body_reports_unsupported_kind(knowledge_tables: None) -> None:
@@ -205,15 +205,15 @@ def test_update_page_body_reports_unsupported_kind(knowledge_tables: None) -> No
             _schema("public"),
             """
             mutation Write($page: ID!) {
-              updatePageBody(page: $page, body: "nope") { ok errorCode }
+              update_page_body(page: $page, body: "nope") { ok error_code }
             }
             """,
             {"page": _public_id(folder)},
             user=alice,
         )
-    )["updatePageBody"]
+    )["update_page_body"]
     assert payload["ok"] is False
-    assert payload["errorCode"] == "UNSUPPORTED_KIND"
+    assert payload["error_code"] == "UNSUPPORTED_KIND"
 
 
 def test_page_backlinks_list_resolved_sources(knowledge_tables: None) -> None:
@@ -230,15 +230,15 @@ def test_page_backlinks_list_resolved_sources(knowledge_tables: None) -> None:
         execute_schema(
             _schema("public"),
             """
-            query Backlinks($id: ID!) {
-              page(id: $id) { backlinks { title displayText } }
+            query Backlinks($id: String!) {
+              pages_by_pk(id: $id) { backlinks { title display_text } }
             }
             """,
             {"id": _public_id(target)},
             user=alice,
         )
-    )["page"]
-    assert detail["backlinks"] == [{"title": "Linker", "displayText": "see target"}]
+    )["pages_by_pk"]
+    assert detail["backlinks"] == [{"title": "Linker", "display_text": "see target"}]
 
 
 def test_crud_update_is_row_scoped(knowledge_tables: None) -> None:
@@ -252,8 +252,8 @@ def test_crud_update_is_row_scoped(knowledge_tables: None) -> None:
     denied = execute_schema(
         schema,
         """
-        mutation Rename($id: ID!) {
-          updateVault(data: {id: $id, name: "Taken over"}) { id }
+        mutation Rename($id: String!) {
+          update_vaults_by_pk(pk_columns: {id: $id}, _set: {name: "Taken over"}) { id }
         }
         """,
         {"id": _public_id(vault)},
@@ -265,14 +265,14 @@ def test_crud_update_is_row_scoped(knowledge_tables: None) -> None:
         execute_schema(
             schema,
             """
-            mutation Rename($id: ID!) {
-              updateVault(data: {id: $id, name: "Lab notes"}) { name }
+            mutation Rename($id: String!) {
+              update_vaults_by_pk(pk_columns: {id: $id}, _set: {name: "Lab notes"}) { name }
             }
             """,
             {"id": _public_id(vault)},
             user=alice,
         )
-    )["updateVault"]
+    )["update_vaults_by_pk"]
     assert renamed["name"] == "Lab notes"
 
 
@@ -291,17 +291,17 @@ def test_delete_vault_previews_blast_radius(knowledge_tables: None) -> None:
             schema,
             """
             mutation Preview($id: ID!) {
-              deleteVault(id: $id) {
-                totalDeletedCount hasBlockers deleted { label count }
+              delete_vault(id: $id) {
+                total_deleted_count has_blockers deleted { label count }
               }
             }
             """,
             {"id": vault_id},
             user=alice,
         )
-    )["deleteVault"]
-    assert preview["totalDeletedCount"] >= 2
-    assert preview["hasBlockers"] is False
+    )["delete_vault"]
+    assert preview["total_deleted_count"] >= 2
+    assert preview["has_blockers"] is False
     assert {group["label"] for group in preview["deleted"]} >= {"vaults", "pages"}
     assert Vault.objects.as_user(alice).exists()
 
@@ -310,7 +310,7 @@ def test_delete_vault_previews_blast_radius(knowledge_tables: None) -> None:
             schema,
             """
             mutation Confirm($id: ID!) {
-              deleteVault(id: $id, confirm: true) { totalDeletedCount }
+              delete_vault(id: $id, confirm: true) { total_deleted_count }
             }
             """,
             {"id": vault_id},
@@ -326,7 +326,7 @@ def test_schema_exposes_revisions_and_subscriptions(knowledge_tables: None) -> N
     public_sdl = _schema("public").as_str()
     console_sdl = _schema("console").as_str()
 
-    assert "markdownPageRevisions(" in public_sdl
+    assert "markdownPage_revisions(" in public_sdl
     assert "pageChanged" not in public_sdl
     assert "pageChanged" in console_sdl
     assert "markdownPageChanged" in console_sdl
@@ -344,10 +344,10 @@ def _page_titles(schema: Any, user: Any) -> list[str]:
     rows = result_data(
         execute_schema(
             schema,
-            "query { pages { results { title } } }",
+            "query { pages { title } }",
             user=user,
         )
-    )["pages"]["results"]
+    )["pages"]
     return [row["title"] for row in rows]
 
 

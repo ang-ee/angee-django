@@ -16,9 +16,9 @@ from rebac import system_context, to_object_ref, to_subject_ref
 from rebac.models import active_relationship_model
 
 from angee.integrate.events import EventKind
+from angee.integrate.http import HTTP_TIMEOUT_SECONDS
 from angee.integrate.models import Bridge
 from angee.integrate.net import validate_public_url
-from angee.integrate.http import HTTP_TIMEOUT_SECONDS
 from angee.integrate.webhooks import SIGNATURE_HEADER
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,

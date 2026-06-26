@@ -7,7 +7,7 @@ import {
   SplitPane,
   SplitPaneHandle,
   SplitPanes,
-} from "@angee/base";
+} from "@angee/ui";
 
 const meta = {
   title: "Page/SplitPanes",

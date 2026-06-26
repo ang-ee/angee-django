@@ -2,16 +2,15 @@ import * as React from "react";
 import {
   Action,
   Column,
-  DataPage,
+  ResourceList,
   Field,
   Form,
   Group,
-  GroupListView,
   List,
   recordActionId,
+  useAuthoredMutation,
   type ActionContext,
-} from "@angee/base";
-import { useAuthoredMutation } from "@angee/sdk";
+} from "@angee/ui";
 
 import { useIntegrateT } from "../../i18n";
 import { IntegrateRevealCredential } from "../documents.console";
@@ -19,16 +18,16 @@ import { IntegrateRevealCredential } from "../documents.console";
 const MODEL = "Credential";
 
 const credentialList = (
-  <List model={MODEL} list={GroupListView}>
-    <Column field="displayName" />
+  <List resource={MODEL}>
+    <Column field="display_name" />
     <Column field="kind" />
     <Column field="status" widget="statusBadge" />
-    <Column field="expiresAt" />
-    <Column field="lastRefreshAt" />
+    <Column field="expires_at" />
+    <Column field="last_refresh_at" />
   </List>
 );
 
-/** Per-user credential health (list / status / revoke / reveal); create via the form override. */
+/** Per-user credential health (list / status / reveal); create via the form override. */
 export function CredentialsPage(): React.ReactElement {
   const t = useIntegrateT();
   const [revealCredential] = useAuthoredMutation(IntegrateRevealCredential);
@@ -40,7 +39,7 @@ export function CredentialsPage(): React.ReactElement {
       const id = recordActionId(ctx);
       if (!id) return;
       const result = await revealCredential({ id });
-      const secret = result?.revealCredential.secret ?? "";
+      const secret = result?.reveal_credential.secret ?? "";
       if (!secret) {
         throw new Error(t("integrate.credentials.reveal.noSecret"));
       }
@@ -62,39 +61,25 @@ export function CredentialsPage(): React.ReactElement {
 
   // Create uses the addon-registered `Credential` form override (a kind dropdown
   // that swaps the material field); this declared form is the lifecycle editor
-  // (status / revoke / reveal / health) the detail shows on edit.
+  // (status / reveal / health) the detail shows on edit.
   const credentialForm = (
-    <Form model={MODEL}>
-      <Field name="displayName" title readOnly />
+    <Form resource={MODEL}>
+      <Field name="display_name" title readOnly />
       <Field name="status" widget="statusbar" />
       <Group label={t("integrate.credentials.group.health")} columns={2}>
         <Field name="kind" readOnly />
-        <Field name="expiresAt" readOnly />
-        <Field name="lastRefreshAt" readOnly />
-        <Field name="lastRefreshStatus" readOnly />
+        <Field name="expires_at" readOnly />
+        <Field name="last_refresh_at" readOnly />
+        <Field name="last_refresh_status" readOnly />
       </Group>
       <Action id="reveal" label={t("integrate.credentials.action.reveal")} icon="eye" run={reveal} />
-      <Action
-        id="revoke"
-        label={t("integrate.revoke")}
-        danger
-        set={{ status: "revoked" }}
-        confirm={{
-          title: t("integrate.credentials.revoke.title"),
-          body: t("integrate.credentials.revoke.body"),
-          danger: true,
-        }}
-        visibleWhen={(record) =>
-          String(record.status ?? "").toUpperCase() !== "REVOKED"
-        }
-      />
     </Form>
   );
 
   return (
-    <DataPage model={MODEL} placement="inline" routed>
+    <ResourceList resource={MODEL} placement="inline" routed>
       {credentialList}
       {credentialForm}
-    </DataPage>
+    </ResourceList>
   );
 }

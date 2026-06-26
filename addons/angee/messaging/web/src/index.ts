@@ -1,24 +1,24 @@
 import {
   defineBaseAddon,
   type BaseAddonRoute,
-  type BaseMenuItem,
-} from "@angee/base";
+} from "@angee/app";
+import { type BaseMenuItem } from "@angee/ui";
 import { Inbox, MessagesSquare } from "lucide-react";
 
 import { MessagesPage } from "./MessagesPage";
 import { ThreadsPage } from "./ThreadsPage";
 
-// Each page is a routed DataPage: a list route + a `$id` detail child the list
-// swaps to inline. `model` tags the collection route so relation fields targeting
+// Each page is a routed ResourceList: a list route + a `$id` detail child the list
+// swaps to inline. `resource` tags the collection route so relation fields targeting
 // it can follow to this detail page.
 const consolePage = (
   name: string,
   path: string,
   component: BaseAddonRoute["component"],
-  model?: string,
+  resource?: string,
 ): readonly BaseAddonRoute[] => [
-  { name, path, shell: "console", component, ...(model ? { model } : {}) },
-  { name: `${name}.record`, path: `${path}/$id`, shell: "console", parent: name },
+  { name, path, layout: "console", component, ...(resource ? { resource } : {}) },
+  { name: `${name}.record`, path: `${path}/$id`, layout: "console", parent: name },
 ];
 
 const messagingMenu: readonly BaseMenuItem[] = [

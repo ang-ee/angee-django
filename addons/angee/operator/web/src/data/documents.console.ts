@@ -7,7 +7,7 @@ import { graphql } from "@angee/gql/console";
 // short-lived scoped token. This targets Django's console schema, not the daemon.
 export const OperatorConnectionQuery = graphql(`
   query OperatorConnection {
-    operatorConnection {
+    operator_connection {
       endpoint
       token
     }

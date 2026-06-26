@@ -2,20 +2,19 @@ import * as React from "react";
 import {
   Action,
   Column,
-  DataPage,
+  ResourceList,
   Field,
   Form,
   Group,
-  GroupListView,
   List,
   recordActionId,
   useEnumOptions,
   useImplPrefill,
   useRecordActionMutation,
+  useAuthoredMutation,
   type ActionContext,
-} from "@angee/base";
+} from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
-import { useAuthoredMutation } from "@angee/sdk";
 
 import { useIntegrateT } from "../../i18n";
 import {
@@ -28,12 +27,12 @@ import { connectCallbackRedirectUri } from "../redirects";
 const MODEL = "OAuthClient";
 
 const providerList = (
-  <List model={MODEL} list={GroupListView}>
+  <List resource={MODEL}>
     <Column field="slug" />
-    <Column field="displayName" />
+    <Column field="display_name" />
     <Column field="environment" />
-    <Column field="isEnabled" />
-    <Column field="configurationState" />
+    <Column field="is_enabled" />
+    <Column field="configuration_state" />
   </List>
 );
 
@@ -41,10 +40,10 @@ const providerList = (
 // authorize/token endpoint pair. Discovery can fill those endpoints, but the
 // actual connect flow requires the resolved transport fields.
 function canConnectAccount(record: Record<string, unknown>): boolean {
-  if (record.isEnabled !== true) return false;
-  if (!fieldString(record.clientId)) return false;
+  if (record.is_enabled !== true) return false;
+  if (!fieldString(record.client_id)) return false;
   return Boolean(
-    fieldString(record.authorizeEndpoint) && fieldString(record.tokenEndpoint),
+    fieldString(record.authorize_endpoint) && fieldString(record.token_endpoint),
   );
 }
 
@@ -52,7 +51,7 @@ function fieldString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-/** OAuth connect providers (full CRUD plus enable/disable and account connect). */
+/** OAuth connect providers (full CRUD plus discovery and account connect). */
 export function ProvidersPage(): React.ReactElement {
   const t = useIntegrateT();
   const [connectAccountStart] = useAuthoredMutation(IntegrateConnectAccountStart);
@@ -60,7 +59,7 @@ export function ProvidersPage(): React.ReactElement {
     IntegrateConnectAccountComplete,
   );
   const [discover] = useRecordActionMutation<ActionFieldName>(
-    "discoverOauthEndpoints",
+    "discover_oauth_endpoints",
     { defaultMessage: t("integrate.providers.discover.done") },
   );
 
@@ -76,13 +75,13 @@ export function ProvidersPage(): React.ReactElement {
         redirectUri: connectCallbackRedirectUri(),
         next: "/integrate/accounts",
       });
-      const payload = result?.connectAccountStart;
-      if (!payload?.authorizeUrl) {
+      const payload = result?.connect_account_start;
+      if (!payload?.authorize_url) {
         throw new Error(payload?.error ?? t("integrate.providers.connect.startError"));
       }
       if (payload.mode !== "manual") {
         // Redirect-back flow: the browser leaves and the callback page completes.
-        window.location.assign(payload.authorizeUrl);
+        window.location.assign(payload.authorize_url);
         return t("integrate.providers.connect.redirecting");
       }
       // Manual flow: the provider only displays the code (no redirect back), so keep
@@ -93,7 +92,7 @@ export function ProvidersPage(): React.ReactElement {
         body: (
           <span>
             <a
-              href={payload.authorizeUrl}
+              href={payload.authorize_url}
               target="_blank"
               rel="noreferrer"
               className="underline"
@@ -113,15 +112,15 @@ export function ProvidersPage(): React.ReactElement {
       });
       if (!entered) return;
       const { code, state } = parseManualCode(entered.pasted, payload.state ?? "", t);
-      if (!payload.redirectUri) {
+      if (!payload.redirect_uri) {
         throw new Error(t("integrate.providers.connect.stateIncomplete"));
       }
       const completed = await connectAccountComplete({
         code,
         state,
-        redirectUri: payload.redirectUri,
+        redirectUri: payload.redirect_uri,
       });
-      const done = completed?.connectAccountComplete;
+      const done = completed?.connect_account_complete;
       if (done?.error) {
         throw new Error(done.error);
       }
@@ -134,17 +133,17 @@ export function ProvidersPage(): React.ReactElement {
   // Provider type is an ImplClassField (Google / Generic OIDC / Generic OAuth);
   // picking one seeds the client's defaults (endpoints/scopes/icon) on create via
   // the server-side ImplDefaultsMixin. useEnumOptions lower-cases the write value.
-  const providerTypeOptions = useEnumOptions(MODEL, "providerType");
-  const providerTypePrefill = useImplPrefill(MODEL, "providerType");
+  const providerTypeOptions = useEnumOptions(MODEL, "provider_type");
+  const providerTypePrefill = useImplPrefill(MODEL, "provider_type");
 
   return (
-    <DataPage model={MODEL} placement="inline" routed>
+    <ResourceList resource={MODEL} placement="inline" routed>
       {providerList}
-      <Form model={MODEL} layout="tabs">
-        <Field name="displayName" title />
+      <Form resource={MODEL} layout="tabs">
+        <Field name="display_name" title />
         <Group label={t("integrate.providers.group.client")} columns={2}>
           <Field
-            name="providerType"
+            name="provider_type"
             widget="select"
             options={providerTypeOptions}
             prefill={providerTypePrefill}
@@ -155,44 +154,44 @@ export function ProvidersPage(): React.ReactElement {
           <Field name="slug" widget="slug" />
           <Field name="icon" />
           <Field name="environment" />
-          <Field name="clientId" />
-          <Field name="clientSecret" />
+          <Field name="client_id" />
+          <Field name="client_secret" />
         </Group>
         <Group label={t("integrate.providers.group.endpoints")} columns={2}>
-          <Field name="discoveryUrl" />
-          <Field name="authorizeEndpoint" />
-          <Field name="tokenEndpoint" />
-          <Field name="revokeEndpoint" />
-          <Field name="userinfoEndpoint" />
-          <Field name="tokenRequestFormat" />
-          <Field name="manualRedirectUri" />
+          <Field name="discovery_url" />
+          <Field name="authorize_endpoint" />
+          <Field name="token_endpoint" />
+          <Field name="revoke_endpoint" />
+          <Field name="userinfo_endpoint" />
+          <Field name="token_request_format" />
+          <Field name="manual_redirect_uri" />
         </Group>
         <Group label={t("integrate.providers.group.behavior")} columns={2}>
-          <Field name="isEnabled" />
-          <Field name="supportsRefresh" />
-          <Field name="refreshRotates" />
-          <Field name="supportsPkce" />
-          <Field name="maxRefreshAgeSeconds" />
+          <Field name="is_enabled" />
+          <Field name="supports_refresh" />
+          <Field name="refresh_rotates" />
+          <Field name="supports_pkce" />
+          <Field name="max_refresh_age_seconds" />
         </Group>
         <Group label={t("integrate.providers.group.scopes")} columns={2}>
-          <Field name="defaultScopes" widget="tagInput" />
-          <Field name="scopesCatalogue" widget="tagInput" />
+          <Field name="default_scopes" widget="tagInput" />
+          <Field name="scopes_catalogue" widget="tagInput" />
         </Group>
         <Group label={t("integrate.providers.group.claims")} columns={2}>
-          <Field name="externalIdClaim" />
-          <Field name="emailClaim" />
-          <Field name="displayNameClaim" />
-          <Field name="avatarUrlClaim" />
+          <Field name="external_id_claim" />
+          <Field name="email_claim" />
+          <Field name="display_name_claim" />
+          <Field name="avatar_url_claim" />
         </Group>
         <Group label={t("integrate.providers.group.oauthMetadata")} columns={2}>
-          <Field name="authorizeParams" />
-          <Field name="tokenParams" />
+          <Field name="authorize_params" />
+          <Field name="token_params" />
         </Group>
         <Action
           id="discover"
           label={t("integrate.providers.action.discover")}
           run={discover}
-          visibleWhen={(record) => fieldString(record.discoveryUrl) !== ""}
+          visibleWhen={(record) => fieldString(record.discovery_url) !== ""}
         />
         <Action
           id="connect"
@@ -200,20 +199,7 @@ export function ProvidersPage(): React.ReactElement {
           run={connect}
           visibleWhen={canConnectAccount}
         />
-        <Action
-          id="disable"
-          label={t("integrate.providers.action.disable")}
-          danger
-          set={{ isEnabled: false }}
-          visibleWhen={(record) => record.isEnabled === true}
-        />
-        <Action
-          id="enable"
-          label={t("integrate.providers.action.enable")}
-          set={{ isEnabled: true }}
-          visibleWhen={(record) => record.isEnabled === false}
-        />
       </Form>
-    </DataPage>
+    </ResourceList>
   );
 }

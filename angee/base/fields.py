@@ -285,7 +285,6 @@ class ImplClassField(TextChoicesField):
             raise ImproperlyConfigured("ImplClassField base_class must be a type.")
         self.base_class = base_class
         self.registry_setting = registry_setting
-        self._fallback_default = kwargs.get("default", models.NOT_PROVIDED)
         kwargs.setdefault("max_length", 100)
         super().__init__(choices_enum=self._build_enum(), **kwargs)
 
@@ -409,13 +408,6 @@ class ImplClassField(TextChoicesField):
 
         keys = sorted(self._registry())
         if not keys:
-            if self.base_class is None:
-                default = self._fallback_default
-                fallback = "none" if default is models.NOT_PROVIDED else str(default)
-                return cast(
-                    "type[models.TextChoices]",
-                    models.TextChoices(self._enum_name(), [(fallback.upper(), (fallback, fallback))]),
-                )
             raise ImproperlyConfigured(
                 f"ImplClassField registry settings.{self.registry_setting} is empty; an addon must "
                 "contribute at least one impl (e.g. a noop/null-object default) before the field is built."

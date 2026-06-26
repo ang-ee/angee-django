@@ -43,7 +43,6 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
     key = "openai"
     label = "OpenAI"
     icon = "openai"
-    oauth_client = ""
     defaults = {
         "vendor": "openai",
         "name": "OpenAI",

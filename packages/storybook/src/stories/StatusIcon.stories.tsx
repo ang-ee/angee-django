@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { StatusDot, StatusIcon, TONES } from "@angee/base";
+import { StatusDot, StatusIcon, TONES } from "@angee/ui";
 
 const meta = {
   title: "Primitives/StatusIcon",

@@ -51,11 +51,12 @@ actually unique to your product.
 - **GraphQL API** — auto-CRUD, search, and aggregates from model `Meta`;
   real-time subscriptions (channels + uvicorn); persisted operations and
   typed-codegen output for the client.
-- **UX framework** — headless `@angee/sdk` (contracts, hooks, urql wiring) + the
-  single rendered binding `@angee/base`: shells, page presets
-  (`DataPage` / `HeroPage` / `CanvasPage`), a view family
-  (`ListView` / `FormView` / `BoardView` / …), field widgets bound by meaning,
-  Tailwind-token theming, and per-addon i18n.
+- **UX framework** — one Refine-native app root with Angee composition contracts,
+  resource metadata projection, and the single rendered binding: refine layouts,
+  resource action surfaces (`ResourceList` / `ResourceCreate` / `ResourceEdit` /
+  `ResourceShow`), rendered view modes (`ListView` / `FormView` / `BoardView` /
+  …), field widgets bound by meaning, Tailwind-token theming, and per-addon
+  i18n.
 - **Resources** — tiered, idempotent reference and seed data
   (`master` / `install` / `demo`) declared in `AppConfig.resources` and applied by
   `manage.py resources load`.

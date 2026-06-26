@@ -1,4 +1,4 @@
-import { type ListColumn } from "@angee/base";
+import { type ListColumn } from "@angee/ui";
 import { useMemo, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";

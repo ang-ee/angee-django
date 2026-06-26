@@ -8,7 +8,6 @@ contact is created as a person or an organisation and deleted through the party
 
 from __future__ import annotations
 
-from datetime import date
 from typing import Any, cast
 
 import strawberry
@@ -17,15 +16,20 @@ from django.apps import apps
 from django.db import transaction
 from rebac import system_context
 from strawberry import auto
-from strawberry_django.pagination import OffsetPaginated
 
-from angee.graphql.crud import crud
-from angee.graphql.data import data_query
-from angee.graphql.ids import PublicID
-from angee.graphql.node import AngeeNode, detail
+from angee.graphql.data import (
+    AngeeHasuraWriteBackend,
+    aggregate_queryset,
+    hasura_model_resource,
+    public_pk_decoder,
+)
+from angee.graphql.ids import optional_public_id
+from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
-from angee.iam.identity import user_display_label, user_public_id
+from angee.iam.audit import AuthoredRefMixin
+from angee.iam.identity import user_public_id
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, session_user
+from angee.integrate.schema import IntegrationLabelMixin
 
 Party = apps.get_model("parties", "Party")
 Person = apps.get_model("parties", "Person")
@@ -39,7 +43,7 @@ Folder = apps.get_model("parties", "Folder")
 
 
 @strawberry_django.type(Party)
-class PartyType(AngeeNode):
+class PartyType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of a party (the unified contact)."""
 
     display_name: auto
@@ -52,18 +56,6 @@ class PartyType(AngeeNode):
     party_handles: list["PartyHandleType"]
     addresses: list["AddressType"]
     affiliations: list["AffiliationType"]
-
-    @strawberry_django.field(only=["created_by_id"])
-    def created_by(self) -> strawberry.ID | None:
-        """Return the creator's public id without exposing the user object."""
-
-        return cast("strawberry.ID | None", user_public_id(cast(Any, self).created_by_id))
-
-    @strawberry_django.field(only=["created_by_id"])
-    def created_by_label(self) -> str | None:
-        """Return the creator's display label - no user object exposed."""
-
-        return user_display_label(cast(Any, self).created_by_id)
 
 
 @strawberry_django.type(Person)
@@ -88,7 +80,7 @@ class PersonType(AngeeNode):
     def user(self) -> strawberry.ID | None:
         """Return the linked platform user's public id, when this person is one."""
 
-        return cast("strawberry.ID | None", user_public_id(cast(Any, self).user_id))
+        return optional_public_id(user_public_id(cast(Any, self).user_id))
 
 
 @strawberry_django.type(Organization)
@@ -192,7 +184,7 @@ class ContactFolderType(AngeeNode):
 
 
 @strawberry_django.type(Directory)
-class DirectoryType(AngeeNode):
+class DirectoryType(IntegrationLabelMixin, AngeeNode):
     """GraphQL projection of a connected contacts directory (e.g. a CardDAV source)."""
 
     backend_class: auto
@@ -204,12 +196,6 @@ class DirectoryType(AngeeNode):
     last_sync_items: auto
     created_at: auto
     updated_at: auto
-
-    @strawberry_django.field(only=["display_name", "vendor", "status"])
-    def display_name(self) -> str:
-        """Return the operator-given directory name (the connect flow sets it)."""
-
-        return cast(Any, self).display_label
 
 
 @strawberry.type
@@ -262,424 +248,229 @@ class PartiesDirectoryMutation:
         return cast(DirectoryType, directory)
 
 
-@strawberry.input
-class PartyPatch:
-    """Fields accepted when updating a party's common identity."""
-
-    id: PublicID
-    display_name: str | None = strawberry.UNSET
-    notes: str | None = strawberry.UNSET
-
-
-@strawberry.input
-class PersonInput:
-    """Fields accepted when creating a person."""
-
-    display_name: str
-    notes: str = ""
-    name_prefix: str = ""
-    given_name: str = ""
-    additional_name: str = ""
-    family_name: str = ""
-    name_suffix: str = ""
-    nickname: str = ""
-    birthday: date | None = None
-    anniversary: date | None = None
-
-
-@strawberry.input
-class PersonPatch:
-    """Fields accepted when updating a person."""
-
-    id: PublicID
-    display_name: str | None = strawberry.UNSET
-    notes: str | None = strawberry.UNSET
-    name_prefix: str | None = strawberry.UNSET
-    given_name: str | None = strawberry.UNSET
-    additional_name: str | None = strawberry.UNSET
-    family_name: str | None = strawberry.UNSET
-    name_suffix: str | None = strawberry.UNSET
-    nickname: str | None = strawberry.UNSET
-    birthday: date | None = strawberry.UNSET
-    anniversary: date | None = strawberry.UNSET
-
-
-@strawberry.input
-class OrganizationInput:
-    """Fields accepted when creating an organisation."""
-
-    display_name: str
-    notes: str = ""
-    legal_name: str = ""
-    domain: str = ""
-
-
-@strawberry.input
-class OrganizationPatch:
-    """Fields accepted when updating an organisation."""
-
-    id: PublicID
-    display_name: str | None = strawberry.UNSET
-    notes: str | None = strawberry.UNSET
-    legal_name: str | None = strawberry.UNSET
-    domain: str | None = strawberry.UNSET
-
-
-@strawberry.input
-class HandleInput:
-    """Fields accepted when creating a handle."""
-
-    value: str
-    platform: str = "email"
-    external_id: str = ""
-    display_name: str = ""
-    label: str = ""
-    is_preferred: bool = False
-    party: PublicID | None = None
-
-
-@strawberry.input
-class HandlePatch:
-    """Fields accepted when updating a handle."""
-
-    id: PublicID
-    value: str | None = strawberry.UNSET
-    platform: str | None = strawberry.UNSET
-    display_name: str | None = strawberry.UNSET
-    label: str | None = strawberry.UNSET
-    is_preferred: bool | None = strawberry.UNSET
-    party: PublicID | None = strawberry.UNSET
-
-
-@strawberry.input
-class AddressInput:
-    """Fields accepted when creating an address."""
-
-    party: PublicID
-    label: str = ""
-    po_box: str = ""
-    extended: str = ""
-    street: str = ""
-    city: str = ""
-    region: str = ""
-    postal_code: str = ""
-    country: str = ""
-    is_primary: bool = False
-
-
-@strawberry.input
-class AddressPatch:
-    """Fields accepted when updating an address."""
-
-    id: PublicID
-    label: str | None = strawberry.UNSET
-    po_box: str | None = strawberry.UNSET
-    extended: str | None = strawberry.UNSET
-    street: str | None = strawberry.UNSET
-    city: str | None = strawberry.UNSET
-    region: str | None = strawberry.UNSET
-    postal_code: str | None = strawberry.UNSET
-    country: str | None = strawberry.UNSET
-    is_primary: bool | None = strawberry.UNSET
-
-
-@strawberry.input
-class AffiliationInput:
-    """Fields accepted when creating an affiliation."""
-
-    party: PublicID
-    organization: PublicID | None = None
-    organization_name: str = ""
-    role: str = ""
-    title: str = ""
-    department: str = ""
-    is_primary: bool = False
-
-
-@strawberry.input
-class AffiliationPatch:
-    """Fields accepted when updating an affiliation."""
-
-    id: PublicID
-    organization: PublicID | None = strawberry.UNSET
-    organization_name: str | None = strawberry.UNSET
-    role: str | None = strawberry.UNSET
-    title: str | None = strawberry.UNSET
-    department: str | None = strawberry.UNSET
-    is_primary: bool | None = strawberry.UNSET
-
-
-@strawberry_django.filter_type(Party, lookups=True)
-class PartyFilter:
-    """Field lookups accepted when filtering the parties connection."""
-
-    display_name: auto
-    created_at: auto
-    updated_at: auto
-
-
-@strawberry_django.order_type(Party)
-class PartyOrder:
-    """Orderings accepted by the parties connection."""
-
-    display_name: auto
-    handle_count: auto
-    created_at: auto
-    updated_at: auto
-
-
-@strawberry_django.filter_type(Person, lookups=True)
-class PersonFilter:
-    """Field lookups accepted when filtering the people list (incl. the folder facet)."""
-
-    display_name: auto
-    given_name: auto
-    family_name: auto
-    nickname: auto
-    folder: auto
-    birthday: auto
-    anniversary: auto
-    created_at: auto
-    updated_at: auto
-
-
-@strawberry_django.order_type(Person)
-class PersonOrder:
-    """Orderings accepted by the people connection."""
-
-    display_name: auto
-    given_name: auto
-    family_name: auto
-    folder: auto
-    created_at: auto
-    updated_at: auto
-
-
-@strawberry_django.filter_type(Organization, lookups=True)
-class OrganizationFilter:
-    """Field lookups accepted when filtering the organizations list."""
-
-    display_name: auto
-    legal_name: auto
-    domain: auto
-    created_at: auto
-    updated_at: auto
-
-
-@strawberry_django.order_type(Organization)
-class OrganizationOrder:
-    """Orderings accepted by the organizations connection."""
-
-    display_name: auto
-    legal_name: auto
-    domain: auto
-    created_at: auto
-    updated_at: auto
-
-
-@strawberry_django.filter_type(Handle, lookups=True)
-class HandleFilter:
-    """Field lookups accepted when filtering the handles connection.
-
-    ``value`` and ``display_name`` are the searchable text columns: the toolbar's
-    free-text search targets the record representation (``display_name``), and
-    ``value`` is the handle itself (the email/phone/handle string).
-    """
-
-    value: auto
-    display_name: auto
-    party: auto
-    platform: auto
-    is_own: auto
-    is_verified: auto
-    is_preferred: auto
-    created_at: auto
-
-
-@strawberry_django.order_type(Handle)
-class HandleOrder:
-    """Orderings accepted by the handles connection."""
-
-    platform: auto
-    value: auto
-    created_at: auto
-
-
-@strawberry_django.filter_type(Address, lookups=True)
-class AddressFilter:
-    """Field lookups accepted when filtering the addresses connection (incl. by party)."""
-
-    party: auto
-    label: auto
-    created_at: auto
-
-
-@strawberry_django.filter_type(Affiliation, lookups=True)
-class AffiliationFilter:
-    """Field lookups accepted when filtering the affiliations connection (incl. by party)."""
-
-    party: auto
-    organization: auto
-    created_at: auto
-
-
-@strawberry_django.filter_type(Directory, lookups=True)
-class DirectoryFilter:
-    """Field lookups accepted when filtering contact directories."""
-
-    display_name: auto
-    backend_class: auto
-    status: auto
-    last_sync_status: auto
-    last_sync_completed_at: auto
-    updated_at: auto
-
-
-@strawberry_django.order_type(Directory)
-class DirectoryOrder:
-    """Orderings accepted by the contact directories list."""
-
-    display_name: auto
-    backend_class: auto
-    status: auto
-    last_sync_completed_at: auto
-    updated_at: auto
-
-
-# Count parties and sum their handle_count, grouped by created_at. Both are
-# non-gated read fields; kind is not an axis because it is the concrete child
-# type, not a column.
-PartyDataQuery, _PARTY_DATA_TYPES = data_query(
+_PARTY_RESOURCE = hasura_model_resource(
     PartyType,
-    type_name="PartyDataQuery",
-    filters=PartyFilter,
-    order=PartyOrder,
-    list_name="parties",
-    detail_name="party",
-    aggregate_name="party_aggregate",
-    group_name="party_groups",
-    aggregate_fields=["id", "handle_count"],
-    group_by_fields=["created_at"],
-    enable_filter_echo=True,
-    aggregate_kwargs={"pagination_style": "offset"},
+    model=Party,
+    name="parties",
+    filterable=["id", "display_name", "created_at", "updated_at"],
+    sortable=["display_name", "handle_count", "created_at", "updated_at"],
+    aggregatable=["id", "handle_count"],
+    groupable=["created_at"],
+    insert=False,
+    updatable=["display_name", "notes"],
 )
-
-# People is the editable concrete contact surface. Keep the public roots
-# (`people` / `person`) identical to the old plain paginated fields, but let the
-# shared data-query owner advertise filters, ordering, aggregate, and group-by.
-PersonDataQuery, _PERSON_DATA_TYPES = data_query(
+_PERSON_RESOURCE = hasura_model_resource(
     PersonType,
-    type_name="PersonDataQuery",
-    filters=PersonFilter,
-    order=PersonOrder,
-    list_name="people",
-    detail_name="person",
-    aggregate_name="person_aggregate",
-    group_name="person_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["folder", "folder__name", "created_at"],
-    enable_filter_echo=True,
-    aggregate_kwargs={"pagination_style": "offset"},
+    model=Person,
+    name="people",
+    filterable=[
+        "id",
+        "display_name",
+        "given_name",
+        "family_name",
+        "nickname",
+        "folder",
+        "birthday",
+        "anniversary",
+        "created_at",
+        "updated_at",
+    ],
+    sortable=["display_name", "given_name", "family_name", "folder", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["folder", "folder__name", "created_at"],
+    insertable=[
+        "display_name",
+        "notes",
+        "name_prefix",
+        "given_name",
+        "additional_name",
+        "family_name",
+        "name_suffix",
+        "nickname",
+        "birthday",
+        "anniversary",
+    ],
+    updatable=[
+        "display_name",
+        "notes",
+        "name_prefix",
+        "given_name",
+        "additional_name",
+        "family_name",
+        "name_suffix",
+        "nickname",
+        "birthday",
+        "anniversary",
+    ],
+    delete=False,
+    field_id_decode={"folder": public_pk_decoder(Folder)},
 )
-
-OrganizationDataQuery, _ORGANIZATION_DATA_TYPES = data_query(
+_ORGANIZATION_RESOURCE = hasura_model_resource(
     OrganizationType,
-    type_name="OrganizationDataQuery",
-    filters=OrganizationFilter,
-    order=OrganizationOrder,
-    list_name="organizations",
-    detail_name="organization",
-    aggregate_name="organization_aggregate",
-    group_name="organization_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["domain", "created_at"],
-    enable_filter_echo=True,
-    aggregate_kwargs={"pagination_style": "offset"},
+    model=Organization,
+    name="organizations",
+    filterable=["id", "display_name", "legal_name", "domain", "created_at", "updated_at"],
+    sortable=["display_name", "legal_name", "domain", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["domain", "created_at"],
+    insertable=["display_name", "notes", "legal_name", "domain"],
+    updatable=["display_name", "notes", "legal_name", "domain"],
+    delete=False,
 )
-
-# Group handles by their resolved contact. Following Odoo's read_group: group by
-# the party id (which owns the drill-down filter) and carry `party.display_name`
-# in each bucket so the header shows the contact's name, not the raw id. The two
-# axes yield the same buckets (id → name is 1:1). Scoped to owned handles: the
-# relation filter input exposes only the public id (no `is_null`), so the
-# per-bucket drill-down cannot express the null-party bucket; unowned handles stay
-# in the flat, ungrouped list.
-HandleDataQuery, _HANDLE_DATA_TYPES = data_query(
+_HANDLE_RESOURCE = hasura_model_resource(
     HandleType,
-    type_name="HandleDataQuery",
-    filters=HandleFilter,
-    order=HandleOrder,
-    list_name="handles",
-    detail_name="handle",
-    aggregate_name="handle_aggregate",
-    group_name="handle_groups",
-    aggregate_fields=["id"],
-    group_by_fields=["party", "party__display_name"],
-    enable_filter_echo=True,
-    aggregate_kwargs={
-        "queryset": Handle.objects.filter(party__isnull=False),
-        "pagination_style": "offset",
+    model=Handle,
+    name="handles",
+    filterable=[
+        "id",
+        "value",
+        "display_name",
+        "party",
+        "platform",
+        "is_own",
+        "is_verified",
+        "is_preferred",
+        "created_at",
+    ],
+    sortable=["platform", "value", "created_at"],
+    aggregatable=["id"],
+    groupable=["party", "party__display_name"],
+    insertable=["value", "platform", "external_id", "display_name", "label", "is_preferred", "party"],
+    updatable=["value", "platform", "display_name", "label", "is_preferred", "party"],
+    field_id_decode={"party": public_pk_decoder(Party)},
+    get_aggregate_queryset=lambda info: aggregate_queryset(Handle.objects.filter(party__isnull=False)),
+    write_backend=AngeeHasuraWriteBackend(Handle, public_id_fields={"party": Party}),
+)
+_ADDRESS_RESOURCE = hasura_model_resource(
+    AddressType,
+    model=Address,
+    name="addresses",
+    filterable=["id", "party", "label", "created_at"],
+    sortable=["party", "label", "created_at"],
+    aggregatable=["id"],
+    insertable=[
+        "party",
+        "label",
+        "po_box",
+        "extended",
+        "street",
+        "city",
+        "region",
+        "postal_code",
+        "country",
+        "is_primary",
+    ],
+    updatable=[
+        "label",
+        "po_box",
+        "extended",
+        "street",
+        "city",
+        "region",
+        "postal_code",
+        "country",
+        "is_primary",
+    ],
+    field_id_decode={"party": public_pk_decoder(Party)},
+    write_backend=AngeeHasuraWriteBackend(Address, public_id_fields={"party": Party}),
+)
+_AFFILIATION_RESOURCE = hasura_model_resource(
+    AffiliationType,
+    model=Affiliation,
+    name="affiliations",
+    filterable=["id", "party", "organization", "created_at"],
+    sortable=["party", "organization", "created_at"],
+    aggregatable=["id"],
+    insertable=[
+        "party",
+        "organization",
+        "organization_name",
+        "role",
+        "title",
+        "department",
+        "is_primary",
+    ],
+    updatable=[
+        "organization",
+        "organization_name",
+        "role",
+        "title",
+        "department",
+        "is_primary",
+    ],
+    field_id_decode={
+        "party": public_pk_decoder(Party),
+        "organization": public_pk_decoder(Party),
     },
+    write_backend=AngeeHasuraWriteBackend(Affiliation, public_id_fields={"party": Party, "organization": Party}),
 )
-
-DirectoryDataQuery, _DIRECTORY_DATA_TYPES = data_query(
+_CONTACT_FOLDER_RESOURCE = hasura_model_resource(
+    ContactFolderType,
+    model=Folder,
+    name="contact_folders",
+    filterable=["id", "directory", "name", "source_href", "updated_at"],
+    sortable=["directory", "name", "source_href", "created_at", "updated_at"],
+    aggregatable=["id"],
+    insert=False,
+    update=False,
+    delete=False,
+    field_id_decode={"directory": public_pk_decoder(Directory)},
+)
+_DIRECTORY_RESOURCE = hasura_model_resource(
     DirectoryType,
-    type_name="DirectoryDataQuery",
-    filters=DirectoryFilter,
-    order=DirectoryOrder,
-    list_name="directories",
-    detail_name="directory",
-    aggregate_name="directory_aggregate",
-    group_name="directory_groups",
-    aggregate_fields=["id", "last_sync_items"],
-    group_by_fields=["backend_class", "status", "last_sync_status"],
-    enable_filter_echo=True,
-    aggregate_kwargs={"pagination_style": "offset"},
+    model=Directory,
+    name="directories",
+    filterable=[
+        "id",
+        "display_name",
+        "backend_class",
+        "status",
+        "last_sync_status",
+        "last_sync_completed_at",
+        "updated_at",
+    ],
+    sortable=["display_name", "backend_class", "status", "last_sync_completed_at", "updated_at"],
+    aggregatable=["id", "last_sync_items"],
+    groupable=["backend_class", "status", "last_sync_status"],
+    insert=False,
+    update=False,
+    delete=False,
 )
 
 
-@strawberry.type
-class PartiesQuery:
-    """Public parties queries."""
-
-    addresses: OffsetPaginated[AddressType] = strawberry_django.offset_paginated(
-        filters=AddressFilter,
-    )
-    address: AddressType | None = detail(AddressType)
-    affiliations: OffsetPaginated[AffiliationType] = strawberry_django.offset_paginated(
-        filters=AffiliationFilter,
-    )
-    affiliation: AffiliationType | None = detail(AffiliationType)
-    contact_folders: OffsetPaginated[ContactFolderType] = strawberry_django.offset_paginated()
-    contact_folder: ContactFolderType | None = detail(ContactFolderType)
-
-
-_DATA_TYPES = [
-    *_PARTY_DATA_TYPES,
-    *_PERSON_DATA_TYPES,
-    *_ORGANIZATION_DATA_TYPES,
-    *_HANDLE_DATA_TYPES,
-    *_DIRECTORY_DATA_TYPES,
+_RESOURCE_TYPES = [
+    *_PARTY_RESOURCE.types,
+    *_PERSON_RESOURCE.types,
+    *_ORGANIZATION_RESOURCE.types,
+    *_HANDLE_RESOURCE.types,
+    *_ADDRESS_RESOURCE.types,
+    *_AFFILIATION_RESOURCE.types,
+    *_CONTACT_FOLDER_RESOURCE.types,
+    *_DIRECTORY_RESOURCE.types,
 ]
 
 
 _PARTIES_SCHEMA_BUCKET = {
     "query": [
-        PartiesQuery,
-        PartyDataQuery,
-        PersonDataQuery,
-        OrganizationDataQuery,
-        HandleDataQuery,
-        DirectoryDataQuery,
+        _PARTY_RESOURCE.query,
+        _PERSON_RESOURCE.query,
+        _ORGANIZATION_RESOURCE.query,
+        _HANDLE_RESOURCE.query,
+        _ADDRESS_RESOURCE.query,
+        _AFFILIATION_RESOURCE.query,
+        _CONTACT_FOLDER_RESOURCE.query,
+        _DIRECTORY_RESOURCE.query,
     ],
     "mutation": [
         PartiesDirectoryMutation,
-        crud(PartyType, update=PartyPatch, delete=True),
-        crud(PersonType, create=PersonInput, update=PersonPatch),
-        crud(OrganizationType, create=OrganizationInput, update=OrganizationPatch),
-        crud(HandleType, create=HandleInput, update=HandlePatch, delete=True),
-        crud(AddressType, create=AddressInput, update=AddressPatch, delete=True),
-        crud(AffiliationType, create=AffiliationInput, update=AffiliationPatch, delete=True),
+        _PARTY_RESOURCE.mutation,
+        _PERSON_RESOURCE.mutation,
+        _ORGANIZATION_RESOURCE.mutation,
+        _HANDLE_RESOURCE.mutation,
+        _ADDRESS_RESOURCE.mutation,
+        _AFFILIATION_RESOURCE.mutation,
+        _CONTACT_FOLDER_RESOURCE.mutation,
+        _DIRECTORY_RESOURCE.mutation,
     ],
     "types": [
         PartyType,
@@ -691,7 +482,7 @@ _PARTIES_SCHEMA_BUCKET = {
         AffiliationType,
         DirectoryType,
         ContactFolderType,
-        *_DATA_TYPES,
+        *_RESOURCE_TYPES,
     ],
 }
 

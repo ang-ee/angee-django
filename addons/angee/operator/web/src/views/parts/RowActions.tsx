@@ -1,4 +1,4 @@
-import { Button } from "@angee/base";
+import { Button } from "@angee/ui";
 import type { ReactNode } from "react";
 
 export interface RowAction<TSubject> {

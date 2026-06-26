@@ -1,4 +1,4 @@
-import { useConfirm } from "@angee/base";
+import { useConfirm } from "@angee/ui";
 import { useMemo } from "react";
 
 import {
@@ -55,8 +55,8 @@ export function useWorkspaceActions(refetch: () => void): {
             if (!ok) return;
             await runDaemon({
               run: destroy.run,
-              field: "workspaceDestroy",
-              variables: { name: workspace.name, purge: false },
+              field: "delete_workspaces_by_pk",
+              variables: { id: workspace.id },
               label: t("operator.workspaces.destroy"),
             });
           })();

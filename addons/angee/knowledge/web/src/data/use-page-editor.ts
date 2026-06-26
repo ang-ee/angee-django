@@ -1,7 +1,28 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import type {
+  Row,
+} from "@angee/resources";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState } from "react";
+import {
+  useUpdate,
+  type BaseRecord,
+  type HttpError,
+  } from "@refinedev/core";
 
-import { useDebouncedCallback } from "@angee/base";
-import { useAuthoredMutation, useResourceMutation } from "@angee/sdk";
+import { useDebouncedCallback } from "use-debounce";
+import {
+  refineFieldsFromPaths,
+  } from "@angee/refine";
+import {
+  useAuthoredMutation,
+} from "@angee/ui";
+import {
+  refineResourceName,
+  useModelMetadata,
+} from "@angee/resources";
 
 import { KnowledgeUpdatePageBody } from "./documents";
 
@@ -20,6 +41,7 @@ export interface PageEditorState {
 }
 
 const AUTOSAVE_MS = 700;
+const PAGE_MODEL = "knowledge.Page";
 
 /**
  * Editing state for one page. The title persists through `updatePage` on commit;
@@ -46,8 +68,13 @@ export function usePageEditor(
     onSavedRef.current = onSaved;
   }, [onSaved]);
 
-  const [updatePage] = useResourceMutation("knowledge.Page", "update", {
-    fields: ["title"],
+  const metadata = useModelMetadata(PAGE_MODEL);
+  const resource = metadata?.resource ?? null;
+  const updatePage = useUpdate<RowRecord, HttpError, Record<string, unknown>>({
+    resource: resource ? refineResourceName(resource) : "",
+    dataProviderName: resource?.schemaName,
+    meta: { fields: refineFieldsFromPaths(["title"]) },
+    invalidates: ["list", "many", "detail"],
   });
   const [updateBody] = useAuthoredMutation(KnowledgeUpdatePageBody);
 
@@ -62,11 +89,11 @@ export function usePageEditor(
         const data = await updateBody({
           page: pageId,
           body: next,
-          expectedHash: bodyHashRef.current || null,
+          expected_hash: bodyHashRef.current || null,
         });
-        const payload = data?.updatePageBody;
+        const payload = data?.update_page_body;
         if (payload?.ok && payload.markdown) {
-          bodyHashRef.current = payload.markdown.bodyHash;
+          bodyHashRef.current = payload.markdown.body_hash;
           setSafeStatus("saved");
           onSavedRef.current();
         } else {
@@ -94,13 +121,13 @@ export function usePageEditor(
     if (!trimmed || trimmed === savedTitleRef.current) return;
     savedTitleRef.current = trimmed;
     setStatus("saving");
-    void updatePage({ data: { id: pageId, title: trimmed } })
+    void updatePage.mutateAsync({ id: pageId, values: { title: trimmed } })
       .then(() => {
         setSafeStatus("saved");
         onSavedRef.current();
       })
       .catch(() => setSafeStatus("error"));
-  }, [title, pageId, updatePage, setSafeStatus]);
+  }, [title, pageId, updatePage.mutateAsync, setSafeStatus]);
 
   // Flush a pending body save when the page switches (the editor unmounts).
   useEffect(() => {
@@ -113,3 +140,5 @@ export function usePageEditor(
 
   return { title, body, status, setTitle: setTitleState, commitTitle, setBody };
 }
+
+type RowRecord = BaseRecord & Row;

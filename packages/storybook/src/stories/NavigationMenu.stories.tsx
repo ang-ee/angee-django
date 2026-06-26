@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Glyph, NavigationMenu } from "@angee/base";
+import { Glyph, NavigationMenu } from "@angee/ui";
 
 const meta = {
   title: "Primitives/NavigationMenu",

@@ -17,8 +17,17 @@ vi.mock("@tanstack/react-router", () => ({
   useParams: () => routerMocks.params,
 }));
 
-vi.mock("urql", () => ({
-  useQuery: () => [{ data: { serviceEndpoint: null }, fetching: false }],
+// ServiceDetail reads the daemon `serviceEndpoint` through the shared authored
+// query on the `operator` provider; stub just that hook (over the real `@angee/ui`)
+// so the detail frame renders without a live refine/react-query context.
+vi.mock("@angee/ui", async () => ({
+  ...(await vi.importActual<typeof import("@angee/ui")>("@angee/ui")),
+  useAuthoredQuery: () => ({
+    data: { serviceEndpoint: null },
+    fetching: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
 }));
 
 vi.mock("../../i18n", () => ({

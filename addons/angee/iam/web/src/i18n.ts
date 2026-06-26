@@ -3,7 +3,8 @@
 // is missing. Components resolve them through `useIamT()` (below), and the
 // manifest contributes this bundle as the `iam` namespace.
 
-import { useNamespaceT, type MessageVars } from "@angee/sdk";
+import { useNamespaceT } from "@angee/ui";
+import { type MessageVars } from "@angee/refine";
 
 export const enIamMessages: Record<string, string> = {
   // Shared action labels.

@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { MetaGrid, MetaSection } from "@angee/base";
+import { MetaGrid, MetaSection } from "@angee/ui";
 
 const meta = {
   title: "Fragments/MetaGrid",

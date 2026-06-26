@@ -1,13 +1,12 @@
 import * as React from "react";
 import {
   Column,
-  DataPage,
+  ResourceList,
   Field,
   Form,
   Group,
-  GroupListView,
   List,
-} from "@angee/base";
+} from "@angee/ui";
 
 const MODEL = "parties.Handle";
 
@@ -21,29 +20,29 @@ const MODEL = "parties.Handle";
  */
 export function HandlesPage(): React.ReactElement {
   return (
-    <DataPage model={MODEL} placement="inline" routed hideCreate>
-      <List model={MODEL} list={GroupListView}>
+    <ResourceList resource={MODEL} placement="inline" routed hideCreate>
+      <List resource={MODEL}>
         <Column field="value" />
         <Column field="platform" />
         <Column field="label" />
-        <Column field="party.displayName" header="Contact" />
+        <Column field="party.display_name" header="Contact" />
         <Column field="confidence" header="Confidence" />
-        <Column field="isPreferred" header="Preferred" />
+        <Column field="is_preferred" header="Preferred" />
       </List>
-      <Form model={MODEL}>
+      <Form resource={MODEL}>
         <Field name="value" title readOnly />
         <Group label="About" columns={2}>
           <Field name="platform" readOnly />
           <Field name="label" readOnly />
-          <Field name="displayName" readOnly />
+          <Field name="display_name" readOnly />
           <Field name="party" label="Contact" readOnly />
         </Group>
         <Group label="Flags" columns={3}>
-          <Field name="isPreferred" readOnly />
-          <Field name="isOwn" readOnly />
-          <Field name="isVerified" readOnly />
+          <Field name="is_preferred" readOnly />
+          <Field name="is_own" readOnly />
+          <Field name="is_verified" readOnly />
         </Group>
       </Form>
-    </DataPage>
+    </ResourceList>
   );
 }
