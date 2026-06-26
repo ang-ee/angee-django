@@ -1,13 +1,15 @@
 #!/usr/bin/env node
-// Derive Angee's shared operation documents from emitted project artifacts.
-// Action mutations come from the SDL; delete-preview mutations come from the
-// backend-owned `angee.resources` artifact. The emitted registries pin
-// `@angee/data` custom operations to generated documents at runtime. Written
-// beside the client-preset output so `@angee/gql/<schema>/actions` resolves via
-// the same alias.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
+import path from "node:path";
 
+import { generate } from "@graphql-codegen/cli";
 import {
   GraphQLObjectType,
   buildSchema,
@@ -15,7 +17,6 @@ import {
   parse,
 } from "graphql";
 
-const SCHEMAS = ["console", "public"];
 const AGGREGATE_MEASURE_OPERATORS = ["sum", "avg", "min", "max"];
 const DELETE_PREVIEW_SELECTION =
   "totalDeletedCount hasBlockers " +
@@ -23,37 +24,203 @@ const DELETE_PREVIEW_SELECTION =
   "root { label objectLabel objectId " +
   "children { label objectLabel objectId " +
   "children { label objectLabel objectId } } }";
+const SCALARS = {
+  DateTime: "string",
+  Date: "string",
+  BigInt: "string",
+  JSON: "unknown",
+};
 
-function actionFields(sdlPath) {
-  const schema = buildSchema(readFileSync(sdlPath, "utf8"));
-  const mutation = schema.getMutationType();
-  if (!mutation) return [];
-  const fields = mutation.getFields();
-  return Object.keys(fields)
-    .filter((name) => {
-      const field = fields[name];
-      if (field.args.length !== 1) return false;
-      const arg = field.args[0];
-      if (arg.name !== "id" || String(arg.type) !== "ID!") return false;
-      const returned = getNamedType(field.type);
-      return returned instanceof GraphQLObjectType && returned.name === "ActionResult";
+const options = parseOptions(process.argv.slice(2));
+const webRoot = resolveFromCwd(options["web-root"] ?? ".");
+const runtimeDir = resolveFromCwd(options.runtime ?? "../runtime");
+const manifest = readManifest(runtimeDir);
+const externalEntries = Array.isArray(manifest.codegen) ? manifest.codegen : [];
+const djangoSchemas = schemaNamesFor(runtimeDir);
+const documentRoots = documentRootsFor(webRoot, manifest);
+
+// Django Angee schemas: client preset + authored operation documents, composed
+// as createApp schemas. Their SDL is the GraphQLSdl-owned runtime/schemas tree.
+for (const name of djangoSchemas) {
+  const schemaPath = path.join(runtimeDir, "schemas", `${name}.graphql`);
+  await runCodegen(name, schemaPath, runtimeDir, documentGlobs(name, documentRoots), false);
+  buildOperationDocuments(name, runtimeDir);
+}
+// External schemas (the operator daemon): the addon owns the committed SDL, read
+// straight from node_modules. No Angee resource metadata, not a createApp schema.
+for (const entry of externalEntries) {
+  const schemaPath = path.resolve(webRoot, "node_modules", entry.package, entry.sdl);
+  const documents = documentRoots.map((root) => `${root}/**/${entry.documents}`);
+  await runCodegen(entry.schema, schemaPath, runtimeDir, documents, entry.types === true);
+}
+emitAppModule(runtimeDir, webRoot, manifest, djangoSchemas);
+
+function parseOptions(args) {
+  const parsed = {};
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg.startsWith("--")) {
+      throw new Error(`Unexpected argument: ${arg}`);
+    }
+    const key = arg.slice(2);
+    const value = args[index + 1];
+    if (!value || value.startsWith("--")) {
+      throw new Error(`Missing value for --${key}`);
+    }
+    parsed[key] = value;
+    index += 1;
+  }
+  return parsed;
+}
+
+function resolveFromCwd(value) {
+  return path.isAbsolute(value) ? value : path.resolve(process.cwd(), value);
+}
+
+function readManifest(runtimeDir) {
+  const manifestPath = path.join(runtimeDir, "web", "manifest.json");
+  if (!existsSync(manifestPath)) {
+    throw new Error(`Missing frontend runtime manifest: ${manifestPath}`);
+  }
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  if (manifest?.schema !== 1) {
+    throw new Error(`Unsupported frontend runtime manifest schema in ${manifestPath}`);
+  }
+  return manifest;
+}
+
+function schemaNamesFor(runtimeDir) {
+  // The SDL on disk is the source of truth for which schemas exist: the Django
+  // `schema` command emits `runtime/schemas/<name>.graphql`, and external owners
+  // (the operator daemon) deposit their SDL into the same directory.
+  const schemaDir = path.join(runtimeDir, "schemas");
+  if (!existsSync(schemaDir)) return [];
+  return readdirSync(schemaDir)
+    .filter((name) => name.endsWith(".graphql"))
+    .map((name) => name.slice(0, -".graphql".length))
+    .sort();
+}
+
+
+function documentRootsFor(webRoot, manifest) {
+  const roots = Array.isArray(manifest.documentRoots) ? manifest.documentRoots : [];
+  return roots
+    .flatMap((entry) => {
+      if (!entry || typeof entry.path !== "string" || entry.path.length === 0) {
+        return [];
+      }
+      return [slash(path.resolve(webRoot, entry.path))];
     })
     .sort();
 }
 
-for (const name of SCHEMAS) {
-  const sdlPath = new URL(`../../runtime/schemas/${name}.graphql`, import.meta.url);
-  const metadataPath = new URL(
-    `../../runtime/schemas/${name}.metadata.json`,
-    import.meta.url,
+function schemaIsLive(sdlPath) {
+  // A schema is live when its SDL declares a Subscription root — the schema's
+  // own contract, not a guess from its name.
+  return buildSchema(readFileSync(sdlPath, "utf8")).getSubscriptionType() != null;
+}
+
+function emitAppModule(runtimeDir, webRoot, manifest, schemaNames) {
+  const addonPackages = Array.isArray(manifest.addonPackages) ? manifest.addonPackages : [];
+  // `runtime/web/app.ts` lives outside the web package's module-resolution
+  // scope, so addon packages are imported by their on-disk entry under the web
+  // package's node_modules. The path is derived from the real --web-root (not a
+  // fixed constant), so a project that relocates its web package still resolves.
+  const webRel = slash(path.relative(path.join(runtimeDir, "web"), webRoot));
+  const addonImports = addonPackages.map((pkg, index) => {
+    const sourceRoot = typeof pkg.sourceRoot === "string" ? pkg.sourceRoot : "src";
+    const entry = `${webRel}/node_modules/${pkg.package}/${sourceRoot}/index`;
+    return `import addon${index} from ${JSON.stringify(entry)};`;
+  });
+  const schemaImports = [];
+  const schemaEntries = schemaNames.map((name, index) => {
+    schemaImports.push(
+      `import schema${index}Metadata from ${JSON.stringify(`../schemas/${name}.metadata.json`)};`,
+      `import { operationDocuments as schema${index}Documents } from ${JSON.stringify(`../gql/${name}/actions`)};`,
+    );
+    const sdlPath = path.join(runtimeDir, "schemas", `${name}.graphql`);
+    const lines = [
+      `  ${JSON.stringify(name)}: {`,
+      `    url: "/graphql/${name}/",`,
+      `    metadata: schema${index}Metadata,`,
+      `    operationDocuments: schema${index}Documents,`,
+    ];
+    if (schemaIsLive(sdlPath)) lines.push("    live: true,");
+    lines.push("  },");
+    return lines.join("\n");
+  });
+  const addonValues = addonPackages.map((_pkg, index) => `addon${index}`).join(", ");
+  const body = [
+    "// Generated composed web runtime - do not edit by hand.",
+    "// Run `pnpm codegen`; `manage.py angee build` emits the manifest it reads.",
+    "",
+    [...addonImports, ...schemaImports].join("\n"),
+    "",
+    `export const composedAddons = [${addonValues}] as const;`,
+    "",
+    "export const schemas = {",
+    schemaEntries.join("\n"),
+    "} as const;",
+    "",
+  ].join("\n");
+  const outPath = path.join(runtimeDir, "web", "app.ts");
+  mkdirSync(path.dirname(outPath), { recursive: true });
+  writeFileSync(outPath, body);
+  console.log(
+    `composed web runtime: ${addonPackages.length} addon(s), ${schemaNames.length} schema(s)`,
   );
-  const outPath = new URL(`../../runtime/gql/${name}/actions.ts`, import.meta.url);
+}
+
+async function runCodegen(name, schemaPath, runtimeDir, documents, types) {
+  if (!existsSync(schemaPath)) {
+    throw new Error(`Missing GraphQL SDL for schema ${name}: ${schemaPath}`);
+  }
+  const codegenConfig = {
+    scalars: SCALARS,
+    enumsAsTypes: true,
+    skipTypename: true,
+    useTypeImports: true,
+  };
+  const generates = {
+    [slash(path.join(runtimeDir, "gql", name, path.sep))]: {
+      preset: "client",
+      presetConfig: { fragmentMasking: false },
+      config: codegenConfig,
+    },
+  };
+  // An external schema may also need a bare `typescript` types module (the
+  // operator console re-exports named daemon types, which the client preset
+  // does not surface as standalone exports).
+  if (types) {
+    generates[slash(path.join(runtimeDir, "gql", name, "types.ts"))] = {
+      plugins: ["typescript"],
+      config: codegenConfig,
+    };
+  }
+  await generate(
+    { schema: slash(schemaPath), documents, ignoreNoDocuments: true, generates },
+    true,
+  );
+}
+
+function documentGlobs(name, roots) {
+  const files =
+    name === "public"
+      ? ["documents.public.ts"]
+      : ["documents.ts", `documents.${name}.ts`];
+  return roots.flatMap((root) => files.map((file) => `${root}/**/${file}`));
+}
+
+function buildOperationDocuments(name, runtimeDir) {
+  const sdlPath = path.join(runtimeDir, "schemas", `${name}.graphql`);
+  const metadataPath = path.join(runtimeDir, "schemas", `${name}.metadata.json`);
+  const outPath = path.join(runtimeDir, "gql", name, "actions.ts");
   const names = actionFields(sdlPath);
   const aggregateResources = aggregateFields(metadataPath);
   const deletePreviewResources = deletePreviewFields(metadataPath);
   const groupResources = groupFields(metadataPath);
   const revisionResources = revisionFields(metadataPath);
-  const union = names.length > 0 ? names.map((n) => `"${n}"`).join(" | ") : "never";
+  const union = names.length > 0 ? names.map((n) => JSON.stringify(n)).join(" | ") : "never";
   const aggregateUnion = aggregateResources.length > 0
     ? aggregateResources.map((resource) => JSON.stringify(resource.modelLabel)).join(" | ")
     : "never";
@@ -76,51 +243,26 @@ for (const name of SCHEMAS) {
       null,
       2,
     );
-    return (
-      `  ${JSON.stringify(resource.modelLabel)}: ` +
-      `${ast} as AggregateDocument,`
-    );
+    return `  ${JSON.stringify(resource.modelLabel)}: ${ast} as AggregateDocument,`;
   });
   const deletePreviewDocuments = deletePreviewResources.map((resource) => {
-    const ast = JSON.stringify(
-      deletePreviewDocument(resource.deletePreviewRoot),
-      null,
-      2,
-    );
-    return (
-      `  ${JSON.stringify(resource.modelLabel)}: ` +
-      `${ast} as DeletePreviewDocument,`
-    );
+    const ast = JSON.stringify(deletePreviewDocument(resource.deletePreviewRoot), null, 2);
+    return `  ${JSON.stringify(resource.modelLabel)}: ${ast} as DeletePreviewDocument,`;
   });
   const groupDocuments = groupResources.map((resource) => {
-    const ast = JSON.stringify(
-      groupDocument(resource),
-      null,
-      2,
-    );
-    return (
-      `  ${JSON.stringify(resource.modelLabel)}: ` +
-      `${ast} as GroupDocument,`
-    );
+    const ast = JSON.stringify(groupDocument(resource), null, 2);
+    return `  ${JSON.stringify(resource.modelLabel)}: ${ast} as GroupDocument,`;
   });
   const revisionDocuments = revisionResources.map((resource) => {
-    const ast = JSON.stringify(
-      revisionDocument(resource.revisionsRoot, resource.fields),
-      null,
-      2,
-    );
-    return (
-      `  ${JSON.stringify(resource.modelLabel)}: ` +
-      `${ast} as RevisionDocument,`
-    );
+    const ast = JSON.stringify(revisionDocument(resource.revisionsRoot, resource.fields), null, 2);
+    return `  ${JSON.stringify(resource.modelLabel)}: ${ast} as RevisionDocument,`;
   });
   const body = [
-    `// Generated from runtime/schemas/${name}.graphql — do not edit by hand.`,
+    `// Generated from runtime/schemas/${name}.graphql - do not edit by hand.`,
     "// Run `pnpm codegen` to regenerate.",
     "//",
-    "// Mutation fields shaped `<field>(id: ID!): ActionResult` — the",
-    "// compile-time allow-list and runtime document registry for",
-    "// `useActionMutation` (@angee/data).",
+    "// Mutation fields shaped `<field>(id: ID!): ActionResult` plus authored",
+    "// aggregate, group, delete-preview, and revision operation documents.",
     "",
     "import type { TypedDocumentNode } from \"@graphql-typed-document-node/core\";",
     "",
@@ -245,7 +387,18 @@ for (const name of SCHEMAS) {
     ...revisionDocuments,
     "};",
     "",
+    "// One object shaped as @angee/refine's SchemaOperationDocuments — the single",
+    "// symbol the composed web runtime imports per schema.",
+    "export const operationDocuments = {",
+    "  actions: actionDocuments,",
+    "  aggregates: aggregateDocuments,",
+    "  deletePreviews: deletePreviewDocuments,",
+    "  groups: groupDocuments,",
+    "  revisions: revisionDocuments,",
+    "};",
+    "",
   ].join("\n");
+  mkdirSync(path.dirname(outPath), { recursive: true });
   writeFileSync(outPath, body);
   console.log(
     `operation documents [${name}]: ` +
@@ -255,6 +408,23 @@ for (const name of SCHEMAS) {
       `${groupResources.length} group query(ies), ` +
       `${revisionResources.length} revision query(ies)`,
   );
+}
+
+function actionFields(sdlPath) {
+  const schema = buildSchema(readFileSync(sdlPath, "utf8"));
+  const mutation = schema.getMutationType();
+  if (!mutation) return [];
+  const fields = mutation.getFields();
+  return Object.keys(fields)
+    .filter((name) => {
+      const field = fields[name];
+      if (field.args.length !== 1) return false;
+      const arg = field.args[0];
+      if (arg.name !== "id" || String(arg.type) !== "ID!") return false;
+      const returned = getNamedType(field.type);
+      return returned instanceof GraphQLObjectType && returned.name === "ActionResult";
+    })
+    .sort();
 }
 
 function deletePreviewFields(metadataPath) {
@@ -487,4 +657,8 @@ function assertGraphQLName(name) {
     throw new Error(`Invalid GraphQL field name in operation document metadata: ${name}`);
   }
   return name;
+}
+
+function slash(value) {
+  return value.replaceAll(path.sep, "/");
 }

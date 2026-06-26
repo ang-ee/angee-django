@@ -138,10 +138,11 @@ jobs:
     workdir: source://framework
     command: ["pnpm", "install"]
 
-  # Refresh the console's codegen SDL from the LIVE daemon (the daemon owns its
-  # schema; Django introspects it over the shared bearer). The command waits for
-  # daemon readiness and fails loudly if the contract can't be fetched, so a
-  # stale SDL never silently masks daemon drift.
+  # Refresh the operator daemon's committed SDL from the LIVE daemon (the daemon
+  # owns its schema; Django introspects it over the shared bearer). The command
+  # waits for daemon readiness and fails loudly if the contract can't be fetched,
+  # so a stale SDL never silently masks daemon drift. The unified codegen reads
+  # this SDL straight from the operator package, so codegen waits on this refresh.
   operator-schema:
     runtime: local
     workdir: source://app
@@ -152,21 +153,15 @@ jobs:
       ANGEE_OPERATOR_TOKEN: "${secret.operator-token}"
     depends_on: [operator, build]
 
-  # Regenerate the console's TypeScript types from the (refreshed) SDL.
-  operator-codegen:
-    runtime: local
-    workdir: source://framework
-    command: ["pnpm", "--filter", "@angee/operator", "codegen"]
-    depends_on: [deps, operator-schema]
-
   # Regenerate this project's typed GraphQL operations into runtime/gql/<name>/
-  # from the freshly emitted SDL. The web package owns its codegen config and
-  # document globs; the stack only orders it after schema emission and before Vite.
+  # from the emitted Django SDL and the operator daemon SDL. @angee/app owns the
+  # one codegen CLI (the manifest declares the operator as an external schema), so
+  # the stack runs a single pass after both schema sources and before Vite.
   codegen:
     runtime: local
     workdir: source://app
     command: ["pnpm", "--dir", "{{ web_path }}", "codegen"]
-    depends_on: [deps, schema]
+    depends_on: [deps, schema, operator-schema]
 
 services:
   # Angee overrides `runserver` to serve angee.asgi with uvicorn (keeping the ASGI
@@ -208,10 +203,10 @@ services:
       # The UI proxies /operator/* to the daemon (same-origin → no CORS), the same
       # way it proxies /graphql/ to Django.
       ANGEE_OPERATOR_URL: "http://127.0.0.1:${ports.operator}"
-    after: [deps, schema, django, operator, operator-codegen, codegen]
+    after: [deps, schema, django, operator, codegen]
 
   # Storybook component workshop (@angee/storybook), served alongside the SPA. It
-  # renders @angee/base against mocked SDK fixtures, so it needs only the JS
+  # renders @angee/ui with mocked app/refine fixtures, so it needs only the JS
   # workspace installed — no Django, schema, or operator dependency. The port is
   # the workspace's storybook allocation, so each workspace serves its own.
   storybook:

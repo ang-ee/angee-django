@@ -159,10 +159,16 @@ looks for `asgi.py`, but only on apps that opt in as Angee addons via
 route modules from leaking into the composed root router.
 
 Other lifecycles remain explicit AppConfig facts. GraphQL schema declarations are
-owned by `angee.graphql`; MCP tool declarations are owned by `angee.mcp`; resource
-and permission declarations are owned by their base addons. Shared dotted
-references use `angee.addons.resolve_addon_reference()` so declaration parsing
-has one owner.
+owned by `angee.graphql`; web declarations are owned by the declaring `AppConfig`
+(`angee_web_package` names its rendered package; `angee_web_codegen` declares an
+external GraphQL codegen pass, e.g. the operator daemon). The composer is a pure
+projector here: it renders `runtime/web/manifest.json` (package graph + codegen
+entries) and `runtime/web/tailwind.sources.css` from those static declarations,
+holding no schema-name or schema-shape knowledge — the `angee-web-codegen` CLI
+owns generating `runtime/gql/<schema>` and the composed `runtime/web/app.ts` from
+the SDL on disk. MCP tool declarations are owned by `angee.mcp`; resource and
+permission declarations are owned by their base addons. Shared dotted references
+use `angee.addons.resolve_addon_reference()` so declaration parsing has one owner.
 
 ## Serving
 

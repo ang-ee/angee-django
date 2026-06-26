@@ -8,17 +8,10 @@ _angee:
   kind: project
   name: web
   description: >-
-    Vite + React web package for a downstream Angee project. Renders the package
-    that owns the project's typed-GraphQL codegen: it generates this project's own
-    `runtime/gql/<schema>/` from the SDL `manage.py schema` emits, and resolves
-    the `@angee/gql/<schema>` alias against that project-owned tree in all three
-    resolvers (tsconfig paths, Vite, Vitest). Addons are consumed from
-    `node_modules` (the `@angee/*/web/src` document roots), not the monorepo
-    layout the in-repo `examples/notes-angee/web` uses. The scaffold ships the
-    framework-standard `console` + `public` schema pair (client-preset needs one
-    codegen config file per schema); a project that composes a further named
-    schema adds a sibling `codegen.<name>.ts` and lists it in the package's
-    `codegen` script + `bin/build-operation-documents.mjs`.
+    Vite + React web package for a downstream Angee project. The composed
+    runtime graph owns frontend package discovery, Tailwind source scanning, app
+    addon/schema wiring, and typed GraphQL operation codegen through
+    `runtime/web/*` artifacts emitted by `manage.py angee build`.
 
 # Display title for the rendered SPA (index.html <title>).
 project_title:
@@ -63,22 +56,6 @@ framework_vitest_shared:
   type: str
   default: "../../angee-django/vitest.shared"
   help: Relative module path from the web package to angee-django's vitest.shared (sibling-checkout layout by default).
-
-# Codegen document roots for THIS project's install layout, relative to the web
-# package. A downstream project installs its addons under `node_modules`, so the
-# default scans the published `@angee/*/web/src` operation files plus the
-# project's own `src` and its consumer addons. Override to match a different
-# layout. The roots are emitted SORTED for a deterministic glob set.
-document_roots:
-  type: yaml
-  default:
-    - "./addons/*/*/web/src"
-    - "./node_modules/@angee/*/web/src"
-    - "./src"
-  help: >-
-    Glob roots (relative to the web package) whose `documents{,.public,.console}.ts`
-    author this project's GraphQL operations. Default targets the node_modules
-    install layout.
 
 # React major used for the @types/react* devDependencies. Kept as one input so the
 # rendered manifest pins a single React line.

@@ -10,6 +10,7 @@ class IntegrateConfig(AppConfig):
 
     default = True
     angee_addon = True
+    angee_web_package = "@angee/integrate"
     name = "angee.integrate"
     label = "integrate"
     depends_on = ("angee.iam",)

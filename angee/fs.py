@@ -12,6 +12,15 @@ import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
+GENERATED_SENTINEL = "# ANGEE GENERATED RUNTIME - DO NOT EDIT"
+"""Marker every Angee-generated file carries; the gate before destructive cleanup.
+
+Lives here, beside :func:`write_atomic`, because it is the sentinel for *all*
+generated files — Python runtime modules, the GraphQL SDL, and the composed
+``runtime/web`` artifacts — so both the composer and the web projector import it
+from one namespace-root owner rather than from each other.
+"""
+
 
 def write_atomic(path: Path, text: str) -> None:
     """Write ``text`` to ``path`` atomically, skipping an unchanged file.

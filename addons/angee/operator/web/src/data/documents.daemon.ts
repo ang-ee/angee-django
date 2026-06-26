@@ -1,9 +1,9 @@
 // Operations against the operator daemon. Field selections are validated against
-// the daemon's own SDL (`schema/operator.graphql`) by the addon's client-preset
-// codegen; this file is intentionally not named `documents.ts`, because the
-// composed Django console codegen scans that filename for console operations.
+// the daemon's own SDL (`runtime/schemas/operator.graphql`) by the unified
+// `angee-web-codegen` pass; this file is intentionally not named `documents.ts`,
+// because the Django console codegen scans that filename for console operations.
 
-import { graphql } from "../__generated__/operator-gql";
+import { graphql } from "@angee/gql/operator";
 
 export const OperatorMutationResultFields = graphql(`
   fragment OperatorMutationResultFields on MutationResult {

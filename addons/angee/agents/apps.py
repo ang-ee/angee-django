@@ -10,6 +10,7 @@ class AgentsConfig(AppConfig):
 
     default = True
     angee_addon = True
+    angee_web_package = "@angee/agents"
     name = "angee.agents"
     label = "agents"
     # operator: agent provisioning drives the daemon over its REST bridge server-side.

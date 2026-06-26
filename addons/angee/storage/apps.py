@@ -17,6 +17,7 @@ class StorageConfig(AppConfig):
 
     default = True
     angee_addon = True
+    angee_web_package = "@angee/storage"
     name = "angee.storage"
     label = "storage"
     depends_on = (

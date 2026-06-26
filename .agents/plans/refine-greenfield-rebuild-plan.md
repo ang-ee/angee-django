@@ -364,7 +364,8 @@ they delete old owners and map directly to the target packages above.
 - **P5 Codegen `TypedDocumentNode` only.** No runtime string-built GraphQL, no
   runtime `parse()` document assembly, and no "temporary" dialect exception. If
   a Hasura dialect document varies by resource, generate it at build/codegen time
-  from `angee.resources`.
+  from `angee.resources`; project document roots come from the generated
+  `runtime/web/manifest.json`, not host-maintained globs.
 - **P5b One filter serialization boundary.** URL/table/form filter state is
   Refine/TanStack state. The only Angee filter logic above the backend is the
   `CrudFilters -> Hasura _bool_exp` serializer in the Refine dialect package,
@@ -378,7 +379,12 @@ they delete old owners and map directly to the target packages above.
 - **E1** project a backend resource → Refine `resource` + `meta`.
 - **E2** contribute to a keyed, sequenced, fail-fast registry (slot / widget /
   form / preview / icon) — deterministic order, collisions error at build.
-- **E3** author codegen documents routed to a schema (public / console / operator).
+- **E3** author codegen documents routed to a schema (public / console / operator);
+  Django `AppConfig.angee_web_package` declares which addon package contributes
+  frontend documents, and `AppConfig.angee_web_codegen` declares an external
+  GraphQL schema (the operator daemon) that joins the one `angee-web-codegen`
+  pass — its committed SDL read from the addon package, generated into
+  `runtime/gql/<schema>/` like every other schema.
 - **E4** declare routes → TanStack route tree + Refine resource actions.
 - **E5** gate on capabilities via `accessControlProvider` reading backend caps.
 - **E6** register an i18next namespace bundle.
@@ -407,7 +413,7 @@ rented:  @refinedev/core · @refinedev/hasura · graphql-request/ws
 | **@angee/refine** | the parts of a Refine+Hasura app every project shares, with **zero domain/metadata knowledge** | `@refinedev/hasura`, graphql-request/ws, TanStack Router | `provider` (named dataProvider map + idType/namingConvention) · `transport` (graphql-request + session/CSRF/service auth) · `live` (graphql-ws liveProvider) · `router` (TanStack routerProvider) · `operation-documents` / `typed-document` contracts · `dialect/{action,aggregate,groupBy,facets,deletePreview,revisions}` (typed codegen docs + hooks over `useCustom`) |
 | **@angee/resources** | the **only** consumer of `angee.resources`; metadata→typed config | refine-core types | `artifact` (load/validate/narrow) · `project` (→ Refine `resources[]` + `meta`) · `fields` (ONE kind/scalar/widget classifier, reads the artifact, not SDL) · `dimensions` (group/facet specs, date granularity, JSON drill-down filter specs → `@angee/refine` dialect params) · `capabilities` (per-action caps → accessControl) · `contracts` (open `ResourceTypeMap`, types) |
 | **@angee/ui** | the single rendered binding + headless view-state | Refine `useTable`/`useForm`/`useMenu`/`useBreadcrumb`, Base UI, TanStack Table | `views/list` (+`list/modes`) · `views/form` · `views/record` · `views/relation` · `views/visualizations` · `views/model` (headless view-state) · `chrome` (rail/topbar/breadcrumb/spotlight) · `widgets` · `feedback` (toast = the notification renderer) · `primitives` (Base UI binding) |
-| **@angee/app** | assembles the app; the only package depending on all the above | Refine `<Refine>`, i18next, TanStack Router | `define-addon` · `compose` · `create-app` · `providers/{auth,i18n,notification,accessControl}` · `routing` (addon routes → TanStack tree) · `registries` (slot/widget/form/preview/icon) · `shell` (app-rail taxonomy, landing) |
+| **@angee/app** | assembles the app; the only package depending on all the above | Refine `<Refine>`, i18next, TanStack Router, GraphQL Code Generator | `define-addon` · `compose` · `create-app` · `providers/{auth,i18n,notification,accessControl}` · `routing` (addon routes → TanStack tree) · `registries` (slot/widget/form/preview/icon) · `codegen` (`angee-web-codegen` over `runtime/web/manifest.json`) · `shell` (app-rail taxonomy, landing) |
 
 ## Canonical vocabulary (settled once, in @angee/ui)
 
@@ -440,7 +446,10 @@ addons/angee/<domain>/web/src/
 
 An addon adds behavior only through E1–E6. That is the entire extension surface.
 `parties` / `messaging` root pages and the loose `iam` / `agents` helpers move into
-this template; document the template in `docs/frontend/guidelines.md`.
+this template; document the template in `docs/frontend/guidelines.md`. Frontend
+presence is declared once on the backend owner with
+`AppConfig.angee_web_package`; the composer emits `runtime/web/manifest.json`,
+`runtime/web/tailwind.sources.css`, and `runtime/web/app.ts`.
 
 ## Provider wiring (the prior-art adoptions, in @angee/app Phase 4)
 
@@ -658,6 +667,11 @@ Implementation order:
   parallel hand-written artifact mirror.
 - [x] Capability metadata exists in `angee.resources` and is consumed by the
   Refine `accessControlProvider`; preserve this through the package split.
+- [x] Frontend runtime manifest slice: composer emits package graph/Tailwind/app
+  wiring from `AppConfig.angee_web_package`, host CSS imports the generated
+  source include, host app imports `composedAddons`/`schemas` from
+  `runtime/web/app`, and `@angee/app` owns `angee-web-codegen` instead of
+  host-local codegen files.
 - [ ] Gate per backend slice: `schema --check`, generated artifact diff review,
   targeted backend tests, and frontend codegen/typecheck where artifacts change.
 
@@ -721,10 +735,9 @@ Implementation order:
 - **Cutover window:** old and new packages coexist during Phase 5; they must NOT
   share a cache or live engine (the failure of the last attempt). Each ported addon
   runs fully on the new stack; nothing bridges the two.
-- **Runtime GraphQL document generation:** not open. Runtime string assembly is
-  forbidden by P5. The remaining design choice is only where the build/codegen
-  integration lives (`@angee/refine` dialect generator or the app host codegen
-  step), not whether runtime strings may remain.
+- **Runtime GraphQL document generation:** resolved to the generated frontend
+  runtime manifest plus the `@angee/app` `angee-web-codegen` CLI. Runtime string
+  assembly remains forbidden by P5.
 - **Resources DAG cleanup:** physical `@angee/resources` stays below
   `@angee/refine` in the DAG and does not depend on the dialect package. Keep it
   that way as capability/dimension modules are split.

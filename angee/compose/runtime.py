@@ -24,10 +24,8 @@ from django.utils.module_loading import module_has_submodule
 
 from angee.base.mixins import HistoryMixin, ModelDecorator
 from angee.base.models import AngeeModel
-from angee.fs import write_atomic
-
-GENERATED_SENTINEL = "# ANGEE GENERATED RUNTIME - DO NOT EDIT"
-"""Sentinel required before destructive runtime cleanup."""
+from angee.compose.web import WebRuntime
+from angee.fs import GENERATED_SENTINEL, write_atomic
 
 
 class ModelContributions(NamedTuple):
@@ -133,6 +131,7 @@ class Runtime:
                 label,
                 source_models,
             )
+        sources.update(WebRuntime(self.addons).render_sources())
         return sources
 
     def emit(self) -> None:

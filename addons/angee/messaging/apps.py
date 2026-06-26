@@ -16,6 +16,7 @@ class MessagingConfig(AppConfig):
 
     default = True
     angee_addon = True
+    angee_web_package = "@angee/messaging"
     name = "angee.messaging"
     label = "messaging"
     depends_on = ("angee.parties", "angee.integrate", "angee.storage")

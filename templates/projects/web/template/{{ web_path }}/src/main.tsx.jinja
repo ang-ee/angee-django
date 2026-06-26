@@ -1,63 +1,16 @@
-import { ConsoleLayout, createApp } from "@angee/base";
-import {
-  actionDocuments as consoleActionDocuments,
-  aggregateDocuments as consoleAggregateDocuments,
-  deletePreviewDocuments as consoleDeletePreviewDocuments,
-  groupDocuments as consoleGroupDocuments,
-  revisionDocuments as consoleRevisionDocuments,
-} from "@angee/gql/console/actions";
-import {
-  actionDocuments as publicActionDocuments,
-  aggregateDocuments as publicAggregateDocuments,
-  deletePreviewDocuments as publicDeletePreviewDocuments,
-  groupDocuments as publicGroupDocuments,
-  revisionDocuments as publicRevisionDocuments,
-} from "@angee/gql/public/actions";
+import { createApp } from "@angee/app";
+import { ConsoleLayout } from "@angee/ui";
 
-import consoleMetadata from "../../runtime/schemas/console.metadata.json";
-import publicMetadata from "../../runtime/schemas/public.metadata.json";
+import { composedAddons, schemas } from "../../runtime/web/app";
 import "./index.css";
 
-// Compose this project's addons here. Import each addon from its package
-// (`@angee/<name>` for base addons, your own consumer addons) and list them in
-// `addons`. See `examples/notes-angee/web/src/main.tsx` in angee-django for the
-// canonical composition (rail grouping, the auth/login layout, the home route).
-//
-// The two standard schemas wire their generated action/aggregate/group/
-// delete-preview/revision documents (emitted into this project's OWN
-// `runtime/gql/<schema>/actions.ts` by `pnpm codegen`) through the `@angee/gql`
-// alias — the surface this scaffold exists to make project-local.
 createApp({
-  addons: [],
+  addons: [...composedAddons],
   layouts: {
     console: { chrome: ConsoleLayout },
     public: { schema: "public" },
   },
-  schemas: {
-    console: {
-      url: "/graphql/console/",
-      metadata: consoleMetadata,
-      operationDocuments: {
-        actions: consoleActionDocuments,
-        aggregates: consoleAggregateDocuments,
-        deletePreviews: consoleDeletePreviewDocuments,
-        groups: consoleGroupDocuments,
-        revisions: consoleRevisionDocuments,
-      },
-      live: true,
-    },
-    public: {
-      url: "/graphql/public/",
-      metadata: publicMetadata,
-      operationDocuments: {
-        actions: publicActionDocuments,
-        aggregates: publicAggregateDocuments,
-        deletePreviews: publicDeletePreviewDocuments,
-        groups: publicGroupDocuments,
-        revisions: publicRevisionDocuments,
-      },
-    },
-  },
+  schemas,
   defaultSchema: "console",
   home: "/",
 }).mount("#root");

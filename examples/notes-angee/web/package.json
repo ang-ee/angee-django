@@ -8,7 +8,7 @@
     "build": "vite build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "codegen": "graphql-codegen --config codegen.public.ts && graphql-codegen --config codegen.console.ts && node ./bin/build-operation-documents.mjs"
+    "codegen": "angee-web-codegen --runtime ../runtime --web-root ."
   },
   "dependencies": {
     "@angee-example/notes-web": "workspace:*",
@@ -30,14 +30,11 @@
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
-    "@graphql-codegen/cli": "^7.1.1",
-    "@graphql-codegen/client-preset": "^6.0.1",
     "@tailwindcss/vite": "^4.0.0",
     "@testing-library/react": "^16.1.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6.0.2",
-    "graphql": "^16.14.0",
     "happy-dom": "^20.9.0",
     "tailwindcss": "^4.0.0",
     "typescript": "^6.0.3",

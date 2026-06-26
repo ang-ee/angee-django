@@ -8,10 +8,7 @@
     "./runtime": "./src/runtime.ts"
   },
   "scripts": {
-    "codegen": "graphql-codegen --config codegen.ts",
-    "pretypecheck": "pnpm codegen",
     "typecheck": "tsc --noEmit",
-    "pretest": "pnpm codegen",
     "test": "vitest run",
     "test:watch": "vitest"
   },

@@ -59,7 +59,7 @@ Dependency changes must update this file in the same change.
 | @refinedev/core | Resource registry, standard data hooks, react-query cache/invalidation, auth/i18n/live provider contracts | Angee projects emitted `angee.resources` metadata to refine resources and mounts one composed `<Refine>` root with named providers and the TanStack Router binding |
 | @refinedev/hasura + graphql-request 5 + graphql 15 | Hasura GraphQL data provider (`_bool_exp`, `order_by`, `_aggregate`, `_by_pk`, `_set`) and authored `meta.gqlQuery` / `meta.gqlMutation` execution | Angee pins `idType: "String"` and `namingConvention: "hasura-default"`, uses refine-compatible GraphQL document ASTs, and applies session/CSRF or service auth at the transport boundary |
 | graphql-ws 5 | GraphQL WebSocket lifecycle for the Hasura live provider and daemon-owned operator transport | Endpoint derivation, connection params, retry policy, and the operator daemon subscription + raw log socket transport — request/response now rides a Refine `operator` data provider, leaving only the intrinsically streaming surfaces on this ws transport |
-| GraphQL Code Generator (client-preset) + @graphql-typed-document-node/core | Generated TypeScript schema and operation types from emitted Django SDL and daemon-owned SDL, as `TypedDocumentNode` documents | Each project web package owns a `codegen` script that emits `runtime/gql/<schema>` from `runtime/schemas/<schema>.graphql`, routed to a Django schema by document filename (`documents.ts`/`documents.console.ts` → console, `documents.public.ts` → public); the operator web package owns a separate daemon client-preset run from `schema/operator.graphql` scanning only `documents.daemon.ts`; authored operations carry no hand-written result/variables types |
+| GraphQL Code Generator (client-preset) + @graphql-typed-document-node/core | Generated TypeScript schema and operation types from emitted Django SDL and daemon-owned SDL, as `TypedDocumentNode` documents | `@angee/app` owns the one `angee-web-codegen` CLI: it reads `runtime/web/manifest.json`, generates each Django schema from `runtime/schemas/<schema>.graphql` (routing documents by filename: `documents.ts`/`documents.console.ts` → console, `documents.public.ts` → public), derives authored action/aggregate/group/delete-preview/revision documents, and emits the composed `runtime/web/app.ts`. The operator daemon joins the same pass as an external `angee_web_codegen` manifest entry — its committed SDL read straight from the operator package, scanning only `documents.daemon.ts`, with a bare `typescript` types module the console re-exports; authored operations carry no hand-written result/variables types |
 | TanStack Router | Type-safe routing and search params | `defineAddon` to `createApp` route composition and flat URL search codec |
 | @refinedev/react-hook-form + react-hook-form + @hookform/resolvers + zod | Form state, submit lifecycle, and validation binding | `FormView` keeps Angee's declarative rendered DSL while delegating state/validation to refine/react-hook-form |
 | @refinedev/react-table + TanStack Table | Server-backed table state, sort/filter/pagination bridge, columns, grouping, selection | `ListView` and `BoardView` keep Angee's rendered controls and domain view modes while delegating standard table/data mechanics |
@@ -111,9 +111,7 @@ semantics or local provider dialects.
 
 Angee's frontend is Refine-native: the app composes one `<Refine>` root, resource
 metadata projects into refine resources, and the rendered binding owns only
-domain presentation over refine state. During the current package split,
-composition/runtime contracts still live in `@angee/sdk`, provider/resource glue
-in `@angee/data`, and rendered UI in `@angee/base`; the target owners are
+domain presentation over refine state. The active frontend owners are
 `@angee/app`, `@angee/refine`, `@angee/resources`, and `@angee/ui`.
 
 | Pick | Owns | Angee adds |
@@ -148,7 +146,7 @@ in `@angee/data`, and rendered UI in `@angee/base`; the target owners are
 | @testing-library/react | React component and hook test rendering | Provider-wrapped render and hook harnesses |
 | Playwright | Browser tests | `@angee/e2e` harness: workspace-isolated runner, role `storageState` login, GraphQL `api` fixture, Page Object base (`docs/testing/e2e.md`) |
 | @playwright/mcp | Interactive browser-driving for host coding agents | Repo-root `.mcp.json` server (npx-run, pinned), bound to the base stack's `chrome-profile` (`.angee/data/chrome`); the agent navigates to the stack's `ANGEE_UI_PORT` (`:5173`). Distinct from `@angee/e2e` (the deterministic test runner) and `agents.MCPServer` (the MCP config rendered for operator-provisioned product agents) |
-| Storybook | Component workshop | `@angee/base` and addon previews |
+| Storybook | Component workshop | `@angee/ui` and addon previews |
 | GitHub Actions | CI | Build, lint, type, test gates |
 | Copier | Project and addon templates | Angee templates |
 

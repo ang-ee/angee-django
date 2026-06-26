@@ -10,6 +10,7 @@ class KnowledgeConfig(AppConfig):
 
     default = True
     angee_addon = True
+    angee_web_package = "@angee/knowledge"
     name = "angee.knowledge"
     label = "knowledge"
     depends_on = ("angee.iam",)
