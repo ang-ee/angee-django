@@ -69,7 +69,7 @@ _angee:
         # containers). Sharing one name ("notes-angee") made Compose merge containers
         # across workspaces — one stack's agent ended up fronted by another stack's edge
         # (or none), so the browser's chat socket hit a dead edge port → WebSocket 1006.
-        project_name:       "${inputs.example}-${workspace.name}"
+        project_name:       "${inputs.example}-${name}"
         project_path:       "examples/${inputs.example}"  # logical, no `..` — resolved by angee
         django_port:        "${alloc.django}"
         ui_port:            "${alloc.ui}"
