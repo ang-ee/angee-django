@@ -16,7 +16,10 @@ import { OAuthConnectCallbackPage } from "./connect/OAuthConnectCallbackPage";
 import { CredentialsPage } from "./connect/views/CredentialsPage";
 import { ExternalAccountsPage } from "./connect/views/ExternalAccountsPage";
 import { ProvidersPage } from "./connect/views/ProvidersPage";
-import { CONNECT_CALLBACK_PATH } from "./connect/redirects";
+import {
+  CONNECT_CALLBACK_LOOPBACK_PATH,
+  CONNECT_CALLBACK_PATH,
+} from "./connect/redirects";
 import { enIntegrateMessages } from "./i18n";
 import { IntegrationsPage } from "./views/IntegrationsPage";
 import { RepositoriesPage } from "./views/RepositoriesPage";
@@ -47,6 +50,16 @@ const integrateRoutes: readonly BaseAddonRoute[] = [
   {
     name: "integrate.connect.callback",
     path: CONNECT_CALLBACK_PATH,
+    layout: "console",
+    component: OAuthConnectCallbackPage,
+  },
+  // Loopback alias for fixed public clients (e.g. Anthropic) whose allow-list registers
+  // only the bare `/callback` loopback: on localhost the backend rewrites the connect
+  // redirect to this path (OAuthClient.loopback_redirect_path), so the provider returns
+  // here. Same completion page — `currentConnectCallbackRedirectUri()` reflects the path.
+  {
+    name: "integrate.connect.callbackLoopback",
+    path: CONNECT_CALLBACK_LOOPBACK_PATH,
     layout: "console",
     component: OAuthConnectCallbackPage,
   },
@@ -144,6 +157,7 @@ export {
   type OAuthConnectPayload,
 } from "./connect/ConnectOAuthButton";
 export {
+  CONNECT_CALLBACK_LOOPBACK_PATH,
   CONNECT_CALLBACK_PATH,
   connectCallbackRedirectUri,
   currentConnectCallbackRedirectUri,

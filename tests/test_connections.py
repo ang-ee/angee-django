@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 from urllib import parse
 
@@ -47,8 +48,15 @@ def test_resolve_connect_redirect_picks_auto_or_manual() -> None:
     )
 
     manual = "https://platform.claude.com/oauth/code/callback"
-    fixed = OAuthClient(slug="anthropic", client_id="a", manual_redirect_uri=manual)
-    assert fixed.resolve_connect_redirect("http://localhost:5177/callback") == (
+    fixed = OAuthClient(
+        slug="anthropic",
+        client_id="a",
+        manual_redirect_uri=manual,
+        loopback_redirect_path="/callback",
+    )
+    # On localhost the proposed path is rewritten to the client's allow-listed loopback
+    # path (origin preserved), so the provider can round-trip back in auto mode.
+    assert fixed.resolve_connect_redirect("http://localhost:5177/integrate/oauth/callback") == (
         "http://localhost:5177/callback",
         "auto",
     )
@@ -56,6 +64,38 @@ def test_resolve_connect_redirect_picks_auto_or_manual() -> None:
     # the session — both fall back to the manual paste callback.
     assert fixed.resolve_connect_redirect("http://127.0.0.1:5177/callback") == (manual, "manual")
     assert fixed.resolve_connect_redirect("https://console.example/callback") == (manual, "manual")
+    # A fixed public client with no declared loopback path cannot round-trip even on
+    # localhost — its allow-list registers only the manual paste page.
+    no_loopback = OAuthClient(slug="grok", client_id="a", manual_redirect_uri=manual)
+    assert no_loopback.resolve_connect_redirect("http://localhost:5177/integrate/oauth/callback") == (
+        manual,
+        "manual",
+    )
+    # The loopback origin is rebuilt from validated parts: userinfo is dropped, and a
+    # schemeless proposal can't go auto — neither leaks into the provider redirect.
+    assert fixed.resolve_connect_redirect("http://evil.test@localhost:5177/x") == (
+        "http://localhost:5177/callback",
+        "auto",
+    )
+    assert fixed.resolve_connect_redirect("//localhost:5177/x") == (manual, "manual")
+
+
+def test_install_fixture_seeds_anthropic_loopback_callback_path() -> None:
+    """The seeded loopback path must equal the `/callback` route the frontend mounts.
+
+    The backend stores the path as data and the SPA mounts a static route at the literal;
+    they can't share one symbol across the boundary, so pin both ends to the same value
+    (here and in the frontend ``index.test.ts``) so a drift fails a test, not a connect.
+    """
+
+    import yaml
+
+    import angee.integrate
+
+    fixture = Path(angee.integrate.__file__).parent / "resources/install/010_integrate.oauthclient.yaml"
+    entries = {entry["slug"]: entry for entry in yaml.safe_load(fixture.read_text())}
+    for slug in ("anthropic-platform", "anthropic-personal"):
+        assert entries[slug]["loopback_redirect_path"] == "/callback"
 
 
 def test_oauth_flow_error_public_message_prefers_safe_provider_body() -> None:

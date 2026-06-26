@@ -25,7 +25,7 @@ import secrets
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from django.apps import apps
 from django.conf import settings
@@ -145,6 +145,7 @@ class OAuthClientManager(RebacManager.from_queryset(OAuthClientQuerySet)):  # ty
             "authorize_params",
             "token_params",
             "manual_redirect_uri",
+            "loopback_redirect_path",
         }
     )
     setting_fields = seed_fields | frozenset({"slug", "environment", "client_secret"})
@@ -267,6 +268,15 @@ class OAuthClient(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     # allow-list we cannot extend. When set, connect uses a localhost loopback redirect
     # when the console runs on localhost, else this manual page (see resolve_connect_redirect).
     manual_redirect_uri = models.URLField(blank=True)
+    # The bare loopback path the same fixed public client's allow-list registers for
+    # native-app localhost connect (RFC 8252 §7.3 — any port, exact path). Anthropic's
+    # public client allows ``/callback`` only, not the console's own callback path, so on
+    # localhost connect must redirect to ``{origin}{loopback_redirect_path}``. The browser
+    # mounts a matching route at this path (see the frontend ``CONNECT_CALLBACK_LOOPBACK_PATH``).
+    # Connect-flow only: ``resolve_connect_redirect`` is shared with OIDC login via
+    # ``issue_flow``, so a login-capable client must leave this blank or its login redirect
+    # would be rewritten to the connect loopback.
+    loopback_redirect_path = models.CharField(max_length=255, blank=True)
     # Claim mapping: how to read a stable subject/email/label/avatar out of this
     # provider's profile (userinfo or, for OIDC, the verified ID token). Connect uses
     # it to label the account; OIDC login reuses it to identify the user.
@@ -339,19 +349,28 @@ class OAuthClient(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     def resolve_connect_redirect(self, proposed_redirect_uri: str) -> tuple[str, str]:
         """Return the ``(redirect_uri, mode)`` this client uses to connect from a browser.
 
-        ``mode`` is ``"auto"`` (the provider redirects back to ``proposed_redirect_uri``)
+        ``mode`` is ``"auto"`` (the provider redirects back to the returned redirect)
         or ``"manual"`` (the user copies the code the provider displays and pastes it
-        back). A client with no ``manual_redirect_uri`` always redirects back. A fixed
-        public client (``manual_redirect_uri`` set) can redirect back only to a
-        ``localhost`` loopback — its allow-list rejects other hosts and a cross-origin
-        callback would also drop the session — so off-localhost it falls back to manual.
+        back). A client with no ``manual_redirect_uri`` always redirects back to the
+        browser-proposed redirect. A fixed public client (``manual_redirect_uri`` set)
+        has an allow-list we cannot extend: on ``localhost`` it can round-trip only to
+        the loopback path its allow-list registers, so the proposed redirect's path is
+        replaced with ``loopback_redirect_path`` (origin preserved); off-localhost — or
+        with no loopback path declared — its allow-list rejects the redirect and the
+        cross-origin callback would drop the session, so it falls back to manual paste.
         """
 
         if not self.manual_redirect_uri:
             return proposed_redirect_uri, "auto"
-        host = (urlsplit(proposed_redirect_uri).hostname or "").lower()
-        if host == "localhost":
-            return proposed_redirect_uri, "auto"
+        parts = urlsplit(proposed_redirect_uri)
+        host = (parts.hostname or "").lower()
+        if self.loopback_redirect_path and parts.scheme in {"http", "https"} and host == "localhost":
+            # Rebuild the origin from validated parts only — never echo userinfo or host
+            # casing from the proposed URL into the redirect we hand the provider, which
+            # exact-matches it again at token exchange.
+            netloc = f"{host}:{parts.port}" if parts.port else host
+            loopback = urlunsplit((parts.scheme, netloc, self.loopback_redirect_path, "", ""))
+            return loopback, "auto"
         return self.manual_redirect_uri, "manual"
 
     @property

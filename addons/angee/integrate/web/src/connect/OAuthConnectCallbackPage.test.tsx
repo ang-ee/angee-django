@@ -6,7 +6,7 @@ import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { OAuthConnectCallbackPage } from "./OAuthConnectCallbackPage";
-import { CONNECT_CALLBACK_PATH } from "./redirects";
+import { CONNECT_CALLBACK_LOOPBACK_PATH, CONNECT_CALLBACK_PATH } from "./redirects";
 
 const mocks = vi.hoisted(() => ({ mutate: vi.fn() }));
 
@@ -60,6 +60,30 @@ describe("OAuthConnectCallbackPage", () => {
         code: "connect-ok",
         state: "s1",
         redirectUri: `${window.location.origin}${CONNECT_CALLBACK_PATH}`,
+      }),
+    );
+  });
+
+  test("completes a loopback `/callback` redirect with that exact redirect_uri", async () => {
+    // A fixed public client returns to the bare loopback path on localhost; completion
+    // must exchange with `origin + /callback` (what authorize used), not the canonical path.
+    window.history.replaceState(null, "", `${CONNECT_CALLBACK_LOOPBACK_PATH}?code=loop-ok&state=s3`);
+    mocks.mutate.mockResolvedValue({
+      connect_account_complete: { next: "/integrate/accounts", error: null, account: null, credential: null },
+    });
+
+    render(
+      <Runtime>
+        <OAuthConnectCallbackPage />
+      </Runtime>,
+    );
+
+    await waitFor(() => expect(vi.mocked(window.location.assign)).toHaveBeenCalledWith("/integrate/accounts"));
+    expect(mocks.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: "loop-ok",
+        state: "s3",
+        redirectUri: `${window.location.origin}${CONNECT_CALLBACK_LOOPBACK_PATH}`,
       }),
     );
   });

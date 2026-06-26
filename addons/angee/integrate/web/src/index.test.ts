@@ -122,13 +122,20 @@ describe("integrate addon manifest", () => {
     expect(route?.path).toBe("/integrate/oauth/callback");
     expect(route?.layout).toBe("console");
     expect(route?.component).toBeTypeOf("function");
+  });
+
+  test("mounts the loopback `/callback` alias for fixed public clients", () => {
+    const loopback = (integrate.routes ?? []).find(
+      (item) => item.name === "integrate.connect.callbackLoopback",
+    );
+    // Pinned to `/callback` to match the seeded `loopback_redirect_path` (see
+    // tests/test_connections.py) — drift on either side fails a test, not a connect.
+    expect(loopback?.path).toBe("/callback");
+    expect(loopback?.layout).toBe("console");
+    expect(loopback?.component).toBeTypeOf("function");
+    // The legacy IAM login callback alias stays dropped; this restores the connect loopback only.
     expect(
-      (integrate.routes ?? []).some((item) =>
-        item.name === "integrate.connect.callbackFallback" ||
-        item.name.startsWith("integrate.connect.callback.") ||
-        item.path === "/callback" ||
-        item.path === "/iam/oauth/callback",
-      ),
+      (integrate.routes ?? []).some((item) => item.path === "/iam/oauth/callback"),
     ).toBe(false);
   });
 

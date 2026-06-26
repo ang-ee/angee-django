@@ -213,6 +213,7 @@ class OAuthClientType(AngeeNode):
     revoke_endpoint: auto
     userinfo_endpoint: auto
     manual_redirect_uri: auto
+    loopback_redirect_path: auto
     token_request_format: auto
     is_enabled: auto
     supports_refresh: auto
@@ -456,6 +457,7 @@ _OAUTH_CLIENT_RESOURCE = hasura_model_resource(
         "revoke_endpoint",
         "userinfo_endpoint",
         "manual_redirect_uri",
+        "loopback_redirect_path",
         "token_request_format",
         "is_enabled",
         "scopes_catalogue",
@@ -486,6 +488,7 @@ _OAUTH_CLIENT_RESOURCE = hasura_model_resource(
         "revoke_endpoint",
         "userinfo_endpoint",
         "manual_redirect_uri",
+        "loopback_redirect_path",
         "token_request_format",
         "is_enabled",
         "scopes_catalogue",

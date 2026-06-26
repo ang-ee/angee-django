@@ -23,6 +23,9 @@
   # Fixed manual-paste callback for off-localhost connect (the public client only
   # allows a localhost loopback or this page, which shows the code as code#state).
   manual_redirect_uri: https://platform.claude.com/oauth/code/callback
+  # The localhost loopback path the same public client allow-lists: on localhost,
+  # connect redirects to {origin}/callback (auto) instead of the manual page.
+  loopback_redirect_path: /callback
   token_request_format: json
   is_enabled: true
   supports_pkce: true
@@ -52,6 +55,7 @@
   token_endpoint: https://platform.claude.com/v1/oauth/token
   userinfo_endpoint: https://api.anthropic.com/api/oauth/profile
   manual_redirect_uri: https://platform.claude.com/oauth/code/callback
+  loopback_redirect_path: /callback
   token_request_format: json
   is_enabled: true
   supports_pkce: true
