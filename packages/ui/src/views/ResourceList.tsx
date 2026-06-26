@@ -439,6 +439,7 @@ function ResourceListBody<TRow extends Row = Row>({
     React.useState<ListViewNavigationScope | null>(null);
   const [pendingNavigation, setPendingNavigation] =
     React.useState<PendingRecordNavigation | null>(null);
+  const listStateRef = React.useRef<ResourceListSnapshot<TRow> | null>(null);
 
   // A record is open when an id is selected or a create was requested.
   const open = hasRecordSurface && (resolvedCreating || resolvedRecordId != null);
@@ -447,6 +448,15 @@ function ResourceListBody<TRow extends Row = Row>({
   // resource-list surface.
   const handleListStateChange = React.useCallback(
     (next: ResourceListSnapshot<TRow>) => {
+      const current = listStateRef.current;
+      if (shouldRetainListStateForRecordNavigation({
+        current,
+        next,
+        recordId: !resolvedCreating ? resolvedRecordId : null,
+      })) {
+        return;
+      }
+      listStateRef.current = next;
       setListState((current) =>
         listStatesEqual(current, next) ? current : next,
       );
@@ -456,7 +466,7 @@ function ResourceListBody<TRow extends Row = Row>({
           : (next.navigationScope ?? null),
       );
     },
-    [],
+    [resolvedCreating, resolvedRecordId],
   );
   React.useEffect(() => {
     if (open) return;
@@ -586,7 +596,7 @@ function ResourceListBody<TRow extends Row = Row>({
       onRowClick={hasRecordSurface && handleSelectRecord ? handleRowClick : undefined}
     />
   );
-  const listStateOnly = open ? (
+  const listStateOnly = open && listState ? (
     <ListStateProbe<TRow>
       resource={resource}
       columns={resolvedColumns}
@@ -1224,6 +1234,27 @@ function listStatesEqual<TRow extends Row>(
       right.navigationScope ?? null,
     )
   );
+}
+
+function shouldRetainListStateForRecordNavigation<TRow extends Row>({
+  current,
+  next,
+  recordId,
+}: {
+  current: ResourceListSnapshot<TRow> | null;
+  next: ResourceListSnapshot<TRow>;
+  recordId?: string | null;
+}): boolean {
+  if (!recordId || !current || !next.fetching) return false;
+  if (!listStateHasRecord(current, recordId)) return false;
+  return !listStateHasRecord(next, recordId);
+}
+
+function listStateHasRecord<TRow extends Row>(
+  state: ResourceListSnapshot<TRow>,
+  recordId: string,
+): boolean {
+  return state.rows.some((row) => rowPublicId(row) === recordId);
 }
 
 function navigationScopesEqual(

@@ -60,17 +60,21 @@ export function RoutedRecordController<TRow extends Row = Row>({
   });
   const onSelect = React.useCallback(
     (id: string | null) => {
-      void navigate({
-        to: recordPath(basePath, id === null ? newRecordId : id),
-        search: (prev: Record<string, unknown>) => prev,
+      React.startTransition(() => {
+        void navigate({
+          to: recordPath(basePath, id === null ? newRecordId : id),
+          search: (prev: Record<string, unknown>) => prev,
+        });
       });
     },
     [basePath, navigate, newRecordId],
   );
   const onClose = React.useCallback(() => {
-    void navigate({
-      to: basePath,
-      search: (prev: Record<string, unknown>) => prev,
+    React.startTransition(() => {
+      void navigate({
+        to: basePath,
+        search: (prev: Record<string, unknown>) => prev,
+      });
     });
   }, [basePath, navigate]);
   const rowHref = React.useCallback(

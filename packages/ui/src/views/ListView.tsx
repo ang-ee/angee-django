@@ -33,6 +33,7 @@ import {
 import { DeletePreviewDialog } from "./DeletePreviewDialog";
 import {
   useClientResourceViewSurface,
+  useGroupedResourceViewSurface,
   useResourceViewSurface,
   type ResourceViewSurface,
   type UseResourceViewSurfaceProps,
@@ -203,16 +204,25 @@ function ListViewBody<TRow extends Row = Row>({
   );
   const hasInvalidGroupStack =
     !resourceViewGroupStacksEqual(resourceView.state.groupStack, validCurrentGroupStack);
+  const handledDefaultGroupRef = React.useRef<ResourceViewGroup | null>(null);
+  const defaultGroupPending =
+    activeDefaultGroup !== null
+    && resourceView.state.group === null
+    && (
+      handledDefaultGroupRef.current === null
+      || !resourceViewGroupsEqual(handledDefaultGroupRef.current, activeDefaultGroup)
+    );
   const effectiveGroupStack = React.useMemo(() => {
     if (validCurrentGroupStack.length > 0) return validCurrentGroupStack;
-    return hasInvalidGroupStack ? validDefaultGroupStack : resourceView.state.groupStack;
+    if (hasInvalidGroupStack || defaultGroupPending) return validDefaultGroupStack;
+    return resourceView.state.groupStack;
   }, [
     resourceView.state.groupStack,
     hasInvalidGroupStack,
+    defaultGroupPending,
     validCurrentGroupStack,
     validDefaultGroupStack,
   ]);
-  const handledDefaultGroupRef = React.useRef<ResourceViewGroup | null>(null);
   React.useEffect(() => {
     if (!activeDefaultGroup) {
       handledDefaultGroupRef.current = null;
@@ -319,6 +329,9 @@ function ListViewBody<TRow extends Row = Row>({
   if (clientRowModel) {
     return <ClientSurfaceBody<TRow> surfaceProps={surfaceProps}>{content}</ClientSurfaceBody>;
   }
+  if (groupedListMode) {
+    return <GroupedServerSurfaceBody<TRow> surfaceProps={surfaceProps}>{content}</GroupedServerSurfaceBody>;
+  }
   return <ServerSurfaceBody<TRow> surfaceProps={surfaceProps}>{content}</ServerSurfaceBody>;
 }
 
@@ -332,6 +345,13 @@ function ServerSurfaceBody<TRow extends Row>({
   children,
 }: SurfaceBodyProps<TRow>): React.ReactElement {
   return children(useResourceViewSurface(surfaceProps));
+}
+
+function GroupedServerSurfaceBody<TRow extends Row>({
+  surfaceProps,
+  children,
+}: SurfaceBodyProps<TRow>): React.ReactElement {
+  return children(useGroupedResourceViewSurface(surfaceProps));
 }
 
 function ClientSurfaceBody<TRow extends Row>({

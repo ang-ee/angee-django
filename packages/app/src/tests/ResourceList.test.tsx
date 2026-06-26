@@ -57,6 +57,9 @@ import {
   type ListColumn,
   type ListViewProps,
   } from "@angee/ui/views/ListView";
+import type {
+  ResourceListSnapshot,
+} from "@angee/ui/views/resource-view-surface";
 import {
   Action,
   Column,
@@ -1501,7 +1504,7 @@ describe("ResourceList", () => {
     const onClose = vi.fn();
 
     function Harness(): ReactElement {
-      const [recordId, setRecordId] = useState<string | null>("note-2");
+      const [recordId, setRecordId] = useState<string | null>(null);
       return (
         <TestUrlState>
           <ResourceList
@@ -1526,6 +1529,9 @@ describe("ResourceList", () => {
     }
 
     render(<Harness />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open Second" }));
+    await waitFor(() => expect(onSelect).toHaveBeenCalledWith("note-2"));
 
     const pager = await screen.findByRole("navigation", {
       name: "Record navigation",
@@ -1566,6 +1572,154 @@ describe("ResourceList", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     await waitFor(() =>
       expect(boardButton.getAttribute("aria-pressed")).toBe("true"),
+    );
+  });
+
+  test("does not probe list state for a cold direct record", async () => {
+    render(
+      <TestUrlState>
+        <ResourceList
+          resource="notes.Note"
+          columns={columns}
+          formFields={formFields}
+          recordId="note-2"
+          placement="inline"
+          pageSize={2}
+        />
+      </TestUrlState>,
+    );
+
+    expect(await screen.findByDisplayValue("Second")).toBeTruthy();
+    expect(
+      screen.queryByRole("navigation", { name: "Record navigation" }),
+    ).toBeNull();
+    expect(sdkMocks.listCalls).toHaveLength(0);
+  });
+
+  test("keeps record navigation during a live list refetch", async () => {
+    const onSelect = vi.fn();
+    const initialSnapshot: ResourceListSnapshot<Row> = {
+      rows: [sdkMocks.rows[0]!, sdkMocks.rows[1]!],
+      total: 4,
+      page: 1,
+      pageSize: 2,
+      pageCount: 2,
+      hasNext: true,
+      hasPrev: false,
+      fetching: false,
+    };
+    const fetchingSnapshot: ResourceListSnapshot<Row> = {
+      ...initialSnapshot,
+      rows: [],
+      fetching: true,
+    };
+    const completedSnapshot: ResourceListSnapshot<Row> = {
+      rows: [sdkMocks.rows[0]!, sdkMocks.rows[2]!],
+      total: 3,
+      page: 1,
+      pageSize: 2,
+      pageCount: 2,
+      hasNext: true,
+      hasPrev: false,
+      fetching: false,
+    };
+
+    function Harness(): ReactElement {
+      const [recordId, setRecordId] = useState<string | null>(null);
+      const [snapshot, setSnapshot] =
+        useState<ResourceListSnapshot<Row>>(initialSnapshot);
+      const SnapshotList: ListComponent<Row> = ({
+        onListStateChange,
+        onRowClick,
+      }: ListViewProps<Row>) => {
+        useEffect(() => {
+          onListStateChange?.(snapshot);
+        }, [onListStateChange, snapshot]);
+        return (
+          <button
+            type="button"
+            onClick={() => onRowClick?.(sdkMocks.rows[1]!)}
+          >
+            Open Second
+          </button>
+        );
+      };
+      return (
+        <TestUrlState>
+          <button
+            type="button"
+            onClick={() => setSnapshot(fetchingSnapshot)}
+          >
+            Publish fetching snapshot
+          </button>
+          <button
+            type="button"
+            onClick={() => setSnapshot(completedSnapshot)}
+          >
+            Publish completed snapshot
+          </button>
+          <ResourceList
+            resource="notes.Note"
+            columns={columns}
+            formFields={formFields}
+            recordId={recordId}
+            list={SnapshotList}
+            placement="drawer"
+            pageSize={2}
+            onSelect={(id) => {
+              onSelect(id);
+              setRecordId(id);
+            }}
+          />
+        </TestUrlState>
+      );
+    }
+
+    render(<Harness />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open Second" }));
+    await waitFor(() => expect(onSelect).toHaveBeenCalledWith("note-2"));
+
+    const pager = await screen.findByRole("navigation", {
+      name: "Record navigation",
+    });
+    expect(pager.textContent?.replace(/\s+/g, " ").trim()).toContain(
+      "2 / 4",
+    );
+    expect(
+      within(pager)
+        .getByRole("button", { name: "Next record" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        hidden: true,
+        name: "Publish fetching snapshot",
+      }),
+    );
+    await nextTask();
+    expect(
+      screen
+        .getByRole("navigation", { name: "Record navigation" })
+        .textContent?.replace(/\s+/g, " ")
+        .trim(),
+    ).toContain("2 / 4");
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        hidden: true,
+        name: "Publish completed snapshot",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("navigation", { name: "Record navigation" })
+          .textContent?.replace(/\s+/g, " ")
+          .trim(),
+      ).toContain("/ 3"),
     );
   });
 
@@ -2265,6 +2419,10 @@ describe("ResourceList", () => {
       </TestUrlState>,
     );
 
+    await screen.findByRole("button", { name: "Groups 1-4 / 4 groups" });
+    await act(async () => {
+      await nextTask();
+    });
     fireEvent.click(
       await screen.findByRole("button", {
         name: "Filter, group, favorites",

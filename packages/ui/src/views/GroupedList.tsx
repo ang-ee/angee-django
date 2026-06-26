@@ -633,7 +633,9 @@ interface GroupSectionProps<TRow extends Row> extends GroupRenderProps<TRow> {
   onListStateChange?: (state: ResourceListSnapshot<TRow>) => void;
 }
 
-function GroupSection<TRow extends Row>({
+const GroupSection = React.memo(GroupSectionInner) as typeof GroupSectionInner;
+
+function GroupSectionInner<TRow extends Row>({
   resource,
   measures,
   bucket,
@@ -930,13 +932,20 @@ interface LeafGroupSectionProps<TRow extends Row> extends GroupRenderProps<TRow>
 }
 
 function LeafGroupSection<TRow extends Row>({
+  expanded,
+  ...props
+}: LeafGroupSectionProps<TRow>): React.ReactElement | null {
+  if (!expanded) return null;
+  return <LeafGroupRecords {...props} />;
+}
+
+function LeafGroupRecords<TRow extends Row>({
   resource,
   modelMetadata,
   bucket,
   bucketKey,
   label,
   filter,
-  expanded,
   page,
   regionId,
   tableColumns,
@@ -951,7 +960,7 @@ function LeafGroupSection<TRow extends Row>({
   onRowClick,
   onPageChange,
   onListStateChange,
-}: LeafGroupSectionProps<TRow>): React.ReactElement | null {
+}: Omit<LeafGroupSectionProps<TRow>, "expanded">): React.ReactElement {
   const t = useBaseT();
   const pageCount = Math.max(
     1,
@@ -983,9 +992,6 @@ function LeafGroupSection<TRow extends Row>({
     filters: refineFilters,
     sorters: refineSorters,
     meta: listMeta,
-    queryOptions: {
-      enabled: expanded,
-    },
   });
   const navigationScope = React.useMemo(
     () => ({
@@ -1057,7 +1063,6 @@ function LeafGroupSection<TRow extends Row>({
   });
   const rowModels = table.getRowModel().rows;
 
-  if (!expanded) return null;
   return (
     <TableBody id={regionId}>
       {list.error ? (

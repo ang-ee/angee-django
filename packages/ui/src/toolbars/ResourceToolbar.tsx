@@ -27,6 +27,8 @@ import type {
 import { resourceViewGroupsEqual } from "../views/resource-view-model";
 import { groupFieldLabel } from "../views/ListInternals";
 
+const FILTER_TEXT_COMMIT_DELAY_MS = 300;
+
 export interface ResourceToolbarProps {
   pager: PagerState;
   view?: ResourceViewKind;
@@ -277,6 +279,27 @@ function FilterPicker({
   const [favoriteOpen, setFavoriteOpen] = React.useState(false);
   const [favoriteLabel, setFavoriteLabel] =
     React.useState(defaultFavoriteLabel);
+  const [draftFilterText, setDraftFilterText] = React.useState(filterText);
+
+  React.useEffect(() => {
+    setDraftFilterText(filterText);
+  }, [filterText]);
+
+  const commitFilterText = React.useCallback(
+    (value: string) => {
+      if (value !== filterText) onFilterTextChange?.(value);
+    },
+    [filterText, onFilterTextChange],
+  );
+
+  React.useEffect(() => {
+    if (draftFilterText === filterText) return undefined;
+    const timeout = window.setTimeout(
+      () => commitFilterText(draftFilterText),
+      FILTER_TEXT_COMMIT_DELAY_MS,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [commitFilterText, draftFilterText, filterText]);
 
   function addCustomFilter() {
     if (!selectedCustomField || !onCustomFilterAdd) return;
@@ -358,11 +381,17 @@ function FilterPicker({
         ))}
         <input
           type="search"
-          value={filterText}
+          value={draftFilterText}
           placeholder={t("dataToolbar.filterPlaceholder")}
           aria-label={t("dataToolbar.filterRecords")}
           className="h-full min-w-[7rem] flex-1 border-0 bg-transparent text-13 text-fg outline-none placeholder:text-fg-muted"
-          onChange={(event) => onFilterTextChange?.(event.currentTarget.value)}
+          onBlur={(event) => commitFilterText(event.currentTarget.value)}
+          onChange={(event) => setDraftFilterText(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              commitFilterText(event.currentTarget.value);
+            }
+          }}
         />
         <PopoverTrigger
           className="grid size-6 shrink-0 place-content-center rounded text-fg-muted outline-none transition-colors hover:bg-sheet hover:text-fg focus-visible:focus-ring"

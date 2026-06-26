@@ -177,6 +177,9 @@ export interface ResourceViewSurface<TRow extends Row = Row>
   sortOrder: ListOrder | undefined;
 }
 
+const EMPTY_ARRAY = [] as const;
+const EMPTY_SELECTED_IDS: ReadonlySet<string> = new Set();
+
 export interface RowsResourceViewSurface<TRow extends StringIdRow = StringIdRow>
   extends ResourceViewPresentationSurface<TRow> {
   list: RowsResourceListSnapshot<TRow>;
@@ -270,6 +273,116 @@ function listResultFromRefineTable<TRow extends Row>({
     fetching,
     error: errorFromUnknown(error),
     refetch,
+  };
+}
+
+export function useGroupedResourceViewSurface<TRow extends Row = Row>({
+  columns,
+  fields,
+  filter,
+  order,
+  pageSize,
+  resourceView,
+  modelMetadata = null,
+}: UseResourceViewSurfaceProps<TRow>): ResourceViewSurface<TRow> {
+  useSyncPageSize(resourceView, pageSize);
+
+  const requestedFields = React.useMemo(
+    () => requestedFieldPaths(columns, fields, modelMetadata),
+    [columns, fields, modelMetadata],
+  );
+  const mergedFilter = React.useMemo(
+    () => Filter.combineOptional(filter, resourceView.state.filter),
+    [resourceView.state.filter, filter],
+  );
+  const sortOrder = React.useMemo(
+    () =>
+      resourceView.state.resourceOrder()
+      ?? order
+      ?? defaultResourceOrder(modelMetadata),
+    [resourceView.state.sort, modelMetadata, order],
+  );
+  const tableColumns = React.useMemo(
+    () => buildColumns(columns, resourceView),
+    [columns, resourceView],
+  );
+  const [columnVisibility, setColumnVisibility] =
+    React.useState<VisibilityState>({});
+  const table = useReactTable<TRow>({
+    data: EMPTY_ARRAY as readonly TRow[] as TRow[],
+    columns: tableColumns as ColumnDef<TRow>[],
+    state: { columnVisibility },
+    onColumnVisibilityChange: setColumnVisibility,
+    getCoreRowModel: getCoreRowModel(),
+    getRowId: modelRowId,
+    autoResetPageIndex: false,
+    autoResetExpanded: false,
+  });
+  const {
+    visibleColumnCount,
+    visibleFields,
+    toggleVisibleField,
+  } = useResourceViewTableChrome(table, columnVisibility);
+  const tableScrollRef = React.useRef<HTMLDivElement | null>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: 0,
+    getScrollElement: () => tableScrollRef.current,
+    initialRect: { width: 1024, height: 600 },
+    estimateSize: () => RECORD_ROW_HEIGHT,
+    overscan: 0,
+  });
+  const list = React.useMemo<ResourceListResult>(
+    () => ({
+      rows: EMPTY_ARRAY,
+      total: undefined,
+      pageCount: undefined,
+      page: resourceView.state.page,
+      pageSize: resourceView.state.pageSize,
+      pageInfo: undefined,
+      hasNext: false,
+      hasPrev: resourceView.state.page > 1,
+      setPage: resourceView.setPage,
+      firstPage: () => resourceView.setPage(1),
+      nextPage: () => resourceView.setPage(resourceView.state.page + 1),
+      prevPage: () => resourceView.setPage(Math.max(1, resourceView.state.page - 1)),
+      lastPage: () => undefined,
+      fetching: false,
+      error: null,
+      refetch: () => undefined,
+    }),
+    [
+      resourceView.setPage,
+      resourceView.state.page,
+      resourceView.state.pageSize,
+    ],
+  );
+  const listState = useResourceRowsSnapshot<TRow>(list);
+
+  return {
+    list,
+    listState,
+    rows: EMPTY_ARRAY as readonly TRow[],
+    requestedFields,
+    mergedFilter,
+    sortOrder,
+    tableColumns,
+    table,
+    columnVisibility,
+    visibleColumnCount,
+    visibleFields,
+    toggleVisibleField,
+    rowModels: EMPTY_ARRAY,
+    selectedIds: resourceView.state.selectedIds ?? EMPTY_SELECTED_IDS,
+    pageIds: EMPTY_ARRAY,
+    allPageSelected: false,
+    somePageSelected: false,
+    setPageSelection: () => undefined,
+    groupedRows: EMPTY_ARRAY,
+    listItems: EMPTY_ARRAY,
+    expandedKeys: EMPTY_SELECTED_IDS,
+    toggleGroup: () => undefined,
+    tableScrollRef,
+    rowVirtualizer,
   };
 }
 
@@ -712,31 +825,11 @@ function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
   getRowId: (row: TRow, index: number) => string;
 }): ResourceViewPresentationSurface<TRow> {
   const tableColumns = table.options.columns as readonly ColumnDef<TRow>[];
-  const visibleColumnCount = table.getVisibleLeafColumns().length;
-  const visibleFields = React.useMemo<readonly VisibleFieldOption[]>(
-    () => {
-      const visibleCount = table.getVisibleLeafColumns().length;
-      return table.getAllLeafColumns().map((column) => {
-        const visible = column.getIsVisible();
-        return {
-          id: column.id,
-          label: tableColumnLabel(column),
-          visible,
-          disabled: visible && visibleCount <= 1,
-        };
-      });
-    },
-    [columnVisibility, table],
-  );
-  const toggleVisibleField = React.useCallback(
-    (id: string, visible: boolean) => {
-      const column = table.getColumn(id);
-      if (!column) return;
-      if (!visible && column.getIsVisible() && visibleColumnCount <= 1) return;
-      column.toggleVisibility(visible);
-    },
-    [table, visibleColumnCount],
-  );
+  const {
+    visibleColumnCount,
+    visibleFields,
+    toggleVisibleField,
+  } = useResourceViewTableChrome(table, columnVisibility);
 
   const rowModels = table.getRowModel().rows;
   const selectedIds = resourceView.state.selectedIds;
@@ -806,6 +899,45 @@ function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
     toggleGroup,
     tableScrollRef,
     rowVirtualizer,
+  };
+}
+
+function useResourceViewTableChrome<TRow extends Row>(
+  table: TableModel<TRow>,
+  columnVisibility: VisibilityState,
+): Pick<
+  ResourceViewPresentationSurface<TRow>,
+  "visibleColumnCount" | "visibleFields" | "toggleVisibleField"
+> {
+  const visibleColumnCount = table.getVisibleLeafColumns().length;
+  const visibleFields = React.useMemo<readonly VisibleFieldOption[]>(
+    () => {
+      const visibleCount = table.getVisibleLeafColumns().length;
+      return table.getAllLeafColumns().map((column) => {
+        const visible = column.getIsVisible();
+        return {
+          id: column.id,
+          label: tableColumnLabel(column),
+          visible,
+          disabled: visible && visibleCount <= 1,
+        };
+      });
+    },
+    [columnVisibility, table],
+  );
+  const toggleVisibleField = React.useCallback(
+    (id: string, visible: boolean) => {
+      const column = table.getColumn(id);
+      if (!column) return;
+      if (!visible && column.getIsVisible() && visibleColumnCount <= 1) return;
+      column.toggleVisibility(visible);
+    },
+    [table, visibleColumnCount],
+  );
+  return {
+    visibleColumnCount,
+    visibleFields,
+    toggleVisibleField,
   };
 }
 
