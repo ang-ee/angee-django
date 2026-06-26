@@ -16,6 +16,7 @@ from strawberry.types.enum import StrawberryEnumDefinition
 from strawberry.utils.str_converters import to_camel_case
 from strawberry_django_hasura import SnakeNameConverter
 
+from angee.base.fields import ImplClassField
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.introspection import (
     FieldPathError,
@@ -811,7 +812,7 @@ def _resource_fields(
             value=surface_type,
             kind=kind,
         )
-        values = _surface_enum_values(surface_type) if kind == "enum" else ()
+        values = _resource_enum_values(model_field, surface_type) if kind == "enum" else ()
         fields.append(
             DataResourceFieldMetadata(
                 name=name,
@@ -1082,6 +1083,33 @@ def _surface_enum_values(value: object | None) -> tuple[DataResourceEnumValueMet
             ),
         )
         for enum_value in definition.values
+    )
+
+
+def _resource_enum_values(
+    field: models.Field[Any, Any] | None,
+    value: object | None,
+) -> tuple[DataResourceEnumValueMetadata, ...]:
+    """Return enum metadata, using impl registry labels for ImplClassField values."""
+
+    values = _surface_enum_values(value)
+    if not isinstance(field, ImplClassField) or not values:
+        return values
+
+    labels_by_key = {
+        str(choice["key"]): str(choice["label"])
+        for choice in field.impl_choices()
+    }
+    definition = _strawberry_enum_definition(value)
+    if definition is None:
+        return values
+    labels_by_name = {
+        str(enum_value.name): labels_by_key.get(str(enum_value.value))
+        for enum_value in definition.values
+    }
+    return tuple(
+        dataclasses.replace(item, description=labels_by_name.get(item.value) or item.description)
+        for item in values
     )
 
 

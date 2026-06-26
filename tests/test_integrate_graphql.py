@@ -113,7 +113,7 @@ def test_integration_groups_aggregate_runs_with_rebac_scope(
             """
             query IntegrationGroups($groupBy: [IntegrationTypeGroupBySpec!]!) {
               integrations_groups(group_by: $groupBy, limit: 10) {
-                key { vendor_id vendor__display_name impl_class }
+                key { vendor_id vendor__display_name kind impl_class }
                 aggregate { count }
               }
             }
@@ -122,6 +122,7 @@ def test_integration_groups_aggregate_runs_with_rebac_scope(
                 "groupBy": [
                     {"field": "VENDOR"},
                     {"field": "VENDOR__DISPLAY_NAME"},
+                    {"field": "KIND"},
                     {"field": "IMPL_CLASS"},
                 ],
             },
@@ -133,6 +134,7 @@ def test_integration_groups_aggregate_runs_with_rebac_scope(
             "key": {
                 "vendor_id": vendor_pk,
                 "vendor__display_name": "Conn-Groups",
+                "kind": "Integration",
                 "impl_class": "NONE",
             },
             "aggregate": {"count": 1},
@@ -159,17 +161,18 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     assert metadata.roots.update_name == "update_integrations_by_pk"
     assert metadata.roots.delete_name == "delete_integrations_by_pk"
     assert metadata.filter_fields == (
-        "id", "display_name", "vendor", "impl_class", "status", "updated_at",
+        "id", "display_name", "vendor", "kind", "impl_class", "status", "updated_at",
     )
     assert metadata.order_fields == (
-        "display_name", "vendor", "impl_class", "status", "created_at", "updated_at",
+        "display_name", "vendor", "kind", "impl_class", "status", "created_at", "updated_at",
     )
     assert metadata.aggregate_fields == ("id",)
-    assert metadata.group_by_fields == ("impl_class", "vendor", "vendor__display_name", "status")
+    assert metadata.group_by_fields == ("kind", "impl_class", "vendor", "vendor__display_name", "status")
     assert {
         dimension.field: (dimension.input, dimension.key, dimension.kind, dimension.scalar)
         for dimension in metadata.group_dimensions
     } == {
+        "kind": ("KIND", "kind", "column", None),
         "impl_class": ("IMPL_CLASS", "impl_class", "column", None),
         "vendor": ("VENDOR", "vendor_id", "relation", "ID"),
         "vendor__display_name": ("VENDOR__DISPLAY_NAME", "vendor__display_name", "column", None),
@@ -207,7 +210,7 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
         "delete",
         "changes",
     ]
-    assert integration["groupByFields"] == ["impl_class", "vendor", "vendor__display_name", "status"]
+    assert integration["groupByFields"] == ["kind", "impl_class", "vendor", "vendor__display_name", "status"]
     assert {
         dimension["field"]: (
             dimension["input"],
@@ -217,6 +220,7 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
         )
         for dimension in integration["groupDimensions"]
     } == {
+        "kind": ("KIND", "kind", "column", None),
         "impl_class": ("IMPL_CLASS", "impl_class", "column", None),
         "vendor": ("VENDOR", "vendor_id", "relation", "ID"),
         "vendor__display_name": ("VENDOR__DISPLAY_NAME", "vendor__display_name", "column", None),
@@ -234,6 +238,14 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     ]
     assert integration["groupAliases"] == []
     assert integration["updateFields"] == ["vendor", "credential", "account", "owner", "status"]
+    kind_field = {field["name"]: field for field in integration["fields"]}["kind"]
+    assert kind_field["kind"] == "scalar"
+    assert kind_field["filterable"] is True
+    assert kind_field["sortable"] is True
+    assert kind_field["groupable"] is True
+    assert kind_field["updatable"] is False
+    impl_field = {field["name"]: field for field in integration["fields"]}["impl_class"]
+    assert impl_field["values"] == [{"value": "NONE", "description": "Draft"}]
     status_field = {field["name"]: field for field in integration["fields"]}["status"]
     assert status_field["kind"] == "enum"
     assert status_field["widget"] == "select"
@@ -364,6 +376,7 @@ def test_vcs_bridge_child_creation_creates_parent_identity(integrate_console_tab
         integration = Integration.objects.get(pk=bridge.pk)
 
         assert integration.impl_class == "none"
+        assert integration.kind == "VCS bridge"
         assert bridge.backend_class == "stub"
         assert str(integration.status) == "draft"
         assert bridge.pk == integration.pk
@@ -371,6 +384,18 @@ def test_vcs_bridge_child_creation_creates_parent_identity(integrate_console_tab
         assert bridge.vendor_id == integration.vendor_id
         assert bridge.credential_id == integration.credential_id
         assert str(bridge.webhook_secret) == "created-secret"
+
+
+def test_integration_kind_backfill_recovers_child_rows(integrate_console_tables: None) -> None:
+    """Existing parent rows recover their concrete integration kind after migration."""
+
+    bridge = make_integration("kind-backfill", backend_class="stub", model=VcsBridge)
+
+    with system_context(reason="test.integrate.kind_backfill"):
+        Integration.objects.filter(pk=bridge.pk).update(kind="Integration")
+        assert Integration.objects.get(pk=bridge.pk).kind == "Integration"
+        assert Integration.objects.sync_kinds() == 1
+        assert Integration.objects.get(pk=bridge.pk).kind == "VCS bridge"
 
 
 def test_integration_update_delete_are_admin_only(

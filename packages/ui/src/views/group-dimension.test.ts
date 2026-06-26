@@ -272,6 +272,33 @@ describe("resourceViewGroupToAggregateDimension", () => {
     });
   });
 
+  test("rejects a stale aggregate alias when its display field is gone", () => {
+    const group = {
+      field: "implLabel",
+      aggregateField: "implClass",
+      aggregateKey: "implClass",
+    };
+    const metadata = {
+      typeName: "IntegrationType",
+      fields: {
+        implClass: { name: "implClass", kind: "enum" },
+      },
+      resource: {
+        groupByFields: ["implClass"],
+        groupDimensions: [
+          {
+            field: "implClass",
+            input: "IMPL_CLASS",
+            key: "implClass",
+            kind: "column",
+          },
+        ],
+      },
+    } as unknown as ModelMetadata;
+
+    expect(validResourceViewGroupStack([group], metadata)).toEqual([]);
+  });
+
   test("fails fast when a grouped axis is not in resource metadata", () => {
     expect(() =>
       resourceViewGroupToAggregateDimension({ field: "missing" }, GROUP_METADATA)

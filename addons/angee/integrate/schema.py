@@ -1119,6 +1119,7 @@ class IntegrationType(IntegrationLabelMixin, AngeeNode):
     credential: CredentialType | None
     account: ExternalAccountType | None
     owner: UserType
+    kind: auto
     impl_class: auto
     status: auto
     last_used_at: auto
@@ -1168,6 +1169,7 @@ class ConnectedIntegrationType(IntegrationLabelMixin, AngeeNode):
     credential: ConnectedCredentialType | None
     account: ConnectedExternalAccountType | None
     owner: UserType
+    kind: auto
     impl_class: auto
     status: auto
     last_used_at: auto
@@ -1213,10 +1215,10 @@ _INTEGRATION_RESOURCE = hasura_model_resource(
     IntegrationType,
     model=Integration,
     name="integrations",
-    filterable=["id", "display_name", "vendor", "impl_class", "status", "updated_at"],
-    sortable=["display_name", "vendor", "impl_class", "status", "created_at", "updated_at"],
+    filterable=["id", "display_name", "vendor", "kind", "impl_class", "status", "updated_at"],
+    sortable=["display_name", "vendor", "kind", "impl_class", "status", "created_at", "updated_at"],
     aggregatable=["id"],
-    groupable=["impl_class", "vendor", "vendor__display_name", "status"],
+    groupable=["kind", "impl_class", "vendor", "vendor__display_name", "status"],
     insertable=["vendor", "owner", "credential", "account", "impl_class", "status"],
     updatable=["vendor", "credential", "account", "owner", "status"],
     field_id_decode={

@@ -26,6 +26,17 @@ export function IntegrationsPage(): React.ReactElement {
   const t = useIntegrateT();
   const implClassOptions = useEnumOptions(MODEL, "impl_class");
   const implClassPrefill = useImplPrefill(MODEL, "impl_class");
+  const groupOptions = React.useMemo(
+    () => [
+      {
+        id: "kind",
+        label: t("integrate.integrations.typeGroup"),
+        group: { field: "kind" },
+        type: "value" as const,
+      },
+    ],
+    [t],
+  );
 
   const cardActions = React.useCallback(
     (row: Row, context: { refresh: () => void }) =>
@@ -45,12 +56,13 @@ export function IntegrationsPage(): React.ReactElement {
       <List
         resource={MODEL}
         defaultGroups={{
-          list: { field: "impl_class" },
-          board: { field: "impl_class" },
+          list: { field: "kind" },
+          board: { field: "kind" },
         }}
+        groupOptions={groupOptions}
       >
         <Column field="display_name" />
-        <Column field="impl_label" header={t("integrate.col.implementation")} />
+        <Column field="kind" header={t("integrate.col.type")} />
         <Column field="vendor.display_name" header={t("integrate.col.vendor")} />
         <Column field="status" widget="statusBadge" />
         <Column

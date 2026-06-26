@@ -34,6 +34,7 @@ from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.db.models import Q
 from django.utils import timezone
+from django.utils.text import capfirst
 from rebac import (
     RelationshipTuple,
     app_settings,
@@ -1167,6 +1168,20 @@ class IntegrationManager(AngeeManager):
         field = cast(ImplClassField, self.model._meta.get_field("impl_class"))
         return cast(type[IntegrationImpl], field.resolve_class(key))
 
+    def sync_kinds(self) -> int:
+        """Backfill parent rows with the concrete integration kind they materialize."""
+
+        parent = self.model._base_manager
+        count = parent.filter(kind="").update(kind=self.model.integration_kind_value())
+        for child_model in _integration_child_models(cast(type[Integration], self.model)):
+            kind = child_model.integration_kind_value()
+            count += (
+                parent.filter(pk__in=child_model._base_manager.values("pk"))
+                .exclude(kind=kind)
+                .update(kind=kind)
+            )
+        return count
+
 
 class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     """A product/workspace integration to a vendor account.
@@ -1181,10 +1196,14 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     runtime = True
 
     sqid_prefix = "int_"
+    integration_kind_label = "Integration"
+    """Human kind label for parent-level integration grouping."""
     # Operator-given label (the connect flow sets it); blank falls back to the
     # vendor-derived :attr:`display_label`. The one human name for every child
     # (directory, channel, …), so it is not re-buried in each child's config.
     display_name = models.CharField(max_length=255, blank=True, default="")
+    kind = models.CharField(max_length=80, db_index=True, default=integration_kind_label)
+    """Human integration type/kind label, denormalized for server-side grouping."""
     vendor = models.ForeignKey("integrate.Vendor", on_delete=models.PROTECT, related_name="integrations")
     impl_class = ImplClassField(
         base_class=IntegrationImpl,
@@ -1234,6 +1253,33 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
 
         vendor_slug = getattr(getattr(self, "vendor", None), "slug", "?")
         return f"{vendor_slug}:{self.public_id}"
+
+    @classmethod
+    def integration_kind_value(cls) -> str:
+        """Return the grouping label this integration concrete model contributes."""
+
+        if _is_integration_child_model(cls):
+            for base in cls.__mro__:
+                label = base.__dict__.get("integration_kind_label")
+                meta = getattr(base, "_meta", None)
+                if label and getattr(meta, "label_lower", "") != "integrate.integration":
+                    return str(label)
+        else:
+            own_label = cls.__dict__.get("integration_kind_label")
+            if own_label:
+                return str(own_label)
+        return capfirst(cls._meta.verbose_name)
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Persist the parent grouping kind when a concrete child row saves."""
+
+        current_kind = self.kind
+        if _is_integration_child_model(type(self)) or not self.kind:
+            self.kind = type(self).integration_kind_value()
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None and self.kind != current_kind:
+            kwargs["update_fields"] = {*update_fields, "kind"}
+        super().save(*args, **kwargs)
 
     @property
     def display_label(self) -> str:
@@ -1294,6 +1340,31 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
                     "updated_at",
                 ]
             )
+
+
+def _is_integration_child_model(model: type[models.Model]) -> bool:
+    """Return whether ``model`` is an MTI child of the Integration parent."""
+
+    return any(parent._meta.label_lower == "integrate.integration" for parent in model._meta.parents)
+
+
+def _integration_child_models(parent_model: type[Integration]) -> tuple[type[Integration], ...]:
+    """Return concrete Integration children in deterministic model-label order."""
+
+    return tuple(
+        cast(type[Integration], model)
+        for model in sorted(
+            (
+                model
+                for model in apps.get_models()
+                if model is not parent_model
+                and not model._meta.abstract
+                and not model._meta.proxy
+                and issubclass(model, parent_model)
+            ),
+            key=lambda model: model._meta.label_lower,
+        )
+    )
 
 
 class Bridge(AngeeModel):
@@ -1438,6 +1509,7 @@ class VcsBridge(Bridge):
 
     runtime = True
     extends = "integrate.Integration"
+    integration_kind_label = "VCS bridge"
 
     backend_class = ImplClassField(
         base_class=VCSBackend,

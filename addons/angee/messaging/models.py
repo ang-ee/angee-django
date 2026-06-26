@@ -50,6 +50,7 @@ class Channel(Bridge):
 
     runtime = True
     extends = "integrate.Integration"
+    integration_kind_label = "Channel"
 
     backend_class = ImplClassField(
         base_class=ChannelBackend,

@@ -24,3 +24,11 @@ class IntegrateConfig(AppConfig):
     """Default vendor catalogue (master) and public OAuth client seeds (install),
     adopted by natural key so reloads stay idempotent. The OIDC refinements for the
     login-capable clients are seeded by the ``iam_integrate_oidc`` addon."""
+
+    def ready(self) -> None:
+        """Wire integration-owned denormalization maintenance after app population."""
+
+        super().ready()
+        from angee.integrate import signals
+
+        signals.connect()

@@ -114,6 +114,7 @@ class InferenceProvider(ImplDefaultsMixin, AngeeModel):
 
     runtime = True
     extends = "integrate.Integration"
+    integration_kind_label = "Inference provider"
 
     backend_class = ImplClassField(
         base_class=InferenceBackend,

@@ -447,6 +447,7 @@ class Directory(Bridge):
 
     runtime = True
     extends = "integrate.Integration"
+    integration_kind_label = "Directory"
 
     backend_class = ImplClassField(
         base_class=DirectoryBackend,

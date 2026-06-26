@@ -261,6 +261,9 @@ function groupAllowedByResource(
   }
   const groupByFields = metadata?.resource?.groupByFields;
   if (!groupByFields) return true;
+  if (group.aggregateField && !groupFieldAvailableOnResource(group.field, metadata)) {
+    return false;
+  }
   const aggregateField = group.aggregateField ?? group.field;
   const dimension =
     resourceGroupDimensionForField(aggregateField, metadata)

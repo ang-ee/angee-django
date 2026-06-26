@@ -13,6 +13,7 @@ export const enIntegrateMessages: Record<string, string> = {
   // Shared list/group column labels.
   "integrate.col.status": "Status",
   "integrate.col.implementation": "Implementation",
+  "integrate.col.type": "Type",
   "integrate.col.vendor": "Vendor",
   "integrate.col.credential": "Credential",
   "integrate.col.lastError": "Last error",
@@ -24,6 +25,7 @@ export const enIntegrateMessages: Record<string, string> = {
   "integrate.integrations.inference": "Inference provider",
   "integrate.integrations.vcs": "VCS bridge",
   "integrate.integrations.implClass": "Implementation",
+  "integrate.integrations.typeGroup": "Type",
   "integrate.integrations.action.connect": "Connect",
   "integrate.integrations.connect.startError": "Could not start integration connection.",
   "integrate.integrations.connect.connected": "Integration connected.",

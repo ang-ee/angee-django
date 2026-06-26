@@ -435,6 +435,18 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   default; an honest client UA passes. `angee.integrate.oauth.client` owns the value
   (`_USER_AGENT`); never reintroduce a browser spoof or fall back to urllib's
   default.
+- **TLS trust is an environment concern, not a per-call one.** Which CA roots we
+  trust is owned by the runtime, set once — never threaded as an `ssl_context`
+  through each outbound HTTPS call. Outbound code uses the stdlib default context
+  (`ssl.create_default_context()`), which OpenSSL resolves against the system
+  trust store and honours `SSL_CERT_FILE`/`SSL_CERT_DIR`. A dev mac trusts via
+  Homebrew `ca-certificates`; an environment that lacks a CA store (a minimal
+  container, a bare CI/agent sandbox) is fixed *there* — install OS
+  `ca-certificates`, or `export SSL_CERT_FILE="$(python -m certifi)"` at bootstrap
+  — not by adding `certifi` plumbing to call sites. Backend outbound HTTP has one
+  owner already: `angee.integrate.http.HttpClient` (`self.http`), which builds the
+  one context; route new outbound calls through it rather than hand-rolling
+  `urlopen` + context.
 - **An `ImplClassField` builds its enum at model-import time from its
   `registry_setting`** — the key→path mapping (e.g. `ANGEE_STORAGE_BACKEND_CLASSES`)
   is supplied by the owning addon's `autoconfig`, so every settings module that
