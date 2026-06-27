@@ -105,6 +105,8 @@ export const enIntegrateMessages: Record<string, string> = {
 
   // Credentials page — form-section labels and actions.
   "integrate.credentials.group.health": "Health",
+  "integrate.credentials.action.refresh": "Refresh token",
+  "integrate.credentials.refresh.done": "Token refreshed.",
   "integrate.credentials.action.reveal": "Reveal secret",
   "integrate.credentials.reveal.noSecret": "This credential has no stored secret to reveal.",
   "integrate.credentials.reveal.title": "Credential secret",

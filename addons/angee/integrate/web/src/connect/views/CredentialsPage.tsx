@@ -9,8 +9,10 @@ import {
   List,
   recordActionId,
   useAuthoredMutation,
+  useRecordActionMutation,
   type ActionContext,
 } from "@angee/ui";
+import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useIntegrateT } from "../../i18n";
 import { IntegrateRevealCredential } from "../documents.console";
@@ -31,6 +33,13 @@ const credentialList = (
 export function CredentialsPage(): React.ReactElement {
   const t = useIntegrateT();
   const [revealCredential] = useAuthoredMutation(IntegrateRevealCredential);
+
+  // Force an OAuth credential to renew its access token now (the lazy on-use refresh
+  // only fires when a consumer touches it). Single-id `{ ok, message }` action: the
+  // helper toasts the outcome and re-pulls the row so the health fields update.
+  const [refresh] = useRecordActionMutation<ActionFieldName>("refresh_credential", {
+    defaultMessage: t("integrate.credentials.refresh.done"),
+  });
 
   // The secret is never in the credential's read projection; this fetches and
   // decrypts it server-side on explicit admin request, then shows it once for copy.
@@ -72,6 +81,13 @@ export function CredentialsPage(): React.ReactElement {
         <Field name="last_refresh_at" readOnly />
         <Field name="last_refresh_status" readOnly />
       </Group>
+      {/* Only OAuth credentials carry a refresh token; static/ssh/basic kinds cannot renew. */}
+      <Action
+        id="refresh"
+        label={t("integrate.credentials.action.refresh")}
+        run={refresh}
+        visibleWhen={(record) => String(record.kind ?? "").toLowerCase() === "oauth"}
+      />
       <Action id="reveal" label={t("integrate.credentials.action.reveal")} icon="eye" run={reveal} />
     </Form>
   );

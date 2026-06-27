@@ -1036,6 +1036,26 @@ class IntegrateCredentialMutation:
             return RevealedCredentialSecret(secret=str(credential.secret_value() or ""))
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def refresh_credential(self, id: PublicID) -> ActionResult:
+        """Force an OAuth credential to renew its token now and report the outcome.
+
+        The interactive counterpart to the lazy on-use refresh: it renews regardless of
+        remaining lifetime (a still-valid token is rotated) and surfaces success or the
+        reason to reconnect, rather than silently swallowing a dead refresh token.
+        """
+
+        with action_target(
+            Credential,
+            id,
+            reason=f"integrate.graphql.credential.refresh:{str(id)}",
+        ) as credential:
+            try:
+                credential.refresh_now()
+            except (OAuthFlowError, ValueError) as error:
+                return ActionResult(ok=False, message=f"Refresh failed: {error}")
+        return ActionResult(ok=True, message="Token refreshed.")
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def create_credential(self, info: strawberry.Info, data: CredentialInput) -> CredentialType:
         """Create one provider-less credential, dispatching material by ``kind``."""
 

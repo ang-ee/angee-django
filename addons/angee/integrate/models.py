@@ -1065,21 +1065,44 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
             logger.warning("Credential %s refresh failed; using the existing token.", self.pk, exc_info=True)
             self._record_refresh_failure()
 
-    def _refresh_locked(self) -> None:
+    def refresh_now(self) -> None:
+        """Force a provider refresh now for an interactive caller, raising on failure.
+
+        The explicit counterpart to :meth:`ensure_fresh`: a console refresh action
+        renews the token regardless of how much life it has left and surfaces the
+        outcome instead of swallowing it. Requires a refresh-capable provider and a
+        stored refresh token — an expired *access* token still refreshes, since the
+        grant uses the refresh token; otherwise raises ``ValueError`` telling the caller
+        to reconnect. A provider rejecting the grant records ``last_refresh_status`` as
+        ``"failed"`` and re-raises (``OAuthFlowError``) so the caller can report it.
+        Serialized under the same row lock as :meth:`ensure_fresh`.
+        """
+
+        if not self.handler.can_refresh(self):
+            raise ValueError("This credential cannot be refreshed; reconnect the account.")
+        try:
+            self._refresh_locked(force=True)
+        except OAuthFlowError, ValueError:
+            self._record_refresh_failure()
+            raise
+
+    def _refresh_locked(self, *, force: bool = False) -> None:
         """Refresh under a row lock, skipping the network when a concurrent consumer won.
 
         Locks the credential row, re-reads its expiry, and performs the provider refresh
-        only while it is *still* stale — so two consumers racing to refresh the same
+        while it is *still* stale — so two consumers racing to refresh the same
         credential (concurrent provisions, or one plan's inference + MCP reads) issue at
-        most one network refresh and never replay a rotated refresh token. The in-memory
-        instance is reloaded from the persisted row either way, so it adopts whichever
-        consumer's tokens won.
+        most one network refresh and never replay a rotated refresh token. ``force``
+        renews regardless of expiry for an explicit, user-initiated refresh, still under
+        the lock so it serializes against the lazy path. The in-memory instance is
+        reloaded from the persisted row either way, so it adopts whichever consumer's
+        tokens won.
         """
 
         with transaction.atomic():
             locked = type(self).objects.sudo(reason="integrate.credential.refresh").select_for_update().get(pk=self.pk)
-            still_stale = locked.expires_at is not None and locked.expires_at <= timezone.now() + _OAUTH_REFRESH_MARGIN
-            if still_stale:
+            stale = locked.expires_at is not None and locked.expires_at <= timezone.now() + _OAUTH_REFRESH_MARGIN
+            if force or stale:
                 self.handler.refresh(locked)
         self.refresh_from_db()
 

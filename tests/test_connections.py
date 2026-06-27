@@ -724,6 +724,105 @@ def test_oauth_refresh_without_expires_in_clears_expiry(monkeypatch: pytest.Monk
         _drop_models(created_models)
 
 
+@pytest.mark.django_db(transaction=True)
+def test_refresh_now_forces_renewal_of_a_valid_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`refresh_now` renews even a still-valid token (the explicit, force path)."""
+
+    created_models = _create_missing_tables()
+    try:
+        user = get_user_model().objects.create_user(username="force-val", email="fv@example.com")
+        call_command("rebac", "sync", verbosity=0)
+        with system_context(reason="test force-valid setup"):
+            oauth_client = OAuthClient.objects.create(
+                slug="forcevalid",
+                display_name="Force valid",
+                client_id="forcevalid-client",
+                token_endpoint="https://idp.example/token",
+                supports_refresh=True,
+            )
+            credential = Credential.objects.upsert_for_user(
+                user,
+                oauth_client,
+                CredentialKind.OAUTH,
+                {"access_token": "valid-access", "refresh_token": "valid-refresh", "expires_in": 3600},
+            )
+
+        def fake_refresh(self: Any, *, refresh_token: str) -> dict[str, Any]:
+            assert refresh_token == "valid-refresh"
+            return {"access_token": "forced-access", "refresh_token": "forced-refresh", "expires_in": 3600}
+
+        monkeypatch.setattr(OAuthClientProtocol, "refresh_token", fake_refresh)
+        with system_context(reason="test force-valid run"):
+            credential.refresh_now()
+
+        assert credential.secret_value() == "forced-access"
+        assert credential.last_refresh_status == "ok"
+    finally:
+        _drop_models(created_models)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_refresh_now_records_and_raises_on_provider_rejection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`refresh_now` re-raises a rejected grant (unlike the swallowing `ensure_fresh`)."""
+
+    created_models = _create_missing_tables()
+    try:
+        user = get_user_model().objects.create_user(username="force-fail", email="ff@example.com")
+        call_command("rebac", "sync", verbosity=0)
+        credential = _expiring_oauth_credential(
+            user,
+            slug="forcefail",
+            material={"access_token": "stale-access", "refresh_token": "revoked", "expires_in": 3600},
+        )
+
+        def boom(self: Any, *, refresh_token: str) -> dict[str, Any]:
+            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400)
+
+        monkeypatch.setattr(OAuthClientProtocol, "refresh_token", boom)
+        with system_context(reason="test force-fail run"), pytest.raises(OAuthFlowError):
+            credential.refresh_now()
+
+        credential.refresh_from_db()
+        assert credential.last_refresh_status == "failed"
+        assert credential.secret_value() == "stale-access"  # the old token is retained
+    finally:
+        _drop_models(created_models)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_refresh_now_raises_when_not_refreshable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`refresh_now` refuses (without calling the provider) when no refresh is possible."""
+
+    created_models = _create_missing_tables()
+    try:
+        user = get_user_model().objects.create_user(username="force-none", email="fn@example.com")
+        call_command("rebac", "sync", verbosity=0)
+        with system_context(reason="test force-none setup"):
+            oauth_client = OAuthClient.objects.create(
+                slug="forcenone",
+                display_name="Force none",
+                client_id="forcenone-client",
+                token_endpoint="https://idp.example/token",
+                supports_refresh=False,
+            )
+            credential = Credential.objects.upsert_for_user(
+                user,
+                oauth_client,
+                CredentialKind.OAUTH,
+                {"access_token": "static-access", "refresh_token": "unused", "expires_in": 3600},
+            )
+
+        monkeypatch.setattr(
+            OAuthClientProtocol,
+            "refresh_token",
+            lambda *args, **kwargs: pytest.fail("must not call the provider when refresh is unsupported"),
+        )
+        with system_context(reason="test force-none run"), pytest.raises(ValueError):
+            credential.refresh_now()
+    finally:
+        _drop_models(created_models)
+
+
 def _expiring_oauth_credential(user: Any, *, slug: str, material: dict[str, Any]) -> Any:
     """Create a refresh-capable OAuth provider + an already-expired credential for ``user``."""
 
