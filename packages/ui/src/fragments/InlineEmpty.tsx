@@ -1,12 +1,16 @@
 import * as React from "react";
 
 import { renderGlyph } from "../chrome/Glyph";
+import { cn } from "../lib/cn";
 import { tv } from "../lib/variants";
+import { textRoleVariants } from "../ui/text";
 
 export const inlineEmptyVariants = tv({
   slots: {
-    root:
-      "flex min-w-0 items-center justify-center gap-2 px-4 py-6 text-center text-13 text-fg-muted",
+    root: cn(
+      textRoleVariants({ role: "meta" }),
+      "flex min-w-0 items-center justify-center gap-2 px-4 py-6 text-center",
+    ),
     icon: "shrink-0 [&_.glyph]:size-3.5 [&>svg]:size-3.5",
     label: "min-w-0 truncate",
   },

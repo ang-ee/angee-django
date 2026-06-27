@@ -33,6 +33,7 @@ export * from "./ui/inline-text-action";
 export * from "./ui/label";
 export * from "./ui/input";
 export * from "./ui/textarea";
+export * from "./ui/text";
 export * from "./ui/select";
 export * from "./ui/pager";
 export * from "./ui/checkbox";

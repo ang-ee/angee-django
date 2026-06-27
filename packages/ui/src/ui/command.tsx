@@ -5,6 +5,7 @@ import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { POPUP_ITEM, POPUP_LIST } from "./popover";
+import { textRoleVariants } from "./text";
 
 const COMMAND_ITEM = cn(
   POPUP_ITEM,
@@ -24,13 +25,13 @@ export const commandVariants = tv({
       POPUP_LIST,
       "max-h-72 [&_[cmdk-list-sizer]]:flex [&_[cmdk-list-sizer]]:flex-col [&_[cmdk-list-sizer]]:gap-1",
     ),
-    empty: "px-4 py-6 text-center text-13 text-fg-muted",
+    empty: cn(textRoleVariants({ role: "meta" }), "px-4 py-6 text-center"),
     group:
       "[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-2xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:text-fg-muted [&_[cmdk-group-heading]]:uppercase",
     item: COMMAND_ITEM,
     separator: "my-1 h-px bg-border-subtle",
-    loading: "px-4 py-3 text-13 text-fg-muted",
-    shortcut: "ml-auto text-2xs text-fg-muted",
+    loading: cn(textRoleVariants({ role: "meta" }), "px-4 py-3"),
+    shortcut: cn(textRoleVariants({ role: "caption" }), "ml-auto"),
   },
 });
 

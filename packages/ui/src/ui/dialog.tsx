@@ -12,7 +12,9 @@ import type {
 } from "@base-ui/react/dialog";
 import { Glyph } from "../chrome/Glyph";
 import { useBaseT } from "../i18n";
+import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
+import { textRoleVariants } from "./text";
 
 export const dialogVariants = tv({
   slots: {
@@ -21,11 +23,11 @@ export const dialogVariants = tv({
     content:
       "fixed left-1/2 z-modal max-w-[calc(100vw-2rem)] -translate-x-1/2 overflow-hidden rounded-12 border border-border-subtle bg-sheet shadow-lg outline-none animate-apps-modal-pop",
     header: "space-y-1.5 px-5 pt-5",
-    body: "px-5 py-3 text-13 text-fg-2",
+    body: cn(textRoleVariants({ role: "description" }), "px-5 py-3"),
     footer:
       "flex items-center justify-end gap-2 border-t border-border-subtle bg-sheet-2 px-5 py-3",
     title: "text-base font-semibold leading-snug text-fg",
-    description: "text-13 leading-relaxed text-fg-2",
+    description: cn(textRoleVariants({ role: "description" }), "leading-relaxed"),
     close:
       "inline-flex size-icon-btn-sm items-center justify-center rounded-6 text-fg-muted outline-none transition-colors hover:bg-inset hover:text-fg focus-visible:focus-ring [&_svg]:size-3.5",
   },

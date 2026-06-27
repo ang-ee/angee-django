@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { textRoleVariants } from "../ui/text";
 
 export interface EditorHeaderBarProps {
   title: React.ReactNode;
@@ -39,7 +40,7 @@ export function EditorHeaderBar({
             <Badge key={index}>{tag}</Badge>
           ))}
         </div>
-        {subtitle ? <p className="text-13 text-fg-2">{subtitle}</p> : null}
+        {subtitle ? <p className={textRoleVariants({ role: "description" })}>{subtitle}</p> : null}
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-2">
         {actions}

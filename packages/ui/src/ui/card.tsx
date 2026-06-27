@@ -3,6 +3,7 @@ import * as React from "react";
 import { cn } from "../lib/cn";
 import { useRender, type UseRenderRenderProp } from "../lib/slot";
 import { tv, type VariantProps } from "../lib/variants";
+import { textRoleVariants } from "./text";
 
 export const cardVariants = tv({
   base: "rounded-6 border bg-sheet text-fg shadow-xs transition-colors",
@@ -60,7 +61,7 @@ export const cardTitleVariants = tv({
 });
 
 export const cardDescriptionVariants = tv({
-  base: "text-13 leading-snug text-fg-muted",
+  base: cn(textRoleVariants({ role: "meta" }), "leading-snug"),
   variants: {
     density: {
       sm: "text-2xs",

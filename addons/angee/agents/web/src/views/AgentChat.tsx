@@ -22,7 +22,9 @@ import {
   StatusDot,
   ToolFallback,
   chatComposerInputClassName,
+  cn,
   statusTone,
+  textRoleVariants,
 } from "@angee/ui";
 import {
   ActionBarPrimitive,
@@ -186,7 +188,7 @@ export function AgentChat({
           <div className="relative flex min-h-0 flex-1 flex-col">
             <ThreadPrimitive.Viewport autoScroll className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
               <ThreadPrimitive.Empty>
-                <p className="text-13 leading-relaxed text-fg-muted">{t("agents.chat.empty")}</p>
+                <p className={cn(textRoleVariants({ role: "meta" }), "leading-relaxed")}>{t("agents.chat.empty")}</p>
               </ThreadPrimitive.Empty>
               <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} />
             </ThreadPrimitive.Viewport>

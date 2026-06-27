@@ -4,6 +4,7 @@ import {
   formatSize,
   isHeicMime,
   isImageMime,
+  textRoleVariants,
   type ListColumn,
 } from "@angee/ui";
 import type { ReactElement } from "react";
@@ -75,7 +76,7 @@ export function fileGalleryCard(row: StorageFileRow): ReactElement {
       </div>
       <div className="p-2">
         <h3 className="truncate text-13 font-medium text-fg">{row.name}</h3>
-        <p className="truncate text-2xs text-fg-muted">
+        <p className={textRoleVariants({ role: "caption", truncate: true })}>
           {row.mimeLabel} · {formatSize(row.sizeBytes)}
         </p>
       </div>

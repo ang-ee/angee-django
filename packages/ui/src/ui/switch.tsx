@@ -6,6 +6,7 @@ import type {
 } from "@base-ui/react/switch";
 
 import { tv, type VariantProps } from "../lib/variants";
+import { textRoleVariants } from "./text";
 
 export const switchVariants = tv({
   slots: {
@@ -15,7 +16,7 @@ export const switchVariants = tv({
     row: "flex items-center justify-between gap-3 rounded-6 border border-border-subtle bg-sheet px-3 py-2",
     rowText: "min-w-0 space-y-0.5",
     label: "text-13 font-medium text-fg",
-    description: "text-2xs text-fg-muted",
+    description: textRoleVariants({ role: "caption" }),
   },
   variants: {
     size: {

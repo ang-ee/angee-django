@@ -3,6 +3,7 @@ import * as React from "react";
 import { cn } from "../lib/cn";
 import { Badge } from "../ui/badge";
 import { Card } from "../ui/card";
+import { textRoleVariants } from "../ui/text";
 
 export interface RailPanelProps {
   title: React.ReactNode;
@@ -41,7 +42,7 @@ export function RailPanel({
         {hasChildren ? (
           children
         ) : (
-          <div className="py-4 text-center text-13 text-fg-muted">{empty}</div>
+          <div className={cn(textRoleVariants({ role: "meta" }), "py-4 text-center")}>{empty}</div>
         )}
       </section>
     </Card>

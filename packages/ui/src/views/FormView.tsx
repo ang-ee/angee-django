@@ -44,6 +44,7 @@ import { SectionEyebrow } from "../ui/section-eyebrow";
 import { Input } from "../ui/input";
 import { Spinner } from "../ui/spinner";
 import { Tabs } from "../ui/tabs";
+import { textRoleVariants } from "../ui/text";
 import { ControlBand } from "../layouts/ControlBand";
 import { cn } from "../lib/cn";
 import { SlotOutlet } from "../lib/slot-outlet";
@@ -1172,7 +1173,7 @@ function RecordSubtitle({
 }): React.ReactElement | null {
   if (!loading && parts.length === 0) return null;
   return (
-    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-13 text-fg-muted">
+    <div className={cn(textRoleVariants({ role: "meta" }), "mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono")}>
       {parts.map((part, index) => (
         <React.Fragment key={index}>
           {index > 0 ? <span aria-hidden="true">/</span> : null}

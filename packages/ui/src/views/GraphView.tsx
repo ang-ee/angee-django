@@ -17,6 +17,7 @@ import { cn } from "../lib/cn";
 import { type Tone } from "../lib/tones";
 import { Badge } from "../ui/badge";
 import { Code } from "../ui/code";
+import { textRoleVariants } from "../ui/text";
 
 export interface GraphViewNode<
   TKind extends string = string,
@@ -265,7 +266,7 @@ function GraphNodeLabel<TKind extends string>({
         </Code>
       ) : null}
       {node.detail ? (
-        <div className="mt-1 truncate text-2xs text-fg-muted">
+        <div className={cn(textRoleVariants({ role: "caption", truncate: true }), "mt-1")}>
           {node.detail}
         </div>
       ) : null}

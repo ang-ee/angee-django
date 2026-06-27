@@ -3,8 +3,10 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  cn,
   MetricGrid,
   Skeleton,
+  textRoleVariants,
   type MetricGridTile,
 } from "@angee/ui";
 import type { ReactNode } from "react";
@@ -47,7 +49,7 @@ export function OverviewSection(): ReactNode {
           <CardHeader>
             <CardTitle>{t("operator.overview.stack.title")}</CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-col gap-2 text-13 text-fg-2">
+          <CardContent className={cn(textRoleVariants({ role: "description" }), "flex flex-col gap-2")}>
             {stack ? (
               <>
                 <p>{stack.name}</p>
@@ -63,7 +65,7 @@ export function OverviewSection(): ReactNode {
           <CardHeader>
             <CardTitle>{t("operator.overview.health.title")}</CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-col gap-2 text-13 text-fg-2">
+          <CardContent className={cn(textRoleVariants({ role: "description" }), "flex flex-col gap-2")}>
             {health ? (
               <>
                 <StateTag state={health.status} />

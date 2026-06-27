@@ -9,6 +9,7 @@ import {
   DropdownMenu,
   type DropdownMenuPositionerProps,
 } from "../ui/dropdown-menu";
+import { textRoleVariants } from "../ui/text";
 import { Glyph } from "./Glyph";
 
 export interface UserMenuProps {
@@ -56,7 +57,7 @@ export function UserMenu({
             <div className="border-b border-border-subtle px-3 pb-2 pt-1">
               <div className="truncate font-semibold text-fg">{displayName}</div>
               {email ? (
-                <div className="truncate text-2xs text-fg-muted">{email}</div>
+                <div className={textRoleVariants({ role: "caption", truncate: true })}>{email}</div>
               ) : null}
             </div>
             <DropdownMenu.Item

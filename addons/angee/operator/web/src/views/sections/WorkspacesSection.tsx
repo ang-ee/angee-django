@@ -1,6 +1,8 @@
 import {
+  cn,
   RowsListView,
   Skeleton,
+  textRoleVariants,
   type ListColumn,
 } from "@angee/ui";
 import { useCallback, useMemo, type ReactNode } from "react";
@@ -53,14 +55,14 @@ export function WorkspacesSection({ names }: WorkspacesSectionProps = {}): React
         field: "template",
         header: t("operator.workspaces.column.template"),
         render: (workspace) => (
-          <span className="text-13 text-fg-muted">{workspace.template}</span>
+          <span className={textRoleVariants({ role: "meta" })}>{workspace.template}</span>
         ),
       },
       {
         field: "path",
         header: t("operator.workspaces.column.path"),
         render: (workspace) => (
-          <span className="font-mono text-13 text-fg-muted">{workspace.path}</span>
+          <span className={cn(textRoleVariants({ role: "meta" }), "font-mono")}>{workspace.path}</span>
         ),
       },
       {
@@ -77,7 +79,7 @@ export function WorkspacesSection({ names }: WorkspacesSectionProps = {}): React
         field: "ttl",
         header: t("operator.workspaces.column.ttl"),
         render: (workspace) => (
-          <span className="text-13 text-fg-muted">{workspace.ttl ?? "—"}</span>
+          <span className={textRoleVariants({ role: "meta" })}>{workspace.ttl ?? "—"}</span>
         ),
       },
     ],
@@ -120,7 +122,7 @@ export function WorkspaceRow({ name, emptyMessage }: WorkspaceRowProps): ReactNo
       {workspace ? (
         <WorkspaceControlRow actions={actions} busy={busy} workspace={workspace} />
       ) : (
-        <p className="border-y border-border-subtle py-3 text-13 text-fg-muted">
+        <p className={cn(textRoleVariants({ role: "meta" }), "border-y border-border-subtle py-3")}>
           {emptyMessage ?? t("operator.workspaces.empty")}
         </p>
       )}
@@ -171,7 +173,7 @@ export function WorkspaceSources({
         field: "branch",
         header: t("operator.workspaceSources.column.branch"),
         render: (source) => (
-          <span className="text-13 text-fg-muted">
+          <span className={textRoleVariants({ role: "meta" })}>
             {source.branch ?? source.ref ?? source.currentRef ?? "—"}
           </span>
         ),
@@ -180,14 +182,14 @@ export function WorkspaceSources({
         field: "drift",
         header: t("operator.workspaceSources.column.drift"),
         render: (source) => (
-          <span className="text-13 text-fg-muted">{workspaceSourceDrift(source, t)}</span>
+          <span className={textRoleVariants({ role: "meta" })}>{workspaceSourceDrift(source, t)}</span>
         ),
       },
       {
         field: "path",
         header: t("operator.workspaceSources.column.path"),
         render: (source) => (
-          <span className="block max-w-80 truncate font-mono text-13 text-fg-muted">
+          <span className={cn(textRoleVariants({ role: "meta" }), "block max-w-80 truncate font-mono")}>
             {source.path}
           </span>
         ),

@@ -25,6 +25,7 @@ import {
 import {
   useModelMetadata,
 } from "@angee/resources";
+import { textRoleVariants } from "@angee/ui";
 
 import { useAgentsT } from "../i18n";
 import { agentLifecycle, agentRuntime, stringField } from "./agent-record";
@@ -102,7 +103,7 @@ export function AgentProvisioning({
   return (
     <div className="flex flex-col gap-5">
       {!agent ? (
-        <p className="text-13 text-fg-muted">
+        <p className={textRoleVariants({ role: "meta" })}>
           {fetching
             ? t("agents.provisioning.loading")
             : t("agents.provisioning.saveFirst")}
@@ -124,11 +125,11 @@ export function AgentProvisioning({
             </OperatorTransportProvider>
           ) : (
             <div className="flex flex-col items-start gap-2">
-              <p className="text-13 text-fg-muted">
+              <p className={textRoleVariants({ role: "meta" })}>
                 {t("agents.provisioning.intro")}
               </p>
               {!hasWorkspaceTemplate ? (
-                <p className="text-13 text-fg-muted">
+                <p className={textRoleVariants({ role: "meta" })}>
                   {t("agents.provisioning.needsTemplate")}
                 </p>
               ) : null}
@@ -197,7 +198,7 @@ function WorkspaceRuntimeView({
           name={workspace}
         />
       ) : (
-        <p className="text-13 text-fg-muted">
+        <p className={textRoleVariants({ role: "meta" })}>
           {isLifecycleActive(lifecycleStatus)
             ? t("agents.provisioning.activityWaiting")
             : t("agents.provisioning.none")}
@@ -238,7 +239,7 @@ function ServiceRuntimeView({
           <ServiceLogs name={service} title={t("agents.provisioning.serviceLogs")} />
         </>
       ) : (
-        <p className="text-13 text-fg-muted">
+        <p className={textRoleVariants({ role: "meta" })}>
           {expectsService
             ? t("agents.provisioning.activityWaitingService")
             : t("agents.provisioning.none")}

@@ -1,6 +1,6 @@
 import { type ReactElement } from "react";
 
-import { EmptyState, Glyph } from "@angee/ui";
+import { cn, EmptyState, Glyph, textRoleVariants } from "@angee/ui";
 
 import { useKnowledgeT } from "../i18n";
 import type { Backlink } from "../data/documents";
@@ -49,7 +49,7 @@ export function BacklinksPanel({
             <span className="truncate">{backlink.title}</span>
           </span>
           {backlink.display_text ? (
-            <span className="truncate pl-6 text-2xs text-fg-muted">
+            <span className={cn(textRoleVariants({ role: "caption", truncate: true }), "pl-6")}>
               {backlink.display_text}
             </span>
           ) : null}

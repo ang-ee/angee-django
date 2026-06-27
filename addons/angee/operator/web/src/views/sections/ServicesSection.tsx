@@ -1,5 +1,7 @@
 import {
+  cn,
   Skeleton,
+  textRoleVariants,
   type ResourceToolbarGroupOption,
   type ListColumn,
 } from "@angee/ui";
@@ -48,7 +50,7 @@ export function ServicesSection({ names }: ServicesSectionProps = {}): ReactNode
       {
         field: "runtime",
         header: t("operator.services.column.runtime"),
-        render: (service) => <span className="text-13 text-fg-muted">{service.runtime}</span>,
+        render: (service) => <span className={textRoleVariants({ role: "meta" })}>{service.runtime}</span>,
       },
       {
         field: "status",
@@ -58,7 +60,7 @@ export function ServicesSection({ names }: ServicesSectionProps = {}): ReactNode
       {
         field: "health",
         header: t("operator.services.column.health"),
-        render: (service) => <span className="text-13 text-fg-muted">{service.health ?? "—"}</span>,
+        render: (service) => <span className={textRoleVariants({ role: "meta" })}>{service.health ?? "—"}</span>,
       },
     ],
     [t],
@@ -120,7 +122,7 @@ export function ServiceRow({ name, emptyMessage }: ServiceRowProps): ReactNode {
           <RowActions actions={actions} busy={busy} subject={service} />
         </div>
       ) : (
-        <p className="border-y border-border-subtle py-3 text-13 text-fg-muted">
+        <p className={cn(textRoleVariants({ role: "meta" }), "border-y border-border-subtle py-3")}>
           {emptyMessage ?? t("operator.services.empty")}
         </p>
       )}

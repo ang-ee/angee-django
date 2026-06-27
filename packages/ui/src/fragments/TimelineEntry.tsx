@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { cn } from "../lib/cn";
+import { textRoleVariants } from "../ui/text";
 import { RelativeTime } from "./RelativeTime";
 
 export interface TimelineEntryProps
@@ -33,10 +34,10 @@ export function TimelineEntry({
         <p className="truncate text-13 font-semibold text-fg">{title}</p>
         <RelativeTime
           value={timestamp}
-          className="shrink-0 text-2xs text-fg-muted"
+          className={cn(textRoleVariants({ role: "caption" }), "shrink-0")}
         />
       </div>
-      <p className="mt-2 line-clamp-3 text-13 leading-5 text-fg-2">
+      <p className={cn(textRoleVariants({ role: "description" }), "mt-2 line-clamp-3")}>
         {text || emptyBody}
       </p>
     </li>

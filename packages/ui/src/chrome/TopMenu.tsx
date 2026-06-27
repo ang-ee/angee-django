@@ -9,6 +9,7 @@ import {
   NavigationMenu,
   navigationMenuVariants,
 } from "../ui/navigation-menu";
+import { textRoleVariants } from "../ui/text";
 import {
   type ChromeMenuItem,
   type ChromeMenuNode,
@@ -216,7 +217,7 @@ function TopMenuPanelLink({
           {item.displayLabel}
         </span>
         {item.description ? (
-          <span className="block truncate text-xs text-fg-muted">
+          <span className={cn(textRoleVariants({ role: "caption", truncate: true }), "block")}>
             {item.description}
           </span>
         ) : null}

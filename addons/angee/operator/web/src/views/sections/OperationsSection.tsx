@@ -5,6 +5,7 @@ import {
   CardHeader,
   CardTitle,
   RowsListView,
+  textRoleVariants,
   useConfirm,
   type ListColumn,
 } from "@angee/ui";
@@ -55,7 +56,7 @@ export function OperationsSection(): ReactNode {
       {
         field: "runtime",
         header: t("operator.operations.column.runtime"),
-        render: (job) => <span className="text-13 text-fg-muted">{job.runtime}</span>,
+        render: (job) => <span className={textRoleVariants({ role: "meta" })}>{job.runtime}</span>,
       },
       {
         field: "actions",

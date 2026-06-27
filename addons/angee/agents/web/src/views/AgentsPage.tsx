@@ -33,6 +33,7 @@ import {
 } from "@angee/refine";
 import {
   useActionMutation,
+  textRoleVariants,
 } from "@angee/ui";
 import {
   refineResourceName,
@@ -94,7 +95,7 @@ function AgentChatPanel({ agentId }: { agentId: string }): React.ReactElement {
     return (
       <Card>
         <CardContent>
-          <p className="text-13 text-fg-muted">{t("agents.agent.chatUnavailable")}</p>
+          <p className={textRoleVariants({ role: "meta" })}>{t("agents.agent.chatUnavailable")}</p>
         </CardContent>
       </Card>
     );

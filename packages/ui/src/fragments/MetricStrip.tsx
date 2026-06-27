@@ -5,6 +5,7 @@ import { tv } from "../lib/variants";
 import { Card } from "../ui/card";
 import { IconTile } from "../ui/icon-tile";
 import { SectionEyebrow } from "../ui/section-eyebrow";
+import { textRoleVariants } from "../ui/text";
 
 export interface MetricTileValue {
   detail?: React.ReactNode;
@@ -47,7 +48,7 @@ export const metricStripVariants = tv({
     tile: "min-w-0 px-3 py-2.5 shadow-none",
     header: "flex min-w-0 items-center justify-between gap-2",
     value: "m-0 mt-1 truncate text-13 font-medium text-fg",
-    detail: "m-0 mt-1 truncate text-2xs text-fg-muted",
+    detail: cn(textRoleVariants({ role: "caption", truncate: true }), "m-0 mt-1"),
   },
 });
 

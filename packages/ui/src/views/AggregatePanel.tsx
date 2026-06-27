@@ -9,8 +9,10 @@ import {
 import type { AggregateBucket } from "@angee/refine";
 
 import { useBaseT } from "../i18n";
+import { cn } from "../lib/cn";
 import { CountBadge } from "../ui/badge";
 import { Skeleton, SkeletonStatus } from "../ui/skeleton";
+import { textRoleVariants } from "../ui/text";
 import {
   hasuraGroupDimension,
   type GroupByDimension,
@@ -97,7 +99,7 @@ export function AggregatePanel({
       ) : fetching ? (
         <AggregateSkeleton grouped={grouped} loadingLabel={t("aggregate.loading")} />
       ) : !grouped ? null : group.buckets.length === 0 ? (
-        <p className="py-1 text-13 text-fg-muted">{t("aggregate.noData")}</p>
+        <p className={cn(textRoleVariants({ role: "meta" }), "py-1")}>{t("aggregate.noData")}</p>
       ) : (
         <ul className="flex flex-col gap-1.5">
           {group.buckets.map((bucket, index) => {

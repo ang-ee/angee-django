@@ -1,10 +1,12 @@
 import * as React from "react";
 
+import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
+import { textRoleVariants } from "./text";
 
 export const tableVariants = tv({
   slots: {
-    table: "w-full border-collapse text-13 leading-5",
+    table: "w-full border-collapse text-13",
     header: "",
     body: "",
     footer: "border-t border-border bg-sheet font-medium",
@@ -12,7 +14,7 @@ export const tableVariants = tv({
     head:
       "h-10 border-b border-border bg-sheet px-3 py-0 text-left align-middle text-xs font-semibold leading-5 text-fg-muted whitespace-nowrap",
     cell: "h-10 px-3 align-middle",
-    caption: "mt-4 text-13 text-fg-muted",
+    caption: cn(textRoleVariants({ role: "meta" }), "mt-4"),
   },
   variants: {
     interactive: {

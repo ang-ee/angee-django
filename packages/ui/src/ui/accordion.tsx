@@ -9,8 +9,10 @@ import type {
 } from "@base-ui/react/accordion";
 
 import { Glyph } from "../chrome/Glyph";
+import { cn } from "../lib/cn";
 import { createVariantContext } from "../lib/variant-context";
 import { tv, type VariantProps } from "../lib/variants";
+import { textRoleVariants } from "./text";
 
 export const accordionVariants = tv({
   slots: {
@@ -18,10 +20,10 @@ export const accordionVariants = tv({
     item: "border-b border-border-subtle",
     header: "m-0",
     trigger:
-      "group flex w-full cursor-pointer items-center gap-2 text-left text-13 font-medium leading-5 text-fg outline-none transition-colors hover:text-fg focus-visible:focus-ring data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60",
+      "group flex w-full cursor-pointer items-center gap-2 text-left text-13 font-medium text-fg outline-none transition-colors hover:text-fg focus-visible:focus-ring data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60",
     icon:
       "flex size-4 shrink-0 -rotate-90 items-center justify-center text-fg-muted transition-transform group-data-[panel-open]:rotate-0 [&_.glyph]:size-3.5",
-    panel: "overflow-hidden text-13 leading-relaxed text-fg-2",
+    panel: cn(textRoleVariants({ role: "description" }), "overflow-hidden leading-relaxed"),
   },
   variants: {
     variant: {

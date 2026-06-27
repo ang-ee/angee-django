@@ -4,6 +4,7 @@ import { cn } from "../lib/cn";
 import { Card } from "../ui/card";
 import { Collapsible } from "../ui/collapsible";
 import { SectionEyebrow } from "../ui/section-eyebrow";
+import { textRoleVariants } from "../ui/text";
 
 export interface FocusPanelProps {
   eyebrow?: React.ReactNode;
@@ -34,7 +35,7 @@ export function FocusPanel({
           {title}
         </h2>
         {subtitle ? (
-          <p className="m-0 mt-1 truncate text-13 text-fg-muted">
+          <p className={cn(textRoleVariants({ role: "meta", truncate: true }), "m-0 mt-1")}>
             {subtitle}
           </p>
         ) : null}

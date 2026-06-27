@@ -16,6 +16,7 @@ import {
 } from "../ui/popover";
 import { Select } from "../ui/select";
 import { Pager, type PagerState } from "../ui/pager";
+import { textRoleVariants } from "../ui/text";
 import type {
   ResourceViewFavorite,
   ResourceViewFilter,
@@ -866,7 +867,7 @@ function PickerDivider(): ReactElement {
 }
 
 function PickerMuted({ children }: { children: ReactNode }): ReactElement {
-  return <p className="px-2 py-1 text-13 text-fg-muted">{children}</p>;
+  return <p className={cn(textRoleVariants({ role: "meta" }), "px-2 py-1")}>{children}</p>;
 }
 
 export function ResourceViewSwitcher({

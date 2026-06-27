@@ -4,6 +4,7 @@ import {
   Badge,
   Code,
   ListView,
+  textRoleVariants,
   type ListColumn,
   type ResourceToolbarGroupOption,
 } from "@angee/ui";
@@ -40,7 +41,7 @@ function columns(t: (key: string) => string): readonly ListColumn<AddonResourceR
           <TextRouteLink href={addonDetailPath(row.id)} className="font-medium">
             {row.label}
           </TextRouteLink>
-          <span className="truncate text-2xs text-fg-muted">{row.id}</span>
+          <span className={textRoleVariants({ role: "caption", truncate: true })}>{row.id}</span>
         </span>
       ),
     },

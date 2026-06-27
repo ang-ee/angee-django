@@ -57,6 +57,7 @@ import {
   TableHeader,
   TableRow,
 } from "../ui/table";
+import { textRoleVariants } from "../ui/text";
 import { useResolvedWidget } from "../widgets";
 import { dateFromUnknown } from "../widgets/date-format";
 import type { ResourceViewContextValue } from "./resource-view-context";
@@ -1490,7 +1491,7 @@ export function enumValueLabel(value: ModelEnumValueMetadata): string {
 export function ListLoadingFooter(): React.ReactElement {
   const t = useBaseT();
   return (
-    <div className="flex items-center justify-center gap-2 border-t border-border px-3 py-4 text-13 text-fg-muted">
+    <div className={cn(textRoleVariants({ role: "meta" }), "flex items-center justify-center gap-2 border-t border-border px-3 py-4")}>
       <Spinner size="sm" />
       {t("list.loading")}
     </div>
@@ -1590,7 +1591,8 @@ export function ListEmpty({
   return (
     <div
       className={cn(
-        "grid h-full place-content-center text-center text-13 text-fg-muted",
+        textRoleVariants({ role: "meta" }),
+        "grid h-full place-content-center text-center",
         className,
       )}
     >

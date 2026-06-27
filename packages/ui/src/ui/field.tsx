@@ -48,8 +48,8 @@ export const fieldVariants = tv({
       sm: {
         root: "gap-1",
         label: "text-xs",
-        description: "text-2xs leading-4",
-        error: "text-2xs leading-4",
+        description: "text-2xs",
+        error: "text-2xs",
         control: "h-btn-sm px-2 text-xs",
         controlFrame: "min-h-btn-sm px-2 py-1 text-xs",
       },

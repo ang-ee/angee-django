@@ -2,6 +2,7 @@ import type { ReactElement, ReactNode } from "react";
 
 import { Avatar, avatarInitials } from "../ui/avatar";
 import { Select } from "../ui/select";
+import { textRoleVariants } from "../ui/text";
 import { widgetLabel } from "./label";
 import {
   optionTextLabel,
@@ -52,7 +53,7 @@ function OwnerCellRead({
   const src =
     typeof value === "object" && value ? value.src ?? value.avatarUrl : undefined;
 
-  if (!text) return <span className="text-13 text-fg-muted" />;
+  if (!text) return <span className={textRoleVariants({ role: "meta" })} />;
 
   return (
     <span className="inline-flex min-w-0 items-center gap-2 text-13 text-fg">

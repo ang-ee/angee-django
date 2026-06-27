@@ -1,4 +1,4 @@
-import { type ListColumn } from "@angee/ui";
+import { textRoleVariants, type ListColumn } from "@angee/ui";
 import { useMemo, type ReactNode } from "react";
 
 import { useOperatorT } from "../../i18n";
@@ -24,7 +24,7 @@ export function SourcesSection(): ReactNode {
       {
         field: "kind",
         header: t("operator.sources.column.kind"),
-        render: (source) => <span className="text-13 text-fg-muted">{source.kind}</span>,
+        render: (source) => <span className={textRoleVariants({ role: "meta" })}>{source.kind}</span>,
       },
       {
         field: "status",
@@ -34,7 +34,7 @@ export function SourcesSection(): ReactNode {
       {
         field: "branch",
         header: t("operator.sources.column.branch"),
-        render: (source) => <span className="text-13 text-fg-muted">{source.branch ?? "—"}</span>,
+        render: (source) => <span className={textRoleVariants({ role: "meta" })}>{source.branch ?? "—"}</span>,
       },
       {
         field: "aheadBehind",
@@ -50,7 +50,7 @@ export function SourcesSection(): ReactNode {
         field: "dirty",
         header: t("operator.sources.column.dirty"),
         render: (source) => (
-          <span className="text-13 text-fg-muted">
+          <span className={textRoleVariants({ role: "meta" })}>
             {source.dirty ? t("operator.sources.dirty") : t("operator.sources.clean")}
           </span>
         ),

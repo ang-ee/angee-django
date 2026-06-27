@@ -2,7 +2,9 @@ import type { ReactElement } from "react";
 
 import { Glyph } from "../chrome/Glyph";
 import { useBaseT } from "../i18n";
+import { cn } from "../lib/cn";
 import { Button } from "../ui/button";
+import { textRoleVariants } from "../ui/text";
 
 export interface RecordNavigation {
   /** Undefined when the open record isn't in the loaded slice. */
@@ -22,7 +24,7 @@ export function RecordPager({
   return (
     <nav
       aria-label={t("recordPager.navigation")}
-      className="flex items-center gap-2 text-13 text-fg-muted"
+      className={cn(textRoleVariants({ role: "meta" }), "flex items-center gap-2")}
     >
       <span className="whitespace-nowrap tabular-nums">
         {navigation.current !== undefined ? (

@@ -20,6 +20,7 @@ import {
   Select,
   SurfacePanel,
   errorMessage,
+  textRoleVariants,
   useAuthoredMutation,
   useAuthoredQuery,
 } from "@angee/ui";
@@ -244,7 +245,7 @@ export function OverviewPage(): ReactElement {
                 <div key={user.id} className="flex items-center justify-between gap-3 px-4 py-3">
                   <div className="min-w-0">
                     <div className="truncate text-13 font-medium text-fg">{user.username}</div>
-                    <div className="truncate text-2xs text-fg-muted">{user.email}</div>
+                    <div className={textRoleVariants({ role: "caption", truncate: true })}>{user.email}</div>
                   </div>
                 </div>
               ))}
@@ -272,7 +273,7 @@ function PrivilegedGrantRow({
     <div className="flex items-center justify-between gap-3 px-4 py-3">
       <div className="min-w-0">
         <div className="truncate text-13 font-medium text-fg">{grant.principal_label}</div>
-        <div className="truncate text-2xs text-fg-muted">{titleLabel(grant.namespace)} · {grant.role_name}</div>
+        <div className={textRoleVariants({ role: "caption", truncate: true })}>{titleLabel(grant.namespace)} · {grant.role_name}</div>
       </div>
       <Button
         variant="danger"

@@ -17,10 +17,10 @@ export const pageHeaderVariants = tv({
       justify: "between",
     }),
     main: "min-w-0 flex-1",
-    crumbs: "mb-1 flex min-w-0 items-center gap-1 text-13 text-fg-muted",
+    crumbs: `${textRoleVariants({ role: "meta" })} mb-1 flex min-w-0 items-center gap-1`,
     eyebrow: "mb-1 text-2xs font-semibold uppercase text-fg-muted",
     title: `${textRoleVariants({ role: "title", truncate: true })} leading-6`,
-    description: "mt-1 max-w-prose text-13 leading-5 text-fg-2",
+    description: `${textRoleVariants({ role: "description" })} mt-1 max-w-prose`,
     actions: "flex shrink-0 flex-wrap items-center justify-end gap-2",
   },
   variants: {

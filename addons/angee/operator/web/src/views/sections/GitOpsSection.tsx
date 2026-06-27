@@ -1,6 +1,7 @@
 import {
   MetricGrid,
   RowsListView,
+  textRoleVariants,
   type ResourceToolbarGroupOption,
   type ListColumn,
   type MetricGridTile,
@@ -49,12 +50,12 @@ export function GitOpsSection(): ReactNode {
       {
         field: "workspace",
         header: t("operator.gitops.column.workspace"),
-        render: (link) => <span className="text-13 text-fg-muted">{link.workspace}</span>,
+        render: (link) => <span className={textRoleVariants({ role: "meta" })}>{link.workspace}</span>,
       },
       {
         field: "slot",
         header: t("operator.gitops.column.slot"),
-        render: (link) => <span className="text-13 text-fg-muted">{link.slot}</span>,
+        render: (link) => <span className={textRoleVariants({ role: "meta" })}>{link.slot}</span>,
       },
       {
         field: "state",
@@ -64,7 +65,7 @@ export function GitOpsSection(): ReactNode {
       {
         field: "branch",
         header: t("operator.gitops.column.branch"),
-        render: (link) => <span className="text-13 text-fg-muted">{link.branch ?? "—"}</span>,
+        render: (link) => <span className={textRoleVariants({ role: "meta" })}>{link.branch ?? "—"}</span>,
       },
       {
         field: "aheadBehind",
@@ -81,7 +82,7 @@ export function GitOpsSection(): ReactNode {
         field: "pushed",
         header: t("operator.gitops.column.pushed"),
         render: (link) => (
-          <span className="text-13 text-fg-muted">
+          <span className={textRoleVariants({ role: "meta" })}>
             {link.pushed ? t("operator.gitops.pushed.yes") : t("operator.gitops.pushed.no")}
           </span>
         ),

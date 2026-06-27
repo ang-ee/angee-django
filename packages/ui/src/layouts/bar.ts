@@ -1,4 +1,5 @@
 import { tv, type VariantProps } from "../lib/variants";
+import { textRoleVariants } from "../ui/text";
 
 // The single owner of "bar chrome" — the flush horizontal frame shared by every
 // fixed-height (or padding-sized) bar in the shell and on a page. It decomposes
@@ -82,10 +83,12 @@ export const barVariants = tv({
       between: "justify-between",
       end: "justify-end",
     },
+    // Routed through the textRoleVariants recipe so the muted secondary literals
+    // live in exactly one place (`13-muted`=meta, `2xs-muted`=caption).
     text: {
       none: "",
-      "13-muted": "text-13 text-fg-muted",
-      "2xs-muted": "text-2xs text-fg-muted",
+      "13-muted": textRoleVariants({ role: "meta" }),
+      "2xs-muted": textRoleVariants({ role: "caption" }),
     },
   },
   defaultVariants: {

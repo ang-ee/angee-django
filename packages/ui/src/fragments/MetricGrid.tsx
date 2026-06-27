@@ -6,6 +6,7 @@ import { tv } from "../lib/variants";
 import { Tag } from "../ui/badge";
 import { Card } from "../ui/card";
 import { IconTile } from "../ui/icon-tile";
+import { textRoleVariants } from "../ui/text";
 
 export interface MetricGridTile {
   detail?: React.ReactNode;
@@ -29,7 +30,7 @@ export const metricGridVariants = tv({
     tile: "px-4 py-3 shadow-none",
     header: "mb-3 flex min-w-0 items-center justify-between gap-2",
     value: "m-0 text-2xl font-semibold tabular-nums text-fg",
-    detail: "m-0 mt-1 truncate text-2xs text-fg-muted",
+    detail: cn(textRoleVariants({ role: "caption", truncate: true }), "m-0 mt-1"),
   },
 });
 

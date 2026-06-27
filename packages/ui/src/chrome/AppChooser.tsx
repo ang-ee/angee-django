@@ -20,6 +20,7 @@ import {
   PopoverRoot,
   PopoverTrigger,
 } from "../ui/popover";
+import { textRoleVariants } from "../ui/text";
 import { Tooltip } from "../ui/tooltip";
 import { AngeeMark } from "./AngeeMark";
 import { Glyph } from "./Glyph";
@@ -123,7 +124,7 @@ export function AppChooser({
                 <h2 className="m-0 truncate text-15 font-semibold text-fg">
                   {resolvedTitle}
                 </h2>
-                <p className="mt-0.5 truncate text-xs text-fg-muted">
+                <p className={cn(textRoleVariants({ role: "caption", truncate: true }), "mt-0.5")}>
                   {t("chrome.appChooserHint")}
                 </p>
               </div>
@@ -167,7 +168,7 @@ export function AppChooser({
                 onSelect={() => setOpen(false)}
               />
               {visibleItems.length === 0 ? (
-                <div className="px-2 py-8 text-center text-13 text-fg-muted">
+                <div className={cn(textRoleVariants({ role: "meta" }), "px-2 py-8 text-center")}>
                   {t("chrome.noApps")}
                 </div>
               ) : null}
@@ -265,7 +266,7 @@ function AppChooserTile({
         {item.label}
       </span>
       {item.description ? (
-        <span className="line-clamp-2 text-center text-2xs leading-[1.125rem] text-fg-muted">
+        <span className={cn(textRoleVariants({ role: "caption" }), "line-clamp-2 text-center leading-[1.125rem]")}>
           {item.description}
         </span>
       ) : null}

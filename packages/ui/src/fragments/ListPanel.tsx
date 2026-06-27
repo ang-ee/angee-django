@@ -48,7 +48,7 @@ export function ListPanel({
               {title}
             </h2>
             {summary ? (
-              <p className="mt-0.5 text-2xs text-fg-muted">{summary}</p>
+              <p className={cn(textRoleVariants({ role: "caption" }), "mt-0.5")}>{summary}</p>
             ) : null}
           </div>
           {actions ? (
@@ -59,7 +59,7 @@ export function ListPanel({
           {hasChildren ? (
             children
           ) : (
-            <div className="px-4 py-6 text-center text-13 text-fg-muted">
+            <div className={cn(textRoleVariants({ role: "meta" }), "px-4 py-6 text-center")}>
               {empty}
             </div>
           )}
@@ -89,7 +89,7 @@ export function ListItem({
           ) : null}
         </div>
         {meta ? (
-          <p className="m-0 mt-0.5 truncate text-2xs text-fg-muted">{meta}</p>
+          <p className={cn(textRoleVariants({ role: "caption", truncate: true }), "m-0 mt-0.5")}>{meta}</p>
         ) : null}
       </div>
       {tags || actions ? (

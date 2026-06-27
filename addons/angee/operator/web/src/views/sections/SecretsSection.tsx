@@ -1,7 +1,9 @@
 import {
   Badge,
   Button,
+  cn,
   RowsListView,
+  textRoleVariants,
   useConfirm,
   usePrompt,
   type ListColumn,
@@ -76,7 +78,7 @@ export function SecretsSection(): ReactNode {
         field: "declared",
         header: t("operator.secrets.column.declared"),
         render: (secret) => (
-          <span className="text-13 text-fg-muted">
+          <span className={textRoleVariants({ role: "meta" })}>
             {secret.declared ? t("operator.secrets.yes") : t("operator.secrets.no")}
           </span>
         ),
@@ -106,7 +108,7 @@ export function SecretsSection(): ReactNode {
         field: "envVar",
         header: t("operator.secrets.column.envVar"),
         render: (secret) => (
-          <span className="font-mono text-13 text-fg-muted">{secret.envVar ?? "—"}</span>
+          <span className={cn(textRoleVariants({ role: "meta" }), "font-mono")}>{secret.envVar ?? "—"}</span>
         ),
       },
       {
@@ -123,7 +125,7 @@ export function SecretsSection(): ReactNode {
               <Button disabled={busy} onClick={() => promptSet(secret.name)} size="sm" variant="ghost">
                 {t("operator.secrets.form.submit")}
               </Button>
-              <span className="self-center text-13 text-fg-muted" title={t("operator.secrets.protected.hint")}>
+              <span className={cn(textRoleVariants({ role: "meta" }), "self-center")} title={t("operator.secrets.protected.hint")}>
                 {t("operator.secrets.protected")}
               </span>
             </div>

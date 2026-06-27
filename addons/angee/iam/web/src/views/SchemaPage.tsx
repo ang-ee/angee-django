@@ -14,10 +14,12 @@ import {
   Alert,
   Badge,
   Button,
+  cn,
   Code,
   GraphView,
   SearchInput,
   Spinner,
+  textRoleVariants,
   Workbench,
   type GraphViewEdge,
   type GraphViewEdgeStyle,
@@ -125,7 +127,7 @@ export function SchemaPage(): ReactElement {
 
   if (query.fetching && resources.length === 0) {
     return (
-      <div className="flex items-center gap-2 rounded-6 border border-border-subtle bg-sheet px-4 py-3 text-13 text-fg-muted">
+      <div className={cn(textRoleVariants({ role: "meta" }), "flex items-center gap-2 rounded-6 border border-border-subtle bg-sheet px-4 py-3")}>
         <Spinner size="sm" />
         {t("iam.schema.loading")}
       </div>
@@ -289,7 +291,7 @@ function ResourceTypeList({
             </Button>
           ))
         ) : (
-          <p className="m-0 px-3 py-6 text-center text-13 text-fg-muted">
+          <p className={cn(textRoleVariants({ role: "meta" }), "m-0 px-3 py-6 text-center")}>
             {t("iam.schema.noMatches")}
           </p>
         )}
@@ -315,7 +317,7 @@ function SchemaGraphCanvas({
 
   if (resources.length === 0) {
     return (
-      <section className="flex h-full min-h-0 p-6 text-13 text-fg-muted">
+      <section className={cn(textRoleVariants({ role: "meta" }), "flex h-full min-h-0 p-6")}>
         {t("iam.schema.noMatches")}
       </section>
     );
@@ -360,7 +362,7 @@ function SchemaInspector({
   const t = useIamT();
   if (!resource) {
     return (
-      <section className="flex h-full min-h-0 p-6 text-13 text-fg-muted">
+      <section className={cn(textRoleVariants({ role: "meta" }), "flex h-full min-h-0 p-6")}>
         {t("iam.schema.noneSelected")}
       </section>
     );
@@ -488,7 +490,7 @@ function EmptyInspectorRow({
   children: ReactNode;
 }): ReactElement {
   return (
-    <div className="rounded-6 border border-dashed border-border-subtle bg-inset px-3 py-4 text-center text-13 text-fg-muted">
+    <div className={cn(textRoleVariants({ role: "meta" }), "rounded-6 border border-dashed border-border-subtle bg-inset px-3 py-4 text-center")}>
       {children}
     </div>
   );
@@ -502,7 +504,7 @@ function ChipList({
   empty: string;
 }): ReactElement {
   if (values.length === 0) {
-    return <span className="text-13 text-fg-muted">{empty}</span>;
+    return <span className={textRoleVariants({ role: "meta" })}>{empty}</span>;
   }
   return (
     <div className="flex min-w-0 flex-wrap gap-1">

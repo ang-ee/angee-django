@@ -4,6 +4,7 @@ import {
   Code,
   ListView,
   formatDateTime,
+  textRoleVariants,
   type ResourceToolbarFilterField,
   type ResourceToolbarGroupOption,
   type ListColumn,
@@ -34,7 +35,7 @@ function columns(t: (key: string) => string): readonly ListColumn<ResourceLedger
       render: (row) => (
         <span className="flex min-w-0 flex-col">
           <span className="font-medium text-fg">{row.source_addon}</span>
-          <span className="truncate text-2xs text-fg-muted">{row.source_path}</span>
+          <span className={textRoleVariants({ role: "caption", truncate: true })}>{row.source_path}</span>
         </span>
       ),
     },
@@ -46,7 +47,7 @@ function columns(t: (key: string) => string): readonly ListColumn<ResourceLedger
         <span className="flex min-w-0 flex-col">
           <Code truncate>{row.target_model}</Code>
           {row.target_id ? (
-            <span className="truncate text-2xs text-fg-muted">{row.target_id}</span>
+            <span className={textRoleVariants({ role: "caption", truncate: true })}>{row.target_id}</span>
           ) : null}
         </span>
       ),

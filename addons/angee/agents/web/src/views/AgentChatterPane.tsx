@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Card, CardContent, EmptyState, buttonVariants } from "@angee/ui";
+import { Card, CardContent, EmptyState, buttonVariants, cn, textRoleVariants } from "@angee/ui";
 import { useAuthoredMutation } from "@angee/ui";
 import { Link } from "@tanstack/react-router";
 
@@ -120,7 +120,7 @@ function PaneMessage({ children }: { children: React.ReactNode }): React.ReactEl
   return (
     <Card>
       <CardContent>
-        <p className="text-13 leading-relaxed text-fg-muted">{children}</p>
+        <p className={cn(textRoleVariants({ role: "meta" }), "leading-relaxed")}>{children}</p>
       </CardContent>
     </Card>
   );

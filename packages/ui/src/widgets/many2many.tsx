@@ -4,6 +4,7 @@ import { Glyph } from "../chrome/Glyph";
 import { Button } from "../ui/button";
 import { Chip } from "../ui/chip";
 import { Select } from "../ui/select";
+import { textRoleVariants } from "../ui/text";
 import { widgetLabel } from "./label";
 import {
   optionLabel,
@@ -72,7 +73,7 @@ function Many2ManyChips({
   options: readonly WidgetOption[];
   onRemove?: (next: readonly string[]) => void;
 }): ReactElement {
-  if (values.length === 0) return <span className="text-13 text-fg-muted" />;
+  if (values.length === 0) return <span className={textRoleVariants({ role: "meta" })} />;
 
   return (
     <span className="inline-flex min-w-0 flex-wrap items-center gap-1">

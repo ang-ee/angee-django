@@ -6,9 +6,11 @@ import "react-pdf/dist/Page/TextLayer.css";
 
 import {
   Button,
+  cn,
   EmptyState,
   Glyph,
   LoadingPanel,
+  textRoleVariants,
   type PreviewProviderProps,
 } from "@angee/ui";
 
@@ -49,7 +51,7 @@ export default function PdfPreview({ file }: PreviewProviderProps): ReactElement
         </Document>
       </div>
       {pageCount > 1 ? (
-        <div className="flex items-center justify-center gap-3 border-t border-subtle bg-sheet p-2 text-13 text-fg-muted">
+        <div className={cn(textRoleVariants({ role: "meta" }), "flex items-center justify-center gap-3 border-t border-subtle bg-sheet p-2")}>
           <Button
             variant="ghost"
             size="iconSm"

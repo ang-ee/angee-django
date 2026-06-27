@@ -2,6 +2,7 @@ import { useMemo, useState, type ReactElement, type ReactNode } from "react";
 
 import { Glyph } from "../chrome/Glyph";
 import { useBaseT } from "../i18n";
+import { cn } from "../lib/cn";
 import {
   SelectIcon,
   SelectItem,
@@ -11,6 +12,7 @@ import {
   SelectPrimitive,
   SelectValue,
 } from "../ui/select";
+import { textRoleVariants } from "../ui/text";
 import { widgetLabel } from "./label";
 import {
   canonicalOptionValue,
@@ -89,7 +91,7 @@ function ComboboxEdit({
                   </SelectItem>
                 ))
               ) : (
-                <div className="px-2 py-3 text-13 text-fg-muted">{t("combobox.noOptions")}</div>
+                <div className={cn(textRoleVariants({ role: "meta" }), "px-2 py-3")}>{t("combobox.noOptions")}</div>
               )}
             </SelectList>
           </SelectPrimitive.Content>

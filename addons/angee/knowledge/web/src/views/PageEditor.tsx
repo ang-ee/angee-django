@@ -5,7 +5,9 @@ import {
   EmptyState,
   Glyph,
   Spinner,
+  cn,
   formatDate as formatBaseDate,
+  textRoleVariants,
   useResolvedWidget,
   type WidgetField,
 } from "@angee/ui";
@@ -79,7 +81,7 @@ export function PageEditor({
             <Glyph name="trash" />
           </Button>
         </div>
-        <div className="flex items-center gap-2 pl-6 font-mono text-13 text-fg-muted">
+        <div className={cn(textRoleVariants({ role: "meta" }), "flex items-center gap-2 pl-6 font-mono")}>
           <span>{metaLine(detail, t)}</span>
           <SaveBadge status={editor.status} t={t} />
         </div>

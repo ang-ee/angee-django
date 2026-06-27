@@ -1,9 +1,11 @@
 import * as React from "react";
 
 import { renderGlyph } from "../chrome/Glyph";
+import { cn } from "../lib/cn";
 import { tv } from "../lib/variants";
 import { PageHeader, type PageHeaderProps } from "../page";
 import { Badge } from "../ui/badge";
+import { textRoleVariants } from "../ui/text";
 
 export const collectionHeaderVariants = tv({
   slots: {
@@ -12,7 +14,7 @@ export const collectionHeaderVariants = tv({
     icon:
       "grid size-8 shrink-0 place-content-center rounded-6 bg-inset text-fg-2 [&_.glyph]:size-4 [&>svg]:size-4",
     title: "min-w-0 truncate text-lg font-semibold leading-tight text-fg",
-    description: "max-w-prose text-13 leading-relaxed text-fg-2",
+    description: cn(textRoleVariants({ role: "description" }), "max-w-prose leading-relaxed"),
     actions: "flex shrink-0 flex-wrap items-center justify-end gap-2",
   },
 });

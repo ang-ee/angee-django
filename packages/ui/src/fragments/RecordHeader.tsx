@@ -1,19 +1,21 @@
 import * as React from "react";
 
+import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { type Tone } from "../lib/tones";
 import { PageHeader, type PageHeaderProps } from "../page";
 import { Badge } from "../ui/badge";
 import { IconTile } from "../ui/icon-tile";
+import { textRoleVariants } from "../ui/text";
 
 export const recordHeaderVariants = tv({
   slots: {
     main: "min-w-0 flex-1 space-y-1",
-    crumbs: "text-2xs leading-4 text-fg-muted",
+    crumbs: textRoleVariants({ role: "caption" }),
     titleRow: "flex min-w-0 flex-wrap items-center gap-2",
     title: "min-w-0 truncate text-lg font-semibold leading-tight text-fg",
-    meta: "flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-13 text-fg-muted",
-    description: "max-w-prose text-13 leading-relaxed text-fg-2",
+    meta: cn(textRoleVariants({ role: "meta" }), "flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1"),
+    description: cn(textRoleVariants({ role: "description" }), "max-w-prose leading-relaxed"),
     actions: "flex shrink-0 flex-wrap items-center justify-end gap-2",
   },
 });

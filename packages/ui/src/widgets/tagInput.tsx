@@ -4,6 +4,7 @@ import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
 import { Button } from "../ui/button";
 import { Chip } from "../ui/chip";
+import { textRoleVariants } from "../ui/text";
 import { widgetLabel } from "./label";
 import type { WidgetDefinition, WidgetRenderProps } from "./types";
 
@@ -83,7 +84,7 @@ function TagInputRead({
 }: WidgetRenderProps<readonly string[]>): ReactElement {
   const tags = normaliseTags(value);
   if (tags.length === 0) {
-    return <span className="text-13 text-fg-muted" />;
+    return <span className={textRoleVariants({ role: "meta" })} />;
   }
   return (
     <span className="inline-flex flex-wrap items-center gap-1">

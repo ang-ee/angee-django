@@ -1,8 +1,10 @@
 import * as React from "react";
 
 import { useBaseT } from "../i18n";
+import { cn } from "../lib/cn";
 import { Card } from "../ui/card";
 import { Skeleton, SkeletonText } from "../ui/skeleton";
+import { textRoleVariants } from "../ui/text";
 
 export interface LoadingPanelProps {
   message?: string;
@@ -21,7 +23,7 @@ export function LoadingPanel({ message }: LoadingPanelProps): React.ReactElement
       >
         <Skeleton className="h-5 w-32" />
         <SkeletonText className="mt-4" lines={3} />
-        <p className="mt-4 text-13 text-fg-muted">{label}</p>
+        <p className={cn(textRoleVariants({ role: "meta" }), "mt-4")}>{label}</p>
       </Card>
     </div>
   );

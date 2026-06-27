@@ -6,6 +6,7 @@ import { tv } from "../lib/variants";
 import { Tag } from "../ui/badge";
 import { Card } from "../ui/card";
 import { IconTile } from "../ui/icon-tile";
+import { textRoleVariants } from "../ui/text";
 
 export interface MiniCardPrimaryTag {
   label: React.ReactNode;
@@ -31,7 +32,7 @@ export const miniCardVariants = tv({
     titleWrap: "min-w-0 flex-1",
     titleRow: "flex min-w-0 items-center gap-2",
     title: "truncate text-13 font-medium text-fg",
-    meta: "mt-0.5 truncate text-2xs text-fg-muted",
+    meta: cn(textRoleVariants({ role: "caption", truncate: true }), "mt-0.5"),
     tags: "mt-2 flex flex-wrap gap-1",
   },
 });

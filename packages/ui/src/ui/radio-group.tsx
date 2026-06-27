@@ -43,7 +43,7 @@ export const radioGroupVariants = tv({
         radio: "size-3.5",
         indicator: "size-1.5",
         label: "text-xs",
-        description: "text-2xs leading-4",
+        description: "text-2xs",
       },
       md: "",
       lg: {

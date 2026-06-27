@@ -7,6 +7,7 @@ import { dragSourceProps, type DndPayload } from "../lib/dnd";
 import { Card } from "../ui/card";
 import { Checkbox } from "../ui/checkbox";
 import { Skeleton, SkeletonStatus } from "../ui/skeleton";
+import { textRoleVariants } from "../ui/text";
 import { ListEmpty } from "./ListInternals";
 import type { ListEmptyState } from "./list-view-types";
 
@@ -278,7 +279,7 @@ function DefaultCardBody<TRow extends Row>({
       <div className="p-2">
         <h3 className="truncate text-13 font-medium text-fg">{title}</h3>
         {subtitle ? (
-          <p className="truncate text-2xs text-fg-muted">{subtitle}</p>
+          <p className={textRoleVariants({ role: "caption", truncate: true })}>{subtitle}</p>
         ) : null}
       </div>
     </>

@@ -1,12 +1,14 @@
 import * as React from "react";
 import {
   Button,
+  cn,
   Dialog,
   Glyph,
   Input,
   RelationField,
   Spinner,
   errorMessage,
+  textRoleVariants,
   useRelationOptions,
   useAuthoredMutation,
   useAuthoredQuery,
@@ -209,7 +211,7 @@ function RepoCandidateList({
   }
   if (fetching && candidates.length === 0) {
     return (
-      <div className="flex items-center gap-2 px-1 py-3 text-13 text-fg-muted">
+      <div className={cn(textRoleVariants({ role: "meta" }), "flex items-center gap-2 px-1 py-3")}>
         <Spinner size="sm" />
         {t("integrate.addRepo.searching")}
       </div>
@@ -256,5 +258,5 @@ function RepoCandidateList({
 }
 
 function ListHint({ children }: { children: React.ReactNode }): React.ReactElement {
-  return <p className="px-1 py-3 text-13 text-fg-muted">{children}</p>;
+  return <p className={cn(textRoleVariants({ role: "meta" }), "px-1 py-3")}>{children}</p>;
 }

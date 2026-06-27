@@ -7,19 +7,21 @@ import type {
 } from "@base-ui/react/collapsible";
 
 import { Glyph } from "../chrome/Glyph";
+import { cn } from "../lib/cn";
 import { createVariantContext } from "../lib/variant-context";
 import { tv, type VariantProps } from "../lib/variants";
+import { textRoleVariants } from "./text";
 import { interactiveSurface } from "./widget-control";
 
 export const collapsibleVariants = tv({
   slots: {
     root: "w-full min-w-0",
-    trigger: `group inline-flex cursor-pointer items-center gap-2 text-left text-13 font-medium leading-5 text-fg hover:text-fg ${interactiveSurface(
+    trigger: `group inline-flex cursor-pointer items-center gap-2 text-left text-13 font-medium text-fg hover:text-fg ${interactiveSurface(
       { focus: "visible", disabled: "pseudo" },
     )}`,
     icon:
       "flex size-4 shrink-0 -rotate-90 items-center justify-center text-fg-muted transition-transform group-data-[panel-open]:rotate-0 [&_.glyph]:size-3.5",
-    panel: "overflow-hidden text-13 leading-relaxed text-fg-2",
+    panel: cn(textRoleVariants({ role: "description" }), "overflow-hidden leading-relaxed"),
   },
   variants: {
     variant: {

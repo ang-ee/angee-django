@@ -4,6 +4,7 @@ import { parseAsString, useQueryState } from "nuqs";
 import {
   Code,
   ListView,
+  textRoleVariants,
   type ResourceToolbarGroupOption,
   type ListColumn,
 } from "@angee/ui";
@@ -39,7 +40,7 @@ function columns(t: (key: string) => string): readonly ListColumn<ModelResourceR
           <TextRouteLink href={modelDetailPath(row.id)} className="font-medium">
             {row.model_name}
           </TextRouteLink>
-          <span className="truncate text-2xs text-fg-muted">{row.id}</span>
+          <span className={textRoleVariants({ role: "caption", truncate: true })}>{row.id}</span>
         </span>
       ),
     },

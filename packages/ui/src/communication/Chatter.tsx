@@ -57,7 +57,7 @@ export function Chatter({
               key={tab.id}
               value={tab.id}
               icon={tab.icon ? <Glyph name={tab.icon} /> : undefined}
-              className="h-8 px-2 text-13 font-medium leading-5"
+              className="h-8 px-2 text-13 font-medium"
             >
               {tab.label}
               {typeof tab.count === "number" ? (

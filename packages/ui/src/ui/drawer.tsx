@@ -4,7 +4,9 @@ import type {
   DialogPopupProps as BaseDialogPopupProps,
 } from "@base-ui/react/dialog";
 
+import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
+import { textRoleVariants } from "./text";
 import {
   DialogBackdrop,
   DialogClose,
@@ -30,7 +32,7 @@ export const drawerVariants = tv({
     content:
       "fixed z-modal flex flex-col overflow-hidden border-border-subtle bg-sheet shadow-lg outline-none transition-transform duration-200 ease-out",
     header: "space-y-1.5 border-b border-border-subtle px-5 py-4",
-    body: "min-h-0 flex-1 overflow-y-auto px-5 py-4 text-13 text-fg-2",
+    body: cn(textRoleVariants({ role: "description" }), "min-h-0 flex-1 overflow-y-auto px-5 py-4"),
     footer:
       "flex items-center justify-end gap-2 border-t border-border-subtle bg-sheet-2 px-5 py-3",
   },

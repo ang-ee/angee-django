@@ -32,7 +32,7 @@ export function SurfacePanel({
           {summary || actions ? (
             <div className="flex shrink-0 items-center gap-2">
               {summary ? (
-                <span className="text-2xs text-fg-muted">{summary}</span>
+                <span className={textRoleVariants({ role: "caption" })}>{summary}</span>
               ) : null}
               {actions}
             </div>
@@ -117,7 +117,7 @@ export function SettingsSection({
       {description ? (
         <header className="grid gap-0.5">
           <h2 className={textRoleVariants({ role: "title" })}>{title}</h2>
-          <p className="text-13 text-fg-muted">{description}</p>
+          <p className={textRoleVariants({ role: "meta" })}>{description}</p>
         </header>
       ) : (
         <h2 className={textRoleVariants({ role: "title" })}>{title}</h2>

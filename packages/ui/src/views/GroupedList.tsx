@@ -53,6 +53,7 @@ import {
   TableHeader,
   TableRow,
 } from "../ui/table";
+import { textRoleVariants } from "../ui/text";
 import type { ResourceViewContextValue } from "./resource-view-context";
 import {
   useResourceRowsSnapshot,
@@ -594,7 +595,7 @@ function SubGroupPager({
         <TableCell colSpan={colSpan} className="bg-sheet py-2">
           <nav
             aria-label={`${label} groups`}
-            className="flex items-center justify-end gap-2 text-13 text-fg-muted"
+            className={cn(textRoleVariants({ role: "meta" }), "flex items-center justify-end gap-2")}
           >
             <Pager
               page={page}
@@ -743,7 +744,7 @@ function GroupSectionInner<TRow extends Row>({
                     <span className="min-w-0 truncate">{label}</span>
                     <CountBadge value={bucket.count} />
                     {!expandable ? (
-                      <span className="text-13 font-normal text-fg-muted">
+                      <span className={cn(textRoleVariants({ role: "meta" }), "font-normal")}>
                         Items unavailable
                       </span>
                     ) : null}
@@ -1104,7 +1105,7 @@ function LeafGroupRecords<TRow extends Row>({
           <TableCell colSpan={colSpan} className="bg-sheet py-2">
             <nav
               aria-label={`${label} records`}
-              className="flex items-center justify-end gap-2 text-13 text-fg-muted"
+              className={cn(textRoleVariants({ role: "meta" }), "flex items-center justify-end gap-2")}
             >
               <Pager
                 page={currentPage}

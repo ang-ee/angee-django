@@ -24,6 +24,7 @@ import { CodeBlock } from "../../ui/code";
 import { Kbd } from "../../ui/kbd";
 import { POPUP_BASE, POPUP_LIST } from "../../ui/popover";
 import { StatusDot } from "../../ui/status-icon";
+import { textRoleVariants } from "../../ui/text";
 import { Textarea, textareaVariants } from "../../ui/textarea";
 
 // ---------------------------------------------------------------------------
@@ -58,7 +59,7 @@ export function ChatHeader({
         <StatusDot tone={statusTone} aria-hidden />
         <div className="min-w-0 flex-1">
           <div className="truncate text-13 font-medium text-fg">{title}</div>
-          {subtitle ? <div className="truncate text-2xs text-fg-muted">{subtitle}</div> : null}
+          {subtitle ? <div className={textRoleVariants({ role: "caption", truncate: true })}>{subtitle}</div> : null}
         </div>
         {statusLabel ? (
           <Tag tone={statusTone} density="compact" shape="pill">
@@ -223,7 +224,7 @@ export function SessionRailItem({
           {status}
           <span className="min-w-0 flex-1 truncate">{children}</span>
           {handle ? (
-            <span className="shrink-0 truncate text-2xs text-fg-muted">{handle}</span>
+            <span className={cn(textRoleVariants({ role: "caption", truncate: true }), "shrink-0")}>{handle}</span>
           ) : null}
         </>
       ),
@@ -369,7 +370,7 @@ export interface ChatComposerHintProps {
 export function ChatComposerHint({ children, className }: ChatComposerHintProps): ReactElement {
   const t = useBaseT();
   return (
-    <span className={cn("flex items-center gap-1.5 text-2xs text-fg-muted", className)}>
+    <span className={cn(textRoleVariants({ role: "caption" }), "flex items-center gap-1.5", className)}>
       {children ?? (
         <>
           <Kbd size="sm">⏎</Kbd>
@@ -474,7 +475,7 @@ export const ChatCommandItem = forwardRef<HTMLButtonElement, ChatCommandItemProp
         {...props}
       >
         <span className="text-13 text-fg">{label}</span>
-        {description ? <span className="truncate text-2xs text-fg-muted">{description}</span> : null}
+        {description ? <span className={textRoleVariants({ role: "caption", truncate: true })}>{description}</span> : null}
       </button>
     );
   },
@@ -487,7 +488,7 @@ export interface ChatCommandEmptyProps {
 
 /** The "no matching commands" row shown when the query filters every command out. */
 export function ChatCommandEmpty({ children, className }: ChatCommandEmptyProps): ReactElement {
-  return <div className={cn("px-2 py-1.5 text-2xs text-fg-muted", className)}>{children}</div>;
+  return <div className={cn(textRoleVariants({ role: "caption" }), "px-2 py-1.5", className)}>{children}</div>;
 }
 
 // ---------------------------------------------------------------------------
