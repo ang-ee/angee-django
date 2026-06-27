@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 import reversion
+from asgiref.sync import async_to_sync
 from django.contrib.auth.models import AnonymousUser
 from rebac import (
     MissingActorError,
@@ -18,8 +19,16 @@ from rebac import (
 )
 from rebac.roles import grant
 
-from angee.knowledge.models import StaleBodyError, UnsupportedPageKindError, parse_wikilinks
-from tests.conftest import Link, MarkdownPage, Page, Vault, create_user, vault_for
+from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.knowledge import schema as knowledge_schema
+from angee.knowledge.models import (
+    SectionNotFoundError,
+    StaleBodyError,
+    UnsupportedPageKindError,
+    parse_wikilinks,
+)
+from angee.mcp.graphql import execute_under_actor
+from tests.conftest import Link, MarkdownPage, Page, SchemaAddon, Vault, create_user, vault_for
 
 
 def test_create_for_sets_owner_and_audit_stamps(knowledge_tables: None) -> None:
@@ -328,6 +337,149 @@ def test_backlinks_respect_source_page_read(knowledge_tables: None) -> None:
 
     _grant(target, "viewer", bob)  # bob reads the target, not the linking source
     assert list(Link.objects.as_user(bob).filter(target_page=target)) == []
+
+
+def test_patch_section_splices_guards_and_reindexes(knowledge_tables: None) -> None:
+    """A section patch CAS-guards, records a revision, and rebuilds backlinks."""
+
+    alice = create_user("alice")
+    vault = vault_for(alice)
+    body = "# Doc\n\nintro\n\n## Usage\n\nold usage\n\n## Notes\n\nkeep me\n"
+    with actor_context(alice):
+        target = Page.objects.create_in(vault, title="Target")
+        page = Page.objects.create_in(vault, title="Guide")
+        markdown = MarkdownPage.objects.write_body(page, body)
+
+        with pytest.raises(StaleBodyError):
+            MarkdownPage.objects.patch_section(page, ["Usage"], "replace", "blocked", expected_hash="stale")
+        with pytest.raises(SectionNotFoundError):
+            MarkdownPage.objects.patch_section(page, ["Missing"], "replace", "nope")
+
+        with reversion.create_revision():
+            patched = MarkdownPage.objects.patch_section(
+                page,
+                ["Usage"],
+                "replace",
+                "see [[Target]]",
+                expected_hash=markdown.body_hash,
+            )
+
+    assert "see [[Target]]" in patched.body
+    assert "old usage" not in patched.body
+    assert "keep me" in patched.body  # sibling section untouched
+
+    versions = list(patched.revisions)
+    assert len(versions) == 1
+    assert "see [[Target]]" in versions[0].field_dict["body"]
+
+    links = {link.target_text: link for link in Link._base_manager.filter(source_page=page)}
+    assert links["Target"].is_resolved
+    assert links["Target"].target_page_id == target.pk
+
+
+def test_replace_unique_swaps_exact_text_with_guard(knowledge_tables: None) -> None:
+    """An exact-string replace CAS-guards and swaps the single occurrence."""
+
+    alice = create_user("alice")
+    vault = vault_for(alice)
+    with actor_context(alice):
+        page = Page.objects.create_in(vault, title="Doc")
+        markdown = MarkdownPage.objects.write_body(page, "alpha beta gamma")
+
+        with pytest.raises(StaleBodyError):
+            MarkdownPage.objects.replace_unique(page, "beta", "BETA", expected_hash="stale")
+        updated = MarkdownPage.objects.replace_unique(page, "beta", "BETA", expected_hash=markdown.body_hash)
+
+    assert updated.body == "alpha BETA gamma"
+
+
+def test_append_and_prepend_grow_body_and_record_revisions(knowledge_tables: None) -> None:
+    """Whole-page append/prepend join one blank apart, CAS-guard, and version."""
+
+    alice = create_user("alice")
+    vault = vault_for(alice)
+    with actor_context(alice):
+        page = Page.objects.create_in(vault, title="Log")
+        first = MarkdownPage.objects.write_body(page, "first line")
+
+        with pytest.raises(StaleBodyError):
+            MarkdownPage.objects.append(page, "blocked", expected_hash="stale")
+
+        with reversion.create_revision():
+            appended = MarkdownPage.objects.append(page, "second line", expected_hash=first.body_hash)
+        with reversion.create_revision():
+            prepended = MarkdownPage.objects.prepend(page, "header", expected_hash=appended.body_hash)
+
+    assert appended.body == "first line\n\nsecond line"
+    assert prepended.body == "header\n\nfirst line\n\nsecond line"
+
+    versions = list(prepended.revisions)
+    assert versions[0].field_dict["body"] == "header\n\nfirst line\n\nsecond line"
+
+
+def test_mcp_body_write_records_a_revision(knowledge_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A section patch driven through the MCP engine is versioned like an HTTP edit.
+
+    The MCP path runs GraphQL with ``request=None``, so ``RevisionMiddleware`` never
+    opens the ``create_revision()`` block an HTTP write rides — the engine itself must.
+    Drive ``patch_page_section`` through :func:`execute_under_actor` (the MCP engine
+    entry point, not the HTTP schema) and assert a ``Version`` lands, bound to the actor,
+    mirroring :func:`test_patch_section_splices_guards_and_reindexes`.
+    """
+
+    parts = {key: tuple(knowledge_schema.schemas["public"].get(key, ())) for key in SCHEMA_PART_KEYS}
+    schemas = GraphQLSchemas([SchemaAddon({"public": parts})])
+    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
+
+    alice = create_user("alice")
+    vault = vault_for(alice)
+    with actor_context(alice):
+        page = Page.objects.create_in(vault, title="Guide")
+        # Written outside a revision block, so the only Version can come from the MCP edit.
+        markdown = MarkdownPage.objects.write_body(page, "# Doc\n\nintro\n\n## Usage\n\nold usage\n")
+
+    document = (
+        "mutation ($page: ID!, $heading_path: [String!]!, $op: SectionOp!, $content: String!) "
+        "{ patch_page_section(page: $page, heading_path: $heading_path, op: $op, content: $content) "
+        "{ ok error_code markdown { body_hash } } }"
+    )
+    variables = {
+        "page": str(page.sqid),
+        "heading_path": ["Usage"],
+        "op": "REPLACE",
+        "content": "new usage through mcp",
+    }
+    with actor_context(alice):
+        data = async_to_sync(execute_under_actor)("public", document, variables)
+
+    assert data["patch_page_section"]["ok"] is True
+    markdown.refresh_from_db()
+    assert "new usage through mcp" in markdown.body
+
+    versions = list(markdown.revisions)
+    assert len(versions) == 1
+    assert versions[0].field_dict["body"] == markdown.body
+    assert versions[0].revision.user_id == alice.pk  # the MCP actor bound as the revision user
+
+
+def test_lexical_retrieval_matches_title_and_body_scoped_to_actor(knowledge_tables: None) -> None:
+    """The lexical provider matches title or body and row-scopes to the actor."""
+
+    alice = create_user("alice")
+    bob = create_user("bob")
+    vault = vault_for(alice)
+    with actor_context(alice):
+        recipes = Page.objects.create_in(vault, title="Recipes")
+        MarkdownPage.objects.write_body(recipes, "uses paprika and cumin")
+        shopping = Page.objects.create_in(vault, title="Shopping")
+        MarkdownPage.objects.write_body(shopping, "milk eggs bread")
+
+    with actor_context(alice):
+        assert [page.title for page in vault.retrieval.search("paprika")] == ["Recipes"]  # body match
+        assert [page.title for page in vault.retrieval.search("shopping")] == ["Shopping"]  # title match
+
+    with actor_context(bob):
+        assert list(vault.retrieval.search("paprika")) == []  # bob reads nothing here
 
 
 def _grant(resource: Any, relation: str, user: Any) -> None:

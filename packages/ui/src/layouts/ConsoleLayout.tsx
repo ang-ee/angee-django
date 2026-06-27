@@ -1,7 +1,7 @@
 import * as React from "react";
 
 import { AppRail } from "../chrome/AppRail";
-import { Breadcrumb } from "../chrome/Breadcrumb";
+import { Breadcrumb, BreadcrumbLabelProvider } from "../chrome/Breadcrumb";
 import { ConsoleSubNav, useConsoleSubNav } from "../chrome/ConsoleSubNav";
 import { TopBar, type TopBarProps } from "../chrome/TopBar";
 import { Chatter } from "../communication/Chatter";
@@ -36,30 +36,32 @@ export function ConsoleLayout({
     <ChatterProvider>
       <ControlBandProvider host={controlHost}>
         <StatuslineProvider host={statusHost}>
-          <div
-            className={cn(
-              showSubNav ? "console-grid-sidebar" : "console-grid",
-              "h-screen w-screen bg-canvas text-fg",
-              className,
-            )}
-          >
-            <AppRail className="area-rail" />
-            {showSubNav ? <ConsoleSubNav /> : null}
-            <TopBar
-              className="area-topbar"
-              topMenu={topMenu}
-              showChatterToggle={showChatter}
-              showUserMenu
-            />
-            <Breadcrumb className="area-crumbs" />
-            <div ref={setControlHost} className="area-control" />
-            <main className="area-content min-h-0 min-w-0 overflow-auto bg-canvas">
-              {children}
-            </main>
-            {showChatter ? <Chatter className="area-chatter" /> : null}
-            {/* Optional statusline; the row collapses while this host is empty. */}
-            <div ref={setStatusHost} className="area-status" />
-          </div>
+          <BreadcrumbLabelProvider>
+            <div
+              className={cn(
+                showSubNav ? "console-grid-sidebar" : "console-grid",
+                "h-screen w-screen bg-canvas text-fg",
+                className,
+              )}
+            >
+              <AppRail className="area-rail" />
+              {showSubNav ? <ConsoleSubNav /> : null}
+              <TopBar
+                className="area-topbar"
+                topMenu={topMenu}
+                showChatterToggle={showChatter}
+                showUserMenu
+              />
+              <Breadcrumb className="area-crumbs" />
+              <div ref={setControlHost} className="area-control" />
+              <main className="area-content min-h-0 min-w-0 overflow-auto bg-canvas">
+                {children}
+              </main>
+              {showChatter ? <Chatter className="area-chatter" /> : null}
+              {/* Optional statusline; the row collapses while this host is empty. */}
+              <div ref={setStatusHost} className="area-status" />
+            </div>
+          </BreadcrumbLabelProvider>
         </StatuslineProvider>
       </ControlBandProvider>
     </ChatterProvider>

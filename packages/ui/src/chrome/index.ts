@@ -9,6 +9,8 @@ export { AppRail, type AppRailProps } from "./AppRail";
 export { ConsoleSubNav, useConsoleSubNav } from "./ConsoleSubNav";
 export {
   Breadcrumb,
+  BreadcrumbLabelProvider,
+  useBreadcrumbLeafLabel,
   type BreadcrumbItem,
   type BreadcrumbProps,
 } from "./Breadcrumb";

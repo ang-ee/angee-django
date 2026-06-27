@@ -1,6 +1,15 @@
 import { type ReactElement } from "react";
 
-import { Button, Field, FormView, Glyph, Group, buttonVariants } from "@angee/ui";
+import {
+  Button,
+  Field,
+  FormView,
+  Glyph,
+  Group,
+  RecordPager,
+  buttonVariants,
+  type RecordNavigation,
+} from "@angee/ui";
 
 import { useStorageT } from "../i18n";
 import type { StorageFile } from "../data/documents";
@@ -18,18 +27,24 @@ export interface FileDetailProps {
   onClose: () => void;
   /** A write landed — refetch the browser's shared file set. */
   onChanged: () => void;
+  /** Navigation through the current file browser result set. */
+  navigation?: RecordNavigation | null;
+  /** Render the detail fields for a narrow side pane. */
+  compact?: boolean;
 }
 
 /**
  * One file as an editable record: the title input renames it, the toolbar
  * carries the download and trash/restore actions, and a read-only detail group
- * surfaces the stored filename, owner, and stage. The larger preview sits in the
- * Explorer aside beside this form.
+ * surfaces the stored filename, owner, and stage. The page decides whether this
+ * renders as the primary content or as a compact side-panel detail.
  */
 export function FileDetail({
   file,
   onClose,
   onChanged,
+  navigation,
+  compact = false,
 }: FileDetailProps): ReactElement {
   const t = useStorageT();
   const actions = useFileActions({ onChanged });
@@ -42,7 +57,7 @@ export function FileDetail({
       returning={[...SUBTITLE_FIELDS]}
       submitLabel={t("storage.file.rename")}
       onSaved={onChanged}
-      toolbar={
+      toolbarStart={
         <>
           {canDownload ? (
             // A real download anchor (the token URL is same-origin), styled as a
@@ -81,9 +96,10 @@ export function FileDetail({
           )}
         </>
       }
+      toolbar={navigation ? <RecordPager navigation={navigation} /> : undefined}
     >
       <Field name="title" widget="text" title placeholder={file.filename} />
-      <Group label={t("storage.file.details")} columns={2}>
+      <Group label={t("storage.file.details")} columns={compact ? 1 : 2}>
         <Field name="filename" label={t("storage.file.filename")} readOnly />
         <Field name="created_by_label" label={t("storage.file.owner")} widget="userRef" readOnly />
         <Field name="upload_state" label={t("storage.file.stage")} readOnly />

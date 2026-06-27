@@ -22,7 +22,6 @@ import {
 import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
 import { ResourceViewSwitcher } from "../toolbars";
-import { Button } from "../ui/button";
 import {
   Dialog,
   DialogBackdrop,
@@ -77,6 +76,7 @@ import {
   type FacetDescriptor,
   type GroupDescriptor,
 } from "./page";
+import { RecordPager, type RecordNavigation } from "./RecordPager";
 
 /** Where the open record's form renders relative to the list. */
 export type ResourceRecordPlacement = "inline" | "drawer";
@@ -1042,14 +1042,6 @@ function ListStateProbe<TRow extends Row>({
 
 type RowRecord = BaseRecord & Row;
 
-interface RecordNavigation {
-  /** Undefined when the open record isn't in the loaded slice (grouped/deep). */
-  current?: number;
-  total: number;
-  onPrev?: () => void;
-  onNext?: () => void;
-}
-
 const EMPTY_RECORD_ID_SET: ReadonlySet<string> = new Set();
 const EMPTY_ACTIONS: readonly ActionDescriptor[] = [];
 
@@ -1103,54 +1095,6 @@ function RecordSmartButtons({
         </button>
       ))}
     </div>
-  );
-}
-
-function RecordPager({
-  navigation,
-}: {
-  navigation: RecordNavigation;
-}): React.ReactElement {
-  return (
-    <nav
-      aria-label="Record navigation"
-      className="flex items-center gap-2 text-13 text-fg-muted"
-    >
-      <span className="whitespace-nowrap tabular-nums">
-        {navigation.current !== undefined ? (
-          <>
-            <span className="font-medium text-fg">
-              {navigation.current.toLocaleString()}
-            </span>{" "}
-            / {navigation.total.toLocaleString()}
-          </>
-        ) : (
-          <>/ {navigation.total.toLocaleString()}</>
-        )}
-      </span>
-      <div className="flex items-center gap-1">
-        <Button
-          type="button"
-          variant="ghost"
-          size="iconSm"
-          aria-label="Previous record"
-          disabled={!navigation.onPrev}
-          onClick={navigation.onPrev}
-        >
-          <Glyph name="chevron-left" className="glyph" />
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="iconSm"
-          aria-label="Next record"
-          disabled={!navigation.onNext}
-          onClick={navigation.onNext}
-        >
-          <Glyph name="chevron-right" className="glyph" />
-        </Button>
-      </div>
-    </nav>
   );
 }
 

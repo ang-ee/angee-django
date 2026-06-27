@@ -39,6 +39,7 @@ dependencies = [
   "anthropic>=0.109.2",
   "openai>=2.43.0",
   "vobject>=0.9.9",
+  "markdown-it-py>=4.2",
 ]
 
 [dependency-groups]
@@ -69,14 +70,6 @@ cache-dir = ".angee/caches/uv"
 # strawberry-django-only. Keep pins explicit so every environment resolves identically.
 strawberry-graphql = { git = "ssh://git@github.com/ang-ee/strawberry.git", branch = "codex/input-object-extensions" }
 strawberry-graphql-django = { git = "ssh://git@github.com/ang-ee/strawberry-django.git", branch = "hotfix-angee-django" }
-# Dev against the local run_query branch; switch to a version pin after 0.3.0 is published.
-strawberry-django-hasura = { path = "../strawberry-django-hasura", editable = true }
-# Pinned to >=0.9.1 (group_by_alias is public as of 0.9.1, published). Local editable
-# source kept for now; drop this entry to consume the PyPI release.
-strawberry-django-aggregates = { path = "../strawberry-django-aggregates", editable = true }
-# Dev against the local rebac sibling for the evaluator_scope cross-context fix
-# (cleanup must not mask the real error); switch to a version pin once published.
-django-zed-rebac = { path = "../django-zed-rebac", editable = true }
 
 [tool.hatch.build.targets.wheel]
 # Two source roots merge into the one `angee` PEP 420 namespace: the framework

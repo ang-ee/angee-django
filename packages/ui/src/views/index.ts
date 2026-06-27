@@ -132,6 +132,10 @@ export {
   type UseRecordActionOptions,
 } from "./record-action";
 export {
+  RecordPager,
+  type RecordNavigation,
+} from "./RecordPager";
+export {
   useRelationFacets,
   type RelationFacets,
   type RelationFacetOptions,

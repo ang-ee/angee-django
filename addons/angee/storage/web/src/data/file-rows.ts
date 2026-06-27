@@ -41,12 +41,13 @@ export interface StorageFileRow extends Record<string, unknown> {
   folder: string | null;
 }
 
-/** A navigator node — folders plus the synthetic All/Trash scopes. */
+/** A navigator node — folders, synthetic scopes, and the open file. */
 export interface StorageTreeRow extends Record<string, unknown> {
   id: string;
   name: string;
   parent: string;
   icon: string;
+  kind: "scope" | "folder" | "file";
 }
 
 /** Project + scope a drive's files for the list, newest first. */
@@ -98,19 +99,50 @@ export function fileById(
 export function folderTreeRows(
   folders: readonly StorageFolder[],
   driveId: string,
+  openFile?: StorageFile | null,
 ): StorageTreeRow[] {
   const rows: StorageTreeRow[] = [
-    { id: ALL_SCOPE, name: "All files", parent: "", icon: "files" },
-    { id: TRASH_SCOPE, name: "Trash", parent: "", icon: "trash" },
+    {
+      id: ALL_SCOPE,
+      name: "All files",
+      parent: "",
+      icon: "files",
+      kind: "scope",
+    },
+    {
+      id: TRASH_SCOPE,
+      name: "Trash",
+      parent: "",
+      icon: "trash",
+      kind: "scope",
+    },
   ];
+  const folderIds = new Set<string>();
   for (const folder of folders) {
     if (folder.is_virtual) continue;
     if ((folder.drive ?? "") !== driveId) continue;
+    folderIds.add(folder.id);
     rows.push({
       id: folder.id,
       name: folder.name,
       parent: folder.parent ?? "",
       icon: "folder",
+      kind: "folder",
+    });
+  }
+  if (openFile && openFile.drive === driveId) {
+    rows.push({
+      id: openFile.id,
+      name: openFile.title || openFile.filename,
+      // Anchor under the file's folder only when that folder is a rendered
+      // node; otherwise fall back to All files so the open file never orphans
+      // out of the tree (folders may resolve after files, or be filtered out).
+      parent:
+        openFile.folder && folderIds.has(openFile.folder)
+          ? openFile.folder
+          : ALL_SCOPE,
+      icon: openFile.mime_type?.icon_key || "file",
+      kind: "file",
     });
   }
   return rows;

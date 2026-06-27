@@ -8,9 +8,11 @@ import { SplitPane, SplitPaneHandle, SplitPanes } from "../page";
  * vault/folder `TreeView`), the main content (a list or `GalleryView`), and an
  * optional `aside` (e.g. a `PreviewPane`). Panes render only when supplied, so
  * `<Explorer>{list}</Explorer>` is a bare content pane and adding `navigator`/
- * `aside` grows it into the storage/knowledge file explorer. Sizes persist per
- * `autoSave` id. This is the `ResourceList navigator ⇒ Explorer` shape from the
- * page docs, composed from the resizable split primitives.
+ * `aside` grows it into the storage/knowledge file explorer. When an `autoSave`
+ * id is given the pane sizes persist under it, falling back to the
+ * `navigatorSize`/`asideSize` defaults when nothing is stored yet. This is the
+ * `ResourceList navigator ⇒ Explorer` shape from the page docs, composed from
+ * the resizable split primitives.
  */
 export interface ExplorerProps {
   /** Left pane (folder/vault tree). */
@@ -53,6 +55,7 @@ export function Explorer({
       {navigator ? (
         <>
           <SplitPane
+            id="navigator"
             defaultSize={navigatorSize}
             minSize={12}
             collapsible
@@ -63,11 +66,14 @@ export function Explorer({
           <SplitPaneHandle />
         </>
       ) : null}
-      <SplitPane className="min-h-0 min-w-0 bg-canvas">{children}</SplitPane>
+      <SplitPane id="content" className="min-h-0 min-w-0 bg-canvas">
+        {children}
+      </SplitPane>
       {aside ? (
         <>
           <SplitPaneHandle />
           <SplitPane
+            id="aside"
             defaultSize={asideSize}
             minSize={16}
             collapsible

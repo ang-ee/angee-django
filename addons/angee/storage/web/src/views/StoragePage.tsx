@@ -4,18 +4,23 @@ import { useNavigate, useParams } from "@tanstack/react-router";
 import {
   EmptyState,
   Explorer,
+  formatSize,
   Glyph,
   LoadingPanel,
   PreviewPane,
   RelationPicker,
   recordPath,
   SelectionBarAction,
+  SurfaceHeader,
+  Tabs,
   TreeView,
+  useBreadcrumbLeafLabel,
   useConfirm,
   useScopedTreeExplorer,
   useAuthoredQuery,
   type FieldDescriptor,
   type PreviewFile,
+  type RecordNavigation,
 } from "@angee/ui";
 
 import {
@@ -50,9 +55,10 @@ import { useStorageT } from "../i18n";
 const STORAGE_LIST_LIMIT = 500;
 
 /**
- * The file browser: an `Explorer` of a folder navigator, the scoped file list,
- * and a preview aside. Drives/folders/files load once; the drive switcher and
- * folder tree drive client-side scoping, and a row click previews the file.
+ * The file browser: an `Explorer` of a folder navigator, the scoped file list
+ * or open-file preview, and a detail aside. Drives/folders/files load once; the
+ * drive switcher and folder tree drive client-side scoping, and a row click
+ * opens the file preview route.
  */
 export function StoragePage(): ReactElement {
   const t = useStorageT();
@@ -71,8 +77,8 @@ export function StoragePage(): ReactElement {
   const files = filesQuery.data?.files ?? [];
   const backends = backendsQuery.data?.backends ?? [];
 
-  // The open file is route state: `/storage/$id` swaps the content to the detail
-  // form and the aside to that file's larger preview; `/storage` is the list.
+  // The open file is route state: `/storage/$id` swaps the content to the large
+  // preview and the aside to editable metadata; `/storage` is the list.
   const navigate = useNavigate();
   const params = useParams({ strict: false });
   const openFileId =
@@ -85,13 +91,14 @@ export function StoragePage(): ReactElement {
     () => fileById(files, openFileId),
     [files, openFileId],
   );
+  useBreadcrumbLeafLabel(openFile ? openFile.title || openFile.filename : null);
   const explorer = useScopedTreeExplorer({
     roots: drives,
     getRootId: (drive) => drive.id,
     getRootLabel: (drive) => drive.name || drive.slug,
     getTreeRows: useCallback(
-      (rootId: string) => folderTreeRows(folders, rootId),
-      [folders],
+      (rootId: string) => folderTreeRows(folders, rootId, openFile),
+      [folders, openFile],
     ),
     defaultSelectedId: ALL_SCOPE,
     selectedRootId: openFile?.drive ?? null,
@@ -132,6 +139,22 @@ export function StoragePage(): ReactElement {
     () => fileRows(files, { driveId, scope: effectiveScope }),
     [files, driveId, effectiveScope],
   );
+  const fileNavigation = useMemo<RecordNavigation | null>(() => {
+    if (!openFileId) return null;
+    const currentIndex = rows.findIndex((row) => row.id === openFileId);
+    const openAt = (index: number): void => {
+      const row = rows[index];
+      if (row) void navigate({ to: recordPath("/storage", row.id) });
+    };
+    return {
+      total: rows.length,
+      ...(currentIndex >= 0 ? { current: currentIndex + 1 } : {}),
+      ...(currentIndex > 0 ? { onPrev: () => openAt(currentIndex - 1) } : {}),
+      ...(currentIndex >= 0 && currentIndex < rows.length - 1
+        ? { onNext: () => openAt(currentIndex + 1) }
+        : {}),
+    };
+  }, [navigate, openFileId, rows]);
   const rowHref = useCallback(
     (row: StorageFileRow) => recordPath("/storage", row.id),
     [],
@@ -267,12 +290,17 @@ export function StoragePage(): ReactElement {
         label="name"
         rowKey="id"
         icon="icon"
-        selectedId={effectiveScope}
+        selectedId={openFile?.id ?? effectiveScope}
         onSelect={(row) => {
+          if (row.kind === "file") {
+            void navigate({ to: recordPath("/storage", row.id) });
+            return;
+          }
           explorer.setSelectedId(row.id);
           closeDetail();
         }}
         dropAccept={STORAGE_FILE_DND}
+        canDropOnNode={(_nodeId, row) => row.kind !== "file"}
         onNodeDrop={(nodeId, payload) =>
           handleFileDrop(nodeId, payload.data as FileDragData)
         }
@@ -293,17 +321,24 @@ export function StoragePage(): ReactElement {
 
   return (
     <Explorer
-      autoSave="storage.browser"
+      autoSave={openFile ? "storage.file.preview" : "storage.browser"}
       navigator={navigator}
-      aside={<FilePreview file={openFile} />}
-    >
-      {openFileId ? (
+      navigatorSize={openFile ? 28 : 18}
+      asideSize={openFile ? 28 : 26}
+      aside={
         openFile ? (
-          <FileDetail
+          <FileAside
             file={openFile}
+            navigation={fileNavigation}
             onClose={closeDetail}
             onChanged={() => filesQuery.refetch()}
           />
+        ) : undefined
+      }
+    >
+      {openFileId ? (
+        openFile ? (
+          <FilePreviewFrame file={openFile} />
         ) : filesQuery.fetching ? (
           <LoadingPanel message={t("storage.loadingFile")} />
         ) : (
@@ -330,18 +365,69 @@ export function StoragePage(): ReactElement {
   );
 }
 
-function FilePreview({ file }: { file: StorageFile | null }): ReactElement {
+function FilePreviewFrame({ file }: { file: StorageFile }): ReactElement {
   const t = useStorageT();
-  if (!file) {
-    return (
-      <EmptyState
-        fill
-        icon="file"
-        title={t("storage.preview.emptyTitle")}
-        description={t("storage.preview.emptyDescription")}
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-canvas">
+      <SurfaceHeader
+        density="compact"
+        headingLevel={2}
+        icon={file.mime_type?.icon_key || "file"}
+        title={file.title || file.filename}
+        subtitle={t("storage.file.subtitle", {
+          type:
+            file.mime_type?.label ||
+            file.mime_type?.mime_type ||
+            t("storage.file.unknownType"),
+          size: formatSize(file.size_bytes),
+        })}
       />
-    );
-  }
+      <div className="min-h-0 flex-1 overflow-hidden p-3">
+        <FilePreview file={file} />
+      </div>
+    </div>
+  );
+}
+
+function FileAside({
+  file,
+  navigation,
+  onClose,
+  onChanged,
+}: {
+  file: StorageFile;
+  navigation: RecordNavigation | null;
+  onClose: () => void;
+  onChanged: () => void;
+}): ReactElement {
+  const t = useStorageT();
+  return (
+    <Tabs
+      defaultValue="details"
+      variant="page"
+      className="flex h-full min-h-0 flex-col"
+    >
+      <Tabs.List className="shrink-0 px-2">
+        <Tabs.Tab value="details">{t("storage.file.detailsTab")}</Tabs.Tab>
+      </Tabs.List>
+      <Tabs.Panel
+        value="details"
+        className="min-h-0 flex-1 overflow-auto p-3 pt-3"
+      >
+        <FileDetail
+          file={file}
+          navigation={navigation}
+          onClose={onClose}
+          onChanged={onChanged}
+          compact
+        />
+      </Tabs.Panel>
+    </Tabs>
+  );
+}
+
+function FilePreview({ file }: { file: StorageFile }): ReactElement {
+  const t = useStorageT();
   const previewFile: PreviewFile = {
     url: file.url,
     name: file.filename,
@@ -349,17 +435,15 @@ function FilePreview({ file }: { file: StorageFile | null }): ReactElement {
     size: file.size_bytes,
   };
   return (
-    <div className="h-full overflow-auto p-3">
-      <PreviewPane
-        file={previewFile}
-        fallback={
-          <EmptyState
-            icon="file"
-            title={file.title || file.filename}
-            description={t("storage.preview.unsupported")}
-          />
-        }
-      />
-    </div>
+    <PreviewPane
+      file={previewFile}
+      fallback={
+        <EmptyState
+          icon="file"
+          title={file.title || file.filename}
+          description={t("storage.preview.unsupported")}
+        />
+      }
+    />
   );
 }
