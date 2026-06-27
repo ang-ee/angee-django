@@ -8,8 +8,7 @@ from typing import Any, ClassVar
 from django.utils.module_loading import import_string
 
 from angee.agents.backends import InferenceBackend, InferenceModelSpec, InferenceRequest
-
-_OAUTH_CREDENTIAL_KIND = "oauth"
+from angee.integrate.credentials import CredentialKind
 
 
 class SDKInferenceBackend(InferenceBackend):
@@ -53,7 +52,7 @@ class SDKInferenceBackend(InferenceBackend):
         if not secret:
             raise ValueError(f"{self.label} inference credential has no secret.")
         key = "api_key"
-        if self._credential_kind(credential) == _OAUTH_CREDENTIAL_KIND:
+        if credential.kind == CredentialKind.OAUTH:
             key = self.oauth_auth_kwarg
             if not key:
                 raise ValueError(f"{self.label} inference does not support OAuth credentials.")
@@ -177,13 +176,6 @@ class SDKInferenceBackend(InferenceBackend):
             return import_string(self.client_class_path)
         except ImportError as error:
             raise RuntimeError(install_hint) from error
-
-    @staticmethod
-    def _credential_kind(credential: Any) -> str:
-        """Return a credential kind value without importing the integrate model."""
-
-        kind = getattr(credential, "kind", "")
-        return str(getattr(kind, "value", kind))
 
     @staticmethod
     def _string_content(content: Any) -> str:

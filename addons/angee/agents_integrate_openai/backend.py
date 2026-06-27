@@ -43,6 +43,7 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
     key = "openai"
     label = "OpenAI"
     icon = "openai"
+    api_key_env = ("OPENAI_API_KEY",)
     defaults = {
         "vendor": "openai",
         "name": "OpenAI",

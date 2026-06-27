@@ -47,6 +47,11 @@ ANGEE_INFERENCE_BACKEND_CLASSES = {
     "openai": "angee.agents_integrate_openai.backend.OpenAIInferenceBackend",
     "stub_inference": "tests.conftest.StubInferenceBackend",
 }
+ANGEE_AGENT_RUNTIME_CLASSES = {
+    "none": "angee.agents.runtimes.NoRuntime",
+    "claude_code": "angee.agents.runtimes.ClaudeCodeRuntime",
+    "opencode": "angee.agents.runtimes.OpenCodeRuntime",
+}
 ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES = {
     "lexical": "angee.knowledge.retrieval.LexicalRetrievalBackend",
 }

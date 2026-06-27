@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from angee.agents.backends import InferenceModelSpec, InferenceRequest, InferenceResponse
+from angee.agents.runtimes import ANTHROPIC_OAUTH_BETA_HEADER
 from angee.agents.sdk_backends import SDKInferenceBackend
 
 DEFAULT_MODEL_LIMIT = 1000
@@ -30,6 +31,7 @@ class AnthropicInferenceBackend(SDKInferenceBackend):
     label = "Anthropic"
     icon = "anthropic"
     oauth_client = "anthropic-personal"
+    api_key_env = ("ANTHROPIC_API_KEY",)
     defaults = {
         "vendor": "anthropic",
         "name": "Anthropic",
@@ -38,6 +40,14 @@ class AnthropicInferenceBackend(SDKInferenceBackend):
     default_model_limit = DEFAULT_MODEL_LIMIT
     client_class_path = "anthropic.Anthropic"
     sdk_package_name = "anthropic"
+
+    def _client_kwargs(self) -> dict[str, Any]:
+        """Return Anthropic SDK kwargs, including the OAuth beta when needed."""
+
+        kwargs = super()._client_kwargs()
+        if "auth_token" in kwargs:
+            kwargs["default_headers"] = {"anthropic-beta": ANTHROPIC_OAUTH_BETA_HEADER}
+        return kwargs
 
     def list_models(self) -> Sequence[InferenceModelSpec]:
         """List Anthropic models and their broker-prefixed aliases."""

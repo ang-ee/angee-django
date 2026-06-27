@@ -106,8 +106,8 @@ def reprovision_agent(id: PublicID) -> ActionResult:
         service = agent.service
         if not workspace:
             return ActionResult(ok=False, message="Agent isn't provisioned — provision it first.")
-        if agent.service_template is None:
-            return ActionResult(ok=False, message="Set a service template on this agent first.")
+        if not agent.runtime_backend.renders_service:
+            return ActionResult(ok=False, message="This agent's runtime renders no service to reprovision.")
         if not agent.inference_credential_ready():
             return ActionResult(
                 ok=False,
@@ -221,15 +221,17 @@ def _render_plan(agent: Any) -> _RenderPlan:
     """Build the operator render plan from an agent's templates, inputs, and secrets."""
 
     workspace_template = agent.workspace_template
-    service_template = agent.service_template
+    runtime = agent.runtime_backend
     return _RenderPlan(
         workspace_inputs=agent.provision_workspace_inputs(),
         service_inputs=agent.provision_service_inputs(),
         secret_name=agent.inference_secret_name(),
-        secret_value=agent.inference_secret(),
+        secret_value=agent.provision_inference_secret(),
         mcp_secrets=agent.mcp_secrets(),
         workspace_template=((workspace_template.name, workspace_template.kind) if workspace_template else ("", "")),
-        service_template=((service_template.name, service_template.kind) if service_template else None),
+        service_template=(
+            (runtime.service_template_name, runtime.service_template_kind) if runtime.renders_service else None
+        ),
     )
 
 

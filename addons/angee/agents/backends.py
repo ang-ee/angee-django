@@ -89,6 +89,10 @@ class InferenceBackend(ImplBase):
     # Vendor-neutral: a base backend never pins a product OAuth client. Provider
     # connect is available only when a vendor backend addon sets this slug.
     oauth_client: ClassVar[str] = ""
+    # The vendor SDK's own API-key env var name(s) — a provider-native fact an agent
+    # runtime composes into the container env (see ``angee.agents.runtimes``). An
+    # empty tuple means the backend declares no static-key runtime env.
+    api_key_env: ClassVar[tuple[str, ...]] = ()
     defaults = {
         "name": "Manual",
         "status": "draft",

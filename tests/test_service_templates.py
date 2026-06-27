@@ -16,6 +16,35 @@ def test_claude_code_template_sets_claude_code_model_env() -> None:
     assert "CLAUDE_MODEL" not in text
 
 
+def test_service_templates_render_runtime_owned_auth_env() -> None:
+    """Service templates consume the auth env block the agent runtime generates."""
+
+    claude = (ROOT / "templates/services/claude-code/template/service.yaml.jinja").read_text()
+    opencode = (ROOT / "templates/services/opencode/template/service.yaml.jinja").read_text()
+
+    assert "{{ auth_env | safe }}" in claude
+    assert "{{ auth_env | safe }}" in opencode
+    # The provider-branching inputs and hardcoded env-var names are gone from both.
+    assert "auth_mode" not in claude
+    assert "secret_name" not in claude
+    assert "ANTHROPIC_API_KEY" not in claude
+    assert "OPENAI_API_KEY" not in opencode
+    assert "GROQ_API_KEY" not in opencode
+    assert "provider ==" not in opencode
+
+
+def test_opencode_image_decodes_oauth_auth_store() -> None:
+    """The opencode image decodes the base64 OAuth auth.json and gates the plugin on a build arg."""
+
+    dockerfile = (ROOT / "templates/services/opencode/template/docker/Dockerfile").read_text()
+
+    # The OAuth blob arrives base64 in ANGEE_OPENCODE_AUTH_B64 and is decoded into the store.
+    assert "ANGEE_OPENCODE_AUTH_B64" in dockerfile
+    assert "OPENCODE_AUTH_CONTENT" in dockerfile
+    # The community auth plugin is opt-in via a build arg (empty by default — API-key only).
+    assert 'ARG OPENCODE_ANTHROPIC_AUTH_PLUGIN=""' in dockerfile
+
+
 def test_claude_code_container_applies_model_env_to_settings() -> None:
     """The container pins Claude Code's Default model to ANTHROPIC_MODEL."""
 

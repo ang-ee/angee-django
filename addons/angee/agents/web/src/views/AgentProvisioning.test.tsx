@@ -32,7 +32,7 @@ const mocks = vi.hoisted(() => ({
     workspace: "",
     service: "",
     workspace_template: { path: "workspaces/agent-default" },
-    service_template: { id: "service-template-1" },
+    runtime_class: "CLAUDE_CODE",
   },
   workspaceStatus: null as {
     error?: string | null;

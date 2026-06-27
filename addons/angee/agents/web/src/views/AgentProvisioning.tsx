@@ -38,7 +38,7 @@ const PROVISION_FIELDS = [
   "last_error",
   "workspace",
   "service",
-  "service_template.id",
+  "runtime_class",
   "workspace_template.path",
 ] as const;
 
@@ -48,7 +48,7 @@ interface AgentProvisionRecord extends Row {
   last_error?: string | null;
   workspace?: string | null;
   service?: string | null;
-  service_template?: { id?: string | null } | null;
+  runtime_class?: string | null;
   workspace_template?: { path?: string | null } | null;
 }
 
@@ -88,7 +88,8 @@ export function AgentProvisioning({
   const service = stringField(agent, "service");
   const lifecycle = agentLifecycle(agent);
   const active = isLifecycleActive(lifecycle);
-  const expectsService = Boolean(agent?.service_template);
+  // The "none" runtime renders no service; any other runtime does.
+  const expectsService = agent?.runtime_class != null && agent.runtime_class !== "NONE";
   const missingRenderedInstances =
     agentRuntime(agent) === "RUNNING" && (!workspace || (expectsService && !service));
   const showRuntime = active || Boolean(workspace) || missingRenderedInstances;

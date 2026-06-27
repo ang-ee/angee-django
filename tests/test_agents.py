@@ -560,7 +560,10 @@ def test_anthropic_backend_uses_auth_token_for_oauth_credentials(
         model = InferenceModel.objects.create(provider=provider, name="claude-sonnet-4-6")
 
     assert model.chat([{"role": "user", "content": "Ping"}]).text == "pong"
-    assert _FakeAnthropicClient.instances[-1].kwargs == {"auth_token": "oauth-token"}
+    assert _FakeAnthropicClient.instances[-1].kwargs == {
+        "auth_token": "oauth-token",
+        "default_headers": {"anthropic-beta": "oauth-2025-04-20"},
+    }
 
 
 @pytest.mark.django_db(transaction=True)

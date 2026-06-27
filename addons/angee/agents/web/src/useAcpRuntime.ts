@@ -195,11 +195,11 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
         const caps = init.agentCapabilities?.promptCapabilities ?? null;
         promptCapabilitiesRef.current = caps;
         setImageSupported(caps?.image === true);
-        // Straight to a session: Claude Code authenticates from its env token
-        // (CLAUDE_CODE_OAUTH_TOKEN, synced at provision), and its ACP `authenticate`
-        // method is not implemented — it advertises `claude-login` only as a terminal
-        // hint. A genuinely unauthenticated agent fails `newSession` here, which the
-        // catch below surfaces, rather than hanging.
+        // Straight to a session: the agent runtime authenticates from provisioned
+        // container env (ANTHROPIC_API_KEY or OAuth bearer env), and its ACP
+        // `authenticate` method is not implemented — it advertises `claude-login`
+        // only as a terminal hint. A genuinely unauthenticated agent fails
+        // `newSession` here, which the catch below surfaces, rather than hanging.
         const session = await connection.newSession({
           cwd: "/workspace",
           mcpServers: toMcpServers(validated.mcp_servers),

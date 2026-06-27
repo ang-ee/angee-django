@@ -22,12 +22,12 @@ from rebac import system_context
 from rebac.managers import RebacManager
 
 from angee.agents.backends import InferenceBackend, InferenceRequest, InferenceResponse
+from angee.agents.runtimes import AgentRuntime, operator_secret_ref
 from angee.agents.skills import parse_skill_meta
 from angee.base.fields import ImplClassField, StateField
 from angee.base.impl import ImplDefaultsMixin
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel
-from angee.integrate.credentials import CredentialKind
 
 
 class InferenceModelUse(models.TextChoices):
@@ -479,7 +479,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
     """An agent definition (or, when ``is_template``, an agent template).
 
     The operator renders an agent into a workspace from ``workspace_template`` and a
-    service from ``service_template`` (both ``integrate.Template`` rows), writing the
+    service from the template its ``runtime_class`` declares, writing the
     ``instructions`` into AGENTS.md/CLAUDE.md, the selected skills and MCP servers/tools
     into the workspace, and the model's API credential into the service. ``service`` and
     ``workspace`` hold the operator instance names once rendered.
@@ -514,13 +514,15 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
     skills = models.ManyToManyField("agents.Skill", blank=True, related_name="agents")
     mcp_servers = models.ManyToManyField("agents.MCPServer", blank=True, related_name="agents")
     mcp_tools = models.ManyToManyField("agents.MCPTool", blank=True, related_name="agents")
-    service_template = models.ForeignKey(
-        "integrate.Template",
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="+",
+    runtime_class = ImplClassField(
+        base_class=AgentRuntime,
+        registry_setting="ANGEE_AGENT_RUNTIME_CLASSES",
+        default="none",
     )
+    """Registry key for the agent runtime — the program this agent renders into. The
+    runtime owns its operator service template, how it consumes an inference credential
+    as container env, and the model-handle convention; ``none`` renders no service
+    (a workspace-only agent)."""
     workspace_template = models.ForeignKey(
         "integrate.Template",
         on_delete=models.PROTECT,
@@ -558,12 +560,24 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         return self.name
 
     @property
+    def runtime_backend(self) -> AgentRuntime:
+        """Return the :class:`~angee.agents.runtimes.AgentRuntime` this agent renders into.
+
+        Resolved fresh from ``runtime_class`` per access (the runtime is stateless); it
+        owns the service template, the credential→env mapping, and the model handle.
+        """
+
+        field = cast(ImplClassField, type(self)._meta.get_field("runtime_class"))
+        runtime_class = cast(type[AgentRuntime], field.resolve_class(self.runtime_class or "none"))
+        return runtime_class()
+
+    @property
     def can_provision(self) -> bool:
         """Whether the provision action may start from the current lifecycle facts."""
 
-        return str(self.runtime_status) == RuntimeStatus.ERROR.value or str(self.lifecycle) in {
-            AgentLifecycle.DRAFT.value,
-            AgentLifecycle.DEPROVISIONED.value,
+        return str(self.runtime_status) == str(RuntimeStatus.ERROR) or str(self.lifecycle) in {
+            str(AgentLifecycle.DRAFT),
+            str(AgentLifecycle.DEPROVISIONED),
         }
 
     @property
@@ -571,9 +585,9 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         """Whether the teardown action is meaningful for the current rendered state."""
 
         return str(self.lifecycle) in {
-            AgentLifecycle.PROVISIONING.value,
-            AgentLifecycle.READY.value,
-            AgentLifecycle.DEPROVISIONING.value,
+            str(AgentLifecycle.PROVISIONING),
+            str(AgentLifecycle.READY),
+            str(AgentLifecycle.DEPROVISIONING),
         } or bool(self.workspace or self.service)
 
     @property
@@ -691,56 +705,67 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         merged = {**(self.workspace_inputs or {}), **structured}
         return {key: str(value) for key, value in merged.items()}
 
+    _SERVICE_ENV_INDENT = "      "
+    """Indent for spliced ``env:`` lines — must match the service templates' ``env:`` block."""
+
     def provision_service_inputs(self) -> dict[str, str]:
         """Resolve the structured service-template inputs from this agent.
 
-        Carries the model handle and the credential-driven auth selection (prefer
-        OAuth: an OAuth credential renders the runtime's OAuth env var, a static key
-        the API-key env var — the service template owns the name↔kind map). The
-        secret *value* never appears here — only ``secret_name``; the operator-held
-        value is synced server-side. ``service_inputs`` supplies template-specific
-        extras (``permission_mode``, ``provider``) and loses to the structured keys.
+        Carries the runtime model handle plus the runtime-owned auth env block. The
+        secret *value* never appears here — only operator ``${secret.…}`` placeholders;
+        the value is synced server-side. The runtime (not the provider) owns how the
+        credential becomes env, because the same token feeds different env vars in
+        different runtimes. ``service_inputs`` supplies template-specific extras
+        (``permission_mode`` etc.) and loses to the structured keys.
         """
 
         structured: dict[str, str] = {}
+        runtime = self.runtime_backend
         model = getattr(self, "model", None)
         if model is not None:
-            structured["model"] = self.service_model_handle()
-        # Advertise auth only when there is a usable secret to sync — otherwise the
-        # rendered service would reference a ${secret.<name>} the operator never gets
-        # (this must agree with the secret sync in the provision flow).
-        if self.inference_secret():
+            structured["model"] = runtime.model_handle(model)
+        # Advertise auth only when the runtime renders a service and there is a usable secret
+        # to sync — otherwise the rendered service would reference a ${secret.<name>} the
+        # operator never gets, and a workspace-only runtime has no service container to read
+        # it. This must agree with the readiness gate and the secret sync in the provision
+        # flow (both also keyed on ``renders_service``).
+        if runtime.renders_service and model is not None and self.inference_secret():
             credential = self._inference_credential()
-            structured["auth_mode"] = "oauth" if credential.kind == CredentialKind.OAUTH else "api_key"
-            structured["secret_name"] = self.inference_secret_name()
-        # The MCP bearers ride the container env too: one ``${secret.<name>}`` env line per
+            backend = getattr(getattr(model, "provider", None), "backend", None)
+            if credential is None or backend is None:
+                raise ValueError("Inference auth requires a model provider backend.")
+            structured["auth_env"] = self._service_env_lines(
+                runtime.auth_env(backend=backend, credential=credential, secret_name=self.inference_secret_name())
+            )
+        # The MCP bearers ride the container env too: one ``${secret.<name>}`` line per
         # credentialed server (the operator resolves it), which the service template renders
         # under the service env and ``.mcp.json`` reads via ``${ANGEE_MCP_BEARER_<…>}``.
-        # The provision answer channel is string-only — every input is ``str()``-ed at the
-        # return below and the daemon takes string answers — so this renders the per-server
-        # env lines as text here rather than passing a structured list for the template to
-        # loop; the template splices them verbatim with ``| safe`` (their indentation must
-        # match its ``env:`` block).
-        mcp_env = "\n".join(
-            f'      {self.mcp_bearer_env(server)}: "${{secret.{secret_name}}}"'
+        mcp_env = {
+            self.mcp_bearer_env(server): operator_secret_ref(secret_name)
             for server, secret_name in self._addressable_mcp_servers()
             if secret_name
-        )
+        }
         if mcp_env:
-            structured["mcp_env"] = mcp_env
+            structured["mcp_env"] = self._service_env_lines(mcp_env)
         merged = {**(self.service_inputs or {}), **structured}
         return {key: str(value) for key, value in merged.items()}
 
+    @classmethod
+    def _service_env_lines(cls, env: Mapping[str, str]) -> str:
+        """Return YAML ``env:`` lines a service template splices verbatim with ``| safe``.
+
+        The provision answer channel is string-only, so the env block is rendered to
+        text here (not a structured list the template loops). ``json.dumps`` double-quotes
+        each value, and the shared indent must match the template's ``env:`` nesting.
+        """
+
+        return "\n".join(f"{cls._SERVICE_ENV_INDENT}{name}: {json.dumps(value)}" for name, value in env.items())
+
     def service_model_handle(self) -> str:
-        """Return the selected model handle in the current service runtime's convention."""
+        """Return the selected model handle in this agent's runtime convention."""
 
         model = getattr(self, "model", None)
-        if model is None:
-            return ""
-        service_template = getattr(self, "service_template", None)
-        if getattr(service_template, "name", "") == "claude-code":
-            return str(getattr(model, "provider_model_name", "") or model.name)
-        return str(model.name)
+        return self.runtime_backend.model_handle(model) if model is not None else ""
 
     def mcp_config(self) -> dict[str, Any]:
         """Return the ``.mcp.json`` document for this agent's reachable MCP servers.
@@ -834,6 +859,29 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         credential.ensure_fresh()
         return str(credential.secret_value())
 
+    def provision_inference_secret(self) -> str:
+        """Return the runtime-shaped inference secret payload synced to the operator store.
+
+        The value the provision flow stores under :meth:`inference_secret_name`, that the
+        service's ``${secret.<name>}`` auth placeholder resolves to in the container: the
+        raw credential secret for most runtimes, or a runtime-built payload (OpenCode's
+        base64 ``auth.json`` for an OAuth credential — see
+        :meth:`~angee.agents.runtimes.AgentRuntime.auth_secret_value`). ``""`` when there is
+        no credential to sync. Readiness still gates on :meth:`inference_secret` (the raw
+        token), so an empty credential is refused before this richer payload is built.
+        A runtime that renders no service has no container to consume the secret, so nothing
+        is synced (kept in step with :meth:`provision_service_inputs`' auth-env block).
+        """
+
+        runtime = self.runtime_backend
+        if not runtime.renders_service:
+            return ""
+        credential = self._inference_credential()
+        if credential is None:
+            return ""
+        credential.ensure_fresh()
+        return runtime.auth_secret_value(credential)
+
     def inference_credential_ready(self) -> bool:
         """Whether this agent can be provisioned with working inference auth.
 
@@ -841,13 +889,18 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         model-backed agent is ready only when its credential yields a usable secret — a
         missing or placeholder credential (no key) would render a service that can never
         authenticate, so the provision flow refuses it up front rather than bringing up a
-        broken agent. Connecting a real credential (e.g. an Anthropic OAuth account) makes
-        it ready.
+        broken agent. When the runtime renders a service, the runtime must also be able to
+        consume that credential kind (e.g. OpenCode cannot use an OAuth token), so an
+        unworkable pairing is refused here rather than degrading silently at run time.
         """
 
         if self.model_id is None:
             return True
-        return bool(self.inference_secret())
+        credential = self._inference_credential()
+        if credential is None or not self.inference_secret():
+            return False
+        runtime = self.runtime_backend
+        return not runtime.renders_service or runtime.supports_credential(credential)
 
     def _inference_credential(self) -> Any:
         """Return the ``integrate.Credential`` backing this agent's inference, or ``None``.

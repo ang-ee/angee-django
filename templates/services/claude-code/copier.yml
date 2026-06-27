@@ -14,17 +14,12 @@ _angee:
     so the service carries no in-container Caddy, token verifier, or auth secret.
   name_pattern: "agent-${workspace.name}"
   inputs:
-    auth_mode:
+    auth_env:
       type: str
-      default: api_key
-      help: api_key (ANTHROPIC_API_KEY) or oauth (CLAUDE_CODE_OAUTH_TOKEN).
-    secret_name:
-      type: str
-      default: anthropic-api-key
+      default: ""
       help: >-
-        Name of the operator secret holding the Anthropic API key (or OAuth
-        token). The operator injects the value at compose-render; it never
-        transits the browser.
+        Pre-rendered YAML env lines for inference auth. The agent runtime owns which
+        env vars receive the operator secret and any static provider headers.
     model:
       type: str
       default: ""
@@ -40,14 +35,9 @@ _angee:
         Pre-rendered YAML env lines (one per credentialed MCP server) setting each
         server's bearer from its operator secret; .mcp.json reads them via ${VAR}.
 
-auth_mode:
+auth_env:
   type: str
-  default: api_key
-  choices: [api_key, oauth]
-
-secret_name:
-  type: str
-  default: anthropic-api-key
+  default: ""
 
 model:
   type: str

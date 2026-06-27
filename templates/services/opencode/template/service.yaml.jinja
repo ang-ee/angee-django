@@ -1,6 +1,6 @@
 # One service entry appended to the outer stack by `service create`. Routed through
 # the operator's central Caddy (see claude-code/service.yaml.jinja) — `route:` replaces
-# `ports:`, the operator owns edge auth, and the API key is an operator-held secret.
+# `ports:`, the operator owns edge auth, and inference auth is an operator-held secret.
 # The operator renders this stack entry with its own engine (not Python Jinja2/copier),
 # which supports only if/elif/else plus simple value interpolation — no `set` tag, string
 # concatenation, or inline conditional. Keep it to the constructs claude-code's entry uses.
@@ -15,32 +15,8 @@ services:
     mounts:
       - "workspace://{{ workspace_name }}:/workspace"
     env:
-      # Provider selects the API-key env var; the secret name falls back to
-      # "<provider>-api-key" when the caller leaves `secret_name` blank.
-{%- if provider == "openai" %}
-{%- if secret_name %}
-      OPENAI_API_KEY: "${secret.{{ secret_name }}}"
-{%- else %}
-      OPENAI_API_KEY: "${secret.openai-api-key}"
-{%- endif %}
-{%- elif provider == "openrouter" %}
-{%- if secret_name %}
-      OPENROUTER_API_KEY: "${secret.{{ secret_name }}}"
-{%- else %}
-      OPENROUTER_API_KEY: "${secret.openrouter-api-key}"
-{%- endif %}
-{%- elif provider == "groq" %}
-{%- if secret_name %}
-      GROQ_API_KEY: "${secret.{{ secret_name }}}"
-{%- else %}
-      GROQ_API_KEY: "${secret.groq-api-key}"
-{%- endif %}
-{%- else %}
-{%- if secret_name %}
-      ANTHROPIC_API_KEY: "${secret.{{ secret_name }}}"
-{%- else %}
-      ANTHROPIC_API_KEY: "${secret.anthropic-api-key}"
-{%- endif %}
+{%- if auth_env %}
+{{ auth_env | safe }}
 {%- endif %}
 {%- if model %}
       OPENCODE_MODEL: "{{ model }}"

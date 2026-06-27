@@ -377,6 +377,18 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   returns 200; check `runtime/schemas/` before chasing app/test regressions. (The
   dev server regenerates it for you — see the `runserver` pitfall — but a manual
   `angee build` outside `angee dev` still needs the explicit `schema` step.)
+- **Agent runtime auth is a `(runtime × provider × credential-kind)` fact, not provider-only.**
+  The `AgentRuntime` an agent's `runtime_class` selects (`angee.agents.runtimes`) owns how a
+  credential becomes container env *and* the synced secret payload (`auth_env` /
+  `auth_secret_value`) — the same Anthropic OAuth token feeds Claude Code's
+  `CLAUDE_CODE_OAUTH_TOKEN` but OpenCode reads only `ANTHROPIC_API_KEY`. The inference
+  backend stays the owner of vendor-native primitives (`api_key_env`, the credential value).
+  A runtime that cannot consume a credential kind refuses it in the readiness gate, never
+  rendering a service that silently degrades to a fallback model. **OpenCode + Personal-Plans
+  OAuth is off by default** (`ANGEE_OPENCODE_OAUTH_ENABLED`): it needs a community auth plugin
+  baked into the opencode image (the `OPENCODE_ANTHROPIC_AUTH_PLUGIN` build arg) and using a
+  Pro/Max token there violates Anthropic's ToS — enabling it without the plugin silently drops
+  Anthropic from OpenCode's model list.
 - **`angee dev` serves via Angee's `runserver` override, not `uvicorn --reload`.**
   `angee.compose` ships a `runserver` that runs `ASGI_APPLICATION` under uvicorn
   supervised by Django's follow-imports autoreloader (mirrors Daphne's override).

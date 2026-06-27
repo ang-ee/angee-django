@@ -14,10 +14,8 @@ services:
     mounts:
       - "workspace://{{ workspace_name }}:/workspace"
     env:
-{%- if auth_mode == "oauth" %}
-      CLAUDE_CODE_OAUTH_TOKEN: "${secret.{{ secret_name }}}"
-{%- else %}
-      ANTHROPIC_API_KEY: "${secret.{{ secret_name }}}"
+{%- if auth_env %}
+{{ auth_env | safe }}
 {%- endif %}
 {%- if mcp_env %}
 {{ mcp_env | safe }}

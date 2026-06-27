@@ -11,6 +11,7 @@ imported) *before* that module is imported: `Skill`/`InferenceProvider`/
 
 from __future__ import annotations
 
+import base64
 import importlib
 import json
 from collections.abc import Iterator
@@ -21,7 +22,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.management import call_command
 from django.db import connection
-from django.test import RequestFactory
+from django.test import RequestFactory, override_settings
 from rebac import app_settings, system_context
 from rebac.roles import grant
 
@@ -612,7 +613,7 @@ def test_provision_agent_renders_via_daemon_and_is_admin_gated(agents_console_ta
 
     admin = _platform_admin("agt-render-admin")
     plain = User.objects.create_user(username="agt-render-plain", email="render@example.com")
-    provider = _provider("agt-render", name="P")
+    provider = _provider("agt-render", backend_class="anthropic", name="P")
     vcs = _vcs_bridge("agt-render-tpl", config={"stub_repos": REPOS})
     vcs.discover_repositories()
     with system_context(reason="test.agents.render.seed"):
@@ -620,9 +621,6 @@ def test_provision_agent_renders_via_daemon_and_is_admin_gated(agents_console_ta
         source = Source.objects.create(repository=repository, kind="template", path="templates")
         workspace_template = Template.objects.create(
             source=source, kind="workspace", name="agent-default", path="workspaces/agent-default"
-        )
-        service_template = Template.objects.create(
-            source=source, kind="service", name="claude-code", path="services/claude-code"
         )
         model = InferenceModel.objects.create(
             provider=provider,
@@ -634,7 +632,7 @@ def test_provision_agent_renders_via_daemon_and_is_admin_gated(agents_console_ta
             instructions="Hi.",
             model=model,
             workspace_template=workspace_template,
-            service_template=service_template,
+            runtime_class="claude_code",
         )
     agent_id = _public_id(agent.sqid)
 
@@ -705,7 +703,8 @@ def test_provision_agent_renders_via_daemon_and_is_admin_gated(agents_console_ta
     assert calls[1][1] == "ref:agent-default" and calls[1][2]["agent_name"] == "Bot"
     assert calls[2] == ("recorded_workspace", "ws-bot", "provisioning")
     assert calls[3][1] == "ref:claude-code"
-    assert calls[3][2] == "ws-bot" and calls[3][3]["auth_mode"] == "api_key"
+    assert calls[3][2] == "ws-bot"
+    assert calls[3][3]["auth_env"] == f'      ANTHROPIC_API_KEY: "${{secret.agent-{agent.sqid}-inference}}"'
     assert calls[4] == ("recorded_service", "svc-bot", "provisioning")
 
     # Deprovision tears down the workspace via the daemon and clears the record.
@@ -741,9 +740,7 @@ def test_provision_agent_failure_tears_down_workspace_and_records_error(
             workspace_template=Template.objects.create(
                 source=source, kind="workspace", name="agent-default", path="workspaces/agent-default"
             ),
-            service_template=Template.objects.create(
-                source=source, kind="service", name="claude-code", path="services/claude-code"
-            ),
+            runtime_class="claude_code",
         )
     agent_id = _public_id(agent.sqid)
 
@@ -1051,12 +1048,12 @@ def test_agent_inference_credential_override_wins_over_model_chain(agents_consol
     """A per-agent ``inference_credential`` overrides the model's integration credential.
 
     Pointing the agent at a connected OAuth credential makes inference authenticate with that
-    token (auth_mode ``oauth``) without touching the model's provider integration — whose own
+    token without touching the model's provider integration — whose own
     credential here is an empty placeholder that otherwise refuses provisioning.
     """
 
     owner = User.objects.create_user(username="agt-ov-owner", email="ov@example.com")
-    provider = _provider("agt-ov-model", material={"api_key": ""}, name="P")
+    provider = _provider("agt-ov-model", backend_class="anthropic", material={"api_key": ""}, name="P")
     oauth_integration = make_integration("agt-ov-oauth", kind=CredentialKind.OAUTH)
     with system_context(reason="test.agents.override.seed"):
         model = InferenceModel.objects.create(
@@ -1064,18 +1061,26 @@ def test_agent_inference_credential_override_wins_over_model_chain(agents_consol
             name="claude-opus-4-8",
         )
         # Without an override the model's empty placeholder credential is unusable.
-        plain = Agent.objects.create(name="Plain", owner=owner, model=model)
+        plain = Agent.objects.create(name="Plain", owner=owner, model=model, runtime_class="claude_code")
         assert plain.inference_secret() == ""
         assert plain.inference_credential_ready() is False
 
         # The per-agent override points at the connected OAuth credential and wins.
         agent = Agent.objects.create(
-            name="Override", owner=owner, model=model, inference_credential=oauth_integration.credential
+            name="Override",
+            owner=owner,
+            model=model,
+            inference_credential=oauth_integration.credential,
+            runtime_class="claude_code",
         )
         assert agent.inference_secret() == "token"
         assert agent.inference_credential_ready() is True
         service_inputs = agent.provision_service_inputs()
-        assert service_inputs["auth_mode"] == "oauth"
+        assert service_inputs["auth_env"] == (
+            f'      ANTHROPIC_AUTH_TOKEN: "${{secret.agent-{agent.sqid}-inference}}"\n'
+            f'      CLAUDE_CODE_OAUTH_TOKEN: "${{secret.agent-{agent.sqid}-inference}}"\n'
+            '      ANTHROPIC_CUSTOM_HEADERS: "anthropic-beta: oauth-2025-04-20"'
+        )
         assert service_inputs["model"] == "claude-opus-4-8"
 
 
@@ -1385,41 +1390,127 @@ def test_mcp_actor_verifier_resolves_bearer_to_the_credential_owner(agents_conso
     assert resolve_actor("") is None
 
 
-def test_provision_service_inputs_credential_drives_auth_mode(agents_console_tables: None) -> None:
-    """The credential kind picks the auth mode (prefer OAuth) and the model rides along."""
+def test_provision_service_inputs_credential_drives_auth_env(agents_console_tables: None) -> None:
+    """The provider backend maps credential kind to service auth env."""
 
     owner = User.objects.create_user(username="agt-svci-owner", email="svci@example.com")
-    static_provider = _provider("agt-svc-static", name="S")
-    oauth_provider = _provider("agt-svc-oauth", kind=CredentialKind.OAUTH, name="O")
+    static_provider = _provider("agt-svc-static", backend_class="anthropic", name="S")
+    oauth_provider = _provider("agt-svc-oauth", backend_class="anthropic", kind=CredentialKind.OAUTH, name="O")
     with system_context(reason="test.agents.provision_inputs.service"):
         static_model = InferenceModel.objects.create(
             provider=static_provider,
             name="claude-3",
         )
-        static_agent = Agent.objects.create(name="Static", owner=owner, model=static_model)
+        static_agent = Agent.objects.create(
+            name="Static", owner=owner, model=static_model, runtime_class="claude_code"
+        )
         static_inputs = static_agent.provision_service_inputs()
 
         oauth_model = InferenceModel.objects.create(
             provider=oauth_provider,
             name="claude-opus-4-8",
         )
-        oauth_agent = Agent.objects.create(name="OAuth", owner=owner, model=oauth_model)
+        oauth_agent = Agent.objects.create(name="OAuth", owner=owner, model=oauth_model, runtime_class="claude_code")
         oauth_inputs = oauth_agent.provision_service_inputs()
 
     assert static_inputs == {
-        "auth_mode": "api_key",
+        "auth_env": f'      ANTHROPIC_API_KEY: "${{secret.agent-{static_agent.sqid}-inference}}"',
         "model": "claude-3",
-        "secret_name": f"agent-{static_agent.sqid}-inference",
     }
-    assert oauth_inputs["auth_mode"] == "oauth"
+    assert oauth_inputs["auth_env"] == (
+        f'      ANTHROPIC_AUTH_TOKEN: "${{secret.agent-{oauth_agent.sqid}-inference}}"\n'
+        f'      CLAUDE_CODE_OAUTH_TOKEN: "${{secret.agent-{oauth_agent.sqid}-inference}}"\n'
+        '      ANTHROPIC_CUSTOM_HEADERS: "anthropic-beta: oauth-2025-04-20"'
+    )
     assert oauth_inputs["model"] == "claude-opus-4-8"
+
+
+def test_provision_service_inputs_opencode_refuses_oauth_credential(agents_console_tables: None) -> None:
+    """OpenCode OAuth is off by default (no plugin in the image), so the pairing is refused."""
+
+    oauth_provider = _provider("agt-oc-oauth", backend_class="anthropic", kind=CredentialKind.OAUTH, name="O")
+    owner = oauth_provider.owner
+    with system_context(reason="test.agents.provision_inputs.opencode_oauth"):
+        model = InferenceModel.objects.create(provider=oauth_provider, name="anthropic/claude-opus-4-8")
+        agent = Agent.objects.create(name="OpenCode OAuth", owner=owner, model=model, runtime_class="opencode")
+        assert agent.inference_credential_ready() is False
+        with pytest.raises(ValueError, match="cannot use a"):
+            agent.provision_service_inputs()
+
+
+@override_settings(ANGEE_OPENCODE_OAUTH_ENABLED=True)
+def test_provision_service_inputs_opencode_oauth_when_enabled(agents_console_tables: None) -> None:
+    """With the opt-in on, OpenCode OAuth syncs a base64 auth.json and the decode env var."""
+
+    oauth_provider = _provider(
+        "agt-oc-oauth-on",
+        backend_class="anthropic",
+        kind=CredentialKind.OAUTH,
+        material={"access_token": "token", "refresh_token": "refresh"},
+        name="O",
+    )
+    owner = oauth_provider.owner
+    with system_context(reason="test.agents.provision_inputs.opencode_oauth_on"):
+        model = InferenceModel.objects.create(provider=oauth_provider, name="anthropic/claude-opus-4-8")
+        agent = Agent.objects.create(name="OC OAuth On", owner=owner, model=model, runtime_class="opencode")
+        assert agent.inference_credential_ready() is True
+        inputs = agent.provision_service_inputs()
+        payload = agent.provision_inference_secret()
+
+    # The service env carries only the base64 blob placeholder (the JSON never appears here).
+    assert inputs["auth_env"] == f'      ANGEE_OPENCODE_AUTH_B64: "${{secret.agent-{agent.sqid}-inference}}"'
+    # The synced secret is base64 of OpenCode's auth.json for the Anthropic OAuth credential.
+    decoded = json.loads(base64.b64decode(payload))
+    assert decoded == {"anthropic": {"type": "oauth", "refresh": "refresh", "access": "token", "expires": 0}}
+
+
+@override_settings(ANGEE_OPENCODE_OAUTH_ENABLED=True)
+def test_provision_service_inputs_opencode_oauth_requires_refresh_token(agents_console_tables: None) -> None:
+    """An OAuth credential with no refresh token can't be refreshed in-container, so it's refused."""
+
+    oauth_provider = _provider(
+        "agt-oc-oauth-norefresh",
+        backend_class="anthropic",
+        kind=CredentialKind.OAUTH,
+        material={"access_token": "token"},
+        name="O",
+    )
+    owner = oauth_provider.owner
+    with system_context(reason="test.agents.provision_inputs.opencode_oauth_norefresh"):
+        model = InferenceModel.objects.create(provider=oauth_provider, name="anthropic/claude-opus-4-8")
+        agent = Agent.objects.create(name="OC No Refresh", owner=owner, model=model, runtime_class="opencode")
+        assert agent.inference_credential_ready() is False
+        with pytest.raises(ValueError, match="cannot use a"):
+            agent.provision_service_inputs()
+
+
+def test_provision_service_inputs_workspace_only_runtime_skips_service_auth(agents_console_tables: None) -> None:
+    """A model-backed workspace-only (``none``) agent is ready and renders no service auth.
+
+    The readiness gate allows a workspace-only runtime regardless of credential kind, so the
+    plan builder must agree: it emits no ``auth_env`` and syncs no inference secret (there is
+    no service container to consume them) rather than raising at plan time.
+    """
+
+    oauth_provider = _provider("agt-none-oauth", backend_class="anthropic", kind=CredentialKind.OAUTH, name="O")
+    owner = oauth_provider.owner
+    with system_context(reason="test.agents.provision_inputs.workspace_only"):
+        model = InferenceModel.objects.create(provider=oauth_provider, name="anthropic/claude-opus-4-8")
+        # runtime_class defaults to "none" (workspace-only) — an OAuth credential no service
+        # runtime could consume must not strand provisioning.
+        agent = Agent.objects.create(name="Workspace Only", owner=owner, model=model)
+        assert agent.inference_credential_ready() is True
+        inputs = agent.provision_service_inputs()
+        assert agent.provision_inference_secret() == ""
+
+    assert "auth_env" not in inputs
 
 
 def test_claude_code_service_inputs_use_provider_model_name(agents_console_tables: None) -> None:
     """Claude Code talks to Anthropic directly, so broker aliases render as provider ids."""
 
     owner = User.objects.create_user(username="agt-cc-model-agent-owner", email="cc-model@example.com")
-    provider = _provider("agt-cc-model", name="Anthropic")
+    provider = _provider("agt-cc-model", backend_class="anthropic", name="Anthropic")
     with system_context(reason="test.agents.provision_inputs.claude_code_model.seed"):
         model = InferenceModel.objects.create(
             provider=provider,
@@ -1441,33 +1532,28 @@ def test_opencode_service_inputs_keep_selected_broker_model(agents_console_table
     """OpenCode expects the provider/model handle, so the selected catalogue row renders as-is."""
 
     owner = User.objects.create_user(username="agt-oc-model-agent-owner", email="oc-model@example.com")
-    provider = _provider("agt-oc-model", name="Anthropic")
-    vcs = _vcs_bridge("agt-oc-model-tpl", config={"stub_repos": REPOS})
-    vcs.discover_repositories()
+    provider = _provider("agt-oc-model", backend_class="anthropic", name="Anthropic")
     with system_context(reason="test.agents.provision_inputs.opencode_model"):
-        repository = Repository.objects.get(name="acme/widgets")
-        source = Source.objects.create(repository=repository, kind="template", path="templates")
-        service_template = Template.objects.create(
-            source=source, kind="service", name="opencode", path="services/opencode"
-        )
         model = InferenceModel.objects.create(
             provider=provider,
             name="anthropic/claude-opus-4-8",
             config={"provider_model": "claude-opus-4-8", "broker_name": "anthropic"},
         )
-        agent = Agent.objects.create(name="OpenCode", owner=owner, service_template=service_template, model=model)
+        agent = Agent.objects.create(name="OpenCode", owner=owner, runtime_class="opencode", model=model)
 
         assert agent.provision_service_inputs()["model"] == "anthropic/claude-opus-4-8"
 
 
 def _provisionable_agent(owner: Any, name: str, *, slug: str, **agent_fields: Any) -> Any:
-    """Seed an agent with workspace + service templates for provisioning-flow tests.
+    """Seed an agent with a workspace template and a service runtime for provisioning tests.
 
-    ``agent_fields`` set the starting instance state (e.g. ``workspace``/``service``/
-    ``lifecycle``/``runtime_status``) so a reprovision/deprovision test can begin from an
-    already-provisioned row.
+    Defaults to the ``claude_code`` runtime (overridable via ``agent_fields``); the runtime
+    declares the service template the daemon resolves by name. ``agent_fields`` set the
+    starting instance state (e.g. ``workspace``/``service``/``lifecycle``/``runtime_status``)
+    so a reprovision/deprovision test can begin from an already-provisioned row.
     """
 
+    agent_fields.setdefault("runtime_class", "claude_code")
     vcs = _vcs_bridge(slug, config={"stub_repos": REPOS})
     vcs.discover_repositories()
     with system_context(reason="test.agents.provisionable.seed"):
@@ -1476,14 +1562,10 @@ def _provisionable_agent(owner: Any, name: str, *, slug: str, **agent_fields: An
         workspace_template = Template.objects.create(
             source=source, kind="workspace", name="agent-default", path="workspaces/agent-default"
         )
-        service_template = Template.objects.create(
-            source=source, kind="service", name="claude-code", path="services/claude-code"
-        )
         return Agent.objects.create(
             name=name,
             owner=owner,
             workspace_template=workspace_template,
-            service_template=service_template,
             **agent_fields,
         )
 

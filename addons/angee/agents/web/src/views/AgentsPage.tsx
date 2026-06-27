@@ -280,7 +280,7 @@ function AgentResourceListPage({
         <Group label={labels.modelTemplates} columns={2}>
           <Field name="model" />
           <Field name="owner" createOnly />
-          <Field name="service_template" />
+          <Field name="runtime_class" />
           <Field name="workspace_template" />
         </Group>
         <Group label={labels.provisioningInputs} columns={2}>

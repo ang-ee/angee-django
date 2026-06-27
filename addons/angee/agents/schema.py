@@ -171,7 +171,7 @@ class AgentType(AngeeNode):
     skills: list[SkillType]
     mcp_servers: list[MCPServerType]
     mcp_tools: list[MCPToolType]
-    service_template: TemplateType | None
+    runtime_class: auto
     workspace_template: TemplateType | None
     service_inputs: JSON
     workspace_inputs: JSON
@@ -274,7 +274,7 @@ _AGENT_RESOURCE = hasura_model_resource(
         "skills",
         "mcp_servers",
         "mcp_tools",
-        "service_template",
+        "runtime_class",
         "workspace_template",
         "service_inputs",
         "workspace_inputs",
@@ -290,7 +290,7 @@ _AGENT_RESOURCE = hasura_model_resource(
         "skills",
         "mcp_servers",
         "mcp_tools",
-        "service_template",
+        "runtime_class",
         "workspace_template",
         "service_inputs",
         "workspace_inputs",
@@ -303,7 +303,6 @@ _AGENT_RESOURCE = hasura_model_resource(
         "skills": public_pk_decoder(Skill),
         "mcp_servers": public_pk_decoder(MCPServer),
         "mcp_tools": public_pk_decoder(MCPTool),
-        "service_template": public_pk_decoder(Template),
         "workspace_template": public_pk_decoder(Template),
     },
     write_backend=AngeeHasuraWriteBackend(
@@ -315,7 +314,6 @@ _AGENT_RESOURCE = hasura_model_resource(
             "skills": Skill,
             "mcp_servers": MCPServer,
             "mcp_tools": MCPTool,
-            "service_template": Template,
             "workspace_template": Template,
         },
         delete_guard=lambda agent: agent.delete_blocker(),
@@ -583,7 +581,7 @@ def _agent_for_view(view: dict[str, Any]) -> Any:
         return (
             Agent.objects.filter(owner_id=user_id, is_template=False, runtime_status=RuntimeStatus.RUNNING)
             .exclude(service="")
-            .select_related("model", "service_template")
+            .select_related("model")
             .order_by("-updated_at")
             .first()
         )
@@ -637,7 +635,7 @@ class AgentActionMutation:
             Agent,
             id,
             reason="agents.graphql.agent_chat_endpoint",
-            select_related=("model", "service_template"),
+            select_related=("model",),
         )
         session = _mint_session(agent)
         return AgentChatEndpoint(
