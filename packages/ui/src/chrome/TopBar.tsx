@@ -24,6 +24,10 @@ export interface TopBarProps {
   menuItems?: TopMenuProps["items"];
   onHelp?: () => void;
   onNotifications?: () => void;
+  primaryPane?: {
+    collapsed: boolean;
+    toggle: () => void;
+  };
   searchPlaceholder?: string;
   showChatterToggle?: boolean;
   showUserMenu?: boolean;
@@ -41,6 +45,7 @@ export function TopBar({
   menuItems,
   onHelp,
   onNotifications,
+  primaryPane,
   searchPlaceholder,
   showChatterToggle = false,
   showUserMenu = false,
@@ -61,6 +66,7 @@ export function TopBar({
       )}
     >
       {brand}
+      {primaryPane ? <PrimaryPaneToggleButton pane={primaryPane} /> : null}
       <TopMenu
         tabs={topMenu}
         items={menuItems}
@@ -86,6 +92,34 @@ export function TopBar({
       {trailing}
       {showChatterToggle ? <ChatterToggleButton /> : null}
     </header>
+  );
+}
+
+function PrimaryPaneToggleButton({
+  pane,
+}: {
+  pane: NonNullable<TopBarProps["primaryPane"]>;
+}): ReactElement {
+  const t = useBaseT();
+  const open = !pane.collapsed;
+  const label = open
+    ? t("chrome.collapsePrimaryPane")
+    : t("chrome.openPrimaryPane");
+  return (
+    <Tooltip label={label}>
+      <Button
+        type="button"
+        variant="icon"
+        size="iconSm"
+        active={open}
+        aria-label={label}
+        aria-pressed={open}
+        onClick={pane.toggle}
+        className="text-on-rail-mut hover:bg-rail-hi hover:text-on-rail-hi"
+      >
+        <Glyph name="panel-left" />
+      </Button>
+    </Tooltip>
   );
 }
 

@@ -22,10 +22,9 @@ import {
  * so its consumers migrate mechanically (`navigator`→`primary`, `aside`→
  * `secondary`, `navigatorSize`→`primarySize`, `asideSize`→`secondarySize`).
  *
- * The collapsible secondary pane is driven by a `useCollapsiblePane` controller
- * that the Workbench surfaces upward through `onSecondaryController`, so a
- * sibling chrome toggle (e.g. the console TopBar) can collapse/expand it and
- * stay in sync with drag-to-collapse.
+ * Collapsible panes are driven by `useCollapsiblePane` controllers that the
+ * Workbench can surface upward, so sibling chrome toggles (e.g. the console
+ * TopBar) can collapse/expand them and stay in sync with drag-to-collapse.
  */
 export interface WorkbenchProps {
   /** Primary (left) sidebar pane — e.g. a navigator/sub-nav tree. */
@@ -40,6 +39,8 @@ export interface WorkbenchProps {
   primarySize?: number;
   /** Secondary pane default width, percent. */
   secondarySize?: number;
+  /** Receives the primary pane's collapse controller (or null on unmount). */
+  onPrimaryController?: (controller: CollapsiblePane | null) => void;
   /** Receives the secondary pane's collapse controller (or null on unmount). */
   onSecondaryController?: (controller: CollapsiblePane | null) => void;
   className?: string;
@@ -51,10 +52,11 @@ export interface WorkbenchProps {
 function usePublishedController(
   controller: CollapsiblePane,
   publish: ((controller: CollapsiblePane | null) => void) | undefined,
+  active: boolean,
 ): void {
   React.useEffect(() => {
-    publish?.(controller);
-  }, [publish, controller]);
+    publish?.(active ? controller : null);
+  }, [publish, controller, active]);
   React.useEffect(() => () => publish?.(null), [publish]);
 }
 
@@ -65,16 +67,19 @@ export function Workbench({
   autoSave,
   primarySize = 18,
   secondarySize = 26,
+  onPrimaryController,
   onSecondaryController,
   className,
 }: WorkbenchProps): React.ReactElement {
-  // The controller stays inert when the secondary pane is not rendered (its
-  // imperative handle simply never mounts).
-  const secondaryController = useCollapsiblePane();
-  usePublishedController(secondaryController, onSecondaryController);
-
   const hasPrimary = primary != null;
   const hasSecondary = secondary != null;
+
+  // Controllers stay inert when their pane is not rendered (their imperative
+  // handles simply never mount).
+  const primaryController = useCollapsiblePane();
+  const secondaryController = useCollapsiblePane();
+  usePublishedController(primaryController, onPrimaryController, hasPrimary);
+  usePublishedController(secondaryController, onSecondaryController, hasSecondary);
 
   // No panes → a plain content frame, no resize machinery (Explorer's pattern).
   if (!hasPrimary && !hasSecondary) {
@@ -106,6 +111,8 @@ export function Workbench({
             defaultSize={primarySize}
             minSize={12}
             collapsible
+            panelRef={primaryController.panelRef}
+            onResize={primaryController.onResize}
             className="min-h-0 min-w-0 border-r border-border-subtle bg-sheet-2"
           >
             {primary}

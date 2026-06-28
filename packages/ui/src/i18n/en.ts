@@ -158,6 +158,8 @@ export const enBaseMessages: Record<string, string> = {
   "chrome.primaryNav": "Primary navigation",
   "chrome.sectionNav": "Section navigation",
   "chrome.collectionViews": "Collection views",
+  "chrome.collapsePrimaryPane": "Collapse primary panel",
+  "chrome.openPrimaryPane": "Open primary panel",
   "chrome.collapseChatter": "Collapse chatter",
   "chrome.openChatter": "Open chatter",
   "form.saveFailed": "Save failed",
