@@ -108,7 +108,7 @@ export function SecretsSection(): ReactNode {
         field: "envVar",
         header: t("operator.secrets.column.envVar"),
         render: (secret) => (
-          <span className={cn(textRoleVariants({ role: "meta" }), "font-mono")}>{secret.envVar ?? "—"}</span>
+          <span className={textRoleVariants({ role: "meta", mono: true })}>{secret.envVar ?? "—"}</span>
         ),
       },
       {

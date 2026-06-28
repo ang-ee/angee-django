@@ -73,7 +73,7 @@ export function GitOpsSection(): ReactNode {
         align: "right",
         sortable: false,
         render: (link) => (
-          <span className="text-13 tabular-nums text-fg-muted">
+          <span className={textRoleVariants({ role: "meta", numeric: true })}>
             ↑{link.ahead ?? 0} ↓{link.behind ?? 0}
           </span>
         ),

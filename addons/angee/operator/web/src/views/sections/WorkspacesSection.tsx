@@ -62,7 +62,7 @@ export function WorkspacesSection({ names }: WorkspacesSectionProps = {}): React
         field: "path",
         header: t("operator.workspaces.column.path"),
         render: (workspace) => (
-          <span className={cn(textRoleVariants({ role: "meta" }), "font-mono")}>{workspace.path}</span>
+          <span className={textRoleVariants({ role: "meta", mono: true })}>{workspace.path}</span>
         ),
       },
       {
@@ -70,7 +70,7 @@ export function WorkspacesSection({ names }: WorkspacesSectionProps = {}): React
         header: t("operator.workspaces.column.port"),
         align: "right",
         render: (workspace) => (
-          <span className="text-13 tabular-nums text-fg-muted">
+          <span className={textRoleVariants({ role: "meta", numeric: true })}>
             {workspace.processComposePort ?? "—"}
           </span>
         ),
@@ -189,7 +189,7 @@ export function WorkspaceSources({
         field: "path",
         header: t("operator.workspaceSources.column.path"),
         render: (source) => (
-          <span className={cn(textRoleVariants({ role: "meta" }), "block max-w-80 truncate font-mono")}>
+          <span className={cn(textRoleVariants({ role: "meta", mono: true, truncate: true }), "block max-w-80")}>
             {source.path}
           </span>
         ),

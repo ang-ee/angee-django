@@ -3,6 +3,7 @@ import { format } from "date-fns";
 import type { Row } from "@angee/resources";
 
 import { cn } from "../lib/cn";
+import { SectionEyebrow } from "../ui/section-eyebrow";
 import { TimelineEntry } from "../fragments/TimelineEntry";
 import { dateFromUnknown } from "../widgets/date-format";
 import { ListEmpty } from "./ListInternals";
@@ -74,9 +75,9 @@ export function TimelineView<TRow extends Row = Row>({
       <ol className="mx-auto flex max-w-3xl flex-col gap-6">
         {groups.map((group) => (
           <li key={group.key} className="space-y-3">
-            <h3 className="sticky top-0 bg-canvas py-1 text-2xs font-semibold uppercase tracking-wider text-fg-muted">
+            <SectionEyebrow as="h3" tracking="wider" className="sticky top-0 bg-canvas py-1">
               {format(group.date, "EEEE, MMMM d, yyyy")}
-            </h3>
+            </SectionEyebrow>
             <ol className="flex flex-col gap-2">
               {group.rows.map((row, index) => {
                 const id = String(row[rowKey] ?? `entry-${index}`);

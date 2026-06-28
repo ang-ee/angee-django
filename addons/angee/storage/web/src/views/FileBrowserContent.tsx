@@ -1,6 +1,6 @@
 import { useMemo, useRef, type ReactElement, type ReactNode } from "react";
 
-import { Button, Glyph, RowsListView, UploadDropTarget, cn } from "@angee/ui";
+import { Button, Glyph, RowsListView, SectionEyebrow, UploadDropTarget, cn } from "@angee/ui";
 
 import { useStorageT } from "../i18n";
 import { fileDragPayload, type StorageFileRow } from "../data/file-rows";
@@ -118,9 +118,9 @@ function UploadStrip({
   return (
     <div className="flex max-h-32 flex-col gap-1 overflow-auto border-b border-border-subtle bg-sheet-2 px-3 py-2">
       <div className="flex items-center justify-between">
-        <span className="text-2xs font-semibold uppercase tracking-wide text-fg-muted">
+        <SectionEyebrow as="span">
           {t("storage.upload.heading")}
-        </span>
+        </SectionEyebrow>
         <Button type="button" size="sm" variant="ghost" onClick={onClear}>
           {t("storage.upload.clearFinished")}
         </Button>

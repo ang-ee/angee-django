@@ -20,6 +20,7 @@ import {
   PopoverRoot,
   PopoverTrigger,
 } from "../ui/popover";
+import { SectionEyebrow } from "../ui/section-eyebrow";
 import { textRoleVariants } from "../ui/text";
 import { Tooltip } from "../ui/tooltip";
 import { AngeeMark } from "./AngeeMark";
@@ -215,9 +216,9 @@ function AppChooserGroup({
   if (!items.length) return null;
   return (
     <section>
-      <h3 className="mb-2 px-1 text-2xs font-semibold uppercase text-fg-muted">
+      <SectionEyebrow as="h3" tracking="normal" className="mb-2 px-1">
         {title}
-      </h3>
+      </SectionEyebrow>
       <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
         {items.map((item) => (
           <AppChooserTile

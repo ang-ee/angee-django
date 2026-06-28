@@ -1,6 +1,6 @@
 import { type ReactElement } from "react";
 
-import { cn, EmptyState, Glyph, textRoleVariants } from "@angee/ui";
+import { cn, EmptyState, Glyph, SectionEyebrow, textRoleVariants } from "@angee/ui";
 
 import { useKnowledgeT } from "../i18n";
 import type { Backlink } from "../data/documents";
@@ -34,9 +34,9 @@ export function BacklinksPanel({
 
   return (
     <div className="flex h-full flex-col gap-1 overflow-auto p-3">
-      <h3 className="px-1 pb-1 text-2xs font-semibold uppercase tracking-wide text-fg-muted">
+      <SectionEyebrow as="h3" className="px-1 pb-1">
         {t("knowledge.backlinks.heading")} · {backlinks.length}
-      </h3>
+      </SectionEyebrow>
       {backlinks.map((backlink) => (
         <button
           key={`${backlink.page}:${backlink.display_text}`}

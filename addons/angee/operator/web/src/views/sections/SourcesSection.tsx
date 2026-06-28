@@ -41,7 +41,7 @@ export function SourcesSection(): ReactNode {
         header: t("operator.sources.column.aheadBehind"),
         align: "right",
         render: (source) => (
-          <span className="text-13 tabular-nums text-fg-muted">
+          <span className={textRoleVariants({ role: "meta", numeric: true })}>
             ↑{source.ahead ?? 0} ↓{source.behind ?? 0}
           </span>
         ),

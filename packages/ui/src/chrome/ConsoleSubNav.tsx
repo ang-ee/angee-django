@@ -3,6 +3,7 @@ import { Link, useRouterState } from "@tanstack/react-router";
 
 import { useBaseT } from "../i18n";
 import { cn } from "../lib/cn";
+import { SectionEyebrow } from "../ui/section-eyebrow";
 import type { ChromeMenuNode } from "./menu-tree";
 import { useChromeMenuTree } from "./refine-menu";
 
@@ -69,9 +70,9 @@ function SubNavGroup({
 }): ReactElement {
   return (
     <div className="mt-3 first:mt-0">
-      <div className="px-2 pb-1 text-2xs font-semibold uppercase tracking-wide text-fg-muted">
+      <SectionEyebrow as="p" spacing="menu">
         {group.displayLabel}
-      </div>
+      </SectionEyebrow>
       {group.targetedChildren.map((child) => (
         <SubNavLink key={child.id} item={child} pathname={pathname} />
       ))}
