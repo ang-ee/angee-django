@@ -588,6 +588,32 @@ def _agent_for_view(view: dict[str, Any]) -> Any:
 
 
 @strawberry.type
+class AgentSessionQuery:
+    """Authenticated agent session queries for chat surfaces."""
+
+    @strawberry.field
+    def resolve_session_for_view(self, view: JSON) -> AgentSession | None:
+        """Resolve the agent that serves the user's current view, for the side chatter.
+
+        The chatter knows the *view*, not the agent: this picks the actor's running agent
+        (``view["type"]`` is the routing seam for a later view-specialised agent) so the
+        client can mint its chat endpoint (``agentChatEndpoint``). Returns ``None`` when the
+        user has no running agent, so the chatter shows a call-to-action instead of erroring.
+        """
+
+        agent = _agent_for_view(dict(view) if isinstance(view, dict) else {})
+        if agent is None:
+            return None
+        model = getattr(agent, "model", None)
+        return AgentSession(
+            agent_id=PublicID(str(agent.sqid)),
+            agent_name=str(agent.name),
+            status=str(agent.runtime_status),
+            model_handle=str(agent.service_model_handle()) if model is not None else "",
+        )
+
+
+@strawberry.type
 class InferenceActionMutation:
     """Operational actions on an inference provider."""
 
@@ -646,27 +672,6 @@ class AgentActionMutation:
             model_handle=str(agent.service_model_handle()),
         )
 
-    @strawberry.mutation
-    def resolve_session_for_view(self, view: JSON) -> AgentSession | None:
-        """Resolve the agent that serves the user's current view, for the side chatter.
-
-        The chatter knows the *view*, not the agent: this picks the actor's running agent
-        (``view["type"]`` is the routing seam for a later view-specialised agent) so the
-        client can mint its chat endpoint (``agentChatEndpoint``). Returns ``None`` when the
-        user has no running agent, so the chatter shows a call-to-action instead of erroring.
-        """
-
-        agent = _agent_for_view(dict(view) if isinstance(view, dict) else {})
-        if agent is None:
-            return None
-        model = getattr(agent, "model", None)
-        return AgentSession(
-            agent_id=PublicID(str(agent.sqid)),
-            agent_name=str(agent.name),
-            status=str(agent.runtime_status),
-            model_handle=str(agent.service_model_handle()) if model is not None else "",
-        )
-
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def render_agent_prompt(self, id: PublicID, view: JSON) -> str:
         """Render the ``<system_context>`` block for an agent and the user's open view.
@@ -708,6 +713,7 @@ _CONSOLE_TYPES: list[object] = [
 schemas = {
     "console": {
         "query": [
+            AgentSessionQuery,
             _AGENT_RESOURCE.query,
             _SKILL_RESOURCE.query,
             _MCP_SERVER_RESOURCE.query,

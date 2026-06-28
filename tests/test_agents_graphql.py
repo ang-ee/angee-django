@@ -1203,13 +1203,13 @@ def test_resolve_session_for_view_resolves_the_actors_running_agent(
         # A draft agent for the same owner is not eligible (not running).
         Agent.objects.create(name="Draft", owner=admin)
 
-    mutation = """
-        mutation Session($view: JSON!) {
+    query = """
+        query Session($view: JSON!) {
           resolve_session_for_view(view: $view) { agent_name status model_handle }
         }
     """
     view = {"kind": "record", "type": "notes/note", "sqid": "nte_x"}
-    session = _data(_execute(console := _schema(), mutation, {"view": view}, user=admin))["resolve_session_for_view"]
+    session = _data(_execute(console := _schema(), query, {"view": view}, user=admin))["resolve_session_for_view"]
 
     assert session["agent_name"] == "Sidekick"
     assert session["status"] == "running"
@@ -1217,13 +1217,13 @@ def test_resolve_session_for_view_resolves_the_actors_running_agent(
 
     # A platform admin with no running agent gets null, not an error.
     other = _platform_admin("agt-session-none")
-    none_session = _data(_execute(console, mutation, {"view": view}, user=other))["resolve_session_for_view"]
+    none_session = _data(_execute(console, query, {"view": view}, user=other))["resolve_session_for_view"]
     assert none_session is None
 
     # The side chatter is actor-scoped, not admin-scoped: a normal user with no
     # running agent also gets null instead of a permission error.
     viewer = User.objects.create_user(username="agt-session-viewer", email="viewer@example.com")
-    viewer_session = _data(_execute(console, mutation, {"view": view}, user=viewer))["resolve_session_for_view"]
+    viewer_session = _data(_execute(console, query, {"view": view}, user=viewer))["resolve_session_for_view"]
     assert viewer_session is None
 
 

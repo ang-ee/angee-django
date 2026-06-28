@@ -78,6 +78,7 @@ export interface AngeeSchemaMetadata {
 export interface DataResourceMetadata {
   schemaName: string;
   modelLabel: string;
+  resourceType?: string | null;
   appLabel: string;
   modelName: string;
   publicIdField: string;

@@ -96,6 +96,7 @@ class HasuraResourceThing(AngeeDataModel):
 
         app_label = "tests"
         ordering = ("-word_count", "name")
+        rebac_resource_type = "tests/hasura_resource_thing"
 
 
 class MeasureOpsThing(AngeeDataModel):
@@ -176,6 +177,7 @@ def test_hasura_resource_attaches_angee_resource_metadata() -> None:
     metadata = schema.angee_resources[0]
     fields = {field.name: field for field in metadata.fields}
 
+    assert metadata.resource_type == "tests/hasura_resource_thing"
     assert metadata.roots == DataResourceRoots(
         list_name="things",
         detail_name="things_by_pk",

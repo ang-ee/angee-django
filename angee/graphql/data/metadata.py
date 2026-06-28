@@ -10,6 +10,7 @@ from typing import Any, cast
 
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
+from rebac.resources import model_resource_type
 from strawberry.types import get_object_definition
 from strawberry.types.base import StrawberryList, StrawberryOptional
 from strawberry.types.enum import StrawberryEnumDefinition
@@ -206,6 +207,7 @@ class DataResourceMetadata:
 
     model: type[models.Model] | None = dataclasses.field(metadata={"wire": False})
     model_label: str
+    resource_type: str | None
     app_label: str
     model_name: str
     public_id_field: str
@@ -371,6 +373,7 @@ def make_data_resource_metadata(
     return DataResourceMetadata(
         model=model,
         model_label=exposed_model_label,
+        resource_type=model_resource_type(model) if model is not None else None,
         app_label=app_label,
         model_name=model_name,
         public_id_field=public_id_field,
@@ -528,6 +531,7 @@ def _merge_data_resource(
     return DataResourceMetadata(
         model=left.model,
         model_label=left.model_label,
+        resource_type=left.resource_type or right.resource_type,
         app_label=left.app_label,
         model_name=left.model_name,
         public_id_field=cast(
