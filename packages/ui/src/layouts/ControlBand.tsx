@@ -28,7 +28,7 @@ export interface ControlBandProviderProps {
   host: HTMLElement | null | undefined;
 }
 
-/** Provide the console control-band host for the bands rendered below. */
+/** Provide the control-band host (`area-control`) for the bands rendered below. */
 export const ControlBandProvider: (
   props: ControlBandProviderProps,
 ) => React.ReactElement = band.Provider;
@@ -40,8 +40,8 @@ export interface ControlBandProps {
 
 /**
  * Renders its children as the page's flush control band in the layout's
- * control-band host. Under a `ConsoleLayout` it portals into the console content
- * stack; with no layout above (standalone/test) it renders the band inline.
+ * `area-control` row. Under a `ConsoleLayout` it portals into that row; with no
+ * layout above (standalone/test) it renders the band inline.
  */
 export const ControlBand: (
   props: ControlBandProps,

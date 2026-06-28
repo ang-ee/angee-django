@@ -63,15 +63,17 @@ export function ConsoleLayout({
                 showChatterToggle={showChatter}
                 showUserMenu
               />
+              <Breadcrumb className="area-crumbs" />
+              <div ref={setControlHost} className="area-control" />
               <ConsoleWorkbench
                 showSubNav={showSubNav}
                 showChatter={showChatter}
                 onPrimaryController={setPrimaryController}
-                setControlHost={setControlHost}
-                setStatusHost={setStatusHost}
               >
                 {children}
               </ConsoleWorkbench>
+              {/* Optional statusline; the row collapses while this host is empty. */}
+              <div ref={setStatusHost} className="area-status" />
             </div>
           </BreadcrumbLabelProvider>
         </StatuslineProvider>
@@ -81,24 +83,23 @@ export function ConsoleLayout({
 }
 
 /**
- * The console region under the top bar: the single `Workbench` every console
- * page flows through. Its primary/secondary panes span from the top bar to the
- * bottom edge; the content pane owns the vertical chrome stack (breadcrumbs,
- * control band, page body, optional statusline).
+ * The console content region: the single `Workbench` every console page flows
+ * through — the settings sub-nav as the (collapsible) primary pane, the page as
+ * the content, and the Chatter as the (collapsible) secondary pane. Lives inside
+ * `ChatterProvider` so it can register the secondary pane's collapse controller
+ * with the chatter bridge, letting the chrome `TopBar` toggle drive it (and stay
+ * in sync with drag-to-collapse). The primary pane's controller is surfaced up to
+ * `ConsoleLayout` so the TopBar's left-panel toggle drives the sub-nav too.
  */
 function ConsoleWorkbench({
   showSubNav,
   showChatter,
   onPrimaryController,
-  setControlHost,
-  setStatusHost,
   children,
 }: {
   showSubNav: boolean;
   showChatter: boolean;
   onPrimaryController: (controller: CollapsiblePane | null) => void;
-  setControlHost: (node: HTMLDivElement | null) => void;
-  setStatusHost: (node: HTMLDivElement | null) => void;
   children: React.ReactNode;
 }): React.ReactElement {
   const { registerSecondaryController } = useChatter();
@@ -111,15 +112,9 @@ function ConsoleWorkbench({
       onPrimaryController={onPrimaryController}
       onSecondaryController={registerSecondaryController}
     >
-      <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
-        <Breadcrumb />
-        <div ref={setControlHost} className="area-control min-w-0 shrink-0" />
-        {/* The shell owns the content scroll boundary, as the old `main` did; a
-            full-height page (e.g. a nested Workbench) fills it without scrolling. */}
-        <main className="min-h-0 min-w-0 flex-1 overflow-auto">{children}</main>
-        {/* Optional statusline; this host collapses while empty. */}
-        <div ref={setStatusHost} className="area-status min-w-0 shrink-0" />
-      </div>
+      {/* The content `main` landmark owns the scroll boundary; a full-height page
+          (e.g. a nested Workbench) fills it without scrolling. */}
+      <main className="h-full min-h-0 overflow-auto">{children}</main>
     </Workbench>
   );
 }

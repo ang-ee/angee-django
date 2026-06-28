@@ -27,7 +27,7 @@ export interface StatuslineProviderProps {
   host: HTMLElement | null | undefined;
 }
 
-/** Provide the console statusline host for the bar rendered below. */
+/** Provide the statusline host (`area-status`) for the bar rendered below. */
 export const StatuslineProvider: (
   props: StatuslineProviderProps,
 ) => React.ReactElement = band.Provider;
@@ -39,12 +39,11 @@ export interface StatuslineProps {
 }
 
 /**
- * The page's flush statusline in the layout's statusline host — a low-profile
+ * The page's flush statusline in the layout's `area-status` row — a low-profile
  * bottom bar of `StatusSegment`s (save state, counts, sync, cursor, …). It is
- * opt-in: a page renders `<Statusline>` to fill the host, which otherwise stays
- * collapsed. Under a `ConsoleLayout` it portals into the console content stack;
- * standalone it renders inline. Use `<StatuslineSpacer />` to push trailing
- * segments right.
+ * opt-in: a page renders `<Statusline>` to fill the row, which otherwise stays
+ * collapsed. Under a `ConsoleLayout` it portals into `area-status`; standalone
+ * it renders inline. Use `<StatuslineSpacer />` to push trailing segments right.
  */
 export const Statusline: (
   props: StatuslineProps,

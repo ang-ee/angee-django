@@ -371,25 +371,37 @@
 /* ============================================================================
    ConsoleLayout grid utilities — declared via Tailwind 4 @utility so the
    layout sets layout with single class names instead of arbitrary-value
-   tuples.
+   tuples. The named-area utilities (area-rail, area-topbar, ...) match the
+   regions declared in console-grid's grid-template-areas.
    ============================================================================ */
-/* A fixed rail + the application column. The top bar stays fixed; everything
-   below it is the console Workbench, whose content pane owns breadcrumbs,
-   control band, page body, and statusline while its side panes span that whole
-   below-topbar region. */
+/* A fixed rail + a content column. The settings sub-nav and the Chatter are no
+   longer grid columns: they ride the content region's Workbench panes
+   (collapsible + resizable + size-persistent), so the shell grid is just the
+   rail and the chrome rows stacked above the content. */
 @utility console-grid {
   display: grid;
   grid-template-columns: var(--spacing-rail-w) 1fr;
+  /* The trailing `auto` status row collapses to zero height when its host is
+     empty, so the optional statusline costs nothing for pages that omit it. */
   grid-template-rows:
     var(--spacing-topbar-h)
-    1fr;
+    var(--spacing-crumbs-h)
+    auto
+    1fr
+    auto;
   grid-template-areas:
     "rail topbar"
-    "rail content";
+    "rail crumbs"
+    "rail control"
+    "rail content"
+    "rail status";
 }
 @utility area-rail    { grid-area: rail; }
 @utility area-topbar  { grid-area: topbar; }
+@utility area-crumbs  { grid-area: crumbs; }
+@utility area-control { grid-area: control; }
 @utility area-content { grid-area: content; }
+@utility area-status  { grid-area: status; }
 
 /* ============================================================================
    Decorative grid background — two intersecting 1px lines repeated on a
