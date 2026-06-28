@@ -81,8 +81,7 @@ function BreadcrumbTrail({
           gap: 1,
           text: "13-muted",
         }),
-        // Grid placement + stacking stay bar-specific.
-        "area-crumbs z-breadcrumb",
+        "z-breadcrumb",
         className,
       )}
     >
