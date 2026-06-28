@@ -13,6 +13,11 @@ export function enOperatorBundleForMenu(
   return { operator: titles } satisfies I18nResources;
 }
 
+// The logs drawer's rail-tab label + overlay aria-label. The drawer manifest is
+// static (no hook context to call `useOperatorT`), so the title is a constant the
+// `operator` namespace also publishes (below) — one source of the copy.
+export const operatorLogsDrawerTitle = "Logs";
+
 /**
  * The operator console's copy beyond the section titles (those come from
  * `enOperatorBundleForMenu`): table headers, row/stack action labels, empty and
@@ -28,6 +33,14 @@ export const enOperatorMessages: Record<string, string> = {
   "operator.logs.connecting": "Connecting",
   "operator.logs.error": "Disconnected",
   "operator.logs.empty": "Waiting for log output…",
+
+  // Logs drawer (console-shell drawer adopter).
+  "operator.logs.drawerTitle": operatorLogsDrawerTitle,
+  "operator.logs.target.label": "Log source",
+  "operator.logs.target.placeholder": "Select a service or workspace…",
+  "operator.logs.target.empty.title": "No log source selected",
+  "operator.logs.target.empty.description":
+    "Pick a service or workspace to stream its logs.",
 
   // Transport / connection states.
   "operator.transport.connecting": "Connecting to operator",

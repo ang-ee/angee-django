@@ -7,8 +7,13 @@ import {
   OPERATOR_PROVIDER,
 } from "./data/operator-provider";
 import { OperatorTransportProvider } from "./data/transport";
-import { enOperatorBundleForMenu, enOperatorMessages } from "./i18n";
-import { OperatorGlyph } from "./OperatorGlyph";
+import {
+  enOperatorBundleForMenu,
+  enOperatorMessages,
+  operatorLogsDrawerTitle,
+} from "./i18n";
+import { OperatorGlyph, OperatorLogsGlyph } from "./OperatorGlyph";
+import { OperatorLogsDrawer } from "./views/sections/LogsDrawer";
 import {
   GitOpsSection,
 } from "./views/sections/GitOpsSection";
@@ -190,7 +195,20 @@ const operator = defineBaseAddon({
       ...enOperatorMessages,
     },
   },
-  icons: { operator: OperatorGlyph },
+  icons: { operator: OperatorGlyph, "operator-logs": OperatorLogsGlyph },
+  // The first console-shell drawer adopter: a non-modal bottom drawer streaming
+  // a chosen service/workspace's logs. Sticky across navigation (mounted once
+  // above the router outlet) and not route-scoped — it picks its own target.
+  drawers: [
+    {
+      id: "logs",
+      edge: "bottom",
+      title: operatorLogsDrawerTitle,
+      icon: "operator-logs",
+      sequence: 10,
+      render: () => createElement(OperatorLogsDrawer),
+    },
+  ],
   // The daemon's GraphQL surface as a refine data provider, authed by the live
   // bearer the token gate mints. `createApp` registers it alongside the
   // schema-named providers, so panes read/write it via `dataProviderName`.

@@ -54,6 +54,16 @@ describe("full addon composition", () => {
     expect(unresolvedMenuIcons(composed.menus, composed.icons)).toEqual([]);
   });
 
+  test("composes the operator logs drawer with a resolvable glyph", () => {
+    const composed = composeAddons(HOST_ADDONS);
+    const logsDrawer = composed.drawers.find(
+      (drawer) => drawer.edge === "bottom" && drawer.id === "logs",
+    );
+    expect(logsDrawer?.title).toBeTruthy();
+    expect(logsDrawer?.icon).toBe("operator-logs");
+    expect(getIcon(composed.icons, logsDrawer?.icon ?? "")).toBeTruthy();
+  });
+
   test("registers the full-page sessions route + child placeholder + Sessions nav item", () => {
     const routes = agents.routes ?? [];
     const sessions = routes.find((route) => route.name === "agents.sessions");
