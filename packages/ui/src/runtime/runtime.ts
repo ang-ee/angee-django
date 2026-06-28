@@ -10,6 +10,8 @@ import {
 
 import type {
   ChatterContribution,
+  DrawerContribution,
+  DrawerEdge,
   FormOverrideMap,
   PreviewContribution,
   SlotContribution,
@@ -30,6 +32,7 @@ export interface AppRuntime {
   chatter: readonly ChatterContribution[];
   slots: readonly SlotContribution[];
   previews: readonly PreviewContribution[];
+  drawers: readonly DrawerContribution[];
   /** Collection route base path per resource id, for relation-follow navigation. */
   routesByResource: Readonly<Record<string, string>>;
 }
@@ -42,6 +45,7 @@ const EMPTY_RUNTIME: AppRuntime = {
   chatter: [],
   slots: [],
   previews: [],
+  drawers: [],
   routesByResource: {},
 };
 
@@ -95,6 +99,21 @@ export function useSlot(slot: string): readonly SlotContribution[] {
 /** The addon-contributed file-preview renderers, in composed order. */
 export function usePreviews(): readonly PreviewContribution[] {
   return useAppRuntime().previews;
+}
+
+/**
+ * The composed drawer contributions, optionally narrowed to one edge, in merged
+ * order. Mirrors `useSlot`: the shell reads `useDrawers("right")` /
+ * `useDrawers("bottom")` to render an edge's stripe-tabs and overlay.
+ */
+export function useDrawers(
+  edge?: DrawerEdge,
+): readonly DrawerContribution[] {
+  const { drawers } = useAppRuntime();
+  return useMemo(
+    () => (edge ? drawers.filter((drawer) => drawer.edge === edge) : drawers),
+    [drawers, edge],
+  );
 }
 
 /** A translator bound to one namespace; resolves keys against merged i18n. */

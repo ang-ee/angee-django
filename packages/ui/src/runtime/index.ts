@@ -14,6 +14,7 @@ export {
   useResourceRoute,
   useSlot,
   usePreviews,
+  useDrawers,
   useT,
   useNamespaceT,
   type AppRuntime,
@@ -21,6 +22,8 @@ export {
 export type {
   ChatterContribution,
   ComposedMenuItem,
+  DrawerContribution,
+  DrawerEdge,
   FormOverrideMap,
   MenuItem,
   PreviewContribution,

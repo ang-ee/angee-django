@@ -5,6 +5,13 @@ export {
   type ControlBandProps,
   type ControlBandProviderProps,
 } from "./ControlBand";
+export {
+  DrawerProvider,
+  drawerPanelId,
+  useDrawerState,
+  type DrawerStateValue,
+} from "./drawer-context";
+export { DrawerOverlay } from "./DrawerOverlay";
 export { HeroPage, type HeroPageProps } from "./HeroPage";
 export {
   PrimaryPaneProvider,

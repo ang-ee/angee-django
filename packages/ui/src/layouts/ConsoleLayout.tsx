@@ -3,12 +3,15 @@ import * as React from "react";
 import { AppRail } from "../chrome/AppRail";
 import { Breadcrumb, BreadcrumbLabelProvider } from "../chrome/Breadcrumb";
 import { ConsoleSubNav, useConsoleSubNav } from "../chrome/ConsoleSubNav";
+import { DrawerRail } from "../chrome/DrawerRail";
 import { TopBar, type TopBarProps } from "../chrome/TopBar";
 import { Chatter } from "../communication/Chatter";
 import { ChatterProvider, useChatter } from "../communication/chatter-context";
 import { cn } from "../lib/cn";
 import type { CollapsiblePane } from "../page";
 import { ControlBandProvider } from "./ControlBand";
+import { DrawerProvider } from "./drawer-context";
+import { DrawerOverlay } from "./DrawerOverlay";
 import { PrimaryPaneProvider, usePrimaryPaneContent } from "./primary-pane-context";
 import { StatuslineProvider } from "./Statusline";
 import { Workbench } from "./Workbench";
@@ -41,48 +44,58 @@ export function ConsoleLayout({
   return (
     <ChatterProvider>
       <PrimaryPaneProvider>
-        <ControlBandProvider host={controlHost}>
-          <StatuslineProvider host={statusHost}>
-            <BreadcrumbLabelProvider>
-              <div
-                className={cn(
-                  "console-grid h-screen w-screen bg-canvas text-fg",
-                  className,
-                )}
-              >
-                <AppRail className="area-rail" />
-                <TopBar
-                  className="area-topbar"
-                  topMenu={topMenu}
-                  // The toggle shows whenever the primary pane has content —
-                  // a page-published explorer *or* the settings sub-nav — which
-                  // is exactly when the Workbench registers its controller.
-                  primaryPane={
-                    primaryController
-                      ? {
-                          collapsed: primaryController.collapsed,
-                          toggle: primaryController.toggle,
-                        }
-                      : undefined
-                  }
-                  showChatterToggle={showChatter}
-                  showUserMenu
-                />
-                <Breadcrumb className="area-crumbs" />
-                <div ref={setControlHost} className="area-control" />
-                <ConsoleWorkbench
-                  showSubNav={showSubNav}
-                  showChatter={showChatter}
-                  onPrimaryController={setPrimaryController}
+        <DrawerProvider>
+          <ControlBandProvider host={controlHost}>
+            <StatuslineProvider host={statusHost}>
+              <BreadcrumbLabelProvider>
+                <div
+                  className={cn(
+                    "console-grid h-screen w-screen bg-canvas text-fg",
+                    className,
+                  )}
                 >
-                  {children}
-                </ConsoleWorkbench>
-                {/* Optional statusline; the row collapses while this host is empty. */}
-                <div ref={setStatusHost} className="area-status" />
-              </div>
-            </BreadcrumbLabelProvider>
-          </StatuslineProvider>
-        </ControlBandProvider>
+                  <AppRail className="area-rail" />
+                  <TopBar
+                    className="area-topbar"
+                    topMenu={topMenu}
+                    // The toggle shows whenever the primary pane has content —
+                    // a page-published explorer *or* the settings sub-nav — which
+                    // is exactly when the Workbench registers its controller.
+                    primaryPane={
+                      primaryController
+                        ? {
+                            collapsed: primaryController.collapsed,
+                            toggle: primaryController.toggle,
+                          }
+                        : undefined
+                    }
+                    showChatterToggle={showChatter}
+                    showUserMenu
+                  />
+                  <Breadcrumb className="area-crumbs" />
+                  <div ref={setControlHost} className="area-control" />
+                  <ConsoleWorkbench
+                    showSubNav={showSubNav}
+                    showChatter={showChatter}
+                    onPrimaryController={setPrimaryController}
+                  >
+                    {children}
+                  </ConsoleWorkbench>
+                  {/* Optional statusline; the row collapses while this host is empty. */}
+                  <div ref={setStatusHost} className="area-status" />
+                </div>
+                {/* Drawers live at shell level (above the grid + router outlet) so
+                    the open drawer's content mounts once and survives navigation.
+                    Overlays render first, rails last, so a tab stays clickable to
+                    toggle its drawer closed even while the panel is open. */}
+                <DrawerOverlay edge="right" />
+                <DrawerOverlay edge="bottom" />
+                <DrawerRail edge="right" />
+                <DrawerRail edge="bottom" />
+              </BreadcrumbLabelProvider>
+            </StatuslineProvider>
+          </ControlBandProvider>
+        </DrawerProvider>
       </PrimaryPaneProvider>
     </ChatterProvider>
   );

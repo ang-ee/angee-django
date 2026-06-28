@@ -4,6 +4,8 @@
 // addon-composition functions (`defineAddon` / `composeAddons`) in
 // `@angee/sdk` build manifests against them.
 
+import type { ReactNode } from "react";
+
 /** A navigation entry; many menu items may target one route. */
 export interface MenuItem {
   /** Stable menu id. Defaults to `route` when omitted. */
@@ -59,4 +61,24 @@ export interface SlotContribution {
  */
 export interface PreviewContribution {
   id: string;
+}
+
+/** A drawer edge the console shell anchors a non-modal overlay to. */
+export type DrawerEdge = "right" | "bottom";
+
+/**
+ * A non-modal overlay drawer contributed at build time. Pulled out by the shell's
+ * edge stripe-tabs, sticky across navigation (mounted once above the router
+ * outlet), and tabbed (multiple drawers on one edge become sibling tabs). Merges
+ * by `(edge, id)` (fail-fast on collision, like widgets/previews) and orders by
+ * `sequence`. The shell renders `render()` into a plain edge-anchored panel —
+ * no scrim, no focus trap (JetBrains "Undock").
+ */
+export interface DrawerContribution {
+  id: string;
+  edge: DrawerEdge;
+  title: string;
+  icon?: string;
+  sequence?: number;
+  render: () => ReactNode;
 }

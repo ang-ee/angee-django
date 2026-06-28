@@ -219,6 +219,9 @@ export const enBaseMessages: Record<string, string> = {
   "preview.noInline": "No inline preview.",
   "preview.unavailable": "No preview available",
   "logStream.waiting": "Waiting for output…",
+  "drawer.rail.right": "Right drawers",
+  "drawer.rail.bottom": "Bottom drawers",
+  "drawer.close": "Close drawer",
 };
 
 export const enBaseBundle = { base: enBaseMessages } as const;

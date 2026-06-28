@@ -18,6 +18,7 @@ export {
   type PageFooterProps,
 } from "./PageFooter";
 export {
+  layoutStorage,
   SplitPane,
   SplitPaneHandle,
   SplitPanes,

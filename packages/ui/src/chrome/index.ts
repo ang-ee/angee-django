@@ -15,6 +15,7 @@ export {
   type BreadcrumbProps,
 } from "./Breadcrumb";
 export { CommandPalette, type CommandPaletteProps } from "./CommandPalette";
+export { DrawerRail } from "./DrawerRail";
 export { Glyph, type GlyphProps } from "./Glyph";
 export {
   baseIcons,

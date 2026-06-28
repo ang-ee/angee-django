@@ -269,6 +269,7 @@
   --z-topbar:          30;    /* Top menu bar */
   --z-rail:            32;    /* Left app rail (slightly above topbar) */
   --z-breadcrumb:      35;    /* Breadcrumb bar (above chrome, below popovers) */
+  --z-drawer:          40;    /* Non-modal edge drawers + their stripe-tabs (above chrome, below popovers/modals) */
   --z-popover:         60;    /* Combobox, date picker, menus, fields chooser */
   --z-toast:           80;    /* Transient toast / banner layer (above popovers) */
   --z-tooltip:         100;   /* AppRail hover tooltip */

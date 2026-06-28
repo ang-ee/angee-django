@@ -121,6 +121,48 @@ describe("composeAddons", () => {
     expect(composeAddons([a]).slots).toHaveLength(2);
   });
 
+  test("orders drawer contributions by sequence, not addon order", () => {
+    const a = defineAddon({
+      id: "a",
+      drawers: [
+        { id: "late", edge: "bottom", title: "Late", sequence: 20, render: () => null },
+      ],
+    });
+    const b = defineAddon({
+      id: "b",
+      drawers: [
+        { id: "early", edge: "bottom", title: "Early", sequence: 10, render: () => null },
+      ],
+    });
+    expect(composeAddons([a, b]).drawers.map((d) => d.id)).toEqual([
+      "early",
+      "late",
+    ]);
+  });
+
+  test("keeps the same drawer id separate under a different edge", () => {
+    const a = defineAddon({
+      id: "a",
+      drawers: [
+        { id: "logs", edge: "right", title: "Logs", render: () => null },
+        { id: "logs", edge: "bottom", title: "Logs", render: () => null },
+      ],
+    });
+    expect(composeAddons([a]).drawers).toHaveLength(2);
+  });
+
+  test("rejects two drawers claiming the same edge and id", () => {
+    const a = defineAddon({
+      id: "a",
+      drawers: [{ id: "logs", edge: "bottom", title: "A", render: () => null }],
+    });
+    const b = defineAddon({
+      id: "b",
+      drawers: [{ id: "logs", edge: "bottom", title: "B", render: () => null }],
+    });
+    expect(() => composeAddons([a, b])).toThrow(/drawer/);
+  });
+
   test("rejects two addons that declare the same widget key", () => {
     const a = defineAddon({ id: "a", widgets: { text: "A" } });
     const b = defineAddon({ id: "b", widgets: { text: "B" } });

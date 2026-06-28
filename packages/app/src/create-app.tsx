@@ -221,6 +221,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     // Built-in renderers are universal (PreviewPane always includes them); the
     // runtime carries only addon-contributed providers.
     previews: composed.previews,
+    drawers: composed.drawers,
     routesByResource: resourceRouteIndex(routes),
   };
   const defaultSchema = input.defaultSchema ?? "public";

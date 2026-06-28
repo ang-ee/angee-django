@@ -12,6 +12,8 @@ import type { I18nResources } from "@angee/refine";
 import type {
   ChatterContribution,
   ComposedMenuItem,
+  DrawerContribution,
+  DrawerEdge,
   FormOverrideMap,
   MenuItem,
   PreviewContribution,
@@ -22,6 +24,8 @@ import type {
 export type {
   ChatterContribution,
   ComposedMenuItem,
+  DrawerContribution,
+  DrawerEdge,
   FormOverrideMap,
   MenuItem,
   PreviewContribution,
@@ -61,6 +65,12 @@ export interface AddonManifest {
   slots?: readonly SlotContribution[];
   previews?: readonly PreviewContribution[];
   /**
+   * Non-modal overlay drawers the addon contributes to the console shell's edge
+   * stripe-tabs (right + bottom). Merged by `(edge, id)` — fail-fast on a second
+   * claim of the same pair — and ordered by `sequence`.
+   */
+  drawers?: readonly DrawerContribution[];
+  /**
    * Refine data providers an addon contributes, keyed by provider name. The SDK
    * manifest keeps the value opaque (only the name matters for collision
    * detection); the rendered binding owns the live `DataProvider` and overrides
@@ -82,6 +92,7 @@ export interface ComposedAddons {
   chatter: readonly ChatterContribution[];
   slots: readonly SlotContribution[];
   previews: readonly PreviewContribution[];
+  drawers: readonly DrawerContribution[];
   dataProviders: Readonly<Record<string, unknown>>;
 }
 
@@ -91,17 +102,28 @@ export function defineAddon(manifest: AddonManifest): AddonManifest {
 }
 
 /**
- * Merge sequence-ordered contributions: dedupe by `keyOf` (later groups win, so
- * an addon overrides a default) and sort by `sequence`. The chatter and slot
+ * Merge sequence-ordered contributions: dedupe by `keyOf` and sort by
+ * `sequence`. By default later groups win (an addon overrides a default); pass
+ * `uniqueKind` to instead fail fast on a duplicate key (two addons claiming one
+ * key is a collision, like widgets/previews). The chatter, slot, and drawer
  * merges are the same fold over different keys.
  */
 function mergeByKey<T extends { sequence?: number }>(
   groups: readonly (readonly T[])[],
   keyOf: (item: T) => string,
+  uniqueKind?: string,
 ): T[] {
   const byKey = new Map<string, T>();
   for (const group of groups) {
-    for (const item of group) byKey.set(keyOf(item), item);
+    for (const item of group) {
+      const key = keyOf(item);
+      if (uniqueKind && byKey.has(key)) {
+        throw new Error(
+          `Two addons contribute ${uniqueKind} "${key}"; ${uniqueKind} keys must be unique.`,
+        );
+      }
+      byKey.set(key, item);
+    }
   }
   return [...byKey.values()].sort(
     (a, b) => (a.sequence ?? 0) - (b.sequence ?? 0),
@@ -118,6 +140,12 @@ export function mergeSlotContributions(
   ...groups: readonly (readonly SlotContribution[])[]
 ): SlotContribution[] {
   return mergeByKey(groups, (entry) => `${entry.slot}\0${entry.id}`);
+}
+
+export function mergeDrawerContributions(
+  ...groups: readonly (readonly DrawerContribution[])[]
+): DrawerContribution[] {
+  return mergeByKey(groups, (drawer) => `${drawer.edge}\0${drawer.id}`, "drawer");
 }
 
 /** Claim a registry key for one addon, failing fast on a second claim. */
@@ -213,6 +241,7 @@ export function composeAddons(addons: readonly AddonManifest[]): ComposedAddons 
     dataProviders,
     chatter: mergeChatterContributions(...addons.map((a) => a.chatter ?? [])),
     slots: mergeSlotContributions(...addons.map((a) => a.slots ?? [])),
+    drawers: mergeDrawerContributions(...addons.map((a) => a.drawers ?? [])),
     previews,
   };
 }

@@ -167,6 +167,55 @@ correct seam) and `integrate/TemplatesPage`'s `<ControlBandProvider host={undefi
    First adopters: a logs drawer + a chat-sessions drawer.
 3. (Deferred) app-rail collapse; modal-drawer variant if a use case appears.
 
+## Phase 2 — concrete design (drawers)
+
+Non-modal, sticky, tabbed overlay panels pulled out by edge stripe-tabs (right +
+bottom). Build-time composed; mounted by the shell above the page so a streaming
+log survives navigation. Mirrors the existing contribution seams exactly (owner
+map below).
+
+**Contribution seam (mirror `slots`/`chatter`).**
+- `addonManifest.drawers?: readonly DrawerContribution[]` with
+  `DrawerContribution = { id: string; edge: "right" | "bottom"; title: string; icon?: string; sequence?: number; render: () => React.ReactNode }`
+  (`packages/app/src/define-addon.ts` — add to `AddonManifest` + `ComposedAddons`).
+- `composeAddons` merges via the ordered-list `mergeByKey` path keyed by
+  `` `${edge}\0${id}` `` (edge-namespaced, like slots), sorted by `sequence`;
+  collisions per edge+id fail fast.
+- `AppRuntime.drawers` (`packages/ui/src/runtime/runtime.ts`) seeded by the
+  composer; `useDrawers(edge?)` lookup mirrors `useSlot`/`usePreviews`.
+
+**State (sticky, persisted).** A `DrawerProvider` in `@angee/ui` layouts holds, per
+edge, the open drawer id (or `null` = closed) — mirrors `chatter-context`/
+`primary-pane-context`. Persist per edge to `localStorage` (reuse `layoutStorage()`
+from `page/SplitPanes`). Panel size persistence is a deferred follow-up (ship
+open/closed first). Mounted in `ConsoleLayout` **above the `console-grid`** so the
+drawer content components mount once at shell level and persist across route
+changes.
+
+**Chrome.** Edge stripe-tabs: a thin rail on the right edge (vertical labels, the
+"Feedback"-tab look) and the bottom edge (horizontal), one tab per registered
+drawer (icon + title), `aria-expanded`/`aria-controls`; clicking toggles+activates.
+The panel is a **plain positioned overlay** (`fixed`, edge-anchored) using the
+`drawerVariants` slide transforms — **NOT** the Base UI `ui/drawer` Dialog (no
+scrim, no focus trap; it stays co-visible, JetBrains "Undock"). New `z-drawer: 40`
+token (above topbar `30`, below `z-modal 100`). Panel host = `role="complementary"`
++ `aria-label`. Side + bottom independent (both open at once); multiple per edge =
+internal tabs. `Esc` returns focus to the stripe-tab (not required — non-modal).
+
+**First adopter (real content, low risk).** Operator **logs drawer**: the operator
+manifest contributes `drawers: [{ id: "logs", edge: "bottom", title, icon, render }]`;
+content composes the existing `useDaemonLogStream`/`LogPanel`
+(`addons/angee/operator/web/src/views/sections/logs.tsx`) with a service/workspace
+selector (the drawer isn't route-scoped, so it picks its target). This proves the
+seam + survives navigation (the tail no longer resets on route change). The
+agent-chat-in-drawer adopter is **deferred** (route-coupled ACP session, medium/high
+risk — its own slice).
+
+**Owner map.** seam → `define-addon.ts` (mirrors slots); registry → `runtime.ts`
+(mirrors `useSlot`); state → a new `layouts/drawer-context.tsx` (mirrors
+`primary-pane-context`); chrome → `ConsoleLayout` + a new `chrome/DrawerRail` +
+`layouts/DrawerOverlay`; persistence → `layoutStorage()`; adopter → operator addon.
+
 ## Open questions
 
 - ARIA: confirm `primary` explorer = `navigation` vs `complementary` (it's a nav

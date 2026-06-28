@@ -5,6 +5,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   AppRuntimeProvider,
+  useDrawers,
   useSlot,
   useT,
   useWidget,
@@ -40,6 +41,31 @@ describe("useSlot", () => {
     });
     const { result } = renderHook(() => useSlot("header"), { wrapper });
     expect(result.current.map((entry) => entry.id)).toEqual(["a", "c"]);
+  });
+});
+
+describe("useDrawers", () => {
+  const drawers = [
+    { id: "logs", edge: "bottom" as const, title: "Logs", render: () => null },
+    { id: "chat", edge: "right" as const, title: "Chat", render: () => null },
+    { id: "tail", edge: "bottom" as const, title: "Tail", render: () => null },
+  ];
+
+  test("returns every drawer when no edge is given", () => {
+    const wrapper = wrapperFor({ drawers });
+    const { result } = renderHook(() => useDrawers(), { wrapper });
+    expect(result.current.map((d) => d.id)).toEqual(["logs", "chat", "tail"]);
+  });
+
+  test("returns only the drawers contributed to the requested edge", () => {
+    const wrapper = wrapperFor({ drawers });
+    const { result } = renderHook(() => useDrawers("bottom"), { wrapper });
+    expect(result.current.map((d) => d.id)).toEqual(["logs", "tail"]);
+  });
+
+  test("is empty when nothing is contributed", () => {
+    const { result } = renderHook(() => useDrawers("right"));
+    expect(result.current).toEqual([]);
   });
 });
 
