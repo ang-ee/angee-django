@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Iterator
 from datetime import timedelta
@@ -9,6 +10,7 @@ from types import MethodType, SimpleNamespace
 from typing import Any
 from urllib import parse
 
+import httpx
 import pytest
 from asgiref.sync import async_to_sync, sync_to_async
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -35,6 +37,7 @@ from angee.integrate.oauth.errors import (
     EXTERNAL_ACCOUNT_RESOLUTION_FAILED,
     INVALID_ID_TOKEN,
     INVALID_STATE,
+    TOKEN_EXCHANGE_FAILED,
     OAuthFlowError,
 )
 from tests.conftest import (
@@ -119,41 +122,35 @@ def test_ensure_endpoints_caches_document_by_discovery_url(monkeypatch: pytest.M
     assert cache_sets[0][1] == 3600
 
 
-def test_http_helpers_send_honest_user_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_outbound_requests_send_honest_user_agent() -> None:
     """Outbound requests send an honest, non-browser User-Agent.
 
-    Not urllib's ``Python-urllib`` default (Anthropic's edge 403s it) and not a spoofed
-    browser/curl UA (Anthropic 429s those) — an honest client UA passes the filter.
+    Not the HTTP client's default (Anthropic's edge 403s ``python-httpx``/``Python-urllib``)
+    and not a spoofed browser/curl UA (Anthropic 429s those) — an honest client UA passes.
+    The GET helper (discovery/userinfo) and the Authlib token POST both carry it.
     """
 
-    requests: list[Any] = []
+    seen: list[str | None] = []
 
-    class Response:
-        def __enter__(self) -> "Response":
-            return self
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("user-agent"))
+        return httpx.Response(200, json={"access_token": "access-token"})
 
-        def __exit__(self, *args: object) -> None:
-            return None
+    transport = httpx.MockTransport(handler)
 
-        def read(self) -> bytes:
-            return b'{"ok": true}'
+    oauth_protocol._get_json(
+        "https://idp.example/.well-known/openid-configuration",
+        error_code=DISCOVERY_FAILED,
+        _transport=transport,
+    )
+    protocol = OAuthClientProtocol(_stub_oauth_client())
+    protocol._transport = transport
+    protocol.exchange_code(code="abc", redirect_uri="https://app.example/callback")
 
-    def urlopen(req: Any, timeout: int) -> Response:
-        assert timeout == oauth_protocol.HTTP_TIMEOUT_SECONDS
-        requests.append(req)
-        return Response()
-
-    monkeypatch.setattr(oauth_protocol.request, "urlopen", urlopen)
-
-    oauth_protocol._get_json("https://idp.example/.well-known/openid-configuration", error_code=DISCOVERY_FAILED)
-    oauth_protocol._post_form("https://idp.example/token", {"code": "abc"})
-    oauth_protocol._post_json("https://idp.example/token", {"code": "abc"})
-
-    user_agents = [req.get_header("User-agent") for req in requests]
-    assert user_agents == [oauth_protocol._USER_AGENT] * 3
-    # Lock in the pitfall: never a urllib-default or a spoofed browser/curl UA.
+    assert seen == [oauth_protocol._USER_AGENT, oauth_protocol._USER_AGENT]
+    # Lock in the pitfall: never an HTTP-client default or a spoofed browser/curl UA.
     sent = oauth_protocol._USER_AGENT.lower()
-    assert not any(token in sent for token in ("python-urllib", "mozilla", "chrome", "curl"))
+    assert not any(token in sent for token in ("python-urllib", "python-httpx", "mozilla", "chrome", "curl"))
 
 
 def test_authorize_url_contains_state_nonce_and_pkce() -> None:
@@ -214,77 +211,72 @@ def test_oauth_authorize_url_omits_oidc_nonce_and_honors_extra_params() -> None:
     assert query["code_challenge_method"] == ["S256"]
 
 
-def test_exchange_code_posts_json_body_with_state_and_pkce(monkeypatch: pytest.MonkeyPatch) -> None:
-    """OAuth clients can opt into JSON token exchanges."""
+def test_exchange_code_posts_json_body_with_pkce() -> None:
+    """OAuth clients can opt into a JSON token exchange (the json-body provider quirk).
+
+    ``state`` is part of the redirect seam but not an access-token-request parameter
+    (RFC 6749 §4.1.3), so it is not posted to the token endpoint.
+    """
 
     captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["fields"] = json.loads(request.content)
+        captured["ua"] = request.headers.get("user-agent")
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "access-token",
+                "refresh_token": "refresh-token",
+                "ignored": "not-token-material",
+            },
+        )
+
     oauth_client = _stub_oauth_client(
         supports_pkce=True,
         token_request_format="json",
         token_param_values={"audience": "https://api.example"},
     )
+    protocol = OAuthClientProtocol(oauth_client)
+    protocol._transport = httpx.MockTransport(handler)
 
-    def post_json(url: str, fields: dict[str, Any]) -> dict[str, Any]:
-        captured["url"] = url
-        captured["fields"] = fields
-        return {
-            "access_token": "access-token",
-            "refresh_token": "refresh-token",
-            "ignored": "not-token-material",
-        }
-
-    monkeypatch.setattr(oauth_protocol, "_post_json", post_json)
-    monkeypatch.setattr(
-        oauth_protocol,
-        "_post_form",
-        lambda *args, **kwargs: pytest.fail("JSON clients must not post form bodies"),
-    )
-
-    tokens = OAuthClientProtocol(oauth_client).exchange_code(
+    tokens = protocol.exchange_code(
         code="auth-code",
         redirect_uri="https://app.example/callback",
         code_verifier="verifier",
         state="state-token",
     )
 
-    assert tokens == {
-        "access_token": "access-token",
-        "refresh_token": "refresh-token",
-    }
-    assert captured == {
-        "url": "https://issuer.example/oauth/token",
-        "fields": {
-            "audience": "https://api.example",
-            "client_id": "oidc-client",
-            "client_secret": "secret",
-            "code": "auth-code",
-            "code_verifier": "verifier",
-            "grant_type": "authorization_code",
-            "redirect_uri": "https://app.example/callback",
-            "state": "state-token",
-        },
+    assert tokens == {"access_token": "access-token", "refresh_token": "refresh-token"}
+    assert captured["url"] == "https://issuer.example/oauth/token"
+    assert captured["ua"] == oauth_protocol._USER_AGENT
+    assert captured["fields"] == {
+        "audience": "https://api.example",
+        "client_id": "oidc-client",
+        "client_secret": "secret",
+        "code": "auth-code",
+        "code_verifier": "verifier",
+        "grant_type": "authorization_code",
+        "redirect_uri": "https://app.example/callback",
     }
 
 
-def test_refresh_token_posts_refresh_grant(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_refresh_token_posts_refresh_grant() -> None:
     """`refresh_token` posts a ``refresh_token`` grant and returns the renewed material."""
 
     captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["fields"] = json.loads(request.content)
+        return httpx.Response(200, json={"access_token": "new-access", "refresh_token": "rotated", "expires_in": 7200})
+
     oauth_client = _stub_oauth_client(token_request_format="json")
+    protocol = OAuthClientProtocol(oauth_client)
+    protocol._transport = httpx.MockTransport(handler)
 
-    def post_json(url: str, fields: dict[str, Any]) -> dict[str, Any]:
-        captured["url"] = url
-        captured["fields"] = fields
-        return {"access_token": "new-access", "refresh_token": "rotated", "expires_in": 7200}
-
-    monkeypatch.setattr(oauth_protocol, "_post_json", post_json)
-    monkeypatch.setattr(
-        oauth_protocol,
-        "_post_form",
-        lambda *args, **kwargs: pytest.fail("JSON clients must not post form bodies"),
-    )
-
-    tokens = OAuthClientProtocol(oauth_client).refresh_token(refresh_token="stored-refresh")
+    tokens = protocol.refresh_token(refresh_token="stored-refresh")
 
     assert tokens == {"access_token": "new-access", "refresh_token": "rotated", "expires_in": 7200}
     assert captured["url"] == "https://issuer.example/oauth/token"
@@ -294,6 +286,62 @@ def test_refresh_token_posts_refresh_grant(monkeypatch: pytest.MonkeyPatch) -> N
         "grant_type": "refresh_token",
         "refresh_token": "stored-refresh",
     }
+
+
+def test_exchange_code_form_path_maps_non_json_error_to_oauth_flow_error() -> None:
+    """A non-JSON token error on the default form path surfaces as ``OAuthFlowError``.
+
+    Authlib parses the token body as JSON before checking the status, so a provider/CDN
+    edge that answers a non-JSON 4xx (the documented Anthropic 403/429 block page) raises
+    a ``ValueError`` inside Authlib; it must map to the stable seam, not leak a 500.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text="<html>403 Forbidden</html>")
+
+    protocol = OAuthClientProtocol(_stub_oauth_client())
+    protocol._transport = httpx.MockTransport(handler)
+
+    with pytest.raises(OAuthFlowError) as exc_info:
+        protocol.exchange_code(code="auth-code", redirect_uri="https://app.example/callback")
+
+    assert exc_info.value.code == TOKEN_EXCHANGE_FAILED
+
+
+def test_refresh_token_form_path_returns_renewed_material() -> None:
+    """The default (form) refresh path returns the filtered token material."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"access_token": "new-access", "refresh_token": "rotated", "expires_in": 3600})
+
+    protocol = OAuthClientProtocol(_stub_oauth_client())
+    protocol._transport = httpx.MockTransport(handler)
+
+    tokens = protocol.refresh_token(refresh_token="stored-refresh")
+
+    assert tokens == {"access_token": "new-access", "refresh_token": "rotated", "expires_in": 3600}
+
+
+def test_exchange_code_public_client_posts_client_id_and_verifier() -> None:
+    """A public client (no secret) still posts ``client_id`` and the PKCE ``code_verifier``
+    (RFC 7636) and never a ``client_secret``."""
+
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = dict(parse.parse_qsl(request.content.decode()))
+        return httpx.Response(200, json={"access_token": "access-token"})
+
+    protocol = OAuthClientProtocol(_stub_oauth_client(client_secret="", supports_pkce=True))
+    protocol._transport = httpx.MockTransport(handler)
+
+    protocol.exchange_code(code="auth-code", redirect_uri="https://app.example/callback", code_verifier="verifier")
+
+    body = captured["body"]
+    assert body["client_id"] == "oidc-client"
+    assert body["code_verifier"] == "verifier"
+    assert body["grant_type"] == "authorization_code"
+    assert "client_secret" not in body
 
 
 def test_verify_id_token_rejects_bad_issuer(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -40,6 +40,8 @@ dependencies = [
   "openai>=2.43.0",
   "vobject>=0.9.9",
   "markdown-it-py>=4.2",
+  "authlib>=1.7.2",
+  "httpx>=0.28.1",
 ]
 
 [dependency-groups]

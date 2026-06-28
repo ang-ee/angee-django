@@ -5,6 +5,13 @@ refresh, and revocation — everything needed to connect an external account for
 API access (Gemini, Grok, Anthropic), with no identity/login concern. OIDC login
 extends this in ``angee.iam_integrate_oidc.protocol.OAuthClientOidcProtocol``.
 
+The OAuth2 protocol mechanism (token request, client authentication, PKCE, and
+the token-response parsing) is owned by Authlib's ``OAuth2Client`` over httpx;
+this module is the thin per-row adapter behind a stable seam. The authorization
+URL is still built here (a deterministic string the OIDC layer extends), and the
+small ``token_request_format == "json"`` provider quirk — a non-standard JSON
+token body Authlib does not emit — keeps a documented shim.
+
 Endpoints are taken from the row as configured; when a row has a discovery URL,
 the protocol asks the row to fill missing OAuth endpoints before failing. OIDC
 login extends this in ``iam_integrate_oidc`` for ID-token/userinfo verification.
@@ -12,11 +19,15 @@ login extends this in ``iam_integrate_oidc`` for ID-token/userinfo verification.
 
 from __future__ import annotations
 
-import json
 import logging
+import ssl
 from collections.abc import Iterable, Mapping
 from typing import Any
-from urllib import error, parse, request
+from urllib import parse
+
+import httpx
+from authlib.integrations.base_client.errors import OAuthError
+from authlib.integrations.httpx_client import OAuth2Client
 
 from angee.integrate.oauth.errors import (
     MISSING_ENDPOINT,
@@ -28,10 +39,16 @@ from angee.integrate.oauth.errors import (
 HTTP_TIMEOUT_SECONDS = 10
 # An honest, non-browser User-Agent for all outbound connection requests. Must NOT
 # spoof a browser: Anthropic's edge denylists browser/curl User-Agents with a 429
-# ``rate_limit_error`` (and blocks urllib's ``Python-urllib`` default with a 403),
-# while an honest client UA passes. See docs/backend/guidelines.md (Pitfalls).
+# ``rate_limit_error`` (and blocks the HTTP client's default UA with a 403), while
+# an honest client UA passes. httpx defaults to ``python-httpx/…``, so the session
+# and the GET helper set this explicitly. See docs/backend/guidelines.md (Pitfalls).
 _USER_AGENT = "Angee-Integrate/1.0"
 logger = logging.getLogger(__name__)
+
+# The token-response keys Angee carries forward; everything else the provider
+# returns is dropped. ``credentials.py`` reads access_token/expires_in/scope and
+# the refresh token, and the OIDC layer reads id_token.
+_TOKEN_MATERIAL_KEYS = ("access_token", "refresh_token", "id_token", "expires_in", "scope")
 
 
 class OAuthClientProtocol:
@@ -41,6 +58,9 @@ class OAuthClientProtocol:
         """Bind the protocol to one OAuth client registration row."""
 
         self.oauth_client = oauth_client
+        # Test seam: an injected httpx transport (e.g. ``httpx.MockTransport``) used
+        # by the per-row session and the JSON shim. ``None`` dials for real.
+        self._transport: httpx.BaseTransport | None = None
 
     def authorize_url(
         self,
@@ -68,18 +88,18 @@ class OAuthClientProtocol:
         code_verifier: str | None = None,
         state: str | None = None,
     ) -> dict[str, Any]:
-        """Exchange an authorization code for token material."""
+        """Exchange an authorization code for token material.
 
-        grant: dict[str, Any] = {
-            "code": code,
-            "grant_type": "authorization_code",
-            "redirect_uri": redirect_uri,
-        }
-        if state is not None:
-            grant["state"] = state
+        ``state`` is part of the redirect seam but not an access-token-request
+        parameter (RFC 6749 §4.1.3); the flow validates it separately, so it is
+        not sent to the token endpoint.
+        """
+
+        del state
+        grant: dict[str, Any] = {"code": code, "redirect_uri": redirect_uri}
         if getattr(self.oauth_client, "supports_pkce", False) and code_verifier:
             grant["code_verifier"] = code_verifier
-        return self._token_request(grant)
+        return self._token_request("authorization_code", grant)
 
     def refresh_token(self, *, refresh_token: str) -> dict[str, Any]:
         """Exchange a stored refresh token for fresh token material (RFC 6749 §6).
@@ -88,9 +108,7 @@ class OAuthClientProtocol:
         caller persists it. Raises ``OAuthFlowError`` when the grant is rejected.
         """
 
-        return self._token_request(
-            {"grant_type": "refresh_token", "refresh_token": refresh_token},
-        )
+        return self._token_request("refresh_token", {"refresh_token": refresh_token})
 
     def fetch_userinfo(self, access_token: str) -> dict[str, Any]:
         """Best-effort fetch of profile claims with one OAuth access token.
@@ -110,6 +128,7 @@ class OAuthClientProtocol:
                 userinfo_endpoint,
                 headers={"Authorization": f"Bearer {access_token}"},
                 error_code=USERINFO_FAILED,
+                _transport=self._transport,
             )
         except Exception:
             return {}
@@ -120,15 +139,15 @@ class OAuthClientProtocol:
         revoke_endpoint = str(getattr(self.oauth_client, "revoke_endpoint", "") or "")
         if not revoke_endpoint or not token:
             return
-        fields = {
-            "client_id": str(getattr(self.oauth_client, "client_id", "")),
-            "token": token,
-            "token_type_hint": "access_token",
-        }
-        client_secret = str(getattr(self.oauth_client, "client_secret", "") or "")
-        if client_secret:
-            fields["client_secret"] = client_secret
-        _post_form_no_response(revoke_endpoint, fields)
+        session = self._session()
+        try:
+            session.revoke_token(revoke_endpoint, token=token, token_type_hint="access_token")
+        except OAuthError, httpx.HTTPError:
+            # Revocation is best-effort: a provider that rejects or omits the endpoint
+            # does not block disconnect.
+            pass
+        finally:
+            session.close()
 
     def ensure_endpoints(self) -> dict[str, Any]:
         """Ask the OAuth client row to fill endpoint fields from discovery."""
@@ -137,6 +156,134 @@ class OAuthClientProtocol:
         if not callable(discover):
             return {}
         return dict(discover())
+
+    def _token_request(self, grant_type: str, grant: Mapping[str, Any]) -> dict[str, Any]:
+        """Dispatch one grant to the token endpoint and return validated material.
+
+        Standard providers go through Authlib's ``OAuth2Client`` (form-encoded per
+        RFC 6749). A provider that declares ``token_request_format == "json"`` —
+        a non-standard body Authlib does not emit — takes the JSON shim. Both paths
+        merge the row's ``token_param_values`` and return the same token shape.
+        """
+
+        token_endpoint = self._endpoint("token_endpoint")
+        extra = _param_values(self.oauth_client, "token_param_values")
+        if getattr(self.oauth_client, "token_request_format_value", "form") == "json":
+            return self._json_token_request(token_endpoint, grant_type, grant, extra)
+        return self._authlib_token_request(token_endpoint, grant_type, grant, extra)
+
+    def _authlib_token_request(
+        self,
+        endpoint: str,
+        grant_type: str,
+        grant: Mapping[str, Any],
+        extra: Mapping[str, str],
+    ) -> dict[str, Any]:
+        """Run the standard (form-encoded) grant through Authlib's OAuth2 client."""
+
+        session = self._session()
+        try:
+            if grant_type == "refresh_token":
+                token = session.refresh_token(endpoint, **grant, **extra)
+            else:
+                token = session.fetch_token(endpoint, grant_type=grant_type, **grant, **extra)
+        except OAuthError as exc:
+            body = {"error": exc.error, "error_description": exc.description}
+            self._log_token_failure(exc.error, body)
+            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400, body=body) from exc
+        except httpx.HTTPStatusError as exc:
+            # Authlib raises this only for >=500 (it raise_for_status()es server errors).
+            self._log_token_failure(exc.response.status_code, _response_body(exc.response))
+            raise OAuthFlowError(
+                TOKEN_EXCHANGE_FAILED,
+                exc.response.status_code,
+                body=_response_body(exc.response),
+            ) from exc
+        except (httpx.HTTPError, ValueError) as exc:
+            # Authlib parses the token body as JSON before checking the status, so a
+            # non-JSON 4xx (the documented Anthropic/CDN 403/429 block page) surfaces as
+            # a ValueError, and a transport failure as httpx.HTTPError — both map to the
+            # stable OAuthFlowError seam, like the JSON-shim and _get_json paths.
+            self._log_token_failure("transport_error", {"error": str(exc)})
+            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400) from exc
+        finally:
+            session.close()
+        return _token_material(dict(token))
+
+    def _json_token_request(
+        self,
+        endpoint: str,
+        grant_type: str,
+        grant: Mapping[str, Any],
+        extra: Mapping[str, str],
+    ) -> dict[str, Any]:
+        """POST a non-standard JSON token body (provider quirk Authlib does not emit)."""
+
+        body: dict[str, Any] = {
+            **extra,
+            "client_id": str(getattr(self.oauth_client, "client_id", "")),
+            "grant_type": grant_type,
+            **grant,
+        }
+        client_secret = str(getattr(self.oauth_client, "client_secret", "") or "")
+        if client_secret:
+            body["client_secret"] = client_secret
+        client = self._httpx_client()
+        try:
+            response = client.post(endpoint, json=body)
+            response.raise_for_status()
+            data = response.json()
+        except httpx.HTTPStatusError as exc:
+            self._log_token_failure(exc.response.status_code, _response_body(exc.response))
+            raise OAuthFlowError(
+                TOKEN_EXCHANGE_FAILED,
+                exc.response.status_code,
+                body=_response_body(exc.response),
+            ) from exc
+        except (httpx.HTTPError, ValueError) as exc:
+            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400) from exc
+        finally:
+            client.close()
+        if not isinstance(data, dict):
+            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400)
+        return _token_material(data)
+
+    def _session(self) -> OAuth2Client:
+        """Build the per-row Authlib OAuth2 client.
+
+        Client authentication rides the body (``client_secret_post``) to match the
+        row's stored secret; a public client (no secret) sends only ``client_id``.
+        Scope is omitted so refresh requests stay minimal — scopes are owned by the
+        authorize URL. Authlib auto-refresh is left off so a rotated refresh token
+        cannot be replayed behind ``Credential`` refresh locking.
+        """
+
+        secret = str(getattr(self.oauth_client, "client_secret", "") or "")
+        return OAuth2Client(
+            client_id=str(getattr(self.oauth_client, "client_id", "")),
+            client_secret=secret or None,
+            token_endpoint_auth_method="client_secret_post" if secret else "none",
+            headers={"User-Agent": _USER_AGENT},
+            **_outbound_kwargs(self._transport),
+        )
+
+    def _httpx_client(self) -> httpx.Client:
+        """Return a plain httpx client carrying the honest UA (JSON-shim transport)."""
+
+        return httpx.Client(headers={"User-Agent": _USER_AGENT}, **_outbound_kwargs(self._transport))
+
+    def _log_token_failure(self, status: object, body: Any) -> None:
+        """Log a redacted token-request failure against the client label."""
+
+        client_label = str(
+            getattr(self.oauth_client, "slug", "") or getattr(self.oauth_client, "client_id", "") or "unknown"
+        )
+        logger.warning(
+            "OAuth token request failed for %s: status=%s body=%r",
+            client_label,
+            status,
+            _safe_error_body(body),
+        )
 
     def _authorize_query(
         self,
@@ -161,52 +308,6 @@ class OAuthClientProtocol:
             query["code_challenge_method"] = "S256"
         return query
 
-    def _token_request(self, grant: Mapping[str, Any]) -> dict[str, Any]:
-        """POST one grant to the token endpoint and return validated token material.
-
-        The grant-specific fields (``code``/``refresh_token``/…) ride ``grant``; the
-        client id, optional secret, and provider ``token_param_values`` are common to
-        every grant. The ``OAuthClient`` row owns the body format via
-        ``token_request_format_value``.
-        """
-
-        token_endpoint = self._endpoint("token_endpoint")
-        payload: dict[str, Any] = {
-            **_param_values(self.oauth_client, "token_param_values"),
-            "client_id": str(getattr(self.oauth_client, "client_id", "")),
-            **grant,
-        }
-        client_secret = str(getattr(self.oauth_client, "client_secret", "") or "")
-        if client_secret:
-            payload["client_secret"] = client_secret
-        try:
-            if getattr(self.oauth_client, "token_request_format_value", "form") == "json":
-                response = _post_json(token_endpoint, payload)
-            else:
-                response = _post_form(token_endpoint, payload)
-        except OAuthFlowError as exc:
-            if exc.code == TOKEN_EXCHANGE_FAILED:
-                client_label = str(
-                    getattr(self.oauth_client, "slug", "") or getattr(self.oauth_client, "client_id", "") or "unknown"
-                )
-                logger.warning(
-                    "OAuth token request failed for %s: status=%s body=%r",
-                    client_label,
-                    exc.http_status,
-                    _safe_error_body(exc.body),
-                )
-            raise
-        except Exception as exc:
-            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400) from exc
-        tokens = {
-            key: response[key]
-            for key in ("access_token", "refresh_token", "id_token", "expires_in", "scope")
-            if key in response
-        }
-        if not tokens.get("access_token"):
-            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400)
-        return tokens
-
     def _endpoint(self, field: str) -> str:
         """Return a configured endpoint value, or raise when the row omits it."""
 
@@ -217,6 +318,24 @@ class OAuthClientProtocol:
         if not value:
             raise OAuthFlowError(MISSING_ENDPOINT, 400)
         return value
+
+
+def _outbound_kwargs(transport: httpx.BaseTransport | None) -> dict[str, Any]:
+    """Shared outbound httpx policy: request timeout, the optional injected test
+    transport, and — for real connections — system-store TLS trust.
+
+    httpx would otherwise verify against the bundled ``certifi`` store; the stdlib
+    default context resolves against the system trust store and honours
+    ``SSL_CERT_FILE``/``SSL_CERT_DIR``, the one outbound-TLS policy the rest of the stack
+    uses (see docs/backend/guidelines.md Pitfalls and ``http.py``). ``verify`` is only
+    meaningful when httpx builds its own transport, so it is omitted when a test
+    transport is injected.
+    """
+
+    kwargs: dict[str, Any] = {"timeout": HTTP_TIMEOUT_SECONDS, "transport": transport}
+    if transport is None:
+        kwargs["verify"] = ssl.create_default_context()
+    return kwargs
 
 
 def _param_values(oauth_client: object, property_name: str) -> dict[str, str]:
@@ -242,113 +361,43 @@ def _get_json(
     *,
     headers: Mapping[str, str] | None = None,
     error_code: str,
+    _transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
-    """GET a JSON document using the standard library HTTP client."""
+    """GET a JSON document over httpx with the honest User-Agent."""
 
     request_headers = {
         "Accept": "application/json",
         "User-Agent": _USER_AGENT,
         **dict(headers or {}),
     }
-    req = request.Request(url, headers=request_headers, method="GET")
     try:
-        with request.urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as response:
-            return _loads_json(response.read(), error_code=error_code)
-    except (error.HTTPError, error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        with httpx.Client(**_outbound_kwargs(_transport)) as client:
+            response = client.get(url, headers=request_headers)
+            response.raise_for_status()
+            data = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
         raise OAuthFlowError(error_code, 400) from exc
-
-
-def _post_form(url: str, fields: Mapping[str, Any]) -> dict[str, Any]:
-    """POST a form body and return the JSON response."""
-
-    data = parse.urlencode(fields).encode("utf-8")
-    req = request.Request(
-        url,
-        data=data,
-        headers={
-            "Accept": "application/json",
-            "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": _USER_AGENT,
-        },
-        method="POST",
-    )
-    try:
-        with request.urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as response:
-            return _loads_json(response.read(), error_code=TOKEN_EXCHANGE_FAILED)
-    except error.HTTPError as exc:
-        raise OAuthFlowError(
-            TOKEN_EXCHANGE_FAILED,
-            exc.code,
-            body=_http_error_body(exc),
-        ) from exc
-    except (error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400) from exc
-
-
-def _post_json(url: str, fields: Mapping[str, Any]) -> dict[str, Any]:
-    """POST a JSON body and return the JSON response."""
-
-    data = json.dumps(dict(fields)).encode("utf-8")
-    req = request.Request(
-        url,
-        data=data,
-        headers={
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "User-Agent": _USER_AGENT,
-        },
-        method="POST",
-    )
-    try:
-        with request.urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as response:
-            return _loads_json(response.read(), error_code=TOKEN_EXCHANGE_FAILED)
-    except error.HTTPError as exc:
-        raise OAuthFlowError(
-            TOKEN_EXCHANGE_FAILED,
-            exc.code,
-            body=_http_error_body(exc),
-        ) from exc
-    except (error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400) from exc
-
-
-def _post_form_no_response(url: str, fields: Mapping[str, str]) -> None:
-    """POST a form body when the endpoint may return an empty response."""
-
-    data = parse.urlencode(fields).encode("utf-8")
-    req = request.Request(
-        url,
-        data=data,
-        headers={
-            "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": _USER_AGENT,
-        },
-        method="POST",
-    )
-    with request.urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as response:
-        response.read()
-
-
-def _loads_json(payload: bytes, *, error_code: str) -> dict[str, Any]:
-    """Decode a JSON object response."""
-
-    decoded = json.loads(payload.decode("utf-8"))
-    if not isinstance(decoded, dict):
+    if not isinstance(data, dict):
         raise OAuthFlowError(error_code, 400)
-    return decoded
+    return data
 
 
-def _http_error_body(exc: error.HTTPError) -> Any:
-    """Return a JSON or text response body from an HTTP error."""
+def _token_material(response: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the carried token keys from a token response, requiring an access token."""
 
-    payload = exc.read()
-    if not payload:
-        return ""
-    text = payload.decode("utf-8", errors="replace")
+    tokens = {key: response[key] for key in _TOKEN_MATERIAL_KEYS if key in response}
+    if not tokens.get("access_token"):
+        raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400)
+    return tokens
+
+
+def _response_body(response: httpx.Response) -> Any:
+    """Return a JSON or text response body from an httpx response."""
+
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return text
+        return response.json()
+    except ValueError:
+        return response.text
 
 
 def _safe_error_body(value: Any) -> Any:

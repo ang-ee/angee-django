@@ -451,6 +451,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
+    { name = "authlib" },
     { name = "channels" },
     { name = "cryptography" },
     { name = "django" },
@@ -463,6 +464,7 @@ dependencies = [
     { name = "django-yamlconf" },
     { name = "django-zed-rebac", extra = ["strawberry-django"] },
     { name = "fastmcp" },
+    { name = "httpx" },
     { name = "markdown-it-py" },
     { name = "mcp" },
     { name = "openai" },
@@ -493,6 +495,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=0.109.2" },
+    { name = "authlib", specifier = ">=1.7.2" },
     { name = "channels", specifier = ">=4.0" },
     { name = "cryptography", specifier = ">=44" },
     { name = "django", specifier = ">=6.0" },
@@ -505,6 +508,7 @@ requires-dist = [
     { name = "django-yamlconf", specifier = ">=1.5.0" },
     { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.12" },
     { name = "fastmcp", specifier = ">=3.4.2,<4" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "markdown-it-py", specifier = ">=4.2" },
     { name = "mcp", specifier = ">=1.2" },
     { name = "openai", specifier = ">=2.43.0" },
