@@ -15,3 +15,12 @@ definition platform/explorer {
 
     permission read = admin->member
 }
+
+definition platform/addon {
+    // The Addon reflection table is system-synced (post_migrate), never authored,
+    // so it is read-only over GraphQL: platform admins read every row through the
+    // same const-backed admin relation; there are no write permissions.
+    relation admin: angee/role // rebac:const=admin
+
+    permission read = admin->member
+}

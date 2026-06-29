@@ -1,0 +1,6 @@
+# Angee addon manifest — the declarative contract. hatch-angee's metadata hook
+# turns this into an `angee.addons` entry point at build; the runtime enumerates
+# those over uv.lock to list *available* addons. (depends_on/contributions migrate
+# here from apps.py over time; for now this is the discovery marker + identity.)
+[addon]
+name = "angee.agents"

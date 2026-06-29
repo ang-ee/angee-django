@@ -232,7 +232,7 @@ export function KnowledgePage(): ReactElement {
   // The backlinks rail rides along as an additive secondary (chatter) tab.
   const backlinksTabs = useMemo<readonly ChatterTab[]>(
     () =>
-      hasVaults
+      detail
         ? [
             {
               id: "backlinks",
@@ -247,9 +247,12 @@ export function KnowledgePage(): ReactElement {
             },
           ]
         : [],
-    [hasVaults, detail?.backlinks, openPage, t],
+    [detail, openPage, t],
   );
-  const chatter = useMemo(() => ({ tabs: backlinksTabs }), [backlinksTabs]);
+  const chatter = useMemo(
+    () => (backlinksTabs.length > 0 ? { tabs: backlinksTabs } : null),
+    [backlinksTabs],
+  );
   useChatterContent(chatter);
 
   if (vaultsQuery.fetching && vaults.length === 0) {

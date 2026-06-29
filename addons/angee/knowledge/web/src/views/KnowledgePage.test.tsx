@@ -263,24 +263,23 @@ describe("KnowledgePage explorer wiring", () => {
     expect(screen.getByTestId("page-editor").getAttribute("data-page-id")).toBe(
       "page-b",
     );
+    expect(screen.getByTestId("shell-chatter").getAttribute("data-tab-ids")).toBe(
+      "backlinks",
+    );
   });
 
-  test("publishes the navigator into the primary pane and a backlinks tab", () => {
+  test("publishes the navigator into the primary pane", () => {
     renderPage();
 
     // The vault switcher + tree live in the shell's primary pane host.
     const primary = within(screen.getByTestId("shell-primary"));
     expect(primary.getByTestId("tree")).toBeTruthy();
     expect(primary.getByLabelText("Vault")).toBeTruthy();
-    // The backlinks rail rides along as an additive secondary (chatter) tab.
+    // Backlinks belong to an open page; the dashboard has no page-specific
+    // secondary tab to publish.
     expect(screen.getByTestId("shell-chatter").getAttribute("data-tab-ids")).toBe(
-      "backlinks",
+      "",
     );
-    expect(
-      within(screen.getByTestId("chatter-tab-backlinks")).getByTestId(
-        "backlinks",
-      ),
-    ).toBeTruthy();
   });
 
   test("selecting a page navigates to its detail route", () => {

@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["hatch-angee>=0.1.1"]
+build-backend = "hatch_angee.build"
 
 [project]
 name = "django-angee"
@@ -9,6 +9,8 @@ description = "Thin Django composition primitives for Angee applications."
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE"]
 requires-python = ">=3.14"
+# `dynamic = ["entry-points"]` and the build hooks are injected by the hatch-angee
+# build backend (build-backend above) — see [tool.hatch-angee] below.
 dependencies = [
   "channels>=4.0",
   "cryptography>=44",
@@ -89,15 +91,35 @@ artifacts = [
   "angee/**/*.pyi",
   "angee/**/*.typed",
   "angee/**/*.yaml",
-  "angee/**/*.yml",
   "angee/**/*.zed",
   "addons/angee/**/*.csv",
   "addons/angee/**/*.pyi",
   "addons/angee/**/*.typed",
   "addons/angee/**/*.yaml",
-  "addons/angee/**/*.yml",
   "addons/angee/**/*.zed",
+  # Addon manifests ship in the wheel so the runtime can read each addon's
+  # contract from its installed package; the entry points only carry identity.
+  "angee/**/addon.toml",
+  "addons/angee/**/addon.toml",
 ]
+# The web/ sources are added by hatch-angee's addon-sources hook (the single source
+# of truth for them), so keep hatchling's default walk out of them — otherwise a
+# package the walk *does* pick up would be added twice. node_modules is never a
+# Python package, so this also drops the dependency tree the broad artifacts above
+# would otherwise force-include from web/*/node_modules.
+exclude = [
+  "angee/web/**",
+  "addons/angee/*/web/**",
+  "**/node_modules",
+]
+
+# Build machinery is hatch-angee, via its build backend (no per-repo hook code or
+# tables). The metadata hook generates the `angee.addons` entry points from each
+# addon.toml; the addon-sources hook ships every addon's web/ (remapping the
+# addons/angee/* roots onto the angee namespace). extra-web names the framework's
+# non-addon core web libraries (shared React packages with no addon.toml).
+[tool.hatch-angee]
+extra-web = ["angee/web/*"]
 
 [tool.hatch.build.targets.sdist]
 only-include = [

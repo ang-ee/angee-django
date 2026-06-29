@@ -25,3 +25,11 @@ class PlatformConfig(AppConfig):
     depends_on = ("angee.iam", "angee.resources")
     schemas = "schema.schemas"
     permissions = "permissions.zed"
+
+    def ready(self) -> None:
+        """Register the Addon-reflection reconcile receiver (see ``signals.py``)."""
+
+        super().ready()
+        from angee.platform import signals
+
+        signals.connect()

@@ -1,4 +1,8 @@
 packages:
+  # The shared React libraries live under the framework core (angee/web/*) so they
+  # ship inside the django-angee Python wheel — one distribution channel for both
+  # Python and JS. packages/* now holds only dev-only tooling (storybook, e2e).
+  - "angee/web/*"
   - "packages/*"
   - "examples/*/e2e"
   - "examples/*/web"

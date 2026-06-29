@@ -204,6 +204,7 @@ export function AgentChat({
               <ChatComposer
                 input={
                   <ComposerPrimitive.Input
+                    render={<textarea />}
                     className={chatComposerInputClassName}
                     rows={3}
                     placeholder={ready ? t("agents.chat.placeholder") : t(`agents.chat.status.${status}`)}

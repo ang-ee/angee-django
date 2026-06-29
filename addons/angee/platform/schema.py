@@ -14,14 +14,16 @@ ledger for the per-addon count) and projects their answers.
 from __future__ import annotations
 
 import strawberry
-from django.apps import AppConfig, apps
+import strawberry_django
+from django.apps import apps
 from django.db.models import Model
 from pydantic import BaseModel
 from rebac import ObjectRef
+from strawberry import auto
 
-from angee.addons import is_angee_addon
 from angee.graphql.access import actor_can_read
-from angee.graphql.data import hasura_pydantic_resource
+from angee.graphql.data import hasura_model_resource, hasura_pydantic_resource
+from angee.platform import composed
 
 _EXPLORER = ObjectRef("platform/explorer", "default")
 
@@ -115,53 +117,12 @@ def platform_can_read() -> bool:
     return actor_can_read(_EXPLORER)
 
 
-def _addons() -> list[AppConfig]:
-    """Return composed Angee addon app configs, sorted by name."""
-
-    return sorted(
-        (config for config in apps.get_app_configs() if is_angee_addon(config)),
-        key=lambda config: config.name,
-    )
-
-
-def _data_models(config: AppConfig) -> list[type[Model]]:
-    """Return one addon's concrete data models.
-
-    Table-less REBAC anchors (``managed = False``) and simple-history audit
-    shadows are excluded — they are not first-class domain models, matching the
-    "operator: 0 models" the explorer reports for an addon that only anchors a
-    permission type.
-    """
-
-    return [
-        model
-        for model in config.get_models()
-        if model._meta.managed and not model._meta.proxy and not _is_historical(model)
-    ]
-
-
-def _is_historical(model: type[Model]) -> bool:
-    """Return whether ``model`` is a simple-history audit shadow table.
-
-    Detected via simple-history's own marker: a generated historical model carries
-    ``instance_type`` (the tracked model class); ordinary models never do.
-    """
-
-    return getattr(model, "instance_type", None) is not None
-
-
-def _own_fields(model: type[Model]) -> list:
-    """Return a model's own concrete columns plus declared many-to-many fields."""
-
-    return [*model._meta.fields, *model._meta.many_to_many]
-
-
 def _field_rows(model: type[Model]) -> list[PlatformField]:
     """Project one model's own fields for the explorer."""
 
     addon_label = model._meta.app_label
     rows: list[PlatformField] = []
-    for field in _own_fields(model):
+    for field in composed.own_fields(model):
         related = field.related_model if field.is_relation else None
         rows.append(
             PlatformField(
@@ -181,7 +142,7 @@ def _edge_rows(model: type[Model], known: set[str]) -> list[PlatformEdge]:
 
     source = model._meta.label_lower
     edges: list[PlatformEdge] = []
-    for field in _own_fields(model):
+    for field in composed.own_fields(model):
         related = field.related_model if field.is_relation else None
         if related is None:
             continue
@@ -206,38 +167,22 @@ def _edge_rows(model: type[Model], known: set[str]) -> list[PlatformEdge]:
     return edges
 
 
-def _resource_counts() -> dict[str, int]:
-    """Return resource-ledger row counts keyed by source addon.
+def _build_explorer() -> PlatformExplorerData:
+    """Project the composed models + relation edges, and the addon rollups.
 
-    The ``resources`` addon owns the ledger and its rollup; ask it rather than
-    re-querying its model here.
+    Addons come from the shared rollup (``composed.addon_rollups``), the single
+    derivation the reflection table reads too — not a second walk here.
     """
 
-    try:
-        resource = apps.get_model("resources", "Resource")
-    except LookupError:
-        return {}
-    return resource.objects.counts_by_addon()
-
-
-def _build_explorer() -> PlatformExplorerData:
-    """Project the composed addons, models, and relation edges."""
-
-    configs = _addons()
-    resource_counts = _resource_counts()
-
-    models_by_addon = {config.name: _data_models(config) for config in configs}
+    configs = composed.addons()
+    models_by_addon = {config.name: composed.data_models(config) for config in configs}
     known = {model._meta.label_lower for models in models_by_addon.values() for model in models}
 
     models_out: list[PlatformModel] = []
     edges_out: list[PlatformEdge] = []
-    addons_out: list[PlatformAddon] = []
     for config in configs:
-        models = models_by_addon[config.name]
-        field_total = 0
-        for model in models:
+        for model in models_by_addon[config.name]:
             fields = _field_rows(model)
-            field_total += len(fields)
             relations = [field for field in fields if field.is_relation]
             models_out.append(
                 PlatformModel(
@@ -256,99 +201,73 @@ def _build_explorer() -> PlatformExplorerData:
                 )
             )
             edges_out.extend(_edge_rows(model, known))
-        # The composer owns the root/dependency split; read its annotation rather
-        # than re-deriving the closure here (`angee/compose/appgraph.py`).
-        kind = "consumer" if getattr(config, "angee_addon_root", False) else "required"
-        addons_out.append(
-            PlatformAddon(
-                id=config.name,
-                label=config.label,
-                namespace=config.name.split(".")[0],
-                kind=kind,
-                model_count=len(models),
-                field_count=field_total,
-                resource_count=resource_counts.get(config.name, 0),
-                depends_on=sorted(getattr(config, "angee_depends_on", ())),
-                model_labels=sorted(model._meta.label_lower for model in models),
-            )
+    addons_out = [
+        PlatformAddon(
+            id=rollup.name,
+            label=rollup.label,
+            namespace=rollup.namespace,
+            kind=rollup.kind,
+            model_count=rollup.model_count,
+            field_count=rollup.field_count,
+            resource_count=rollup.resource_count,
+            depends_on=rollup.depends_on,
+            model_labels=rollup.model_labels,
         )
+        for rollup in composed.addon_rollups()
+    ]
     return PlatformExplorerData(addons=addons_out, models=models_out, edges=edges_out)
 
 
-class PlatformAddonRow(BaseModel):
-    """Computed platform-explorer addon row (no Django table behind it).
+_Addon = apps.get_model("platform", "Addon")
 
-    The row-shape SSOT for the ``platform.Addon`` Hasura resource. Reverse
-    dependencies (``depended_by``) are resolved server-side across the whole
-    addon set, since a paginated client page cannot invert ``depends_on``.
+
+@strawberry_django.type(_Addon)
+class AddonNode:
+    """Read-only projection of one composed/available addon (the reflection table).
+
+    Identity is the addon ``name`` (e.g. ``angee.iam``) — the stable key the whole
+    console cross-links on (the model/field pages filter by it) — not a sqid. The
+    table is system-synced (``post_migrate``), so this resource is read-only.
     """
 
-    id: str
-    label: str
-    namespace: str
+    label: auto
+    namespace: auto
+    # Exposed as the string value, not an `auto` enum: strawberry would name the
+    # generated enum `Source`, colliding with `integrate`'s connection-source enum.
     kind: str
-    model_count: int
-    field_count: int
-    resource_count: int
+    source: str
+    enabled: auto
+    model_count: auto
+    field_count: auto
+    resource_count: auto
     depends_on: list[str]
     depended_by: list[str]
     model_labels: list[str]
 
+    @strawberry_django.field
+    def id(self) -> str:
+        """Return the addon name as the row identity."""
 
-def _addon_rows() -> list[PlatformAddonRow]:
-    """Project composed addons as rows, resolving reverse dependencies."""
-
-    explorer = _build_explorer()
-    depended_by: dict[str, list[str]] = {}
-    for addon in explorer.addons:
-        for dependency in addon.depends_on:
-            depended_by.setdefault(dependency, []).append(addon.id)
-    return [
-        PlatformAddonRow(
-            id=addon.id,
-            label=addon.label,
-            namespace=addon.namespace,
-            kind=addon.kind,
-            model_count=addon.model_count,
-            field_count=addon.field_count,
-            resource_count=addon.resource_count,
-            depends_on=list(addon.depends_on),
-            depended_by=sorted(depended_by.get(addon.id, ())),
-            model_labels=list(addon.model_labels),
-        )
-        for addon in explorer.addons
-    ]
+        return self.name  # type: ignore[attr-defined]
 
 
-def _addon_rows_for(info: strawberry.Info) -> list[PlatformAddonRow]:
-    """Row provider gated on the same platform-admin read as the explorer."""
-
-    del info
-    return _addon_rows() if platform_can_read() else []
-
-
-_ADDON_RESOURCE = hasura_pydantic_resource(
-    PlatformAddonRow,
+# Read is gated by the model's own ``platform/addon`` REBAC scope (const-backed
+# admin) via the default queryset — no second explorer gate. Read-only: the table
+# is system-synced (``signals.py``).
+_ADDON_RESOURCE = hasura_model_resource(
+    AddonNode,
+    model=_Addon,
     name="platform_addons",
     model_label="platform.Addon",
-    filterable=[
-        "id",
-        "label",
-        "namespace",
-        "kind",
-        "model_count",
-        "field_count",
-        "resource_count",
-    ],
-    sortable=[
-        "label",
-        "namespace",
-        "kind",
-        "model_count",
-        "field_count",
-        "resource_count",
-    ],
-    rows=_addon_rows_for,
+    filterable=["label", "namespace", "kind", "source", "enabled", "model_count", "field_count", "resource_count"],
+    sortable=["label", "namespace", "kind", "model_count", "field_count", "resource_count"],
+    aggregatable=["id"],
+    groupable=["namespace", "kind", "source"],
+    insert=False,
+    update=False,
+    delete=False,
+    id_decode=lambda value: value,
+    id_column="name",
 )
 
 

@@ -3,12 +3,60 @@
 from __future__ import annotations
 
 import importlib
+import tomllib
 from collections.abc import Iterable
+from dataclasses import dataclass
+from importlib import metadata
+from pathlib import Path
 from typing import Any
 
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string, module_has_submodule
+
+ADDON_ENTRY_POINT_GROUP = "angee.addons"
+
+
+@dataclass(frozen=True, slots=True)
+class AvailableAddon:
+    """An addon present in the environment, whether or not it is enabled.
+
+    ``source`` is ``"installed"`` for an addon advertised by an installed bundle's
+    ``angee.addons`` entry point, or ``"local"`` for one discovered as an
+    ``addon.toml`` under a configured addon dir. ``anchor`` is the entry point's
+    import target (installed) or the addon directory (local).
+    """
+
+    name: str
+    source: str
+    anchor: str
+
+
+def available_addons(addon_dirs: Iterable[Path | str] = ()) -> dict[str, AvailableAddon]:
+    """Return every *available* addon, keyed by name.
+
+    The available set is the union of (1) the ``angee.addons`` entry points across
+    all installed distributions — the SSOT being ``uv.lock``'s bundles, the same
+    way ``pip``-installed packages are "available" before being added to
+    ``INSTALLED_APPS`` — and (2) any ``addon.toml`` under the configured addon dirs
+    (local/uninstalled consumer addons). The enabled set (``INSTALLED_APPS``) is
+    expected to be a subset of this. Pure ``importlib.metadata`` + filesystem; no
+    Django app loading required, so a catalog/marketplace can read it cheaply.
+    """
+
+    available: dict[str, AvailableAddon] = {}
+    for entry_point in metadata.entry_points(group=ADDON_ENTRY_POINT_GROUP):
+        available[entry_point.name] = AvailableAddon(
+            name=entry_point.name, source="installed", anchor=entry_point.value
+        )
+    for addon_dir in addon_dirs:
+        for marker in sorted(Path(addon_dir).glob("**/addon.toml")):
+            if "node_modules" in marker.parts:
+                continue
+            name = tomllib.loads(marker.read_text()).get("addon", {}).get("name")
+            if name and name not in available:
+                available[name] = AvailableAddon(name=name, source="local", anchor=str(marker.parent))
+    return dict(sorted(available.items()))
 
 
 def is_angee_addon(app_config: AppConfig) -> bool:

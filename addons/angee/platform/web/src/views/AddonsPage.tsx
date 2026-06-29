@@ -13,10 +13,10 @@ import { usePlatformT } from "../i18n";
 import { LinkedChips, TextRouteLink } from "../lib/cells";
 import { addonDetailPath, fieldsPath, modelsPath } from "../lib/paths";
 
-// The `platform.Addon` Hasura resource row (`hasura_pydantic_resource`,
-// `addons/angee/platform/schema.py`): raw snake fields, fetched + grouped
-// client-side by ListView's client row model. `depends_on`/`depended_by` arrive
-// already resolved across the whole addon set (the server inverts `depends_on`).
+// The `platform.Addon` Hasura resource row (`hasura_model_resource` over the
+// system-synced `Addon` reflection table, `addons/angee/platform/schema.py`): raw
+// snake fields, fetched + grouped client-side by ListView's client row model.
+// `depends_on`/`depended_by` are reconciled across the whole addon set at sync.
 interface AddonResourceRow extends Record<string, unknown> {
   id: string;
   label: string;
