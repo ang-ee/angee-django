@@ -1,63 +1,12 @@
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
-import tailwindcss from "@tailwindcss/vite";
+import { defineAngeeWebViteConfig } from "../../../vite.shared";
 
-const django = process.env.ANGEE_DJANGO_URL ?? "http://127.0.0.1:8000";
-// The operator daemon (the dev-stack supervisor) the console talks to. The
-// workspace allocates its port and the stack exports ANGEE_OPERATOR_URL.
-const operator = process.env.ANGEE_OPERATOR_URL ?? "http://127.0.0.1:9000";
-// The angee workspace allocates a unique UI port and exports it; honour it so a
-// workspace's frontend (and the e2e harness targeting it) do not collide on 5173.
-const uiPort = Number(process.env.ANGEE_UI_PORT ?? 5173);
-
-export default defineConfig({
-  plugins: [react(), tailwindcss()],
-  // The `@angee/gql/<schema>` alias for this project's generated typed
-  // operations, pointing at the project's OWN `runtime/gql/<name>/` tree (the
-  // web package generates it via codegen). Project-supplied and project-relative
-  // — the same resolution this project declares in its tsconfig/vitest, and the
-  // shape a downstream project uses for its own web package.
-  resolve: {
-    alias: [
-      {
-        find: /^@angee\/gql\//,
-        replacement: fileURLToPath(new URL("../runtime/gql/", import.meta.url)),
-      },
-    ],
-  },
-  server: {
-    host: true,
-    port: uiPort,
-    strictPort: true,
-    proxy: {
-      "/graphql/": { target: django, changeOrigin: false, ws: true },
-      "/auth/csrf/": { target: django, changeOrigin: false },
-      // The storage proxy upload/download endpoints are Django REST routes; scope
-      // to the exact paths so the SPA's /storage page routes still hard-reload to
-      // index.html (a file id is never "upload"/"download").
-      "/storage/upload": { target: django, changeOrigin: false },
-      "/storage/download": { target: django, changeOrigin: false },
-      // Proxy ONLY the daemon GraphQL endpoint (Django sets
-      // ANGEE_OPERATOR_GRAPHQL_ENDPOINT=/operator/graphql), stripping the prefix so
-      // it lands on the daemon's own /graphql — no cross-origin. Scoped to the exact
-      // path so the SPA's own /operator/* page routes still hard-reload to index.html.
-      "/operator/graphql": {
-        target: operator,
-        changeOrigin: false,
-        ws: true,
-        rewrite: (path) => path.replace(/^\/operator/, ""),
-      },
-      // The daemon's structured per-service log socket (v0.6). A `^`-anchored regex
-      // key proxies only `/operator/services/<name>/logs/stream` (the WebSocket) and
-      // strips the prefix to the daemon's own `/services/<name>/logs/stream` — the
-      // `/operator/services/<name>` SPA detail route still hard-reloads to index.html.
-      "^/operator/services/[^/]+/logs/stream": {
-        target: operator,
-        changeOrigin: false,
-        ws: true,
-        rewrite: (path) => path.replace(/^\/operator/, ""),
-      },
-    },
-  },
+// The framework owns the plugin pair, the dev-server host/port/proxy wiring, and
+// the project-derived optimizeDeps set (see `vite.shared.ts`). This config
+// supplies only the two project facts: the in-repo example consumes the
+// `@angee/*` packages as linked workspace source, so it does NOT pre-bundle
+// them; and its `@angee/gql/<schema>` alias points at its OWN `runtime/gql/`.
+export default defineAngeeWebViteConfig({
+  prebundleAngeePackages: false,
+  gqlRuntimeDir: fileURLToPath(new URL("../runtime/gql/", import.meta.url)),
 });
