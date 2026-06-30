@@ -2,7 +2,7 @@
 # the package's [project] + entry points; see angee/addons.py (AddonContract).
 [addon]
 name = "angee.agents_integrate_openai"
-description = "Source app manifest for OpenAI's inference backend."
+description = "OpenAI (GPT) inference backend — adds the OpenAI client to the agents catalogue"
 keywords = ["openai", "gpt", "inference"]
 category = "Integration"
 depends_on = ["angee.agents", "angee.integrate"]

@@ -2,7 +2,7 @@
 # the package's [project] + entry points; see angee/addons.py (AddonContract).
 [addon]
 name = "angee.iam"
-description = "Source app manifest for Angee identity models."
+description = "Identity, the swappable user model, and the REBAC permission hub"
 keywords = ["identity", "rebac", "auth"]
 category = "Foundation"
 depends_on = ["angee.resources", "angee.graphql", "django.contrib.auth", "django.contrib.sessions"]

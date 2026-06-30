@@ -2,7 +2,7 @@
 # the package's [project] + entry points; see angee/addons.py (AddonContract).
 [addon]
 name = "angee.platform_integrate_operator"
-description = "The operator transport for addon install/uninstall — edits settings.yaml + rebuilds through the operator file API."
+description = "Install and uninstall addons through the operator — edits settings.yaml and rebuilds the stack"
 keywords = ["marketplace", "addons", "operator"]
 category = "Integration"
 depends_on = ["angee.platform", "angee.operator"]

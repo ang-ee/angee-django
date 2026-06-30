@@ -2,7 +2,7 @@
 # the package's [project] + entry points; see angee/addons.py (AddonContract).
 [addon]
 name = "angee.resources"
-description = "Resource addon marker and command/model host."
+description = "Tiered data import/export — load demo and seed data from declarative resource files"
 keywords = ["resources", "import", "data"]
 category = "Foundation"
 depends_on = ["angee.base"]

@@ -2,7 +2,7 @@
 # the package's [project] + entry points; see angee/addons.py (AddonContract).
 [addon]
 name = "angee.storage"
-description = "Source app manifest for the Angee file domain."
+description = "Drives, folders, and content-addressed files with chunked uploads"
 keywords = ["storage", "files", "drives"]
 category = "Data"
 depends_on = ["angee.iam", "angee.resources", "angee.graphql", "django.contrib.contenttypes"]

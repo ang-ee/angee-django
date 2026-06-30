@@ -2,7 +2,7 @@
 # the package's [project] + entry points; see angee/addons.py (AddonContract).
 [addon]
 name = "angee.knowledge_graph_pgvector"
-description = "Source app manifest for the knowledge semantic-retrieval plugin."
+description = "Semantic retrieval for the knowledge base — pgvector embeddings and graph-RAG search"
 keywords = ["pgvector", "embeddings", "knowledge"]
 category = "Integration"
 depends_on = ["angee.knowledge", "angee.mcp"]

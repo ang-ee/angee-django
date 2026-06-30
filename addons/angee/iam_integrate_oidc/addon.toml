@@ -2,7 +2,7 @@
 # the package's [project] + entry points; see angee/addons.py (AddonContract).
 [addon]
 name = "angee.iam_integrate_oidc"
-description = "Source app manifest for the OIDC login addon."
+description = "OIDC single sign-on — login and account linking over any OpenID Connect provider"
 keywords = ["oidc", "login", "sso"]
 category = "Integration"
 depends_on = ["angee.iam", "angee.integrate"]

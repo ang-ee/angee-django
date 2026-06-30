@@ -2,7 +2,7 @@
 # the package's [project] + entry points; see angee/addons.py (AddonContract).
 [addon]
 name = "angee.knowledge"
-description = "Source app manifest for the knowledge addon."
+description = "A markdown-first knowledge base — vaults of pages with versioned markdown bodies"
 keywords = ["knowledge", "rag", "embeddings"]
 category = "Data"
 depends_on = ["angee.iam"]

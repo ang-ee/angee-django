@@ -2,7 +2,7 @@
 # the package's [project] + entry points; see angee/addons.py (AddonContract).
 [addon]
 name = "angee.messaging"
-description = "Messaging addon: threads, messages, and the channel-bridge substrate."
+description = "Threads, messages, and channel bridges that ingest mail and social conversations"
 keywords = ["messaging", "channels", "chat"]
 category = "Data"
 depends_on = ["angee.parties", "angee.integrate", "angee.storage"]

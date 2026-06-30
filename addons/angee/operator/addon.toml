@@ -2,7 +2,7 @@
 # the package's [project] + entry points; see angee/addons.py (AddonContract).
 [addon]
 name = "angee.operator"
-description = "Source app manifest for the operator daemon bridge."
+description = "Bridge to the operator daemon — drives the local stack and the admin console"
 keywords = ["operator", "daemon", "stack"]
 category = "Platform"
 depends_on = ["angee.iam"]

@@ -2,7 +2,7 @@
 # the package's [project] + entry points; see angee/addons.py (AddonContract).
 [addon]
 name = "example.notes"
-description = "Source app manifest for the notes addon."
+description = "A notes example — the minimal consumer addon the example project composes"
 keywords = ["notes", "example"]
 category = "Example"
 depends_on = ["angee.iam", "angee.integrate", "angee.iam_integrate_oidc", "angee.agents", "angee.agents_integrate_anthropic", "angee.mcp"]

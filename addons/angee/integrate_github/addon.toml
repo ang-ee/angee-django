@@ -2,7 +2,7 @@
 # the package's [project] + entry points; see angee/addons.py (AddonContract).
 [addon]
 name = "angee.integrate_github"
-description = "Source app manifest for the GitHub VCS backend."
+description = "GitHub backend for the VCS inventory — reads repositories over the GitHub REST API"
 keywords = ["github", "vcs"]
 category = "Integration"
 depends_on = ["angee.integrate"]

@@ -2,7 +2,7 @@
 # the package's [project] + entry points; see angee/addons.py (AddonContract).
 [addon]
 name = "angee.platform_integrate_vcs"
-description = "The VCS/remote tier of the addon marketplace — addons known from a repo, not yet installed."
+description = "The marketplace catalog tier — addons discovered from VCS sources, known by repo@sha"
 keywords = ["marketplace", "addons", "vcs"]
 category = "Integration"
 depends_on = ["angee.platform", "angee.integrate"]

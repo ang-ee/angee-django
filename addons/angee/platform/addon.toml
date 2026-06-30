@@ -2,7 +2,7 @@
 # the package's [project] + entry points; see angee/addons.py (AddonContract).
 [addon]
 name = "angee.platform"
-description = "Source app manifest for the platform console."
+description = "The admin console — schema/addon explorer, the marketplace board, and contributed sections"
 keywords = ["console", "admin", "explorer"]
 category = "Platform"
 depends_on = ["angee.iam", "angee.resources"]

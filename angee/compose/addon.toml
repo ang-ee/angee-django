@@ -2,7 +2,7 @@
 # the package's [project] + entry points; see angee/addons.py (AddonContract).
 [addon]
 name = "angee.compose"
-description = "Bootstrap composed runtime models during app population."
+description = "The build-time composer that turns addon contracts into a runnable Django project"
 keywords = ["composer", "build", "runtime"]
 category = "Foundation"
 depends_on = ["django_yamlconf"]

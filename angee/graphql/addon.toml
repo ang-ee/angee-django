@@ -2,7 +2,7 @@
 # the package's [project] + entry points; see angee/addons.py (AddonContract).
 [addon]
 name = "angee.graphql"
-description = "GraphQL runtime and schema command host."
+description = "The GraphQL runtime — schema buckets, auto-CRUD, subscriptions, and SDL"
 keywords = ["graphql", "schema", "api"]
 category = "Foundation"
 depends_on = ["angee.base", "channels"]
