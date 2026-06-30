@@ -81,6 +81,19 @@ jobs:
     env:
       ANGEE_PROJECT_DIR: "."
 
+  # Prune REBAC schema orphaned by an uninstalled addon, before any check-gated DB
+  # step. An addon dropped from INSTALLED_APPS leaves its permissions.zed in the
+  # Schema* tables; that fails rebac.E009 and would otherwise block makemigrations /
+  # migrate / rebac sync — so this check-free reconcile runs first and keeps the
+  # rebuild an uninstall triggers green. See angee.platform.permissions.
+  reconcile-permissions:
+    runtime: local
+    workdir: source://app
+    command: ["uv", "run", "python", "manage.py", "reconcile_permissions"]
+    env:
+      ANGEE_PROJECT_DIR: "."
+    depends_on: [build]
+
   # Generate migrations against the freshly emitted concrete models. Mandatory:
   # the composer emits models.py, never migration files. No app list — the set of
   # composed apps is owned by the composer (each redirects to
@@ -92,7 +105,7 @@ jobs:
     command: ["uv", "run", "python", "manage.py", "makemigrations"]
     env:
       ANGEE_PROJECT_DIR: "."
-    depends_on: [build]
+    depends_on: [reconcile-permissions]
 
   migrate:
     runtime: local
