@@ -519,7 +519,7 @@ requires-dist = [
     { name = "python-magic", specifier = ">=0.4.27" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "strawberry-django-aggregates", specifier = ">=0.9.1" },
-    { name = "strawberry-django-hasura", editable = "/Users/alexis/Work/angee/strawberry-django-hasura" },
+    { name = "strawberry-django-hasura", specifier = ">=0.3.2" },
     { name = "strawberry-graphql", git = "ssh://git@github.com/ang-ee/strawberry.git?branch=codex%2Finput-object-extensions" },
     { name = "strawberry-graphql-django", git = "ssh://git@github.com/ang-ee/strawberry-django.git?branch=hotfix-angee-django" },
     { name = "tablib", specifier = ">=3" },
@@ -1795,29 +1795,16 @@ wheels = [
 [[package]]
 name = "strawberry-django-hasura"
 version = "0.3.2"
-source = { editable = "/Users/alexis/Work/angee/strawberry-django-hasura" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
     { name = "strawberry-django-aggregates" },
     { name = "strawberry-graphql" },
     { name = "strawberry-graphql-django" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "django", specifier = ">=6.0" },
-    { name = "strawberry-django-aggregates", specifier = ">=0.7.0" },
-    { name = "strawberry-graphql", specifier = ">=0.315.0" },
-    { name = "strawberry-graphql-django", specifier = ">=0.82.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "django-stubs", specifier = ">=5" },
-    { name = "mypy", specifier = ">=1.10" },
-    { name = "pytest", specifier = ">=8" },
-    { name = "pytest-django", specifier = ">=4" },
-    { name = "ruff", specifier = ">=0.6" },
+sdist = { url = "https://files.pythonhosted.org/packages/05/f1/2710d1ac8f734ab12c6676b3e8e6269435d890d5f13c378974576967642c/strawberry_django_hasura-0.3.2.tar.gz", hash = "sha256:e3c3318c0f9235ac236ec131ab1c1d3d317e443ff88ce1c1abaf04bfa13e0bd8", size = 60707, upload-time = "2026-06-30T14:34:04.251Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7e/77/649d52698b3e3eefea66fc98eccdfe90f0aa9e027ac26e8e65da944318bf/strawberry_django_hasura-0.3.2-py3-none-any.whl", hash = "sha256:28665a12ff76d558fba02e0c68a03987304b64dedf18c4cd2ed9686a58af1765", size = 51096, upload-time = "2026-06-30T14:34:03.286Z" },
 ]
 
 [[package]]
