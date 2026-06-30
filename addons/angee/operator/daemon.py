@@ -8,7 +8,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, cast
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
 from django.conf import settings
 from graphql import build_client_schema, get_introspection_query, print_schema
@@ -38,6 +38,19 @@ class OperatorDaemonError(RuntimeError):
 
 class OperatorDaemonNotFound(OperatorDaemonError):
     """The daemon reported that the requested resource is already absent."""
+
+
+@dataclass(frozen=True, slots=True)
+class RemoteFile:
+    """One workspace file read through the operator file tools.
+
+    ``etag`` is the daemon's content hash for optimistic concurrency — read it,
+    edit, then write it back so a concurrent edit fails the write rather than
+    silently clobbering it.
+    """
+
+    content: str
+    etag: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,6 +216,33 @@ class OperatorDaemon:
 
         payload = {"actor": actor, "service": service, "ttl": ttl}
         return cast(dict[str, Any], self._request("POST", f"{self._base()}/tokens/route", payload))
+
+    # --- Workspace file tools (the AddonInstaller's operator transport) ---------
+    # The operator owns the deployment's files + rebuild lifecycle. These read/edit
+    # one file under a stack source (e.g. ``app/settings.yaml``) over its file API
+    # and trigger a rebuild. The ``etag`` carries optimistic concurrency: read it,
+    # echo it on write, and the daemon 409s a stale write rather than clobbering.
+
+    def read_file(self, source: str, path: str) -> RemoteFile:
+        """Read ``path`` under a stack ``source`` (``GET /files?source=&path=``)."""
+
+        query = urlencode({"source": source, "path": path})
+        data = self._request("GET", f"{self._base()}/files?{query}") or {}
+        return RemoteFile(content=str(data.get("content", "")), etag=str(data.get("etag", "")))
+
+    def write_file(self, source: str, path: str, content: str, etag: str = "") -> str:
+        """Write ``path`` under a stack ``source`` (``PUT /files?source=&path=``); return the new etag."""
+
+        query = urlencode({"source": source, "path": path})
+        data = self._request("PUT", f"{self._base()}/files?{query}", {"content": content, "etag": etag}) or {}
+        return str(data.get("etag", ""))
+
+    def stack_build(self) -> str:
+        """Trigger a stack rebuild + restart (``POST /stack/build``); return a status marker."""
+
+        data = self._request("POST", f"{self._base()}/stack/build", {})
+        status = (data or {}).get("status")
+        return str(status) if status else "rebuilding"
 
     def _base(self) -> str:
         """Return the absolute daemon base, or raise when the daemon is unconfigured."""

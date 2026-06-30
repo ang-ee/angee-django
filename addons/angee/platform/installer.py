@@ -13,16 +13,19 @@ registry rather than a model column:
 - :class:`AddonInstaller` owns all YAML logic — the comment-preserving
   ``ruamel.yaml`` round-trip read → edit ``INSTALLED_APPS`` → write → request rebuild.
 - :class:`AddonInstallerBackend` is pure transport — it only moves the settings bytes
-  and asks for a rebuild. ``local`` (the dev stub) edits the local ``settings.yaml``
-  and treats rebuild as a pending no-op (the addon composes on the next ``angee dev``
-  boot); ``operator`` is a skeleton whose every method raises ``NotImplementedError``
-  pointing at the operator file-tools proposal it will be built against.
+  and asks for a rebuild. ``local`` (the dev stub, defined here) edits the local
+  ``settings.yaml`` and treats rebuild as a pending no-op (the addon composes on the
+  next ``angee dev`` boot). The production ``operator`` backend — edit + rebuild over
+  the operator daemon — is contributed by the ``platform_integrate_operator`` bridge
+  addon, so ``platform`` stays unaware of the operator (they are siblings).
 
 The backend is chosen by ``settings.ANGEE_ADDON_INSTALLER_BACKEND`` against the
-``settings.ANGEE_ADDON_INSTALLER_BACKEND_CLASSES`` key→dotted-path registry, both
-supplied by this addon's ``autoconfig`` (``local`` is the default; production flips
-the key to ``operator``). :func:`register_checks` binds a ``manage.py check`` guard
-over that registry, the row-less analogue of ``ImplClassField.check``.
+``settings.ANGEE_ADDON_INSTALLER_BACKEND_CLASSES`` key→dotted-path registry. This
+addon's ``autoconfig`` supplies the default (``local``) and the ``local`` entry;
+the ``platform_integrate_operator`` bridge contributes the ``operator`` entry, and a
+deployment flips the key to ``operator``. :func:`register_checks` binds a
+``manage.py check`` guard over that registry, the row-less analogue of
+``ImplClassField.check``.
 """
 
 from __future__ import annotations
@@ -46,7 +49,6 @@ _INSTALLED_APPS_KEY = "INSTALLED_APPS"
 _SETTINGS_FILENAME = "settings.yaml"
 _BACKEND_SETTING = "ANGEE_ADDON_INSTALLER_BACKEND"
 _REGISTRY_SETTING = "ANGEE_ADDON_INSTALLER_BACKEND_CLASSES"
-_PROPOSAL = ".agents/proposals/operator-file-tools.md"
 
 
 class AddonInstallerBackend:
@@ -107,44 +109,6 @@ class LocalInstallerBackend(AddonInstallerBackend):
         if not base_dir:
             raise FileNotFoundError("settings.BASE_DIR is not configured; no settings.yaml to edit.")
         return Path(base_dir) / _SETTINGS_FILENAME
-
-
-class OperatorInstallerBackend(AddonInstallerBackend):
-    """Production skeleton — the last connection, not built here.
-
-    The operator owns the deployment's ``settings.yaml`` and the rebuild lifecycle.
-    When the operator file tools land (``.agents/proposals/operator-file-tools.md``),
-    each method maps to one operator endpoint; until then they raise
-    ``NotImplementedError`` naming that endpoint. Registered behind the ``operator``
-    key but not the dev default.
-    """
-
-    key = "operator"
-
-    def read_settings_text(self) -> str:
-        """Skeleton: operator ``GET /files?source=app&path=settings.yaml``."""
-
-        raise NotImplementedError(
-            f"OperatorInstallerBackend.read_settings_text maps to operator "
-            f"GET /files?source=app&path=settings.yaml — not built; see {_PROPOSAL}"
-        )
-
-    def write_settings_text(self, text: str) -> None:
-        """Skeleton: operator ``PUT /files`` (+ etag)."""
-
-        del text
-        raise NotImplementedError(
-            f"OperatorInstallerBackend.write_settings_text maps to operator "
-            f"PUT /files (+ etag) — not built; see {_PROPOSAL}"
-        )
-
-    def request_rebuild(self) -> str:
-        """Skeleton: operator ``POST /stack/build`` (+ restart)."""
-
-        raise NotImplementedError(
-            f"OperatorInstallerBackend.request_rebuild maps to operator "
-            f"POST /stack/build (+ restart) — not built; see {_PROPOSAL}"
-        )
 
 
 @dataclass(frozen=True, slots=True)

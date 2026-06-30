@@ -1,9 +1,9 @@
 """Tests for the AddonInstaller seam — the one writer of settings.yaml's INSTALLED_APPS.
 
 The ``local`` backend edits a real ``settings.yaml`` (comment-preserving via
-``ruamel.yaml``); the ``operator`` backend is a skeleton that points at the operator
-file-tools proposal; ``addon_installer()`` resolves the configured backend the way an
-``ImplClassField`` resolves an impl key.
+``ruamel.yaml``); ``addon_installer()`` resolves the configured backend the way an
+``ImplClassField`` resolves an impl key. (The production ``operator`` backend lives in
+the ``platform_integrate_operator`` bridge addon; it is tested there.)
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from django.core.exceptions import ImproperlyConfigured
 from angee.platform.installer import (
     AddonInstaller,
     LocalInstallerBackend,
-    OperatorInstallerBackend,
     addon_installer,
 )
 
@@ -131,18 +130,6 @@ def test_installed_app_names_is_empty_when_unreadable(tmp_path: Path, settings: 
     settings.BASE_DIR = tmp_path  # no settings.yaml written
 
     assert AddonInstaller(LocalInstallerBackend()).installed_app_names() == ()
-
-
-def test_operator_backend_methods_point_at_the_proposal() -> None:
-    """The operator skeleton raises NotImplementedError naming the file-tools proposal."""
-
-    backend = OperatorInstallerBackend()
-
-    for call in (backend.read_settings_text, backend.request_rebuild):
-        with pytest.raises(NotImplementedError, match="operator-file-tools.md"):
-            call()
-    with pytest.raises(NotImplementedError, match="operator-file-tools.md"):
-        backend.write_settings_text("text")
 
 
 def test_addon_installer_resolves_local_default(settings: Any) -> None:

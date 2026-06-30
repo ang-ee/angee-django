@@ -95,6 +95,50 @@ def test_resolve_template_ref_reads_collection_envelope(monkeypatch: pytest.Monk
     assert daemon.resolve_template_ref(name="agent-default", kind="workspace") == "workspaces/agent-default"
 
 
+def test_file_tools_call_the_files_api_and_carry_the_etag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """read_file/write_file hit ``/files?source=&path=`` carrying the etag; stack_build hits ``/stack/build``."""
+
+    daemon = OperatorDaemon(
+        endpoint="http://op/graphql",
+        server_base="http://op",
+        admin_bearer="admin",
+        scope=(),
+        ttl="1h",
+    )
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def fake_request(
+        self: OperatorDaemon,
+        method: str,
+        url: str,
+        payload: dict[str, object] | None = None,
+        *,
+        timeout: int = 60,
+    ) -> dict[str, object]:
+        del self, timeout
+        calls.append((method, url, payload))
+        if method == "GET":
+            return {"source": "app", "path": "settings.yaml", "content": "INSTALLED_APPS: []\n", "etag": "e1"}
+        if method == "PUT":
+            return {"source": "app", "path": "settings.yaml", "etag": "e2"}
+        return {"status": "queued"}
+
+    monkeypatch.setattr(OperatorDaemon, "_request", fake_request)
+
+    remote = daemon.read_file("app", "settings.yaml")
+    assert (remote.content, remote.etag) == ("INSTALLED_APPS: []\n", "e1")
+    assert daemon.write_file("app", "settings.yaml", "INSTALLED_APPS: [x]\n", "e1") == "e2"
+    assert daemon.stack_build() == "queued"
+
+    get_method, get_url, _ = calls[0]
+    assert get_method == "GET"
+    assert get_url.startswith("http://op/files?") and "source=app" in get_url and "path=settings.yaml" in get_url
+    put_method, put_url, put_payload = calls[1]
+    assert put_method == "PUT" and put_url.startswith("http://op/files?")
+    assert put_payload == {"content": "INSTALLED_APPS: [x]\n", "etag": "e1"}
+    assert calls[2] == ("POST", "http://op/stack/build", {})
+
+
 # --- endpoint resolution ------------------------------------------------------
 #
 # The daemon resolves from Django settings only. Dev stack env and project YAML
