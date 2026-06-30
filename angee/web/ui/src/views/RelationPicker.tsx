@@ -68,6 +68,12 @@ export interface RelationPickerProps {
   /** Called with the id after an inline edit (e.g. to refetch options for a relabel). */
   onEdited?: (id: string) => void;
   /**
+   * Notified when the picker *popover* opens or closes — distinct from this
+   * component's create/edit *dialog* state. Lets the caller defer the option
+   * fetch until first open.
+   */
+  onOpenChange?: (open: boolean) => void;
+  /**
    * In-app path to the selected record's detail page. When set, a "follow" arrow
    * beside the picker navigates there — so a chosen relation is a link to its
    * record, not a dead end. Omitted when the target model has no routed page.
@@ -99,6 +105,7 @@ export function RelationPicker({
   onCreated,
   edit,
   onEdited,
+  onOpenChange,
   followHref,
 }: RelationPickerProps): ReactElement {
   const t = useBaseT();
@@ -120,6 +127,7 @@ export function RelationPicker({
             aria-label={ariaLabel}
             readOnly={readOnly}
             onCreate={create ? (query) => setDialog({ mode: "create", query }) : undefined}
+            onOpenChange={onOpenChange}
           />
         </div>
         {canEdit && value ? (

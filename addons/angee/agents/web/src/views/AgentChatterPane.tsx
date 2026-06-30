@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Card, CardContent, EmptyState, buttonVariants, cn, textRoleVariants } from "@angee/ui";
+import { Card, CardContent, EmptyState, LazyBoundary, buttonVariants, cn, textRoleVariants } from "@angee/ui";
 import { useAuthoredQuery } from "@angee/ui";
 import type { ChatterView } from "@angee/ui/runtime";
 import { Link } from "@tanstack/react-router";
@@ -9,9 +9,17 @@ import {
   ResolveSessionForView,
   type AgentChatView,
 } from "../documents";
-import { AgentChat } from "./AgentChat";
 import { KeptAliveAgents, useOpenedAgents } from "./useOpenedAgents";
 import { useRunningAgents } from "./useRunningAgents";
+
+// The chat surface is the addon's heaviest tree (assistant-ui + streamdown /
+// react-markdown). It's referenced eagerly here — the chatter contribution is
+// registered at boot — so lazy-mount it through the shared `LazyBoundary`, the way
+// the spotlight and lazy widgets do, keeping streamdown out of the boot bundle and
+// in its own chunk loaded only when the user opens the agents chatter.
+const AgentChat = React.lazy(() =>
+  import("./AgentChat").then((module) => ({ default: module.AgentChat })),
+);
 
 /**
  * The side-chatter entry: resolves the agent that serves the user (their running agent) and
@@ -104,15 +112,17 @@ export function AgentChatterPane({
       openedIds={openedIds}
       selectedId={selectedId}
       renderAgent={(id) => (
-        <AgentChat
-          agentId={id}
-          view={liveView}
-          modelHandle={agents.find((agent) => agent.id === id)?.model?.name ?? resolved.model_handle}
-          agents={agents}
-          selectedAgentId={selectedId ?? undefined}
-          onSelectAgent={handleSelect}
-          fallbackName={resolved.agent_name}
-        />
+        <LazyBoundary pending={<PaneMessage>{t("agents.chat.resolving")}</PaneMessage>}>
+          <AgentChat
+            agentId={id}
+            view={liveView}
+            modelHandle={agents.find((agent) => agent.id === id)?.model?.name ?? resolved.model_handle}
+            agents={agents}
+            selectedAgentId={selectedId ?? undefined}
+            onSelectAgent={handleSelect}
+            fallbackName={resolved.agent_name}
+          />
+        </LazyBoundary>
       )}
     />
   );

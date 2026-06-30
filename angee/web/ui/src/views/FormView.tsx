@@ -83,6 +83,8 @@ import {
   type RecordDeleteAction,
 } from "./RecordActionBar";
 import { RelationFieldWidget } from "./RelationFieldWidget";
+import { relationSelectedOption } from "./relation-options";
+import type { RelationOption } from "../widgets/RelationField";
 import { useBaseT } from "../i18n";
 
 export type FieldKind = PageFieldKind;
@@ -402,11 +404,11 @@ export function FormView({
       // and the record loads as null. Resource metadata owns which fields are
       // readable — skip a declared field once metadata is loaded and lacks it.
       if (modelMetadata && !modelMetadata.fields[field.name]) continue;
-      addFieldSelection(paths, field);
+      addFieldSelection(paths, field, relationByField.get(field.name));
     }
     for (const extra of returning ?? []) paths.add(extra);
     return [...paths];
-  }, [formFields, modelMetadata, returning]);
+  }, [formFields, modelMetadata, relationByField, returning]);
 
   const dataResource = modelMetadata?.resource ?? null;
   const refineFields = React.useMemo(
@@ -734,28 +736,38 @@ export function FormView({
     () => recordSubtitleParts(displayRecord, id),
     [displayRecord, id],
   );
-  const renderField = (field: FieldDescriptor): React.ReactNode => (
-    <Controller
-      key={field.name}
-      control={form.control}
-      name={field.name}
-      render={({ field: controller, fieldState }) => (
-        <BoundFieldRow
-          field={field}
-          relation={relationByField.get(field.name)}
-          value={controller.value}
-          readOnly={fieldReadOnly(field)}
-          errors={fieldState.error ? [fieldState.error] : []}
-          serverMessages={serverFieldErrors[field.name]}
-          onChange={(next) => {
-            clearServerFieldError(field.name);
-            controller.onChange(next);
-            afterFieldChange(field, next);
-          }}
-        />
-      )}
-    />
-  );
+  const renderField = (field: FieldDescriptor): React.ReactNode => {
+    const relation = relationByField.get(field.name);
+    // The selected record's label comes from the parent read (folded above), so
+    // the picker shows it with no extra query — derived during render, never
+    // stored in form state (which stays the flat id).
+    const selectedOption = relation
+      ? relationSelectedOption(displayRecord?.[field.name], relation.labelField)
+      : undefined;
+    return (
+      <Controller
+        key={field.name}
+        control={form.control}
+        name={field.name}
+        render={({ field: controller, fieldState }) => (
+          <BoundFieldRow
+            field={field}
+            relation={relation}
+            selectedOption={selectedOption}
+            value={controller.value}
+            readOnly={fieldReadOnly(field)}
+            errors={fieldState.error ? [fieldState.error] : []}
+            serverMessages={serverFieldErrors[field.name]}
+            onChange={(next) => {
+              clearServerFieldError(field.name);
+              controller.onChange(next);
+              afterFieldChange(field, next);
+            }}
+          />
+        )}
+      />
+    );
+  };
 
   // Apply a field's `prefill` seeds (the impl-defaults mechanism): picking an impl
   // loads its full preset, so every declared default lands — including booleans the
@@ -1290,6 +1302,7 @@ function ConditionalSections({
 function BoundFieldRow({
   field,
   relation,
+  selectedOption,
   value,
   readOnly,
   errors,
@@ -1298,6 +1311,7 @@ function BoundFieldRow({
 }: {
   field: FieldDescriptor;
   relation?: RelationFieldInfo;
+  selectedOption?: RelationOption;
   value: unknown;
   readOnly?: boolean;
   errors: readonly unknown[];
@@ -1326,6 +1340,7 @@ function BoundFieldRow({
             onChange={onChange}
             readOnly={effectiveReadOnly}
             relation={relation}
+            selectedOption={selectedOption}
             aria-label={fieldAriaLabel(field)}
           />
         ) : (
@@ -1472,9 +1487,17 @@ function titleText(value: unknown): string {
 function addFieldSelection(
   paths: Set<string>,
   field: FieldDescriptor,
+  relation?: RelationFieldInfo,
 ): void {
   if (isRelationIdField(field)) {
     paths.add(`${field.name}.id`);
+    // Fold the related record's label into the parent read so a read-only/show
+    // view labels the relation with no extra round-trip. `labelField` is the
+    // related type's `recordRepresentation`, always a readable scalar field, so
+    // the nested selection is safe.
+    if (relation && relation.labelField !== "id") {
+      paths.add(`${field.name}.${relation.labelField}`);
+    }
     return;
   }
   paths.add(field.name);

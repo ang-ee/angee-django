@@ -39,6 +39,7 @@ export {
   inlineEmptyVariants,
   type InlineEmptyProps,
 } from "./InlineEmpty";
+export { LazyBoundary, type LazyBoundaryProps } from "./LazyBoundary";
 export {
   ListItem,
   type ListItemProps,

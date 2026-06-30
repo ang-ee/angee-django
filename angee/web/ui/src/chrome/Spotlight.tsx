@@ -1,23 +1,23 @@
 import {
+  lazy,
   useEffect,
-  useMemo,
   useRef,
   type ReactElement,
   type ReactNode,
 } from "react";
 
+import { LazyBoundary } from "../fragments/LazyBoundary";
+import { LoadingPanel } from "../fragments/LoadingPanel";
 import { useBaseT } from "../i18n";
-import { Command } from "../ui/command";
 import {
   DialogBackdrop,
-  DialogBody,
   DialogContent,
   DialogPortal,
   DialogRoot,
-  DialogTitle,
 } from "../ui/dialog";
-import { Kbd } from "../ui/kbd";
-import { renderGlyph } from "./Glyph";
+
+// cmdk (and the command list it renders) loads on first ⌘K, not at boot.
+const SpotlightCommandList = lazy(() => import("./SpotlightCommandList"));
 
 export interface SpotlightCommand {
   id: string;
@@ -66,86 +66,26 @@ export function Spotlight({
   const t = useBaseT();
   const resolvedPlaceholder = placeholder ?? t("chrome.searchCommands");
   const commandPalette = t("chrome.commandPalette");
-  const groups = useMemo(
-    () => groupCommands(commands, t("chrome.commands")),
-    [commands, t],
-  );
-
-  function runCommand(command: SpotlightCommand): void {
-    void Promise.resolve(command.run()).finally(() => onOpenChange(false));
-  }
 
   return (
     <DialogRoot open={open} onOpenChange={onOpenChange}>
       <DialogPortal>
         <DialogBackdrop />
         <DialogContent aria-label={commandPalette} placement="default">
-          <Command label={commandPalette} loop>
-            <DialogTitle className="sr-only">{commandPalette}</DialogTitle>
-            <Command.Search className="h-12 px-4">
-              <Command.Input
-                autoFocus
-                placeholder={resolvedPlaceholder}
-                aria-label={resolvedPlaceholder}
-              />
-              <Kbd>Esc</Kbd>
-            </Command.Search>
-            <DialogBody className="p-0">
-              <Command.List className="max-h-modal-list-max-h">
-                <Command.Empty>{t("chrome.noCommands")}</Command.Empty>
-                {groups.map((group) => (
-                  <Command.Group key={group.name} heading={group.name}>
-                    {group.commands.map((command) => (
-                      <Command.Item
-                        key={command.id}
-                        value={commandValue(command)}
-                        onSelect={() => runCommand(command)}
-                      >
-                        {command.icon ? renderGlyph(command.icon) : null}
-                        <span className="min-w-0 flex-1 truncate">
-                          {command.title}
-                        </span>
-                        {command.hint ? (
-                          <Command.Shortcut>{command.hint}</Command.Shortcut>
-                        ) : null}
-                      </Command.Item>
-                    ))}
-                  </Command.Group>
-                ))}
-              </Command.List>
-            </DialogBody>
-          </Command>
+          {/* The dialog mounts its content only while open, so the lazy body —
+              and cmdk with it — loads on first ⌘K. */}
+          <LazyBoundary pending={<LoadingPanel />}>
+            <SpotlightCommandList
+              commands={commands}
+              placeholder={resolvedPlaceholder}
+              label={commandPalette}
+              onOpenChange={onOpenChange}
+            />
+          </LazyBoundary>
         </DialogContent>
       </DialogPortal>
     </DialogRoot>
   );
-}
-
-function groupCommands(
-  commands: readonly SpotlightCommand[],
-  defaultGroup: string,
-): readonly {
-  name: string;
-  commands: readonly SpotlightCommand[];
-}[] {
-  const order: string[] = [];
-  const byGroup = new Map<string, SpotlightCommand[]>();
-  for (const command of commands) {
-    const group = command.group ?? defaultGroup;
-    const existing = byGroup.get(group);
-    if (existing) {
-      existing.push(command);
-    } else {
-      order.push(group);
-      byGroup.set(group, [command]);
-    }
-  }
-  return order.map((name) => ({ name, commands: byGroup.get(name) ?? [] }));
-}
-
-function commandValue(command: SpotlightCommand): string {
-  if (command.searchValue) return command.searchValue;
-  return typeof command.title === "string" ? command.title : command.id;
 }
 
 function isTextEntryTarget(target: EventTarget | null): boolean {

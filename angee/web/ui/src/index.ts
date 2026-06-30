@@ -85,15 +85,6 @@ export * from "./feedback";
 // composition surface, app chrome, the communication surface, and the preview
 // registry. (Wave A.3/A.4: relocated from `@angee/base`.)
 export * from "./views";
-export {
-  GraphView,
-  type GraphViewEdge,
-  type GraphViewEdgeStyle,
-  type GraphViewLayout,
-  type GraphViewNode,
-  type GraphViewNodeStyle,
-  type GraphViewProps,
-} from "./views/GraphView";
 export * from "./toolbars";
 export * from "./page";
 export * from "./layouts";

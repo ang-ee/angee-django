@@ -1,9 +1,10 @@
-import { useMemo, useState, type ReactElement } from "react";
+import { lazy, useMemo, useState, type ReactElement } from "react";
 
 import { Glyph } from "../chrome/Glyph";
+import { LazyBoundary } from "../fragments/LazyBoundary";
 import { useBaseT } from "../i18n";
 import { cn } from "../lib/cn";
-import { Command } from "../ui/command";
+import { Skeleton } from "../ui/skeleton";
 import {
   PopoverContent,
   PopoverPortal,
@@ -11,6 +12,10 @@ import {
   PopoverRoot,
   PopoverTrigger,
 } from "../ui/popover";
+
+// cmdk (and the option list it renders) loads when the picker first opens, not
+// at boot — the popover mounts this body only while open.
+const RelationFieldCommandList = lazy(() => import("./RelationFieldCommandList"));
 
 /** One selectable related record. */
 export interface RelationOption {
@@ -32,6 +37,12 @@ export interface RelationFieldProps {
    * it matches no option — the searchable, in-place create affordance.
    */
   onCreate?: (query: string) => void;
+  /**
+   * Notified whenever the picker popover opens or closes. Lets a caller defer
+   * work (e.g. fetching the option list) until the popover is first opened;
+   * the internal open state is unaffected when this is omitted.
+   */
+  onOpenChange?: (open: boolean) => void;
 }
 
 const TRIGGER_CLASS =
@@ -55,43 +66,27 @@ export function RelationField({
   readOnly,
   "aria-label": ariaLabel,
   onCreate,
+  onOpenChange,
 }: RelationFieldProps): ReactElement {
   const t = useBaseT();
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
 
   const selected = useMemo(
     () => options.find((option) => option.value === value),
     [options, value],
   );
-  const normalized = query.trim().toLowerCase();
-  const filtered = useMemo(() => {
-    if (!normalized) return options;
-    return options.filter((option) =>
-      `${option.label} ${option.value}`.toLowerCase().includes(normalized),
-    );
-  }, [options, normalized]);
-  const exactMatch = options.some(
-    (option) => option.label.trim().toLowerCase() === normalized,
-  );
-  const showCreate = Boolean(onCreate) && normalized.length > 0 && !exactMatch;
   const triggerLabel = selected
     ? ariaLabel
       ? `${ariaLabel}: ${selected.label}`
       : selected.label
     : ariaLabel;
 
-  function dismiss(): void {
-    setOpen(false);
-    setQuery("");
-  }
-
   return (
     <PopoverRoot
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
-        if (!next) setQuery("");
+        onOpenChange?.(next);
       }}
     >
       <PopoverTrigger
@@ -107,51 +102,17 @@ export function RelationField({
       <PopoverPortal>
         <PopoverPositioner sideOffset={4} align="start">
           <PopoverContent className="min-w-56 p-0">
-            <Command shouldFilter={false} label={ariaLabel}>
-              <Command.Search>
-                <Command.Input
-                  autoFocus
-                  value={query}
-                  onValueChange={setQuery}
-                  placeholder={searchPlaceholder ?? t("relation.searchPlaceholder")}
-                />
-              </Command.Search>
-              <Command.List>
-                {filtered.map((option) => (
-                  <Command.Item
-                    key={option.value}
-                    value={option.value}
-                    onSelect={() => {
-                      onChange?.(option.value);
-                      dismiss();
-                    }}
-                  >
-                    <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                    {option.value === value ? (
-                      <Glyph decorative name="check" />
-                    ) : null}
-                  </Command.Item>
-                ))}
-                {showCreate ? (
-                  <Command.Item
-                    value="__create__"
-                    onSelect={() => {
-                      onCreate?.(query.trim());
-                      dismiss();
-                    }}
-                    className="text-brand-soft-text"
-                  >
-                    <Glyph decorative name="plus" />
-                    <span className="min-w-0 flex-1 truncate">
-                      {t("relation.create", { query: query.trim() })}
-                    </span>
-                  </Command.Item>
-                ) : null}
-                {filtered.length === 0 && !showCreate ? (
-                  <Command.Empty>{t("relation.noMatches")}</Command.Empty>
-                ) : null}
-              </Command.List>
-            </Command>
+            <LazyBoundary pending={<Skeleton className="m-1 h-8" />}>
+              <RelationFieldCommandList
+                options={options}
+                value={value}
+                searchPlaceholder={searchPlaceholder}
+                aria-label={ariaLabel}
+                onSelect={(next) => onChange?.(next)}
+                onCreate={onCreate}
+                onDismiss={() => setOpen(false)}
+              />
+            </LazyBoundary>
           </PopoverContent>
         </PopoverPositioner>
       </PopoverPortal>

@@ -566,9 +566,10 @@ function SortHeader<TRow extends Row>({
   );
 }
 
-export function RecordRow<TRow extends Row>({
+function RecordRowInner<TRow extends Row>({
   row,
-  resourceView,
+  selected,
+  onToggleSelected,
   interactive,
   selectable = true,
   rowHref,
@@ -577,7 +578,8 @@ export function RecordRow<TRow extends Row>({
   draggableRow,
 }: {
   row: TableRowModel<TRow>;
-  resourceView: ResourceViewContextValue;
+  selected: boolean;
+  onToggleSelected: (id: string, selected?: boolean) => void;
   interactive: boolean;
   selectable?: boolean;
   rowHref?: (row: TRow) => string;
@@ -591,7 +593,8 @@ export function RecordRow<TRow extends Row>({
     return (
       <LinkedRecordRow
         row={row}
-        resourceView={resourceView}
+        selected={selected}
+        onToggleSelected={onToggleSelected}
         selectable={selectable}
         href={href}
         onRecordOpen={onRecordOpen}
@@ -602,7 +605,8 @@ export function RecordRow<TRow extends Row>({
   return (
     <PlainRecordRow
       row={row}
-      resourceView={resourceView}
+      selected={selected}
+      onToggleSelected={onToggleSelected}
       interactive={interactive}
       selectable={selectable}
       onRowClick={onRowClick}
@@ -612,16 +616,24 @@ export function RecordRow<TRow extends Row>({
   );
 }
 
+// Memoised so a selection toggle re-renders only the affected row: `selected` is
+// the sole per-row-changing prop, `onToggleSelected` is the stable
+// `toggleSelectedId`, and the rest (row, callbacks) are stable across toggles
+// because they originate above the selection-context boundary.
+export const RecordRow = React.memo(RecordRowInner) as typeof RecordRowInner;
+
 function LinkedRecordRow<TRow extends Row>({
   row,
-  resourceView,
+  selected,
+  onToggleSelected,
   selectable,
   href,
   onRecordOpen,
   dragProps,
 }: {
   row: TableRowModel<TRow>;
-  resourceView: ResourceViewContextValue;
+  selected: boolean;
+  onToggleSelected: (id: string, selected?: boolean) => void;
   selectable: boolean;
   href: string;
   onRecordOpen?: (row: TRow) => void;
@@ -629,7 +641,6 @@ function LinkedRecordRow<TRow extends Row>({
 }): React.ReactElement {
   const t = useBaseT();
   const id = row.id;
-  const selected = resourceView.state.selectedIds.has(id);
   const navigate = useNavigate();
   const openHref = React.useCallback(
     (event: React.MouseEvent<HTMLTableRowElement>) => {
@@ -669,7 +680,7 @@ function LinkedRecordRow<TRow extends Row>({
             checked={selected}
             onClick={(event) => event.stopPropagation()}
             onCheckedChange={(checked) =>
-              resourceView.toggleSelectedId(id, checked)
+              onToggleSelected(id, checked)
             }
           />
         </TableCell>
@@ -688,7 +699,8 @@ function LinkedRecordRow<TRow extends Row>({
 
 function PlainRecordRow<TRow extends Row>({
   row,
-  resourceView,
+  selected,
+  onToggleSelected,
   interactive,
   selectable,
   onRowClick,
@@ -696,7 +708,8 @@ function PlainRecordRow<TRow extends Row>({
   dragProps,
 }: {
   row: TableRowModel<TRow>;
-  resourceView: ResourceViewContextValue;
+  selected: boolean;
+  onToggleSelected: (id: string, selected?: boolean) => void;
   interactive: boolean;
   selectable: boolean;
   onRowClick?: (row: TRow) => void;
@@ -705,7 +718,6 @@ function PlainRecordRow<TRow extends Row>({
 }): React.ReactElement {
   const t = useBaseT();
   const id = row.id;
-  const selected = resourceView.state.selectedIds.has(id);
   return (
     <TableRow
       {...dragProps}
@@ -724,7 +736,7 @@ function PlainRecordRow<TRow extends Row>({
             checked={selected}
             onClick={(event) => event.stopPropagation()}
             onCheckedChange={(checked) =>
-              resourceView.toggleSelectedId(id, checked)
+              onToggleSelected(id, checked)
             }
           />
         </TableCell>
@@ -797,7 +809,8 @@ function renderListItem<TRow extends Row>({
     <RecordRow
       key={item.row.id}
       row={item.row}
-      resourceView={resourceView}
+      selected={resourceView.state.selectedIds.has(item.row.id)}
+      onToggleSelected={resourceView.toggleSelectedId}
       interactive={interactive}
       selectable={selectable}
       rowHref={rowHref}

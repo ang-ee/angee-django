@@ -57,6 +57,10 @@ import {
 const sdkMocks = vi.hoisted(() => ({
   record: null as Row | null,
   listRows: [] as Row[],
+  // Whether the most recent relation-options `useList` ran with its query
+  // enabled — the deferred 200-row fetch fires only once the picker is opened,
+  // so this stays `false` on a read-only/show render and an editable mount.
+  listEnabled: false,
   mutate: vi.fn(),
   recordSelection: undefined as readonly string[] | undefined,
   mutationAction: undefined as string | undefined,
@@ -155,14 +159,23 @@ vi.mock("@refinedev/core", async (importOriginal) => {
         },
       };
     },
-    useList: () => ({
-      result: { data: sdkMocks.listRows, total: sdkMocks.listRows.length },
-      query: {
-        isFetching: false,
-        error: null,
-        refetch: vi.fn(),
-      },
-    }),
+    useList: (options?: { queryOptions?: { enabled?: boolean } }) => {
+      // The relation-options query is deferred via refine's `queryOptions.enabled`;
+      // when disabled it returns no rows and never fires — mirror that so a test
+      // can prove the read path does not pull the 200-row option list.
+      const enabled = options?.queryOptions?.enabled !== false;
+      sdkMocks.listEnabled = enabled;
+      return {
+        result: enabled
+          ? { data: sdkMocks.listRows, total: sdkMocks.listRows.length }
+          : { data: [], total: 0 },
+        query: {
+          isFetching: false,
+          error: null,
+          refetch: vi.fn(),
+        },
+      };
+    },
     useCreate: mutationResult("create", async ({ values = {} }) => ({
       data: await sdkMocks.mutate({ data: values }),
     })),
@@ -301,6 +314,7 @@ describe("FormView", () => {
     };
     sdkMocks.mutate.mockReset();
     sdkMocks.listRows = [];
+    sdkMocks.listEnabled = false;
     sdkMocks.recordSelection = undefined;
     sdkMocks.mutationAction = undefined;
     sdkMocks.mutationOptions = undefined;
@@ -1006,13 +1020,17 @@ describe("FormView", () => {
     });
   });
 
-  test("renders relation object values through metadata-owned relation options", async () => {
+  test("folds the related label into the read and defers the option list to first open", async () => {
+    // The detail read folds the related record's label (`vendor.display_name`),
+    // so the picker shows it with no option query. The list carries a DISTINCT
+    // label, proving the read path uses the record's own label and never fetches
+    // the 200-row option list until the picker is first opened.
     sdkMocks.record = {
       id: "provider-1",
       name: "Anthropic",
-      vendor: { id: "vnd_1" },
+      vendor: { id: "vnd_1", display_name: "Anthropic Vendor" },
     };
-    sdkMocks.listRows = [{ id: "vnd_1", display_name: "Anthropic Vendor" }];
+    sdkMocks.listRows = [{ id: "vnd_1", display_name: "Vendor From List" }];
     const metadata: SchemaFieldMetadata = {
       types: {
         InferenceProviderType: {
@@ -1063,12 +1081,27 @@ describe("FormView", () => {
       metadata,
     );
 
+    // The trigger label comes from the record read, and the deferred option
+    // list has NOT fired on the editable-form mount (the headline guarantee).
     await waitFor(() =>
       expect(
         screen.getByRole("button", { name: "Vendor: Anthropic Vendor" }),
       ).toBeTruthy(),
     );
+    expect(sdkMocks.listEnabled).toBe(false);
     expect(sdkMocks.recordSelection).toContain("vendor.id");
+    expect(sdkMocks.recordSelection).toContain("vendor.display_name");
+
+    // Opening the picker fires the option list once; its fresh label then wins.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Vendor: Anthropic Vendor" }),
+    );
+    await waitFor(() => expect(sdkMocks.listEnabled).toBe(true));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Vendor: Vendor From List" }),
+      ).toBeTruthy(),
+    );
   });
 
   test("omits unselected option fields from create payloads", async () => {

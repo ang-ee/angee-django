@@ -6,8 +6,7 @@ import { colorDotWidget } from "./colorDot";
 import { comboboxWidget } from "./combobox";
 import { dateWidget } from "./date";
 import { datetimeWidget } from "./datetime";
-import { jsonWidget } from "./json";
-import { markdownEditorWidget, markdownPreviewWidget } from "./markdown";
+import { lazyWidget } from "./lazy-widget";
 import { many2manyWidget } from "./many2many";
 import { many2oneWidget } from "./many2one";
 import { floatWidget, integerWidget } from "./number";
@@ -28,12 +27,11 @@ import { userRefWidget } from "./userRef";
 import type { WidgetDefinition } from "./types";
 
 export {
-  Markdown,
   WikilinkProvider,
   useWikilinkResolver,
   type WikilinkResolver,
   type WikilinkTarget,
-} from "./markdown";
+} from "./wikilink";
 
 export type {
   WidgetDefinition,
@@ -65,6 +63,23 @@ export {
   type RelationFieldProps,
   type RelationOption,
 } from "./RelationField";
+
+// The editor-heavy widgets (CodeMirror, react-markdown, react-json-view-lite)
+// are code-split: the registry holds a stable lazy wrapper, and the real module
+// loads only when a field that uses it is first rendered — keeping those libs out
+// of the boot bundle.
+const jsonWidget = lazyWidget(() => import("./json").then((m) => m.jsonWidget), {
+  edit: true,
+  cell: true,
+});
+const markdownEditorWidget = lazyWidget(
+  () => import("./markdown").then((m) => m.markdownEditorWidget),
+  { edit: true, cell: true },
+);
+const markdownPreviewWidget = lazyWidget(
+  () => import("./markdown").then((m) => m.markdownPreviewWidget),
+  { edit: true, cell: true },
+);
 
 export const defaultWidgets = {
   text: textWidget,

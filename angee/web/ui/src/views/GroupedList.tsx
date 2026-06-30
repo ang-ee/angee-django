@@ -1092,7 +1092,8 @@ function LeafGroupRecords<TRow extends Row>({
           <RecordRow
             key={row.id}
             row={row}
-            resourceView={resourceView}
+            selected={resourceView.state.selectedIds.has(row.id)}
+            onToggleSelected={resourceView.toggleSelectedId}
             interactive={interactive}
             rowHref={rowHref}
             onRowClick={onRowClick}

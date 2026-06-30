@@ -487,7 +487,16 @@ export class ResourceViewState {
   }
 
   withSelectedIds(selectedIds: Iterable<string>): ResourceViewState {
-    return this.with({ selectedIds: new Set(selectedIds) });
+    // Selection is the hot path (toggled on every row click). Clone by structural
+    // sharing so the already-normalised sort/filter/group/groupStack KEEP their
+    // references — routing through `with()`/the constructor re-normalises them into
+    // new objects on a pure selection change, churning every downstream memo (and
+    // every memoised row) that derives from them.
+    return Object.assign(
+      Object.create(ResourceViewState.prototype) as ResourceViewState,
+      this,
+      { selectedIds: new Set(selectedIds) },
+    );
   }
 
   toFavorite(

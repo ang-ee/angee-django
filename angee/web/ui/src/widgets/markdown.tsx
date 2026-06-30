@@ -1,10 +1,7 @@
 import {
-  createContext,
-  useContext,
   useRef,
   useState,
   type ReactElement,
-  type ReactNode,
 } from "react";
 import { markdown } from "@codemirror/lang-markdown";
 import { EditorView, keymap } from "@codemirror/view";
@@ -23,6 +20,7 @@ import { Toolbar } from "../ui/toolbar";
 import { widgetControlSurface } from "../ui/widget-control";
 import type { WidgetDefinition, WidgetRenderProps } from "./types";
 import { useCodeMirrorEditor } from "./codemirror-editor";
+import { useWikilinkResolver, type WikilinkResolver } from "./wikilink";
 import {
   markdownBoldCommand,
   markdownBulletListCommand,
@@ -241,41 +239,6 @@ function ModeButton({
       <Glyph name={iconName} />
     </Button>
   );
-}
-
-/** How a `[[wikilink]]` resolves: a way to open it, and whether it is broken. */
-export interface WikilinkTarget {
-  /** Open the linked page; absent when the link does not resolve. */
-  onActivate?: () => void;
-  /** The target does not resolve to a page (rendered as a broken link). */
-  broken: boolean;
-}
-
-/** Resolve a `[[target]]` to its navigation, supplied by the host. */
-export type WikilinkResolver = (target: string) => WikilinkTarget;
-
-const WikilinkContext = createContext<WikilinkResolver | null>(null);
-
-/**
- * Make `[[wikilinks]]` in any descendant {@link Markdown} clickable by supplying
- * a resolver. Without a provider, `[[...]]` renders as plain text.
- */
-export function WikilinkProvider({
-  resolve,
-  children,
-}: {
-  resolve: WikilinkResolver;
-  children: ReactNode;
-}): ReactElement {
-  return (
-    <WikilinkContext.Provider value={resolve}>
-      {children}
-    </WikilinkContext.Provider>
-  );
-}
-
-export function useWikilinkResolver(): WikilinkResolver | null {
-  return useContext(WikilinkContext);
 }
 
 const WIKILINK_PREFIX = "wikilink:";

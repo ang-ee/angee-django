@@ -143,6 +143,7 @@ export {
 export {
   useRelationOptions,
   relationOptionsFromRows,
+  relationSelectedOption,
   type RelationOptionsConfig,
   type RelationOptionsList,
   type RelationOptionsResult,

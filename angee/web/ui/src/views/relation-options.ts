@@ -91,6 +91,26 @@ export function useRelationOptions(
   return React.useMemo(() => ({ list, options }), [list, options]);
 }
 
+/**
+ * The selected-record analog of {@link relationOptionsFromRows}: the picker
+ * option for a single already-loaded related record (the parent read's folded
+ * `{ id, <labelField> }` object), reusing the shared labeling rule so the
+ * trigger shows the label with no extra round-trip. Returns `undefined` when the
+ * value carries no readable id (e.g. a bare id string before a label loads).
+ */
+export function relationSelectedOption(
+  value: unknown,
+  labelField: string,
+): RelationOption | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const row = value as Row;
+  const id = rowPublicId(row);
+  if (!id) return undefined;
+  return { value: id, label: relationOptionLabel(row, labelField, id) };
+}
+
 export function relationOptionsFromRows(
   rows: readonly Row[],
   labelField: string,

@@ -142,7 +142,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("AgentChatterPane", () => {
-  test("leaves the no-agent state when the session query refetches with a running agent", () => {
+  test("leaves the no-agent state when the session query refetches with a running agent", async () => {
     sdkMocks.sessionData = { resolve_session_for_view: null };
 
     const view = render(<AgentChatterPane resource="notes/note" recordId="nte_1" />);
@@ -158,7 +158,8 @@ describe("AgentChatterPane", () => {
     view.rerender(<AgentChatterPane resource="notes/note" recordId="nte_1" />);
 
     expect(screen.queryByText("No agent yet")).toBeNull();
-    const chat = screen.getByTestId("agent-chat");
+    // The chat surface is lazy-mounted (its own chunk), so it resolves a tick after render.
+    const chat = await screen.findByTestId("agent-chat");
     expect(chat.getAttribute("data-agent-id")).toBe("agt_running");
     expect(chat.getAttribute("data-selected-agent-id")).toBe("agt_running");
     expect(chat.getAttribute("data-model-handle")).toBe("claude-sonnet-4-6");
@@ -175,7 +176,7 @@ describe("AgentChatterPane", () => {
     ).toBe(true);
   });
 
-  test("uses a contributed chatter view directly", () => {
+  test("uses a contributed chatter view directly", async () => {
     sdkMocks.rosterData = {
       agents: [agent("agt_running", "Demo Agent")],
     };
@@ -194,7 +195,7 @@ describe("AgentChatterPane", () => {
       />,
     );
 
-    const chat = screen.getByTestId("agent-chat");
+    const chat = await screen.findByTestId("agent-chat");
     expect(chat.getAttribute("data-view")).toBe(
       JSON.stringify({
         kind: "record",

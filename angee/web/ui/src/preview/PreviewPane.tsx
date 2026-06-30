@@ -1,12 +1,8 @@
-import {
-  Component,
-  Suspense,
-  type ReactElement,
-  type ReactNode,
-} from "react";
+import { type ReactElement, type ReactNode } from "react";
 import { usePreviews } from "../runtime";
 
 import { EmptyState } from "../fragments/EmptyState";
+import { LazyBoundary } from "../fragments/LazyBoundary";
 import { LoadingPanel } from "../fragments/LoadingPanel";
 import { useBaseT } from "../i18n";
 import { builtinPreviewProviders } from "./builtins";
@@ -57,38 +53,12 @@ export function PreviewPane({
   // page index) must not carry across files in a persistent pane.
   const instanceKey = `${provider.id}:${file.url}`;
   return (
-    <PreviewErrorBoundary fallback={empty} resetKey={instanceKey}>
-      <Suspense fallback={<LoadingPanel message={t("preview.loading")} />}>
-        <Renderer key={instanceKey} file={file} mime={resolvedMime} />
-      </Suspense>
-    </PreviewErrorBoundary>
+    <LazyBoundary
+      pending={<LoadingPanel message={t("preview.loading")} />}
+      fallback={empty}
+      resetKey={instanceKey}
+    >
+      <Renderer key={instanceKey} file={file} mime={resolvedMime} />
+    </LazyBoundary>
   );
-}
-
-interface PreviewErrorBoundaryProps {
-  fallback: ReactNode;
-  /** When this changes the boundary resets so a new file/provider retries. */
-  resetKey: string;
-  children: ReactNode;
-}
-
-class PreviewErrorBoundary extends Component<
-  PreviewErrorBoundaryProps,
-  { failed: boolean }
-> {
-  override state = { failed: false };
-
-  static getDerivedStateFromError(): { failed: boolean } {
-    return { failed: true };
-  }
-
-  override componentDidUpdate(previous: PreviewErrorBoundaryProps): void {
-    if (this.state.failed && previous.resetKey !== this.props.resetKey) {
-      this.setState({ failed: false });
-    }
-  }
-
-  override render(): ReactNode {
-    return this.state.failed ? this.props.fallback : this.props.children;
-  }
 }
