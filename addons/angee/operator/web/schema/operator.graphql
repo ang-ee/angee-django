@@ -58,6 +58,19 @@ type DiffHunk {
   body: String!
 }
 
+type FileContent {
+  path: String!
+  source: String!
+  content: String!
+  etag: String!
+}
+
+type FileRef {
+  path: String!
+  source: String!
+  etag: String!
+}
+
 type GitOpResult {
   ok: Boolean!
   conflicted: Boolean!
@@ -179,6 +192,7 @@ type Mutation {
   stackDown: MutationResult
   stackDestroy(purge: Boolean): MutationResult
   jobRun(name: String!, inputs: [KeyValueInput!]): String!
+  fileWrite(source: String!, path: String!, content: String!, etag: String): FileRef!
   serviceInit(input: ServiceInput!): MutationResult
   insert_services_one(object: services_insert_input!): ServiceState
   update_services_by_pk(pk_columns: services_pk_columns_input!, _set: services_set_input!): ServiceState
@@ -258,6 +272,7 @@ type Query {
   workspaceLogs(name: String!, limit: Int): String!
   mcpDescriptor: JSON
   secretValue(name: String!): SecretValue
+  file(source: String!, path: String!): FileContent!
 }
 
 type RouteRef {

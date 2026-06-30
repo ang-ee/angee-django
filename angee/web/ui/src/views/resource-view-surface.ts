@@ -29,8 +29,11 @@ import {
   } from "@tanstack/react-virtual";
 import {
   crudFiltersFromFilterRecord,
+  hasuraWhereFromCrudFilters,
   refineFieldsFromPaths,
   refineSortersFromAngeeOrder,
+  type AggregateBucket,
+  type GroupByRequestOptions,
   } from "@angee/refine";
 import {
   refineResourceName,
@@ -45,7 +48,18 @@ import type {
 import type { ResourceViewContextValue } from "./resource-view-context";
 import { useExpandedKeys } from "./grouped-list-utils";
 import {
+  useAngeeAggregate,
+  useAngeeGroupByBatch,
+  useAngeeListBatch,
+  type AngeeListBatchEntry,
+  type AngeeListBatchScope,
+  type GroupByBatchScope,
+  type UseAngeeGroupByResult,
+} from "../data/hooks";
+import {
   Filter,
+  stableSerialize,
+  type ResourceViewFilter,
   type ResourceViewGroup,
 } from "./resource-view-model";
 import {
@@ -57,15 +71,32 @@ import {
 import {
   GROUP_ROW_HEIGHT,
   RECORD_ROW_HEIGHT,
+  bucketFilterForGroup,
+  bucketValueLabels,
   buildColumns,
+  estimateGroupedItemSize,
+  groupFieldLabel,
   groupKey,
+  groupLabelDimension,
+  groupMeasuresFromColumns,
+  hasuraGroupDimension,
+  hasuraGroupOrderForDimensions,
+  hasuraMeasuresFromGroupMeasures,
   readPath,
+  resourceViewGroupToAggregateDimension,
   tableColumnLabel,
+  type GroupByDimension,
+  type GroupedListItem,
+  type GroupedRecordNav,
+  type GroupMeasure,
   type ListRenderItem,
   type RowGroup,
   type VisibleFieldOption,
 } from "./ListInternals";
 import type { ColumnDescriptor } from "./page";
+
+/** Leaf record page size inside a server-grouped bucket. */
+const GROUPED_LEAF_PAGE_SIZE = 20;
 
 type ListFilter = Record<string, unknown>;
 type ListOrder = Record<string, unknown>;
@@ -175,10 +206,18 @@ export interface ResourceViewSurface<TRow extends Row = Row>
   requestedFields: readonly string[];
   mergedFilter: ListFilter | undefined;
   sortOrder: ListOrder | undefined;
+  /** Grand-total measure footer (server-grouped surface); null otherwise. */
+  footerAggregate: AggregateBucket | null;
+  /** Set a server-grouped sub-group/leaf scope's page; no-op on flat surfaces. */
+  setScopePage: (key: string, page: number) => void;
+  /** The windowed server-grouped render stream; empty on flat surfaces. */
+  groupedItems: readonly GroupedListItem<TRow>[];
 }
 
 const EMPTY_ARRAY = [] as const;
 const EMPTY_SELECTED_IDS: ReadonlySet<string> = new Set();
+const EMPTY_LEAF_RESULTS: ReadonlyMap<string, AngeeListBatchEntry> = new Map();
+const NOOP_SET_SCOPE_PAGE = (_key: string, _page: number): void => undefined;
 
 export interface RowsResourceViewSurface<TRow extends StringIdRow = StringIdRow>
   extends ResourceViewPresentationSurface<TRow> {
@@ -276,7 +315,17 @@ function listResultFromRefineTable<TRow extends Row>({
   };
 }
 
+/**
+ * The server-grouped list surface: the one owner of a folded group view's render
+ * model. It emits a single measured `listItems` stream (per-level `_groups`
+ * headers, the leaf record rows of expanded buckets, and the per-group pagers)
+ * driving the same `useVirtualizer` the flat list uses, batches every `_groups`
+ * level into one `useAngeeGroupByBatch` and every expanded leaf into one
+ * `useAngeeListBatch`, and exposes per-group pagination via `setScopePage`. The
+ * thin {@link GroupedListBody} composes this surface; it no longer fetches.
+ */
 export function useGroupedResourceViewSurface<TRow extends Row = Row>({
+  resource,
   columns,
   fields,
   filter,
@@ -284,8 +333,10 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   pageSize,
   resourceView,
   modelMetadata = null,
+  groupStack,
 }: UseResourceViewSurfaceProps<TRow>): ResourceViewSurface<TRow> {
   useSyncPageSize(resourceView, pageSize);
+  const dataResource = requireGroupedDataResource(resource, modelMetadata);
 
   const requestedFields = React.useMemo(
     () => requestedFieldPaths(columns, fields, modelMetadata),
@@ -302,14 +353,116 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
       ?? defaultResourceOrder(modelMetadata),
     [resourceView.state.sort, modelMetadata, order],
   );
+  const leafOrder = React.useMemo<ListOrder | undefined>(
+    () => sortOrder ?? order,
+    [sortOrder, order],
+  );
+  const rowGroupStack = groupStack ?? resourceView.state.groupStack;
+  const rootPage = resourceView.state.page;
+  const statePageSize = resourceView.state.pageSize;
+
+  // Columns + per-group/footer measures.
   const tableColumns = React.useMemo(
     () => buildColumns(columns, resourceView),
     [columns, resourceView],
   );
   const [columnVisibility, setColumnVisibility] =
     React.useState<VisibilityState>({});
+  const measures = React.useMemo(
+    () => groupMeasuresFromColumns(columns),
+    [columns],
+  );
+  const queryMeasures = React.useMemo(
+    () => hasuraMeasuresFromGroupMeasures(measures, modelMetadata),
+    [measures, modelMetadata],
+  );
+  const where = React.useMemo(
+    () => hasuraWhereFromCrudFilters(crudFiltersFromFilterRecord(mergedFilter)),
+    [mergedFilter],
+  );
+  const grandTotal = useAngeeAggregate(dataResource, {
+    where,
+    measures: queryMeasures,
+    enabled: rowGroupStack.length > 0 && measures.length > 0,
+  });
+
+  // Collapse state and per-scope pager pages (one map, keyed by cumulative scope).
+  const { expandedKeys, toggle: toggleGroup } = useExpandedKeys();
+  const [pageByScope, setPageByScope] =
+    React.useState<Record<string, number>>({});
+  const setScopePage = React.useCallback((key: string, page: number) => {
+    setPageByScope((current) => ({ ...current, [key]: normaliseScopePage(page) }));
+  }, []);
+
+  const renderParams = React.useMemo<GroupedRenderParams>(
+    () => ({
+      groupStack: rowGroupStack,
+      baseFilter: mergedFilter,
+      expandedKeys,
+      pageByScope,
+      rootPage,
+      pageSize: statePageSize,
+      queryMeasures,
+      leafOrder,
+      modelMetadata,
+    }),
+    [
+      rowGroupStack,
+      mergedFilter,
+      expandedKeys,
+      pageByScope,
+      rootPage,
+      statePageSize,
+      queryMeasures,
+      leafOrder,
+      modelMetadata,
+    ],
+  );
+
+  // Per-level `_groups` requests stage over renders: the desired scope frontier is
+  // derived from the resolved buckets, so it grows one level deeper each time a
+  // parent resolves. `useAngeeGroupByBatch` is a single hook, so a dynamic-length
+  // array is rules-of-hooks safe.
+  const [groupScopes, setGroupScopes] =
+    React.useState<readonly GroupByBatchScope[]>(EMPTY_ARRAY);
+  const groupByResults = useAngeeGroupByBatch(dataResource, groupScopes, {
+    enabled: rowGroupStack.length > 0,
+  });
+  const scopeModel = React.useMemo(
+    () =>
+      buildGroupedRenderModel<TRow>(
+        groupByResults,
+        EMPTY_LEAF_RESULTS,
+        new Map<string, readonly TableRowModel<TRow>[]>(),
+        renderParams,
+      ),
+    [groupByResults, renderParams],
+  );
+  const desiredGroupScopes = scopeModel.groupScopes;
+  const leafScopes = scopeModel.leafScopes;
+  React.useEffect(() => {
+    setGroupScopes((current) =>
+      groupScopesEqual(current, desiredGroupScopes) ? current : desiredGroupScopes,
+    );
+  }, [desiredGroupScopes]);
+
+  // Every expanded leaf bucket's record page, batched into one request round.
+  const leafResults = useAngeeListBatch(dataResource, leafScopes, {
+    fields: requestedFields,
+    enabled: leafScopes.length > 0,
+  });
+
+  // One table over the in-display-order concatenation of loaded leaf rows: row
+  // ids stay the bare public id so selection identity matches the flat surface.
+  const leafRows = React.useMemo(
+    () =>
+      leafScopes.flatMap((scope) => [
+        ...((leafResults.get(scope.key)?.rows ?? EMPTY_ARRAY) as readonly TRow[]),
+      ]),
+    [leafScopes, leafResults],
+  );
   const table = useReactTable<TRow>({
-    data: EMPTY_ARRAY as readonly TRow[] as TRow[],
+    data: leafRows as TRow[],
     columns: tableColumns as ColumnDef<TRow>[],
     state: { columnVisibility },
     onColumnVisibilityChange: setColumnVisibility,
@@ -318,6 +471,29 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     autoResetPageIndex: false,
     autoResetExpanded: false,
   });
+  const rowModels = table.getRowModel().rows;
+  const rowModelsByScopeKey = React.useMemo(() => {
+    const byScope = new Map<string, readonly TableRowModel<TRow>[]>();
+    let offset = 0;
+    for (const scope of leafScopes) {
+      const count = leafResults.get(scope.key)?.rows.length ?? 0;
+      byScope.set(scope.key, rowModels.slice(offset, offset + count));
+      offset += count;
+    }
+    return byScope;
+  }, [leafScopes, leafResults, rowModels]);
+
+  const groupedItems = React.useMemo(
+    () =>
+      buildGroupedRenderModel<TRow>(
+        groupByResults,
+        leafResults,
+        rowModelsByScopeKey,
+        renderParams,
+      ).items,
+    [groupByResults, leafResults, rowModelsByScopeKey, renderParams],
+  );
+
   const {
     visibleColumnCount,
     visibleFields,
@@ -325,36 +501,44 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   } = useResourceViewTableChrome(table, columnVisibility);
   const tableScrollRef = React.useRef<HTMLDivElement | null>(null);
   const rowVirtualizer = useVirtualizer({
-    count: 0,
+    count: groupedItems.length,
     getScrollElement: () => tableScrollRef.current,
     initialRect: { width: 1024, height: 600 },
-    estimateSize: () => RECORD_ROW_HEIGHT,
-    overscan: 0,
+    estimateSize: (index) => estimateGroupedItemSize(groupedItems[index]),
+    overscan: 10,
   });
+
+  const rootResult = scopeModel.rootResult;
+  const rootTotal = rootResult
+    ? rootResult.totalCount ?? rootResult.buckets.length
+    : undefined;
+  const rootPageCount =
+    rootTotal === undefined ? undefined : Math.max(1, Math.ceil(rootTotal / statePageSize));
   const list = React.useMemo<ResourceListResult>(
     () => ({
       rows: EMPTY_ARRAY,
-      total: undefined,
-      pageCount: undefined,
-      page: resourceView.state.page,
-      pageSize: resourceView.state.pageSize,
+      total: rootTotal,
+      pageCount: rootPageCount,
+      page: rootPage,
+      pageSize: statePageSize,
       pageInfo: undefined,
-      hasNext: false,
-      hasPrev: resourceView.state.page > 1,
+      hasNext: rootPageCount !== undefined && rootPage < rootPageCount,
+      hasPrev: rootPage > 1,
       setPage: resourceView.setPage,
       firstPage: () => resourceView.setPage(1),
-      nextPage: () => resourceView.setPage(resourceView.state.page + 1),
-      prevPage: () => resourceView.setPage(Math.max(1, resourceView.state.page - 1)),
-      lastPage: () => undefined,
-      fetching: false,
-      error: null,
-      refetch: () => undefined,
+      nextPage: () =>
+        resourceView.setPage(
+          rootPageCount ? Math.min(rootPage + 1, rootPageCount) : rootPage + 1,
+        ),
+      prevPage: () => resourceView.setPage(Math.max(1, rootPage - 1)),
+      lastPage: () => {
+        if (rootPageCount) resourceView.setPage(rootPageCount);
+      },
+      fetching: rootResult ? rootResult.fetching : true,
+      error: errorFromUnknown(rootResult?.error ?? null),
+      refetch: () => rootResult?.refetch(),
     }),
-    [
-      resourceView.setPage,
-      resourceView.state.page,
-      resourceView.state.pageSize,
-    ],
+    [resourceView.setPage, rootResult, rootPage, rootPageCount, rootTotal, statePageSize],
   );
   const listState = useResourceRowsSnapshot<TRow>(list);
 
@@ -365,13 +549,16 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     requestedFields,
     mergedFilter,
     sortOrder,
-    tableColumns,
+    footerAggregate: grandTotal.aggregate,
+    setScopePage,
+    groupedItems,
+    tableColumns: tableColumns as readonly ColumnDef<TRow>[],
     table,
     columnVisibility,
     visibleColumnCount,
     visibleFields,
     toggleVisibleField,
-    rowModels: EMPTY_ARRAY,
+    rowModels,
     selectedIds: resourceView.state.selectedIds ?? EMPTY_SELECTED_IDS,
     pageIds: EMPTY_ARRAY,
     allPageSelected: false,
@@ -379,8 +566,8 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     setPageSelection: () => undefined,
     groupedRows: EMPTY_ARRAY,
     listItems: EMPTY_ARRAY,
-    expandedKeys: EMPTY_SELECTED_IDS,
-    toggleGroup: () => undefined,
+    expandedKeys,
+    toggleGroup,
     tableScrollRef,
     rowVirtualizer,
   };
@@ -545,6 +732,9 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     requestedFields,
     mergedFilter,
     sortOrder,
+    footerAggregate: null,
+    setScopePage: NOOP_SET_SCOPE_PAGE,
+    groupedItems: EMPTY_ARRAY,
     ...presentation,
   };
 }
@@ -683,6 +873,9 @@ export function useClientResourceViewSurface<TRow extends Row = Row>({
     requestedFields,
     mergedFilter,
     sortOrder,
+    footerAggregate: null,
+    setScopePage: NOOP_SET_SCOPE_PAGE,
+    groupedItems: EMPTY_ARRAY,
     ...presentation,
   };
 }
@@ -1080,4 +1273,281 @@ function flattenListItems<TRow extends Row>(
 
 function groupPathKey(path: readonly string[]): string {
   return JSON.stringify(path);
+}
+
+interface GroupedRenderParams {
+  groupStack: readonly ResourceViewGroup[];
+  baseFilter: ResourceViewFilter | undefined;
+  expandedKeys: ReadonlySet<string>;
+  pageByScope: Record<string, number>;
+  rootPage: number;
+  pageSize: number;
+  queryMeasures: readonly GroupMeasure[];
+  leafOrder: ListOrder | undefined;
+  modelMetadata: ModelMetadata | null;
+}
+
+interface GroupedRenderModel<TRow extends Row> {
+  groupScopes: GroupByBatchScope[];
+  leafScopes: AngeeListBatchScope[];
+  items: GroupedListItem<TRow>[];
+  rootResult: UseAngeeGroupByResult | undefined;
+}
+
+/**
+ * Walk the server group tree once, emitting the windowed `GroupedListItem`
+ * stream and collecting the `_groups`/leaf scopes the batched hooks must fetch.
+ * Pure: the same call yields the scope frontier (with empty leaf maps) and, once
+ * the leaf rows resolve, the final render items (with the loaded row models). The
+ * recursion descends only into expanded buckets whose parent level has resolved,
+ * so the scope set grows one level at a time as parents arrive.
+ */
+function buildGroupedRenderModel<TRow extends Row>(
+  groupByResults: ReadonlyMap<string, UseAngeeGroupByResult>,
+  leafResults: ReadonlyMap<string, AngeeListBatchEntry>,
+  rowModelsByScopeKey: ReadonlyMap<string, readonly TableRowModel<TRow>[]>,
+  params: GroupedRenderParams,
+): GroupedRenderModel<TRow> {
+  const {
+    groupStack,
+    baseFilter,
+    expandedKeys,
+    pageByScope,
+    rootPage,
+    pageSize,
+    queryMeasures,
+    leafOrder,
+    modelMetadata,
+  } = params;
+  const groupScopes: GroupByBatchScope[] = [];
+  const leafScopes: AngeeListBatchScope[] = [];
+  const items: GroupedListItem<TRow>[] = [];
+  let rootResult: UseAngeeGroupByResult | undefined;
+
+  const emitLeaf = (
+    bucketKey: string,
+    cumulativeFilter: ResourceViewFilter,
+    bucket: AggregateBucket,
+    label: string,
+    depth: number,
+  ): void => {
+    const pageCount = Math.max(1, Math.ceil(bucket.count / GROUPED_LEAF_PAGE_SIZE));
+    const currentPage = Math.min(pageByScope[bucketKey] ?? 1, pageCount);
+    leafScopes.push({
+      key: bucketKey,
+      filter: cumulativeFilter,
+      order: leafOrder,
+      page: currentPage,
+      pageSize: GROUPED_LEAF_PAGE_SIZE,
+    });
+    const leaf = leafResults.get(bucketKey);
+    const rows = rowModelsByScopeKey.get(bucketKey) ?? EMPTY_ARRAY;
+    // The sibling-list a record in this bucket opens into (detail prev/next).
+    const nav: GroupedRecordNav = {
+      filter: cumulativeFilter,
+      order: leafOrder,
+      page: currentPage,
+      pageSize: GROUPED_LEAF_PAGE_SIZE,
+      rows: leaf?.rows ?? EMPTY_ARRAY,
+      total: leaf?.total,
+      fetching: leaf?.fetching ?? false,
+    };
+    if (leaf?.error) {
+      items.push({
+        kind: "status",
+        itemKey: `leaf-error:${bucketKey}`,
+        depth,
+        message: leaf.error.message,
+        tone: "danger",
+      });
+    } else if ((!leaf || leaf.fetching) && rows.length === 0) {
+      items.push({
+        kind: "skeleton",
+        itemKey: `leaf-skeleton:${bucketKey}`,
+        depth,
+        rowCount: Math.min(4, Math.max(1, bucket.count)),
+      });
+    } else if (rows.length === 0) {
+      items.push({
+        kind: "status",
+        itemKey: `leaf-empty:${bucketKey}`,
+        depth,
+        message: "No records in this group.",
+        tone: "muted",
+      });
+    } else {
+      for (const row of rows) {
+        items.push({ kind: "record", itemKey: `${bucketKey}:${row.id}`, row, nav });
+      }
+    }
+    // The pager mirrors the original: shown once a page settles (hidden mid-fetch).
+    if (leaf && !leaf.error && !leaf.fetching && bucket.count > 0) {
+      items.push({
+        kind: "pager",
+        pageKey: bucketKey,
+        depth,
+        label,
+        page: currentPage,
+        pageSize: GROUPED_LEAF_PAGE_SIZE,
+        total: bucket.count,
+        unit: "records",
+      });
+    }
+  };
+
+  const walkLevel = (
+    depth: number,
+    parentFilter: ResourceViewFilter | undefined,
+  ): void => {
+    const axisGroup = groupStack[depth];
+    if (!axisGroup) return;
+    const dimension = resourceViewGroupToAggregateDimension(axisGroup, modelMetadata);
+    const labelDimension = groupLabelDimension(axisGroup, modelMetadata);
+    const dimensions: GroupByDimension[] = labelDimension
+      ? [dimension, labelDimension]
+      : [dimension];
+    const hasuraDimensions = dimensions.map(hasuraGroupDimension);
+    const orderBy = hasuraGroupOrderForDimensions(hasuraDimensions);
+    const levelWhere = hasuraWhereFromCrudFilters(
+      crudFiltersFromFilterRecord(parentFilter),
+    );
+    const levelScopeKey = stableSerialize({
+      axis: dimension,
+      filter: parentFilter ?? null,
+      pageSize,
+    });
+    const storedPage = depth === 0 ? rootPage : pageByScope[levelScopeKey] ?? 1;
+    const query: GroupByRequestOptions = {
+      dimensions: hasuraDimensions,
+      ...(orderBy ? { orderBy } : {}),
+      ...(levelWhere !== undefined ? { where: levelWhere } : {}),
+      measures: queryMeasures,
+      page: storedPage,
+      pageSize,
+    };
+    groupScopes.push({ key: levelScopeKey, query });
+    const result = groupByResults.get(levelScopeKey);
+    if (depth === 0) rootResult = result;
+
+    if (!result || result.error || result.buckets.length === 0) {
+      // Depth 0 defers its empty/loading/error states to the thin body (which owns
+      // the `emptyMessage`); a nested level renders its own status inline.
+      if (depth > 0) {
+        if (result?.error) {
+          items.push({
+            kind: "status",
+            itemKey: `error:${levelScopeKey}`,
+            depth,
+            message: result.error.message,
+            tone: "danger",
+          });
+        } else if (!result || result.fetching) {
+          items.push({
+            kind: "skeleton",
+            itemKey: `skeleton:${levelScopeKey}`,
+            depth,
+            rowCount: 4,
+          });
+        } else {
+          items.push({
+            kind: "status",
+            itemKey: `empty:${levelScopeKey}`,
+            depth,
+            message: "No sub-groups.",
+            tone: "muted",
+          });
+        }
+      }
+      return;
+    }
+
+    const levelTotal = result.totalCount ?? result.buckets.length;
+    const isLeafLevel = depth === groupStack.length - 1;
+    for (const bucket of result.buckets) {
+      const bucketFilter = bucketFilterForGroup(bucket, axisGroup, modelMetadata);
+      const expandable = bucketFilter !== undefined;
+      const bucketKey = stableSerialize({
+        scope: levelScopeKey,
+        bucket: bucket.key ?? null,
+      });
+      const expanded = expandable && expandedKeys.has(bucketKey);
+      const label = bucketLabel(bucket, axisGroup, modelMetadata);
+      items.push({
+        kind: "groupHeader",
+        bucketKey,
+        depth,
+        label,
+        count: bucket.count,
+        expandable,
+        expanded,
+        bucket,
+      });
+      if (!expanded || bucketFilter === undefined) continue;
+      const cumulativeFilter = Filter.combine(parentFilter ?? {}, bucketFilter);
+      if (isLeafLevel) {
+        emitLeaf(bucketKey, cumulativeFilter, bucket, label, depth);
+      } else {
+        walkLevel(depth + 1, cumulativeFilter);
+      }
+    }
+    // Sub-group levels page within the body; depth 0 pages via the toolbar.
+    if (depth > 0 && levelTotal > 0) {
+      const pageCount = Math.max(1, Math.ceil(levelTotal / pageSize));
+      items.push({
+        kind: "pager",
+        pageKey: levelScopeKey,
+        depth,
+        label: groupFieldLabel(axisGroup.field),
+        page: Math.min(storedPage, pageCount),
+        pageSize,
+        total: levelTotal,
+        unit: "groups",
+      });
+    }
+  };
+
+  walkLevel(0, baseFilter);
+  return { groupScopes, leafScopes, items, rootResult };
+}
+
+function bucketLabel(
+  bucket: AggregateBucket,
+  group: ResourceViewGroup | undefined,
+  metadata: ModelMetadata | null,
+): string {
+  if (!group) return "All records";
+  const [label] = bucketValueLabels(bucket, [group], metadata);
+  return label ?? "All records";
+}
+
+function groupScopesEqual(
+  left: readonly GroupByBatchScope[],
+  right: readonly GroupByBatchScope[],
+): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  return left.every((scope, index) => {
+    const other = right[index];
+    return (
+      other !== undefined
+      && scope.key === other.key
+      && stableSerialize(scope.query) === stableSerialize(other.query)
+    );
+  });
+}
+
+function normaliseScopePage(page: number): number {
+  if (!Number.isFinite(page)) return 1;
+  return Math.max(1, Math.floor(page));
+}
+
+function requireGroupedDataResource(
+  resourceId: string,
+  metadata: ModelMetadata | null | undefined,
+): NonNullable<ModelMetadata["resource"]> {
+  const dataResource = metadata?.resource;
+  if (!dataResource) {
+    throw new Error(`Resource "${resourceId}" has no data resource metadata.`);
+  }
+  return dataResource;
 }

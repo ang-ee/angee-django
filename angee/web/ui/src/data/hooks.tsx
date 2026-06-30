@@ -5,24 +5,32 @@ import {
   useCustomMutation,
   useDataProvider,
   useInvalidate,
+  useKeys,
+  useResourceSubscription,
   type BaseRecord,
   type HttpError,
 } from "@refinedev/core";
 import {
   resourceOperationTarget,
   refineInvalidationParams,
+  refineResourceIdentifier,
+  refineResourceName,
   resourceInvalidationTargets,
   useActiveGraphQLSchemaName,
   useSchemaFieldMetadata,
   type DataResourceMetadata,
+  type Row,
 } from "@angee/resources";
 
 import {
   aggregateRequest,
   actionRequest,
+  crudFiltersFromFilterRecord,
   deletePreviewRequest,
   extractActionOutcome,
   extractAggregate,
+  refineFieldsFromPaths,
+  refineSortersFromAngeeOrder,
   runActionResult,
   extractDeletePreview,
   extractFacet,
@@ -64,6 +72,35 @@ export interface UseAngeeFacetsOptions {
   facets: readonly FacetRequestSpec[];
 }
 
+/** One `_groups` request in a batch, addressed by a caller-stable `key`. */
+export interface GroupByBatchScope {
+  key: string;
+  query: GroupByRequestOptions;
+}
+
+/** One leaf `list` request in a batch, addressed by a caller-stable `key`. */
+export interface AngeeListBatchScope {
+  key: string;
+  filter: Record<string, unknown> | undefined;
+  order: Record<string, unknown> | undefined;
+  page: number;
+  pageSize: number;
+}
+
+export interface AngeeListBatchEntry {
+  rows: readonly Row[];
+  total: number | undefined;
+  fetching: boolean;
+  error: Error | null;
+}
+
+interface GroupByRequestBatchEntry {
+  data: unknown;
+  fetching: boolean;
+  error: HttpError | null;
+  refetch: () => void;
+}
+
 export interface UseAngeeFacetsResult {
   facets: Readonly<Record<string, ResourceFacetResult>>;
   fetching: boolean;
@@ -93,6 +130,8 @@ export interface UseActionMutationState {
 }
 
 const EMPTY_FACETS: readonly FacetRequestSpec[] = [];
+const EMPTY_GROUP_BY_SCOPES: readonly GroupByBatchScope[] = [];
+const EMPTY_LIST_SCOPES: readonly AngeeListBatchScope[] = [];
 
 export function useAngeeAggregate(
   resource: DataResourceMetadata,
@@ -172,34 +211,71 @@ export function useAngeeFacets(
   const { enabled = true, facets } = options;
   const canQuery = enabled && Boolean(resource?.roots.groups) && facets.length > 0;
   const activeFacets = canQuery ? facets : EMPTY_FACETS;
-  const facetsKey = stableJson(activeFacets);
+  const scopes = useMemo<readonly GroupByBatchScope[]>(
+    () => activeFacets.map((facet) => ({ key: facet.id, query: facet })),
+    [activeFacets],
+  );
+  const batch = useGroupByRequestBatch(resource, scopes, { enabled: canQuery });
+  const root = resource?.roots.groups ?? "";
+  return useMemo(() => {
+    const values = [...batch.values()];
+    return {
+      facets: Object.fromEntries(
+        activeFacets.map((facet) => [
+          facet.id,
+          extractFacet(batch.get(facet.id)?.data, root, facet),
+        ]),
+      ),
+      fetching: values.some((entry) => entry.fetching),
+      error: values.find((entry) => entry.error)?.error ?? null,
+      refetch: () => {
+        values.forEach((entry) => entry.refetch());
+      },
+    };
+  }, [activeFacets, batch, root]);
+}
+
+/**
+ * Batch any number of `_groups` requests through one {@link useQueries} call: the
+ * dynamic-length array is a single hook, so the request set can grow over renders
+ * (e.g. a grouped surface revealing deeper sub-group levels as parents resolve)
+ * without breaking the rules of hooks. The shared core behind {@link useAngeeFacets}
+ * and {@link useAngeeGroupByBatch}; results are addressed by each scope's `key`.
+ */
+function useGroupByRequestBatch(
+  resource: DataResourceMetadata | null,
+  scopes: readonly GroupByBatchScope[],
+  options: { enabled?: boolean } = {},
+): ReadonlyMap<string, GroupByRequestBatchEntry> {
+  const enabled = options.enabled ?? true;
+  const canQuery = enabled && Boolean(resource?.roots.groups);
+  const activeScopes = canQuery ? scopes : EMPTY_GROUP_BY_SCOPES;
+  const scopesKey = stableJson(activeScopes);
   const dataProvider = useDataProvider();
   const operationDocuments = useOperationDocuments();
-  const facetRequests = useMemo(() => {
+  const requests = useMemo(() => {
     if (!canQuery || !resource) return [];
     const document = groupDocumentForResource(
       operationDocuments,
       resource.schemaName,
       resource.modelLabel,
     );
-    return activeFacets.map((facet) => ({
-      facet,
-      request: groupByRequest(
-        resourceOperationTarget(resource, "groups"),
-        facet,
-        { document },
-      ),
+    const target = resourceOperationTarget(resource, "groups");
+    return activeScopes.map((scope) => ({
+      key: scope.key,
+      queryKey: stableJson(scope.query),
+      request: groupByRequest(target, scope.query, { document }),
     }));
-  }, [activeFacets, canQuery, facetsKey, operationDocuments, resource]);
+  }, [activeScopes, canQuery, operationDocuments, resource, scopesKey]);
   const queries = useQueries({
-    queries: facetRequests.map(({ facet, request }) => ({
+    queries: requests.map(({ key, queryKey, request }) => ({
       queryKey: [
         "angee",
-        "facets",
+        "group-by",
         request.dataProviderName,
         request.root,
-        facet.id,
-        stableJson(facet),
+        key,
+        queryKey,
       ],
       queryFn: async () => {
         const custom = dataProvider(request.dataProviderName).custom;
@@ -219,21 +295,147 @@ export function useAngeeFacets(
       enabled: canQuery,
     })),
   });
-  return {
-    facets: Object.fromEntries(
-      facetRequests.map(({ facet, request }, index) => [
-        facet.id,
-        extractFacet(queries[index]?.data, request.root, facet),
-      ]),
-    ),
-    fetching: queries.some((query) => query.isFetching),
-    error: (queries.find((query) => query.error)?.error ?? null) as HttpError | null,
-    refetch: () => {
-      queries.forEach((query) => {
-        void query.refetch();
-      });
-    },
-  };
+  return useMemo(
+    () =>
+      new Map(
+        requests.map(({ key }, index) => {
+          const query = queries[index];
+          return [
+            key,
+            {
+              data: query?.data,
+              fetching: query?.isFetching ?? false,
+              error: (query?.error ?? null) as HttpError | null,
+              refetch: () => {
+                void query?.refetch();
+              },
+            },
+          ] as const;
+        }),
+      ),
+    [requests, queries],
+  );
+}
+
+/**
+ * Batch the per-level `_groups` aggregates of a server-grouped view into one
+ * request round. Each scope resolves to the same {@link GroupByResult} a single
+ * {@link useAngeeGroupBy} would, keyed by the scope's `key`.
+ */
+export function useAngeeGroupByBatch(
+  resource: DataResourceMetadata | null,
+  scopes: readonly GroupByBatchScope[],
+  options: { enabled?: boolean } = {},
+): ReadonlyMap<string, UseAngeeGroupByResult> {
+  const batch = useGroupByRequestBatch(resource, scopes, options);
+  const root = resource?.roots.groups ?? "";
+  return useMemo(
+    () =>
+      new Map(
+        [...batch.entries()].map(([key, entry]) => [
+          key,
+          {
+            ...extractGroupBy(entry.data, root),
+            fetching: entry.fetching,
+            error: entry.error,
+            refetch: entry.refetch,
+          },
+        ]),
+      ),
+    [batch, root],
+  );
+}
+
+/**
+ * Batch the leaf record pages of a server-grouped view into one {@link useQueries}
+ * round — one `getList` per currently-rendered expanded bucket, instead of one
+ * `useList` hook mounted per bucket. The query keys mirror refine's `useList` so
+ * `useInvalidate` reaches them, and a single static resource-level subscription
+ * re-opens the live `changes()` feed (key parity alone never re-subscribes).
+ */
+export function useAngeeListBatch(
+  resource: DataResourceMetadata | null,
+  scopes: readonly AngeeListBatchScope[],
+  options: { fields: readonly string[]; enabled?: boolean },
+): ReadonlyMap<string, AngeeListBatchEntry> {
+  const enabled = options.enabled ?? true;
+  const canQuery = enabled && Boolean(resource?.roots.list);
+  const activeScopes = canQuery ? scopes : EMPTY_LIST_SCOPES;
+  const { keys } = useKeys();
+  const dataProvider = useDataProvider();
+  const resourceName = resource ? refineResourceName(resource) : "";
+  const identifier = resource ? refineResourceIdentifier(resource) : "";
+  const schemaName = resource?.schemaName;
+  const fieldsKey = stableJson(options.fields);
+  const listMeta = useMemo(
+    () => ({ fields: refineFieldsFromPaths(options.fields) }),
+    [fieldsKey],
+  );
+  const scopesKey = stableJson(activeScopes);
+  const requests = useMemo(
+    () =>
+      activeScopes.map((scope) => ({
+        scope,
+        filters: crudFiltersFromFilterRecord(scope.filter) ?? [],
+        sorters: refineSortersFromAngeeOrder(scope.order) ?? [],
+        pagination: {
+          mode: "server" as const,
+          currentPage: scope.page,
+          pageSize: scope.pageSize,
+        },
+      })),
+    [activeScopes, scopesKey],
+  );
+  // One static, resource-level live subscription re-opens the websocket changes()
+  // feed for these rows: refine's auto liveMode invalidates the resource list cache
+  // on each change, and the keys below are the very keys useList builds, so the
+  // invalidation reaches them. (Matching query keys alone never re-subscribes.)
+  useResourceSubscription({
+    channel: `resources/${resourceName}`,
+    resource: resourceName,
+    types: ["*"],
+    params: { subscriptionType: "useList" },
+    enabled: canQuery,
+    meta: { dataProviderName: schemaName },
+  });
+  const queries = useQueries({
+    queries: requests.map(({ filters, sorters, pagination }) => ({
+      queryKey: keys()
+        .data(schemaName)
+        .resource(identifier)
+        .action("list")
+        .params({ ...listMeta, filters, pagination, sorters })
+        .get(),
+      queryFn: () =>
+        dataProvider(schemaName).getList({
+          resource: resourceName,
+          pagination,
+          filters,
+          sorters,
+          meta: listMeta,
+        }),
+      enabled: canQuery,
+    })),
+  });
+  return useMemo(
+    () =>
+      new Map(
+        requests.map(({ scope }, index) => {
+          const query = queries[index];
+          const data = query?.data;
+          return [
+            scope.key,
+            {
+              rows: (data?.data ?? []) as readonly Row[],
+              total: data?.total,
+              fetching: query?.isFetching ?? false,
+              error: errorFromHttp(query?.error),
+            },
+          ] as const;
+        }),
+      ),
+    [requests, queries],
+  );
 }
 
 export function useAngeeDeletePreview(
@@ -339,6 +541,16 @@ export function useActionMutation<TField extends string = string>(
 }
 
 const EMPTY_MODEL_LABELS: readonly string[] = [];
+
+function errorFromHttp(error: unknown): Error | null {
+  if (!error) return null;
+  if (error instanceof Error) return error;
+  const message =
+    typeof error === "object" && error !== null && "message" in error
+      ? String((error as { message?: unknown }).message)
+      : String(error);
+  return new Error(message);
+}
 
 function stableJson(value: unknown): string {
   return JSON.stringify(sortJson(value));

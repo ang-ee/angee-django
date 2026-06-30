@@ -114,6 +114,84 @@ export type ListRenderItem<TRow extends Row> =
   | { kind: "group"; group: RowGroup<TRow> }
   | { kind: "row"; row: TableRowModel<TRow> };
 
+/**
+ * One windowed row of a server-grouped list. The grouped surface flattens its
+ * group tree (per-level `_groups` headers, the leaf record rows of expanded
+ * buckets, and the per-group pagers) into this stream and feeds it to the shared
+ * `useVirtualizer`; the thin grouped body renders each kind. Every variant is
+ * self-describing so the renderer never re-decodes a bucket or filter — the
+ * surface that owns the data put the rendered facts here.
+ */
+/**
+ * The sibling-list a record opens into from a server group: the leaf bucket's
+ * cumulative filter/order/page that drives the detail view's prev/next. Carried
+ * on each record row so the thin body can report it on open without re-deriving
+ * the bucket (kept structural — no `resource-view-surface` import — to stay a leaf
+ * module the surface can depend on).
+ */
+export interface GroupedRecordNav {
+  filter: Record<string, unknown> | undefined;
+  order: Record<string, unknown> | undefined;
+  page: number;
+  pageSize: number;
+  rows: readonly Row[];
+  total: number | undefined;
+  fetching: boolean;
+}
+
+export type GroupedListItem<TRow extends Row> =
+  | {
+      kind: "groupHeader";
+      /** The cumulative path key the surface toggles/expands on. */
+      bucketKey: string;
+      depth: number;
+      label: string;
+      count: number;
+      expandable: boolean;
+      expanded: boolean;
+      bucket: AggregateBucket;
+    }
+  | { kind: "record"; itemKey: string; row: TableRowModel<TRow>; nav: GroupedRecordNav }
+  | {
+      kind: "pager";
+      /** The page-state key the surface pages on (a level or leaf scope). */
+      pageKey: string;
+      depth: number;
+      label: string;
+      page: number;
+      pageSize: number;
+      total: number;
+      unit: "groups" | "records";
+    }
+  | { kind: "skeleton"; itemKey: string; depth: number; rowCount: number }
+  | {
+      kind: "status";
+      itemKey: string;
+      depth: number;
+      message: React.ReactNode;
+      tone: "muted" | "danger";
+    };
+
+/** Estimated row height per grouped item kind, in lockstep with the rendered CSS. */
+export function estimateGroupedItemSize<TRow extends Row>(
+  item: GroupedListItem<TRow> | undefined,
+): number {
+  switch (item?.kind) {
+    case "groupHeader":
+      return GROUP_HEADER_HEIGHT;
+    case "record":
+      return RECORD_ROW_HEIGHT;
+    case "pager":
+      return PAGER_ROW_HEIGHT;
+    case "skeleton":
+      return Math.max(1, item.rowCount) * SKELETON_ROW_HEIGHT;
+    case "status":
+      return GROUP_STATUS_HEIGHT;
+    default:
+      return RECORD_ROW_HEIGHT;
+  }
+}
+
 export const ALIGN_CLASS: Record<PageColumnAlign, string> = {
   left: "text-left",
   center: "text-center",
@@ -125,6 +203,14 @@ export const TABLE_SCROLL_STYLE: React.CSSProperties = {
 };
 export const GROUP_ROW_HEIGHT = 32;
 export const RECORD_ROW_HEIGHT = 40;
+/** Server-grouped header row (`h-9`); taller than the flat `h-8` group header. */
+export const GROUP_HEADER_HEIGHT = 36;
+/** In-body pager row (the sub-group and leaf-record pagers). */
+export const PAGER_ROW_HEIGHT = 44;
+/** A single skeleton/placeholder row while a grouped page loads. */
+export const SKELETON_ROW_HEIGHT = 40;
+/** A single empty/error status row inside the grouped body. */
+export const GROUP_STATUS_HEIGHT = 52;
 
 export function SelectionBar({
   count,
@@ -227,18 +313,11 @@ export function FlatListBody<TRow extends Row>({
     () => groupMeasuresFromColumns(columns),
     [columns],
   );
-  const virtualItems = rowVirtualizer.getVirtualItems();
-  const visibleIndexes = virtualItems.length > 0
-    ? virtualItems.map((item) => item.index)
-    : listItems.slice(0, Math.min(listItems.length, 20)).map((_, index) => index);
-  const firstVirtualItem = virtualItems[0];
-  const lastVirtualItem = virtualItems[virtualItems.length - 1];
-  const paddingTop = firstVirtualItem?.start ?? 0;
-  const paddingBottom = Math.max(
-    0,
-    virtualItems.length > 0
-      ? rowVirtualizer.getTotalSize() - (lastVirtualItem?.end ?? 0)
-      : estimatedListHeight(listItems.slice(visibleIndexes.length)),
+  const { paddingTop, paddingBottom, visibleIndexes } = useVirtualWindow(
+    rowVirtualizer,
+    listItems.length,
+    (index) =>
+      listItems[index]?.kind === "group" ? GROUP_ROW_HEIGHT : RECORD_ROW_HEIGHT,
   );
   return (
     <div
@@ -802,7 +881,7 @@ function renderListItem<TRow extends Row>({
   );
 }
 
-function VirtualPaddingRow({
+export function VirtualPaddingRow({
   height,
   colSpan,
 }: {
@@ -818,6 +897,41 @@ function VirtualPaddingRow({
       />
     </TableRow>
   );
+}
+
+/**
+ * The padding-row windowing math shared by every virtualized list body: the
+ * leading/trailing spacer heights plus the indexes of the items to render. One
+ * owner so the flat and grouped bodies window identically. `estimateSize` feeds
+ * the pre-measure fallback (before the virtualizer has real rects), keyed per the
+ * caller's item kinds.
+ */
+export function useVirtualWindow(
+  rowVirtualizer: Virtualizer<HTMLDivElement, Element>,
+  itemCount: number,
+  estimateSize: (index: number) => number,
+): { paddingTop: number; paddingBottom: number; visibleIndexes: number[] } {
+  const virtualItems = rowVirtualizer.getVirtualItems();
+  const visibleIndexes =
+    virtualItems.length > 0
+      ? virtualItems.map((item) => item.index)
+      : Array.from({ length: Math.min(itemCount, 20) }, (_, index) => index);
+  const firstVirtualItem = virtualItems[0];
+  const lastVirtualItem = virtualItems[virtualItems.length - 1];
+  const paddingTop = firstVirtualItem?.start ?? 0;
+  let fallbackTail = 0;
+  if (virtualItems.length === 0) {
+    for (let index = visibleIndexes.length; index < itemCount; index += 1) {
+      fallbackTail += estimateSize(index);
+    }
+  }
+  const paddingBottom = Math.max(
+    0,
+    virtualItems.length > 0
+      ? rowVirtualizer.getTotalSize() - (lastVirtualItem?.end ?? 0)
+      : fallbackTail,
+  );
+  return { paddingTop, paddingBottom, visibleIndexes };
 }
 
 function GroupHeader<TRow extends Row>({
@@ -883,16 +997,6 @@ function GroupHeader<TRow extends Row>({
         )}
       </TableCell>
     </TableRow>
-  );
-}
-
-function estimatedListHeight<TRow extends Row>(
-  items: readonly ListRenderItem<TRow>[],
-): number {
-  return items.reduce(
-    (height, item) =>
-      height + (item.kind === "group" ? GROUP_ROW_HEIGHT : RECORD_ROW_HEIGHT),
-    0,
   );
 }
 

@@ -60,6 +60,7 @@ export type {
 } from "./resource-types";
 export {
   refineResourceName,
+  refineResourceIdentifier,
   refineResourcesFromAngeeSchemaMetadata,
   refineResourcesFromSchemaMetadata,
   refineResourcesFromDataResources,

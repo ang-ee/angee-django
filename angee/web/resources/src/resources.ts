@@ -63,6 +63,17 @@ export function refineResourceName(resource: DataResourceMetadata): string {
   return requiredRoot(resource, "list");
 }
 
+/**
+ * The refine resource identifier (`<schema>:<modelLabel>`) a resource registers
+ * under — the stable key refine builds list query keys and invalidations on.
+ * Hand-built data hooks (e.g. a batched `useQueries` list fetch) key on this so
+ * `useInvalidate` and live `changes()` events reach them exactly as they reach a
+ * `useList`.
+ */
+export function refineResourceIdentifier(resource: DataResourceMetadata): string {
+  return `${resource.schemaName}:${resource.modelLabel}`;
+}
+
 function refineResourceFromDataResource(
   resource: DataResourceMetadata,
   options: RefineResourceOptions,
@@ -76,7 +87,7 @@ function refineResourceFromDataResource(
     ?? {};
   return {
     name: refineResourceName(resource),
-    identifier: `${resource.schemaName}:${resource.modelLabel}`,
+    identifier: refineResourceIdentifier(resource),
     meta: {
       hide: metadata.hide ?? true,
       ...metadata,

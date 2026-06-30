@@ -268,7 +268,10 @@ def _transport_unavailable(error: Exception) -> str:
 
     if isinstance(error, NotImplementedError):
         return str(error) or "The operator file tools that edit settings.yaml are not available yet."
-    return (
+    # A backend that knows *why* it can't reach settings.yaml (e.g. the operator
+    # backend's "operator … unavailable: …") supplies its own reason; the fixed
+    # message is only the fallback for a bare FileNotFoundError.
+    return str(error) or (
         "This deployment has no editable settings.yaml; "
         "addons are installed by the operator in production."
     )
