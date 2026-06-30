@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import cast
-
 import strawberry
 import strawberry_django
 from django.apps import apps
@@ -17,13 +15,13 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.revisions import revisions
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
-from angee.iam.identity import user_display_label, user_public_id
+from angee.iam.audit import AuthoredRefMixin
 
 Note = apps.get_model("notes", "Note")
 
 
 @strawberry_django.type(Note)
-class NoteType(AngeeNode):
+class NoteType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of a note."""
 
     title: auto
@@ -35,30 +33,6 @@ class NoteType(AngeeNode):
     created_at: auto
     updated_at: auto
     word_count: auto
-
-    @strawberry_django.field(only=["created_by_id"])
-    def created_by(self) -> strawberry.ID | None:
-        """Return the creator's public id without exposing the user object."""
-
-        return cast("strawberry.ID | None", user_public_id(self.created_by_id))
-
-    @strawberry_django.field(only=["created_by_id"])
-    def created_by_label(self) -> str | None:
-        """Return the creator's display label - no user object exposed."""
-
-        return user_display_label(self.created_by_id)
-
-    @strawberry_django.field(only=["updated_by_id"])
-    def updated_by(self) -> strawberry.ID | None:
-        """Return the updater's public id without exposing the user object."""
-
-        return cast("strawberry.ID | None", user_public_id(self.updated_by_id))
-
-    @strawberry_django.field(only=["updated_by_id"])
-    def updated_by_label(self) -> str | None:
-        """Return the updater's display label - no user object exposed."""
-
-        return user_display_label(self.updated_by_id)
 
 
 def _note_queryset(info: strawberry.Info) -> models.QuerySet[Note]:

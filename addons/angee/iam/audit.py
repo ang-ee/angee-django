@@ -22,6 +22,7 @@ import strawberry_django
 
 from angee.graphql.ids import optional_public_id
 from angee.iam.identity import user_display_label, user_public_id
+from angee.iam.permissions import request_from_info
 
 
 @strawberry.type
@@ -40,10 +41,10 @@ class AuthoredRefMixin:
         return cast("strawberry.ID | None", optional_public_id(user_public_id(cast(Any, self).created_by_id)))
 
     @strawberry_django.field(only=["created_by_id"])
-    def created_by_label(self) -> str | None:
+    def created_by_label(self, info: strawberry.Info) -> str | None:
         """Return the creator's display label - no user object exposed."""
 
-        return user_display_label(cast(Any, self).created_by_id)
+        return user_display_label(cast(Any, self).created_by_id, request=request_from_info(info))
 
     @strawberry_django.field(only=["updated_by_id"])
     def updated_by(self) -> strawberry.ID | None:
@@ -52,7 +53,7 @@ class AuthoredRefMixin:
         return cast("strawberry.ID | None", optional_public_id(user_public_id(cast(Any, self).updated_by_id)))
 
     @strawberry_django.field(only=["updated_by_id"])
-    def updated_by_label(self) -> str | None:
+    def updated_by_label(self, info: strawberry.Info) -> str | None:
         """Return the last editor's display label - no user object exposed."""
 
-        return user_display_label(cast(Any, self).updated_by_id)
+        return user_display_label(cast(Any, self).updated_by_id, request=request_from_info(info))

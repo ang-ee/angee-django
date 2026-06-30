@@ -28,6 +28,7 @@ from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_display_label, user_public_id
+from angee.iam.permissions import request_from_info
 from angee.knowledge.models import (
     AmbiguousMatchError,
     SectionNotFoundError,
@@ -60,10 +61,10 @@ class VaultType(AngeeNode):
         return optional_public_id(user_public_id(cast(Any, self).owner_id))
 
     @strawberry_django.field(only=["owner_id"])
-    def owner_label(self) -> str | None:
+    def owner_label(self, info: strawberry.Info) -> str | None:
         """Return the owner's display label — no user object exposed."""
 
-        return user_display_label(cast(Any, self).owner_id)
+        return user_display_label(cast(Any, self).owner_id, request=request_from_info(info))
 
 
 @strawberry.type

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.http import HttpRequest
 
 from angee.iam.identity import (
     user_display_label,
@@ -30,6 +31,33 @@ def test_user_principal_accepts_raw_public_id() -> None:
     assert user_from_public_id(node_id) == user
     assert user_public_id(user.pk) == str(user.pk)
     assert user_display_label(str(user.pk)) == "Identity Target"
+
+
+@pytest.mark.django_db
+def test_user_display_label_memoizes_per_request(django_assert_num_queries: object) -> None:
+    """A request-scoped memo resolves each author once — the audited-list N+1 fix.
+
+    The label resolver runs its own ORM read per row, which the optimizer cannot
+    batch; the memo de-duplicates repeated authors within one request so a list
+    sharing an author queries the user once instead of per row.
+    """
+
+    user = get_user_model().objects.create_user(
+        username="memo-target",
+        email="memo@example.com",
+        first_name="Memo",
+        last_name="Target",
+    )
+    request = HttpRequest()
+
+    assert user_display_label(user.pk, request=request) == "Memo Target"
+    with django_assert_num_queries(0):  # type: ignore[operator]
+        assert user_display_label(user.pk, request=request) == "Memo Target"
+
+    missing_pk = user.pk + 10_000
+    assert user_display_label(missing_pk, request=request) is None
+    with django_assert_num_queries(0):  # type: ignore[operator]
+        assert user_display_label(missing_pk, request=request) is None
 
 
 @pytest.mark.django_db

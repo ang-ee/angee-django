@@ -22,6 +22,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.contrib.auth.models import Group as DjangoGroup
 from django.db import transaction
 from django.db.models import QuerySet
+from django.http import HttpRequest
 from pydantic import BaseModel
 from rebac import (
     ObjectRef,
@@ -211,10 +212,10 @@ class IAMGrantType:
         return str(cast(Any, self).subject_type)
 
     @strawberry_django.field
-    def principal_label(self) -> str | None:
+    def principal_label(self, info: strawberry.Info) -> str | None:
         """Return the principal's display name - no user object exposed."""
 
-        return _user_display_label(cast(Any, self).subject_id)
+        return _user_display_label(cast(Any, self).subject_id, request=_request(info))
 
     @strawberry_django.field
     def principal_ref(self) -> str:
@@ -984,7 +985,7 @@ def _role_rows() -> list[IAMRoleRow]:
     ]
 
 
-def _grant_rows() -> list[IAMGrantRow]:
+def _grant_rows(request: HttpRequest | None = None) -> list[IAMGrantRow]:
     """Project direct user role-grant tuples as computed resource rows."""
 
     rows: list[IAMGrantRow] = []
@@ -1001,7 +1002,7 @@ def _grant_rows() -> list[IAMGrantRow]:
                 principal_id=subject_id,
                 principal_type=subject_type,
                 principal_ref=principal_ref,
-                principal_label=_user_display_label(subject_id) or principal_ref,
+                principal_label=_user_display_label(subject_id, request=request) or principal_ref,
                 role=role,
                 role_name=resource_id,
                 namespace=_role_namespace(resource_type),
@@ -1042,7 +1043,7 @@ def _grant_rows_for(info: strawberry.Info) -> list[IAMGrantRow]:
     if not _admin_actor(info):
         return []
     with system_context(reason="iam.graphql.grants"):
-        return _grant_rows()
+        return _grant_rows(_request(info))
 
 
 _ROLE_RESOURCE = hasura_pydantic_resource(

@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from django.contrib.auth import get_user_model
+from django.http import HttpRequest
 from rebac import app_settings, system_context
 
 from angee.base.models import instance_from_public_id, public_id_for
@@ -30,18 +31,43 @@ def user_public_id(user_id: Any) -> str | None:
     return public_id_for(get_user_model(), user_id)
 
 
-def user_display_label(user_id: Any) -> str | None:
+def _label_memo(request: HttpRequest | None) -> dict[Any, str | None] | None:
+    """Return the per-request user-label memo, creating it on first use.
+
+    Hung on the Django request — the per-request seam IAM already uses for
+    request-scoped state — so a list of rows sharing an author resolves the
+    label (and queries the user) once instead of per row. Absent outside a
+    request, where resolution falls back to the uncached path.
+    """
+
+    if request is None:
+        return None
+    memo: dict[Any, str | None] | None = getattr(request, "_iam_user_label_memo", None)
+    if memo is None:
+        memo = {}
+        setattr(request, "_iam_user_label_memo", memo)
+    return memo
+
+
+def user_display_label(user_id: Any, *, request: HttpRequest | None = None) -> str | None:
     """Return a user's display label (name) without exposing the user object.
 
     Resolved under ``system_context`` (IAM's elevation for server-side
     reads) so an actor-scoped caller never pulls a guarded User row into
     its own queryset — REBAC rejects that; only a display string leaves
-    the helper. Intended for the single-record form — not selected as a
-    list column.
+    the helper.
+
+    Pass the Django ``request`` to memoize the label per request: a list of
+    rows sharing an author then resolves (and queries) that user once, with
+    repeated authors de-duplicated. Distinct authors still cost one read
+    each — the memo de-duplicates, it does not batch.
     """
 
     if user_id is None:
         return None
+    memo = _label_memo(request)
+    if memo is not None and user_id in memo:
+        return memo[user_id]
     user_model = get_user_model()
     with system_context(reason="iam.identity.user_label"):
         try:
@@ -52,8 +78,11 @@ def user_display_label(user_id: Any) -> str | None:
         try:
             user = user_principal(str(user_id))
         except ValueError:
-            return None
-    return user_label(user)
+            user = None
+    label = None if user is None else user_label(user)
+    if memo is not None:
+        memo[user_id] = label
+    return label
 
 
 def user_principal(principal_id: str, *, graphql_type_name: str = "UserType") -> Any:
