@@ -25,6 +25,10 @@ class AppGraph:
       addon's "consumer" vs "required" classification.
     - ``angee_depends_on``: the addon's declared dependency names, normalized
       through :meth:`app_dependencies` (the one parser of that fact).
+    - ``angee_forced``: whether any other resolved app depends on this one — the
+      composer's reading of "cannot be uninstalled" (framework core + anything
+      another installed addon needs). Transitive: ``A→B→C`` forces both ``B`` and
+      ``C``. A leaf consumer/host root nothing depends on is not forced.
     """
 
     def resolve(self, roots: Iterable[str | AppConfig]) -> tuple[AppConfig, ...]:
@@ -104,9 +108,14 @@ class AppGraph:
         for name in sorted(app_configs_by_name):
             visit_app(name, ordered=ordered, visiting=visiting, visited=visited)
 
+        depended_upon: set[str] = set()
+        for config in ordered:
+            for dependency in self.app_dependencies(config):
+                depended_upon.add(aliases.get(dependency, dependency))
         for config in ordered:
             config.angee_addon_root = config.name in root_name_set
             config.angee_depends_on = self.app_dependencies(config)
+            config.angee_forced = config.name in depended_upon
         return tuple(ordered)
 
     def app_dependencies(self, config: AppConfig) -> tuple[str, ...]:

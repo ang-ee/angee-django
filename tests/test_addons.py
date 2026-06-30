@@ -44,7 +44,8 @@ def test_registry_facts_full_row_for_enabled_and_zeroed_for_available(db) -> Non
 
     facts = AddonManager._registry_facts()
     row_keys = {
-        "label", "namespace", "kind", "source", "state",
+        "label", "namespace", "description", "keywords", "category",
+        "kind", "source", "state", "forced", "pending",
         "model_count", "field_count", "resource_count",
         "depends_on", "depended_by", "model_labels",
     }
@@ -52,13 +53,68 @@ def test_registry_facts_full_row_for_enabled_and_zeroed_for_available(db) -> Non
     enabled = facts["angee.iam"]  # in the test INSTALLED_APPS
     assert enabled["state"] == Addon.State.ENABLED
     assert set(enabled) == row_keys  # complete row, no partial dict
+    assert enabled["pending"] is False  # a composed addon is never pending
+    assert enabled["category"] == "Foundation"  # mirrored from the addon.toml manifest
 
     # an installed bundle that is *not* enabled in the test settings
     available = facts["angee.knowledge_graph_pgvector"]
     assert set(available) == row_keys  # complete row even when available-only
     assert available["state"] == Addon.State.DISABLED
+    assert available["forced"] is False
+    assert available["pending"] is False  # not in the (empty) desired set
+    assert available["category"] == ""  # metadata stays blank until composed
     assert available["model_count"] == 0
     assert available["field_count"] == 0
     assert available["depends_on"] == []
     assert available["model_labels"] == []
     assert available["depended_by"] == []
+
+
+def test_registry_facts_pending_reflects_desired_settings_roots(db) -> None:
+    """``pending`` flags an available-but-not-composed addon named in the desired roots.
+
+    ``desired`` is the install owner's ``settings.yaml`` ``INSTALLED_APPS`` view; an
+    available addon listed there but not yet composed is the board's "to install".
+    """
+
+    from angee.platform.models import AddonManager
+
+    facts = AddonManager._registry_facts(desired=frozenset({"angee.knowledge_graph_pgvector"}))
+
+    assert facts["angee.knowledge_graph_pgvector"]["pending"] is True
+    # An addon composed in the test app graph stays non-pending even if named desired.
+    assert facts["angee.iam"]["pending"] is False
+
+
+def test_registry_facts_flags_a_queued_uninstall_for_a_composed_root(db, monkeypatch) -> None:
+    """A composed *root* dropped from the desired roots is ``pending`` (a queued uninstall).
+
+    The symmetric "to install" diff: a composed consumer root no longer named in
+    ``settings.yaml`` leaves on the next boot, so the board shows it pending. A composed
+    *dependency* (``required``) is never in the roots yet is not being uninstalled, so it
+    is never flagged.
+    """
+
+    from dataclasses import replace
+
+    from angee.platform import composed
+    from angee.platform import models as platform_models
+    from angee.platform.models import AddonManager
+
+    root = composed.AddonRollup(
+        name="example.demo", label="demo", namespace="example", kind="consumer",
+        forced=False, model_count=0, field_count=0, resource_count=0,
+        depends_on=[], model_labels=[], description="", keywords=[], category="Example",
+    )
+    monkeypatch.setattr(platform_models, "available_addons", lambda dirs=(): {})
+    monkeypatch.setattr(platform_models.composed, "addon_rollups", lambda: [root])
+
+    # Composed but dropped from the desired roots → queued uninstall.
+    assert AddonManager._registry_facts(desired=frozenset())["example.demo"]["pending"] is True
+    # Still a desired root → not pending.
+    assert AddonManager._registry_facts(desired=frozenset({"example.demo"}))["example.demo"]["pending"] is False
+
+    # A composed dependency (required) is never flagged, even absent from the roots.
+    dependency = replace(root, name="example.dep", kind="required")
+    monkeypatch.setattr(platform_models.composed, "addon_rollups", lambda: [dependency])
+    assert AddonManager._registry_facts(desired=frozenset())["example.dep"]["pending"] is False

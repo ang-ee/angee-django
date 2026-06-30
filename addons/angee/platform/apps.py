@@ -21,9 +21,10 @@ class PlatformConfig(AppConfig):
     name = "angee.platform"
 
     def ready(self) -> None:
-        """Register the Addon-reflection reconcile receiver (see ``signals.py``)."""
+        """Register the reconcile receiver + the installer-backend system check."""
 
         super().ready()
-        from angee.platform import signals
+        from angee.platform import installer, signals
 
+        installer.register_checks()
         signals.connect()

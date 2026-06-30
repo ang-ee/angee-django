@@ -8,7 +8,6 @@ library owns the behavior.
 from __future__ import annotations
 
 import base64
-from collections.abc import Mapping
 from typing import Any, cast
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -24,6 +23,7 @@ from django_sqids import SqidsField
 from sqids import Sqids
 
 from angee.base.impl import ImplBase
+from angee.base.registry import impl_registry, resolve_impl_class
 
 
 def _derive_fernet(label: str) -> Fernet:
@@ -377,24 +377,12 @@ class ImplClassField(TextChoicesField):
         """Return the impl class the configured mapping binds to ``key``.
 
         ``key`` may be a plain string or the enum member this column reads back.
+        Delegates the registry lookup + ``base_class`` check to the shared
+        :func:`~angee.base.registry.resolve_impl_class` owner after canonicalizing the
+        key, so the per-row column and the row-less selectors resolve identically.
         """
 
-        registry = self._registry()
-        key = self.key_for(key)
-        try:
-            dotted = registry[key]
-        except KeyError as error:
-            known = ", ".join(sorted(registry)) or "none configured"
-            raise ImproperlyConfigured(
-                f"No impl for key {key!r} in settings.{self.registry_setting} (known: {known})."
-            ) from error
-        impl = import_string(dotted)
-        if not (isinstance(self.base_class, type) and isinstance(impl, type) and issubclass(impl, self.base_class)):
-            base_name = getattr(self.base_class, "__name__", self.base_class)
-            raise ImproperlyConfigured(
-                f"settings.{self.registry_setting}[{key!r}] = {dotted!r} is not a {base_name}."
-            )
-        return impl
+        return resolve_impl_class(self.registry_setting, self.key_for(key), cast(type, self.base_class))
 
     def key_for(self, value: Any) -> str:
         """Return the canonical registry key for a stored/input enum-ish value.
@@ -460,7 +448,4 @@ class ImplClassField(TextChoicesField):
     def _registry(self) -> dict[str, str]:
         """Return the configured ``key → dotted path`` mapping for this field."""
 
-        mapping = getattr(settings, self.registry_setting, {}) if self.registry_setting else {}
-        if not isinstance(mapping, Mapping):
-            raise ImproperlyConfigured(f"settings.{self.registry_setting} must be a mapping of key to dotted path.")
-        return {str(key): str(value) for key, value in mapping.items()}
+        return impl_registry(self.registry_setting)

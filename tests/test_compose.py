@@ -672,6 +672,11 @@ def test_appgraph_annotates_roots_and_dependencies() -> None:
     # `resources` is pulled in through iam's closure, not declared — a dependency.
     assert configs["angee.resources"].angee_addon_root is False
 
+    # `forced` = another resolved app depends on me (cannot be uninstalled). `resources`
+    # is in iam's closure → forced; the sole declared root nothing depends on is not.
+    assert configs["angee.resources"].angee_forced is True
+    assert iam.angee_forced is False
+
 
 def test_appgraph_rejects_duplicate_roots() -> None:
     """A repeated explicit root app is a settings error, not hidden dedupe."""

@@ -2,34 +2,31 @@ import { type ReactElement } from "react";
 
 import {
   Badge,
-  Code,
+  Chip,
   ListView,
+  statusTone,
   textRoleVariants,
+  type CardActionContext,
   type ListColumn,
   type ResourceToolbarGroupOption,
 } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
-import { LinkedChips, TextRouteLink } from "../lib/cells";
-import { addonDetailPath, fieldsPath, modelsPath } from "../lib/paths";
+import { addonDetailPath } from "../lib/paths";
+import {
+  AddonCard,
+  AddonCardActions,
+  ADDON_MODEL,
+  SOURCE_TONES,
+  STATE_TONES,
+  type AddonResourceRow,
+} from "./AddonCard";
+import { AddonSourceControls } from "./AddonSourceControls";
 
-// The `platform.Addon` Hasura resource row (`hasura_model_resource` over the
-// system-synced `Addon` reflection table, `addons/angee/platform/schema.py`): raw
-// snake fields, fetched + grouped client-side by ListView's client row model.
-// `depends_on`/`depended_by` are reconciled across the whole addon set at sync.
-interface AddonResourceRow extends Record<string, unknown> {
-  id: string;
-  label: string;
-  namespace: string;
-  kind: string;
-  model_count: number;
-  field_count: number;
-  resource_count: number;
-  depends_on: readonly string[];
-  depended_by: readonly string[];
-}
-
-const shortName = (id: string): string => id.split(".").pop() ?? id;
+// Board-card data not shown as a list column: the description/keywords the card
+// renders, the forced/pending flags the lifecycle actions branch on, and the VCS
+// provenance. Fetched alongside the column fields by the one client row-model query.
+const CARD_FIELDS = ["description", "keywords", "forced", "pending", "vcs_path"] as const;
 
 function columns(t: (key: string) => string): readonly ListColumn<AddonResourceRow>[] {
   return [
@@ -38,82 +35,78 @@ function columns(t: (key: string) => string): readonly ListColumn<AddonResourceR
       header: t("platform.col.addon"),
       render: (row) => (
         <span className="flex min-w-0 flex-col">
-          <TextRouteLink href={addonDetailPath(row.id)} className="font-medium">
-            {row.label}
-          </TextRouteLink>
+          <span className="truncate font-medium text-fg">{row.label}</span>
           <span className={textRoleVariants({ role: "caption", truncate: true })}>{row.id}</span>
         </span>
       ),
     },
     {
-      field: "namespace",
-      header: t("platform.col.namespace"),
-      render: (row) => <Code truncate>{row.namespace}</Code>,
+      field: "category",
+      header: t("platform.col.category"),
+      render: (row) =>
+        row.category ? <Chip tone="muted" size="sm">{row.category}</Chip> : <span className="text-fg-muted">—</span>,
     },
     {
       field: "kind",
       header: t("platform.col.kind"),
+      // Route every enum cell through i18n so list and card read the same labels.
       render: (row) => (
-        <Badge tone={row.kind === "required" ? "info" : "neutral"}>{row.kind}</Badge>
+        <Badge tone={row.kind === "consumer" ? "brand" : "neutral"}>{t(`platform.kind.${row.kind}`)}</Badge>
       ),
     },
     {
-      field: "model_count",
-      header: t("platform.col.models"),
-      render: (row) =>
-        row.model_count ? (
-          <TextRouteLink href={modelsPath({ addon: row.id })}>{row.model_count}</TextRouteLink>
-        ) : (
-          <span className="text-fg-muted">0</span>
-        ),
+      field: "source",
+      header: t("platform.col.source"),
+      render: (row) => (
+        <Badge tone={statusTone(row.source, SOURCE_TONES, { unknownTone: "neutral" })}>
+          {t(`platform.source.${row.source}`)}
+        </Badge>
+      ),
     },
     {
-      field: "field_count",
-      header: t("platform.col.fields"),
-      render: (row) =>
-        row.field_count ? (
-          <TextRouteLink href={fieldsPath({ addon: row.id })}>{row.field_count}</TextRouteLink>
-        ) : (
-          <span className="text-fg-muted">0</span>
-        ),
+      field: "state",
+      header: t("platform.col.state"),
+      render: (row) => <Badge tone={statusTone(row.state, STATE_TONES)}>{t(`platform.state.${row.state}`)}</Badge>,
     },
+    { field: "model_count", header: t("platform.col.models") },
+    { field: "field_count", header: t("platform.col.fields") },
     { field: "resource_count", header: t("platform.col.resources") },
-    {
-      field: "depends_on",
-      header: t("platform.col.dependsOn"),
-      sortable: false,
-      render: (row) => (
-        <LinkedChips items={row.depends_on} href={addonDetailPath} format={shortName} />
-      ),
-    },
-    {
-      field: "depended_by",
-      header: t("platform.col.dependedBy"),
-      sortable: false,
-      render: (row) => (
-        <LinkedChips items={row.depended_by} href={addonDetailPath} format={shortName} />
-      ),
-    },
   ];
 }
 
 function groupOptions(t: (key: string) => string): readonly ResourceToolbarGroupOption[] {
   return [
+    { id: "category", label: t("platform.col.category"), group: { field: "category" }, type: "value" },
     { id: "namespace", label: t("platform.col.namespace"), group: { field: "namespace" }, type: "value" },
     { id: "kind", label: t("platform.col.kind"), group: { field: "kind" }, type: "value" },
+    { id: "source", label: t("platform.col.source"), group: { field: "source" }, type: "value" },
+    { id: "state", label: t("platform.col.state"), group: { field: "state" }, type: "value" },
   ];
 }
 
+/**
+ * The Odoo-style Apps board: the `platform.Addon` reflection rendered as category
+ * lanes of app cards (board view) over the shared `ListView`, with a list view a
+ * toggle away. Cards carry the manifest metadata + lifecycle state and the
+ * Install/Uninstall actions; the toolbar grows and rescans the VCS marketplace.
+ */
 export function AddonsPage(): ReactElement {
   const t = usePlatformT();
-
   return (
     <ListView<AddonResourceRow>
-      resource="platform.Addon"
+      resource={ADDON_MODEL}
       columns={columns(t)}
+      fields={CARD_FIELDS}
       groupOptions={groupOptions(t)}
-      defaultGroup={{ field: "namespace" }}
+      defaultView="board"
+      defaultGroup={{ field: "category" }}
       pageSize={100}
+      rowHref={(row) => addonDetailPath(row.id)}
+      toolbarActions={<AddonSourceControls />}
+      renderCard={(row) => <AddonCard row={row} />}
+      cardActions={(row: AddonResourceRow, context: CardActionContext) => (
+        <AddonCardActions row={row} context={context} />
+      )}
       emptyMessage={t("platform.empty.addons")}
     />
   );

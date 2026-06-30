@@ -14,7 +14,10 @@ from angee.platform_integrate_vcs.catalog import parse_addon_meta
 def test_parse_addon_meta_reads_the_addon_block() -> None:
     """The manifest's ``[addon]`` block becomes the catalog descriptor."""
 
-    blob = b'[addon]\nname = "angee.demo"\ndescription = "A demo addon."\ndepends_on = ["angee.iam", "angee.platform"]\n'
+    blob = (
+        b'[addon]\nname = "angee.demo"\ndescription = "A demo addon."\n'
+        b'depends_on = ["angee.iam", "angee.platform"]\n'
+    )
 
     meta = parse_addon_meta(blob)
 

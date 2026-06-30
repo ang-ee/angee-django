@@ -20,6 +20,8 @@ INSTALLED_APPS = [
     "angee.storage",
     "angee.parties",
     "angee.messaging",
+    "angee.platform",
+    "angee.platform_integrate_vcs",
 ]
 DATABASES = {
     "default": {
@@ -54,6 +56,14 @@ ANGEE_AGENT_RUNTIME_CLASSES = {
 }
 ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES = {
     "lexical": "angee.knowledge.retrieval.LexicalRetrievalBackend",
+}
+# The AddonInstaller backend registry (normally platform's autoconfig contributes
+# these). Bare test settings skip the composer, so the row-less ImplClassField-style
+# registry is declared explicitly here; ``local`` is the dev/test default.
+ANGEE_ADDON_INSTALLER_BACKEND = "local"
+ANGEE_ADDON_INSTALLER_BACKEND_CLASSES = {
+    "local": "angee.platform.installer.LocalInstallerBackend",
+    "operator": "angee.platform.installer.OperatorInstallerBackend",
 }
 # Directory/channel backends each addon's autoconfig normally contributes; declared
 # here so the ImplClassField registries are non-empty at model-import time.

@@ -10,6 +10,7 @@ export {
 export {
   ListView,
   type ListViewProps,
+  type CardActionContext,
   type ListEmptyAction,
   type ListEmptyContent,
   type ListEmptyState,

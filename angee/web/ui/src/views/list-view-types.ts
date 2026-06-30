@@ -88,6 +88,10 @@ export interface ListViewProps<TRow extends Row = Row> {
   toolbarActions?: ReactNode;
   /** Optional action content rendered in each board card footer. */
   cardActions?: (row: TRow, context: CardActionContext) => ReactNode;
+  /** Optional board card body override — a rich card (description, chips, badges)
+   * instead of the default title + key/value rows. Board view only; the lane
+   * grouping, frame link/click, and the `cardActions` footer are unchanged. */
+  renderCard?: (row: TRow) => ReactNode;
   /** Empty-state content shown when the list has no rows. */
   emptyMessage?: ReactNode;
   /** Structured empty-state content, including an optional action. */

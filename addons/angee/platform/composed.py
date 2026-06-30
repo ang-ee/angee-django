@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from django.apps import AppConfig, apps
 from django.db.models import Model
 
-from angee.addons import is_angee_addon
+from angee.addons import addon_contract, is_angee_addon
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,11 +24,18 @@ class AddonRollup:
     label: str
     namespace: str
     kind: str
+    forced: bool
     model_count: int
     field_count: int
     resource_count: int
     depends_on: list[str]
     model_labels: list[str]
+    # Manifest metadata (the addon's ``addon.toml`` ``[addon]`` block), surfaced for the
+    # marketplace board — the freeform ``category`` it groups by, and the
+    # ``description``/``keywords`` the cards show. The contract owns these; we only read.
+    description: str
+    keywords: list[str]
+    category: str
 
 
 def addons() -> list[AppConfig]:
@@ -86,6 +93,8 @@ def addon_rollups() -> list[AddonRollup]:
     rollups: list[AddonRollup] = []
     for config in addons():
         models = data_models(config)
+        # The manifest owns the addon's descriptive metadata; read it, never re-derive.
+        contract = addon_contract(config)
         rollups.append(
             AddonRollup(
                 name=config.name,
@@ -93,11 +102,17 @@ def addon_rollups() -> list[AddonRollup]:
                 namespace=config.name.split(".")[0],
                 # The composer owns the root/dependency split; read its annotation.
                 kind="consumer" if getattr(config, "angee_addon_root", False) else "required",
+                # The composer owns the dependency closure; read its "forced" annotation
+                # (cannot be uninstalled), never re-derive it from the registry here.
+                forced=bool(getattr(config, "angee_forced", False)),
                 model_count=len(models),
                 field_count=sum(len(own_fields(model)) for model in models),
                 resource_count=counts.get(config.name, 0),
                 depends_on=sorted(getattr(config, "angee_depends_on", ())),
                 model_labels=sorted(model._meta.label_lower for model in models),
+                description=contract.description if contract else "",
+                keywords=list(contract.keywords) if contract else [],
+                category=(contract.category or "") if contract else "",
             )
         )
     return rollups

@@ -76,6 +76,12 @@ class AddonCatalogManager(AngeeManager):
                     defaults={
                         "label": str(descriptor.get("label", "")),
                         "namespace": str(descriptor.get("namespace", "")),
+                        # The board groups by ``category`` and renders ``description``/
+                        # ``keywords`` — a discovered marketplace row carries the same
+                        # manifest metadata the parser read, never a blank-category lane.
+                        "description": str(descriptor.get("description", "")),
+                        "keywords": list(descriptor.get("keywords", [])),
+                        "category": str(descriptor.get("category", "")),
                         "kind": addon.Kind.REQUIRED,
                         "source": addon.Source.REMOTE,
                         "state": addon.State.DISABLED,

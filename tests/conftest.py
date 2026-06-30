@@ -40,6 +40,10 @@ from angee.knowledge.models import Link as AbstractLink
 from angee.knowledge.models import MarkdownPage as AbstractMarkdownPage
 from angee.knowledge.models import Page as AbstractPage
 from angee.knowledge.models import Vault as AbstractVault
+from angee.platform.models import Addon as AbstractAddon
+from angee.platform.models import PlatformExplorer as AbstractPlatformExplorer
+from angee.platform_integrate_vcs.models import AddonCatalog as AbstractAddonCatalog
+from angee.platform_integrate_vcs.models import CatalogProvenance as AbstractCatalogProvenance
 from angee.storage.models import Backend as AbstractStorageBackend
 from angee.storage.models import Drive as AbstractDrive
 from angee.storage.models import File as AbstractFile
@@ -444,6 +448,60 @@ class File(AbstractFile):
 
 STORAGE_TEST_MODELS = (Backend, Drive, Folder, MimeType, File)
 """Concrete storage models created on demand by storage test fixtures."""
+
+
+class Addon(AbstractAddon, AbstractCatalogProvenance):
+    """Concrete platform reflection row used by source-addon tests.
+
+    Folds the ``platform_integrate_vcs`` provenance extension (``vcs_source`` /
+    ``vcs_path``) onto the one table, the way the composer folds ``CatalogProvenance``
+    onto the emitted ``platform.Addon`` — so the marketplace tier reads its fields off
+    one concrete row.
+    """
+
+    class Meta(AbstractAddon.Meta):
+        """Django model options for the canonical test platform addon row."""
+
+        abstract = False
+        app_label = "platform"
+        db_table = "test_platform_addon"
+        rebac_resource_type = "platform/addon"
+        rebac_id_attr = "name"
+
+
+class PlatformExplorer(AbstractPlatformExplorer):
+    """Concrete table-less REBAC anchor for the platform explorer surface."""
+
+    class Meta(AbstractPlatformExplorer.Meta):
+        """Django model options for the canonical test platform explorer anchor."""
+
+        abstract = False
+        managed = False
+        app_label = "platform"
+        rebac_resource_type = "platform/explorer"
+
+
+class AddonCatalog(AbstractAddonCatalog):
+    """Concrete addon-source dispatch binding for source-addon tests.
+
+    Table-less (``managed = False``): its ``source_kind`` registers the ``addon`` kind
+    with integrate's ``Source`` dispatch, and its manager reconciles discovered rows
+    into the ``platform.Addon`` table above.
+    """
+
+    source_kind = "addon"
+
+    class Meta(AbstractAddonCatalog.Meta):
+        """Django model options for the canonical test addon catalog binding."""
+
+        abstract = False
+        managed = False
+        app_label = "platform_integrate_vcs"
+        rebac_resource_type = "platform_integrate_vcs/catalog"
+
+
+PLATFORM_TEST_MODELS = (Addon,)
+"""Concrete platform reflection table created on demand by marketplace test fixtures."""
 
 
 def _create_missing_tables(

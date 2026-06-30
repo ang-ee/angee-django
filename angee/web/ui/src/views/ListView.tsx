@@ -86,6 +86,7 @@ export type {
   ListColumn,
 } from "./ListInternals";
 export type {
+  CardActionContext,
   ListEmptyAction,
   ListEmptyContent,
   ListEmptyState,
@@ -155,6 +156,7 @@ function ListViewBody<TRow extends Row = Row>({
   rowHref,
   toolbarActions,
   cardActions,
+  renderCard,
   emptyMessage = "No records.",
   emptyState,
   className,
@@ -318,6 +320,7 @@ function ListViewBody<TRow extends Row = Row>({
       rowHref={rowHref}
       toolbarActions={toolbarActions}
       cardActions={cardActions}
+      renderCard={renderCard}
       emptyContent={emptyContent}
       className={className}
     />
@@ -385,6 +388,7 @@ interface ListViewContentProps<TRow extends Row> {
   rowHref: ListViewProps<TRow>["rowHref"];
   toolbarActions: ListViewProps<TRow>["toolbarActions"];
   cardActions: ListViewProps<TRow>["cardActions"];
+  renderCard: ListViewProps<TRow>["renderCard"];
   emptyContent: ListEmptyContent;
   className: string | undefined;
 }
@@ -413,6 +417,7 @@ function ListViewContent<TRow extends Row = Row>({
   rowHref,
   toolbarActions,
   cardActions,
+  renderCard,
   emptyContent,
   className,
 }: ListViewContentProps<TRow>): React.ReactElement {
@@ -650,6 +655,7 @@ function ListViewContent<TRow extends Row = Row>({
           onRowClick={onRowClick}
           cardActions={cardActions}
           cardActionContext={cardActionContext}
+          renderCard={renderCard}
         />
       ) : flatMeasures.length > 0 ? (
         <FlatListBodyWithAggregate

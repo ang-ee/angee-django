@@ -32,7 +32,7 @@ const platformMenu: readonly BaseMenuItem[] = [
           { id: "platform.graph", label: "Graph", route: "platform.graph", icon: "share" },
           { id: "platform.models", label: "Models", route: "platform.models", icon: "grid" },
           { id: "platform.fields", label: "Fields", route: "platform.fields", icon: "columns" },
-          { id: "platform.addons", label: "Addons", route: "platform.addons", icon: "list" },
+          { id: "platform.addons", label: "Apps", route: "platform.addons", icon: "grid" },
         ],
       },
     ],

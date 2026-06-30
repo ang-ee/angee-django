@@ -45,6 +45,10 @@ export interface BoardViewProps<TRow extends Row = Row> {
   onRowClick?: (row: TRow) => void;
   cardActions?: (row: TRow, context: CardActionContext) => React.ReactNode;
   cardActionContext?: CardActionContext;
+  /** Override the card body (mirrors `GalleryView.renderCard`) — for a rich card
+   * (description, chips, badges) instead of the default title + key/value rows. The
+   * lane grouping, frame link/click, selection, and the `cardActions` footer stay. */
+  renderCard?: (row: TRow) => React.ReactNode;
 }
 
 export function BoardView<TRow extends Row = Row>(
@@ -60,6 +64,7 @@ export function BoardView<TRow extends Row = Row>(
     onRowClick,
     cardActions,
     cardActionContext,
+    renderCard,
   } = props;
   return (
     <BoardRows
@@ -72,6 +77,7 @@ export function BoardView<TRow extends Row = Row>(
       onRowClick={onRowClick}
       cardActions={cardActions}
       cardActionContext={cardActionContext ?? EMPTY_CARD_ACTION_CONTEXT}
+      renderCard={renderCard}
     />
   );
 }
@@ -90,6 +96,7 @@ function BoardRows<TRow extends Row>({
   onRowClick,
   cardActions,
   cardActionContext,
+  renderCard,
 }: {
   columns: readonly ColumnDescriptor<TRow>[];
   fetching: boolean;
@@ -100,6 +107,7 @@ function BoardRows<TRow extends Row>({
   onRowClick?: (row: TRow) => void;
   cardActions?: (row: TRow, context: CardActionContext) => React.ReactNode;
   cardActionContext: CardActionContext;
+  renderCard?: (row: TRow) => React.ReactNode;
 }): React.ReactElement {
   const t = useBaseT();
   const leaves = groups.flatMap(flattenLeaves);
@@ -133,6 +141,7 @@ function BoardRows<TRow extends Row>({
           onRowClick={onRowClick}
           cardActions={cardActions}
           cardActionContext={cardActionContext}
+          renderCard={renderCard}
         />
       ))}
     </div>
@@ -206,6 +215,7 @@ function BoardLane<TRow extends Row>({
   onRowClick,
   cardActions,
   cardActionContext,
+  renderCard,
 }: {
   columns: readonly ColumnDescriptor<TRow>[];
   group: RowGroup<TRow>;
@@ -215,6 +225,7 @@ function BoardLane<TRow extends Row>({
   onRowClick?: (row: TRow) => void;
   cardActions?: (row: TRow, context: CardActionContext) => React.ReactNode;
   cardActionContext: CardActionContext;
+  renderCard?: (row: TRow) => React.ReactNode;
 }): React.ReactElement {
   const headingId = React.useId();
   const tone = laneDotTone(group, groupStack, columns);
@@ -244,6 +255,7 @@ function BoardLane<TRow extends Row>({
             onRowClick={onRowClick}
             cardActions={cardActions}
             cardActionContext={cardActionContext}
+            renderCard={renderCard}
           />
         ))}
       </div>
@@ -259,6 +271,7 @@ function BoardRowCard<TRow extends Row>({
   onRowClick,
   cardActions,
   cardActionContext,
+  renderCard,
 }: {
   columns: readonly ColumnDescriptor<TRow>[];
   groupFields: ReadonlySet<string>;
@@ -267,37 +280,25 @@ function BoardRowCard<TRow extends Row>({
   onRowClick?: (row: TRow) => void;
   cardActions?: (row: TRow, context: CardActionContext) => React.ReactNode;
   cardActionContext: CardActionContext;
+  renderCard?: (row: TRow) => React.ReactNode;
 }): React.ReactElement {
   const href = rowHref?.(row.original);
   const actions = cardActions?.(row.original, cardActionContext);
-  const cardColumns = columns
-    .filter((column) => !groupFields.has(column.field))
-    .slice(0, 4);
-  const [titleColumn, ...detailColumns] = cardColumns;
   return (
     <article className="grid gap-2 rounded-8 border border-border-subtle bg-sheet p-3 shadow-xs transition hover:-translate-y-0.5 hover:border-border hover:shadow-md">
       <BoardCardFrame
         href={href}
         onClick={onRowClick ? () => onRowClick(row.original) : undefined}
       >
-        {titleColumn ? (
-          <span className="block min-w-0 truncate text-sm font-semibold text-fg">
-            <ListCellContent column={titleColumn} row={row.original} />
-          </span>
-        ) : null}
-        {detailColumns.map((column) => (
-          <div
-            key={column.field}
-            className="flex min-w-0 items-start justify-between gap-3 text-13"
-          >
-            <span className="shrink-0 text-fg-muted">
-              {column.header ?? column.field}
-            </span>
-            <span className="min-w-0 text-right text-fg">
-              <ListCellContent column={column} row={row.original} />
-            </span>
-          </div>
-        ))}
+        {renderCard ? (
+          renderCard(row.original)
+        ) : (
+          <DefaultBoardCardBody
+            columns={columns}
+            groupFields={groupFields}
+            row={row.original}
+          />
+        )}
       </BoardCardFrame>
       {actions ? (
         <footer className="flex items-center justify-end gap-2 border-t border-border-subtle pt-2">
@@ -305,6 +306,43 @@ function BoardRowCard<TRow extends Row>({
         </footer>
       ) : null}
     </article>
+  );
+}
+
+function DefaultBoardCardBody<TRow extends Row>({
+  columns,
+  groupFields,
+  row,
+}: {
+  columns: readonly ColumnDescriptor<TRow>[];
+  groupFields: ReadonlySet<string>;
+  row: TRow;
+}): React.ReactElement {
+  const cardColumns = columns
+    .filter((column) => !groupFields.has(column.field))
+    .slice(0, 4);
+  const [titleColumn, ...detailColumns] = cardColumns;
+  return (
+    <>
+      {titleColumn ? (
+        <span className="block min-w-0 truncate text-sm font-semibold text-fg">
+          <ListCellContent column={titleColumn} row={row} />
+        </span>
+      ) : null}
+      {detailColumns.map((column) => (
+        <div
+          key={column.field}
+          className="flex min-w-0 items-start justify-between gap-3 text-13"
+        >
+          <span className="shrink-0 text-fg-muted">
+            {column.header ?? column.field}
+          </span>
+          <span className="min-w-0 text-right text-fg">
+            <ListCellContent column={column} row={row} />
+          </span>
+        </div>
+      ))}
+    </>
   );
 }
 

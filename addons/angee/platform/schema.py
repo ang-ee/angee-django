@@ -22,7 +22,9 @@ from rebac import ObjectRef
 from strawberry import auto
 
 from angee.graphql.access import actor_can_read
+from angee.graphql.actions import ActionResult
 from angee.graphql.data import hasura_model_resource, hasura_pydantic_resource
+from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.platform import composed
 
 _EXPLORER = ObjectRef("platform/explorer", "default")
@@ -232,12 +234,17 @@ class AddonNode:
 
     label: auto
     namespace: auto
+    description: auto
+    category: auto
+    keywords: list[str]
     # Exposed as the string value, not an `auto` enum: strawberry would name the
     # generated enums `Source`/`State`, colliding with `integrate`'s connection-source
     # enum and the shared StateField names.
     kind: str
     source: str
     state: str
+    forced: auto
+    pending: auto
     model_count: auto
     field_count: auto
     resource_count: auto
@@ -260,10 +267,13 @@ _ADDON_RESOURCE = hasura_model_resource(
     model=_Addon,
     name="platform_addons",
     model_label="platform.Addon",
-    filterable=["label", "namespace", "kind", "source", "state", "model_count", "field_count", "resource_count"],
-    sortable=["label", "namespace", "kind", "state", "model_count", "field_count", "resource_count"],
+    filterable=[
+        "label", "namespace", "category", "kind", "source", "state", "forced", "pending",
+        "model_count", "field_count", "resource_count",
+    ],
+    sortable=["label", "namespace", "category", "kind", "state", "model_count", "field_count", "resource_count"],
     aggregatable=["id"],
-    groupable=["namespace", "kind", "source", "state"],
+    groupable=["namespace", "category", "kind", "source", "state", "forced", "pending"],
     insert=False,
     update=False,
     delete=False,
@@ -430,6 +440,33 @@ _FIELD_RESOURCE = hasura_pydantic_resource(
 )
 
 
+@strawberry.type
+class AddonInstallMutation:
+    """Install/uninstall an addon by editing ``settings.yaml``'s ``INSTALLED_APPS``.
+
+    Thin admin-gated edge over :class:`~angee.platform.models.AddonManager`, which owns
+    the whole flow — validate the target, edit the one install source (``settings.yaml``)
+    through the :class:`~angee.platform.installer.AddonInstaller`, refuse a forced
+    (depended-on) addon, and re-run the reflection reconcile so the board shows the new
+    ``pending`` state at once (the addon itself composes on the next ``angee dev`` boot).
+    These resolvers only dispatch and relay the result's ``ok``/``summary``.
+    """
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def install(self, addon: str) -> ActionResult:
+        """Install an addon root and report the manager's outcome."""
+
+        result = _Addon.objects.install(addon)
+        return ActionResult(ok=result.ok, message=result.summary)
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def uninstall(self, addon: str) -> ActionResult:
+        """Uninstall an addon root and report the manager's outcome."""
+
+        result = _Addon.objects.uninstall(addon)
+        return ActionResult(ok=result.ok, message=result.summary)
+
+
 schemas = {
     "console": {
         "query": [
@@ -438,6 +475,7 @@ schemas = {
             _MODEL_RESOURCE.query,
             _FIELD_RESOURCE.query,
         ],
+        "mutation": [AddonInstallMutation],
         "types": [
             PlatformExplorerData,
             *_ADDON_RESOURCE.types,

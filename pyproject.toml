@@ -23,6 +23,9 @@ dependencies = [
   "pydantic>=2.13",
   "pyjwt[crypto]>=2.12",
   "pyyaml>=6",
+  # Comment/format-preserving YAML round-trip: the AddonInstaller's settings.yaml
+  # INSTALLED_APPS install/uninstall edit (pyyaml round-trips lose comments/layout).
+  "ruamel.yaml>=0.18",
   "strawberry-graphql>=0.270",
   "strawberry-django-aggregates>=0.9.1",
   "strawberry-django-hasura>=0.3.0",
