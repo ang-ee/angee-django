@@ -519,7 +519,7 @@ requires-dist = [
     { name = "python-magic", specifier = ">=0.4.27" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "strawberry-django-aggregates", specifier = ">=0.9.1" },
-    { name = "strawberry-django-hasura", specifier = ">=0.3.0" },
+    { name = "strawberry-django-hasura", editable = "/Users/alexis/Work/angee/strawberry-django-hasura" },
     { name = "strawberry-graphql", git = "ssh://git@github.com/ang-ee/strawberry.git?branch=codex%2Finput-object-extensions" },
     { name = "strawberry-graphql-django", git = "ssh://git@github.com/ang-ee/strawberry-django.git?branch=hotfix-angee-django" },
     { name = "tablib", specifier = ">=3" },
@@ -1794,17 +1794,30 @@ wheels = [
 
 [[package]]
 name = "strawberry-django-hasura"
-version = "0.3.1"
-source = { registry = "https://pypi.org/simple" }
+version = "0.3.2"
+source = { editable = "/Users/alexis/Work/angee/strawberry-django-hasura" }
 dependencies = [
     { name = "django" },
     { name = "strawberry-django-aggregates" },
     { name = "strawberry-graphql" },
     { name = "strawberry-graphql-django" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/68/ad/ca18fb15acd934580ff769aee4e32e74d3fe53c144b65c2776393d0898c5/strawberry_django_hasura-0.3.1.tar.gz", hash = "sha256:030c2abef1239a2aecd70c0085f5f64c1856b7e21da820a2f3492635e0585e5c", size = 58791, upload-time = "2026-06-26T15:52:38.666Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/64/1e/14ef14aa3b0b2a12793d68db3efc64e1aaedc4351109c6e8977a42638c14/strawberry_django_hasura-0.3.1-py3-none-any.whl", hash = "sha256:fc52b82f8d86e73033c08c8d392a72786f7c143fd060cfa7c0789f1e59f25576", size = 50860, upload-time = "2026-06-26T15:52:37.68Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "django", specifier = ">=6.0" },
+    { name = "strawberry-django-aggregates", specifier = ">=0.7.0" },
+    { name = "strawberry-graphql", specifier = ">=0.315.0" },
+    { name = "strawberry-graphql-django", specifier = ">=0.82.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "django-stubs", specifier = ">=5" },
+    { name = "mypy", specifier = ">=1.10" },
+    { name = "pytest", specifier = ">=8" },
+    { name = "pytest-django", specifier = ">=4" },
+    { name = "ruff", specifier = ">=0.6" },
 ]
 
 [[package]]

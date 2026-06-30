@@ -25,7 +25,7 @@ dependencies = [
   "pyyaml>=6",
   "strawberry-graphql>=0.270",
   "strawberry-django-aggregates>=0.9.1",
-  "strawberry-django-hasura>=0.3.0",
+  "strawberry-django-hasura>=0.3.2",
   "strawberry-graphql-django>=0.86",
   "tablib>=3",
   "django-choices-field>=4.0.0",
@@ -78,6 +78,12 @@ cache-dir = ".angee/caches/uv"
 # strawberry-django-only. Keep pins explicit so every environment resolves identically.
 strawberry-graphql = { git = "ssh://git@github.com/ang-ee/strawberry.git", branch = "codex/input-object-extensions" }
 strawberry-graphql-django = { git = "ssh://git@github.com/ang-ee/strawberry-django.git", branch = "hotfix-angee-django" }
+# TEMPORARY local override: resolve strawberry-django-hasura 0.3.2 (the N+1
+# optimizer-bypass fix) from the local source checkout so the workspace runs
+# before the 0.3.2 PyPI release lands. The durable wiring is the bumped
+# `strawberry-django-hasura>=0.3.2` specifier alone — REMOVE this entry once
+# 0.3.2 is published, then re-run `uv lock`.
+strawberry-django-hasura = { path = "/Users/alexis/Work/angee/strawberry-django-hasura", editable = true }
 
 [tool.hatch.build.targets.wheel]
 # Two source roots merge into the one `angee` PEP 420 namespace: the framework
