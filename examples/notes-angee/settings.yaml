@@ -17,6 +17,7 @@ INSTALLED_APPS:
   - angee.parties_integrate_carddav
   - angee.messaging
   - angee.platform
+  - angee.platform_integrate_vcs
   - angee.storage
   - example.notes
 

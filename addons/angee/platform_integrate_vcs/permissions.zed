@@ -1,0 +1,15 @@
+// Authorization schema for the platform_integrate_vcs addon.
+// @rebac_package: platform_integrate_vcs
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 1
+
+definition platform_integrate_vcs/catalog {
+    // The addon source kind is a table-less (`managed = False`) dispatch binding:
+    // it owns the sync, but the rows it produces live in `platform.Addon` (gated by
+    // that type). This definition backs the model only to satisfy the rebac.E009
+    // system check and is never read. Platform admins reach it through the same
+    // const-backed admin relation the rest of the platform console uses.
+    relation admin: angee/role // rebac:const=admin
+
+    permission read = admin->member
+}

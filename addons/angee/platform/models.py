@@ -131,6 +131,7 @@ class Addon(AngeeModel):
 
         INSTALLED = "installed", "Installed"  # an installed bundle's entry point (uv.lock)
         LOCAL = "local", "Local"  # an addon.toml under ANGEE_ADDON_DIRS
+        REMOTE = "remote", "Remote"  # known from a VCS source, not materialised (platform_integrate_vcs)
 
     class State(models.TextChoices):
         """The addon's lifecycle in this project — reconciled, never deleted."""
