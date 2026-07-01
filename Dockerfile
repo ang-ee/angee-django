@@ -28,11 +28,13 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/.venv \
     # compiler-free.
     AUTOBAHN_USE_NVX=0
 # libmagic1: python-magic (storage MIME sniffing). tini: PID 1 signal reaping so
-# `docker stop` shuts the ASGI server down cleanly. Nothing else — the framework's
-# wheels are self-contained (cryptography/uvicorn[standard]/httptools ship
-# manylinux binaries); no compiler, no node (Vite is a separate image).
+# `docker stop` shuts the ASGI server down cleanly. git: uv resolves the pinned
+# ang-ee/strawberry* git deps with it — needed both to bake the closure (deps) and
+# for the mounted-source `uv sync` at container start (the dev flow this image
+# exists for). No compiler, no node (Vite is a separate image); the framework's own
+# wheels ship manylinux binaries.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libmagic1 tini ca-certificates \
+        libmagic1 tini ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 # Non-root runtime user; /app and the venv are user-owned so a mounted-source
 # `uv sync` at container start can link the editable project into /opt/.venv.
@@ -40,10 +42,8 @@ RUN useradd --create-home --uid 1000 angee \
     && install -d -o angee -g angee /app /opt/.venv
 WORKDIR /app
 
-# --- deps: bake the dependency closure; git toolchain lives ONLY in this stage -
+# --- deps: bake the dependency closure (git comes from base) --------------------
 FROM base AS deps
-RUN apt-get update && apt-get install -y --no-install-recommends git \
-    && rm -rf /var/lib/apt/lists/*
 # `--build-arg DEV=--no-dev` for a runtime-lean image; default includes the dev
 # group so a dev workspace can run pytest/ruff/mypy in-container out of the box.
 ARG DEV=
@@ -56,7 +56,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project ${DEV} \
     && chown -R angee:angee /opt/.venv
 
-# --- final: the lean base + the baked venv, none of the build toolchain --------
+# --- final: the lean base + the baked venv (git inherited for the dev uv sync) --
 FROM base AS final
 COPY --from=deps --chown=angee:angee /opt/.venv /opt/.venv
 USER angee
