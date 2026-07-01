@@ -1,0 +1,35 @@
+_min_copier_version: "9.0"
+_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+
+_angee:
+  schema: 1
+  kind: service
+  name: opencode
+  description: >-
+    OpenCode agent (ACP over a WebSocket) as a container service. Provider-agnostic:
+    the agent runtime injects the inference auth env and the provider-qualified model
+    handle, so any provider OpenCode supports works. Mounts an agent workspace at
+    /workspace and joins the operator's central Caddy edge; the operator mints route
+    tokens and forward-auths each upgrade, so the service carries no auth machinery.
+  name_pattern: "agent-${workspace.name}"
+  inputs:
+    auth_env:
+      type: str
+      default: ""
+      help: >-
+        Pre-rendered YAML env lines for inference auth. The agent runtime owns which
+        env vars receive the operator secret.
+    model:
+      type: str
+      default: ""
+      help: Optional model override (OPENCODE_MODEL).
+
+auth_env:
+  type: str
+  default: ""
+
+model:
+  type: str
+  default: ""

@@ -1,0 +1,80 @@
+version: 1
+kind: stack
+name: {{ instance_name }}
+
+template:
+  active: stacks/local
+  answers_file: .copier-answers.yml
+
+# The instance stores its own state (SQLite db, caches) under ./data, relative to
+# this stack root. The operator materializes it on every bring-up (StackPrepare)
+# before migrate opens the database. settings.yaml's ANGEE_DATA_DIR resolves to the
+# same ./data inside the mounted source.
+secrets_backend:
+  type: env-file
+  path: .env
+
+ports:
+  # The operator daemon's port. The CLI reaches it via ANGEE_OPERATOR_URL=
+  # http://127.0.0.1:${ports.operator}; export that in your shell profile.
+  operator: { value: {{ operator_port }}, export_env: ANGEE_OPERATOR_PORT }
+  django: { value: {{ django_port }}, export_env: DJANGO_PORT }
+  ui: { value: {{ ui_port }}, export_env: ANGEE_UI_PORT }
+
+persist:
+  app-data: { subpath: ./data, scope: stack }
+
+# The application source — cloned into ./sources/app on the first bring-up, then
+# mounted into the runtime containers. This is the non-dev layout: the root is the
+# stack and the operator pulls the source in (vs the dev overlay's local paths).
+sources:
+  app:
+    kind: git
+    repo: {{ app_repo }}
+    default_ref: {{ app_ref }}
+
+services:
+  # The control plane. Open on loopback — no --token — so the CLI needs only
+  # `export ANGEE_OPERATOR_URL=http://127.0.0.1:{{ operator_port }}`. Runs on the
+  # host so it can drive docker-compose; add sources/services/workspaces through it.
+  operator:
+    runtime: local
+    command:
+      - sh
+      - "-c"
+      - exec angee operator --root . --bind 127.0.0.1 --port ${ports.operator}
+
+  # angee-django backend on the framework runtime image. The cloned source mounts
+  # at /app (deps are baked in the image); the entrypoint links the editable
+  # project, emits the runtime, migrates, and serves with uvicorn.
+  django:
+    runtime: container
+    image: {{ base_image }}
+    mounts:
+      - source://app:/app
+    workdir: /app
+    command: ["bash", "docker/dev/app-entrypoint.sh"]
+    env:
+      ANGEE_PROJECT_DIR: /app/{{ project_subpath }}
+      ANGEE_DJANGO_PORT: "8000"
+      UV_CACHE_DIR: /tmp/uv-cache
+    ports:
+      - "{{ django_port }}:8000"
+    after: [operator]
+
+  # Vite frontend. Reaches the backend container by service name on the compose
+  # network; the fresh clone has no node_modules, so pnpm installs cleanly for Linux.
+  vite:
+    runtime: container
+    image: node:22-slim
+    mounts:
+      - source://app:/app
+    workdir: /app
+    command: ["bash", "docker/dev/vite-entrypoint.sh"]
+    env:
+      ANGEE_WEB_DIR: /app/{{ project_subpath }}/web
+      ANGEE_DJANGO_URL: "http://django:8000"
+      ANGEE_UI_PORT: "5173"
+    ports:
+      - "{{ ui_port }}:5173"
+    after: [django]

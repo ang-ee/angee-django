@@ -1,0 +1,24 @@
+# Generated composer output — emitted by `manage.py angee build`, never edited.
+/runtime/
+
+# The dev-stack overlay: `angee init --dev` renders angee.yaml + local state here.
+# It is per-clone and regenerable, so the whole directory is ignored — the project
+# owns the repo root; the stack overlays into `.angee/`.
+/.angee/
+/.env
+
+# Python
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.venv/
+
+# JS
+node_modules/
+/{{ web_path }}/dist/
+/{{ web_path }}/.vite/
+
+# Scratch / reports
+/.playwright-mcp/
+/test-results/
+/playwright-report/

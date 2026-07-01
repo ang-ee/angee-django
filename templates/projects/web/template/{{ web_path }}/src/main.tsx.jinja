@@ -1,0 +1,16 @@
+import { createApp } from "@angee/app";
+import { ConsoleLayout } from "@angee/ui";
+
+import { composedAddons, schemas } from "../../runtime/web/app";
+import "./index.css";
+
+createApp({
+  addons: [...composedAddons],
+  layouts: {
+    console: { chrome: ConsoleLayout },
+    public: { schema: "public" },
+  },
+  schemas,
+  defaultSchema: "console",
+  home: "/",
+}).mount("#root");

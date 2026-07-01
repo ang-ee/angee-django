@@ -1,0 +1,64 @@
+_min_copier_version: "9.0"
+_subdirectory: template
+_templates_suffix: .jinja
+# The instance root IS the stack (non-dev layout, ANGEE_ROOT=.), so the stack owns
+# the root's canonical answers file — unlike the dev overlay, which lives in .angee/.
+_answers_file: .copier-answers.yml
+
+_message_after_copy: |
+  Local Angee instance rendered.
+
+  1. Bring it up (clones angee-django into ./sources, builds the runtime, serves):
+       angee up
+  2. Point the CLI at the local operator — add to your ~/.profile:
+       export ANGEE_OPERATOR_URL=http://127.0.0.1:{{ operator_port }}
+
+  Backend:  http://localhost:{{ django_port }}
+  Frontend: http://localhost:{{ ui_port }}
+
+_angee:
+  schema: 1
+  kind: stack
+  name: local
+  description: >-
+    A self-contained local Angee instance (quickstart). `angee up` clones
+    angee-django as a git source, runs the backend on
+    ghcr.io/ang-ee/django-angee-base with the Vite frontend under docker-compose,
+    and stands up an open-loopback operator on 127.0.0.1:9000 that the CLI drives
+    via ANGEE_OPERATOR_URL. The root folder is the stack; sources are cloned in.
+
+# Display name of the instance (the compose project's friendly label; the operator
+# derives a root-unique project id from it).
+instance_name:
+  type: str
+  default: angee-local
+
+# The application source the instance runs, cloned into ./sources/app. Defaults to
+# the framework repo, which carries the quickstart example.
+app_repo:
+  type: str
+  default: "https://github.com/ang-ee/angee-django"
+app_ref:
+  type: str
+  default: main
+
+# The project within the cloned source to run (the dir holding manage.py/settings.yaml).
+project_subpath:
+  type: str
+  default: "examples/notes-angee"
+  help: Path within the cloned source to the project (holds manage.py).
+
+# The framework runtime image (deps baked; the cloned source mounts over the code).
+base_image:
+  type: str
+  default: "ghcr.io/ang-ee/django-angee-base:latest"
+
+operator_port:
+  type: int
+  default: 9000
+django_port:
+  type: int
+  default: 8000
+ui_port:
+  type: int
+  default: 5173

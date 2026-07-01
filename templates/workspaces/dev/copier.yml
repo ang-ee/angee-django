@@ -1,0 +1,110 @@
+_min_copier_version: "9.0"
+_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+
+_angee:
+  schema: 1
+  kind: workspace
+  name: dev
+  description: Workspace for contributing to angee-django. Materializes angee-django as the workspace root so the chained inner stack can run any bundled example consumer with the framework changes.
+  instance_naming:
+    pattern: "${inputs.topic | slug | truncate(48)}"
+    fallback: dev
+    max_length: 48
+  inputs:
+    topic:
+      type: str
+      default: dev
+    example:
+      type: str
+      default: notes-angee
+      help: Which example consumer dir under examples/ to mount as the inner stack.
+    branch_prefix:
+      type: str
+      default: workspace
+    base_ref:
+      type: str
+      default: main
+    repo_url:
+      type: str
+      default: https://github.com/ang-ee/angee-django.git
+    source_cache_path:
+      type: str
+      default: "../.."
+      help: Where sibling repos live, relative to ANGEE_ROOT (the host's .angee/). Default "../.." resolves to the directory containing this angee-django checkout and its sibling repos.
+    playwright_browser:
+      type: str
+      default: chrome
+  ensure:
+    operator.port_pool.django:     { range: "8101-8199" }
+    operator.port_pool.ui:         { range: "5175-5273" }
+    operator.port_pool.storybook:  { range: "6007-6105" }
+    operator.port_pool.operator:   { range: "9001-9099" }
+    operator.port_pool.playwright: { range: "9224-9322" }
+    operator.port_pool.process_compose: { range: "10000-10999" }
+    # Caddy edge host port — each workspace leases a distinct one so parallel
+    # workspace stacks (and the base stack on :80) don't all contend for :80.
+    # Start at 7001: on macOS :7000 is held by Control Center (AirPlay Receiver),
+    # so an edge that leased 7000 would fail to bind and the agent socket 1006s.
+    operator.port_pool.edge:       { range: "7001-7099" }
+  sources:
+    repo:
+      source: angee-django
+      kind: git
+      repo: "${inputs.repo_url}"
+      default_ref: "${inputs.base_ref}"
+      cache_path: "${inputs.source_cache_path}/angee-django"
+      mode: worktree
+      ref: "${inputs.base_ref}"
+      branch: "${inputs.branch_prefix}/${name | slug}"
+      subpath: .
+  chain_root: .angee
+  chain:
+    - template: templates/stacks/dev
+      root: .
+      inputs:
+        # Stack name == the docker-compose project name. Scope it to the workspace so
+        # parallel workspace stacks get ISOLATED compose projects (their own edge/agent
+        # containers). Sharing one name ("notes-angee") made Compose merge containers
+        # across workspaces — one stack's agent ended up fronted by another stack's edge
+        # (or none), so the browser's chat socket hit a dead edge port → WebSocket 1006.
+        project_name:       "${inputs.example}-${name}"
+        project_path:       "examples/${inputs.example}"  # logical, no `..` — resolved by angee
+        django_port:        "${alloc.django}"
+        ui_port:            "${alloc.ui}"
+        storybook_port:     "${alloc.storybook}"
+        operator_port:      "${alloc.operator}"
+        edge_port:          "${alloc.edge}"
+        playwright_port:    "${alloc.playwright}"
+        process_compose_port: "${alloc.process_compose}"
+        playwright_user_data_dir: "${workspace.path}/.angee/data/chrome"
+        playwright_browser: "${inputs.playwright_browser}"
+
+topic:
+  type: str
+  default: dev
+
+example:
+  type: str
+  default: notes-angee
+
+branch_prefix:
+  type: str
+  default: workspace
+
+base_ref:
+  type: str
+  default: main
+
+repo_url:
+  type: str
+  default: https://github.com/ang-ee/angee-django.git
+
+source_cache_path:
+  type: str
+  default: "../.."
+
+playwright_browser:
+  type: str
+  default: chrome

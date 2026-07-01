@@ -1,0 +1,53 @@
+_min_copier_version: "9.0"
+_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+
+_angee:
+  schema: 1
+  kind: service
+  name: claude-code
+  description: >-
+    Claude Code agent (ACP over a WebSocket) as a container service. Mounts an
+    agent workspace at /workspace and joins the operator's central Caddy edge;
+    the operator mints short-lived route tokens and forward-auths every upgrade,
+    so the service carries no in-container Caddy, token verifier, or auth secret.
+  name_pattern: "agent-${workspace.name}"
+  inputs:
+    auth_env:
+      type: str
+      default: ""
+      help: >-
+        Pre-rendered YAML env lines for inference auth. The agent runtime owns which
+        env vars receive the operator secret and any static provider headers.
+    model:
+      type: str
+      default: ""
+      help: Optional Claude Code model override (ANTHROPIC_MODEL).
+    permission_mode:
+      type: str
+      default: acceptEdits
+      help: Claude Code permission mode (default | acceptEdits | plan | bypassPermissions).
+    mcp_env:
+      type: str
+      default: ""
+      help: >-
+        Pre-rendered YAML env lines (one per credentialed MCP server) setting each
+        server's bearer from its operator secret; .mcp.json reads them via ${VAR}.
+
+auth_env:
+  type: str
+  default: ""
+
+model:
+  type: str
+  default: ""
+
+permission_mode:
+  type: str
+  default: acceptEdits
+  choices: [default, acceptEdits, plan, bypassPermissions]
+
+mcp_env:
+  type: str
+  default: ""

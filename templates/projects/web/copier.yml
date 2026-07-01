@@ -1,0 +1,69 @@
+_min_copier_version: "9.0"
+_subdirectory: template
+_templates_suffix: .jinja
+# The project owns the repo root, so it takes the canonical answers file. The dev
+# stack is NOT rendered here — it is an on-demand overlay a developer adds with
+# `angee init --dev` (into a gitignored `.angee/`), and a non-dev `stacks/local`
+# instance clones this project in as a source. Either way the root is the project.
+_answers_file: .copier-answers.yml
+
+_angee:
+  schema: 1
+  kind: project
+  name: web
+  description: >-
+    Full host scaffold for a downstream Angee project: manage.py, settings.yaml,
+    the consumer-addon namespace, and the Vite + React web package. The composed
+    runtime graph owns frontend package discovery, Tailwind source scanning, app
+    addon/schema wiring, and typed GraphQL operation codegen through
+    `runtime/web/*` artifacts emitted by `manage.py angee build`.
+
+# Machine name of the project — the slug used for the SECRET_KEY, the manage.py
+# docstring, and (by default) the web package's npm scope. Lowercase, no spaces.
+project_name:
+  type: str
+  default: app
+  help: Machine name of the project (lowercase slug); seeds SECRET_KEY and the web package scope.
+
+# Display title for the rendered SPA (index.html <title>).
+project_title:
+  type: str
+  default: Angee
+  help: Human title shown in the browser tab (index.html <title>).
+
+# npm package name for the rendered web package. Scoped to the project so it does
+# not collide with framework workspace packages; defaults to the project name.
+package_name:
+  type: str
+  default: "@{{ project_name }}/web"
+  help: npm name for the rendered web package (its own private host package).
+
+# Directory name for the project's own consumer addons, under addons/<namespace>/.
+# INSTALLED_APPS references it as `<namespace>.<app>`.
+addon_namespace:
+  type: str
+  default: "{{ project_name }}"
+  help: Directory + import namespace for this project's consumer addons (addons/<namespace>/).
+
+# Path to the project's web package, relative to the project root — the directory
+# this template renders the web package into. Mirrors the `web_path` input the dev
+# stack passes to `pnpm --dir <web_path> codegen`, so codegen ownership is one place.
+web_path:
+  type: str
+  default: "web"
+  help: Path of the web package relative to the project root (matches the dev stack's web_path).
+
+# The rendered web package reaches the framework's build-config (Vite, Vitest) by
+# PACKAGE NAME — `@angee/app/vite`, `@angee/app/vitest` — not a sibling path.
+# `@angee/app` is a dependency of the web package, so those exports resolve the
+# same way whether the framework is an editable checkout or an installed wheel.
+# That is why this template takes no `framework_*` path input. (The tsconfig is
+# inlined rather than extended: a package-name `extends` resolves in tsc but not
+# in Vite's oxc tsconfig loader.)
+
+# React major used for the @types/react* devDependencies. Kept as one input so the
+# rendered manifest pins a single React line.
+react_version:
+  type: str
+  default: "^19.2.0"
+  help: React (and react-dom) version range for the rendered package.

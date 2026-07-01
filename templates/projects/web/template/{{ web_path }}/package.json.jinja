@@ -1,0 +1,35 @@
+{
+  "name": "{{ package_name }}",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "codegen": "angee-web-codegen --runtime ../runtime --web-root ."
+  },
+  "dependencies": {
+    "@angee/app": "^0.1.0",
+    "@angee/refine": "^0.1.0",
+    "@angee/resources": "^0.1.0",
+    "@angee/ui": "^0.1.0",
+    "@graphql-typed-document-node/core": "^3.2.0",
+    "@tanstack/react-router": "^1.170.8",
+    "react": "{{ react_version }}",
+    "react-dom": "{{ react_version }}"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@testing-library/react": "^16.1.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6.0.2",
+    "happy-dom": "^20.9.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.14",
+    "vitest": "^4.1.7"
+  }
+}

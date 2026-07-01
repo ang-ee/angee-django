@@ -1,0 +1,29 @@
+# One service entry appended to the outer stack by `service create`. The operator's
+# central Caddy routes wss://{{ service_name }}.<domain>/ and forward-auths every
+# upgrade against the daemon (route tokens are operator-minted), so this service runs
+# a plain stdio<->ws bridge with no in-container auth. `route:` replaces `ports:` —
+# a routed service publishes nothing and leases no host port.
+services:
+  {{ service_name }}:
+    runtime: container
+    build:
+      # The operator installs the rendered docker/ at <root>/services/<name>/docker
+      # (root is ANGEE_ROOT, e.g. .angee) and requires the build context to
+      # resolve there, relative to the generated compose file at the root.
+      context: ./services/{{ service_name }}/docker
+    mounts:
+      - "workspace://{{ workspace_name }}:/workspace"
+    env:
+{%- if auth_env %}
+{{ auth_env | safe }}
+{%- endif %}
+{%- if mcp_env %}
+{{ mcp_env | safe }}
+{%- endif %}
+      CLAUDE_PERMISSION_MODE: "{{ permission_mode }}"
+{%- if model %}
+      ANTHROPIC_MODEL: "{{ model }}"
+{%- endif %}
+    route:
+      port: 3007
+      auth: forward

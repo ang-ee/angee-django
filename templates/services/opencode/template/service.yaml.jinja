@@ -1,0 +1,29 @@
+# One service entry appended to the outer stack by `service create`. Routed through
+# the operator's central Caddy (see claude-code/service.yaml.jinja) — `route:` replaces
+# `ports:`, the operator owns edge auth, and inference auth is an operator-held secret.
+# The operator renders this stack entry with its own engine (not Python Jinja2/copier),
+# which supports only if/elif/else plus simple value interpolation — no `set` tag, string
+# concatenation, or inline conditional. Keep it to the constructs claude-code's entry uses.
+services:
+  {{ service_name }}:
+    runtime: container
+    build:
+      # The operator installs the rendered docker/ at <root>/services/<name>/docker
+      # (root is ANGEE_ROOT, e.g. .angee) and requires the build context to
+      # resolve there, relative to the generated compose file at the root.
+      context: ./services/{{ service_name }}/docker
+    mounts:
+      - "workspace://{{ workspace_name }}:/workspace"
+    env:
+{%- if auth_env %}
+{{ auth_env | safe }}
+{%- endif %}
+{%- if model %}
+      OPENCODE_MODEL: "{{ model }}"
+      # Load the baked config (model: {env:OPENCODE_MODEL}) so opencode pins this model
+      # instead of its own default; opencode does not take the model over the ACP session.
+      OPENCODE_CONFIG: "/home/node/.config/opencode/angee.json"
+{%- endif %}
+    route:
+      port: 3007
+      auth: forward

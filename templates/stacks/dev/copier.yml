@@ -1,0 +1,69 @@
+_min_copier_version: "9.0"
+_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+_preserve_symlinks: true
+
+_angee:
+  schema: 1
+  kind: stack
+  name: dev
+  description: Generic Django+Vite+Playwright+Storybook dev stack for any consumer project under angee-django or downstream.
+
+project_name:
+  type: str
+  default: notes-angee
+
+project_path:
+  type: path
+  default: "examples/notes-angee"
+  help: Path to the consumer project root. Logical (no `..` needed) — angee resolves it relative to where the manifest is being rendered. Default "examples/notes-angee" assumes the repo-level layout (`.angee/` at the angee-django repo root, project under examples/). For per-project layout (`.angee/` lives inside the project dir), pass --input project_path=. Absolute paths are accepted and kept as-is.
+
+framework_path:
+  type: path
+  default: "."
+  help: Path to the angee-django monorepo root. Used to reach Storybook (the `@angee/storybook` package under `packages/storybook`) and to run `pnpm install` at the workspace root. Default `.` assumes the repo-level layout (manifest at `<repo>/.angee/angee.yaml`); for downstream projects that consume angee-django as a sibling checkout, point at the sibling (e.g. `--input framework_path=../angee-django`).
+
+web_path:
+  type: str
+  default: "web"
+  help: Path to the project's Vite web package, relative to `project_path`. Its package owns the `dev` and `codegen` scripts for the composed project's generated GraphQL operation types.
+
+ANGEE_ROOT:
+  type: str
+  default: .angee
+
+django_port:
+  type: int
+  default: 8100
+
+ui_port:
+  type: int
+  default: 5173
+
+storybook_port:
+  type: int
+  default: 6006
+
+operator_port:
+  type: int
+  default: 9000
+
+# Host port the Caddy edge publishes (ws://localhost:<edge_port>/<service>/). Defaults
+# to 80 for the base stack; workspaces lease a distinct value from operator.port_pool.edge
+# so parallel stacks on one host don't all contend for :80.
+edge_port:
+  type: int
+  default: 80
+
+playwright_port:
+  type: int
+  default: 9223
+
+process_compose_port:
+  type: int
+  default: 8080
+
+playwright_browser:
+  type: str
+  default: chrome

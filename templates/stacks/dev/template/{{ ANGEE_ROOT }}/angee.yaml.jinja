@@ -1,0 +1,247 @@
+version: 1
+kind: stack
+name: {{ project_name }}
+
+template:
+  active: stacks/dev
+  answers_file: .copier-answers.yml
+
+# Edge ingress. The operator's central Caddy fronts every service that declares a
+# `route:` block (e.g. the agent chat WebSocket) and forward-auths each upgrade
+# against the operator's /edge/verify. Without an `ingress.type: caddy` stack the
+# operator treats routed services as unrouted (ServiceEndpoint.routed = false) and
+# `agentChatEndpoint` can't hand the browser a reachable URL.
+#
+# Dev uses `routing: path` + `tls: off`: one shared host with a `/<service>/` prefix
+# per agent (no per-agent subdomain/DNS), and plain ws (no local-CA cert to trust).
+# `localhost` always resolves, so a freshly provisioned agent is reachable at
+# ws://localhost:<edge_port>/<service>/ with zero DNS or cert setup. Prod flips to the
+# defaults (`routing: host`, `tls: auto` → wss://<service>.<domain>/ with a wildcard cert).
+ingress:
+  type: caddy
+  routing: path
+  tls: "off"   # quoted: bare YAML `off` is boolean false; the operator wants the string
+  domain: localhost
+  # Host port the edge publishes. 80 for the base stack; a workspace leases a distinct
+  # value (operator.port_pool.edge) so parallel stacks on one host don't all fight for :80.
+  # The agent chat URL carries this port (ws://localhost:<port>/<service>/).
+  port: {{ edge_port }}
+  # The edge runs as a container; this dev stack's operator is `runtime: local`, so
+  # forward_auth must reach it on the host instead of the default `operator:9000`.
+  verify: host.docker.internal:{{ operator_port }}
+
+# The operator daemon owns stack-secret management. The console bearer is a
+# generated secret shared by the daemon (--token) and Django
+# (ANGEE_OPERATOR_TOKEN setting), so neither side hardcodes it.
+secrets_backend:
+  type: env-file
+  path: .env
+
+secrets:
+  operator-token: { generated: true, length: 32 }
+
+ports:
+  django: { value: {{ django_port }}, export_env: DJANGO_PORT }
+  process_compose: { value: {{ process_compose_port }}, export_env: PROCESS_COMPOSE_PORT }
+  # The operator daemon's port — workspace-allocated (operator.port_pool.operator),
+  # never a hardcoded 9000. Services reference it as ${ports.operator}.
+  operator: { value: {{ operator_port }}, export_env: ANGEE_OPERATOR_PORT }
+
+# Local state angee owns and must guarantee exists before any job runs. Subpaths
+# are relative to the stack dir (the parent of {{ ANGEE_ROOT }}); the operator
+# materializes them on every bring-up (StackPrepare), so a fresh stack/workspace
+# has them before makemigrations/migrate open the database. ANGEE_DATA_DIR
+# (settings.yaml) resolves to this same {{ ANGEE_ROOT }}/data — SQLite never
+# creates its file's parent directory, so without this the first migrate fails
+# with "unable to open database file".
+persist:
+  app-data: { subpath: {{ ANGEE_ROOT }}/data, scope: stack }
+  chrome-profile: { subpath: {{ ANGEE_ROOT }}/data/chrome, scope: stack }
+
+sources:
+  app:
+    kind: local
+    path: {{ project_path }}
+  framework:
+    kind: local
+    path: {{ framework_path }}
+
+# The compose/build/serve lifecycle. JOBS run once in depends_on order; SERVICES
+# stay up. Every command boots angee.compose.settings, which reads the project's
+# settings contract and resolves the single Django app set. Runtime files are
+# emitted only by the explicit build job; normal Django startup checks and
+# imports the generated models without writing.
+jobs:
+  # Explicit runtime emit. Later jobs and services check/import this output
+  # without rewriting it during Django app population.
+  build:
+    runtime: local
+    workdir: source://app
+    command: ["uv", "run", "python", "manage.py", "angee", "build"]
+    env:
+      ANGEE_PROJECT_DIR: "."
+
+  # Prune stale package-managed REBAC schema before any check-gated DB step. An
+  # addon dropped from INSTALLED_APPS, or a definition removed from a still-composed
+  # permissions.zed, leaves rows in the Schema* tables; that fails rebac.E009 and
+  # would otherwise block makemigrations / migrate / rebac sync. This check-free
+  # reconcile runs first and keeps rebuilds green. See angee.platform.permissions.
+  reconcile-permissions:
+    runtime: local
+    workdir: source://app
+    command: ["uv", "run", "python", "manage.py", "reconcile_permissions"]
+    env:
+      ANGEE_PROJECT_DIR: "."
+    depends_on: [build]
+
+  # Generate migrations against the freshly emitted concrete models. Mandatory:
+  # the composer emits models.py, never migration files. No app list — the set of
+  # composed apps is owned by the composer (each redirects to
+  # runtime/<label>/migrations via MIGRATION_MODULES); bare makemigrations
+  # discovers them, so a new addon never has to be re-listed here.
+  makemigrations:
+    runtime: local
+    workdir: source://app
+    command: ["uv", "run", "python", "manage.py", "makemigrations"]
+    env:
+      ANGEE_PROJECT_DIR: "."
+    depends_on: [reconcile-permissions]
+
+  migrate:
+    runtime: local
+    workdir: source://app
+    command: ["uv", "run", "python", "manage.py", "migrate", "--noinput"]
+    env:
+      ANGEE_PROJECT_DIR: "."
+    depends_on: [makemigrations]
+
+  permissions:
+    runtime: local
+    workdir: source://app
+    command: ["uv", "run", "python", "manage.py", "rebac", "sync", "--yes"]
+    env:
+      ANGEE_PROJECT_DIR: "."
+    depends_on: [migrate]
+
+  resources:
+    runtime: local
+    workdir: source://app
+    command:
+      - sh
+      - "-c"
+      - uv run python manage.py resources load --include-demo
+    env:
+      ANGEE_PROJECT_DIR: "."
+    depends_on: [permissions]
+
+  # Render GraphQL SDL to runtime/schemas/<name>.graphql; the SPA imports it to
+  # derive its urql cache config.
+  schema:
+    runtime: local
+    workdir: source://app
+    command: ["uv", "run", "python", "manage.py", "schema"]
+    env:
+      ANGEE_PROJECT_DIR: "."
+    depends_on: [build]
+
+  # Install the JS workspace so the frontend service has its node_modules.
+  # Idempotent and fast when the lockfile is already satisfied.
+  deps:
+    runtime: local
+    workdir: source://framework
+    command: ["pnpm", "install"]
+
+  # Refresh the operator daemon's committed SDL from the LIVE daemon (the daemon
+  # owns its schema; Django introspects it over the shared bearer). The command
+  # waits for daemon readiness and fails loudly if the contract can't be fetched,
+  # so a stale SDL never silently masks daemon drift. The unified codegen reads
+  # this SDL straight from the operator package, so codegen waits on this refresh.
+  operator-schema:
+    runtime: local
+    workdir: source://app
+    command: ["uv", "run", "python", "manage.py", "operator_schema"]
+    env:
+      ANGEE_PROJECT_DIR: "."
+      ANGEE_OPERATOR_URL: "http://127.0.0.1:${ports.operator}"
+      ANGEE_OPERATOR_TOKEN: "${secret.operator-token}"
+    depends_on: [operator, build]
+
+  # Regenerate this project's typed GraphQL operations into runtime/gql/<name>/
+  # from the emitted Django SDL and the operator daemon SDL. @angee/app owns the
+  # one codegen CLI (the manifest declares the operator as an external schema), so
+  # the stack runs a single pass after both schema sources and before Vite.
+  codegen:
+    runtime: local
+    workdir: source://app
+    command: ["pnpm", "--dir", "{{ web_path }}", "codegen"]
+    depends_on: [deps, schema, operator-schema]
+
+services:
+  # Angee overrides `runserver` to serve angee.asgi with uvicorn (keeping the ASGI
+  # lifespan the MCP mount's session manager needs — see angee.asgi) under Django's
+  # own follow-imports autoreloader. That watches every imported source file —
+  # consumer addons, base addons, framework core, and editable deps — with no
+  # `--reload-dir` math, and never the generated runtime/ tree (the emit happens
+  # during each child's boot, before its reloader snapshots), so a model edit
+  # reloads once. The boot also regenerates the GraphQL SDL (Vite then HMRs).
+  django:
+    runtime: local
+    workdir: source://app
+    command: ["uv", "run", "python", "manage.py", "runserver", "127.0.0.1:{{ django_port }}"]
+    env:
+      ANGEE_PROJECT_DIR: "."
+      # Django mints the browser's scoped connection token over the daemon's direct
+      # URL + the shared generated secret. The browser then opens the daemon GraphQL
+      # same-origin via /operator/graphql (the UI proxies /operator → the daemon, so
+      # no cross-origin). The operator daemon runs on the workspace-allocated port.
+      ANGEE_OPERATOR_GRAPHQL_ENDPOINT: "/operator/graphql"
+      ANGEE_OPERATOR_URL: "http://127.0.0.1:${ports.operator}"
+      ANGEE_OPERATOR_TOKEN: "${secret.operator-token}"
+      # Container-reachable URL for this Django process's built-in /mcp mount.
+      # Agents run in containers, so they reach the local backend through the host gateway.
+      ANGEE_BUILTIN_MCP_URL: "http://host.docker.internal:{{ django_port }}/mcp"
+    after: [resources, schema]
+
+  # Vite dev server for the SPA. It proxies /graphql/ and /auth/csrf/ to Django,
+  # so the SPA and backend share the session cookie across the two ports. The UI
+  # port is the workspace's allocation, so an isolated workspace serves on its own
+  # port and the e2e harness (docs/testing/e2e.md) targets the same URL.
+  frontend:
+    runtime: local
+    workdir: source://app
+    command: ["pnpm", "--dir", "{{ web_path }}", "dev"]
+    env:
+      ANGEE_DJANGO_URL: http://127.0.0.1:{{ django_port }}
+      ANGEE_UI_PORT: "{{ ui_port }}"
+      # The UI proxies /operator/* to the daemon (same-origin → no CORS), the same
+      # way it proxies /graphql/ to Django.
+      ANGEE_OPERATOR_URL: "http://127.0.0.1:${ports.operator}"
+    after: [deps, schema, django, operator, codegen]
+
+  # Storybook component workshop (@angee/storybook), served alongside the SPA. It
+  # renders @angee/ui with mocked app/refine fixtures, so it needs only the JS
+  # workspace installed — no Django, schema, or operator dependency. The port is
+  # the workspace's storybook allocation, so each workspace serves its own.
+  storybook:
+    runtime: local
+    workdir: source://framework
+    command: ["pnpm", "--filter", "@angee/storybook", "dev", "--no-open"]
+    env:
+      STORYBOOK_PORT: "{{ storybook_port }}"
+    after: [deps]
+
+  # The operator daemon for THIS stack: it serves the console's data (services,
+  # workspaces, sources, gitops, secrets) and is what runs the dev stack.
+  # `angee operator --root .` resolves the stack root by walking up to this stack's
+  # angee.yaml; binds loopback on the workspace-allocated operator port.
+  operator:
+    runtime: local
+    command:
+      - sh
+      - "-c"
+      # Bind 0.0.0.0 (not just loopback): the Caddy edge runs in a container and
+      # reaches the operator's /edge/verify via host.docker.internal, which lands on
+      # the host gateway, not 127.0.0.1. 0.0.0.0 still serves Django on loopback.
+      - exec angee operator --root . --bind 0.0.0.0 --port ${ports.operator} --token "$ANGEE_OPERATOR_TOKEN"
+    env:
+      ANGEE_OPERATOR_TOKEN: "${secret.operator-token}"

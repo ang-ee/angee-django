@@ -1,0 +1,32 @@
+{
+  // The compiler contract for this project's web package. It is inlined rather
+  // than `extends`-ing a framework base: a package-name `extends` resolves in
+  // `tsc` but not in Vite's oxc tsconfig loader (used by `vite` and `vitest`),
+  // and a project owns its own web tsconfig once rendered. The framework's
+  // `angee-django/tsconfig.base.json` is the canonical contract this mirrors.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["vite/client"],
+    // This project owns its `runtime/gql/<schema>/` tree (its web package
+    // generates it via codegen), so it declares its OWN project-relative
+    // `@angee/gql/*` resolution. The web package lives one level under the
+    // project root, so `runtime/gql` is one level up.
+    "paths": {
+      "@angee/gql/*": ["../runtime/gql/*"]
+    }
+  },
+  "include": ["src"]
+}

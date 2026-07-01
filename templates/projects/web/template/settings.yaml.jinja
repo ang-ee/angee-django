@@ -1,0 +1,30 @@
+SECRET_KEY: {{ project_name }}-dev-key
+DEBUG: true
+ALLOWED_HOSTS:
+  - "*"
+
+# {{ project_title }} composes the Angee base addons as its foundation —
+# identity & permissions (iam), tiered data (resources), files (storage),
+# connectors (integrate), partners (parties), messaging, OIDC login, platform,
+# and the operator console — and adds its own capabilities as consumer addons
+# under addons/{{ addon_namespace }}/*.
+INSTALLED_APPS:
+  - angee.iam
+  - angee.resources
+  - angee.storage
+  - angee.integrate
+  - angee.parties
+  - angee.messaging
+  - angee.iam_integrate_oidc
+  - angee.platform
+  - angee.operator
+  # Consumer addons land here as they are built.
+  # - {{ addon_namespace }}.example
+
+ANGEE_ADDON_DIRS:
+  - "{BASE_DIR}/addons"
+ANGEE_RUNTIME_DIR: "{BASE_DIR}/runtime"
+# Data lives under the dev-stack overlay `.angee/` (rendered by `angee init --dev`),
+# so it matches the stack's `persist:` and stays out of the project source. A
+# non-dev instance overrides ANGEE_DATA_DIR via the stack env.
+ANGEE_DATA_DIR: "{BASE_DIR}/.angee/data"
