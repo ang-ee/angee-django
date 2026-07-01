@@ -1,0 +1,12 @@
+@import "tailwindcss";
+@import "@angee/ui/styles.css";
+
+@source "../../ui/src/**/*.{ts,tsx}";
+@source "../.storybook/**/*.{ts,tsx,mjs,js}";
+@source "./**/*.{ts,tsx}";
+
+@layer base {
+  *, ::before, ::after, ::backdrop, ::file-selector-button {
+    --tw-border-style: solid;
+  }
+}

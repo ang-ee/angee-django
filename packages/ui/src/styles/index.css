@@ -1,0 +1,448 @@
+/* ============================================================================
+   @angee/base — Tailwind 4 entry stylesheet.
+
+   Imports tokens, binds the dark-mode variant to [data-theme="dark"], and
+   bridges every semantic token into a Tailwind utility through the @theme
+   block.
+
+   No component CSS lives here; view components emit their chrome through
+   Tailwind utilities directly.
+   ============================================================================ */
+
+/* This file is consumed via @import from a parent Tailwind 4 entry (the app's
+   own entry stylesheet). It MUST NOT @import "tailwindcss" itself or @source
+   consumer sources — the consumer's entry stylesheet does both. We only declare
+   tokens here so they apply globally regardless of which consumer loads us. */
+
+@import "tw-animate-css";
+@import "./tokens.css";
+
+/* Bind Tailwind's `dark:` variant to the existing [data-theme="dark"]
+   selector so authoring `dark:bg-rail` matches what tokens.css already
+   does. The `:where()` keeps specificity at zero. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+@theme {
+  /* ----------------------------------------------------------------
+   *  COLORS — semantic tokens → Tailwind utility classes.
+   *  Values reference the CSS vars defined in tokens.css so the
+   *  dark-theme block there drives `bg-canvas` and friends.
+   * ---------------------------------------------------------------- */
+
+  /* Surfaces */
+  --color-canvas:        var(--surface-canvas);
+  --color-sheet:         var(--surface-sheet);
+  --color-sheet-2:       var(--surface-sheet-2);
+  --color-rail:          var(--surface-rail);
+  --color-rail-hi:       var(--surface-rail-hi);
+  --color-rail-hover:    var(--surface-rail-hover);   /* `bg-rail-hover` for transient hover */
+  --color-kbd-on-rail:   var(--surface-kbd-on-rail);  /* `bg-kbd-on-rail` for kbd badges */
+  --color-kbd-on-rail-border: var(--border-kbd-on-rail);  /* `border-kbd-on-rail-border` */
+  --color-on-brand-divider:   var(--on-brand-divider);          /* `bg-on-brand-divider` */
+  --color-on-brand-soft-hover: var(--on-brand-soft-hover);      /* chip-x hover */
+  --color-tooltip:       var(--tooltip-bg);
+  --color-on-tooltip:    var(--tooltip-fg);
+  --color-overlay:       var(--surface-overlay);
+  --color-popover:       var(--surface-popover);
+  --color-inset:         var(--surface-inset);
+
+  /* shadcn alias layer — additive aliases over the angee tokens so
+     shadcn-shaped snippets compile while the semantic token tree stays
+     the only source of visual values. */
+  --color-background:           var(--surface-canvas);
+  --color-foreground:           var(--text-primary);
+  --color-primary:              var(--brand);
+  --color-primary-foreground:   var(--text-on-brand);
+  --color-secondary:            var(--surface-inset);
+  --color-secondary-foreground: var(--text-primary);
+  --color-muted:                var(--surface-inset);
+  --color-muted-foreground:     var(--text-muted);
+  --color-accent-foreground:    var(--accent-soft-text);
+  --color-destructive:          var(--danger);
+  --color-destructive-foreground: var(--on-danger);
+  --color-card:                 var(--surface-sheet);
+  --color-card-foreground:      var(--text-primary);
+  --color-popover-foreground:   var(--text-primary);
+  --color-input:                var(--border-default);
+  --color-ring:                 var(--border-focus);
+
+  /* Foreground / text */
+  --color-fg:            var(--text-primary);
+  --color-fg-2:          var(--text-secondary);
+  --color-fg-muted:      var(--text-muted);
+  --color-fg-subtle:     var(--text-subtle);
+  --color-fg-inverse:    var(--text-inverse);
+  --color-on-rail:       var(--text-on-rail);
+  --color-on-rail-mut:   var(--text-on-rail-mut);
+  --color-on-rail-hi:    var(--text-on-rail-hi);
+  --color-on-brand:      var(--text-on-brand);     /* text color on brand surfaces (e.g. bulk-bar) */
+  --color-link:          var(--text-link);
+
+  /* Borders. The bare `border` class uses --color-border by default,
+     so `border-default` lives at --color-border. */
+  --color-border-subtle: var(--border-subtle);
+  --color-border:        var(--border-default);
+  --color-border-strong: var(--border-strong);
+  --color-border-focus:  var(--border-focus);
+  --color-border-on-rail: var(--border-on-rail);
+
+  /* Brand */
+  --color-brand:            var(--brand);
+  --color-brand-hover:      var(--brand-hover);
+  --color-brand-active:     var(--brand-active);
+  --color-brand-soft:       var(--brand-soft);
+  --color-brand-soft-text:  var(--brand-soft-text);
+
+  /* Brand ramp — for fills that need a specific shade. */
+  --color-brand-50:  var(--b-50);
+  --color-brand-100: var(--b-100);
+  --color-brand-200: var(--b-200);
+  --color-brand-300: var(--b-300);
+  --color-brand-400: var(--b-400);
+  --color-brand-500: var(--b-500);
+  --color-brand-600: var(--b-600);
+  --color-brand-700: var(--b-700);
+  --color-brand-800: var(--b-800);
+  --color-brand-900: var(--b-900);
+
+  /* Accent (teal — AI / chatter highlight) */
+  --color-accent:           var(--accent);
+  --color-accent-soft:      var(--accent-soft);
+  --color-accent-soft-text: var(--accent-soft-text);
+  --color-accent-300:       var(--t-300);
+  --color-accent-500:       var(--t-500);
+  --color-accent-600:       var(--t-600);
+  --color-accent-700:       var(--t-700);
+
+  /* Semantic status (soft fill + readable text) */
+  --color-success-soft: var(--success-soft);
+  --color-success-text: var(--success-text);
+  --color-warning-soft: var(--warning-soft);
+  --color-warning-text: var(--warning-text);
+  --color-danger-soft:  var(--danger-soft);
+  --color-danger-text:  var(--danger-text);
+  --color-info-soft:    var(--info-soft);
+  --color-info-text:    var(--info-text);
+
+  /* Danger — solid (button / destructive). Distinct from danger-soft. */
+  --color-danger:        var(--danger);
+  --color-danger-hover:  var(--danger-hover);
+  --color-danger-active: var(--danger-active);
+  --color-on-danger:     var(--on-danger);
+
+  /* Soft tag variants needing custom dark mode. */
+  --color-purple-soft:      var(--purple-soft);
+  --color-purple-soft-text: var(--purple-soft-text);
+  --color-pink-soft:        var(--pink-soft);
+  --color-pink-soft-text:   var(--pink-soft-text);
+
+  /* Two-axis fill matrix (tone × variant). Completes the palette so
+     lib/tones.ts can map every (tone × fill) combo. Emits bg-info / bg-success
+     / … (solid), text-on-success / … (on-fill), border-success-line / …
+     (outline + surface border), bg-success-tint / … (surface bg). The
+     brand/danger/accent solids and on-brand/on-danger already bridge above. */
+  --color-info:         var(--info);
+  --color-success:      var(--success);
+  --color-warning:      var(--warning);
+  --color-purple:       var(--purple);
+  --color-pink:         var(--pink);
+
+  --color-on-accent:    var(--on-accent);
+  --color-on-info:      var(--on-info);
+  --color-on-success:   var(--on-success);
+  --color-on-warning:   var(--on-warning);
+  --color-on-purple:    var(--on-purple);
+  --color-on-pink:      var(--on-pink);
+
+  --color-brand-line:   var(--brand-line);
+  --color-accent-line:  var(--accent-line);
+  --color-info-line:    var(--info-line);
+  --color-success-line: var(--success-line);
+  --color-warning-line: var(--warning-line);
+  --color-danger-line:  var(--danger-line);
+  --color-purple-line:  var(--purple-line);
+  --color-pink-line:    var(--pink-line);
+
+  --color-brand-tint:   var(--brand-tint);
+  --color-accent-tint:  var(--accent-tint);
+  --color-info-tint:    var(--info-tint);
+  --color-success-tint: var(--success-tint);
+  --color-warning-tint: var(--warning-tint);
+  --color-danger-tint:  var(--danger-tint);
+  --color-purple-tint:  var(--purple-tint);
+  --color-pink-tint:    var(--pink-tint);
+
+  /* Status palette — raw 100/500/700 for literal fills (dots, charts,
+     hard-coded `red-500` button danger variants). Reuse the primitive ramp. */
+  --color-green-100:  var(--green-100);
+  --color-green-500:  var(--green-500);
+  --color-green-700:  var(--green-700);
+  --color-amber-100:  var(--amber-100);
+  --color-amber-500:  var(--amber-500);
+  --color-amber-700:  var(--amber-700);
+  --color-red-100:    var(--red-100);
+  --color-red-500:    var(--red-500);
+  --color-red-700:    var(--red-700);
+  --color-blue-100:   var(--blue-100);
+  --color-blue-500:   var(--blue-500);
+  --color-blue-700:   var(--blue-700);
+  --color-purple-100: var(--purple-100);
+  --color-purple-500: var(--purple-500);
+  --color-purple-700: var(--purple-700);
+  --color-pink-100:   var(--pink-100);
+  --color-pink-500:   var(--pink-500);
+  --color-pink-700:   var(--pink-700);
+
+  /* Avatar default background — token reference for slot-less avatars. */
+  --color-avatar-default-bg: var(--avatar-default-bg);
+
+  /* Neutral ramp — for chrome needing a specific gray (rail tooltips,
+     dark-only surfaces, modal scrims). */
+  --color-n-0:    var(--n-0);
+  --color-n-50:   var(--n-50);
+  --color-n-100:  var(--n-100);
+  --color-n-150:  var(--n-150);
+  --color-n-200:  var(--n-200);
+  --color-n-300:  var(--n-300);
+  --color-n-400:  var(--n-400);
+  --color-n-500:  var(--n-500);
+  --color-n-600:  var(--n-600);
+  --color-n-700:  var(--n-700);
+  --color-n-800:  var(--n-800);
+  --color-n-850:  var(--n-850);
+  --color-n-900:  var(--n-900);
+  --color-n-950:  var(--n-950);
+
+  /* ----------------------------------------------------------------
+   *  SPACING — chrome dimensions. Tailwind's default spacing scale
+   *  (1=4px … 16=64px) already matches --sp-* tokens, so we only add
+   *  the named chrome dimensions. Emits w-rail-w, h-topbar-h, etc.
+   * ---------------------------------------------------------------- */
+  --spacing-rail-w:        2.5rem;   /* 40px — rail outer width */
+  --spacing-rail-sub:      13rem;    /* 208px — secondary sub-nav rail */
+  --spacing-topbar-h:      2.625rem; /* 42px — dark menu-bar */
+  --spacing-crumbs-h:      1.875rem; /* 30px — breadcrumbs row */
+  --spacing-control-h:     3rem;     /* 48px — control panel row */
+  --spacing-chatter-w:     20.75rem; /* 332px — right pane */
+  --spacing-search-w:      13.5rem;  /* 216px — topbar global-search pill */
+
+  /* Per-component sizing referenced from multiple primitives. */
+  --spacing-btn-sm:        1.625rem; /* 26px */
+  --spacing-btn-md:        1.875rem; /* 30px */
+  --spacing-btn-lg:        2.25rem;  /* 36px */
+  --spacing-icon-btn-sm:   1.5rem;   /* 24px */
+  --spacing-icon-btn-md:   1.875rem; /* 30px */
+  --spacing-icon-btn-lg:   2.25rem;  /* 36px */
+  --spacing-avatar-sm:     1.25rem;  /* 20px */
+  --spacing-avatar-md:     1.5rem;   /* 24px */
+  --spacing-avatar-lg:     2rem;     /* 32px */
+  --spacing-avatar-xl:     3rem;     /* 48px */
+  --spacing-avatar-xxl:    4.5rem;   /* 72px — detail-page heads */
+  --spacing-tag-h:         1.125rem; /* 18px */
+  --spacing-kbd-h:         1.125rem; /* 18px */
+  --spacing-input-h:       1.875rem; /* 30px — same as btn-md */
+  --spacing-input-h-lg:    2.25rem;  /* 36px */
+
+  /* Modal / popover surface dimensions. Recurring chrome widths only —
+     per-component one-offs stay inline. */
+  --spacing-modal-w:           40rem;   /* 640px — Spotlight popup */
+  --spacing-modal-top:         20vh;    /* Spotlight vertical offset */
+  --spacing-fields-chooser-w:  45rem;   /* 720px — resource toolbar field chooser */
+  --spacing-preview-max-h:     60vh;    /* FilePreview content cap */
+  --spacing-modal-list-max-h:  50vh;    /* Spotlight list cap */
+
+  /* ----------------------------------------------------------------
+   *  STACKING LAYERS — the canonical z-index ladder. Emits
+   *  `z-sticky-cell`, `z-popover`, `z-modal`, etc. Components MUST NOT
+   *  use arbitrary `z-[N]` values; reach for the named stop instead.
+   *  Three notes:
+   *    - Base UI internal stacking variables such as --toast-index may use
+   *      calculated z-index values inside a named page-level layer.
+   *    - tooltip and modal-backdrop sit at the same numeric level (100);
+   *      separate concepts that never co-render in practice.
+   *    - modal is one tick above its own backdrop so the backdrop click
+   *      handler still resolves before the popup paints.
+   * ---------------------------------------------------------------- */
+  --z-sticky-cell:     5;     /* ListView sticky header */
+  --z-sticky-col:      10;    /* sticky first column */
+  --z-bulk-bar:        15;    /* ListView sticky bulk-action bar (above sticky-col) */
+  --z-topbar:          30;    /* Top menu bar */
+  --z-rail:            32;    /* Left app rail (slightly above topbar) */
+  --z-breadcrumb:      35;    /* Breadcrumb bar (above chrome, below popovers) */
+  --z-drawer:          40;    /* Non-modal edge drawers + their stripe-tabs (above chrome, below popovers/modals) */
+  --z-popover:         60;    /* Combobox, date picker, menus, fields chooser */
+  --z-toast:           80;    /* Transient toast / banner layer (above popovers) */
+  --z-tooltip:         100;   /* AppRail hover tooltip */
+  --z-modal-backdrop:  100;   /* Modal dim layer */
+  --z-modal:           101;   /* Modal popup */
+
+  /* ----------------------------------------------------------------
+   *  RADII — emit `rounded-2`, `rounded-4`, etc.
+   * ---------------------------------------------------------------- */
+  --radius-2:    2px;
+  --radius-4:    4px;
+  --radius-6:    6px;
+  --radius-8:    8px;
+  --radius-10:   10px;
+  --radius-12:   12px;
+  --radius-full: 999px;
+  --radius:      var(--r-6);
+
+  /* ----------------------------------------------------------------
+   *  TYPOGRAPHY — fonts + scale.
+   * ---------------------------------------------------------------- */
+  --font-sans:
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono:
+    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Type scale tokens not in Tailwind's default (11/13/15/22/28/34).
+     12/14/16/18 align with text-xs/text-sm/text-base/text-lg already. */
+  --text-2xs:               0.6875rem; /* 11px */
+  --text-2xs--line-height:  1rem;      /* 16px */
+  --text-13:                0.8125rem; /* 13px */
+  --text-13--line-height:   1.25rem;   /* 20px */
+  --text-15:                0.9375rem; /* 15px */
+  --text-15--line-height:   1.375rem;  /* 22px */
+  --text-22:                1.375rem;  /* 22px */
+  --text-22--line-height:   1.875rem;  /* 30px */
+  --text-28:                1.75rem;   /* 28px */
+  --text-28--line-height:   2.25rem;   /* 36px */
+  --text-34:                2.125rem;  /* 34px */
+  --text-34--line-height:   2.625rem;  /* 42px */
+
+  /* ----------------------------------------------------------------
+   *  ELEVATION — `shadow-X` utilities. The shadow values themselves
+   *  live in tokens.css under `--elevation-*` so the dark theme can
+   *  override them in one place. Here we only bridge the semantic name
+   *  into a Tailwind utility token name.
+   * ---------------------------------------------------------------- */
+  --shadow-xs:      var(--elevation-xs);
+  --shadow-sm:      var(--elevation-sm);
+  --shadow-md:      var(--elevation-md);
+  --shadow-lg:      var(--elevation-lg);
+  --shadow-popover: var(--elevation-popover);
+}
+
+/* ============================================================================
+   Non-color CSS vars — gradients and focus-ring shadows. Can't live in @theme
+   (Tailwind's color/shadow utilities expect color/shadow values, not arbitrary
+   tokens). Components reach them through `[property:var(--…)]` arbitrary-value
+   syntax or direct style props.
+   ============================================================================ */
+:root {
+  /* Avatar — eight stable gradients, hashed from initials. Composed from
+     Tailwind's built-in palette so the values aren't hard-coded hex. */
+  --avatar-grad-1: linear-gradient(135deg, var(--color-pink-400, #f472b6),    var(--color-pink-500, #ec4899));
+  --avatar-grad-2: linear-gradient(135deg, var(--color-indigo-400, #818cf8),  var(--color-indigo-500, #6366f1));
+  --avatar-grad-3: linear-gradient(135deg, var(--color-emerald-400, #34d399), var(--color-emerald-500, #10b981));
+  --avatar-grad-4: linear-gradient(135deg, var(--color-amber-400, #fbbf24),   var(--color-amber-500, #f59e0b));
+  --avatar-grad-5: linear-gradient(135deg, var(--color-blue-400, #60a5fa),    var(--color-blue-500, #3b82f6));
+  --avatar-grad-6: linear-gradient(135deg, var(--color-violet-400, #a78bfa),  var(--color-violet-500, #8b5cf6));
+  --avatar-grad-7: linear-gradient(135deg, var(--color-teal-400, #2dd4bf),    var(--color-teal-500, #14b8a6));
+  --avatar-grad-8: linear-gradient(135deg, var(--color-orange-400, #fb923c),  var(--color-orange-500, #f97316));
+}
+
+/* Default icon sizing — SVGs carrying `.glyph` (the `<Glyph>` component) or
+   `.icon` shrink to 1em / 1em and never grow past their box. Parent components
+   override via `[&_.glyph]:size-X` Tailwind variants. Without this default,
+   SVGs without explicit width/height collapse to 0 or expand to their
+   container's intrinsic size. */
+@layer base {
+  .glyph,
+  .icon {
+    width: 1em;
+    height: 1em;
+    flex-shrink: 0;
+  }
+}
+
+/* Soft focus rings — namespaced `focus-ring` to avoid colliding with
+   Tailwind's auto-generated `ring-brand` utility. */
+@layer utilities {
+  .focus-ring {
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--brand) 30%, transparent);
+  }
+  .focus-ring-danger {
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--red-500) 30%, transparent);
+  }
+}
+
+/* ============================================================================
+   ConsoleLayout grid utilities — declared via Tailwind 4 @utility so the
+   layout sets layout with single class names instead of arbitrary-value
+   tuples. The named-area utilities (area-rail, area-topbar, ...) match the
+   regions declared in console-grid's grid-template-areas.
+   ============================================================================ */
+/* A fixed rail + a content column. The settings sub-nav and the Chatter are no
+   longer grid columns: they ride the content region's Workbench panes
+   (collapsible + resizable + size-persistent), so the shell grid is just the
+   rail and the chrome rows stacked above the content. */
+@utility console-grid {
+  display: grid;
+  grid-template-columns: var(--spacing-rail-w) 1fr;
+  /* The trailing `auto` status row collapses to zero height when its host is
+     empty, so the optional statusline costs nothing for pages that omit it. */
+  grid-template-rows:
+    var(--spacing-topbar-h)
+    var(--spacing-crumbs-h)
+    auto
+    1fr
+    auto;
+  grid-template-areas:
+    "rail topbar"
+    "rail crumbs"
+    "rail control"
+    "rail content"
+    "rail status";
+}
+@utility area-rail    { grid-area: rail; }
+@utility area-topbar  { grid-area: topbar; }
+@utility area-crumbs  { grid-area: crumbs; }
+@utility area-control { grid-area: control; }
+@utility area-content { grid-area: content; }
+@utility area-status  { grid-area: status; }
+
+/* ============================================================================
+   Decorative grid background — two intersecting 1px lines repeated on a
+   square step. Used by the public LoginPage backdrop; available to any
+   marketing / empty-state surface. The step and line color are tokenised so a
+   deployment can tweak the marketing chrome from one place. The default mask
+   softens the lower 18% of the pattern toward transparent.
+   ============================================================================ */
+:root {
+  --bg-grid-step:  44px;
+  --bg-grid-color: color-mix(in oklab, var(--border-default) 55%, transparent);
+  --bg-grid-mask:  linear-gradient(to bottom, black, transparent 82%);
+  --bg-cover-wide-size: 112% auto;
+}
+@utility bg-grid {
+  background-image:
+    linear-gradient(to right, var(--bg-grid-color) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--bg-grid-color) 1px, transparent 1px);
+  background-size: var(--bg-grid-step) var(--bg-grid-step);
+  mask-image: var(--bg-grid-mask);
+  -webkit-mask-image: var(--bg-grid-mask);
+}
+@utility bg-cover-wide {
+  background-size: var(--bg-cover-wide-size);
+}
+
+/* Spotlight (command menu) entrance animations. */
+@theme {
+  --animate-apps-modal-fade: apps-modal-fade 180ms cubic-bezier(0.2, 0.6, 0.2, 1);
+  --animate-apps-modal-pop:  apps-modal-pop 180ms cubic-bezier(0.2, 0.6, 0.2, 1);
+  --animate-skeleton-shimmer: skeleton-shimmer 1400ms ease-in-out infinite;
+}
+@keyframes apps-modal-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes apps-modal-pop {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes skeleton-shimmer {
+  to { transform: translateX(100%); }
+}

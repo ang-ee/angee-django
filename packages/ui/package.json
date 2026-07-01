@@ -1,0 +1,381 @@
+{
+  "name": "@angee/ui",
+  "version": "0.0.0",
+  "license": "AGPL-3.0-or-later",
+  "private": true,
+  "type": "module",
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./styles.css": "./src/styles/index.css",
+    "./lib": {
+      "types": "./src/lib/index.ts",
+      "import": "./src/lib/index.ts"
+    },
+    "./lib/slot-outlet": {
+      "types": "./src/lib/slot-outlet.tsx",
+      "import": "./src/lib/slot-outlet.tsx"
+    },
+    "./lib/variant-context": {
+      "types": "./src/lib/variant-context.tsx",
+      "import": "./src/lib/variant-context.tsx"
+    },
+    "./lib/*": {
+      "types": "./src/lib/*.ts",
+      "import": "./src/lib/*.ts"
+    },
+    "./chrome/Glyph": {
+      "types": "./src/chrome/Glyph.tsx",
+      "import": "./src/chrome/Glyph.tsx"
+    },
+    "./chrome/AgentGlyph": {
+      "types": "./src/chrome/AgentGlyph.tsx",
+      "import": "./src/chrome/AgentGlyph.tsx"
+    },
+    "./chrome/AngeeMark": {
+      "types": "./src/chrome/AngeeMark.tsx",
+      "import": "./src/chrome/AngeeMark.tsx"
+    },
+    "./chrome/icon-registry": {
+      "types": "./src/chrome/icon-registry.ts",
+      "import": "./src/chrome/icon-registry.ts"
+    },
+    "./i18n": {
+      "types": "./src/i18n/index.ts",
+      "import": "./src/i18n/index.ts"
+    },
+    "./runtime": {
+      "types": "./src/runtime/index.ts",
+      "import": "./src/runtime/index.ts"
+    },
+    "./runtime/make-context": {
+      "types": "./src/runtime/make-context.ts",
+      "import": "./src/runtime/make-context.ts"
+    },
+    "./runtime/contracts": {
+      "types": "./src/runtime/contracts.ts",
+      "import": "./src/runtime/contracts.ts"
+    },
+    "./runtime/*": {
+      "types": "./src/runtime/*.ts",
+      "import": "./src/runtime/*.ts"
+    },
+    "./i18n/en": {
+      "types": "./src/i18n/en.ts",
+      "import": "./src/i18n/en.ts"
+    },
+    "./ui/widget-control": {
+      "types": "./src/ui/widget-control.ts",
+      "import": "./src/ui/widget-control.ts"
+    },
+    "./ui/*": {
+      "types": "./src/ui/*.tsx",
+      "import": "./src/ui/*.tsx"
+    },
+    "./widgets/index": {
+      "types": "./src/widgets/index.ts",
+      "import": "./src/widgets/index.ts"
+    },
+    "./widgets/codemirror-editor": {
+      "types": "./src/widgets/codemirror-editor.ts",
+      "import": "./src/widgets/codemirror-editor.ts"
+    },
+    "./widgets/date-format": {
+      "types": "./src/widgets/date-format.ts",
+      "import": "./src/widgets/date-format.ts"
+    },
+    "./widgets/label": {
+      "types": "./src/widgets/label.ts",
+      "import": "./src/widgets/label.ts"
+    },
+    "./widgets/markdown-codemirror": {
+      "types": "./src/widgets/markdown-codemirror.ts",
+      "import": "./src/widgets/markdown-codemirror.ts"
+    },
+    "./widgets/status-tones": {
+      "types": "./src/widgets/status-tones.ts",
+      "import": "./src/widgets/status-tones.ts"
+    },
+    "./widgets/types": {
+      "types": "./src/widgets/types.ts",
+      "import": "./src/widgets/types.ts"
+    },
+    "./widgets/*": {
+      "types": "./src/widgets/*.tsx",
+      "import": "./src/widgets/*.tsx"
+    },
+    "./feedback/index": {
+      "types": "./src/feedback/index.ts",
+      "import": "./src/feedback/index.ts"
+    },
+    "./feedback/error-message": {
+      "types": "./src/feedback/error-message.ts",
+      "import": "./src/feedback/error-message.ts"
+    },
+    "./feedback/refine-notification": {
+      "types": "./src/feedback/refine-notification.ts",
+      "import": "./src/feedback/refine-notification.ts"
+    },
+    "./feedback/use-busy-run": {
+      "types": "./src/feedback/use-busy-run.ts",
+      "import": "./src/feedback/use-busy-run.ts"
+    },
+    "./feedback/*": {
+      "types": "./src/feedback/*.tsx",
+      "import": "./src/feedback/*.tsx"
+    },
+    "./chrome/app-rail-model": {
+      "types": "./src/chrome/app-rail-model.ts",
+      "import": "./src/chrome/app-rail-model.ts"
+    },
+    "./chrome/app-rail-preferences": {
+      "types": "./src/chrome/app-rail-preferences.ts",
+      "import": "./src/chrome/app-rail-preferences.ts"
+    },
+    "./chrome/index": {
+      "types": "./src/chrome/index.ts",
+      "import": "./src/chrome/index.ts"
+    },
+    "./chrome/menu-tree": {
+      "types": "./src/chrome/menu-tree.ts",
+      "import": "./src/chrome/menu-tree.ts"
+    },
+    "./chrome/refine-menu": {
+      "types": "./src/chrome/refine-menu.ts",
+      "import": "./src/chrome/refine-menu.ts"
+    },
+    "./chrome/*": {
+      "types": "./src/chrome/*.tsx",
+      "import": "./src/chrome/*.tsx"
+    },
+    "./fragments/index": {
+      "types": "./src/fragments/index.ts",
+      "import": "./src/fragments/index.ts"
+    },
+    "./fragments/*": {
+      "types": "./src/fragments/*.tsx",
+      "import": "./src/fragments/*.tsx"
+    },
+    "./layouts/index": {
+      "types": "./src/layouts/index.ts",
+      "import": "./src/layouts/index.ts"
+    },
+    "./layouts/slots": {
+      "types": "./src/layouts/slots.ts",
+      "import": "./src/layouts/slots.ts"
+    },
+    "./layouts/*": {
+      "types": "./src/layouts/*.tsx",
+      "import": "./src/layouts/*.tsx"
+    },
+    "./page/index": {
+      "types": "./src/page/index.ts",
+      "import": "./src/page/index.ts"
+    },
+    "./page/*": {
+      "types": "./src/page/*.tsx",
+      "import": "./src/page/*.tsx"
+    },
+    "./toolbars/index": {
+      "types": "./src/toolbars/index.ts",
+      "import": "./src/toolbars/index.ts"
+    },
+    "./toolbars/*": {
+      "types": "./src/toolbars/*.tsx",
+      "import": "./src/toolbars/*.tsx"
+    },
+    "./preview/index": {
+      "types": "./src/preview/index.ts",
+      "import": "./src/preview/index.ts"
+    },
+    "./preview/model": {
+      "types": "./src/preview/model.ts",
+      "import": "./src/preview/model.ts"
+    },
+    "./preview/registry": {
+      "types": "./src/preview/registry.ts",
+      "import": "./src/preview/registry.ts"
+    },
+    "./preview/*": {
+      "types": "./src/preview/*.tsx",
+      "import": "./src/preview/*.tsx"
+    },
+    "./communication/index": {
+      "types": "./src/communication/index.ts",
+      "import": "./src/communication/index.ts"
+    },
+    "./communication/*": {
+      "types": "./src/communication/*.tsx",
+      "import": "./src/communication/*.tsx"
+    },
+    "./views/documents": {
+      "types": "./src/views/documents.ts",
+      "import": "./src/views/documents.ts"
+    },
+    "./views/enum-options": {
+      "types": "./src/views/enum-options.ts",
+      "import": "./src/views/enum-options.ts"
+    },
+    "./views/facet-query": {
+      "types": "./src/views/facet-query.ts",
+      "import": "./src/views/facet-query.ts"
+    },
+    "./views/grouped-list-utils": {
+      "types": "./src/views/grouped-list-utils.ts",
+      "import": "./src/views/grouped-list-utils.ts"
+    },
+    "./views/index": {
+      "types": "./src/views/index.ts",
+      "import": "./src/views/index.ts"
+    },
+    "./views/list-view-types": {
+      "types": "./src/views/list-view-types.ts",
+      "import": "./src/views/list-view-types.ts"
+    },
+    "./views/list-view-utils": {
+      "types": "./src/views/list-view-utils.ts",
+      "import": "./src/views/list-view-utils.ts"
+    },
+    "./views/local-rows": {
+      "types": "./src/views/local-rows.ts",
+      "import": "./src/views/local-rows.ts"
+    },
+    "./views/model-metadata-defaults": {
+      "types": "./src/views/model-metadata-defaults.ts",
+      "import": "./src/views/model-metadata-defaults.ts"
+    },
+    "./views/page/index": {
+      "types": "./src/views/page/index.ts",
+      "import": "./src/views/page/index.ts"
+    },
+    "./views/page/types": {
+      "types": "./src/views/page/types.ts",
+      "import": "./src/views/page/types.ts"
+    },
+    "./views/record-action": {
+      "types": "./src/views/record-action.ts",
+      "import": "./src/views/record-action.ts"
+    },
+    "./views/relation-facet": {
+      "types": "./src/views/relation-facet.ts",
+      "import": "./src/views/relation-facet.ts"
+    },
+    "./views/relation-options": {
+      "types": "./src/views/relation-options.ts",
+      "import": "./src/views/relation-options.ts"
+    },
+    "./views/resource-routing": {
+      "types": "./src/views/resource-routing.ts",
+      "import": "./src/views/resource-routing.ts"
+    },
+    "./views/resource-view-model": {
+      "types": "./src/views/resource-view-model.ts",
+      "import": "./src/views/resource-view-model.ts"
+    },
+    "./views/resource-view-surface": {
+      "types": "./src/views/resource-view-surface.ts",
+      "import": "./src/views/resource-view-surface.ts"
+    },
+    "./views/scalar-facet": {
+      "types": "./src/views/scalar-facet.ts",
+      "import": "./src/views/scalar-facet.ts"
+    },
+    "./views/useBulkDelete": {
+      "types": "./src/views/useBulkDelete.ts",
+      "import": "./src/views/useBulkDelete.ts"
+    },
+    "./views/useScopedTreeExplorer": {
+      "types": "./src/views/useScopedTreeExplorer.ts",
+      "import": "./src/views/useScopedTreeExplorer.ts"
+    },
+    "./views/validation-errors": {
+      "types": "./src/views/validation-errors.ts",
+      "import": "./src/views/validation-errors.ts"
+    },
+    "./views/*": {
+      "types": "./src/views/*.tsx",
+      "import": "./src/views/*.tsx"
+    },
+    "./data/hooks": {
+      "types": "./src/data/hooks.tsx",
+      "import": "./src/data/hooks.tsx"
+    },
+    "./data/authored-hooks": {
+      "types": "./src/data/authored-hooks.tsx",
+      "import": "./src/data/authored-hooks.tsx"
+    },
+    "./data/revisions": {
+      "types": "./src/data/revisions.ts",
+      "import": "./src/data/revisions.ts"
+    },
+    "./data/errors": {
+      "types": "./src/data/errors.ts",
+      "import": "./src/data/errors.ts"
+    },
+    "./data/*": {
+      "types": "./src/data/*.ts",
+      "import": "./src/data/*.ts"
+    }
+  },
+  "scripts": {
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@angee/logo-react": "^0.2.1",
+    "@angee/refine": "workspace:*",
+    "@angee/resources": "workspace:*",
+    "@base-ui/react": "^1.6.0",
+    "@codemirror/commands": "^6.10.4",
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/lang-markdown": "^6.0.0",
+    "@codemirror/state": "^6.7.0",
+    "@codemirror/view": "^6.43.3",
+    "@dagrejs/dagre": "^3.0.0",
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@refinedev/core": "^5.0.12",
+    "@refinedev/react-hook-form": "^5.0.4",
+    "@refinedev/react-table": "^6.0.1",
+    "@tanstack/react-table": "^8.21.3",
+    "@tanstack/react-virtual": "^3.14.3",
+    "@xyflow/react": "^12.11.1",
+    "cmdk": "^1.1.1",
+    "codemirror": "^6.0.0",
+    "date-fns": "^4.1.0",
+    "lucide-react": "^1.21.0",
+    "nuqs": "^2.5.0",
+    "react-day-picker": "^10.0.1",
+    "react-hook-form": "^7.80.0",
+    "react-json-view-lite": "^2.5.0",
+    "react-markdown": "^10.1.0",
+    "react-resizable-panels": "^4.11.1",
+    "remark-gfm": "^4.0.1",
+    "tailwind-merge": "^3.6.0",
+    "tailwind-variants": "^3.2.0",
+    "tw-animate-css": "^1.0.0"
+  },
+  "peerDependencies": {
+    "@tanstack/react-router": "^1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@tanstack/react-query": "^5.101.1",
+    "@tanstack/react-router": "^1.170.16",
+    "@testing-library/react": "^16.1.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "happy-dom": "^20.10.6",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  }
+}

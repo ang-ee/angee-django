@@ -1,0 +1,385 @@
+/* ============================================================================
+   Angee — Design Tokens
+   Three layers:
+     1. Primitive — raw color ramps. Never reference these from components;
+        they exist so semantic tokens have a single source.
+     2. Semantic — what components reference. Same names work in both themes.
+     3. Theme — light is default; dark overrides via [data-theme="dark"].
+
+   Discipline: every semantic token MUST reference a primitive via
+   `var(--<primitive>)`. Raw hex / rgba in the semantic / theme layers is a
+   token-system bug — extend the primitive ramp instead.
+   ============================================================================ */
+
+:root {
+  /* -------------------------------------------------------------------------
+     1. PRIMITIVES — neutral ramp (cool gray) + brand + status
+     ------------------------------------------------------------------------- */
+
+  /* Neutral (cool gray). The extra in-between shades (n-225, n-475, n-550,
+     n-680, n-775, n-825, n-875, n-925, n-1000) are dark-theme-specific
+     stops that don't fall cleanly between the 50-step ladder; they are
+     primitives, not semantic tokens. */
+  --n-0:    #ffffff;
+  --n-50:   #f7f8fa;
+  --n-100:  #eef0f3;
+  --n-125:  #e8eaee;     /* dark theme text-primary */
+  --n-150:  #e3e6ea;
+  --n-175:  #cdd1d8;     /* on-rail text */
+  --n-200:  #d6dae0;
+  --n-225:  #c2c6cd;     /* dark theme text-secondary */
+  --n-300:  #b9bfc8;
+  --n-400:  #8a93a0;
+  --n-450:  #8c92a0;     /* dark theme text-muted (≈ n-400, kept for color-fidelity) */
+  --n-475:  #7d8593;     /* on-rail-muted text */
+  --n-500:  #6b7280;
+  --n-550:  #5f6573;     /* dark theme text-subtle */
+  --n-600:  #4b5360;
+  --n-680:  #3a4150;     /* dark theme border-strong */
+  --n-700:  #353a44;
+  --n-775:  #2a2f39;     /* dark theme border-default */
+  --n-800:  #21252c;
+  --n-825:  #1f232b;     /* dark theme inset / border-subtle */
+  --n-850:  #181b21;
+  --n-870:  #1a1d24;     /* light theme rail-hi */
+  --n-875:  #1c1f26;     /* dark theme sheet-2 / popover */
+  --n-880:  #20232a;     /* light theme border-on-rail */
+  --n-900:  #11141a;
+  --n-925:  #14171d;     /* dark theme rail-hi */
+  --n-935:  #15181f;     /* dark theme border-on-rail */
+  --n-950:  #0a0c10;
+  --n-1000: #07090c;     /* dark theme rail */
+
+  /* Brand — indigo-violet */
+  --b-50:   #eef0ff;
+  --b-100:  #dde1ff;
+  --b-200:  #c0c6ff;
+  --b-300:  #9aa1ff;
+  --b-400:  #7a7df5;
+  --b-500:  #5b5bd6;
+  --b-600:  #4848b8;
+  --b-700:  #393995;
+  --b-800:  #2c2c73;
+  --b-900:  #1f1f56;
+
+  /* Accent — teal (AI / chatter highlight) */
+  --t-50:   #effcf9;
+  --t-100:  #d3f7ee;
+  --t-300:  #5eead4;
+  --t-500:  #14b8a6;
+  --t-600:  #0d9488;
+  --t-700:  #0f766e;
+
+  /* Status — each ramp carries 100 (soft fill) / 300 (dark-theme text) /
+     500 (icon / accent) / 700 (light-theme text). */
+  --green-100: #dcfce7;  --green-300: #6ee7b7;  --green-500: #10b981;  --green-700: #047857;
+  --amber-100: #fef3c7;  --amber-300: #fcd34d;  --amber-500: #f59e0b;  --amber-700: #b45309;
+  --red-100:   #fee2e2;  --red-300:   #fca5a5;  --red-500:   #ef4444;  --red-700:   #b91c1c;
+  --blue-100:  #dbeafe;  --blue-300:  #93c5fd;  --blue-500:  #3b82f6;  --blue-700:  #1d4ed8;
+  --purple-100:#ede9fe;  --purple-300:#c4b5fd;  --purple-500:#8b5cf6;  --purple-700:#6d28d9;
+  --pink-100:  #fce7f3;  --pink-300:  #f9a8d4;  --pink-500:  #ec4899;  --pink-700:  #be185d;
+
+  /* Pure black — explicit primitive so the dark overlay can reference it
+     without a raw hex. */
+  --black:  #000000;
+
+  /* -------------------------------------------------------------------------
+     2. SEMANTIC TOKENS (light theme defaults)
+     ------------------------------------------------------------------------- */
+
+  /* Surfaces */
+  --surface-canvas:    var(--n-50);     /* page background */
+  --surface-sheet:     var(--n-0);      /* cards, list rows, form sheet */
+  --surface-sheet-2:   var(--n-50);     /* alternating, hover */
+  --surface-rail:      var(--n-950);    /* left app rail (dark even on light) */
+  --surface-rail-hi:   var(--n-870);    /* rail hover row */
+  --surface-rail-hover:   color-mix(in oklab, var(--n-0) 6%, transparent);   /* translucent hover overlay on rail */
+  --surface-kbd-on-rail:  color-mix(in oklab, var(--n-0) 8%, transparent);   /* kbd / chip bg on rail */
+  --border-kbd-on-rail:   color-mix(in oklab, var(--n-0) 12%, transparent);  /* kbd / chip border on rail */
+  --on-brand-divider:        color-mix(in oklab, var(--n-0) 40%, transparent);    /* divider in BulkActionBar */
+  --on-brand-soft-hover:     color-mix(in oklab, var(--text-primary) 10%, transparent);  /* chip-x hover on brand-soft */
+  --surface-overlay:   color-mix(in oklab, var(--n-950) 55%, transparent);
+  --surface-popover:   var(--n-0);
+  --surface-inset:     var(--n-100);    /* search pill, kbd, tag bg */
+
+  /* Tooltip — chrome that sits above all surfaces; same in both themes */
+  --tooltip-bg:        var(--n-900);
+  --tooltip-fg:        var(--n-0);
+
+  /* Text */
+  --text-primary:      var(--n-900);
+  --text-secondary:    var(--n-700);
+  --text-muted:        var(--n-500);
+  --text-subtle:       var(--n-400);
+  --text-inverse:      var(--n-0);
+  --text-on-rail:      var(--n-175);
+  --text-on-rail-mut:  var(--n-475);
+  --text-on-rail-hi:   var(--n-0);      /* hover/active on rail */
+  --text-on-brand:     var(--n-0);
+  --text-link:         var(--b-600);
+
+  /* Borders */
+  --border-subtle:     var(--n-150);
+  --border-default:    var(--n-200);
+  --border-strong:     var(--n-300);
+  --border-focus:      var(--b-500);
+  --border-on-rail:    var(--n-880);
+
+  /* Brand */
+  --brand:             var(--b-500);
+  --brand-hover:       var(--b-600);
+  --brand-active:      var(--b-700);
+  --brand-soft:        var(--b-50);
+  --brand-soft-text:   var(--b-700);
+
+  /* Avatar default — fill behind slot-less initials/glyph avatars. */
+  --avatar-default-bg: var(--n-500);
+
+  /* Accent (AI) */
+  --accent:            var(--t-600);
+  --accent-soft:       var(--t-50);
+  --accent-soft-text:  var(--t-700);
+
+  /* Status soft */
+  --success-soft:      var(--green-100);
+  --success-text:      var(--green-700);
+  --warning-soft:      var(--amber-100);
+  --warning-text:      var(--amber-700);
+  --danger-soft:       var(--red-100);
+  --danger-text:       var(--red-700);
+  --info-soft:         var(--blue-100);
+  --info-text:         var(--blue-700);
+
+  /* Danger — solid fill for destructive buttons / banners. Distinct from
+     danger-soft (subtle banner) and danger-text (text on soft). */
+  --danger:            var(--red-500);
+  --danger-hover:      var(--red-700);
+  --danger-active:     var(--red-700);
+  --on-danger:         var(--n-0);
+
+  /* Soft tag swatches that need a separate dark-mode tweak. The
+     light fallback reuses the primitive 100/700 ramp; the dark
+     block below replaces them with translucent fills + lighter text
+     so the gem-toned tags stay legible on dark surfaces. */
+  --purple-soft:       var(--purple-100);
+  --purple-soft-text:  var(--purple-700);
+  --pink-soft:         var(--pink-100);
+  --pink-soft-text:    var(--pink-700);
+
+  /* ---------------------------------------------------------------------------
+     Two-axis fill matrix (tone × variant). `soft` (above) and the brand/danger
+     solids already exist; these complete the palette so lib/tones.ts can map
+     every (tone × fill) combo. Per palette: `--P` solid fill, `--on-P` text on
+     it, `--P-line` the outline/surface border, `--P-tint` the faint surface bg.
+     Names follow the ramp primitives — no raw hex.
+     --------------------------------------------------------------------------- */
+  /* Solid fills (brand/danger/accent already defined above) */
+  --info:          var(--blue-500);
+  --success:       var(--green-500);
+  --warning:       var(--amber-500);
+  --purple:        var(--purple-500);
+  --pink:          var(--pink-500);
+
+  /* Text on the solid fill (on-brand/on-danger already defined above) */
+  --on-accent:     var(--n-0);
+  --on-info:       var(--n-0);
+  --on-success:    var(--n-0);
+  --on-warning:    var(--n-900);   /* dark text — amber-500 fails white-on-amber */
+  --on-purple:     var(--n-0);
+  --on-pink:       var(--n-0);
+
+  /* Outline / surface border (ramp-300) */
+  --brand-line:    var(--b-300);
+  --accent-line:   var(--t-300);
+  --info-line:     var(--blue-300);
+  --success-line:  var(--green-300);
+  --warning-line:  var(--amber-300);
+  --danger-line:   var(--red-300);
+  --purple-line:   var(--purple-300);
+  --pink-line:     var(--pink-300);
+
+  /* Faint panel tint for the `surface` fill (palette over the sheet) */
+  --brand-tint:    color-mix(in oklab, var(--b-500) 6%, var(--surface-sheet));
+  --accent-tint:   color-mix(in oklab, var(--t-500) 6%, var(--surface-sheet));
+  --info-tint:     color-mix(in oklab, var(--blue-500) 6%, var(--surface-sheet));
+  --success-tint:  color-mix(in oklab, var(--green-500) 6%, var(--surface-sheet));
+  --warning-tint:  color-mix(in oklab, var(--amber-500) 6%, var(--surface-sheet));
+  --danger-tint:   color-mix(in oklab, var(--red-500) 6%, var(--surface-sheet));
+  --purple-tint:   color-mix(in oklab, var(--purple-500) 6%, var(--surface-sheet));
+  --pink-tint:     color-mix(in oklab, var(--pink-500) 6%, var(--surface-sheet));
+
+  /* Focus ring */
+  --ring:              0 0 0 3px color-mix(in oklab, var(--brand) 30%, transparent);
+  --ring-danger:       0 0 0 3px color-mix(in oklab, var(--red-500) 30%, transparent);
+
+  /* Elevation — shadows reference `--n-900` for the rgb source so a
+     theme rebrand carries through. The light theme keeps the cool-gray
+     cast (n-900 ≈ #11141a) on its drop shadows. */
+  --elevation-xs:         0 1px 1px rgb(from var(--n-900) r g b / 0.04);
+  --elevation-sm:         0 1px 2px rgb(from var(--n-900) r g b / 0.06),
+                       0 1px 1px rgb(from var(--n-900) r g b / 0.04);
+  --elevation-md:         0 4px 12px rgb(from var(--n-900) r g b / 0.08),
+                       0 1px 2px rgb(from var(--n-900) r g b / 0.04);
+  --elevation-lg:         0 12px 32px rgb(from var(--n-900) r g b / 0.12),
+                       0 2px 6px rgb(from var(--n-900) r g b / 0.06);
+  --elevation-popover:    0 6px 16px rgb(from var(--n-900) r g b / 0.10),
+                       0 2px 4px rgb(from var(--n-900) r g b / 0.06);
+
+  /* The canonical z-index ladder, the popover / modal surface
+     dimensions, and the `--bg-grid-step` pattern step live in
+     index.css `@theme` so they emit Tailwind utilities directly. See
+     `index.css § stacking layers` and `§ surface dimensions`. */
+
+  /* -------------------------------------------------------------------------
+     Type scale
+     ------------------------------------------------------------------------- */
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --fs-11: 11px;  --lh-11: 16px;
+  --fs-12: 12px;  --lh-12: 16px;
+  --fs-13: 13px;  --lh-13: 20px;
+  --fs-14: 14px;  --lh-14: 20px;
+  --fs-15: 15px;  --lh-15: 22px;
+  --fs-16: 16px;  --lh-16: 24px;
+  --fs-18: 18px;  --lh-18: 26px;
+  --fs-22: 22px;  --lh-22: 30px;
+  --fs-28: 28px;  --lh-28: 36px;
+  --fs-34: 34px;  --lh-34: 42px;
+
+  --fw-regular:  400;
+  --fw-medium:   500;
+  --fw-semibold: 600;
+  --fw-bold:     700;
+
+  /* -------------------------------------------------------------------------
+     Spacing (4px base) and radii
+     ------------------------------------------------------------------------- */
+  --sp-0:  0;
+  --sp-1:  4px;
+  --sp-2:  8px;
+  --sp-3:  12px;
+  --sp-4:  16px;
+  --sp-5:  20px;
+  --sp-6:  24px;
+  --sp-8:  32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+  --sp-16: 64px;
+
+  --r-2: 2px;
+  --r-4: 4px;
+  --r-6: 6px;
+  --r-8: 8px;
+  --r-10: 10px;
+  --r-12: 12px;
+  --r-full: 999px;
+
+  /* -------------------------------------------------------------------------
+     Layout constants (the chrome dimensions)
+     ------------------------------------------------------------------------- */
+  --rail-w:        40px;
+  --topbar-h:      42px;
+  --breadcrumbs-h: 30px;
+  --controlpanel-h:48px;
+  --chatter-w:     332px;
+
+  /* Motion */
+  --dur-fast:  120ms;
+  --dur-base:  180ms;
+  --dur-slow:  280ms;
+  --ease:      cubic-bezier(0.2, 0.6, 0.2, 1);
+}
+
+/* ============================================================================
+   3. THEME — DARK
+   Every override references a primitive. Surface/text/border tokens use
+   the dark-specific in-between neutrals (n-225, n-475, n-550, n-680,
+   n-775, n-825, n-875, n-925, n-935, n-1000) so the primitive layer is
+   still the single source of truth.
+   ============================================================================ */
+[data-theme="dark"] {
+  --surface-canvas:    var(--n-950);
+  --surface-sheet:     var(--n-850);
+  --surface-sheet-2:   var(--n-875);
+  --surface-rail:      var(--n-1000);
+  --surface-rail-hi:   var(--n-925);
+  --surface-overlay:   color-mix(in oklab, var(--black) 65%, transparent);
+  --surface-popover:   var(--n-875);
+  --surface-inset:     var(--n-825);
+
+  --text-primary:      var(--n-125);
+  --text-secondary:    var(--n-225);
+  --text-muted:        var(--n-450);
+  --text-subtle:       var(--n-550);
+  --text-inverse:      var(--n-900);
+  --text-on-rail:      var(--n-175);
+  --text-on-rail-mut:  var(--n-475);
+  --text-link:         var(--b-300);
+
+  --border-subtle:     var(--n-825);
+  --border-default:    var(--n-775);
+  --border-strong:     var(--n-680);
+  --border-on-rail:    var(--n-935);
+
+  --brand:             var(--b-400);
+  --brand-hover:       var(--b-300);
+  --brand-active:      var(--b-200);
+  --brand-soft:        color-mix(in oklab, var(--b-400) 15%, transparent);
+  --brand-soft-text:   var(--b-200);
+
+  --accent-soft:       color-mix(in oklab, var(--t-500) 15%, transparent);
+  --accent-soft-text:  var(--t-300);
+
+  --success-soft:      color-mix(in oklab, var(--green-500) 15%, transparent);
+  --success-text:      var(--green-300);
+  --warning-soft:      color-mix(in oklab, var(--amber-500) 15%, transparent);
+  --warning-text:      var(--amber-300);
+  --danger-soft:       color-mix(in oklab, var(--red-500) 18%, transparent);
+  --danger-text:       var(--red-300);
+  --info-soft:         color-mix(in oklab, var(--blue-500) 18%, transparent);
+  --info-text:         var(--blue-300);
+
+  /* Dark-theme: lighten danger fill on hover (light variant darkens). */
+  --danger:            var(--red-500);
+  --danger-hover:      var(--red-300);
+  --danger-active:     var(--red-300);
+  --on-danger:         var(--n-0);
+
+  --purple-soft:       color-mix(in oklab, var(--purple-500) 18%, transparent);
+  --purple-soft-text:  var(--purple-300);
+  --pink-soft:         color-mix(in oklab, var(--pink-500) 18%, transparent);
+  --pink-soft-text:    var(--pink-300);
+
+  /* Two-axis fills — dark overrides. Solids keep their vivid ramp-500 (like
+     --danger); only the outline/surface border and the surface tint need a
+     theme-aware, translucent value over the darker sheet. */
+  --brand-line:    color-mix(in oklab, var(--b-400) 40%, transparent);
+  --accent-line:   color-mix(in oklab, var(--t-500) 40%, transparent);
+  --info-line:     color-mix(in oklab, var(--blue-500) 40%, transparent);
+  --success-line:  color-mix(in oklab, var(--green-500) 40%, transparent);
+  --warning-line:  color-mix(in oklab, var(--amber-500) 40%, transparent);
+  --danger-line:   color-mix(in oklab, var(--red-500) 40%, transparent);
+  --purple-line:   color-mix(in oklab, var(--purple-500) 40%, transparent);
+  --pink-line:     color-mix(in oklab, var(--pink-500) 40%, transparent);
+
+  --brand-tint:    color-mix(in oklab, var(--b-400) 12%, var(--surface-sheet));
+  --accent-tint:   color-mix(in oklab, var(--t-500) 12%, var(--surface-sheet));
+  --info-tint:     color-mix(in oklab, var(--blue-500) 12%, var(--surface-sheet));
+  --success-tint:  color-mix(in oklab, var(--green-500) 12%, var(--surface-sheet));
+  --warning-tint:  color-mix(in oklab, var(--amber-500) 12%, var(--surface-sheet));
+  --danger-tint:   color-mix(in oklab, var(--red-500) 12%, var(--surface-sheet));
+  --purple-tint:   color-mix(in oklab, var(--purple-500) 12%, var(--surface-sheet));
+  --pink-tint:     color-mix(in oklab, var(--pink-500) 12%, var(--surface-sheet));
+
+  --elevation-xs:         0 1px 1px rgb(from var(--black) r g b / 0.30);
+  --elevation-sm:         0 1px 2px rgb(from var(--black) r g b / 0.40),
+                       0 1px 1px rgb(from var(--black) r g b / 0.30);
+  --elevation-md:         0 4px 12px rgb(from var(--black) r g b / 0.45),
+                       0 1px 2px rgb(from var(--black) r g b / 0.30);
+  --elevation-lg:         0 12px 32px rgb(from var(--black) r g b / 0.55),
+                       0 2px 6px rgb(from var(--black) r g b / 0.30);
+  --elevation-popover:    0 6px 16px rgb(from var(--black) r g b / 0.55),
+                       0 2px 4px rgb(from var(--black) r g b / 0.30);
+}
