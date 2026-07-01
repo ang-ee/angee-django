@@ -60,14 +60,29 @@ reads `DATABASE_URL`, so no SQLite file lives in the tree. Add the framework's
 example later by adding a source onto `angee-django/examples` and enabling it in
 `INSTALLED_APPS`.
 
-> **Status.** The `local` template is converging on this shape (framework image +
-> Postgres). Today it runs the framework's example over `django-angee-base` with
-> SQLite as a transitional quickstart.
+> **Status.** The `local` template now *is* this shape: a thin `kind: stack` that
+> chains `projects/web` and runs the framework from the `ghcr.io/ang-ee/django-angee`
+> runtime image on `pgvector/pgvector:pg17`. The one-command render below needs the
+> operator's template-chain resolver, still landing in `ang-ee/angee-operator`; until
+> it ships, render the host then the stack in two copier steps.
 
 ## Run a local stack
+
+Once the operator's chain resolver ships, one command renders host + stack:
 
 ```sh
 angee stack init https://github.com/ang-ee/angee-django/tree/main/templates/stacks/local ~/.angee
 angee up --root ~/.angee
 export ANGEE_OPERATOR_URL=http://127.0.0.1:9000   # the CLI then drives the operator
+```
+
+Until then, render the two templates in sequence (the stack overlays the host),
+emit + commit `runtime/` via the runtime image, then bring it up:
+
+```sh
+copier copy .../templates/projects/web ~/.angee
+copier copy --overwrite .../templates/stacks/local ~/.angee
+docker run --rm -v ~/.angee:/app -w /app ghcr.io/ang-ee/django-angee \
+  sh -c 'ANGEE_PROJECT_DIR=/app python manage.py angee build && python manage.py makemigrations && python manage.py schema'
+angee up --root ~/.angee
 ```

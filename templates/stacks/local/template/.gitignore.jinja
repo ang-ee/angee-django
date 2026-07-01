@@ -1,0 +1,36 @@
+# Local Angee instance = a git-controlled project at the stack root (ANGEE_ROOT=.).
+# This OVERWRITES the project's .gitignore: here runtime/ is COMMITTED (a local
+# instance is a real deployment, so the built concrete apps + SDL are the pinned
+# artifact you deploy and review) — so, unlike the project default, /runtime/ is NOT
+# ignored. Commit what you author; ignore what a tool regenerates.
+
+# The operator's compiled bring-up artifacts and resolved secrets.
+/.env
+/docker-compose.yaml
+/process-compose.yaml
+/run/
+/sources/
+# The dev-stack overlay (`angee init --dev`), if ever added alongside.
+/.angee/
+
+# Instance state the operator materializes on bring-up: app media/static (./data)
+# and the Postgres data cluster (./pgdata — a sibling of ./data so the cluster stays
+# outside the django container's data mount). Never committed.
+/data/
+/pgdata/
+
+# Python
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.venv/
+
+# JS
+node_modules/
+/{{ web_path }}/dist/
+/{{ web_path }}/.vite/
+
+# Scratch / reports
+/.playwright-mcp/
+/test-results/
+/playwright-report/

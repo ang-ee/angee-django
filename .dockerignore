@@ -1,5 +1,25 @@
-# The base image only bakes deps (COPY pyproject.toml uv.lock); keep the build
-# context tiny so `docker build` doesn't ship the monorepo, node_modules, or state.
-*
-!pyproject.toml
-!uv.lock
+# Deny-list, not an allow-list: the `runtime` stage builds the framework wheel from
+# the `angee/` + `addons/` source roots, so they (and the manifests) must stay in the
+# build context. Drop only VCS, virtualenvs, generated/state, caches, node_modules,
+# the JS workspace, and the example project — none are copied by any stage, and
+# hatch-angee already excludes web/node_modules from the wheel itself.
+.git
+.venv
+.angee
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/runtime
+.mypy_cache
+.pytest_cache
+.ruff_cache
+packages
+examples
+.work
+docs/screenshots
+test-results
+playwright-report
+.playwright-mcp
+dist
+build
+*.egg-info

@@ -53,6 +53,15 @@ dependencies = [
   "httpx>=0.28.1,<0.29",
 ]
 
+[project.optional-dependencies]
+# Postgres driver only — installed by the runtime image's `--extra postgres` and by
+# the self-contained local stack. psycopg 3 is the driver Django 6's
+# django.db.backends.postgresql uses when DATABASE_URL points at Postgres (the
+# stack env supplies the URL; angee/compose/settings.py maps it, SQLite floor
+# otherwise). pgvector's Python package and the hatch-angee addon-dependency
+# collection stay deferred, so this is a static table, not `dynamic`.
+postgres = ["psycopg[binary]>=3.2"]
+
 [dependency-groups]
 dev = [
   # Test-only: channels.testing imports daphne (ChannelsLiveServerTestCase). It is

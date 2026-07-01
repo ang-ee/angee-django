@@ -41,10 +41,11 @@ entrypoints, and generated runtime output. A project is scaffolded from a
 a project repository: `manage.py`, `settings.yaml`, the consumer-addon namespace,
 and the web package. It owns the root. A project is *run* by a **stack**, which is
 a separate concern: a developer overlays a dev stack into a gitignored `.angee/`
-with `angee init --dev`, and a self-contained local/staging/prod instance clones
-the project in as a source. A stack rendered into the project's own root — so the
-root's `.copier-answers.yml` describes the stack, not the project — is an
-anti-pattern. The two stack layouts live in the operator's
+with `angee init --dev`, and a self-contained local/staging/prod instance is the
+project at its own root with a thin stack overlay chained onto it — the stack keeps
+its own `.copier-answers.stack.yml` so the project's canonical `.copier-answers.yml`
+stays the project's, and the framework comes from the runtime image rather than a
+cloned source. The two stack layouts live in the operator's
 [Concepts](/operator/concepts#two-stack-layouts).
 
 **Host** — the application runtime a stack runs. `angee-django` is the first and

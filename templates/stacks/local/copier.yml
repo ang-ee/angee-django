@@ -1,57 +1,88 @@
 _min_copier_version: "9.0"
 _subdirectory: template
 _templates_suffix: .jinja
-# The instance root IS the stack (non-dev layout, ANGEE_ROOT=.), so the stack owns
-# the root's canonical answers file — unlike the dev overlay, which lives in .angee/.
-_answers_file: .copier-answers.yml
+# The stack overlays into the project root (ANGEE_ROOT=.), but the PROJECT owns the
+# canonical .copier-answers.yml (rendered by the chained projects/web). The stack
+# keeps its OWN answers file so it never clobbers the project's.
+_answers_file: .copier-answers.stack.yml
 
 _message_after_copy: |
-  Local Angee instance rendered.
+  Local Angee instance rendered — the root folder IS the stack and a git-controlled
+  project (ANGEE_ROOT=.). Postgres + Django (framework image) + Vite.
 
-  1. Bring it up (clones angee-django into ./sources, builds the runtime, serves):
+  1. Emit the runtime artifact once and commit it. A local instance is a real
+     deployment, so runtime/ is the pinned artifact you deploy and review — the
+     bring-up does NOT regenerate it. With the framework available:
+       python manage.py angee build
+       python manage.py makemigrations
+       git add runtime && git commit -m "chore: build runtime"
+  2. Bring it up (Postgres + Django + Vite under docker-compose):
        angee up
-  2. Point the CLI at the local operator — add to your ~/.profile:
+  3. Point the CLI at the local operator — add to your ~/.profile:
        export ANGEE_OPERATOR_URL=http://127.0.0.1:{{ operator_port }}
 
   Backend:  http://localhost:{{ django_port }}
   Frontend: http://localhost:{{ ui_port }}
+
+  The framework's notes example is NOT installed by default (INSTALLED_APPS is
+  base-only). Add it later by declaring a git source onto angee-django/examples
+  and enabling example.notes in settings.yaml's INSTALLED_APPS.
 
 _angee:
   schema: 1
   kind: stack
   name: local
   description: >-
-    A self-contained local Angee instance (quickstart). `angee up` clones
-    angee-django as a git source, runs the backend on
-    ghcr.io/ang-ee/django-angee-base with the Vite frontend under docker-compose,
-    and stands up an open-loopback operator on 127.0.0.1:9000 that the CLI drives
-    via ANGEE_OPERATOR_URL. The root folder is the stack; sources are cloned in.
+    A self-contained local Angee instance: the root folder IS the stack AND a
+    git-controlled project (ANGEE_ROOT=.). It chains the `projects/web` project
+    template to scaffold the host (manage.py, settings.yaml, addons, web), then
+    overlays a Postgres-backed `angee.yaml` — operator + postgres (pgvector) +
+    django (on the framework runtime image, DATABASE_URL → postgres) + vite. The
+    framework is a dependency baked into the runtime image, not a cloned source.
+    This is how you run your own Angee app locally on a real Postgres database.
+  # Chain the project template first so the stack overlays a real host, then this
+  # template adds only the stack overlay (angee.yaml, .gitignore). In-repo relative
+  # ref; downstream this pins as
+  # github.com/ang-ee/angee-django//templates/projects/web?ref=<tag>. Rendered by
+  # the operator's chain resolver; until that ships, render the two templates with
+  # copier in sequence into one root (projects/web first, then stacks/local).
+  chain:
+    - template: ./templates/projects/web
+      inputs:
+        project_name: "{{ instance_name }}"
+        web_path: "{{ web_path }}"
+        addon_namespace: "{{ addon_namespace }}"
 
-# Display name of the instance (the compose project's friendly label; the operator
-# derives a root-unique project id from it).
+# Machine name of the instance: the compose project's friendly label (the operator
+# derives a root-unique project id from it) AND the chained project's name (seeds
+# SECRET_KEY, manage.py docstring, the web package's npm scope).
 instance_name:
   type: str
   default: angee-local
+  help: Machine name of the instance; also the chained project's name.
 
-# The application source the instance runs, cloned into ./sources/app. Defaults to
-# the framework repo, which carries the quickstart example.
-app_repo:
+# Directory + import namespace for this project's own consumer addons (addons/<ns>/,
+# referenced in INSTALLED_APPS as <ns>.<app>). Must be a valid Python identifier;
+# defaults to the instance name with hyphens folded to underscores.
+addon_namespace:
   type: str
-  default: "https://github.com/ang-ee/angee-django"
-app_ref:
-  type: str
-  default: main
+  default: "{{ instance_name | replace('-', '_') }}"
+  help: Import namespace for this project's consumer addons; a valid Python identifier.
 
-# The project within the cloned source to run (the dir holding manage.py/settings.yaml).
-project_subpath:
+# Path of the web (Vite) package relative to the project root; matches the chained
+# project's web_path and the vite service's workdir (/app/<web_path>).
+web_path:
   type: str
-  default: "examples/notes-angee"
-  help: Path within the cloned source to the project (holds manage.py).
+  default: "web"
+  help: Path of the web package relative to the project root.
 
-# The framework runtime image (deps baked; the cloned source mounts over the code).
+# The framework runtime image: framework CODE + deps + psycopg baked in (the
+# Dockerfile `runtime` target). The project mounts over /app, so the framework lives
+# OFF /app in the image. Distinct from the deps-only ...-base image.
 base_image:
   type: str
-  default: "ghcr.io/ang-ee/django-angee-base:latest"
+  default: "ghcr.io/ang-ee/django-angee:latest"
+  help: Framework runtime image (code + deps + psycopg) the django service runs.
 
 operator_port:
   type: int

@@ -4,23 +4,26 @@ name: {{ instance_name }}
 
 template:
   active: stacks/local
-  answers_file: .copier-answers.yml
+  # The PROJECT owns the canonical .copier-answers.yml (rendered by the chained
+  # projects/web); the stack keeps its own so it never clobbers the project's.
+  answers_file: .copier-answers.stack.yml
 
-# The instance stores its own state (SQLite db, caches) under ./data, relative to
-# this stack root. The operator materializes it on every bring-up (StackPrepare)
-# before migrate opens the database. settings.yaml's ANGEE_DATA_DIR resolves to the
-# same ./data inside the mounted source.
+# The docker-compose backend always loads ./.env via `--env-file`, so that file must
+# exist before any user secret resolves. The env-file backend writes it as it resolves
+# the generated secrets below.
 secrets_backend:
   type: env-file
   path: .env
 
 secrets:
-  # A generated secret whose resolution writes the env-file (./ .env) the
-  # docker-compose backend always loads via `--env-file`. A container stack needs
-  # that file to exist before any user secret; the compose backend passes
-  # `--env-file .env` unconditionally (EnvFilePath defaults to `.env`). Also serves
-  # as the instance's Django SECRET_KEY.
+  # Bootstraps the env-file the compose backend loads unconditionally (`--env-file
+  # .env`); a fresh instance needs the file to exist before bring-up. Also available
+  # as the instance's Django SECRET_KEY source.
   secret-key: { generated: true, length: 50 }
+  # The Postgres superuser password. Generated (base64url → URL-safe, so it embeds in
+  # the DATABASE_URL userinfo with no percent-encoding) and shared by the postgres
+  # service (POSTGRES_PASSWORD) and the django service's DATABASE_URL.
+  db-password: { generated: true, length: 32 }
 
 ports:
   # The operator daemon's port. The CLI reaches it via ANGEE_OPERATOR_URL=
@@ -29,22 +32,27 @@ ports:
   django: { value: {{ django_port }}, export_env: DJANGO_PORT }
   ui: { value: {{ ui_port }}, export_env: ANGEE_UI_PORT }
 
+# Local state the operator materializes on every bring-up (StackPrepare), before any
+# container opens it. Subpaths are relative to this stack root (== the project root).
 persist:
+  # App media/static (ANGEE_DATA_DIR → /app/.angee/data via the django bind mount).
   app-data: { subpath: ./data, scope: stack }
+  # The Postgres data volume — the database survives re-up. A SIBLING of ./data (not
+  # nested under it), so the cluster (uid 999, mode 0700) is never exposed inside the
+  # django container's ./data → /app/.angee/data mount.
+  pgdata: { subpath: ./pgdata, scope: stack }
 
-# The application source — cloned into ./sources/app on the first bring-up, then
-# mounted into the runtime containers. This is the non-dev layout: the root is the
-# stack and the operator pulls the source in (vs the dev overlay's local paths).
+# The application source IS this root — the project is the stack (no git clone; the
+# framework is baked into the runtime image, not pulled in as a source).
 sources:
   app:
-    kind: git
-    repo: {{ app_repo }}
-    default_ref: {{ app_ref }}
+    kind: local
+    path: .
 
 services:
   # The control plane. Open on loopback — no --token — so the CLI needs only
-  # `export ANGEE_OPERATOR_URL=http://127.0.0.1:{{ operator_port }}`. Runs on the
-  # host so it can drive docker-compose; add sources/services/workspaces through it.
+  # `export ANGEE_OPERATOR_URL=http://127.0.0.1:{{ operator_port }}`. Runs on the host
+  # so it can drive docker-compose; add sources/services/workspaces through it.
   operator:
     runtime: local
     command:
@@ -52,43 +60,76 @@ services:
       - "-c"
       - exec angee operator --root . --bind 127.0.0.1 --port ${ports.operator}
 
-  # angee-django backend on the framework runtime image. The cloned source mounts
-  # at /app (deps are baked in the image); the entrypoint links the editable
-  # project, emits the runtime, migrates, and serves with uvicorn.
+  # The database. pgvector/pgvector:pg17 = stock Postgres 17 plus the pgvector
+  # extension, so a later retrieval backend has vector columns available without a
+  # rebuild. Internal only (no host port) — reachable by service name on the compose
+  # network. The password comes from the generated db-password secret.
+  postgres:
+    runtime: container
+    image: pgvector/pgvector:pg17
+    env:
+      POSTGRES_USER: angee
+      POSTGRES_DB: angee
+      POSTGRES_PASSWORD: "${secret.db-password}"
+    mounts:
+      - bind://./pgdata:/var/lib/postgresql/data
+
+  # angee-django backend on the framework runtime image (framework code + deps +
+  # psycopg baked in). The project mounts at /app OVER the image's own /app workdir;
+  # the framework lives off /app in the image, so `import angee.*` still resolves from
+  # the baked venv. Waits for Postgres, migrates the committed runtime, syncs REBAC,
+  # then serves. No `angee build` — runtime/ is a committed artifact.
   django:
     runtime: container
     image: {{ base_image }}
     mounts:
       - source://app:/app
-      # The notes example runs on SQLite + local file storage, so THIS deployment
-      # must provide a writable data dir at the example's ANGEE_DATA_DIR
-      # (/app/.angee/data, which sits inside the read-through code mount and doesn't
-      # exist in a fresh clone). Bind the stack's persist dir (app-data → ./data)
-      # there so the DB/media/static live outside the ephemeral clone and survive
-      # re-up. A Postgres + remote-storage deployment would drop this line entirely.
+      # ANGEE_DATA_DIR (settings.yaml) resolves to /app/.angee/data, which lives inside
+      # the code mount and does not exist in a fresh checkout. Bind the stack's data dir
+      # there so media/static live outside the mount and survive re-up.
       - bind://./data:/app/.angee/data
     workdir: /app
-    command: ["bash", "docker/dev/app-entrypoint.sh"]
     env:
-      ANGEE_PROJECT_DIR: /app/{{ project_subpath }}
-      ANGEE_DJANGO_PORT: "8000"
-      UV_CACHE_DIR: /tmp/uv-cache
+      ANGEE_PROJECT_DIR: /app
+      # django-environ (angee.compose.settings) parses this into DATABASES override-safe.
+      # Host `postgres` is the compose service name; user/db `angee` match the postgres
+      # env; the base64url password needs no encoding.
+      DATABASE_URL: "postgres://angee:${secret.db-password}@postgres:5432/angee"
+      # Run on the generated secret, not settings.yaml's dev default (yamlconf env override).
+      YAMLCONF_SECRET_KEY: "${secret.secret-key}"
+    command:
+      - sh
+      - "-c"
+      - >-
+        n=0;
+        until python -c "import os,psycopg; psycopg.connect(os.environ['DATABASE_URL']).close()" 2>/tmp/pgwait.err; do
+        n=$((n+1));
+        [ "$n" -ge 60 ] && { echo 'postgres not reachable after 60s:' >&2; cat /tmp/pgwait.err >&2; exit 1; };
+        echo "waiting for postgres ($n/60)..."; sleep 1;
+        done
+        && python manage.py migrate --noinput
+        && python manage.py rebac sync --yes
+        && python manage.py resources load
+        && exec uvicorn angee.asgi:application --host 0.0.0.0 --port 8000
+    after: [postgres]
     ports:
       - "{{ django_port }}:8000"
 
   # Vite frontend. Reaches the backend container by service name on the compose
-  # network; the fresh clone has no node_modules, so pnpm installs cleanly for Linux.
+  # network; the fresh checkout has no node_modules, so pnpm installs cleanly for Linux.
   vite:
     runtime: container
     image: node:22-slim
     mounts:
       - source://app:/app
-    workdir: /app
-    command: ["bash", "docker/dev/vite-entrypoint.sh"]
+    workdir: /app/{{ web_path }}
     env:
-      ANGEE_WEB_DIR: /app/{{ project_subpath }}/web
       ANGEE_DJANGO_URL: "http://django:8000"
       ANGEE_UI_PORT: "5173"
+    command:
+      - sh
+      - "-c"
+      - corepack enable; pnpm install; pnpm codegen; exec pnpm dev --host 0.0.0.0 --port 5173
+    after: [django]
     ports:
       - "{{ ui_port }}:5173"
-    after: [django]

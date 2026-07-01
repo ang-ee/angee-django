@@ -8,7 +8,11 @@
 # baked deps survive — change code, it's live; change a lockfile, `up --build`
 # rebuilds the deps layer. The framework CODE is NOT baked here: it is mounted
 # (framework dev) or added by a derived image / installed as the wheel (downstream
-# project). One artifact, the container analogue of the `django-angee` wheel.
+# project). Two targets share these stages: `final` is the deps-only base image
+# (`django-angee-base`, the container analogue of the `django-angee` wheel's deps);
+# the `runtime` target below is the derived image this comment foretells — it bakes
+# the framework code + `[postgres]` into `ghcr.io/ang-ee/django-angee`, the fuller
+# image the self-contained `local` stack runs.
 
 ARG PYTHON_VERSION=3.14
 
@@ -65,3 +69,36 @@ ENTRYPOINT ["tini", "--"]
 # links the editable project first, e.g.:
 #   uv sync --frozen && exec uv run python manage.py runserver 0.0.0.0:8000
 CMD ["python", "-c", "import django, sys; print('django-angee-base ready — python', sys.version.split()[0], '· django', django.get_version())"]
+
+# --- runtime: base + baked deps + framework code + [postgres] -------------------
+# ghcr.io/ang-ee/django-angee — the FULL framework runtime image (framework CODE +
+# deps + psycopg baked), distinct from the deps-only `final`/django-angee-base
+# above. The self-contained `local` stack runs its `django` service on this image:
+# the project bind-mounts over /app while `import angee.*` resolves from the baked
+# wheel in /opt/.venv, independent of the mount. Build it explicitly:
+#   docker build --target runtime -t ghcr.io/ang-ee/django-angee:latest .
+FROM deps AS runtime
+# Off /app on purpose: the local stack bind-mounts the project at /app, so the
+# framework source lands at /opt/angee-src — a mount over /app can never hide it.
+WORKDIR /opt/angee-src
+# The forks in [tool.uv.sources] are public (git inherited from base clones them
+# over anonymous HTTPS → credential-free). README.md + LICENSE satisfy the wheel
+# build's metadata (`license-files`); angee + addons are the two source roots the
+# hatch-angee backend merges onto the one `angee.*` PEP 420 namespace.
+COPY --chown=angee:angee pyproject.toml uv.lock README.md LICENSE ./
+COPY --chown=angee:angee angee ./angee
+COPY --chown=angee:angee addons ./addons
+# --no-editable installs the framework as a BUILT wheel into /opt/.venv (via the
+# hatch-angee backend) so `import angee.*` resolves from site-packages regardless
+# of the /app project mount; --extra postgres pulls psycopg (the driver Django 6's
+# django.db.backends.postgresql uses); --no-dev drops daphne/pytest/etc. for a lean
+# runtime; --frozen honours the committed lock (relocked to carry the extra).
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-editable --extra postgres \
+    && chown -R angee:angee /opt/.venv
+USER angee
+WORKDIR /app
+# tini reaps PID 1 for a clean `docker stop`. The stack's django service supplies
+# the concrete command (wait-for-postgres · migrate · rebac sync · runserver); the
+# venv is on PATH and runtime/ is committed, so there is no uv/angee build at start.
+ENTRYPOINT ["tini", "--"]
