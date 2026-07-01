@@ -9,7 +9,7 @@
 **/node_modules
 **/__pycache__
 **/*.pyc
-**/runtime
+/runtime
 .mypy_cache
 .pytest_cache
 .ruff_cache

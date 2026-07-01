@@ -20,6 +20,11 @@ secrets:
   # .env`); a fresh instance needs the file to exist before bring-up. Also available
   # as the instance's Django SECRET_KEY source.
   secret-key: { generated: true, length: 50 }
+  # First-admin password. Generated into .env and consumed through YAMLCONF so the
+  # IAM bootstrap command reads the same declarative settings surface as any
+  # operator override. Rotate/change it after first login if this instance leaves
+  # your workstation.
+  admin-password: { generated: true, length: 32 }
   # The Postgres superuser password. Generated (base64url → URL-safe, so it embeds in
   # the DATABASE_URL userinfo with no percent-encoding) and shared by the postgres
   # service (POSTGRES_PASSWORD) and the django service's DATABASE_URL.
@@ -97,19 +102,23 @@ services:
       DATABASE_URL: "postgres://angee:${secret.db-password}@postgres:5432/angee"
       # Run on the generated secret, not settings.yaml's dev default (yamlconf env override).
       YAMLCONF_SECRET_KEY: "${secret.secret-key}"
+      YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_USERNAME: "admin"
+      YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_EMAIL: "admin@example.com"
+      YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_PASSWORD: "${secret.admin-password}"
     command:
       - sh
       - "-c"
       - >-
         n=0;
         until python -c "import os,psycopg; psycopg.connect(os.environ['DATABASE_URL']).close()" 2>/tmp/pgwait.err; do
-        n=$((n+1));
-        [ "$n" -ge 60 ] && { echo 'postgres not reachable after 60s:' >&2; cat /tmp/pgwait.err >&2; exit 1; };
-        echo "waiting for postgres ($n/60)..."; sleep 1;
+        n=$$((n+1));
+        [ "$$n" -ge 60 ] && { echo 'postgres not reachable after 60s:' >&2; cat /tmp/pgwait.err >&2; exit 1; };
+        echo "waiting for postgres ($$n/60)..."; sleep 1;
         done
         && python manage.py migrate --noinput
         && python manage.py rebac sync --yes
         && python manage.py resources load
+        && python manage.py bootstrap_admin
         && exec uvicorn angee.asgi:application --host 0.0.0.0 --port 8000
     after: [postgres]
     ports:

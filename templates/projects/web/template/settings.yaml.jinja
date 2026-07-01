@@ -15,8 +15,8 @@ ALLOWED_HOSTS:jsonenv: true
 # {{ project_title }} composes the Angee base addons as its foundation —
 # identity & permissions (iam), tiered data (resources), files (storage),
 # connectors (integrate), partners (parties), messaging, OIDC login, platform,
-# and the operator console — and adds its own capabilities as consumer addons
-# under addons/{{ addon_namespace }}/*.
+# the VCS-backed marketplace tier, and the operator console — and adds its own
+# capabilities as consumer addons under addons/{{ addon_namespace }}/*.
 INSTALLED_APPS:
   - angee.iam
   - angee.resources
@@ -26,6 +26,7 @@ INSTALLED_APPS:
   - angee.messaging
   - angee.iam_integrate_oidc
   - angee.platform
+  - angee.platform_integrate_vcs
   - angee.operator
   # Consumer addons land here as they are built.
   # - {{ addon_namespace }}.example

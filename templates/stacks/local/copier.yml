@@ -23,6 +23,7 @@ _message_after_copy: |
 
   Backend:  http://localhost:{{ django_port }}
   Frontend: http://localhost:{{ ui_port }}
+  Login:    admin / the generated admin-password secret in .env
 
   The framework's notes example is NOT installed by default (INSTALLED_APPS is
   base-only). Add it later by declaring a git source onto angee-django/examples
@@ -48,9 +49,9 @@ _angee:
   chain:
     - template: ../../projects/web
       inputs:
-        project_name: "{{ instance_name }}"
-        web_path: "{{ web_path }}"
-        addon_namespace: "{{ addon_namespace }}"
+        project_name: "${inputs.instance_name}"
+        web_path: "${inputs.web_path}"
+        addon_namespace: "${inputs.addon_namespace}"
 
 # Machine name of the instance: the compose project's friendly label (the operator
 # derives a root-unique project id from it) AND the chained project's name (seeds

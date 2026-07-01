@@ -1,9 +1,8 @@
-name: publish base image
+name: publish framework images
 
-# Builds and publishes ghcr.io/ang-ee/django-angee-base — the framework runtime
-# base (python-slim + uv + the dependency closure). Tagged to the framework
-# version on release; :edge tracks main. Derived images (a downstream project, a
-# workspace dev stack) and the operator's docker-compose FROM this.
+# Builds and publishes the framework container surface: the dependency base,
+# the self-contained Django runtime image, and the matching @angee/* web runtime.
+# Tagged to the framework version on release; :edge tracks main.
 
 on:
   release:
@@ -23,7 +22,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  IMAGE: ghcr.io/ang-ee/django-angee-base
+  REGISTRY: ghcr.io/ang-ee
 
 jobs:
   build:
@@ -31,6 +30,19 @@ jobs:
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: base
+            image: django-angee-base
+            target: final
+          - id: runtime
+            image: django-angee
+            target: runtime
+          - id: web
+            image: angee-web
+            target: angee-web
     steps:
       - uses: actions/checkout@v4
 
@@ -46,7 +58,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.IMAGE }}
+          images: ${{ env.REGISTRY }}/${{ matrix.image }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -59,14 +71,14 @@ jobs:
         with:
           context: .
           file: Dockerfile
-          target: final
+          target: ${{ matrix.target }}
           platforms: linux/amd64,linux/arm64
           push: true
           # No provenance/SBOM attestations — they push extra manifests to ghcr
-          # (more surface for a 403) and the base image doesn't need them.
+          # (more surface for a 403), and these quickstart images don't need them.
           provenance: false
           sbom: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.id }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.id }}
