@@ -81,12 +81,11 @@ export ANGEE_OPERATOR_URL=http://127.0.0.1:9000   # the CLI then drives the oper
 ```
 
 Until then, render the two templates in sequence (the stack overlays the host),
-emit + commit `runtime/` via the runtime image, then bring it up:
+then bring it up. First start emits the local runtime, migrations, and GraphQL
+schemas before starting Django and Vite:
 
 ```sh
 copier copy .../templates/projects/web ~/.angee
 copier copy --overwrite .../templates/stacks/local ~/.angee
-docker run --rm -v ~/.angee:/app -w /app ghcr.io/ang-ee/django-angee \
-  sh -c 'ANGEE_PROJECT_DIR=/app python manage.py angee build && python manage.py makemigrations && python manage.py schema'
 angee up --root ~/.angee
 ```

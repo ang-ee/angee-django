@@ -1,16 +1,30 @@
-import { createApp } from "@angee/app";
+import { createApp, defineBaseAddon } from "@angee/app";
+import { IamLoginPage } from "@angee/iam";
 import { ConsoleLayout } from "@angee/ui";
 
 import { composedAddons, schemas } from "../../runtime/web/app";
 import "./index.css";
 
 createApp({
-  addons: [...composedAddons],
+  addons: [
+    defineBaseAddon({
+      id: "host-auth",
+      routes: [
+        {
+          name: "auth.login",
+          path: "/login",
+          layout: "public",
+          component: IamLoginPage,
+        },
+      ],
+    }),
+    ...composedAddons,
+  ],
   layouts: {
     console: { chrome: ConsoleLayout },
     public: { schema: "public" },
   },
   schemas,
   defaultSchema: "console",
-  home: "/",
+  home: "platform.graph",
 }).mount("#root");
