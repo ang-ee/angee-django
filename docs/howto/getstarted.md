@@ -185,7 +185,7 @@ example project, so it brings the whole stack up for you.
 3. **Set up and bring up the stack from the repo root.**
 
    ```sh
-   angee init --dev   # set up the dev stack from the template (first time only)
+   angee init --dev   # render the dev-stack overlay into .angee/ (first time only)
    angee dev          # run the examples/notes-angee stack
    ```
 
@@ -193,6 +193,13 @@ example project, so it brings the whole stack up for you.
    Django, Vite, Daphne, or workers by hand. Run from the repository root: the
    root stack is wired to the `examples/notes-angee` project, so `angee dev`
    runs that example against the framework.
+
+   `angee init --dev` renders a **dev-stack overlay** into a gitignored `.angee/`,
+   with `local` sources pointing at the checkout you already have — one of the
+   [two stack layouts](/operator/concepts#two-stack-layouts). The other is a
+   **self-contained instance** you `angee stack init` in its own folder, which
+   clones its sources in; that is how a downstream project or a shared local
+   platform is run.
 
 To run one-shot management commands against the example (emit runtime sources,
 migrate, sync permissions, load data, check the GraphQL SDL), drive its

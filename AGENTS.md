@@ -63,8 +63,9 @@ on top.
 │   ├── base/               # `@angee/base` — the single rendered (styled) binding
 │   ├── storybook/          # `@angee/storybook` — the storybook-first component workshop
 │   └── e2e/                # `@angee/e2e` — Playwright e2e harness (`docs/testing/e2e.md`)
-├── templates/              # Copier templates the operator renders
-│   ├── stacks/dev/         # dev Stack template (`angee init --dev`)
+├── templates/              # Copier templates — project / stack / workspace / service kinds
+│   ├── projects/web/       # project template — scaffolds the host repo (owns the project root)
+│   ├── stacks/dev/         # dev Stack template — the `.angee/` overlay (`angee init --dev`)
 │   └── workspaces/dev/     # dev Workspace template (`angee ws create … --template dev`)
 ├── examples/notes-angee/   # the example project `angee dev` runs from the repo root
 │   ├── manage.py           # Django entrypoint (`uv run examples/notes-angee/manage.py …`)
@@ -242,6 +243,12 @@ smaller and clearer.
 Django, Vite, Daphne, workers, or watchers by hand. Run it from the repository
 root: the root stack is wired to the `examples/notes-angee` project, so `angee
 dev` there runs that example against the framework.
+
+This repo-root `.angee/` is a **dev-stack overlay** — `ANGEE_ROOT=.angee` with
+`local` sources pointing at this checkout. It is one of two stack layouts (the
+other being a self-contained instance that clones its sources in); the project
+owns the repository root, the stack overlays into `.angee/`. See `docs/glossary.md`
+(Project / Project template / Host).
 
 ```sh
 angee dev            # from the repo root — runs the examples/notes-angee stack

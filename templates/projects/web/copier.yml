@@ -1,10 +1,11 @@
 _min_copier_version: "9.0"
 _subdirectory: template
 _templates_suffix: .jinja
-# Distinct from the stack template's `.copier-answers.yml`: a standalone project
-# root carries both a stack render (angee.yaml) and this project render (host +
-# web), so each keeps its own answers file for independent `copier update`.
-_answers_file: .copier-answers.project.yml
+# The project owns the repo root, so it takes the canonical answers file. The dev
+# stack is NOT rendered here — it is an on-demand overlay a developer adds with
+# `angee init --dev` (into a gitignored `.angee/`), and a non-dev `stacks/local`
+# instance clones this project in as a source. Either way the root is the project.
+_answers_file: .copier-answers.yml
 
 _angee:
   schema: 1

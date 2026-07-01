@@ -33,7 +33,23 @@ selected by `ANGEE_PROJECT_SETTINGS`. They declare root apps with Django
 composed settings module turns that contract into the running Django settings.
 
 **Project** — a runnable product: project settings, consumer addons, frontend
-entrypoints, and generated runtime output.
+entrypoints, and generated runtime output. A project is scaffolded from a
+**project template** and owns its repository root, including the canonical
+`.copier-answers.yml`.
+
+**Project template** — the Copier template (`_angee.kind: project`) that scaffolds
+a project repository: `manage.py`, `settings.yaml`, the consumer-addon namespace,
+and the web package. It owns the root. A project is *run* by a **stack**, which is
+a separate concern: a developer overlays a dev stack into a gitignored `.angee/`
+with `angee init --dev`, and a self-contained local/staging/prod instance clones
+the project in as a source. A stack rendered into the project's own root — so the
+root's `.copier-answers.yml` describes the stack, not the project — is an
+anti-pattern. The two stack layouts live in the operator's
+[Concepts](/operator/concepts#two-stack-layouts).
+
+**Host** — the application runtime a stack runs. `angee-django` is the first and
+default Host; a project *is* the Host's source. The operator is Host-agnostic — to
+it, a project is just a git Source.
 
 **Addon contract** — what an addon declares for the composer to consume (source
 models, native Strawberry GraphQL classes, routes, slots, resources). Contracts
