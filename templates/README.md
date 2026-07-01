@@ -62,9 +62,10 @@ example later by adding a source onto `angee-django/examples` and enabling it in
 
 > **Status.** The `local` template now *is* this shape: a thin `kind: stack` that
 > chains `projects/web` and runs the framework from the `ghcr.io/ang-ee/django-angee`
-> runtime image on `pgvector/pgvector:pg17`. The one-command render below needs the
-> operator's template-chain resolver, still landing in `ang-ee/angee-operator`; until
-> it ships, render the host then the stack in two copier steps.
+> runtime image on `pgvector/pgvector:pg17`. The one-command render uses the operator's
+> template-chain resolver (`ang-ee/angee-operator#39`); once that lands in a released
+> operator, `angee stack init` renders host + overlay in one step. Until that release,
+> use the two-copier-step render below.
 
 ## Run a local stack
 

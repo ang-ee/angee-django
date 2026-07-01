@@ -41,13 +41,12 @@ _angee:
     framework is a dependency baked into the runtime image, not a cloned source.
     This is how you run your own Angee app locally on a real Postgres database.
   # Chain the project template first so the stack overlays a real host, then this
-  # template adds only the stack overlay (angee.yaml, .gitignore). In-repo relative
-  # ref; downstream this pins as
-  # github.com/ang-ee/angee-django//templates/projects/web?ref=<tag>. Rendered by
-  # the operator's chain resolver; until that ships, render the two templates with
-  # copier in sequence into one root (projects/web first, then stacks/local).
+  # template adds only the stack overlay (angee.yaml, .gitignore). The ref is
+  # relative to THIS template's directory (the operator's chain resolver joins it
+  # against the stack template dir); downstream this can instead pin a remote ref,
+  # e.g. github.com/ang-ee/angee-django//templates/projects/web?ref=<tag>.
   chain:
-    - template: ./templates/projects/web
+    - template: ../../projects/web
       inputs:
         project_name: "{{ instance_name }}"
         web_path: "{{ web_path }}"
