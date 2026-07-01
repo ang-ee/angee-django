@@ -61,10 +61,13 @@ example later by adding a source onto `angee-django/examples` and enabling it in
 `INSTALLED_APPS`.
 
 > **Status.** The `local` template now *is* this shape: a thin `kind: stack` that
-> chains `projects/web` and runs the framework from the `ghcr.io/ang-ee/django-angee`
-> runtime image on `pgvector/pgvector:pg17`. The one-command render uses the operator's
-> template-chain resolver (`ang-ee/angee-operator#39`); once that lands in a released
-> operator, `angee stack init` renders host + overlay in one step. Until that release,
+> chains `projects/web`, runs the framework from the `ghcr.io/ang-ee/django-angee`
+> runtime image on `pgvector/pgvector:pg17`, bootstraps a generated `admin` user,
+> and runs Vite from the matching `ghcr.io/ang-ee/angee-web` image. The one-command
+> render uses the operator's template-chain resolver (`ang-ee/angee-operator#39`);
+> once that lands in a released operator, `angee stack init` renders host + overlay
+> in one step. The web image rebuild depends on the published `hatch-angee` release
+> that ships addon `web/schema/` directories. Until those releases are available,
 > use the two-copier-step render below.
 
 ## Run a local stack
