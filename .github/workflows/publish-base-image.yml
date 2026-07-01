@@ -51,7 +51,9 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=edge,branch=main
-            type=raw,value=latest,enable=${{ github.event_name == 'release' }}
+            # :latest tracks the default branch so the quickstart (stacks/local
+            # defaults to :latest) resolves without needing a tagged release.
+            type=raw,value=latest,enable={{is_default_branch}}
 
       - uses: docker/build-push-action@v6
         with:
@@ -60,6 +62,10 @@ jobs:
           target: final
           platforms: linux/amd64,linux/arm64
           push: true
+          # No provenance/SBOM attestations — they push extra manifests to ghcr
+          # (more surface for a 403) and the base image doesn't need them.
+          provenance: false
+          sbom: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
