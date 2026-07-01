@@ -83,6 +83,11 @@ base_image:
   default: "ghcr.io/ang-ee/django-angee:latest"
   help: Framework runtime image (code + deps + psycopg) the django service runs.
 
+web_image:
+  type: str
+  default: "ghcr.io/ang-ee/angee-web:latest"
+  help: Framework JS runtime image (node + the @angee/* pnpm workspace) the vite service runs.
+
 operator_port:
   type: int
   default: 9000

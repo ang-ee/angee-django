@@ -115,21 +115,30 @@ services:
     ports:
       - "{{ django_port }}:8000"
 
-  # Vite frontend. Reaches the backend container by service name on the compose
-  # network; the fresh checkout has no node_modules, so pnpm installs cleanly for Linux.
+  # Vite frontend on the framework's JS runtime image (node + the @angee/* packages,
+  # copied from the django-angee wheel, as a pnpm workspace). The project mounts INTO
+  # the workspace as a member, so its `@angee/*: workspace:*` deps link to the baked
+  # packages — one hoisted node_modules → a single React — with no registry. codegen's
+  # `../runtime` resolves because the whole project (web/ + runtime/) mounts together.
   vite:
     runtime: container
-    image: node:22-slim
+    image: {{ web_image }}
     mounts:
-      - source://app:/app
-    workdir: /app/{{ web_path }}
+      - source://app:/opt/angee-web/project
+    workdir: /opt/angee-web/project/{{ web_path }}
     env:
       ANGEE_DJANGO_URL: "http://django:8000"
       ANGEE_UI_PORT: "5173"
     command:
       - sh
       - "-c"
-      - corepack enable; pnpm install; pnpm codegen; exec pnpm dev --host 0.0.0.0 --port 5173
+      - >-
+        cd /opt/angee-web
+        && printf 'packages:\n  - "packages/*"\n  - "project/{{ web_path }}"\n' > pnpm-workspace.yaml
+        && pnpm install
+        && cd project/{{ web_path }}
+        && pnpm codegen
+        && exec pnpm dev --host 0.0.0.0 --port 5173
     after: [django]
     ports:
       - "{{ ui_port }}:5173"
