@@ -1,0 +1,5 @@
+# The base image only bakes deps (COPY pyproject.toml uv.lock); keep the build
+# context tiny so `docker build` doesn't ship the monorepo, node_modules, or state.
+*
+!pyproject.toml
+!uv.lock

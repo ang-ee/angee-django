@@ -1,0 +1,56 @@
+# A containerized dev stack for the notes-angee example — the M1 reference.
+#
+# Django + Vite run in containers over ghcr.io/ang-ee/django-angee-base, with the
+# worktree bind-mounted at /app (deps baked in the image, code live). This is the
+# shape the operator's `stacks/dev` container variant generates from angee.yaml;
+# here it is a hand-written reference you can `docker compose up` directly to
+# validate the base image + mount pattern end-to-end. SQLite for now — psycopg /
+# pgvector land with the Postgres opt-in (see the operator's
+# operator-backup-restore + local-platform-instance proposals).
+#
+#   docker compose -f docker/dev/docker-compose.yml up --build
+#   # app  → http://localhost:8000   vite → http://localhost:5173
+
+name: angee-dev
+
+services:
+  app:
+    image: ghcr.io/ang-ee/django-angee-base:dev
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: final
+      ssh: ["default"] # clone the ang-ee strawberry forks pinned in uv.lock
+    # tini is the image ENTRYPOINT; supply the dev startup as the command.
+    command: ["bash", "/app/docker/dev/app-entrypoint.sh"]
+    environment:
+      ANGEE_PROJECT_DIR: /app/examples/notes-angee
+      ANGEE_DJANGO_PORT: "8000"
+      # A named volume mounts root-owned but the container runs as uid 1000, so
+      # keep uv's cache on the (user-writable) container tmpfs. Fast enough; deps
+      # are already baked into the image's venv.
+      UV_CACHE_DIR: /tmp/uv-cache
+    volumes:
+      - ../..:/app
+    ports:
+      - "8000:8000"
+    networks: [angee-dev]
+
+  vite:
+    image: node:22-slim
+    init: true
+    command: ["bash", "/app/docker/dev/vite-entrypoint.sh"]
+    environment:
+      ANGEE_WEB_DIR: /app/examples/notes-angee/web
+      ANGEE_DJANGO_URL: http://app:8000
+      ANGEE_UI_PORT: "5173"
+    volumes:
+      - ../..:/app
+    ports:
+      - "5173:5173"
+    depends_on: [app]
+    networks: [angee-dev]
+
+networks:
+  angee-dev:
+    driver: bridge
