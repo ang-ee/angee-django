@@ -10,15 +10,11 @@ _message_after_copy: |
   Local Angee instance rendered — the root folder IS the stack and a git-controlled
   project (ANGEE_ROOT=.). Postgres + Django (framework image) + Vite.
 
-  1. Emit the runtime artifact once and commit it. A local instance is a real
-     deployment, so runtime/ is the pinned artifact you deploy and review — the
-     bring-up does NOT regenerate it. With the framework available:
-       python manage.py angee build
-       python manage.py makemigrations
-       git add runtime && git commit -m "chore: build runtime"
-  2. Bring it up (Postgres + Django + Vite under docker-compose):
+  1. Bring it up (Postgres + Django + Vite under docker-compose). First start
+     emits runtime/, creates migrations, writes GraphQL schemas, migrates, syncs
+     permissions, loads install resources, and bootstraps the admin user:
        angee up
-  3. Point the CLI at the local operator — add to your ~/.profile:
+  2. Point the CLI at the local operator — add to your ~/.profile:
        export ANGEE_OPERATOR_URL=http://127.0.0.1:{{ operator_port }}
 
   Backend:  http://localhost:{{ django_port }}
@@ -62,11 +58,12 @@ instance_name:
   help: Machine name of the instance; also the chained project's name.
 
 # Directory + import namespace for this project's own consumer addons (addons/<ns>/,
-# referenced in INSTALLED_APPS as <ns>.<app>). Must be a valid Python identifier;
-# defaults to the instance name with hyphens folded to underscores.
+# referenced in INSTALLED_APPS as <ns>.<app>). Must be a valid Python identifier.
+# Copier-go does not evaluate Jinja defaults before chain-input substitution, so
+# keep this concrete; override it alongside `instance_name` for custom projects.
 addon_namespace:
   type: str
-  default: "{{ instance_name | replace('-', '_') }}"
+  default: angee_local
   help: Import namespace for this project's consumer addons; a valid Python identifier.
 
 # Path of the web (Vite) package relative to the project root; matches the chained

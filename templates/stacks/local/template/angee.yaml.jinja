@@ -82,8 +82,8 @@ services:
   # angee-django backend on the framework runtime image (framework code + deps +
   # psycopg baked in). The project mounts at /app OVER the image's own /app workdir;
   # the framework lives off /app in the image, so `import angee.*` still resolves from
-  # the baked venv. Waits for Postgres, migrates the committed runtime, syncs REBAC,
-  # then serves. No `angee build` — runtime/ is a committed artifact.
+  # the baked venv. The local quickstart owns first-run runtime emission so
+  # `stack init && up` is enough for a loginable app.
   django:
     runtime: container
     image: {{ base_image }}
@@ -115,7 +115,10 @@ services:
         [ "$$n" -ge 60 ] && { echo 'postgres not reachable after 60s:' >&2; cat /tmp/pgwait.err >&2; exit 1; };
         echo "waiting for postgres ($$n/60)..."; sleep 1;
         done
+        && python manage.py angee build
+        && python manage.py makemigrations
         && python manage.py migrate --noinput
+        && python manage.py schema
         && python manage.py rebac sync --yes
         && python manage.py resources load
         && python manage.py bootstrap_admin
@@ -145,6 +148,12 @@ services:
         cd /opt/angee-web
         && printf 'packages:\n  - "packages/*"\n  - "project/{{ web_path }}"\n' > pnpm-workspace.yaml
         && pnpm install
+        && n=0
+        && until [ -s project/runtime/schemas/console.graphql ] && [ -s project/runtime/schemas/public.graphql ]; do
+        n=$$((n+1));
+        [ "$$n" -ge 120 ] && { echo 'runtime GraphQL schemas not ready after 120s' >&2; ls -R project/runtime >&2 || true; exit 1; };
+        echo "waiting for runtime GraphQL schemas ($$n/120)..."; sleep 1;
+        done
         && cd project/{{ web_path }}
         && pnpm codegen
         && exec pnpm dev --host 0.0.0.0 --port 5173
