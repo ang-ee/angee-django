@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatch-angee>=0.1.1"]
+requires = ["hatch-angee>=0.1.3"]
 build-backend = "hatch_angee.build"
 
 [project]

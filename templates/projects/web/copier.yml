@@ -34,41 +34,12 @@ web_path:
   default: "web"
   help: Path of the web package relative to the project root (matches the dev stack's web_path).
 
-# Relative path FROM the rendered web package TO the framework's tsconfig.base.json.
-# A downstream project consumes angee-django as a sibling checkout (the same model
-# as the dev stack's framework_path), so the base config is reached relatively.
-# The web tsconfig extends this and then declares its OWN project-relative
-# `@angee/gql/*` paths (TS `paths` fully override, they do not merge), so the
-# project resolves its own runtime/gql regardless of the fixture path the base
-# carries.
-framework_tsconfig_base:
-  type: str
-  default: "../../angee-django/tsconfig.base.json"
-  help: Relative path from the web package to angee-django's tsconfig.base.json (sibling-checkout layout by default).
-
-# Relative path FROM the rendered web package TO angee-django's `vitest.shared`
-# module (the framework owner of the web Vitest defaults — refine aliases, the
-# DOM-deps inline list, the test globs, and `gqlAliasFor`). The rendered config
-# imports `defineAngeeWebVitestConfig` + `gqlAliasFor` from here and supplies its
-# OWN project-relative gql alias, so the framework stays the single source of
-# truth for the defaults. Same sibling-checkout layout as framework_tsconfig_base.
-framework_vitest_shared:
-  type: str
-  default: "../../angee-django/vitest.shared"
-  help: Relative module path from the web package to angee-django's vitest.shared (sibling-checkout layout by default).
-
-# Relative path FROM the rendered web package TO angee-django's `vite.shared`
-# module (the framework owner of the web Vite build defaults — the react +
-# tailwind plugin pair, the dev-server host/port/proxy map, and the
-# project-derived optimizeDeps set). The rendered config imports
-# `defineAngeeWebViteConfig` from here and supplies its OWN prebundle posture and
-# project-relative gql path. Same sibling-checkout layout as
-# framework_vitest_shared — note the one-character difference (`vite.shared` vs
-# `vitest.shared`); they are distinct modules.
-framework_vite_shared:
-  type: str
-  default: "../../angee-django/vite.shared"
-  help: Relative module path from the web package to angee-django's vite.shared, the web build-config owner (sibling-checkout layout by default; distinct from vitest.shared).
+# The rendered web package reaches the framework's build-config (Vite, Vitest,
+# and the tsconfig base) by PACKAGE NAME — `@angee/app/vite`, `@angee/app/vitest`,
+# `@angee/app/tsconfig.base.json` — not a sibling path. `@angee/app` is a
+# dependency of the web package, so those exports resolve the same way whether the
+# framework is an editable checkout or an installed wheel. That is why this
+# template no longer takes any `framework_*` path input.
 
 # React major used for the @types/react* devDependencies. Kept as one input so the
 # rendered manifest pins a single React line.

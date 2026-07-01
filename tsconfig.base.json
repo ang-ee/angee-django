@@ -9,11 +9,12 @@
     // resolve through it).
     //
     // A downstream/own project does NOT inherit this fixture path: its own web
-    // `tsconfig.json` declares its project-relative `@angee/gql/*` ->
-    // `../runtime/gql/*` (TS `paths` fully override, they do not merge), which
-    // shadows this fixture for that project. See
-    // `examples/notes-angee/web/tsconfig.json` for the canonical example of a
-    // project supplying its own resolution.
+    // `tsconfig.json` inlines the same compiler contract and declares its
+    // project-relative `@angee/gql/*` -> `../runtime/gql/*`. It cannot `extends`
+    // this base by the `@angee/app/...` package specifier: TypeScript resolves a
+    // package-name `extends`, but Vite's oxc tsconfig loader (used by `vite` and
+    // `vitest`) does not. See `examples/notes-angee/web/tsconfig.json` and the
+    // `templates/projects/web` scaffold.
     "paths": {
       "@angee/gql/*": ["./examples/notes-angee/runtime/gql/*"]
     },

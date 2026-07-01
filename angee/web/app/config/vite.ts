@@ -6,17 +6,19 @@ import { defineConfig, mergeConfig, type UserConfig } from "vite";
 
 // The framework owner of the web Vite defaults: the plugin pair, the dev-server
 // host/port/proxy wiring, the `@angee/gql/<schema>` alias, and the
-// project-derived `optimizeDeps` set. A project's `web/vite.config.ts` calls
-// `defineAngeeWebViteConfig` and supplies only the two project facts the
-// framework cannot know (its prebundle posture and its own `runtime/gql/` path),
-// so the proxy map and plugin choices live once, here, and never drift across
-// the example and the downstream template.
+// project-derived `optimizeDeps` set. A project's `web/vite.config.ts` imports
+// `@angee/app/vite`, calls `defineAngeeWebViteConfig`, and supplies only the two
+// project facts the framework cannot know (its prebundle posture and its own
+// `runtime/gql/` path), so the proxy map and plugin choices live once, here, and
+// never drift across the example and the downstream template. Shipping this in
+// `@angee/app` (not a repo-root file) is what lets a project reach it by package
+// name whether the framework is an editable checkout or an installed wheel.
 //
 // This module is loaded by Node as a Vite config and therefore imports ONLY the
 // Node-side build plugins and node builtins — never `react`/`react-dom` or any
 // `.tsx`, which would pull the browser runtime into the config graph. The
 // `@angee/gql` alias is inlined (two lines) rather than imported from
-// `vitest.shared.ts`, whose top-level `require.resolve` side effect has no place
+// `@angee/app/vitest`, whose top-level `require.resolve` side effect has no place
 // in the Vite build path.
 
 const django = process.env.ANGEE_DJANGO_URL ?? "http://127.0.0.1:8000";
