@@ -1,0 +1,31 @@
+{
+  "name": "@angee-example/notes-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.tsx"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@angee/agents": "workspace:*",
+    "@angee/app": "workspace:*",
+    "@angee/ui": "workspace:*",
+    "date-fns": "^4.1.0",
+    "lucide-react": "^1.21.0"
+  },
+  "peerDependencies": {
+    "@tanstack/react-router": "^1",
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "devDependencies": {
+    "@tanstack/react-router": "^1.170.16",
+    "@types/react": "^19.2.17",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "typescript": "^6.0.3"
+  }
+}

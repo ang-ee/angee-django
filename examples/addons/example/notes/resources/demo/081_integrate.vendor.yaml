@@ -1,0 +1,4 @@
+# A vendor for the local template source — the local backend has no real git host.
+- xref: vendor_local
+  slug: local
+  display_name: Local

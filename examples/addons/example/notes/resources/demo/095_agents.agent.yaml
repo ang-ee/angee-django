@@ -1,0 +1,47 @@
+# Two ready-to-provision demo agents over the Anthropic provider owned by
+# agents_integrate_anthropic. One row targets each agent runtime (`runtime_class`), so the
+# demo shows both the claude-code and opencode runtimes end to end. Each is wired to its
+# runtime's model handle and the shared agent-default workspace template. After a fresh seed:
+#   1. connect a usable Anthropic credential (Providers page), then on each agent set its
+#      `inference_credential` (Agents page) to override the Anthropic addon's placeholder,
+#   2. click Provision on the agent and watch the workspace + service come up.
+# Until a usable credential is set, provisioning is refused (the placeholder carries no
+# secret) rather than bringing up an agent that can't authenticate.
+#
+# The runtime — not the provider — owns how a credential becomes container env, because
+# the same token feeds different runtimes differently: claude-code accepts an Anthropic
+# OAuth (Personal Plans) token *or* an API key, while opencode uses an API-key credential
+# by default (it refuses an OAuth-only one up front). OpenCode's OAuth path is opt-in and
+# off by default — it needs a community auth plugin in the opencode image and using a
+# Pro/Max token there is against Anthropic's terms (see ANGEE_OPENCODE_OAUTH_ENABLED).
+#
+# Uses the nested `_meta`/`rows` form because Agent has a `model` field, which collides
+# with the flat format's reserved `model` (Django-model) key.
+_meta:
+  model: agents.Agent
+rows:
+  - _xref: agent_demo
+    fields:
+      name: Demo Agent
+      owner: iam.user_admin
+      instructions: |
+        You are a helpful coding agent working in /workspace. Keep changes small and
+        explain what you did.
+      model: agents_integrate_anthropic.model_claude_demo
+      workspace_template: notes.tpl_agent_default
+      runtime_class: claude_code
+      mcp_servers:
+        - agents.mcp_angee
+  # The opencode counterpart. No `mcp_servers`: the agent-default workspace writes a
+  # `.mcp.json` (claude-code's format), which opencode does not read — wiring the platform
+  # MCP server into opencode means emitting its own config, a separate follow-up.
+  - _xref: agent_demo_opencode
+    fields:
+      name: Demo Agent (OpenCode)
+      owner: iam.user_admin
+      instructions: |
+        You are a helpful coding agent working in /workspace. Keep changes small and
+        explain what you did.
+      model: agents_integrate_anthropic.model_opencode_demo
+      workspace_template: notes.tpl_agent_default
+      runtime_class: opencode

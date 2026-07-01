@@ -1,0 +1,1 @@
+"""Notes example addon."""

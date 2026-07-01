@@ -1,0 +1,7 @@
+# The template source: the repo's templates/ dir. A source sync (the console Refresh
+# action, or the integrate scheduler) walks it via the local backend and upserts
+# integrate.Template rows (agent-default, claude-code, opencode) that agents reference.
+- xref: source_local_templates
+  repository: notes.repo_local_templates
+  kind: template
+  path: templates

@@ -1,0 +1,9 @@
+# Demonstrates the install-resource mechanism: a consumer/integration addon adds
+# its own row to the integrate.Vendor catalogue (model inferred from the
+# `integrate.vendor` filename). Adopted by slug so it links an existing row
+# instead of duplicating; this is how a new integration registers its vendor.
+- xref: acme
+  slug: acme
+  display_name: Acme Integrations
+  website_url: https://acme.example.com
+  description: Example vendor contributed by the notes consumer addon at install time.

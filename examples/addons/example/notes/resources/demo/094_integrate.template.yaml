@@ -1,0 +1,20 @@
+# The agent-default workspace + service templates, pre-materialised so demo agents can
+# reference them before a source sync runs. Keyed by (source, path)
+# to exactly match what the local-templates source (085) discovers, so a later Refresh
+# upserts these rows instead of duplicating them. `name`/`kind` mirror each template's
+# copier.yml `_angee` (the daemon resolves its render target by name + kind).
+- xref: tpl_agent_default
+  source: notes.source_local_templates
+  kind: workspace
+  name: agent-default
+  path: templates/workspaces/agent-default
+- xref: tpl_claude_code
+  source: notes.source_local_templates
+  kind: service
+  name: claude-code
+  path: templates/services/claude-code
+- xref: tpl_opencode
+  source: notes.source_local_templates
+  kind: service
+  name: opencode
+  path: templates/services/opencode

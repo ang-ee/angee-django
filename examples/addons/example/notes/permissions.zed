@@ -1,0 +1,33 @@
+// Authorization schema for the notes addon.
+// @rebac_package: notes
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 2
+
+definition notes/note {
+    relation owner: auth/user // rebac:field=created_by
+    relation editor: auth/user | auth/group#member
+    relation reader: auth/user | auth/group#member
+
+    // Universal-admin reach without a per-note grant. Every note points at the
+    // platform admin role via a const-backed relation (synthetic — no stored
+    // tuple, no column), so `admin->member` resolves the actor's membership in
+    // angee/role:admin. One role membership covers every note, the way GCP IAM's
+    // admin-at-a-scope covers every resource under it.
+    relation admin: angee/role // rebac:const=admin
+
+    // Any signed-in principal may create a note (which they then own, via the
+    // created_by-backed owner relation) — a built-in actor term, so `check_new`
+    // authorises it with no relationship overlay and no elevation. The MCP tool
+    // additionally requires a user actor so the row is attributable.
+    permission create = authenticated
+    permission read   = owner + editor + reader + admin->member
+    permission write  = owner + editor + admin->member
+    permission delete = owner + admin->member
+
+    // Owners alone see the personal flags; readers get the rest of the note.
+    permission read__is_starred  = owner
+    permission read__reminder_at = owner
+
+    // Status transitions are an editorial action.
+    permission write__status = owner + editor + admin->member
+}

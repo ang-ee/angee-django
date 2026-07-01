@@ -1,0 +1,11 @@
+# The local-template VCS bridge. `config.local_root` is resolved against BASE_DIR by
+# LocalVCSBackend; "../.." is the repo root, where templates/ lives.
+- xref: vcs_local_templates
+  owner: iam.user_admin
+  vendor: notes.vendor_local
+  backend_class: local
+  credential: notes.cred_local_templates
+  status: active
+  config:
+    local_root: "../.."
+    local_name: angee-django
