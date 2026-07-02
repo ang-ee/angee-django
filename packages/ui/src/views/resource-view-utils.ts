@@ -635,18 +635,21 @@ export function filterOperatorLabel(
     case "inList":
       return "is one of";
     case "isNull":
-      return "is";
+      return "is empty";
     case "isNotNull":
       return "is not empty";
-    case "contains":
     case "iContains":
       return "contains";
-    case "startsWith":
+    case "contains":
+      return "contains (case-sensitive)";
     case "iStartsWith":
       return "starts with";
-    case "endsWith":
+    case "startsWith":
+      return "starts with (case-sensitive)";
     case "iEndsWith":
       return "ends with";
+    case "endsWith":
+      return "ends with (case-sensitive)";
     case "gt":
       return ">";
     case "gte":

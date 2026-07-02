@@ -28,12 +28,15 @@ export const ANGEE_FILTER_LOOKUP_OPERATORS = [
 export type AngeeFilterLookupOperator =
   (typeof ANGEE_FILTER_LOOKUP_OPERATORS)[number];
 
+// The offered text vocabulary — every entry must round-trip the FULL wire
+// stack (refine provider encoding AND the backend lookup registry). The
+// case-sensitive startsWith/endsWith variants ride the provider's `_similar`
+// encoding, which the backend deliberately leaves unmapped, so they are not
+// offered (the codec still maps them for URL-supplied filters).
 export const ANGEE_TEXT_FILTER_LOOKUP_OPERATORS = [
   "contains",
   "iContains",
-  "startsWith",
   "iStartsWith",
-  "endsWith",
   "iEndsWith",
   "isNull",
 ] as const satisfies readonly AngeeFilterLookupOperator[];

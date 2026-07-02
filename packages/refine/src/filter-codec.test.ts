@@ -128,12 +128,12 @@ describe("refine/Hasura filter codec", () => {
       "lt",
       "lte",
     ]);
+    // The case-sensitive startsWith/endsWith variants ride the provider's
+    // `_similar` encoding, which the backend leaves unmapped — not offered.
     expect(ANGEE_TEXT_FILTER_LOOKUP_OPERATORS).toEqual([
       "contains",
       "iContains",
-      "startsWith",
       "iStartsWith",
-      "endsWith",
       "iEndsWith",
       "isNull",
     ]);
