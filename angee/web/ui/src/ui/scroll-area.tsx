@@ -19,7 +19,7 @@ export const scrollAreaVariants = tv({
     scrollbar:
       "absolute flex touch-none select-none p-0.5 opacity-0 transition-opacity data-[hovering]:opacity-100 data-[scrolling]:opacity-100 data-[orientation=vertical]:right-0 data-[orientation=vertical]:top-0 data-[orientation=vertical]:h-full data-[orientation=vertical]:w-2.5 data-[orientation=horizontal]:bottom-0 data-[orientation=horizontal]:left-0 data-[orientation=horizontal]:h-2.5 data-[orientation=horizontal]:w-full",
     thumb:
-      "flex-1 rounded-full bg-border-strong transition-colors hover:bg-fg-muted",
+      "flex-1 rounded-full bg-scrollbar-thumb transition-colors hover:bg-scrollbar-thumb-hover",
     corner: "bg-transparent",
   },
 });

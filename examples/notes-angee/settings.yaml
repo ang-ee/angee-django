@@ -26,6 +26,8 @@ INSTALLED_APPS:
   - angee.storage
   - example.notes
 
+  - angee.knowledge_graph_pgvector
+  - angee.platform_integrate_operator
 ANGEE_ADDON_DIRS:
   - "{BASE_DIR}/addons"
 ANGEE_RUNTIME_DIR: "{BASE_DIR}/runtime"
