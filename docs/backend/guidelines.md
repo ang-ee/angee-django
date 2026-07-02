@@ -382,6 +382,7 @@ data through REBAC, never a queryset bypass.
 
 Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 
+- **State columns are `StateField`; guarded changes go through transition methods, never direct assignment.**
 - **`hasura_model_resource` create `full_clean`s the input, so model + input defaults must agree.**
   The Hasura model-resource create path builds a dummy instance from the input and calls
   `full_clean()` before saving — two traps follow. (1) A `JSONField(default=dict)`
