@@ -66,7 +66,7 @@ export function ConsoleLayout({
               <BreadcrumbLabelProvider>
                 <div
                   className={cn(
-                    "console-grid h-screen w-screen bg-canvas text-fg",
+                    "console-grid min-h-screen w-screen bg-canvas text-fg",
                     className,
                   )}
                 >
@@ -98,7 +98,10 @@ export function ConsoleLayout({
                     {children}
                   </ConsoleWorkbench>
                   {/* Optional statusline; the row collapses while this host is empty. */}
-                  <div ref={setStatusHost} className="area-status" />
+                  <div
+                    ref={setStatusHost}
+                    className="area-status console-statusline-host"
+                  />
                 </div>
                 {/* Drawers live at shell level (above the grid + router outlet) so
                     the open drawer's content mounts once and survives navigation.
@@ -149,14 +152,14 @@ function ConsoleWorkbench({
     <Workbench
       className="area-content"
       autoSave="console.workbench"
+      scrollMode="browser"
       primary={primary}
       secondary={showChatter ? <Chatter /> : undefined}
       onPrimaryController={onPrimaryController}
       onSecondaryController={registerSecondaryController}
     >
-      {/* The content `main` landmark owns the scroll boundary; a full-height page
-          (e.g. a nested Workbench) fills it without scrolling. */}
-      <main className="h-full min-h-0 overflow-auto">{children}</main>
+      {/* The browser owns route scrolling; the statusline remains pinned chrome. */}
+      <main className="console-browser-scroll-main">{children}</main>
     </Workbench>
   );
 }

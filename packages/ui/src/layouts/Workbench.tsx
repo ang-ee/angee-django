@@ -43,6 +43,8 @@ export interface WorkbenchProps {
   onPrimaryController?: (controller: CollapsiblePane | null) => void;
   /** Receives the secondary pane's collapse controller (or null on unmount). */
   onSecondaryController?: (controller: CollapsiblePane | null) => void;
+  /** Whether the content pane is clipped by the workbench or allowed to grow the document. */
+  scrollMode?: "contained" | "browser";
   className?: string;
 }
 
@@ -69,10 +71,12 @@ export function Workbench({
   secondarySize = 26,
   onPrimaryController,
   onSecondaryController,
+  scrollMode = "contained",
   className,
 }: WorkbenchProps): React.ReactElement {
   const hasPrimary = primary != null;
   const hasSecondary = secondary != null;
+  const browserScroll = scrollMode === "browser";
 
   // Controllers stay inert when their pane is not rendered (their imperative
   // handles simply never mount).
@@ -84,7 +88,16 @@ export function Workbench({
   // No panes → a plain content frame, no resize machinery (Explorer's pattern).
   if (!hasPrimary && !hasSecondary) {
     return (
-      <div className={cn("h-full min-h-0 min-w-0", className)}>{children}</div>
+      <div
+        className={cn(
+          browserScroll
+            ? "min-h-0 min-w-0 overflow-visible"
+            : "h-full min-h-0 min-w-0",
+          className,
+        )}
+      >
+        {children}
+      </div>
     );
   }
 
@@ -102,7 +115,10 @@ export function Workbench({
       direction="horizontal"
       autoSave={autoSave}
       panelIds={panelIds}
-      className={cn("h-full min-h-0", className)}
+      className={cn(
+        browserScroll ? "h-auto min-h-0 overflow-visible" : "h-full min-h-0",
+        className,
+      )}
     >
       {hasPrimary ? (
         <>
@@ -120,7 +136,13 @@ export function Workbench({
           <SplitPaneHandle />
         </>
       ) : null}
-      <SplitPane id="content" className="min-h-0 min-w-0 bg-canvas">
+      <SplitPane
+        id="content"
+        className={cn(
+          "min-h-0 min-w-0 bg-canvas",
+          browserScroll && "overflow-visible",
+        )}
+      >
         {children}
       </SplitPane>
       {hasSecondary ? (

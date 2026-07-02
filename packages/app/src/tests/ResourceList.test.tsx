@@ -148,6 +148,7 @@ const sdkMocks = vi.hoisted(() => ({
   groupByCalls: [] as Array<GroupByRequestOptions & { enabled?: boolean }>,
   listCalls: [] as ResourceListOptions[],
   mutate: vi.fn(async ({ data }: { data: Row }) => data),
+  fetching: false,
 }));
 
 vi.mock("@angee/ui/runtime", async (importOriginal) => {
@@ -261,7 +262,7 @@ vi.mock("@refinedev/core", async (importOriginal) => {
       return {
         result: { data: rows, total: active ? matchingRows.length : undefined },
         query: {
-          isFetching: false,
+          isFetching: sdkMocks.fetching,
           error: null,
           refetch: vi.fn(),
         },
@@ -746,7 +747,7 @@ vi.mock("@angee/ui/data/hooks", async (importOriginal) => {
         count: 0,
         totalCount: 0,
         buckets: [],
-        fetching: false,
+        fetching: sdkMocks.fetching,
         error: null,
         refetch: vi.fn(),
       };
@@ -766,7 +767,7 @@ vi.mock("@angee/ui/data/hooks", async (importOriginal) => {
       count: visibleBuckets.reduce((total, bucket) => total + bucket.count, 0),
       totalCount: buckets.length,
       buckets: visibleBuckets,
-      fetching: false,
+      fetching: sdkMocks.fetching,
       error: null,
       refetch: vi.fn(),
     };
@@ -788,7 +789,7 @@ vi.mock("@angee/ui/data/hooks", async (importOriginal) => {
         page * scope.pageSize,
       ),
       total: matchingRows.length,
-      fetching: false,
+      fetching: sdkMocks.fetching,
       error: null,
     };
   }
@@ -1111,6 +1112,7 @@ describe("ResourceList", () => {
       await nextTask();
     });
     sdkMocks.listCalls.length = 0;
+    sdkMocks.fetching = false;
   });
 
   test("renders ListView with the resource toolbar and group controls", async () => {
@@ -1938,6 +1940,30 @@ describe("ResourceList", () => {
 
     fireEvent.click(cardButton);
     expect(onSelect).toHaveBeenCalledWith("note-3");
+  });
+
+  test("keeps board refresh loading out of the list footer", async () => {
+    sdkMocks.fetching = true;
+    const boardColumns = [
+      { field: "title", header: "Title" },
+      { field: "status", header: "Status" },
+      { field: "priority", header: "Priority" },
+    ] satisfies readonly ListColumn[];
+
+    render(
+      <TestUrlState searchParams="?view=board">
+        <ResourceList
+          resource="notes.Note"
+          columns={boardColumns}
+          formFields={formFields}
+        />
+      </TestUrlState>,
+    );
+
+    expect(await screen.findByRole("region", { name: "All records" }))
+      .toBeTruthy();
+    expect(screen.queryByText("Loading...")).toBeNull();
+    expect(screen.queryByText("list.loading")).toBeNull();
   });
 
   test("seeds different default groups for list and board views", async () => {

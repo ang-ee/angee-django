@@ -15,7 +15,6 @@ import { StatusDot } from "../ui/status-icon";
 import type { ResourceViewContextValue } from "./resource-view-context";
 import type { ResourceViewGroup } from "./resource-view-model";
 import {
-  LIST_VIEW_SCROLL_BUDGET,
   ListCellContent,
   ListEmpty,
   readPath,
@@ -26,12 +25,10 @@ import { columnTone } from "./page";
 import type { ColumnDescriptor } from "./page";
 import type { CardActionContext } from "./list-view-types";
 
-const BOARD_SCROLL_STYLE: React.CSSProperties = {
-  height: LIST_VIEW_SCROLL_BUDGET,
-  maxHeight: LIST_VIEW_SCROLL_BUDGET,
-};
+const BOARD_SCROLL_SURFACE_CLASS =
+  "flex items-start gap-3 p-3";
 const BOARD_CARD_SHELL_CLASS =
-  "block w-full rounded-8 text-left text-inherit outline-none focus-visible:focus-ring";
+  "block min-w-0 max-w-full rounded-8 text-left text-inherit outline-none focus-visible:focus-ring";
 
 export interface BoardViewProps<TRow extends Row = Row> {
   columns: readonly ColumnDescriptor<TRow>[];
@@ -126,10 +123,7 @@ function BoardRows<TRow extends Row>({
   // Kanban is most useful with an active group axis; with no group-by applied a single lane is shown.
   // The board renders the current page only (bounded by the page-size cap, MAX_PAGE_SIZE), grouped into lanes; no row virtualization is used here.
   return (
-    <div
-      className="flex gap-3 overflow-x-auto overflow-y-hidden p-3"
-      style={BOARD_SCROLL_STYLE}
-    >
+    <div className={BOARD_SCROLL_SURFACE_CLASS}>
       {leaves.map((group) => (
         <BoardLane
           key={group.key}
@@ -158,14 +152,13 @@ function BoardSkeleton({
   return (
     <SkeletonStatus
       label={loadingLabel}
-      className="flex gap-3 overflow-x-auto overflow-y-hidden p-3"
-      style={BOARD_SCROLL_STYLE}
+      className={BOARD_SCROLL_SURFACE_CLASS}
     >
       {Array.from({ length: Math.max(1, laneCount) }, (_, laneIndex) => (
         <section
           key={laneIndex}
           aria-hidden="true"
-          className="flex max-h-full min-h-0 w-[300px] flex-none flex-col rounded-[10px] border border-border-subtle bg-inset"
+          className="flex w-[300px] flex-none flex-col rounded-[10px] border border-border-subtle bg-inset"
         >
           <div className="sticky top-0 z-10 flex items-center gap-2 rounded-t-[10px] bg-inset px-3 pt-3 pb-2">
             <Skeleton className="size-2.5 shrink-0 rounded-full" />
@@ -176,7 +169,7 @@ function BoardSkeleton({
             />
             <Skeleton shape="text" size="sm" className="w-5" />
           </div>
-          <div className="flex min-h-0 flex-col gap-2 overflow-y-auto px-2 pb-2">
+          <div className="flex flex-col gap-2 px-2 pb-2">
             {Array.from({ length: 3 }, (_, cardIndex) => (
               <article
                 key={cardIndex}
@@ -232,7 +225,7 @@ function BoardLane<TRow extends Row>({
   return (
     <section
       aria-labelledby={headingId}
-      className="flex max-h-full min-h-0 w-[300px] flex-none flex-col rounded-[10px] border border-border-subtle bg-inset"
+      className="flex w-[300px] flex-none flex-col rounded-[10px] border border-border-subtle bg-inset"
     >
       <div className="sticky top-0 z-10 flex items-center gap-2 rounded-t-[10px] bg-inset px-3 pt-3 pb-2">
         {tone ? <StatusDot tone={tone} /> : null}
@@ -244,7 +237,7 @@ function BoardLane<TRow extends Row>({
         </h3>
         <CountBadge value={group.rows.length} />
       </div>
-      <div className="flex min-h-0 flex-col gap-2 overflow-y-auto px-2 pb-2">
+      <div className="flex flex-col gap-2 px-2 pb-2">
         {group.rows.map((row) => (
           <BoardRowCard
             key={row.id}
@@ -285,7 +278,7 @@ function BoardRowCard<TRow extends Row>({
   const href = rowHref?.(row.original);
   const actions = cardActions?.(row.original, cardActionContext);
   return (
-    <article className="grid gap-2 rounded-8 border border-border-subtle bg-sheet p-3 shadow-xs transition hover:-translate-y-0.5 hover:border-border hover:shadow-md">
+    <article className="board-card-grid grid min-w-0 gap-2 rounded-8 border border-border-subtle bg-sheet p-3 shadow-xs transition hover:-translate-y-0.5 hover:border-border hover:shadow-md">
       <BoardCardFrame
         href={href}
         onClick={onRowClick ? () => onRowClick(row.original) : undefined}
@@ -332,12 +325,12 @@ function DefaultBoardCardBody<TRow extends Row>({
       {detailColumns.map((column) => (
         <div
           key={column.field}
-          className="flex min-w-0 items-start justify-between gap-3 text-13"
+          className="board-card-detail-grid grid min-w-0 items-start gap-x-3 text-13"
         >
-          <span className="shrink-0 text-fg-muted">
+          <span className="min-w-0 truncate text-fg-muted">
             {column.header ?? column.field}
           </span>
-          <span className="min-w-0 text-right text-fg">
+          <span className="min-w-0 overflow-hidden text-right text-fg [overflow-wrap:anywhere] [&>*]:max-w-full">
             <ListCellContent column={column} row={row} />
           </span>
         </div>

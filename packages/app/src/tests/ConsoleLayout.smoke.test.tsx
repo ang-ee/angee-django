@@ -16,6 +16,7 @@ import { parseFlatSearch, stringifyFlatSearch } from "../create-app";
 import { setThemePreference, storedThemePreference } from "@angee/ui/lib/theme";
 import { ConsoleLayout } from "@angee/ui/layouts/ConsoleLayout";
 import { ControlBand } from "@angee/ui/layouts/ControlBand";
+import { Statusline, StatusSegment } from "@angee/ui/layouts/Statusline";
 import { useChatterContent } from "@angee/ui/communication/index";
 
 vi.mock("@angee/logo-react", () => ({
@@ -275,6 +276,23 @@ describe("ConsoleLayout", () => {
     // Lands in the layout's control row, not inline in the content area.
     expect(control?.contains(button)).toBe(true);
     expect(screen.getByRole("main").contains(button)).toBe(false);
+  });
+
+  test("uses browser scrolling for content and pins the statusline host", async () => {
+    const { container } = renderInRouter(
+      <ConsoleLayout>
+        <section aria-label="Page body">Tall body</section>
+        <Statusline>
+          <StatusSegment>Ready</StatusSegment>
+        </Statusline>
+      </ConsoleLayout>,
+    );
+    await screen.findByText("Tall body");
+
+    expect(screen.getByRole("main").className).toBe("console-browser-scroll-main");
+    const statusHost = container.querySelector(".area-status");
+    expect(statusHost?.className).toContain("console-statusline-host");
+    expect(statusHost?.textContent).toContain("Ready");
   });
 
   test("toggles the document theme from the top bar", async () => {
