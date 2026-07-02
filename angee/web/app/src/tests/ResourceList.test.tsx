@@ -1149,6 +1149,44 @@ describe("ResourceList", () => {
     expect(await screen.findByText("Group by")).toBeTruthy();
   });
 
+  test("scrolls toolbar chips horizontally without moving the picker trigger", async () => {
+    const activeFilter = encodeURIComponent(
+      JSON.stringify({
+        status: { exact: "ACTIVE" },
+        priority: { exact: "High" },
+      }),
+    );
+
+    render(
+      <TestUrlState searchParams={`?filter=${activeFilter}&group=updatedAt:day`}>
+        <ResourceList
+          resource="notes.Note"
+          columns={columns}
+          formFields={formFields}
+        />
+      </TestUrlState>,
+    );
+
+    await screen.findByText("Updated · Day");
+    const trigger = screen.getByRole("button", {
+      name: "Filter, group, favorites",
+    });
+    const input = screen.getByLabelText("Filter records") as HTMLInputElement;
+    const scrollableChipLane = input.closest(".scroll-x-contained");
+
+    expect(input.getAttribute("placeholder")).toBeNull();
+    expect(input.className).toContain("min-w-0");
+    expect(input.className).not.toContain("min-w-[7rem]");
+    expect(scrollableChipLane).not.toBeNull();
+    expect(scrollableChipLane?.className).toContain("scroll-x-contained");
+    expect(scrollableChipLane?.contains(trigger)).toBe(false);
+
+    fireEvent.click(trigger);
+
+    expect(await screen.findByRole("button", { name: "Add custom filter" }))
+      .toBeTruthy();
+  });
+
   test("parses List child columns and forwards props into the list renderer", async () => {
     const captured: { current: ListViewProps<Row> | null } = { current: null };
     const CapturingList: ListComponent<Row> = (props) => {
