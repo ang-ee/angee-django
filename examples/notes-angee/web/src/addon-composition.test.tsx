@@ -13,6 +13,7 @@ import parties from "@angee/parties";
 import platform from "@angee/platform";
 import resources from "@angee/resources-addon";
 import storage from "@angee/storage";
+import workflows from "@angee/workflows";
 import { describe, expect, test } from "vitest";
 
 const authAddon = defineBaseAddon({
@@ -38,6 +39,7 @@ const ADDONS = [
   agents,
   operator,
   storage,
+  workflows,
   knowledge,
   resources,
   platform,

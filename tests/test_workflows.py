@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import connection
-from rebac import system_context
+from rebac import app_settings, system_context
+from rebac.roles import grant
 
+from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows.models import (
     Edge as AbstractEdge,
 )
@@ -27,6 +31,9 @@ from angee.workflows.models import (
 from angee.workflows.models import (
     Workflow as AbstractWorkflow,
 )
+from tests.conftest import SchemaAddon, execute_schema, result_data
+
+User = get_user_model()
 
 
 class Workflow(AbstractWorkflow):
@@ -120,6 +127,14 @@ def create_entry(workflow: Workflow, *, key: str = "start", name: str = "Start")
     return Step.objects.create(workflow=workflow, key=key, name=name, is_entry=True)
 
 
+def _platform_admin(username: str) -> Any:
+    """Create a superuser holding the platform-admin role tuple."""
+
+    admin = User.objects.create_superuser(username=username, email=f"{username}@example.com", password="admin")
+    grant(actor=admin, role=app_settings.REBAC_UNIVERSAL_ADMIN_ROLE)
+    return admin
+
+
 @pytest.mark.django_db(transaction=True)
 def test_publish_requires_exactly_one_entry_step(workflow_tables: None) -> None:
     """Publishing validates that a definition has exactly one entry step."""
@@ -198,6 +213,47 @@ def test_publish_copies_draft_to_immutable_version(workflow_tables: None) -> Non
         published_step.name = "Edited"
         with pytest.raises(ValidationError, match="immutable"):
             published_step.save()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_console_can_publish_workflow(workflow_tables: None) -> None:
+    """The console exposes the workflow publish model method as an action."""
+
+    del workflow_tables
+    # Building the console schema resolves the whole runtime model family; the
+    # concrete test classes live in test_workflows_engine (function-level import
+    # because that module imports this one for the definition models).
+    importlib.import_module("tests.test_workflows_engine")
+    workflows_schema = importlib.import_module("angee.workflows.schema")
+    schema = GraphQLSchemas(
+        [
+            SchemaAddon(
+                {"console": {key: tuple(workflows_schema.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}}
+            )
+        ]
+    ).build("console")
+    with system_context(reason="test workflows graphql publish"):
+        workflow = create_workflow()
+        create_entry(workflow)
+    admin = _platform_admin("workflow-publish-admin")
+
+    result = result_data(
+        execute_schema(
+            schema,
+            """
+            mutation Publish($id: ID!) {
+              publish_workflow(workflow: $id) { ok message }
+            }
+            """,
+            {"id": workflow.sqid},
+            user=admin,
+        )
+    )["publish_workflow"]
+
+    assert result["ok"] is True
+    with system_context(reason="test workflows graphql publish result"):
+        published = Workflow.objects.get(published_from=workflow)
+    assert published.status == WorkflowStatus.PUBLISHED
 
 
 @pytest.mark.django_db(transaction=True)

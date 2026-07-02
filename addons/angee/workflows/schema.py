@@ -301,6 +301,22 @@ _DECISION_RESOURCE = hasura_model_resource(
 
 
 @strawberry.type
+class WorkflowActionMutation:
+    """Console actions for workflow definition lifecycle."""
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def publish_workflow(self, workflow: PublicID) -> ActionResult:
+        """Publish a draft workflow lineage head."""
+
+        target = resolve_action_target(Workflow, workflow, reason="workflows.graphql.publish_workflow")
+        try:
+            published = target.publish()
+        except Exception as error:  # noqa: BLE001 - domain publish failures return action results.
+            return ActionResult(ok=False, message=f"Publish failed: {error}")
+        return ActionResult(ok=True, message=f"Published workflow {published.sqid}.")
+
+
+@strawberry.type
 class DecisionMutation:
     """Public decision resolution mutation."""
 
@@ -431,6 +447,7 @@ schemas = {
             _STEP_RESOURCE.mutation,
             _EDGE_RESOURCE.mutation,
             _TRIGGER_RESOURCE.mutation,
+            WorkflowActionMutation,
             WorkflowRunActionMutation,
             TriggerActionMutation,
             DecisionMutation,

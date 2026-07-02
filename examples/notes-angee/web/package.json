@@ -23,6 +23,7 @@
     "@angee/platform": "workspace:*",
     "@angee/resources-addon": "workspace:*",
     "@angee/storage": "workspace:*",
+    "@angee/workflows": "workspace:*",
     "@angee/ui": "workspace:*",
     "@graphql-typed-document-node/core": "^3.2.0",
     "@tanstack/react-router": "^1.170.16",

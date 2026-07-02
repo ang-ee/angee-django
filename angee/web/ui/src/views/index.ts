@@ -36,6 +36,8 @@ export {
   type GraphViewNode,
   type GraphViewNodeStyle,
   type GraphViewProps,
+  type GraphViewConnection,
+  type GraphViewPosition,
 } from "./GraphView";
 export {
   DashboardView,
