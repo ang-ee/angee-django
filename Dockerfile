@@ -38,12 +38,14 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/.venv \
 # exists for). No compiler, no node (Vite is a separate image); the framework's own
 # wheels ship manylinux binaries.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libmagic1 tini ca-certificates git \
+        libmagic1 tini ca-certificates git gosu \
     && rm -rf /var/lib/apt/lists/*
 # Non-root runtime user; /app and the venv are user-owned so a mounted-source
 # `uv sync` at container start can link the editable project into /opt/.venv.
 RUN useradd --create-home --uid 1000 angee \
     && install -d -o angee -g angee /app /opt/.venv
+COPY docker/runtime-entrypoint.sh /usr/local/bin/angee-django-entrypoint
+RUN chmod +x /usr/local/bin/angee-django-entrypoint
 WORKDIR /app
 
 # --- deps: bake the dependency closure (git comes from base) --------------------
@@ -63,8 +65,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # --- final: the lean base + the baked venv (git inherited for the dev uv sync) --
 FROM base AS final
 COPY --from=deps --chown=angee:angee /opt/.venv /opt/.venv
-USER angee
-ENTRYPOINT ["tini", "--"]
+USER root
+ENTRYPOINT ["tini", "--", "/usr/local/bin/angee-django-entrypoint"]
 # The stack service supplies the concrete command; a mounted-source dev service
 # links the editable project first, e.g.:
 #   uv sync --frozen && exec uv run python manage.py runserver 0.0.0.0:8000
@@ -96,12 +98,12 @@ COPY --chown=angee:angee addons ./addons
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable --extra postgres \
     && chown -R angee:angee /opt/.venv
-USER angee
+USER root
 WORKDIR /app
 # tini reaps PID 1 for a clean `docker stop`. The stack's django service supplies
 # the concrete command (wait-for-postgres · migrate · rebac sync · runserver); the
 # venv is on PATH and runtime/ is committed, so there is no uv/angee build at start.
-ENTRYPOINT ["tini", "--"]
+ENTRYPOINT ["tini", "--", "/usr/local/bin/angee-django-entrypoint"]
 
 # --- web-src: collect every @angee/* JS package the wheel ships into one tree -----
 # The framework JS is scattered in the venv — the core libs at angee/web/*, each
