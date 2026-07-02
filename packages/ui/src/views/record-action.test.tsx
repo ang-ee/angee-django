@@ -15,8 +15,19 @@ const dataMocks = vi.hoisted(() => ({
   useActionMutation: vi.fn(),
 }));
 
-vi.mock("../data/hooks", () => ({
+vi.mock("@angee/refine", () => ({
   useActionMutation: dataMocks.useActionMutation,
+}));
+
+vi.mock("@angee/metadata", () => ({
+  refineInvalidationParams: (target: { modelLabel: string }) => ({
+    dataProviderName: "console",
+    invalidates: ["list"],
+    resource: target.modelLabel,
+  }),
+  resourceInvalidationTargets: (_metadata: unknown, modelLabels: readonly string[]) =>
+    modelLabels.map((modelLabel) => ({ modelLabel })),
+  useSchemaFieldMetadata: () => ({ schemas: {} }),
 }));
 
 describe("record action helpers", () => {
@@ -115,7 +126,15 @@ describe("record action helpers", () => {
 
     expect(dataMocks.useActionMutation).toHaveBeenCalledWith(
       "refresh_source",
-      { invalidateModels: ["agents.Skill"] },
+      {
+        invalidates: [
+          {
+            dataProviderName: "console",
+            invalidates: ["list"],
+            resource: "agents.Skill",
+          },
+        ],
+      },
     );
     expect(dataMocks.mutate).toHaveBeenCalledWith("src_1");
     expect(refresh).toHaveBeenCalledOnce();

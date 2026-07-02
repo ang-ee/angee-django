@@ -2,7 +2,7 @@ import { lazy, useMemo, useState, type ReactElement } from "react";
 
 import { Glyph } from "../chrome/Glyph";
 import { LazyBoundary } from "../fragments/LazyBoundary";
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { Skeleton } from "../ui/skeleton";
 import {
@@ -68,7 +68,7 @@ export function RelationField({
   onCreate,
   onOpenChange,
 }: RelationFieldProps): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const [open, setOpen] = useState(false);
 
   const selected = useMemo(

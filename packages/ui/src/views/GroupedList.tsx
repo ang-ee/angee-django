@@ -3,12 +3,12 @@
 // emits the per-level group headers, the expanded buckets' leaf record rows, and
 // the per-group pagers; this file only paints them (composing the same RecordRow,
 // Pager, and padding-row window the flat list uses). Imports the shared seam from
-// ./ListInternals and the surface types; must NOT import ListView (ListView depends
+// ./resource-view-list-body and the surface types; must NOT import ListView (ListView depends
 // on this module, not vice versa).
 import * as React from "react";
 import {
   type Row,
-} from "@angee/resources";
+} from "@angee/metadata";
 import {
   type Column as TableColumn,
   type ColumnDef,
@@ -20,18 +20,16 @@ import {
 } from "@angee/refine";
 import type {
   ModelMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 import { Glyph } from "../chrome/Glyph";
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
-import { titleCase } from "../lib/titleCase";
 import { CountBadge } from "../ui/badge";
 import { Pager } from "../ui/pager";
 import {
   Table,
   TableBody,
   TableCell,
-  TableFooter,
   TableHead,
   TableHeader,
   TableRow,
@@ -45,6 +43,7 @@ import {
   ListHeaderCell,
   ListLoadingFooter,
   ListSkeletonRows,
+  MeasureFooter,
   RecordRow,
   TABLE_SCROLL_STYLE,
   VirtualPaddingRow,
@@ -59,9 +58,9 @@ import {
   type GroupedRecordNav,
   type GroupMeasure,
   type VisibleFieldOption,
-} from "./ListInternals";
+} from "./resource-view-list-body";
 import type { ColumnDescriptor } from "./page";
-import type { ListEmptyContent } from "./list-view-types";
+import type { ListEmptyContent } from "./resource-view-types";
 
 function formatPagerNumber(value: number): string {
   return value.toLocaleString();
@@ -88,7 +87,7 @@ export interface GroupedListBodyProps<TRow extends Row> {
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
   onListStateChange?: (state: ResourceListSnapshot<TRow>) => void;
-  emptyMessage: ListEmptyContent;
+  emptyContent: ListEmptyContent;
   fetching: boolean;
   error: Error | null;
 }
@@ -111,11 +110,11 @@ export function GroupedListBody<TRow extends Row>({
   rowHref,
   onRowClick,
   onListStateChange,
-  emptyMessage,
+  emptyContent,
   fetching,
   error,
 }: GroupedListBodyProps<TRow>): React.ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   // Grouped mode keeps a sticky chevron column in place of the select-all box.
   const colSpan = Math.max(1, visibleColumnCount + 1);
   const measures = React.useMemo(
@@ -136,11 +135,20 @@ export function GroupedListBody<TRow extends Row>({
     listItems.length,
     (index) => estimateGroupedItemSize(listItems[index]),
   );
+  const recordNavByRowId = React.useMemo(() => {
+    const map = new Map<string, GroupedRecordNav>();
+    for (const item of listItems) {
+      if (item.kind === "record") map.set(item.row.id, item.nav);
+    }
+    return map;
+  }, [listItems]);
   const handleRecordOpen = React.useCallback(
-    (nav: GroupedRecordNav) => {
+    (row: TRow) => {
+      const nav = recordNavByRowId.get(String(row.id));
+      if (!nav) return;
       onListStateChange?.(snapshotFromNav<TRow>(nav));
     },
-    [onListStateChange],
+    [onListStateChange, recordNavByRowId],
   );
 
   return (
@@ -177,7 +185,7 @@ export function GroupedListBody<TRow extends Row>({
             ) : listItems.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={colSpan} className="py-8 text-center text-fg-muted">
-                  <ListEmpty>{emptyMessage}</ListEmpty>
+                  <ListEmpty>{emptyContent}</ListEmpty>
                 </TableCell>
               </TableRow>
             ) : (
@@ -213,10 +221,12 @@ export function GroupedListBody<TRow extends Row>({
             )}
           </TableBody>
           {measures.length > 0 && footerAggregate ? (
-            <GroupedMeasureFooter
+            <MeasureFooter
               table={table}
               measures={queryMeasures}
               aggregate={footerAggregate}
+              selectable
+              labelInSelectionColumn
             />
           ) : null}
         </Table>
@@ -264,7 +274,7 @@ function GroupedItemRow<TRow extends Row>({
   interactive: boolean;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
-  onRecordOpen: (nav: GroupedRecordNav) => void;
+  onRecordOpen: (row: TRow) => void;
   onToggleGroup: (key: string) => void;
   onPageChange: (key: string, page: number) => void;
   loadingLabel: React.ReactNode;
@@ -288,7 +298,7 @@ function GroupedItemRow<TRow extends Row>({
           interactive={interactive}
           rowHref={rowHref}
           onRowClick={onRowClick}
-          onRecordOpen={() => onRecordOpen(item.nav)}
+          onRecordOpen={onRecordOpen}
         />
       );
     case "pager":
@@ -441,43 +451,6 @@ function GroupedStatusRow<TRow extends Row>({
         {item.message}
       </TableCell>
     </TableRow>
-  );
-}
-
-function GroupedMeasureFooter<TRow extends Row>({
-  table,
-  measures,
-  aggregate,
-}: {
-  table: TableModel<TRow>;
-  measures: readonly GroupMeasure[];
-  aggregate: AggregateBucket;
-}): React.ReactElement {
-  const byColumn = new Map(measures.map((measure) => [measure.columnId, measure]));
-  return (
-    <TableFooter>
-      <TableRow>
-        <TableCell className="w-8 text-fg-muted">{titleCase("total")}</TableCell>
-        {table.getVisibleLeafColumns().map((column) => {
-          const measure = byColumn.get(column.id);
-          const value = measure ? measureValue(aggregate, measure) : undefined;
-          const formatted = measure && value != null ? formatMeasure(value, measure) : "";
-          return (
-            <TableCell
-              key={column.id}
-              className={ALIGN_CLASS[alignOf(column.columnDef)]}
-              aria-label={
-                measure
-                  ? `Total ${measure.label}${formatted ? `: ${formatted}` : ""}`
-                  : undefined
-              }
-            >
-              {formatted}
-            </TableCell>
-          );
-        })}
-      </TableRow>
-    </TableFooter>
   );
 }
 

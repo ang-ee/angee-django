@@ -14,10 +14,14 @@ import {
   sessionAuth,
   type AuthFetch,
 } from "./transport-auth";
+import {
+  operationName,
+  recordValue,
+  stringValue,
+} from "./dialect/wire";
 
 type FetchFn = typeof globalThis.fetch;
 type GraphQLWsClient = ReturnType<typeof graphqlWS.createClient>;
-const GRAPHQL_NAME = /^[_A-Za-z][_0-9A-Za-z]*$/;
 const noopSubscription = () => undefined;
 
 export const ANGEE_HASURA_PROVIDER_OPTIONS = {
@@ -163,7 +167,17 @@ export function createAngeeChangeLiveProvider(
           { query: changeSubscriptionDocument(changesRoot) },
           {
             next: (result) => entry.consumers.forEach((c) => c(result.data)),
-            error: () => undefined,
+            error: (error) => {
+              console.error(
+                "Angee live subscription failed; the next subscriber will reconnect.",
+                { changesRoot, resource: resourceName },
+                error,
+              );
+              if (subscriptions.get(changesRoot) === entry) {
+                entry.dispose();
+                subscriptions.delete(changesRoot);
+              }
+            },
             complete: () => undefined,
           },
         );
@@ -215,7 +229,7 @@ function resourcesByListRoot(
 }
 
 function changeSubscriptionDocument(changesRoot: string): string {
-  const root = assertGraphQLName(changesRoot);
+  const root = operationName(changesRoot);
   // The schema's ChangeEvent fields are snake_case (Hasura naming); alias the
   // multi-word ones to the camelCase keys `changeEventFromResult` reads.
   return (
@@ -256,21 +270,4 @@ function liveEventType(action: string): LiveEvent["type"] {
   if (action === "update") return "updated";
   if (action === "delete") return "deleted";
   return action;
-}
-
-function assertGraphQLName(name: string): string {
-  if (!GRAPHQL_NAME.test(name)) {
-    throw new Error(`Invalid GraphQL name: ${name}`);
-  }
-  return name;
-}
-
-function recordValue(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function stringValue(value: unknown): string | null {
-  return typeof value === "string" && value ? value : null;
 }

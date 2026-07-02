@@ -1,24 +1,17 @@
+import { ModelMetadataProvider, defineAngeeSchemaMetadata, schemaFieldMetadataFromAngeeSchemaMetadata, type AngeeSchemaMetadata, } from "@angee/metadata";
 import {
-  ModelMetadataProvider,
-  defineAngeeSchemaMetadata,
-  schemaFieldMetadataFromAngeeSchemaMetadata,
-  type AngeeSchemaMetadata,
-} from "@angee/resources";
-import {
-  useMemo,
-  type ReactNode } from "react";
+  useMemo, type ReactNode } from "react";
 import { Refine } from "@refinedev/core";
 import {
   AppRuntimeProvider,
-  } from "@angee/ui";
+  baseIcons,
+  defaultWidgets,
+  type AppRuntime,
+} from "@angee/ui";
+import { ActiveGraphQLSchemaProvider, } from "@angee/metadata";
 import {
-  ActiveGraphQLSchemaProvider,
-} from "@angee/resources";
-import {
-  createAngeeHasuraDataProviders,
-  type AngeeHasuraSchemaConfig,
-} from "@angee/refine";
-import { ModalsHost, baseIcons, defaultWidgets } from "@angee/ui";
+  createAngeeHasuraDataProviders, type AngeeHasuraSchemaConfig, } from "@angee/refine";
+import { ModalsHost } from "@angee/ui";
 
 /**
  * Shared story fixtures for data-bound views (`ListView`/`FormView`). A view that
@@ -31,6 +24,22 @@ import { ModalsHost, baseIcons, defaultWidgets } from "@angee/ui";
 type StorySchemaConfig = AngeeHasuraSchemaConfig & {
   metadata?: AngeeSchemaMetadata;
 };
+
+export function RuntimeRegistryFixture({
+  children,
+  runtime = {},
+}: {
+  children: ReactNode;
+  runtime?: Partial<AppRuntime>;
+}): ReactNode {
+  return (
+    <AppRuntimeProvider
+      runtime={{ icons: baseIcons, widgets: defaultWidgets, ...runtime }}
+    >
+      {children}
+    </AppRuntimeProvider>
+  );
+}
 
 /** A JSON `Response` for a story fetch responder. */
 export function jsonResponse(data: unknown): Response {
@@ -105,11 +114,9 @@ export function RuntimeFixture({
       >
         <ActiveGraphQLSchemaProvider schema="public">
           <ModelMetadataProvider metadata={fieldMetadata}>
-            <AppRuntimeProvider
-              runtime={{ icons: baseIcons, slots: [], widgets: defaultWidgets }}
-            >
+            <RuntimeRegistryFixture runtime={{ slots: [] }}>
               {children}
-            </AppRuntimeProvider>
+            </RuntimeRegistryFixture>
           </ModelMetadataProvider>
         </ActiveGraphQLSchemaProvider>
       </Refine>

@@ -1,7 +1,7 @@
 import * as React from "react";
 
 import { Glyph } from "../chrome/Glyph";
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import {
@@ -165,7 +165,7 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
     },
     ref,
   ) {
-    const t = useBaseT();
+    const t = useUiT();
     const styles = searchInputVariants({ size, surface, invalid, readOnly });
     const rootClass = widgetControlSurface({
       focus: "within",

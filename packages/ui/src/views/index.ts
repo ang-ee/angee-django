@@ -1,4 +1,4 @@
-// Rendered resource views over refine/@angee/data owners: reusable declarative
+// Rendered resource views over refine/metadata owners: reusable declarative
 // list/form views, their collection⇄record page composition, and aggregate
 // panels. Hosts configure them with descriptors or with the page element DSL.
 
@@ -27,6 +27,15 @@ export {
   type RelationPickerProps,
   type RelationCreateConfig,
 } from "./RelationPicker";
+export {
+  MutationDialog,
+  type MutationDialogField,
+  type MutationDialogProps,
+} from "./MutationDialog";
+export {
+  FieldDescriptorControl,
+  type FieldDescriptorControlProps,
+} from "./field-descriptor-control";
 export { useEnumOptions, useImplCategory, useImplChoices, useImplPrefill } from "./enum-options";
 export {
   GraphView,
@@ -45,6 +54,12 @@ export {
   TreeView,
   type TreeViewProps,
 } from "./TreeView";
+export {
+  ScopedExplorerPane,
+  type ScopedExplorerController,
+  type ScopedExplorerPaneProps,
+  type ScopedExplorerRootPicker,
+} from "./ScopedExplorerPane";
 export {
   useScopedTreeExplorer,
   type ScopedTreeExplorerController,
@@ -106,7 +121,7 @@ export {
   type ResourceRecordPlacement,
   type RecordSmartButtonDescriptor,
 } from "./ResourceList";
-export { recordPath } from "./resource-routing";
+export { recordPath, useRouteRecordId } from "./resource-routing";
 export {
   AggregatePanel,
   type AggregatePanelProps,

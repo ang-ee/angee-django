@@ -2,7 +2,7 @@ import * as React from "react";
 import { useResourceRevisions } from "../data/revisions";
 import { revisionSnapshot } from "@angee/refine";
 
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { EmptyState } from "../fragments/EmptyState";
 import { ErrorBanner } from "../fragments/ErrorBanner";
 import { LoadingPanel } from "../fragments/LoadingPanel";
@@ -19,7 +19,7 @@ export function RevisionsTab({
   resource,
   recordId,
 }: RevisionsTabProps): React.ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const activeRecordId = typeof recordId === "string" && recordId !== ""
     ? recordId
     : null;

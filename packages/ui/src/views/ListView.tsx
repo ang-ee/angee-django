@@ -2,18 +2,17 @@ import * as React from "react";
 import {
   crudFiltersFromFilterRecord,
   hasuraWhereFromCrudFilters,
-} from "@angee/refine";
-import {
   useAngeeAggregate,
-} from "../data/hooks";
+} from "@angee/refine";
 import {
   isClientRowModel,
   useModelMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 import type {
   Row,
-} from "@angee/resources";
+} from "@angee/metadata";
 
+import { useUiT } from "../i18n";
 import type { PagerState } from "../ui/pager";
 import { BoardView } from "./BoardView";
 import {
@@ -48,12 +47,11 @@ import {
   hasuraMeasuresFromGroupMeasures,
   type FlatListBodyProps,
   type GroupMeasure,
-} from "./ListInternals";
+} from "./resource-view-list-body";
 import { ResourceListFrame } from "./ResourceListFrame";
-import type { ListEmptyContent, ListViewProps } from "./list-view-types";
+import type { ListEmptyContent, ListViewProps } from "./resource-view-types";
 import {
   activeFilterIdsFor,
-  addCustomFilter as addCustomFilterToFilter,
   buildFilterFields,
   buildFilterOptions,
   buildGroupOptions,
@@ -62,32 +60,31 @@ import {
   mergeFilterFields,
   mergeFilterOptions,
   mergeGroupOptions,
-  nextFacetFilter,
-  nextTextFilter,
   resolveResourceViewGroup,
-  removeCustomFilter,
   resolveTextFilterField,
   textFilterValue,
   validResourceViewGroupStack,
-} from "./list-view-utils";
+} from "./resource-view-utils";
 import { columnsWithMetadataDefaults } from "./model-metadata-defaults";
 import type { ColumnDescriptor } from "./page";
 import { useRelationFacets } from "./relation-facet";
 import { useScalarFacets } from "./scalar-facet";
 import { useBulkDelete } from "./useBulkDelete";
+import { useAggregateOperation } from "./resource-operations";
+import { useResourceToolbarProps } from "./resource-toolbar-props";
 
 export type { ResourceListSnapshot } from "./resource-view-surface";
 export type {
   ColumnAlign,
   ListColumn,
-} from "./ListInternals";
+} from "./resource-view-list-body";
 export type {
   CardActionContext,
   ListEmptyAction,
   ListEmptyContent,
   ListEmptyState,
   ListViewProps,
-} from "./list-view-types";
+} from "./resource-view-types";
 
 const EMPTY_GROUP_STACK = [] as const;
 
@@ -136,10 +133,10 @@ function ListViewBody<TRow extends Row = Row>({
   resource,
   columns,
   fields,
-  filter,
-  filters: explicitFilters,
+  baseFilter,
+  filterOptions: explicitFilterOptions,
   facets,
-  filterFields: explicitFilterFields,
+  customFilterFields: explicitCustomFilterFields,
   groupOptions: explicitGroupOptions,
   order,
   pageSize,
@@ -153,22 +150,22 @@ function ListViewBody<TRow extends Row = Row>({
   toolbarActions,
   cardActions,
   renderCard,
-  emptyMessage = "No records.",
-  emptyState,
+  emptyContent,
   className,
   resourceView,
 }: ListViewProps<TRow> & {
   resourceView: ResourceViewContextValue;
 }): React.ReactElement {
-  const emptyContent = emptyState ?? emptyMessage;
+  const t = useUiT();
+  const resolvedEmptyContent = emptyContent ?? t("list.empty");
   const modelMetadata = useModelMetadata(resource);
   const resolvedColumns = React.useMemo(
     () => columnsWithMetadataDefaults(columns, modelMetadata),
     [columns, modelMetadata],
   );
   const mergedFilter = React.useMemo(
-    () => Filter.combineOptional(filter, resourceView.state.filter),
-    [resourceView.state.filter, filter],
+    () => Filter.combineOptional(baseFilter, resourceView.state.filter),
+    [resourceView.state.filter, baseFilter],
   );
   const declaredFacets = useRelationFacets(resource, facets, mergedFilter);
   const scalarFacets = useScalarFacets(
@@ -262,8 +259,8 @@ function ListViewBody<TRow extends Row = Row>({
   ]);
 
   // A client resource holds the whole set in the browser, so it groups through
-  // the flat list's groupRows()/listItems machinery — never the server
-  // _groups/GroupedListBody path (the aggregate it would query does not exist).
+  // TanStack row models — never the server _groups/GroupedListBody path (the
+  // aggregate it would query does not exist).
   const clientRowModel = isClientRowModel(modelMetadata?.resource);
   const groupDimensions = React.useMemo(
     () =>
@@ -282,7 +279,7 @@ function ListViewBody<TRow extends Row = Row>({
     resource,
     columns: resolvedColumns,
     fields,
-    filter,
+    filter: baseFilter,
     order,
     pageSize,
     resourceView,
@@ -299,12 +296,13 @@ function ListViewBody<TRow extends Row = Row>({
       modelMetadata={modelMetadata}
       resourceView={resourceView}
       effectiveGroupStack={effectiveGroupStack}
+      clientRowModel={clientRowModel}
       groupedListMode={groupedListMode}
       declaredFacets={declaredFacets}
       scalarFacets={scalarFacets}
       explicitGroupOptions={explicitGroupOptions}
-      explicitFilters={explicitFilters}
-      explicitFilterFields={explicitFilterFields}
+      explicitFilterOptions={explicitFilterOptions}
+      explicitCustomFilterFields={explicitCustomFilterFields}
       defaultGroup={defaultGroup}
       defaultGroups={defaultGroups}
       order={order}
@@ -316,7 +314,7 @@ function ListViewBody<TRow extends Row = Row>({
       toolbarActions={toolbarActions}
       cardActions={cardActions}
       renderCard={renderCard}
-      emptyContent={emptyContent}
+      emptyContent={resolvedEmptyContent}
       className={className}
     />
   );
@@ -366,12 +364,13 @@ interface ListViewContentProps<TRow extends Row> {
   modelMetadata: ReturnType<typeof useModelMetadata>;
   resourceView: ResourceViewContextValue;
   effectiveGroupStack: readonly ResourceViewGroup[];
+  clientRowModel: boolean;
   groupedListMode: boolean;
   declaredFacets: ReturnType<typeof useRelationFacets>;
   scalarFacets: ReturnType<typeof useScalarFacets>;
   explicitGroupOptions: ListViewProps<TRow>["groupOptions"];
-  explicitFilters: ListViewProps<TRow>["filters"];
-  explicitFilterFields: ListViewProps<TRow>["filterFields"];
+  explicitFilterOptions: ListViewProps<TRow>["filterOptions"];
+  explicitCustomFilterFields: ListViewProps<TRow>["customFilterFields"];
   defaultGroup: ListViewProps<TRow>["defaultGroup"];
   defaultGroups: ListViewProps<TRow>["defaultGroups"];
   order: ListViewProps<TRow>["order"];
@@ -394,12 +393,13 @@ function ListViewContent<TRow extends Row = Row>({
   modelMetadata,
   resourceView,
   effectiveGroupStack,
+  clientRowModel,
   groupedListMode,
   declaredFacets,
   scalarFacets,
   explicitGroupOptions,
-  explicitFilters,
-  explicitFilterFields,
+  explicitFilterOptions,
+  explicitCustomFilterFields,
   defaultGroup,
   defaultGroups,
   order,
@@ -465,37 +465,37 @@ function ListViewContent<TRow extends Row = Row>({
       resolvedColumns,
     ],
   );
-  const inferredFilterFields = React.useMemo(
+  const inferredCustomFilterFields = React.useMemo(
     () => buildFilterFields(resolvedColumns, surface.rows, modelMetadata),
     [modelMetadata, resolvedColumns, surface.rows],
   );
   const inferredFilterOptions = React.useMemo(
-    () => buildFilterOptions(resolvedColumns, surface.rows, inferredFilterFields),
-    [inferredFilterFields, resolvedColumns, surface.rows],
+    () => buildFilterOptions(resolvedColumns, surface.rows, inferredCustomFilterFields),
+    [inferredCustomFilterFields, resolvedColumns, surface.rows],
   );
   const facetFilters = React.useMemo(
     () => mergeFilterOptions(declaredFacets.filters, scalarFacets.filters),
     [declaredFacets.filters, scalarFacets.filters],
   );
   const explicitAndFacetFilters = React.useMemo(
-    () => mergeFilterOptions(explicitFilters, facetFilters),
-    [explicitFilters, facetFilters],
+    () => mergeFilterOptions(explicitFilterOptions, facetFilters),
+    [explicitFilterOptions, facetFilters],
   );
   const filterOptions = React.useMemo(
     () => mergeFilterOptions(explicitAndFacetFilters, inferredFilterOptions),
     [explicitAndFacetFilters, inferredFilterOptions],
   );
-  const facetFilterFields = React.useMemo(
+  const facetCustomFilterFields = React.useMemo(
     () => mergeFilterFields(declaredFacets.filterFields, scalarFacets.filterFields),
     [declaredFacets.filterFields, scalarFacets.filterFields],
   );
-  const explicitAndFacetFilterFields = React.useMemo(
-    () => mergeFilterFields(explicitFilterFields, facetFilterFields),
-    [explicitFilterFields, facetFilterFields],
+  const explicitAndFacetCustomFilterFields = React.useMemo(
+    () => mergeFilterFields(explicitCustomFilterFields, facetCustomFilterFields),
+    [explicitCustomFilterFields, facetCustomFilterFields],
   );
-  const filterFields = React.useMemo(
-    () => mergeFilterFields(explicitAndFacetFilterFields, inferredFilterFields),
-    [explicitAndFacetFilterFields, inferredFilterFields],
+  const customFilterFields = React.useMemo(
+    () => mergeFilterFields(explicitAndFacetCustomFilterFields, inferredCustomFilterFields),
+    [explicitAndFacetCustomFilterFields, inferredCustomFilterFields],
   );
   const activeFilterIds = activeFilterIdsFor(
     resourceView.state.filter,
@@ -507,15 +507,8 @@ function ListViewContent<TRow extends Row = Row>({
   const customFilterChips = customFilterChipsFor(
     resourceView.state.filter,
     filterOptions,
-    filterFields,
+    customFilterFields,
     textFilterField,
-  );
-
-  const setPage = React.useCallback(
-    (page: number) => {
-      resourceView.setPage(page);
-    },
-    [resourceView.setPage],
   );
 
   const filterText = textFilterValue(resourceView.state.filter, textFilterField);
@@ -529,49 +522,31 @@ function ListViewContent<TRow extends Row = Row>({
     () => ({ refresh: surface.list.refetch }),
     [surface.list.refetch],
   );
+  const toolbar = useResourceToolbarProps({
+    actions: toolbarActions,
+    pager: toolbarPager,
+    view: resourceView.state.view,
+    group: effectiveGroupStack[0] ?? null,
+    groupStack: effectiveGroupStack,
+    groupOptions: toolbarGroupOptions,
+    filterOptions,
+    customFilterFields,
+    customFilterChips,
+    favorites: resourceView.savedFavorites,
+    activeFilterIds,
+    filterText,
+    textFilterField,
+    createLabel: createLabel ?? createLabelForResource(resource),
+    onCreate,
+    resourceView,
+    pagerSubject: groupedListMode ? "Groups" : undefined,
+    pagerTotalUnit: groupedListMode ? "groups" : undefined,
+  });
 
   return (
     <ResourceListFrame
       className={className}
-      toolbar={{
-        actions: toolbarActions,
-        pager: toolbarPager,
-        view: resourceView.state.view,
-        group: effectiveGroupStack[0] ?? null,
-        groupStack: effectiveGroupStack,
-        groupOptions: toolbarGroupOptions,
-        filterOptions,
-        filterFields,
-        customFilterChips,
-        favorites: resourceView.savedFavorites,
-        activeFilterIds,
-        filterText,
-        createLabel: createLabel ?? createLabelForResource(resource),
-        onCreate,
-        onClearGroup: () => resourceView.setGroupStack([]),
-        onGroupStackChange: resourceView.setGroupStack,
-        onViewChange: resourceView.setView,
-        onPageChange: setPage,
-        onPageSizeChange: resourceView.setPageSize,
-        onCustomFilterAdd: (customFilter) =>
-          resourceView.setFilter(
-            addCustomFilterToFilter(resourceView.state.filter, customFilter),
-          ),
-        onCustomFilterRemove: (id) =>
-          resourceView.setFilter(removeCustomFilter(resourceView.state.filter, id)),
-        onFavoriteSave: resourceView.saveFavorite,
-        onFavoriteSelect: resourceView.applyFavorite,
-        pagerSubject: groupedListMode ? "Groups" : undefined,
-        pagerTotalUnit: groupedListMode ? "groups" : undefined,
-        onFilterToggle: (id) =>
-          resourceView.setFilter(
-            nextFacetFilter(resourceView.state.filter, filterOptions, id),
-          ),
-        onFilterTextChange: (value) =>
-          resourceView.setFilter(
-            nextTextFilter(resourceView.state.filter, value, textFilterField),
-          ),
-      }}
+      toolbar={toolbar}
       selection={{
         count: surface.selectedIds.size,
         onClear: resourceView.clearSelectedIds,
@@ -621,7 +596,7 @@ function ListViewContent<TRow extends Row = Row>({
           rowHref={rowHref}
           onRowClick={onRowClick}
           onListStateChange={onListStateChange}
-          emptyMessage={emptyContent}
+          emptyContent={emptyContent}
           fetching={surface.list.fetching}
           error={surface.list.error}
         />
@@ -633,14 +608,14 @@ function ListViewContent<TRow extends Row = Row>({
           selectedIds={surface.selectedIds}
           interactive={interactive}
           fetching={surface.list.fetching}
-          emptyMessage={emptyContent}
+          emptyContent={emptyContent}
           rowHref={rowHref}
           onRowClick={onRowClick}
           cardActions={cardActions}
           cardActionContext={cardActionContext}
           renderCard={renderCard}
         />
-      ) : flatMeasures.length > 0 ? (
+      ) : flatMeasures.length > 0 && !clientRowModel ? (
         <FlatListBodyWithAggregate
           resource={resource}
           filter={surface.mergedFilter}
@@ -649,7 +624,6 @@ function ListViewContent<TRow extends Row = Row>({
           columns={resolvedColumns}
           table={surface.table}
           rowModels={surface.rowModels}
-          listItems={surface.listItems}
           tableScrollRef={surface.tableScrollRef}
           rowVirtualizer={surface.rowVirtualizer}
           visibleColumnCount={surface.visibleColumnCount}
@@ -662,17 +636,14 @@ function ListViewContent<TRow extends Row = Row>({
           interactive={interactive}
           rowHref={rowHref}
           onRowClick={onRowClick}
-          emptyMessage={emptyContent}
+          emptyContent={emptyContent}
           fetching={surface.list.fetching}
-          expandedKeys={surface.expandedKeys}
-          onToggleGroup={surface.toggleGroup}
         />
       ) : (
         <FlatListBody
           columns={resolvedColumns}
           table={surface.table}
           rowModels={surface.rowModels}
-          listItems={surface.listItems}
           tableScrollRef={surface.tableScrollRef}
           rowVirtualizer={surface.rowVirtualizer}
           visibleColumnCount={surface.visibleColumnCount}
@@ -685,10 +656,8 @@ function ListViewContent<TRow extends Row = Row>({
           interactive={interactive}
           rowHref={rowHref}
           onRowClick={onRowClick}
-          emptyMessage={emptyContent}
+          emptyContent={emptyContent}
           fetching={surface.list.fetching}
-          expandedKeys={surface.expandedKeys}
-          onToggleGroup={surface.toggleGroup}
         />
       )}
     </ResourceListFrame>
@@ -708,6 +677,7 @@ function FlatListBodyWithAggregate<TRow extends Row>({
   measures: readonly GroupMeasure[];
 }): React.ReactElement {
   const dataResource = requireDataResource(resource, modelMetadata);
+  const aggregateOperation = useAggregateOperation(dataResource);
   const where = React.useMemo(
     () => hasuraWhereFromCrudFilters(crudFiltersFromFilterRecord(filter)),
     [filter],
@@ -716,7 +686,8 @@ function FlatListBodyWithAggregate<TRow extends Row>({
     () => hasuraMeasuresFromGroupMeasures(measures, modelMetadata),
     [measures, modelMetadata],
   );
-  const aggregate = useAngeeAggregate(dataResource, {
+  const aggregate = useAngeeAggregate(aggregateOperation.target, {
+    document: aggregateOperation.document,
     where,
     measures: queryMeasures,
     enabled: queryMeasures.length > 0,

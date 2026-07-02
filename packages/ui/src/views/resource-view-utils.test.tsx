@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { ModelMetadata } from "@angee/resources";
+import type { ModelMetadata } from "@angee/metadata";
 
-import { resolveTextFilterField } from "./list-view-utils";
+import { resolveTextFilterField } from "./resource-view-utils";
 
 function meta(over: {
   recordRepresentation?: string;

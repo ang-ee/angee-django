@@ -1,10 +1,10 @@
 import { useId, useState, type FormEvent, type ReactNode } from "react";
-import { useLoginWithPassword } from "@angee/refine";
 
 import { errorMessage } from "@angee/ui/feedback/index";
-import { useBaseT } from "@angee/ui/i18n";
+import { useUiT } from "@angee/ui/i18n";
 import { Button } from "@angee/ui/ui/button";
 import { FieldControl, FieldLabel, FieldRoot } from "@angee/ui/ui/field";
+import { useLoginWithPassword } from "../providers/auth";
 
 export interface UsernamePasswordFormProps {
   /** Called after a successful sign-in; the page handles the redirect. */
@@ -23,7 +23,7 @@ export function UsernamePasswordForm({
   onSuccess,
   passwordHelp,
 }: UsernamePasswordFormProps): ReactNode {
-  const t = useBaseT();
+  const t = useUiT();
   const { login, fetching } = useLoginWithPassword();
   const usernameId = useId();
   const passwordId = useId();

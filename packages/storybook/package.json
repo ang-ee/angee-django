@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@angee/refine": "workspace:*",
-    "@angee/resources": "workspace:*",
+    "@angee/metadata": "workspace:*",
     "@angee/ui": "workspace:*",
     "@refinedev/core": "^5.0.12",
     "nuqs": "^2.5.0",

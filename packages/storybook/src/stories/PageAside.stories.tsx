@@ -1,14 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import {
-  Badge,
-  Chip,
-  Page,
-  PageAside,
-  PageBody,
-  PageHeader,
-  SectionNav,
-  type SectionNavItem,
-} from "@angee/ui";
+import { Badge, Chip, Page, PageAside, PageBody, PageHeader, SectionNav, type SectionNavItem } from "@angee/ui";
 
 const navItems: readonly SectionNavItem[] = [
   { id: "overview", label: "Overview", href: "#overview", active: true },

@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { AlertDialog } from "../ui/alert-dialog";
 import { Input } from "../ui/input";
 
@@ -177,7 +177,7 @@ function ConfirmDialog({
   request: QueuedRequest<NormalisedConfirmOptions, boolean> | null;
   onResolve: (confirmed: boolean) => void;
 }): ReactElement | null {
-  const t = useBaseT();
+  const t = useUiT();
   if (!request) return null;
   const { options } = request;
   return (
@@ -245,7 +245,7 @@ function PromptDialogForm({
   request: QueuedRequest<PromptOptions, Record<string, string> | null>;
   onResolve: (values: Record<string, string> | null) => void;
 }): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const { options } = request;
   const [values, setValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(

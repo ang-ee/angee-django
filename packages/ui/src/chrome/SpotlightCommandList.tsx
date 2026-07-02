@@ -1,6 +1,6 @@
 import { useMemo, type ReactElement } from "react";
 
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { Command } from "../ui/command";
 import { DialogBody, DialogTitle } from "../ui/dialog";
 import { Kbd } from "../ui/kbd";
@@ -26,7 +26,7 @@ export default function SpotlightCommandList({
   label,
   onOpenChange,
 }: SpotlightCommandListProps): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const groups = useMemo(
     () => groupCommands(commands, t("chrome.commands")),
     [commands, t],

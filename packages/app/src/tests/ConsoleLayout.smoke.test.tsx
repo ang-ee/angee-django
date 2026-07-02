@@ -14,10 +14,12 @@ import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
 import { parseFlatSearch, stringifyFlatSearch } from "../create-app";
 import { setThemePreference, storedThemePreference } from "@angee/ui/lib/theme";
+import { baseIcons } from "@angee/ui/chrome/icon-registry";
 import { ConsoleLayout } from "@angee/ui/layouts/ConsoleLayout";
 import { ControlBand } from "@angee/ui/layouts/ControlBand";
 import { Statusline, StatusSegment } from "@angee/ui/layouts/Statusline";
 import { useChatterContent } from "@angee/ui/communication/index";
+import { AppRuntimeProvider, type AppRuntime } from "@angee/ui/runtime";
 
 vi.mock("@angee/logo-react", () => ({
   AngeeLogo: ({ bgColor: _bgColor, geometry: _geometry, preset: _preset, ...props }: SVGProps<SVGSVGElement> & {
@@ -122,11 +124,10 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   };
 });
 
-vi.mock("@angee/refine", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/refine")>();
+function runtimeForConsoleTest(): Partial<AppRuntime> {
   return {
-    ...actual,
-    useAuth: () => ({
+    icons: baseIcons,
+    auth: {
       user: {
         id: "user_1",
         name: "Ada Lovelace",
@@ -134,14 +135,14 @@ vi.mock("@angee/refine", async (importOriginal) => {
       },
       status: "authenticated" as const,
       hasRole: () => false,
-    }),
-    useLogout: () => ({
+    },
+    logoutAction: {
       logout: vi.fn(async () => true),
       fetching: false,
       error: null,
-    }),
+    },
   };
-});
+}
 
 function renderInRouter(children: ReactNode, initialPath = "/notes") {
   const rootRoute = createRootRoute({
@@ -185,7 +186,11 @@ function renderInRouter(children: ReactNode, initialPath = "/notes") {
     stringifySearch: stringifyFlatSearch,
   });
 
-  return render(<RouterProvider router={router} />);
+  return render(
+    <AppRuntimeProvider runtime={runtimeForConsoleTest()}>
+      <RouterProvider router={router} />
+    </AppRuntimeProvider>,
+  );
 }
 
 describe("ConsoleLayout", () => {

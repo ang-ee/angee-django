@@ -1,13 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import {
-  Page,
-  PageAside,
-  PageBody,
-  PageHeader,
-  SplitPane,
-  SplitPaneHandle,
-  SplitPanes,
-} from "@angee/ui";
+import { Page, PageAside, PageBody, PageHeader, SplitPane, SplitPaneHandle, SplitPanes } from "@angee/ui";
 
 const meta = {
   title: "Page/SplitPanes",

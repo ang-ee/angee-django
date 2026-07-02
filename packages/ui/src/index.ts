@@ -1,29 +1,27 @@
 // @angee/ui — the single rendered binding. The styling foundation (the one
 // class-merge config + `cn`, the `tv` recipe factory, the tone/fill vocabulary),
 // the drag-and-drop seam, and the slot/render helpers live here; everything that
-// renders builds on them. (Wave A.0: `lib/` relocated from `@angee/base`; the
-// rendered primitives/views/chrome follow in later waves.)
+// renders builds on them.
 
 export * from "./lib";
 
 // The app-runtime registry + contribution contracts the binding owns: the
 // `AppRuntime` provider and its `useWidget`/`useSlot`/`usePreviews`/`useT`
 // lookups, the `makeContext` factory, and the menu/slot/preview/widget/form
-// contracts the render surfaces consume. (Wave B1: relocated from `@angee/sdk`;
-// the binding owns the runtime it consumes, `@angee/app` mounts the provider.)
+// contracts the render surfaces consume. The binding owns the runtime it
+// consumes; `@angee/app` mounts the provider.
 export * from "./runtime";
 
 // Render leaves the primitives/chrome build on: the glyph renderer + icon
 // registry (and the brand/agent marks they resolve) and the base-namespace
-// translator. (Wave A.0b: relocated from `@angee/base`.)
+// translator.
 export * from "./chrome/Glyph";
 export * from "./chrome/icon-registry";
 export * from "./chrome/AgentGlyph";
 export * from "./chrome/AngeeMark";
 export * from "./i18n";
 
-// UI primitives — embeddable, SDK-agnostic atoms on base-ui. (Wave A.1:
-// relocated from `@angee/base`.)
+// UI primitives — embeddable atoms on Base UI.
 export * from "./ui/button";
 export * from "./ui/spinner";
 export * from "./ui/skeleton";
@@ -76,14 +74,13 @@ export * from "./ui/form-layout";
 export * from "./ui/upload-drop-target";
 
 // Widgets — the field renderers + the default widget registry — and the
-// feedback surface (modals, toasts, the Refine notification bridge). (Wave A.2:
-// relocated from `@angee/base`.)
+// feedback surface (modals, toasts, the Refine notification bridge).
 export * from "./widgets";
 export * from "./feedback";
 
 // The rendered render layer: data-bound views, the toolbar/page/layout/fragment
 // composition surface, app chrome, the communication surface, and the preview
-// registry. (Wave A.3/A.4: relocated from `@angee/base`.)
+// registry.
 export * from "./views";
 export * from "./toolbars";
 export * from "./page";
@@ -93,36 +90,8 @@ export * from "./chrome";
 export * from "./communication";
 export * from "./preview";
 
-// The data-bound hooks the rendered views consume: the metadata-driven Refine
-// operation hooks (aggregate/action/deletePreview/facets/groupBy), the authored
-// query/mutation hooks, and the resource revisions hook. These compose
-// `@angee/refine` (the Hasura dialect) and `@angee/resources` (the metadata
-// bridge) — both already `@angee/ui` dependencies — so they live with their
-// consumer. (Wave C: relocated from `@angee/data`.)
-export {
-  useAngeeAggregate,
-  useActionMutation,
-  useAngeeDeletePreview,
-  useAngeeFacets,
-  useAngeeGroupBy,
-  type ActionMutate,
-  type UseActionMutationOptions,
-  type UseActionMutationState,
-  type UseAngeeAggregateResult,
-  type UseAngeeDeletePreviewResult,
-  type UseAngeeFacetsOptions,
-  type UseAngeeFacetsResult,
-  type UseAngeeGroupByResult,
-} from "./data/hooks";
-export {
-  useAuthoredMutation,
-  useAuthoredQuery,
-  type AuthoredMutate,
-  type AuthoredMutationOptions,
-  type AuthoredOperationOptions,
-  type AuthoredQueryOptions,
-  type AuthoredQueryResult,
-} from "./data/authored-hooks";
+// Resource revisions still compose UI record history surfaces; Hasura dialect
+// hooks and authored operations live in `@angee/refine`.
 export {
   useResourceRevisions,
   type UseResourceRevisionsOptions,

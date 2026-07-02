@@ -2,25 +2,25 @@ import * as React from "react";
 import {
   rowPublicId,
   type Row,
-} from "@angee/resources";
+} from "@angee/metadata";
 import {
   useList,
   type BaseRecord,
   type HttpError,
   } from "@refinedev/core";
 import {
-  DEFAULT_PAGE_SIZE,
   refineFieldsFromPaths,
   } from "@angee/refine";
 import {
   refineResourceName,
-} from "@angee/resources";
+} from "@angee/metadata";
 import {
   useModelMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 import type { RelationOption } from "../widgets/RelationField";
 import type { RelationFieldInfo } from "./model-metadata-defaults";
+import { DEFAULT_PAGE_SIZE } from "./page-size";
 
 export const RELATION_OPTION_LIMIT = 200;
 

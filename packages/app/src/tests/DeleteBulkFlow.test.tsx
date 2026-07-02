@@ -2,7 +2,7 @@
 
 import type {
   Row,
-} from "@angee/resources";
+} from "@angee/metadata";
 import {
   act,
   cleanup,
@@ -38,7 +38,7 @@ import { afterEach,
   vi } from "vitest";
 import {
   ModelMetadataProvider,
-} from "@angee/resources";
+} from "@angee/metadata";
 import {
   OperationDocumentsProvider,
   extractDeletePreview,
@@ -48,7 +48,7 @@ import {
 } from "@angee/ui/runtime";
 import {
   type SchemaFieldMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 import { baseIcons } from "@angee/ui/chrome/icon-registry";
 import { parseFlatSearch, stringifyFlatSearch } from "../create-app";
@@ -106,6 +106,7 @@ vi.mock("@refinedev/react-table", async () => {
         queryOptions?: { enabled?: boolean };
       };
       onColumnVisibilityChange?: (updater: unknown) => void;
+      onRowSelectionChange?: (updater: unknown) => void;
     }) => {
       const props = options.refineCoreProps ?? {};
       const pageSize =
@@ -128,12 +129,14 @@ vi.mock("@refinedev/react-table", async () => {
         columns: (options.columns ?? []) as never[],
         getCoreRowModel: TanStackTable.getCoreRowModel(),
         getRowId: options.getRowId as never,
+        // The caller's controlled state (incl. rowSelection) flows through;
+        // only pagination/pinning are normalized by the mock.
         state: {
           ...(options.state ?? {}),
           columnPinning: { left: [], right: [] },
           pagination,
-          rowSelection: {},
         },
+        onRowSelectionChange: options.onRowSelectionChange as never,
         onStateChange: () => undefined,
         renderFallbackValue: null,
       });

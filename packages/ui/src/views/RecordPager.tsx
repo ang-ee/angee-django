@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
 
 import { Glyph } from "../chrome/Glyph";
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { Button } from "../ui/button";
 import { textRoleVariants } from "../ui/text";
@@ -20,7 +20,7 @@ export function RecordPager({
 }: {
   navigation: RecordNavigation;
 }): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   return (
     <nav
       aria-label={t("recordPager.navigation")}

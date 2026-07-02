@@ -1,6 +1,6 @@
 import { useEffect, type ReactElement } from "react";
 
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import {
   applyThemePreference,
@@ -23,7 +23,7 @@ function ThemePickerEdit({
   field,
   readOnly,
 }: WidgetRenderProps<ThemePreference>): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const { preference, setPreference, system } = useThemePreference();
   const theme = normaliseThemePreference(value) ?? preference;
 
@@ -73,7 +73,7 @@ function ThemePickerEdit({
 function ThemePickerRead({
   value,
 }: WidgetRenderProps<ThemePreference>): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const theme = normaliseThemePreference(value) ?? "system";
   const label =
     THEME_OPTIONS.find((item) => item.value === theme)?.label ?? "theme.system";

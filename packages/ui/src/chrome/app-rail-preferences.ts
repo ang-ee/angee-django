@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { type UserPreferences, useUserPreferences } from "@angee/refine";
 
 import { dedupeBy } from "../lib/dedupe";
+import {
+  type RuntimeUserPreferences,
+  useRuntimeUserPreferences,
+} from "../runtime";
 
 export const APP_RAIL_PREFERENCES_KEY = "chrome.rail";
 
@@ -16,7 +19,7 @@ const EMPTY_RAIL_PREFERENCES: AppRailPreferences = {
 };
 
 export function readAppRailPreferences(
-  preferences: UserPreferences | null | undefined,
+  preferences: RuntimeUserPreferences | null | undefined,
 ): AppRailPreferences {
   const raw = preferences?.[APP_RAIL_PREFERENCES_KEY];
   if (!isObject(raw)) return EMPTY_RAIL_PREFERENCES;
@@ -29,9 +32,9 @@ export function readAppRailPreferences(
 }
 
 export function writeAppRailPreferences(
-  preferences: UserPreferences,
+  preferences: RuntimeUserPreferences,
   rail: AppRailPreferences,
-): UserPreferences {
+): RuntimeUserPreferences {
   return {
     ...preferences,
     [APP_RAIL_PREFERENCES_KEY]: {
@@ -45,7 +48,7 @@ export function useAppRailPreferences(): {
   railPreferences: AppRailPreferences;
   setRailPreferences: (rail: AppRailPreferences) => void;
 } {
-  const { preferences, setPreferences } = useUserPreferences();
+  const { preferences, setPreferences } = useRuntimeUserPreferences();
   const [optimistic, setOptimistic] = useState<AppRailPreferences | null>(null);
   const stored = useMemo(
     () => readAppRailPreferences(preferences),

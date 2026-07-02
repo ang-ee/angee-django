@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
 
 import { Glyph } from "../chrome/Glyph";
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { drawerVariants } from "../ui/drawer";
 import { useDrawers, type DrawerEdge } from "../runtime";
 import { drawerPanelId, useDrawerState } from "./drawer-context";
@@ -21,7 +21,7 @@ export function DrawerOverlay({
 }): ReactElement | null {
   const drawers = useDrawers(edge);
   const { openId, close } = useDrawerState();
-  const t = useBaseT();
+  const t = useUiT();
 
   const active = drawers.find((drawer) => drawer.id === openId(edge));
   if (!active) return null;

@@ -1,20 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import {
-  Avatar,
-  Button,
-  Glyph,
-  MessageActions,
-  MessageAttachmentChip,
-  MessageComposer,
-  MessageComposerHint,
-  MessageDaySeparator,
-  MessageFeed,
-  MessageRow,
-  ReactionBar,
-  ReactionPicker,
-  Tag,
-  messageComposerInputClassName,
-} from "@angee/ui";
+import { Avatar, Button, Glyph, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageDaySeparator, MessageFeed, MessageRow, ReactionBar, ReactionPicker, Tag, messageComposerInputClassName } from "@angee/ui";
+
+import { StorySurface } from "./chrome-fixtures";
 
 const meta = {
   title: "Communication/Message",
@@ -25,10 +12,6 @@ const meta = {
 export default meta;
 
 type Story = StoryObj;
-
-const Surface = ({ children }: { children: React.ReactNode }) => (
-  <div className="max-w-lg rounded-6 border border-border-subtle bg-sheet p-3">{children}</div>
-);
 
 const hour = 60 * 60 * 1000;
 const now = Date.now();
@@ -56,7 +39,7 @@ function RowActions() {
  *  Every actor renders in one column — direction is an inline tag, never an L/R split. */
 export const Feed: Story = {
   render: () => (
-    <Surface>
+    <StorySurface>
       <MessageFeed label="Comments">
         <MessageRow
           avatar={<Avatar size="sm" initials="AY" />}
@@ -123,13 +106,13 @@ export const Feed: Story = {
           Thanks — the updated contract is attached, signed on our side.
         </MessageRow>
       </MessageFeed>
-    </Surface>
+    </StorySurface>
   ),
 };
 
 export const Row: Story = {
   render: () => (
-    <Surface>
+    <StorySurface>
       <MessageFeed>
         <MessageRow
           avatar={<Avatar size="sm" initials="AY" />}
@@ -142,7 +125,7 @@ export const Row: Story = {
           hover-revealed action set.
         </MessageRow>
       </MessageFeed>
-    </Surface>
+    </StorySurface>
   ),
 };
 

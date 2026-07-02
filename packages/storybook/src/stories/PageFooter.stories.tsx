@@ -1,12 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import {
-  Button,
-  Glyph,
-  Page,
-  PageBody,
-  PageFooter,
-  PageHeader,
-} from "@angee/ui";
+import { Button, Glyph, Page, PageBody, PageFooter, PageHeader } from "@angee/ui";
 
 const meta = {
   title: "Page/PageFooter",

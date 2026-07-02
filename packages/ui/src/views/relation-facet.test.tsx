@@ -5,26 +5,41 @@ import {
 import type { ResourceFacetOption } from "@angee/refine";
 import {
   ModelMetadataProvider,
-} from "@angee/resources";
+} from "@angee/metadata";
 import type {
   SchemaFieldMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { useRelationFacets } from "./relation-facet";
 
-const dataMocks = vi.hoisted(() => ({
-  facets: vi.fn(),
-}));
+const dataMocks = vi.hoisted(() => {
+  const groupsDocument = { kind: "groups-document" };
+  return {
+    facets: vi.fn(),
+    groupsDocument,
+    operationDocuments: {
+      console: {
+        groups: { "agents.InferenceModel": groupsDocument },
+      },
+    },
+  };
+});
 
-vi.mock("../data/hooks", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../data/hooks")>();
+vi.mock("@angee/refine", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/refine")>();
   return {
     ...actual,
     useAngeeFacets: dataMocks.facets,
+    useOperationDocuments: () => dataMocks.operationDocuments,
   };
 });
+
+const GROUPS_TARGET = {
+  dataProviderName: "console",
+  root: "inference_models_groups",
+};
 
 beforeEach(() => {
   dataMocks.facets.mockReset();
@@ -45,8 +60,9 @@ describe("useRelationFacets", () => {
     );
 
     expect(dataMocks.facets).toHaveBeenCalledWith(
-      INFERENCE_MODEL_RESOURCE,
+      GROUPS_TARGET,
       {
+        document: dataMocks.groupsDocument,
         facets: [{
           id: "provider",
           dimensions: [
@@ -106,8 +122,9 @@ describe("useRelationFacets", () => {
     );
 
     expect(dataMocks.facets).toHaveBeenCalledWith(
-      INFERENCE_MODEL_RESOURCE,
+      GROUPS_TARGET,
       {
+        document: dataMocks.groupsDocument,
         facets: [{
           id: "provider",
           dimensions: [
@@ -122,7 +139,7 @@ describe("useRelationFacets", () => {
           valueKey: "providerId",
           labelKey: "provider_Name",
           pageSize: 200,
-          where: { name: { _ilike: "launch" } },
+          where: { name: { _ilike: "%launch%" } },
         }],
         enabled: true,
       },
@@ -164,8 +181,9 @@ describe("useRelationFacets", () => {
     );
 
     expect(dataMocks.facets).toHaveBeenLastCalledWith(
-      INFERENCE_MODEL_RESOURCE,
+      GROUPS_TARGET,
       {
+        document: dataMocks.groupsDocument,
         facets: [],
         enabled: false,
       },
@@ -214,7 +232,7 @@ const METADATA: SchemaFieldMetadata = {
         appLabel: "agents",
         modelName: "inferencemodel",
         publicIdField: "sqid",
-        roots: {},
+        roots: { groups: "inference_models_groups" },
         typeNames: { node: "InferenceModelType" },
         capabilities: ["list", "groups"],
         filterFields: ["provider", "publisher"],
@@ -257,8 +275,6 @@ const METADATA: SchemaFieldMetadata = {
     },
   },
 };
-
-const INFERENCE_MODEL_RESOURCE = METADATA.types.InferenceModelType!.resource!;
 
 function Metadata({ children }: { children: ReactNode }): ReactNode {
   return (

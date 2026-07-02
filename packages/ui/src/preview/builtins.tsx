@@ -2,7 +2,7 @@ import { lazy, useEffect, useState, type ReactElement } from "react";
 
 import { EmptyState } from "../fragments/EmptyState";
 import { LoadingPanel } from "../fragments/LoadingPanel";
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { formatSize, isJsonMime } from "./model";
 import {
   type PreviewProvider,
@@ -61,7 +61,7 @@ function FileText({
   url: string;
   children: (text: string) => ReactElement;
 }): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const { text, loading, error } = useFileText(url);
   if (loading) return <LoadingPanel message={t("preview.loading")} />;
   if (error) return <EmptyState title={t("preview.loadError")} description={error.message} />;
@@ -101,7 +101,7 @@ function MarkdownPreview({ file }: PreviewProviderProps): ReactElement {
 }
 
 function FallbackPreview({ file }: PreviewProviderProps): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   return (
     <EmptyState
       icon="files"

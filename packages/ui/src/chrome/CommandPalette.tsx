@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactElement } from "react";
 import { useNavigate } from "@tanstack/react-router";
 
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { Glyph } from "./Glyph";
 import { useChromeMenuTree } from "./refine-menu";
 import {
@@ -29,7 +29,7 @@ export function CommandPalette({
   placeholder,
   triggerPlaceholder,
 }: CommandPaletteProps): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const [open, setOpen] = useState(false);
   useSpotlightShortcut(() => setOpen((current) => !current));
   const navCommands = useNavCommands();

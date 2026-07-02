@@ -1,9 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import {
-  FormView,
-  type FormField,
-  type GroupDescriptor,
-} from "@angee/ui";
+import { FormView, type FormField, type GroupDescriptor } from "@angee/ui";
 
 import { RuntimeFixture, jsonResponse, storySchema } from "./runtime-fixtures";
 

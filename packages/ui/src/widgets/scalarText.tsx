@@ -91,6 +91,28 @@ function PhoneRead({
   return <span className="text-13 text-fg">{value ?? ""}</span>;
 }
 
+function PasswordEdit({
+  value,
+  onChange,
+  field,
+  readOnly,
+}: WidgetRenderProps<string>): ReactElement {
+  return (
+    <Input
+      type="password"
+      value={value ?? ""}
+      readOnly={readOnly}
+      aria-label={widgetLabel(field, "Password")}
+      placeholder={fieldPlaceholder(field)}
+      onChange={(event) => onChange?.(event.currentTarget.value)}
+    />
+  );
+}
+
+function PasswordRead(): ReactElement {
+  return <span className="text-13 text-fg">••••••••</span>;
+}
+
 export const emailWidget = {
   edit: EmailEdit,
   read: EmailRead,
@@ -109,6 +131,11 @@ export const phoneWidget = {
   cell: PhoneRead,
 } satisfies WidgetDefinition<string>;
 
+export const passwordWidget = {
+  edit: PasswordEdit,
+  read: PasswordRead,
+} satisfies WidgetDefinition<string>;
+
 function fieldPlaceholder(field: WidgetField | undefined): string | undefined {
-  return typeof field?.label === "string" ? field.label : undefined;
+  return field?.placeholder ?? (typeof field?.label === "string" ? field.label : undefined);
 }

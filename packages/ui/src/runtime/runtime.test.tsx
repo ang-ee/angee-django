@@ -6,10 +6,13 @@ import { describe, expect, test } from "vitest";
 import {
   AppRuntimeProvider,
   useDrawers,
+  useRuntimeAuth,
+  useRuntimeUserPreferences,
   useSlot,
   useT,
   useWidget,
   type AppRuntime,
+  type RuntimeI18n,
 } from "./runtime";
 
 function wrapperFor(runtime: Partial<AppRuntime>) {
@@ -30,6 +33,38 @@ describe("useWidget", () => {
   });
 });
 
+describe("AppRuntimeProvider", () => {
+  test("nested providers overlay dynamic session state without dropping registries", () => {
+    function wrapper({ children }: { children: ReactNode }) {
+      return (
+        <AppRuntimeProvider runtime={{ widgets: { text: "TEXT_WIDGET" } }}>
+          <AppRuntimeProvider
+            runtime={{
+              auth: {
+                user: { id: "user_1", name: "Ada Lovelace" },
+                status: "authenticated",
+                hasRole: () => false,
+              },
+            }}
+          >
+            {children}
+          </AppRuntimeProvider>
+        </AppRuntimeProvider>
+      );
+    }
+    const { result } = renderHook(
+      () => ({
+        widget: useWidget("text"),
+        auth: useRuntimeAuth(),
+      }),
+      { wrapper },
+    );
+
+    expect(result.current.widget).toBe("TEXT_WIDGET");
+    expect(result.current.auth.user?.name).toBe("Ada Lovelace");
+  });
+});
+
 describe("useSlot", () => {
   test("returns only the entries contributed to the requested slot", () => {
     const wrapper = wrapperFor({
@@ -41,6 +76,14 @@ describe("useSlot", () => {
     });
     const { result } = renderHook(() => useSlot("header"), { wrapper });
     expect(result.current.map((entry) => entry.id)).toEqual(["a", "c"]);
+  });
+});
+
+describe("useRuntimeUserPreferences", () => {
+  test("defaults to empty preferences outside the app auth provider", () => {
+    const { result } = renderHook(() => useRuntimeUserPreferences());
+
+    expect(result.current.preferences).toEqual({});
   });
 });
 
@@ -71,7 +114,9 @@ describe("useDrawers", () => {
 
 describe("useT", () => {
   test("resolves a key in its namespace and interpolates vars", () => {
-    const wrapper = wrapperFor({ i18n: { notes: { greet: "Hi {name}" } } });
+    const wrapper = wrapperFor({
+      i18n: testI18n({ notes: { greet: "Hi {name}" } }),
+    });
     const { result } = renderHook(() => useT("notes"), { wrapper });
     expect(result.current("greet", { name: "Ada" })).toBe("Hi Ada");
   });
@@ -81,3 +126,17 @@ describe("useT", () => {
     expect(result.current("missing")).toBe("missing");
   });
 });
+
+function testI18n(
+  resources: Record<string, Record<string, string>>,
+): RuntimeI18n {
+  return {
+    getFixedT: (_lng, namespace) => (key, options = {}) => {
+      const template = resources[namespace]?.[key] ?? options.defaultValue ?? key;
+      return template.replace(/\{([A-Za-z0-9_]+)\}/g, (match, name: string) => {
+        const value = options[name];
+        return value === undefined ? match : String(value);
+      });
+    },
+  };
+}

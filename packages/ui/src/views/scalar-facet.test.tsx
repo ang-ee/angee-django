@@ -4,22 +4,34 @@ import { renderHook } from "@testing-library/react";
 import type { ResourceFacetOption } from "@angee/refine";
 import type {
   ModelMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { scalarFacetDeclarations, useScalarFacets } from "./scalar-facet";
 
-const dataMocks = vi.hoisted(() => ({
-  facets: vi.fn(),
-}));
+const dataMocks = vi.hoisted(() => {
+  const groupsDocument = { kind: "groups-document" };
+  return {
+    facets: vi.fn(),
+    groupsDocument,
+    operationDocuments: {
+      public: {
+        groups: { "notes.Note": groupsDocument },
+      },
+    },
+  };
+});
 
-vi.mock("../data/hooks", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../data/hooks")>();
+vi.mock("@angee/refine", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/refine")>();
   return {
     ...actual,
     useAngeeFacets: dataMocks.facets,
+    useOperationDocuments: () => dataMocks.operationDocuments,
   };
 });
+
+const GROUPS_TARGET = { dataProviderName: "public", root: "notes_groups" };
 
 beforeEach(() => {
   dataMocks.facets.mockReset();
@@ -65,7 +77,8 @@ describe("useScalarFacets", () => {
         { title: { iContains: "release" }, status: { exact: "DRAFT" } },
       ));
 
-    expect(dataMocks.facets).toHaveBeenCalledWith(NOTE_METADATA.resource, {
+    expect(dataMocks.facets).toHaveBeenCalledWith(GROUPS_TARGET, {
+      document: dataMocks.groupsDocument,
       facets: [
         {
           id: "status",
@@ -73,7 +86,7 @@ describe("useScalarFacets", () => {
           orderBy: [{ field: "status", direction: "ASC", nulls: "LAST" }],
           valueKey: "status",
           pageSize: 200,
-          where: { title: { _ilike: "release" } },
+          where: { title: { _ilike: "%release%" } },
         },
         {
           id: "source",
@@ -82,7 +95,7 @@ describe("useScalarFacets", () => {
           valueKey: "source",
           pageSize: 200,
           where: {
-            title: { _ilike: "release" },
+            title: { _ilike: "%release%" },
             status: { _eq: "DRAFT" },
           },
         },
@@ -178,7 +191,7 @@ const NOTE_METADATA: ModelMetadata = {
     appLabel: "notes",
     modelName: "note",
     publicIdField: "sqid",
-    roots: {},
+    roots: { groups: "notes_groups" },
     typeNames: { node: "NoteType" },
     capabilities: ["list", "filter", "groups"],
     filterFields: ["title", "status", "source", "wordCount", "updatedAt"],

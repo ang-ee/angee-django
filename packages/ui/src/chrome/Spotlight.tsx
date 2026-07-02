@@ -8,7 +8,7 @@ import {
 
 import { LazyBoundary } from "../fragments/LazyBoundary";
 import { LoadingPanel } from "../fragments/LoadingPanel";
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import {
   DialogBackdrop,
   DialogContent,
@@ -63,7 +63,7 @@ export function Spotlight({
   open,
   placeholder,
 }: SpotlightProps): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const resolvedPlaceholder = placeholder ?? t("chrome.searchCommands");
   const commandPalette = t("chrome.commandPalette");
 

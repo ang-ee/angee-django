@@ -4,15 +4,15 @@ import { describe, expect, test } from "vitest";
 
 import type {
   ModelMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 import {
   bucketFilterForGroup,
   bucketValueLabels,
   resourceViewGroupToAggregateDimension,
   groupLabelDimension,
-} from "./ListInternals";
-import { validResourceViewGroupStack } from "./list-view-utils";
+} from "./resource-view-list-body";
+import { validResourceViewGroupStack } from "./resource-view-utils";
 
 // A model whose resource artifact owns group dimensions, including a relation
 // label axis for `party__display_name`.

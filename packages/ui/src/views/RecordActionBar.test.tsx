@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import type { Row } from "@angee/resources";
+import type { Row } from "@angee/metadata";
 import {
   cleanup,
   fireEvent,

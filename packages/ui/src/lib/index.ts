@@ -20,6 +20,7 @@ export {
   type ToneValueBuckets,
 } from "./tones";
 export { useRender } from "./slot";
+export { useLatestRef } from "./use-latest-ref";
 export type {
   UseRenderComponentProps,
   UseRenderRenderProp,

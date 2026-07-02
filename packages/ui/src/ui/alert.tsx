@@ -1,7 +1,7 @@
 import * as React from "react";
 
 import { Glyph } from "../chrome/Glyph";
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { INTENT_GLYPHS, toneClass, type FeedbackIntent, type Fill } from "../lib/tones";
 import { tv, type VariantProps } from "../lib/variants";
@@ -133,7 +133,7 @@ export function Banner({
   format = "banner",
   ...props
 }: BannerProps): React.ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const styles = alertVariants({ format });
   const dismissAction = onDismiss ? (
     <button

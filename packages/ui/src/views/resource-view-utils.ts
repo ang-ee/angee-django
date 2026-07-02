@@ -1,15 +1,22 @@
 import type { ReactNode } from "react";
 import {
+  filterFieldType as metadataFilterFieldType,
+  groupAllowedByResource,
+  groupSupportedByResource,
   isClientRowModel,
+  looksLikeDateField,
+  resourceGroupDimensionForField,
+  supportsChoiceFacet as metadataSupportsChoiceFacet,
   type ModelFieldMetadata,
   type ModelMetadata,
   type Row,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 import { dedupeBy } from "../lib/dedupe";
 import { statusLabel } from "../lib/labels";
 import type {
   ResourceToolbarCustomFilter,
+  ResourceToolbarCustomFilterOperator,
   ResourceToolbarCustomFilterChip,
   ResourceToolbarFilterField,
   ResourceToolbarFilterOption,
@@ -18,6 +25,7 @@ import type {
 import {
   DEFAULT_TEXT_FILTER_FIELD,
   Filter,
+  RESOURCE_VIEW_GROUP_GRANULARITIES,
   isLookupOperator,
   type ResourceViewFilter,
   type ResourceViewGroup,
@@ -27,19 +35,14 @@ import {
 } from "./resource-view-model";
 import {
   groupFieldLabel,
-  looksLikeDateField,
   readPath,
-  resourceGroupDimensionForField,
-  fieldToSnake,
-} from "./ListInternals";
+} from "./resource-view-list-body";
 import type { ColumnDescriptor } from "./page";
 import {
   enumOptions,
   fieldLabel,
-  groupLabel,
+  resourceFieldGroupLabel,
 } from "./model-metadata-defaults";
-
-const DATE_GROUP_GRANULARITIES = ["year", "quarter", "month", "week", "day"] as const;
 
 export function buildGroupOptions<TRow extends Row>(
   columns: readonly ColumnDescriptor<TRow>[],
@@ -62,10 +65,10 @@ export function buildGroupOptions<TRow extends Row>(
     addOption({
       id: resolvedGroup.field,
       label: relationGroupLabel(resolvedGroup, metadata)
-        ?? groupLabel(resolvedGroup.field, field),
+        ?? resourceFieldGroupLabel(resolvedGroup.field, field),
       group: resolvedGroup,
       type,
-      ...(type === "date" ? { granularities: DATE_GROUP_GRANULARITIES } : {}),
+      ...(type === "date" ? { granularities: RESOURCE_VIEW_GROUP_GRANULARITIES } : {}),
     });
   }
 
@@ -83,10 +86,10 @@ export function buildGroupOptions<TRow extends Row>(
     const type = dateGroupType(alias.field, field) ? "date" : "value";
     addOption({
       id: alias.field,
-      label: groupLabel(alias.field, field),
+      label: resourceFieldGroupLabel(alias.field, field),
       group,
       type,
-      ...(type === "date" ? { granularities: DATE_GROUP_GRANULARITIES } : {}),
+      ...(type === "date" ? { granularities: RESOURCE_VIEW_GROUP_GRANULARITIES } : {}),
     });
   }
   for (const fieldName of resourceGroupByFields) {
@@ -98,13 +101,13 @@ export function buildGroupOptions<TRow extends Row>(
     const type = dateGroupType(fieldName, field) ? "date" : "value";
     addOption({
       id: fieldName,
-      label: groupLabel(fieldName, field),
+      label: resourceFieldGroupLabel(fieldName, field),
       group: {
         field: fieldName,
         ...(type === "date" ? { granularity: "day" as const } : {}),
       },
       type,
-      ...(type === "date" ? { granularities: DATE_GROUP_GRANULARITIES } : {}),
+      ...(type === "date" ? { granularities: RESOURCE_VIEW_GROUP_GRANULARITIES } : {}),
     });
   }
 
@@ -121,17 +124,17 @@ export function buildGroupOptions<TRow extends Row>(
         id: column.field,
         // Group labels are field-derived (groupFieldLabel trims a trailing
         // "At"), independent of the column's display header.
-        label: groupLabel(column.field, field),
+        label: resourceFieldGroupLabel(column.field, field),
         group: { field: column.field, granularity: "day" },
         type: "date",
-        granularities: DATE_GROUP_GRANULARITIES,
+        granularities: RESOURCE_VIEW_GROUP_GRANULARITIES,
       });
       continue;
     }
     if (supportsChoiceFacet(column, metadata)) {
       addOption({
         id: column.field,
-        label: groupLabel(column.field, field),
+        label: resourceFieldGroupLabel(column.field, field),
         group: { field: column.field },
         type: "value",
       });
@@ -249,72 +252,6 @@ function canonicalResourceViewGroup(
   return dimension.field === group.field ? group : { ...group, field: dimension.field };
 }
 
-function groupAllowedByResource(
-  group: ResourceViewGroup,
-  metadata: ModelMetadata | null,
-): boolean {
-  // A client resource groups in the browser over the fetched set, so any plain
-  // (non-relation) resource field is a valid group axis — it has no server
-  // group dimensions to validate against.
-  if (isClientRowModel(metadata?.resource)) {
-    return groupFieldAvailableOnResource(group.field, metadata);
-  }
-  const groupByFields = metadata?.resource?.groupByFields;
-  if (!groupByFields) return true;
-  if (group.aggregateField && !groupFieldAvailableOnResource(group.field, metadata)) {
-    return false;
-  }
-  const aggregateField = group.aggregateField ?? group.field;
-  const dimension =
-    resourceGroupDimensionForField(aggregateField, metadata)
-    ?? resourceGroupDimensionForField(group.field, metadata);
-  if (dimension) return groupByFields.includes(dimension.field);
-  const aggregateSnake = fieldToSnake(aggregateField);
-  const fieldSnake = fieldToSnake(group.field);
-  return groupByFields.some((field) =>
-    field === aggregateField ||
-    field === group.field ||
-    field === aggregateSnake ||
-    field === fieldSnake ||
-    fieldToSnake(field) === aggregateSnake ||
-    fieldToSnake(field) === fieldSnake
-  );
-}
-
-function groupFieldAvailableOnResource(
-  field: string,
-  metadata: ModelMetadata | null,
-): boolean {
-  // Accept a plain field the resource exposes; a dotted path (relation.label)
-  // groups by its leading relation segment when that is a known field.
-  const [head] = field.split(".");
-  const fieldMetadata = metadata?.fields[field] ?? metadata?.fields[head ?? field];
-  if (!fieldMetadata) return false;
-  return fieldMetadata.kind !== "list";
-}
-
-function groupSupportedByResource(
-  group: ResourceViewGroup,
-  metadata: ModelMetadata | null,
-): boolean {
-  if (!groupAllowedByResource(group, metadata)) return false;
-  // A client resource needs no server group dimension: the in-browser groupKey()
-  // resolves the bucket (including date granularities) over the fetched set.
-  if (isClientRowModel(metadata?.resource)) return true;
-  const dimensions = metadata?.resource?.groupDimensions;
-  if (!dimensions) return true;
-  const dimension =
-    resourceGroupDimensionForField(group.aggregateField ?? group.field, metadata)
-    ?? resourceGroupDimensionForField(group.field, metadata);
-  if (!dimension) return false;
-  if (!group.granularity) return true;
-  const requested = group.granularity.toUpperCase();
-  return (dimension.extractions ?? []).some(
-    (extraction) =>
-      extraction.name === group.granularity || extraction.input === requested,
-  );
-}
-
 function defaultGroupList(
   defaultGroups: ResourceViewGroup | readonly ResourceViewGroup[] | null | undefined,
 ): readonly ResourceViewGroup[] {
@@ -419,16 +356,12 @@ function filterFieldType<TRow extends Row>(
   column: ColumnDescriptor<TRow> | undefined,
   field: ModelFieldMetadata | undefined,
 ): ResourceToolbarFilterField["type"] | null {
-  if (field?.kind === "enum") return "selection";
-  if (field?.kind === "scalar" && field.scalar === "String") return "text";
-  if (field?.kind === "scalar" && field.scalar === "Boolean") return "boolean";
-  if (field?.kind === "scalar" && (field.scalar === "Int" || field.scalar === "Float")) return "number";
-  if (field?.kind === "scalar" && field.scalar === "DateTime") return "datetime";
-  if (field?.kind === "scalar" && field.scalar === "Date") return "date";
   if (fieldName === DEFAULT_TEXT_FILTER_FIELD) return "text";
-  if (looksLikeDateField(fieldName)) return "datetime";
-  if (column && supportsChoiceFacet(column, null)) return "selection";
-  return null;
+  return metadataFilterFieldType(fieldName, field, {
+    hasOptions: Boolean(column?.options?.length),
+    hasTone: Boolean(column?.tone),
+    allowStatusFallback: Boolean(column),
+  });
 }
 
 function filterAllowedByResource(
@@ -454,11 +387,14 @@ export function supportsChoiceFacet<TRow extends Row>(
   metadata: ModelMetadata | null,
 ): boolean {
   const field = metadata?.fields[column.field];
-  if (field?.kind === "enum") return true;
-  if (column.options && column.options.length > 0) return true;
-  if (column.tone) return true;
-  // No-metadata escape hatch for RowsListView's built-in status facet.
-  return column.field === "status";
+  return metadataSupportsChoiceFacet({
+    fieldName: column.field,
+    field,
+    hasOptions: Boolean(column.options?.length),
+    hasTone: Boolean(column.tone),
+    // No-metadata escape hatch for RowsListView's built-in status facet.
+    allowStatusFallback: metadata === null,
+  });
 }
 
 function statusValues<TRow extends Row>(
@@ -685,22 +621,24 @@ function customFilterChipLabel({
       value === false ? "not empty" : "empty"
     }`;
   }
-  return `${labelText(fieldLabel) ?? "Field"} ${operatorLabel(operator)} ${
+  return `${labelText(fieldLabel) ?? "Field"} ${filterOperatorLabel(operator)} ${
     filterValueLabel(value)
   }`;
 }
 
-function operatorLabel(operator: ResourceViewLookupOperator): string {
+export function filterOperatorLabel(
+  operator: ResourceViewLookupOperator | ResourceToolbarCustomFilterOperator,
+): string {
   switch (operator) {
     case "exact":
-    case "iExact":
       return "is";
     case "inList":
       return "is one of";
     case "isNull":
       return "is";
+    case "isNotNull":
+      return "is not empty";
     case "contains":
-    case "jsonContains":
     case "iContains":
       return "contains";
     case "startsWith":
@@ -741,7 +679,7 @@ function isLookup(value: unknown): value is ResourceViewLookup {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function labelText(value: ReactNode): string | null {
+export function labelText(value: ReactNode): string | null {
   if (typeof value === "string") return value;
   if (typeof value === "number") return String(value);
   return null;

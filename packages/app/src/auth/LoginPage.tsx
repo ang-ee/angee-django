@@ -10,12 +10,11 @@ import { AngeeLogo, AngeeLogoCube } from "@angee/logo-react";
 import "@angee/logo-react/style.css";
 import { useSlot } from "@angee/ui/runtime";
 
-import { useBaseT } from "@angee/ui/i18n";
+import { useUiT } from "@angee/ui/i18n";
 import { cn } from "@angee/ui/lib/cn";
 import { SlotOutlet, slotEntriesHaveContent } from "@angee/ui/lib/slot-outlet";
 import { safeRedirectPath } from "./safe-redirect";
 import { UsernamePasswordForm } from "./UsernamePasswordForm";
-import { Button } from "@angee/ui/ui/button";
 
 export const AUTH_LOGIN_METHOD_SLOT = "auth.login.method";
 export const AUTH_LOGIN_CARD_FOOTER_SLOT = "auth.login.card-footer";
@@ -24,13 +23,21 @@ export const AUTH_LOGIN_PASSWORD_HELP_SLOT = "auth.login.password-help";
 
 const HERO_SLIDE_KEYS = ["intent", "agentNative", "composable"] as const;
 const LOGIN_BACKDROP_FADE_MS = 1_000;
+const BRAND_TEAL = "#14b8a6";
+const BRAND_GOLD = "#FCD34D";
+const BRAND_GOLD_DARK = "#9A7D0A";
+const BRAND_GOLD_FACE = "#E6B400";
+const BRAND_DARK = "#08111f";
 
 export interface LoginPageProps {
   brand?: ReactNode;
   redirectTo?: string;
   footer?: ReactNode;
+  /** `undefined` renders the default brand hero, `null` removes it, a node replaces it. */
   hero?: ReactNode | null;
+  /** `undefined` renders the default card header, `null` leaves only `brand`, a node replaces it. */
   cardHeader?: ReactNode | null;
+  /** `undefined` renders the password-help slot when contributed, `null` suppresses it, a node replaces it. */
   passwordHelp?: ReactNode | null;
   showAtmosphere?: boolean;
   backgroundImageUrl?: string;
@@ -59,7 +66,7 @@ export function LoginPage({
     }
     window.location.assign(target);
   }, [navigate, redirectTo]);
-  const t = useBaseT();
+  const t = useUiT();
   const methodSlot = useSlot(AUTH_LOGIN_METHOD_SLOT);
   const cardFooterSlot = useSlot(AUTH_LOGIN_CARD_FOOTER_SLOT);
   const pageFooterSlot = useSlot(AUTH_LOGIN_PAGE_FOOTER_SLOT);
@@ -76,7 +83,7 @@ export function LoginPage({
     : (passwordHelp
       ?? (slotEntriesHaveContent(passwordHelpSlot)
         ? <SlotOutlet entries={passwordHelpSlot} />
-        : <DefaultPasswordHelp />));
+        : null));
   const loginMethods = slotEntriesHaveContent(methodSlot)
     ? <SlotOutlet entries={methodSlot} />
     : null;
@@ -236,7 +243,7 @@ function useHeroSlide(): {
   isSwitching: boolean;
   slide: HeroSlide;
 } {
-  const t = useBaseT();
+  const t = useUiT();
   const [index, setIndex] = useState(0);
   const [isSwitching, setIsSwitching] = useState(false);
 
@@ -373,9 +380,9 @@ function WanderingCube(): ReactNode {
       <AngeeLogoCube
         size={68}
         gap={2}
-        leftColor="#14b8a6"
-        rightColor="#fcd34d"
-        baseDark="#08111f"
+        leftColor={BRAND_TEAL}
+        rightColor={BRAND_GOLD}
+        baseDark={BRAND_DARK}
         animationSpeed={24}
         animationType="rotate-slide"
         wander
@@ -425,7 +432,7 @@ function DefaultCardHeader({
 }: {
   brand?: ReactNode;
 }): ReactNode {
-  const t = useBaseT();
+  const t = useUiT();
   if (brand) {
     return (
       <div className="mb-8">
@@ -449,9 +456,9 @@ function DefaultCardHeader({
         <AngeeLogoCube
           size={9}
           gap={0.75}
-          leftColor="#9A7D0A"
-          rightColor="#E6B400"
-          baseDark="#FCD34D"
+          leftColor={BRAND_GOLD_DARK}
+          rightColor={BRAND_GOLD_FACE}
+          baseDark={BRAND_GOLD}
           animationSpeed={18}
           animationType="rotate"
         />
@@ -468,19 +475,5 @@ function DefaultCardHeader({
         </p>
       </div>
     </div>
-  );
-}
-
-function DefaultPasswordHelp(): ReactNode {
-  const t = useBaseT();
-  return (
-    <Button
-      type="button"
-      variant="link"
-      size="sm"
-      className="!h-auto px-0 py-0 text-sm font-medium"
-    >
-      {t("auth.forgotPassword")}
-    </Button>
   );
 }

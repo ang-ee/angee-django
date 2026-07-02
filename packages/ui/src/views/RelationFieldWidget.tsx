@@ -5,7 +5,7 @@ import {
 } from "../runtime";
 import {
   useModelMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 import type { RelationOption } from "../widgets/RelationField";
 import { recordPath } from "./resource-routing";

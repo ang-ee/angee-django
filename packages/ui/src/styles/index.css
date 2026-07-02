@@ -1,5 +1,5 @@
 /* ============================================================================
-   @angee/base — Tailwind 4 entry stylesheet.
+   @angee/ui — Tailwind 4 entry stylesheet.
 
    Imports tokens, binds the dark-mode variant to [data-theme="dark"], and
    bridges every semantic token into a Tailwind utility through the @theme

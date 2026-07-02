@@ -10,49 +10,55 @@ import {
   type BaseRecord,
   type HttpError,
 } from "@refinedev/core";
-import {
-  resourceOperationTarget,
-  refineInvalidationParams,
-  refineResourceIdentifier,
-  refineResourceName,
-  resourceInvalidationTargets,
-  useActiveGraphQLSchemaName,
-  useSchemaFieldMetadata,
-  type DataResourceMetadata,
-  type Row,
-} from "@angee/resources";
 
+import {
+  crudFiltersFromFilterRecord,
+  refineFieldsFromPaths,
+  refineSortersFromAngeeOrder,
+} from "../filter-codec";
 import {
   aggregateRequest,
   actionRequest,
-  crudFiltersFromFilterRecord,
   deletePreviewRequest,
   extractActionOutcome,
   extractAggregate,
-  refineFieldsFromPaths,
-  refineSortersFromAngeeOrder,
   runActionResult,
   extractDeletePreview,
   extractFacet,
   extractGroupBy,
+  extractRevisions,
   groupByRequest,
+  revisionsRequest,
   type AggregateBucket,
   type AggregateRequestOptions,
   type ByIdVariables,
+  type CustomGraphQLOperationTarget,
   type DeletePreview,
   type DeletePreviewVariables,
   type FacetRequestSpec,
   type GroupByRequestOptions,
   type GroupByResult,
+  type ResourceRevision,
   type ResourceFacetResult,
-} from "@angee/refine";
+} from "../operations";
 import {
-  aggregateDocumentForResource,
-  actionDocumentForSchema,
-  deletePreviewDocumentForResource,
-  groupDocumentForResource,
+  operationDocument,
   useOperationDocuments,
-} from "@angee/refine";
+} from "../operation-documents";
+import { stableKey } from "../stable-deps";
+
+type Row = Record<string, unknown>;
+type InvalidateParams = Parameters<ReturnType<typeof useInvalidate>>[0];
+
+export interface ListBatchTarget {
+  dataProviderName: string | undefined;
+  resourceIdentifier: string;
+  resourceName: string;
+}
+
+export interface DialectDocumentOptions {
+  document: unknown;
+}
 
 export interface UseAngeeAggregateResult {
   aggregate: AggregateBucket | null;
@@ -116,12 +122,20 @@ export interface UseAngeeDeletePreviewResult {
   reset: () => void;
 }
 
+export interface UseAngeeRevisionsResult {
+  revisions: readonly ResourceRevision[];
+  count: number;
+  fetching: boolean;
+  error: HttpError | null;
+  refetch: () => void;
+}
+
 export type ActionMutate = (id: string) => Promise<string | undefined>;
 
 export interface UseActionMutationOptions {
   dataProviderName?: string;
-  /** Extra Angee model labels whose refine caches this action mutates. */
-  invalidateModels?: readonly string[];
+  /** Refine invalidation calls this action should trigger after success. */
+  invalidates?: readonly InvalidateParams[];
 }
 
 export interface UseActionMutationState {
@@ -134,32 +148,26 @@ const EMPTY_GROUP_BY_SCOPES: readonly GroupByBatchScope[] = [];
 const EMPTY_LIST_SCOPES: readonly AngeeListBatchScope[] = [];
 
 export function useAngeeAggregate(
-  resource: DataResourceMetadata,
-  options: AggregateRequestOptions & { enabled?: boolean } = {},
+  target: CustomGraphQLOperationTarget | null,
+  options: AggregateRequestOptions & DialectDocumentOptions & { enabled?: boolean },
 ): UseAngeeAggregateResult {
-  const { enabled = true, ...query } = options;
-  const queryKey = stableJson(query);
-  const operationDocuments = useOperationDocuments();
+  const { document, enabled = true, ...query } = options;
+  const queryKey = stableKey(query);
+  const canQuery = enabled && target !== null;
   const request = useMemo(
-    () => aggregateRequest(resourceOperationTarget(resource, "aggregate"), query, {
-      document: aggregateDocumentForResource(
-        operationDocuments,
-        resource.schemaName,
-        resource.modelLabel,
-      ),
-    }),
-    [operationDocuments, resource, queryKey],
+    () => (target ? aggregateRequest(target, query, { document }) : null),
+    [document, target, queryKey],
   );
   const run = useCustom<BaseRecord, HttpError>({
     url: "",
     method: "post",
-    dataProviderName: request.dataProviderName,
-    meta: request.meta,
-    queryOptions: { enabled },
+    dataProviderName: request?.dataProviderName,
+    meta: request?.meta,
+    queryOptions: { enabled: canQuery },
   });
   const data = run.query.data?.data ?? run.result.data;
   return {
-    aggregate: extractAggregate(data, request.root),
+    aggregate: request ? extractAggregate(data, request.root) : null,
     fetching: run.query.isFetching,
     error: run.query.error,
     refetch: () => {
@@ -169,31 +177,25 @@ export function useAngeeAggregate(
 }
 
 export function useAngeeGroupBy(
-  resource: DataResourceMetadata,
-  options: GroupByRequestOptions & { enabled?: boolean },
+  target: CustomGraphQLOperationTarget | null,
+  options: GroupByRequestOptions & DialectDocumentOptions & { enabled?: boolean },
 ): UseAngeeGroupByResult {
-  const { enabled = true, ...query } = options;
-  const queryKey = stableJson(query);
-  const operationDocuments = useOperationDocuments();
+  const { document, enabled = true, ...query } = options;
+  const queryKey = stableKey(query);
+  const canQuery = enabled && target !== null;
   const request = useMemo(
-    () => groupByRequest(resourceOperationTarget(resource, "groups"), query, {
-      document: groupDocumentForResource(
-        operationDocuments,
-        resource.schemaName,
-        resource.modelLabel,
-      ),
-    }),
-    [operationDocuments, resource, queryKey],
+    () => (target ? groupByRequest(target, query, { document }) : null),
+    [document, target, queryKey],
   );
   const run = useCustom<BaseRecord, HttpError>({
     url: "",
     method: "post",
-    dataProviderName: request.dataProviderName,
-    meta: request.meta,
-    queryOptions: { enabled },
+    dataProviderName: request?.dataProviderName,
+    meta: request?.meta,
+    queryOptions: { enabled: canQuery },
   });
   const data = run.query.data?.data ?? run.result.data;
-  const result = extractGroupBy(data, request.root);
+  const result = request ? extractGroupBy(data, request.root) : { count: 0, buckets: [] };
   return {
     ...result,
     fetching: run.query.isFetching,
@@ -205,18 +207,18 @@ export function useAngeeGroupBy(
 }
 
 export function useAngeeFacets(
-  resource: DataResourceMetadata | null,
-  options: UseAngeeFacetsOptions,
+  target: CustomGraphQLOperationTarget | null,
+  options: UseAngeeFacetsOptions & DialectDocumentOptions,
 ): UseAngeeFacetsResult {
-  const { enabled = true, facets } = options;
-  const canQuery = enabled && Boolean(resource?.roots.groups) && facets.length > 0;
+  const { document, enabled = true, facets } = options;
+  const canQuery = enabled && target !== null && facets.length > 0;
   const activeFacets = canQuery ? facets : EMPTY_FACETS;
   const scopes = useMemo<readonly GroupByBatchScope[]>(
     () => activeFacets.map((facet) => ({ key: facet.id, query: facet })),
     [activeFacets],
   );
-  const batch = useGroupByRequestBatch(resource, scopes, { enabled: canQuery });
-  const root = resource?.roots.groups ?? "";
+  const batch = useGroupByRequestBatch(target, scopes, { document, enabled: canQuery });
+  const root = target?.root ?? "";
   return useMemo(() => {
     const values = [...batch.values()];
     return {
@@ -243,30 +245,23 @@ export function useAngeeFacets(
  * and {@link useAngeeGroupByBatch}; results are addressed by each scope's `key`.
  */
 function useGroupByRequestBatch(
-  resource: DataResourceMetadata | null,
+  target: CustomGraphQLOperationTarget | null,
   scopes: readonly GroupByBatchScope[],
-  options: { enabled?: boolean } = {},
+  options: DialectDocumentOptions & { enabled?: boolean },
 ): ReadonlyMap<string, GroupByRequestBatchEntry> {
-  const enabled = options.enabled ?? true;
-  const canQuery = enabled && Boolean(resource?.roots.groups);
+  const { document, enabled = true } = options;
+  const canQuery = enabled && target !== null;
   const activeScopes = canQuery ? scopes : EMPTY_GROUP_BY_SCOPES;
-  const scopesKey = stableJson(activeScopes);
+  const scopesKey = stableKey(activeScopes);
   const dataProvider = useDataProvider();
-  const operationDocuments = useOperationDocuments();
   const requests = useMemo(() => {
-    if (!canQuery || !resource) return [];
-    const document = groupDocumentForResource(
-      operationDocuments,
-      resource.schemaName,
-      resource.modelLabel,
-    );
-    const target = resourceOperationTarget(resource, "groups");
+    if (!canQuery || !target) return [];
     return activeScopes.map((scope) => ({
       key: scope.key,
-      queryKey: stableJson(scope.query),
+      queryKey: stableKey(scope.query),
       request: groupByRequest(target, scope.query, { document }),
     }));
-  }, [activeScopes, canQuery, operationDocuments, resource, scopesKey]);
+  }, [activeScopes, canQuery, document, target, scopesKey]);
   const queries = useQueries({
     queries: requests.map(({ key, queryKey, request }) => ({
       queryKey: [
@@ -323,12 +318,12 @@ function useGroupByRequestBatch(
  * {@link useAngeeGroupBy} would, keyed by the scope's `key`.
  */
 export function useAngeeGroupByBatch(
-  resource: DataResourceMetadata | null,
+  target: CustomGraphQLOperationTarget | null,
   scopes: readonly GroupByBatchScope[],
-  options: { enabled?: boolean } = {},
+  options: DialectDocumentOptions & { enabled?: boolean },
 ): ReadonlyMap<string, UseAngeeGroupByResult> {
-  const batch = useGroupByRequestBatch(resource, scopes, options);
-  const root = resource?.roots.groups ?? "";
+  const batch = useGroupByRequestBatch(target, scopes, options);
+  const root = target?.root ?? "";
   return useMemo(
     () =>
       new Map(
@@ -354,24 +349,24 @@ export function useAngeeGroupByBatch(
  * re-opens the live `changes()` feed (key parity alone never re-subscribes).
  */
 export function useAngeeListBatch(
-  resource: DataResourceMetadata | null,
+  target: ListBatchTarget | null,
   scopes: readonly AngeeListBatchScope[],
   options: { fields: readonly string[]; enabled?: boolean },
 ): ReadonlyMap<string, AngeeListBatchEntry> {
   const enabled = options.enabled ?? true;
-  const canQuery = enabled && Boolean(resource?.roots.list);
+  const canQuery = enabled && target !== null;
   const activeScopes = canQuery ? scopes : EMPTY_LIST_SCOPES;
   const { keys } = useKeys();
   const dataProvider = useDataProvider();
-  const resourceName = resource ? refineResourceName(resource) : "";
-  const identifier = resource ? refineResourceIdentifier(resource) : "";
-  const schemaName = resource?.schemaName;
-  const fieldsKey = stableJson(options.fields);
+  const resourceName = target?.resourceName ?? "";
+  const identifier = target?.resourceIdentifier ?? "";
+  const schemaName = target?.dataProviderName;
+  const fieldsKey = stableKey(options.fields);
   const listMeta = useMemo(
     () => ({ fields: refineFieldsFromPaths(options.fields) }),
     [fieldsKey],
   );
-  const scopesKey = stableJson(activeScopes);
+  const scopesKey = stableKey(activeScopes);
   const requests = useMemo(
     () =>
       activeScopes.map((scope) => ({
@@ -439,24 +434,16 @@ export function useAngeeListBatch(
 }
 
 export function useAngeeDeletePreview(
-  resource: DataResourceMetadata,
+  target: CustomGraphQLOperationTarget | null,
+  options: DialectDocumentOptions,
 ): UseAngeeDeletePreviewResult {
-  const root = resource.roots.deletePreview ?? "";
+  const { document } = options;
+  const root = target?.root ?? "";
   const run = useCustomMutation<BaseRecord, HttpError, DeletePreviewVariables>();
-  const operationDocuments = useOperationDocuments();
   const mutate = useCallback(
     async (variables: DeletePreviewVariables) => {
-      const request = deletePreviewRequest(
-        resourceOperationTarget(resource, "deletePreview"),
-        variables,
-        {
-          document: deletePreviewDocumentForResource(
-            operationDocuments,
-            resource.schemaName,
-            resource.modelLabel,
-          ),
-        },
-      );
+      if (!target) return null;
+      const request = deletePreviewRequest(target, variables, { document });
       const response = await run.mutateAsync({
         url: "",
         method: "post",
@@ -466,7 +453,7 @@ export function useAngeeDeletePreview(
       });
       return extractDeletePreview(response.data, request.root);
     },
-    [operationDocuments, resource, run.mutateAsync],
+    [document, target, run.mutateAsync],
   );
   return {
     preview: root ? extractDeletePreview(run.mutation.data?.data, root) : null,
@@ -474,6 +461,44 @@ export function useAngeeDeletePreview(
     error: run.mutation.error,
     mutate,
     reset: run.mutation.reset,
+  };
+}
+
+export function useAngeeRevisions(
+  target: CustomGraphQLOperationTarget | null,
+  id: string | null | undefined,
+  options: DialectDocumentOptions & { enabled?: boolean },
+): UseAngeeRevisionsResult {
+  const { document, enabled = true } = options;
+  const canQuery =
+    enabled && target !== null && id !== null && id !== undefined && id !== "";
+  const request = useMemo(
+    () =>
+      canQuery && target && id
+        ? revisionsRequest(target, id, { document })
+        : null,
+    [canQuery, document, id, target],
+  );
+  const run = useCustom<BaseRecord, HttpError>({
+    url: "",
+    method: "post",
+    dataProviderName: request?.dataProviderName,
+    meta: request?.meta,
+    queryOptions: { enabled: canQuery },
+  });
+  const data = run.query.data?.data ?? run.result.data;
+  const revisions = useMemo(
+    () => (request ? extractRevisions(data, request.root) : []),
+    [data, request],
+  );
+  return {
+    revisions,
+    count: revisions.length,
+    fetching: run.query.isFetching,
+    error: run.query.error,
+    refetch: () => {
+      void run.query.refetch();
+    },
   };
 }
 
@@ -486,24 +511,19 @@ export function useActionMutation<TField extends string = string>(
   field: TField,
   options: UseActionMutationOptions = {},
 ): [ActionMutate, UseActionMutationState] {
-  const activeSchema = useActiveGraphQLSchemaName();
-  const dataProviderName = options.dataProviderName ?? activeSchema ?? "default";
-  const metadata = useSchemaFieldMetadata();
+  const dataProviderName = options.dataProviderName ?? "default";
   const operationDocuments = useOperationDocuments();
   const invalidate = useInvalidate();
-  const invalidateModels = options.invalidateModels ?? EMPTY_MODEL_LABELS;
-  const invalidationTargets = useMemo(
-    () => resourceInvalidationTargets(metadata, invalidateModels),
-    [metadata, invalidateModels],
-  );
+  const invalidates = options.invalidates ?? EMPTY_INVALIDATIONS;
   const run = useCustomMutation<BaseRecord, HttpError, ByIdVariables>();
   const mutate = useCallback<ActionMutate>(
     async (id) => {
       const request = actionRequest(field, { id }, {
         dataProviderName,
-        document: actionDocumentForSchema(
+        document: operationDocument(
           operationDocuments,
           dataProviderName,
+          "actions",
           field,
         ),
       });
@@ -516,9 +536,7 @@ export function useActionMutation<TField extends string = string>(
       });
       const result = runActionResult(extractActionOutcome(response.data, request.root));
       await Promise.all(
-        invalidationTargets.map((target) =>
-          invalidate(refineInvalidationParams(target)),
-        ),
+        invalidates.map((target) => invalidate(target)),
       );
       return result;
     },
@@ -526,7 +544,7 @@ export function useActionMutation<TField extends string = string>(
       dataProviderName,
       field,
       invalidate,
-      invalidationTargets,
+      invalidates,
       operationDocuments,
       run.mutateAsync,
     ],
@@ -540,7 +558,7 @@ export function useActionMutation<TField extends string = string>(
   ];
 }
 
-const EMPTY_MODEL_LABELS: readonly string[] = [];
+const EMPTY_INVALIDATIONS: readonly InvalidateParams[] = [];
 
 function errorFromHttp(error: unknown): Error | null {
   if (!error) return null;
@@ -550,18 +568,4 @@ function errorFromHttp(error: unknown): Error | null {
       ? String((error as { message?: unknown }).message)
       : String(error);
   return new Error(message);
-}
-
-function stableJson(value: unknown): string {
-  return JSON.stringify(sortJson(value));
-}
-
-function sortJson(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sortJson);
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => [key, sortJson(item)]),
-  );
 }

@@ -71,7 +71,7 @@ const currentUser = {
   roleRefs: ["angee/role:admin"],
 };
 
-describe("Angee refine auth provider", () => {
+describe("Angee app auth provider", () => {
   for (const [name, document] of [
     ["current_user", CURRENT_USER_DOCUMENT],
     ["login", LOGIN_DOCUMENT],

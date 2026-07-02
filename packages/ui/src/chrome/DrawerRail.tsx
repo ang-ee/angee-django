@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { tv } from "../lib/variants";
 import { drawerPanelId, useDrawerState } from "../layouts/drawer-context";
 import { useDrawers, type DrawerEdge } from "../runtime";
@@ -38,7 +38,7 @@ const drawerRailVariants = tv({
 export function DrawerRail({ edge }: { edge: DrawerEdge }): ReactElement | null {
   const drawers = useDrawers(edge);
   const { openId, toggle } = useDrawerState();
-  const t = useBaseT();
+  const t = useUiT();
   const styles = drawerRailVariants({ edge });
 
   if (drawers.length === 0) return null;
