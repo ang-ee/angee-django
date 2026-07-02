@@ -54,35 +54,6 @@ sources:
     kind: local
     path: .
 
-{% if frontend_mode == "caddy_static" %}
-jobs:
-  # Static frontend build for Caddy ingress. This mirrors the Vite service's
-  # codegen bootstrap, then emits the SPA into <web_path>/dist for Caddy to serve.
-  frontend-build:
-    runtime: container
-    image: {{ web_image }}
-    mounts:
-      - source://app:/opt/angee-web/project
-    workdir: /opt/angee-web/project/{{ web_path }}
-    command:
-      - sh
-      - "-c"
-      - >-
-        cd /opt/angee-web
-        && printf 'packages:\n  - "packages/*"\n  - "project/{{ web_path }}"\n' > pnpm-workspace.yaml
-        && pnpm install
-        && n=0
-        && until [ -s project/runtime/schemas/console.graphql ] && [ -s project/runtime/schemas/public.graphql ]; do
-        n=$$((n+1));
-        [ "$$n" -ge 120 ] && { echo 'runtime GraphQL schemas not ready after 120s' >&2; ls -R project/runtime >&2 || true; exit 1; };
-        echo "waiting for runtime GraphQL schemas ($$n/120)..."; sleep 1;
-        done
-        && cd project/{{ web_path }}
-        && pnpm codegen
-        && pnpm build
-    depends_on: [django]
-
-{% endif %}
 services:
   # The control plane. Open on loopback — no --token — so the CLI needs only
   # `export ANGEE_OPERATOR_URL=http://127.0.0.1:{{ operator_port }}`. Runs on the host
@@ -200,6 +171,32 @@ services:
     ports:
       - "{{ ui_port }}:5173"
 {% elif frontend_mode == "caddy_static" %}
+  # Static frontend build for Caddy ingress. This is a compose-visible service
+  # rather than a stack job because Caddy depends on it in the container graph.
+  frontend-build:
+    runtime: container
+    image: {{ web_image }}
+    mounts:
+      - source://app:/opt/angee-web/project
+    workdir: /opt/angee-web/project/{{ web_path }}
+    command:
+      - sh
+      - "-c"
+      - >-
+        cd /opt/angee-web
+        && printf 'packages:\n  - "packages/*"\n  - "project/{{ web_path }}"\n' > pnpm-workspace.yaml
+        && pnpm install
+        && n=0
+        && until [ -s project/runtime/schemas/console.graphql ] && [ -s project/runtime/schemas/public.graphql ]; do
+        n=$$((n+1));
+        [ "$$n" -ge 120 ] && { echo 'runtime GraphQL schemas not ready after 120s' >&2; ls -R project/runtime >&2 || true; exit 1; };
+        echo "waiting for runtime GraphQL schemas ($$n/120)..."; sleep 1;
+        done
+        && cd project/{{ web_path }}
+        && pnpm codegen
+        && pnpm build
+    after: [django]
+
   # Browser-facing ingress. Caddy serves the built SPA and proxies only backend
   # endpoints over internal routes; SPA pages like /operator/services still fall
   # through to index.html.
@@ -212,6 +209,13 @@ services:
       - sh
       - "-c"
       - |-
+        n=0
+        until [ -s /srv/project/{{ web_path }}/dist/index.html ]; do
+          n=$$((n+1))
+          [ "$$n" -ge 180 ] && { echo 'frontend build output not ready after 180s' >&2; ls -R /srv/project/{{ web_path }}/dist >&2 || true; exit 1; }
+          echo "waiting for frontend build output ($$n/180)..."
+          sleep 1
+        done
         cat >/etc/caddy/Caddyfile <<'CADDY'
         :80 {
           encode zstd gzip

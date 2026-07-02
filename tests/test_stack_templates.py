@@ -91,8 +91,8 @@ def test_local_stack_frontend_mode_contract() -> None:
 def test_local_stack_caddy_static_renders_single_public_frontend_ingress() -> None:
     stack = _render_local_stack(frontend_mode="caddy_static")
 
-    assert "frontend-build" in stack["jobs"]
     assert "vite" not in stack["services"]
+    assert "frontend-build" in stack["services"]
     assert "caddy" in stack["services"]
     assert "ports" not in stack["services"]["django"]
     assert stack["services"]["django"]["env"]["ANGEE_BUILTIN_MCP_URL"] == "http://django:8000/mcp"
@@ -100,7 +100,9 @@ def test_local_stack_caddy_static_renders_single_public_frontend_ingress() -> No
     caddy = stack["services"]["caddy"]
     assert caddy["ports"] == ["5173:80"]
     assert caddy["after"] == ["django", "frontend-build"]
+    assert set(caddy["after"]) <= set(stack["services"])
     caddyfile_command = caddy["command"][-1]
+    assert "until [ -s /srv/project/web/dist/index.html ]" in caddyfile_command
     assert "reverse_proxy django:8000" in caddyfile_command
     assert "uri strip_prefix /operator" in caddyfile_command
     assert "reverse_proxy host.docker.internal:${ports.operator}" in caddyfile_command
