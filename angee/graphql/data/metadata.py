@@ -19,9 +19,22 @@ from strawberry_django_hasura import SnakeNameConverter
 
 from angee.base.fields import ImplClassField
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
+from angee.graphql.data.field_classification import (
+    RESOURCE_FIELD_KINDS as _RESOURCE_FIELD_KINDS,
+)
+from angee.graphql.data.field_classification import (
+    RESOURCE_FIELD_SCALARS as _RESOURCE_FIELD_SCALARS,
+)
+from angee.graphql.data.field_classification import (
+    RESOURCE_FIELD_WIDGETS as _RESOURCE_FIELD_WIDGETS,
+)
+from angee.graphql.data.field_classification import (
+    model_field_scalar,
+    resource_field_kind,
+    resource_field_widget,
+)
 from angee.graphql.introspection import (
     FieldPathError,
-    is_to_many_relation,
     is_to_one_relation,
     require_field_for_path,
     surface_field_names,
@@ -46,13 +59,6 @@ _RESOURCE_CAPABILITY_ORDER = (
     "deletePreview",
     "changes",
 )
-
-_RESOURCE_FIELD_KINDS = frozenset({"scalar", "enum", "relation", "list"})
-_RESOURCE_FIELD_SCALARS = frozenset({"ID", "String", "Boolean", "Int", "Float", "DateTime", "Date", "JSON"})
-_RESOURCE_FIELD_WIDGETS = frozenset(
-    {"select", "many2one", "tagInput", "switch", "integer", "float", "datetime", "date", "json"}
-)
-
 
 @dataclass(frozen=True, slots=True)
 class DataRelationAxisMetadata:
@@ -151,6 +157,22 @@ class DataResourceRoots:
     revisions_name: str | None = dataclasses.field(default=None, metadata={"wire": "revisions"})
     changes_name: str | None = dataclasses.field(default=None, metadata={"wire": "changes"})
 
+    def merge(self, left: DataResourceMetadata, right: DataResourceMetadata) -> DataResourceRoots:
+        """Return root names merged with metadata-level collision checks."""
+
+        return DataResourceRoots(
+            **{
+                field_def.name: _merge_value(
+                    left,
+                    right,
+                    field_def.name,
+                    getattr(self, field_def.name),
+                    getattr(right.roots, field_def.name),
+                )
+                for field_def in dataclasses.fields(DataResourceRoots)
+            }
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class DataResourceTypeNames:
@@ -170,6 +192,22 @@ class DataResourceTypeNames:
     update_input: str | None = None
     delete_payload: str | None = None
     revision: str | None = None
+
+    def merge(self, left: DataResourceMetadata, right: DataResourceMetadata) -> DataResourceTypeNames:
+        """Return type names merged with metadata-level collision checks."""
+
+        return DataResourceTypeNames(
+            **{
+                field_def.name: _merge_value(
+                    left,
+                    right,
+                    field_def.name,
+                    getattr(self, field_def.name),
+                    getattr(right.type_names, field_def.name),
+                )
+                for field_def in dataclasses.fields(DataResourceTypeNames)
+            }
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,6 +271,55 @@ class DataResourceMetadata:
     node_type: type | None = dataclasses.field(default=None, metadata={"wire": False})
     filter_type: type | None = dataclasses.field(default=None, metadata={"wire": False})
     order_type: type | None = dataclasses.field(default=None, metadata={"wire": False})
+
+    def merge(self, other: DataResourceMetadata) -> DataResourceMetadata:
+        """Return this resource contribution merged with another same-model contribution."""
+
+        if self.model is not other.model:
+            left_owner = self.model._meta.label if self.model is not None else self.model_label
+            right_owner = other.model._meta.label if other.model is not None else other.model_label
+            raise ImproperlyConfigured(
+                f"resource metadata model label '{self.model_label}' is contributed by both "
+                f"{left_owner} and {right_owner}."
+            )
+        return DataResourceMetadata(
+            model=self.model,
+            model_label=self.model_label,
+            resource_type=self.resource_type or other.resource_type,
+            app_label=self.app_label,
+            model_name=self.model_name,
+            public_id_field=cast(
+                str,
+                _merge_value(self, other, "public_id_field", self.public_id_field, other.public_id_field),
+            ),
+            roots=self.roots.merge(self, other),
+            type_names=self.type_names.merge(self, other),
+            row_model=_merge_row_model(self, other),
+            capabilities=_merge_capabilities(self.capabilities, other.capabilities),
+            fields=_merge_resource_fields(self.fields, other.fields),
+            filter_fields=self.filter_fields or other.filter_fields,
+            order_fields=self.order_fields or other.order_fields,
+            aggregate_fields=self.aggregate_fields or other.aggregate_fields,
+            group_by_fields=self.group_by_fields or other.group_by_fields,
+            group_dimensions=self.group_dimensions or other.group_dimensions,
+            aggregate_measures=self.aggregate_measures or other.aggregate_measures,
+            default_measures=self.default_measures or other.default_measures,
+            default_sort=self.default_sort or other.default_sort,
+            create_fields=self.create_fields or other.create_fields,
+            update_fields=self.update_fields or other.update_fields,
+            required_create_fields=self.required_create_fields or other.required_create_fields,
+            revision_fields=self.revision_fields or other.revision_fields,
+            relation_axes=self.relation_axes or other.relation_axes,
+            group_aliases=self.group_aliases or other.group_aliases,
+            node_type=self.node_type or other.node_type,
+            filter_type=self.filter_type or other.filter_type,
+            order_type=self.order_type or other.order_type,
+        )
+
+    def as_wire(self, *, schema_name: str) -> dict[str, object]:
+        """Return this resource metadata in JSON-safe frontend wire shape."""
+
+        return {"schemaName": schema_name, **_wire_dataclass(self)}
 
 
 def data_resource_metadata(surface: object) -> tuple[DataResourceMetadata, ...]:
@@ -470,7 +557,7 @@ def merge_data_resources(
     merged: dict[str, DataResourceMetadata] = {}
     for item in metadata:
         existing = merged.get(item.model_label)
-        merged[item.model_label] = item if existing is None else _merge_data_resource(existing, item)
+        merged[item.model_label] = item if existing is None else existing.merge(item)
     return tuple(merged.values())
 
 
@@ -481,13 +568,7 @@ def serialize_data_resources(
 ) -> list[dict[str, object]]:
     """Return a JSON-safe schema-extension payload for resource metadata."""
 
-    return [_serialize_data_resource(item, schema_name=schema_name) for item in metadata]
-
-
-def _serialize_data_resource(metadata: DataResourceMetadata, *, schema_name: str) -> dict[str, object]:
-    """Return one JSON-safe resource metadata mapping."""
-
-    return {"schemaName": schema_name, **_wire_dataclass(metadata)}
+    return [item.as_wire(schema_name=schema_name) for item in metadata]
 
 
 def _wire_dataclass(instance: Any) -> dict[str, object]:
@@ -517,93 +598,6 @@ def _wire_value(value: object) -> object:
     if isinstance(value, (tuple, list)):
         return [_wire_value(item) for item in value]
     return value
-
-
-def _merge_data_resource(
-    left: DataResourceMetadata,
-    right: DataResourceMetadata,
-) -> DataResourceMetadata:
-    """Return two same-model resource contributions folded into one."""
-
-    if left.model is not right.model:
-        left_owner = left.model._meta.label if left.model is not None else left.model_label
-        right_owner = right.model._meta.label if right.model is not None else right.model_label
-        raise ImproperlyConfigured(
-            f"resource metadata model label '{left.model_label}' is contributed by both {left_owner} and {right_owner}."
-        )
-    return DataResourceMetadata(
-        model=left.model,
-        model_label=left.model_label,
-        resource_type=left.resource_type or right.resource_type,
-        app_label=left.app_label,
-        model_name=left.model_name,
-        public_id_field=cast(
-            str,
-            _merge_value(left, right, "public_id_field", left.public_id_field, right.public_id_field),
-        ),
-        roots=_merge_roots(left, right),
-        type_names=_merge_type_names(left, right),
-        row_model=_merge_row_model(left, right),
-        capabilities=_merge_capabilities(left.capabilities, right.capabilities),
-        fields=_merge_resource_fields(left.fields, right.fields),
-        filter_fields=left.filter_fields or right.filter_fields,
-        order_fields=left.order_fields or right.order_fields,
-        aggregate_fields=left.aggregate_fields or right.aggregate_fields,
-        group_by_fields=left.group_by_fields or right.group_by_fields,
-        group_dimensions=left.group_dimensions or right.group_dimensions,
-        aggregate_measures=left.aggregate_measures or right.aggregate_measures,
-        default_measures=left.default_measures or right.default_measures,
-        default_sort=left.default_sort or right.default_sort,
-        create_fields=left.create_fields or right.create_fields,
-        update_fields=left.update_fields or right.update_fields,
-        required_create_fields=left.required_create_fields or right.required_create_fields,
-        revision_fields=left.revision_fields or right.revision_fields,
-        relation_axes=left.relation_axes or right.relation_axes,
-        group_aliases=left.group_aliases or right.group_aliases,
-        node_type=left.node_type or right.node_type,
-        filter_type=left.filter_type or right.filter_type,
-        order_type=left.order_type or right.order_type,
-    )
-
-
-def _merge_roots(
-    left: DataResourceMetadata,
-    right: DataResourceMetadata,
-) -> DataResourceRoots:
-    """Return merged root names after fail-fast collision checks."""
-
-    return DataResourceRoots(
-        **{
-            field_def.name: _merge_value(
-                left,
-                right,
-                field_def.name,
-                getattr(left.roots, field_def.name),
-                getattr(right.roots, field_def.name),
-            )
-            for field_def in dataclasses.fields(DataResourceRoots)
-        }
-    )
-
-
-def _merge_type_names(
-    left: DataResourceMetadata,
-    right: DataResourceMetadata,
-) -> DataResourceTypeNames:
-    """Return merged type names after fail-fast collision checks."""
-
-    return DataResourceTypeNames(
-        **{
-            field_def.name: _merge_value(
-                left,
-                right,
-                field_def.name,
-                getattr(left.type_names, field_def.name),
-                getattr(right.type_names, field_def.name),
-            )
-            for field_def in dataclasses.fields(DataResourceTypeNames)
-        }
-    )
 
 
 def _merge_row_model(
@@ -806,9 +800,9 @@ def _resource_fields(
         axis = relation_by_field.get(name)
         model_field = _model_field_or_none(model, python_name)
         surface_type = _surface_field_type(node_type, python_name)
-        kind = _field_kind(
+        kind = resource_field_kind(
             model_field,
-            axis,
+            has_relation_axis=axis is not None,
             is_list=_strawberry_type_is_list(surface_type),
             is_enum=_strawberry_type_is_enum(surface_type),
             is_object=_strawberry_type_is_object(surface_type),
@@ -826,7 +820,7 @@ def _resource_fields(
                 kind=kind,
                 scalar=scalar,
                 values=values,
-                widget=None if scalar == "ID" else _field_widget(model_field, kind),
+                widget=None if scalar == "ID" else resource_field_widget(model_field, kind),
                 filterable=name in filterable,
                 sortable=name in sortable,
                 aggregatable=name in aggregatable,
@@ -860,7 +854,7 @@ def _model_resource_field(
         raise ImproperlyConfigured(
             f"resource metadata for {model._meta.label} declares unknown model field {name!r}."
         ) from error
-    kind = _field_kind(field, relation_axis)
+    kind = resource_field_kind(field, has_relation_axis=relation_axis is not None)
     if kind in {"enum", "list"}:
         raise ImproperlyConfigured(
             f"resource metadata for {model._meta.label} cannot reconstruct {kind} field "
@@ -879,7 +873,7 @@ def _model_resource_field(
         values=(),
         # `model_field_scalar` never yields "ID", so unlike the surface path the
         # widget is always derived from the field kind here.
-        widget=_field_widget(field, kind),
+        widget=resource_field_widget(field, kind),
         filterable=filterable,
         sortable=sortable,
         aggregatable=aggregatable,
@@ -904,31 +898,6 @@ def _relation_model_label(
     remote_model = getattr(remote_field, "model", None)
     meta = getattr(remote_model, "_meta", None)
     return str(meta.label) if meta is not None else None
-
-
-def model_field_scalar(field: models.Field[Any, Any]) -> str | None:
-    """Return the GraphQL scalar a Django field's column type maps to, or None.
-
-    The single owner of Django-field-to-scalar classification, shared by the
-    model-derived resource field metadata and the Hasura group-dimension keys.
-    Relations, enums, and lists carry no scalar of their own; callers gate on kind.
-    """
-
-    if isinstance(field, models.BooleanField):
-        return "Boolean"
-    if isinstance(field, models.IntegerField):
-        return "Int"
-    if isinstance(field, (models.DecimalField, models.FloatField)):
-        return "Float"
-    if isinstance(field, models.DateTimeField):
-        return "DateTime"
-    if isinstance(field, models.DateField):
-        return "Date"
-    if isinstance(field, models.JSONField):
-        return "JSON"
-    if isinstance(field, (models.CharField, models.TextField, models.UUIDField)):
-        return "String"
-    return None
 
 
 # The schema is built with ``hasura_config()`` (``angee/graphql/schema.py``); its
@@ -1103,10 +1072,7 @@ def _resource_enum_values(
     if not isinstance(field, ImplClassField) or not values:
         return values
 
-    labels_by_key = {
-        str(choice["key"]): str(choice["label"])
-        for choice in field.impl_choices()
-    }
+    labels_by_key = {choice.key: choice.label for choice in field.impl_choices()}
     definition = _strawberry_enum_definition(value)
     if definition is None:
         return values
@@ -1167,55 +1133,6 @@ def _model_field_or_none(model: type[models.Model] | None, name: str) -> models.
         return model._meta.get_field(name)
     except FieldDoesNotExist:
         return None
-
-
-def _field_kind(
-    field: models.Field[Any, Any] | None,
-    relation_axis: DataRelationAxisMetadata | None,
-    *,
-    is_list: bool = False,
-    is_enum: bool = False,
-    is_object: bool = False,
-) -> str:
-    """Return a coarse field kind for resource metadata."""
-
-    if is_list or (field is not None and is_to_many_relation(field)):
-        return "list"
-    if is_object or relation_axis is not None or (field is not None and field.is_relation):
-        return "relation"
-    if is_enum or (field is not None and getattr(field, "choices", None)):
-        return "enum"
-    if field is not None and getattr(field, "many_to_many", False):
-        return "list"
-    return "scalar"
-
-
-def _field_widget(field: models.Field[Any, Any] | None, kind: str) -> str | None:
-    """Return the default rendered widget owned by the model field shape."""
-
-    if kind == "enum":
-        return "select"
-    if kind == "relation":
-        return "many2one"
-    if kind == "list":
-        if field is None or field.is_relation:
-            return None
-        return "tagInput"
-    if field is None:
-        return None
-    if isinstance(field, models.BooleanField):
-        return "switch"
-    if isinstance(field, models.IntegerField):
-        return "integer"
-    if isinstance(field, (models.DecimalField, models.FloatField)):
-        return "float"
-    if isinstance(field, models.DateTimeField):
-        return "datetime"
-    if isinstance(field, models.DateField):
-        return "date"
-    if isinstance(field, models.JSONField):
-        return "json"
-    return None
 
 
 def _default_sort(

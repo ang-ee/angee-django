@@ -14,7 +14,7 @@ import importlib
 import inspect
 from collections.abc import Iterable
 from pathlib import Path
-from typing import NamedTuple, cast
+from typing import Any, NamedTuple, cast
 
 from django.apps import AppConfig, apps
 from django.conf import settings
@@ -22,10 +22,15 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.utils.module_loading import module_has_submodule
 
-from angee.base.mixins import HistoryMixin, ModelDecorator
+from angee.base.emission import ModelClassAttribute, ModelDecorator
 from angee.base.models import AngeeModel
 from angee.compose.web import WebRuntime
 from angee.fs import GENERATED_SENTINEL, write_atomic
+
+_COMPOSER_WEB_SOURCES = {
+    Path("web/manifest.json"),
+    Path("web/tailwind.sources.css"),
+}
 
 
 class ModelContributions(NamedTuple):
@@ -261,9 +266,9 @@ class Runtime:
         ``runtime.<label>.models``. Django-owned ``Meta`` facts ride along
         through ``class Meta(_SourceMeta)``; REBAC Meta options are re-emitted
         because Django discards non-standard Meta attributes.
-        ``HistoryMixin`` models gain a ``HistoricalRecords`` field. Field
-        collisions across the composed bases are rejected at construction
-        (``_check_field_collisions``).
+        Mixins may contribute model decorators and class-body attributes through
+        declared emission seams. Field collisions across the composed bases are
+        rejected at construction (``_check_field_collisions``).
         """
 
         lines = [
@@ -280,13 +285,12 @@ class Runtime:
                 str | None,
                 tuple[tuple[type[models.Model], str], ...],
                 tuple[ModelDecorator, ...],
+                tuple[ModelClassAttribute, ...],
             ]
         ] = []
         for model_class in self._ordered_source_models(label, source_models):
             source_alias = f"Abstract{model_class.__name__}"
             imports.extend(self._class_import(model_class, source_alias))
-            if issubclass(model_class, HistoryMixin):
-                imports.append("from simple_history.models import HistoricalRecords")
             runtime_parent_alias = self._runtime_parent_alias(model_class)
             if runtime_parent_alias is not None:
                 runtime_parent_import = self._runtime_parent_import(label, model_class, runtime_parent_alias)
@@ -298,7 +302,7 @@ class Runtime:
                     model_class._meta.label_lower,
                     (),
                 )
-                for base in extension.get_extension_bases()
+                    for base in extension.get_extension_bases()
             )
             aliased_extensions: list[tuple[type[models.Model], str]] = []
             for index, extension_base in enumerate(extension_bases, start=1):
@@ -306,7 +310,9 @@ class Runtime:
                 aliased_extensions.append((extension_base, alias))
                 imports.extend(self._class_import(extension_base, alias))
             decorators = self._model_decorators(model_class, extension_bases)
+            attributes = self._model_attributes(label, model_class, extension_bases)
             imports.extend(self._model_decorator_imports(decorators))
+            imports.extend(self._model_attribute_imports(attributes))
             render_plans.append(
                 (
                     model_class,
@@ -314,12 +320,13 @@ class Runtime:
                     runtime_parent_alias,
                     tuple(aliased_extensions),
                     decorators,
+                    attributes,
                 )
             )
 
         lines.extend(sorted(set(imports)))
         lines.append("")
-        for model_class, source_alias, runtime_parent_alias, extension_aliases, decorators in render_plans:
+        for model_class, source_alias, runtime_parent_alias, extension_aliases, decorators, attributes in render_plans:
             meta_name = f"_{model_class.__name__}Meta"
             base_names = [alias for _extension, alias in extension_aliases]
             if runtime_parent_alias is not None:
@@ -330,7 +337,11 @@ class Runtime:
                 f"        app_label = {label!r}",
             ]
             meta_lines.extend(self._rebac_meta_source(model_class))
-            body_lines = self._history_source(label, model_class)
+            body_lines = [
+                line
+                for attribute in attributes
+                for line in (*self._model_attribute_source(attribute), "")
+            ]
             decorator_lines = [
                 self._model_decorator_source(
                     model_class,
@@ -395,6 +406,46 @@ class Runtime:
                         )
         return tuple(decorators)
 
+    def _model_attributes(
+        self,
+        label: str,
+        model_class: type[models.Model],
+        extension_bases: tuple[type[models.Model], ...],
+    ) -> tuple[ModelClassAttribute, ...]:
+        """Return class-body attributes contributed by composed abstract bases."""
+
+        attributes: list[ModelClassAttribute] = []
+        attributes_by_name: dict[str, ModelClassAttribute] = {}
+        seen_owners: set[type] = set()
+        for base in (*extension_bases, model_class):
+            for owner in base.__mro__:
+                if owner in seen_owners:
+                    continue
+                seen_owners.add(owner)
+                if "angee_model_attributes" not in owner.__dict__:
+                    continue
+                declared = cast(Any, owner).angee_model_attributes(
+                    app_label=label,
+                    model_class=model_class,
+                    extension_bases=extension_bases,
+                )
+                for attribute in declared:
+                    if not isinstance(attribute, ModelClassAttribute):
+                        raise ImproperlyConfigured(
+                            f"{owner.__module__}.{owner.__name__}.angee_model_attributes "
+                            "must return ModelClassAttribute instances"
+                        )
+                    previous = attributes_by_name.get(attribute.name)
+                    if previous is None:
+                        attributes_by_name[attribute.name] = attribute
+                        attributes.append(attribute)
+                    elif previous != attribute:
+                        raise ImproperlyConfigured(
+                            f"{model_class._meta.label} composes conflicting class attributes "
+                            f"for {attribute.name!r}"
+                        )
+        return tuple(attributes)
+
     def _model_decorator_imports(
         self,
         decorators: tuple[ModelDecorator, ...],
@@ -402,6 +453,14 @@ class Runtime:
         """Return import lines for model decorators."""
 
         return [f"import {self._model_decorator_module(decorator)}" for decorator in decorators]
+
+    def _model_attribute_imports(
+        self,
+        attributes: tuple[ModelClassAttribute, ...],
+    ) -> list[str]:
+        """Return import lines for model class attributes."""
+
+        return [f"import {self._model_attribute_module(attribute)}" for attribute in attributes]
 
     def _model_decorator_source(
         self,
@@ -426,6 +485,16 @@ class Runtime:
             parts.append(f"{name}={value!r}")
         return f"@{decorator.import_path}({', '.join(parts)})"
 
+    def _model_attribute_source(
+        self,
+        attribute: ModelClassAttribute,
+    ) -> list[str]:
+        """Return one emitted class attribute declaration."""
+
+        parts = [repr(arg) for arg in attribute.args]
+        parts.extend(f"{name}={value!r}" for name, value in attribute.kwargs)
+        return [f"    {attribute.name} = {attribute.import_path}({', '.join(parts)})"]
+
     def _composed_model_attr(
         self,
         model_class: type[models.Model],
@@ -447,20 +516,13 @@ class Runtime:
             raise ImproperlyConfigured(f"Model decorator import path must be dotted: {decorator.import_path!r}")
         return module
 
-    def _history_source(
-        self,
-        label: str,
-        model_class: type[models.Model],
-    ) -> list[str]:
-        """Return simple-history declarations for a concrete model."""
+    def _model_attribute_module(self, attribute: ModelClassAttribute) -> str:
+        """Return the module imported for one class attribute path."""
 
-        if not issubclass(model_class, HistoryMixin):
-            return []
-        args = f'app="{label}"'
-        excluded = self._history_excluded_fields(model_class)
-        if excluded:
-            args += f", excluded_fields={excluded!r}"
-        return [f"    history = HistoricalRecords({args})", ""]
+        module, _separator, name = attribute.import_path.rpartition(".")
+        if not module or not name:
+            raise ImproperlyConfigured(f"Model class attribute import path must be dotted: {attribute.import_path!r}")
+        return module
 
     def _extensions_for(
         self,
@@ -581,6 +643,8 @@ class Runtime:
         relative = path.relative_to(self.runtime_dir)
         if relative.parts and relative.parts[0] in {"gql", "schemas"}:
             return False
+        if relative.parts and relative.parts[0] == "web" and relative not in _COMPOSER_WEB_SOURCES:
+            return False
         if self._is_orphaned_migration_path(relative):
             return False
         if "__pycache__" in path.parts:
@@ -683,32 +747,6 @@ class Runtime:
             if value is not None:
                 lines.append(f"        {attr} = {value!r}")
         return lines
-
-    def _history_excluded_fields(
-        self,
-        model_class: type[models.Model],
-    ) -> list[str]:
-        """Return source fields simple-history cannot mirror.
-
-        Reads the model's own field lists rather than ``get_fields()``: the
-        latter walks reverse relations through the global relation graph, which
-        requires ``models_ready``. Emission runs mid app-populate (phase 2,
-        before adoption), so only definition-time field lists are available.
-        """
-
-        meta = model_class._meta
-        own_fields = (
-            *meta.local_fields,
-            *meta.private_fields,
-            *meta.local_many_to_many,
-        )
-        return sorted(
-            field.name
-            for field in own_fields
-            if getattr(field, "concrete", True) is False
-            and not field.is_relation
-            and not getattr(field, "auto_created", False)
-        )
 
     def _declared_fields(
         self,

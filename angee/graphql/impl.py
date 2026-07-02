@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import strawberry
 from django.apps import apps
@@ -11,6 +11,7 @@ from strawberry.scalars import JSON
 from strawberry.utils.str_converters import to_snake_case
 
 from angee.base.fields import ImplClassField
+from angee.base.impl import ImplChoice as BaseImplChoice
 
 
 @strawberry.type
@@ -39,16 +40,19 @@ def impl_choices(model: str, field: str) -> list[ImplChoice]:
         raise ImproperlyConfigured(f"{django_model._meta.label} has no field {field!r}.") from error
     if not isinstance(model_field, ImplClassField):
         raise ImproperlyConfigured(f"{django_model._meta.label}.{model_field.name} is not an ImplClassField.")
-    return [
-        ImplChoice(
-            key=str(choice["key"]),
-            label=str(choice["label"]),
-            icon=str(choice["icon"]),
-            category=str(choice["category"]),
-            defaults=choice["defaults"],
-        )
-        for choice in model_field.impl_choices()
-    ]
+    return [_project_choice(choice) for choice in model_field.impl_choices()]
+
+
+def _project_choice(choice: BaseImplChoice) -> ImplChoice:
+    """Project the base impl-choice value object onto the GraphQL type."""
+
+    return ImplChoice(
+        key=choice.key,
+        label=choice.label,
+        icon=choice.icon,
+        category=choice.category,
+        defaults=cast(JSON, choice.defaults),
+    )
 
 
 def _model_for_label(label: str) -> type[Any]:

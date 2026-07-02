@@ -8,4 +8,3 @@
   label: Local filesystem
   backend_class: local
   backend_config: {}
-  is_default: true

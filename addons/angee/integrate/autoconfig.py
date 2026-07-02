@@ -22,6 +22,13 @@ SETTINGS = {
     "ANGEE_INTEGRATION_IMPLS": {
         "none": "angee.integrate.impl.NullIntegrationImpl",
     },
+    # Networked resource manifests belong to integrate's outbound HTTP owner; the
+    # resources addon reads the settings registry lazily when entries materialize.
+    "ANGEE_RESOURCE_SOURCE_CLASSES.url": "angee.integrate.resource_source.url_source",
+    # Credential disconnect guards are explicit operation hooks. Login addons can
+    # append guards here without wiring model-delete signals that also fire during
+    # unrelated cascades.
+    "ANGEE_CREDENTIAL_DISCONNECT_GUARDS": (),
     # VCS bridge backends. ``local`` inventories a local working tree with no
     # network (dev/offline template + skill discovery); host addons add their own
     # backends with yamlconf dotted keys (``"ANGEE_VCS_BACKEND_CLASSES.github"``).

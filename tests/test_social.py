@@ -38,6 +38,7 @@ from tests.conftest import (
     PostMetrics,
     Quota,
     StubFeedBackend,
+    _clear_model_tables,
     _create_missing_tables,
     create_user,
     make_integration,
@@ -58,12 +59,14 @@ _AT = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
 def social_tables() -> Iterator[None]:
     """Create the messaging + social concrete tables and sync the REBAC schema."""
 
-    created = _create_missing_tables(MESSAGING_TEST_MODELS + SOCIAL_TEST_MODELS)
+    table_models = MESSAGING_TEST_MODELS + SOCIAL_TEST_MODELS
+    created = _create_missing_tables(table_models)
     call_command("rebac", "sync", verbosity=0)
     try:
         yield
     finally:
         StubFeedBackend.reset()
+        _clear_model_tables(table_models)
         if created:
             with connection.schema_editor() as schema_editor:
                 for model in reversed(created):

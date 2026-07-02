@@ -12,16 +12,18 @@ from django.contrib.auth.models import Group
 from django.db import connection, models
 from django.db.models.signals import post_save
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 from rebac import actor_context, anonymous_actor
 
-from angee.base.mixins import AuditMixin
+from angee.base.mixins import AuditMixin, TimestampMixin
 from angee.base.serialization import json_safe
 from angee.graphql import access, publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
+from tests.conftest import _clear_model_tables, _create_missing_tables
 
 
-class AuditStamped(AuditMixin, models.Model):
+class AuditStamped(TimestampMixin, AuditMixin, models.Model):
     """Concrete audit model used to test model-owned stamping."""
 
     id = models.CharField(max_length=32, primary_key=True)
@@ -61,14 +63,16 @@ def test_audit_mixin_stamps_from_rebac_actor_inside_save() -> None:
     creator = User.objects.create_user(username="audit-creator")
     editor = User.objects.create_user(username="audit-editor")
 
-    with connection.schema_editor() as editor_schema:
-        editor_schema.create_model(AuditStamped)
+    created_models = _create_missing_tables((AuditStamped,))
     try:
         with actor_context(creator):
             row = AuditStamped.objects.create(id="known", name="first")
         row.refresh_from_db()
         assert row.created_by_id == creator.pk
         assert row.updated_by_id == creator.pk
+        previous_updated_at = timezone.now() - datetime.timedelta(days=1)
+        AuditStamped.objects.filter(pk=row.pk).update(updated_at=previous_updated_at)
+        row.refresh_from_db()
 
         with actor_context(editor):
             row.name = "second"
@@ -76,9 +80,12 @@ def test_audit_mixin_stamps_from_rebac_actor_inside_save() -> None:
         row.refresh_from_db()
         assert row.created_by_id == creator.pk
         assert row.updated_by_id == editor.pk
+        assert row.updated_at > previous_updated_at
     finally:
-        with connection.schema_editor() as editor_schema:
-            editor_schema.delete_model(AuditStamped)
+        _clear_model_tables((AuditStamped,))
+        if created_models:
+            with connection.schema_editor() as editor_schema:
+                editor_schema.delete_model(AuditStamped)
 
 
 def test_connect_publishers_is_idempotent() -> None:
@@ -237,15 +244,17 @@ def test_change_read_gate_drops_unreadable_rows(
 def test_change_read_gate_redacts_denied_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Field-gated values are removed when field reads are denied."""
+    """Field-gated values are redacted when their field action denies."""
 
     monkeypatch.setattr(access, "model_resource_type", lambda model: "group")
     monkeypatch.setattr(access, "gated_read_fields", lambda model: {"secret"})
     monkeypatch.setattr(access, "backend", lambda: object())
+    actions: list[str] = []
 
     def check(*args: object, **kwargs: object) -> SimpleNamespace:
-        """Allow row reads and deny secret field reads."""
+        """Record the REBAC checks used by the subscription gate."""
 
+        actions.append(kwargs["action"])
         return SimpleNamespace(allowed=kwargs["action"] != "read__secret")
 
     monkeypatch.setattr(access, "check_field_access", check)
@@ -261,3 +270,36 @@ def test_change_read_gate_redacts_denied_fields(
     assert event is not None
     assert event.changed_fields == ["name"]
     assert event.changed_values == {"name": "editors"}
+    assert actions == ["read", "read__secret"]
+
+
+def test_change_read_gate_keeps_allowed_field_gates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Field-gated values remain in live payloads when the actor may read them."""
+
+    monkeypatch.setattr(access, "model_resource_type", lambda model: "group")
+    monkeypatch.setattr(access, "gated_read_fields", lambda model: {"secret"})
+    monkeypatch.setattr(access, "backend", lambda: object())
+    actions: list[str] = []
+
+    def check(*args: object, **kwargs: object) -> SimpleNamespace:
+        """Record the resource and field checks used by the subscription gate."""
+
+        actions.append(kwargs["action"])
+        return SimpleNamespace(allowed=True)
+
+    monkeypatch.setattr(access, "check_field_access", check)
+    gate = ChangeReadGate(Group, anonymous_actor())
+
+    event = gate.filter(
+        payload(
+            changed_fields=["name", "secret"],
+            changed_values={"name": "editors", "secret": "visible"},
+        )
+    )
+
+    assert event is not None
+    assert event.changed_fields == ["name", "secret"]
+    assert event.changed_values == {"name": "editors", "secret": "visible"}
+    assert actions == ["read", "read__secret"]

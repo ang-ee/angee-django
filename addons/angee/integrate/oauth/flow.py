@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, cast
 
 from django.apps import apps
@@ -20,9 +22,20 @@ from django.utils.http import url_has_allowed_host_and_scheme
 
 from angee.base.models import instance_from_public_id
 from angee.integrate.oauth import state
+from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import INVALID_STATE, OAuthFlowError
 
 _SESSION_OAUTH_CLIENT_PREFIX = "angee.integrate.oauth.flow:"
+
+
+@dataclass(frozen=True, slots=True)
+class OAuthStart:
+    """Browser redirect-flow start data shared by OAuth connect and OIDC login."""
+
+    authorize_url: str
+    state: str
+    mode: str
+    redirect_uri: str
 
 
 def _oauth_client_model() -> Any:
@@ -61,6 +74,37 @@ def issue_flow(
     session[f"{_SESSION_OAUTH_CLIENT_PREFIX}{state_token}"] = str(oauth_client.sqid)
     session.modified = True
     return state_token, record, effective_redirect_uri, mode
+
+
+def start(
+    request: HttpRequest,
+    oauth_client: Any,
+    redirect_uri: str,
+    *,
+    user_id: str | None = None,
+    next_path: str = "/",
+    flow: state.StateFlow = state.StateFlow.CONNECT,
+    integration_id: str = "",
+    authorize_url_builder: Callable[[Any, str, state.StateRecord, str], str] | None = None,
+) -> OAuthStart:
+    """Issue state and return the browser redirect facts for one OAuth/OIDC flow."""
+
+    state_token, record, effective_redirect_uri, mode = issue_flow(
+        request,
+        oauth_client,
+        redirect_uri,
+        user_id=user_id,
+        next_path=next_path,
+        flow=flow,
+        integration_id=integration_id,
+    )
+    builder = authorize_url_builder or _default_authorize_url
+    return OAuthStart(
+        authorize_url=builder(oauth_client, state_token, record, effective_redirect_uri),
+        state=state_token,
+        mode=mode,
+        redirect_uri=effective_redirect_uri,
+    )
 
 
 def remembered_oauth_client(request: HttpRequest, state_token: str) -> Any:
@@ -122,3 +166,19 @@ def pkce_challenge(code_verifier: str | None) -> str | None:
         return None
     digest = hashlib.sha256(code_verifier.encode()).digest()
     return base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+
+
+def _default_authorize_url(
+    oauth_client: Any,
+    state_token: str,
+    record: state.StateRecord,
+    redirect_uri: str,
+) -> str:
+    """Return the standard OAuth authorize URL for one started flow."""
+
+    return OAuthClientProtocol(oauth_client).authorize_url(
+        state=state_token,
+        redirect_uri=redirect_uri,
+        scopes=oauth_client.default_scope_values,
+        code_challenge=pkce_challenge(record.code_verifier),
+    )

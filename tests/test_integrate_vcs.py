@@ -125,6 +125,26 @@ def test_search_repositories_is_the_typeahead(vcs_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_search_repositories_uses_backend_declared_scope_key(vcs_tables: None) -> None:
+    """The VCS bridge asks its backend which config key scopes repository search."""
+
+    del vcs_tables
+    repos = [
+        *REPOS,
+        {
+            "name": "other/widgets",
+            "org": "other",
+            "remote": "https://github.com/other/widgets.git",
+            "default_branch": "main",
+            "visibility": "private",
+        },
+    ]
+    vcs = _vcs_bridge("search-scope", config={"stub_repos": repos, "stub_org": "other"})
+
+    assert [candidate.name for candidate in vcs.search_repositories("widget")] == ["other/widgets"]
+
+
+@pytest.mark.django_db(transaction=True)
 def test_source_refresh_materializes_templates(vcs_tables: None) -> None:
     """A template source refresh walks the tree and upserts Template rows."""
 

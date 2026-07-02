@@ -15,8 +15,10 @@ import pytest
 from asgiref.sync import async_to_sync, sync_to_async
 from cryptography.hazmat.primitives.asymmetric import rsa
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
 from django.db import connection
+from django.test import override_settings
 from django.utils import timezone
 from rebac import system_context
 from strawberry_django_aggregates import AggregateOp, compute_aggregation
@@ -147,9 +149,9 @@ def test_outbound_requests_send_honest_user_agent() -> None:
     protocol._transport = transport
     protocol.exchange_code(code="abc", redirect_uri="https://app.example/callback")
 
-    assert seen == [oauth_protocol._USER_AGENT, oauth_protocol._USER_AGENT]
+    assert seen == [oauth_protocol.USER_AGENT, oauth_protocol.USER_AGENT]
     # Lock in the pitfall: never an HTTP-client default or a spoofed browser/curl UA.
-    sent = oauth_protocol._USER_AGENT.lower()
+    sent = oauth_protocol.USER_AGENT.lower()
     assert not any(token in sent for token in ("python-urllib", "python-httpx", "mozilla", "chrome", "curl"))
 
 
@@ -246,7 +248,7 @@ def test_exchange_code_posts_json_body_with_pkce() -> None:
 
     assert tokens == {"access_token": "access-token", "refresh_token": "refresh-token"}
     assert captured["url"] == "https://issuer.example/oauth/token"
-    assert captured["ua"] == oauth_protocol._USER_AGENT
+    assert captured["ua"] == oauth_protocol.USER_AGENT
     assert captured["fields"] == {
         "audience": "https://api.example",
         "client_id": "oidc-client",
@@ -362,7 +364,7 @@ def test_verify_id_token_rejects_bad_issuer(monkeypatch: pytest.MonkeyPatch) -> 
     )
 
     with pytest.raises(OAuthFlowError) as exc_info:
-        OAuthClientOidcProtocol(oidc).verify_id_token("token", nonce="nonce", _jwks_client=_FakeJwksClient())
+        OAuthClientOidcProtocol(oidc).verify_id_token("token", nonce="nonce", jwks_client=_FakeJwksClient())
 
     assert exc_info.value.code == INVALID_ID_TOKEN
 
@@ -378,7 +380,7 @@ def test_verify_id_token_rejects_bad_audience(monkeypatch: pytest.MonkeyPatch) -
     )
 
     with pytest.raises(OAuthFlowError) as exc_info:
-        OAuthClientOidcProtocol(oidc).verify_id_token("token", nonce="nonce", _jwks_client=_FakeJwksClient())
+        OAuthClientOidcProtocol(oidc).verify_id_token("token", nonce="nonce", jwks_client=_FakeJwksClient())
 
     assert exc_info.value.code == INVALID_ID_TOKEN
 
@@ -394,7 +396,7 @@ def test_verify_id_token_rejects_bad_nonce(monkeypatch: pytest.MonkeyPatch) -> N
     )
 
     with pytest.raises(OAuthFlowError) as exc_info:
-        OAuthClientOidcProtocol(oidc).verify_id_token("token", nonce="nonce", _jwks_client=_FakeJwksClient())
+        OAuthClientOidcProtocol(oidc).verify_id_token("token", nonce="nonce", jwks_client=_FakeJwksClient())
 
     assert exc_info.value.code == INVALID_ID_TOKEN
 
@@ -417,12 +419,77 @@ def test_verify_id_token_accepts_rs256_and_rejects_ps256() -> None:
     ps256_token = oidc_protocol.jwt.encode(claims, private_key, algorithm="PS256", headers={"kid": "kid"})
     jwks_client = _FakeJwksClient(private_key.public_key())
 
-    verified = OAuthClientOidcProtocol(oidc).verify_id_token(rs256_token, nonce="nonce", _jwks_client=jwks_client)
+    verified = OAuthClientOidcProtocol(oidc).verify_id_token(rs256_token, nonce="nonce", jwks_client=jwks_client)
 
     assert verified["sub"] == "sub-alg"
     with pytest.raises(OAuthFlowError) as exc_info:
-        OAuthClientOidcProtocol(oidc).verify_id_token(ps256_token, nonce="nonce", _jwks_client=jwks_client)
+        OAuthClientOidcProtocol(oidc).verify_id_token(ps256_token, nonce="nonce", jwks_client=jwks_client)
     assert exc_info.value.code == INVALID_ID_TOKEN
+
+
+def test_jwks_client_is_cached_per_uri(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OIDC verification reuses the JWKS client for one configured URI."""
+
+    clients: list[Any] = []
+
+    class FakeJwksClient:
+        """Stub PyJWT client for cache tests."""
+
+        def __init__(self, uri: str) -> None:
+            self.uri = uri
+            clients.append(self)
+
+    monkeypatch.setattr(oidc_protocol, "_PinnedPyJWKClient", FakeJwksClient)
+    oidc_protocol._jwks_client.cache_clear()
+    try:
+        first = oidc_protocol._jwks_client("https://issuer.example/jwks")
+        second = oidc_protocol._jwks_client("https://issuer.example/jwks")
+    finally:
+        oidc_protocol._jwks_client.cache_clear()
+
+    assert first is second
+    assert [client.uri for client in clients] == ["https://issuer.example/jwks"]
+
+
+def test_jwks_fetch_uses_pinned_http_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PyJWT owns key parsing, while Angee owns the JWKS HTTP transport."""
+
+    requests: list[tuple[str, dict[str, str], bool, int]] = []
+
+    class FakeHttpResponse:
+        status = 200
+        ok = True
+
+        def json(self) -> dict[str, list[object]]:
+            return {"keys": []}
+
+    class FakeHttpClient:
+        def get(
+            self,
+            url: str,
+            *,
+            headers: dict[str, str],
+            allow_private: bool,
+            timeout: int,
+            **kwargs: object,
+        ) -> FakeHttpResponse:
+            del kwargs
+            requests.append((url, headers, allow_private, timeout))
+            return FakeHttpResponse()
+
+    monkeypatch.setattr(oidc_protocol, "HttpClient", FakeHttpClient)
+
+    data = oidc_protocol._PinnedPyJWKClient("https://issuer.example/jwks").fetch_data()
+
+    assert data == {"keys": []}
+    assert requests == [
+        (
+            "https://issuer.example/jwks",
+            {"Accept": "application/json", "User-Agent": oidc_protocol.USER_AGENT},
+            True,
+            oidc_protocol.HTTP_TIMEOUT_SECONDS,
+        )
+    ]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -471,12 +538,30 @@ def test_resolver_blocks_non_active_account(oidc_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_external_account_manager_coerces_status_member_names(oidc_tables: None) -> None:
+    """External-account status normalization lives in the manager field owner."""
+
+    user = get_user_model().objects.create_user(username="status-owner", email="status@example.com")
+    oauth_client = _oauth_client()
+    account = ExternalAccount.objects.link(
+        oauth_client,
+        "sub-status",
+        owner=user,
+        email="status@example.com",
+        status="REVOKED",
+    )
+
+    assert account.status == AccountStatus.REVOKED
+
+
+@pytest.mark.django_db(transaction=True)
 def test_resolver_blocks_inactive_user(oidc_tables: None) -> None:
     """A deactivated owner must not authenticate via OIDC (parity with the password path)."""
 
     user = get_user_model().objects.create_user(username="inactive-owner", email="ina@example.com")
     user.is_active = False
-    user.save(update_fields=["is_active"])
+    with system_context(reason="test.oidc.inactive_user"):
+        user.save(update_fields=["is_active"])
     oauth_client = _oauth_client()
     ExternalAccount.objects.link(oauth_client, "sub-inactive", owner=user, email="ina@example.com")
 
@@ -485,46 +570,44 @@ def test_resolver_blocks_inactive_user(oidc_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_resolver_link_on_email_match_uses_signed_email_claim(
+def test_resolver_link_on_email_match_requires_verified_email(
     oidc_tables: None,
 ) -> None:
-    """link_on_email_match follows the P1 policy without requiring email_verified."""
+    """Email-match login only trusts provider-verified email addresses."""
 
-    user = get_user_model().objects.create_user(username="verify-match", email="vm@example.com")
+    get_user_model().objects.create_user(username="verify-match", email="vm@example.com")
     oauth_client = _oauth_client(link_on_email_match=True, allowed_email_domains=["example.com"])
 
-    resolved = identity.resolve(
-        oauth_client,
-        sub="sub-unverified",
-        email="vm@example.com",
-        claims={"sub": "sub-unverified", "email": "vm@example.com"},
-    )
+    with pytest.raises(OAuthFlowError):
+        identity.resolve(
+            oauth_client,
+            sub="sub-unverified",
+            email="vm@example.com",
+            claims={"sub": "sub-unverified", "email": "vm@example.com"},
+        )
 
-    assert resolved.pk == user.pk
     with system_context(reason="test oidc assertions"):
-        account = ExternalAccount.objects.get(oauth_client=oauth_client, external_id="sub-unverified")
-    assert account.email == "vm@example.com"
+        assert not ExternalAccount.objects.filter(oauth_client=oauth_client, external_id="sub-unverified").exists()
 
 
 @pytest.mark.django_db(transaction=True)
-def test_resolver_create_on_login_uses_signed_email_claim(
+def test_resolver_create_on_login_requires_verified_email(
     oidc_tables: None,
 ) -> None:
-    """create_on_login follows the P1 policy without requiring email_verified."""
+    """Create-on-login only provisions from provider-verified email addresses."""
 
     oauth_client = _oauth_client(create_on_login=True, allowed_email_domains=["example.com"])
 
-    user = identity.resolve(
-        oauth_client,
-        sub="sub-unverified-new",
-        email="new@example.com",
-        claims={"sub": "sub-unverified-new", "email": "new@example.com"},
-    )
+    with pytest.raises(OAuthFlowError):
+        identity.resolve(
+            oauth_client,
+            sub="sub-unverified-new",
+            email="new@example.com",
+            claims={"sub": "sub-unverified-new", "email": "new@example.com"},
+        )
 
-    assert user.email == "new@example.com"
     with system_context(reason="test oidc assertions"):
-        account = ExternalAccount.objects.get(oauth_client=oauth_client, external_id="sub-unverified-new")
-    assert account.email == "new@example.com"
+        assert not ExternalAccount.objects.filter(oauth_client=oauth_client, external_id="sub-unverified-new").exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -547,6 +630,29 @@ def test_resolver_link_on_email_match_creates_external_account(
     with system_context(reason="test oidc assertions"):
         account = ExternalAccount.objects.get(oauth_client=oauth_client, external_id="sub-email")
     assert account.email == "match@example.com"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_resolver_link_on_email_match_rejects_ambiguous_email(
+    oidc_tables: None,
+) -> None:
+    """Email-match login fails closed when more than one user owns the email."""
+
+    user_model = get_user_model()
+    user_model.objects.create_user(username="email-match-a", email="dupe@example.com")
+    user_model.objects.create_user(username="email-match-b", email="DUPE@example.com")
+    oauth_client = _oauth_client(link_on_email_match=True, allowed_email_domains=["example.com"])
+
+    with pytest.raises(OAuthFlowError):
+        identity.resolve(
+            oauth_client,
+            sub="sub-dupe-email",
+            email="dupe@example.com",
+            claims={"sub": "sub-dupe-email", "email": "dupe@example.com", "email_verified": True},
+        )
+
+    with system_context(reason="test oidc assertions"):
+        assert not ExternalAccount.objects.filter(oauth_client=oauth_client, external_id="sub-dupe-email").exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -825,6 +931,66 @@ def test_credential_upsert_reasserts_active_status(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_credential_disconnect_guard_blocks_last_oidc_sign_in(
+    oidc_tables: None,
+) -> None:
+    """Explicit disconnect refuses the only sign-in method for a passwordless user."""
+
+    user = get_user_model().objects.create_user(username="oidc-only", email="oidc-only@example.com")
+    oauth_client = _oauth_client()
+    account = ExternalAccount.objects.link(
+        oauth_client,
+        "sub-oidc-only",
+        owner=user,
+        email="oidc-only@example.com",
+        identity_claims={"sub": "sub-oidc-only"},
+    )
+    credential = Credential.objects.upsert_for_user(
+        user,
+        oauth_client,
+        "oauth",
+        {"access_token": "access"},
+        external_account=account,
+    )
+
+    with pytest.raises(OAuthFlowError) as exc_info:
+        Credential.objects.check_disconnect(credential)
+
+    assert exc_info.value.code == "only_sign_in_method"
+    assert exc_info.value.http_status == 409
+
+
+@pytest.mark.django_db(transaction=True)
+def test_low_level_credential_delete_does_not_run_disconnect_guard(
+    oidc_tables: None,
+) -> None:
+    """The OIDC guard belongs to explicit disconnect, not model-delete signals."""
+
+    user = get_user_model().objects.create_user(username="oidc-cascade", email="oidc-cascade@example.com")
+    oauth_client = _oauth_client(slug="oidc-cascade")
+    account = ExternalAccount.objects.link(
+        oauth_client,
+        "sub-oidc-cascade",
+        owner=user,
+        email="oidc-cascade@example.com",
+        identity_claims={"sub": "sub-oidc-cascade"},
+    )
+    credential = Credential.objects.upsert_for_user(
+        user,
+        oauth_client,
+        "oauth",
+        {"access_token": "access"},
+        external_account=account,
+    )
+
+    with system_context(reason="test oidc raw credential delete"):
+        credential.delete()
+
+    with system_context(reason="test oidc cascade assertion"):
+        assert not Credential.objects.filter(pk=credential.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_userinfo_claims_merge_into_login_and_link_claims(
     oidc_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -1021,6 +1187,45 @@ def test_state_records_are_single_use() -> None:
     assert exc_info.value.http_status == 400
 
 
+def test_state_consume_rejects_failed_delete(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A state replay loses the delete race and is rejected."""
+
+    record = oauth_state.StateRecord(
+        oauth_client_id="clt_race",
+        redirect_uri="https://app.example/callback",
+        user_id=None,
+        nonce="nonce",
+        code_verifier=None,
+        created_at=timezone.now(),
+    )
+
+    class ReplayCache:
+        def get(self, key: str) -> oauth_state.StateRecord:
+            del key
+            return record
+
+        def delete(self, key: str) -> bool:
+            del key
+            return False
+
+    monkeypatch.setattr(oauth_state, "cache", ReplayCache())
+
+    with pytest.raises(OAuthFlowError) as exc_info:
+        oauth_state.consume("state-token")
+
+    assert exc_info.value.code == INVALID_STATE
+
+
+@override_settings(DEBUG=False, ANGEE_INTEGRATE_ALLOW_LOCAL_OAUTH_STATE_CACHE=False)
+def test_state_issue_rejects_locmem_cache_without_opt_in() -> None:
+    """Production OAuth state needs a shared cache, not per-process LocMemCache."""
+
+    oauth_client = SimpleNamespace(sqid="clt_locmem", pk=1, supports_pkce=False)
+
+    with pytest.raises(ImproperlyConfigured, match="shared cache"):
+        oauth_state.issue(oauth_client, "https://app.example/callback")
+
+
 def test_state_flow_binding_rejects_cross_flow_completion() -> None:
     """A login token cannot complete a link, and a link token cannot complete a login."""
 
@@ -1191,3 +1396,28 @@ def test_oidc_group_by_login_enabled() -> None:
             with connection.schema_editor() as schema_editor:
                 for model in reversed(created_models):
                     schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_oidc_login_picker_queryset_scope(oidc_tables: None) -> None:
+    """The OIDC extension owns the public login-picker queryset predicate."""
+
+    del oidc_tables
+    _oauth_client(slug="picker-enabled", oidc=True, is_enabled=True)
+    _oauth_client(slug="picker-disabled", oidc=True, is_enabled=False)
+    _oauth_client(slug="picker-oauth", oidc=False, is_enabled=True)
+    _oauth_client(slug="picker-no-client", oidc=True, is_enabled=True, client_id="")
+    _oauth_client(
+        slug="picker-discovery",
+        oidc=True,
+        is_enabled=True,
+        authorize_endpoint="",
+        token_endpoint="",
+        discovery_url="https://issuer.example/.well-known/openid-configuration",
+    )
+
+    with system_context(reason="test oidc picker"):
+        queryset = OAuthClient.login_picker_queryset(OAuthClient.objects.all())
+        slugs = set(queryset.values_list("slug", flat=True))
+
+    assert slugs == {"picker-enabled", "picker-discovery"}

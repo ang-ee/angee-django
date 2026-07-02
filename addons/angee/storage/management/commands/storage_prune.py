@@ -6,11 +6,10 @@ from datetime import timedelta
 from typing import Any
 
 from django.apps import apps
+from django.conf import settings
 from django.core.management.base import BaseCommand, CommandParser
 from django.utils import timezone
 from rebac import system_context
-
-from angee.storage.autoconfig import setting
 
 DEFAULT_CHUNK_SIZE = 500
 """Rows materialized per purge query."""
@@ -47,8 +46,8 @@ class Command(BaseCommand):
         del args
         file_model = apps.get_model("storage", "File")
         now = timezone.now()
-        draft_cutoff = now - timedelta(hours=int(setting("ANGEE_STORAGE_DRAFT_TTL_HOURS")))
-        trash_cutoff = now - timedelta(days=int(setting("ANGEE_STORAGE_TRASH_TTL_DAYS")))
+        draft_cutoff = now - timedelta(hours=int(settings.ANGEE_STORAGE_DRAFT_TTL_HOURS))
+        trash_cutoff = now - timedelta(days=int(settings.ANGEE_STORAGE_TRASH_TTL_DAYS))
 
         with system_context(reason="storage.prune"):
             stale_drafts = file_model.objects.stale_drafts(draft_cutoff)

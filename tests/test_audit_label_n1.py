@@ -17,10 +17,11 @@ from typing import Any
 
 from django.contrib.auth import get_user_model
 from django.db import connection
+from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
-from angee.iam.identity import user_display_label
+from angee.iam.identity import user_display_label, user_display_labels
 from tests.conftest import (
     Page,
     addon_schema,
@@ -107,3 +108,25 @@ def test_audited_list_labels_scale_with_distinct_authors_not_rows(knowledge_tabl
         doubled_rows = result_data(execute_schema(schema, _LABELS_QUERY, user=alice))["pages"]
     assert len(doubled_rows) == 2 * row_count
     assert len(_label_reads(doubled)) == author_count
+
+
+def test_user_display_labels_batches_and_primes_request_memo(transactional_db: Any) -> None:
+    """The batch label owner resolves many user ids with one elevated read."""
+
+    del transactional_db
+    alice = create_user("batch-alice")
+    bob = create_user("batch-bob")
+    request = RequestFactory().get("/")
+
+    with CaptureQueriesContext(connection) as first:
+        labels = user_display_labels([alice.pk, bob.pk, alice.pk], request=request)
+
+    assert labels == {
+        alice.pk: "batch-alice",
+        bob.pk: "batch-bob",
+    }
+    assert len(_label_reads(first)) == 1
+
+    with CaptureQueriesContext(connection) as cached:
+        assert user_display_labels([alice.pk, bob.pk], request=request) == labels
+    assert _label_reads(cached) == []

@@ -154,8 +154,7 @@ class Vault(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
         registry, and the boundary is a method, not ``_meta`` shape-probing.
         """
 
-        field = cast(ImplClassField, type(self)._meta.get_field("retrieval_class"))
-        backend_class = cast("type[RetrievalBackend]", field.resolve_class(key))
+        backend_class = cast("type[RetrievalBackend]", type(self).resolve_impl_class("retrieval_class", key))
         return backend_class(self)
 
 

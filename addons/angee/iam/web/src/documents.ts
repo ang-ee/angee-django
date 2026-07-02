@@ -13,7 +13,6 @@ export const IamOverview = graphql(`
       id
       namespace
       label
-      description
     }
     iam_overview(peek_limit: $peekLimit) {
       user_count
@@ -95,8 +94,7 @@ export const IamGrantRole = graphql(`
 `);
 
 /** One `roles` row, derived from the `IamOverview` selection — the same
- * `{id, namespace, label, description}` shape the dropped standalone `IamRoles`
- * query exposed. */
+ * `{id, namespace, label}` shape the dropped standalone `IamRoles` query exposed. */
 export type IAMRole = DocumentType<typeof IamOverview>["roles"][number];
 
 export type IAMOverviewVariables = DocumentVariables<typeof IamOverview>;

@@ -510,3 +510,49 @@ def test_delete_by_public_id_skips_hook_when_blocked(
 
     assert preview.has_blockers
     assert Group.objects.filter(pk=group.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_delete_by_public_id_returns_blocked_preview_for_late_protected_relation() -> None:
+    """A blocker appearing after preview returns the same blocked-preview shape."""
+
+    class DeleteRaceParent(models.Model):
+        """Parent model targeted by a late protected child."""
+
+        name = models.CharField(max_length=32)
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+
+    class DeleteRaceChild(models.Model):
+        """Child model that blocks parent deletion."""
+
+        parent = models.ForeignKey(DeleteRaceParent, on_delete=models.PROTECT)
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(DeleteRaceParent)
+        schema_editor.create_model(DeleteRaceChild)
+    try:
+        parent = DeleteRaceParent.objects.create(name="race")
+
+        preview = delete_by_public_id(
+            DeleteRaceParent,
+            str(parent.pk),
+            confirm=True,
+            before_delete=lambda row: DeleteRaceChild.objects.create(parent=cast(DeleteRaceParent, row)),
+        )
+
+        assert preview.has_blockers
+        assert preview.blocked[0].count == 1
+        assert DeleteRaceParent.objects.filter(pk=parent.pk).exists()
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(DeleteRaceChild)
+            schema_editor.delete_model(DeleteRaceParent)

@@ -29,7 +29,7 @@ def test_user_principal_accepts_raw_public_id() -> None:
     assert user_principal(str(user.pk)) == user
     assert user_principal(node_id) == user
     assert user_from_public_id(node_id) == user
-    assert user_public_id(user.pk) == str(user.pk)
+    assert user_public_id(user.pk) == node_id
     assert user_display_label(str(user.pk)) == "Identity Target"
 
 

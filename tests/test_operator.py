@@ -2,49 +2,61 @@
 
 from __future__ import annotations
 
-import io
-import urllib.error
-import urllib.request
+import json
 from types import SimpleNamespace
+from typing import Iterator, cast
 
 import pytest
 import strawberry
+from django.core.cache import cache
 from rebac import SubjectRef
 
+from angee.integrate.http import HttpResponse
+from angee.operator import daemon as daemon_module
 from angee.operator import schema as operator_schema
-from angee.operator.daemon import OperatorDaemon, OperatorDaemonNotFound, _daemon_error
+from angee.operator.daemon import OperatorDaemon, OperatorDaemonError, OperatorDaemonNotFound, _daemon_error_body
 
 _CONNECTION_QUERY = "{ operatorConnection { endpoint token } }"
 _ACTOR = SubjectRef.of("auth/user", "abc")
 
 
+@pytest.fixture(autouse=True)
+def _clear_operator_token_cache() -> Iterator[None]:
+    """Keep daemon token-cache assertions independent within this module."""
+
+    cache.clear()
+    yield
+    cache.clear()
+
+
 def test_daemon_error_surfaces_the_response_body() -> None:
     """A daemon HTTP error reports its body (JSON ``error`` field, else text), not a bare status."""
 
-    def err(code: int, body: bytes) -> urllib.error.HTTPError:
-        return urllib.error.HTTPError("http://op/x", code, "err", {}, io.BytesIO(body))  # type: ignore[arg-type]
-
-    assert _daemon_error(err(500, b'{"error": "secret \\"x\\" is not resolved"}')) == (
+    assert _daemon_error_body(500, b'{"error": "secret \\"x\\" is not resolved"}') == (
         'HTTP 500: secret "x" is not resolved'
     )
-    assert _daemon_error(err(409, b'{"reason": "already exists"}')) == "HTTP 409: already exists"
-    assert _daemon_error(err(503, b"upstream down")) == "HTTP 503: upstream down"
+    assert _daemon_error_body(409, b'{"reason": "already exists"}') == "HTTP 409: already exists"
+    assert _daemon_error_body(503, b"upstream down") == "HTTP 503: upstream down"
 
 
 def test_daemon_request_raises_typed_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     """HTTP 404 remains a readable daemon error and is typed for idempotent teardown."""
 
-    def missing(_request: urllib.request.Request, timeout: int) -> None:
-        del timeout
-        raise urllib.error.HTTPError(
-            "http://op/services/svc/destroy",
-            404,
-            "not found",
-            {},
-            io.BytesIO(b'{"error": "service \\"svc\\" is not declared"}'),
-        )
+    class FakeHttpClient:
+        def request(
+            self,
+            method: str,
+            url: str,
+            *,
+            headers: dict[str, str] | None = None,
+            body: bytes | None = None,
+            allow_private: bool = False,
+            timeout: int = 60,
+        ) -> HttpResponse:
+            del method, url, headers, body, allow_private, timeout
+            return HttpResponse(status=404, body=b'{"error": "service \\"svc\\" is not declared"}')
 
-    monkeypatch.setattr(urllib.request, "urlopen", missing)
+    monkeypatch.setattr(daemon_module, "HttpClient", FakeHttpClient)
     daemon = OperatorDaemon(
         endpoint="http://op/graphql",
         server_base="http://op",
@@ -58,6 +70,56 @@ def test_daemon_request_raises_typed_not_found(monkeypatch: pytest.MonkeyPatch) 
 
     assert raised.value.status_code == 404
     assert str(raised.value) == 'operator POST destroy: HTTP 404: service "svc" is not declared'
+
+
+def test_daemon_request_uses_the_shared_integrate_http_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Operator REST calls ride the shared pinned HTTP owner, allowing local daemon addresses."""
+
+    calls: list[dict[str, object]] = []
+
+    class FakeHttpClient:
+        def request(
+            self,
+            method: str,
+            url: str,
+            *,
+            headers: dict[str, str] | None = None,
+            body: bytes | None = None,
+            allow_private: bool = False,
+            timeout: int = 60,
+        ) -> HttpResponse:
+            calls.append(
+                {
+                    "method": method,
+                    "url": url,
+                    "headers": headers,
+                    "body": body,
+                    "allow_private": allow_private,
+                    "timeout": timeout,
+                }
+            )
+            return HttpResponse(status=200, body=b'{"ok": true}')
+
+    monkeypatch.setattr(daemon_module, "HttpClient", FakeHttpClient)
+    daemon = OperatorDaemon(
+        endpoint="http://op/graphql",
+        server_base="http://op",
+        admin_bearer="admin",
+        scope=(),
+        ttl="1h",
+    )
+
+    assert daemon._request("POST", "http://op/workspaces", {"name": "demo"}, timeout=7) == {"ok": True}
+    call = calls[0]
+    assert call["method"] == "POST"
+    assert call["url"] == "http://op/workspaces"
+    assert call["headers"] == {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer admin",
+    }
+    assert json.loads(cast(bytes, call["body"]).decode()) == {"name": "demo"}
+    assert call["allow_private"] is True
+    assert call["timeout"] == 7
 
 
 def test_resolve_template_ref_reads_collection_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -302,6 +364,61 @@ def test_mint_token_none_on_transport_error(
     monkeypatch.setattr(OperatorDaemon, "_post_json", boom)
 
     assert OperatorDaemon.from_settings().mint_token("auth/user:abc") is None
+
+
+def test_mint_token_none_on_daemon_http_error(
+    settings: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A daemon HTTP failure hides the connection rather than bubbling through GraphQL."""
+
+    settings.ANGEE_OPERATOR_URL = "http://localhost:9000"
+    settings.ANGEE_OPERATOR_TOKEN = "admin-bearer"
+
+    def boom(self: OperatorDaemon, url: str, payload: dict[str, object]) -> dict[str, object]:
+        del self, url, payload
+        raise OperatorDaemonError("operator POST mint: HTTP 500: no")
+
+    monkeypatch.setattr(OperatorDaemon, "_post_json", boom)
+
+    assert OperatorDaemon.from_settings().mint_token("auth/user:abc") is None
+
+
+def test_mint_token_reuses_cached_actor_token(
+    settings: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A browser connection query reuses the short-lived daemon token for the same actor window."""
+
+    cache.clear()
+    settings.ANGEE_OPERATOR_URL = "http://localhost:9000"
+    settings.ANGEE_OPERATOR_TOKEN = "admin-bearer"
+    settings.ANGEE_OPERATOR_TOKEN_SCOPE = ["service:read"]
+    settings.ANGEE_OPERATOR_TOKEN_TTL = "30m"
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def fake_post(self: OperatorDaemon, url: str, payload: dict[str, object]) -> dict[str, object]:
+        del self
+        calls.append((url, payload))
+        return {"token": f"minted-{len(calls)}"}
+
+    monkeypatch.setattr(OperatorDaemon, "_post_json", fake_post)
+    daemon = OperatorDaemon.from_settings()
+
+    assert daemon.mint_token("auth/user:abc") == "minted-1"
+    assert daemon.mint_token("auth/user:abc") == "minted-1"
+    assert daemon.mint_token("auth/user:def") == "minted-2"
+    assert calls == [
+        (
+            "http://localhost:9000/tokens/mint",
+            {"actor": "auth/user:abc", "scope": ["service:read"], "ttl": "30m"},
+        ),
+        (
+            "http://localhost:9000/tokens/mint",
+            {"actor": "auth/user:def", "scope": ["service:read"], "ttl": "30m"},
+        ),
+    ]
+    cache.clear()
 
 
 # --- resolver gate ------------------------------------------------------------

@@ -13,9 +13,11 @@ from django.db import IntegrityError, connection, models
 from import_export.results import Result, RowResult
 from rebac import system_context
 
+from angee.addons import AddonContract
 from angee.base.models import AngeeModel
 from angee.resources.entries import EntryGraph, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
+from angee.resources.loader import build_resource
 from angee.resources.models import Resource
 from angee.resources.tiers import ResourceTier
 from angee.resources.widgets import resolve_xref
@@ -34,8 +36,8 @@ class Addon:
     path: str
     """Filesystem root for local resource files."""
 
-    resources: Mapping[str, tuple[Mapping[str, Any], ...]]
-    """Raw resource declarations keyed by tier."""
+    _addon_contract: AddonContract
+    """In-memory addon contract used by the resources manifest owner."""
 
 
 def addon(
@@ -51,7 +53,10 @@ def addon(
         name=name,
         label=label,
         path=str(tmp_path),
-        resources=manifest or {"master": (), "install": (), "demo": ()},
+        _addon_contract=AddonContract(
+            name=name,
+            resources=manifest or {"master": (), "install": (), "demo": ()},
+        ),
     )
 
 
@@ -82,6 +87,47 @@ def test_load_result_counts_import_export_totals() -> None:
     counted = LoadResult(created=1, updated=1, skipped=1).with_result(result)
 
     assert counted == LoadResult(created=3, updated=4, skipped=6)
+
+
+def test_resource_condition_q_evaluator_supported_lookup_set(tmp_path: Path) -> None:
+    """Resource adoption conditions intentionally support exact/isnull on concrete fields."""
+
+    class ConditionThing(AngeeModel):
+        """Model used to exercise resource adoption condition matching."""
+
+        name = models.CharField(max_length=40)
+        status = models.CharField(max_length=40, default="active")
+        flag = models.CharField(max_length=40, blank=True, null=True)
+
+        class Meta:
+            """Django model options for the condition-matching test model."""
+
+            app_label = "base"
+
+    class ConditionLedger(Resource):
+        """Concrete resource ledger for condition-matching tests."""
+
+        class Meta(Resource.Meta):
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+            abstract = False
+
+    resource = build_resource(
+        ConditionThing,
+        entry(tmp_path, {"path": "resources/010_base.conditionthing.csv"}),
+        ledger_model=ConditionLedger,
+        addon_aliases={},
+    )
+    row = {"_xref": "one", "name": "api-key", "status": "active"}
+
+    assert resource._row_matches_condition(
+        row,
+        models.Q(flag__isnull=True) & models.Q(status__exact="active") & ~models.Q(name__exact="blocked"),
+    )
+    assert resource._row_matches_condition(row, models.Q(status="active"))
+    with pytest.raises(ImproperlyConfigured, match="lookup 'name__icontains' is not supported"):
+        resource._row_matches_condition(row, models.Q(name__icontains="api"))
 
 
 def test_resource_entry_reads_structured_rows_and_fields(
@@ -258,7 +304,7 @@ def test_path_source_materializes_to_the_addon_file(tmp_path: Path) -> None:
 
 
 def test_entry_requires_exactly_one_registered_source(tmp_path: Path) -> None:
-    """A declaration must name exactly one registered source key."""
+    """A declaration must name exactly one configured source key."""
 
     owner = addon(tmp_path)
     with pytest.raises(ImproperlyConfigured, match="exactly one source"):

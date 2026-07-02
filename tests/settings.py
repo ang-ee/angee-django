@@ -11,7 +11,7 @@ INSTALLED_APPS = [
     "simple_history",
     "angee.base",
     "angee.resources",
-    "angee.iam",
+    "tests.iam_app.TestIAMConfig",
     "angee.integrate",
     "angee.iam_integrate_oidc",
     "angee.agents",
@@ -31,14 +31,23 @@ DATABASES = {
     }
 }
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+AUTH_USER_MODEL = "iam.User"
 USE_TZ = True
 ANGEE_RUNTIME_MODULE = "tests.runtime"
+ANGEE_STORAGE_DEFAULT_DRIVE = "assets"
+ANGEE_STORAGE_PROXY_UPLOAD_MAX_BYTES = 64 * 1024 * 1024
+ANGEE_STORAGE_DRAFT_TTL_HOURS = 24
+ANGEE_STORAGE_TRASH_TTL_DAYS = 30
 # Bare test settings do not run the composer, so the ImplClassField registries
 # (normally supplied by each addon's autoconfig) are declared explicitly here;
 # the enum field requires each to be non-empty at model-import time.
 ANGEE_STORAGE_BACKEND_CLASSES = {"local": "angee.storage.backends.LocalBackend"}
 ANGEE_INTEGRATION_IMPLS = {
     "none": "angee.integrate.impl.NullIntegrationImpl",
+}
+ANGEE_RESOURCE_SOURCE_CLASSES = {
+    "path": "angee.resources.sources.path_source",
+    "url": "angee.integrate.resource_source.url_source",
 }
 ANGEE_VCS_BACKEND_CLASSES = {
     "local": "angee.integrate.vcs.backend.LocalVCSBackend",
@@ -87,6 +96,13 @@ ANGEE_OAUTH_PROVIDER_TYPES = {
     "generic_oidc": "angee.iam_integrate_oidc.providers.GenericOidc",
     "google": "angee.iam_integrate_oidc.providers.GoogleType",
 }
+ANGEE_CREDENTIAL_DISCONNECT_GUARDS = (
+    "angee.iam_integrate_oidc.identity.guard_last_sign_in_disconnect",
+)
+# Bare tests run Django's per-process LocMem cache. Production OAuth redirects
+# must use a shared cache; tests opt in explicitly so the state guard remains loud.
+ANGEE_INTEGRATE_ALLOW_LOCAL_OAUTH_STATE_CACHE = True
+ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER = True
 # The agents-supplied bearer→actor verifier is composer autoconfig (angee.agents); a
 # bare test settings module that skips the composer declares it so the verifier is
 # wired. The MCP actor is bracketed around each tool call by

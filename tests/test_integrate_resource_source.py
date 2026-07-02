@@ -8,7 +8,6 @@ from typing import Any
 import pytest
 from django.core.exceptions import ValidationError
 
-from angee.integrate import resource_source
 from angee.integrate.http import HttpResponse
 from angee.resources import sources
 from angee.resources.entries import ResourceEntry
@@ -23,13 +22,6 @@ class _Addon:
     name = "tests.url_addon"
     label = "url_addon"
     path = "/tmp"
-
-
-@pytest.fixture(autouse=True)
-def _url_source() -> None:
-    """Ensure the url source is registered even when integrate.ready did not run."""
-
-    resource_source.register()
 
 
 def _entry(url: str) -> ResourceEntry:

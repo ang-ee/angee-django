@@ -13,7 +13,9 @@ from datetime import datetime
 from enum import StrEnum
 
 from django.conf import settings
-from django.core.cache import cache
+from django.core.cache import DEFAULT_CACHE_ALIAS, cache, caches
+from django.core.cache.backends.locmem import LocMemCache
+from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
 
 from angee.integrate.oauth.errors import INVALID_STATE, OAuthFlowError
@@ -61,6 +63,7 @@ def issue(
 ) -> tuple[str, StateRecord]:
     """Create and cache one single-use redirect state record."""
 
+    _check_state_cache()
     state_token = secrets.token_urlsafe(32)
     record = StateRecord(
         oauth_client_id=str(getattr(oauth_client, "sqid", getattr(oauth_client, "pk", ""))),
@@ -84,7 +87,8 @@ def consume(state_token: str) -> StateRecord:
     record = cache.get(key)
     if not isinstance(record, StateRecord):
         raise OAuthFlowError(INVALID_STATE, 400)
-    cache.delete(key)
+    if not cache.delete(key):
+        raise OAuthFlowError(INVALID_STATE, 400)
     return record
 
 
@@ -98,3 +102,14 @@ def _state_ttl_seconds() -> int:
     """Return the configured lifetime for one redirect state record."""
 
     return int(getattr(settings, "ANGEE_INTEGRATE_OAUTH_STATE_TTL", _DEFAULT_STATE_TTL_SECONDS))
+
+
+def _check_state_cache() -> None:
+    """Raise when OAuth state is backed by a per-process production cache."""
+
+    if getattr(settings, "DEBUG", False) or getattr(settings, "ANGEE_INTEGRATE_ALLOW_LOCAL_OAUTH_STATE_CACHE", False):
+        return
+    if isinstance(caches[DEFAULT_CACHE_ALIAS], LocMemCache):
+        raise ImproperlyConfigured(
+            "OAuth redirect state requires a shared cache; LocMemCache is per-process."
+        )

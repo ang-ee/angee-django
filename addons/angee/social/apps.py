@@ -22,3 +22,8 @@ class SocialConfig(AppConfig):
 
     default = True
     name = "angee.social"
+
+    def ready(self) -> None:
+        """Run social ready-time hooks after app population."""
+
+        super().ready()

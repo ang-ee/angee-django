@@ -199,15 +199,17 @@ Rules that follow from the layering:
   smell that a module boundary is wrong — an import cycle, or a layer reaching
   across a seam — so fix the seam (move the shared fact to its owning module, or
   invert the dependency) instead of hiding the import inside a function. Two
-  exceptions, both narrow: a dependency that is genuinely optional at runtime
-  (isolate it behind its own module), and Django's app-loading order — an
+  exceptions, all narrow: a dependency that is genuinely optional at runtime
+  (isolate it behind its own module), Django's app-loading order — an
   `AppConfig` module is imported in app-populate phase 1, before the registry is
   ready, so it must defer importing model classes (and signal wiring that pulls
-  them in) until a method runs after `ready()`. Mark such a deferral with a
-  comment naming the reason; everywhere else, hoist. Within Angee's own source
-  (`angee/` and `addons/angee/`) these are
-  the only function-local imports allowed — phase-1 deferrals and `TYPE_CHECKING`
-  blocks. Probe optional or generated modules with `importlib.util.find_spec`
+  them in) until a method runs after `ready()` — and the ASGI application
+  factory's import of Django/Channels serving modules after pytest-django or
+  `django.setup()` owns setup. Mark such a deferral with a comment naming the
+  reason; everywhere else, hoist. Within Angee's own source (`angee/` and
+  `addons/angee/`) these are the only function-local imports allowed — phase-1
+  deferrals, ASGI setup-order deferrals, and `TYPE_CHECKING` blocks. Probe optional
+  or generated modules with `importlib.util.find_spec`
   (verifying each parent first) rather than `try/except ImportError`, so an absent
   generated `runtime/` reads as "not built yet," not a swallowed error.
 - A pure renderer that takes its owner and returns a value with no other state may
@@ -255,7 +257,7 @@ Rules that follow from the layering:
     **explicit per-row** choice, **never** derived from a vendor slug (a vendor
     can have several impls/accounts).
   - *Only behaviour differs, closed framework-known set* → a `StateField` + an
-    eager **handler registry** (`iam.credentials.register_handler`/`handler_for`).
+    eager **handler registry** (`integrate.credentials.register_handler`/`handler_for`).
     The row stores the enum value; the kind projects as a GraphQL enum.
 - **Enum-backed fields use `StateField`, never `CharField(choices=…)`.**
   `StateField` wraps django-choices-field's `TextChoicesField`, so strawberry-django
@@ -456,9 +458,38 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   fire before resolvers and never reach it, so guard required inputs client-side
   from `rootFields.requiredCreateFields`.
 - **In test-client logins pass the backend** —
-  `force_login(user, backend="django.contrib.auth.backends.ModelBackend")`; the
-  default pins `RebacBackend`, whose `get_user` fails outside actor scope and
-  yields `AnonymousUser`.
+  `force_login(user, backend="angee.iam.auth.ModelBackend")`; the default pins
+  `RebacBackend`, whose `get_user` fails outside actor scope and yields
+  `AnonymousUser`.
+- **Login throttling belongs at the IAM auth seam.** Do not add per-view or
+  per-test throttles; implement the scheduled hardening where the login backend
+  and audit trail can enforce one policy.
+- **A gated factory that uses `sudo()` must restore the actor before returning.**
+  Elevated writes may be necessary to create the row, but callers continue under
+  the original actor. Capture `current_actor()` before the elevated block and
+  rebind the returned instance with `.with_actor(actor)` after save.
+- **Publishers wire during schema build, not schema import.** GraphQL schema
+  modules declare subscription surfaces; `GraphQLSchemas` connects publishers
+  from declared `changes` metadata when a schema is built, so importing a schema
+  for SDL/tests never mutates process-global signal state. Processes that never
+  build a schema do not publish changes; base and consumer addons behave
+  identically because no addon owns its own publisher label list.
+- **`AngeeModel` managers/querysets must keep the canon.** If a model customizes
+  `objects`, its queryset class must derive from `AngeeQuerySet`; otherwise
+  shared methods such as public-id lookup, actor scoping, and elevated reads drift
+  between models.
+- **`MIGRATION_MODULES` may be assigned during app populate only for generated
+  runtime apps.** That exception belongs to composed settings/runtime boot; do
+  not use it as an addon-local shortcut or a way to hide source-model migration
+  state.
+- **`EncryptedField` keys are bound to `model._meta.label_lower` plus field
+  name.** Renaming a model/app/field changes the derived key. Plan
+  `ANGEE_FERNET_KEYS`/`MultiFernet` rotation before such a rename, and treat one
+  corrupt row as a row-local unreadable value, not as a reason to break list
+  queries.
+- **Data-resource field widgets are backend-owned vocabulary.** Add or rename
+  widget keys in `angee.graphql.data.field_classification` with the matching
+  frontend renderer; resource callers declare fields, not ad hoc widget strings.
 - **After adding or moving an addon** run `pnpm install`, and delete any stale
   gitignored `runtime/*/migrations/*.py` that imports a moved module before
   `makemigrations`.
@@ -466,7 +497,7 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   Anthropic's token-endpoint edge 429s spoofed browser/curl User-Agents with a
   `rate_limit_error` (before any auth check) and 403s urllib's `Python-urllib`
   default; an honest client UA passes. `angee.integrate.oauth.client` owns the value
-  (`_USER_AGENT`); never reintroduce a browser spoof or fall back to urllib's
+  (`USER_AGENT`); never reintroduce a browser spoof or fall back to urllib's
   default.
 - **Anthropic's JSON OAuth token exchange must echo redirect `state`.** Standard
   OAuth validates state before the token POST and does not send it, but

@@ -14,7 +14,6 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.contrib.auth import login as auth_login
-from django.db.models import Q
 from rebac import system_context
 from strawberry import auto
 from strawberry.scalars import JSON
@@ -44,12 +43,6 @@ OAuthClient = apps.get_model("integrate", "OAuthClient")
 @strawberry.type
 class AvailableConnection(ConnectableAccount):
     """Picker-safe OAuth client fields for the public OIDC login picker."""
-
-    @strawberry.field
-    def is_oidc(self) -> bool:
-        """Return whether this connection can run OIDC login/link flows (always true here)."""
-
-        return True
 
 
 @strawberry.type
@@ -87,13 +80,8 @@ def _available_connections(info: strawberry.Info) -> Any:
     """
 
     del info
-    return (
-        cast(Any, OAuthClient.objects)
-        .system_context(reason="iam_integrate_oidc.available_connections")
-        .filter(is_enabled=True, login_enabled=True)
-        .exclude(client_id="")
-        .filter(Q(authorize_endpoint__gt="", token_endpoint__gt="") | Q(discovery_url__gt=""))
-    )
+    queryset = cast(Any, OAuthClient.objects).system_context(reason="iam_integrate_oidc.available_connections")
+    return OAuthClient.login_picker_queryset(queryset)
 
 
 def _enabled_oidc_oauth_client(oauth_client_sqid: str) -> Any:
@@ -112,37 +100,26 @@ def _enabled_oidc_oauth_client(oauth_client_sqid: str) -> Any:
     return oauth_client
 
 
-def _start_login_flow(
-    request: Any,
-    oauth_client: Any,
-    redirect_uri: str,
-    *,
-    user_id: str | None = None,
-    next_path: str = "/",
-    flow: oauth_state.StateFlow = oauth_state.StateFlow.LOGIN,
-) -> OAuthStartPayload:
-    """Issue state and return the OIDC authorize URL for a login or link flow."""
+def _oidc_authorize_url(oauth_client: Any, state_token: str, record: oauth_state.StateRecord, redirect_uri: str) -> str:
+    """Return the OIDC authorize URL delta: nonce plus the shared PKCE challenge."""
 
-    state_token, record, effective_redirect_uri, mode = oauth_flow.issue_flow(
-        request,
-        oauth_client,
-        redirect_uri,
-        user_id=user_id,
-        next_path=next_path,
-        flow=flow,
-    )
-    authorize_url = OAuthClientOidcProtocol(oauth_client).authorize_url(
+    return OAuthClientOidcProtocol(oauth_client).authorize_url(
         state=state_token,
-        redirect_uri=effective_redirect_uri,
+        redirect_uri=redirect_uri,
         scopes=oauth_client.default_scope_values,
         nonce=record.nonce,
         code_challenge=oauth_flow.pkce_challenge(record.code_verifier),
     )
+
+
+def _oauth_start_payload(started: oauth_flow.OAuthStart) -> OAuthStartPayload:
+    """Project the flow-owned start facts onto the GraphQL payload."""
+
     return OAuthStartPayload(
-        authorize_url=authorize_url,
-        state=state_token,
-        mode=mode,
-        redirect_uri=effective_redirect_uri,
+        authorize_url=started.authorize_url,
+        state=started.state,
+        mode=started.mode,
+        redirect_uri=started.redirect_uri,
     )
 
 
@@ -172,11 +149,15 @@ class OidcLoginMutation:
         request = _request(info)
         try:
             oauth_client = _enabled_oidc_oauth_client(oauth_client_sqid)
-            return _start_login_flow(
-                request,
-                oauth_client,
-                redirect_uri,
-                next_path=oauth_flow.coerce_next_path(next, request),
+            return _oauth_start_payload(
+                oauth_flow.start(
+                    request,
+                    oauth_client,
+                    redirect_uri,
+                    next_path=oauth_flow.coerce_next_path(next, request),
+                    flow=oauth_state.StateFlow.LOGIN,
+                    authorize_url_builder=_oidc_authorize_url,
+                )
             )
         except OAuthFlowError as error:
             return OAuthStartPayload(error=error.public_message, error_code=error.code)
@@ -225,13 +206,16 @@ class OidcLoginMutation:
         request = _request(info)
         try:
             oauth_client = _enabled_oidc_oauth_client(oauth_client_sqid)
-            return _start_login_flow(
-                request,
-                oauth_client,
-                redirect_uri,
-                user_id=str(user.pk),
-                next_path=oauth_flow.coerce_next_path(next, request),
-                flow=oauth_state.StateFlow.LINK,
+            return _oauth_start_payload(
+                oauth_flow.start(
+                    request,
+                    oauth_client,
+                    redirect_uri,
+                    user_id=str(user.pk),
+                    next_path=oauth_flow.coerce_next_path(next, request),
+                    flow=oauth_state.StateFlow.LINK,
+                    authorize_url_builder=_oidc_authorize_url,
+                )
             )
         except OAuthFlowError as error:
             return OAuthStartPayload(error=error.public_message, error_code=error.code)

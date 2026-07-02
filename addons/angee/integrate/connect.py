@@ -103,10 +103,35 @@ def complete_account_connect(
     external_id = oauth_client.external_id_from_claims(claims)
     if not external_id:
         raise OAuthFlowError(EXTERNAL_ACCOUNT_RESOLUTION_FAILED, 400)
+    return complete_external_account_link(
+        oauth_client,
+        user=user,
+        external_id=external_id,
+        tokens=tokens,
+        claims=claims,
+        next_path=record.next_path or "/",
+        integration_id=record.integration_id,
+        reason="integrate.oauth.connect",
+    )
+
+
+def complete_external_account_link(
+    oauth_client: Any,
+    *,
+    user: AbstractBaseUser,
+    external_id: str,
+    tokens: dict[str, Any],
+    claims: dict[str, Any],
+    next_path: str = "/",
+    integration_id: str = "",
+    reason: str = "integrate.oauth.connect",
+) -> AccountConnectCompletion:
+    """Link an external account to ``user`` and store its OAuth credential."""
+
     email = oauth_client.email_from_claims(claims) or ""
     Account = cast(Any, apps.get_model("integrate", "ExternalAccount"))
     Credential = cast(Any, apps.get_model("integrate", "Credential"))
-    with system_context(reason="integrate.oauth.connect"), transaction.atomic():
+    with system_context(reason=reason), transaction.atomic():
         account = Account.objects.filter(oauth_client=oauth_client, external_id=external_id).first()
         if account is not None:
             owner = Account.objects.owner_for(account)
@@ -135,8 +160,8 @@ def complete_account_connect(
         credential=cast(models.Model, credential),
         user=user,
         claims=claims,
-        next_path=record.next_path or "/",
-        integration_id=record.integration_id,
+        next_path=next_path or "/",
+        integration_id=integration_id,
     )
 
 

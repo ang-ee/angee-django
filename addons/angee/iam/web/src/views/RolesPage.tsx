@@ -13,7 +13,6 @@ interface RoleResourceRow extends Record<string, unknown> {
   id: string;
   namespace: string;
   label: string;
-  description: string;
 }
 
 const roleColumns: readonly ListColumn<RoleResourceRow>[] = [
@@ -25,7 +24,6 @@ const roleColumns: readonly ListColumn<RoleResourceRow>[] = [
     field: "label",
     render: (row) => <span className="font-medium text-fg">{row.label}</span>,
   },
-  { field: "description", sortable: false },
 ];
 
 export function RolesPage(): ReactElement {

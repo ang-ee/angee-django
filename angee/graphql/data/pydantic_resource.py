@@ -11,9 +11,11 @@ through the same ``useList`` path as a model resource — no bespoke client path
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
+from dataclasses import replace
 from typing import Any
 
 import strawberry.experimental.pydantic
+from django.core.exceptions import ImproperlyConfigured
 from pydantic import BaseModel
 from strawberry_django_hasura import (
     HasuraResource,
@@ -84,10 +86,8 @@ def hasura_pydantic_resource(
         source=source,
         id_field=id_field,
     )
-    types_by_name = {resource_type_name(item): item for item in resource.types}
-    filter_type = types_by_name.get(f"{name}_bool_exp")
-    order_type = types_by_name.get(f"{name}_order_by")
-    aggregate_type = types_by_name.get(f"{node_type_name}Aggregate")
+    if resource.detail_root is None:
+        raise ImproperlyConfigured(f"{model_label or name} Hasura resource did not expose a detail root.")
     attach_data_resource_metadata(
         resource.query,
         make_data_resource_metadata(
@@ -97,21 +97,24 @@ def hasura_pydantic_resource(
             # library uses for ``<name>_by_pk``; keep them one source of truth.
             public_id_field=id_field,
             node_type=node,
-            filter_type=filter_type,
-            order_type=order_type,
+            filter_type=resource.filter_type,
+            order_type=resource.order_by_type,
             # Read the wire names off the built query surface (the owner), as the
             # model path does, instead of re-templating the dialect convention.
             roots=DataResourceRoots(
-                list_name=resource_wire_field_name(resource.query, name),
-                detail_name=resource_wire_field_name(resource.query, f"{name}_by_pk"),
-                aggregate_name=resource_wire_field_name(resource.query, f"{name}_aggregate"),
+                list_name=resource_wire_field_name(resource.query, str(resource.list_root or name)),
+                detail_name=resource_wire_field_name(resource.query, str(resource.detail_root)),
+                aggregate_name=resource_wire_field_name(
+                    resource.query,
+                    str(resource.aggregate_root or f"{name}_aggregate"),
+                ),
             ),
             type_names=DataResourceTypeNames(
                 query=resource_type_name(resource.query),
                 node=node_type_name,
-                filter=resource_type_name(filter_type),
-                order=resource_type_name(order_type),
-                aggregate=resource_type_name(aggregate_type),
+                filter=resource_type_name(resource.filter_type),
+                order=resource_type_name(resource.order_by_type),
+                aggregate=resource_type_name(resource.aggregate_container_type),
             ),
             capabilities=("list", "detail", "aggregate"),
             # A computed pydantic source is small and admin-only: the frontend
@@ -125,8 +128,4 @@ def hasura_pydantic_resource(
     # The derived node is reachable from the query, but register it in the
     # bundle's types so a schema bucket carries it explicitly (mirrors the
     # model path, where the addon registers the node type).
-    return HasuraResource(
-        query=resource.query,
-        mutation=resource.mutation,
-        types=[node, *resource.types],
-    )
+    return replace(resource, types=[node, *resource.types])

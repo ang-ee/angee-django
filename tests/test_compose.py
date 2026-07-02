@@ -15,7 +15,7 @@ from django.db import models
 
 import angee.compose as compose_package
 import angee.compose.runtime as runtime_module
-from angee.base.mixins import RevisionMixin
+from angee.base.mixins import HistoryMixin, RevisionMixin
 from angee.base.models import AngeeModel
 from angee.compose.appgraph import AppGraph
 from angee.compose.apps import ComposeConfig
@@ -51,6 +51,20 @@ class DecoratedRevisionThing(RevisionMixin, AngeeModel):
     revisioned_fields = ("body",)
 
     body = models.TextField()
+
+    class Meta:
+        """Django model options for the test source model."""
+
+        abstract = True
+        app_label = "tests"
+
+
+class DecoratedHistoryThing(HistoryMixin, AngeeModel):
+    """Abstract model used to test composer-emitted class attributes."""
+
+    runtime = True
+
+    title = models.CharField(max_length=64)
 
     class Meta:
         """Django model options for the test source model."""
@@ -260,6 +274,23 @@ def test_runtime_renders_model_decorators_from_mixins(tmp_path: Path) -> None:
     assert source.index("@reversion.register") < source.index("class DecoratedRevisionThing")
 
 
+def test_runtime_renders_model_attributes_from_mixins(tmp_path: Path) -> None:
+    """Mixin-declared class attributes are emitted on concrete runtime models."""
+
+    app_config = SimpleNamespace(
+        label="tests",
+        name=__name__,
+        module=sys.modules[__name__],
+        models_module=sys.modules[__name__],
+    )
+
+    source = Runtime((app_config,), runtime_dir=tmp_path / "runtime").render_sources()[Path("tests/models.py")]
+
+    assert "import simple_history.models" in source
+    assert "history = simple_history.models.HistoricalRecords(app='tests')" in source
+    assert source.index("history = simple_history") < source.index("class Meta(_DecoratedHistoryThingMeta)")
+
+
 def test_runtime_emits_only_models_marked_runtime(tmp_path: Path) -> None:
     """Only abstract source models declaring ``runtime = True`` are emitted."""
 
@@ -453,6 +484,19 @@ def test_runtime_check_ignores_graphql_codegen_output(tmp_path: Path) -> None:
     gql_path = tmp_path / "runtime" / "gql" / "public" / "graphql.ts"
     gql_path.parent.mkdir(parents=True)
     gql_path.write_text("export const ok = true;\n", encoding="utf-8")
+
+    runtime.check()
+
+
+def test_runtime_check_ignores_web_codegen_output(tmp_path: Path) -> None:
+    """Generated web entry code is checked by the frontend CLI, not build."""
+
+    runtime = runtime_for(tmp_path)
+    runtime.emit()
+    app_path = tmp_path / "runtime" / "web" / "app.ts"
+    app_path.write_text("export const ok = true;\n", encoding="utf-8")
+    routes_path = tmp_path / "runtime" / "web" / "routes.gen.ts"
+    routes_path.write_text("export const routes = [];\n", encoding="utf-8")
 
     runtime.check()
 

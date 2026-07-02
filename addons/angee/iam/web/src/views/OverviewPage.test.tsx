@@ -260,7 +260,6 @@ function overviewData(overrides: Record<string, unknown> = {}): unknown {
         id: "writer",
         namespace: "angee",
         label: "Writer",
-        description: "",
       },
     ],
     iam_overview: {

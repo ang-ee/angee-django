@@ -6,27 +6,15 @@ import os
 from collections.abc import Awaitable, Callable, MutableMapping
 from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from django.apps import apps
-from django.core.asgi import get_asgi_application
-
-from angee.addons import addon_contribution
-from angee.paths import resolve_path
-
-_PROJECT_DIR_ENV = "ANGEE_PROJECT_DIR"
+from angee.project import PROJECT_DIR_ENV, find_project_dir
 
 
 def _project_dir() -> Path | None:
     """Return the project root for direct ASGI imports, when discoverable."""
 
-    configured = os.environ.get(_PROJECT_DIR_ENV)
-    if configured:
-        return resolve_path(configured)
-    for parent in (Path.cwd().resolve(), *Path.cwd().resolve().parents):
-        if (parent / "settings.yaml").exists() or (parent / "settings.py").exists():
-            return parent
-    return None
+    return find_project_dir()
 
 
 def _bootstrap() -> None:
@@ -34,12 +22,18 @@ def _bootstrap() -> None:
 
     project_dir = _project_dir()
     if project_dir is not None:
-        os.environ.setdefault(_PROJECT_DIR_ENV, str(project_dir))
+        os.environ.setdefault(PROJECT_DIR_ENV, str(project_dir))
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "angee.compose.settings")
 
 
 def _websocket_urlpatterns() -> list[object]:
     """Return WebSocket URL patterns contributed by installed addons."""
+
+    # Deferred: tests import routing helpers before Django's app registry is set
+    # up; the composed application path imports this only during the lazy build.
+    from django.apps import apps
+
+    from angee.addons import addon_contribution
 
     patterns: list[object] = []
     for app_config in apps.get_app_configs():
@@ -49,6 +43,12 @@ def _websocket_urlpatterns() -> list[object]:
 
 def _http_mounts() -> list[tuple[str, Any]]:
     """Return the ``(path_prefix, ASGI app)`` HTTP mounts contributed by addons."""
+
+    # Deferred for the same Django app-loading reason as
+    # :func:`_websocket_urlpatterns`.
+    from django.apps import apps
+
+    from angee.addons import addon_contribution
 
     mounts: list[tuple[str, Any]] = []
     for app_config in apps.get_app_configs():
@@ -98,6 +98,10 @@ def _application() -> Any:
     protocol — Angee serves with uvicorn (see ``docs/stack.md``).
     """
 
+    # Deferred: importing ``django.core.asgi`` at module collection time pulls on
+    # Django internals before pytest-django owns setup.
+    from django.core.asgi import get_asgi_application
+
     django_asgi_app = get_asgi_application()
     _emit_dev_sdl()
     websocket_patterns = _websocket_urlpatterns()
@@ -117,6 +121,28 @@ def _application() -> Any:
 
         mapping["websocket"] = AuthMiddlewareStack(URLRouter(websocket_patterns))
     return ProtocolTypeRouter(mapping)
+
+
+class _LazyApplication:
+    """Build the composed ASGI app on first use, not module import.
+
+    Tests import this module's routing helpers without a composed runtime. The
+    server-facing ``application`` object is still a normal ASGI callable, but the
+    expensive Django/app/addon composition happens only when a server dispatches
+    a scope.
+    """
+
+    def __init__(self) -> None:
+        self._wrapped: ASGIApp | None = None
+
+    def _app(self) -> ASGIApp:
+        if self._wrapped is None:
+            _bootstrap()
+            self._wrapped = cast(ASGIApp, _application())
+        return self._wrapped
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await self._app()(scope, receive, send)
 
 
 def _http_app(django_app: ASGIApp, http_mounts: list[tuple[str, ASGIApp]]) -> ASGIApp:
@@ -193,6 +219,5 @@ class _Lifespan:
                 return
 
 
-_bootstrap()
-application = _application()
+application = _LazyApplication()
 """ASGI application for the composed Angee runtime."""

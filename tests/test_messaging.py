@@ -54,6 +54,8 @@ from tests.conftest import (
     Drive,
     Integration,
     MimeType,
+    PostMetrics,
+    _clear_model_tables,
     _create_missing_tables,
     make_integration,
 )
@@ -356,6 +358,7 @@ MESSAGING_TEST_MODELS = (
     ThreadActivity,
     MessageSubtype,
     Message,
+    PostMetrics,
     ThreadNotification,
     Reaction,
     MessageStar,
@@ -378,6 +381,7 @@ def messaging_tables() -> Iterator[None]:
     try:
         yield
     finally:
+        _clear_model_tables(MESSAGING_TEST_MODELS)
         if created_models:
             with connection.schema_editor() as schema_editor:
                 for model in reversed(created_models):
@@ -863,7 +867,7 @@ def test_threaded_model_updates_comment_content(messaging_tables: None) -> None:
     assert edited.pk == message.pk
     assert edited.status == "edited"
     assert edited.preview == "Updated body"
-    assert edited.metadata["edited_by_id"] == str(user.pk)
+    assert edited.metadata["edited_by_id"] == user.pk
     assert Part._base_manager.select_related("fragment").get(message=edited).fragment.text == "Updated body"
     assert Message._base_manager.count() == 1
     assert ThreadNotification._base_manager.count() == notification_count

@@ -11,6 +11,7 @@ from django.db import IntegrityError, models, transaction
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import system_context
 
+from angee.base.models import AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.resources.entries import (
     EntryGraph,
     LoadResult,
@@ -28,7 +29,7 @@ from angee.resources.loader import (
 )
 
 
-class ResourceQuerySet(models.QuerySet[Any]):
+class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
     """QuerySet methods for validating, loading, and diffing resources."""
 
     def validate_addons(
@@ -233,5 +234,5 @@ class ResourceQuerySet(models.QuerySet[Any]):
                 seen[key] = row
 
 
-ResourceManager = models.Manager.from_queryset(ResourceQuerySet)
+ResourceManager = AngeeUnscopedManager.from_queryset(ResourceQuerySet)
 """Manager exposing resource ledger operations."""

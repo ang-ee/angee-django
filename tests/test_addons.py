@@ -9,7 +9,7 @@ fresh install of `django-angee` enumerates them with no `INSTALLED_APPS` list.
 
 from __future__ import annotations
 
-from angee.addons import AvailableAddon, available_addons
+from angee.addons import AddonContract, AvailableAddon, available_addons
 
 
 def test_available_addons_enumerates_installed_base_addons() -> None:
@@ -33,6 +33,28 @@ def test_available_addons_includes_local_addon_dirs(tmp_path) -> None:
 
     assert available["example.demo"].source == "local"
     assert available["example.demo"].anchor == str(addon)
+
+
+def test_available_addons_reads_local_manifest_through_contract_owner(tmp_path, monkeypatch) -> None:
+    """Local catalog discovery reuses the cached manifest reader."""
+
+    addon = tmp_path / "example" / "contract"
+    addon.mkdir(parents=True)
+    marker = addon / "addon.toml"
+    marker.write_text("not valid toml", encoding="utf-8")
+    seen: list[str] = []
+
+    def fake_read_addon_contract(path: str) -> AddonContract:
+        seen.append(path)
+        return AddonContract(name="example.contract")
+
+    monkeypatch.setattr("angee.addons._read_addon_contract", fake_read_addon_contract)
+
+    available = available_addons([tmp_path])
+
+    assert seen == [str(marker)]
+    assert available["example.contract"].source == "local"
+    assert available["example.contract"].anchor == str(addon)
 
 
 def test_registry_facts_full_row_for_enabled_and_zeroed_for_available(db) -> None:

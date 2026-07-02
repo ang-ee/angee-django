@@ -46,6 +46,7 @@ class GitHubBackend(VCSBackend):
     key = "github"
     label = "GitHub"
     icon = "github"
+    repository_search_scope_config_key = "github_org"
     defaults = {
         "vendor": "github",
         "config": {

@@ -45,7 +45,7 @@ from pydantic import BaseModel
 from rebac import current_actor, system_context
 from strawberry.utils.str_converters import to_camel_case, to_snake_case
 
-from angee.base.mixins import actor_user_id
+from angee.base.actors import actor_user_id
 from angee.graphql.schema import GraphQLSchemas
 from mcp.types import ToolAnnotations
 

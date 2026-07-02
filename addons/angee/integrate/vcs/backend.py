@@ -78,6 +78,8 @@ class VCSBackend(BridgeImpl, HttpClientMixin):
     category = "vcs"
     label = "VCS"
     icon = "git-branch"
+    repository_search_scope_config_key = ""
+    """Optional ``VcsBridge.config`` key whose value scopes repository search/listing."""
 
     def ls_repos(self, *, org: str = "") -> list[RepoDescriptor]:
         """List repositories visible to this bridge, optionally within ``org``."""
@@ -108,6 +110,12 @@ class VCSBackend(BridgeImpl, HttpClientMixin):
         """Return repositories whose name matches ``query`` — the typeahead source."""
 
         raise NotImplementedError("VCSBackend subclasses must implement search_repos().")
+
+    def repository_search_scope(self) -> str:
+        """Return the backend-owned repository search scope for this bridge row."""
+
+        key = str(self.repository_search_scope_config_key or "")
+        return str(self.bridge.config.get(key) or "") if key else ""
 
     def get_repo(self, name: str) -> RepoDescriptor:
         """Return one repository by its ``owner/repo`` name; raise ``FileNotFoundError`` if absent."""

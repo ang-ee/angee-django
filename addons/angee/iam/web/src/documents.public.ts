@@ -14,7 +14,6 @@ export const IamAvailableConnections = graphql(`
         oauth_client_display_name
         oauth_client_slug
         oauth_client_icon
-        is_oidc
       }
     }
   }

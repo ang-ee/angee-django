@@ -14,6 +14,7 @@ from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 
 from angee.compose.composer import Composer
+from angee.project import PROJECT_DIR_ENV, find_project_dir, project_dir
 
 
 def _installed_paths(installed_apps: list[object]) -> list[str]:
@@ -40,6 +41,28 @@ def _compose(tmp_path: Path) -> dict[str, Any]:
     }
     Composer(settings).compose_settings()
     return settings
+
+
+def test_project_dir_owner_discovers_explicit_manage_and_ancestor_roots(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """One project-root owner serves explicit env, manage.py, and ancestor discovery."""
+
+    explicit = tmp_path / "explicit"
+    manage_project = tmp_path / "manage-project"
+    nested_project = tmp_path / "nested-project"
+    nested = nested_project / "web" / "src"
+    explicit.mkdir()
+    manage_project.mkdir()
+    nested.mkdir(parents=True)
+    manage_py = manage_project / "manage.py"
+    manage_py.write_text("# test entrypoint\n", encoding="utf-8")
+    (nested_project / "settings.yaml").write_text("SECRET_KEY: nested\n", encoding="utf-8")
+
+    assert project_dir(environ={PROJECT_DIR_ENV: str(explicit)}, argv=[], cwd=tmp_path) == explicit.resolve()
+    assert find_project_dir(environ={}, argv=[str(manage_py)], cwd=tmp_path) == manage_project.resolve()
+    assert find_project_dir(environ={}, argv=["uvicorn", "angee.asgi:application"], cwd=nested) == nested_project
 
 
 def test_base_is_installed_exactly_once(tmp_path: Path) -> None:
@@ -149,11 +172,11 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "angee.integrate.apps.IntegrateConfig",
         "angee.mcp",
         "angee.operator",
-        "angee.agents",
+        "angee.agents.apps.AgentsConfig",
         "angee.agents_integrate_anthropic",
         "angee.iam_integrate_oidc.apps.IAMIntegrateOidcConfig",
         "angee.storage.apps.StorageConfig",
-        "angee.parties",
+        "angee.parties.apps.PartiesConfig",
         "angee.messaging.apps.MessagingConfig",
         "example.notes",
     ]
@@ -229,18 +252,31 @@ def test_auth_user_model_comes_from_iam_autoconfig(
     settings = _compose(tmp_path)
 
     assert SETTINGS["AUTH_USER_MODEL"] == "iam.User"
+    assert SETTINGS["AUTHENTICATION_BACKENDS:append"] == [
+        "rebac.backends.auth.RebacBackend",
+        "angee.iam.auth.ModelBackend",
+    ]
     assert settings["AUTH_USER_MODEL"] == "iam.User"
 
 
-def test_graphql_ide_comes_from_graphql_autoconfig(tmp_path: Path) -> None:
-    """GraphQL owns its IDE default instead of Composer knowing GraphQL."""
+def test_graphql_ide_default_is_debug_only(tmp_path: Path) -> None:
+    """GraphQL owns its IDE default and only enables it for DEBUG projects."""
 
-    from angee.graphql.autoconfig import SETTINGS
+    from angee.graphql.autoconfig import settings as graphql_settings
 
     settings = _compose(tmp_path)
 
-    assert SETTINGS["ANGEE_GRAPHQL_IDE"] == "graphiql"
-    assert settings["ANGEE_GRAPHQL_IDE"] == "graphiql"
+    assert graphql_settings({"DEBUG": True})["ANGEE_GRAPHQL_IDE"] == "graphiql"
+    assert settings["ANGEE_GRAPHQL_IDE"] is None
+
+    debug_settings: dict[str, Any] = {
+        "INSTALLED_APPS": ("angee.graphql",),
+        "ANGEE_RUNTIME_DIR": tmp_path / "debug-runtime",
+        "DEBUG": True,
+    }
+    Composer(debug_settings).compose_settings()
+
+    assert debug_settings["ANGEE_GRAPHQL_IDE"] == "graphiql"
 
 
 def test_data_dir_is_host_owned_not_composed(tmp_path: Path) -> None:
@@ -735,6 +771,41 @@ def test_compose_settings_module_uses_project_dir_for_non_manage_entrypoints(
     assert str(tmp_path / "addons") in sys.path
 
 
+def test_compose_settings_module_discovers_project_ancestor_for_non_manage_entrypoints(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The shared project-dir owner lets ASGI-style imports run from child dirs."""
+
+    project = tmp_path / "project"
+    nested = project / "web" / "src"
+    nested.mkdir(parents=True)
+    (project / "settings.yaml").write_text(
+        "\n".join(
+            [
+                "SECRET_KEY: nested-asgi-secret",
+                "INSTALLED_APPS:",
+                "  - angee.resources",
+                'ANGEE_RUNTIME_DIR: "{BASE_DIR}/runtime"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(nested)
+    monkeypatch.delitem(sys.modules, "settings", raising=False)
+    monkeypatch.delenv("ANGEE_PROJECT_DIR", raising=False)
+    monkeypatch.setattr(sys, "argv", ["uvicorn", "angee.asgi:application"])
+
+    import angee.compose.settings as compose_settings
+
+    compose_settings = importlib.reload(compose_settings)
+
+    assert compose_settings.SECRET_KEY == "nested-asgi-secret"
+    assert compose_settings.BASE_DIR == project
+    assert compose_settings.ANGEE_RUNTIME_DIR == project / "runtime"
+
+
 def test_compose_settings_rejects_cwd_without_project_contract(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -889,6 +960,38 @@ def test_addon_autoconfig_applies_setting_fragments(
         "django.middleware.common.CommonMiddleware",
         "alpha.middleware.One",
     ]
+
+
+def test_addon_autoconfig_merges_resource_source_classes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Dotted autoconfig keys append resource sources to the settings registry."""
+
+    _write_addon(
+        tmp_path,
+        "alpha",
+        autoconfig=(
+            "SETTINGS = {\n"
+            "    'ANGEE_RESOURCE_SOURCE_CLASSES.url': 'alpha.sources.url_source',\n"
+            "}\n"
+        ),
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    settings: dict[str, Any] = {
+        "INSTALLED_APPS": ("alpha",),
+        "ANGEE_RUNTIME_DIR": tmp_path / "runtime",
+        "ANGEE_RESOURCE_SOURCE_CLASSES": {
+            "path": "angee.resources.sources.path_source",
+        },
+    }
+    Composer(settings).compose_settings()
+
+    assert settings["ANGEE_RESOURCE_SOURCE_CLASSES"] == {
+        "path": "angee.resources.sources.path_source",
+        "url": "alpha.sources.url_source",
+    }
 
 
 def test_addon_autoconfig_merges_sequences_in_dependency_order(
@@ -1086,6 +1189,32 @@ def test_addon_contribution_ignores_absent_conventional_module(
 
     assert addon_contribution(app_config, "asgi", "websocket_urlpatterns", allow_callable=True) == []
     assert "alpha_absent.asgi" not in sys.modules
+
+
+def test_addon_contract_infers_only_bound_conventional_symbols(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Conventional seams are declarations, not type-only annotations."""
+
+    _write_addon(tmp_path, "alpha_annotations")
+    (tmp_path / "alpha_annotations" / "schema.py").write_text(
+        "schemas: dict[str, object]\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "alpha_annotations" / "mcp_tools.py").write_text(
+        "register: object\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    from angee.addons import addon_contract
+
+    contract = addon_contract(_addon_test_config("alpha_annotations"))
+
+    assert contract is not None
+    assert contract.schemas is None
+    assert contract.mcp_tools is None
 
 
 def test_addon_contribution_wraps_conventional_module_import_errors(

@@ -11,7 +11,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import connection
+from django.db import connection, transaction
 from rebac import system_context, to_object_ref, to_subject_ref
 from rebac.models import active_relationship_model
 
@@ -252,6 +252,86 @@ def test_deliver_event_signs_and_posts_only_matching_subscriptions(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_enqueue_event_delivers_after_commit(
+    webhook_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The manager-owned queue seam sends webhook fan-out after commit."""
+
+    del webhook_tables
+    call_command("rebac", "sync", verbosity=0)
+    posts = _record_posts(monkeypatch, status=202)
+
+    user = get_user_model().objects.create_user(username="webhook-queued", email="queued@example.com")
+    with system_context(reason="test webhook queued setup"):
+        WebhookSubscription.objects.create(
+            owner=user,
+            target_url="https://hooks-queued.example.test/events",
+            secret="queued-secret",
+            event_kinds=[EventKind.BRIDGE_SYNCED.value],
+        )
+
+    with transaction.atomic():
+        WebhookSubscription.objects.enqueue_event(
+            kind=EventKind.BRIDGE_SYNCED,
+            payload={"bridge": "br_queued"},
+        )
+        assert posts == []
+
+    assert [post["url"] for post in posts] == ["https://hooks-queued.example.test/events"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_deliver_event_prefilters_integration_scope_before_row_matching(
+    webhook_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The manager excludes integration-filter misses before calling row matchers."""
+
+    del webhook_tables
+    call_command("rebac", "sync", verbosity=0)
+    _record_posts(monkeypatch, status=202)
+
+    user = get_user_model().objects.create_user(username="webhook-prefilter", email="prefilter@example.com")
+    conn = make_integration("prefilter-account")
+    other_conn = make_integration("prefilter-other")
+    with system_context(reason="test webhook prefilter setup"):
+        matching = WebhookSubscription.objects.create(
+            owner=user,
+            target_url="https://hooks-prefilter.example.test/events",
+            secret="prefilter-secret",
+            event_kinds=[EventKind.BRIDGE_SYNCED.value],
+            integration_filter=conn,
+        )
+        wrong_account = WebhookSubscription.objects.create(
+            owner=user,
+            target_url="https://hooks-prefilter-other.example.test/events",
+            secret="prefilter-other-secret",
+            event_kinds=[EventKind.BRIDGE_SYNCED.value],
+            integration_filter=other_conn,
+        )
+
+    checked: list[int] = []
+    original_matches = WebhookSubscription.matches
+
+    def tracked_matches(subscription: WebhookSubscription, **kwargs: Any) -> bool:
+        checked.append(subscription.pk)
+        return original_matches(subscription, **kwargs)
+
+    monkeypatch.setattr(WebhookSubscription, "matches", tracked_matches)
+
+    result = WebhookSubscription.objects.deliver_event(
+        kind=EventKind.BRIDGE_SYNCED,
+        payload={"bridge": "br_prefilter"},
+        integration=conn,
+    )
+
+    assert result == {"delivered": 1, "errors": 0}
+    assert matching.pk in checked
+    assert wrong_account.pk not in checked
+
+
+@pytest.mark.django_db(transaction=True)
 def test_deliver_event_failure_increments_consecutive_failures(
     webhook_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -284,6 +364,27 @@ def test_deliver_event_failure_increments_consecutive_failures(
     assert subscription.last_delivery_at is not None
     assert subscription.last_delivery_status == ""
     assert "ConnectionRefusedError" in subscription.last_error
+
+
+@pytest.mark.django_db(transaction=True)
+def test_record_delivery_failure_refreshes_incremented_counter(webhook_tables: None) -> None:
+    """Failure telemetry leaves the row instance with the database counter value."""
+
+    del webhook_tables
+    call_command("rebac", "sync", verbosity=0)
+
+    user = get_user_model().objects.create_user(username="webhook-refresh", email="refresh@example.com")
+    with system_context(reason="test webhook refresh setup"):
+        subscription = WebhookSubscription.objects.create(
+            owner=user,
+            target_url="https://hooks-refresh.example.test/events",
+            secret="refresh-secret",
+            event_kinds=[EventKind.BRIDGE_ERRORED.value],
+            consecutive_failures=4,
+        )
+        subscription.record_delivery_failure(status="", error="ConnectionRefusedError: connection refused")
+
+    assert subscription.consecutive_failures == 5
 
 
 @pytest.mark.django_db(transaction=True)

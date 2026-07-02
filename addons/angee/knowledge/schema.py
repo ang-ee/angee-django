@@ -295,7 +295,7 @@ _PAGE_RESOURCE = hasura_model_resource(
         "vault": public_pk_decoder(Vault),
         "parent": public_pk_decoder(Page),
     },
-    write_backend=PageWriteBackend(Page, public_id_fields={"parent": Page}),
+    write_backend=PageWriteBackend(Page, public_id_fields=("parent",)),
 )
 
 

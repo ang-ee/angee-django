@@ -14,12 +14,15 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.management import call_command
 from django.db import connection
+from django.db.models.signals import post_save
 from rebac import actor_context, app_settings, system_context
+from rebac.actors import to_subject_ref
 from rebac.errors import PermissionDenied
 from rebac.roles import grant
 
 from angee.storage import exceptions
 from angee.storage.models import FileManager, UploadState
+from angee.storage.signals import file_finalized
 from tests.conftest import (
     STORAGE_TEST_MODELS,
     Backend,
@@ -27,6 +30,7 @@ from tests.conftest import (
     File,
     Folder,
     MimeType,
+    _clear_model_tables,
     _create_missing_tables,
     addon_schema,
     execute_schema,
@@ -56,6 +60,20 @@ def test_file_source_model_owns_the_upload_protocol() -> None:
     assert set(UploadState.values) == {"draft", "ready", "failed"}
 
 
+def test_storage_autoconfig_has_no_runtime_setting_shim() -> None:
+    """Production storage code reads declared Django settings directly."""
+
+    autoconfig = importlib.import_module("angee.storage.autoconfig")
+
+    assert not hasattr(autoconfig, "setting")
+
+
+def test_backend_has_no_dormant_default_flag() -> None:
+    """The configured default drive owns defaults; backend rows do not."""
+
+    assert "is_default" not in {field.name for field in Backend._meta.fields}
+
+
 def test_detect_mime_falls_back_to_the_filename_when_libmagic_is_unsure() -> None:
     """libmagic wins on content it recognises; an opaque blob defers to the
     filename extension, so a format libmagic misses (e.g. HEIC) still gets a
@@ -79,6 +97,7 @@ def storage_tables() -> Iterator[None]:
     try:
         yield
     finally:
+        _clear_model_tables(STORAGE_TEST_MODELS)
         if created_models:
             with connection.schema_editor() as schema_editor:
                 for model in reversed(created_models):
@@ -155,6 +174,69 @@ def test_proxy_upload_flow_verifies_bytes_and_dedups(tmp_path: Path, drive: Any)
         )
     assert dedup.pk == row.pk
     assert dedup.upload_state == UploadState.READY
+
+
+@pytest.mark.django_db(transaction=True)
+def test_finalize_publishes_once_when_stale_instance_loses_ready_race(drive: Any) -> None:
+    """Only the caller that conditionally flips DRAFT→READY emits file_finalized."""
+
+    seen: list[int] = []
+
+    def capture(sender: Any, instance: Any, **kwargs: Any) -> None:
+        del sender, kwargs
+        seen.append(instance.pk)
+
+    file_finalized.connect(capture, sender=File, dispatch_uid="test.storage.finalize_once")
+    try:
+        with actor_context(drive.alice):
+            row = File.objects.draft(
+                filename="race.png",
+                mime_type="image/png",
+                size_bytes=len(PNG_BYTES),
+                drive_id=str(drive.sqid),
+            )
+            token = row.issue_upload_token()
+            File.objects.for_upload_token(token).receive_bytes(BytesIO(PNG_BYTES))
+            stale = File.objects.all().from_public_id(str(row.sqid))
+            fresh = File.objects.all().from_public_id(str(row.sqid))
+
+            fresh.finalize(expected_hash=PNG_SHA256, expected_size=len(PNG_BYTES))
+            stale.finalize(expected_hash=PNG_SHA256, expected_size=len(PNG_BYTES))
+    finally:
+        file_finalized.disconnect(sender=File, dispatch_uid="test.storage.finalize_once")
+
+    assert seen == [row.pk]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_finalize_emits_post_save_for_change_feed(drive: Any) -> None:
+    """The DRAFT->READY conditional update still reaches post_save publishers."""
+
+    seen: list[frozenset[str]] = []
+    with actor_context(drive.alice):
+        row = File.objects.draft(
+            filename="change-feed.png",
+            mime_type="image/png",
+            size_bytes=len(PNG_BYTES),
+            drive_id=str(drive.sqid),
+        )
+        token = row.issue_upload_token()
+        File.objects.for_upload_token(token).receive_bytes(BytesIO(PNG_BYTES))
+        fresh = File.objects.all().from_public_id(str(row.sqid))
+
+    def capture(sender: Any, instance: Any, created: bool, update_fields: Any, **kwargs: Any) -> None:
+        del sender, kwargs
+        if instance.pk == row.pk and not created:
+            seen.append(frozenset(update_fields or ()))
+
+    post_save.connect(capture, sender=File, dispatch_uid="test.storage.finalize_post_save")
+    try:
+        with actor_context(drive.alice):
+            fresh.finalize(expected_hash=PNG_SHA256, expected_size=len(PNG_BYTES))
+    finally:
+        post_save.disconnect(sender=File, dispatch_uid="test.storage.finalize_post_save")
+
+    assert frozenset({"content_hash", "size_bytes", "mime_type", "upload_state", "updated_at"}) in seen
 
 
 @pytest.mark.django_db(transaction=True)
@@ -313,8 +395,23 @@ def test_storage_graphql_custom_mutations_accept_public_ids(drive: Any) -> None:
     }
 
     row.refresh_from_db()
-    with actor_context(drive.alice):
-        row.delete()
+    storage_path = row.storage_path
+    deleted = result_data(
+        execute_schema(
+            schema,
+            """
+            mutation Delete($id: ID!) {
+              delete_file(id: $id, confirm: true) { has_blockers }
+            }
+            """,
+            {"id": str(row.sqid)},
+            user=drive.alice,
+        )
+    )["delete_file"]
+    assert deleted == {"has_blockers": False}
+    row.refresh_from_db()
+    assert row.is_trashed
+    assert (Path(drive.backend.storage.location) / storage_path).exists()
 
     restored = result_data(
         execute_schema(
@@ -448,6 +545,10 @@ def test_folder_tree_invariants(drive: Any) -> None:
         root.parent = child
         with pytest.raises(ValidationError):
             root.full_clean()
+        with pytest.raises(ValidationError):
+            root.save(update_fields=["parent"])
+        root.refresh_from_db()
+        assert root.parent_id is None
 
 
 @pytest.mark.django_db(transaction=True)
@@ -469,18 +570,56 @@ def test_dedup_restores_a_trashed_hit(drive: Any) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_ingest_dedup_grants_read_reach_to_second_owner(drive: Any) -> None:
+    """A dedup hit grants the requested owner reach to the existing READY row."""
+
+    bob = get_user_model().objects.create_user(username="storage-dedup-bob", email="dedup-bob@example.com")
+    with system_context(reason="test storage dedup ingest"):
+        first = File.objects.ingest_bytes(
+            PNG_BYTES,
+            filename="first.png",
+            owner_id=drive.alice.pk,
+            drive_id=str(drive.sqid),
+        )
+        second = File.objects.ingest_bytes(
+            PNG_BYTES,
+            filename="second.png",
+            owner_id=bob.pk,
+            drive_id=str(drive.sqid),
+        )
+
+    assert second.pk == first.pk
+    with actor_context(bob):
+        assert File.objects.filter(pk=first.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_create_folder_factory_gates_on_drive_write(drive: Any) -> None:
     """The factory creates for a drive writer and denies an unrelated user."""
 
     with actor_context(drive.alice):
         folder = Folder.objects.create_in_drive(drive_id=str(drive.sqid), name="Reports")
     assert folder.pk is not None and folder.drive_id == drive.pk and not folder.is_virtual
+    assert not folder.is_sudo()
+    assert folder.actor() == to_subject_ref(drive.alice)
 
     # An unrelated user can't create in a drive they have no write access to
     # (the drive isn't even readable to them, so it resolves as not-found).
     stranger = get_user_model().objects.create_user(username="storage-dora", email="dora@example.com")
     with actor_context(stranger), pytest.raises(exceptions.UploadError):
         Folder.objects.create_in_drive(drive_id=str(drive.sqid), name="Sneaky")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_file_draft_rebinds_returned_row_to_actor(drive: Any) -> None:
+    """The draft factory returns an actor-bound row after the sudo insert."""
+
+    with actor_context(drive.alice):
+        row = File.objects.draft(filename="draft.txt", drive_id=str(drive.sqid))
+
+    assert row.pk is not None
+    assert not row.is_sudo()
+    assert row.actor() == to_subject_ref(drive.alice)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -601,3 +740,61 @@ def test_users_get_a_trash_smart_folder(storage_tables: None) -> None:
     folders = Folder._base_manager.filter(owner=user, is_virtual=True)
     assert [folder.smart_kind for folder in folders] == [Folder.SmartKind.TRASH]
     assert folders.get().drive_id is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_backend_storage_cache_tracks_resolved_env_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    storage_tables: None,
+) -> None:
+    """Environment-backed backend config changes produce a new storage instance."""
+
+    del storage_tables
+    Backend._storage_cache.clear()
+    monkeypatch.setenv("ANGEE_TEST_STORAGE_ROOT", str(tmp_path / "one"))
+    with system_context(reason="test storage setup"):
+        backend = Backend._base_manager.create(
+            slug="env-local",
+            label="Env Local",
+            backend_class="local",
+            backend_config={"root": {"env": "ANGEE_TEST_STORAGE_ROOT"}, "base_url": "/media/"},
+        )
+
+    first = backend.storage
+    monkeypatch.setenv("ANGEE_TEST_STORAGE_ROOT", str(tmp_path / "two"))
+    second = backend.storage
+
+    assert first is not second
+    assert Path(first.location) == tmp_path / "one"
+    assert Path(second.location) == tmp_path / "two"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_backend_storage_cache_is_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    storage_tables: None,
+) -> None:
+    """The process cache evicts old resolved backend instances."""
+
+    del storage_tables
+    from angee.storage import models as storage_models
+
+    monkeypatch.setattr(storage_models, "_STORAGE_CACHE_MAX_SIZE", 2)
+    Backend._storage_cache.clear()
+    with system_context(reason="test storage setup"):
+        backends = [
+            Backend._base_manager.create(
+                slug=f"bounded-{index}",
+                label=f"Bounded {index}",
+                backend_class="local",
+                backend_config={"root": str(tmp_path / str(index)), "base_url": "/media/"},
+            )
+            for index in range(3)
+        ]
+
+    for backend in backends:
+        backend.storage
+
+    assert len(Backend._storage_cache) == 2

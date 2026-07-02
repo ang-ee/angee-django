@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
 import json
-import re
 import tomllib
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -61,13 +61,35 @@ class AddonContract:
 
 
 def _module_defines(module_path: Path, symbol: str) -> bool:
-    """Return whether a module file defines a top-level ``symbol`` (def/assignment)."""
+    """Return whether a module file binds a top-level ``symbol``."""
 
-    pattern = re.compile(
-        rf"^(?:async def |def ){re.escape(symbol)}\b|^{re.escape(symbol)}\s*[:=]",
-        re.MULTILINE,
-    )
-    return bool(pattern.search(module_path.read_text()))
+    try:
+        module = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+    except SyntaxError as error:
+        raise ImproperlyConfigured(f"{module_path} could not be parsed for addon seam inference") from error
+    return any(_node_binds_symbol(node, symbol) for node in module.body)
+
+
+def _node_binds_symbol(node: ast.stmt, symbol: str) -> bool:
+    """Return whether a top-level AST node binds ``symbol``."""
+
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return node.name == symbol
+    if isinstance(node, ast.Assign):
+        return any(_target_binds_symbol(target, symbol) for target in node.targets)
+    if isinstance(node, ast.AnnAssign) and node.value is not None:
+        return _target_binds_symbol(node.target, symbol)
+    return False
+
+
+def _target_binds_symbol(target: ast.expr, symbol: str) -> bool:
+    """Return whether an assignment target binds ``symbol``."""
+
+    if isinstance(target, ast.Name):
+        return target.id == symbol
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return any(_target_binds_symbol(element, symbol) for element in target.elts)
+    return False
 
 
 def _infer_contributions(addon_dir: Path) -> dict[str, str]:
@@ -191,7 +213,8 @@ def available_addons(addon_dirs: Iterable[Path | str] = ()) -> dict[str, Availab
         for marker in sorted(Path(addon_dir).glob("**/addon.toml")):
             if "node_modules" in marker.parts:
                 continue
-            name = tomllib.loads(marker.read_text()).get("addon", {}).get("name")
+            contract = _read_addon_contract(str(marker))
+            name = contract.name if contract is not None else None
             if name and name not in available:
                 available[name] = AvailableAddon(name=name, source="local", anchor=str(marker.parent))
     return dict(sorted(available.items()))

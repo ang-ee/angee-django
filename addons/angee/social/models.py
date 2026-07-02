@@ -92,8 +92,7 @@ class Feed(Bridge):
     def backend(self) -> FeedBackend:
         """Return this feed's selected backend, bound to this row."""
 
-        field = cast(ImplClassField, type(self)._meta.get_field("backend_class"))
-        backend_class = cast("type[FeedBackend]", field.resolve_class(self.backend_class))
+        backend_class = cast("type[FeedBackend]", self.resolve_impl("backend_class"))
         return backend_class(self)
 
     def sync(self) -> int:

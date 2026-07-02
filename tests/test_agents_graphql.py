@@ -43,6 +43,7 @@ from tests.conftest import (
     OAuthClient,
     SchemaAddon,
     Vendor,
+    _clear_model_tables,
     execute_schema,
     make_integration,
 )
@@ -115,6 +116,9 @@ def agents_console_tables(transactional_db: Any) -> Iterator[None]:
     try:
         yield
     finally:
+        _clear_model_tables(
+            IAM_CONNECTION_TEST_MODELS + INTEGRATE_TEST_MODELS + VCS_TEST_MODELS + AGENTS_GRAPHQL_MODELS
+        )
         if created:
             with connection.schema_editor() as schema_editor:
                 for model in reversed(created):
@@ -144,7 +148,7 @@ def test_agent_hasura_insert_update_and_delete(agents_console_tables: None) -> N
               }
             }
             """,
-            {"owner": str(admin.pk)},
+            {"owner": str(admin.sqid)},
             user=admin,
         )
     )["insert_agents_one"]
@@ -440,7 +444,7 @@ def test_create_inference_provider_creates_child_row(agents_console_tables: None
             mutation,
             {
                 "vendor": _public_id(seed.vendor.sqid),
-                "owner": str(seed.owner.pk),
+                "owner": str(seed.owner.sqid),
             },
             user=admin,
         )
@@ -1385,7 +1389,7 @@ def test_mcp_actor_verifier_resolves_bearer_to_the_credential_owner(agents_conso
     actor = resolve_actor("tok-secret")
     assert actor is not None
     assert actor.subject_type == "auth/user"
-    assert actor.subject_id == str(owner.pk)  # the agent runs as the credential's owner
+    assert actor.subject_id == str(owner.sqid)  # the agent runs as the credential's owner
     assert resolve_actor("wrong-token") is None
     assert resolve_actor("") is None
 

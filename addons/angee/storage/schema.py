@@ -9,8 +9,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.urls import reverse
-from rebac import ObjectRef, current_actor, system_context
-from rebac.backends import backend as rebac_backend
+from rebac import ObjectRef, system_context
 from strawberry import auto
 from strawberry.permission import BasePermission
 from strawberry.scalars import JSON
@@ -28,6 +27,7 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
 from angee.iam.audit import AuthoredRefMixin
+from angee.iam.permissions import RolePermission
 from angee.storage import exceptions
 from angee.storage.models import UploadState
 
@@ -59,7 +59,6 @@ class BackendType(AngeeNode):
     label: auto
     backend_class: auto
     backend_config: JSON
-    is_default: auto
     is_archived: auto
     created_at: auto
     updated_at: auto
@@ -200,29 +199,15 @@ class FileUploadFinalizePayload:
     error_code: str | None = strawberry.field(name="error_code", default=None)
 
 
-class StorageAdminPermission(BasePermission):
+class StorageAdminPermission(RolePermission):
     """Allow actors who reach the ``storage_admin`` role.
 
     Platform admins (``angee/role:admin``) are implicit members through the
     role's ``member`` union in ``permissions.zed``.
     """
 
+    role_ref = _STORAGE_ADMIN_ROLE
     message = "Storage admin permission required."
-    error_extensions = {"code": "PERMISSION_DENIED"}
-
-    def has_permission(self, source: Any, info: strawberry.Info, **kwargs: Any) -> bool:
-        """Return whether the current actor is an effective storage admin."""
-
-        del source, info, kwargs
-        actor = current_actor()
-        if actor is None:
-            return False
-        result = rebac_backend().check_access(
-            subject=actor,
-            action="effective_member",
-            resource=_STORAGE_ADMIN_ROLE,
-        )
-        return bool(result.allowed)
 
 
 _STORAGE_ADMIN_CLASSES: list[type[BasePermission]] = [StorageAdminPermission]
@@ -264,7 +249,7 @@ _DRIVE_RESOURCE = hasura_model_resource(
     insertable=["backend", "slug", "name", "description", "prefix"],
     updatable=["name", "description", "prefix", "is_archived"],
     field_id_decode={"backend": public_pk_decoder(Backend)},
-    write_backend=AngeeHasuraWriteBackend(Drive, public_id_fields={"backend": Backend}),
+    write_backend=AngeeHasuraWriteBackend(Drive, public_id_fields=("backend",)),
 )
 _FOLDER_RESOURCE = hasura_model_resource(
     FolderType,
@@ -280,7 +265,7 @@ _FOLDER_RESOURCE = hasura_model_resource(
         "drive": public_pk_decoder(Drive),
         "parent": public_pk_decoder(Folder),
     },
-    write_backend=FolderWriteBackend(Folder, public_id_fields={"parent": Folder}),
+    write_backend=FolderWriteBackend(Folder, public_id_fields=("parent",)),
 )
 _FILE_RESOURCE = hasura_model_resource(
     FileType,
@@ -305,18 +290,18 @@ _FILE_RESOURCE = hasura_model_resource(
         "drive": public_pk_decoder(Drive),
         "folder": public_pk_decoder(Folder),
     },
-    write_backend=AngeeHasuraWriteBackend(File, public_id_fields={"folder": Folder}),
+    write_backend=AngeeHasuraWriteBackend(File, public_id_fields=("folder",)),
 )
 _BACKEND_RESOURCE = hasura_model_resource(
     BackendType,
     model=Backend,
     name="backends",
-    filterable=["id", "slug", "label", "backend_class", "is_default", "is_archived"],
+    filterable=["id", "slug", "label", "backend_class", "is_archived"],
     sortable=["slug", "label", "created_at", "updated_at"],
     aggregatable=["id"],
-    groupable=["backend_class", "is_default", "is_archived"],
-    insertable=["slug", "label", "backend_class", "backend_config", "is_default"],
-    updatable=["label", "backend_class", "backend_config", "is_default", "is_archived"],
+    groupable=["backend_class", "is_archived"],
+    insertable=["slug", "label", "backend_class", "backend_config"],
+    updatable=["label", "backend_class", "backend_config", "is_archived"],
 )
 
 

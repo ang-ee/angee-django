@@ -7,6 +7,7 @@ from datetime import datetime
 from django.utils import timezone
 from rebac import system_context
 
+from angee.integrate.models import Bridge
 from angee.integrate.registry import bridge_models
 
 
@@ -18,7 +19,7 @@ def run_due_bridges(*, now: datetime | None = None) -> dict[str, int]:
     errors = 0
 
     with system_context(reason="integrate.scheduler"):
-        for model in bridge_models():
+        for model in bridge_models(Bridge):
             due_bridges = model._default_manager.filter(next_sync_at__lte=timestamp).order_by("pk")
             for bridge in due_bridges:
                 ran += 1

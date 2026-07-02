@@ -31,8 +31,9 @@ from django.utils.text import capfirst
 from rebac import PermissionDenied, current_actor
 from rebac.managers import RebacManager
 
+from angee.base.actors import actor_user_id
 from angee.base.fields import ImplClassField, SqidField, StateField
-from angee.base.mixins import AuditMixin, HistoryMixin, SqidMixin, actor_user_id
+from angee.base.mixins import AuditMixin, HistoryMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.integrate.models import Bridge
 from angee.messaging.backends import ChannelBackend
@@ -52,6 +53,16 @@ from angee.messaging.managers import (
 )
 from angee.messaging.tracking import FieldTracker, TrackingChange
 from angee.parties.models import Handle
+
+
+def _owner_user_id(instance: models.Model) -> Any | None:
+    """Return the user FK id for this model's effective REBAC actor."""
+
+    actor_getter = getattr(instance, "actor", None)
+    actor = actor_getter() if callable(actor_getter) else None
+    if actor is None:
+        actor = current_actor()
+    return actor_user_id(actor)
 
 
 class ThreadedModelMixin(models.Model):
@@ -241,7 +252,7 @@ class ThreadedModelMixin(models.Model):
         if attachment is None or message.thread_id != attachment.thread_id:
             raise ValueError("Message does not belong to this record thread.")
         message_model = apps.get_model("messaging", "Message")
-        owner_id = actor_user_id(getattr(self, "_rebac_actor", None) or current_actor())
+        owner_id = _owner_user_id(self)
         return message_model.objects.update_content(message, body=body, owner_id=owner_id)
 
     def message_unlink(self, message: models.Model) -> models.Model:
@@ -347,7 +358,7 @@ class ThreadedModelMixin(models.Model):
             raise ValueError("Cannot post a message without a thread.")
         thread = attachment.thread
         message_model = apps.get_model("messaging", "Message")
-        owner_id = actor_user_id(getattr(self, "_rebac_actor", None) or current_actor())
+        owner_id = _owner_user_id(self)
         message = message_model.objects.post_to_thread(
             thread,
             body=body,
@@ -561,7 +572,7 @@ class ThreadedModelMixin(models.Model):
     def _message_after_create(self) -> None:
         """Run Odoo-style chatter side effects after this row is first saved."""
 
-        owner_id = actor_user_id(getattr(self, "_rebac_actor", None) or current_actor())
+        owner_id = _owner_user_id(self)
         if owner_id is None:
             return
         follower_model = apps.get_model("messaging", "ThreadFollower")
@@ -709,8 +720,7 @@ class Channel(Bridge):
     def backend(self) -> ChannelBackend:
         """Return this channel's selected backend, bound to this row."""
 
-        field = cast(ImplClassField, type(self)._meta.get_field("backend_class"))
-        backend_class = cast("type[ChannelBackend]", field.resolve_class(self.backend_class))
+        backend_class = cast("type[ChannelBackend]", self.resolve_impl("backend_class"))
         return backend_class(self)
 
     def sync(self) -> int:

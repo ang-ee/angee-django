@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
 import strawberry
@@ -19,7 +19,12 @@ from strawberry_django_hasura import (
     hasura_resource as build_hasura_resource,
 )
 
-from angee.base.models import instance_from_public_id
+from angee.base.models import (
+    aggregate_scoped_queryset,
+    bind_actor,
+    instance_from_public_id,
+    requires_angee_rebac_contract,
+)
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.metadata import (
     DataAggregateMeasureMetadata,
@@ -35,7 +40,6 @@ from angee.graphql.data.metadata import (
     model_resource_fields,
     resource_type_name,
     resource_wire_field_name,
-    resource_wire_field_names,
 )
 from angee.graphql.deletion import delete_by_public_id
 from angee.graphql.ids import require_instance_for_id
@@ -60,23 +64,48 @@ class AngeeHasuraWriteBackend:
         self,
         model: type[models.Model],
         *,
-        public_id_fields: Mapping[str, type[models.Model]] | None = None,
+        public_id_fields: Iterable[str] | None = None,
         delete_guard: Callable[[models.Model], str | None] | None = None,
     ) -> None:
         self.model = model
-        self.public_id_fields = dict(public_id_fields or {})
+        self.public_id_fields = _public_id_field_models(model, public_id_fields or ())
         self.delete_guard = delete_guard
 
     def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
         """Create through strawberry-django's stock mutation resolver."""
 
-        return mutation_resolvers.create(
+        decoded_data, relationships = self._decode_public_id_fields_with_relationships(data)
+        check_create = getattr(self.model._default_manager, "check_create", None)
+        if not callable(check_create):
+            if requires_angee_rebac_contract(self.model):
+                raise ImproperlyConfigured(f"{self.model._meta.label} manager must expose check_create().")
+            return mutation_resolvers.create(
+                info,
+                self.model,
+                decoded_data,
+                key_attr=PUBLIC_ID_FIELD_NAME,
+                full_clean=True,
+            )
+
+        verified_actor: Any | None = None
+
+        def pre_save_hook(instance: models.Model) -> None:
+            nonlocal verified_actor
+            verified_actor = check_create(relationships)
+            sudo = getattr(instance, "sudo", None)
+            if callable(sudo):
+                sudo(reason="graphql.hasura.create")
+
+        instance = mutation_resolvers.create(
             info,
             self.model,
-            self._decode_public_id_fields(data),
+            decoded_data,
             key_attr=PUBLIC_ID_FIELD_NAME,
             full_clean=True,
+            pre_save_hook=pre_save_hook,
         )
+        bind_actor(instance, verified_actor)
+        return instance
 
     def update(self, info: strawberry.Info, pk: str, data: dict[str, Any]) -> Any:
         """Patch one public-id-addressed row through the write queryset."""
@@ -99,11 +128,8 @@ class AngeeHasuraWriteBackend:
         """Delete one public-id-addressed row and return the deleted instance."""
 
         del info
-        captured: dict[str, Any] = {}
 
-        def capture(instance: models.Model) -> None:
-            captured["instance"] = instance
-            captured["pk"] = instance.pk
+        def guard(instance: models.Model) -> None:
             if self.delete_guard is None:
                 return
             message = self.delete_guard(instance)
@@ -115,18 +141,26 @@ class AngeeHasuraWriteBackend:
             str(pk),
             confirm=True,
             queryset=write_queryset(self.model),
-            before_delete=capture,
+            before_delete=guard,
         )
-        if preview.has_blockers or "instance" not in captured:
+        if preview.has_blockers:
             return None
-        instance = captured["instance"]
-        instance.pk = captured["pk"]
-        return instance
+        return preview.deleted_instance
 
     def _decode_public_id_fields(self, data: dict[str, Any]) -> dict[str, Any]:
         """Translate public-id relation fields to Django-native write values."""
 
+        decoded, _relationships = self._decode_public_id_fields_with_relationships(data)
+        return decoded
+
+    def _decode_public_id_fields_with_relationships(
+        self,
+        data: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, tuple[Any, ...]]]:
+        """Translate public-id relation fields and keep relationship instances."""
+
         out: dict[str, Any] = {}
+        relationships: dict[str, tuple[Any, ...]] = {}
         for key, value in data.items():
             related_model = self.public_id_fields.get(key)
             if related_model is None:
@@ -137,16 +171,50 @@ class AngeeHasuraWriteBackend:
             except FieldDoesNotExist:
                 field = None
             if getattr(field, "many_to_many", False):
-                out[key] = [_public_instance(related_model, item) for item in value] if value is not None else None
+                instances = (
+                    tuple(_write_public_instance(related_model, item) for item in value)
+                    if value is not None
+                    else ()
+                )
+                out[key] = list(instances) if value is not None else None
+                if instances:
+                    relationships[key] = instances
                 continue
-            out[f"{key}_id"] = _public_pk(related_model, value)
-        return out
+            instance = _write_public_instance(related_model, value)
+            out[f"{key}_id"] = None if instance is None else instance.pk
+            if instance is not None:
+                relationships[key] = (instance,)
+        return out, relationships
 
 
 def public_pk_decoder(model: type[models.Model]) -> Callable[[Any], Any]:
     """Return a decoder from Angee public id to database primary key."""
 
     return lambda value: _public_pk(model, value)
+
+
+def _public_id_field_models(
+    model: type[models.Model],
+    fields: Iterable[str],
+) -> dict[str, type[models.Model]]:
+    """Return related models for public-id write fields declared by name."""
+
+    related: dict[str, type[models.Model]] = {}
+    for field_name in fields:
+        name = str(field_name)
+        try:
+            field = model._meta.get_field(name)
+        except FieldDoesNotExist as error:
+            raise ImproperlyConfigured(
+                f"{model._meta.label} public id field {name!r} does not exist."
+            ) from error
+        related_model = getattr(field, "related_model", None)
+        if not isinstance(related_model, type) or not issubclass(related_model, models.Model):
+            raise ImproperlyConfigured(
+                f"{model._meta.label} public id field {name!r} must be a relation."
+            )
+        related[name] = related_model
+    return related
 
 
 def aggregate_queryset(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
@@ -157,8 +225,7 @@ def aggregate_queryset(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
     unchanged. Resources with a custom aggregate source wrap it through here.
     """
 
-    scoped = getattr(queryset, "scoped_for_aggregate", None)
-    return scoped() if callable(scoped) else queryset
+    return aggregate_scoped_queryset(queryset)
 
 
 def _model_queryset(
@@ -228,15 +295,27 @@ def _public_pk(model: type[models.Model], value: Any) -> Any:
     return None if instance is None else instance.pk
 
 
-def _public_instance(model: type[models.Model], value: Any) -> Any:
+def _write_public_instance(model: type[models.Model], value: Any) -> Any:
+    """Decode one write relation public id through the actor-scoped write owner."""
+
+    return _public_instance(model, value, queryset=write_queryset(model))
+
+
+def _public_instance(
+    model: type[models.Model],
+    value: Any,
+    *,
+    queryset: models.QuerySet[Any] | None = None,
+) -> Any:
     """Decode one public id to a model instance through the identity owner."""
 
     if value in (None, ""):
         return None
+    active_queryset = queryset if queryset is not None else model._base_manager.all()
     instance = instance_from_public_id(
         model,
         str(value),
-        queryset=model._base_manager.all(),
+        queryset=active_queryset,
     )
     if instance is None:
         raise ValueError(f"{model._meta.object_name} {value!r} was not found")
@@ -344,17 +423,6 @@ def attach_hasura_resource_metadata(
 ) -> HasuraResource:
     """Attach Angee resource metadata to a built Hasura resource bundle."""
 
-    type_names = _ResourceTypes(resource, name, node)
-    create_fields = (
-        resource_wire_field_names(type_names.insert_input_type, exclude=("id",))
-        if insert
-        else ()
-    )
-    update_fields = (
-        resource_wire_field_names(type_names.set_input_type, exclude=("id",))
-        if update
-        else ()
-    )
     fields = model_resource_fields(
         model,
         declared_fields,
@@ -362,9 +430,11 @@ def attach_hasura_resource_metadata(
         order_fields=sortable,
         aggregate_fields=aggregatable,
         group_by_fields=groupable,
-        create_fields=create_fields,
-        update_fields=update_fields,
+        create_fields=tuple(resource.insertable_fields) if insert else (),
+        update_fields=tuple(resource.updatable_fields) if update else (),
     )
+    if resource.detail_root is None:
+        raise ImproperlyConfigured(f"{model._meta.label} Hasura resource did not expose a detail root.")
     attach_data_resource_metadata(
         resource.query,
         make_data_resource_metadata(
@@ -372,25 +442,32 @@ def attach_hasura_resource_metadata(
             model_label=model_label,
             public_id_field=public_id_field,
             node_type=node,
-            filter_type=type_names.filter_type,
-            order_type=type_names.order_type,
+            filter_type=resource.filter_type,
+            order_type=resource.order_by_type,
             roots=DataResourceRoots(
-                list_name=resource_wire_field_name(resource.query, name),
-                detail_name=resource_wire_field_name(resource.query, f"{name}_by_pk"),
-                aggregate_name=resource_wire_field_name(resource.query, f"{name}_aggregate"),
-                group_name=resource_wire_field_name(resource.query, f"{name}_groups") if groupable else None,
+                list_name=resource_wire_field_name(resource.query, str(resource.list_root or name)),
+                detail_name=resource_wire_field_name(resource.query, str(resource.detail_root)),
+                aggregate_name=resource_wire_field_name(
+                    resource.query,
+                    str(resource.aggregate_root or f"{name}_aggregate"),
+                ),
+                group_name=(
+                    resource_wire_field_name(resource.query, str(resource.groups_root))
+                    if groupable and resource.groups_root is not None
+                    else None
+                ),
             ),
             type_names=DataResourceTypeNames(
                 query=resource_type_name(resource.query),
                 node=resource_type_name(node),
-                filter=resource_type_name(type_names.filter_type),
-                order=resource_type_name(type_names.order_type),
-                aggregate=resource_type_name(type_names.aggregate_container_type),
-                grouped=resource_type_name(type_names.group_type),
-                group_key=resource_type_name(type_names.group_key_type),
-                group_by_spec=resource_type_name(type_names.group_by_spec_type),
-                group_order=resource_type_name(type_names.group_order_type),
-                having=resource_type_name(type_names.having_type),
+                filter=resource_type_name(resource.filter_type),
+                order=resource_type_name(resource.order_by_type),
+                aggregate=resource_type_name(resource.aggregate_container_type),
+                grouped=resource_type_name(resource.group_type),
+                group_key=resource_type_name(resource.group_key_type),
+                group_by_spec=resource_type_name(resource.group_by_spec_type),
+                group_order=resource_type_name(resource.group_order_type),
+                having=resource_type_name(resource.having_type),
             ),
             capabilities=("list", "detail", "aggregate", *(("groups",) if groupable else ())),
             filter_fields=filterable,
@@ -421,71 +498,39 @@ def attach_hasura_resource_metadata(
                     create_name=(
                         resource_wire_field_name(
                             resource.mutation,
-                            f"insert_{name}_one",
+                            resource.insert_one_root,
                         )
-                        if insert
+                        if insert and resource.insert_one_root is not None
                         else None
                     ),
                     update_name=(
                         resource_wire_field_name(
                             resource.mutation,
-                            f"update_{name}_by_pk",
+                            resource.update_by_pk_root,
                         )
-                        if update
+                        if update and resource.update_by_pk_root is not None
                         else None
                     ),
                     delete_name=(
                         resource_wire_field_name(
                             resource.mutation,
-                            f"delete_{name}_by_pk",
+                            resource.delete_by_pk_root,
                         )
-                        if delete
+                        if delete and resource.delete_by_pk_root is not None
                         else None
                     ),
                 ),
                 type_names=DataResourceTypeNames(
                     node=resource_type_name(node),
-                    create_input=resource_type_name(type_names.insert_input_type),
-                    update_input=resource_type_name(type_names.set_input_type),
+                    create_input=resource_type_name(resource.insert_input_type),
+                    update_input=resource_type_name(resource.set_input_type),
                 ),
-                create_input_type=type_names.insert_input_type,
-                update_input_type=type_names.set_input_type,
+                create_input_type=resource.insert_input_type,
+                update_input_type=resource.set_input_type,
                 capabilities=mutation_capabilities,
             ),
         )
     return resource
-
-
-class _ResourceTypes:
-    """Named generated types carried by a ``HasuraResource`` bundle."""
-
-    def __init__(self, resource: HasuraResource, name: str, node: type) -> None:
-        node_name = resource_type_name(node)
-        self.aggregate_container_type = self._require(resource, f"{name}_aggregate")
-        self.filter_type = self._require(resource, f"{name}_bool_exp")
-        self.order_type = self._require(resource, f"{name}_order_by")
-        self.insert_input_type = self._optional(resource, f"{name}_insert_input")
-        self.set_input_type = self._optional(resource, f"{name}_set_input")
-        self.group_type = self._optional(resource, f"{name}_group")
-        self.group_key_type = self._optional(resource, f"{node_name}GroupKey")
-        self.group_by_spec_type = self._optional(resource, f"{node_name}GroupBySpec")
-        self.group_order_type = self._optional(resource, f"{node_name}GroupOrder")
-        self.having_type = self._optional(resource, f"{node_name}Having")
-
-    @staticmethod
-    def _require(resource: HasuraResource, name: str) -> type:
-        for item in resource.types:
-            if resource_type_name(item) == name:
-                return item
-        raise ImproperlyConfigured(f"Hasura resource is missing generated type {name!r}.")
-
-    @staticmethod
-    def _optional(resource: HasuraResource, name: str) -> type | None:
-        for item in resource.types:
-            if resource_type_name(item) == name:
-                return item
-        return None
-
 
 def _mutation_capabilities(
     *,

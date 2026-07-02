@@ -8,22 +8,22 @@ substrate (``OAuthClient``/``ExternalAccount``/``Credential``) is owned by
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import UnicodeUsernameValidator
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
-from rebac import app_settings
-from rebac.managers import RebacManager
+from rebac import app_settings, current_actor, system_context
 from rebac.permissions_mixin import RebacPermissionsMixin
 from rebac.roles import grant, revoke
 
 from angee.base.mixins import SqidMixin
-from angee.base.models import AngeeModel
+from angee.base.models import AngeeManager, AngeeModel
 
 
-class UserManager(RebacManager, BaseUserManager):
+class UserManager(AngeeManager, BaseUserManager):
     """Manager for Angee's composed user model."""
 
     use_in_migrations = True
@@ -33,12 +33,10 @@ class UserManager(RebacManager, BaseUserManager):
 
         return self.system_context(reason="iam.credentials").get(**{self.model.USERNAME_FIELD: username})
 
-    def get(self, *args: Any, **kwargs: Any) -> Any:
-        """Return a user, bypassing REBAC only for session primary keys."""
+    def get_for_session(self, user_id: Any) -> Any:
+        """Return the session user through the named Django-auth reload seam."""
 
-        if self._is_session_lookup(args, kwargs):
-            return self.system_context(reason="iam.session").get(**kwargs)
-        return super().get(*args, **kwargs)
+        return self.system_context(reason="iam.session").get(pk=user_id)
 
     async def aget_by_natural_key(self, username: str) -> Any:
         """Async sibling of ``get_by_natural_key``."""
@@ -92,21 +90,14 @@ class UserManager(RebacManager, BaseUserManager):
             **extra_fields,
         )
         user.set_password(password)
+        actor = current_actor()
+        user.sudo(reason="iam.user.create")
         user.save(using=self._db)
+        if actor is not None:
+            user.with_actor(actor)
+        else:
+            user._rebac_sudo_reason = None
         return user
-
-    def _is_session_lookup(
-        self,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
-    ) -> bool:
-        """Return whether ``kwargs`` match Django's session user lookup."""
-
-        if args or len(kwargs) != 1:
-            return False
-        key = next(iter(kwargs))
-        pk = self.model._meta.pk
-        return pk is not None and key in {"pk", pk.name, pk.attname}
 
 
 class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
@@ -165,6 +156,15 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
             grant(actor=self, role=role)
         else:
             revoke(actor=self, role=role)
+
+    def update_preferences(self, preferences: Mapping[str, Any]) -> None:
+        """Replace this user's private UI preference object."""
+
+        if not isinstance(preferences, Mapping):
+            raise ValueError("preferences must be a JSON object")
+        with system_context(reason="iam.preferences.update"), transaction.atomic():
+            self.preferences = dict(preferences)
+            self.save(update_fields=["preferences"])
 
     def get_full_name(self) -> str:
         """Return first and last name joined with a space."""

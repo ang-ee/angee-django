@@ -12,10 +12,9 @@ from typing import Any, Protocol, TypeAlias
 import tablib
 import yaml
 from django.apps import AppConfig, apps
-from django.core.exceptions import ImproperlyConfigured, SuspiciousFileOperation
+from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models.utils import make_model_tuple
-from django.utils._os import safe_join
 from import_export.results import Result, RowResult
 
 from angee.addons import addon_contract
@@ -110,13 +109,13 @@ def _resource_entries(
 def _resource_entry(app_config: AppConfig, declaration: object) -> dict[str, Any]:
     """Return one normalized resource entry dictionary.
 
-    The source key (``path``, or ``url`` once an addon like ``integrate`` registers
-    it) selects a registered :class:`~angee.resources.sources.ResourceSource` that
+    The source key (``path``, or ``url`` when an addon like ``integrate`` configures
+    it) selects a configured :class:`~angee.resources.sources.ResourceSource` that
     normalizes the value; the rest of the mapping is carried through as entry fields.
     """
 
     if isinstance(declaration, str | Path):
-        return {"path": _relative_app_path(app_config, declaration)}
+        return {"path": sources.normalize_path(app_config, declaration)}
     if not isinstance(declaration, Mapping):
         raise ImproperlyConfigured(f"{declaration!r} is not a resource path or mapping")
 
@@ -135,7 +134,7 @@ def _resource_entry(app_config: AppConfig, declaration: object) -> dict[str, Any
 
 
 def _source_key(declaration: Mapping[str, Any]) -> str:
-    """Return the single registered source key named by ``declaration``, or raise."""
+    """Return the single configured source key named by ``declaration``, or raise."""
 
     present = [key for key in sources.source_keys() if declaration.get(key) is not None]
     if len(present) != 1:
@@ -156,19 +155,6 @@ def _resource_adopt_value(value: object) -> AdoptDeclaration:
             raise ImproperlyConfigured("adopt must name at least one field")
         return fields
     return bool(value)
-
-
-def _relative_app_path(app_config: AppConfig, value: object) -> str:
-    """Return one safe path relative to ``app_config.path``."""
-
-    raw = str(value)
-    if not raw:
-        raise ImproperlyConfigured("Manifest path must not be empty")
-    try:
-        safe_join(app_config.path, raw)
-    except SuspiciousFileOperation as error:
-        raise ImproperlyConfigured(f"Manifest path {raw!r} must be relative and stay inside the addon") from error
-    return raw
 
 
 def _normalize_depends_on(value: object) -> tuple[str, ...]:
@@ -628,16 +614,3 @@ class LoadResult:
         """Return the number of created or updated rows."""
 
         return self.created + self.updated
-
-
-def _materialize_path(entry: ResourceEntry) -> Path:
-    """Materialize a local ``path`` source to its addon-relative file."""
-
-    return Path(entry.addon.path) / entry.source_value
-
-
-# The built-in local-file source. Networked sources (``url``) are registered by the
-# addon that owns outbound HTTP (``angee.integrate``), so resources stays local-only.
-sources.register_source(
-    sources.ResourceSource(key="path", normalize=_relative_app_path, materialize=_materialize_path)
-)

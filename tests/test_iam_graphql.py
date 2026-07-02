@@ -20,7 +20,6 @@ from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
 from django.db import connection
-from django.db.models.signals import pre_delete
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext, override_settings
 from rebac import app_settings, system_context
@@ -38,9 +37,11 @@ from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import OAuthFlowError
 from tests.conftest import (
+    SOCIAL_TEST_MODELS,
     Credential,
     ExternalAccount,
     OAuthClient,
+    _clear_model_tables,
     addon_schema,
     execute_schema,
 )
@@ -53,7 +54,6 @@ integrate_schema = importlib.import_module("angee.integrate.schema")
 oidc_schema = importlib.import_module("angee.iam_integrate_oidc.schema")
 oidc_identity = importlib.import_module("angee.iam_integrate_oidc.identity")
 integrate_connect = importlib.import_module("angee.integrate.connect")
-oidc_signals = importlib.import_module("angee.iam_integrate_oidc.signals")
 
 # The connection/login surface now spans three addons; tests compose them the way
 # the runtime does (one merged schema per bucket).
@@ -91,7 +91,6 @@ def test_available_connections_returns_only_enabled_oauth_clients_without_secret
                   oauth_client_display_name
                   oauth_client_slug
                   oauth_client_icon
-                  is_oidc
                 }
               }
             }
@@ -102,7 +101,6 @@ def test_available_connections_returns_only_enabled_oauth_clients_without_secret
     connections = data["available_connections"]["results"]
     assert data["available_connections"]["total_count"] == 1
     assert [row["oauth_client_slug"] for row in connections] == ["enabled"]
-    assert connections[0]["is_oidc"] is True
     assert "clientSecret" not in public_schema.as_str()
 
 
@@ -207,7 +205,7 @@ def test_login_start_returns_oidc_flow_error_payload(
 @override_settings(
     AUTHENTICATION_BACKENDS=(
         "rebac.backends.auth.RebacBackend",
-        "django.contrib.auth.backends.ModelBackend",
+        "angee.iam.auth.ModelBackend",
     )
 )
 def test_login_complete_provisions_and_logs_in(
@@ -298,7 +296,7 @@ def test_login_complete_provisions_and_logs_in(
         "user": {"username": "oidc-user"},
     }
     assert request.session[SESSION_KEY] == str(user.pk)
-    assert request.session[BACKEND_SESSION_KEY] == "django.contrib.auth.backends.ModelBackend"
+    assert request.session[BACKEND_SESSION_KEY] == "angee.iam.auth.ModelBackend"
 
 
 def test_login_complete_returns_oidc_flow_error_payload(
@@ -576,7 +574,6 @@ def test_oauth_client_crud_are_admin_only(
             icon
             display_name
             configuration_state
-            client_secret
           }
         }
     """
@@ -592,10 +589,22 @@ def test_oauth_client_crud_are_admin_only(
     assert oauth_client["icon"] == "console.svg"
     assert oauth_client["display_name"] == "Console prod"
     assert oauth_client["configuration_state"] == "ready"
-    assert oauth_client["client_secret"] == "console-secret"
     with system_context(reason="test.iam.oauth_client_secret"):
         stored_client = OAuthClient.objects.get(client_id="console-client")
     assert stored_client.client_secret == "console-secret"
+    revealed = _data(
+        _execute(
+            console_schema,
+            """
+            mutation Reveal($id: ID!) {
+              reveal_oauth_client_secret(id: $id) { secret }
+            }
+            """,
+            variables={"id": oauth_client_id},
+            user=admin,
+        )
+    )["reveal_oauth_client_secret"]
+    assert revealed == {"secret": "console-secret"}
 
     external_account_mutation = """
         mutation CreateExternalAccount($oauthClient: ID!, $owner: String!) {
@@ -620,7 +629,7 @@ def test_oauth_client_crud_are_admin_only(
         _execute(
             console_schema,
             external_account_mutation,
-            {"oauthClient": oauth_client_id, "owner": str(admin.pk)},
+            {"oauthClient": oauth_client_id, "owner": _user_public_id(admin)},
             user=admin,
         )
     )["create_external_account"]
@@ -633,7 +642,7 @@ def test_oauth_client_crud_are_admin_only(
     assert _execute(
         console_schema,
         external_account_mutation,
-        {"oauthClient": oauth_client_id, "owner": str(admin.pk)},
+        {"oauthClient": oauth_client_id, "owner": _user_public_id(admin)},
         user=user,
     ).errors is not None
 
@@ -786,6 +795,25 @@ def test_user_crud_create_update_delete_are_admin_only(
         assert user.first_name == "Renamed"
         assert user.is_staff is False
         assert user.check_password("first-secret")
+
+    assert _execute(
+        console_schema,
+        """
+        mutation InvalidEmail($id: String!) {
+          update_users_by_pk(
+            pk_columns: {id: $id},
+            _set: {email: "not-an-email"}
+          ) {
+            email
+          }
+        }
+        """,
+        {"id": user_id},
+        user=admin,
+    ).errors is not None
+    with system_context(reason="test.iam.user_crud.invalid_email"):
+        user.refresh_from_db()
+        assert user.email == "console-user@example.com"
 
     _data(
         _execute(
@@ -950,6 +978,7 @@ def test_external_account_update_delete_are_admin_only(
 
 def test_credential_crud_create_delete_are_admin_only(
     iam_connection_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Creating a static-token credential renders ``display_name``; delete is admin gated."""
 
@@ -989,6 +1018,14 @@ def test_credential_crud_create_delete_are_admin_only(
         assert credential.kind == CredentialKind.STATIC_TOKEN
         assert credential.oauth_client_id is None
     credential_id = str(credential.sqid)
+    scheduled: list[Any] = []
+    revoked: list[Any] = []
+    monkeypatch.setattr(integrate_schema.transaction, "on_commit", lambda callback: scheduled.append(callback))
+    monkeypatch.setattr(
+        integrate_schema,
+        "_revoke_remote_oauth_token",
+        lambda credential: revoked.append(credential.pk),
+    )
 
     delete_credential = """
         mutation DeleteCredential($id: ID!) {
@@ -1006,6 +1043,10 @@ def test_credential_crud_create_delete_are_admin_only(
     )["delete_credential"]
     assert deleted["has_blockers"] is False
     assert deleted["total_deleted_count"] >= 1
+    assert revoked == []
+    assert len(scheduled) == 1
+    scheduled.pop()()
+    assert revoked == [credential.pk]
     with system_context(reason="test.iam.credential_crud.delete"):
         assert not Credential.objects.filter(pk=credential.pk).exists()
 
@@ -1134,16 +1175,17 @@ def test_console_external_accounts_provider_projection_query_count_stays_flat(
     assert len(three_rows.captured_queries) == len(one_row.captured_queries)
 
 
-def test_oauth_client_secret_is_console_readable_and_public_hidden(
+def test_oauth_client_secret_uses_reveal_posture(
     iam_connection_tables: None,
 ) -> None:
-    """OAuth client secrets are admin-readable while remaining absent publicly."""
+    """OAuth client secrets are writable but revealed only by an admin action."""
 
     public_sdl = _schema("public").as_str()
     console_sdl = _schema("console").as_str()
 
     assert "clientSecret" not in public_sdl
-    assert "client_secret" in _sdl_block(console_sdl, "type OAuthClientType")
+    assert "client_secret" not in _sdl_block(console_sdl, "type OAuthClientType")
+    assert "reveal_oauth_client_secret" in _sdl_block(console_sdl, "type Mutation")
     assert "client_secret" in _sdl_block(console_sdl, "input oauth_clients_insert_input")
     assert "client_secret" in _sdl_block(console_sdl, "input oauth_clients_set_input")
     for sdl in (public_sdl, console_sdl):
@@ -1265,11 +1307,8 @@ def test_iam_group_hasura_resource_uses_public_identity_sqids() -> None:
 
     group = iam_schema.Group.objects.create(name="Operators")
     group_id = iam_schema.GROUP_PUBLIC_IDENTITY.public_id_from_pk(group.pk)
-    admin = User.objects.create_superuser(
-        username="auth-catalogue-admin",
-        email="auth-catalogue-admin@example.com",
-        password="admin",
-    )
+    call_command("rebac", "sync", verbosity=0)
+    admin = _platform_admin("auth-catalogue-admin")
     console_schema = _schema("console")
 
     metadata = {item.model_label: item for item in console_schema.angee_resources}
@@ -1552,26 +1591,22 @@ def iam_connection_tables(transactional_db: Any) -> Iterator[None]:
     registered by sibling suites with ``app_label="auth"``): deleting a real
     ``auth.User`` walks Django's deletion collector across every ``auth``-app
     relation (``AuditMixin`` adds ``SET_NULL`` user FKs), so a phantom registered
-    model without a table would break ``delete_user`` under suite ordering. Wires
-    the OIDC last-sign-in disconnect guard (normally connected by AppConfig.ready).
+    model without a table would break ``delete_user`` under suite ordering. The
+    OIDC last-sign-in disconnect guard is contributed through settings, matching
+    composed runtime behavior.
     """
 
     del transactional_db
-    created_models = _create_connection_tables()
-    created_models += _create_auth_app_tables()
+    from tests.test_messaging import MESSAGING_TEST_MODELS
+
+    connection_models = MESSAGING_TEST_MODELS + SOCIAL_TEST_MODELS
+    _create_connection_tables(connection_models)
+    auth_models = tuple(_create_auth_app_tables())
     call_command("rebac", "sync", verbosity=0)
-    oidc_signals.connect()
     try:
         yield
     finally:
-        pre_delete.disconnect(
-            sender=apps.get_model("integrate", "Credential"),
-            dispatch_uid="iam_integrate_oidc.last_sign_in",
-        )
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
+        _clear_model_tables(connection_models + auth_models)
 
 
 def _create_auth_app_tables() -> list[Any]:
@@ -1681,9 +1716,8 @@ def _platform_admin(username: str) -> Any:
 def _user_public_id(user: Any) -> str:
     """Return the public id ``UserType`` mutations resolve for ``user``.
 
-    The source-addon test user is Django's default auth user (no ``sqid``), so its
-    public id is the primary key — the same value ``instance_from_public_id`` reads
-    on the write path.
+    The bare harness uses the concrete IAM user model, so the public id is the
+    same sqid that runtime projects expose at the GraphQL boundary.
     """
 
     return str(getattr(user, "sqid", user.pk))

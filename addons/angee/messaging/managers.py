@@ -32,7 +32,7 @@ from django.db.models.functions import Coalesce, Greatest
 from django.utils import timezone
 from rebac import current_actor
 
-from angee.base.mixins import actor_user_id
+from angee.base.actors import actor_user_id
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.messaging.tracking import TrackingChange
 

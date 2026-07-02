@@ -1,7 +1,7 @@
 // Authorization schema for the storage addon.
 // @rebac_package: storage
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
 
 // Roles-as-namespace anchor, mirroring operator/role: `includes` lets one
 // storage role imply another, and resources gate on `effective_member` so
@@ -70,16 +70,19 @@ definition storage/folder {
     permission delete = drive->write + owner + admin->member
 }
 
-// `owner` is the uploader (field-backed by created_by). No `create`
+// `owner` is the uploader (field-backed by created_by). `viewer` grants read
+// reach for content-addressed dedup hits where another owner reuses the bytes.
+// No `create`
 // permission: rows enter through File.objects.draft, which gates on drive
 // write itself.
 definition storage/file {
     relation drive:  storage/drive // rebac:field=drive
     relation folder: storage/folder // rebac:field=folder
     relation owner:  auth/user // rebac:field=created_by
+    relation viewer: auth/user | auth/group#member | auth/user:*
     relation admin:  angee/role // rebac:const=admin
 
-    permission read   = drive->read + folder->read + owner + admin->member
+    permission read   = drive->read + folder->read + owner + viewer + admin->member
     permission write  = drive->write + folder->write + owner + admin->member
     permission delete = owner + drive->write + admin->member
 }

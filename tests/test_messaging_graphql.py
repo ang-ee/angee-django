@@ -26,6 +26,7 @@ from tests.conftest import (
     Integration,
     MimeType,
     SchemaAddon,
+    _clear_model_tables,
     _create_missing_tables,
     execute_schema,
 )
@@ -1571,7 +1572,7 @@ def test_record_chatter_post_notifies_direct_recipient(messaging_graphql_tables:
                 "model": "messaging.ThreadedTicket",
                 "id": ticket.sqid,
                 "body": "Direct heads-up.",
-                "recipient": str(recipient.pk),
+                "recipient": str(recipient.sqid),
             },
             request=_request(poster),
         )
@@ -2038,6 +2039,7 @@ def messaging_graphql_tables(transactional_db: Any) -> Iterator[None]:
     try:
         yield
     finally:
+        _clear_model_tables(MESSAGING_GRAPHQL_MODELS)
         if created_models:
             with connection.schema_editor() as schema_editor:
                 for model in reversed(created_models):

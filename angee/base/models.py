@@ -13,12 +13,13 @@ from django.db.models.utils import make_model_tuple
 from django_sqids.field import DEFAULT_ALPHABET
 from rebac import RebacMixin, SubjectRef, check_new, current_actor, to_object_ref
 from rebac.actors import is_sudo as ambient_is_sudo
-from rebac.errors import MissingActorError, PermissionDenied
+from rebac.actors import to_subject_ref
+from rebac.errors import MissingActorError, NoActorResolvedError, PermissionDenied
 from rebac.managers import RebacManager, RebacQuerySet
 from rebac.resources import model_resource_type
 from sqids import Sqids
 
-from angee.base.fields import SqidField, canonical_sqid_prefix, encode_public_id
+from angee.base.fields import ImplClassField, SqidField, canonical_sqid_prefix, encode_public_id
 from angee.base.mixins import SqidMixin, TimestampMixin
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
@@ -55,12 +56,32 @@ class AngeeQuerySet(RebacQuerySet[_ModelT]):
         if queryset.is_sudo() or ambient_is_sudo():
             return queryset
         try:
-            actor = queryset._resolve_effective_actor()[0]
+            actor, is_unscoped = queryset.effective_actor(strict=False)
         except MissingActorError:
             return cast(Self, queryset.none())
+        if is_unscoped:
+            return queryset
         if actor is None and model_resource_type(self.model):
             return cast(Self, queryset.none())
         return queryset.apply_ambient_scope()
+
+
+class AngeeUnscopedQuerySet(models.QuerySet[_ModelT]):
+    """Angee queryset API for models that intentionally have no REBAC row policy."""
+
+    def from_public_id(self, value: str) -> _ModelT | None:
+        """Return the row addressed by ``value`` within this queryset."""
+
+        return _instance_from_public_id_queryset(self, value)
+
+    def scoped_for_aggregate(self) -> Self:
+        """Return this queryset for permission-naive aggregation.
+
+        These querysets are only for Angee models without ``rebac_resource_type``;
+        row authorization has no model-owned policy to apply.
+        """
+
+        return self
 
 
 class AngeeManager(RebacManager.from_queryset(AngeeQuerySet)):  # type: ignore[misc]
@@ -110,6 +131,15 @@ class AngeeManager(RebacManager.from_queryset(AngeeQuerySet)):  # type: ignore[m
         return actor
 
 
+class AngeeUnscopedManager(models.Manager.from_queryset(AngeeUnscopedQuerySet)):  # type: ignore[misc]
+    """Manager backed by AngeeUnscopedQuerySet."""
+
+    def get_queryset(self) -> AngeeUnscopedQuerySet[Any]:
+        """Return the base unscoped Angee queryset for this manager's model."""
+
+        return cast(AngeeUnscopedQuerySet[Any], super().get_queryset())
+
+
 class AngeeModel(TimestampMixin, RebacMixin):
     """Abstract base model for Angee source and runtime models."""
 
@@ -137,6 +167,47 @@ class AngeeModel(TimestampMixin, RebacMixin):
         """Return whether this model class declares itself as a runtime model."""
 
         return cls.__dict__.get("runtime", False)
+
+    @classmethod
+    def impl_key_for(cls, field_name: str, value: Any, *, default: str | None = None) -> str:
+        """Return the canonical registry key for one ``ImplClassField`` value."""
+
+        field = cls._impl_field(field_name)
+        if value is None:
+            if default is None:
+                raise ValueError(f"{cls.__name__}.{field_name} requires an impl key.")
+            value = default
+        key = str(field.key_for(value) or "")
+        if not key and default is not None:
+            key = str(field.key_for(default) or "")
+        field.resolve_class(key)
+        return key
+
+    @classmethod
+    def resolve_impl_class(cls, field_name: str, value: Any, *, default: str | None = None) -> type:
+        """Return the impl class bound to one supplied impl-field value."""
+
+        field = cls._impl_field(field_name)
+        key = cls.impl_key_for(field_name, value, default=default)
+        return field.resolve_class(key)
+
+    @classmethod
+    def _impl_field(cls, field_name: str) -> Any:
+        """Return the named impl field or raise when the field is not impl-owned."""
+
+        field = cls._meta.get_field(field_name)
+        if not isinstance(field, ImplClassField):
+            raise FieldDoesNotExist(f"{cls.__name__}.{field_name} is not an ImplClassField.")
+        return field
+
+    def resolve_impl(self, field_name: str, *, default: str | None = None) -> type:
+        """Return the impl class selected by ``field_name`` on this instance."""
+
+        field = type(self)._impl_field(field_name)
+        value = getattr(self, field.attname)
+        if not value and default is not None:
+            return field.resolve_class(default)
+        return field.resolve_for(self)
 
     @classmethod
     def get_extension_target(cls) -> str | None:
@@ -321,11 +392,76 @@ def public_id_for(
     return str(pk)
 
 
+def bind_actor(instance: models.Model, actor: Any | None) -> None:
+    """Bind ``actor`` to ``instance`` when the model owns REBAC row policy."""
+
+    if actor is None:
+        return
+    with_actor = getattr(instance, "with_actor", None)
+    if callable(with_actor):
+        with_actor(actor)
+        return
+    if requires_angee_rebac_contract(type(instance)):
+        raise ImproperlyConfigured(f"{instance._meta.label} instances must expose with_actor(actor).")
+
+
+def aggregate_scoped_queryset(queryset: models.QuerySet[_ModelT]) -> models.QuerySet[_ModelT]:
+    """Return the aggregate-safe scoped queryset for a REBAC model."""
+
+    scoped = getattr(queryset, "scoped_for_aggregate", None)
+    if callable(scoped):
+        return cast(models.QuerySet[_ModelT], scoped())
+    if requires_angee_rebac_contract(queryset.model):
+        raise ImproperlyConfigured(f"{queryset.model._meta.label} querysets must expose scoped_for_aggregate().")
+    return queryset
+
+
+def read_scoped_queryset(
+    model: type[_ModelT],
+    actor: Any | None,
+    *,
+    action: str = "read",
+) -> models.QuerySet[_ModelT] | None:
+    """Return a queryset scoped to ``actor`` for models with a REBAC row policy."""
+
+    if not model_resource_type(model) or actor is None:
+        return None
+    manager = model._default_manager
+    with_actor = getattr(manager, "with_actor", None)
+    if not callable(with_actor):
+        if requires_angee_rebac_contract(model):
+            raise ImproperlyConfigured(f"{model._meta.label} manager must expose with_actor(actor).")
+        return None
+    queryset = with_actor(actor)
+    with_action = getattr(queryset, "with_action", None)
+    if callable(with_action):
+        queryset = with_action(action)
+    elif requires_angee_rebac_contract(model):
+        raise ImproperlyConfigured(f"{model._meta.label} querysets must expose with_action(action).")
+    return cast(models.QuerySet[_ModelT], queryset)
+
+
+def write_scoped_queryset(model: type[_ModelT]) -> models.QuerySet[_ModelT]:
+    """Return a write-target queryset with REBAC row scope and unredacted fields."""
+
+    manager = model._default_manager
+    for_write = getattr(manager, "for_write", None)
+    if callable(for_write):
+        return cast(models.QuerySet[_ModelT], for_write())
+    if requires_angee_rebac_contract(model):
+        raise ImproperlyConfigured(f"{model._meta.label} manager must expose for_write().")
+    return manager.all()
+
+
 def _relationship_subject(value: Any) -> SubjectRef:
     """Return one preflight relationship value as a REBAC subject reference."""
 
     if isinstance(value, SubjectRef):
         return value
+    try:
+        return to_subject_ref(value)
+    except NoActorResolvedError:
+        pass
     ref = to_object_ref(value)
     return SubjectRef.of(ref.resource_type, ref.resource_id)
 
@@ -364,6 +500,12 @@ def _public_id_lookup(
         return dict(lookup(value))
     pk = model._meta.pk
     return {pk.name: value} if pk is not None else {}
+
+
+def requires_angee_rebac_contract(model: type[models.Model]) -> bool:
+    """Return whether ``model`` is an Angee model with declared row authorization."""
+
+    return issubclass(model, AngeeModel) and bool(model_resource_type(model))
 
 
 def _is_contributed_extension_base(value: type) -> bool:

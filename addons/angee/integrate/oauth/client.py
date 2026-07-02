@@ -43,7 +43,7 @@ HTTP_TIMEOUT_SECONDS = 10
 # ``rate_limit_error`` (and blocks the HTTP client's default UA with a 403), while
 # an honest client UA passes. httpx defaults to ``python-httpx/…``, so the session
 # and the GET helper set this explicitly. See docs/backend/guidelines.md (Pitfalls).
-_USER_AGENT = "Angee-Integrate/1.0"
+USER_AGENT = "Angee-Integrate/1.0"
 logger = logging.getLogger(__name__)
 
 # The token-response keys Angee carries forward; everything else the provider
@@ -79,7 +79,7 @@ class OAuthClientProtocol:
             scopes=scopes,
             code_challenge=code_challenge,
         )
-        return _with_query(self._endpoint("authorize_endpoint"), query)
+        return with_query(self._endpoint("authorize_endpoint"), query)
 
     def exchange_code(
         self,
@@ -271,14 +271,14 @@ class OAuthClientProtocol:
             client_id=str(getattr(self.oauth_client, "client_id", "")),
             client_secret=secret or None,
             token_endpoint_auth_method="client_secret_post" if secret else "none",
-            headers={"User-Agent": _USER_AGENT},
+            headers={"User-Agent": USER_AGENT},
             **_outbound_kwargs(self._transport),
         )
 
     def _httpx_client(self) -> httpx.Client:
         """Return a plain httpx client carrying the honest UA (JSON-shim transport)."""
 
-        return httpx.Client(headers={"User-Agent": _USER_AGENT}, **_outbound_kwargs(self._transport))
+        return httpx.Client(headers={"User-Agent": USER_AGENT}, **_outbound_kwargs(self._transport))
 
     def _log_token_failure(self, status: object, body: Any) -> None:
         """Log a redacted token-request failure against the client label."""
@@ -353,7 +353,7 @@ def _param_values(oauth_client: object, property_name: str) -> dict[str, str]:
     return {}
 
 
-def _with_query(url: str, query: Mapping[str, str]) -> str:
+def with_query(url: str, query: Mapping[str, str]) -> str:
     """Return ``url`` with ``query`` appended or merged."""
 
     parts = parse.urlsplit(url)
@@ -373,7 +373,7 @@ def _get_json(
 
     request_headers = {
         "Accept": "application/json",
-        "User-Agent": _USER_AGENT,
+        "User-Agent": USER_AGENT,
         **dict(headers or {}),
     }
     try:

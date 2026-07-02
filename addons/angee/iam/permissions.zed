@@ -1,7 +1,7 @@
 // Authorization schema for the IAM addon.
 // @rebac_package: iam
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 6
+// @rebac_schema_revision: 7
 
 definition auth/user {
     // Const-backed universal admin: every user points at angee/role:admin
@@ -22,4 +22,6 @@ definition auth/group {
 
 definition angee/role {
     relation member: auth/user | auth/group#member
+
+    permission effective_member = member
 }

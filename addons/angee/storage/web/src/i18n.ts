@@ -113,7 +113,6 @@ export const enStorageMessages: Record<string, string> = {
   "storage.settings.archived": "Archived",
   "storage.settings.backendClass": "Backend class",
   "storage.settings.config": "Config",
-  "storage.settings.default": "Default",
 };
 
 // A translator bound to the `storage` namespace: resolves against the host

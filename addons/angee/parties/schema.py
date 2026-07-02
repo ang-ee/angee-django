@@ -339,7 +339,7 @@ _HANDLE_RESOURCE = hasura_model_resource(
     updatable=["value", "platform", "display_name", "label", "is_preferred", "party"],
     field_id_decode={"party": public_pk_decoder(Party)},
     get_aggregate_queryset=lambda info: aggregate_queryset(Handle.objects.filter(party__isnull=False)),
-    write_backend=AngeeHasuraWriteBackend(Handle, public_id_fields={"party": Party}),
+    write_backend=AngeeHasuraWriteBackend(Handle, public_id_fields=("party",)),
 )
 _ADDRESS_RESOURCE = hasura_model_resource(
     AddressType,
@@ -372,7 +372,7 @@ _ADDRESS_RESOURCE = hasura_model_resource(
         "is_primary",
     ],
     field_id_decode={"party": public_pk_decoder(Party)},
-    write_backend=AngeeHasuraWriteBackend(Address, public_id_fields={"party": Party}),
+    write_backend=AngeeHasuraWriteBackend(Address, public_id_fields=("party",)),
 )
 _AFFILIATION_RESOURCE = hasura_model_resource(
     AffiliationType,
@@ -402,7 +402,7 @@ _AFFILIATION_RESOURCE = hasura_model_resource(
         "party": public_pk_decoder(Party),
         "organization": public_pk_decoder(Party),
     },
-    write_backend=AngeeHasuraWriteBackend(Affiliation, public_id_fields={"party": Party, "organization": Party}),
+    write_backend=AngeeHasuraWriteBackend(Affiliation, public_id_fields=("party", "organization")),
 )
 _CONTACT_FOLDER_RESOURCE = hasura_model_resource(
     ContactFolderType,

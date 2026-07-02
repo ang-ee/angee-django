@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 import reversion
+from django.apps import apps
 from django.db import connection, models
 from rebac import MissingActorError, RebacMixin, system_context
 
@@ -59,6 +60,25 @@ def test_every_angee_model_carries_the_rebac_mixin() -> None:
     """AngeeModel wires REBAC behavior into every source model."""
 
     assert issubclass(AngeeModel, RebacMixin)
+
+
+def test_concrete_angee_models_keep_the_manager_queryset_canon() -> None:
+    """Concrete Angee models expose the inherited public-id and aggregate scopes."""
+
+    missing: dict[str, list[str]] = {}
+    for model in apps.get_models():
+        if model._meta.abstract or not issubclass(model, AngeeModel):
+            continue
+        queryset = model._default_manager.all()
+        missing_methods = [
+            method_name
+            for method_name in ("from_public_id", "scoped_for_aggregate")
+            if not callable(getattr(queryset, method_name, None))
+        ]
+        if missing_methods:
+            missing[model._meta.label] = missing_methods
+
+    assert missing == {}
 
 
 def test_angee_data_model_carries_the_public_data_identity_contract() -> None:
@@ -139,6 +159,8 @@ def test_revision_mixin_restores_declared_fields_from_versions() -> None:
 
         assert instance.title == "Final"
         assert instance.body == "v1"
+        assert instance.revisions.count() == 3
+        assert instance.revisions.first().revision.comment.startswith("Reverted to revision ")
     finally:
         reversion.unregister(RevisionThing)
         with connection.schema_editor() as schema_editor:

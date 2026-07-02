@@ -15,7 +15,7 @@ SETTINGS = {
     ],
     "AUTHENTICATION_BACKENDS:append": [
         "rebac.backends.auth.RebacBackend",
-        "django.contrib.auth.backends.ModelBackend",
+        "angee.iam.auth.ModelBackend",
     ],
 }
 """Django settings contributed when IAM is installed."""

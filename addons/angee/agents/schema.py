@@ -28,7 +28,7 @@ from angee.agents import provisioning
 from angee.agents.autoconfig import SETTINGS as _AGENTS_SETTINGS
 from angee.agents.context import render_view_context
 from angee.agents.models import RuntimeStatus
-from angee.base.mixins import actor_user_id
+from angee.base.actors import actor_user_id
 from angee.graphql.actions import ActionResult, action_target, resolve_action_target
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID
@@ -307,15 +307,15 @@ _AGENT_RESOURCE = hasura_model_resource(
     },
     write_backend=AngeeHasuraWriteBackend(
         Agent,
-        public_id_fields={
-            "owner": User,
-            "model": InferenceModel,
-            "inference_credential": Credential,
-            "skills": Skill,
-            "mcp_servers": MCPServer,
-            "mcp_tools": MCPTool,
-            "workspace_template": Template,
-        },
+        public_id_fields=(
+            "owner",
+            "model",
+            "inference_credential",
+            "skills",
+            "mcp_servers",
+            "mcp_tools",
+            "workspace_template",
+        ),
         delete_guard=lambda agent: agent.delete_blocker(),
     ),
 )
@@ -343,7 +343,7 @@ _MCP_SERVER_RESOURCE = hasura_model_resource(
     insertable=["name", "description", "placement", "transport", "url", "credential", "config"],
     updatable=["name", "description", "placement", "transport", "url", "credential", "config"],
     field_id_decode={"credential": public_pk_decoder(Credential)},
-    write_backend=AngeeHasuraWriteBackend(MCPServer, public_id_fields={"credential": Credential}),
+    write_backend=AngeeHasuraWriteBackend(MCPServer, public_id_fields=("credential",)),
 )
 _MCP_TOOL_RESOURCE = hasura_model_resource(
     MCPToolType,
@@ -356,7 +356,7 @@ _MCP_TOOL_RESOURCE = hasura_model_resource(
     insertable=["server", "name", "description", "input_schema", "enabled"],
     updatable=["name", "description", "input_schema", "enabled"],
     field_id_decode={"server": public_pk_decoder(MCPServer)},
-    write_backend=AngeeHasuraWriteBackend(MCPTool, public_id_fields={"server": MCPServer}),
+    write_backend=AngeeHasuraWriteBackend(MCPTool, public_id_fields=("server",)),
 )
 _INFERENCE_PROVIDER_RESOURCE = hasura_model_resource(
     InferenceProviderType,
@@ -417,10 +417,7 @@ _INFERENCE_MODEL_RESOURCE = hasura_model_resource(
     },
     write_backend=AngeeHasuraWriteBackend(
         InferenceModel,
-        public_id_fields={
-            "provider": InferenceProvider,
-            "publisher": Vendor,
-        },
+        public_id_fields=("provider", "publisher"),
     ),
 )
 

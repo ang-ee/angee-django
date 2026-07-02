@@ -308,6 +308,8 @@ class StubVCSBackend(VCSBackend):
     ``stub_repos``/``stub_tree``/``stub_blobs`` through the bridge config.
     """
 
+    repository_search_scope_config_key = "stub_org"
+
     def ls_repos(self, *, org: str = "") -> list[RepoDescriptor]:
         """Return the configured repositories (filtered to ``org`` when given)."""
 
@@ -553,6 +555,7 @@ class Feed(Integration, AbstractFeed):
         """Django model options for the canonical test feed."""
 
         abstract = False
+        managed = False
         app_label = "social"
         db_table = "test_social_feed"
         rebac_resource_type = "social/feed"
@@ -566,6 +569,7 @@ class FeedFollow(AbstractFeedFollow):
         """Django model options for the canonical test feed follow."""
 
         abstract = False
+        managed = False
         app_label = "social"
         db_table = "test_social_feed_follow"
         rebac_resource_type = "social/feed_follow"
@@ -579,6 +583,7 @@ class PostMetrics(AbstractPostMetrics):
         """Django model options for the canonical test post metrics."""
 
         abstract = False
+        managed = False
         app_label = "social"
         db_table = "test_social_post_metrics"
         rebac_resource_type = "social/post_metrics"
@@ -592,6 +597,7 @@ class Quota(AbstractQuota):
         """Django model options for the canonical test quota."""
 
         abstract = False
+        managed = False
         app_label = "social"
         db_table = "test_social_quota"
         rebac_resource_type = "social/quota"
@@ -608,13 +614,43 @@ def _create_missing_tables(
     """Create concrete source-addon test tables when pytest did not sync them."""
 
     existing_tables = set(connection.introspection.table_names())
-    missing = [model for model in test_models if model._meta.db_table not in existing_tables]
+    missing = []
+    for model in test_models:
+        if model._meta.db_table in existing_tables:
+            continue
+        missing.append(model)
+        existing_tables.add(model._meta.db_table)
     if not missing:
         return []
     with connection.schema_editor() as schema_editor:
         for model in missing:
             schema_editor.create_model(model)
     return missing
+
+
+def _clear_model_tables(test_models: tuple[type[models.Model], ...]) -> None:
+    """Delete rows from schema-editor-created model tables without dropping them.
+
+    Source-addon tests share concrete unmanaged tables across modules. Keeping the
+    schema lets post-migrate hooks see registered models; clearing rows before
+    pytest-django flushes the managed tables prevents dangling FKs and uniqueness
+    leaks when a later fixture reuses an already-created table.
+    """
+
+    existing_tables = set(connection.introspection.table_names())
+    table_names = []
+    for model in test_models:
+        table_name = model._meta.db_table
+        if table_name not in existing_tables:
+            continue
+        table_names.append(table_name)
+
+    if not table_names:
+        return
+
+    with connection.constraint_checks_disabled(), connection.cursor() as cursor:
+        for table_name in reversed(tuple(dict.fromkeys(table_names))):
+            cursor.execute(f"DELETE FROM {connection.ops.quote_name(table_name)}")
 
 
 @pytest.fixture()
@@ -627,6 +663,7 @@ def knowledge_tables(transactional_db: Any) -> Iterator[None]:
     try:
         yield
     finally:
+        _clear_model_tables(KNOWLEDGE_TEST_MODELS)
         if created_models:
             with connection.schema_editor() as schema_editor:
                 for model in reversed(created_models):

@@ -8,14 +8,13 @@ request/auth context helpers shared between the permission and iam's resolvers.
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import strawberry
-from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.http import HttpRequest
-from rebac import PermissionDenied
-from rebac.managers import RebacManager
+from rebac import ObjectRef, PermissionDenied, app_settings, current_actor
+from rebac import backend as rebac_backend
 from strawberry.permission import BasePermission
 
 
@@ -46,21 +45,35 @@ def session_user(info: strawberry.Info) -> Any:
 
 
 def is_platform_admin(user: Any) -> bool:
-    """Return whether ``user`` reaches IAM's platform-admin role.
-
-    SECURITY: evaluate this with the REAL request actor, never inside a
-    ``system_context``/sudo block. For a ``RebacManager`` user model the check is
-    ``User.objects.filter(pk=...).exists()``, and sudo bypasses the REBAC
-    ``auth/user`` read scoping — so under sudo this returns True for ANY
-    authenticated user. Gate first (outside sudo), then sudo only the data read.
-    """
+    """Return whether ``user`` reaches IAM's platform-admin role."""
 
     if not is_authenticated(user):
         return False
-    user_model = get_user_model()
-    if isinstance(user_model._default_manager, RebacManager):
-        return cast(bool, user_model.objects.filter(pk=cast(Any, user).pk).exists())
-    return bool(getattr(user, "is_superuser", False))
+    role = _platform_admin_role()
+    if role is None:
+        return bool(getattr(user, "is_superuser", False))
+    return current_actor_has_role(role)
+
+
+def current_actor_has_role(role: ObjectRef) -> bool:
+    """Return whether the ambient REBAC actor is an effective member of ``role``."""
+
+    actor = current_actor()
+    if actor is None:
+        return False
+    result = rebac_backend().check_access(
+        subject=actor,
+        action="effective_member",
+        resource=role,
+    )
+    return bool(result.allowed)
+
+
+def _platform_admin_role() -> ObjectRef | None:
+    """Return the configured platform-admin role object, if any."""
+
+    role = app_settings.REBAC_UNIVERSAL_ADMIN_ROLE
+    return ObjectRef.parse(role) if role else None
 
 
 def require_platform_admin(info: strawberry.Info) -> Any:
@@ -72,11 +85,30 @@ def require_platform_admin(info: strawberry.Info) -> Any:
     return user
 
 
-class PlatformAdminPermission(BasePermission):
+class RolePermission(BasePermission):
+    """Allow actors that reach ``role_ref`` through ``effective_member``."""
+
+    role_ref: ClassVar[ObjectRef | None] = None
+
+    message = "Role permission required."
+    error_extensions = {"code": "PERMISSION_DENIED"}
+
+    def has_permission(
+        self,
+        source: Any,
+        info: strawberry.Info,
+        **kwargs: Any,
+    ) -> bool:
+        """Return whether the current actor reaches the configured role."""
+
+        del source, kwargs
+        return self.role_ref is not None and current_actor_has_role(self.role_ref)
+
+
+class PlatformAdminPermission(RolePermission):
     """Allow only actors that reach IAM's const-backed platform admin role."""
 
     message = "Platform admin permission required."
-    error_extensions = {"code": "PERMISSION_DENIED"}
 
     def has_permission(
         self,

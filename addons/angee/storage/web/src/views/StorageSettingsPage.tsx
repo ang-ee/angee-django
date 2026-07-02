@@ -55,7 +55,6 @@ export function StorageSettingsPage(): ReactElement {
             <Column field="label" />
             <Column field="slug" />
             <Column field="backend_class" />
-            <Column field="is_default" widget="booleanBadge" />
             <Column field="is_archived" widget="booleanBadge" />
           </List>
           <Form resource={BACKEND_MODEL}>
@@ -63,7 +62,6 @@ export function StorageSettingsPage(): ReactElement {
             <Field name="slug" createOnly />
             <Field name="backend_class" label={t("storage.settings.backendClass")} />
             <Field name="backend_config" label={t("storage.settings.config")} widget="json" />
-            <Field name="is_default" label={t("storage.settings.default")} widget="switch" />
             <Field name="is_archived" label={t("storage.settings.archived")} widget="switch" editOnly />
           </Form>
         </DrawerResourceList>

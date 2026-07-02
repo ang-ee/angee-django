@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
-import urllib.error
-import urllib.request
+import re
 from dataclasses import dataclass
 from typing import Any, cast
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
 from django.conf import settings
+from django.core.cache import cache
+from django.core.exceptions import ValidationError
 from graphql import build_client_schema, get_introspection_query, print_schema
+
+from angee.integrate.http import HttpClient
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +30,9 @@ _MINT_TIMEOUT = 5
 
 _PROVISION_TIMEOUT = 60
 """Seconds to wait on a server-side render call (workspace/service create)."""
+
+_TOKEN_CACHE_PREFIX = "angee:operator:token:"
+_TOKEN_CACHE_SKEW_SECONDS = 5
 
 
 class OperatorDaemonError(RuntimeError):
@@ -100,14 +107,22 @@ class OperatorDaemon:
         if self.admin_bearer is None or self.server_base is None:
             logger.debug("operator: daemon URL or bearer not configured; hiding connection")
             return None
+        cache_key = self._token_cache_key(actor)
+        cached = cache.get(cache_key)
+        if isinstance(cached, str) and cached:
+            return cached
         payload = {"actor": actor, "scope": list(self.scope), "ttl": self.ttl}
         try:
             data = self._post_json(f"{self.server_base}/tokens/mint", payload)
-        except (OSError, ValueError) as error:
+        except (OperatorDaemonError, OSError, ValidationError, ValueError) as error:
             logger.warning("operator: connection token mint failed: %s", error)
             return None
         token = data.get("token")
-        return token if isinstance(token, str) and token else None
+        if not isinstance(token, str) or not token:
+            return None
+        if timeout := _cache_timeout_seconds(self.ttl):
+            cache.set(cache_key, token, timeout=timeout)
+        return token
 
     def introspect_sdl(self) -> str | None:
         """Return the daemon's GraphQL SDL by introspecting it, or ``None``.
@@ -126,7 +141,7 @@ class OperatorDaemon:
                 self._with_graphql_path(self.server_base),
                 {"query": get_introspection_query()},
             )
-        except (OSError, ValueError) as error:
+        except (OperatorDaemonError, OSError, ValidationError, ValueError) as error:
             logger.warning("operator: schema introspection failed: %s", error)
             return None
         result = data.get("data")
@@ -263,30 +278,43 @@ class OperatorDaemon:
     ) -> Any:
         """Issue an authenticated daemon REST call; return the decoded JSON body (or ``None``)."""
 
-        request = urllib.request.Request(
+        response = HttpClient().request(
+            method,
             url,
-            data=json.dumps(payload).encode() if payload is not None else None,
-            method=method,
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {self.admin_bearer}",
             },
+            body=json.dumps(payload).encode() if payload is not None else None,
+            allow_private=True,
+            timeout=timeout,
         )
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                body = response.read().decode()
-        except urllib.error.HTTPError as error:
+        if not response.ok:
             # Surface the daemon's own error message instead of a bare "HTTP 500":
             # the body is JSON like ``{"error": "…"}`` (or text); the caller records it.
-            message = f"operator {method} {url.rsplit('/', 1)[-1]}: {_daemon_error(error)}"
-            error_class = OperatorDaemonNotFound if error.code == 404 else OperatorDaemonError
-            raise error_class(message, status_code=error.code) from error
-        return json.loads(body) if body else None
+            error_detail = _daemon_error_body(response.status, response.body)
+            message = f"operator {method} {url.rsplit('/', 1)[-1]}: {error_detail}"
+            error_class = OperatorDaemonNotFound if response.status == 404 else OperatorDaemonError
+            raise error_class(message, status_code=response.status)
+        return response.json() if response.body else None
 
     def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         """POST with the admin bearer on the short token/introspection budget."""
 
         return cast(dict[str, Any], self._request("POST", url, payload, timeout=_MINT_TIMEOUT))
+
+    def _token_cache_key(self, actor: str) -> str:
+        """Return the cache key for one actor/scoping window without exposing secrets."""
+
+        material = {
+            "actor": actor,
+            "server_base": self.server_base,
+            "admin_bearer": self.admin_bearer,
+            "scope": self.scope,
+            "ttl": self.ttl,
+        }
+        encoded = json.dumps(material, sort_keys=True, separators=(",", ":")).encode()
+        return f"{_TOKEN_CACHE_PREFIX}{hashlib.sha256(encoded).hexdigest()}"
 
     @staticmethod
     def _setting(name: str) -> str | None:
@@ -341,10 +369,10 @@ def _collection_items(value: Any) -> tuple[Any, ...] | list[Any]:
     return ()
 
 
-def _daemon_error(error: urllib.error.HTTPError) -> str:
-    """Return a human message from a daemon HTTP error: its JSON ``error`` field, or text."""
+def _daemon_error_body(status: int, body: bytes) -> str:
+    """Return a human message from one daemon error response."""
 
-    raw = error.read().decode(errors="replace").strip()
+    raw = body.decode(errors="replace").strip()
     detail = raw
     try:
         decoded = json.loads(raw)
@@ -352,4 +380,19 @@ def _daemon_error(error: urllib.error.HTTPError) -> str:
         decoded = None
     if isinstance(decoded, dict):
         detail = str(decoded.get("error") or decoded.get("reason") or raw)
-    return f"HTTP {error.code}: {detail}" if detail else f"HTTP {error.code}"
+    return f"HTTP {status}: {detail}" if detail else f"HTTP {status}"
+
+
+def _cache_timeout_seconds(ttl: str) -> int | None:
+    """Return a conservative cache timeout for simple daemon TTL strings."""
+
+    match = re.fullmatch(r"\s*(\d+)\s*([smhd]?)\s*", ttl)
+    if match is None:
+        return None
+    value = int(match.group(1))
+    unit = match.group(2) or "s"
+    seconds = value * {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]
+    if seconds <= 0:
+        return None
+    skew = min(_TOKEN_CACHE_SKEW_SECONDS, max(seconds // 2, 0))
+    return max(seconds - skew, 1)

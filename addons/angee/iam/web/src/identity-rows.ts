@@ -7,7 +7,6 @@ export interface IAMRoleRow extends Record<string, unknown> {
   id: string;
   namespace: string;
   label: string;
-  description: string;
 }
 
 export function roleRows(roles: readonly IAMRole[]): IAMRoleRow[] {
@@ -20,7 +19,6 @@ export function roleRows(roles: readonly IAMRole[]): IAMRoleRow[] {
       id: role.id,
       namespace: role.namespace,
       label: role.label,
-      description: role.description,
     }));
 }
 

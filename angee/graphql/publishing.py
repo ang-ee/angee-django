@@ -7,10 +7,14 @@ from typing import Any
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
+from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
 from django.db.models.signals import post_delete, post_save
 
 from angee.graphql.events import ChangePayload
+
+_INMEMORY_CHANNEL_LAYER = "channels.layers.InMemoryChannelLayer"
 
 
 def change_group(model: type[models.Model]) -> str:
@@ -32,6 +36,29 @@ def connect_publishers(model: type[models.Model]) -> None:
         _on_delete,
         sender=model,
         dispatch_uid=f"{dispatch_uid}-delete",
+    )
+
+
+def change_channel_layer() -> Any:
+    """Return the configured channel layer after validating deployment safety."""
+
+    _check_channel_layer()
+    return get_channel_layer()
+
+
+def _check_channel_layer() -> None:
+    """Fail loudly when the dev-only in-memory layer is used outside dev/test."""
+
+    layer_config = getattr(settings, "CHANNEL_LAYERS", {}).get("default", {})
+    backend = layer_config.get("BACKEND", "")
+    if backend != _INMEMORY_CHANNEL_LAYER:
+        return
+    if getattr(settings, "DEBUG", False):
+        return
+    if getattr(settings, "ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER", False):
+        return
+    raise ImproperlyConfigured(
+        "channels.layers.InMemoryChannelLayer is dev-only for GraphQL changes; configure a shared channel layer."
     )
 
 
@@ -86,7 +113,7 @@ def _publish(
 def _broadcast(model: type[models.Model], payload: dict[str, Any]) -> None:
     """Send ``payload`` to the model's channel-layer change group."""
 
-    layer = get_channel_layer()
+    layer = change_channel_layer()
     if layer is None:
         return
     async_to_sync(layer.group_send)(

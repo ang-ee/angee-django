@@ -10,17 +10,20 @@ configured, discovery is owned by that row's ``discover_endpoints()`` method.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from functools import cache
 from typing import Any
 
 import jwt
+from django.conf import settings
 from jwt import PyJWKClient
-from jwt.exceptions import PyJWKClientError, PyJWTError
+from jwt.exceptions import PyJWKClientConnectionError, PyJWKClientError, PyJWTError
 
+from angee.integrate.http import HttpClient
 from angee.integrate.oauth.client import (
-    _USER_AGENT,
     HTTP_TIMEOUT_SECONDS,
+    USER_AGENT,
     OAuthClientProtocol,
-    _with_query,
+    with_query,
 )
 from angee.integrate.oauth.errors import (
     INVALID_ID_TOKEN,
@@ -32,15 +35,11 @@ _ALLOWED_JWT_ALGORITHMS = (
     "RS256",
     "ES256",
 )
+_DEFAULT_JWKS_TTL_SECONDS = 3600
 
 
 class OAuthClientOidcProtocol(OAuthClientProtocol):
     """OIDC login protocol for one OAuth client with OIDC login fields."""
-
-    def __init__(self, oauth_client: Any) -> None:
-        """Bind to one OAuth client row."""
-
-        super().__init__(oauth_client)
 
     def authorize_url(
         self,
@@ -71,7 +70,7 @@ class OAuthClientOidcProtocol(OAuthClientProtocol):
             code_challenge=code_challenge,
         )
         query["nonce"] = nonce
-        return _with_query(self._endpoint("authorize_endpoint"), query)
+        return with_query(self._endpoint("authorize_endpoint"), query)
 
     def exchange_code(
         self,
@@ -96,7 +95,7 @@ class OAuthClientOidcProtocol(OAuthClientProtocol):
         id_token: str,
         *,
         nonce: str | None = None,
-        _jwks_client: Any | None = None,
+        jwks_client: Any | None = None,
     ) -> dict[str, Any]:
         """Verify and return claims from one OIDC ID token."""
 
@@ -112,12 +111,8 @@ class OAuthClientOidcProtocol(OAuthClientProtocol):
             raise OAuthFlowError(MISSING_ENDPOINT, 400)
         client_id = str(getattr(self.oauth_client, "client_id", ""))
         try:
-            jwks_client = _jwks_client or PyJWKClient(
-                jwks_uri,
-                headers={"User-Agent": _USER_AGENT},
-                timeout=HTTP_TIMEOUT_SECONDS,
-            )
-            signing_key = jwks_client.get_signing_key_from_jwt(id_token)
+            verifier = jwks_client or _jwks_client(jwks_uri)
+            signing_key = verifier.get_signing_key_from_jwt(id_token)
             claims = jwt.decode(
                 id_token,
                 signing_key.key,
@@ -169,3 +164,52 @@ def _audience_matches(value: object, expected: str) -> bool:
     if isinstance(value, list):
         return expected in value
     return False
+
+
+class _PinnedPyJWKClient(PyJWKClient):
+    """PyJWT JWKS parser whose fetches use Angee's pinned HTTP owner."""
+
+    def __init__(self, uri: str) -> None:
+        """Bind one JWKS URI with PyJWT's JWK-set TTL cache enabled."""
+
+        super().__init__(
+            uri,
+            cache_jwk_set=True,
+            lifespan=_jwks_ttl_seconds(),
+            headers={"User-Agent": USER_AGENT},
+            timeout=HTTP_TIMEOUT_SECONDS,
+        )
+
+    def fetch_data(self) -> Any:
+        """Fetch the JWKS document through ``integrate.http.HttpClient``."""
+
+        try:
+            response = HttpClient().get(
+                self.uri,
+                headers={"Accept": "application/json", "User-Agent": USER_AGENT},
+                allow_private=True,
+                timeout=HTTP_TIMEOUT_SECONDS,
+            )
+            if not response.ok:
+                raise PyJWKClientConnectionError(f"Fail to fetch data from the url, status: {response.status}")
+            jwk_set = response.json()
+        except PyJWKClientConnectionError:
+            raise
+        except Exception as exc:
+            raise PyJWKClientConnectionError(f'Fail to fetch data from the url, err: "{exc}"') from exc
+        if self.jwk_set_cache is not None:
+            self.jwk_set_cache.put(jwk_set)
+        return jwk_set
+
+
+@cache
+def _jwks_client(jwks_uri: str) -> _PinnedPyJWKClient:
+    """Return the process-local JWKS client for one URI."""
+
+    return _PinnedPyJWKClient(jwks_uri)
+
+
+def _jwks_ttl_seconds() -> int:
+    """Return the configured lifetime for PyJWT's cached JWK set."""
+
+    return int(getattr(settings, "ANGEE_OIDC_JWKS_TTL", _DEFAULT_JWKS_TTL_SECONDS))

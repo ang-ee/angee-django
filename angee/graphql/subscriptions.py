@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from typing import Any
 
 import strawberry
 from asgiref.sync import sync_to_async
-from channels.layers import get_channel_layer
-from django.db import models
+from django.db import close_old_connections, models
 from rebac import current_actor
 
 from angee.graphql.access import ChangeReadGate
@@ -19,13 +19,12 @@ from angee.graphql.data.metadata import (
     resource_wire_field_name,
 )
 from angee.graphql.events import ChangeEvent, ChangePayload
-from angee.graphql.publishing import change_group, connect_publishers
+from angee.graphql.publishing import change_channel_layer, change_group
 
 
 def changes(model: type[models.Model], *, field: str) -> type:
     """Return a subscription surface streaming changes to ``model``."""
 
-    connect_publishers(model)
     label = model._meta.label
 
     async def resolve(
@@ -39,11 +38,13 @@ def changes(model: type[models.Model], *, field: str) -> type:
         actor = current_actor()
         if actor is None:
             return
-        # The gate resolves this model+actor's authorization facts once; each
-        # payload is filtered (and redacted) through it in the sync thread.
-        gate = await sync_to_async(ChangeReadGate, thread_sensitive=True)(model, actor)
+        # The gate work stays on the general sync executor so subscriptions can
+        # filter concurrently. The wrappers bracket that thread's ORM work with
+        # Django's connection lifecycle because long-lived subscriptions do not
+        # ride the normal request boundary.
+        gate = await sync_to_async(_change_read_gate, thread_sensitive=False)(model, actor)
         async for payload in _subscribe(model):
-            event = await sync_to_async(gate.filter, thread_sensitive=True)(payload)
+            event = await sync_to_async(_filter_change_event, thread_sensitive=False)(gate, payload)
             if event is not None:
                 yield event
 
@@ -63,12 +64,32 @@ def changes(model: type[models.Model], *, field: str) -> type:
     )
 
 
+def _change_read_gate(model: type[models.Model], actor: Any) -> ChangeReadGate:
+    """Build a read gate in a sync worker with healthy Django connections."""
+
+    close_old_connections()
+    try:
+        return ChangeReadGate(model, actor)
+    finally:
+        close_old_connections()
+
+
+def _filter_change_event(gate: ChangeReadGate, payload: Any) -> ChangeEvent | None:
+    """Filter one change payload in a sync worker with healthy Django connections."""
+
+    close_old_connections()
+    try:
+        return gate.filter(payload)
+    finally:
+        close_old_connections()
+
+
 async def _subscribe(
     model: type[models.Model],
 ) -> AsyncGenerator[ChangePayload, None]:
     """Yield change payloads for ``model`` from the channel layer."""
 
-    layer = get_channel_layer()
+    layer = change_channel_layer()
     if layer is None:
         return
     group = change_group(model)

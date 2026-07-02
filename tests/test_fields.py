@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from django.conf import settings
 from django.core.exceptions import FieldError, ImproperlyConfigured
@@ -9,7 +11,7 @@ from django.db import connection, models
 from django.db.models import F, Value
 from django.db.models.functions import Concat
 
-from angee.base.fields import EncryptedField, SqidField, _derive_fernet
+from angee.base.fields import EncryptedField, SqidField, StateField, _derive_fernet
 from angee.base.mixins import SqidMixin
 
 
@@ -123,6 +125,35 @@ def test_encrypted_field_deconstruct_is_stable_and_value_free() -> None:
 
     assert first == second
     assert settings.SECRET_KEY not in repr(first)
+
+
+def test_encrypted_field_caches_bound_fernet(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bound encrypted field derives its Fernet once per model column."""
+
+    class FieldCachedFernet(models.Model):
+        """Concrete model used for encrypted field cache tests."""
+
+        secret = EncryptedField()
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+
+    field = FieldCachedFernet._meta.get_field("secret")
+    calls: list[str] = []
+
+    def derive(label: str) -> Any:
+        calls.append(label)
+        return _derive_fernet(label)
+
+    monkeypatch.setattr("angee.base.fields._derive_fernet", derive)
+
+    first = field._fernet()
+    second = field._fernet()
+
+    assert first is second
+    assert calls == [f"{FieldCachedFernet._meta.label_lower}.secret"]
 
 
 def test_encrypted_field_rejects_unique_and_primary_key() -> None:
@@ -346,14 +377,88 @@ def test_encrypted_field_wraps_invalid_ciphertext_errors() -> None:
                 ["not encrypted", instance.pk],
             )
 
+        reloaded = FieldInvalidCiphertext.objects.get(pk=instance.pk)
+
         with pytest.raises(
             ImproperlyConfigured,
             match=f"Cannot decrypt {FieldInvalidCiphertext._meta.label_lower}",
         ):
-            FieldInvalidCiphertext.objects.get(pk=instance.pk)
+            reloaded.secret
     finally:
         with connection.schema_editor() as schema_editor:
             schema_editor.delete_model(FieldInvalidCiphertext)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_encrypted_field_corrupt_row_does_not_break_queryset() -> None:
+    """One bad encrypted value is isolated to the row field access."""
+
+    class FieldCorruptRow(models.Model):
+        """Concrete model used for encrypted field corrupt-row tests."""
+
+        secret = EncryptedField()
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(FieldCorruptRow)
+    try:
+        valid = FieldCorruptRow.objects.create(secret="valid")
+        corrupt = FieldCorruptRow.objects.create(secret="corrupt")
+        table = connection.ops.quote_name(FieldCorruptRow._meta.db_table)
+        column = connection.ops.quote_name("secret")
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"UPDATE {table} SET {column} = %s WHERE id = %s",
+                ["not encrypted", corrupt.pk],
+            )
+
+        rows = list(FieldCorruptRow.objects.order_by("pk"))
+
+        assert rows[0].pk == valid.pk
+        assert rows[0].secret == "valid"
+        assert rows[1].pk == corrupt.pk
+        with pytest.raises(ImproperlyConfigured, match=f"Cannot decrypt {FieldCorruptRow._meta.label_lower}"):
+            rows[1].secret
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(FieldCorruptRow)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_state_field_supports_blank_string_states() -> None:
+    """StateField owns nullable-free blank-string state columns."""
+
+    class OptionalKind(models.TextChoices):
+        """Finite states for blank-compatible state-field tests."""
+
+        ENABLED = "enabled", "Enabled"
+
+    class FieldBlankState(models.Model):
+        """Concrete model used for blank-compatible state tests."""
+
+        state = StateField(choices_enum=OptionalKind, default="", blank=True)
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "auth"
+
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(FieldBlankState)
+    try:
+        blank = FieldBlankState.objects.create()
+        enabled = FieldBlankState.objects.create(state="ENABLED")
+
+        assert FieldBlankState.objects.get(pk=blank.pk).state == ""
+        assert FieldBlankState.objects.get(pk=enabled.pk).state == OptionalKind.ENABLED
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(FieldBlankState)
 
 
 @pytest.mark.django_db(transaction=True)

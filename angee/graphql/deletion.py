@@ -17,7 +17,7 @@ from django.db.models.deletion import (
 from rebac import current_actor, system_context
 from rebac.resources import model_resource_type
 
-from angee.base.models import public_id_of
+from angee.base.models import public_id_of, read_scoped_queryset
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.metadata import (
     DataResourceRoots,
@@ -30,6 +30,7 @@ from angee.graphql.data.metadata import (
 from angee.graphql.ids import require_instance_for_id
 
 _PREVIEW_LEAF_LIMIT = 50
+_PREVIEW_PK_CHUNK_SIZE = 500
 
 type _FastDelete = tuple[models.QuerySet[models.Model], int]
 
@@ -144,6 +145,9 @@ class DeletePreview:
     )
     """Rooted tree of rows Django would delete; deleted counts include this root row."""
 
+    deleted_instance: strawberry.Private[models.Model | None] = None
+    """Deleted row returned internally to mutation envelopes, never exposed in SDL."""
+
     @classmethod
     def from_instance(cls, instance: models.Model, actor: Any | None = None) -> DeletePreview:
         """Return Django's cascade forecast for ``instance``.
@@ -214,7 +218,14 @@ def delete_by_public_id(
         if confirm and not preview.has_blockers:
             if before_delete is not None:
                 before_delete(instance)
-            instance.delete()
+            deleted_pk = instance.pk
+            try:
+                instance.delete()
+            except (ProtectedError, RestrictedError):
+                preview = DeletePreview.from_instance(instance)
+            else:
+                instance.pk = deleted_pk
+                preview.deleted_instance = instance
     return preview
 
 
@@ -319,9 +330,29 @@ class _PreviewRows:
             if _requires_read_scope(model):
                 return cls(total_count=len(collected), visible_count=0)
             return cls(total_count=len(collected), visible_count=len(collected), visible_rows=collected)
-        visible_pks = set(scoped.filter(pk__in=[row.pk for row in collected]).values_list("pk", flat=True))
-        visible_rows = [row for row in collected if row.pk in visible_pks]
-        return cls(total_count=len(collected), visible_count=len(visible_pks), visible_rows=visible_rows)
+        return cls._from_scoped_collected(collected, scoped)
+
+    @classmethod
+    def _from_scoped_collected(
+        cls,
+        collected: list[models.Model],
+        scoped: models.QuerySet[models.Model],
+    ) -> _PreviewRows:
+        """Return visible collected rows without issuing an unbounded ``pk__in`` query."""
+
+        pk_to_row = {row.pk: row for row in collected}
+        visible_rows: list[models.Model] = []
+        visible_count = 0
+        for pk_chunk in _chunks([row.pk for row in collected], _PREVIEW_PK_CHUNK_SIZE):
+            chunk_visible = set(scoped.filter(pk__in=pk_chunk).values_list("pk", flat=True))
+            visible_count += len(chunk_visible)
+            if len(visible_rows) <= _PREVIEW_LEAF_LIMIT:
+                visible_rows.extend(
+                    pk_to_row[pk] for pk in pk_chunk if pk in chunk_visible and pk in pk_to_row
+                )
+                if len(visible_rows) > _PREVIEW_LEAF_LIMIT + 1:
+                    visible_rows = visible_rows[: _PREVIEW_LEAF_LIMIT + 1]
+        return cls(total_count=len(collected), visible_count=visible_count, visible_rows=visible_rows)
 
     @classmethod
     def from_fast_delete(
@@ -392,25 +423,20 @@ def _count_by_model(
     return counts
 
 
+def _chunks(values: list[Any], size: int) -> Iterable[list[Any]]:
+    """Yield ``values`` in fixed-size chunks."""
+
+    for index in range(0, len(values), size):
+        yield values[index : index + size]
+
+
 def _read_scoped_queryset(
     model: type[models.Model],
     actor: Any | None,
 ) -> models.QuerySet[models.Model] | None:
     """Return a read-scoped queryset for a REBAC model, if one can be resolved."""
 
-    if not _requires_read_scope(model) or actor is None:
-        return None
-    manager = model._default_manager
-    # Dynamic test models and third-party models may declare a REBAC resource
-    # type without installing the REBAC manager/queryset pair.
-    with_actor = getattr(manager, "with_actor", None)
-    if not callable(with_actor):
-        return None
-    queryset = with_actor(actor)
-    with_action = getattr(queryset, "with_action", None)
-    if callable(with_action):
-        queryset = with_action("read")
-    return queryset
+    return read_scoped_queryset(model, actor)
 
 
 def _requires_read_scope(model: type[models.Model]) -> bool:

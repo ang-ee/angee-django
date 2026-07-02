@@ -3,8 +3,9 @@
 The ``resources`` base addon owns the source-type seam but knows only local files.
 ``integrate`` owns outbound HTTP, so it contributes the ``url`` source here: a remote
 resource file is fetched once through the SSRF-pinned
-:class:`~angee.integrate.http.HttpClient` into the local data cache. Registered from
-``IntegrateConfig.ready`` so ``resources`` never has to reach up into this addon.
+:class:`~angee.integrate.http.HttpClient` into the local data cache. ``integrate``
+contributes this source through ``ANGEE_RESOURCE_SOURCE_CLASSES`` so ``resources``
+never reaches up into this addon.
 """
 
 from __future__ import annotations
@@ -68,10 +69,7 @@ def _cache_path(url: str) -> Path:
     return Path(settings.ANGEE_DATA_DIR) / _CACHE_SUBDIR / f"{digest}{suffix}"
 
 
-def register() -> None:
-    """Register the ``url`` resource source (idempotent across app reloads)."""
+def url_source() -> sources.ResourceSource:
+    """Return integrate's networked ``url`` resource source."""
 
-    if "url" not in sources.source_keys():
-        sources.register_source(
-            sources.ResourceSource(key="url", normalize=_normalize_url, materialize=_materialize_url)
-        )
+    return sources.ResourceSource(key="url", normalize=_normalize_url, materialize=_materialize_url)

@@ -234,7 +234,7 @@ def test_integrate_registry_discovers_bridge_models_in_deterministic_order(sched
 
     del scheduler_tables
 
-    discovered_bridge_models = bridge_models()
+    discovered_bridge_models = bridge_models(Bridge)
     bridge_labels = tuple(model._meta.label_lower for model in discovered_bridge_models)
 
     assert SchedulerBridge in discovered_bridge_models

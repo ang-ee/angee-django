@@ -24,16 +24,19 @@ import logging
 import secrets
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
+from functools import cache
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core import checks
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
+from django.db import IntegrityError, connections, models, transaction
 from django.db.models import Q
 from django.utils import timezone
+from django.utils.module_loading import import_string
 from django.utils.text import capfirst
 from rebac import (
     RelationshipTuple,
@@ -44,14 +47,14 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
-from rebac.managers import RebacManager, RebacQuerySet
 from rebac.models import active_relationship_model
 from strawberry_django.descriptors import model_property
 
 from angee.base.fields import EncryptedField, ImplClassField, StateField
 from angee.base.impl import ImplDefaultsMixin
 from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel
+from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
+from angee.integrate import registry
 from angee.integrate.credentials import CredentialKind, handler_for
 from angee.integrate.events import EventKind
 from angee.integrate.impl import IntegrationImpl
@@ -93,7 +96,7 @@ class CredentialStatus(models.TextChoices):
     REVOKED = "revoked", "Revoked"
 
 
-class OAuthClientQuerySet(RebacQuerySet[Any]):
+class OAuthClientQuerySet(AngeeQuerySet[Any]):
     """REBAC-scoped reads for OAuth client registration."""
 
     def connectable(self) -> OAuthClientQuerySet:
@@ -104,11 +107,6 @@ class OAuthClientQuerySet(RebacQuerySet[Any]):
             self.system_context(reason="integrate.graphql.connectable").filter(is_enabled=True).exclude(client_id=""),
         )
 
-    def console_oauth_clients(self) -> OAuthClientQuerySet:
-        """Return admin-visible OAuth clients (self-describing; no vendor join)."""
-
-        return cast(OAuthClientQuerySet, self)
-
     def enabled_for_slug(self, slug: str, *, environment: str = "prod") -> Any | None:
         """Return the preferred OAuth client for a slug when that row is enabled."""
 
@@ -117,7 +115,7 @@ class OAuthClientQuerySet(RebacQuerySet[Any]):
         return client if client is not None and client.is_enabled else None
 
 
-class OAuthClientManager(RebacManager.from_queryset(OAuthClientQuerySet)):  # type: ignore[misc]
+class OAuthClientManager(AngeeManager.from_queryset(OAuthClientQuerySet)):  # type: ignore[misc]
     """Manager for settings-sourced OAuth client registration.
 
     OAuth only: settings entries carry the OAuth base fields. The OIDC refinement
@@ -492,7 +490,7 @@ class OAuthClient(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         return discovery
 
 
-class ExternalAccountQuerySet(RebacQuerySet[Any]):
+class ExternalAccountQuerySet(AngeeQuerySet[Any]):
     """REBAC-scoped reads for external accounts."""
 
     def console_external_accounts(self) -> ExternalAccountQuerySet:
@@ -501,7 +499,7 @@ class ExternalAccountQuerySet(RebacQuerySet[Any]):
         return cast(ExternalAccountQuerySet, self.rebac_select_related("oauth_client", "credential"))
 
 
-class ExternalAccountManager(RebacManager.from_queryset(ExternalAccountQuerySet)):  # type: ignore[misc]
+class ExternalAccountManager(AngeeManager.from_queryset(ExternalAccountQuerySet)):  # type: ignore[misc]
     """Manager for idempotent external account linking.
 
     Actor-less framework writes run under ``system_context``; update paths do not maintain ``updated_by``.
@@ -595,7 +593,7 @@ class ExternalAccountManager(RebacManager.from_queryset(ExternalAccountQuerySet)
                     subject_type=app_settings.REBAC_USER_TYPE,
                     optional_subject_relation="",
                 )
-                .order_by(self._relationship_subject_id_ordering(Relationship))
+                .order_by_subject()
                 .first()
             )
             if row is None:
@@ -607,14 +605,6 @@ class ExternalAccountManager(RebacManager.from_queryset(ExternalAccountQuerySet)
                 return UserModel.objects.get(**{user_id_attr: row.subject_id})
             except UserModel.DoesNotExist:
                 return None
-
-    def _relationship_subject_id_ordering(self, relationship_model: type[Any]) -> str:
-        """Return the concrete ordering key for the active REBAC relationship store."""
-
-        if any(field.name == "subject_fk" for field in relationship_model._meta.fields):
-            return "subject_fk__resource_id"
-        return "subject_id"
-
 
 class ExternalAccount(SqidMixin, AuditMixin, AngeeModel):
     """A user's identity at a provider, shared by principals through REBAC grants.
@@ -718,7 +708,7 @@ class ExternalAccount(SqidMixin, AuditMixin, AngeeModel):
         return email
 
 
-class CredentialQuerySet(RebacQuerySet[Any]):
+class CredentialQuerySet(AngeeQuerySet[Any]):
     """REBAC-scoped reads for credential health and connected accounts."""
 
     def connected_for(self, user: Any) -> CredentialQuerySet:
@@ -750,7 +740,7 @@ class CredentialQuerySet(RebacQuerySet[Any]):
         )
 
 
-class CredentialManager(RebacManager.from_queryset(CredentialQuerySet)):  # type: ignore[misc]
+class CredentialManager(AngeeManager.from_queryset(CredentialQuerySet)):  # type: ignore[misc]
     """Manager for idempotent per-user credential writes.
 
     Actor-less framework writes run under ``system_context``; update paths do not maintain ``updated_by``.
@@ -769,6 +759,12 @@ class CredentialManager(RebacManager.from_queryset(CredentialQuerySet)):  # type
     operation_fields = frozenset({"kind", "material"})
 
     _REASON = "integrate.connections.credential"
+
+    def check_disconnect(self, credential: Any) -> None:
+        """Run installed credential-disconnect guards for an explicit disconnect."""
+
+        for guard in credential_disconnect_guards():
+            guard(credential)
 
     def live_oauth_for_user(self, user: Any, oauth_client: Any) -> Any | None:
         """Return this user's active, non-expired OAuth credential for one client."""
@@ -906,6 +902,42 @@ class CredentialManager(RebacManager.from_queryset(CredentialQuerySet)):  # type
             "last_refresh_at": None,
             "last_refresh_status": "",
         }
+
+
+@cache
+def credential_disconnect_guards() -> tuple[Any, ...]:
+    """Return configured credential-disconnect guard callables."""
+
+    return tuple(import_string(str(path)) for path in getattr(settings, "ANGEE_CREDENTIAL_DISCONNECT_GUARDS", ()))
+
+
+def check_credential_disconnect_guards(
+    app_configs: list[object] | None = None,
+    **kwargs: object,
+) -> list[checks.CheckMessage]:
+    """Validate configured credential-disconnect guard callables."""
+
+    del app_configs, kwargs
+    errors: list[checks.CheckMessage] = []
+    for path in getattr(settings, "ANGEE_CREDENTIAL_DISCONNECT_GUARDS", ()):
+        try:
+            guard = import_string(str(path))
+        except (AttributeError, ImportError, ModuleNotFoundError) as error:
+            errors.append(
+                checks.Error(
+                    f"ANGEE_CREDENTIAL_DISCONNECT_GUARDS entry {path!r} cannot be imported: {error}",
+                    id="angee.integrate.E003",
+                )
+            )
+            continue
+        if not callable(guard):
+            errors.append(
+                checks.Error(
+                    f"ANGEE_CREDENTIAL_DISCONNECT_GUARDS entry {path!r} is not callable.",
+                    id="angee.integrate.E004",
+                )
+            )
+    return errors
 
 
 class Credential(SqidMixin, AuditMixin, AngeeModel):
@@ -1100,7 +1132,10 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
         """
 
         with transaction.atomic():
-            locked = type(self).objects.sudo(reason="integrate.credential.refresh").select_for_update().get(pk=self.pk)
+            queryset = type(self).objects.sudo(reason="integrate.credential.refresh")
+            if connections[queryset.db].features.has_select_for_update:
+                queryset = queryset.select_for_update()
+            locked = queryset.get(pk=self.pk)
             stale = locked.expires_at is not None and locked.expires_at <= timezone.now() + _OAUTH_REFRESH_MARGIN
             if force or stale:
                 self.handler.refresh(locked)
@@ -1126,7 +1161,10 @@ def _validated_manager_values(
     if unknown:
         names = ", ".join(sorted(unknown))
         raise ValueError(f"Unknown {model.__name__} field(s): {names}")
-    return dict(values)
+    result = dict(values)
+    if "status" in result:
+        result["status"] = model._meta.get_field("status").to_python(result["status"])
+    return result
 
 
 class Vendor(SqidMixin, AuditMixin, AngeeModel):
@@ -1175,7 +1213,10 @@ class IntegrationStatus(models.TextChoices):
     def from_value(cls, value: object) -> IntegrationStatus:
         """Return the member for one string or enum integration-status value."""
 
-        raw = str(getattr(value, "value", value))
+        raw = str(getattr(value, "value", value)).strip()
+        member = cls.__members__.get(raw)
+        if member is not None:
+            return cast(IntegrationStatus, member)
         try:
             return cast(IntegrationStatus, cls(raw))
         except ValueError as error:
@@ -1188,15 +1229,69 @@ class IntegrationManager(AngeeManager):
     def impl_class_for_key(self, key: str) -> type[IntegrationImpl]:
         """Return the implementation class registered for ``key`` on this model."""
 
-        field = cast(ImplClassField, self.model._meta.get_field("impl_class"))
-        return cast(type[IntegrationImpl], field.resolve_class(key))
+        return cast(type[IntegrationImpl], self.model.resolve_impl_class("impl_class", key))
+
+    def draft_for(self, user: Any, *, vendor: Any, impl_class: str) -> Any:
+        """Return the parent integration row for a user's vendor/implementation draft."""
+
+        with system_context(reason="integrate.integration.draft"):
+            integration = (
+                self.filter(
+                    owner=user,
+                    vendor=vendor,
+                    impl_class=impl_class,
+                    kind=Integration.integration_kind_label,
+                )
+                .order_by("pk")
+                .first()
+            )
+            if integration is not None:
+                return integration
+            try:
+                with transaction.atomic():
+                    return self.create(
+                        owner=user,
+                        vendor=vendor,
+                        impl_class=impl_class,
+                        kind=Integration.integration_kind_label,
+                        status=IntegrationStatus.DRAFT,
+                    )
+            except IntegrityError:
+                return self.get(
+                    owner=user,
+                    vendor=vendor,
+                    impl_class=impl_class,
+                    kind=Integration.integration_kind_label,
+                )
+
+    def activate_from_credential(
+        self,
+        user: Any,
+        *,
+        vendor: Any,
+        credential: Any,
+        impl_class: str = "none",
+    ) -> Any:
+        """Attach ``credential`` to the user's parent integration row and activate it."""
+
+        integration = self.draft_for(user, vendor=vendor, impl_class=impl_class)
+        with system_context(reason="integrate.integration.activate_from_credential"), transaction.atomic():
+            integration = self.select_for_update().get(pk=integration.pk)
+            integration.credential = credential
+            integration.account = getattr(credential, "external_account", None)
+            integration.status = IntegrationStatus.ACTIVE
+            integration.save(update_fields=["credential", "account", "status", "updated_at"])
+        return integration
 
     def sync_kinds(self) -> int:
         """Backfill parent rows with the concrete integration kind they materialize."""
 
         parent = self.model._base_manager
         count = parent.filter(kind="").update(kind=self.model.integration_kind_value())
+        connection = connections[self.db]
         for child_model in _integration_child_models(cast(type[Integration], self.model)):
+            if not child_model._meta.can_migrate(connection):
+                continue
             kind = child_model.integration_kind_value()
             count += (
                 parent.filter(pk__in=child_model._base_manager.values("pk"))
@@ -1270,6 +1365,13 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
         ordering = ("-updated_at",)
         rebac_resource_type = "integrate/integration"
         rebac_id_attr = "sqid"
+        constraints = (
+            models.UniqueConstraint(
+                fields=("owner", "vendor", "impl_class"),
+                condition=Q(kind="Integration"),
+                name="uniq_integrate_parent_owner_vendor_impl",
+            ),
+        )
 
     def __str__(self) -> str:
         """Return a stable vendor-qualified integration label."""
@@ -1322,8 +1424,7 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     def impl(self) -> IntegrationImpl:
         """Return this row's integration-level implementation."""
 
-        field = cast(ImplClassField, type(self)._meta.get_field("impl_class"))
-        impl_class = cast(type[IntegrationImpl], field.resolve_class(self.impl_class))
+        impl_class = cast(type[IntegrationImpl], self.resolve_impl("impl_class"))
         return impl_class(self)
 
     def attach_credential(self, credential: Any) -> None:
@@ -1400,7 +1501,7 @@ class Bridge(AngeeModel):
     """
 
     config = models.JSONField(default=dict, blank=True)
-    """Bridge-scoped settings used by the selected VCS backend."""
+    """Bridge-scoped settings interpreted by the selected backend."""
     cursor = models.JSONField(default=dict, blank=True)
     poll_interval = models.PositiveIntegerField(default=300)
     subscription_state = models.JSONField(default=dict, blank=True)
@@ -1543,7 +1644,7 @@ class VcsBridge(Bridge):
     webhook_secret = EncryptedField(blank=True)
     """Shared secret for verifying inbound push webhooks (per account, not per repo)."""
 
-    objects = RebacManager()
+    objects = AngeeManager()
 
     class Meta:
         """Django model options for the VCS bridge child model."""
@@ -1556,8 +1657,7 @@ class VcsBridge(Bridge):
     def backend(self) -> VCSBackend:
         """Return this bridge's selected VCS backend."""
 
-        field = cast(ImplClassField, type(self)._meta.get_field("backend_class"))
-        backend_class = cast(type[VCSBackend], field.resolve_class(self.backend_class))
+        backend_class = cast(type[VCSBackend], self.resolve_impl("backend_class"))
         return backend_class(self)
 
     def repositories_by_org(self) -> dict[str, list[Any]]:
@@ -1597,7 +1697,14 @@ class VcsBridge(Bridge):
         content of already-inventoried repositories.
         """
 
-        return sum(source.refresh() for repository in self.repositories.all() for source in repository.sources.all())
+        source_model = apps.get_model("integrate", "Source")
+        with system_context(reason="integrate.vcs_bridge.sync.sources"):
+            sources = tuple(
+                source_model.objects.filter(repository__vcs_bridge=self)
+                .select_related("repository", "repository__vcs_bridge")
+                .order_by("repository_id", "pk")
+            )
+        return sum(source.refresh() for source in sources)
 
     def handle_webhook(self, payload: Any) -> None:
         """Re-sync this bridge's inventory on an inbound push webhook."""
@@ -1613,7 +1720,8 @@ class VcsBridge(Bridge):
     def search_repositories(self, query: str) -> list[Any]:
         """Return host repositories whose name matches ``query`` (the add typeahead)."""
 
-        return self.backend.search_repos(query, org=self._search_scope())
+        backend = self.backend
+        return backend.search_repos(query, org=backend.repository_search_scope())
 
     def import_repository(self, name: str) -> Any:
         """Inventory one repository by its host ``name`` (a picked typeahead result)."""
@@ -1627,13 +1735,7 @@ class VcsBridge(Bridge):
         repository_model = apps.get_model("integrate", "Repository")
         return repository_model.objects.reconcile(self, self.backend.ls_repos(org=org))
 
-    def _search_scope(self) -> str:
-        """Return the org/user the typeahead search scopes to (from ``config.github_org``)."""
-
-        return str(cast(Any, self).config.get("github_org") or "")
-
-
-class RepositoryManager(RebacManager):
+class RepositoryManager(AngeeManager):
     """Manager owning the upsert/reconcile of repository rows from a host listing."""
 
     def reconcile(self, vcs_bridge: Any, descriptors: Iterable[Any]) -> int:
@@ -1645,11 +1747,29 @@ class RepositoryManager(RebacManager):
         """
 
         descriptor_list = list(descriptors)
-        seen: set[Any] = set()
+        descriptors_by_name = {str(descriptor.name): descriptor for descriptor in descriptor_list}
+        now = timezone.now()
         with system_context(reason="integrate.repository.reconcile"), transaction.atomic():
-            for descriptor in descriptor_list:
-                seen.add(self._upsert(vcs_bridge, descriptor).pk)
-            self.filter(vcs_bridge=vcs_bridge).exclude(pk__in=seen).delete()
+            self.bulk_create(
+                [
+                    self._row_from_descriptor(vcs_bridge, descriptor, now=now)
+                    for descriptor in descriptors_by_name.values()
+                ],
+                update_conflicts=True,
+                unique_fields=["vcs_bridge", "name"],
+                update_fields=[
+                    "org",
+                    "remote",
+                    "ssh_remote",
+                    "remote_id",
+                    "default_branch",
+                    "visibility",
+                    "web_url",
+                    "archived",
+                    "updated_at",
+                ],
+            )
+            self.filter(vcs_bridge=vcs_bridge).exclude(name__in=descriptors_by_name).delete()
         return len(descriptor_list)
 
     def add(self, vcs_bridge: Any, descriptor: Any) -> Any:
@@ -1676,6 +1796,24 @@ class RepositoryManager(RebacManager):
             },
         )
         return repository
+
+    def _row_from_descriptor(self, vcs_bridge: Any, descriptor: Any, *, now: datetime) -> Any:
+        """Return an unsaved repository row projected from one host descriptor."""
+
+        return self.model(
+            vcs_bridge=vcs_bridge,
+            name=descriptor.name,
+            org=descriptor.org,
+            remote=descriptor.remote,
+            ssh_remote=descriptor.ssh_remote,
+            remote_id=descriptor.remote_id,
+            default_branch=descriptor.default_branch,
+            visibility=descriptor.visibility,
+            web_url=descriptor.web_url,
+            archived=descriptor.archived,
+            created_at=now,
+            updated_at=now,
+        )
 
 
 class Repository(SqidMixin, AuditMixin, AngeeModel):
@@ -1748,7 +1886,7 @@ class Source(SqidMixin, AuditMixin, AngeeModel):
     """Pathspec of the subtree this source points at within the repository."""
     last_synced_at = models.DateTimeField(null=True, blank=True)
 
-    objects = RebacManager()
+    objects = AngeeManager()
 
     class Meta:
         """Django model options for source inventory."""
@@ -1768,11 +1906,11 @@ class Source(SqidMixin, AuditMixin, AngeeModel):
         """Return the output models that declare a ``source_kind`` (e.g. ``Template``).
 
         ``Source`` owns "what a kind resolves to": an output model binds itself to a
-        kind with a ``source_kind`` class attribute, discovered through the app
-        registry so a new addon adds a kind without ``integrate`` changing.
+        kind with a ``source_kind`` class attribute; the integration registry owns
+        the deterministic app scan and contract check.
         """
 
-        return tuple(model for model in apps.get_models() if getattr(model, "source_kind", ""))
+        return registry.source_kind_models()
 
     @classmethod
     def available_kinds(cls) -> tuple[str, ...]:
@@ -1807,7 +1945,7 @@ class Source(SqidMixin, AuditMixin, AngeeModel):
         }
 
 
-class TemplateManager(RebacManager):
+class TemplateManager(AngeeManager):
     """Manager owning the reconcile of template rows from a template source."""
 
     def sync_from_source(self, source: Any) -> int:
@@ -1815,23 +1953,35 @@ class TemplateManager(RebacManager):
 
         vcs_bridge = source.repository.vcs_bridge
         descriptors = vcs_bridge.discover(source, marker="copier.yml", parse=parse_template_meta)
-        seen: set[Any] = set()
+        descriptors_by_path = {str(descriptor.get("path", "")): descriptor for descriptor in descriptors}
+        now = timezone.now()
         with system_context(reason="integrate.template.sync"), transaction.atomic():
-            for descriptor in descriptors:
-                template, _created = self.update_or_create(
-                    source=source,
-                    path=str(descriptor.get("path", "")),
-                    defaults={
-                        "name": str(descriptor.get("name", "")),
-                        "kind": str(descriptor.get("kind", "")),
-                        "inputs": list(descriptor.get("inputs", [])),
-                    },
-                )
-                seen.add(template.pk)
-            self.filter(source=source).exclude(pk__in=seen).delete()
-            source.last_synced_at = timezone.now()
+            self.bulk_create(
+                [
+                    self._row_from_descriptor(source, descriptor, now=now)
+                    for descriptor in descriptors_by_path.values()
+                ],
+                update_conflicts=True,
+                unique_fields=["source", "path"],
+                update_fields=["name", "kind", "inputs", "updated_at"],
+            )
+            self.filter(source=source).exclude(path__in=descriptors_by_path).delete()
+            source.last_synced_at = now
             source.save(update_fields=["last_synced_at", "updated_at"])
         return len(descriptors)
+
+    def _row_from_descriptor(self, source: Any, descriptor: dict[str, Any], *, now: datetime) -> Any:
+        """Return an unsaved template row projected from one discovered descriptor."""
+
+        return self.model(
+            source=source,
+            path=str(descriptor.get("path", "")),
+            name=str(descriptor.get("name", "")),
+            kind=str(descriptor.get("kind", "")),
+            inputs=list(descriptor.get("inputs", [])),
+            created_at=now,
+            updated_at=now,
+        )
 
 
 class Template(SqidMixin, AuditMixin, AngeeModel):
@@ -1887,8 +2037,30 @@ def _descriptor_key(descriptor: dict[str, Any]) -> tuple[str, str]:
     return (str(descriptor.get("kind", "")), str(descriptor.get("name") or descriptor.get("path", "")))
 
 
-class WebhookSubscriptionManager(RebacManager):
+class WebhookSubscriptionManager(AngeeManager):
     """Manager for webhook subscriptions."""
+
+    def enqueue_event(
+        self,
+        *,
+        kind: EventKind,
+        payload: Any,
+        impl_app: str = "",
+        integration: Any | None = None,
+    ) -> None:
+        """Queue one event fan-out after the current transaction commits."""
+
+        kind_value = str(kind)
+        body = self._event_body(payload)
+        integration_pk = getattr(integration, "pk", None)
+        transaction.on_commit(
+            lambda: self._deliver_event_body(
+                kind=kind_value,
+                body=body,
+                impl_app=impl_app,
+                integration_pk=integration_pk,
+            )
+        )
 
     def deliver_event(
         self,
@@ -1905,12 +2077,38 @@ class WebhookSubscriptionManager(RebacManager):
         itself; this method only owns the row-set loop and the success/error tally.
         """
 
-        body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return self._deliver_event_body(
+            kind=str(kind),
+            body=self._event_body(payload),
+            impl_app=impl_app,
+            integration_pk=getattr(integration, "pk", None),
+        )
+
+    @staticmethod
+    def _event_body(payload: Any) -> bytes:
+        """Return the canonical webhook JSON body for an event payload."""
+
+        return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+    def _deliver_event_body(
+        self,
+        *,
+        kind: str,
+        body: bytes,
+        impl_app: str,
+        integration_pk: Any | None,
+    ) -> dict[str, int]:
+        """Deliver a pre-serialized event body to matching enabled subscriptions."""
+
         delivered = 0
         errors = 0
         with system_context(reason="integrate.webhooks.deliver"):
-            for subscription in self.filter(enabled=True).order_by("pk"):
-                if not subscription.matches(kind=kind, impl_app=impl_app, integration=integration):
+            for subscription in self._matching_queryset(
+                kind=kind,
+                impl_app=impl_app,
+                integration_pk=integration_pk,
+            ).iterator():
+                if not subscription.matches(kind=kind, impl_app=impl_app, integration_pk=integration_pk):
                     continue
                 ok, _message = subscription.deliver_recorded(body)
                 if ok:
@@ -1918,6 +2116,19 @@ class WebhookSubscriptionManager(RebacManager):
                 else:
                     errors += 1
         return {"delivered": delivered, "errors": errors}
+
+    def _matching_queryset(self, *, kind: str, impl_app: str, integration_pk: Any | None) -> Any:
+        """Return the narrowest portable candidate queryset for one webhook event."""
+
+        queryset = self.filter(enabled=True)
+        if integration_pk is None:
+            queryset = queryset.filter(integration_filter__isnull=True)
+        else:
+            queryset = queryset.filter(Q(integration_filter__isnull=True) | Q(integration_filter_id=integration_pk))
+        if connections[queryset.db].features.supports_json_field_contains:
+            queryset = queryset.filter(event_kinds__contains=[kind])
+            queryset = queryset.filter(Q(impl_app_filter=[]) | Q(impl_app_filter__contains=[impl_app]))
+        return queryset.order_by("pk")
 
 
 class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
@@ -1964,7 +2175,14 @@ class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
         "updated_at",
     )
 
-    def matches(self, *, kind: str, impl_app: str, integration: Any | None) -> bool:
+    def matches(
+        self,
+        *,
+        kind: str,
+        impl_app: str,
+        integration: Any | None = None,
+        integration_pk: Any | None = None,
+    ) -> bool:
         """Return whether this subscription should receive one event."""
 
         if kind not in {str(value) for value in self.event_kinds or ()}:
@@ -1974,7 +2192,8 @@ class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
             return False
         if self.integration_filter_id is None:
             return True
-        return integration is not None and self.integration_filter_id == getattr(integration, "pk", None)
+        expected_pk = getattr(integration, "pk", None) if integration_pk is None else integration_pk
+        return self.integration_filter_id == expected_pk
 
     def deliver(self, body: bytes) -> str:
         """POST one signed event body to this subscription's pinned target; raise on non-2xx."""
@@ -2057,3 +2276,4 @@ class WebhookSubscription(SqidMixin, AuditMixin, AngeeModel):
         # increment — this counter is the thing failure policy gates on.
         self.consecutive_failures = models.F("consecutive_failures") + 1
         self.save(update_fields=self._delivery_update_fields)
+        self.refresh_from_db(fields=("consecutive_failures",))

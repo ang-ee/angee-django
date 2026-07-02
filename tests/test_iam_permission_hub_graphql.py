@@ -17,12 +17,13 @@ from rebac.actors import to_subject_ref
 from rebac.models import active_relationship_model
 from rebac.roles import ROLE_RELATION, grant
 
+from tests.conftest import IAM_CONNECTION_TEST_MODELS, _clear_model_tables, addon_schema, execute_schema
 from tests.conftest import _create_missing_tables as _create_connection_tables
-from tests.conftest import addon_schema, execute_schema
 from tests.conftest import result_data as _data
 
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
+iam_roles = importlib.import_module("angee.iam.roles")
 
 
 def test_permission_hub_queries_are_admin_only(
@@ -124,9 +125,8 @@ def test_roles_grants_resources_are_admin_scoped(
 ) -> None:
     """The ``iam_roles`` / ``iam_grants`` computed resources list for admins only.
 
-    Their provider evaluates the platform-admin gate OUTSIDE ``system_context``:
-    sudo bypasses the REBAC ``auth/user`` read scoping, so gating inside it would
-    resolve admin for any authenticated user. A non-admin must get the empty set.
+    Their provider evaluates the platform-admin role graph before reading the
+    tuple-backed rows. A non-admin must get the empty set.
     """
 
     plain = User.objects.create_user(
@@ -193,7 +193,7 @@ def test_roles_query_excludes_role_types_missing_from_rebac_schema(
     )
     roles = data["roles"]
     grants = data["iam_grants"]
-    schema_role_types = iam_schema._schema_role_resource_types()
+    schema_role_types = iam_roles.schema_role_resource_types()
 
     assert {"id": "admin", "namespace": "angee", "label": "Admin"} in roles
     assert {"id": "note_admin", "namespace": "notes", "label": "Note Admin"} not in roles
@@ -237,8 +237,8 @@ def test_grants_query_labels_principals_by_display_name(
         row["principal_id"]: row["principal_label"]
         for row in data["iam_grants"]
     }
-    assert labels[str(named.pk)] == "Named Owner"
-    assert labels[str(plain.pk)] == "hub-label-plain"
+    assert labels[str(named.sqid)] == "Named Owner"
+    assert labels[str(plain.sqid)] == "hub-label-plain"
 
 
 def test_iam_overview_aggregates_do_not_depend_on_paginated_rows(
@@ -247,17 +247,15 @@ def test_iam_overview_aggregates_do_not_depend_on_paginated_rows(
     """The IAM overview is a backend aggregate, not a summary of page-limited rows."""
 
     admin = _platform_admin("hub-overview-admin")
-    User.objects.bulk_create(
-        User(
+    for index in range(505):
+        User.objects.create_user(
             username=f"hub-overview-target-{index:03d}",
             email=f"target-{index:03d}@example.com",
         )
-        for index in range(505)
-    )
     targets = list(
-        User.objects.filter(username__startswith="hub-overview-target-").order_by(
-            "username",
-        )
+        User.objects.sudo(reason="test.iam.overview.targets")
+        .filter(username__startswith="hub-overview-target-")
+        .order_by("username")
     )
     grant(actor=targets[0], role="angee/role:auditor")
     grant(actor=targets[-1], role="angee/role:admin")
@@ -559,6 +557,7 @@ def iam_permission_hub_tables(transactional_db: Any) -> Iterator[None]:
     try:
         yield
     finally:
+        _clear_model_tables(IAM_CONNECTION_TEST_MODELS)
         if created_models:
             with connection.schema_editor() as schema_editor:
                 for model in reversed(created_models):

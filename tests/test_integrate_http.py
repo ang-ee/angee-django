@@ -13,16 +13,14 @@ is used.
 from __future__ import annotations
 
 import socket
-import threading
-from collections.abc import Iterator
-from contextlib import contextmanager
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
 import httpcore
+import httpx
 import pytest
 from django.core.exceptions import ValidationError
 
+from angee.integrate import http as http_module
 from angee.integrate.http import HttpClient, PinnedTransport, _PinnedBackend, _response_status, _without_host
 
 URL = "https://dav.example.test/path?x=1"
@@ -188,53 +186,47 @@ def test_response_without_status_raises_rather_than_defaulting_to_200() -> None:
     assert _response_status(WithStatus()) == 204
 
 
-class _RedirectHandler(BaseHTTPRequestHandler):
-    """Loopback handler that records the received Host and 302s to a fixed location."""
-
-    location = ""
-    received_host: str | None = None
-
-    def do_GET(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler API
-        type(self).received_host = self.headers.get("Host")
-        self.send_response(302)
-        self.send_header("Location", type(self).location)
-        self.end_headers()
-
-    def log_message(self, *args: Any) -> None:
-        """Silence the default stderr request logging."""
-
-
-@contextmanager
-def _loopback_redirect_server(location: str) -> Iterator[int]:
-    """Run a loopback server that 302s to ``location``; yield its port."""
-
-    _RedirectHandler.location = location
-    _RedirectHandler.received_host = None
-    server = HTTPServer(("127.0.0.1", 0), _RedirectHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield server.server_address[1]
-    finally:
-        server.shutdown()
-        thread.join()
-
-
-def test_redirect_to_an_unsafe_host_is_rejected_at_the_hop() -> None:
+def test_redirect_to_an_unsafe_host_is_rejected_at_the_hop(monkeypatch: pytest.MonkeyPatch) -> None:
     """Following a redirect re-enters the pinned backend, so a 30x to metadata is rejected."""
 
-    with _loopback_redirect_server("http://169.254.169.254/") as port:
-        with pytest.raises(ValidationError):
-            HttpClient().get(f"http://127.0.0.1:{port}/", allow_private=True, follow_redirects=True)
+    requests: list[httpx.Request] = []
+
+    def transport(*, allow_private: bool) -> httpx.MockTransport:
+        assert allow_private is True
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if len(requests) == 1:
+                return httpx.Response(302, headers={"Location": "http://169.254.169.254/"})
+            raise ValidationError("URL host resolves to an address that is not allowed.")
+
+        return httpx.MockTransport(handler)
+
+    monkeypatch.setattr(http_module, "PinnedTransport", transport)
+
+    with pytest.raises(ValidationError):
+        HttpClient().get("http://127.0.0.1:8123/", allow_private=True, follow_redirects=True)
+
+    assert [str(request.url) for request in requests] == ["http://127.0.0.1:8123/", "http://169.254.169.254/"]
 
 
-def test_redirect_not_followed_by_default_and_host_is_the_url_host() -> None:
+def test_redirect_not_followed_by_default_and_host_is_the_url_host(monkeypatch: pytest.MonkeyPatch) -> None:
     """Without ``follow_redirects`` the 30x is returned as-is, and the sent Host is the URL host."""
 
-    with _loopback_redirect_server("http://169.254.169.254/") as port:
-        response = HttpClient().get(
-            f"http://127.0.0.1:{port}/", headers={"Host": "evil.example.com"}, allow_private=True
-        )
+    received_host = ""
+
+    def transport(*, allow_private: bool) -> httpx.MockTransport:
+        assert allow_private is True
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal received_host
+            received_host = request.headers["host"]
+            return httpx.Response(302, headers={"Location": "http://169.254.169.254/"})
+
+        return httpx.MockTransport(handler)
+
+    monkeypatch.setattr(http_module, "PinnedTransport", transport)
+    response = HttpClient().get("http://127.0.0.1:8123/", headers={"Host": "evil.example.com"}, allow_private=True)
 
     assert response.status == 302
-    assert _RedirectHandler.received_host == f"127.0.0.1:{port}"
+    assert received_host == "127.0.0.1:8123"

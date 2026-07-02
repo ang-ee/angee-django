@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from types import ModuleType
-from typing import Any
+from types import ModuleType, SimpleNamespace
+from typing import Any, cast
 
 import pytest
 import strawberry
@@ -13,7 +13,7 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from django_choices_field import IntegerChoicesField
 from graphql import GraphQLEnumType, GraphQLObjectType, get_named_type
-from rebac import MissingActorError, PermissionDenied, RebacMixin
+from rebac import MissingActorError, PermissionDenied, RebacMixin, SubjectRef
 from rebac.graphql.strawberry import RebacExtension
 from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
 from rebac.managers import RebacManager
@@ -21,6 +21,9 @@ from strawberry.extensions import SchemaExtension
 
 from angee.base.fields import StateField
 from angee.base.mixins import RevisionMixin
+from angee.base.models import AngeeManager, AngeeModel
+from angee.graphql.data import hasura as hasura_data
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.revisions import revisions
 from angee.graphql.schema import (
     DEFAULT_SCHEMA_NAME,
@@ -65,6 +68,46 @@ class ManagedThing(RebacMixin):
 
         app_label = "tests"
         rebac_resource_type = "tests/managed"
+
+
+class GatedWriteThingManager(AngeeManager):
+    """Test manager recording create preflight relationships."""
+
+    checked_relationships: dict[str, tuple[Any, ...]] | None = None
+
+    def check_create(self, relationships: dict[str, tuple[Any, ...]] | None = None) -> SubjectRef:
+        """Record the relationship map and return the verified actor."""
+
+        self.checked_relationships = dict(relationships or {})
+        return SubjectRef.of("auth/user", "verified")
+
+
+class GatedWriteThing(AngeeModel):
+    """Concrete Angee model used to exercise Hasura write authorization."""
+
+    owner = models.ForeignKey(ManagedThing, on_delete=models.CASCADE)
+    name = models.CharField(max_length=32, blank=True)
+
+    objects = GatedWriteThingManager()
+
+    class Meta:
+        """Django model options for the gated write test model."""
+
+        app_label = "tests"
+        rebac_resource_type = "tests/gated-write"
+
+
+class UngatedWriteThing(AngeeModel):
+    """Concrete Angee model whose manager is missing the create gate."""
+
+    objects = models.Manager()
+    name = models.CharField(max_length=32, blank=True)
+
+    class Meta:
+        """Django model options for the ungated write test model."""
+
+        app_label = "tests"
+        rebac_resource_type = "tests/ungated-write"
 
 
 class UnmanagedThing(RebacMixin):
@@ -182,6 +225,100 @@ class ValidationQuery:
     @strawberry.field
     def plain_error(self) -> str:
         raise ValidationError("Something went wrong.")
+
+
+def test_hasura_write_backend_decodes_public_relations_through_write_queryset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Relation public IDs in writes resolve through the actor-scoped write owner."""
+
+    sentinel_queryset = object()
+    related = SimpleNamespace(pk=7)
+    calls: dict[str, Any] = {}
+
+    def fake_write_queryset(model: type[models.Model]) -> object:
+        calls["write_model"] = model
+        return sentinel_queryset
+
+    def fake_instance_from_public_id(
+        model: type[models.Model],
+        value: str,
+        *,
+        queryset: object | None = None,
+    ) -> object:
+        calls["decode"] = (model, value, queryset)
+        return related
+
+    monkeypatch.setattr(hasura_data, "write_queryset", fake_write_queryset)
+    monkeypatch.setattr(hasura_data, "instance_from_public_id", fake_instance_from_public_id)
+
+    backend = AngeeHasuraWriteBackend(GatedWriteThing, public_id_fields=("owner",))
+
+    assert backend._decode_public_id_fields({"owner": "pub-owner", "name": "Row"}) == {
+        "owner_id": related.pk,
+        "name": "Row",
+    }
+    assert calls == {
+        "write_model": ManagedThing,
+        "decode": (ManagedThing, "pub-owner", sentinel_queryset),
+    }
+
+
+def test_hasura_write_backend_create_uses_manager_create_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hasura create preflights relationship-conditioned create rules on the manager."""
+
+    related = SimpleNamespace(pk=7)
+    manager = GatedWriteThing._default_manager
+    manager.checked_relationships = None
+    created: dict[str, Any] = {}
+
+    def fake_instance_from_public_id(
+        model: type[models.Model],
+        value: str,
+        *,
+        queryset: object | None = None,
+    ) -> object:
+        del model, value, queryset
+        return related
+
+    def fake_create(
+        info: Any,
+        model: type[models.Model],
+        data: dict[str, Any],
+        **kwargs: Any,
+    ) -> models.Model:
+        del info
+        assert model is GatedWriteThing
+        assert data == {"owner_id": related.pk, "name": "Row"}
+        pre_save_hook = kwargs["pre_save_hook"]
+        instance = model(owner_id=data["owner_id"], name=data["name"])
+        pre_save_hook(instance)
+        assert instance.is_sudo()
+        created["row"] = instance
+        return instance
+
+    monkeypatch.setattr(hasura_data, "instance_from_public_id", fake_instance_from_public_id)
+    monkeypatch.setattr(hasura_data.mutation_resolvers, "create", fake_create)
+
+    backend = AngeeHasuraWriteBackend(GatedWriteThing, public_id_fields=("owner",))
+
+    result = backend.create(cast(Any, SimpleNamespace()), {"owner": "pub-owner", "name": "Row"})
+
+    assert result is created["row"]
+    assert manager.checked_relationships == {"owner": (related,)}
+    assert result.actor() == SubjectRef.of("auth/user", "verified")
+    assert not result.is_sudo()
+
+
+def test_hasura_write_backend_create_requires_gate_for_angee_rebac_models() -> None:
+    """Angee REBAC models fail closed when their manager lacks ``check_create``."""
+
+    backend = AngeeHasuraWriteBackend(UngatedWriteThing)
+
+    with pytest.raises(ImproperlyConfigured, match="check_create"):
+        backend.create(cast(Any, SimpleNamespace()), {"name": "unguarded"})
 
 
 @strawberry.type

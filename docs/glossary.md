@@ -72,12 +72,23 @@ Generated output — change the source, not the artifact.
 **`runtime/`** — the directory of generated backend output (concrete apps,
 GraphQL SDL, codegen stubs, migrations). Output, not source.
 
-**Model extension** — an abstract source model with `extends = "app.Model"`.
-The composer emits it as an additional base for the target model.
+**Model extension (same-row)** — an abstract source model with
+`extends = "app.Model"`. The composer emits it as an additional base for the
+target model, adding fields or behavior to the same database row.
 
-**Child model** — a concrete Django model that specializes a parent model when a
-row is exactly one concrete kind of that parent. The parent owns common identity
-and lifecycle; the child owns kind-specific fields, behavior, tabs, and actions.
+**Model extension (materialized child)** — a concrete Django child model that
+specializes a parent model when a row is exactly one concrete kind of that
+parent. It shares the parent identity and materializes kind-specific fields in
+its own table. In conversation, "extend a model" can mean either this child-row
+reading or the same-row `extends` reading above; choose by row semantics.
+
+**GraphQL type extension** — a Strawberry extension contribution that adds fields
+to an existing GraphQL type. It is not a model `extends`; it extends the API
+projection, not the Django model class.
+
+**Child model** — the materialized-child reading of model extension. The parent
+owns common identity and lifecycle; the child owns kind-specific fields,
+behavior, tabs, and actions.
 
 **Backend class** — an `ImplClassField` value on a concrete owner model that
 selects an interchangeable strategy/client/backend while the row's persisted
@@ -91,9 +102,17 @@ Authorization is structural: reads scope through the model manager, writes check
 the instance. Addons keep the owning `permissions.zed` contract adjacent to the
 addon (discovered by convention); `django-zed-rebac` owns sync.
 
-**Resource** — tabular data owned by an addon and imported idempotently by tier
-(`master`, `install`, `demo`). Addons list resource files in their `addon.toml`
-`[resources]` manifest.
+**Resource file** — tabular data owned by an addon and imported idempotently by
+tier (`master`, `install`, `demo`). Addons list resource files in their
+`addon.toml` `[resources]` manifest.
+
+**GraphQL data resource** — a list/detail/mutation metadata contract emitted from
+a GraphQL schema contribution for the frontend data-view layer. It is a UI/API
+surface, not an import file.
+
+**REBAC resource** — an authorization object (`ObjectRef`) in the
+`django-zed-rebac` schema. It names what an actor can read/write; it is separate
+from resource files and GraphQL data resources.
 
 **Symbolic model reference** — referring to a model by symbol/string across addon
 boundaries instead of importing it, to avoid import cycles.

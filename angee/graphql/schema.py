@@ -35,6 +35,7 @@ from angee.graphql.introspection import (
     surface_field_names,
     surface_name,
 )
+from angee.graphql.publishing import connect_publishers
 from graphql import GraphQLError, GraphQLSchema
 
 DEFAULT_SCHEMA_NAME = "public"
@@ -286,6 +287,7 @@ class GraphQLSchemas:
         assert_unique_sqid_prefixes(types)
         self._describe_choice_enums(types)
         resources = self._data_resources_from_parts(parts)
+        self._connect_change_publishers(resources)
         schema = AngeeSchema(
             query=query,
             mutation=self._merge_root(name, "mutation", parts.mutation),
@@ -334,6 +336,17 @@ class GraphQLSchemas:
         angee_extensions["resources"] = serialize_data_resources(resources, schema_name=name)
         extensions["angee"] = angee_extensions
         schema._schema.extensions = extensions
+
+    def _connect_change_publishers(
+        self,
+        resources: tuple[DataResourceMetadata, ...],
+    ) -> None:
+        """Connect model-change publishers for every declared change resource."""
+
+        for resource in resources:
+            if resource.model is None or "changes" not in resource.capabilities:
+                continue
+            connect_publishers(resource.model)
 
     def _schema_types(self, parts: SchemaParts) -> tuple[object, ...]:
         """Return concrete and native extension types registered with Strawberry."""

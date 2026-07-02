@@ -61,6 +61,16 @@ class OAuthClientOidc(AngeeModel):
             return False
         return email.rsplit("@", 1)[1].lower() in allowed_domains
 
+    @classmethod
+    def login_picker_queryset(cls, queryset: Any) -> Any:
+        """Return enabled, configured, login-capable OAuth clients."""
+
+        return (
+            queryset.filter(is_enabled=True, login_enabled=True)
+            .exclude(client_id="")
+            .filter(models.Q(authorize_endpoint__gt="", token_endpoint__gt="") | models.Q(discovery_url__gt=""))
+        )
+
     DISCOVERY_FIELDS = {
         "issuer": "issuer",
         "jwks_uri": "jwks_uri",

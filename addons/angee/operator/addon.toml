@@ -5,7 +5,7 @@ name = "angee.operator"
 description = "Bridge to the operator daemon — drives the local stack and the admin console"
 keywords = ["operator", "daemon", "stack"]
 category = "Platform"
-depends_on = ["angee.iam"]
+depends_on = ["angee.iam", "angee.integrate"]
 
 [web]
 codegen = { schema = "operator", sdl = "schema/operator.graphql", documents = "documents.daemon.ts", types = true }

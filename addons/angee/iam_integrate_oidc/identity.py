@@ -20,6 +20,7 @@ from django.db import models, transaction
 from rebac import system_context
 
 from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
+from angee.integrate.connect import complete_external_account_link
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.models import AccountStatus
 from angee.integrate.oauth import flow
@@ -27,7 +28,7 @@ from angee.integrate.oauth.errors import INVALID_ID_TOKEN, INVALID_STATE, OAuthF
 from angee.integrate.oauth.state import StateFlow, StateRecord
 
 IDENTITY_RESOLUTION_FAILED = "identity_resolution_failed"
-SESSION_AUTH_BACKEND = "django.contrib.auth.backends.ModelBackend"
+SESSION_AUTH_BACKEND = "angee.iam.auth.ModelBackend"
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,38 +98,20 @@ class OidcLoginCompletion:
         link_user = OidcIdentityResolver(self.oauth_client).user_for_link_state(record)
         tokens, claims = self._exchange_verify(code, state_token, redirect_uri, record)
         sub = self._required_sub(claims)
-        email = self._claim_email(claims) or ""
-        Account = cast(Any, apps.get_model("integrate", "ExternalAccount"))
-        Credential = cast(Any, apps.get_model("integrate", "Credential"))
-        with system_context(reason="iam_integrate_oidc.link"), transaction.atomic():
-            account = Account.objects.filter(oauth_client=self.oauth_client, external_id=sub).first()
-            if account is not None:
-                owner = Account.objects.owner_for(account)
-                if owner is not None and owner.pk != link_user.pk:
-                    raise OAuthFlowError("account_already_linked", 409)
-            account = Account.objects.link(
-                self.oauth_client,
-                sub,
-                owner=link_user,
-                email=email,
-                identity_claims=claims,
-                display_name=self.oauth_client.display_name_from_claims(claims, email),
-                avatar_url=self.oauth_client.avatar_url_from_claims(claims),
-            )
-            credential = Credential.objects.upsert_for_user(
-                link_user,
-                self.oauth_client,
-                CredentialKind.OAUTH,
-                tokens,
-                external_account=account,
-            )
-            account.credential = credential
-            account.save(update_fields=["credential", "updated_at"])
-        return LinkCompletion(
-            account=cast(models.Model, account),
+        completion = complete_external_account_link(
+            self.oauth_client,
             user=link_user,
+            external_id=sub,
+            tokens=tokens,
             claims=claims,
             next_path=record.next_path or "/",
+            reason="iam_integrate_oidc.link",
+        )
+        return LinkCompletion(
+            account=completion.account,
+            user=completion.user,
+            claims=completion.claims,
+            next_path=completion.next_path,
         )
 
     def _exchange_verify(
@@ -193,9 +176,11 @@ class OidcIdentityResolver:
                 return cast(AbstractBaseUser, owner)
 
             normalized_email = email or ""
+            email_verified = claims.get("email_verified") is True
             if (
                 self.oauth_client.link_on_email_match
                 and normalized_email
+                and email_verified
                 and self.oauth_client.allows_email_domain(normalized_email)
             ):
                 user = self._find_by_email(normalized_email)
@@ -211,7 +196,8 @@ class OidcIdentityResolver:
                     return user
 
             if self.oauth_client.create_on_login and (
-                not normalized_email or self.oauth_client.allows_email_domain(normalized_email)
+                not normalized_email
+                or (email_verified and self.oauth_client.allows_email_domain(normalized_email))
             ):
                 user = self._create_for_identity(normalized_email, sub, claims=claims)
                 Account.objects.link(
@@ -241,10 +227,13 @@ class OidcIdentityResolver:
         return cast(AbstractBaseUser, user)
 
     def _find_by_email(self, email: str) -> AbstractBaseUser | None:
-        """Return the first user matching ``email`` case-insensitively."""
+        """Return the unique user matching ``email`` case-insensitively."""
 
         manager = cast(Any, get_user_model().objects)
-        return cast(AbstractBaseUser | None, manager.filter(email__iexact=email).order_by("pk").first())
+        matches = list(manager.filter(email__iexact=email).order_by("pk")[:2])
+        if len(matches) > 1:
+            raise OAuthFlowError(IDENTITY_RESOLUTION_FAILED, 403)
+        return cast(AbstractBaseUser | None, matches[0] if matches else None)
 
     def _create_for_identity(self, email: str, sub: str, *, claims: dict[str, Any]) -> AbstractBaseUser:
         """Create a non-superuser user for one OIDC identity."""
@@ -334,3 +323,15 @@ def is_only_oidc_sign_in(user: Any) -> bool:
             .count()
         )
     return oidc_account_count <= 1
+
+
+def guard_last_sign_in_disconnect(credential: Any) -> None:
+    """Veto explicit disconnect of a user's last OIDC sign-in credential."""
+
+    if str(credential.kind) != CredentialKind.OAUTH:
+        return
+    oauth_client = getattr(credential, "oauth_client", None)
+    if oauth_client is None or not getattr(oauth_client, "login_enabled", False):
+        return
+    if is_only_oidc_sign_in(credential.user):
+        raise OAuthFlowError("only_sign_in_method", 409)

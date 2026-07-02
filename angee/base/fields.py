@@ -17,12 +17,13 @@ from django.conf import settings
 from django.core import checks
 from django.core.exceptions import FieldError, ImproperlyConfigured
 from django.db import models
+from django.db.models.query_utils import DeferredAttribute
 from django.utils.module_loading import import_string
 from django_choices_field import TextChoicesField
 from django_sqids import SqidsField
 from sqids import Sqids
 
-from angee.base.impl import ImplBase
+from angee.base.impl_types import ImplBase, ImplChoice
 from angee.base.registry import impl_registry, resolve_impl_class
 
 
@@ -156,21 +157,24 @@ class StateField(TextChoicesField):
     def __init__(self, **kwargs: Any) -> None:
         """Default a state column to indexed; it is what queries filter on."""
 
+        self._angee_blank_string = bool(kwargs.get("blank")) and not bool(kwargs.get("null"))
+        if self._angee_blank_string:
+            kwargs["blank"] = False
         kwargs.setdefault("db_index", True)
         super().__init__(**kwargs)
+        if self._angee_blank_string:
+            self.blank = True
 
     def to_python(self, value: Any) -> Any:
         """Accept stored values and GraphQL enum member names for this state."""
 
         choices_enum = cast(Any, self.choices_enum)
-        if isinstance(value, choices_enum):
-            return value
+        member = enum_member_for(choices_enum, value)
+        if member is not None:
+            return member
         raw = getattr(value, "value", value)
-        text = str(raw).strip()
-        if text:
-            member = getattr(choices_enum, "__members__", {}).get(text)
-            if member is not None:
-                return member
+        if self._angee_blank_string and raw in self.empty_values:
+            return ""
         return super().to_python(raw)
 
     def pre_save(self, model_instance: models.Model, add: bool) -> Any:
@@ -178,6 +182,46 @@ class StateField(TextChoicesField):
 
         value = self.to_python(super().pre_save(model_instance, add))
         setattr(model_instance, self.attname, value)
+        return value
+
+
+class _InvalidEncryptedValue:
+    """Row-local marker for ciphertext that cannot be decrypted."""
+
+    def __init__(self, label: str | None) -> None:
+        """Store the field label for the eventual access error."""
+
+        self.label = label or "<unbound encrypted field>"
+
+    def error(self) -> ImproperlyConfigured:
+        """Return the actionable error for this unreadable value."""
+
+        return ImproperlyConfigured(
+            f"Cannot decrypt {self.label}: ciphertext is not valid for the current "
+            "SECRET_KEY-derived key (rotated SECRET_KEY, renamed model/field label, or non-encrypted data). "
+            "Plan key rotation with ANGEE_FERNET_KEYS/MultiFernet before changing SECRET_KEY or model labels."
+        )
+
+    def __repr__(self) -> str:
+        """Return a safe debug representation without exposing ciphertext."""
+
+        return f"<InvalidEncryptedValue {self.label}>"
+
+
+class _EncryptedFieldDescriptor(DeferredAttribute):
+    """Descriptor that isolates decrypt failures to field access."""
+
+    def __set__(self, instance: models.Model, value: Any) -> None:
+        """Store assigned values where Django expects concrete field data."""
+
+        instance.__dict__[self.field.attname] = value
+
+    def __get__(self, instance: models.Model | None, cls: type[models.Model] | None = None) -> Any:
+        """Return the plaintext value or raise the row-local decrypt error."""
+
+        value = super().__get__(instance, cls)
+        if isinstance(value, _InvalidEncryptedValue):
+            raise value.error()
         return value
 
 
@@ -197,7 +241,10 @@ class EncryptedField(models.TextField):
     path.
     """
 
+    descriptor_class = _EncryptedFieldDescriptor
+
     _angee_fernet_label: str | None = None
+    _angee_fernet: Fernet | None = None
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Reject uniqueness contracts Fernet ciphertext cannot enforce."""
@@ -220,10 +267,13 @@ class EncryptedField(models.TextField):
 
         super().contribute_to_class(cls, name, private_only=private_only)
         self._angee_fernet_label = f"{cls._meta.label_lower}.{name}"
+        self._angee_fernet = None
 
     def get_db_prep_save(self, value: Any, connection: Any) -> str | None:
         """Encrypt plaintext for storage in the database column."""
 
+        if isinstance(value, _InvalidEncryptedValue):
+            raise value.error()
         prepared = super().get_db_prep_save(value, connection=connection)
         if prepared is None:
             return None
@@ -240,7 +290,7 @@ class EncryptedField(models.TextField):
         value: str | None,
         expression: Any,
         connection: Any,
-    ) -> str | None:
+    ) -> str | _InvalidEncryptedValue | None:
         """Decrypt database tokens back to plaintext."""
 
         del expression, connection
@@ -248,11 +298,8 @@ class EncryptedField(models.TextField):
             return None
         try:
             return self._fernet().decrypt(value.encode()).decode()
-        except InvalidToken as exc:
-            raise ImproperlyConfigured(
-                f"Cannot decrypt {self._angee_fernet_label}: ciphertext is not valid for the current "
-                "SECRET_KEY-derived key (rotated SECRET_KEY or non-encrypted data)."
-            ) from exc
+        except InvalidToken:
+            return _InvalidEncryptedValue(self._angee_fernet_label)
 
     def get_lookup(self, lookup_name: str) -> Any:
         """Allow null checks only; encrypted values are not comparable."""
@@ -266,7 +313,9 @@ class EncryptedField(models.TextField):
 
         if self._angee_fernet_label is None:
             raise ImproperlyConfigured("EncryptedField must be bound to a model before use.")
-        return _derive_fernet(self._angee_fernet_label)
+        if self._angee_fernet is None:
+            self._angee_fernet = _derive_fernet(self._angee_fernet_label)
+        return self._angee_fernet
 
 
 class ImplClassField(TextChoicesField):
@@ -384,6 +433,11 @@ class ImplClassField(TextChoicesField):
 
         return resolve_impl_class(self.registry_setting, self.key_for(key), cast(type, self.base_class))
 
+    def resolve_for(self, instance: models.Model) -> type:
+        """Return the impl class selected by this field on ``instance``."""
+
+        return self.resolve_class(getattr(instance, self.attname))
+
     def key_for(self, value: Any) -> str:
         """Return the canonical registry key for a stored/input enum-ish value.
 
@@ -392,22 +446,10 @@ class ImplClassField(TextChoicesField):
         that mapping, so callers canonicalize here before resolving or storing.
         """
 
-        registry = self._registry()
-        raw = getattr(value, "value", value)
-        text = str(raw).strip()
-        if text in registry:
-            return text
-        name = str(getattr(value, "name", "")).strip()
-        candidates = [candidate for candidate in (text, name) if candidate]
-        for candidate in candidates:
-            lower = candidate.lower()
-            if lower in registry:
-                return lower
-            upper = candidate.upper()
-            for key in registry:
-                if key.upper() == upper:
-                    return key
-        return text
+        member = enum_member_for(cast(Any, self.choices_enum), value)
+        if member is not None:
+            return str(member.value)
+        return str(getattr(value, "value", value)).strip()
 
     def _build_enum(self) -> type[models.TextChoices]:
         """Return a ``TextChoices`` enum over the registered keys, in deterministic order."""
@@ -428,7 +470,7 @@ class ImplClassField(TextChoicesField):
         camel = "".join(part.capitalize() for part in core.split("_") if part)
         return f"{camel or 'Impl'}Impl"
 
-    def impl_choices(self) -> list[dict[str, Any]]:
+    def impl_choices(self) -> list[ImplChoice]:
         """Return pickable choices (``key``/``label``/``icon``/``category``/``defaults``) for the registry.
 
         The registry key is authoritative — it is the enum value the column stores;
@@ -436,16 +478,43 @@ class ImplClassField(TextChoicesField):
         impl (a bare behaviour class) degrades to a label-only choice.
         """
 
-        choices: list[dict[str, Any]] = []
+        choices: list[ImplChoice] = []
         for key in sorted(self._registry()):
             impl = self.resolve_class(key)
             if isinstance(impl, type) and issubclass(impl, ImplBase):
-                choices.append({**impl.choice(), "key": key})
+                choice = impl.choice()
+                choices.append(
+                    ImplChoice(
+                        key=key,
+                        label=choice.label,
+                        icon=choice.icon,
+                        category=choice.category,
+                        defaults=choice.defaults,
+                    )
+                )
             else:
-                choices.append({"key": key, "label": key, "icon": "", "category": "", "defaults": {}})
+                choices.append(ImplChoice(key=key, label=key, icon="", category="", defaults={}))
         return choices
 
     def _registry(self) -> dict[str, str]:
         """Return the configured ``key → dotted path`` mapping for this field."""
 
         return impl_registry(self.registry_setting)
+
+
+def enum_member_for(choices_enum: Any, value: Any) -> Any | None:
+    """Return the enum member represented by ``value`` or ``None`` when unknown."""
+
+    if isinstance(value, choices_enum):
+        return value
+    raw = getattr(value, "value", value)
+    text = str(raw).strip()
+    if not text:
+        return None
+    member = getattr(choices_enum, "__members__", {}).get(text)
+    if member is not None:
+        return member
+    try:
+        return choices_enum(raw)
+    except ValueError:
+        return None

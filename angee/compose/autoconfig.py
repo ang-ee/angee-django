@@ -75,7 +75,7 @@ class AutoConfig:
         if not module_has_submodule(app_config.module, "autoconfig"):
             return
         module = importlib.import_module(f"{app_config.name}.autoconfig")
-        contributed = getattr(module, "SETTINGS", {})
+        contributed = self._module_settings(module, app_config)
         if not isinstance(contributed, Mapping):
             raise ImproperlyConfigured(f"{app_config.name}.autoconfig.SETTINGS must be a mapping")
 
@@ -118,6 +118,22 @@ class AutoConfig:
         for name in names:
             if (name == YAMLCONF_ATTRIBUTES or is_setting_name(name)) and hasattr(settings_module, name):
                 self.namespace[str(name)] = getattr(settings_module, name)
+
+    def _module_settings(self, module: ModuleType, app_config: AppConfig) -> Mapping[str, Any]:
+        """Return one autoconfig module's static and namespace-derived settings."""
+
+        contributed = getattr(module, "SETTINGS", {})
+        if not isinstance(contributed, Mapping):
+            return contributed
+        derive = getattr(module, "settings", None)
+        if derive is None:
+            return contributed
+        if not callable(derive):
+            raise ImproperlyConfigured(f"{app_config.name}.autoconfig.settings must be callable")
+        derived = derive(self.namespace)
+        if not isinstance(derived, Mapping):
+            raise ImproperlyConfigured(f"{app_config.name}.autoconfig.settings() must return a mapping")
+        return {**contributed, **derived}
 
 
 SETTINGS = {

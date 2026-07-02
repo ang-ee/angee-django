@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from django.db import models
 
+from angee.base.models import write_scoped_queryset
+
 
 def write_queryset(model: type[models.Model]) -> models.QuerySet[models.Model]:
     """Return a write-target queryset with row scope and full field values.
@@ -14,6 +16,4 @@ def write_queryset(model: type[models.Model]) -> models.QuerySet[models.Model]:
     models have no field redaction and use their default manager.
     """
 
-    manager = model._default_manager
-    for_write = getattr(manager, "for_write", None)
-    return for_write() if callable(for_write) else manager.all()
+    return write_scoped_queryset(model)

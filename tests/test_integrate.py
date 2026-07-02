@@ -5,7 +5,8 @@ from __future__ import annotations
 from django.db import models
 
 from angee.integrate.models import Bridge, IntegrationStatus
-from tests.conftest import Integration
+from angee.integrate.registry import bridge_models, check_source_kind_contracts, source_kind_models
+from tests.conftest import Integration, Source, Template
 
 
 class ConcreteBridge(Integration, Bridge):
@@ -52,6 +53,25 @@ def test_concrete_bridge_uses_django_mti_parent_link() -> None:
     assert parent_link.remote_field.model is Integration
 
 
+def test_bridge_registry_is_explicit_about_the_bridge_base() -> None:
+    """Bridge discovery takes the base model from the caller that owns it."""
+
+    assert bridge_models(Bridge)
+    assert all(issubclass(model, Bridge) for model in bridge_models(Bridge))
+
+
+def test_source_kind_registry_is_deterministic_and_checked() -> None:
+    """Source-kind output declarations are discovered and validated by the registry."""
+
+    models_with_source_kind = source_kind_models()
+    labels = [model._meta.label_lower for model in models_with_source_kind]
+
+    assert labels == sorted(labels)
+    assert Template in models_with_source_kind
+    assert "template" in Source.available_kinds()
+    assert not [error for error in check_source_kind_contracts() if error.id.startswith("angee.integrate.")]
+
+
 def test_report_status_records_integration_telemetry() -> None:
     """report_status writes telemetry on the integration row itself."""
 
@@ -71,6 +91,12 @@ def test_report_status_records_integration_telemetry() -> None:
     assert integration.last_used_status == "active"
     assert integration.last_error == ""
     assert integration.last_error_at is None
+
+
+def test_integration_status_from_value_accepts_graphql_enum_name() -> None:
+    """The integration status owner accepts GraphQL enum member names."""
+
+    assert IntegrationStatus.from_value("DISABLED") is IntegrationStatus.DISABLED
 
 
 def test_report_status_updates_unsaved_integration_in_memory() -> None:

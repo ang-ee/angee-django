@@ -5,11 +5,10 @@ The integrate console references iam types (``IntegrationType.credential`` /
 the iam and integrate addon ``console`` parts — the same shape the composer
 assembles at runtime — and run over the concrete iam + integrate test tables.
 
-Harness note: source-addon tests stand in Django's default auth user for the
-swappable iam ``User`` (it has no ``sqid``). In this source-addon harness,
-``owner: ID`` falls back to the Django pk; runtime projects still pass the iam
-user public id. Webhook ``secret`` remains write-only: accepted by the Hasura
-input and absent from the output projection.
+Harness note: source-addon tests use the concrete IAM user model, so ``owner:
+ID`` carries the same sqid public id runtime projects pass. Webhook ``secret``
+remains write-only: accepted by the Hasura input and absent from the output
+projection.
 """
 
 from __future__ import annotations
@@ -22,7 +21,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.management import call_command
-from django.db import connection
+from django.db import IntegrityError
 from django.test import RequestFactory
 from rebac import app_settings, system_context
 from rebac.roles import grant
@@ -32,8 +31,7 @@ from angee.integrate.credentials import CredentialKind
 from angee.integrate.events import EventKind
 from angee.integrate.webhooks import WebhookDeliveryError
 from tests.conftest import (
-    IAM_CONNECTION_TEST_MODELS,
-    INTEGRATE_TEST_MODELS,
+    SOCIAL_TEST_MODELS,
     Credential,
     Integration,
     OAuthClient,
@@ -41,6 +39,7 @@ from tests.conftest import (
     VcsBridge,
     Vendor,
     WebhookSubscription,
+    _clear_model_tables,
     execute_schema,
     make_integration,
 )
@@ -334,7 +333,7 @@ def test_create_integration_rejects_child_backend_key(integrate_console_tables: 
         """,
         {
             "vendor": _public_id(vendor.sqid),
-            "owner": str(owner.pk),
+            "owner": str(owner.sqid),
         },
         user=admin,
     )
@@ -410,7 +409,7 @@ def test_integration_update_delete_are_admin_only(
 
     # Hasura create is still REBAC-gated; the deliberately bogus relation ids
     # only need to prove a plain user cannot create through the generic root.
-    owner_id = str(conn.owner.pk)
+    owner_id = str(conn.owner.sqid)
     assert _execute(
         console_schema,
         """
@@ -487,7 +486,7 @@ def test_webhook_crud_secret_write_only(
           }
         }
         """,
-        {"owner": str(owner.pk)},
+        {"owner": str(owner.sqid)},
         user=plain,
     ).errors is not None
     with system_context(reason="test.integrate.webhook_crud.create"):
@@ -674,6 +673,22 @@ def test_connect_integration_reuses_existing_row_with_enum_impl_class(
             vendor=conn.vendor,
             impl_class="none",
         ).count() == 1
+
+
+def test_integration_draft_factory_is_database_unique(
+    integrate_console_tables: None,
+) -> None:
+    """The Integration owner, not resolvers, owns parent draft uniqueness."""
+
+    owner = User.objects.create_user(username="draft-unique", email="draft-unique@example.com")
+    with system_context(reason="test.integrate.draft_unique.seed"):
+        vendor = Vendor.objects.create(slug="draft-unique", display_name="Draft Unique")
+        first = Integration.objects.draft_for(owner, vendor=vendor, impl_class="none")
+        second = Integration.objects.draft_for(owner, vendor=vendor, impl_class="none")
+
+    assert second.pk == first.pk
+    with pytest.raises(IntegrityError), system_context(reason="test.integrate.draft_unique.duplicate"):
+        Integration.objects.create(owner=owner, vendor=vendor, impl_class="none")
 
 
 def test_connect_integration_uses_shared_oauth_client_error_code(
@@ -902,7 +917,7 @@ def test_create_vcs_bridge_creates_child_row(
             """,
             {
                 "vendor": _public_id(seed.vendor.sqid),
-                "owner": str(seed.owner.pk),
+                "owner": str(seed.owner.sqid),
             },
             user=admin,
         )
@@ -1011,23 +1026,15 @@ def integrate_console_tables(transactional_db: Any) -> Iterator[None]:
     """Create the iam + integrate (incl. webhook) console tables and sync REBAC."""
 
     del transactional_db
-    created_models = _create_connection_tables(IAM_CONNECTION_TEST_MODELS + INTEGRATE_TEST_MODELS + (VcsBridge,))
-    webhook_created = False
-    if WebhookSubscription._meta.db_table not in connection.introspection.table_names():
-        with connection.schema_editor() as schema_editor:
-            schema_editor.create_model(WebhookSubscription)
-        webhook_created = True
+    from tests.test_messaging import MESSAGING_TEST_MODELS
+
+    connection_models = MESSAGING_TEST_MODELS + SOCIAL_TEST_MODELS + (VcsBridge, WebhookSubscription)
+    _create_connection_tables(connection_models)
     call_command("rebac", "sync", verbosity=0)
     try:
         yield
     finally:
-        if webhook_created:
-            with connection.schema_editor() as schema_editor:
-                schema_editor.delete_model(WebhookSubscription)
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
+        _clear_model_tables(connection_models)
 
 
 def _schema() -> Any:

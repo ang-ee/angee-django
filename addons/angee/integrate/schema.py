@@ -15,8 +15,8 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ObjectDoesNotExist
-from django.db import IntegrityError, transaction
+from django.db import transaction
+from django.db.models import Prefetch
 from django.utils import timezone
 from rebac import PermissionDenied, system_context
 from strawberry import auto
@@ -45,6 +45,7 @@ from angee.iam.schema import UserType
 from angee.integrate import connect as _connect
 from angee.integrate.credentials import handler_for
 from angee.integrate.impl import IntegrationImpl
+from angee.integrate.models import Bridge, IntegrationStatus
 from angee.integrate.oauth import flow, state
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, OAuthFlowError
@@ -100,7 +101,12 @@ class ExternalAccountType(AngeeNode):
     last_used_at: auto
     created_at: auto
     updated_at: auto
-    credential_status: str
+
+    @strawberry_django.field(only=["credential__status"])
+    def credential_status(self) -> str:
+        """Return this account credential's current status when it is loaded."""
+
+        return str(cast(Any, self).credential_status)
 
     @strawberry_django.field(only=["oauth_client__slug"])
     def provider_slug(self) -> str:
@@ -251,12 +257,6 @@ class OAuthClientType(AngeeNode):
 
         return cast(JSON, cast(Any, self).token_params)
 
-    @strawberry_django.field(only=["client_secret"])
-    def client_secret(self) -> str:
-        """Return the decrypted client secret for the admin console."""
-
-        return str(cast(Any, self).client_secret or "")
-
     @strawberry_django.field
     def configuration_state(self) -> str:
         """Return this OAuth client's operator-facing configuration readiness."""
@@ -343,6 +343,17 @@ class OAuthStartPayload:
     """The effective redirect URI the flow used (resent verbatim at completion)."""
 
 
+def _oauth_start_payload(started: flow.OAuthStart) -> OAuthStartPayload:
+    """Project the flow-owned start facts onto the GraphQL payload."""
+
+    return OAuthStartPayload(
+        authorize_url=started.authorize_url,
+        state=started.state,
+        mode=started.mode,
+        redirect_uri=started.redirect_uri,
+    )
+
+
 @strawberry.type
 class ConnectAccountResult:
     """Result returned by OAuth account-connect completion."""
@@ -404,13 +415,6 @@ def _my_connected_accounts(info: strawberry.Info) -> Any:
     return cast(Any, Credential.objects).connected_for(_session_user(info))
 
 
-def _console_oauth_clients(info: strawberry.Info) -> Any:
-    """Return admin-visible OAuth clients (self-describing; no vendor join)."""
-
-    del info
-    return cast(Any, OAuthClient.objects).console_oauth_clients()
-
-
 def _console_external_accounts(info: strawberry.Info) -> Any:
     """Return admin-visible external accounts with guarded FK joins."""
 
@@ -423,6 +427,19 @@ def _console_credentials(info: strawberry.Info) -> Any:
 
     del info
     return cast(Any, Credential.objects).console_credentials()
+
+
+def _console_integrations(info: strawberry.Info) -> Any:
+    """Return admin-visible integrations with bridge children prefetched."""
+
+    del info
+    return Integration.objects.all().prefetch_related(
+        Prefetch(
+            "vcsbridge",
+            queryset=VcsBridge._base_manager.all(),
+            to_attr="_angee_prefetched_bridge",
+        )
+    )
 
 
 _OAUTH_CLIENT_EXTENSION_INSERT_FIELDS = declared_hasura_resource_fields(
@@ -510,7 +527,6 @@ _OAUTH_CLIENT_RESOURCE = hasura_model_resource(
         "avatar_url_claim",
         *_OAUTH_CLIENT_EXTENSION_UPDATE_FIELDS,
     ],
-    get_queryset=_console_oauth_clients,
 )
 _EXTERNAL_ACCOUNT_RESOURCE = hasura_model_resource(
     ExternalAccountType,
@@ -643,7 +659,7 @@ def integration_create_attrs(
     if account is not strawberry.UNSET:
         attrs["account"] = account
     if data.status not in (strawberry.UNSET, None):
-        attrs["status"] = data.status
+        attrs["status"] = IntegrationStatus.from_value(data.status)
     return attrs
 
 
@@ -678,7 +694,7 @@ def apply_integration_patch_fields(
         )
         provided.add("account")
     if data.status is not strawberry.UNSET and (data.status is not None or not ignore_null_status):
-        target.status = data.status
+        target.status = IntegrationStatus.from_value(data.status)
         provided.add("status")
     return provided
 
@@ -713,22 +729,7 @@ def _current_user_integration(
         raise ValueError("connectIntegration requires integrationId or vendorSlug and implClass.")
     impl_key = Integration.impl_key_for("impl_class", impl_class)
     vendor = _vendor_by_slug(vendor_key)
-    with system_context(reason="integrate.graphql.connect_integration.draft"):
-        integration = Integration.objects.filter(owner=user, vendor=vendor, impl_class=impl_key).first()
-        if integration is not None:
-            return integration
-        try:
-            integration = Integration.objects.create(
-                owner=user,
-                vendor=vendor,
-                impl_class=impl_key,
-                status="draft",
-            )
-        except IntegrityError:
-            integration = Integration.objects.filter(owner=user, vendor=vendor, impl_class=impl_key).first()
-            if integration is None:
-                raise
-    return integration
+    return Integration.objects.draft_for(user, vendor=vendor, impl_class=impl_key)
 
 
 def _attach_completed_integration(integration_sqid: str, user: Any, credential: Any) -> None:
@@ -773,7 +774,7 @@ def connect_integration_target(
             f"OAuth client is not fully configured ({oauth_client.configuration_state}).",
         )
     request = _request(info)
-    state_token, record, effective_redirect_uri, mode = flow.issue_flow(
+    started = flow.start(
         request,
         oauth_client,
         redirect_uri,
@@ -782,18 +783,12 @@ def connect_integration_target(
         flow=state.StateFlow.CONNECT,
         integration_id=str(integration.sqid),
     )
-    authorize_url = OAuthClientProtocol(oauth_client).authorize_url(
-        state=state_token,
-        redirect_uri=effective_redirect_uri,
-        scopes=oauth_client.default_scope_values,
-        code_challenge=flow.pkce_challenge(record.code_verifier),
-    )
     return ConnectIntegrationResult(
         integration=cast("ConnectedIntegrationType", integration),
-        authorize_url=authorize_url,
-        state=state_token,
-        mode=mode,
-        redirect_uri=effective_redirect_uri,
+        authorize_url=started.authorize_url,
+        state=started.state,
+        mode=started.mode,
+        redirect_uri=started.redirect_uri,
     )
 
 
@@ -836,7 +831,7 @@ class ConnectionMutation:
                     400,
                     f"OAuth client is not fully configured ({oauth_client.configuration_state}).",
                 )
-            state_token, record, effective_redirect_uri, mode = flow.issue_flow(
+            started = flow.start(
                 request,
                 oauth_client,
                 redirect_uri,
@@ -844,20 +839,9 @@ class ConnectionMutation:
                 next_path=flow.coerce_next_path(next, request),
                 flow=state.StateFlow.CONNECT,
             )
-            authorize_url = OAuthClientProtocol(oauth_client).authorize_url(
-                state=state_token,
-                redirect_uri=effective_redirect_uri,
-                scopes=oauth_client.default_scope_values,
-                code_challenge=flow.pkce_challenge(record.code_verifier),
-            )
         except OAuthFlowError as error:
             return OAuthStartPayload(error=error.public_message, error_code=error.code)
-        return OAuthStartPayload(
-            authorize_url=authorize_url,
-            state=state_token,
-            mode=mode,
-            redirect_uri=effective_redirect_uri,
-        )
+        return _oauth_start_payload(started)
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def discover_oauth_endpoints(self, id: PublicID) -> ActionResult:
@@ -970,10 +954,10 @@ class ConnectionMutation:
                 return UnlinkAccountResult(ok=False)
             external_account = credential.external_account
             with system_context(reason="integrate.graphql.disconnect_account"), transaction.atomic():
+                Credential.objects.check_disconnect(credential)
                 ExternalAccount.objects.revoke_owner(external_account, user)
-                # Revoke at the provider only if the delete commits. The login addon's
-                # pre_delete guard can veto (a passwordless user's last sign-in), rolling
-                # this back — we must not revoke a token whose local credential we keep.
+                # Revoke at the provider only if the delete commits; local guards run
+                # before scheduling the remote side effect.
                 transaction.on_commit(lambda: _revoke_remote_oauth_token(credential))
                 deleted, _details = Credential.objects.filter(pk=credential.pk).with_action("delete").delete()
             return UnlinkAccountResult(ok=deleted > 0)
@@ -1025,6 +1009,17 @@ class IntegrateCredentialMutation:
     """Admin CRUD for credentials; create mints provider-less kinds (OAuth arrives via connect)."""
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def reveal_oauth_client_secret(self, id: PublicID) -> RevealedCredentialSecret:
+        """Return one OAuth client's decrypted client secret for an admin."""
+
+        with action_target(
+            OAuthClient,
+            id,
+            reason=f"integrate.graphql.oauth_client.reveal:{str(id)}",
+        ) as oauth_client:
+            return RevealedCredentialSecret(secret=str(oauth_client.client_secret or ""))
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def reveal_credential(self, id: PublicID) -> RevealedCredentialSecret:
         """Return one credential's decrypted secret for an admin to copy."""
 
@@ -1070,14 +1065,18 @@ class IntegrateCredentialMutation:
 
     @strawberry.mutation(name="delete_credential", permission_classes=_ADMIN_PERMISSION_CLASSES)
     def delete_credential(self, id: PublicID, confirm: bool = False) -> DeletePreview:
-        """Best-effort remote revoke, then delete the credential when unblocked."""
+        """Delete the credential, then best-effort revoke remotely after commit."""
+
+        def prepare_delete(credential: Any) -> None:
+            Credential.objects.check_disconnect(credential)
+            transaction.on_commit(lambda: _revoke_remote_oauth_token(credential))
 
         return delete_by_public_id(
             Credential,
             str(id),
             reason="integrate.graphql.credential.delete",
             confirm=confirm,
-            before_delete=_revoke_remote_oauth_token,
+            before_delete=prepare_delete,
         )
 
 
@@ -1154,10 +1153,14 @@ class IntegrationType(IntegrationLabelMixin, AngeeNode):
     def bridge(self) -> VcsBridgeType | None:
         """Return this integration's VCS child row when present."""
 
-        try:
-            return cast("VcsBridgeType", getattr(cast(Any, self), "vcsbridge"))
-        except ObjectDoesNotExist:
-            return None
+        prefetched = getattr(self, "_angee_prefetched_bridge", None)
+        if prefetched is not None:
+            if isinstance(prefetched, (list, tuple)):
+                return cast("VcsBridgeType | None", prefetched[0] if prefetched else None)
+            return cast("VcsBridgeType | None", prefetched)
+        with system_context(reason="integrate.integration.bridge"):
+            bridge = VcsBridge._base_manager.filter(pk=cast(Any, self).pk).first()
+        return cast("VcsBridgeType | None", bridge)
 
     @strawberry_django.field(only=["impl_class"], description="Implementation")
     def impl_category(self) -> str:
@@ -1247,14 +1250,10 @@ _INTEGRATION_RESOURCE = hasura_model_resource(
         "credential": public_pk_decoder(Credential),
         "account": public_pk_decoder(ExternalAccount),
     },
+    get_queryset=_console_integrations,
     write_backend=AngeeHasuraWriteBackend(
         Integration,
-        public_id_fields={
-            "vendor": Vendor,
-            "owner": User,
-            "credential": Credential,
-            "account": ExternalAccount,
-        },
+        public_id_fields=("vendor", "owner", "credential", "account"),
     ),
 )
 _WEBHOOK_SUBSCRIPTION_RESOURCE = hasura_model_resource(
@@ -1288,10 +1287,7 @@ _WEBHOOK_SUBSCRIPTION_RESOURCE = hasura_model_resource(
     },
     write_backend=AngeeHasuraWriteBackend(
         WebhookSubscription,
-        public_id_fields={
-            "owner": User,
-            "integration_filter": Integration,
-        },
+        public_id_fields=("owner", "integration_filter"),
     ),
 )
 
@@ -1344,26 +1340,11 @@ class IntegrationCredentialMutation:
         if oauth_credential.user_id != user.pk:
             raise PermissionDenied("Credential does not belong to the current user.")
         vendor = _vendor_by_slug(vendor_slug)
-        with system_context(reason="integrate.graphql.integration_from_credential"), transaction.atomic():
-            # Self-service links reuse the user's draft row for this vendor; concrete
-            # child models own any domain-specific uniqueness.
-            integration = (
-                Integration.objects.filter(owner=user, vendor=vendor, impl_class="none").order_by("pk").first()
-            )
-            if integration is None:
-                integration = Integration.objects.create(
-                    owner=user,
-                    vendor=vendor,
-                    impl_class="none",
-                    credential=oauth_credential,
-                    account=oauth_credential.external_account,
-                    status="active",
-                )
-            else:
-                integration.credential = oauth_credential
-                integration.account = oauth_credential.external_account
-                integration.status = "active"
-                integration.save(update_fields=["credential", "account", "status", "updated_at"])
+        integration = Integration.objects.activate_from_credential(
+            user,
+            vendor=vendor,
+            credential=oauth_credential,
+        )
         return cast(ConnectedIntegrationType, integration)
 
 
@@ -1380,7 +1361,7 @@ class IntegrationActionMutation:
         items = 0
         with action_target(Integration, id, reason="integrate.graphql.sync_integration") as integration:
             now = timezone.now()
-            for model in bridge_models():
+            for model in bridge_models(Bridge):
                 for bridge in model._default_manager.filter(pk=integration.pk).order_by("pk"):
                     ran += 1
                     try:
@@ -1606,7 +1587,7 @@ _SOURCE_RESOURCE = hasura_model_resource(
     insertable=["repository", "kind", "ref", "path"],
     updatable=["kind", "ref", "path"],
     field_id_decode={"repository": public_pk_decoder(Repository)},
-    write_backend=AngeeHasuraWriteBackend(Source, public_id_fields={"repository": Repository}),
+    write_backend=AngeeHasuraWriteBackend(Source, public_id_fields=("repository",)),
 )
 _TEMPLATE_RESOURCE = hasura_model_resource(
     TemplateType,

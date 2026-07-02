@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,7 @@ from django.utils import timezone
 from rebac import system_context, to_object_ref, to_subject_ref
 from rebac.models import active_relationship_model
 
-from angee.integrate.credentials import CredentialKind, StaticTokenCredentialHandler
+from angee.integrate.credentials import CredentialKind, OAuthCredentialHandler, StaticTokenCredentialHandler
 from angee.integrate.models import AccountStatus
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import TOKEN_EXCHANGE_FAILED, OAuthFlowError
@@ -626,6 +627,45 @@ def test_ensure_fresh_renews_an_expiring_oauth_credential(monkeypatch: pytest.Mo
         assert credential.expires_at is not None and credential.expires_at > timezone.now()
         reloaded = Credential.objects.sudo(reason="test reload").get(pk=credential.pk)
         assert reloaded.reveal()["access_token"] == "new-access"  # persisted, not just in-memory
+    finally:
+        _drop_models(created_models)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ensure_fresh_does_not_call_select_for_update_on_sqlite(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SQLite is the documented floor; refresh locking degrades to a plain read there."""
+
+    created_models = _create_missing_tables()
+    try:
+        user = get_user_model().objects.create_user(username="refresh-sqlite", email="sqlite@example.com")
+        call_command("rebac", "sync", verbosity=0)
+        credential = _expiring_oauth_credential(
+            user,
+            slug="refreshsqlite",
+            material={"access_token": "old-access", "refresh_token": "old-refresh", "expires_in": 3600},
+        )
+
+        def forbidden_select_for_update(self: Any, *args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("SQLite refresh must not call select_for_update()")
+
+        def fake_handler_refresh(self: Any, locked: Any) -> None:
+            locked.material = json.dumps(
+                {"access_token": "sqlite-access", "refresh_token": "sqlite-refresh"},
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            locked.expires_at = timezone.now() + timedelta(hours=2)
+            locked.last_refresh_at = timezone.now()
+            locked.last_refresh_status = "ok"
+            locked.save(update_fields=["material", "expires_at", "last_refresh_at", "last_refresh_status"])
+
+        monkeypatch.setattr(type(Credential.objects.all()), "select_for_update", forbidden_select_for_update)
+        monkeypatch.setattr(OAuthCredentialHandler, "refresh", fake_handler_refresh)
+
+        with system_context(reason="test sqlite refresh run"):
+            credential.ensure_fresh()
+
+        assert credential.secret_value() == "sqlite-access"
     finally:
         _drop_models(created_models)
 

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from angee.base.impl import ImplBase
+import pytest
+from django.core.exceptions import FieldDoesNotExist
+from django.db import models
+
+from angee.base.impl import ImplBase, ImplChoice
 from tests.conftest import OAuthClient
 
 
@@ -68,13 +72,13 @@ def test_effective_defaults_deep_merges_dict_defaults() -> None:
 def test_choice_metadata_falls_back_to_titlecased_key() -> None:
     """``choice`` projects pickable metadata; label falls back to the key, category inherits."""
 
-    assert _RefinedImpl.choice() == {
-        "key": "refined",
-        "label": "Refined",
-        "icon": "",
-        "category": "demo",
-        "defaults": _RefinedImpl.effective_defaults(),
-    }
+    assert _RefinedImpl.choice() == ImplChoice(
+        key="refined",
+        label="Refined",
+        icon="",
+        category="demo",
+        defaults=_RefinedImpl.effective_defaults(),
+    )
 
 
 def test_materialize_seeds_only_unprovided_fields() -> None:
@@ -113,3 +117,30 @@ def test_materialize_deep_copies_mutable_defaults() -> None:
     assert first.authorize_params == second.authorize_params
     assert first.authorize_params is not second.authorize_params
     assert first.authorize_params is not _ConfigBase.defaults["authorize_params"]
+
+
+def test_materialize_fk_default_requires_declared_slug() -> None:
+    """String FK impl defaults fail fast when the related model has no slug key."""
+
+    class NoSlug(models.Model):
+        """Related model without the declared natural key."""
+
+        name = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "tests"
+
+    class NeedsNoSlug(models.Model):
+        """Model receiving an FK impl default."""
+
+        target = models.ForeignKey(NoSlug, on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = "tests"
+
+    class _BrokenFkImpl(ImplBase):
+        key = "broken"
+        defaults = {"target": "missing"}
+
+    with pytest.raises(FieldDoesNotExist):
+        _BrokenFkImpl.materialize(NeedsNoSlug(), provided=frozenset())

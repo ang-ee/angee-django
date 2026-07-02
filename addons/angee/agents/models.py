@@ -19,7 +19,6 @@ from django.conf import settings
 from django.db import models, transaction
 from django.utils import timezone
 from rebac import system_context
-from rebac.managers import RebacManager
 
 from angee.agents.backends import InferenceBackend, InferenceRequest, InferenceResponse
 from angee.agents.runtimes import AgentRuntime, operator_secret_ref
@@ -153,8 +152,7 @@ class InferenceProvider(ImplDefaultsMixin, AngeeModel):
         effect at once and the backend owns any client lifetime it needs.
         """
 
-        field = cast(ImplClassField, type(self)._meta.get_field("backend_class"))
-        backend_class = cast(type[InferenceBackend], field.resolve_class(self.backend_class))
+        backend_class = cast(type[InferenceBackend], self.resolve_impl("backend_class"))
         return backend_class(self)
 
     def refresh_models(self) -> int:
@@ -289,7 +287,7 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
         )
 
 
-class SkillManager(RebacManager):
+class SkillManager(AngeeManager):
     """Manager owning the reconcile of skill rows from a skill source."""
 
     def sync_from_source(self, source: Any) -> int:
@@ -380,7 +378,7 @@ class MCPServer(SqidMixin, AuditMixin, AngeeModel):
     )
     config = models.JSONField(default=dict, blank=True)
 
-    objects = RebacManager()
+    objects = AngeeManager()
 
     class Meta:
         """Django model options for MCP servers."""
@@ -458,7 +456,7 @@ class MCPTool(SqidMixin, AuditMixin, AngeeModel):
     input_schema = models.JSONField(default=dict, blank=True)
     enabled = models.BooleanField(default=True)
 
-    objects = RebacManager()
+    objects = AngeeManager()
 
     class Meta:
         """Django model options for MCP tools."""
@@ -544,7 +542,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
     last_error = models.TextField(blank=True)
     """The reason ``runtime_status`` is ``ERROR`` — the last failed operation."""
 
-    objects = RebacManager()
+    objects = AngeeManager()
 
     class Meta:
         """Django model options for agents."""
@@ -567,8 +565,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         owns the service template, the credential→env mapping, and the model handle.
         """
 
-        field = cast(ImplClassField, type(self)._meta.get_field("runtime_class"))
-        runtime_class = cast(type[AgentRuntime], field.resolve_class(self.runtime_class or "none"))
+        runtime_class = cast(type[AgentRuntime], self.resolve_impl("runtime_class", default="none"))
         return runtime_class()
 
     @property

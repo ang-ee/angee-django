@@ -102,30 +102,23 @@ class ChangeReadGate:
     ) -> ChangePayload:
         """Return ``payload`` with unreadable field-gated values removed.
 
-        Each gated field performs one backend check.
+        The resource-level ``read`` check already decided whether the actor may
+        receive this delivery. Changed field-gated values then ask the same
+        upstream ``read__<field>`` owner used by ordinary query redaction, so a
+        row-readable actor keeps fields it may read and loses only denied ones.
         """
 
         if not self.gated_fields or payload.changed_fields is None:
             return payload
 
-        denied = {
-            field
-            for field in payload.changed_fields
-            if field in self.gated_fields
-            and not self._can_read_field(
-                field,
-                resource,
+        denied: set[str] = set()
+        for field_name in set(payload.changed_fields) & set(self.gated_fields):
+            result = check_field_access(
+                self.active_backend,
+                subject=self.actor,
+                action=f"read__{field_name}",
+                resource=resource,
             )
-        }
+            if not result.allowed:
+                denied.add(field_name)
         return payload.redacted(denied)
-
-    def _can_read_field(self, field: str, resource: ObjectRef) -> bool:
-        """Return whether the actor may read one gated field."""
-
-        result = check_field_access(
-            self.active_backend,
-            subject=self.actor,
-            action=f"read__{field}",
-            resource=resource,
-        )
-        return bool(result.allowed)

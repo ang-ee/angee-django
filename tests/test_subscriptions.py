@@ -7,18 +7,23 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
 import strawberry
 from channels.layers import InMemoryChannelLayer
 from channels.testing import WebsocketCommunicator
 from django.contrib.auth.models import AnonymousUser, Group
+from django.core.exceptions import ImproperlyConfigured
 from django.db.models.signals import post_save
+from django.test import override_settings
 from rebac import actor_context, anonymous_actor, current_actor
 from rebac.graphql.strawberry import RebacChannelsConsumerMixin
 
 from angee.graphql import publishing, subscriptions
 from angee.graphql.consumers import AngeeGraphQLWSConsumer
 from angee.graphql.events import ChangeEvent, ChangePayload
+from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.subscriptions import changes
+from tests.conftest import SchemaAddon
 
 ANON = anonymous_actor()
 SubscriptionResolver = Callable[
@@ -54,8 +59,9 @@ def _receiver_count(signal: Any, dispatch_uid: str) -> int:
 
 
 def test_changes_builds_a_named_subscription_field() -> None:
-    """``changes`` exposes one subscription field and wires publishers."""
+    """``changes`` exposes one subscription field without wiring publishers."""
 
+    receiver_count = _receiver_count(post_save, "angee-changes-auth.Group-save")
     surface = changes(Group, field="groupChanged")
 
     @strawberry.type
@@ -66,14 +72,49 @@ def test_changes_builds_a_named_subscription_field() -> None:
 
     sdl = strawberry.Schema(query=Query, subscription=surface).as_str()
     assert "groupChanged: ChangeEvent!" in sdl
-    assert _receiver_count(post_save, "angee-changes-auth.Group-save") == 1
+    assert _receiver_count(post_save, "angee-changes-auth.Group-save") == receiver_count
+
+
+def test_schema_build_wires_change_publishers_from_subscription_metadata() -> None:
+    """Building a schema connects publishers for declared ``changes`` resources."""
+
+    dispatch_uid = "angee-changes-auth.Group-save"
+    was_connected = _receiver_count(post_save, dispatch_uid) > 0
+    post_save.disconnect(sender=Group, dispatch_uid=dispatch_uid)
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def ok(self) -> bool:
+            return True
+
+    try:
+        surface = changes(Group, field="groupChanged")
+        GraphQLSchemas(
+            [
+                SchemaAddon(
+                    {
+                        "public": {
+                            "query": (Query,),
+                            "subscription": (surface,),
+                        }
+                    }
+                )
+            ]
+        ).build("public")
+        assert _receiver_count(post_save, dispatch_uid) == 1
+    finally:
+        if was_connected:
+            publishing.connect_publishers(Group)
+        else:
+            post_save.disconnect(sender=Group, dispatch_uid=dispatch_uid)
 
 
 def test_subscribe_yields_broadcast_payloads(monkeypatch) -> None:
     """A payload sent to the model group reaches an active subscriber."""
 
     layer = InMemoryChannelLayer()
-    monkeypatch.setattr(subscriptions, "get_channel_layer", lambda: layer)
+    monkeypatch.setattr(subscriptions, "change_channel_layer", lambda: layer)
 
     async def scenario() -> ChangePayload:
         stream = subscriptions._subscribe(Group)
@@ -95,8 +136,9 @@ def test_subscribe_yields_broadcast_payloads(monkeypatch) -> None:
 def test_subscription_resolver_gates_events_through_sync_adapter(
     monkeypatch,
 ) -> None:
-    """Gate construction and each filter are offloaded to the sync adapter."""
+    """Gate construction and filtering do not use the shared thread-sensitive executor."""
 
+    closed_connections: list[str] = []
     thread_flags: list[bool] = []
 
     async def subscribe(model: type[Group]):
@@ -133,6 +175,12 @@ def test_subscription_resolver_gates_events_through_sync_adapter(
     monkeypatch.setattr(subscriptions, "ChangeReadGate", Gate)
     monkeypatch.setattr(
         subscriptions,
+        "close_old_connections",
+        lambda: closed_connections.append("close"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        subscriptions,
         "sync_to_async",
         sync_adapter,
         raising=False,
@@ -150,8 +198,9 @@ def test_subscription_resolver_gates_events_through_sync_adapter(
 
     events = asyncio.run(scenario())
 
-    # One gate construction + one payload filter, both thread-sensitive.
-    assert thread_flags == [True, True]
+    # One gate construction + one payload filter, both on the general sync executor.
+    assert thread_flags == [False, False]
+    assert closed_connections == ["close", "close", "close", "close"]
     assert [event.id for event in events] == [strawberry.ID("9")]
 
 
@@ -235,6 +284,18 @@ def test_subscription_resolver_denies_without_current_actor(
 
     assert events == []
     assert calls == []
+
+
+@override_settings(
+    DEBUG=False,
+    ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER=False,
+    CHANNEL_LAYERS={"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}},
+)
+def test_inmemory_channel_layer_requires_dev_or_explicit_opt_in() -> None:
+    """The default in-memory changes transport is loud outside dev/test."""
+
+    with pytest.raises(ImproperlyConfigured, match="dev-only"):
+        publishing.change_channel_layer()
 
 
 def test_ws_consumer_uses_rebac_channels_mixin() -> None:
