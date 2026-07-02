@@ -16,7 +16,7 @@ from typing import Any, Literal, cast
 from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import models, transaction
 from django.utils import timezone
 from procrastinate import exceptions as procrastinate_exceptions
@@ -64,6 +64,7 @@ def start(
     *,
     trigger: Any = None,
     parent_step_run: Any = None,
+    dedup_key: str | None = None,
 ) -> Any:
     """Start the current published version for ``workflow`` and enqueue advancement."""
 
@@ -78,7 +79,7 @@ def start(
             raise ValidationError({"workflow": "Workflow runs must pin a published version."})
 
         subject_content_type, subject_object_id = _object_ref(subject)
-        dedup_key = _dedup_key(trigger, subject_content_type, subject_object_id)
+        run_dedup_key = dedup_key or _dedup_key(trigger, subject_content_type, subject_object_id)
         owner_id = _owner_id(actor=actor, trigger=trigger, workflow=version)
 
         attrs = {
@@ -94,8 +95,8 @@ def start(
             run, created = run_model.objects.get_or_create(parent_step_run=parent_step_run, defaults=attrs)
             if not created:
                 return run
-        elif dedup_key:
-            run, created = run_model.objects.get_or_create(dedup_key=dedup_key, defaults=attrs)
+        elif run_dedup_key:
+            run, created = run_model.objects.get_or_create(dedup_key=run_dedup_key, defaults=attrs)
             if not created:
                 return run
         else:
@@ -128,6 +129,8 @@ def advance(run_id: int, *, now: datetime | None = None) -> dict[str, int]:
             return {"claimed": 0}
 
         _activate_run_if_needed(run, timestamp=timestamp)
+        _route_completed_steps(run)
+        _process_map_steps(run, timestamp=timestamp)
         _route_completed_steps(run)
         if _fail_if_budget_exceeded(run):
             return {"claimed": 0}
@@ -838,9 +841,189 @@ def _terminal_step_runs(run: Any) -> Iterable[Any]:
     return (
         run.step_runs.select_related("step")
         .filter(status__in=list(STEP_TERMINAL))
+        .filter(map_index=-1)
         .filter(step__isnull=False)
         .order_by("pk")
     )
+
+
+def _process_map_steps(run: Any, *, timestamp: datetime) -> None:
+    map_rows = list(
+        run.step_runs.select_for_update()
+        .select_related("step")
+        .filter(step__step_class="map", map_index=-1, status__in=[StepRunStatus.SCHEDULED, StepRunStatus.WAITING])
+        .order_by("pk")
+    )
+    for step_run in map_rows:
+        if step_run.status == StepRunStatus.SCHEDULED:
+            _expand_map_step(run, step_run, timestamp=timestamp)
+        if step_run.status == StepRunStatus.WAITING:
+            _complete_map_step_if_ready(run, step_run)
+
+
+def _expand_map_step(run: Any, step_run: Any, *, timestamp: datetime) -> None:
+    try:
+        target = _map_target(step_run)
+        items = _map_items(step_run)
+    except ValidationError as error:
+        step_run.mark_started(heartbeat_at=timestamp)
+        output = {"error": str(error), "total": 0, "successes": 0, "failures": 0}
+        step_run.mark_succeeded(output=output, outcome="failed")
+        run.steps_taken += 1
+        run.save(update_fields=["steps_taken", "updated_at"])
+        return
+
+    state = dict(step_run.resume_state)
+    state["map"] = {
+        "target_step_key": target.key,
+        "target_step_id": target.pk,
+        "items": items,
+    }
+    step_run.mark_started(heartbeat_at=timestamp)
+    step_run.resume_state = state
+    step_run.save(update_fields=["resume_state", "updated_at"])
+    run.steps_taken += 1
+    run.save(update_fields=["steps_taken", "updated_at"])
+    _ensure_map_children(run, step_run, target=target, items=items)
+    if not items:
+        _complete_map_step_if_ready(run, step_run)
+    else:
+        step_run.mark_waiting(resume_state=state)
+
+
+def _complete_map_step_if_ready(run: Any, step_run: Any) -> None:
+    state = dict(step_run.resume_state.get("map", {}))
+    target_id = state.get("target_step_id")
+    items = list(state.get("items", ()))
+    if target_id is None:
+        return
+    target = _model("Step").objects.get(pk=target_id)
+    children = list(
+        run.step_runs.select_for_update()
+        .filter(step=target, map_index__gte=0)
+        .order_by("map_index")
+    )
+    if len(children) < len(items):
+        _ensure_map_children(run, step_run, target=target, items=items)
+        return
+    if any(child.status not in STEP_TERMINAL for child in children):
+        return
+
+    output = _map_output(children)
+    outcome = "succeeded" if _map_policy_passes(step_run.step.config, output) else "failed"
+    updated_state = dict(step_run.resume_state)
+    map_state = dict(updated_state.get("map", {}))
+    map_state["results"] = output["results"]
+    updated_state["map"] = map_state
+    step_run.resume_state = updated_state
+    step_run.save(update_fields=["resume_state", "updated_at"])
+    step_run.mark_succeeded(output=output, outcome=outcome)
+
+
+def _ensure_map_children(run: Any, step_run: Any, *, target: Any, items: list[Any]) -> None:
+    step_run_model = _model("StepRun")
+    for index, item in enumerate(items):
+        child, _ = step_run_model.objects.get_or_create(
+            run=run,
+            step=target,
+            map_index=index,
+            defaults={
+                "status": StepRunStatus.SCHEDULED,
+                "input": _map_child_input(item),
+            },
+        )
+        child.previous.add(step_run)
+
+
+def _map_target(step_run: Any) -> Any:
+    config = step_run.step.config if isinstance(step_run.step.config, Mapping) else {}
+    key = str(config.get("target_step") or "")
+    if not key:
+        raise ValidationError({"config": "Map steps require target_step."})
+    try:
+        return step_run.run.workflow.steps.get(key=key)
+    except ObjectDoesNotExist as error:
+        raise ValidationError({"config": f"Map target step {key!r} does not exist."}) from error
+
+
+def _map_items(step_run: Any) -> list[Any]:
+    config = step_run.step.config if isinstance(step_run.step.config, Mapping) else {}
+    expression = config.get("items")
+    value = _map_expression_value(expression, step_run)
+    if not isinstance(value, list):
+        raise ValidationError({"config": "Map items expression must resolve to a list."})
+    return list(value)
+
+
+def _map_expression_value(expression: Any, step_run: Any) -> Any:
+    if isinstance(expression, list):
+        return expression
+    if not isinstance(expression, str) or not expression:
+        raise ValidationError({"config": "Map steps require an items expression."})
+    root, *path = expression.split(".")
+    if root == "subject":
+        value = step_run.run.subject
+    elif root == "run":
+        value = step_run.run
+    elif root == "input":
+        value = step_run.input
+    else:
+        raise ValidationError({"config": "Map items expression must start with subject, run, or input."})
+    for part in path:
+        value = _map_lookup(value, part)
+    return value
+
+
+def _map_lookup(value: Any, key: str) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(key)
+    return getattr(value, key)
+
+
+def _map_child_input(item: Any) -> Any:
+    if isinstance(item, Mapping):
+        return dict(item)
+    return {"item": item}
+
+
+def _map_output(children: list[Any]) -> dict[str, Any]:
+    results = [
+        {
+            "map_index": child.map_index,
+            "status": str(getattr(child.status, "value", child.status)),
+            "outcome": child.outcome,
+            "output": child.output,
+            "error": child.error,
+        }
+        for child in children
+    ]
+    successes = sum(1 for child in children if child.status == StepRunStatus.SUCCEEDED)
+    failures = sum(1 for child in children if child.status in {StepRunStatus.FAILED, StepRunStatus.CANCELED})
+    return {
+        "total": len(children),
+        "successes": successes,
+        "failures": failures,
+        "results": results,
+    }
+
+
+def _map_policy_passes(config: Any, output: Mapping[str, Any]) -> bool:
+    total = int(output["total"])
+    successes = int(output["successes"])
+    failures = int(output["failures"])
+    mapping = config if isinstance(config, Mapping) else {}
+    if bool(mapping.get("all_must_succeed", False)):
+        return failures == 0 and successes == total
+    ratio_value = mapping.get("min_success_ratio", mapping.get("min_success"))
+    if ratio_value is None:
+        return failures == 0 and successes == total
+    try:
+        ratio = float(ratio_value)
+    except (TypeError, ValueError):
+        return False
+    if total == 0:
+        return ratio <= 0
+    return successes / total >= ratio
 
 
 def _route_success(run: Any, step_run: Any) -> None:
@@ -979,6 +1162,7 @@ def _claim_due_steps(run: Any, *, timestamp: datetime) -> list[int]:
             models.Q(status=StepRunStatus.SCHEDULED)
             | models.Q(status=StepRunStatus.WAITING, wait_until__isnull=False, wait_until__lte=timestamp)
         )
+        .exclude(step__step_class="map", map_index=-1)
         .order_by("pk")
     )
     if not due:
@@ -1060,7 +1244,11 @@ def _update_run_status(run: Any, *, timestamp: datetime) -> None:
             run.save(update_fields=["wake_at", "updated_at"])
         return
 
-    failed = run.step_runs.filter(status__in=[StepRunStatus.FAILED, StepRunStatus.CANCELED]).order_by("-pk").first()
+    failed = (
+        run.step_runs.filter(status__in=[StepRunStatus.FAILED, StepRunStatus.CANCELED], map_index=-1)
+        .order_by("-pk")
+        .first()
+    )
     if failed is not None:
         if run.status == RunStatus.PENDING:
             run.mark_running()

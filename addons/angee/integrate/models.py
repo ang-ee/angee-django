@@ -62,6 +62,7 @@ from angee.integrate.net import validate_public_url
 from angee.integrate.oauth.discovery import discovery_document
 from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.oauth.providers import OAuthProviderType
+from angee.integrate.sync import bridge_sync_context
 from angee.integrate.vcs.backend import VCSBackend
 from angee.integrate.vcs.templates import parse_template_meta
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
@@ -1565,7 +1566,8 @@ class Bridge(AngeeModel):
 
         self.mark_sync_started(now=now)
         try:
-            result = self.sync()
+            with bridge_sync_context():
+                result = self.sync()
             self.record_sync(result, now=now)
         except Exception as error:  # noqa: BLE001 — sync failure is telemetry, then caller policy.
             self.record_sync_error(error, now=now)

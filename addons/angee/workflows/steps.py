@@ -282,6 +282,33 @@ class GateStep(StepImpl):
         )
 
 
+class MapStep(StepImpl):
+    """Built-in control step that maps one target step over a journaled item list."""
+
+    key = "map"
+    label = "Map"
+    category = "Control"
+
+    @classmethod
+    def validate_config(cls, config: Any) -> None:
+        """Validate the map declaration consumed by the engine."""
+
+        super().validate_config(config)
+        if not str(config.get("target_step", "") or ""):
+            raise ValidationError({"config": "Map steps require target_step."})
+        items = config.get("items")
+        if not isinstance(items, (str, list)) or not items:
+            raise ValidationError({"config": "Map steps require an items expression or literal list."})
+        ratio = config.get("min_success_ratio", config.get("min_success"))
+        if ratio is not None:
+            try:
+                parsed = float(ratio)
+            except (TypeError, ValueError) as error:
+                raise ValidationError({"config": "Map min_success_ratio must be a number."}) from error
+            if parsed < 0 or parsed > 1:
+                raise ValidationError({"config": "Map min_success_ratio must be between 0 and 1."})
+
+
 def _config_until(value: Any) -> datetime | None:
     """Return an aware datetime parsed from a wait config value."""
 

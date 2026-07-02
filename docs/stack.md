@@ -33,6 +33,7 @@ Dependency changes must update this file in the same change.
 | strawberry-django-hasura | Expose Django models in the Hasura GraphQL dialect (`_bool_exp`/`_aggregate`/`x_by_pk`/`_set`), plus computed (non-model) sources via a `run_query` `RowSource` | Composes it as the model emitter (`hasura_model_resource`) and the pydantic computed-source emitter (`hasura_pydantic_resource`) |
 | pydantic | Typed model validation/parsing | Row-shape SSOT for computed (non-model) Hasura resources — the node + filter scalars derive from the pydantic model (`hasura_pydantic_resource`) |
 | Procrastinate | Postgres task queue — deferred/periodic jobs, retries, priorities, queueing locks | hosted by the `angee.tasks` framework app; dispatch confined to engine seams |
+| croniter | Cron-expression schedule parsing | schedule triggers compute `next_fire_at` (workflows) |
 | channels + uvicorn | ASGI/WebSocket transport and serving | GraphQL subscription mounting; uvicorn serves the composed ASGI app and sends the lifespan that enters the MCP mount's `http_app` lifespan (`angee.asgi`) |
 | django-zed-rebac | REBAC engine, actor scoping, relationship storage, local and SpiceDB-compatible backends | Per-addon schema merge, reserved roles, actor resolver |
 | django-sqids | Opaque external IDs | `SqidMixin`, `SqidField` (NULL-safe decode on joins), GraphQL boundary scalar |

@@ -15,4 +15,6 @@ class WorkflowsConfig(AppConfig):
         """Run workflows ready-time hooks after app population."""
 
         super().ready()
-        # Phase-1 ready hooks belong here when workflows needs populated models.
+        from angee.workflows.triggers import connect_event_trigger_receiver
+
+        connect_event_trigger_receiver()

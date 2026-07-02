@@ -11,6 +11,7 @@ references; public ids stay at the transport boundary.
 from __future__ import annotations
 
 import copy
+from collections.abc import Mapping
 from typing import Any, Self, cast
 
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -455,6 +456,11 @@ class Trigger(AuditMixin, AngeeDataModel):
     kind = StateField(choices_enum=TriggerKind, default=TriggerKind.MANUAL)
     enabled = models.BooleanField(default=False)
     config = models.JSONField(default=dict, blank=True)
+    event_model_label = models.CharField(max_length=200, blank=True, default="", db_index=True)
+    next_fire_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    last_fire_at = models.DateTimeField(null=True, blank=True)
+    hourly_window_started_at = models.DateTimeField(null=True, blank=True)
+    hourly_fire_count = models.PositiveIntegerField(default=0)
 
     objects = AngeeManager()
 
@@ -472,17 +478,52 @@ class Trigger(AuditMixin, AngeeDataModel):
         return f"{self.workflow_id}:{self.kind}"
 
     def clean(self) -> None:
-        """Validate that triggers attach to lineage heads."""
+        """Validate lineage ownership and trigger declaration shape."""
 
         super().clean()
         if self.workflow_id is not None and self.workflow.published_from_id is not None:
             raise ValidationError({"workflow": "Triggers attach only to workflow lineage heads."})
+        if not isinstance(self.config, Mapping):
+            raise ValidationError({"config": "Trigger config must be a JSON object."})
+        if self.kind == TriggerKind.EVENT:
+            if not self.event_model_label:
+                raise ValidationError({"config": "Event triggers require a model label."})
+            condition = self.config.get("condition", {})
+            if condition is not None and not isinstance(condition, Mapping):
+                raise ValidationError({"config": "Event trigger condition must be a JSON object."})
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the trigger after model validation."""
 
+        self._sync_index_fields()
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None:
+            fields = set(update_fields)
+            if {"kind", "config"} & fields:
+                fields.add("event_model_label")
+                kwargs["update_fields"] = fields
         self.full_clean()
         super().save(*args, **kwargs)
+
+    def enable(self) -> None:
+        """Enable this trigger through the model owner."""
+
+        self.enabled = True
+        self.save(update_fields={"enabled", "event_model_label", "updated_at"})
+
+    def disable(self) -> None:
+        """Disable this trigger through the model owner."""
+
+        self.enabled = False
+        self.save(update_fields={"enabled", "event_model_label", "updated_at"})
+
+    def _sync_index_fields(self) -> None:
+        """Mirror config-owned event declarations into indexed query fields."""
+
+        if self.kind != TriggerKind.EVENT or not isinstance(self.config, Mapping):
+            self.event_model_label = ""
+            return
+        self.event_model_label = str(self.config.get("model") or self.config.get("model_label") or "").lower()
 
 
 class WorkflowRun(AuditMixin, AngeeDataModel):

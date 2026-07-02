@@ -77,6 +77,7 @@ ANGEE_WORKFLOW_STEP_CLASSES = {
     "handler": "angee.workflows.steps.HandlerStep",
     "wait": "angee.workflows.steps.WaitStep",
     "gate": "angee.workflows.steps.GateStep",
+    "map": "angee.workflows.steps.MapStep",
     "agent": "angee.workflows_agents.steps.AgentStepImpl",
 }
 ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES = {

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from django.apps import apps
+from django.utils import timezone
 from procrastinate import RetryStrategy
 from procrastinate import jobs as procrastinate_jobs
 from procrastinate.contrib.django import app
@@ -92,6 +94,16 @@ def reap_workflow_step_runs(_timestamp: int) -> None:
     engine.reap()
 
 
+@app.periodic(cron="* * * * *", periodic_id="workflows.schedule_triggers")
+@app.task(name="workflows.schedule_triggers", retry=RetryStrategy(max_attempts=3, exponential_wait=30))
+def run_workflow_schedule_triggers(_timestamp: int) -> None:
+    """Start schedule triggers due at the injected periodic timestamp."""
+
+    from angee.workflows import triggers
+
+    triggers.run_due_schedule_triggers(now=_periodic_timestamp(_timestamp))
+
+
 def _retry_policy_for_job(job: procrastinate_jobs.Job) -> StepRetryPolicy:
     """Return the StepRun retry policy for a Procrastinate job."""
 
@@ -105,3 +117,9 @@ def _retry_policy_for_job(job: procrastinate_jobs.Job) -> StepRetryPolicy:
     if step_run is None or step_run.step_id is None:
         return StepRetryPolicy()
     return retry_policy_from_config(step_run.step.config)
+
+
+def _periodic_timestamp(value: int) -> datetime:
+    """Return an aware datetime for Procrastinate's periodic Unix timestamp."""
+
+    return datetime.fromtimestamp(value, tz=timezone.get_current_timezone())

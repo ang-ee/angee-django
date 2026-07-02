@@ -82,6 +82,7 @@ class TriggerType(AngeeNode):
     kind: auto
     enabled: auto
     config: JSON
+    next_fire_at: auto
     created_at: auto
     updated_at: auto
 
@@ -206,8 +207,8 @@ _TRIGGER_RESOURCE = hasura_model_resource(
     TriggerType,
     model=Trigger,
     name="workflow_triggers",
-    filterable=["id", "workflow", "kind", "enabled", "updated_at"],
-    sortable=["workflow", "kind", "enabled", "created_at", "updated_at"],
+    filterable=["id", "workflow", "kind", "enabled", "next_fire_at", "updated_at"],
+    sortable=["workflow", "kind", "enabled", "next_fire_at", "created_at", "updated_at"],
     aggregatable=["id"],
     groupable=["workflow", "workflow__name", "kind", "enabled", "updated_at"],
     insertable=["workflow", "kind", "enabled", "config"],
@@ -363,6 +364,28 @@ class WorkflowRunActionMutation:
         override = engine.override_run(target, steps, actor=actor)
         return ActionResult(ok=True, message=f"Override recorded as {override.sqid}.")
 
+
+@strawberry.type
+class TriggerActionMutation:
+    """Console actions for workflow trigger lifecycle."""
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def enable_workflow_trigger(self, trigger: PublicID) -> ActionResult:
+        """Enable a workflow trigger."""
+
+        with action_target(Trigger, trigger, reason="workflows.graphql.enable_workflow_trigger") as target:
+            target.enable()
+        return ActionResult(ok=True, message="Workflow trigger enabled.")
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def disable_workflow_trigger(self, trigger: PublicID) -> ActionResult:
+        """Disable a workflow trigger."""
+
+        with action_target(Trigger, trigger, reason="workflows.graphql.disable_workflow_trigger") as target:
+            target.disable()
+        return ActionResult(ok=True, message="Workflow trigger disabled.")
+
+
 _CONSOLE_TYPES: list[object] = [
     WorkflowType,
     StepType,
@@ -409,6 +432,7 @@ schemas = {
             _EDGE_RESOURCE.mutation,
             _TRIGGER_RESOURCE.mutation,
             WorkflowRunActionMutation,
+            TriggerActionMutation,
             DecisionMutation,
         ],
         "subscription": [
