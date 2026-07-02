@@ -753,15 +753,22 @@ def privileged_role_refs() -> set[str]:
 
 
 def _privileged_grant_rows(grant_rows: QuerySet[Any]) -> QuerySet[Any]:
-    """Return grant rows whose role is privileged by the installed schema."""
+    """Return grant rows whose role is privileged by the installed schema.
 
-    query = Q()
+    Matching goes through the queryset's own ``for_resource`` (both
+    relationship storage modes translate it): a raw ``Q(resource_type=…,
+    resource_id=…)`` would bypass the registry mode's kwarg translation and
+    fail on the FK-backed model.
+    """
+
+    rows: QuerySet[Any] | None = None
     for role in privileged_role_refs():
         role_object = ObjectRef.parse(role)
-        query |= Q(
-            resource_type=role_object.resource_type,
-            resource_id=role_object.resource_id,
+        matched = grant_rows.for_resource(
+            role_object.resource_type,
+            role_object.resource_id,
         )
-    if not query:
+        rows = matched if rows is None else rows | matched
+    if rows is None:
         return cast(QuerySet[Any], grant_rows.none())
-    return cast(QuerySet[Any], grant_rows.filter(query))
+    return cast(QuerySet[Any], rows)
