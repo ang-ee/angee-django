@@ -1,7 +1,4 @@
 import * as React from "react";
-import type {
-  Row,
-} from "@angee/resources";
 import {
   useMatches,
   useNavigate,
@@ -9,10 +6,8 @@ import {
   useRouterState,
   type AnyRoute,
   type AnyRouteMatch,
-  } from "@tanstack/react-router";
-import {
-  rowPublicId,
-} from "@angee/resources";
+} from "@tanstack/react-router";
+import { rowPublicId, type Row } from "@angee/metadata";
 
 import type { ResourceRecordController } from "./ResourceList";
 
@@ -97,6 +92,17 @@ export function RoutedRecordController<TRow extends Row = Row>({
     onClose,
     rowHref,
   });
+}
+
+export function useRouteRecordId(): string | undefined {
+  const fullPath = useMatches({ select: leafFullPath });
+  const activeParamName = trailingRouteParamName(fullPath);
+  const selectRecordId = React.useCallback(
+    (matches: readonly AnyRouteMatch[]): string | undefined =>
+      activeParamName ? matches.at(-1)!.params[activeParamName] : undefined,
+    [activeParamName],
+  );
+  return useMatches({ select: selectRecordId });
 }
 
 function leafFullPath(matches: readonly AnyRouteMatch[]): string {

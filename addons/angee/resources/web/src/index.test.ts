@@ -1,9 +1,14 @@
+import { expectValidBaseAddon } from "@angee/app/testing";
 import type { BaseMenuItem } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import resources from "./index";
 
 describe("resources addon manifest", () => {
+  test("satisfies the rendered-addon invariants", () => {
+    expect(() => expectValidBaseAddon(resources)).not.toThrow();
+  });
+
   test("contributes a single Resources section under platform", () => {
     expect(resources.menus).toHaveLength(1);
     const menu = resources.menus?.[0] as BaseMenuItem | undefined;
@@ -21,7 +26,6 @@ describe("resources addon manifest", () => {
     const route = resources.routes?.[0];
     expect(route?.name).toBe("resources.ledger");
     expect(route?.path).toBe("/platform/resources");
-    expect(route?.layout).toBe("console");
     expect(route?.component).toBeTypeOf("function");
   });
 });

@@ -1,14 +1,9 @@
+import { Alert, EmptyState, LoadingPanel, errorMessage } from "@angee/ui";
 import {
-  Alert,
-  EmptyState,
-  LoadingPanel,
-  errorMessage,
   useAuthoredMutation,
   useAuthoredQuery,
-} from "@angee/ui";
-import type {
-  DocumentData,
-  DocumentVariables,
+  type DocumentData,
+  type DocumentVariables,
 } from "@angee/refine";
 import type { TypedDocumentNode } from "@graphql-typed-document-node/core";
 import {
@@ -23,7 +18,7 @@ import {
 
 import { OPERATOR_PROVIDER } from "./operator-provider";
 import { useOperatorT } from "../i18n";
-import { OperatorConnectionQuery } from "./documents.console";
+import { OperatorConnectionQuery } from "./documents";
 import { useDocumentSubscription } from "./document-subscription";
 import {
   SNAPSHOT_QUERY,
@@ -123,7 +118,7 @@ export function OperatorTransportProvider({
     } catch (error) {
       return {
         kind: "error",
-        message: errorMessage(error, t("operator.transport.unknownError")),
+        message: errorMessage(error, t("transport.unknownError")),
       };
     }
   }, [connectionQuery.data, connectionQuery.error, connectionQuery.fetching, t]);
@@ -155,7 +150,7 @@ export function OperatorTransportProvider({
   );
 
   if (state.kind === "loading") {
-    return <LoadingPanel message={t("operator.transport.connecting")} />;
+    return <LoadingPanel message={t("transport.connecting")} />;
   }
 
   if (state.kind === "error") {
@@ -166,8 +161,8 @@ export function OperatorTransportProvider({
     return (
       <EmptyState
         icon="operator"
-        title={t("operator.transport.unavailable.title")}
-        description={t("operator.transport.unavailable.description")}
+        title={t("transport.unavailable.title")}
+        description={t("transport.unavailable.description")}
       />
     );
   }

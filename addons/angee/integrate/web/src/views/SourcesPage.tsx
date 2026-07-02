@@ -1,15 +1,5 @@
 import * as React from "react";
-import {
-  Action,
-  Column,
-  ResourceList,
-  Facet,
-  Field,
-  Form,
-  Group,
-  List,
-  useRecordActionMutation,
-} from "@angee/ui";
+import { Action, Column, ResourceList, Facet, Field, Form, Group, List, useRecordActionMutation } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useIntegrateT } from "../i18n";
@@ -41,13 +31,13 @@ export function SourcesPage(): React.ReactElement {
       <Form resource={MODEL}>
         {/* The repository is fixed at create; the patch input omits it. */}
         <Field name="repository" createOnly />
-        <Group label={t("integrate.sources.pointer")} columns={2}>
+        <Group label={t("sources.pointer")} columns={2}>
           <Field name="kind" />
           <Field name="ref" />
         </Group>
         <Field name="path" />
         <Field name="last_synced_at" readOnly />
-        <Action id="refresh" label={t("integrate.action.refresh")} icon="refresh" run={refresh} />
+        <Action id="refresh" label={t("action.refresh")} icon="refresh" run={refresh} />
       </Form>
     </ResourceList>
   );

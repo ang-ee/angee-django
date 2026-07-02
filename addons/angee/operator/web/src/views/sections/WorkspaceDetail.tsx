@@ -1,6 +1,5 @@
-import { DetailSection, DetailSurface, TextLink } from "@angee/ui";
+import { DetailSection, DetailSurface, TextLink, useRouteRecordId } from "@angee/ui";
 import { type ReactElement } from "react";
-import { useParams } from "@tanstack/react-router";
 
 import {
   WORKSPACE_LOGS_QUERY,
@@ -15,8 +14,7 @@ import { useWorkspaceActions } from "./workspace-actions";
 /** Workspace detail: overview + lifecycle actions + the live log tail. */
 export function WorkspaceDetail(): ReactElement {
   const t = useOperatorT();
-  const params = useParams({ strict: false });
-  const name = "name" in params && typeof params.name === "string" ? params.name : undefined;
+  const name = useRouteRecordId();
   const { snapshot, result, refetch } = useOperatorSnapshot({ workspaces: true });
   const { actions, busy } = useWorkspaceActions(refetch);
   const logs = useDaemonLogStream({
@@ -33,12 +31,12 @@ export function WorkspaceDetail(): ReactElement {
   return (
     <DetailSurface
       loading={result.fetching && !snapshot}
-      loadingMessage={t("operator.workspaces.loading")}
+      loadingMessage={t("workspaces.loading")}
       empty={
         !workspace
           ? {
               icon: "files",
-              title: t("operator.workspaces.detail.notFound"),
+              title: t("workspaces.detail.notFound"),
               description: name,
             }
           : null
@@ -63,21 +61,21 @@ export function WorkspaceDetail(): ReactElement {
       {workspace ? (
         <>
           <DetailSection
-            title={t("operator.workspaces.detail.overview")}
+            title={t("workspaces.detail.overview")}
             rows={[
-              [t("operator.workspaces.column.template"), workspace.template],
-              [t("operator.workspaces.column.path"), workspace.path],
+              [t("workspaces.column.template"), workspace.template],
+              [t("workspaces.column.path"), workspace.path],
               [
-                t("operator.workspaces.column.port"),
+                t("workspaces.column.port"),
                 workspace.processComposePort ?? "—",
               ],
-              [t("operator.workspaces.column.ttl"), workspace.ttl ?? "—"],
+              [t("workspaces.column.ttl"), workspace.ttl ?? "—"],
               [
-                t("operator.workspaces.detail.expiresAt"),
+                t("workspaces.detail.expiresAt"),
                 workspace.ttlExpiresAt ?? "—",
               ],
               [
-                t("operator.workspaces.detail.mcp"),
+                t("workspaces.detail.mcp"),
                 workspace.playwrightMcpUrl ? (
                   <TextLink href={workspace.playwrightMcpUrl} target="_blank">
                     {workspace.playwrightMcpUrl}
@@ -89,7 +87,7 @@ export function WorkspaceDetail(): ReactElement {
             ]}
           />
 
-          <LogPanel logs={logs} title={t("operator.workspaces.detail.logs")} />
+          <LogPanel logs={logs} title={t("workspaces.detail.logs")} />
         </>
       ) : null}
     </DetailSurface>

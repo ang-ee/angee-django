@@ -1,6 +1,7 @@
+import { useAuthoredMutation } from "@angee/refine";
 import { useCallback, useState } from "react";
 
-import { errorMessage, useAuthoredMutation } from "@angee/ui";
+import { errorMessage } from "@angee/ui";
 
 import { useStorageT } from "../i18n";
 import { StorageFileUploadBegin, StorageFileUploadFinalize } from "./documents";
@@ -97,7 +98,7 @@ export function useStorageUpload(
         if (!payload || payload.error) {
           patch(taskId, {
             status: "failed",
-            error: payload?.error ?? t("storage.upload.error.cannotStart"),
+            error: payload?.error ?? t("upload.error.cannotStart"),
           });
           return null;
         }
@@ -115,7 +116,7 @@ export function useStorageUpload(
         if (!response.ok) {
           patch(taskId, {
             status: "failed",
-            error: t("storage.upload.error.transfer", { status: response.status }),
+            error: t("upload.error.transfer", { status: response.status }),
           });
           return null;
         }
@@ -131,7 +132,7 @@ export function useStorageUpload(
         if (!result || result.error) {
           patch(taskId, {
             status: "failed",
-            error: result?.error ?? t("storage.upload.error.cannotFinalize"),
+            error: result?.error ?? t("upload.error.cannotFinalize"),
           });
           return null;
         }
@@ -141,7 +142,7 @@ export function useStorageUpload(
       } catch (error) {
         patch(taskId, {
           status: "failed",
-          error: errorMessage(error, t("storage.upload.error.generic")),
+          error: errorMessage(error, t("upload.error.generic")),
         });
         return null;
       }

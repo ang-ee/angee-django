@@ -2,12 +2,7 @@ import { type ReactElement } from "react";
 import { parseAsString, useQueryState } from "nuqs";
 
 import {
-  Code,
-  ListView,
-  textRoleVariants,
-  type ResourceToolbarGroupOption,
-  type ListColumn,
-} from "@angee/ui";
+  Code, ListView, textRoleVariants, type ResourceToolbarGroupOption, type ListColumn } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
 import { LinkedChips, TextRouteLink } from "../lib/cells";
@@ -34,7 +29,7 @@ function columns(t: (key: string) => string): readonly ListColumn<ModelResourceR
   return [
     {
       field: "model_name",
-      header: t("platform.col.model"),
+      header: t("col.model"),
       render: (row) => (
         <span className="flex min-w-0 flex-col">
           <TextRouteLink href={modelDetailPath(row.id)} className="font-medium">
@@ -46,32 +41,32 @@ function columns(t: (key: string) => string): readonly ListColumn<ModelResourceR
     },
     {
       field: "addon_label",
-      header: t("platform.col.addon"),
+      header: t("col.addon"),
       render: (row) => (
         <TextRouteLink href={addonDetailPath(row.addon_id)}>{row.addon_label}</TextRouteLink>
       ),
     },
     {
       field: "db_table",
-      header: t("platform.col.table"),
+      header: t("col.table"),
       render: (row) => <Code truncate>{row.db_table}</Code>,
     },
     {
       field: "field_count",
-      header: t("platform.col.fields"),
+      header: t("col.fields"),
       render: (row) => (
         <TextRouteLink href={fieldsPath({ model: row.id })}>{row.field_count}</TextRouteLink>
       ),
     },
-    { field: "relation_count", header: t("platform.col.relations") },
+    { field: "relation_count", header: t("col.relations") },
     {
       field: "resource_type",
-      header: t("platform.col.resourceType"),
+      header: t("col.resourceType"),
       render: (row) => (row.resource_type ? <Code truncate>{row.resource_type}</Code> : null),
     },
     {
       field: "depends_on",
-      header: t("platform.col.dependsOn"),
+      header: t("col.dependsOn"),
       sortable: false,
       render: (row) => <LinkedChips items={row.depends_on} href={modelDetailPath} />,
     },
@@ -80,8 +75,8 @@ function columns(t: (key: string) => string): readonly ListColumn<ModelResourceR
 
 function groupOptions(t: (key: string) => string): readonly ResourceToolbarGroupOption[] {
   return [
-    { id: "addon_label", label: t("platform.col.addon"), group: { field: "addon_label" }, type: "value" },
-    { id: "resource_type", label: t("platform.col.resourceType"), group: { field: "resource_type" }, type: "value" },
+    { id: "addon_label", label: t("col.addon"), group: { field: "addon_label" }, type: "value" },
+    { id: "resource_type", label: t("col.resourceType"), group: { field: "resource_type" }, type: "value" },
   ];
 }
 
@@ -94,10 +89,10 @@ export function ModelsPage(): ReactElement {
       resource="platform.Model"
       columns={columns(t)}
       groupOptions={groupOptions(t)}
-      filter={addonScope ? { addon_id: { exact: addonScope } } : undefined}
+      baseFilter={addonScope ? { addon_id: { exact: addonScope } } : undefined}
       defaultGroup={addonScope ? null : { field: "addon_label" }}
       pageSize={50}
-      emptyMessage={t("platform.empty.models")}
+      emptyContent={t("empty.models")}
     />
   );
 }

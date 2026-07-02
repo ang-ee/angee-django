@@ -14,10 +14,10 @@ import { afterEach,
   vi } from "vitest";
 import {
   ModelMetadataProvider,
-} from "@angee/resources";
+} from "@angee/metadata";
 import type {
   SchemaFieldMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 import { enAgentsMessages } from "../i18n";
 import { AgentProvisioning } from "./AgentProvisioning";
@@ -125,7 +125,7 @@ afterEach(cleanup);
 
 describe("AgentProvisioning", () => {
   test("shows the saved provisioning error even without recorded runtime names", () => {
-    const intro = enAgentsMessages["agents.provisioning.intro"] ?? "";
+    const intro = enAgentsMessages["provisioning.intro"] ?? "";
 
     renderProvisioning(<AgentProvisioning agentId="agent-1" pane="service" />);
 
@@ -139,7 +139,7 @@ describe("AgentProvisioning", () => {
     mocks.record.runtime_status = "RUNNING";
     mocks.record.last_error = "";
     mocks.record.service = "agent-demo-agent";
-    const logsTitle = enAgentsMessages["agents.provisioning.serviceLogs"] ?? "Service logs";
+    const logsTitle = enAgentsMessages["provisioning.serviceLogs"] ?? "Service logs";
 
     renderProvisioning(<AgentProvisioning agentId="agent-1" pane="service" />);
 
@@ -167,13 +167,13 @@ describe("AgentProvisioning", () => {
         },
       ],
     };
-    const logsTitle = enAgentsMessages["agents.provisioning.workspaceLogs"] ?? "Workspace logs";
+    const logsTitle = enAgentsMessages["provisioning.workspaceLogs"] ?? "Workspace logs";
 
     renderProvisioning(<AgentProvisioning agentId="agent-1" pane="workspace" />);
 
     expect(screen.getByTestId("workspace-row").textContent).toBe("agent-demo-workspace");
     expect(screen.queryByText(logsTitle)).toBeNull();
-    expect(screen.getByText(enAgentsMessages["agents.provisioning.workspaceSources"] ?? "Sources")).toBeTruthy();
+    expect(screen.getByText(enAgentsMessages["provisioning.workspaceSources"] ?? "Sources")).toBeTruthy();
     expect(screen.getByText("notes")).toBeTruthy();
     expect(screen.getByText("+2 / -1")).toBeTruthy();
   });

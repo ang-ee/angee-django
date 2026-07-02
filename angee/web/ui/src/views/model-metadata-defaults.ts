@@ -2,12 +2,13 @@ import type {
   ModelMetadata,
   ModelRelationFilterMetadata,
   SchemaFieldMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
+import { defaultWidgetForModelField } from "@angee/metadata";
 import type {
   ReactNode } from "react";
 import type {
   ModelFieldMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 import type { WidgetOption } from "../widgets";
 import type {
@@ -15,7 +16,7 @@ import type {
   FieldDescriptor,
 } from "./page";
 import { titleCase } from "../lib/titleCase";
-import { enumValueLabel, groupFieldLabel } from "./ListInternals";
+import { enumValueLabel, groupFieldLabel } from "./resource-view-list-body";
 
 /** A form field's resolved relation target — which model the picker lists, its
  * display field, and whether the related model can be created inline. */
@@ -43,15 +44,6 @@ const NON_EDITABLE_FIELDS = new Set([
   "updated_by_label",
 ]);
 
-const SCALAR_WIDGET: Readonly<Record<string, string>> = {
-  Boolean: "switch",
-  Int: "integer",
-  Float: "float",
-  DateTime: "datetime",
-  Date: "date",
-  JSON: "json",
-};
-
 /**
  * The default widget for a field from its resource metadata: enums pick a select,
  * object relations a `many2one` picker, string-list fields a tag input, and
@@ -64,11 +56,7 @@ const SCALAR_WIDGET: Readonly<Record<string, string>> = {
 export function defaultWidgetFor(
   field: ModelFieldMetadata | undefined,
 ): string | undefined {
-  if (!field) return undefined;
-  if (field.kind === "enum") return "select";
-  if (field.kind === "relation") return "many2one";
-  if (field.kind === "list") return "tagInput";
-  return field.scalar ? SCALAR_WIDGET[field.scalar] : undefined;
+  return defaultWidgetForModelField(field);
 }
 
 /**
@@ -189,8 +177,8 @@ export function fieldLabel(
   return explicit ?? metadata?.label ?? titleCase(name);
 }
 
-/** Resolve a group label from resource metadata, then group-specific field text. */
-export function groupLabel(
+/** Resolve a grouping-field label from resource metadata, then field text. */
+export function resourceFieldGroupLabel(
   name: string,
   metadata: ModelFieldMetadata | undefined,
 ): string {

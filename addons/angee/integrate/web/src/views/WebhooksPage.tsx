@@ -1,17 +1,6 @@
+import { useAuthoredMutation } from "@angee/refine";
 import * as React from "react";
-import {
-  Action,
-  Column,
-  ResourceList,
-  Field,
-  Form,
-  Group,
-  List,
-  recordActionId,
-  useRecordActionMutation,
-  useAuthoredMutation,
-  type ActionContext,
-} from "@angee/ui";
+import { Action, Column, ResourceList, Field, Form, Group, List, recordActionId, useRecordActionMutation, type ActionContext } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useIntegrateT } from "../i18n";
@@ -39,23 +28,23 @@ export function WebhooksPage(): React.ReactElement {
       const result = await rotateSecret({ id });
       const outcome = result?.rotate_webhook_secret;
       if (outcome && !outcome.ok)
-        throw new Error(t("integrate.webhooks.rotateFailed"));
+        throw new Error(t("webhooks.rotateFailed"));
       const secret = outcome?.secret;
       if (secret) {
         await ctx.prompt({
-          title: t("integrate.webhooks.newSecretTitle"),
-          body: t("integrate.webhooks.newSecretBody"),
+          title: t("webhooks.newSecretTitle"),
+          body: t("webhooks.newSecretBody"),
           fields: [
             {
               name: "secret",
-              label: t("integrate.webhooks.signingSecret"),
+              label: t("webhooks.signingSecret"),
               defaultValue: secret,
               readOnly: true,
             },
           ],
         });
       }
-      return t("integrate.webhooks.rotated");
+      return t("webhooks.rotated");
     },
     [rotateSecret, t],
   );
@@ -66,15 +55,15 @@ export function WebhooksPage(): React.ReactElement {
       <Form resource={MODEL}>
         <Field name="target_url" title />
         <Field name="enabled" />
-        <Group label={t("integrate.webhooks.filters")} columns={2}>
+        <Group label={t("webhooks.filters")} columns={2}>
           <Field name="event_kinds" widget="tagInput" />
           <Field name="impl_app_filter" widget="tagInput" />
           <Field name="integration_filter" />
         </Group>
         {/* Write-only signing key — set on create, never read back from the server. */}
         <Field name="secret" widget="text" kind="string" createOnly />
-        <Action id="send-test" label={t("integrate.webhooks.sendTest")} run={sendTest} />
-        <Action id="rotate-secret" label={t("integrate.webhooks.rotateSecret")} run={rotate} />
+        <Action id="send-test" label={t("webhooks.sendTest")} run={sendTest} />
+        <Action id="rotate-secret" label={t("webhooks.rotateSecret")} run={rotate} />
       </Form>
     </ResourceList>
   );

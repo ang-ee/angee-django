@@ -2,10 +2,7 @@ import { type ReactElement } from "react";
 import { parseAsString, useQueryState } from "nuqs";
 
 import {
-  ListView,
-  type ResourceToolbarGroupOption,
-  type ListColumn,
-} from "@angee/ui";
+  ListView, type ResourceToolbarGroupOption, type ListColumn } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
 import { TextRouteLink } from "../lib/cells";
@@ -28,27 +25,27 @@ function columns(t: (key: string) => string): readonly ListColumn<FieldResourceR
   return [
     {
       field: "name",
-      header: t("platform.col.field"),
+      header: t("col.field"),
       render: (row) => <span className="font-medium text-fg">{row.name}</span>,
     },
     {
       field: "model",
-      header: t("platform.col.model"),
+      header: t("col.model"),
       render: (row) => (
         <TextRouteLink href={modelDetailPath(row.model)}>{row.model}</TextRouteLink>
       ),
     },
     {
       field: "addon",
-      header: t("platform.col.addon"),
+      header: t("col.addon"),
       render: (row) => (
         <TextRouteLink href={addonDetailPath(row.addon)}>{row.addon}</TextRouteLink>
       ),
     },
-    { field: "kind", header: t("platform.col.type") },
+    { field: "kind", header: t("col.type") },
     {
       field: "relation_target",
-      header: t("platform.col.relationTarget"),
+      header: t("col.relationTarget"),
       render: (row) =>
         row.relation_target ? (
           <TextRouteLink href={modelDetailPath(row.relation_target)}>
@@ -61,10 +58,10 @@ function columns(t: (key: string) => string): readonly ListColumn<FieldResourceR
 
 function groupOptions(t: (key: string) => string): readonly ResourceToolbarGroupOption[] {
   return [
-    { id: "addon", label: t("platform.col.addon"), group: { field: "addon" }, type: "value" },
-    { id: "model", label: t("platform.col.model"), group: { field: "model" }, type: "value" },
-    { id: "kind", label: t("platform.col.type"), group: { field: "kind" }, type: "value" },
-    { id: "relation_target", label: t("platform.col.relationTarget"), group: { field: "relation_target" }, type: "value" },
+    { id: "addon", label: t("col.addon"), group: { field: "addon" }, type: "value" },
+    { id: "model", label: t("col.model"), group: { field: "model" }, type: "value" },
+    { id: "kind", label: t("col.type"), group: { field: "kind" }, type: "value" },
+    { id: "relation_target", label: t("col.relationTarget"), group: { field: "relation_target" }, type: "value" },
   ];
 }
 
@@ -85,10 +82,10 @@ export function FieldsPage(): ReactElement {
       resource="platform.Field"
       columns={columns(t)}
       groupOptions={groupOptions(t)}
-      filter={Object.keys(filter).length > 0 ? filter : undefined}
+      baseFilter={Object.keys(filter).length > 0 ? filter : undefined}
       defaultGroup={modelScope ? null : { field: "model" }}
       pageSize={100}
-      emptyMessage={t("platform.empty.fields")}
+      emptyContent={t("empty.fields")}
     />
   );
 }

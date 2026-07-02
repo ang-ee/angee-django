@@ -1,15 +1,19 @@
+import { expectValidBaseAddon } from "@angee/app/testing";
 import { MenuTree, type BaseMenuItem, type ChromeMenuItem } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import integrate from "./index";
 
 describe("integrate addon manifest", () => {
+  test("satisfies the rendered-addon invariants", () => {
+    expect(() => expectValidBaseAddon(integrate)).not.toThrow();
+  });
+
   test("registers the integrations landing on the console layout with a component", () => {
     const integrations = (integrate.routes ?? []).find(
       (route) => route.name === "integrate.integrations",
     );
     expect(integrations?.path).toBe("/integrate");
-    expect(integrations?.layout).toBe("console");
     expect(integrations?.component).toBeTypeOf("function");
     // No `menu:` — the route-less root no longer references this route, so a
     // `menu` would mismatch (createApp throws "item does not reference the route").
@@ -120,7 +124,6 @@ describe("integrate addon manifest", () => {
       (item) => item.name === "integrate.connect.callback",
     );
     expect(route?.path).toBe("/integrate/oauth/callback");
-    expect(route?.layout).toBe("console");
     expect(route?.component).toBeTypeOf("function");
   });
 
@@ -131,7 +134,6 @@ describe("integrate addon manifest", () => {
     // Pinned to `/callback` to match the seeded `loopback_redirect_path` (see
     // tests/test_connections.py) — drift on either side fails a test, not a connect.
     expect(loopback?.path).toBe("/callback");
-    expect(loopback?.layout).toBe("console");
     expect(loopback?.component).toBeTypeOf("function");
     // The legacy IAM login callback alias stays dropped; this restores the connect loopback only.
     expect(

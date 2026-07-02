@@ -31,8 +31,8 @@ export function SelectedFolderControl({
       value={name}
       busy={busy}
       onSubmit={onRename}
-      inputLabel={t("storage.folder.nameLabel")}
-      submitLabel={t("storage.folder.save")}
+      inputLabel={t("folder.nameLabel")}
+      submitLabel={t("folder.save")}
       className="px-1"
       formClassName="w-full items-center gap-1"
       inputClassName="min-w-0 flex-1"
@@ -45,7 +45,7 @@ export function SelectedFolderControl({
             type="button"
             size="iconSm"
             variant="ghost"
-            aria-label={t("storage.folder.rename")}
+            aria-label={t("folder.rename")}
             onClick={open}
           >
             <Glyph name="edit" />
@@ -54,7 +54,7 @@ export function SelectedFolderControl({
             type="button"
             size="iconSm"
             variant="ghost"
-            aria-label={t("storage.folder.delete")}
+            aria-label={t("folder.delete")}
             onClick={onDelete}
           >
             <Glyph name="trash" />

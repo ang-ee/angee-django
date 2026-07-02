@@ -1,27 +1,17 @@
+import { useAuthoredQuery } from "@angee/refine";
 import { useCallback, useMemo, type ReactElement } from "react";
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 
 import {
-  EmptyState,
-  LoadingPanel,
-  RelationPicker,
-  recordPath,
-  TreeView,
-  WikilinkProvider,
-  useChatterContent,
-  useConfirm,
-  usePrimaryPane,
-  useScopedTreeExplorer,
-  type ChatterTab,
-  type WikilinkResolver,
-} from "@angee/ui";
-import { useAuthoredQuery } from "@angee/ui";
+  EmptyState, LoadingPanel, ScopedExplorerPane, recordPath, TreeView, WikilinkProvider, useChatterContent, useConfirm, useRouteRecordId, type ChatterTab, type ScopedExplorerController, type WikilinkResolver } from "@angee/ui";
 
 import {
   KnowledgePage as KnowledgePageQuery,
   KnowledgePages,
   KnowledgeVaults,
   type Backlink,
+  type KnowledgePageDetail,
+  type KnowledgePageRow,
 } from "../data/documents";
 import {
   KNOWLEDGE_PAGE_DND,
@@ -43,6 +33,11 @@ import { useKnowledgeT } from "../i18n";
 // client-side so the navigator and reader share one fetch.
 const KNOWLEDGE_LIST_LIMIT = 500;
 const EMPTY_BACKLINKS: readonly Backlink[] = [];
+
+type KnowledgeExplorerController = ScopedExplorerController<
+  { id: string; name: string },
+  KnowledgeTreeRow
+>;
 
 /**
  * The knowledge wiki reader. The vault switcher + page-tree navigator publishes
@@ -70,9 +65,7 @@ export function KnowledgePage(): ReactElement {
   // The open page is route state: `/knowledge/$id` reads that page into the
   // content + aside; `/knowledge` is the empty reader.
   const navigate = useNavigate();
-  const params = useParams({ strict: false });
-  const openPageId =
-    "id" in params && typeof params.id === "string" ? params.id : null;
+  const openPageId = useRouteRecordId() ?? null;
   const openPage = useCallback(
     (id: string) => {
       void navigate({ to: recordPath("/knowledge", id) });
@@ -121,26 +114,6 @@ export function KnowledgePage(): ReactElement {
     (rootId: string) => pageTreeRows(pages, rootId),
     [pages],
   );
-  const explorer = useScopedTreeExplorer({
-    roots: vaults,
-    getRootId: getVaultId,
-    getRootLabel: getVaultLabel,
-    getTreeRows: getVaultTreeRows,
-    selectedId: openPageId,
-    selectedRootId: activePage?.vault ?? null,
-  });
-  const vaultId = explorer.rootId;
-  const vaultOptions = explorer.rootOptions;
-  // New pages land inside the active scope when it is a folder, else at the root.
-  const handleNewPage = useCallback(
-    async (kind: NewPageKind, title: string) => {
-      if (!vaultId) return;
-      const parent = activePage?.kind === "folder" ? openPageId : null;
-      const id = await createPage({ vault: vaultId, title, kind, parent });
-      if (id) openPage(id);
-    },
-    [vaultId, activePage, openPageId, createPage, openPage],
-  );
   // Drop a page onto another to reparent it; the guard blocks dropping a page
   // onto itself or its own descendant (which would orphan the subtree).
   const handlePageDrop = useCallback(
@@ -153,92 +126,68 @@ export function KnowledgePage(): ReactElement {
   const handleDeletePage = useCallback(async () => {
     if (!activePage) return;
     const ok = await confirm({
-      title: t("knowledge.page.deleteConfirmTitle", { title: activePage.title }),
-      body: t("knowledge.page.deleteConfirmBody"),
-      confirm: t("knowledge.page.deleteConfirm"),
+      title: t("page.deleteConfirmTitle", { title: activePage.title }),
+      body: t("page.deleteConfirmBody"),
+      confirm: t("page.deleteConfirm"),
       danger: true,
     });
     if (!ok) return;
     await deletePage(activePage.id);
     closePage();
   }, [activePage, confirm, deletePage, closePage, t]);
-
-  const { selectedId, setRootId, treeRows } = explorer;
-  // A `[[wikilink]]` resolves to a page by title within the vault; clicking it
-  // opens that page, or renders broken when nothing matches.
-  const resolveWikilink = useCallback<WikilinkResolver>(
-    (target) => {
-      const id = pageIdByTitle(pages, vaultId, target);
-      return id
-        ? { broken: false, onActivate: () => openPage(id) }
-        : { broken: true };
-    },
-    [pages, vaultId, openPage],
+  const vaultRootPicker = useMemo(
+    () => ({
+      "aria-label": t("vault.label"),
+      placeholder: t("vault.placeholder"),
+      searchPlaceholder: t("vault.searchPlaceholder"),
+      create: { resource: "Vault" },
+      onCreated: () => {
+        void refetchVaults();
+        closePage();
+      },
+    }),
+    [closePage, refetchVaults, t],
   );
-
-  const hasVaults = vaults.length > 0;
-
-  // The vault switcher + page-tree navigator lives in the shell's primary pane.
-  const navigator = useMemo(
-    () => (
-      <div
-        role="navigation"
-        aria-label={t("knowledge.nav.label")}
-        className="flex h-full flex-col gap-2 p-2"
-      >
-        <RelationPicker
-          aria-label={t("knowledge.vault.label")}
-          value={vaultId}
-          options={vaultOptions}
-          placeholder={t("knowledge.vault.placeholder")}
-          searchPlaceholder={t("knowledge.vault.searchPlaceholder")}
-          onChange={(value) => {
-            setRootId(value);
-            closePage();
-          }}
-          create={{ resource: "Vault" }}
-          onCreated={(id) => {
-            void refetchVaults();
-            setRootId(id);
-            closePage();
-          }}
-        />
-        <TreeView<KnowledgeTreeRow>
-          rows={treeRows}
-          parent="parent"
-          label="title"
-          rowKey="id"
-          icon="icon"
-          selectedId={selectedId}
-          onSelect={(row) => openPage(row.id)}
-          draggableRow={pageDragPayload}
-          dropAccept={KNOWLEDGE_PAGE_DND}
-          onNodeDrop={(nodeId, payload) =>
-            handlePageDrop(nodeId, payload.data as PageDragData)
-          }
-          className="min-h-0 flex-1 overflow-auto"
-        />
-        <NewPageControl busy={actionsBusy} onCreate={handleNewPage} />
-      </div>
+  const renderTree = useCallback(
+    (controller: KnowledgeExplorerController) => (
+      <TreeView<KnowledgeTreeRow>
+        rows={controller.treeRows}
+        parent="parent"
+        label="title"
+        rowKey="id"
+        icon="icon"
+        selectedId={controller.selectedId}
+        onSelect={(row) => openPage(row.id)}
+        draggableRow={pageDragPayload}
+        dropAccept={KNOWLEDGE_PAGE_DND}
+        onNodeDrop={(nodeId, payload) =>
+          handlePageDrop(nodeId, payload.data as PageDragData)
+        }
+        className="min-h-0 flex-1 overflow-auto"
+      />
     ),
-    [
-      t,
-      vaultId,
-      vaultOptions,
-      setRootId,
-      closePage,
-      refetchVaults,
-      treeRows,
-      selectedId,
-      openPage,
-      handlePageDrop,
-      actionsBusy,
-      handleNewPage,
-    ],
+    [handlePageDrop, openPage],
   );
-  // Publish the navigator only once vaults exist; the loading/empty states own
-  // the whole surface and the shell falls back to its own primary content.
-  usePrimaryPane(hasVaults ? navigator : null);
+  const renderNavigatorFooter = useCallback(
+    (controller: KnowledgeExplorerController) => {
+      const createInScope = async (
+        kind: NewPageKind,
+        title: string,
+      ): Promise<void> => {
+        if (!controller.rootId) return;
+        const parent = activePage?.kind === "folder" ? openPageId : null;
+        const id = await createPage({
+          vault: controller.rootId,
+          title,
+          kind,
+          parent,
+        });
+        if (id) openPage(id);
+      };
+      return <NewPageControl busy={actionsBusy} onCreate={createInScope} />;
+    },
+    [actionsBusy, activePage, createPage, openPage, openPageId],
+  );
 
   // The backlinks rail rides along as an additive secondary (chatter) tab.
   const backlinksTabs = useMemo<readonly ChatterTab[]>(
@@ -247,7 +196,7 @@ export function KnowledgePage(): ReactElement {
         ? [
             {
               id: "backlinks",
-              label: t("knowledge.backlinks.heading"),
+              label: t("backlinks.heading"),
               icon: "link",
               children: (
                 <BacklinksPanel
@@ -266,25 +215,83 @@ export function KnowledgePage(): ReactElement {
   );
   useChatterContent(chatter);
 
-  if (vaultsQuery.fetching && vaults.length === 0) {
-    return <LoadingPanel message={t("knowledge.loading")} />;
-  }
-  if (vaults.length === 0) {
-    return (
-      <EmptyState
-        fill
-        icon="vault"
-        title={
-          vaultsQuery.error
-            ? t("knowledge.vaults.unavailableTitle")
-            : t("knowledge.vaults.emptyTitle")
-        }
-        description={
-          vaultsQuery.error?.message ?? t("knowledge.vaults.emptyDescription")
-        }
-      />
-    );
-  }
+  return (
+    <ScopedExplorerPane<{ id: string; name: string }, KnowledgeTreeRow>
+      roots={vaults}
+      getRootId={getVaultId}
+      getRootLabel={getVaultLabel}
+      getTreeRows={getVaultTreeRows}
+      selectedId={openPageId}
+      selectedRootId={activePage?.vault ?? null}
+      navigatorLabel={t("nav.label")}
+      rootPicker={vaultRootPicker}
+      onRootChange={closePage}
+      renderTree={renderTree}
+      renderNavigatorFooter={renderNavigatorFooter}
+      loading={vaultsQuery.fetching && vaults.length === 0}
+      loadingContent={<LoadingPanel message={t("loading")} />}
+      emptyContent={
+        <EmptyState
+          fill
+          icon="vault"
+          title={
+            vaultsQuery.error
+              ? t("vaults.unavailableTitle")
+              : t("vaults.emptyTitle")
+          }
+          description={
+            vaultsQuery.error?.message ?? t("vaults.emptyDescription")
+          }
+        />
+      }
+    >
+      {(controller) => (
+        <KnowledgeExplorerContent
+          controller={controller}
+          pages={pages}
+          openPageId={openPageId}
+          detail={detail}
+          detailFetching={detailQuery.fetching}
+          onOpenPage={openPage}
+          onTitleSaved={handleTitleSaved}
+          onDeletePage={handleDeletePage}
+        />
+      )}
+    </ScopedExplorerPane>
+  );
+}
+
+function KnowledgeExplorerContent({
+  controller,
+  pages,
+  openPageId,
+  detail,
+  detailFetching,
+  onOpenPage,
+  onTitleSaved,
+  onDeletePage,
+}: {
+  controller: KnowledgeExplorerController;
+  pages: readonly KnowledgePageRow[];
+  openPageId: string | null;
+  detail: KnowledgePageDetail | null;
+  detailFetching: boolean;
+  onOpenPage: (id: string) => void;
+  onTitleSaved: () => void;
+  onDeletePage: () => Promise<void>;
+}): ReactElement {
+  const t = useKnowledgeT();
+  // A `[[wikilink]]` resolves to a page by title within the vault; clicking it
+  // opens that page, or renders broken when nothing matches.
+  const resolveWikilink = useCallback<WikilinkResolver>(
+    (target) => {
+      const id = pageIdByTitle(pages, controller.rootId, target);
+      return id
+        ? { broken: false, onActivate: () => onOpenPage(id) }
+        : { broken: true };
+    },
+    [controller.rootId, onOpenPage, pages],
+  );
 
   return (
     <WikilinkProvider resolve={resolveWikilink}>
@@ -293,25 +300,25 @@ export function KnowledgePage(): ReactElement {
           <PageEditor
             key={openPageId}
             detail={detail}
-            onTitleSaved={handleTitleSaved}
-            onDelete={handleDeletePage}
+            onTitleSaved={onTitleSaved}
+            onDelete={onDeletePage}
           />
-        ) : detailQuery.fetching || detail ? (
-          <LoadingPanel message={t("knowledge.page.loading")} />
+        ) : detailFetching || detail ? (
+          <LoadingPanel message={t("page.loading")} />
         ) : (
           <EmptyState
             fill
             icon="note"
-            title={t("knowledge.page.notFoundTitle")}
-            description={t("knowledge.page.notFoundDescription")}
+            title={t("page.notFoundTitle")}
+            description={t("page.notFoundDescription")}
           />
         )
       ) : (
         <EmptyState
           fill
           icon="note"
-          title={t("knowledge.page.selectTitle")}
-          description={t("knowledge.page.selectDescription")}
+          title={t("page.selectTitle")}
+          description={t("page.selectDescription")}
         />
       )}
     </WikilinkProvider>

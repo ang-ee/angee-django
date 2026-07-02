@@ -2,7 +2,7 @@ import * as React from "react";
 import {
   rowPublicId,
   type Row,
-} from "@angee/resources";
+} from "@angee/metadata";
 import { useMutation } from "@tanstack/react-query";
 
 import { Button } from "../ui/button";

@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Column, ResourceList, Field, Form, Group, List } from "@angee/ui";
+import { usePartiesT } from "./i18n";
 
 const MODEL = "parties.Organization";
 
@@ -11,23 +12,20 @@ const organizationsList = (
   </List>
 );
 
-const organizationsForm = (
-  <Form resource={MODEL}>
-    <Field name="display_name" title />
-    <Group label="Details" columns={2}>
-      <Field name="legal_name" label="Legal name" />
-      <Field name="domain" label="Domain" />
-    </Group>
-    <Field name="notes" />
-  </Form>
-);
-
 /** Organizations (the organisation-kind contacts): full create/edit/list/detail. */
 export function OrganizationsPage(): React.ReactElement {
+  const t = usePartiesT();
   return (
     <ResourceList resource={MODEL} placement="inline" routed>
       {organizationsList}
-      {organizationsForm}
+      <Form resource={MODEL}>
+        <Field name="display_name" title />
+        <Group label={t("organization.group.details")} columns={2}>
+          <Field name="legal_name" label={t("organization.field.legalName")} />
+          <Field name="domain" label={t("organization.field.domain")} />
+        </Group>
+        <Field name="notes" />
+      </Form>
     </ResourceList>
   );
 }

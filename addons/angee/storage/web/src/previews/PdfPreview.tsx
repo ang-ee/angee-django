@@ -5,14 +5,7 @@ import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 
 import {
-  Button,
-  cn,
-  EmptyState,
-  Glyph,
-  LoadingPanel,
-  textRoleVariants,
-  type PreviewProviderProps,
-} from "@angee/ui";
+  Button, cn, EmptyState, Glyph, LoadingPanel, textRoleVariants, type PreviewProviderProps } from "@angee/ui";
 
 import { useStorageT } from "../i18n";
 
@@ -37,12 +30,12 @@ export default function PdfPreview({ file }: PreviewProviderProps): ReactElement
             setPageCount(numPages);
             setPage((current) => Math.min(current, numPages));
           }}
-          loading={<LoadingPanel message={t("storage.preview.loading")} />}
+          loading={<LoadingPanel message={t("preview.loading")} />}
           error={
             <EmptyState
               icon="file"
               title={file.name}
-              description={t("storage.preview.loadError")}
+              description={t("preview.loadError")}
             />
           }
           className="grid place-content-center"
@@ -56,13 +49,13 @@ export default function PdfPreview({ file }: PreviewProviderProps): ReactElement
             variant="ghost"
             size="iconSm"
             disabled={page <= 1}
-            aria-label={t("storage.preview.pdfPrev")}
+            aria-label={t("preview.pdfPrev")}
             onClick={() => setPage((current) => Math.max(1, current - 1))}
           >
             <Glyph name="chevron-left" />
           </Button>
           <span className="tabular-nums">
-            {t("storage.preview.pdfPage", {
+            {t("preview.pdfPage", {
               page: String(page),
               total: String(pageCount),
             })}
@@ -71,7 +64,7 @@ export default function PdfPreview({ file }: PreviewProviderProps): ReactElement
             variant="ghost"
             size="iconSm"
             disabled={page >= pageCount}
-            aria-label={t("storage.preview.pdfNext")}
+            aria-label={t("preview.pdfNext")}
             onClick={() => setPage((current) => Math.min(pageCount, current + 1))}
           >
             <Glyph name="chevron-right" />

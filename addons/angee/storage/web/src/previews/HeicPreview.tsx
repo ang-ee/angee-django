@@ -2,10 +2,7 @@ import { useEffect, useState, type ReactElement } from "react";
 import { heicTo } from "heic-to";
 
 import {
-  EmptyState,
-  LoadingPanel,
-  type PreviewProviderProps,
-} from "@angee/ui";
+  EmptyState, LoadingPanel, type PreviewProviderProps } from "@angee/ui";
 
 import { useStorageT } from "../i18n";
 
@@ -55,12 +52,12 @@ export default function HeicPreview({ file }: PreviewProviderProps): ReactElemen
     return (
       <EmptyState
         icon="image"
-        title={t("storage.preview.loadError")}
+        title={t("preview.loadError")}
         description={state.error.message}
       />
     );
   }
-  if (!state.url) return <LoadingPanel message={t("storage.preview.decoding")} />;
+  if (!state.url) return <LoadingPanel message={t("preview.decoding")} />;
   return (
     <div className="grid h-full place-content-center overflow-auto bg-inset p-4">
       <img

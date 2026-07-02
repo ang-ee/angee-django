@@ -1,7 +1,8 @@
 import { fileURLToPath } from "node:url";
-import type { ViteUserConfig } from "vitest/config";
+import { mergeConfig, type ViteUserConfig } from "vitest/config";
 import {
   type AngeeWebVitestConfig,
+  defineAngeePackageVitestConfig as definePackageVitestConfig,
   defineAngeeWebVitestConfig as defineWebVitestConfig,
   gqlAliasFor,
 } from "./angee/web/app/config/vitest";
@@ -21,7 +22,6 @@ import {
 
 export {
   type AngeeWebVitestConfig,
-  defineAngeePackageVitestConfig,
   gqlAliasFor,
 } from "./angee/web/app/config/vitest";
 
@@ -31,6 +31,17 @@ export {
 export const gqlAlias = gqlAliasFor(
   fileURLToPath(new URL("./examples/notes-angee/runtime/gql/", import.meta.url)),
 );
+
+// Core framework packages resolve the same fixture: `@angee/ui` owns authored
+// `documents.ts` view operations, so any core package whose test import graph
+// reaches them needs the `@angee/gql/<schema>` alias too.
+export function defineAngeePackageVitestConfig(
+  config: ViteUserConfig = {},
+): ViteUserConfig {
+  return definePackageVitestConfig(
+    mergeConfig({ resolve: { alias: gqlAlias } }, config),
+  );
+}
 
 // Defaults `gqlAlias` to the in-repo fixture so a base-addon config need not
 // repeat it; a config that owns its own `runtime/gql/` passes `gqlAlias`.

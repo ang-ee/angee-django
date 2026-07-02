@@ -1,22 +1,5 @@
 import * as React from "react";
-import {
-  ResourceList,
-  Form,
-  List,
-  Column,
-  Field,
-  Group,
-  REFINE_CREATE_ID,
-  RevisionsTab,
-  Statusline,
-  StatusSegment,
-  StatuslineSpacer,
-  useResourceRevisions,
-  type ChatterTab,
-  type ResourceViewDefaultGroups,
-  type RecordSmartButtonDescriptor,
-  useChatterContent,
-} from "@angee/ui";
+import { ResourceList, Form, List, Column, Field, Group, REFINE_CREATE_ID, RevisionsTab, Statusline, StatusSegment, StatuslineSpacer, useResourceRevisions, type ChatterTab, type ResourceViewDefaultGroups, type RecordSmartButtonDescriptor, useChatterContent } from "@angee/ui";
 import { useParams } from "@tanstack/react-router";
 
 const MODEL = "notes.Note";
@@ -39,7 +22,7 @@ const noteList = (
     resource={MODEL}
     defaultGroups={NOTE_DEFAULT_GROUPS}
     order={{ updated_at: "DESC" }}
-    emptyState={{
+    emptyContent={{
       icon: "agent",
       title: "No notes yet",
       description: "The agent isn't running yet — provision it to start chatting.",

@@ -21,10 +21,10 @@ describe("parseManualCode", () => {
 
   test("rejects incomplete or mismatched manual codes", () => {
     expect(() => parseManualCode("code-only", "", t)).toThrow(
-      "integrate.providers.connect.codeIncomplete",
+      "providers.connect.codeIncomplete",
     );
     expect(() => parseManualCode("code#other-state", "state", t)).toThrow(
-      "integrate.providers.connect.codeMismatch",
+      "providers.connect.codeMismatch",
     );
   });
 });

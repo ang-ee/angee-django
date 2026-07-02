@@ -18,3 +18,10 @@ export const State: Story = {
   render: (args) => <LoadingPanel {...args} />,
 };
 
+export const Inline: Story = {
+  args: {
+    density: "inline",
+    message: "Loading folder",
+  },
+  render: (args) => <LoadingPanel {...args} />,
+};

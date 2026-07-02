@@ -1,18 +1,21 @@
 {
   "name": "@angee/messaging",
   "version": "0.0.0",
+  "license": "AGPL-3.0-or-later",
   "private": true,
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": "./src/index.tsx"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
     "@angee/app": "workspace:*",
+    "@angee/refine": "workspace:*",
     "@angee/storage": "workspace:*",
     "@angee/ui": "workspace:*",
     "@tanstack/react-virtual": "^3.14.3",

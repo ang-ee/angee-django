@@ -1,14 +1,7 @@
 import { type ReactElement } from "react";
 
 import {
-  Column,
-  DrawerResourceList,
-  Field,
-  Form,
-  List,
-  SettingsSection,
-  SettingsShell,
-} from "@angee/ui";
+  Column, DrawerResourceList, Field, Form, List, SettingsSection, SettingsShell } from "@angee/ui";
 import { useKnowledgeT } from "../i18n";
 
 const VAULT_MODEL = "knowledge.Vault";
@@ -23,8 +16,8 @@ export function KnowledgeSettingsPage(): ReactElement {
   return (
     <SettingsShell maxWidth="1100" gap="6">
       <SettingsSection
-        title={t("knowledge.settings.title")}
-        description={t("knowledge.settings.description")}
+        title={t("settings.title")}
+        description={t("settings.description")}
       />
       <DrawerResourceList resource={VAULT_MODEL}>
         <List resource={VAULT_MODEL} order={{ name: "ASC" }}>

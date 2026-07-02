@@ -1,14 +1,7 @@
 import { type ReactElement } from "react";
 
 import {
-  Column,
-  DrawerResourceList,
-  Field,
-  Form,
-  List,
-  SettingsSection,
-  SettingsShell,
-} from "@angee/ui";
+  Column, DrawerResourceList, Field, Form, List, SettingsSection, SettingsShell } from "@angee/ui";
 import { useStorageT } from "../i18n";
 
 const DRIVE_MODEL = "storage.Drive";
@@ -26,8 +19,8 @@ export function StorageSettingsPage(): ReactElement {
   return (
     <SettingsShell maxWidth="1100" gap="10">
       <SettingsSection
-        title={t("storage.settings.drives.title")}
-        description={t("storage.settings.drives.description")}
+        title={t("settings.drives.title")}
+        description={t("settings.drives.description")}
       >
         <DrawerResourceList resource={DRIVE_MODEL} hideCreate>
           <List resource={DRIVE_MODEL} order={{ name: "ASC" }}>
@@ -41,14 +34,14 @@ export function StorageSettingsPage(): ReactElement {
             <Field name="slug" createOnly />
             <Field name="prefix" />
             <Field name="description" widget="textarea" />
-            <Field name="is_archived" label={t("storage.settings.archived")} widget="switch" />
+            <Field name="is_archived" label={t("settings.archived")} widget="switch" />
           </Form>
         </DrawerResourceList>
       </SettingsSection>
 
       <SettingsSection
-        title={t("storage.settings.backends.title")}
-        description={t("storage.settings.backends.description")}
+        title={t("settings.backends.title")}
+        description={t("settings.backends.description")}
       >
         <DrawerResourceList resource={BACKEND_MODEL}>
           <List resource={BACKEND_MODEL} order={{ label: "ASC" }}>
@@ -60,9 +53,9 @@ export function StorageSettingsPage(): ReactElement {
           <Form resource={BACKEND_MODEL}>
             <Field name="label" widget="text" title />
             <Field name="slug" createOnly />
-            <Field name="backend_class" label={t("storage.settings.backendClass")} />
-            <Field name="backend_config" label={t("storage.settings.config")} widget="json" />
-            <Field name="is_archived" label={t("storage.settings.archived")} widget="switch" editOnly />
+            <Field name="backend_class" label={t("settings.backendClass")} />
+            <Field name="backend_config" label={t("settings.config")} widget="json" />
+            <Field name="is_archived" label={t("settings.archived")} widget="switch" editOnly />
           </Form>
         </DrawerResourceList>
       </SettingsSection>

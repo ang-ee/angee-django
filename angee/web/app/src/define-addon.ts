@@ -7,8 +7,7 @@
 import type { I18nResources } from "@angee/refine";
 // The contribution contracts moved down into the binding (`@angee/ui` owns the
 // runtime registry that consumes them); composition here builds manifests
-// against them. Re-exported so `@angee/sdk` importers (via the shim) resolve
-// them unchanged.
+// against them. Re-exported here so addon manifests import one composition seam.
 import type {
   ChatterContribution,
   ComposedMenuItem,
@@ -42,7 +41,7 @@ export interface AddonRoute {
   /** Optional route name this route nests under in the rendered route tree. */
   parent?: string;
   /** Which refine layout renders this route's chrome (`console`, `public`, ...). */
-  layout: string;
+  layout?: string;
   /**
    * Resource whose collection this route lists, e.g. `"OAuthClient"`. Set it on
    * a routed collection action (not its `$id` child) to make the resource
@@ -148,8 +147,8 @@ export function mergeDrawerContributions(
   return mergeByKey(groups, (drawer) => `${drawer.edge}\0${drawer.id}`, "drawer");
 }
 
-/** Claim a registry key for one addon, failing fast on a second claim. */
-function claim(
+/** Assert a registry key is still unclaimed for one addon. */
+function assertUnclaimed(
   registry: Record<string, unknown>,
   key: string,
   addonId: string,
@@ -182,7 +181,7 @@ export function composeAddons(addons: readonly AddonManifest[]): ComposedAddons 
   for (const addon of addons) {
     if (addon.routes) {
       for (const route of addon.routes) {
-        claim(routeNames, route.name, addon.id, "route name");
+        assertUnclaimed(routeNames, route.name, addon.id, "route name");
         routeNames[route.name] = true;
         routes.push(route);
       }
@@ -192,25 +191,25 @@ export function composeAddons(addons: readonly AddonManifest[]): ComposedAddons 
     }
     if (addon.widgets) {
       for (const [key, widget] of Object.entries(addon.widgets)) {
-        claim(widgets, key, addon.id, "widget");
+        assertUnclaimed(widgets, key, addon.id, "widget");
         widgets[key] = widget;
       }
     }
     if (addon.icons) {
       for (const [name, icon] of Object.entries(addon.icons)) {
-        claim(icons, name, addon.id, "icon");
+        assertUnclaimed(icons, name, addon.id, "icon");
         icons[name] = icon;
       }
     }
     if (addon.forms) {
       for (const [model, form] of Object.entries(addon.forms)) {
-        claim(forms, model, addon.id, "form override");
+        assertUnclaimed(forms, model, addon.id, "form override");
         forms[model] = form;
       }
     }
     if (addon.dataProviders) {
       for (const [name, provider] of Object.entries(addon.dataProviders)) {
-        claim(dataProviders, name, addon.id, "data provider");
+        assertUnclaimed(dataProviders, name, addon.id, "data provider");
         dataProviders[name] = provider;
       }
     }
@@ -218,14 +217,14 @@ export function composeAddons(addons: readonly AddonManifest[]): ComposedAddons 
       for (const [namespace, messages] of Object.entries(addon.i18n)) {
         const target = (i18n[namespace] ??= {});
         for (const [key, value] of Object.entries(messages)) {
-          claim(target, key, addon.id, `i18n key "${namespace}.${key}"`);
+          assertUnclaimed(target, key, addon.id, `i18n key "${namespace}.${key}"`);
           target[key] = value;
         }
       }
     }
     if (addon.previews) {
       for (const preview of addon.previews) {
-        claim(previewIds, preview.id, addon.id, "preview");
+        assertUnclaimed(previewIds, preview.id, addon.id, "preview");
         previews.push(preview);
       }
     }
@@ -260,7 +259,7 @@ function normalizeMenuItem(
   addonId: string,
 ): ComposedMenuItem {
   const id = menuItemId(item, addonId);
-  claim(registry, id, addonId, "menu item id");
+  assertUnclaimed(registry, id, addonId, "menu item id");
   registry[id] = true;
   const { id: _id, children, ...rest } = item;
   return {

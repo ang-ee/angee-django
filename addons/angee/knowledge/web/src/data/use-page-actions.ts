@@ -1,38 +1,22 @@
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo } from "react";
 
 import {
-  resourceOperationTarget,
-  type Row,
-} from "@angee/resources";
+  resourceOperationTarget, type Row, } from "@angee/metadata";
 import {
-  useCreate,
-  useCustomMutation,
-  useInvalidate,
-  useUpdate,
-  type BaseRecord,
-  type HttpError,
-  } from "@refinedev/core";
+  useCreate, useInvalidate, useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
 import {
-  refineFieldsFromPaths,
-  } from "@angee/refine";
+  refineFieldsFromPaths, } from "@angee/refine";
 import {
-  deletePreviewDocumentForResource,
-  deletePreviewRequest,
-  extractDeletePreview,
-  useOperationDocuments,
-  type DeletePreviewVariables,
-  } from "@angee/refine";
+  deletePreviewDocumentForResource, useAngeeDeletePreview, useOperationDocuments, } from "@angee/refine";
 import {
-  refineResourceName,
-} from "@angee/resources";
+  refineResourceName, } from "@angee/metadata";
 import {
-  rowPublicId,
-} from "@angee/resources";
+  rowPublicId, } from "@angee/metadata";
 import {
-  useBusyRun } from "@angee/ui";
+  useBusyRun, useLatestRef } from "@angee/ui";
 import {
   useModelMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 export interface PageActions {
   busy: boolean;
@@ -75,8 +59,19 @@ export function usePageActions(
     meta: { fields },
     invalidates: ["list", "many", "detail"],
   });
-  const deletePageMutation =
-    useCustomMutation<BaseRecord, HttpError, DeletePreviewVariables>();
+  const deletePreviewTarget = resource
+    ? resourceOperationTarget(resource, "deletePreview")
+    : null;
+  const deletePreviewDocument = resource
+    ? deletePreviewDocumentForResource(
+        operationDocuments,
+        resource.schemaName,
+        resource.modelLabel,
+      )
+    : "";
+  const deletePreview = useAngeeDeletePreview(deletePreviewTarget, {
+    document: deletePreviewDocument,
+  });
   const invalidate = useInvalidate();
   const { busy, run } = useBusyRun(onChanged);
 
@@ -84,25 +79,14 @@ export function usePageActions(
   // must stay stable even if Refine refreshes the mutation function identities.
   const { mutateAsync: createMutate } = createPageMutation;
   const { mutateAsync: updateMutate } = updatePageMutation;
-  const { mutateAsync: deleteMutate } = deletePageMutation;
-  const actionRef = useRef({
+  const actionRef = useLatestRef({
     createMutate,
-    deleteMutate,
+    deletePreview,
     invalidate,
-    operationDocuments,
     resource,
     run,
     updateMutate,
   });
-  actionRef.current = {
-    createMutate,
-    deleteMutate,
-    invalidate,
-    operationDocuments,
-    resource,
-    run,
-    updateMutate,
-  };
 
   const createPage = useCallback<PageActions["createPage"]>(
     ({ vault, title, kind, parent }) => {
@@ -120,32 +104,13 @@ export function usePageActions(
 
   const deletePage = useCallback<PageActions["deletePage"]>(
     (id) => {
-      const { deleteMutate, invalidate, operationDocuments, resource, run } =
-        actionRef.current;
+      const { deletePreview, invalidate, resource, run } = actionRef.current;
       return run(async () => {
         requirePageResource(resource);
-        const request = deletePreviewRequest(
-          resourceOperationTarget(resource, "deletePreview"),
-          { id, confirm: true },
-          {
-            document: deletePreviewDocumentForResource(
-              operationDocuments,
-              resource.schemaName,
-              resource.modelLabel,
-            ),
-          },
-        );
-        const response = await deleteMutate({
-          url: "",
-          method: "post",
-          values: { id, confirm: true },
-          dataProviderName: request.dataProviderName,
-          meta: request.meta,
-        });
-        void extractDeletePreview(response.data, request.root);
+        await deletePreview.mutate({ id, confirm: true });
         await invalidate({
           resource: refineResourceName(resource),
-          dataProviderName: request.dataProviderName,
+          dataProviderName: resource.schemaName,
           id,
           invalidates: ["list", "many", "detail"],
         });

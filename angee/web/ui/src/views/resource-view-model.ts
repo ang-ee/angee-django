@@ -1,22 +1,10 @@
 import {
-  DEFAULT_PAGE_SIZE,
+  ANGEE_FILTER_LOOKUP_OPERATORS,
   clampPageSize,
+  type AngeeFilterLookupOperator,
 } from "@angee/refine";
-
-function dedupeBy<T>(
-  items: readonly T[],
-  keyFor: (item: T) => string,
-): readonly T[] {
-  const seen = new Set<string>();
-  const result: T[] = [];
-  for (const item of items) {
-    const key = keyFor(item);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    result.push(item);
-  }
-  return result;
-}
+import { dedupeBy } from "../lib/dedupe";
+import { DEFAULT_PAGE_SIZE } from "./page-size";
 
 export const RESOURCE_VIEW_KINDS = ["list", "board"] as const;
 export const RESOURCE_VIEW_GROUP_GRANULARITIES = [
@@ -33,25 +21,8 @@ export type ResourceViewGroupGranularity =
   (typeof RESOURCE_VIEW_GROUP_GRANULARITIES)[number];
 export type ResourceViewSortDirection = "asc" | "desc";
 export type ResourceViewOrderDirection = "ASC" | "DESC";
-export const RESOURCE_VIEW_LOOKUP_OPERATORS = [
-  "exact",
-  "inList",
-  "isNull",
-  "iExact",
-  "contains",
-  "jsonContains",
-  "iContains",
-  "startsWith",
-  "iStartsWith",
-  "endsWith",
-  "iEndsWith",
-  "gt",
-  "gte",
-  "lt",
-  "lte",
-] as const;
-export type ResourceViewLookupOperator =
-  (typeof RESOURCE_VIEW_LOOKUP_OPERATORS)[number];
+export const RESOURCE_VIEW_LOOKUP_OPERATORS = ANGEE_FILTER_LOOKUP_OPERATORS;
+export type ResourceViewLookupOperator = AngeeFilterLookupOperator;
 export const RESOURCE_VIEW_RELATION_LOOKUP_OPERATORS = ["sqid", "pk"] as const;
 export type ResourceViewRelationLookupOperator =
   (typeof RESOURCE_VIEW_RELATION_LOOKUP_OPERATORS)[number];

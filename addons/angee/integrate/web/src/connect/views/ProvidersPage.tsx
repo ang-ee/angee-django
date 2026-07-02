@@ -1,19 +1,6 @@
+import { useAuthoredMutation } from "@angee/refine";
 import * as React from "react";
-import {
-  Action,
-  Column,
-  ResourceList,
-  Field,
-  Form,
-  Group,
-  List,
-  recordActionId,
-  useEnumOptions,
-  useImplPrefill,
-  useRecordActionMutation,
-  useAuthoredMutation,
-  type ActionContext,
-} from "@angee/ui";
+import { Action, Column, ResourceList, Field, Form, Group, List, recordActionId, useEnumOptions, useImplPrefill, useRecordActionMutation, type ActionContext } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useIntegrateT } from "../../i18n";
@@ -60,7 +47,7 @@ export function ProvidersPage(): React.ReactElement {
   );
   const [discover] = useRecordActionMutation<ActionFieldName>(
     "discover_oauth_endpoints",
-    { defaultMessage: t("integrate.providers.discover.done") },
+    { defaultMessage: t("providers.discover.done") },
   );
 
   // Fill the transport endpoints from the client's discovery URL (no manual entry).
@@ -77,18 +64,18 @@ export function ProvidersPage(): React.ReactElement {
       });
       const payload = result?.connect_account_start;
       if (!payload?.authorize_url) {
-        throw new Error(payload?.error ?? t("integrate.providers.connect.startError"));
+        throw new Error(payload?.error ?? t("providers.connect.startError"));
       }
       if (payload.mode !== "manual") {
         // Redirect-back flow: the browser leaves and the callback page completes.
         window.location.assign(payload.authorize_url);
-        return t("integrate.providers.connect.redirecting");
+        return t("providers.connect.redirecting");
       }
       // Manual flow: the provider only displays the code (no redirect back), so keep
       // this tab/session alive and let the user paste the `code#state` it shows. The
       // link is a real user gesture, so it is never popup-blocked.
       const entered = await ctx.prompt({
-        title: t("integrate.providers.action.connect"),
+        title: t("providers.action.connect"),
         body: (
           <span>
             <a
@@ -97,23 +84,23 @@ export function ProvidersPage(): React.ReactElement {
               rel="noreferrer"
               className="underline"
             >
-              {t("integrate.providers.connect.openAuthorize")}
+              {t("providers.connect.openAuthorize")}
             </a>
-            {t("integrate.providers.connect.instructions")}
+            {t("providers.connect.instructions")}
           </span>
         ),
         fields: [
           {
             name: "pasted",
-            label: t("integrate.providers.connect.codeLabel"),
-            placeholder: t("integrate.providers.connect.codePlaceholder"),
+            label: t("providers.connect.codeLabel"),
+            placeholder: t("providers.connect.codePlaceholder"),
           },
         ],
       });
       if (!entered) return;
       const { code, state } = parseManualCode(entered.pasted, payload.state ?? "", t);
       if (!payload.redirect_uri) {
-        throw new Error(t("integrate.providers.connect.stateIncomplete"));
+        throw new Error(t("providers.connect.stateIncomplete"));
       }
       const completed = await connectAccountComplete({
         code,
@@ -125,7 +112,7 @@ export function ProvidersPage(): React.ReactElement {
         throw new Error(done.error);
       }
       ctx.refresh();
-      return t("integrate.providers.connect.connected");
+      return t("providers.connect.connected");
     },
     [connectAccountStart, connectAccountComplete, t],
   );
@@ -141,7 +128,7 @@ export function ProvidersPage(): React.ReactElement {
       {providerList}
       <Form resource={MODEL} layout="tabs">
         <Field name="display_name" title />
-        <Group label={t("integrate.providers.group.client")} columns={2}>
+        <Group label={t("providers.group.client")} columns={2}>
           <Field
             name="provider_type"
             widget="select"
@@ -157,7 +144,7 @@ export function ProvidersPage(): React.ReactElement {
           <Field name="client_id" />
           <Field name="client_secret" />
         </Group>
-        <Group label={t("integrate.providers.group.endpoints")} columns={2}>
+        <Group label={t("providers.group.endpoints")} columns={2}>
           <Field name="discovery_url" />
           <Field name="authorize_endpoint" />
           <Field name="token_endpoint" />
@@ -166,36 +153,36 @@ export function ProvidersPage(): React.ReactElement {
           <Field name="token_request_format" />
           <Field name="manual_redirect_uri" />
         </Group>
-        <Group label={t("integrate.providers.group.behavior")} columns={2}>
+        <Group label={t("providers.group.behavior")} columns={2}>
           <Field name="is_enabled" />
           <Field name="supports_refresh" />
           <Field name="refresh_rotates" />
           <Field name="supports_pkce" />
           <Field name="max_refresh_age_seconds" />
         </Group>
-        <Group label={t("integrate.providers.group.scopes")} columns={2}>
+        <Group label={t("providers.group.scopes")} columns={2}>
           <Field name="default_scopes" widget="tagInput" />
           <Field name="scopes_catalogue" widget="tagInput" />
         </Group>
-        <Group label={t("integrate.providers.group.claims")} columns={2}>
+        <Group label={t("providers.group.claims")} columns={2}>
           <Field name="external_id_claim" />
           <Field name="email_claim" />
           <Field name="display_name_claim" />
           <Field name="avatar_url_claim" />
         </Group>
-        <Group label={t("integrate.providers.group.oauthMetadata")} columns={2}>
+        <Group label={t("providers.group.oauthMetadata")} columns={2}>
           <Field name="authorize_params" />
           <Field name="token_params" />
         </Group>
         <Action
           id="discover"
-          label={t("integrate.providers.action.discover")}
+          label={t("providers.action.discover")}
           run={discover}
           visibleWhen={(record) => fieldString(record.discovery_url) !== ""}
         />
         <Action
           id="connect"
-          label={t("integrate.providers.action.connect")}
+          label={t("providers.action.connect")}
           run={connect}
           visibleWhen={canConnectAccount}
         />

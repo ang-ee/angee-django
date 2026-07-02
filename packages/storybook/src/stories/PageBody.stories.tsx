@@ -1,16 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import {
-  Badge,
-  Page,
-  PageBody,
-  PageHeader,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@angee/ui";
+import { Badge, Page, PageBody, PageHeader, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@angee/ui";
 
 const meta = {
   title: "Page/PageBody",

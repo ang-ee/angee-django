@@ -1,12 +1,4 @@
-import {
-  Badge,
-  Glyph,
-  formatSize,
-  isHeicMime,
-  isImageMime,
-  textRoleVariants,
-  type ListColumn,
-} from "@angee/ui";
+import { Badge, Glyph, formatSize, isHeicMime, isImageMime, textRoleVariants, type ListColumn } from "@angee/ui";
 import type { ReactElement } from "react";
 
 import type { StorageFileRow } from "../data/file-rows";
@@ -21,7 +13,7 @@ export function fileColumns(
   return [
     {
       field: "name",
-      header: t("storage.column.name"),
+      header: t("column.name"),
       render: (row) => (
         <span className="flex min-w-0 items-center gap-2">
           <Glyph decorative name={row.icon} fallbackName="file" className="text-fg-muted" />
@@ -29,10 +21,10 @@ export function fileColumns(
         </span>
       ),
     },
-    { field: "mimeLabel", header: t("storage.column.type") },
+    { field: "mimeLabel", header: t("column.type") },
     {
       field: "uploadState",
-      header: t("storage.column.stage"),
+      header: t("column.stage"),
       render: (row) => {
         const stage = fileStage(row.uploadState, t);
         return <Badge tone={stage.tone}>{stage.label}</Badge>;
@@ -40,16 +32,16 @@ export function fileColumns(
     },
     {
       field: "sizeBytes",
-      header: t("storage.column.size"),
+      header: t("column.size"),
       align: "right",
       render: (row) => (
         <span className="tabular-nums text-fg-muted">{formatSize(row.sizeBytes)}</span>
       ),
     },
-    { field: "owner", header: t("storage.column.owner") },
+    { field: "owner", header: t("column.owner") },
     {
       field: "updatedAt",
-      header: t("storage.column.modified"),
+      header: t("column.modified"),
       render: (row) => <span className="text-fg-muted">{formatDate(row.updatedAt)}</span>,
     },
   ];

@@ -1,20 +1,8 @@
-import { defineBaseAddon, type BaseAddonRoute } from "@angee/app";
+import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import { type BaseMenuItem } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { AtSign, Building2, Contact, Users } from "lucide-react";
-
-// Each resource page is a routed ResourceList: a list route + a `$id` detail child the
-// list page swaps to inline. `resource` tags the collection route so relation fields
-// targeting it can "follow" to this detail page.
-const consolePage = (
-  name: string,
-  path: string,
-  component: BaseAddonRoute["component"],
-  resource?: string,
-): readonly BaseAddonRoute[] => [
-  { name, path, layout: "console", component, ...(resource ? { resource } : {}) },
-  { name: `${name}.record`, path: `${path}/$id`, layout: "console", parent: name },
-];
+import { enPartiesMessages } from "./i18n";
 
 // One rail root ("Parties") whose children are the People and Organizations
 // pages. The root is route-less and inherits its target from the first child.
@@ -45,18 +33,19 @@ const partiesMenu: readonly BaseMenuItem[] = [
 const parties = defineBaseAddon({
   id: "parties",
   routes: [
-    ...consolePage("parties.people", "/parties/people", lazyRouteComponent(() => import("./PeoplePage"), "PeoplePage"), "parties.Person"),
-    ...consolePage(
+    ...resourcePageRoutes("parties.people", "/parties/people", lazyRouteComponent(() => import("./PeoplePage"), "PeoplePage"), "parties.Person"),
+    ...resourcePageRoutes(
       "parties.organizations",
       "/parties/organizations",
       lazyRouteComponent(() => import("./OrganizationsPage"), "OrganizationsPage"),
       "parties.Organization",
     ),
-    ...consolePage("parties.handles", "/parties/handles", lazyRouteComponent(() => import("./HandlesPage"), "HandlesPage"), "parties.Handle"),
-    ...consolePage("parties.directories", "/parties/directories", lazyRouteComponent(() => import("./DirectoriesPage"), "DirectoriesPage"), "parties.Directory"),
+    ...resourcePageRoutes("parties.handles", "/parties/handles", lazyRouteComponent(() => import("./HandlesPage"), "HandlesPage"), "parties.Handle"),
+    ...resourcePageRoutes("parties.directories", "/parties/directories", lazyRouteComponent(() => import("./DirectoriesPage"), "DirectoriesPage"), "parties.Directory"),
   ],
   menus: partiesMenu,
   icons: { parties: Users, organization: Building2, "address-book": Contact, handle: AtSign },
+  i18n: { parties: enPartiesMessages },
 });
 
 export default parties;

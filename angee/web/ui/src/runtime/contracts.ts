@@ -1,8 +1,8 @@
 // Runtime contribution contracts. The type-only shapes the rendered binding's
 // runtime registry (`runtime.ts`) and its render surfaces (menus, slots,
 // previews, widgets, forms) consume. The binding OWNS these contracts; the
-// addon-composition functions (`defineAddon` / `composeAddons`) in
-// `@angee/sdk` build manifests against them.
+// addon-composition functions (`defineAddon` / `composeAddons`) in `@angee/app`
+// build manifests against them.
 
 import type { ReactNode } from "react";
 

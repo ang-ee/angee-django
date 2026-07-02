@@ -1,22 +1,11 @@
 import * as React from "react";
-import {
-  Button,
-  cn,
-  Dialog,
-  Glyph,
-  Input,
-  RelationField,
-  Spinner,
-  errorMessage,
-  textRoleVariants,
-  useRelationOptions,
-  useAuthoredMutation,
-  useAuthoredQuery,
-} from "@angee/ui";
+import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
+import { Button, DialogForm, Glyph, Input, RelationField, Spinner, cn, errorMessage, textRoleVariants, useRelationOptions } from "@angee/ui";
 import { useDebounce } from "use-debounce";
 import type { DocumentVariables } from "@angee/refine";
 
 import { useIntegrateT } from "../i18n";
+import { VCS_BRIDGE_RELATION } from "../data/vcs-bridge";
 import {
   IntegrateAddRepository,
   IntegrateSearchRepositories,
@@ -25,12 +14,6 @@ import {
 
 /** The repository model whose list refetches after an add. */
 const REPOSITORY_MODEL = "integrate.Repository";
-const VCS_BRIDGE_MODEL = "integrate.VcsBridge";
-const VCS_BRIDGE_RELATION = {
-  resource: VCS_BRIDGE_MODEL,
-  labelField: "display_name",
-  canCreate: false,
-};
 // Debounce keystrokes before hitting the host search API.
 const SEARCH_DEBOUNCE_MS = 250;
 
@@ -48,7 +31,7 @@ export function AddRepositoryControl(): React.ReactElement {
     <>
       <Button variant="primary" size="sm" onClick={() => setOpen(true)}>
         <Glyph decorative name="plus" />
-        {t("integrate.addRepo.title")}
+        {t("addRepo.title")}
       </Button>
       <AddRepositoryDialog open={open} onOpenChange={setOpen} />
     </>
@@ -121,7 +104,7 @@ function AddRepositoryDialog({
         await addRepository({ vcsBridgeId, name: candidate.name });
         setAdded((prev) => new Set(prev).add(candidate.name));
       } catch (cause) {
-        setError(errorMessage(cause, t("integrate.addRepo.addFailed")));
+        setError(errorMessage(cause, t("addRepo.addFailed")));
       } finally {
         setAdding(null);
       }
@@ -130,58 +113,47 @@ function AddRepositoryDialog({
   );
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Backdrop />
-        <Dialog.Content size="lg">
-          <Dialog.Header>
-            <div className="flex items-start gap-3">
-              <div className="min-w-0 flex-1">
-                <Dialog.Title>{t("integrate.addRepo.title")}</Dialog.Title>
-                <Dialog.Description>
-                  {t("integrate.addRepo.description")}
-                </Dialog.Description>
-              </div>
-              <Dialog.Close />
-            </div>
-          </Dialog.Header>
-          <Dialog.Body>
-            <div className="flex flex-col gap-3">
-              <RelationField
-                aria-label={t("integrate.addRepo.integrationLabel")}
-                value={vcsBridgeId}
-                options={bridgeOptions}
-                placeholder={t("integrate.addRepo.integrationPlaceholder")}
-                searchPlaceholder={t("integrate.addRepo.integrationSearch")}
-                onChange={setPickedId}
-              />
-              <Input
-                type="search"
-                aria-label={t("integrate.addRepo.nameLabel")}
-                placeholder={t("integrate.addRepo.namePlaceholder")}
-                value={query}
-                disabled={vcsBridgeId === ""}
-                onChange={(event) => setQuery(event.currentTarget.value)}
-              />
-              {error ? (
-                <p className="text-13 text-danger-text" role="alert">
-                  {error}
-                </p>
-              ) : null}
-              <RepoCandidateList
-                candidates={candidates}
-                fetching={searchQuery.fetching}
-                searching={searchEnabled}
-                hasBridge={vcsBridgeId !== ""}
-                adding={adding}
-                added={added}
-                onAdd={add}
-              />
-            </div>
-          </Dialog.Body>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <DialogForm
+      open={open}
+      onOpenChange={onOpenChange}
+      title={t("addRepo.title")}
+      description={t("addRepo.description")}
+      size="lg"
+      onSubmit={(event) => event.preventDefault()}
+    >
+      <div className="flex flex-col gap-3">
+        <RelationField
+          aria-label={t("addRepo.integrationLabel")}
+          value={vcsBridgeId}
+          options={bridgeOptions}
+          placeholder={t("addRepo.integrationPlaceholder")}
+          searchPlaceholder={t("addRepo.integrationSearch")}
+          onChange={setPickedId}
+        />
+        <Input
+          type="search"
+          aria-label={t("addRepo.nameLabel")}
+          placeholder={t("addRepo.namePlaceholder")}
+          value={query}
+          disabled={vcsBridgeId === ""}
+          onChange={(event) => setQuery(event.currentTarget.value)}
+        />
+        {error ? (
+          <p className="text-13 text-danger-text" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <RepoCandidateList
+          candidates={candidates}
+          fetching={searchQuery.fetching}
+          searching={searchEnabled}
+          hasBridge={vcsBridgeId !== ""}
+          adding={adding}
+          added={added}
+          onAdd={add}
+        />
+      </div>
+    </DialogForm>
   );
 }
 
@@ -204,21 +176,21 @@ function RepoCandidateList({
 }): React.ReactElement {
   const t = useIntegrateT();
   if (!hasBridge) {
-    return <ListHint>{t("integrate.addRepo.selectIntegration")}</ListHint>;
+    return <ListHint>{t("addRepo.selectIntegration")}</ListHint>;
   }
   if (!searching) {
-    return <ListHint>{t("integrate.addRepo.typeToSearch")}</ListHint>;
+    return <ListHint>{t("addRepo.typeToSearch")}</ListHint>;
   }
   if (fetching && candidates.length === 0) {
     return (
       <div className={cn(textRoleVariants({ role: "meta" }), "flex items-center gap-2 px-1 py-3")}>
         <Spinner size="sm" />
-        {t("integrate.addRepo.searching")}
+        {t("addRepo.searching")}
       </div>
     );
   }
   if (candidates.length === 0) {
-    return <ListHint>{t("integrate.addRepo.noMatches")}</ListHint>;
+    return <ListHint>{t("addRepo.noMatches")}</ListHint>;
   }
   return (
     <ul className="flex max-h-72 flex-col gap-1 overflow-auto">
@@ -244,7 +216,7 @@ function RepoCandidateList({
               ) : isAdded ? (
                 <span className="flex items-center gap-1 text-12 text-fg-muted">
                   <Glyph decorative name="check" />
-                  {t("integrate.addRepo.added")}
+                  {t("addRepo.added")}
                 </span>
               ) : (
                 <Glyph decorative name="plus" className="text-fg-muted" />

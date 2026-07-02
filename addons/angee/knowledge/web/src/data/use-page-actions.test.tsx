@@ -11,11 +11,11 @@ import { beforeEach,
   vi } from "vitest";
 import {
   ModelMetadataProvider,
-} from "@angee/resources";
+} from "@angee/metadata";
 import { OperationDocumentsProvider } from "@angee/refine";
 import type {
   SchemaFieldMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 const sdk = vi.hoisted(() => {
   type RefineMutation = {
@@ -29,7 +29,8 @@ const sdk = vi.hoisted(() => {
   };
 });
 
-vi.mock("@angee/ui", () => ({
+vi.mock("@angee/ui", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/ui")>()),
   rowPublicId: (record: { id?: string } | null | undefined) => record?.id ?? null,
   useBusyRun: vi.fn((onChanged?: () => void) => ({
     busy: false,

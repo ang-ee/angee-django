@@ -1,12 +1,8 @@
 import { useState, type ReactElement, type ReactNode } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { AppRuntimeProvider } from "@angee/ui";
-import {
-  baseIcons,
-  defaultWidgets,
-  type WidgetDefinition,
-  type WidgetField,
-} from "@angee/ui";
+import { defaultWidgets, type WidgetDefinition, type WidgetField } from "@angee/ui";
+
+import { RuntimeRegistryFixture } from "./runtime-fixtures";
 
 const selectionOptions = [
   { value: "draft", label: "Draft" },
@@ -82,7 +78,7 @@ type Story = StoryObj<typeof meta>;
 
 export const EditAndRead: Story = {
   render: () => (
-    <AppRuntimeProvider runtime={{ icons: baseIcons }}>
+    <RuntimeRegistryFixture>
       <div className="max-w-6xl overflow-x-auto">
         <div className="min-w-[960px] rounded-6 border border-border bg-sheet">
           <div className="grid grid-cols-[10rem_minmax(14rem,1fr)_minmax(14rem,1fr)_minmax(14rem,1fr)] gap-3 border-b border-border-subtle px-4 py-2 text-2xs font-semibold uppercase text-fg-muted">
@@ -213,7 +209,7 @@ export const EditAndRead: Story = {
           </div>
         </div>
       </div>
-    </AppRuntimeProvider>
+    </RuntimeRegistryFixture>
   ),
 };
 

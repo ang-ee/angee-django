@@ -53,8 +53,8 @@ export function useServiceActions(refetch: () => void): {
         void (async () => {
           if (dangerous) {
             const ok = await confirm({
-              title: t("operator.services.destroy.confirm.title"),
-              body: t("operator.services.destroy.confirm.body", { name: service.name }),
+              title: t("services.destroy.confirm.title"),
+              body: t("services.destroy.confirm.body", { name: service.name }),
               confirm: label,
               danger: true,
             });
@@ -72,20 +72,20 @@ export function useServiceActions(refetch: () => void): {
     return [
       named(
         "serviceStart",
-        t("operator.services.start"),
+        t("services.start"),
         "secondary",
         start.run,
         (service) => ({ name: service.name }),
       ),
       named(
         "serviceRestart",
-        t("operator.services.restart"),
+        t("services.restart"),
         "ghost",
         restart.run,
         (service) => ({ name: service.name }),
       ),
       {
-        label: t("operator.services.recreate"),
+        label: t("services.recreate"),
         variant: "ghost",
         perform: (service) => {
           void runDaemon({
@@ -96,20 +96,20 @@ export function useServiceActions(refetch: () => void): {
             // `serviceUp(name)` has no `build` arg, and only `stackUp(input: { build: true })`
             // rebuilds an image, so scope `stackUp` to this one service.
             variables: { input: { services: [service.name], build: true } },
-            label: t("operator.services.recreate"),
+            label: t("services.recreate"),
           });
         },
       },
       named(
         "serviceStop",
-        t("operator.services.stop"),
+        t("services.stop"),
         "ghost",
         stop.run,
         (service) => ({ name: service.name }),
       ),
       named(
         "delete_services_by_pk",
-        t("operator.services.destroy"),
+        t("services.destroy"),
         "ghost",
         destroy.run,
         (service) => ({ id: service.id }),

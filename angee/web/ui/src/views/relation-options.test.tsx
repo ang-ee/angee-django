@@ -9,7 +9,7 @@ import {
   ModelMetadataProvider,
   schemaFieldMetadataFromDataResources,
   type SchemaFieldMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { useRelationOptions } from "./relation-options";

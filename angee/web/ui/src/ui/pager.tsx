@@ -1,7 +1,7 @@
 import * as React from "react";
 
 import { Glyph } from "../chrome/Glyph";
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { tv } from "../lib/variants";
 import { Button } from "./button";
@@ -97,7 +97,7 @@ export function Pager({
   nextLabel,
   formatNumber = defaultFormatNumber,
 }: PagerProps): React.ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const resolvedSubject = subject ?? t("pager.records");
   const [customPageSize, setCustomPageSize] = React.useState<number | null>(
     null,
@@ -186,7 +186,7 @@ function PageSizePicker({
   onCustomPageSizeChange: (value: number | null) => void;
   onPageSizeChange: (pageSize: number) => void;
 }): React.ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const applyPageSize = React.useCallback(
     (value: number | null) => {
       if (typeof value !== "number" || !Number.isFinite(value) || value < 1) {

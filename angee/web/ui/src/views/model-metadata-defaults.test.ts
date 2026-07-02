@@ -2,18 +2,19 @@ import { describe, expect, test } from "vitest";
 import type {
   ModelMetadata,
   Row,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 import {
   buildFilterFields,
   buildFilterOptions,
   buildGroupOptions,
   resolveResourceViewGroup,
-} from "./list-view-utils";
+} from "./resource-view-utils";
 import {
   columnsWithMetadataDefaults,
   fieldsWithMetadataDefaults,
 } from "./model-metadata-defaults";
+import { RESOURCE_VIEW_GROUP_GRANULARITIES } from "./resource-view-model";
 import type { ColumnDescriptor, FieldDescriptor } from "./page";
 
 const NOTE_METADATA: ModelMetadata = {
@@ -216,14 +217,14 @@ describe("resource metadata defaults", () => {
         label: "Updated",
         group: { field: "updatedAt", granularity: "day" },
         type: "date",
-        granularities: ["year", "quarter", "month", "week", "day"],
+        granularities: RESOURCE_VIEW_GROUP_GRANULARITIES,
       },
       {
         id: "createdAt",
         label: "Created",
         group: { field: "createdAt", granularity: "day" },
         type: "date",
-        granularities: ["year", "quarter", "month", "week", "day"],
+        granularities: RESOURCE_VIEW_GROUP_GRANULARITIES,
       },
     ]);
   });

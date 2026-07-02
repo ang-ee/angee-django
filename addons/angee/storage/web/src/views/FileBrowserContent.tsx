@@ -12,7 +12,7 @@ type Translate = (key: string) => string;
 /** Upload-task status → its label. `t` is threaded in from the rendering
  * component; this map is not a component and cannot call the hook itself. */
 function statusLabel(status: UploadStatus, t: Translate): string {
-  return t(`storage.upload.status.${status}`);
+  return t(`upload.status.${status}`);
 }
 
 export interface FileBrowserContentProps {
@@ -56,7 +56,7 @@ export function FileBrowserContent({
     <UploadDropTarget
       className="relative flex h-full min-h-0 flex-col"
       disabled={!canUpload}
-      overlay={t("storage.upload.dropOverlay")}
+      overlay={t("upload.dropOverlay")}
       onFiles={startUpload}
     >
       {uploads.tasks.length > 0 ? (
@@ -73,8 +73,8 @@ export function FileBrowserContent({
           bulkActions={bulkActions}
           draggableRow={fileDragPayload}
           gallery={{ renderCard: fileGalleryCard }}
-          emptyMessage={
-            canUpload ? t("storage.list.emptyUpload") : t("storage.list.empty")
+          emptyContent={
+            canUpload ? t("list.emptyUpload") : t("list.empty")
           }
           pageSize={50}
           toolbarActions={
@@ -86,7 +86,7 @@ export function FileBrowserContent({
                 onClick={() => inputRef.current?.click()}
               >
                 <Glyph name="attachment" />
-                {t("storage.upload.button")}
+                {t("upload.button")}
               </Button>
             ) : undefined
           }
@@ -119,10 +119,10 @@ function UploadStrip({
     <div className="flex max-h-32 flex-col gap-1 overflow-auto border-b border-border-subtle bg-sheet-2 px-3 py-2">
       <div className="flex items-center justify-between">
         <SectionEyebrow as="span">
-          {t("storage.upload.heading")}
+          {t("upload.heading")}
         </SectionEyebrow>
         <Button type="button" size="sm" variant="ghost" onClick={onClear}>
-          {t("storage.upload.clearFinished")}
+          {t("upload.clearFinished")}
         </Button>
       </div>
       {tasks.map((task) => (

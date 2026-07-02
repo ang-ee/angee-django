@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { Button, type ButtonProps } from "./button";
@@ -129,7 +129,7 @@ export const SelectionBarRoot = React.forwardRef<
   },
   ref,
 ) {
-  const t = useBaseT();
+  const t = useUiT();
   const styles = selectionBarVariants({ position, surface });
   const hasSummary =
     summary !== null && summary !== undefined && summary !== false;

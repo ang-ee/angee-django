@@ -1,3 +1,4 @@
+import { expectValidBaseAddon } from "@angee/app/testing";
 import type { BaseMenuItem } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
@@ -17,6 +18,10 @@ const SECTION_PATHS = [
 ];
 
 describe("operator addon manifest", () => {
+  test("satisfies the rendered-addon invariants", () => {
+    expect(() => expectValidBaseAddon(operator)).not.toThrow();
+  });
+
   test("registers a console route per section plus resource detail routes", () => {
     const routes = operator.routes ?? [];
     // Section routes are the nav-level panes; detail routes carry a `$param` and
@@ -26,7 +31,6 @@ describe("operator addon manifest", () => {
     const detailRoutes = routes.filter((route) => route.path.includes("$"));
     expect(sectionRoutes.map((route) => route.path)).toEqual(SECTION_PATHS);
     for (const route of routes) {
-      expect(route.layout).toBe("console");
       expect(route.component).toBeTypeOf("function");
     }
     const sectionNames = new Set(sectionRoutes.map((route) => route.name));

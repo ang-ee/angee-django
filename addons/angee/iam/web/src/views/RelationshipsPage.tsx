@@ -1,12 +1,7 @@
 import { useMemo, type ReactElement } from "react";
 
 import {
-  Badge,
-  Code,
-  ListView,
-  type ListColumn,
-  type ResourceToolbarGroupOption,
-} from "@angee/ui";
+  Badge, Code, ListView, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
 
 import { useIamT } from "../i18n";
 
@@ -34,19 +29,19 @@ function relationshipGroupOptions(
   return [
     {
       id: "resource_type",
-      label: t("iam.relationships.column.resourceType"),
+      label: t("relationships.column.resourceType"),
       group: { field: "resource_type" },
       type: "value",
     },
     {
       id: "subject_type",
-      label: t("iam.relationships.column.subjectType"),
+      label: t("relationships.column.subjectType"),
       group: { field: "subject_type" },
       type: "value",
     },
     {
       id: "relation",
-      label: t("iam.relationships.column.relation"),
+      label: t("relationships.column.relation"),
       group: { field: "relation" },
       type: "value",
     },
@@ -59,26 +54,26 @@ export function RelationshipsPage(): ReactElement {
     () => [
       {
         field: "resource_id",
-        header: t("iam.relationships.column.resourceRef"),
+        header: t("relationships.column.resourceRef"),
         render: (row) => <Code truncate>{ref(row.resource_type, row.resource_id)}</Code>,
       },
       {
         field: "subject_id",
-        header: t("iam.relationships.column.subjectRef"),
+        header: t("relationships.column.subjectRef"),
         render: (row) => <Code truncate>{ref(row.subject_type, row.subject_id)}</Code>,
       },
-      { field: "resource_type", header: t("iam.relationships.column.resourceType") },
-      { field: "resource_id", header: t("iam.relationships.column.resourceId") },
+      { field: "resource_type", header: t("relationships.column.resourceType") },
+      { field: "resource_id", header: t("relationships.column.resourceId") },
       {
         field: "relation",
-        header: t("iam.relationships.column.relation"),
+        header: t("relationships.column.relation"),
         render: (row) => <Badge tone="info">{row.relation}</Badge>,
       },
-      { field: "subject_type", header: t("iam.relationships.column.subjectType") },
-      { field: "subject_id", header: t("iam.relationships.column.subjectId") },
+      { field: "subject_type", header: t("relationships.column.subjectType") },
+      { field: "subject_id", header: t("relationships.column.subjectId") },
       {
         field: "caveat_name",
-        header: t("iam.relationships.column.caveat"),
+        header: t("relationships.column.caveat"),
         render: (row) =>
           row.caveat_name ? (
             <Badge tone="warning">{row.caveat_name}</Badge>

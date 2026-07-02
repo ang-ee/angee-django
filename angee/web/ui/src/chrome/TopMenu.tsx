@@ -2,7 +2,7 @@ import type { ReactElement } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { parseAsString, useQueryState } from "nuqs";
 
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { Glyph } from "./Glyph";
 import {
@@ -59,7 +59,7 @@ function TopMenuTabs({
   className?: string;
   tabs: readonly TopMenuTab[];
 }): ReactElement | null {
-  const t = useBaseT();
+  const t = useUiT();
   const [rawTab, setActiveTab] = useQueryState("tab", parseAsString);
 
   const [firstTab] = tabs;

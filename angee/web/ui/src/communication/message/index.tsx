@@ -2,12 +2,12 @@
 // cross-surface message atoms shared with the role-aligned chat transcript
 // (`communication/chat`). No transport coupling: a consumer wires the GraphQL/urql
 // data, the mutations, and any streaming runtime around these. Tokens + `tone` follow
-// the base design system; copy routes through `useBaseT`.
+// the base design system; copy routes through `useUiT`.
 
 import type { HTMLAttributes, ReactElement, ReactNode } from "react";
 
 import { RelativeTime } from "../../fragments/RelativeTime";
-import { useBaseT } from "../../i18n";
+import { useUiT } from "../../i18n";
 import { cn } from "../../lib/cn";
 import { Chip, type ChipTone } from "../../ui/chip";
 import { Kbd } from "../../ui/kbd";
@@ -168,7 +168,7 @@ interface ReactionPillProps {
  *  and `ReactionPicker` (count-less). `aria-pressed` reflects the current user's own
  *  reaction; the count span renders only when a count is given. */
 function ReactionPill({ reaction, count, active, title, disabled, onToggle }: ReactionPillProps): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const label =
     count === undefined
       ? t("message.reaction.pill", { reaction })
@@ -353,7 +353,7 @@ export interface MessageComposerHintProps {
 /** The keyboard-shortcut affordance under a composer; defaults to "⏎ send · ⇧⏎ newline".
  *  Pure presentation — the real keybindings live with the input the composer renders. */
 export function MessageComposerHint({ children, className }: MessageComposerHintProps): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   return (
     <span className={cn(textRoleVariants({ role: "caption" }), "flex items-center gap-1.5", className)}>
       {children ?? (

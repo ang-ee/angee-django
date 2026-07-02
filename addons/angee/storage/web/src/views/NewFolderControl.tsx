@@ -25,9 +25,9 @@ export function NewFolderControl({
     <InlineTextAction
       busy={busy}
       onSubmit={onCreate}
-      inputLabel={t("storage.newFolder.nameLabel")}
-      placeholder={t("storage.newFolder.placeholder")}
-      submitLabel={t("storage.newFolder.create")}
+      inputLabel={t("newFolder.nameLabel")}
+      placeholder={t("newFolder.placeholder")}
+      submitLabel={t("newFolder.create")}
       formClassName="items-center gap-1"
       renderTrigger={({ busy: actionBusy, open }) => (
         <Button
@@ -39,7 +39,7 @@ export function NewFolderControl({
           onClick={open}
         >
           <Glyph name="folder" />
-          {t("storage.newFolder.button")}
+          {t("newFolder.button")}
         </Button>
       )}
     />

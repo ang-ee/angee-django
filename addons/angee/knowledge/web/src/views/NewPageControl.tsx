@@ -34,13 +34,13 @@ export function NewPageControl({
       onSubmit={(title) => {
         if (kind) onCreate(kind, title);
       }}
-      inputLabel={t("knowledge.newPage.titleLabel")}
+      inputLabel={t("newPage.titleLabel")}
       placeholder={
         kind === "folder"
-          ? t("knowledge.newPage.folderPlaceholder")
-          : t("knowledge.newPage.notePlaceholder")
+          ? t("newPage.folderPlaceholder")
+          : t("newPage.notePlaceholder")
       }
-      submitLabel={t("knowledge.newPage.create")}
+      submitLabel={t("newPage.create")}
       formClassName="items-center gap-1"
       renderTrigger={({ busy: actionBusy, open }) => (
         <div className="flex items-center gap-1">
@@ -56,13 +56,13 @@ export function NewPageControl({
             }}
           >
             <Glyph name="note" />
-            {t("knowledge.newPage.newNote")}
+            {t("newPage.newNote")}
           </Button>
           <Button
             type="button"
             size="iconSm"
             variant="ghost"
-            aria-label={t("knowledge.newPage.newFolder")}
+            aria-label={t("newPage.newFolder")}
             disabled={actionBusy}
             onClick={() => {
               setKind("folder");

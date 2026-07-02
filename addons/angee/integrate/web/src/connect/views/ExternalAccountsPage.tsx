@@ -1,12 +1,5 @@
 import * as React from "react";
-import {
-  Column,
-  ResourceList,
-  Field,
-  Form,
-  Group,
-  List,
-} from "@angee/ui";
+import { Column, ResourceList, Field, Form, Group, List } from "@angee/ui";
 
 import { useIntegrateT } from "../../i18n";
 
@@ -33,8 +26,8 @@ export function ExternalAccountsPage(): React.ReactElement {
     <Form resource={MODEL}>
       <Field name="display_name" title />
       <Field name="status" widget="statusbar" />
-      <Group label={t("integrate.externalAccounts.group.identity")} columns={2}>
-        <Field name="provider_label" label={t("integrate.externalAccounts.provider")} readOnly />
+      <Group label={t("externalAccounts.group.identity")} columns={2}>
+        <Field name="provider_label" label={t("externalAccounts.provider")} readOnly />
         <Field name="external_id" readOnly />
         <Field name="email" />
         <Field name="avatar_url" />

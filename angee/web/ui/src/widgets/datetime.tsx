@@ -1,6 +1,6 @@
 import { useState, type ReactElement } from "react";
 
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import {
@@ -23,7 +23,7 @@ function DatetimeEdit({
   field,
   readOnly,
 }: WidgetRenderProps<DateWidgetValue>): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const [open, setOpen] = useState(false);
   const date = dateFromValue(value);
   const label =

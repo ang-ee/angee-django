@@ -1,9 +1,14 @@
+import { expectValidBaseAddon } from "@angee/app/testing";
 import type { BaseMenuItem } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import platform from "./index";
 
 describe("platform addon manifest", () => {
+  test("satisfies the rendered-addon invariants", () => {
+    expect(() => expectValidBaseAddon(platform)).not.toThrow();
+  });
+
   test("registers a console route per section plus model/addon detail routes", () => {
     const routes = platform.routes ?? [];
     expect(routes.map((route) => route.path)).toEqual([
@@ -15,7 +20,6 @@ describe("platform addon manifest", () => {
       "/platform/addons/$id",
     ]);
     for (const route of routes) {
-      expect(route.layout).toBe("console");
       expect(route.component).toBeTypeOf("function");
     }
   });

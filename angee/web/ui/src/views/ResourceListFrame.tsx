@@ -9,7 +9,7 @@ import { cn } from "../lib/cn";
 import {
   ListLoadingFooter,
   SelectionBar,
-} from "./ListInternals";
+} from "./resource-view-list-body";
 
 export interface ResourceListFrameSelection {
   count: number;

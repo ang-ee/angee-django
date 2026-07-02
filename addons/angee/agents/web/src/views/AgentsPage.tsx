@@ -1,43 +1,25 @@
 import * as React from "react";
 import type {
   Row,
-} from "@angee/resources";
+} from "@angee/metadata";
+import { useOne, type BaseRecord, type HttpError, } from "@refinedev/core";
 import {
-  useOne,
-  type BaseRecord,
-  type HttpError,
-  } from "@refinedev/core";
+  Action, Button, Card, CardContent, Column, ResourceList, Field, Form, Glyph, Group, List, errorMessage, useRecordActionMutation, useToast, type RecordToolbarContext, type RecordTabDescriptor } from "@angee/ui";
 import {
-  Action,
-  Button,
-  Card,
-  CardContent,
-  Column,
-  ResourceList,
-  Field,
-  Form,
-  Glyph,
-  Group,
-  List,
-  errorMessage,
-  useRecordActionMutation,
-  useToast,
-  type RecordToolbarContext,
-  type RecordTabDescriptor,
-  } from "@angee/ui";
-import {
+  refineInvalidationParams,
+  resourceInvalidationTargets,
   useModelMetadata,
-} from "@angee/resources";
+  useSchemaFieldMetadata,
+} from "@angee/metadata";
 import {
   refineFieldsFromPaths,
+  useActionMutation,
 } from "@angee/refine";
 import {
-  useActionMutation,
-  textRoleVariants,
-} from "@angee/ui";
+  textRoleVariants } from "@angee/ui";
 import {
   refineResourceName,
-} from "@angee/resources";
+} from "@angee/metadata";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useAgentsT } from "../i18n";
@@ -95,7 +77,7 @@ function AgentChatPanel({ agentId }: { agentId: string }): React.ReactElement {
     return (
       <Card>
         <CardContent>
-          <p className={textRoleVariants({ role: "meta" })}>{t("agents.agent.chatUnavailable")}</p>
+          <p className={textRoleVariants({ role: "meta" })}>{t("agent.chatUnavailable")}</p>
         </CardContent>
       </Card>
     );
@@ -113,10 +95,18 @@ function AgentProvisionToolbarAction({
 }: RecordToolbarContext): React.ReactElement | null {
   const t = useAgentsT();
   const toast = useToast();
+  const schemaMetadata = useSchemaFieldMetadata();
+  const invalidates = React.useMemo(
+    () =>
+      resourceInvalidationTargets(schemaMetadata, [MODEL]).map(
+        refineInvalidationParams,
+      ),
+    [schemaMetadata],
+  );
   const [optimisticProvisioning, setOptimisticProvisioning] = React.useState(false);
   const [provisionAgent, provisionState] = useActionMutation<ActionFieldName>(
     "provision_agent",
-    { invalidateModels: [MODEL] },
+    { invalidates },
   );
   const canProvision = canProvisionAgent(record);
 
@@ -139,8 +129,8 @@ function AgentProvisionToolbarAction({
     } catch (caught) {
       setOptimisticProvisioning(false);
       toast.danger({
-        title: t("agents.provisioning.provisionFailed"),
-        description: errorMessage(caught, t("agents.provisioning.actionFailed")),
+        title: t("provisioning.provisionFailed"),
+        description: errorMessage(caught, t("provisioning.actionFailed")),
       });
     }
   };
@@ -154,7 +144,7 @@ function AgentProvisionToolbarAction({
       onClick={() => void handleProvision()}
     >
       <Glyph name="plus" />
-      {t("agents.provisioning.provision")}
+      {t("provisioning.provision")}
     </Button>
   );
 }
@@ -172,11 +162,11 @@ interface AgentLabels {
 function useAgentLabels(): AgentLabels {
   const t = useAgentsT();
   return {
-    modelTemplates: t("agents.agent.modelTemplates"),
-    provisioningInputs: t("agents.agent.provisioningInputs"),
-    tabService: t("agents.agent.tabService"),
-    tabWorkspace: t("agents.agent.tabWorkspace"),
-    tabChat: t("agents.agent.tabChat"),
+    modelTemplates: t("agent.modelTemplates"),
+    provisioningInputs: t("agent.provisioningInputs"),
+    tabService: t("agent.tabService"),
+    tabWorkspace: t("agent.tabWorkspace"),
+    tabChat: t("agent.tabChat"),
   };
 }
 
@@ -194,7 +184,7 @@ function AgentResourceListPage({
   const t = useAgentsT();
   const [deprovision] = useRecordActionMutation<ActionFieldName>("deprovision_agent", {
     invalidateModels: [MODEL],
-    missingRecordMessage: t("agents.provisioning.saveFirst"),
+    missingRecordMessage: t("provisioning.saveFirst"),
   });
   const recordTabs: readonly RecordTabDescriptor[] | undefined = isTemplate
     ? undefined
@@ -220,7 +210,7 @@ function AgentResourceListPage({
       resource={MODEL}
       placement="inline"
       routed
-      filter={{ is_template: { exact: isTemplate } }}
+      baseFilter={{ is_template: { exact: isTemplate } }}
       createDefaults={{ is_template: isTemplate }}
       recordTabs={recordTabs}
       returning={
@@ -255,12 +245,12 @@ function AgentResourceListPage({
         {!isTemplate ? (
           <Action
             id="deprovision"
-            label={t("agents.provisioning.deprovision")}
+            label={t("provisioning.deprovision")}
             icon="trash"
             danger
             confirm={{
-              title: t("agents.provisioning.confirmTitle"),
-              body: t("agents.provisioning.confirmBody"),
+              title: t("provisioning.confirmTitle"),
+              body: t("provisioning.confirmBody"),
               danger: true,
             }}
             visibleWhen={canDeprovisionAgent}

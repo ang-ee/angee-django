@@ -1,5 +1,6 @@
+import { useAuthoredMutation } from "@angee/refine";
 import * as React from "react";
-import { Button, Glyph, errorMessage, usePrompt, useToast, useAuthoredMutation } from "@angee/ui";
+import { Button, Glyph, errorMessage, usePrompt, useToast } from "@angee/ui";
 import { type DocumentType } from "@angee/gql/console";
 
 import { useIntegrateT } from "../i18n";
@@ -71,16 +72,16 @@ export function ConnectOAuthButton({
               rel="noreferrer"
               className="underline"
             >
-              {t("integrate.providers.connect.openAuthorize")}
+              {t("providers.connect.openAuthorize")}
             </a>
-            {t("integrate.providers.connect.instructions")}
+            {t("providers.connect.instructions")}
           </span>
         ),
         fields: [
           {
             name: "pasted",
-            label: t("integrate.providers.connect.codeLabel"),
-            placeholder: t("integrate.providers.connect.codePlaceholder"),
+            label: t("providers.connect.codeLabel"),
+            placeholder: t("providers.connect.codePlaceholder"),
           },
         ],
       });
@@ -91,7 +92,7 @@ export function ConnectOAuthButton({
         t,
       );
       if (!payload.redirect_uri) {
-        throw new Error(t("integrate.providers.connect.stateIncomplete"));
+        throw new Error(t("providers.connect.stateIncomplete"));
       }
       const completed = await connectAccountComplete({
         code,
@@ -146,10 +147,10 @@ export function parseManualCode(
   const code = hash > 0 ? pasted.slice(0, hash) : "";
   const state = hash > 0 ? pasted.slice(hash + 1) : "";
   if (!code || !state) {
-    throw new Error(t("integrate.providers.connect.codeIncomplete"));
+    throw new Error(t("providers.connect.codeIncomplete"));
   }
   if (expectedState && state !== expectedState) {
-    throw new Error(t("integrate.providers.connect.codeMismatch"));
+    throw new Error(t("providers.connect.codeMismatch"));
   }
   return { code, state };
 }

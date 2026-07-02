@@ -1,56 +1,44 @@
 // @vitest-environment happy-dom
 
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  within,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within, } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import {
+  ChatterTabsTestHost,
+  PrimaryPaneTestHost,
+  ShellPageTestProviders,
+} from "@angee/app/testing";
 
 const routerMocks = vi.hoisted(() => ({
-  navigate: vi.fn(),
-  params: {} as Record<string, string>,
-}));
+  navigate: vi.fn(), params: {} as Record<string, string>, }));
 
 const sdkMocks = vi.hoisted(() => ({
-  useAuthoredQuery: vi.fn(),
-  refetch: {
-    detail: vi.fn(async () => undefined),
-    pages: vi.fn(async () => undefined),
-    vaults: vi.fn(async () => undefined),
-  },
-}));
+  useAuthoredQuery: vi.fn(), refetch: {
+    detail: vi.fn(async () => undefined), pages: vi.fn(async () => undefined), vaults: vi.fn(async () => undefined), }, }));
 
 // The page now publishes a memoized navigator into the shell's primary pane via
-// an effect, so its hooks must hand back stable references (matching production,
-// where `usePageActions` memoizes). A fresh object per render would republish
+// an effect, so its hooks must hand back stable references (matching production, // where `usePageActions` memoizes). A fresh object per render would republish
 // every render and spin the publish effect. Hoist one stable actions object.
 const pageActionMocks = vi.hoisted(() => ({
-  busy: false,
-  createPage: vi.fn(async () => "created-page"),
-  deletePage: vi.fn(async () => undefined),
-  movePage: vi.fn(),
-}));
+  busy: false, createPage: vi.fn(async () => "created-page"), deletePage: vi.fn(async () => undefined), movePage: vi.fn(), }));
 
 vi.mock("@tanstack/react-router", () => ({
-  useNavigate: () => routerMocks.navigate,
-  useParams: () => routerMocks.params,
+  useNavigate: () => routerMocks.navigate, useParams: () => routerMocks.params, }));
+
+vi.mock("@angee/refine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/refine")>()),
+  useAuthoredQuery: sdkMocks.useAuthoredQuery,
 }));
 
-// `@angee/data`, `@angee/sdk`, and `@angee/base` symbols now all resolve from
-// `@angee/ui`, so the three former module mocks fold into one (Vitest hoists one
-// factory per module id): `useAuthoredQuery` + `useNamespaceT` + the render
-// overrides, atop the real module.
+// The shared rendered hooks resolve from `@angee/ui`, so the module mock folds
+// `useNamespaceT` and the render overrides into one Vitest-hoisted factory atop
+// the real module.
 vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
   // Production `useNamespaceT` returns a `useCallback`-stable translator; mirror
   // that here (cache by the `messages` object) so a memoized published node keeps
   // a stable identity instead of republishing every render.
   const translators = new WeakMap<
-    Record<string, string>,
-    (key: string, vars?: Record<string, string>) => string
+    Record<string, string>, (key: string, vars?: Record<string, string>) => string
   >();
   const makeT = (messages: Record<string, string>) => {
     let t = translators.get(messages);
@@ -68,60 +56,14 @@ vi.mock("@angee/ui", async (importOriginal) => {
   };
   return {
     ...actual,
-    useAuthoredQuery: sdkMocks.useAuthoredQuery,
+    useRouteRecordId: () => routerMocks.params.id,
     useNamespaceT: (_namespace: string, messages: Record<string, string>) =>
-      makeT(messages),
-    EmptyState: ({ title }: { title: string }) => (
+      makeT(messages), EmptyState: ({ title }: { title: string }) => (
       <section data-testid="empty-state">{title}</section>
-    ),
-    LoadingPanel: ({ message }: { message: string }) => (
+    ), LoadingPanel: ({ message }: { message: string }) => (
       <section data-testid="loading">{message}</section>
-    ),
-    RelationPicker: ({
-      value,
-      options,
-      onChange,
-      onCreated,
-      "aria-label": ariaLabel,
-    }: {
-      value?: string | null;
-      options: readonly { value: string; label: string }[];
-      onChange?: (value: string) => void;
-      onCreated?: (value: string) => void;
-      "aria-label"?: string;
-    }) => (
-      <div>
-        <select
-          aria-label={ariaLabel}
-          data-testid="root-picker"
-          value={value ?? ""}
-          onChange={(event) => onChange?.(event.currentTarget.value)}
-        >
-          {options.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          data-testid="create-root"
-          onClick={() => {
-            onChange?.("vault-created");
-            onCreated?.("vault-created");
-          }}
-        >
-          Create root
-        </button>
-      </div>
-    ),
-    TreeView: ({
-      rows,
-      rowKey,
-      label,
-      selectedId,
-      onSelect,
-    }: {
+    ), TreeView: ({
+      rows, rowKey, label, selectedId, onSelect, }: {
       rows: readonly Record<string, string>[];
       rowKey: string;
       label: string;
@@ -130,7 +72,7 @@ vi.mock("@angee/ui", async (importOriginal) => {
     }) => (
       <div
         data-testid="tree"
-        data-row-ids={rows.map((row) => row[rowKey]).join(",")}
+        data-row-ids={rows.map((row) => row[rowKey]).join(", ")}
         data-selected={selectedId ?? ""}
       >
         {rows.map((row) => (
@@ -144,38 +86,62 @@ vi.mock("@angee/ui", async (importOriginal) => {
           </button>
         ))}
       </div>
-    ),
-    WikilinkProvider: ({ children }: { children: React.ReactNode }) => (
+    ), WikilinkProvider: ({ children }: { children: React.ReactNode }) => (
       <>{children}</>
-    ),
-    useConfirm: () => async () => true,
-  };
+    ), useConfirm: () => async () => true, };
 });
 
 vi.mock("../data/use-page-actions", () => ({
-  usePageActions: () => pageActionMocks,
-}));
+  usePageActions: () => pageActionMocks, }));
 
 vi.mock("./BacklinksPanel", () => ({
-  BacklinksPanel: () => <section data-testid="backlinks" />,
-}));
+  BacklinksPanel: () => <section data-testid="backlinks" />, }));
 
 vi.mock("./NewPageControl", () => ({
-  NewPageControl: () => <button type="button">New page</button>,
-}));
+  NewPageControl: () => <button type="button">New page</button>, }));
 
 vi.mock("./PageEditor", () => ({
   PageEditor: ({ detail }: { detail: { id: string } }) => (
     <section data-testid="page-editor" data-page-id={detail.id} />
+  ), }));
+
+// The explorer pane composes RelationPicker through its own module import, so
+// the picker double mocks the subpath module (same resolved id), not the barrel.
+vi.mock("@angee/ui/views/RelationPicker", () => ({
+  RelationPicker: ({
+    value, options, onChange, onCreated, "aria-label": ariaLabel, }: {
+    value?: string | null;
+    options: readonly { value: string; label: string }[];
+    onChange?: (value: string) => void;
+    onCreated?: (value: string) => void;
+    "aria-label"?: string;
+  }) => (
+    <div>
+      <select
+        aria-label={ariaLabel}
+        data-testid="root-picker"
+        value={value ?? ""}
+        onChange={(event) => onChange?.(event.currentTarget.value)}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        data-testid="create-root"
+        onClick={() => {
+          onChange?.("vault-created");
+          onCreated?.("vault-created");
+        }}
+      >
+        Create root
+      </button>
+    </div>
   ),
 }));
-
-import {
-  ChatterProvider,
-  PrimaryPaneProvider,
-  useChatter,
-  usePrimaryPaneContent,
-} from "@angee/ui";
 
 import {
   KnowledgePage as KnowledgePageQuery,
@@ -184,38 +150,13 @@ import {
 } from "../data/documents";
 import { KnowledgePage } from "./KnowledgePage";
 
-// The navigator now publishes into the shell's primary pane and the backlinks
-// rail into the secondary (chatter); a thin host renders each published surface
-// so the assertions see what the page publishes, not the page's own DOM.
-function PrimaryHost() {
-  const { node } = usePrimaryPaneContent();
-  return <div data-testid="shell-primary">{node}</div>;
-}
-
-function ChatterHost() {
-  const { content } = useChatter();
-  const tabs = content?.tabs ?? [];
-  return (
-    <div data-testid="shell-chatter" data-tab-ids={tabs.map((t) => t.id).join(",")}>
-      {tabs.map((tab) => (
-        <div key={tab.id} data-testid={`chatter-tab-${tab.id}`}>
-          {tab.label}
-          {tab.children}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function renderPage() {
   return render(
-    <PrimaryPaneProvider>
-      <ChatterProvider>
-        <KnowledgePage />
-        <PrimaryHost />
-        <ChatterHost />
-      </ChatterProvider>
-    </PrimaryPaneProvider>,
+    <ShellPageTestProviders>
+      <KnowledgePage />
+      <PrimaryPaneTestHost />
+      <ChatterTabsTestHost tabTestId={(id) => `chatter-tab-${id}`} />
+    </ShellPageTestProviders>,
   );
 }
 
@@ -319,13 +260,11 @@ describe("KnowledgePage explorer wiring", () => {
       ],
     };
     view.rerender(
-      <PrimaryPaneProvider>
-        <ChatterProvider>
-          <KnowledgePage />
-          <PrimaryHost />
-          <ChatterHost />
-        </ChatterProvider>
-      </PrimaryPaneProvider>,
+      <ShellPageTestProviders>
+        <KnowledgePage />
+        <PrimaryPaneTestHost />
+        <ChatterTabsTestHost tabTestId={(id) => `chatter-tab-${id}`} />
+      </ShellPageTestProviders>,
     );
 
     expect(rootPickerValue()).toBe("vault-created");

@@ -1,6 +1,6 @@
 import type { ReactElement, ReactNode } from "react";
 
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { useThemePreference, type ThemePreference } from "../lib/theme";
 import { useChatter } from "../communication/chatter-context";
@@ -54,7 +54,7 @@ export function TopBar({
   className,
   children,
 }: TopBarProps): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   return (
     <header
       aria-label={t("chrome.topBar")}
@@ -100,7 +100,7 @@ function PrimaryPaneToggleButton({
 }: {
   pane: NonNullable<TopBarProps["primaryPane"]>;
 }): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const open = !pane.collapsed;
   const label = open
     ? t("chrome.collapsePrimaryPane")
@@ -124,7 +124,7 @@ function PrimaryPaneToggleButton({
 }
 
 function ThemeToggleButton(): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const { resolved, setPreference } = useThemePreference();
   const next: ThemePreference = resolved === "dark" ? "light" : "dark";
   const label =
@@ -150,7 +150,7 @@ function ThemeToggleButton(): ReactElement {
 }
 
 function ChatterToggleButton(): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const { collapsed, toggleCollapsed } = useChatter();
   const open = !collapsed;
   const label = open ? t("chrome.collapseChatter") : t("chrome.openChatter");

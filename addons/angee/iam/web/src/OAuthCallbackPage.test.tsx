@@ -11,11 +11,13 @@ const mocks = vi.hoisted(() => ({ mutate: vi.fn() }));
 
 vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
-  return {
-    ...actual,
-    useAuthoredMutation: () => [mocks.mutate, { fetching: false, error: null }],
-  };
+  return { ...actual };
 });
+
+vi.mock("@angee/refine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/refine")>()),
+  useAuthoredMutation: () => [mocks.mutate, { fetching: false, error: null }],
+}));
 
 beforeAll(() => {
   Object.defineProperty(Element.prototype, "getAnimations", {

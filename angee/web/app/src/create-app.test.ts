@@ -3,7 +3,7 @@
 import { createElement, type ReactNode } from "react";
 import { cleanup, waitFor } from "@testing-library/react";
 import { createAngeeHasuraDataProvider } from "@angee/refine";
-import { useAuthoredQuery } from "@angee/ui/data/authored-hooks";
+import { useAuthoredQuery } from "@angee/refine";
 import { useChatterRoutes, useResourceRoute } from "@angee/ui/runtime";
 import { useParams } from "@tanstack/react-router";
 import { afterEach, describe, expect, test } from "vitest";
@@ -28,7 +28,7 @@ import {
   resourceViewStateToSearch,
   mergeResourceViewSearch,
 } from "@angee/ui/views/resource-view-model";
-import type { DataResourceMetadata } from "@angee/resources";
+import type { DataResourceMetadata } from "@angee/metadata";
 
 afterEach(() => cleanup());
 

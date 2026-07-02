@@ -1,20 +1,20 @@
 import * as React from "react";
 import {
   useAngeeFacets,
-} from "../data/hooks";
+} from "@angee/refine";
 import type {
   FacetRequestSpec,
   } from "@angee/refine";
 import {
   useModelMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 import {
   useSchemaFieldMetadata,
   type ModelMetadata,
   type ModelRelationFilterMetadata,
   type ModelRelationFilterMode,
   type SchemaFieldMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 import type {
   ResourceToolbarFilterField,
@@ -28,13 +28,14 @@ import {
   groupLabelDimension,
   hasuraGroupDimension,
   hasuraGroupOrderForDimensions,
-} from "./ListInternals";
+} from "./resource-view-list-body";
 import {
-  groupLabel,
+  resourceFieldGroupLabel,
   relationFieldInfo,
   type RelationFieldInfo,
 } from "./model-metadata-defaults";
 import type { FacetDescriptor } from "./page";
+import { useGroupOperation } from "./resource-operations";
 
 const RELATION_FACET_OPTION_LIMIT = 200;
 const EMPTY_FILTER_OPTIONS: readonly ResourceToolbarFilterOption[] = [];
@@ -79,6 +80,7 @@ export function useRelationFacets(
     [facetOptions, modelMetadata, schemaMetadata],
   );
   const dataResource = modelMetadata?.resource ?? null;
+  const groupOperation = useGroupOperation(dataResource);
   const facetSpecs = React.useMemo(
     () =>
       facets.flatMap((facet) =>
@@ -87,7 +89,8 @@ export function useRelationFacets(
           : []),
     [activeFilter, facets],
   );
-  const facetQuery = useAngeeFacets(dataResource, {
+  const facetQuery = useAngeeFacets(groupOperation.target, {
+    document: groupOperation.document,
     facets: facetSpecs,
     enabled: dataResource !== null && facetSpecs.length > 0,
   });
@@ -185,7 +188,8 @@ function relationFacetDeclaration(
   });
   if (!filter) return null;
   const aggregateKey = optionAggregateKey ?? filter.aggregateKey;
-  const label = optionLabel ?? groupLabel(field, modelMetadata?.fields[field]);
+  const label =
+    optionLabel ?? resourceFieldGroupLabel(field, modelMetadata?.fields[field]);
   const groupOption = relationGroupOption({
     aggregateKey,
     field,

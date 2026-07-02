@@ -40,6 +40,12 @@ from angee.graphql.data.metadata import (
     model_resource_fields,
     resource_type_name,
     resource_wire_field_name,
+    resource_wire_field_names,
+)
+from angee.graphql.data.resource_bundle import (
+    resource_attr,
+    resource_type_by_name,
+    resource_type_by_suffix,
 )
 from angee.graphql.deletion import delete_by_public_id
 from angee.graphql.ids import require_instance_for_id
@@ -423,6 +429,64 @@ def attach_hasura_resource_metadata(
 ) -> HasuraResource:
     """Attach Angee resource metadata to a built Hasura resource bundle."""
 
+    list_root = resource_attr(resource, "list_root", name)
+    detail_root = resource_attr(resource, "detail_root", f"{name}_by_pk")
+    aggregate_root = resource_attr(resource, "aggregate_root", f"{name}_aggregate")
+    groups_root = resource_attr(resource, "groups_root", f"{name}_groups")
+    filter_type = resource_attr(
+        resource,
+        "filter_type",
+        resource_type_by_name(resource, f"{name}_bool_exp"),
+    )
+    order_by_type = resource_attr(
+        resource,
+        "order_by_type",
+        resource_type_by_name(resource, f"{name}_order_by"),
+    )
+    aggregate_container_type = resource_attr(
+        resource,
+        "aggregate_container_type",
+        resource_type_by_name(resource, f"{name}_aggregate"),
+    )
+    group_type = resource_attr(
+        resource,
+        "group_type",
+        resource_type_by_name(resource, f"{name}_group") if groupable else None,
+    )
+    group_key_type = resource_attr(
+        resource,
+        "group_key_type",
+        resource_type_by_suffix(resource, "GroupKey") if groupable else None,
+    )
+    group_by_spec_type = resource_attr(
+        resource,
+        "group_by_spec_type",
+        resource_type_by_suffix(resource, "GroupBySpec") if groupable else None,
+    )
+    group_order_type = resource_attr(
+        resource,
+        "group_order_type",
+        resource_type_by_suffix(resource, "GroupOrder") if groupable else None,
+    )
+    having_type = resource_attr(
+        resource,
+        "having_type",
+        resource_type_by_suffix(resource, "Having") if groupable else None,
+    )
+    insert_input_type = resource_attr(
+        resource,
+        "insert_input_type",
+        resource_type_by_name(resource, f"{name}_insert_input") if insert else None,
+    )
+    set_input_type = resource_attr(
+        resource,
+        "set_input_type",
+        resource_type_by_name(resource, f"{name}_set_input") if update else None,
+    )
+    insert_one_root = resource_attr(resource, "insert_one_root", f"insert_{name}_one")
+    update_by_pk_root = resource_attr(resource, "update_by_pk_root", f"update_{name}_by_pk")
+    delete_by_pk_root = resource_attr(resource, "delete_by_pk_root", f"delete_{name}_by_pk")
+
     fields = model_resource_fields(
         model,
         declared_fields,
@@ -430,10 +494,18 @@ def attach_hasura_resource_metadata(
         order_fields=sortable,
         aggregate_fields=aggregatable,
         group_by_fields=groupable,
-        create_fields=tuple(resource.insertable_fields) if insert else (),
-        update_fields=tuple(resource.updatable_fields) if update else (),
+        create_fields=(
+            resource_wire_field_names(insert_input_type, exclude=("id",))
+            if insert
+            else ()
+        ),
+        update_fields=(
+            resource_wire_field_names(set_input_type, exclude=("id",))
+            if update
+            else ()
+        ),
     )
-    if resource.detail_root is None:
+    if detail_root is None:
         raise ImproperlyConfigured(f"{model._meta.label} Hasura resource did not expose a detail root.")
     attach_data_resource_metadata(
         resource.query,
@@ -442,32 +514,32 @@ def attach_hasura_resource_metadata(
             model_label=model_label,
             public_id_field=public_id_field,
             node_type=node,
-            filter_type=resource.filter_type,
-            order_type=resource.order_by_type,
+            filter_type=filter_type,
+            order_type=order_by_type,
             roots=DataResourceRoots(
-                list_name=resource_wire_field_name(resource.query, str(resource.list_root or name)),
-                detail_name=resource_wire_field_name(resource.query, str(resource.detail_root)),
+                list_name=resource_wire_field_name(resource.query, str(list_root or name)),
+                detail_name=resource_wire_field_name(resource.query, str(detail_root)),
                 aggregate_name=resource_wire_field_name(
                     resource.query,
-                    str(resource.aggregate_root or f"{name}_aggregate"),
+                    str(aggregate_root or f"{name}_aggregate"),
                 ),
                 group_name=(
-                    resource_wire_field_name(resource.query, str(resource.groups_root))
-                    if groupable and resource.groups_root is not None
+                    resource_wire_field_name(resource.query, str(groups_root))
+                    if groupable and groups_root is not None
                     else None
                 ),
             ),
             type_names=DataResourceTypeNames(
                 query=resource_type_name(resource.query),
                 node=resource_type_name(node),
-                filter=resource_type_name(resource.filter_type),
-                order=resource_type_name(resource.order_by_type),
-                aggregate=resource_type_name(resource.aggregate_container_type),
-                grouped=resource_type_name(resource.group_type),
-                group_key=resource_type_name(resource.group_key_type),
-                group_by_spec=resource_type_name(resource.group_by_spec_type),
-                group_order=resource_type_name(resource.group_order_type),
-                having=resource_type_name(resource.having_type),
+                filter=resource_type_name(filter_type),
+                order=resource_type_name(order_by_type),
+                aggregate=resource_type_name(aggregate_container_type),
+                grouped=resource_type_name(group_type),
+                group_key=resource_type_name(group_key_type),
+                group_by_spec=resource_type_name(group_by_spec_type),
+                group_order=resource_type_name(group_order_type),
+                having=resource_type_name(having_type),
             ),
             capabilities=("list", "detail", "aggregate", *(("groups",) if groupable else ())),
             filter_fields=filterable,
@@ -498,35 +570,35 @@ def attach_hasura_resource_metadata(
                     create_name=(
                         resource_wire_field_name(
                             resource.mutation,
-                            resource.insert_one_root,
+                            insert_one_root,
                         )
-                        if insert and resource.insert_one_root is not None
+                        if insert and insert_one_root is not None
                         else None
                     ),
                     update_name=(
                         resource_wire_field_name(
                             resource.mutation,
-                            resource.update_by_pk_root,
+                            update_by_pk_root,
                         )
-                        if update and resource.update_by_pk_root is not None
+                        if update and update_by_pk_root is not None
                         else None
                     ),
                     delete_name=(
                         resource_wire_field_name(
                             resource.mutation,
-                            resource.delete_by_pk_root,
+                            delete_by_pk_root,
                         )
-                        if delete and resource.delete_by_pk_root is not None
+                        if delete and delete_by_pk_root is not None
                         else None
                     ),
                 ),
                 type_names=DataResourceTypeNames(
                     node=resource_type_name(node),
-                    create_input=resource_type_name(resource.insert_input_type),
-                    update_input=resource_type_name(resource.set_input_type),
+                    create_input=resource_type_name(insert_input_type),
+                    update_input=resource_type_name(set_input_type),
                 ),
-                create_input_type=resource.insert_input_type,
-                update_input_type=resource.set_input_type,
+                create_input_type=insert_input_type,
+                update_input_type=set_input_type,
                 capabilities=mutation_capabilities,
             ),
         )

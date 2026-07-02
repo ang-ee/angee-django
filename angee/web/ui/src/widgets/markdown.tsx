@@ -12,7 +12,7 @@ import ReactMarkdown, {
 import remarkGfm from "remark-gfm";
 
 import { Glyph } from "../chrome/Glyph";
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -69,7 +69,7 @@ function MarkdownEdit({
   field,
   readOnly,
 }: WidgetRenderProps<string>): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const [mode, setMode] = useState<MarkdownMode>("source");
   const [linkDraft, setLinkDraft] = useState("");
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -221,7 +221,7 @@ function ModeButton({
   current: MarkdownMode;
   onSelect: (mode: MarkdownMode) => void;
 }): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const active = mode === current;
   const iconName = mode === "source" ? "code-xml" : "eye";
   const label = mode === "source" ? t("markdown.source") : t("markdown.preview");

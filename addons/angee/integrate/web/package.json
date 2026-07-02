@@ -1,8 +1,10 @@
 {
   "name": "@angee/integrate",
   "version": "0.0.0",
+  "license": "AGPL-3.0-or-later",
   "private": true,
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": "./src/index.tsx"
   },
@@ -14,7 +16,7 @@
   "dependencies": {
     "@angee/app": "workspace:*",
     "@angee/refine": "workspace:*",
-    "@angee/resources": "workspace:*",
+    "@angee/metadata": "workspace:*",
     "@angee/ui": "workspace:*",
     "lucide-react": "^1.21.0",
     "use-debounce": "^10.1.1"

@@ -1,5 +1,5 @@
 import type { BaseAddonRoute } from "@angee/app";
-import { defineBaseAddon } from "@angee/app";
+import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import type { BaseMenuItem } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { BookOpen, FileStack, FileText, Library } from "lucide-react";
@@ -10,28 +10,13 @@ import { vaultCreateForm } from "./views/vault-form";
 const KNOWLEDGE_ID = "knowledge";
 
 const knowledgeRoutes: readonly BaseAddonRoute[] = [
-  {
-    name: "knowledge.home",
-    path: "/knowledge",
-    layout: "console",
-    menu: KNOWLEDGE_ID,
-    component: lazyRouteComponent(() => import("./views/KnowledgePage"), "KnowledgePage"),
-  },
+  ...resourcePageRoutes("knowledge.home", "/knowledge", lazyRouteComponent(() => import("./views/KnowledgePage"), "KnowledgePage"), undefined, { detailName: "knowledge.page", menu: KNOWLEDGE_ID }),
   {
     // The vaults admin. A static `/knowledge/settings` outranks the
     // `/knowledge/$id` page route, so it is a sibling, not a page id.
     name: "knowledge.settings",
     path: "/knowledge/settings",
-    layout: "console",
     component: lazyRouteComponent(() => import("./views/KnowledgeSettingsPage"), "KnowledgeSettingsPage"),
-  },
-  {
-    // The page reader nests under the wiki; `KnowledgePage` reads the `$id`
-    // param and renders that page.
-    name: "knowledge.page",
-    path: "/knowledge/$id",
-    layout: "console",
-    parent: "knowledge.home",
   },
 ];
 

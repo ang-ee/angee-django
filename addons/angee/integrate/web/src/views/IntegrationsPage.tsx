@@ -1,19 +1,8 @@
+import { useAuthoredMutation } from "@angee/refine";
 import * as React from "react";
+import { rowPublicId, type Row, } from "@angee/metadata";
 import {
-  rowPublicId,
-  type Row,
-} from "@angee/resources";
-import {
-  Column,
-  ResourceList,
-  Field,
-  Form,
-  Group,
-  List,
-  useEnumOptions,
-  useImplPrefill,
-  useAuthoredMutation,
-} from "@angee/ui";
+  Column, ResourceList, Field, Form, Group, List, useEnumOptions, useImplPrefill } from "@angee/ui";
 
 import { canConnectRecord, ConnectOAuthButton } from "../connect/ConnectOAuthButton";
 import { ConnectIntegration } from "../documents";
@@ -30,7 +19,7 @@ export function IntegrationsPage(): React.ReactElement {
     () => [
       {
         id: "kind",
-        label: t("integrate.integrations.typeGroup"),
+        label: t("integrations.typeGroup"),
         group: { field: "kind" },
         type: "value" as const,
       },
@@ -62,23 +51,23 @@ export function IntegrationsPage(): React.ReactElement {
         groupOptions={groupOptions}
       >
         <Column field="display_name" />
-        <Column field="kind" header={t("integrate.col.type")} />
-        <Column field="vendor.display_name" header={t("integrate.col.vendor")} />
+        <Column field="kind" header={t("col.type")} />
+        <Column field="vendor.display_name" header={t("col.vendor")} />
         <Column field="status" widget="statusBadge" />
         <Column
           field="credential.display_name"
-          header={t("integrate.col.credential")}
+          header={t("col.credential")}
         />
-        <Column field="last_error" header={t("integrate.col.lastError")} />
+        <Column field="last_error" header={t("col.lastError")} />
       </List>
       <Form resource={MODEL} layout="tabs">
         <Field name="display_name" title readOnly />
-        <Group label={t("integrate.integrations.identity")} columns={2}>
+        <Group label={t("integrations.identity")} columns={2}>
           <Field name="owner" createOnly />
           <Field name="vendor" createOnly />
           <Field
             name="impl_class"
-            label={t("integrate.integrations.implClass")}
+            label={t("integrations.implClass")}
             widget="select"
             options={implClassOptions}
             prefill={implClassPrefill}
@@ -86,11 +75,11 @@ export function IntegrationsPage(): React.ReactElement {
           />
           <Field name="status" widget="statusbar" editOnly />
         </Group>
-        <Group label={t("integrate.integrations.authentication")} columns={2}>
+        <Group label={t("integrations.authentication")} columns={2}>
           <Field name="credential" editOnly />
           <Field name="account" editOnly />
         </Group>
-        <Group label={t("integrate.integrations.runtime")} columns={2}>
+        <Group label={t("integrations.runtime")} columns={2}>
           <Field name="last_used_at" readOnly />
           <Field name="last_used_status" readOnly />
           <Field name="use_count_24h" readOnly />
@@ -116,9 +105,9 @@ function IntegrationConnectButton({
 
   return (
     <ConnectOAuthButton
-      label={t("integrate.integrations.action.connect")}
-      connectedTitle={t("integrate.integrations.connect.connected")}
-      startErrorTitle={t("integrate.integrations.connect.startError")}
+      label={t("integrations.action.connect")}
+      connectedTitle={t("integrations.connect.connected")}
+      startErrorTitle={t("integrations.connect.startError")}
       next={CONNECT_NEXT}
       onConnected={refresh}
       start={async ({ redirectUri, next }) => {

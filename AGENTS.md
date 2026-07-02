@@ -58,9 +58,12 @@ on top.
 │   ├── agents_integrate_anthropic/ # Anthropic inference backend addon — SDK client + model sync
 │   └── iam_integrate_oidc/ # OIDC login addon — extends integrate's OAuthClient with login fields + composes iam
 │       └── …               # an addon may carry a co-located `web/` (e.g. `iam/web` = `@angee/iam`)
-├── packages/               # frontend workspace (pnpm) — the shared React layer (`angee-react`)
-│   ├── sdk/                # `@angee/sdk` — headless bindings
-│   ├── base/               # `@angee/base` — the single rendered (styled) binding
+├── angee/web/              # frontend framework packages shipped with `django-angee`
+│   ├── app/                # `@angee/app` — composition root, routes, providers, addon manifests
+│   ├── refine/             # `@angee/refine` — Refine/Hasura transport, live, router, typed-doc glue
+│   ├── metadata/           # `@angee/metadata` — `angee.resources` metadata bridge and projection
+│   └── ui/                 # `@angee/ui` — rendered binding, primitives, runtime context, views
+├── packages/               # dev-only frontend workspace packages
 │   ├── storybook/          # `@angee/storybook` — the storybook-first component workshop
 │   └── e2e/                # `@angee/e2e` — Playwright e2e harness (`docs/testing/e2e.md`)
 ├── templates/              # Copier templates — project / stack / workspace / service kinds

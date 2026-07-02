@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import type {
   ModelRelationFilterMode,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 import type { ResourceViewGroup } from "../resource-view-model";
 import { PAGE_ELEMENT_SLOT } from "./types";

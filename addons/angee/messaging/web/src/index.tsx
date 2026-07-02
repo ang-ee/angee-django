@@ -1,7 +1,4 @@
-import {
-  defineBaseAddon,
-  type BaseAddonRoute,
-} from "@angee/app";
+import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import { type BaseMenuItem } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { Inbox, MessagesSquare, Send } from "lucide-react";
@@ -9,19 +6,6 @@ import { Inbox, MessagesSquare, Send } from "lucide-react";
 import { enMessagingMessages } from "./i18n";
 import { RecordActivityPane } from "./RecordActivityPane";
 import { RecordChatterPane } from "./RecordChatterPane";
-
-// Each page is a routed ResourceList: a list route + a `$id` detail child the list
-// swaps to inline. `resource` tags the collection route so relation fields targeting
-// it can follow to this detail page.
-const consolePage = (
-  name: string,
-  path: string,
-  component: BaseAddonRoute["component"],
-  resource?: string,
-): readonly BaseAddonRoute[] => [
-  { name, path, layout: "console", component, ...(resource ? { resource } : {}) },
-  { name: `${name}.record`, path: `${path}/$id`, layout: "console", parent: name },
-];
 
 const messagingMenu: readonly BaseMenuItem[] = [
   {
@@ -38,8 +22,8 @@ const messagingMenu: readonly BaseMenuItem[] = [
 const messaging = defineBaseAddon({
   id: "messaging",
   routes: [
-    ...consolePage("messaging.inbox", "/messaging/inbox", lazyRouteComponent(() => import("./MessagesPage"), "MessagesPage"), "messaging.Message"),
-    ...consolePage("messaging.threads", "/messaging/threads", lazyRouteComponent(() => import("./ThreadsPage"), "ThreadsPage"), "messaging.Thread"),
+    ...resourcePageRoutes("messaging.inbox", "/messaging/inbox", lazyRouteComponent(() => import("./MessagesPage"), "MessagesPage"), "messaging.Message"),
+    ...resourcePageRoutes("messaging.threads", "/messaging/threads", lazyRouteComponent(() => import("./ThreadsPage"), "ThreadsPage"), "messaging.Thread"),
   ],
   menus: messagingMenu,
   icons: { inbox: Inbox, threads: MessagesSquare, send: Send },

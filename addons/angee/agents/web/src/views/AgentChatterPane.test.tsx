@@ -39,13 +39,17 @@ vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
     ...actual,
-    useAuthoredQuery: sdkMocks.useAuthoredQuery,
     useNamespaceT:
       (_namespace: string, messages: Record<string, string>) =>
       (key: string) =>
         messages[key] ?? key,
   };
 });
+
+vi.mock("@angee/refine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/refine")>()),
+  useAuthoredQuery: sdkMocks.useAuthoredQuery,
+}));
 
 vi.mock("./AgentChat", () => ({
   AgentChat: ({

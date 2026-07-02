@@ -1,7 +1,6 @@
 import { type ReactElement } from "react";
-import { useParams } from "@tanstack/react-router";
 
-import { Badge, Code, DetailSection, DetailSurface } from "@angee/ui";
+import { Badge, Code, DetailSection, DetailSurface, useRouteRecordId } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
 import {
@@ -15,20 +14,19 @@ import { usePlatformModel } from "../lib/explorer";
 
 export function ModelDetail(): ReactElement {
   const t = usePlatformT();
-  const params = useParams({ strict: false });
-  const id = "id" in params && typeof params.id === "string" ? params.id : undefined;
+  const id = useRouteRecordId();
   const { model, dependedBy, fetching } = usePlatformModel(id);
   const go = useRouteNavigate();
 
   return (
     <DetailSurface
       loading={fetching && !model}
-      loadingMessage={t("platform.detail.model.loading")}
+      loadingMessage={t("detail.model.loading")}
       empty={
         !model
           ? {
               icon: "grid",
-              title: t("platform.detail.model.notFound"),
+              title: t("detail.model.notFound"),
               description: id,
             }
           : null
@@ -48,27 +46,27 @@ export function ModelDetail(): ReactElement {
         model
           ? [
               {
-                label: t("platform.col.fields"),
+                label: t("col.fields"),
                 value: model.field_count,
                 icon: "columns",
                 href: fieldsPath({ model: model.label }),
                 onNavigate: go,
               },
               {
-                label: t("platform.col.relations"),
+                label: t("col.relations"),
                 value: model.relation_count,
                 icon: "share",
               },
               {
-                label: t("platform.col.addon"),
+                label: t("col.addon"),
                 value: model.addon_label,
                 icon: "grid",
                 href: addonDetailPath(model.addon_id),
                 onNavigate: go,
               },
               {
-                label: t("platform.col.graph"),
-                value: t("platform.detail.open"),
+                label: t("col.graph"),
+                value: t("detail.open"),
                 icon: "share",
                 href: graphPath(model.label),
                 onNavigate: go,
@@ -80,13 +78,13 @@ export function ModelDetail(): ReactElement {
       {model ? (
         <>
           <DetailSection
-            title={t("platform.detail.definition")}
+            title={t("detail.definition")}
             rows={[
-              [t("platform.col.table"), <Code truncate>{model.db_table}</Code>],
-              [t("platform.col.appLabel"), model.app_label],
+              [t("col.table"), <Code truncate>{model.db_table}</Code>],
+              [t("col.appLabel"), model.app_label],
               ...(model.resource_type
                 ? [[
-                    t("platform.col.resourceType"),
+                    t("col.resourceType"),
                     <Code truncate>{model.resource_type}</Code>,
                   ] as const]
                 : []),
@@ -94,14 +92,14 @@ export function ModelDetail(): ReactElement {
           />
 
           <DetailSection
-            title={t("platform.detail.dependencies")}
+            title={t("detail.dependencies")}
             rows={[
               [
-                t("platform.col.dependsOn"),
+                t("col.dependsOn"),
                 <LinkedChips items={model.depends_on} href={modelDetailPath} />,
               ],
               [
-                t("platform.col.dependedBy"),
+                t("col.dependedBy"),
                 <LinkedChips items={dependedBy} href={modelDetailPath} />,
               ],
             ]}

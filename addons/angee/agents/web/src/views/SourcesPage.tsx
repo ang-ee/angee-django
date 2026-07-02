@@ -1,15 +1,5 @@
 import * as React from "react";
-import {
-  Action,
-  Column,
-  ResourceList,
-  Facet,
-  Field,
-  Form,
-  Group,
-  List,
-  useRecordActionMutation,
-} from "@angee/ui";
+import { Action, Column, ResourceList, Facet, Field, Form, Group, List, useRecordActionMutation } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useAgentsT } from "../i18n";
@@ -32,7 +22,7 @@ export function SourcesPage(): React.ReactElement {
       resource={MODEL}
       placement="inline"
       routed
-      filter={{ kind: { exact: "skill" } }}
+      baseFilter={{ kind: { exact: "skill" } }}
       createDefaults={SKILL_DEFAULTS}
     >
       <List resource={MODEL} pageSize={50}>
@@ -46,13 +36,13 @@ export function SourcesPage(): React.ReactElement {
             `readOnly`) so the `createDefaults` "skill" seed is actually submitted —
             `mutationData` drops readOnly fields — then locked read-only on edit. */}
         <Field name="repository" createOnly />
-        <Group label={t("agents.sources.pointer")} columns={2}>
+        <Group label={t("sources.pointer")} columns={2}>
           <Field name="kind" createOnly />
           <Field name="ref" />
         </Group>
         <Field name="path" />
         <Field name="last_synced_at" readOnly />
-        <Action id="refresh" label={t("agents.sources.refreshSkills")} icon="refresh" run={refresh} />
+        <Action id="refresh" label={t("sources.refreshSkills")} icon="refresh" run={refresh} />
       </Form>
     </ResourceList>
   );

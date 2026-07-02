@@ -15,6 +15,7 @@ export { DrawerOverlay } from "./DrawerOverlay";
 export { HeroPage, type HeroPageProps } from "./HeroPage";
 export {
   PrimaryPaneProvider,
+  PrimaryPanePublisher,
   usePrimaryPane,
   usePrimaryPaneContent,
   type PrimaryPaneContextValue,

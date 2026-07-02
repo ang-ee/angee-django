@@ -1,6 +1,7 @@
+import { useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
 import { Card, CardContent, EmptyState, LazyBoundary, buttonVariants, cn, textRoleVariants } from "@angee/ui";
-import { useAuthoredQuery } from "@angee/ui";
+
 import type { ChatterView } from "@angee/ui/runtime";
 import { Link } from "@tanstack/react-router";
 
@@ -89,17 +90,17 @@ export function AgentChatterPane({
   const { openedIds } = useOpenedAgents({ selectedId });
 
   if (loading) {
-    return <PaneMessage>{t("agents.chat.resolving")}</PaneMessage>;
+    return <PaneMessage>{t("chat.resolving")}</PaneMessage>;
   }
   if (session === null) {
     return (
       <EmptyState
         icon="agent"
-        title={t("agents.agent.noRunningAgent")}
-        description={t("agents.agent.chatUnavailable")}
+        title={t("agent.noRunningAgent")}
+        description={t("agent.chatUnavailable")}
         actions={
           <Link className={buttonVariants({ variant: "primary", size: "sm" })} to="/agents">
-            {t("agents.agent.setupAssistant")}
+            {t("agent.setupAssistant")}
           </Link>
         }
         className="min-h-48 p-4"
@@ -112,7 +113,7 @@ export function AgentChatterPane({
       openedIds={openedIds}
       selectedId={selectedId}
       renderAgent={(id) => (
-        <LazyBoundary pending={<PaneMessage>{t("agents.chat.resolving")}</PaneMessage>}>
+        <LazyBoundary pending={<PaneMessage>{t("chat.resolving")}</PaneMessage>}>
           <AgentChat
             agentId={id}
             view={liveView}

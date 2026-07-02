@@ -4,7 +4,7 @@ import type {
   OpenNotificationParams,
 } from "@refinedev/core";
 
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { useToast, type ToastTone } from "./Toast";
 
 const REFINE_NOTIFICATION_TONE: Readonly<
@@ -17,7 +17,7 @@ const REFINE_NOTIFICATION_TONE: Readonly<
 
 export function useRefineNotificationProvider(): NotificationProvider {
   const toast = useToast();
-  const t = useBaseT();
+  const t = useUiT();
   const idsByKey = useRef(new Map<string, string>());
 
   const close = useCallback(

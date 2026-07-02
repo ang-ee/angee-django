@@ -225,25 +225,17 @@
       "types": "./src/views/facet-query.ts",
       "import": "./src/views/facet-query.ts"
     },
-    "./views/grouped-list-utils": {
-      "types": "./src/views/grouped-list-utils.ts",
-      "import": "./src/views/grouped-list-utils.ts"
-    },
     "./views/index": {
       "types": "./src/views/index.ts",
       "import": "./src/views/index.ts"
     },
-    "./views/list-view-types": {
-      "types": "./src/views/list-view-types.ts",
-      "import": "./src/views/list-view-types.ts"
+    "./views/resource-view-types": {
+      "types": "./src/views/resource-view-types.ts",
+      "import": "./src/views/resource-view-types.ts"
     },
-    "./views/list-view-utils": {
-      "types": "./src/views/list-view-utils.ts",
-      "import": "./src/views/list-view-utils.ts"
-    },
-    "./views/local-rows": {
-      "types": "./src/views/local-rows.ts",
-      "import": "./src/views/local-rows.ts"
+    "./views/resource-view-utils": {
+      "types": "./src/views/resource-view-utils.ts",
+      "import": "./src/views/resource-view-utils.ts"
     },
     "./views/model-metadata-defaults": {
       "types": "./src/views/model-metadata-defaults.ts",
@@ -301,14 +293,6 @@
       "types": "./src/views/*.tsx",
       "import": "./src/views/*.tsx"
     },
-    "./data/hooks": {
-      "types": "./src/data/hooks.tsx",
-      "import": "./src/data/hooks.tsx"
-    },
-    "./data/authored-hooks": {
-      "types": "./src/data/authored-hooks.tsx",
-      "import": "./src/data/authored-hooks.tsx"
-    },
     "./data/revisions": {
       "types": "./src/data/revisions.ts",
       "import": "./src/data/revisions.ts"
@@ -329,8 +313,8 @@
   },
   "dependencies": {
     "@angee/logo-react": "^0.2.1",
+    "@angee/metadata": "workspace:*",
     "@angee/refine": "workspace:*",
-    "@angee/resources": "workspace:*",
     "@base-ui/react": "^1.6.0",
     "@codemirror/commands": "^6.10.4",
     "@codemirror/lang-json": "^6.0.2",
@@ -359,7 +343,8 @@
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.6.0",
     "tailwind-variants": "^3.2.0",
-    "tw-animate-css": "^1.0.0"
+    "tw-animate-css": "^1.0.0",
+    "use-debounce": "^10.1.1"
   },
   "peerDependencies": {
     "@tanstack/react-router": "^1",

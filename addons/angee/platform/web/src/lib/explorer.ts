@@ -3,10 +3,9 @@ import { useMemo } from "react";
 import {
   useAuthoredQuery,
   type AuthoredQueryResult,
-  type GraphViewEdge,
-  type GraphViewNode,
-} from "@angee/ui";
-import type { DocumentData } from "@angee/refine";
+  type DocumentData,
+} from "@angee/refine";
+import type { GraphViewEdge, GraphViewNode } from "@angee/ui";
 
 import {
   PlatformExplorer,

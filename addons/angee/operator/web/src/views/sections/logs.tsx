@@ -1,16 +1,6 @@
+import { Alert, Badge, Card, CardContent, CardHeader, CardTitle, LogStream } from "@angee/ui";
 import {
-  Alert,
-  Badge,
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  LogStream,
-  useAuthoredQuery,
-} from "@angee/ui";
-import {
-  isFatalGraphQLWsCloseCode,
-} from "@angee/refine";
+  isFatalGraphQLWsCloseCode, useAuthoredQuery } from "@angee/refine";
 import type { DocumentData } from "@angee/refine";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
@@ -219,7 +209,7 @@ export function ServiceLogs({
 }): ReactNode {
   const t = useOperatorT();
   const logs = useServiceLogStream(name);
-  return <LogPanel logs={logs} title={title ?? t("operator.services.detail.logs")} />;
+  return <LogPanel logs={logs} title={title ?? t("services.detail.logs")} />;
 }
 
 /** A titled log card with a connection-status badge and the {@link LogStream} tail. */
@@ -232,10 +222,10 @@ export function LogPanel({
 }): ReactNode {
   const t = useOperatorT();
   const status = logs.error
-    ? { tone: "danger" as const, label: t("operator.logs.error") }
+    ? { tone: "danger" as const, label: t("logs.error") }
     : logs.streaming
-      ? { tone: "success" as const, label: t("operator.logs.live") }
-      : { tone: "neutral" as const, label: t("operator.logs.connecting") };
+      ? { tone: "success" as const, label: t("logs.live") }
+      : { tone: "neutral" as const, label: t("logs.connecting") };
 
   return (
     <Card className="flex min-h-0 flex-1 flex-col">
@@ -250,7 +240,7 @@ export function LogPanel({
         <LogStream
           lines={logs.lines}
           className="min-h-64 flex-1"
-          emptyMessage={t("operator.logs.empty")}
+          emptyContent={t("logs.empty")}
         />
       </CardContent>
     </Card>

@@ -1,0 +1,38 @@
+_min_copier_version: "9.0"
+_subdirectory: template
+_templates_suffix: .jinja
+
+_angee:
+  schema: 1
+  kind: addon
+  name: web
+  description: >-
+    Frontend package scaffold for an Angee addon. It emits the post-refactor
+    shape: `defineBaseAddon`, `resourcePageRoutes`, namespace-relative i18n via
+    `createNamespaceT`, `expectValidBaseAddon` tests, and the shared
+    package/tsconfig/vitest wiring.
+
+addon_id:
+  type: str
+  default: notes
+  help: Stable addon id and i18n namespace, e.g. notes or billing.
+
+addon_title:
+  type: str
+  default: Notes
+  help: Human menu label for the addon.
+
+route_path:
+  type: str
+  default: "/notes"
+  help: Console route path for the addon's main collection page.
+
+resource_name:
+  type: str
+  default: Note
+  help: Refine/resource model name claimed by the collection route.
+
+package_name:
+  type: str
+  default: "@angee/{{ addon_id }}"
+  help: npm package name for this addon's web package.

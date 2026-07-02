@@ -1,17 +1,17 @@
 import * as React from "react";
 import {
   useAngeeFacets,
-} from "../data/hooks";
+} from "@angee/refine";
 import type {
   FacetRequestSpec,
   ResourceFacetOption,
   } from "@angee/refine";
 import {
   type ModelFieldMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 import type {
   ModelMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 import type {
   ResourceToolbarFilterField,
@@ -24,9 +24,10 @@ import {
   groupKey,
   hasuraGroupDimension,
   hasuraGroupOrderForDimensions,
-} from "./ListInternals";
-import { groupLabel } from "./model-metadata-defaults";
+} from "./resource-view-list-body";
+import { resourceFieldGroupLabel } from "./model-metadata-defaults";
 import type { ColumnDescriptor } from "./page";
+import { useGroupOperation } from "./resource-operations";
 
 const SCALAR_FACET_OPTION_LIMIT = 200;
 const EMPTY_FILTER_OPTIONS: readonly ResourceToolbarFilterOption[] = [];
@@ -62,6 +63,7 @@ export function useScalarFacets<TRow extends object>(
     [columns, metadata],
   );
   const resource = metadata?.resource ?? null;
+  const groupOperation = useGroupOperation(resource);
   const facetSpecs = React.useMemo(
     () =>
       facets.map((facet) =>
@@ -72,7 +74,8 @@ export function useScalarFacets<TRow extends object>(
         )),
     [activeFilter, facets],
   );
-  const facetQuery = useAngeeFacets(resource, {
+  const facetQuery = useAngeeFacets(groupOperation.target, {
+    document: groupOperation.document,
     facets: facetSpecs,
     enabled: resource !== null && facetSpecs.length > 0,
   });
@@ -185,7 +188,7 @@ function addScalarFacet(
   const dimension = hasuraGroupDimension(identity);
   const orderBy = hasuraGroupOrderForDimensions([dimension]);
   const labelField = options.labelField ?? fieldName;
-  const label = groupLabel(labelField, metadata.fields[labelField]);
+  const label = resourceFieldGroupLabel(labelField, metadata.fields[labelField]);
   seen.add(fieldName);
   facets.push({
     id: fieldName,

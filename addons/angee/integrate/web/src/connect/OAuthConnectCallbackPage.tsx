@@ -1,9 +1,5 @@
-import {
-  OAuthCallback,
-  type CallbackExchange,
-  type OAuthCallbackCopy,
-} from "@angee/app/auth";
-import { useAuthoredMutation } from "@angee/ui";
+import { OAuthCallback, type CallbackExchange, type OAuthCallbackCopy, } from "@angee/app/auth";
+import { useAuthoredMutation } from "@angee/refine";
 import { useCallback, useMemo, type ReactNode } from "react";
 
 import { useIntegrateT } from "../i18n";
@@ -15,14 +11,14 @@ export function OAuthConnectCallbackPage(): ReactNode {
   const t = useIntegrateT();
   const copy = useMemo<OAuthCallbackCopy>(
     () => ({
-      pendingTitle: t("integrate.connectCallback.completing"),
-      pendingBody: t("integrate.connectCallback.confirming"),
-      errorTitle: t("integrate.connectCallback.failedTitle"),
+      pendingTitle: t("connectCallback.completing"),
+      pendingBody: t("connectCallback.confirming"),
+      errorTitle: t("connectCallback.failedTitle"),
       backHref: "/integrate/providers",
-      backLabel: t("integrate.connectCallback.backToProviders"),
-      serverError: t("integrate.connectCallback.browserOnly"),
-      missingInfo: t("integrate.connectCallback.missingInfo"),
-      failure: t("integrate.connectCallback.completeError"),
+      backLabel: t("connectCallback.backToProviders"),
+      serverError: t("connectCallback.browserOnly"),
+      missingInfo: t("connectCallback.missingInfo"),
+      failure: t("connectCallback.completeError"),
     }),
     [t],
   );

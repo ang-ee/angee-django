@@ -1,9 +1,5 @@
-import {
-  OAuthCallback,
-  type CallbackExchange,
-  type OAuthCallbackCopy,
-} from "@angee/app/auth";
-import { useAuthoredMutation } from "@angee/ui";
+import { OAuthCallback, type CallbackExchange, type OAuthCallbackCopy, } from "@angee/app/auth";
+import { useAuthoredMutation } from "@angee/refine";
 import { useCallback, useMemo, type ReactNode } from "react";
 
 import { IamLoginComplete } from "./documents.public";
@@ -15,14 +11,14 @@ export function OAuthCallbackPage(): ReactNode {
   const t = useIamT();
   const copy = useMemo<OAuthCallbackCopy>(
     () => ({
-      pendingTitle: t("iam.callback.completing"),
-      pendingBody: t("iam.callback.confirming"),
-      errorTitle: t("iam.callback.signInFailed"),
+      pendingTitle: t("callback.completing"),
+      pendingBody: t("callback.confirming"),
+      errorTitle: t("callback.signInFailed"),
       backHref: "/login",
-      backLabel: t("iam.callback.backToSignIn"),
-      serverError: t("iam.callback.browserOnly"),
-      missingInfo: t("iam.callback.missingInfo"),
-      failure: t("iam.callback.completeError"),
+      backLabel: t("callback.backToSignIn"),
+      serverError: t("callback.browserOnly"),
+      missingInfo: t("callback.missingInfo"),
+      failure: t("callback.completeError"),
     }),
     [t],
   );

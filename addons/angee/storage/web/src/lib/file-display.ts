@@ -1,8 +1,4 @@
-import {
-  formatDate as formatBaseDate,
-  statusTone as resolveStatusTone,
-  type Tone,
-} from "@angee/ui";
+import { formatDate as formatBaseDate, statusTone as resolveStatusTone, type Tone } from "@angee/ui";
 
 // Presentational mappings for file rows: the upload-state → stage badge and a
 // date display. Byte sizes reuse `formatSize` from `@angee/ui` (the preview
@@ -25,13 +21,13 @@ export function fileStage(
   });
   switch (uploadState.toLowerCase()) {
     case "ready":
-      return { label: t("storage.stage.ready"), tone };
+      return { label: t("stage.ready"), tone };
     case "draft":
-      return { label: t("storage.stage.uploading"), tone };
+      return { label: t("stage.uploading"), tone };
     case "failed":
-      return { label: t("storage.stage.failed"), tone };
+      return { label: t("stage.failed"), tone };
     default:
-      return { label: uploadState || t("storage.stage.unknown"), tone };
+      return { label: uploadState || t("stage.unknown"), tone };
   }
 }
 

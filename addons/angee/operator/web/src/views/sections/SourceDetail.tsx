@@ -1,6 +1,5 @@
-import { Code, DetailSection, DetailSurface } from "@angee/ui";
+import { Code, DetailSection, DetailSurface, useRouteRecordId } from "@angee/ui";
 import { type ReactElement } from "react";
-import { useParams } from "@tanstack/react-router";
 
 import { useOperatorT } from "../../i18n";
 import { useOperatorSnapshot } from "../../data/transport";
@@ -11,8 +10,7 @@ import { useSourceActions } from "./source-actions";
 /** Source detail: drift readout + the source's git actions (no log stream). */
 export function SourceDetail(): ReactElement {
   const t = useOperatorT();
-  const params = useParams({ strict: false });
-  const name = "name" in params && typeof params.name === "string" ? params.name : undefined;
+  const name = useRouteRecordId();
   const { snapshot, result, refetch } = useOperatorSnapshot({ sources: true });
   const { actions, busy } = useSourceActions(refetch);
 
@@ -21,12 +19,12 @@ export function SourceDetail(): ReactElement {
   return (
     <DetailSurface
       loading={result.fetching && !snapshot}
-      loadingMessage={t("operator.sources.loading")}
+      loadingMessage={t("sources.loading")}
       empty={
         !source
           ? {
               icon: "share",
-              title: t("operator.sources.detail.notFound"),
+              title: t("sources.detail.notFound"),
               description: name,
             }
           : null
@@ -53,29 +51,29 @@ export function SourceDetail(): ReactElement {
     >
       {source ? (
         <DetailSection
-          title={t("operator.sources.detail.overview")}
+          title={t("sources.detail.overview")}
           rows={[
-            [t("operator.sources.column.kind"), source.kind],
+            [t("sources.column.kind"), source.kind],
             [
-              t("operator.sources.column.status"),
+              t("sources.column.status"),
               <StateTag state={source.state ?? "unknown"} />,
             ],
-            [t("operator.sources.column.branch"), source.branch ?? "—"],
+            [t("sources.column.branch"), source.branch ?? "—"],
             [
-              t("operator.sources.column.aheadBehind"),
+              t("sources.column.aheadBehind"),
               <span className="tabular-nums">
                 ↑{source.ahead ?? 0} ↓{source.behind ?? 0}
               </span>,
             ],
             [
-              t("operator.sources.column.dirty"),
+              t("sources.column.dirty"),
               source.dirty
-                ? t("operator.sources.dirty")
-                : t("operator.sources.clean"),
+                ? t("sources.dirty")
+                : t("sources.clean"),
             ],
-            [t("operator.sources.detail.upstream"), source.upstream ?? "—"],
+            [t("sources.detail.upstream"), source.upstream ?? "—"],
             [
-              t("operator.sources.detail.currentRef"),
+              t("sources.detail.currentRef"),
               source.currentRef ? (
                 <Code truncate>{source.currentRef}</Code>
               ) : (
@@ -83,19 +81,19 @@ export function SourceDetail(): ReactElement {
               ),
             ],
             [
-              t("operator.sources.detail.pushed"),
+              t("sources.detail.pushed"),
               source.pushed
-                ? t("operator.gitops.pushed.yes")
-                : t("operator.gitops.pushed.no"),
+                ? t("gitops.pushed.yes")
+                : t("gitops.pushed.no"),
             ],
             [
-              t("operator.sources.detail.path"),
+              t("sources.detail.path"),
               <Code truncate>{source.path}</Code>,
             ],
             ...(source.error
               ? ([
                   [
-                    t("operator.sources.detail.error"),
+                    t("sources.detail.error"),
                     <span className="text-danger-text">{source.error}</span>,
                   ],
                 ] as const)

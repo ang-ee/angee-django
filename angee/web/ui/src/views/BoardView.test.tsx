@@ -4,13 +4,13 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { BoardView } from "./BoardView";
-import type { RowGroup } from "./ListInternals";
+import type { RowGroup } from "./resource-view-list-body";
 import type { ResourceViewContextValue } from "./resource-view-context";
 import type { ColumnDescriptor } from "./page";
-import type { Row } from "@angee/resources";
+import type { Row } from "@angee/metadata";
 
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
-vi.mock("../i18n", () => ({ useBaseT: () => (key: string) => key }));
+vi.mock("../i18n", () => ({ useUiT: () => (key: string) => key }));
 
 afterEach(() => cleanup());
 
@@ -49,7 +49,7 @@ function renderBoard(props: Partial<Parameters<typeof BoardView<DemoRow>>[0]> = 
       resourceView={RESOURCE_VIEW}
       selectedIds={new Set()}
       interactive={false}
-      emptyMessage="empty"
+      emptyContent="empty"
       {...props}
     />,
   );
@@ -96,7 +96,9 @@ describe("BoardView", () => {
     });
 
     const card = screen.getByText(/Release train status/).closest("article");
-    const frame = card?.querySelector("button");
+    // A card with no href/onClick renders its frame as a plain <div> (the
+    // anchor/button variants are reserved for genuinely interactive cards).
+    const frame = card?.firstElementChild;
     const wordCountRow = screen.getByText("Word Count").closest("div");
     const wordCountValue = screen.getByText("155").closest("span");
 

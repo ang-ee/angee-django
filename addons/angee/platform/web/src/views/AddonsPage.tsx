@@ -1,15 +1,7 @@
 import { type ReactElement } from "react";
 
 import {
-  Badge,
-  Chip,
-  ListView,
-  statusTone,
-  textRoleVariants,
-  type CardActionContext,
-  type ListColumn,
-  type ResourceToolbarGroupOption,
-} from "@angee/ui";
+  Badge, Chip, ListView, statusTone, textRoleVariants, type CardActionContext, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
 import { addonDetailPath } from "../lib/paths";
@@ -32,7 +24,7 @@ function columns(t: (key: string) => string): readonly ListColumn<AddonResourceR
   return [
     {
       field: "label",
-      header: t("platform.col.addon"),
+      header: t("col.addon"),
       render: (row) => (
         <span className="flex min-w-0 flex-col">
           <span className="truncate font-medium text-fg">{row.label}</span>
@@ -42,45 +34,45 @@ function columns(t: (key: string) => string): readonly ListColumn<AddonResourceR
     },
     {
       field: "category",
-      header: t("platform.col.category"),
+      header: t("col.category"),
       render: (row) =>
         row.category ? <Chip tone="muted" size="sm">{row.category}</Chip> : <span className="text-fg-muted">—</span>,
     },
     {
       field: "kind",
-      header: t("platform.col.kind"),
+      header: t("col.kind"),
       // Route every enum cell through i18n so list and card read the same labels.
       render: (row) => (
-        <Badge tone={row.kind === "consumer" ? "brand" : "neutral"}>{t(`platform.kind.${row.kind}`)}</Badge>
+        <Badge tone={row.kind === "consumer" ? "brand" : "neutral"}>{t(`kind.${row.kind}`)}</Badge>
       ),
     },
     {
       field: "source",
-      header: t("platform.col.source"),
+      header: t("col.source"),
       render: (row) => (
         <Badge tone={statusTone(row.source, SOURCE_TONES, { unknownTone: "neutral" })}>
-          {t(`platform.source.${row.source}`)}
+          {t(`source.${row.source}`)}
         </Badge>
       ),
     },
     {
       field: "state",
-      header: t("platform.col.state"),
-      render: (row) => <Badge tone={statusTone(row.state, STATE_TONES)}>{t(`platform.state.${row.state}`)}</Badge>,
+      header: t("col.state"),
+      render: (row) => <Badge tone={statusTone(row.state, STATE_TONES)}>{t(`state.${row.state}`)}</Badge>,
     },
-    { field: "model_count", header: t("platform.col.models") },
-    { field: "field_count", header: t("platform.col.fields") },
-    { field: "resource_count", header: t("platform.col.resources") },
+    { field: "model_count", header: t("col.models") },
+    { field: "field_count", header: t("col.fields") },
+    { field: "resource_count", header: t("col.resources") },
   ];
 }
 
 function groupOptions(t: (key: string) => string): readonly ResourceToolbarGroupOption[] {
   return [
-    { id: "category", label: t("platform.col.category"), group: { field: "category" }, type: "value" },
-    { id: "namespace", label: t("platform.col.namespace"), group: { field: "namespace" }, type: "value" },
-    { id: "kind", label: t("platform.col.kind"), group: { field: "kind" }, type: "value" },
-    { id: "source", label: t("platform.col.source"), group: { field: "source" }, type: "value" },
-    { id: "state", label: t("platform.col.state"), group: { field: "state" }, type: "value" },
+    { id: "category", label: t("col.category"), group: { field: "category" }, type: "value" },
+    { id: "namespace", label: t("col.namespace"), group: { field: "namespace" }, type: "value" },
+    { id: "kind", label: t("col.kind"), group: { field: "kind" }, type: "value" },
+    { id: "source", label: t("col.source"), group: { field: "source" }, type: "value" },
+    { id: "state", label: t("col.state"), group: { field: "state" }, type: "value" },
   ];
 }
 
@@ -107,7 +99,7 @@ export function AddonsPage(): ReactElement {
       cardActions={(row: AddonResourceRow, context: CardActionContext) => (
         <AddonCardActions row={row} context={context} />
       )}
-      emptyMessage={t("platform.empty.addons")}
+      emptyContent={t("empty.addons")}
     />
   );
 }

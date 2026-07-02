@@ -1,10 +1,7 @@
 import { type ReactElement } from "react";
 
 import {
-  Code,
-  ListView,
-  type ListColumn,
-} from "@angee/ui";
+  Code, ListView, type ListColumn } from "@angee/ui";
 
 // The `iam.Role` Hasura resource row (`hasura_pydantic_resource`,
 // `addons/angee/iam/schema.py`): roles deduped from active role-relationship

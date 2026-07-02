@@ -3,7 +3,7 @@
 // is model-driven (ResourceList reads the SDL); these are the non-CRUD operations the
 // connect views invoke. The connect start/complete flow is served by the public
 // schema (it runs from public-facing pages); the console-only credential reveal
-// lives in `documents.console.ts`. Inbound OIDC login
+// lives in `documents.ts`. Inbound OIDC login
 // (`login_start`/`available_connections`) lives in `@angee/iam`.
 
 import { graphql } from "@angee/gql/public";

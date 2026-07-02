@@ -3,52 +3,49 @@
 import * as React from "react";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import {
+  PrimaryPaneTestHost,
+  ShellPageTestProviders,
+} from "@angee/app/testing";
 
 import type { AgentRosterItem } from "../documents";
 
 const routerMocks = vi.hoisted(() => ({
-  navigate: vi.fn(),
-  params: {} as Record<string, string>,
-}));
+  navigate: vi.fn(), params: {} as Record<string, string>, }));
 
 const sdkMocks = vi.hoisted(() => ({
-  useAuthoredQuery: vi.fn(),
-}));
+  useAuthoredQuery: vi.fn(), }));
 
 vi.mock("@tanstack/react-router", async () => {
   const React = await import("react");
   return {
-    useNavigate: () => routerMocks.navigate,
-    useParams: () => routerMocks.params,
-    // A capturing anchor: keeps the `to` href and spreads the merged props (className,
-    // aria-current, data-active) that `SessionRailItem`'s `useRender` injects.
+    useNavigate: () => routerMocks.navigate, useParams: () => routerMocks.params, // A capturing anchor: keeps the `to` href and spreads the merged props (className, // aria-current, data-active) that `SessionRailItem`'s `useRender` injects.
     Link: React.forwardRef<HTMLAnchorElement, { to?: unknown; children?: React.ReactNode }>(
       function Link({ to, children, ...rest }, ref) {
         return React.createElement(
-          "a",
-          { ref, href: typeof to === "string" ? to : String(to ?? ""), ...rest },
-          children,
-        );
-      },
-    ),
-  };
+          "a", { ref, href: typeof to === "string" ? to : String(to ?? ""), ...rest }, children, );
+      }, ), };
 });
 
+vi.mock("@angee/refine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/refine")>()),
+  useAuthoredQuery: sdkMocks.useAuthoredQuery,
+}));
+
 // `@angee/ui` carries the real rail/empty/skeleton primitives + `recordPath`; only the
-// data hook and the namespace translator are overridden.
+// route-id helper and namespace translator are overridden.
 vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
   const React = await import("react");
   return {
     ...actual,
-    useAuthoredQuery: sdkMocks.useAuthoredQuery,
+    useRouteRecordId: () => routerMocks.params.id,
     // Mirror the real `useNamespaceT` contract: a STABLE translator identity (memoized
     // on its inputs). AgentSessionsPage publishes a `t`-derived node into the shell
     // primary pane via `usePrimaryPane`, so an unstable `t` would churn that node and
     // republish on every render — an infinite publish/re-render loop.
     useNamespaceT: (_namespace: string, messages: Record<string, string>) =>
-      React.useCallback((key: string) => messages[key] ?? key, [messages]),
-  };
+      React.useCallback((key: string) => messages[key] ?? key, [messages]), };
 });
 
 // Stub the chat surface so the test never pulls in the assistant-ui runtime — it only
@@ -56,29 +53,18 @@ vi.mock("@angee/ui", async (importOriginal) => {
 vi.mock("./AgentChat", () => ({
   AgentChat: ({ agentId }: { agentId: string }) => (
     <div data-testid="agent-chat" data-agent-id={agentId} />
-  ),
-}));
-
-import { PrimaryPaneProvider, usePrimaryPaneContent } from "@angee/ui";
+  ), }));
 
 import { AgentSessionsPage } from "./AgentSessionsPage";
-
-// The session rail now lives in the shell PRIMARY pane: the page publishes it via
-// `usePrimaryPane`, so the test renders the published node into a thin host and asserts
-// against that. The conversation content (chat / empty state) stays in the page's own DOM.
-function PrimaryHost(): React.ReactElement {
-  const { node } = usePrimaryPaneContent();
-  return <div data-testid="shell-primary">{node}</div>;
-}
 
 // A fresh element each call: React bails out of re-rendering a referentially-identical
 // element, so `rerender` must get a NEW tree to pick up the changed router params.
 function harness() {
   return (
-    <PrimaryPaneProvider>
+    <ShellPageTestProviders>
       <AgentSessionsPage />
-      <PrimaryHost />
-    </PrimaryPaneProvider>
+      <PrimaryPaneTestHost />
+    </ShellPageTestProviders>
   );
 }
 

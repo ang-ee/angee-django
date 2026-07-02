@@ -1,6 +1,6 @@
-import { Code, DetailSection, DetailSurface, TextLink, useAuthoredQuery } from "@angee/ui";
+import { useAuthoredQuery } from "@angee/refine";
+import { Code, DetailSection, DetailSurface, TextLink, useRouteRecordId } from "@angee/ui";
 import { type ReactElement } from "react";
-import { useParams } from "@tanstack/react-router";
 
 import { SERVICE_ENDPOINT_QUERY } from "../../data/documents.daemon";
 import { OPERATOR_PROVIDER } from "../../data/operator-provider";
@@ -14,8 +14,7 @@ import { useServiceActions } from "./service-actions";
 /** Service detail: state + lifecycle actions + the live log tail. */
 export function ServiceDetail(): ReactElement {
   const t = useOperatorT();
-  const params = useParams({ strict: false });
-  const name = "name" in params && typeof params.name === "string" ? params.name : undefined;
+  const name = useRouteRecordId();
   const { snapshot, result, refetch } = useOperatorSnapshot({ services: true });
   const { actions, busy } = useServiceActions(refetch);
   const endpoint = useAuthoredQuery(
@@ -29,12 +28,12 @@ export function ServiceDetail(): ReactElement {
   return (
     <DetailSurface
       loading={result.fetching && !snapshot}
-      loadingMessage={t("operator.services.loading")}
+      loadingMessage={t("services.loading")}
       empty={
         !service
           ? {
               icon: "server",
-              title: t("operator.services.detail.notFound"),
+              title: t("services.detail.notFound"),
               description: name,
             }
           : null
@@ -62,16 +61,16 @@ export function ServiceDetail(): ReactElement {
       {service ? (
         <>
           <DetailSection
-            title={t("operator.services.detail.overview")}
+            title={t("services.detail.overview")}
             rows={[
-              [t("operator.services.column.runtime"), service.runtime],
+              [t("services.column.runtime"), service.runtime],
               [
-                t("operator.services.column.status"),
+                t("services.column.status"),
                 <StateTag state={service.status} />,
               ],
-              [t("operator.services.column.health"), service.health ?? "—"],
+              [t("services.column.health"), service.health ?? "—"],
               [
-                t("operator.services.detail.endpoint"),
+                t("services.detail.endpoint"),
                 resolved?.url ? (
                   <TextLink href={resolved.url} target="_blank">
                     {resolved.url}
@@ -81,7 +80,7 @@ export function ServiceDetail(): ReactElement {
                 ),
               ],
               [
-                t("operator.services.detail.internal"),
+                t("services.detail.internal"),
                 resolved ? (
                   <Code truncate>{`${resolved.internalHost}:${resolved.internalPort}`}</Code>
                 ) : (

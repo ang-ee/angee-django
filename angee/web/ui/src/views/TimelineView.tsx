@@ -1,13 +1,14 @@
 import { useMemo, type ReactElement, type ReactNode } from "react";
 import { format } from "date-fns";
-import type { Row } from "@angee/resources";
+import type { Row } from "@angee/metadata";
 
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { SectionEyebrow } from "../ui/section-eyebrow";
 import { TimelineEntry } from "../fragments/TimelineEntry";
 import { dateFromUnknown } from "../widgets/date-format";
-import { ListEmpty } from "./ListInternals";
-import type { ListEmptyState } from "./list-view-types";
+import { ListEmpty } from "./resource-view-list-body";
+import type { ListEmptyContent } from "./resource-view-types";
 
 /**
  * The chronological View — rows bucketed by day (newest first), each rendered
@@ -27,10 +28,8 @@ export interface TimelineViewProps<TRow extends Row = Row> {
   rowKey?: keyof TRow & string;
   /** Override the entry body. */
   renderEntry?: (row: TRow) => ReactNode;
-  /** Shown centered when there are no dated rows. */
-  emptyMessage?: ReactNode;
-  /** Structured empty state shown when there are no dated rows. */
-  emptyState?: ListEmptyState;
+  /** Empty-state content shown when there are no dated rows. */
+  emptyContent?: ListEmptyContent;
   className?: string;
 }
 
@@ -47,11 +46,11 @@ export function TimelineView<TRow extends Row = Row>({
   bodyField,
   rowKey = "id" as keyof TRow & string,
   renderEntry,
-  emptyMessage = "No records.",
-  emptyState,
+  emptyContent,
   className,
 }: TimelineViewProps<TRow>): ReactElement {
-  const emptyContent = emptyState ?? emptyMessage;
+  const t = useUiT();
+  const resolvedEmptyContent = emptyContent ?? t("list.empty");
   const groups = useMemo<DayGroup<TRow>[]>(() => {
     const dated = rows
       .map((row) => ({ row, date: dateFromUnknown(row[dateField]) }))
@@ -70,7 +69,7 @@ export function TimelineView<TRow extends Row = Row>({
   return (
     <div className={cn("flex-1 overflow-y-auto bg-canvas p-6", className)}>
       {groups.length === 0 ? (
-        <ListEmpty>{emptyContent}</ListEmpty>
+        <ListEmpty>{resolvedEmptyContent}</ListEmpty>
       ) : (
       <ol className="mx-auto flex max-w-3xl flex-col gap-6">
         {groups.map((group) => (

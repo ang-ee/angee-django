@@ -8,7 +8,7 @@ import { Toast as BaseToast } from "@base-ui/react/toast";
 import type { ToastObject as BaseToastObject } from "@base-ui/react/toast";
 
 import { Glyph } from "../chrome/Glyph";
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { INTENT_GLYPHS, toneClass, type FeedbackIntent } from "../lib/tones";
 import { Button } from "../ui/button";
@@ -139,7 +139,7 @@ function ToastItem({
   toast: BaseToastObject<ToastData>;
 }): ReactElement {
   const { close } = BaseToast.useToastManager<ToastData>();
-  const t = useBaseT();
+  const t = useUiT();
   const tone = toast.data?.tone ?? "info";
   const action = toast.data?.action;
 

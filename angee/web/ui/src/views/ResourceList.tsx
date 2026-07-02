@@ -2,23 +2,7 @@ import * as React from "react";
 import {
   rowPublicId,
   type Row,
-} from "@angee/resources";
-import {
-  useList,
-  type BaseRecord,
-  type HttpError,
-  } from "@refinedev/core";
-import {
-  crudFiltersFromFilterRecord,
-  refineFieldsFromPaths,
-  refineSortersFromAngeeOrder,
-  } from "@angee/refine";
-import {
-  refineResourceName,
-} from "@angee/resources";
-import {
-  useModelMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
 import { ResourceViewSwitcher } from "../toolbars";
@@ -50,13 +34,9 @@ import {
   useResourceViewMaybe,
 } from "./resource-view-context";
 import {
-  type ResourceListResult,
-  useResourceRowsSnapshot,
-  useSyncPageSize,
   type ListViewNavigationScope,
 } from "./resource-view-surface";
 import {
-  Filter,
   stableSerialize,
   type ResourceViewDefaultGroups,
   type ResourceViewGroup,
@@ -134,10 +114,10 @@ export interface ResourceListProps<TRow extends Row = Row> {
   /** Where the form shows: beside/below the list (`"inline"`) or in a modal. */
   placement?: ResourceRecordPlacement;
   /** List options forwarded to `ListView`. */
-  filter?: ListViewProps<TRow>["filter"];
-  filters?: ListViewProps<TRow>["filters"];
+  baseFilter?: ListViewProps<TRow>["baseFilter"];
+  filterOptions?: ListViewProps<TRow>["filterOptions"];
   facets?: ListViewProps<TRow>["facets"];
-  filterFields?: ListViewProps<TRow>["filterFields"];
+  customFilterFields?: ListViewProps<TRow>["customFilterFields"];
   groupOptions?: ListViewProps<TRow>["groupOptions"];
   order?: ListViewProps<TRow>["order"];
   pageSize?: number;
@@ -367,10 +347,10 @@ function ResourceListBody<TRow extends Row = Row>({
   declarations,
   recordController,
   placement = "inline",
-  filter,
-  filters,
+  baseFilter,
+  filterOptions,
   facets,
-  filterFields,
+  customFilterFields,
   groupOptions,
   order,
   pageSize,
@@ -409,10 +389,10 @@ function ResourceListBody<TRow extends Row = Row>({
     : facets;
   const listRenderProps = {
     fields,
-    filter,
-    filters,
+    baseFilter,
+    filterOptions,
     facets: resolvedFacets,
-    filterFields,
+    customFilterFields,
     groupOptions,
     order,
     pageSize,
@@ -598,14 +578,11 @@ function ResourceListBody<TRow extends Row = Row>({
   );
   const listStateOnly = open && listState ? (
     <ListStateProbe<TRow>
+      list={ResolvedListComponent}
       resource={resource}
       columns={resolvedColumns}
-      fields={listRenderProps.fields}
-      filter={listRenderProps.filter}
-      order={listRenderProps.order}
-      pageSize={listRenderProps.pageSize}
+      listRenderProps={listRenderProps}
       navigationScope={recordNavigationScope}
-      resourceView={resourceView}
       onListStateChange={handleListStateChange}
     />
   ) : null;
@@ -922,125 +899,52 @@ interface PendingRecordNavigation {
 }
 
 function ListStateProbe<TRow extends Row>({
+  list: ListComponent,
   resource,
   columns,
-  fields,
-  filter,
-  order,
-  pageSize,
+  listRenderProps,
   navigationScope,
-  resourceView,
   onListStateChange,
 }: {
+  list: ListComponent<TRow>;
   resource: string;
   columns: readonly ListColumn<TRow>[];
-  fields?: ListViewProps<TRow>["fields"];
-  filter?: ListViewProps<TRow>["filter"];
-  order?: ListViewProps<TRow>["order"];
-  pageSize?: number;
+  listRenderProps: Partial<ListViewProps<TRow>>;
   navigationScope: ListViewNavigationScope | null;
-  resourceView: ReturnType<typeof useResourceView>;
   onListStateChange: (state: ResourceListSnapshot<TRow>) => void;
-}): null {
-  useSyncPageSize(resourceView, navigationScope ? undefined : pageSize);
-
-  const requestedFields = React.useMemo(() => {
-    const paths = new Set<string>(["id"]);
-    for (const column of columns) paths.add(column.field);
-    for (const extra of fields ?? []) paths.add(extra);
-    return [...paths];
-  }, [columns, fields]);
-  const mergedFilter = React.useMemo(
-    () => Filter.combineOptional(filter, resourceView.state.filter),
-    [resourceView.state.filter, filter],
+}): React.ReactElement {
+  const content = (
+    <ListComponent
+      resource={resource}
+      columns={columns}
+      {...listRenderProps}
+      baseFilter={navigationScope?.filter ?? listRenderProps.baseFilter}
+      order={navigationScope?.order ?? listRenderProps.order}
+      pageSize={navigationScope?.pageSize ?? listRenderProps.pageSize}
+      onListStateChange={onListStateChange}
+    />
   );
-  const sortOrder = resourceView.state.resourceOrder();
-  const activeFilter = navigationScope ? navigationScope.filter : mergedFilter;
-  const activeOrder = navigationScope
-    ? navigationScope.order
-    : (sortOrder ?? order);
-  const activePage = navigationScope ? navigationScope.page : resourceView.state.page;
-  const activePageSize = navigationScope
-    ? navigationScope.pageSize
-    : resourceView.state.pageSize;
-  const metadata = useModelMetadata(resource);
-  const dataResource = metadata?.resource ?? null;
-  const listMeta = React.useMemo(
-    () => ({ fields: refineFieldsFromPaths(requestedFields) }),
-    [requestedFields],
+  return (
+    <div hidden aria-hidden="true">
+      {navigationScope ? (
+        <ResourceViewProvider
+          key={navigationScopeKey(navigationScope)}
+          scope="local"
+          resource={resource}
+          initialState={{
+            filter: navigationScope.filter ?? {},
+            page: navigationScope.page,
+            pageSize: navigationScope.pageSize,
+          }}
+        >
+          {content}
+        </ResourceViewProvider>
+      ) : (
+        content
+      )}
+    </div>
   );
-  const refineFilters = React.useMemo(
-    () => crudFiltersFromFilterRecord(activeFilter),
-    [activeFilter],
-  );
-  const refineSorters = React.useMemo(
-    () => refineSortersFromAngeeOrder(activeOrder),
-    [activeOrder],
-  );
-  const run = useList<RowRecord, HttpError>({
-    resource: dataResource ? refineResourceName(dataResource) : "__angee_disabled__",
-    dataProviderName: dataResource?.schemaName,
-    pagination: {
-      mode: "server",
-      currentPage: activePage,
-      pageSize: activePageSize,
-    },
-    filters: refineFilters,
-    sorters: refineSorters,
-    meta: listMeta,
-    queryOptions: {
-      enabled: dataResource !== null,
-    },
-  });
-  const list = React.useMemo<ResourceListResult>(() => {
-    const total = run.result.total;
-    const pageCount = total === undefined
-      ? undefined
-      : Math.max(1, Math.ceil(total / activePageSize));
-    return {
-      rows: (run.result.data ?? []) as readonly Row[],
-      total,
-      pageCount,
-      page: activePage,
-      pageSize: activePageSize,
-      pageInfo: undefined,
-      hasNext: pageCount !== undefined && activePage < pageCount,
-      hasPrev: activePage > 1,
-      setPage: resourceView.setPage,
-      firstPage: () => resourceView.setPage(1),
-      nextPage: () =>
-        resourceView.setPage(
-          pageCount ? Math.min(activePage + 1, pageCount) : activePage + 1,
-        ),
-      prevPage: () => resourceView.setPage(Math.max(1, activePage - 1)),
-      lastPage: () => {
-        if (pageCount) resourceView.setPage(pageCount);
-      },
-      fetching: run.query.isFetching,
-      error: errorFromUnknown(run.query.error),
-      refetch: () => {
-        void run.query.refetch();
-      },
-    };
-  }, [
-    activePage,
-    activePageSize,
-    resourceView.setPage,
-    run.query,
-    run.result.data,
-    run.result.total,
-  ]);
-  const listState = useResourceRowsSnapshot<TRow>(
-    list,
-    navigationScope ?? undefined,
-  );
-  React.useEffect(() => {
-    onListStateChange(listState);
-  }, [listState, onListStateChange]);
-  return null;
 }
-
-type RowRecord = BaseRecord & Row;
 
 const EMPTY_RECORD_ID_SET: ReadonlySet<string> = new Set();
 const EMPTY_ACTIONS: readonly ActionDescriptor[] = [];
@@ -1217,19 +1121,19 @@ function navigationScopesEqual(
   );
 }
 
+function navigationScopeKey(scope: ListViewNavigationScope): string {
+  return stableSerialize({
+    filter: scope.filter ?? null,
+    order: scope.order ?? null,
+    page: scope.page,
+    pageSize: scope.pageSize,
+  });
+}
+
 function rowIdsEqual(
   left: readonly Row[],
   right: readonly Row[],
 ): boolean {
   if (left.length !== right.length) return false;
   return left.every((row, index) => rowPublicId(row) === rowPublicId(right[index]));
-}
-
-function errorFromUnknown(error: unknown): Error | null {
-  if (!error) return null;
-  if (error instanceof Error) return error;
-  if (typeof error === "object" && "message" in error) {
-    return new Error(String((error as { message?: unknown }).message));
-  }
-  return new Error(String(error));
 }

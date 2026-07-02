@@ -18,10 +18,15 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 
 // ServiceDetail reads the daemon `serviceEndpoint` through the shared authored
-// query on the `operator` provider; stub just that hook (over the real `@angee/ui`)
+// query on the `operator` provider; stub just that hook from the refine owner
 // so the detail frame renders without a live refine/react-query context.
 vi.mock("@angee/ui", async () => ({
   ...(await vi.importActual<typeof import("@angee/ui")>("@angee/ui")),
+  useRouteRecordId: () => routerMocks.params.name,
+}));
+
+vi.mock("@angee/refine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredQuery: () => ({
     data: { serviceEndpoint: null },
     fetching: false,
@@ -102,7 +107,7 @@ describe("operator detail surfaces", () => {
     const view = render(<SourceDetail />);
 
     expect(screen.getByRole("status")).toBeTruthy();
-    expect(screen.getByText("operator.sources.loading")).toBeTruthy();
+    expect(screen.getByText("sources.loading")).toBeTruthy();
 
     routerMocks.params = { name: "missing" };
     operatorMocks.useOperatorSnapshot.mockReturnValue({
@@ -113,7 +118,7 @@ describe("operator detail surfaces", () => {
     view.rerender(<SourceDetail />);
 
     expect(screen.getByRole("heading", {
-      name: "operator.sources.detail.notFound",
+      name: "sources.detail.notFound",
     })).toBeTruthy();
     expect(screen.getByText("missing")).toBeTruthy();
   });
@@ -142,7 +147,7 @@ describe("operator detail surfaces", () => {
     render(<SourceDetail />);
 
     expect(screen.getByRole("heading", { name: "framework" })).toBeTruthy();
-    expect(screen.getByText("operator.sources.detail.overview")).toBeTruthy();
+    expect(screen.getByText("sources.detail.overview")).toBeTruthy();
     expect(screen.getByText("main")).toBeTruthy();
     expect(screen.getByText("↑2 ↓1")).toBeTruthy();
 
@@ -170,7 +175,7 @@ describe("operator detail surfaces", () => {
     render(<ServiceDetail />);
 
     expect(screen.getByRole("heading", { name: "web" })).toBeTruthy();
-    expect(screen.getByText("operator.services.detail.overview")).toBeTruthy();
+    expect(screen.getByText("services.detail.overview")).toBeTruthy();
     expect(screen.getAllByText("node")).toHaveLength(2);
     expect(screen.getByTestId("service-logs").textContent).toBe("web");
   });
@@ -195,11 +200,11 @@ describe("operator detail surfaces", () => {
     render(<WorkspaceDetail />);
 
     expect(screen.getByRole("heading", { name: "notes-dev" })).toBeTruthy();
-    expect(screen.getByText("operator.workspaces.detail.overview")).toBeTruthy();
+    expect(screen.getByText("workspaces.detail.overview")).toBeTruthy();
     expect(screen.getAllByText("dev")).toHaveLength(2);
     expect(screen.getByText("/work/notes-dev")).toBeTruthy();
     expect(screen.getByTestId("workspace-logs").textContent).toBe(
-      "operator.workspaces.detail.logs",
+      "workspaces.detail.logs",
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Open" }));

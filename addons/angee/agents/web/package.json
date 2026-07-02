@@ -1,14 +1,16 @@
 {
   "name": "@angee/agents",
   "version": "0.0.0",
+  "license": "AGPL-3.0-or-later",
   "private": true,
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": "./src/index.tsx"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
@@ -17,7 +19,7 @@
     "@angee/integrate": "workspace:*",
     "@angee/operator": "workspace:*",
     "@angee/refine": "workspace:*",
-    "@angee/resources": "workspace:*",
+    "@angee/metadata": "workspace:*",
     "@angee/ui": "workspace:*",
     "@assistant-ui/react": "^0.14.24",
     "@refinedev/core": "^5.0.12",

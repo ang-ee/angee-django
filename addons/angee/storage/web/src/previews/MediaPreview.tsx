@@ -1,15 +1,8 @@
 import { type ReactElement } from "react";
 import {
-  MediaPlayer,
-  MediaProvider,
-  type AudioMimeType,
-  type VideoMimeType,
-} from "@vidstack/react";
+  MediaPlayer, MediaProvider, type AudioMimeType, type VideoMimeType, } from "@vidstack/react";
 import {
-  DefaultAudioLayout,
-  DefaultVideoLayout,
-  defaultLayoutIcons,
-} from "@vidstack/react/player/layouts/default";
+  DefaultAudioLayout, DefaultVideoLayout, defaultLayoutIcons, } from "@vidstack/react/player/layouts/default";
 import "@vidstack/react/player/styles/default/theme.css";
 import "@vidstack/react/player/styles/default/layouts/video.css";
 import "@vidstack/react/player/styles/default/layouts/audio.css";

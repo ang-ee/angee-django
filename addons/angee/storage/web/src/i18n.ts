@@ -2,122 +2,119 @@
 // active translations; these are the defaults used when a key is missing.
 // Components resolve them through `useStorageT()` (below).
 
-import { useNamespaceT } from "@angee/ui";
-import type { MessageVars } from "@angee/refine";
+import { createNamespaceT } from "@angee/ui";
 
 export const enStorageMessages: Record<string, string> = {
   // Browser-level loading and empty states.
-  "storage.loading": "Loading storage",
-  "storage.loadingFile": "Loading file",
-  "storage.drives.unavailableTitle": "Storage unavailable",
-  "storage.drives.emptyTitle": "No drives",
-  "storage.drives.emptyDescription": "No storage drives are available to you.",
-  "storage.file.notFoundTitle": "File not found",
-  "storage.file.notFoundDescription": "This file is no longer available.",
-  "storage.preview.unsupported": "No inline preview for this file type.",
+  "loading": "Loading storage",
+  "loadingFile": "Loading file",
+  "drives.unavailableTitle": "Storage unavailable",
+  "drives.emptyTitle": "No drives",
+  "drives.emptyDescription": "No storage drives are available to you.",
+  "file.notFoundTitle": "File not found",
+  "file.notFoundDescription": "This file is no longer available.",
+  "preview.unsupported": "No inline preview for this file type.",
   // Rich renderer (PDF / media / HEIC) loading and error surfaces.
-  "storage.preview.loading": "Loading preview",
-  "storage.preview.loadError": "Could not load this preview.",
-  "storage.preview.decoding": "Decoding photo",
-  "storage.preview.pdfPage": "Page {page} of {total}",
-  "storage.preview.pdfPrev": "Previous page",
-  "storage.preview.pdfNext": "Next page",
+  "preview.loading": "Loading preview",
+  "preview.loadError": "Could not load this preview.",
+  "preview.decoding": "Decoding photo",
+  "preview.pdfPage": "Page {page} of {total}",
+  "preview.pdfPrev": "Previous page",
+  "preview.pdfNext": "Next page",
 
   // Primary-pane folder navigator landmark.
-  "storage.nav.label": "Files",
+  "nav.label": "Files",
 
   // Drive switcher.
-  "storage.drive.label": "Drive",
-  "storage.drive.placeholder": "Select a drive",
-  "storage.drive.searchPlaceholder": "Search drives…",
+  "drive.label": "Drive",
+  "drive.placeholder": "Select a drive",
+  "drive.searchPlaceholder": "Search drives…",
 
   // Folder delete confirm + inline folder controls.
-  "storage.folder.deleteTitle": 'Delete "{name}"?',
-  "storage.folder.deleteBody": "Files inside this folder move to the drive root.",
-  "storage.folder.deleteConfirm": "Delete",
-  "storage.folder.rename": "Rename folder",
-  "storage.folder.delete": "Delete folder",
-  "storage.folder.nameLabel": "Folder name",
-  "storage.folder.save": "Save",
-  "storage.newFolder.button": "New folder",
-  "storage.newFolder.placeholder": "Folder name",
-  "storage.newFolder.nameLabel": "New folder name",
-  "storage.newFolder.create": "Create",
+  "folder.deleteTitle": 'Delete "{name}"?',
+  "folder.deleteBody": "Files inside this folder move to the drive root.",
+  "folder.deleteConfirm": "Delete",
+  "folder.rename": "Rename folder",
+  "folder.delete": "Delete folder",
+  "folder.nameLabel": "Folder name",
+  "folder.save": "Save",
+  "newFolder.button": "New folder",
+  "newFolder.placeholder": "Folder name",
+  "newFolder.nameLabel": "New folder name",
+  "newFolder.create": "Create",
 
   // Selection-bar bulk verbs.
-  "storage.bulk.restore": "Restore",
-  "storage.bulk.trash": "Trash",
+  "bulk.restore": "Restore",
+  "bulk.trash": "Trash",
 
   // File list + upload surface.
-  "storage.list.emptyUpload": "Drop files here or use Upload.",
-  "storage.list.empty": "No files here yet",
-  "storage.upload.button": "Upload",
-  "storage.upload.dropOverlay": "Drop to upload",
-  "storage.upload.heading": "Uploads",
-  "storage.upload.clearFinished": "Clear finished",
+  "list.emptyUpload": "Drop files here or use Upload.",
+  "list.empty": "No files here yet",
+  "upload.button": "Upload",
+  "upload.dropOverlay": "Drop to upload",
+  "upload.heading": "Uploads",
+  "upload.clearFinished": "Clear finished",
 
   // Upload task statuses (threaded into the status map, not resolved in a hook).
-  "storage.upload.status.hashing": "Preparing…",
-  "storage.upload.status.uploading": "Uploading…",
-  "storage.upload.status.finalizing": "Finalizing…",
-  "storage.upload.status.done": "Uploaded",
-  "storage.upload.status.deduped": "Already stored",
-  "storage.upload.status.failed": "Failed",
+  "upload.status.hashing": "Preparing…",
+  "upload.status.uploading": "Uploading…",
+  "upload.status.finalizing": "Finalizing…",
+  "upload.status.done": "Uploaded",
+  "upload.status.deduped": "Already stored",
+  "upload.status.failed": "Failed",
 
   // Upload error messages (surfaced as the task's failure tooltip).
-  "storage.upload.error.cannotStart": "Upload could not start.",
-  "storage.upload.error.transfer": "Upload failed ({status}).",
-  "storage.upload.error.cannotFinalize": "Could not finalize upload.",
-  "storage.upload.error.generic": "Upload failed.",
+  "upload.error.cannotStart": "Upload could not start.",
+  "upload.error.transfer": "Upload failed ({status}).",
+  "upload.error.cannotFinalize": "Could not finalize upload.",
+  "upload.error.generic": "Upload failed.",
 
   // File detail toolbar.
-  "storage.file.rename": "Rename",
-  "storage.file.download": "Download",
-  "storage.file.restore": "Restore",
-  "storage.file.trash": "Trash",
-  "storage.file.detailsTab": "Details",
-  "storage.file.unknownType": "Unknown type",
+  "file.rename": "Rename",
+  "file.download": "Download",
+  "file.restore": "Restore",
+  "file.trash": "Trash",
+  "file.detailsTab": "Details",
+  "file.unknownType": "Unknown type",
   // File preview pane header subtitle: mime label · formatted size (formatSize
   // already carries the unit, e.g. "1.4 MB").
-  "storage.file.subtitle": "{type} · {size}",
+  "file.subtitle": "{type} · {size}",
 
   // File detail record form — section + field labels.
-  "storage.file.details": "Details",
-  "storage.file.filename": "Filename",
-  "storage.file.owner": "Owner",
-  "storage.file.stage": "Stage",
+  "file.details": "Details",
+  "file.filename": "Filename",
+  "file.owner": "Owner",
+  "file.stage": "Stage",
 
   // File-row stage badge.
-  "storage.stage.ready": "Ready",
-  "storage.stage.uploading": "Uploading",
-  "storage.stage.failed": "Failed",
-  "storage.stage.unknown": "Unknown",
+  "stage.ready": "Ready",
+  "stage.uploading": "Uploading",
+  "stage.failed": "Failed",
+  "stage.unknown": "Unknown",
 
   // File-list column headers.
-  "storage.column.name": "Name",
-  "storage.column.type": "Type",
-  "storage.column.stage": "Stage",
-  "storage.column.size": "Size",
-  "storage.column.owner": "Owner",
-  "storage.column.modified": "Modified",
+  "column.name": "Name",
+  "column.type": "Type",
+  "column.stage": "Stage",
+  "column.size": "Size",
+  "column.owner": "Owner",
+  "column.modified": "Modified",
 
   // Settings admin console sections.
-  "storage.settings.drives.title": "Drives",
-  "storage.settings.drives.description":
+  "settings.drives.title": "Drives",
+  "settings.drives.description":
     "The unit of access control and key namespace files live in.",
-  "storage.settings.backends.title": "Backends",
-  "storage.settings.backends.description":
+  "settings.backends.title": "Backends",
+  "settings.backends.description":
     "Storage infrastructure a drive is created against.",
 
   // Settings admin console — drive/backend form field labels.
-  "storage.settings.archived": "Archived",
-  "storage.settings.backendClass": "Backend class",
-  "storage.settings.config": "Config",
+  "settings.archived": "Archived",
+  "settings.backendClass": "Backend class",
+  "settings.config": "Config",
 };
 
 // A translator bound to the `storage` namespace: resolves against the host
 // runtime's merged i18n first, then falls back to the bundled English. Thin alias
-// over the shared `useNamespaceT` owner, so the copy still renders provider-less.
-export function useStorageT(): (key: string, vars?: MessageVars) => string {
-  return useNamespaceT("storage", enStorageMessages);
-}
+// over the shared `createNamespaceT` owner, so the copy still renders provider-less.
+export const useStorageT = createNamespaceT("storage", enStorageMessages);

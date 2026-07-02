@@ -20,12 +20,16 @@ vi.mock("@angee/ui", async (importOriginal) => {
     ...actual,
     Glyph: () => <span />,
     useToast: () => mocks.toast,
-    useAuthoredMutation: () => [mocks.mutate, { fetching: false, error: null }],
     // Mirror the real (memoized) translator so the namespace bundle resolves to English.
     useNamespaceT: (_namespace: string, messages: Record<string, string>) =>
       useCallback((key: string) => messages[key] ?? key, [messages]),
   };
 });
+
+vi.mock("@angee/refine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/refine")>()),
+  useAuthoredMutation: () => [mocks.mutate, { fetching: false, error: null }],
+}));
 
 function row(overrides: Partial<AddonResourceRow> = {}): AddonResourceRow {
   return {

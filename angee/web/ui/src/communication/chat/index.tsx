@@ -1,7 +1,7 @@
 // Presentational chat primitives — styled slots for an agent/comment chat surface.
 // No `@assistant-ui`/`streamdown` coupling: a consumer (the agents addon) wires the
 // streaming runtime and markdown around these. Tokens + `tone`/`Fill` follow the base
-// design system; copy routes through `useBaseT`.
+// design system; copy routes through `useUiT`.
 
 import { forwardRef } from "react";
 import type {
@@ -11,7 +11,7 @@ import type {
   ReactNode,
 } from "react";
 
-import { useBaseT } from "../../i18n";
+import { useUiT } from "../../i18n";
 import { barVariants } from "../../layouts/bar";
 import { cn } from "../../lib/cn";
 import { useRender, type UseRenderRenderProp } from "../../lib/slot";
@@ -274,7 +274,7 @@ export interface ChatTypingIndicatorProps {
  *  `aria-hidden`; an `aria-live="polite"` label (default `chat.typing`) announces it to
  *  assistive tech, and the motion is gated behind `motion-safe`. */
 export function ChatTypingIndicator({ label, className }: ChatTypingIndicatorProps): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   return (
     <div aria-live="polite" className={cn("flex items-center gap-1.5", className)}>
       <span className="sr-only">{label ?? t("chat.typing")}</span>
@@ -366,7 +366,7 @@ export function ToolFallback({
   result,
   isError = false,
 }: ToolFallbackProps): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const hasResult = result !== undefined && result !== null;
   const hasInput = input !== undefined && input !== null;
   const label = status ?? (!hasResult ? t("chat.tool.status.running") : isError ? t("chat.tool.status.error") : t("chat.tool.status.complete"));
@@ -400,7 +400,7 @@ export interface MessageReasoningFrameProps {
 
 /** A muted, collapsible "Thinking" frame for an assistant reasoning/thought stream. */
 export function MessageReasoningFrame({ children, className }: MessageReasoningFrameProps): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   return (
     <details className={cn("my-1 rounded-6 border border-border-subtle bg-inset px-2 py-1 text-2xs", className)}>
       <summary className="cursor-pointer font-medium text-fg-muted">{t("chat.reasoning.label")}</summary>

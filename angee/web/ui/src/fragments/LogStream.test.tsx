@@ -16,7 +16,7 @@ describe("LogStream", () => {
   });
 
   test("shows the empty message when there are no lines", () => {
-    render(<LogStream lines={[]} emptyMessage="Waiting for output…" />);
+    render(<LogStream lines={[]} emptyContent="Waiting for output…" />);
     expect(screen.getByText("Waiting for output…")).toBeTruthy();
   });
 });

@@ -1,14 +1,5 @@
 import * as React from "react";
-import {
-  Column,
-  ResourceList,
-  Facet,
-  Field,
-  Form,
-  Group,
-  List,
-  useEnumOptions,
-} from "@angee/ui";
+import { Column, ResourceList, Facet, Field, Form, Group, List, useEnumOptions } from "@angee/ui";
 
 import { useAgentsT } from "../i18n";
 
@@ -30,7 +21,7 @@ export function McpServersPage(): React.ReactElement {
       <Form resource={SERVER_MODEL}>
         <Field name="name" title />
         <Field name="description" />
-        <Group label={t("agents.mcp.endpoint")} columns={2}>
+        <Group label={t("mcp.endpoint")} columns={2}>
           <Field name="placement" widget="select" options={placementOptions} createOnly />
           <Field name="transport" widget="select" options={transportOptions} createOnly />
           <Field name="url" />

@@ -15,22 +15,11 @@ libraries and what each one owns. Check it before adding a dependency or
 hand-rolling a concern. TypeScript dependency setup belongs in `package.json`,
 `pnpm-workspace.yaml`, and `pnpm-lock.yaml`.
 
-## Package layering
+## Package Layering
 
 The frontend workspace is a strict one-way stack. Each package owns one concern
 and depends only on packages below it. `docs/stack.md` says which rented library
 owns what; this section says which Angee package wraps it and who may import whom.
-
-> **Open for architect confirmation.** This is the target contract for the
-> in-flight Refine package split.
-> Two placements are architect calls that the later code waves depend on and must
-> not be acted on until confirmed: (1) the `@angee/data` data hooks land in
-> `@angee/refine` as metadata-free dialect hooks, with the `resourceOperationTarget`
-> resolved at the caller edge and passed in as `{ root }` (so `refine` stays below
-> `resources` in the DAG); (2) the auth provider and the i18n provider both land in
-> `@angee/app`. These are the plan's recommended defaults; the doc encodes them so
-> the contract exists, but the code slices STOP for confirmation before relying on
-> them.
 
 ### Target DAG
 
@@ -42,7 +31,7 @@ rented libs   @refinedev/core · @refinedev/hasura · graphql-request/ws ·
    │
 @angee/refine     Hasura-dialect Refine binding — zero domain/metadata knowledge
    │
-@angee/resources  metadata (angee.resources) → Refine config bridge
+@angee/metadata  metadata (angee.resources) → Refine config bridge
    │
 @angee/ui         the single rendered binding + headless view-state
    │
@@ -54,41 +43,58 @@ rented libs   @refinedev/core · @refinedev/hasura · graphql-request/ws ·
 | Package | Owns |
 |---|---|
 | `@angee/refine` | the parts of a Refine+Hasura app every project shares, with **zero domain/metadata knowledge**: data/transport/live providers, the router bridge, typed-document contracts, and the `dialect/` hooks (action, aggregate, groupBy, facets, deletePreview, revisions) over `useCustom`. |
-| `@angee/resources` | the **only** consumer of `angee.resources` metadata: artifact load/validate, projection to Refine `resources[]` + `meta`, the one field kind/scalar/widget classifier, group/facet/drill-down dimension specs, and per-action capabilities → accessControl. |
-| `@angee/ui` | the single rendered binding + headless view-state: `views/{list,form,record,relation,visualizations}` + headless view-models, chrome (rail/topbar/breadcrumb/spotlight), widgets, feedback (toast), the Base UI primitives binding, and the `runtime/` contracts it consumes — the `AppRuntime` registry context + its lookup hooks, `makeContext`, and the menu/slot/preview/widget/form contribution types (the binding owns the runtime it renders against; `@angee/app` only mounts the provider). |
+| `@angee/metadata` | the **only** consumer of `angee.resources` metadata: artifact load/validate, projection to Refine `resources[]` + `meta`, the one field kind/scalar/widget classifier, group/facet/drill-down dimension specs, and per-action capabilities → accessControl. |
+| `@angee/ui` | the single rendered binding + headless view-state: `views/{list,form,record,relation,visualizations}` + headless view-models, chrome (rail/topbar/breadcrumb/spotlight), widgets, feedback (toast), the Base UI primitives binding, and the `runtime/` contracts it consumes — the `AppRuntime` registry/session context + its lookup hooks, `makeContext`, and the menu/slot/preview/widget/form contribution types (the binding owns the runtime it renders against; `@angee/app` only mounts the provider). |
 | `@angee/app` | assembles the app: `define-addon`, `defineBaseAddon`, `createApp`, the `providers/{auth,i18n,notification,accessControl}`, addon-route → TanStack tree routing, the slot/widget/form/preview/icon registries, and the app shell. |
 | `@angee/<domain>` | a domain addon: its pages and codegen `documents*.ts`. |
 
+### Target Decisions
+
+- Auth, preferences, and runtime i18n are app-owned providers under
+  `@angee/app/src/providers/{auth,i18n}`. Transport auth headers stay in
+  `@angee/refine`; chrome reads only the app-supplied session surface on
+  `@angee/ui`'s `AppRuntime`.
+- Dialect data hooks live in `@angee/refine` as metadata-free hooks. Callers
+  resolve `resourceOperationTarget` at the metadata edge and pass the root as
+  `{ root }`.
+- Runtime i18n has one app-owned i18next instance. Addon bundles are
+  namespace-relative, and the rendered binding namespace is `ui`.
+- Record display representation is a backend-emitted metadata fact in the
+  `angee.resources` artifact. Frontend code reads that field and keeps only the
+  `id` floor; it does not probe candidate display fields.
+- Layering and unconsumed-owner guardrails are Vitest checks over the locked
+  package graph. Do not add a boundary-lint dependency without updating
+  `docs/stack.md` and the manifests together.
+
 ### Current → target
 
-Where each concern lives **today** versus where it lives **after** the split. The
-old shells (`@angee/base`, `@angee/data`, `@angee/sdk`) are deleted once their last
-importer flips.
+Where each concern lives **today** versus where the open refactor waves move the
+remaining debt. Deleted shell packages are historical only; new code uses the
+real package names below.
 
 | Concern | Current owner | Target owner |
 |---|---|---|
-| Data/transport/live providers, router bridge, custom-op hooks | `@angee/data` | `@angee/refine` |
-| Typed-document / operation-document contracts, stable-deps | `@angee/data` (already moved) | `@angee/refine` |
-| `@angee/data` data hooks (aggregate/action/deletePreview/facets/groupBy, revisions, authored-hooks) | `@angee/data` | `@angee/refine` dialect (metadata-free; target resolved at the caller edge as `{ root }`) |
-| Metadata artifact, resource projection, field classifier, dimensions, capabilities, row contracts | `@angee/data` → physical `@angee/resources` (already moved) | `@angee/resources` |
-| Invalidation: resource targets vs authored-query metadata | `@angee/data` → split (already moved) | `@angee/resources` (resource targets) + `@angee/refine` (authored-query metadata) |
-| Rendered views / chrome / widgets / feedback / primitives | `@angee/base` | `@angee/ui` |
-| `lib/` styling helpers (cn/tv/tones/dnd) | `@angee/base` | `@angee/ui` |
-| Runtime contracts the binding consumes — the `AppRuntime` registry + its `useWidget`/`useSlot`/`usePreviews`/`useT`/`useNamespaceT` lookups, the `makeContext` factory, and the menu/slot/preview/widget/form contribution contracts | `@angee/sdk` (`runtime.ts` / `make-context.ts` + the contribution types in `define-addon.ts`) | **`@angee/ui`** (the binding OWNS the runtime it consumes; `@angee/app` only mounts the provider) |
-| `defineAddon` / `composeAddons` (addon-manifest composition) | `@angee/sdk` (`define-addon.ts`) | `@angee/app` |
-| `createApp` / `defineBaseAddon` + app shell (the single `<Refine>`/cache/live owner) | `@angee/base` | `@angee/app` |
-| Auth provider | `@angee/data` (`auth.tsx`) | `@angee/app` `providers/auth` |
-| i18n provider | `@angee/base` + `@angee/data` + `@angee/sdk` (parallel paths) | `@angee/app` i18n provider (collapse the parallel path) |
+| Data/transport/live providers, router bridge, typed-document contracts, stable-deps | `@angee/refine` | `@angee/refine` |
+| Dialect data hooks (aggregate/action/deletePreview/facets/groupBy, revisions, authored-hooks) | `@angee/ui` rendered-data hooks | `@angee/refine` dialect hooks (metadata-free; target resolved at the caller edge as `{ root }`) |
+| Metadata artifact, resource projection, field classifier, dimensions, capabilities, row contracts | `@angee/metadata` | `@angee/metadata` |
+| Invalidation: resource targets vs authored-query metadata | `@angee/metadata` resource targets + `@angee/ui` authored-query hooks | `@angee/metadata` resource targets + `@angee/refine` authored-query metadata |
+| Rendered views / chrome / widgets / feedback / primitives | `@angee/ui` | `@angee/ui` |
+| `lib/` styling helpers (cn/tv/tones/dnd) | `@angee/ui` | `@angee/ui` |
+| Runtime contracts the binding consumes — the `AppRuntime` registry + its `useWidget`/`useSlot`/`usePreviews`/`useT`/`useNamespaceT` lookups, the `makeContext` factory, and the menu/slot/preview/widget/form contribution contracts | `@angee/ui` | `@angee/ui` |
+| `defineAddon` / `composeAddons` (addon-manifest composition) | `@angee/app` | `@angee/app` |
+| `createApp` / `defineBaseAddon` + app shell (the single `<Refine>`/cache/live owner) | `@angee/app` | `@angee/app` |
+| Auth provider | `@angee/app` `providers/auth` | `@angee/app` `providers/auth` |
+| i18n provider | `@angee/app` i18n provider | `@angee/app` i18n provider |
 
 ### One-way rules
 
 These are the dependency invariants; a violation is a layering bug, not a
 convenience.
 
-- `@angee/refine` imports **only rented libs** — never `@angee/resources`,
+- `@angee/refine` imports **only rented libs** — never `@angee/metadata`,
   `@angee/ui`, `@angee/app`, and never any `angee.resources` metadata.
-- `@angee/resources` must **NOT** import `@angee/refine`.
-- `@angee/ui` may import `@angee/refine` + `@angee/resources`, but **not**
+- `@angee/metadata` must **NOT** import `@angee/refine`.
+- `@angee/ui` may import `@angee/refine` + `@angee/metadata`, but **not**
   `@angee/app`.
 - `@angee/app` is the **ONLY** package that may import compose / `createApp`-level
   concerns. The `AppRuntime` context and its lookup hooks live in **`@angee/ui`**
@@ -96,22 +102,15 @@ convenience.
   addon manifests (`composeAddons`) and mounts that `AppRuntimeProvider` with the
   merged value. `@angee/ui` reads it via the context — never by importing
   `@angee/app`.
-- After the split, **no addon imports `@angee/base`, `@angee/data`, or
-  `@angee/sdk`** — those shells are deleted.
+- No addon imports deleted shell packages; addon web code composes the real
+  framework owners directly.
 
 ### Carried debts
 
-Two known defects are relocated **as-is** by the split (moving them green is the
-priority; fixing them inside the move would break the green-at-every-step
-guarantee). Each is tracked as a separate follow-up, not entrenched:
-
-- **Local-rows engine** — the hand-rolled `_bool_exp` evaluator in
-  `local-rows.ts` (the shared client filter/sort/paginate engine). Relocated into
-  `@angee/ui`'s views as-is; the evaluator hardening is a tracked follow-up.
-- **Parallel i18n path** — i18n interpolation/fallback exists in more than one
-  shell today (`@angee/base`, `@angee/data`, `@angee/sdk`). Relocated as-is into
-  `@angee/app`; collapsing onto one i18next-native provider path is a tracked
-  follow-up.
+No shared frontend engine is intentionally carried as debt: client-side
+filtering, sorting, grouping, expansion, row selection, and pagination compose
+TanStack Table row models. Angee keeps only the thin lookup evaluator that lets
+TanStack apply the URL-owned filter object to in-memory rows.
 
 ## Rules
 
@@ -120,7 +119,7 @@ guarantee). Each is tracked as a separate follow-up, not entrenched:
   operation is a `graphql()` document imported from `@angee/gql/<schema>`; its
   result/variables types come from the generated `TypedDocumentNode` (use
   `DocumentType<typeof Doc>` for named result types and
-  `DocumentVariables<typeof Doc>` from `@angee/data` for named variable types) —
+  `DocumentVariables<typeof Doc>` from `@angee/refine` for named variable types) —
   never a hand-written `…Data`/`…Variables` interface, and never call-site
   `<TData,TVars>` generics on the `useAuthored*` hooks. The operation's **file
   name picks its schema**: `documents.ts`/`documents.console.ts` → console,
@@ -131,14 +130,15 @@ guarantee). Each is tracked as a separate follow-up, not entrenched:
   opaque (parse, do not assert).
 - **Single-id action mutations are derived, not authored.** For a
   `<field>(id: ID!): ActionResult` mutation, call
-  `useActionMutation<ActionFieldName>("field")` from `@angee/data` in headless
-  code, or
+  `useActionMutation<ActionFieldName>("field")` from `@angee/ui` in headless
+  rendered-view code, or
   `useRecordActionMutation<ActionFieldName>("field")` for a rendered
-  `@angee/base` `<Action run={...}>` bound to the open record. `ActionFieldName`
+  `@angee/ui` `<Action run={...}>` bound to the open record. `ActionFieldName`
   comes from `@angee/gql/<schema>/actions`; no document, result type, or
-  variables are authored. `@angee/data` owns deriving the Hasura custom mutation
-  and running it through refine `useCustomMutation`; base owns adapting it to
-  `ActionContext` (record id, refresh, missing-record handling, success hooks).
+  variables are authored. The shared hook owns deriving the Hasura custom
+  mutation and running it through refine `useCustomMutation`; the rendered record
+  adapter owns binding it to `ActionContext` (record id, refresh,
+  missing-record handling, success hooks).
   Don't hand-author these as `graphql()` documents or page-local
   `ctx.record.id → mutate → refresh` callbacks.
 - React does not own business logic, permissions, models, or persistence.
@@ -163,16 +163,26 @@ guarantee). Each is tracked as a separate follow-up, not entrenched:
   composition. One greppable seam per addon — never annotate a bare
   `const x: BaseAddon = {…}`. These contracts and the packages that own them are
   described under "Package layering" below.
+- Rendered resource pages use `resourcePageRoutes(name, path, component,
+  resource?)` from `@angee/app`; the helper owns the list + `$id` child pair and
+  the default `"console"` layout. Addon manifest tests call
+  `expectValidBaseAddon(manifest)` from `@angee/app/testing` and keep only
+  genuinely addon-specific assertions.
 - Compose addon capabilities at build time through the manifest + `composeAddons`
   (widgets, i18n, icons, forms, slots, previews, and menu declarations); never
   register or mutate a module-global at runtime. `usePreviews`/`useWidget`/
   `useSlot` read the composed `AppRuntime`; menu declarations project into refine
   resources and chrome renders refine `useMenu`.
-- Shell-published surfaces (`usePrimaryPane`, `useChatterContent`) are effect
-  publishers. Publish memoized nodes/content, and keep any callbacks they close
-  over stable; when a callback wraps Refine/query mutation objects that may
-  refresh identity, expose a stable callback that reads the latest execution
-  context from a ref.
+- Shell-published surfaces (`usePrimaryPane`/`PrimaryPanePublisher`,
+  `useChatterContent`) are effect publishers. Publish memoized nodes/content,
+  and keep any callbacks they close over stable; when a callback wraps
+  Refine/query mutation objects that may refresh identity, expose a stable
+  callback that reads the latest execution context from a ref (`useLatestRef`).
+  Explorer pages compose `ScopedExplorerPane`, which owns the primary-pane
+  navigator publication plus the root loading/empty gate; addons provide row
+  projection, route transitions, DnD policy, and domain actions. Page tests use
+  `ShellPageTestProviders`, `PrimaryPaneTestHost`, and `ChatterTabsTestHost`
+  from `@angee/app/testing` instead of hand-rolled shell provider wrappers.
 - **Routed page components are code-split.** In an addon manifest give each
   routed page `component: lazyRouteComponent(() => import("./views/Page"),
   "Page")` (the stack-native helper from `@tanstack/react-router`, already a
@@ -204,9 +214,9 @@ guarantee). Each is tracked as a separate follow-up, not entrenched:
   a value the vocabulary doesn't know takes an explicit `<Column tone>` (e.g. a task's
   `blocked`→`danger`). Keep the run state a separate field from a lifecycle/state enum
   rather than overloading one column with both axes.
-- Route every user-facing string through i18n: `useBaseT()` in `@angee/base`,
-  `use<Addon>T()` in an addon (both built on the SDK's `useNamespaceT(ns,
-  fallback)`), with the English in the namespace bundle. A prop whose default is a
+- Route every user-facing string through i18n: `useUiT()` in `@angee/ui`,
+  `use<Addon>T()` in an addon (created with `createNamespaceT(ns, fallback)`),
+  with namespace-relative English keys in the namespace bundle. A prop whose default is a
   label defaults to `undefined` and resolves `?? t("key")` in the body — never call
   `t()` in a default parameter. No hardcoded copy in a component. Two boundaries
   stay plain English: an addon's declarative manifest menu/route `label:` (chrome
@@ -225,7 +235,7 @@ guarantee). Each is tracked as a separate follow-up, not entrenched:
   (`ResourceList`/`ResourceCreate`/`ResourceEdit`/`ResourceShow`), `List`/`Form`
   declarations, and record fragments (`RecordHeader`/`MetaGrid`/`MetricStrip`);
   for a linked cell, compose `TextLink`/`Chip`/`MetricTile`, never a bespoke link
-  class. If a shared view lacks what your case needs, extend it in `@angee/base`
+  class. If a shared view lacks what your case needs, extend it in `@angee/ui`
   (the owner) so every addon gets it. The principle and what a hand-rolled copy
   silently drops live in `AGENTS.md` → "Compose, never re-implement, at the addon
   level".
@@ -252,9 +262,9 @@ guarantee). Each is tracked as a separate follow-up, not entrenched:
   memory. A computed/non-model source is exposed **once** as a Hasura resource
   (`hasura_pydantic_resource`) for the uniform fetch + metadata + MCP surface,
   and its admin list processes client-side over the fetched set. Do not
-  hand-roll a new client filter/sort/paginate engine — compose the one shared
-  client engine (`local-rows.ts`, applied by `useClientResourceViewSurface` over
-  the fetched set for a `rowModel:"client"` resource); `RowsListView` remains the
+  hand-roll a new client filter/sort/paginate engine — compose TanStack Table's
+  row models through `useClientResourceViewSurface` over the fetched set for a
+  `rowModel:"client"` resource; `RowsListView` remains the
   renderer for the genuinely non-resource in-memory case (the operator-daemon
   quarantine).
 - A recipe's icon-button size keys are `iconSm`/`iconMd`/`iconLg` (one spelling
@@ -303,6 +313,10 @@ guarantee). Each is tracked as a separate follow-up, not entrenched:
   related model's fields, so a relation is created, edited, and followed without
   leaving the parent form. The create-form override stays create-only: an edit
   dialog renders the passed `fields` (the registered form is not reused for edit).
+- Toolbar/action dialogs with ordinary field inputs compose `MutationDialog` from
+  `@angee/ui`. It owns the `DialogForm` scaffold, value reset, required gating,
+  submit busy/error state, and FieldDescriptor widget rendering; addons provide
+  fields, mutation variables, and domain result handling.
 - A labeled control is a page element or a `FieldRoot`. Reach for `FieldRoot` /
   `FieldLabel` (the stacked label-over-control owner, e.g. for an ephemeral
   composer not bound to a model record) before hand-rolling a `<label>` wrapper.
@@ -324,6 +338,10 @@ guarantee). Each is tracked as a separate follow-up, not entrenched:
   rotating a short-lived credential before it expires — never to re-read a
   resolver hoping it changed. If a foreign system publishes no change
   subscription, add one there rather than polling it from the client.
+- Authored mutation result envelopes are decoded at the hook boundary. Pass
+  `errorFrom` to `useAuthoredMutation` for `{error, error_code}` payloads; the
+  hook throws before invalidating, so pages do not repeat result-error checks or
+  accidentally refresh failed writes.
 - Client-side gates are UX only. The server is the authorization boundary.
 - No Python view DSL, no frontend metadata hidden in backend decorators.
 
@@ -359,8 +377,9 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   `RelationPicker` own their query state and filter a fixed `options` list
   client-side, so they cannot drive a remote search. For one (e.g. a host repo
   search), build a thin control on the dialog/`Input` primitives whose debounced
-  query feeds `@angee/data`'s refine-backed `useAuthoredQuery`, and refresh the
-  affected list with `useModelInvalidation(model)` after the write.
+  query feeds `@angee/ui`'s refine-backed `useAuthoredQuery`, and run the write
+  through `useAuthoredMutation(..., { invalidateModels: [...] })` or the
+  matching refine invalidation owner after the write.
 - **A FormView create dialog under the console layout** needs
   `<ControlBandProvider host={undefined}>` to keep its Save band inline instead of
   portaling into the layout's band.
@@ -391,8 +410,10 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 - **Generate the operator console's types from the Go daemon's introspected SDL**
   (`operator_schema` → codegen), never by hand; daemon actions return
   `MutationResult{status}`, not `{ok}`.
-- **Add every new addon web package to the app CSS `@source`** — its unique
-  arbitrary Tailwind classes silently fail to generate otherwise.
+- **Expose every addon web package through the composed web manifest** — the
+  composer emits `runtime/web/tailwind.sources.css` from declared package
+  sources. Do not hand-edit runtime CSS; a package missing from the manifest will
+  miss its unique arbitrary Tailwind classes.
 - **Shared/generic icon glyphs live in the base `chrome/icon-registry.ts`** —
   composition is fail-fast on id, so an addon cannot re-register another's glyph,
   **and adding a name to `baseIcons` collides with any addon already contributing
@@ -403,6 +424,15 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 - **A new web package needs `pnpm install` + a Vite restart** (Vite snapshots
   workspace packages at start) plus registration in the host `main.tsx` addons and
   `package.json`.
+- **Start new addon web packages from `templates/addons/web`.** The Copier template
+  owns the current ceremony: `defineBaseAddon`, `resourcePageRoutes`, lazy routed
+  pages, `createNamespaceT`, `expectValidBaseAddon`, and package/test wiring.
+  Don't copy an older addon and then manually chase drift.
+- **Architecture guardrails are tests, not review folklore.** After changing a
+  framework package edge, addon package dependency, or newly exported shared owner,
+  update `angee/web/app/src/architecture-guardrails.test.ts` with the intended
+  package edge or deliberate public-export allowance; do not bypass it with an
+  undeclared import or a second local implementation.
 - **`ResourceList` still needs a form declaration, even for read-only records.** Give
   discovered/read-only resources a `<Form>` child or `formFields` with read-only fields;
   an all-read-only form never assembles an update mutation. Delete affordances are
@@ -475,7 +505,7 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   one term for another's concept across components, props, or slots.
 - **Layout slot ids use the `@angee/ui.*` symbol namespace.** Register new slots as
   `Symbol.for("@angee/ui.<name>-slot")` (see `layouts/slots.ts`); the legacy
-  `@angee/base.*` prefix is retired.
+  rendered-binding prefix is retired.
 
 ## Checks
 
@@ -492,12 +522,19 @@ stale assertion drift. When verifying data-bound views, wait for the async query
 to load before asserting. Use browser verification for meaningful UI changes.
 
 For page/addon changes, run a primitive-drift scan and explain every hit outside
-`@angee/base`:
+`@angee/ui`:
 
 ```sh
-rg -n '<table\b|<thead\b|<tbody\b|<tr\b|<td\b|<th\b|role="grid"|useReactTable|manualPagination' addons examples/notes-angee/web -g '*.tsx'
-rg -n 'useAuthored(Query|Mutation)<|interface .*Data|interface .*Variables|fetch\([^)]*graphql|gql`' addons examples/notes-angee/web packages -g '*.ts' -g '*.tsx'
+rg -n '<table\b|<thead\b|<tbody\b|<tr\b|<td\b|<th\b|role="grid"|useReactTable|manualPagination' angee/web addons examples/notes-angee/web -g '*.tsx'
+rg -n 'useAuthored(Query|Mutation)<|interface .*Data|interface .*Variables|fetch\([^)]*graphql|gql`' angee/web addons examples/notes-angee/web packages -g '*.ts' -g '*.tsx'
+```
+
+Run the architecture guardrail when changing package layering, public shared
+owners, or addon manifests:
+
+```sh
+pnpm --filter @angee/app run test -- architecture-guardrails.test.ts
 ```
 
 A hit is not automatically wrong, but it must either compose the shared primitive
-or identify the owning base/SDK gap to fix first.
+or identify the owning framework gap to fix first.

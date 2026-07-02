@@ -1,32 +1,14 @@
 // @vitest-environment happy-dom
 
+import { cleanup, fireEvent, render, screen, waitFor, } from "@testing-library/react";
 import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+  Outlet, RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter, } from "@tanstack/react-router";
 import {
-  Outlet,
-  RouterProvider,
-  createMemoryHistory,
-  createRootRoute,
-  createRoute,
-  createRouter,
-} from "@tanstack/react-router";
-import {
-  createContext,
-  useContext,
-  useMemo,
-  type ReactElement,
-  type ReactNode,
-} from "react";
+  createContext, useContext, useMemo, type ReactElement, type ReactNode, } from "react";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, ModalsHost, baseIcons } from "@angee/ui";
 
 import { OverviewPage } from "./OverviewPage";
-import { documentName } from "./test-documents";
 
 const ALICE_PUBLIC_ID = "usr_1";
 const STALE_PUBLIC_ID = "usr_2";
@@ -51,10 +33,10 @@ const sdkMocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("@angee/ui", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/ui")>();
+vi.mock("@angee/refine", async (importOriginal) => {
+  const { documentName } = await import("./test-documents");
   return {
-    ...actual,
+    ...(await importOriginal<typeof import("@angee/refine")>()),
     useAuthoredQuery: (document: unknown) => {
       const name = documentName(document);
       if (name === "IamOverview") return sdkMocks.overview;

@@ -1,17 +1,7 @@
+import { useAuthoredMutation } from "@angee/refine";
 import { useCallback, type ReactElement, type ReactNode } from "react";
 import {
-  Badge,
-  Button,
-  Chip,
-  Glyph,
-  errorMessage,
-  statusTone,
-  textRoleVariants,
-  useAuthoredMutation,
-  useToast,
-  type CardActionContext,
-  type Tone,
-} from "@angee/ui";
+  Badge, Button, Chip, Glyph, errorMessage, statusTone, textRoleVariants, useToast, type CardActionContext, type Tone } from "@angee/ui";
 
 import { InstallAddon, UninstallAddon } from "../documents";
 import { usePlatformT } from "../i18n";
@@ -86,12 +76,12 @@ export function AddonCard({ row }: { row: AddonResourceRow }): ReactElement {
         </span>
       ) : null}
       <span className="flex flex-wrap items-center gap-1">
-        <Badge tone={statusTone(row.state, STATE_TONES)}>{t(`platform.state.${row.state}`)}</Badge>
+        <Badge tone={statusTone(row.state, STATE_TONES)}>{t(`state.${row.state}`)}</Badge>
         <Badge tone={statusTone(row.source, SOURCE_TONES, { unknownTone: "neutral" })}>
-          {t(`platform.source.${row.source}`)}
+          {t(`source.${row.source}`)}
         </Badge>
-        {row.forced ? <Badge tone="info">{t("platform.apps.required")}</Badge> : null}
-        {row.pending ? <Badge tone="warning">{t("platform.apps.pending")}</Badge> : null}
+        {row.forced ? <Badge tone="info">{t("apps.required")}</Badge> : null}
+        {row.pending ? <Badge tone="warning">{t("apps.pending")}</Badge> : null}
       </span>
     </div>
   );
@@ -135,10 +125,10 @@ export function AddonCardActions({
           toast.success({ title: result.message });
           context.refresh();
         } else {
-          toast.danger({ title: result?.message ?? t("platform.apps.actionFailed") });
+          toast.danger({ title: result?.message ?? t("apps.actionFailed") });
         }
       } catch (cause) {
-        toast.danger({ title: errorMessage(cause, t("platform.apps.actionFailed")) });
+        toast.danger({ title: errorMessage(cause, t("apps.actionFailed")) });
       }
     },
     [install, uninstall, row.id, toast, t, context],
@@ -149,7 +139,7 @@ export function AddonCardActions({
   if (row.pending) {
     return (
       <Button size="sm" variant="ghost" disabled>
-        {t("platform.apps.pendingRestart")}
+        {t("apps.pendingRestart")}
       </Button>
     );
   }
@@ -159,11 +149,11 @@ export function AddonCardActions({
         size="sm"
         variant="ghost"
         disabled={row.forced || busy}
-        title={row.forced ? t("platform.apps.forcedHint") : undefined}
+        title={row.forced ? t("apps.forcedHint") : undefined}
         onClick={() => void run("uninstall")}
       >
         <Glyph decorative name="trash" />
-        {t("platform.apps.uninstall")}
+        {t("apps.uninstall")}
       </Button>
     );
   }
@@ -172,16 +162,16 @@ export function AddonCardActions({
     // cannot clone it, so installing would write an unbootable settings.yaml.
     // Materialising is an operator-tier step; until then the action is locked.
     return (
-      <Button size="sm" variant="ghost" disabled title={t("platform.apps.remoteHint")}>
+      <Button size="sm" variant="ghost" disabled title={t("apps.remoteHint")}>
         <Glyph decorative name="plus" />
-        {t("platform.apps.install")}
+        {t("apps.install")}
       </Button>
     );
   }
   return (
     <Button size="sm" variant="primary" disabled={busy} onClick={() => void run("install")}>
       <Glyph decorative name="plus" />
-      {t("platform.apps.install")}
+      {t("apps.install")}
     </Button>
   );
 }

@@ -1,29 +1,8 @@
-import {
-  useEffect,
-  useId,
-  useMemo,
-  useState,
-  type FormEvent,
-  type ReactElement,
-} from "react";
+import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
+import { useEffect, useId, useMemo, useState, type FormEvent, type ReactElement, } from "react";
 
 import {
-  Alert,
-  Button,
-  DashboardView,
-  FieldDescription,
-  FieldLabel,
-  FieldRoot,
-  InlineEmpty,
-  Metric,
-  MiniCard,
-  Select,
-  SurfacePanel,
-  errorMessage,
-  textRoleVariants,
-  useAuthoredMutation,
-  useAuthoredQuery,
-} from "@angee/ui";
+  Alert, Button, DashboardView, FieldDescription, FieldLabel, FieldRoot, InlineEmpty, Metric, MiniCard, Select, SurfacePanel, errorMessage, textRoleVariants } from "@angee/ui";
 
 import {
   IamGrantRole,
@@ -114,17 +93,17 @@ export function OverviewPage(): ReactElement {
   async function handleGrant(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (!principal_id || !role) {
-      setError(t("iam.overview.grant.chooseBoth"));
+      setError(t("overview.grant.chooseBoth"));
       return;
     }
     setError(null);
     try {
       const result = await grant_role({ principal_id, role });
-      if (result?.grant_role === false) throw new Error(t("iam.overview.grant.error"));
+      if (result?.grant_role === false) throw new Error(t("overview.grant.error"));
       setPrincipalId("");
       overview.refetch();
     } catch (caught) {
-      setError(errorMessage(caught, t("iam.overview.grant.error")));
+      setError(errorMessage(caught, t("overview.grant.error")));
     }
   }
 
@@ -132,16 +111,16 @@ export function OverviewPage(): ReactElement {
 
   return (
     <DashboardView className="p-1">
-      <Metric label={t("iam.overview.metric.users")} value={count(overviewFacts?.user_count, loading)} icon="users" />
-      <Metric label={t("iam.overview.metric.roles")} value={count(overviewFacts?.role_count, loading)} icon="auth" tone="brand" />
-      <Metric label={t("iam.overview.metric.grants")} value={count(overviewFacts?.grant_count, loading)} icon="check" tone="success" />
-      <Metric label={t("iam.overview.metric.relationships")} value={count(overviewFacts?.relationship_count, loading)} icon="share" tone="info" />
-      <Metric label={t("iam.overview.metric.privileged")} value={count(overviewFacts?.privileged_grant_count, loading)} icon="auth" tone="warning" detail={t("iam.overview.metric.privilegedDetail")} />
-      <Metric label={t("iam.overview.metric.unassigned")} value={count(overviewFacts?.unassigned_user_count, loading)} icon="users" tone="danger" detail={t("iam.overview.metric.unassignedDetail")} />
+      <Metric label={t("overview.metric.users")} value={count(overviewFacts?.user_count, loading)} icon="users" />
+      <Metric label={t("overview.metric.roles")} value={count(overviewFacts?.role_count, loading)} icon="auth" tone="brand" />
+      <Metric label={t("overview.metric.grants")} value={count(overviewFacts?.grant_count, loading)} icon="check" tone="success" />
+      <Metric label={t("overview.metric.relationships")} value={count(overviewFacts?.relationship_count, loading)} icon="share" tone="info" />
+      <Metric label={t("overview.metric.privileged")} value={count(overviewFacts?.privileged_grant_count, loading)} icon="auth" tone="warning" detail={t("overview.metric.privilegedDetail")} />
+      <Metric label={t("overview.metric.unassigned")} value={count(overviewFacts?.unassigned_user_count, loading)} icon="users" tone="danger" detail={t("overview.metric.unassignedDetail")} />
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_400px]">
         <div className="space-y-6">
-          <SurfacePanel title={t("iam.overview.grant.title")} summary={t("iam.overview.grant.summary")}>
+          <SurfacePanel title={t("overview.grant.title")} summary={t("overview.grant.summary")}>
             <div className="p-4">
               <form
                 className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(12rem,16rem)_auto]"
@@ -151,19 +130,19 @@ export function OverviewPage(): ReactElement {
                   {/* A Select trigger is a button, not a labelable control, so the
                       label renders as a span and associates via aria-labelledby. */}
                   <FieldLabel id={principal_labelId} nativeLabel={false} render={<span />}>
-                    {t("iam.overview.grant.principal")}
+                    {t("overview.grant.principal")}
                   </FieldLabel>
                   <Select
                     value={principal_id}
                     options={principalOptions}
-                    placeholder={usersQuery.fetching ? t("iam.overview.grant.loadingUsers") : t("iam.overview.grant.selectUser")}
+                    placeholder={usersQuery.fetching ? t("overview.grant.loadingUsers") : t("overview.grant.selectUser")}
                     aria-labelledby={principal_labelId}
                     disabled={usersQuery.fetching || principalOptions.length === 0}
                     onValueChange={setPrincipalId}
                   />
                   {usersTruncated ? (
                     <FieldDescription>
-                      {t("iam.overview.grant.truncated", {
+                      {t("overview.grant.truncated", {
                         shown: IAM_LIST_LIMIT.toLocaleString(),
                         total: userTotalCount.toLocaleString(),
                       })}
@@ -172,31 +151,31 @@ export function OverviewPage(): ReactElement {
                 </FieldRoot>
                 <FieldRoot>
                   <FieldLabel id={roleLabelId} nativeLabel={false} render={<span />}>
-                    {t("iam.overview.grant.role")}
+                    {t("overview.grant.role")}
                   </FieldLabel>
                   <Select
                     value={role}
                     options={roleOptions}
-                    placeholder={t("iam.overview.grant.selectRole")}
+                    placeholder={t("overview.grant.selectRole")}
                     aria-labelledby={roleLabelId}
                     onValueChange={setRole}
                   />
                 </FieldRoot>
                 <div className="flex items-end">
                   <Button type="submit" variant="primary" pending={grantState.fetching} disabled={!principal_id || !role}>
-                    {t("iam.overview.grant.submit")}
+                    {t("overview.grant.submit")}
                   </Button>
                 </div>
               </form>
               {error ? (
-                <Alert className="mt-3" tone="danger" title={t("iam.overview.grant.failedTitle")}>{error}</Alert>
+                <Alert className="mt-3" tone="danger" title={t("overview.grant.failedTitle")}>{error}</Alert>
               ) : null}
             </div>
           </SurfacePanel>
 
           <SurfacePanel
-            title={t("iam.overview.privileged.title")}
-            summary={t("iam.overview.privileged.summary", { count: privilegedTotal.toLocaleString() })}
+            title={t("overview.privileged.title")}
+            summary={t("overview.privileged.summary", { count: privilegedTotal.toLocaleString() })}
           >
             <div className="divide-y divide-border-subtle">
               {privileged.map((grant) => (
@@ -205,7 +184,7 @@ export function OverviewPage(): ReactElement {
                 }} />
               ))}
               {privileged.length === 0 ? (
-                <div className="p-4"><InlineEmpty label={t("iam.overview.privileged.empty")} /></div>
+                <div className="p-4"><InlineEmpty label={t("overview.privileged.empty")} /></div>
               ) : null}
             </div>
           </SurfacePanel>
@@ -213,8 +192,8 @@ export function OverviewPage(): ReactElement {
 
         <div className="space-y-6">
           <SurfacePanel
-            title={t("iam.overview.namespaces.title")}
-            summary={t("iam.overview.namespaces.summary", { count: namespaces.length.toLocaleString() })}
+            title={t("overview.namespaces.title")}
+            summary={t("overview.namespaces.summary", { count: namespaces.length.toLocaleString() })}
           >
             <div className="space-y-3 p-4">
               {namespaces.map((namespace) => (
@@ -223,22 +202,22 @@ export function OverviewPage(): ReactElement {
                   title={titleLabel(namespace.namespace)}
                   meta={
                     namespace.role_count === 1
-                      ? t("iam.overview.namespaces.roleCount.one", { count: namespace.role_count.toLocaleString() })
-                      : t("iam.overview.namespaces.roleCount.other", { count: namespace.role_count.toLocaleString() })
+                      ? t("overview.namespaces.roleCount.one", { count: namespace.role_count.toLocaleString() })
+                      : t("overview.namespaces.roleCount.other", { count: namespace.role_count.toLocaleString() })
                   }
                   primaryTag={{
-                    label: t("iam.overview.namespaces.grantCount", { count: namespace.grant_count.toLocaleString() }),
+                    label: t("overview.namespaces.grantCount", { count: namespace.grant_count.toLocaleString() }),
                     tone: namespace.grant_count > 0 ? "brand" : "neutral",
                   }}
                 />
               ))}
-              {namespaces.length === 0 ? <InlineEmpty label={t("iam.overview.namespaces.empty")} /> : null}
+              {namespaces.length === 0 ? <InlineEmpty label={t("overview.namespaces.empty")} /> : null}
             </div>
           </SurfacePanel>
 
           <SurfacePanel
-            title={t("iam.overview.unassigned.title")}
-            summary={t("iam.overview.unassigned.summary", { count: unassignedTotal.toLocaleString() })}
+            title={t("overview.unassigned.title")}
+            summary={t("overview.unassigned.summary", { count: unassignedTotal.toLocaleString() })}
           >
             <div className="divide-y divide-border-subtle">
               {unassigned.map((user) => (
@@ -250,7 +229,7 @@ export function OverviewPage(): ReactElement {
                 </div>
               ))}
               {unassigned.length === 0 ? (
-                <div className="p-4"><InlineEmpty label={t("iam.overview.unassigned.empty")} /></div>
+                <div className="p-4"><InlineEmpty label={t("overview.unassigned.empty")} /></div>
               ) : null}
             </div>
           </SurfacePanel>
@@ -283,7 +262,7 @@ function PrivilegedGrantRow({
           void revoke({ principal_id: grant.principal_id, role: grant.role }).then(onRevoked);
         }}
       >
-        {t("iam.revoke")}
+        {t("revoke")}
       </Button>
     </div>
   );

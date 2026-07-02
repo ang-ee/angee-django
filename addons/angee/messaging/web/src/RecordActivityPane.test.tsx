@@ -22,21 +22,25 @@ vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
     ...actual,
-    useAuthoredQuery: mocks.useAuthoredQuery,
-    useAuthoredMutation: (document: unknown) => {
-      const op = operationName(document);
-      const mutate = vi.fn(async (vars: Record<string, unknown>) => {
-        mocks.mutateCalls.push({ op, vars });
-        return {};
-      });
-      return [mutate, { fetching: false }];
-    },
     useNamespaceT:
       (_namespace: string, messages: Record<string, string>) =>
       (key: string) =>
         messages[key] ?? key,
   };
 });
+
+vi.mock("@angee/refine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/refine")>()),
+  useAuthoredQuery: mocks.useAuthoredQuery,
+  useAuthoredMutation: (document: unknown) => {
+    const op = operationName(document);
+    const mutate = vi.fn(async (vars: Record<string, unknown>) => {
+      mocks.mutateCalls.push({ op, vars });
+      return {};
+    });
+    return [mutate, { fetching: false }];
+  },
+}));
 
 import { RecordActivityPane } from "./RecordActivityPane";
 

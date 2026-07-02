@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactElement, type ReactNode } from "react";
 
 import { Glyph } from "../chrome/Glyph";
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import {
   SelectIcon,
@@ -29,7 +29,7 @@ function ComboboxEdit({
   field,
   readOnly,
 }: WidgetRenderProps<string>): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const [query, setQuery] = useState("");
   const options = field?.options ?? [];
   const labels = useMemo(() => optionLabelMap(options), [options]);

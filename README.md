@@ -98,7 +98,7 @@ shared React libraries live under the framework core, so they travel inside the
   - Python (`angee/…`) — composition, GraphQL, REBAC, resources, and the
     `manage.py angee build` composer.
   - `angee/web/*` — the shared React libraries: `@angee/ui`, `@angee/app`,
-    `@angee/refine`, `@angee/resources`.
+    `@angee/refine`, `@angee/metadata`.
 - **`addons/angee/*`** — the base addons, each a vertical slice: Python
   (source models · GraphQL · REBAC) plus its React surface under
   `addons/angee/<name>/web` (`@angee/iam`, `@angee/agents`, `@angee/platform`,

@@ -28,13 +28,17 @@ vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
     ...actual,
-    useAuthoredQuery: mocks.useAuthoredQuery,
     useNamespaceT:
       (_namespace: string, messages: Record<string, string>) =>
       (key: string) =>
         messages[key] ?? key,
   };
 });
+
+vi.mock("@angee/refine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/refine")>()),
+  useAuthoredQuery: mocks.useAuthoredQuery,
+}));
 
 import { ThreadTranscript } from "./ThreadTranscript";
 

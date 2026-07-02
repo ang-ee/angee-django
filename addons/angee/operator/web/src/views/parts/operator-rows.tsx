@@ -1,8 +1,4 @@
-import {
-  RowsListView,
-  type RowsListViewProps,
-  type StringIdRow,
-} from "@angee/ui";
+import { RowsListView, type RowsListViewProps, type StringIdRow } from "@angee/ui";
 import type { ReactElement } from "react";
 
 import {

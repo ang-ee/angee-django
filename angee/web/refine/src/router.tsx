@@ -2,21 +2,35 @@ import * as React from "react";
 import {
   Link as TanStackLink,
   useNavigate,
+  useRouter,
   useRouterState,
 } from "@tanstack/react-router";
 import {
   ResourceContext,
   matchResourceFromRoute,
   type BaseKey,
-  type GoConfig,
   type RouterProvider,
 } from "@refinedev/core";
 
 export const tanStackRouterProvider: RouterProvider = {
   go: () => {
     const navigate = useNavigate();
+    const router = useRouter();
     return (config) => {
-      if (config.type === "path") return urlFromGoConfig(config);
+      if (config.type === "path") {
+        const location = router.buildLocation({
+          to: config.to || ".",
+          search: config.query as never,
+          hash: config.hash?.replace(/^#/, ""),
+        } as never) as {
+          hash?: string;
+          href?: string;
+          pathname: string;
+          searchStr?: string;
+        };
+        return location.href
+          ?? `${location.pathname}${location.searchStr ?? ""}${location.hash ?? ""}`;
+      }
       void navigate({
         to: config.to || ".",
         search: config.query as never,
@@ -106,24 +120,4 @@ function routeSegments(route: string): readonly string[] {
     .replace(/^\/+|\/+$/g, "")
     .split("/")
     .filter(Boolean);
-}
-
-export function urlFromGoConfig(config: GoConfig): string {
-  const path = config.to ?? "";
-  const query = queryString(config.query);
-  const hash = config.hash
-    ? `#${config.hash.replace(/^#/, "")}`
-    : "";
-  return `${path}${query}${hash}`;
-}
-
-function queryString(query: Record<string, unknown> | undefined): string {
-  if (!query) return "";
-  const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(query)) {
-    if (value == null || value === "") continue;
-    params.set(key, String(value));
-  }
-  const serialized = params.toString();
-  return serialized ? `?${serialized}` : "";
 }

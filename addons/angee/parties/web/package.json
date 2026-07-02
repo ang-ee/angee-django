@@ -1,16 +1,21 @@
 {
   "name": "@angee/parties",
   "version": "0.0.0",
+  "license": "AGPL-3.0-or-later",
   "private": true,
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": "./src/index.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@angee/app": "workspace:*",
+    "@angee/refine": "workspace:*",
     "@angee/ui": "workspace:*",
     "lucide-react": "^1.21.0"
   },
@@ -21,10 +26,13 @@
   },
   "devDependencies": {
     "@tanstack/react-router": "^1.170.16",
+    "@testing-library/react": "^16.1.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
+    "happy-dom": "^20.10.6",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
   }
 }

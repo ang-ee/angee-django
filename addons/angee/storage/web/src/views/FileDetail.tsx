@@ -38,14 +38,14 @@ export function FileDetail({
       resource={FILE_MODEL}
       id={file.id}
       returning={[...SUBTITLE_FIELDS]}
-      submitLabel={t("storage.file.rename")}
+      submitLabel={t("file.rename")}
       onSaved={onChanged}
     >
       <Field name="title" widget="text" title placeholder={file.filename} />
-      <Group label={t("storage.file.details")} columns={compact ? 1 : 2}>
-        <Field name="filename" label={t("storage.file.filename")} readOnly />
-        <Field name="created_by_label" label={t("storage.file.owner")} widget="userRef" readOnly />
-        <Field name="upload_state" label={t("storage.file.stage")} readOnly />
+      <Group label={t("file.details")} columns={compact ? 1 : 2}>
+        <Field name="filename" label={t("file.filename")} readOnly />
+        <Field name="created_by_label" label={t("file.owner")} widget="userRef" readOnly />
+        <Field name="upload_state" label={t("file.stage")} readOnly />
       </Group>
     </FormView>
   );

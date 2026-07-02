@@ -1,29 +1,9 @@
 import * as React from "react";
+import { rowPublicId, type Row, } from "@angee/metadata";
 import {
-  rowPublicId,
-  type Row,
-} from "@angee/resources";
-import {
-  Action,
-  Column,
-  ResourceList,
-  Facet,
-  Field,
-  Form,
-  Group,
-  List,
-  useRecordActionMutation,
-  useEnumOptions,
-  useImplPrefill,
-  type FormSubmit,
-  } from "@angee/ui";
-import {
-  canConnectRecord,
-  ConnectOAuthButton,
-  } from "@angee/integrate";
-import { useAuthoredMutation,
-} from "@angee/ui";
-import type { DocumentVariables } from "@angee/refine";
+  Action, Column, ResourceList, Facet, Field, Form, Group, List, useRecordActionMutation, useEnumOptions, useImplPrefill, type FormSubmit } from "@angee/ui";
+import { canConnectRecord, ConnectOAuthButton, } from "@angee/integrate";
+import { useAuthoredMutation, type DocumentVariables } from "@angee/refine";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { ConnectInferenceProvider, UpdateInferenceProvider } from "../documents";
@@ -77,11 +57,11 @@ export function InferenceProvidersPage(): React.ReactElement {
         <Column field="name" />
         <Column field="backend_class" />
         <Column field="status" widget="statusBadge" />
-        <Column field="credential.display_name" header={t("agents.inference.credential")} />
+        <Column field="credential.display_name" header={t("inference.credential")} />
       </List>
       <Form resource={PROVIDER_MODEL} submit={submitProvider}>
         <Field name="name" title />
-        <Group label={t("agents.inference.backend")} columns={2}>
+        <Group label={t("inference.backend")} columns={2}>
           <Field name="owner" />
           <Field
             name="backend_class"
@@ -94,11 +74,11 @@ export function InferenceProvidersPage(): React.ReactElement {
           <Field name="account" />
           <Field name="status" widget="statusbar" />
         </Group>
-        <Group label={t("agents.inference.provider")} columns={2}>
+        <Group label={t("inference.provider")} columns={2}>
           <Field name="base_url" />
         </Group>
         <Field name="config" widget="json" />
-        <Action id="refresh-models" label={t("agents.inference.refreshModels")} icon="refresh" run={refreshModels} />
+        <Action id="refresh-models" label={t("inference.refreshModels")} icon="refresh" run={refreshModels} />
       </Form>
     </ResourceList>
   );
@@ -118,9 +98,9 @@ function ProviderConnectButton({
 
   return (
     <ConnectOAuthButton
-      label={t("agents.inference.connect.action")}
-      connectedTitle={t("agents.inference.connect.connected")}
-      startErrorTitle={t("agents.inference.connect.startError")}
+      label={t("inference.connect.action")}
+      connectedTitle={t("inference.connect.connected")}
+      startErrorTitle={t("inference.connect.startError")}
       next="/agents/providers"
       onConnected={refresh}
       start={async ({ redirectUri, next }) => {
@@ -148,9 +128,9 @@ export function InferenceModelsPage(): React.ReactElement {
         resource={MODEL_MODEL}
         defaultGroups={defaultGroups}
       >
-        <Facet field="provider" label={t("agents.inference.provider")} labelField="name" />
+        <Facet field="provider" label={t("inference.provider")} labelField="name" />
         <Column field="name" />
-        <Column field="provider.name" header={t("agents.inference.provider")} />
+        <Column field="provider.name" header={t("inference.provider")} />
         <Column field="display_name" />
         <Column field="model_use" />
         <Column field="status" widget="statusBadge" />
@@ -158,7 +138,7 @@ export function InferenceModelsPage(): React.ReactElement {
       <Form resource={MODEL_MODEL}>
         <Field name="name" title />
         <Field name="display_name" />
-        <Group label={t("agents.inference.catalogue")} columns={2}>
+        <Group label={t("inference.catalogue")} columns={2}>
           <Field name="provider" createOnly />
           <Field name="publisher" />
           <Field name="model_use" widget="select" options={modelUseOptions} createOnly />

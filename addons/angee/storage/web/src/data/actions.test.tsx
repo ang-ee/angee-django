@@ -11,11 +11,11 @@ import { beforeEach,
   vi } from "vitest";
 import {
   ModelMetadataProvider,
-} from "@angee/resources";
+} from "@angee/metadata";
 import { OperationDocumentsProvider } from "@angee/refine";
 import type {
   SchemaFieldMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 const sdk = vi.hoisted(() => {
   type RefineMutation = {
@@ -34,13 +34,6 @@ vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
     ...actual,
-    useAuthoredMutation: vi.fn(() => [
-      vi.fn(async (variables: unknown) => {
-        sdk.authoredCalls.push(variables);
-        return {};
-      }),
-      { error: null, fetching: false },
-    ]),
     useBusyRun: vi.fn((onChanged?: () => void) => ({
       busy: false,
       run: async <T,>(task: () => Promise<T>) => {
@@ -49,6 +42,20 @@ vi.mock("@angee/ui", async (importOriginal) => {
         return result;
       },
     })),
+  };
+});
+
+vi.mock("@angee/refine", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/refine")>();
+  return {
+    ...actual,
+    useAuthoredMutation: vi.fn(() => [
+      vi.fn(async (variables: unknown) => {
+        sdk.authoredCalls.push(variables);
+        return {};
+      }),
+      { error: null, fetching: false },
+    ]),
   };
 });
 

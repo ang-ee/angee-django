@@ -114,8 +114,8 @@ def test_runtime_renders_resource_sources(tmp_path: Path) -> None:
     # Tailwind sources, never schema-shaped TypeScript. `runtime/web/app.ts` and
     # `runtime/gql/<schema>/*` are owned by the `angee-web-codegen` CLI.
     assert Path("web/app.ts") not in sources
-    assert '"package": "@angee/resources-addon"' in sources[Path("web/manifest.json")]
-    assert '@source "../../web/node_modules/@angee/resources-addon/src";' in sources[Path("web/tailwind.sources.css")]
+    assert '"package": "@angee/resources"' in sources[Path("web/manifest.json")]
+    assert '@source "../../web/node_modules/@angee/resources/src";' in sources[Path("web/tailwind.sources.css")]
 
 
 def test_web_runtime_projects_addon_web_packages_in_composed_order(stub_contracts: None) -> None:

@@ -93,14 +93,14 @@ export function SlashCommandComposer({
           <ComposerPrimitive.Unstable_TriggerPopover
             char="/"
             adapter={adapter}
-            aria-label={t("agents.chat.commands")}
+            aria-label={t("chat.commands")}
             render={<ChatCommandList className="absolute inset-x-2 bottom-full z-10 mb-1" />}
           >
             <ComposerPrimitive.Unstable_TriggerPopover.Directive formatter={slashCommandFormatter} />
             <ComposerPrimitive.Unstable_TriggerPopoverItems>
               {(items) =>
                 items.length === 0 ? (
-                  <ChatCommandEmpty>{t("agents.chat.commandsEmpty")}</ChatCommandEmpty>
+                  <ChatCommandEmpty>{t("chat.commandsEmpty")}</ChatCommandEmpty>
                 ) : (
                   items.map((item) => (
                     <ComposerPrimitive.Unstable_TriggerPopoverItem

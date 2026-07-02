@@ -3,10 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { parseAsString, useQueryState } from "nuqs";
 
 import {
-  GraphView,
-  type GraphViewNode,
-  type GraphViewNodeStyle,
-} from "@angee/ui";
+  GraphView, type GraphViewNode, type GraphViewNodeStyle } from "@angee/ui";
 
 import { usePlatformModelGraph } from "../lib/explorer";
 import { modelDetailPath } from "../lib/paths";

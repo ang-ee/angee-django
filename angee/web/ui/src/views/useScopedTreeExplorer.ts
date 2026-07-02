@@ -116,14 +116,25 @@ export function useScopedTreeExplorer<
     [defaultSelectedId],
   );
 
-  return {
-    root,
-    rootId,
-    rootOptions,
-    setRootId: handleSetRootId,
-    treeRows,
-    selectedId: effectiveSelectedId,
-    selectedRow,
-    setSelectedId: setLocalSelectedId,
-  };
+  return useMemo(
+    () => ({
+      root,
+      rootId,
+      rootOptions,
+      setRootId: handleSetRootId,
+      treeRows,
+      selectedId: effectiveSelectedId,
+      selectedRow,
+      setSelectedId: setLocalSelectedId,
+    }),
+    [
+      root,
+      rootId,
+      rootOptions,
+      handleSetRootId,
+      treeRows,
+      effectiveSelectedId,
+      selectedRow,
+    ],
+  );
 }

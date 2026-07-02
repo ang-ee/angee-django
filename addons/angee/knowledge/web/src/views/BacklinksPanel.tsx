@@ -26,8 +26,8 @@ export function BacklinksPanel({
       <EmptyState
         fill
         icon="link"
-        title={t("knowledge.backlinks.emptyTitle")}
-        description={t("knowledge.backlinks.emptyDescription")}
+        title={t("backlinks.emptyTitle")}
+        description={t("backlinks.emptyDescription")}
       />
     );
   }
@@ -35,7 +35,7 @@ export function BacklinksPanel({
   return (
     <div className="flex h-full flex-col gap-1 overflow-auto p-3">
       <SectionEyebrow as="h3" className="px-1 pb-1">
-        {t("knowledge.backlinks.heading")} · {backlinks.length}
+        {t("backlinks.heading")} · {backlinks.length}
       </SectionEyebrow>
       {backlinks.map((backlink) => (
         <button

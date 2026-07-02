@@ -21,7 +21,6 @@ const resourcesRoutes: readonly BaseAddonRoute[] = [
   {
     name: "resources.ledger",
     path: "/platform/resources",
-    layout: "console",
     resource: "resources.Resource",
     component: lazyRouteComponent(() => import("./views/ResourcesPage"), "ResourcesPage"),
   },

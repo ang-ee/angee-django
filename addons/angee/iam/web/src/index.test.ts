@@ -1,15 +1,16 @@
 import { AUTH_LOGIN_METHOD_SLOT } from "@angee/app/auth";
+import { expectValidBaseAddon } from "@angee/app/testing";
 import {
-  formViewSectionsSlot,
-  MenuTree,
-  type BaseMenuItem,
-  type ChromeMenuItem,
-} from "@angee/ui";
+  formViewSectionsSlot, MenuTree, type BaseMenuItem, type ChromeMenuItem } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import iam, { IAM_LOGIN_BACKGROUND_IMAGE_URLS } from "./index";
 
 describe("iam addon manifest", () => {
+  test("satisfies the rendered-addon invariants", () => {
+    expect(() => expectValidBaseAddon(iam)).not.toThrow();
+  });
+
   test("registers the public login callback route", () => {
     const route = iam.routes?.find((item) => item.name === "iam.login.callback");
     expect(route?.name).toBe("iam.login.callback");

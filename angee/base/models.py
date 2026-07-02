@@ -55,14 +55,13 @@ class AngeeQuerySet(RebacQuerySet[_ModelT]):
         queryset = cast(Self, self.on_field_deny("allow"))
         if queryset.is_sudo() or ambient_is_sudo():
             return queryset
-        try:
-            actor, is_unscoped = queryset.effective_actor(strict=False)
-        except MissingActorError:
-            return cast(Self, queryset.none())
-        if is_unscoped:
+        actor = queryset.actor() or current_actor()
+        if actor is None:
+            if model_resource_type(self.model):
+                return cast(Self, queryset.none())
             return queryset
-        if actor is None and model_resource_type(self.model):
-            return cast(Self, queryset.none())
+        if not model_resource_type(self.model):
+            return queryset
         return queryset.apply_ambient_scope()
 
 

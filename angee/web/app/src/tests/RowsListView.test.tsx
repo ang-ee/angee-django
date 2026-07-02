@@ -20,7 +20,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { parseFlatSearch, stringifyFlatSearch } from "../create-app";
 import { ResourceViewProvider } from "@angee/ui/views/resource-view-context";
 import { RowsListView } from "@angee/ui/views/RowsListView";
-import type { ListColumn } from "@angee/ui/views/ListInternals";
+import type { ListColumn } from "@angee/ui/views/resource-view-list-body";
 
 afterEach(() => cleanup());
 
@@ -60,10 +60,10 @@ function renderInRouter(ui: ReactElement, initialEntries = ["/"]): void {
   render(<RouterProvider router={router} />);
 }
 
-// These assert the collapse semantics — the `flattenListItems`/`expandedKeys`
-// reshape and the `aria-expanded` toggle — through the render output. Under
-// happy-dom the virtualizer reports zero items, so `FlatListBody` takes its
-// "render all" fallback; this does not exercise the virtualized count/padding.
+// These assert the TanStack grouped-row collapse semantics and the
+// `aria-expanded` toggle through the render output. Under happy-dom the
+// virtualizer reports zero items, so `FlatListBody` takes its "render all"
+// fallback; this does not exercise the virtualized count/padding.
 describe("RowsListView grouping", () => {
   test("groups are collapsed by default and a header click expands only that group", async () => {
     renderInRouter(
@@ -102,7 +102,7 @@ describe("RowsListView filters", () => {
       <RowsListView<Item>
         rows={ROWS}
         columns={columns}
-        filterFields={[
+        customFilterFields={[
           {
             id: "region",
             field: "region",

@@ -64,7 +64,10 @@ const packageDefaults = defineConfig({
     environment: "node",
     include: srcTestIncludes,
     server: {
-      deps: { inline: ["@refinedev/react-table"] },
+      // The chrome barrel pulls in the logo stylesheet; inline it so Vite
+      // resolves the CSS import instead of Node's ESM loader rejecting it
+      // (same rationale as the web defaults below).
+      deps: { inline: ["@angee/logo-react", "@refinedev/react-table"] },
     },
   },
 });

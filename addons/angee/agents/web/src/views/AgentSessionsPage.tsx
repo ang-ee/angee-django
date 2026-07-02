@@ -1,17 +1,7 @@
 import * as React from "react";
-import { Link, useNavigate, useParams } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import {
-  EmptyState,
-  Glyph,
-  SessionRail,
-  SessionRailItem,
-  Skeleton,
-  StatusDot,
-  buttonVariants,
-  recordPath,
-  statusTone,
-  usePrimaryPane,
-} from "@angee/ui";
+  EmptyState, Glyph, PrimaryPanePublisher, SessionRail, SessionRailItem, Skeleton, StatusDot, buttonVariants, recordPath, statusTone, useRouteRecordId } from "@angee/ui";
 
 import { useAgentsT } from "../i18n";
 import { type AgentChatView } from "../documents";
@@ -26,8 +16,8 @@ const SESSIONS_BASE = "/agents/sessions";
  * session/thread switcher) and the selected agent's live ACP conversation filling the
  * rest.
  *
- * The rail is published into the shell's primary (left explorer) pane via
- * `usePrimaryPane`; this component returns only the conversation content. The URL `:id`
+ * The rail is published into the shell's primary (left explorer) pane; this
+ * component returns only the conversation content. The URL `:id`
  * is the single owner of which agent is shown — the rail rows and the heal-redirect both
  * write it, and the page's parent route stays mounted across `:id` changes, which is the
  * substrate keep-alive needs. Each opened agent renders one stable `<AgentChat>` and only
@@ -39,9 +29,7 @@ const SESSIONS_BASE = "/agents/sessions";
 export function AgentSessionsPage(): React.ReactElement {
   const t = useAgentsT();
   const navigate = useNavigate();
-  const params = useParams({ strict: false });
-  const selectedId =
-    "id" in params && typeof params.id === "string" ? params.id : null;
+  const selectedId = useRouteRecordId() ?? null;
 
   // The shared running-agents owner (same hook the side-chatter uses) — live-refreshing,
   // already filtered to the running, non-template agents.
@@ -83,7 +71,7 @@ export function AgentSessionsPage(): React.ReactElement {
   const rail = React.useMemo<React.ReactNode | null>(() => {
     if (loading) {
       return (
-        <SessionRail label={t("agents.sessions.railLabel")} busy>
+        <SessionRail label={t("sessions.railLabel")} busy>
           {Array.from({ length: 4 }, (_, index) => (
             <li key={index} className="px-2 py-1.5">
               <Skeleton className="h-5" />
@@ -97,11 +85,11 @@ export function AgentSessionsPage(): React.ReactElement {
     }
     return (
       <SessionRail
-        label={t("agents.sessions.railLabel")}
+        label={t("sessions.railLabel")}
         action={
           <Link className={buttonVariants({ variant: "ghost", size: "sm" })} to="/agents">
             <Glyph name="plus" />
-            {t("agents.sessions.new")}
+            {t("sessions.new")}
           </Link>
         }
       >
@@ -112,7 +100,7 @@ export function AgentSessionsPage(): React.ReactElement {
             status={
               <StatusDot
                 tone={statusTone(agent.runtime_status)}
-                label={t("agents.sessions.running")}
+                label={t("sessions.running")}
               />
             }
             handle={agent.model?.name ?? undefined}
@@ -124,31 +112,35 @@ export function AgentSessionsPage(): React.ReactElement {
       </SessionRail>
     );
   }, [loading, agents, selectedId, t]);
-  usePrimaryPane(rail);
-
   // Loading: a skeleton conversation pane beside the skeleton rail rows above.
   if (loading) {
     return (
-      <div className="min-w-0 flex-1 p-3">
-        <Skeleton className="h-full" />
-      </div>
+      <>
+        <PrimaryPanePublisher node={rail} />
+        <div className="min-w-0 flex-1 p-3">
+          <Skeleton className="h-full" />
+        </div>
+      </>
     );
   }
 
   // Empty: no running agent → the provision call-to-action (no rail to switch).
   if (agents.length === 0) {
     return (
-      <EmptyState
-        icon="agent"
-        title={t("agents.agent.noRunningAgent")}
-        description={t("agents.agent.chatUnavailable")}
-        actions={
-          <Link className={buttonVariants({ variant: "primary", size: "sm" })} to="/agents">
-            {t("agents.agent.setupAssistant")}
-          </Link>
-        }
-        fill
-      />
+      <>
+        <PrimaryPanePublisher node={rail} />
+        <EmptyState
+          icon="agent"
+          title={t("agent.noRunningAgent")}
+          description={t("agent.chatUnavailable")}
+          actions={
+            <Link className={buttonVariants({ variant: "primary", size: "sm" })} to="/agents">
+              {t("agent.setupAssistant")}
+            </Link>
+          }
+          fill
+        />
+      </>
     );
   }
 
@@ -160,12 +152,15 @@ export function AgentSessionsPage(): React.ReactElement {
   // fallback (a single `<AgentChat key={activeId}>`) is leak-free too but would drop the
   // prior in-browser transcript on every switch; keep-alive is chosen to avoid that.
   return (
-    <div className="min-w-0 flex-1 min-h-0">
-      <KeptAliveAgents
-        openedIds={openedIds}
-        selectedId={activeId}
-        renderAgent={(id) => <AgentChat agentId={id} view={viewForAgent(id)} />}
-      />
-    </div>
+    <>
+      <PrimaryPanePublisher node={rail} />
+      <div className="min-w-0 flex-1 min-h-0">
+        <KeptAliveAgents
+          openedIds={openedIds}
+          selectedId={activeId}
+          renderAgent={(id) => <AgentChat agentId={id} view={viewForAgent(id)} />}
+        />
+      </div>
+    </>
   );
 }

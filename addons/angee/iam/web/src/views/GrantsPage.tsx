@@ -1,19 +1,8 @@
-import {
-  useMemo,
-  useState,
-  type ReactElement,
-} from "react";
+import { useAuthoredMutation } from "@angee/refine";
+import { useMemo, useState, type ReactElement, } from "react";
 
 import {
-  Alert,
-  Button,
-  Code,
-  ListView,
-  errorMessage,
-  useConfirm,
-  type ListColumn,
-  useAuthoredMutation,
-} from "@angee/ui";
+  Alert, Button, Code, ListView, errorMessage, useConfirm, type ListColumn } from "@angee/ui";
 
 import { IamRevokeRole } from "../documents";
 import { useIamT } from "../i18n";
@@ -51,10 +40,10 @@ export function GrantsPage(): ReactElement {
 
   async function revoke(row: GrantResourceRow): Promise<void> {
     const confirmed = await confirm({
-      title: t("iam.grants.revoke.title"),
-      body: t("iam.grants.revoke.body", { role: row.role, principal: row.principal_label }),
-      cancel: t("iam.grants.revoke.cancel"),
-      confirm: t("iam.revoke"),
+      title: t("grants.revoke.title"),
+      body: t("grants.revoke.body", { role: row.role, principal: row.principal_label }),
+      cancel: t("grants.revoke.cancel"),
+      confirm: t("revoke"),
       danger: true,
     });
     if (!confirmed) return;
@@ -66,10 +55,10 @@ export function GrantsPage(): ReactElement {
         role: row.role,
       });
       if (result?.revoke_role === false) {
-        throw new Error(t("iam.grants.revoke.error"));
+        throw new Error(t("grants.revoke.error"));
       }
     } catch (caught) {
-      setActionError(errorMessage(caught, t("iam.grants.revoke.error")));
+      setActionError(errorMessage(caught, t("grants.revoke.error")));
     } finally {
       setPendingGrantId(null);
     }
@@ -79,7 +68,7 @@ export function GrantsPage(): ReactElement {
     () => [
       {
         field: "principal_label",
-        header: t("iam.grants.column.principal"),
+        header: t("grants.column.principal"),
         render: (row) => (
           <span className="flex min-w-0 flex-col">
             <span className="truncate text-13 text-fg">{row.principal_label}</span>
@@ -91,7 +80,7 @@ export function GrantsPage(): ReactElement {
       },
       {
         field: "role",
-        header: t("iam.grants.column.role"),
+        header: t("grants.column.role"),
         render: (row) => (
           <div className="min-w-0">
             <div className="truncate font-medium text-fg">{row.role_name}</div>
@@ -103,7 +92,7 @@ export function GrantsPage(): ReactElement {
       },
       {
         field: "namespace",
-        header: t("iam.grants.column.namespace"),
+        header: t("grants.column.namespace"),
         render: (row) => <Code truncate>{row.namespace}</Code>,
       },
       {
@@ -120,7 +109,7 @@ export function GrantsPage(): ReactElement {
             disabled={pendingGrantId !== null && pendingGrantId !== row.id}
             onClick={() => void revoke(row)}
           >
-            {t("iam.revoke")}
+            {t("revoke")}
           </Button>
         ),
       },
@@ -131,7 +120,7 @@ export function GrantsPage(): ReactElement {
   return (
     <div className="flex flex-col gap-3">
       {actionError ? (
-        <Alert tone="danger" title={t("iam.grants.revoke.failedTitle")}>
+        <Alert tone="danger" title={t("grants.revoke.failedTitle")}>
           {actionError}
         </Alert>
       ) : null}

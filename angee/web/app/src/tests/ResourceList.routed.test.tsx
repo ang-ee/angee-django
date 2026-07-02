@@ -39,10 +39,10 @@ import { afterEach,
   vi } from "vitest";
 import {
   ModelMetadataProvider,
-} from "@angee/resources";
+} from "@angee/metadata";
 import type {
   SchemaFieldMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 import { parseFlatSearch, stringifyFlatSearch } from "../create-app";
 import { ModalsHost, ToastProvider } from "@angee/ui/feedback/index";
@@ -52,7 +52,7 @@ import type { FormField } from "@angee/ui/views/FormView";
 import type { ListColumn, ListViewProps } from "@angee/ui/views/ListView";
 import type {
   Row,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 const sdkMocks = vi.hoisted(() => ({
   rows: [

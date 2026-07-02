@@ -30,26 +30,26 @@ export function useWorkspaceActions(refetch: () => void): {
   const actions = useMemo<readonly WorkspaceRowAction[]>(() => {
     return [
       {
-        label: t("operator.workspaces.syncBase"),
+        label: t("workspaces.syncBase"),
         variant: "secondary",
         perform: (workspace: WorkspaceRef) => {
           void runDaemon({
             run: syncBase.run,
             field: "workspaceSyncBase",
             variables: { name: workspace.name },
-            label: t("operator.workspaces.syncBase"),
+            label: t("workspaces.syncBase"),
           });
         },
       },
       {
-        label: t("operator.workspaces.destroy"),
+        label: t("workspaces.destroy"),
         variant: "ghost",
         perform: (workspace: WorkspaceRef) => {
           void (async () => {
             const ok = await confirm({
-              title: t("operator.workspaces.destroy.confirm.title"),
-              body: t("operator.workspaces.destroy.confirm.body", { name: workspace.name }),
-              confirm: t("operator.workspaces.destroy"),
+              title: t("workspaces.destroy.confirm.title"),
+              body: t("workspaces.destroy.confirm.body", { name: workspace.name }),
+              confirm: t("workspaces.destroy"),
               danger: true,
             });
             if (!ok) return;
@@ -57,7 +57,7 @@ export function useWorkspaceActions(refetch: () => void): {
               run: destroy.run,
               field: "delete_workspaces_by_pk",
               variables: { id: workspace.id },
-              label: t("operator.workspaces.destroy"),
+              label: t("workspaces.destroy"),
             });
           })();
         },

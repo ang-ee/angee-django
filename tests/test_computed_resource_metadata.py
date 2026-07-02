@@ -51,6 +51,7 @@ def test_computed_resource_metadata_is_model_optional() -> None:
     assert metadata.model_label == "platform.addon"
     assert (metadata.app_label, metadata.model_name) == ("platform", "addon")
     assert metadata.roots.list_name == "platform_addons"
+    assert metadata.record_representation == "label"
     # Fields derive from the node surface even with no Django model behind it.
     field_names = {field.name for field in metadata.fields}
     assert {"id", "label", "model_count"} <= field_names
@@ -58,6 +59,7 @@ def test_computed_resource_metadata_is_model_optional() -> None:
     [wire] = serialize_data_resources((metadata,), schema_name="console")
     assert "model" not in wire  # the Python model handle never reaches the wire
     assert wire["modelLabel"] == "platform.addon"
+    assert wire["recordRepresentation"] == "label"
     assert wire["roots"]["list"] == "platform_addons"
 
 

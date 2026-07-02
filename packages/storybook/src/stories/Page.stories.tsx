@@ -1,27 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import {
-  Badge,
-  Button,
-  Glyph,
-  Page,
-  PageAside,
-  PageBody,
-  PageFooter,
-  PageHeader,
-  PageToolbar,
-  SearchInput,
-  SectionNav,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-  Toolbar,
-  STATUS_TONES,
-  stateToneFromValue,
-  type SectionNavItem,
-} from "@angee/ui";
+import { Badge, Button, Glyph, Page, PageAside, PageBody, PageFooter, PageHeader, PageToolbar, SearchInput, SectionNav, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Toolbar, STATUS_TONES, stateToneFromValue, type SectionNavItem } from "@angee/ui";
+
+import { ConsoleContentStoryShell, PageStoryShell } from "./chrome-fixtures";
 
 const navItems: readonly SectionNavItem[] = [
   { id: "all", label: "All notes", href: "#all", active: true },
@@ -50,7 +30,7 @@ type Story = StoryObj<typeof meta>;
 
 export const Frame: Story = {
   render: () => (
-    <div className="h-screen bg-canvas p-6 text-fg">
+    <PageStoryShell>
       <Page className="h-full overflow-hidden rounded-6 border border-border-subtle">
         <PageHeader
           crumbs="Notes / All notes"
@@ -149,7 +129,7 @@ export const Frame: Story = {
           <span className="tabular-nums">1-50 / 245</span>
         </PageFooter>
       </Page>
-    </div>
+    </PageStoryShell>
   ),
 };
 
@@ -159,12 +139,8 @@ export const InContentRegion: Story = {
     // Page is layout-agnostic: mounted inside the console content region, that
     // region owns the scroll and canvas background, so Page runs height="auto"
     // / overflow="visible" and never opens a second scroller.
-    <div className="grid h-screen grid-rows-[auto_1fr] bg-inset">
-      <div className="flex h-12 shrink-0 items-center border-b border-border-subtle bg-sheet px-4 text-sm font-semibold text-fg">
-        Workspace / Notes
-      </div>
-      <main className="min-h-0 min-w-0 overflow-auto bg-canvas">
-        <Page height="auto" overflow="visible" className="min-h-full">
+    <ConsoleContentStoryShell>
+      <Page height="auto" overflow="visible" className="min-h-full">
         <PageHeader
           headingLevel={2}
           crumbs="Workspace / Notes"
@@ -206,8 +182,7 @@ export const InContentRegion: Story = {
             </TableBody>
           </Table>
         </PageBody>
-        </Page>
-      </main>
-    </div>
+      </Page>
+    </ConsoleContentStoryShell>
   ),
 };

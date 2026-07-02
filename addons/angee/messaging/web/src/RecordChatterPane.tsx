@@ -1,34 +1,6 @@
+import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import {
-  Avatar,
-  Button,
-  Checkbox,
-  Chip,
-  EmptyState,
-  Glyph,
-  LoadingPanel,
-  MessageActions,
-  MessageAttachmentChip,
-  MessageComposer,
-  MessageComposerHint,
-  MessageFeed,
-  MessageRow,
-  ReactionBar,
-  ReactionPicker,
-  SearchInput,
-  SegmentedControl,
-  Select,
-  Tag,
-  Textarea,
-  UploadDropTarget,
-  avatarInitials,
-  cn,
-  messageComposerInputClassName,
-  textRoleVariants,
-  useAuthoredMutation,
-  useAuthoredQuery,
-  type Reaction,
-} from "@angee/ui";
+import { Avatar, Button, Checkbox, Chip, EmptyState, FieldRoot, Glyph, LoadingPanel, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageFeed, MessageRow, ReactionBar, ReactionPicker, SearchInput, SegmentedControl, Select, Tag, Textarea, UploadDropTarget, avatarInitials, cn, errorMessage, messageComposerInputClassName, textRoleVariants, type Reaction } from "@angee/ui";
 import { formatSize } from "@angee/ui/preview/index";
 import type { ChatterViewContext } from "@angee/ui/runtime";
 import {
@@ -117,35 +89,35 @@ export function RecordChatterPane({ context }: RecordChatterPaneProps): React.Re
   );
   const [postMessage, postState] = useAuthoredMutation(PostRecordMessageDocument, {
     invalidateModels: READ_MODELS,
-    shouldInvalidate: (data) => !data?.post_record_message.error_code,
+    errorFrom: (data) => data?.post_record_message,
   });
   const [setFollowing, followState] = useAuthoredMutation(SetRecordFollowingDocument, {
     invalidateModels: READ_MODELS,
-    shouldInvalidate: (data) => !data?.set_record_following.error_code,
+    errorFrom: (data) => data?.set_record_following,
   });
   const [markRead, markReadState] = useAuthoredMutation(MarkRecordThreadReadDocument, {
     invalidateModels: READ_MODELS,
-    shouldInvalidate: (data) => !data?.mark_record_thread_read.error_code,
+    errorFrom: (data) => data?.mark_record_thread_read,
   });
   const [markMessageDone] = useAuthoredMutation(MarkRecordMessageDoneDocument, {
     invalidateModels: READ_MODELS,
-    shouldInvalidate: (data) => !data?.mark_record_message_done.error_code,
+    errorFrom: (data) => data?.mark_record_message_done,
   });
   const [updateMessage] = useAuthoredMutation(UpdateRecordMessageDocument, {
     invalidateModels: READ_MODELS,
-    shouldInvalidate: (data) => !data?.update_record_message.error_code,
+    errorFrom: (data) => data?.update_record_message,
   });
   const [deleteMessage] = useAuthoredMutation(DeleteRecordMessageDocument, {
     invalidateModels: READ_MODELS,
-    shouldInvalidate: (data) => !data?.delete_record_message.error_code,
+    errorFrom: (data) => data?.delete_record_message,
   });
   const [setReaction] = useAuthoredMutation(SetRecordMessageReactionDocument, {
     invalidateModels: READ_MODELS,
-    shouldInvalidate: (data) => !data?.set_record_message_reaction.error_code,
+    errorFrom: (data) => data?.set_record_message_reaction,
   });
   const [setStarred] = useAuthoredMutation(SetRecordMessageStarredDocument, {
     invalidateModels: READ_MODELS,
-    shouldInvalidate: (data) => !data?.set_record_message_starred.error_code,
+    errorFrom: (data) => data?.set_record_message_starred,
   });
 
   const [postKind, setPostKind] = React.useState<ChatterPostKind>("comment");
@@ -209,15 +181,10 @@ export function RecordChatterPane({ context }: RecordChatterPaneProps): React.Re
       if (!next || !modelLabel || !recordId) return;
       setError(null);
       try {
-        const data = await updateMessage({ modelLabel, recordId, messageId, body: next });
-        const payload = data?.update_record_message;
-        if (payload?.error_code) {
-          setError(payload.error ?? t("messaging.error.update"));
-          return;
-        }
+        await updateMessage({ modelLabel, recordId, messageId, body: next });
         setEditingMessageId(null);
-      } catch {
-        setError(t("messaging.error.generic"));
+      } catch (cause) {
+        setError(errorMessage(cause, t("error.update")));
       }
     },
     [modelLabel, recordId, updateMessage, t],
@@ -235,13 +202,9 @@ export function RecordChatterPane({ context }: RecordChatterPaneProps): React.Re
       if (!modelLabel || !recordId) return;
       setError(null);
       try {
-        const data = await deleteMessage({ modelLabel, recordId, messageId: message.id });
-        const payload = data?.delete_record_message;
-        if (payload?.error_code) {
-          setError(payload.error ?? t("messaging.error.delete"));
-        }
-      } catch {
-        setError(t("messaging.error.generic"));
+        await deleteMessage({ modelLabel, recordId, messageId: message.id });
+      } catch (cause) {
+        setError(errorMessage(cause, t("error.delete")));
       }
     },
     [modelLabel, recordId, deleteMessage, t],
@@ -252,19 +215,15 @@ export function RecordChatterPane({ context }: RecordChatterPaneProps): React.Re
       if (!modelLabel || !recordId) return;
       setError(null);
       try {
-        const data = await setReaction({
+        await setReaction({
           modelLabel,
           recordId,
           messageId,
           reaction,
           action: "toggle",
         });
-        const payload = data?.set_record_message_reaction;
-        if (payload?.error_code) {
-          setError(payload.error ?? t("messaging.error.reaction"));
-        }
-      } catch {
-        setError(t("messaging.error.generic"));
+      } catch (cause) {
+        setError(errorMessage(cause, t("error.reaction")));
       }
     },
     [modelLabel, recordId, setReaction, t],
@@ -275,18 +234,14 @@ export function RecordChatterPane({ context }: RecordChatterPaneProps): React.Re
       if (!modelLabel || !recordId) return;
       setError(null);
       try {
-        const data = await setStarred({
+        await setStarred({
           modelLabel,
           recordId,
           messageId: message.id,
           starred: !message.starred,
         });
-        const payload = data?.set_record_message_starred;
-        if (payload?.error_code) {
-          setError(payload.error ?? t("messaging.error.starred"));
-        }
-      } catch {
-        setError(t("messaging.error.generic"));
+      } catch (cause) {
+        setError(errorMessage(cause, t("error.starred")));
       }
     },
     [modelLabel, recordId, setStarred, t],
@@ -297,13 +252,9 @@ export function RecordChatterPane({ context }: RecordChatterPaneProps): React.Re
       if (!modelLabel || !recordId) return;
       setError(null);
       try {
-        const data = await markMessageDone({ modelLabel, recordId, messageId });
-        const payload = data?.mark_record_message_done;
-        if (payload?.error_code) {
-          setError(payload.error ?? t("messaging.error.markDone"));
-        }
-      } catch {
-        setError(t("messaging.error.generic"));
+        await markMessageDone({ modelLabel, recordId, messageId });
+      } catch (cause) {
+        setError(errorMessage(cause, t("error.markDone")));
       }
     },
     [modelLabel, recordId, markMessageDone, t],
@@ -314,7 +265,7 @@ export function RecordChatterPane({ context }: RecordChatterPaneProps): React.Re
       if (!modelLabel || !recordId) return false;
       setError(null);
       try {
-        const data = await postMessage({
+        await postMessage({
           modelLabel,
           recordId,
           body: args.body,
@@ -325,18 +276,15 @@ export function RecordChatterPane({ context }: RecordChatterPaneProps): React.Re
           autofollowRecipients:
             postKind === "comment" && args.recipientUserIds.length > 0 && args.autofollowRecipients,
         });
-        const payload = data?.post_record_message;
-        if (payload?.error_code) {
-          setError(
-            payload.error ??
-              t(postKind === "note" ? "messaging.error.postNote" : "messaging.error.postComment"),
-          );
-          return false;
-        }
         setReplyToMessage(null);
         return true;
-      } catch {
-        setError(t("messaging.error.generic"));
+      } catch (cause) {
+        setError(
+          errorMessage(
+            cause,
+            t(postKind === "note" ? "error.postNote" : "error.postComment"),
+          ),
+        );
         return false;
       }
     },
@@ -347,17 +295,15 @@ export function RecordChatterPane({ context }: RecordChatterPaneProps): React.Re
     if (!modelLabel || !recordId) return;
     setError(null);
     try {
-      const data = await setFollowing({
+      await setFollowing({
         modelLabel,
         recordId,
         following: !isFollowing,
         notificationPolicy: "inbox",
         subtypeKeys: !isFollowing ? selectedSubtypeKeys : [],
       });
-      const payload = data?.set_record_following;
-      if (payload?.error_code) setError(payload.error ?? t("messaging.error.following"));
-    } catch {
-      setError(t("messaging.error.generic"));
+    } catch (cause) {
+      setError(errorMessage(cause, t("error.following")));
     }
   }
 
@@ -372,17 +318,15 @@ export function RecordChatterPane({ context }: RecordChatterPaneProps): React.Re
     if (nextSubtypeKeys.length === 0) return;
     setError(null);
     try {
-      const data = await setFollowing({
+      await setFollowing({
         modelLabel,
         recordId,
         following: true,
         notificationPolicy: String(selfFollower?.notification_policy ?? "inbox").toLowerCase(),
         subtypeKeys: nextSubtypeKeys,
       });
-      const payload = data?.set_record_following;
-      if (payload?.error_code) setError(payload.error ?? t("messaging.error.filters"));
-    } catch {
-      setError(t("messaging.error.generic"));
+    } catch (cause) {
+      setError(errorMessage(cause, t("error.filters")));
     }
   }
 
@@ -390,11 +334,9 @@ export function RecordChatterPane({ context }: RecordChatterPaneProps): React.Re
     if (!modelLabel || !recordId) return;
     setError(null);
     try {
-      const data = await markRead({ modelLabel, recordId });
-      const payload = data?.mark_record_thread_read;
-      if (payload?.error_code) setError(payload.error ?? t("messaging.error.markRead"));
-    } catch {
-      setError(t("messaging.error.generic"));
+      await markRead({ modelLabel, recordId });
+    } catch (cause) {
+      setError(errorMessage(cause, t("error.markRead")));
     }
   }
 
@@ -402,21 +344,21 @@ export function RecordChatterPane({ context }: RecordChatterPaneProps): React.Re
     return (
       <EmptyState
         icon="comments"
-        title={t("messaging.chatter.noRecord")}
-        description={t("messaging.chatter.noRecordHint")}
+        title={t("chatter.noRecord")}
+        description={t("chatter.noRecordHint")}
         className="min-h-48 p-4"
       />
     );
   }
   if (threadQuery.fetching && threadQuery.data === undefined) {
-    return <LoadingPanel message={t("messaging.chatter.loading")} />;
+    return <LoadingPanel message={t("chatter.loading")} />;
   }
   if (threadQuery.error || threadPayload?.error_code === "BAD_RECORD") {
     return (
       <EmptyState
         icon="comments"
-        title={t("messaging.chatter.disabled")}
-        description={t("messaging.chatter.disabledHint")}
+        title={t("chatter.disabled")}
+        description={t("chatter.disabledHint")}
         className="min-h-48 p-4"
       />
     );
@@ -427,7 +369,7 @@ export function RecordChatterPane({ context }: RecordChatterPaneProps): React.Re
       <div className="flex items-center justify-between gap-3">
         <div className={cn(textRoleVariants({ role: "meta" }), "inline-flex items-center gap-1")}>
           <Glyph decorative name="users" />
-          {t("messaging.chatter.following", { count: followerCount })}
+          {t("chatter.following", { count: followerCount })}
           {attachmentCount > 0 ? (
             <>
               <span aria-hidden="true">·</span>
@@ -439,14 +381,14 @@ export function RecordChatterPane({ context }: RecordChatterPaneProps): React.Re
             <>
               <span aria-hidden="true">·</span>
               <Glyph decorative name="bell" />
-              {t("messaging.chatter.unread", { count: unreadCount })}
+              {t("chatter.unread", { count: unreadCount })}
             </>
           ) : null}
           {deliveryErrorCount > 0 ? (
             <>
               <span aria-hidden="true">·</span>
               <Glyph decorative name="triangle-alert" />
-              {t("messaging.chatter.failed", { count: deliveryErrorCount })}
+              {t("chatter.failed", { count: deliveryErrorCount })}
             </>
           ) : null}
         </div>
@@ -460,7 +402,7 @@ export function RecordChatterPane({ context }: RecordChatterPaneProps): React.Re
               onClick={() => void handleMarkRead()}
             >
               <Glyph name="check" />
-              {t("messaging.chatter.markRead")}
+              {t("chatter.markRead")}
             </Button>
           ) : null}
           <Button
@@ -471,28 +413,32 @@ export function RecordChatterPane({ context }: RecordChatterPaneProps): React.Re
             onClick={() => void handleFollowToggle()}
           >
             <Glyph name={isFollowing ? "bell-off" : "bell"} />
-            {isFollowing ? t("messaging.chatter.unfollow") : t("messaging.chatter.follow")}
+            {isFollowing ? t("chatter.unfollow") : t("chatter.follow")}
           </Button>
         </div>
       </div>
       {isFollowing && subtypeOptions.length > 0 ? (
-        <div className="flex flex-wrap gap-2" role="group" aria-label={t("messaging.subtype.legend")}>
+        <div className="flex flex-wrap gap-2" role="group" aria-label={t("subtype.legend")}>
           {subtypeOptions.map((subtype) => {
             const checked = selectedSubtypeKeys.includes(subtype.key);
             return (
-              <label
+              <FieldRoot
                 key={subtype.key}
                 className="inline-flex h-8 items-center gap-2 rounded-6 border border-border-subtle bg-surface px-2 text-12 text-fg-muted"
                 title={subtype.description || subtype.name}
               >
-                <Checkbox
-                  size="sm"
-                  checked={checked}
-                  disabled={followState.fetching || (checked && selectedSubtypeKeys.length === 1)}
-                  onCheckedChange={(next) => void handleSubtypeToggle(subtype.key, next)}
-                />
-                <span>{subtype.name}</span>
-              </label>
+                <FieldRoot.Item>
+                  <Checkbox
+                    size="sm"
+                    checked={checked}
+                    disabled={followState.fetching || (checked && selectedSubtypeKeys.length === 1)}
+                    onCheckedChange={(next) => void handleSubtypeToggle(subtype.key, next)}
+                  />
+                  <FieldRoot.Label className="text-12 text-fg-muted">
+                    {subtype.name}
+                  </FieldRoot.Label>
+                </FieldRoot.Item>
+              </FieldRoot>
             );
           })}
         </div>
@@ -501,17 +447,17 @@ export function RecordChatterPane({ context }: RecordChatterPaneProps): React.Re
         value={search}
         onChange={(event) => setSearch(event.currentTarget.value)}
         onClear={() => setSearch("")}
-        placeholder={t("messaging.chatter.search")}
-        aria-label={t("messaging.chatter.search")}
+        placeholder={t("chatter.search")}
+        aria-label={t("chatter.search")}
       />
       {messages.length > 0 ? (
         <div className="space-y-3">
           {debouncedSearch ? (
             <div className={cn(textRoleVariants({ role: "caption" }), "px-1")}>
-              {t("messaging.chatter.results", { count: messageResultCount })}
+              {t("chatter.results", { count: messageResultCount })}
             </div>
           ) : null}
-          <MessageFeed label={t("messaging.chatter.feedLabel")}>
+          <MessageFeed label={t("chatter.feedLabel")}>
             {messages.map((message) => (
               <MessageFeedRow
                 key={message.id}
@@ -533,9 +479,9 @@ export function RecordChatterPane({ context }: RecordChatterPaneProps): React.Re
       ) : (
         <EmptyState
           icon="comments"
-          title={debouncedSearch ? t("messaging.chatter.noMatchTitle") : t("messaging.chatter.emptyTitle")}
+          title={debouncedSearch ? t("chatter.noMatchTitle") : t("chatter.emptyTitle")}
           description={
-            debouncedSearch ? t("messaging.chatter.noMatchHint") : t("messaging.chatter.emptyHint")
+            debouncedSearch ? t("chatter.noMatchHint") : t("chatter.emptyHint")
           }
           className="min-h-40 p-4"
         />
@@ -664,7 +610,7 @@ function ChatterComposer({
     >
       <UploadDropTarget
         disabled={posting}
-        overlay={t("messaging.composer.dropFiles")}
+        overlay={t("composer.dropFiles")}
         overlayClassName="rounded-6"
         onFiles={handleFiles}
       >
@@ -682,7 +628,7 @@ function ChatterComposer({
                         type="button"
                         variant="ghost"
                         size="iconSm"
-                        aria-label={t("messaging.composer.removeAttachment", { name: file.filename })}
+                        aria-label={t("composer.removeAttachment", { name: file.filename })}
                         onClick={() =>
                           setAttachmentDrafts((current) =>
                             current.filter((item) => item.id !== file.id),
@@ -711,7 +657,7 @@ function ChatterComposer({
                     type="button"
                     variant="ghost"
                     size="iconSm"
-                    aria-label={t("messaging.composer.clearUploads")}
+                    aria-label={t("composer.clearUploads")}
                     onClick={uploads.clearFinished}
                   >
                     <Glyph name="x" />
@@ -727,7 +673,7 @@ function ChatterComposer({
                   <Glyph decorative name="quote" className="shrink-0 text-fg-muted" />
                   <div className="min-w-0 flex-1">
                     <div className={cn(textRoleVariants({ role: "caption" }), "font-medium")}>
-                      {t("messaging.message.replyingTo", { kind: replyKindLabel(replyToMessage, t) })}
+                      {t("message.replyingTo", { kind: replyKindLabel(replyToMessage, t) })}
                     </div>
                     <div className="truncate text-13 text-fg">{messageText(replyToMessage)}</div>
                   </div>
@@ -735,7 +681,7 @@ function ChatterComposer({
                     type="button"
                     variant="ghost"
                     size="iconSm"
-                    aria-label={t("messaging.composer.cancelReply")}
+                    aria-label={t("composer.cancelReply")}
                     onClick={onClearReply}
                   >
                     <Glyph name="x" />
@@ -746,8 +692,8 @@ function ChatterComposer({
                 value={postKind}
                 onValueChange={handleKindChange}
                 options={[
-                  { value: "comment", label: t("messaging.composer.comment") },
-                  { value: "note", label: t("messaging.composer.note") },
+                  { value: "comment", label: t("composer.comment") },
+                  { value: "note", label: t("composer.note") },
                 ]}
               />
               {postKind === "comment" ? (
@@ -775,11 +721,11 @@ function ChatterComposer({
                 rows={3}
                 resize="none"
                 className={messageComposerInputClassName}
-                aria-label={t("messaging.composer.messageLabel")}
+                aria-label={t("composer.messageLabel")}
                 placeholder={
                   postKind === "note"
-                    ? t("messaging.composer.logNote")
-                    : t("messaging.composer.writeComment")
+                    ? t("composer.logNote")
+                    : t("composer.writeComment")
                 }
               />
             </div>
@@ -790,8 +736,8 @@ function ChatterComposer({
                 type="button"
                 variant="ghost"
                 size="iconSm"
-                aria-label={t("messaging.composer.attach")}
-                title={t("messaging.composer.attach")}
+                aria-label={t("composer.attach")}
+                title={t("composer.attach")}
                 disabled={posting}
                 onClick={() => fileInputRef.current?.click()}
               >
@@ -804,7 +750,7 @@ function ChatterComposer({
                 disabled={posting || uploadBusy || !canSubmit}
               >
                 <Glyph name="send" />
-                {postKind === "note" ? t("messaging.composer.log") : t("messaging.composer.send")}
+                {postKind === "note" ? t("composer.log") : t("composer.send")}
               </Button>
             </>
           }
@@ -844,10 +790,10 @@ function ComposerRecipients({
   onAutofollowChange: (checked: boolean) => void;
 }): React.ReactElement {
   const placeholder = loading
-    ? t("messaging.composer.loadingRecipients")
+    ? t("composer.loadingRecipients")
     : available.length > 0
-      ? t("messaging.composer.addRecipient")
-      : t("messaging.composer.noRecipients");
+      ? t("composer.addRecipient")
+      : t("composer.noRecipients");
   return (
     <div className="space-y-1.5 rounded-6 border border-border-subtle bg-surface px-2 py-2">
       <div className="flex items-center gap-2">
@@ -856,7 +802,7 @@ function ComposerRecipients({
           value=""
           disabled={loading || available.length === 0}
           placeholder={placeholder}
-          aria-label={t("messaging.composer.addRecipient")}
+          aria-label={t("composer.addRecipient")}
           className="min-w-0 flex-1"
           options={available.map((option) => ({
             value: option.id,
@@ -867,14 +813,18 @@ function ComposerRecipients({
           }}
         />
         {selected.length > 0 ? (
-          <label className="inline-flex h-8 items-center gap-1.5 rounded-6 border border-border-subtle px-2 text-12 text-fg-muted">
+          <FieldRoot className="inline-flex h-8 items-center gap-1.5 rounded-6 border border-border-subtle px-2 text-12 text-fg-muted">
+            <FieldRoot.Item>
             <Checkbox
               size="sm"
               checked={autofollow}
               onCheckedChange={(next) => onAutofollowChange(next)}
             />
-            <span>{t("messaging.composer.followRecipients")}</span>
-          </label>
+              <FieldRoot.Label className="text-12 text-fg-muted">
+                {t("composer.followRecipients")}
+              </FieldRoot.Label>
+            </FieldRoot.Item>
+          </FieldRoot>
         ) : null}
       </div>
       {selected.length > 0 ? (
@@ -884,17 +834,17 @@ function ComposerRecipients({
               <span className="min-w-0 max-w-40 truncate">{option.label}</span>
               {option.follower ? (
                 <Tag tone="neutral" density="micro">
-                  {t("messaging.composer.follower")}
+                  {t("composer.follower")}
                 </Tag>
               ) : null}
               {option.suggested ? (
                 <Tag tone="info" density="micro">
-                  {option.reason || t("messaging.composer.suggested")}
+                  {option.reason || t("composer.suggested")}
                 </Tag>
               ) : null}
               <button
                 type="button"
-                aria-label={t("messaging.composer.removeRecipient", { name: option.label })}
+                aria-label={t("composer.removeRecipient", { name: option.label })}
                 onClick={() => onRemove(option.id)}
                 className="shrink-0 text-fg-muted outline-none hover:text-fg focus-visible:focus-ring"
               >
@@ -941,7 +891,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
   onMarkDone,
 }: MessageFeedRowProps): React.ReactElement {
   const text = messageText(message);
-  const author = message.sender?.display_name || message.sender?.value || t("messaging.message.author");
+  const author = message.sender?.display_name || message.sender?.value || t("message.author");
   const trackingValues = [...message.tracking_values].sort(
     (left, right) =>
       left.position - right.position || left.field_label.localeCompare(right.field_label),
@@ -984,7 +934,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
       author={author}
       timestamp={timestamp}
       channel={directionTag ? <Tag tone="info" density="micro">{directionTag}</Tag> : undefined}
-      meta={message.status === "EDITED" ? t("messaging.chatter.editedMeta") : undefined}
+      meta={message.status === "EDITED" ? t("chatter.editedMeta") : undefined}
       tracking={
         trackingValues.length > 0 ? (
           <dl className="space-y-1 rounded-6 bg-surface-inset p-2">
@@ -1026,7 +976,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
         reactions.length > 0 ? (
           <ReactionBar
             reactions={reactions}
-            label={t("messaging.message.reactions")}
+            label={t("message.reactions")}
             onToggle={(reaction) => onToggleReaction(message.id, reaction)}
           />
         ) : undefined
@@ -1038,7 +988,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
               type="button"
               variant="ghost"
               size="iconSm"
-              aria-label={t("messaging.message.markDone")}
+              aria-label={t("message.markDone")}
               className="text-brand"
               onClick={() => onMarkDone(message.id)}
             >
@@ -1049,7 +999,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
             type="button"
             variant="ghost"
             size="iconSm"
-            aria-label={t("messaging.message.reply")}
+            aria-label={t("message.reply")}
             onClick={() => onStartReply(message)}
           >
             <Glyph name="quote" />
@@ -1058,7 +1008,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
             type="button"
             variant="ghost"
             size="iconSm"
-            aria-label={message.starred ? t("messaging.message.unstar") : t("messaging.message.star")}
+            aria-label={message.starred ? t("message.unstar") : t("message.star")}
             aria-pressed={message.starred}
             className={message.starred ? "text-warning-text" : undefined}
             onClick={() => onToggleStarred(message)}
@@ -1068,7 +1018,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
           <ReactionPicker
             options={QUICK_REACTIONS}
             active={activeReactions}
-            label={t("messaging.message.addReaction")}
+            label={t("message.addReaction")}
             onToggle={(reaction) => onToggleReaction(message.id, reaction)}
           />
           {message.can_edit ? (
@@ -1076,7 +1026,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
               type="button"
               variant="ghost"
               size="iconSm"
-              aria-label={t("messaging.message.edit")}
+              aria-label={t("message.edit")}
               onClick={() => onStartEdit(message.id)}
             >
               <Glyph name="pencil" />
@@ -1087,7 +1037,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
               type="button"
               variant="ghost"
               size="iconSm"
-              aria-label={t("messaging.message.delete")}
+              aria-label={t("message.delete")}
               onClick={() => onDelete(message)}
             >
               <Glyph name="trash" />
@@ -1099,7 +1049,7 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
       {message.parent ? (
         <div className="mb-2 rounded-6 border-l-2 border-border-subtle bg-surface px-2 py-1">
           <div className={cn(textRoleVariants({ role: "caption" }), "font-medium")}>
-            {t("messaging.message.replyingTo", { kind: replyKindLabel(message.parent, t) })}
+            {t("message.replyingTo", { kind: replyKindLabel(message.parent, t) })}
           </div>
           <div className="truncate text-13 text-fg-muted">{message.parent.preview}</div>
         </div>
@@ -1139,16 +1089,16 @@ function MessageEditor({
         onChange={(event) => setBody(event.currentTarget.value)}
         rows={3}
         resize="none"
-        aria-label={t("messaging.message.editLabel")}
+        aria-label={t("message.editLabel")}
       />
       <div className="flex justify-end gap-2">
         <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
           <Glyph name="x" />
-          {t("messaging.message.cancel")}
+          {t("message.cancel")}
         </Button>
         <Button type="submit" variant="primary" size="sm" disabled={body.trim() === ""}>
           <Glyph name="check" />
-          {t("messaging.message.save")}
+          {t("message.save")}
         </Button>
       </div>
     </form>
@@ -1165,16 +1115,16 @@ function messageText(message: Pick<RecordMessageRow, "parts" | "preview">): stri
 }
 
 function replyKindLabel(message: { message_type?: string | null }, t: MessagingT): string {
-  if (message.message_type === "NOTIFICATION") return t("messaging.message.kindNote");
-  if (message.message_type === "AUTO_COMMENT") return t("messaging.message.kindUpdate");
-  return t("messaging.message.kindMessage");
+  if (message.message_type === "NOTIFICATION") return t("message.kindNote");
+  if (message.message_type === "AUTO_COMMENT") return t("message.kindUpdate");
+  return t("message.kindMessage");
 }
 
 function directionLabel(direction: string | null | undefined, t: MessagingT): string | null {
   // Read the SDL's UPPERCASE `Direction` enum verbatim, the same convention as the
   // `message_type` reads below — one enum-casing convention across the file.
-  if (direction === "INBOUND") return t("messaging.message.directionInbound");
-  if (direction === "OUTBOUND") return t("messaging.message.directionOutbound");
+  if (direction === "INBOUND") return t("message.directionInbound");
+  if (direction === "OUTBOUND") return t("message.directionOutbound");
   return null;
 }
 
@@ -1243,7 +1193,7 @@ function recipientOptionsFrom(
 
 function recipientOptionLabel(option: RecipientOption, t: MessagingT): string {
   const label = option.suggested
-    ? `${option.label} · ${option.reason || t("messaging.composer.suggested")}`
+    ? `${option.label} · ${option.reason || t("composer.suggested")}`
     : option.label;
   return option.detail ? `${label} · ${option.detail}` : label;
 }
@@ -1269,15 +1219,15 @@ function isVisibleComposerUploadTask(task: UploadTask): boolean {
 function uploadTaskLabel(status: UploadTask["status"], t: MessagingT): string {
   switch (status) {
     case "hashing":
-      return t("messaging.upload.preparing");
+      return t("upload.preparing");
     case "uploading":
-      return t("messaging.upload.uploading");
+      return t("upload.uploading");
     case "finalizing":
-      return t("messaging.upload.finalizing");
+      return t("upload.finalizing");
     case "failed":
-      return t("messaging.upload.failed");
+      return t("upload.failed");
     case "deduped":
     case "done":
-      return t("messaging.upload.attached");
+      return t("upload.attached");
   }
 }

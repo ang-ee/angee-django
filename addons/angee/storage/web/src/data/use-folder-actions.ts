@@ -1,32 +1,16 @@
+import { resourceOperationTarget, type Row, } from "@angee/metadata";
 import {
-  resourceOperationTarget,
-  type Row,
-} from "@angee/resources";
+  useCreate, useInvalidate, useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
 import {
-  useCreate,
-  useCustomMutation,
-  useInvalidate,
-  useUpdate,
-  type BaseRecord,
-  type HttpError,
-  } from "@refinedev/core";
+  refineFieldsFromPaths, } from "@angee/refine";
 import {
-  refineFieldsFromPaths,
-  } from "@angee/refine";
+  deletePreviewDocumentForResource, useAngeeDeletePreview, useOperationDocuments, } from "@angee/refine";
 import {
-  deletePreviewDocumentForResource,
-  deletePreviewRequest,
-  extractDeletePreview,
-  useOperationDocuments,
-  type DeletePreviewVariables,
-  } from "@angee/refine";
-import {
-  refineResourceName,
-} from "@angee/resources";
+  refineResourceName, } from "@angee/metadata";
 import { useBusyRun } from "@angee/ui";
 import {
   useModelMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 export interface FolderActions {
   busy: boolean;
@@ -68,8 +52,19 @@ export function useFolderActions(
     meta: { fields },
     invalidates: ["list", "many", "detail"],
   });
-  const deleteFolder =
-    useCustomMutation<BaseRecord, HttpError, DeletePreviewVariables>();
+  const deletePreviewTarget = resource
+    ? resourceOperationTarget(resource, "deletePreview")
+    : null;
+  const deletePreviewDocument = resource
+    ? deletePreviewDocumentForResource(
+        operationDocuments,
+        resource.schemaName,
+        resource.modelLabel,
+      )
+    : "";
+  const deletePreview = useAngeeDeletePreview(deletePreviewTarget, {
+    document: deletePreviewDocument,
+  });
   const invalidate = useInvalidate();
   const { busy, run } = useBusyRun(onChanged);
 
@@ -88,28 +83,10 @@ export function useFolderActions(
     remove: (id) =>
       run(async () => {
         requireFolderResource(resource);
-        const request = deletePreviewRequest(
-          resourceOperationTarget(resource, "deletePreview"),
-          { id, confirm: true },
-          {
-            document: deletePreviewDocumentForResource(
-              operationDocuments,
-              resource.schemaName,
-              resource.modelLabel,
-            ),
-          },
-        );
-        const response = await deleteFolder.mutateAsync({
-          url: "",
-          method: "post",
-          values: { id, confirm: true },
-          dataProviderName: request.dataProviderName,
-          meta: request.meta,
-        });
-        void extractDeletePreview(response.data, request.root);
+        await deletePreview.mutate({ id, confirm: true });
         await invalidate({
           resource: refineResourceName(resource),
-          dataProviderName: request.dataProviderName,
+          dataProviderName: resource.schemaName,
           id,
           invalidates: ["list", "many", "detail"],
         });

@@ -1,14 +1,5 @@
 import * as React from "react";
-import {
-  Action,
-  Column,
-  ResourceList,
-  Facet,
-  Field,
-  Form,
-  Group,
-  List,
-} from "@angee/ui";
+import { Action, Column, ResourceList, Facet, Field, Form, Group, List } from "@angee/ui";
 
 const MODEL = "messaging.Message";
 

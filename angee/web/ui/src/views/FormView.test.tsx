@@ -4,7 +4,7 @@ import type {
   DataResourceMetadata,
   ModelMetadata,
   SchemaFieldMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 import {
   act,
   cleanup,
@@ -32,10 +32,10 @@ import {
   } from "../runtime";
 import {
   ModelMetadataProvider,
-} from "@angee/resources";
+} from "@angee/metadata";
 import type {
   Row,
-} from "@angee/resources";
+} from "@angee/metadata";
 import { useMemo, useState, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -67,8 +67,8 @@ const sdkMocks = vi.hoisted(() => ({
   mutationOptions: undefined as { fields?: readonly string[]; enabled?: boolean } | undefined,
 }));
 
-vi.mock("../data/hooks", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../data/hooks")>();
+vi.mock("@angee/refine", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/refine")>();
   return actual;
 });
 

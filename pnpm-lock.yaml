@@ -38,15 +38,15 @@ importers:
       '@angee/integrate':
         specifier: workspace:*
         version: link:../../integrate/web
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../angee/web/metadata
       '@angee/operator':
         specifier: workspace:*
         version: link:../../operator/web
       '@angee/refine':
         specifier: workspace:*
         version: link:../../../../angee/web/refine
-      '@angee/resources':
-        specifier: workspace:*
-        version: link:../../../../angee/web/resources
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../angee/web/ui
@@ -102,12 +102,12 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../angee/web/app
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../angee/web/metadata
       '@angee/refine':
         specifier: workspace:*
         version: link:../../../../angee/web/refine
-      '@angee/resources':
-        specifier: workspace:*
-        version: link:../../../../angee/web/resources
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../angee/web/ui
@@ -145,12 +145,12 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../angee/web/app
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../angee/web/metadata
       '@angee/refine':
         specifier: workspace:*
         version: link:../../../../angee/web/refine
-      '@angee/resources':
-        specifier: workspace:*
-        version: link:../../../../angee/web/resources
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../angee/web/ui
@@ -194,12 +194,12 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../angee/web/app
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../angee/web/metadata
       '@angee/refine':
         specifier: workspace:*
         version: link:../../../../angee/web/refine
-      '@angee/resources':
-        specifier: workspace:*
-        version: link:../../../../angee/web/resources
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../angee/web/ui
@@ -246,6 +246,9 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../angee/web/app
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../angee/web/refine
       '@angee/storage':
         specifier: workspace:*
         version: link:../../storage/web
@@ -356,6 +359,9 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../angee/web/app
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../angee/web/refine
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../angee/web/ui
@@ -366,12 +372,18 @@ importers:
       '@tanstack/react-router':
         specifier: ^1.170.16
         version: 1.170.16(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17
       '@types/react-dom':
         specifier: ^19.2.3
         version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -381,12 +393,18 @@ importers:
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.9(@types/node@26.0.1)(happy-dom@20.10.6)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.27.7)(jiti@2.7.0)(yaml@2.9.0))
 
   addons/angee/platform/web:
     dependencies:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../angee/web/app
+      '@angee/integrate':
+        specifier: workspace:*
+        version: link:../../integrate/web
       '@angee/refine':
         specifier: workspace:*
         version: link:../../../../angee/web/refine
@@ -470,12 +488,12 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../angee/web/app
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../angee/web/metadata
       '@angee/refine':
         specifier: workspace:*
         version: link:../../../../angee/web/refine
-      '@angee/resources':
-        specifier: workspace:*
-        version: link:../../../../angee/web/resources
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../angee/web/ui
@@ -531,12 +549,12 @@ importers:
       '@angee/logo-react':
         specifier: ^0.2.1
         version: 0.2.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../metadata
       '@angee/refine':
         specifier: workspace:*
         version: link:../refine
-      '@angee/resources':
-        specifier: workspace:*
-        version: link:../resources
       '@angee/ui':
         specifier: workspace:*
         version: link:../ui
@@ -558,6 +576,9 @@ importers:
       graphql:
         specifier: ^16.14.0
         version: 16.14.0
+      i18next:
+        specifier: ^26.3.2
+        version: 26.3.2(typescript@6.0.3)
       nuqs:
         specifier: ^2.5.0
         version: 2.8.9(@tanstack/react-router@1.170.16(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
@@ -608,6 +629,25 @@ importers:
         specifier: ^4.1.9
         version: 4.1.9(@types/node@26.0.1)(happy-dom@20.10.6)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.27.7)(jiti@2.7.0)(yaml@2.9.0))
 
+  angee/web/metadata:
+    dependencies:
+      '@refinedev/core':
+        specifier: ^5.0.12
+        version: 5.0.12(@tanstack/react-query@5.101.1(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+    devDependencies:
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.9(@types/node@26.0.1)(happy-dom@20.10.6)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.27.7)(jiti@2.7.0)(yaml@2.9.0))
+
   angee/web/refine:
     dependencies:
       '@graphql-typed-document-node/core':
@@ -622,38 +662,31 @@ importers:
       graphql:
         specifier: ^16.14.0
         version: 16.14.0
-      i18next:
-        specifier: ^26.3.2
-        version: 26.3.2(typescript@6.0.3)
     devDependencies:
+      '@tanstack/react-query':
+        specifier: ^5.101.1
+        version: 5.101.1(react@19.2.7)
       '@tanstack/react-router':
         specifier: ^1.170.16
         version: 1.170.16(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
       react:
         specifier: ^19.2.7
         version: 19.2.7
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.9(@types/node@26.0.1)(happy-dom@20.10.6)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.27.7)(jiti@2.7.0)(yaml@2.9.0))
-
-  angee/web/resources:
-    dependencies:
-      '@refinedev/core':
-        specifier: ^5.0.12
-        version: 5.0.12(@tanstack/react-query@5.101.1(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-    devDependencies:
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      react:
+      react-dom:
         specifier: ^19.2.7
-        version: 19.2.7
+        version: 19.2.7(react@19.2.7)
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -666,12 +699,12 @@ importers:
       '@angee/logo-react':
         specifier: ^0.2.1
         version: 0.2.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../metadata
       '@angee/refine':
         specifier: workspace:*
         version: link:../refine
-      '@angee/resources':
-        specifier: workspace:*
-        version: link:../resources
       '@base-ui/react':
         specifier: ^1.6.0
         version: 1.6.0(@date-fns/tz@1.5.0)(@types/react@19.2.17)(date-fns@4.4.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -759,6 +792,9 @@ importers:
       tw-animate-css:
         specifier: ^1.0.0
         version: 1.4.0
+      use-debounce:
+        specifier: ^10.1.1
+        version: 10.1.1(react@19.2.7)
     devDependencies:
       '@tanstack/react-query':
         specifier: ^5.101.1
@@ -873,7 +909,7 @@ importers:
       '@angee/platform':
         specifier: workspace:*
         version: link:../../../addons/angee/platform/web
-      '@angee/resources-addon':
+      '@angee/resources':
         specifier: workspace:*
         version: link:../../../addons/angee/resources/web
       '@angee/storage':
@@ -940,12 +976,12 @@ importers:
 
   packages/storybook:
     dependencies:
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../angee/web/metadata
       '@angee/refine':
         specifier: workspace:*
         version: link:../../angee/web/refine
-      '@angee/resources':
-        specifier: workspace:*
-        version: link:../../angee/web/resources
       '@angee/ui':
         specifier: workspace:*
         version: link:../../angee/web/ui

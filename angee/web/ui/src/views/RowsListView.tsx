@@ -1,10 +1,10 @@
 import * as React from "react";
 
-import { Button } from "../ui/button";
-import { Glyph } from "../chrome/Glyph";
 import type { DndPayload } from "../lib/dnd";
+import { useUiT } from "../i18n";
 import { GalleryView } from "./GalleryView";
 import {
+  ResourceViewSwitcher,
   type ResourceToolbarFilterField,
   type ResourceToolbarFilterOption,
   type ResourceToolbarGroupOption,
@@ -21,8 +21,6 @@ import {
   type ResourceViewGroup,
 } from "./resource-view-model";
 import {
-  nextRowTextFilter,
-  rowTextFilterValue,
   useRowsResourceViewSurface,
   type ResourceListSnapshot,
   type StringIdRow,
@@ -30,27 +28,26 @@ import {
 import {
   FlatListBody,
   type ListColumn,
-} from "./ListInternals";
+} from "./resource-view-list-body";
 import { ResourceListFrame } from "./ResourceListFrame";
-import type { ListEmptyState } from "./list-view-types";
+import type { ListEmptyContent } from "./resource-view-types";
 import {
   activeFilterIdsFor,
-  addCustomFilter as addCustomFilterToFilter,
   buildFilterFields,
   buildFilterOptions,
   buildGroupOptions,
   customFilterChipsFor,
   mergeFilterFields,
   mergeFilterOptions,
-  nextFacetFilter,
-  removeCustomFilter,
-} from "./list-view-utils";
+  textFilterValue,
+} from "./resource-view-utils";
+import { useResourceToolbarProps } from "./resource-toolbar-props";
 
 export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   rows: readonly TRow[];
   columns: readonly ListColumn<TRow>[];
-  filters?: readonly ResourceToolbarFilterOption[];
-  filterFields?: readonly ResourceToolbarFilterField[];
+  filterOptions?: readonly ResourceToolbarFilterOption[];
+  customFilterFields?: readonly ResourceToolbarFilterField[];
   groupOptions?: readonly ResourceToolbarGroupOption[];
   defaultGroup?: ResourceViewGroup | null;
   pageSize?: number;
@@ -59,8 +56,7 @@ export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   onRowClick?: (row: TRow) => void;
   onListStateChange?: (state: ResourceListSnapshot<TRow>) => void;
   rowHref?: (row: TRow) => string;
-  emptyMessage?: React.ReactNode;
-  emptyState?: ListEmptyState;
+  emptyContent?: ListEmptyContent;
   className?: string;
   selectable?: boolean;
   /** Controls rendered in the toolbar's leading slot, beside the filter. */
@@ -123,8 +119,8 @@ function RowsListViewBound<TRow extends StringIdRow = StringIdRow>(
 function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   rows,
   columns,
-  filters: explicitFilters,
-  filterFields: explicitFilterFields,
+  filterOptions: explicitFilterOptions,
+  customFilterFields: explicitCustomFilterFields,
   groupOptions,
   defaultGroup,
   pageSize,
@@ -133,8 +129,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   onRowClick,
   onListStateChange,
   rowHref,
-  emptyMessage = "No records.",
-  emptyState,
+  emptyContent,
   className,
   selectable = false,
   toolbarActions,
@@ -145,7 +140,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
 }: RowsListViewProps<TRow> & {
   resourceView: ResourceViewContextValue;
 }): React.ReactElement {
-  const emptyContent = emptyState ?? emptyMessage;
+  const t = useUiT();
   const [layout, setLayout] = React.useState<RowLayout>("list");
   const handledDefaultGroupRef = React.useRef<ResourceViewGroup | null>(null);
   React.useEffect(() => {
@@ -194,21 +189,21 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   );
   const groupingEnabled =
     toolbarGroupOptions.length > 0 || resourceView.state.groupStack.length > 0;
-  const inferredFilterFields = React.useMemo(
+  const inferredCustomFilterFields = React.useMemo(
     () => buildFilterFields(columns, surface.sourceRows, null),
     [columns, surface.sourceRows],
   );
-  const filterFields = React.useMemo(
-    () => mergeFilterFields(explicitFilterFields, inferredFilterFields),
-    [explicitFilterFields, inferredFilterFields],
+  const customFilterFields = React.useMemo(
+    () => mergeFilterFields(explicitCustomFilterFields, inferredCustomFilterFields),
+    [explicitCustomFilterFields, inferredCustomFilterFields],
   );
   const inferredFilterOptions = React.useMemo(
-    () => buildFilterOptions(columns, surface.sourceRows, inferredFilterFields),
-    [columns, inferredFilterFields, surface.sourceRows],
+    () => buildFilterOptions(columns, surface.sourceRows, inferredCustomFilterFields),
+    [columns, inferredCustomFilterFields, surface.sourceRows],
   );
   const filterOptions = React.useMemo(
-    () => mergeFilterOptions(explicitFilters, inferredFilterOptions),
-    [explicitFilters, inferredFilterOptions],
+    () => mergeFilterOptions(explicitFilterOptions, inferredFilterOptions),
+    [explicitFilterOptions, inferredFilterOptions],
   );
   const activeFilterIds = activeFilterIdsFor(
     resourceView.state.filter,
@@ -217,48 +212,38 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   const customFilterChips = customFilterChipsFor(
     resourceView.state.filter,
     filterOptions,
-    filterFields,
+    customFilterFields,
   );
-  const filterText = rowTextFilterValue(resourceView.state.filter);
+  const filterText = textFilterValue(resourceView.state.filter);
   const interactive = Boolean(onRowClick || rowHref);
+  const resolvedEmptyContent = emptyContent ?? t("list.empty");
+  const toolbar = useResourceToolbarProps({
+    actions: toolbarActions,
+    viewSwitcher: gallery ? (
+      <ResourceViewSwitcher<RowLayout>
+        mode="layout"
+        view={layout}
+        onViewChange={setLayout}
+      />
+    ) : undefined,
+    pager: toolbarPager,
+    group: resourceView.state.group,
+    groupStack: resourceView.state.groupStack,
+    groupOptions: toolbarGroupOptions,
+    groupingEnabled,
+    filterOptions,
+    customFilterFields,
+    customFilterChips,
+    favorites: resourceView.savedFavorites,
+    activeFilterIds,
+    filterText,
+    resourceView,
+  });
 
   return (
     <ResourceListFrame
       className={className}
-      toolbar={{
-        actions: toolbarActions,
-        viewSwitcher: gallery ? (
-          <RowLayoutSwitcher layout={layout} onLayoutChange={setLayout} />
-        ) : undefined,
-        pager: toolbarPager,
-        group: groupingEnabled ? resourceView.state.group : undefined,
-        groupStack: groupingEnabled ? resourceView.state.groupStack : undefined,
-        groupOptions: groupingEnabled ? toolbarGroupOptions : undefined,
-        filterOptions,
-        filterFields,
-        customFilterChips,
-        favorites: resourceView.savedFavorites,
-        activeFilterIds,
-        filterText,
-        onClearGroup: groupingEnabled ? () => resourceView.setGroupStack([]) : undefined,
-        onGroupStackChange: groupingEnabled ? resourceView.setGroupStack : undefined,
-        onPageChange: resourceView.setPage,
-        onPageSizeChange: resourceView.setPageSize,
-        onCustomFilterAdd: (customFilter) =>
-          resourceView.setFilter(
-            addCustomFilterToFilter(resourceView.state.filter, customFilter),
-          ),
-        onCustomFilterRemove: (id) =>
-          resourceView.setFilter(removeCustomFilter(resourceView.state.filter, id)),
-        onFavoriteSave: resourceView.saveFavorite,
-        onFavoriteSelect: resourceView.applyFavorite,
-        onFilterToggle: (id) =>
-          resourceView.setFilter(
-            nextFacetFilter(resourceView.state.filter, filterOptions, id),
-          ),
-        onFilterTextChange: (value) =>
-          resourceView.setFilter(nextRowTextFilter(resourceView.state.filter, value)),
-      }}
+      toolbar={toolbar}
       selection={
         selectable
           ? {
@@ -286,17 +271,13 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
           selectedIds={selectable ? surface.selectedIds : undefined}
           onToggleSelected={selectable ? resourceView.toggleSelectedId : undefined}
           fetching={fetching}
-          emptyMessage={emptyMessage}
-          emptyState={emptyState}
+          emptyContent={resolvedEmptyContent}
         />
       ) : (
         <FlatListBody
           columns={columns}
           table={surface.table}
           rowModels={surface.rowModels}
-          listItems={surface.listItems}
-          expandedKeys={surface.expandedKeys}
-          onToggleGroup={surface.toggleGroup}
           tableScrollRef={surface.tableScrollRef}
           rowVirtualizer={surface.rowVirtualizer}
           visibleColumnCount={surface.visibleColumnCount}
@@ -311,45 +292,10 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
           rowHref={rowHref}
           onRowClick={onRowClick}
           draggableRow={draggableRow}
-          emptyMessage={emptyContent}
+          emptyContent={resolvedEmptyContent}
           fetching={fetching}
         />
       )}
     </ResourceListFrame>
-  );
-}
-
-function RowLayoutSwitcher({
-  layout,
-  onLayoutChange,
-}: {
-  layout: RowLayout;
-  onLayoutChange: (layout: RowLayout) => void;
-}): React.ReactElement {
-  return (
-    <div className="flex items-center gap-1" role="group" aria-label="Layout">
-      <Button
-        type="button"
-        variant="ghost"
-        size="iconSm"
-        aria-label="List view"
-        aria-pressed={layout === "list"}
-        active={layout === "list"}
-        onClick={() => onLayoutChange("list")}
-      >
-        <Glyph name="list" className="glyph" />
-      </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="iconSm"
-        aria-label="Grid view"
-        aria-pressed={layout === "grid"}
-        active={layout === "grid"}
-        onClick={() => onLayoutChange("grid")}
-      >
-        <Glyph name="layout-grid" className="glyph" />
-      </Button>
-    </div>
   );
 }

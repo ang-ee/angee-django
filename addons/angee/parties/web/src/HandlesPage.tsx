@@ -1,12 +1,6 @@
 import * as React from "react";
-import {
-  Column,
-  ResourceList,
-  Field,
-  Form,
-  Group,
-  List,
-} from "@angee/ui";
+import { Column, ResourceList, Field, Form, Group, List } from "@angee/ui";
+import { usePartiesT } from "./i18n";
 
 const MODEL = "parties.Handle";
 
@@ -19,25 +13,26 @@ const MODEL = "parties.Handle";
  * Person's Handles tab.
  */
 export function HandlesPage(): React.ReactElement {
+  const t = usePartiesT();
   return (
     <ResourceList resource={MODEL} placement="inline" routed hideCreate>
       <List resource={MODEL}>
         <Column field="value" />
         <Column field="platform" />
         <Column field="label" />
-        <Column field="party.display_name" header="Contact" />
-        <Column field="confidence" header="Confidence" />
-        <Column field="is_preferred" header="Preferred" />
+        <Column field="party.display_name" header={t("handle.contact")} />
+        <Column field="confidence" header={t("handle.confidence")} />
+        <Column field="is_preferred" header={t("handle.preferred")} />
       </List>
       <Form resource={MODEL}>
         <Field name="value" title readOnly />
-        <Group label="About" columns={2}>
+        <Group label={t("handle.group.about")} columns={2}>
           <Field name="platform" readOnly />
           <Field name="label" readOnly />
           <Field name="display_name" readOnly />
-          <Field name="party" label="Contact" readOnly />
+          <Field name="party" label={t("handle.contact")} readOnly />
         </Group>
-        <Group label="Flags" columns={3}>
+        <Group label={t("handle.group.flags")} columns={3}>
           <Field name="is_preferred" readOnly />
           <Field name="is_own" readOnly />
           <Field name="is_verified" readOnly />

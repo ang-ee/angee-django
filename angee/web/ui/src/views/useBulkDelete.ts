@@ -1,35 +1,27 @@
 import * as React from "react";
 import {
-  resourceOperationTarget,
-} from "@angee/resources";
-import {
-  useCustomMutation,
   useCan,
   useInvalidate,
-  type BaseRecord,
-  type HttpError,
-  } from "@refinedev/core";
+} from "@refinedev/core";
 import {
-  deletePreviewDocumentForResource,
-  deletePreviewRequest,
-  extractDeletePreview,
-  useOperationDocuments,
+  useAngeeDeletePreview,
   type DeletePreview,
   type DeletePreviewGroup,
   type DeletePreviewNode,
-  type DeletePreviewVariables,
-  } from "@angee/refine";
+} from "@angee/refine";
 import {
   refineResourceName,
-} from "@angee/resources";
+} from "@angee/metadata";
 import {
   useModelMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 import {
   useModelRootFields,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 import { errorMessage, useToast } from "../feedback";
+import { useUiT } from "../i18n";
+import { useDeletePreviewOperation } from "./resource-operations";
 
 const BULK_DELETE_PREVIEW_LIMIT = 25;
 
@@ -63,11 +55,12 @@ export function useBulkDelete(
   selectedIds: ReadonlySet<string>,
   clearSelectedIds: () => void,
 ): UseBulkDeleteResult {
+  const t = useUiT();
   const toast = useToast();
   const rootFields = useModelRootFields(resource);
   const metadata = useModelMetadata(resource);
   const dataResource = metadata?.resource ?? null;
-  const operationDocuments = useOperationDocuments();
+  const deletePreviewOperation = useDeletePreviewOperation(dataResource);
   const refineResource = dataResource ? refineResourceName(dataResource) : undefined;
   const deleteAccess = useCan({
     resource: refineResource,
@@ -77,7 +70,9 @@ export function useBulkDelete(
   const canDelete =
     (rootFields === null || Boolean(rootFields.delete))
     && (deleteAccess.data?.can ?? true);
-  const deletePreview = useCustomMutation<BaseRecord, HttpError, DeletePreviewVariables>();
+  const deletePreview = useAngeeDeletePreview(deletePreviewOperation.target, {
+    document: deletePreviewOperation.document,
+  });
   const invalidate = useInvalidate();
   const mutate = React.useCallback(
     async ({ id, confirm }: { id: string; confirm?: boolean }) => {
@@ -87,41 +82,22 @@ export function useBulkDelete(
       if (!dataResource) {
         throw new Error(`Resource metadata for "${resource}" is not available.`);
       }
-      const variables = { id, confirm };
-      const request = deletePreviewRequest(
-        resourceOperationTarget(dataResource, "deletePreview"),
-        variables,
-        {
-          document: deletePreviewDocumentForResource(
-            operationDocuments,
-            dataResource.schemaName,
-            dataResource.modelLabel,
-          ),
-        },
-      );
-      const response = await deletePreview.mutateAsync({
-        url: "",
-        method: "post",
-        values: variables,
-        dataProviderName: request.dataProviderName,
-        meta: request.meta,
-      });
+      const preview = await deletePreview.mutate({ id, confirm });
       if (confirm === true) {
         await invalidate({
           resource: refineResourceName(dataResource),
-          dataProviderName: request.dataProviderName,
+          dataProviderName: dataResource.schemaName,
           id,
           invalidates: ["list", "many", "detail"],
         });
       }
-      return extractDeletePreview(response.data, request.root);
+      return preview;
     },
     [
       canDelete,
       dataResource,
-      deletePreview.mutateAsync,
+      deletePreview.mutate,
       invalidate,
-      operationDocuments,
       resource,
     ],
   );
@@ -164,8 +140,8 @@ export function useBulkDelete(
         );
         if (previews.length === 0) {
           toast.danger({
-            title: "Delete preview failed",
-            description: "No preview was returned for the selected records.",
+            title: t("deletePreview.failedTitle"),
+            description: t("deletePreview.emptyPreview"),
           });
           return;
         }
@@ -173,7 +149,7 @@ export function useBulkDelete(
           .filter((entry) => entry.preview.hasBlockers)
           .map((entry) => entry.id);
         setPreviewState({
-          preview: aggregatePreviews(previews, overflowCount),
+          preview: aggregatePreviews(previews, overflowCount, t),
           selectedIds: selectedIdList,
           blockedIds,
           overflowCount,
@@ -181,17 +157,17 @@ export function useBulkDelete(
       })
       .catch((error: unknown) => {
         toast.danger({
-          title: "Delete preview failed",
+          title: t("deletePreview.failedTitle"),
           description: errorMessage(
             error,
-            "The delete preview could not be loaded.",
+            t("deletePreview.loadError"),
           ),
         });
       })
       .finally(() => {
         if (requestIdRef.current === requestId) setPreviewPending(false);
       });
-  }, [canDelete, mutate, selectedIdList, toast]);
+  }, [canDelete, mutate, selectedIdList, toast, t]);
 
   const onCancel = React.useCallback(() => {
     if (deletePending) return;
@@ -234,12 +210,13 @@ export function useBulkDelete(
           blocked: state.blockedIds.length + blockedByDelete,
           failed,
           overflowCount: state.overflowCount,
+          t,
         });
       })
       .finally(() => {
         if (requestIdRef.current === requestId) setDeletePending(false);
       });
-  }, [canDelete, clearSelectedIds, deletePending, mutate, previewState, toast]);
+  }, [canDelete, clearSelectedIds, deletePending, mutate, previewState, toast, t]);
 
   return {
     previewState: previewState?.preview ?? null,
@@ -258,6 +235,7 @@ export function useBulkDelete(
 function aggregatePreviews(
   entries: readonly PreviewEntry[],
   overflowCount: number,
+  t: ReturnType<typeof useUiT>,
 ): DeletePreview {
   const roots = entries.map((entry) => entry.preview.root);
   return {
@@ -269,28 +247,29 @@ function aggregatePreviews(
     updated: aggregateGroups(entries.flatMap((entry) => entry.preview.updated)),
     blocked: aggregateGroups(entries.flatMap((entry) => entry.preview.blocked)),
     hasBlockers: entries.some((entry) => entry.preview.hasBlockers),
-    root: aggregateRoot(roots, overflowCount),
+    root: aggregateRoot(roots, overflowCount, t),
   };
 }
 
 function aggregateRoot(
   roots: readonly DeletePreviewNode[],
   overflowCount: number,
+  t: ReturnType<typeof useUiT>,
 ): DeletePreviewNode {
   return {
-    label: "Selection",
-    objectLabel: `${roots.length} records`,
+    label: t("deletePreview.selection"),
+    objectLabel: t("deletePreview.recordCount", { count: roots.length }),
     objectId: null,
     children: overflowCount > 0
-      ? [...roots, moreNode(overflowCount)]
+      ? [...roots, moreNode(overflowCount, t)]
       : roots,
   };
 }
 
-function moreNode(count: number): DeletePreviewNode {
+function moreNode(count: number, t: ReturnType<typeof useUiT>): DeletePreviewNode {
   return {
     label: "",
-    objectLabel: `+${count} more`,
+    objectLabel: t("deletePreview.more", { count }),
     objectId: null,
     children: [],
   };
@@ -314,20 +293,26 @@ function toastDeleteOutcome({
   blocked,
   failed,
   overflowCount,
+  t,
 }: {
   toast: ReturnType<typeof useToast>;
   deleted: number;
   blocked: number;
   failed: number;
   overflowCount: number;
+  t: ReturnType<typeof useUiT>;
 }) {
   const details = [
-    blocked > 0 ? `${blocked} blocked` : "",
-    failed > 0 ? `${failed} failed` : "",
-    overflowCount > 0 ? `${overflowCount} were not previewed` : "",
+    blocked > 0 ? t("deletePreview.blockedDetail", { count: blocked }) : "",
+    failed > 0 ? t("deletePreview.failedDetail", { count: failed }) : "",
+    overflowCount > 0
+      ? t("deletePreview.notPreviewedDetail", { count: overflowCount })
+      : "",
   ].filter(Boolean);
   const options = {
-    title: deleted === 0 ? "No records deleted" : `Deleted ${deleted} records`,
+    title: deleted === 0
+      ? t("deletePreview.noRecordsDeleted")
+      : t("deletePreview.recordsDeleted", { count: deleted }),
     ...(details.length > 0 ? { description: details.join(". ") } : {}),
   };
   if (deleted > 0 && details.length === 0) {

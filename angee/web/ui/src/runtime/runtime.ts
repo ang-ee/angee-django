@@ -1,11 +1,7 @@
 import { useCallback, useMemo } from "react";
-
-import {
-  interpolateMessage,
-  translateWithFallback,
-  type I18nResources,
-  type MessageResources,
-  type MessageVars,
+import type {
+  MessageResources,
+  MessageVars,
 } from "@angee/refine";
 
 import type {
@@ -27,7 +23,10 @@ import { makeContext } from "./make-context";
  */
 export interface AppRuntime {
   widgets: WidgetMap;
-  i18n: I18nResources;
+  i18n: RuntimeI18n | null;
+  auth: RuntimeAuthState;
+  logoutAction: RuntimeLogoutAction;
+  userPreferences: RuntimeUserPreferencesState;
   icons: Readonly<Record<string, unknown>>;
   forms: FormOverrideMap;
   chatter: readonly ChatterContribution[];
@@ -39,9 +38,66 @@ export interface AppRuntime {
   routesByResource: Readonly<Record<string, string>>;
 }
 
+export interface RuntimeI18n {
+  language?: string;
+  getFixedT: (
+    lng: string | readonly string[] | null | undefined,
+    ns: string,
+  ) => (key: string, options?: RuntimeTOptions) => unknown;
+}
+
+export type RuntimeUserPreferences = Record<string, unknown>;
+
+export interface RuntimeAuthUser {
+  id: string;
+  name: string;
+  username?: string;
+  email?: string;
+  roles?: readonly string[];
+}
+
+export interface RuntimeAuthState {
+  user: RuntimeAuthUser | null;
+  status: "anonymous" | "authenticated";
+  hasRole: (role: string) => boolean;
+}
+
+export interface RuntimeLogoutAction {
+  logout: () => Promise<boolean>;
+  fetching: boolean;
+  error: Error | null;
+}
+
+export interface RuntimeUserPreferencesState {
+  preferences: RuntimeUserPreferences;
+  setPreferences: (preferences: RuntimeUserPreferences) => Promise<void>;
+}
+
+type RuntimeTOptions = MessageVars & {
+  defaultValue?: string;
+};
+
+const ANONYMOUS_RUNTIME_AUTH: RuntimeAuthState = {
+  user: null,
+  status: "anonymous",
+  hasRole: () => false,
+};
+
+const EMPTY_USER_PREFERENCES: RuntimeUserPreferences = {};
+
 const EMPTY_RUNTIME: AppRuntime = {
   widgets: {},
-  i18n: {},
+  i18n: null,
+  auth: ANONYMOUS_RUNTIME_AUTH,
+  logoutAction: {
+    logout: async () => false,
+    fetching: false,
+    error: null,
+  },
+  userPreferences: {
+    preferences: EMPTY_USER_PREFERENCES,
+    setPreferences: async () => undefined,
+  },
   icons: {},
   forms: {},
   chatter: [],
@@ -60,9 +116,10 @@ export function AppRuntimeProvider(props: {
   children: React.ReactNode;
 }): React.ReactNode {
   const { runtime } = props;
+  const parent = RuntimeContext.useMaybe();
   const value = useMemo<AppRuntime>(
-    () => ({ ...EMPTY_RUNTIME, ...runtime }),
-    [runtime],
+    () => ({ ...EMPTY_RUNTIME, ...(parent ?? {}), ...runtime }),
+    [parent, runtime],
   );
   return RuntimeContext.Provider({ value, children: props.children });
 }
@@ -91,6 +148,21 @@ export function useFormOverride(resource: string): unknown {
 export function useResourceRoute(resource: string): string | undefined {
   // `?.` guards a `Partial<AppRuntime>` provider that spread `routesByResource: undefined`.
   return useAppRuntime().routesByResource?.[resource];
+}
+
+/** The shell-readable auth state supplied by the app-owned auth provider. */
+export function useRuntimeAuth(): RuntimeAuthState {
+  return useAppRuntime().auth ?? ANONYMOUS_RUNTIME_AUTH;
+}
+
+/** The shell-readable logout action supplied by the app-owned auth provider. */
+export function useRuntimeLogoutAction(): RuntimeLogoutAction {
+  return useAppRuntime().logoutAction ?? EMPTY_RUNTIME.logoutAction;
+}
+
+/** User preferences persisted by the app-owned auth provider. */
+export function useRuntimeUserPreferences(): RuntimeUserPreferencesState {
+  return useAppRuntime().userPreferences ?? EMPTY_RUNTIME.userPreferences;
 }
 
 /** The slot entries contributed to one slot, in merged order. */
@@ -128,9 +200,12 @@ export function useDrawers(
 export function useT(namespace: string): (key: string, vars?: MessageVars) => string {
   const { i18n } = useAppRuntime();
   return useMemo(() => {
-    const messages = i18n[namespace] ?? {};
-    return (key: string, vars: MessageVars = {}) =>
-      interpolateMessage(messages[key] ?? key, vars);
+    const fixedT = i18n?.getFixedT(null, namespace);
+    return (key: string, vars: MessageVars = {}) => {
+      if (!fixedT) return key;
+      const result = fixedT(key, vars);
+      return typeof result === "string" ? result : String(result);
+    };
   }, [i18n, namespace]);
 }
 
@@ -138,7 +213,7 @@ export function useT(namespace: string): (key: string, vars?: MessageVars) => st
  * A namespaced translator with a bundled-English `fallback`: resolves a key
  * against the host runtime's merged i18n for `namespace`, then falls back to
  * `fallback`, then the key. The one owner of the translate-with-fallback pattern
- * — `@angee/base`'s `useBaseT` and each addon's `useXT` build on it — so a
+ * — the UI namespace hook and each addon's `useXT` build on it — so a
  * component renders its English even before its runtime bundle is mounted
  * (unit tests, storybook, provider-less embeds). Stable identity (memoized on
  * the namespace translator) for use in dependency arrays.
@@ -149,8 +224,18 @@ export function useNamespaceT(
 ): (key: string, vars?: MessageVars) => string {
   const t = useT(namespace);
   return useCallback(
-    (key: string, vars: MessageVars = {}) =>
-      translateWithFallback(t, fallback, key, vars),
+    (key: string, vars: MessageVars = {}) => {
+      const defaultValue = fallback[key] ?? key;
+      const result = t(key, { ...vars, defaultValue });
+      return result === key ? interpolateFallback(defaultValue, vars) : result;
+    },
     [t, fallback],
   );
+}
+
+function interpolateFallback(template: string, vars: MessageVars): string {
+  return template.replace(/\{([A-Za-z0-9_]+)\}/g, (match, name: string) => {
+    const value = vars[name];
+    return value === undefined ? match : String(value);
+  });
 }

@@ -1,7 +1,7 @@
 /// <reference path="./previews/assets.d.ts" />
 
 import type { BaseAddonRoute } from "@angee/app";
-import { defineBaseAddon } from "@angee/app";
+import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import type { BaseMenuItem } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { ArchiveRestore, Download, HardDrive, Image, Pencil } from "lucide-react";
@@ -12,28 +12,13 @@ import { storagePreviews } from "./previews";
 const STORAGE_ID = "storage";
 
 const storageRoutes: readonly BaseAddonRoute[] = [
-  {
-    name: "storage.files",
-    path: "/storage",
-    layout: "console",
-    menu: STORAGE_ID,
-    component: lazyRouteComponent(() => import("./views/StoragePage"), "StoragePage"),
-  },
-  {
-    // The file record nests under the list; `StoragePage` reads the `$id` param
-    // and swaps its content to the detail form.
-    name: "storage.file",
-    path: "/storage/$id",
-    layout: "console",
-    parent: "storage.files",
-  },
+  ...resourcePageRoutes("storage.files", "/storage", lazyRouteComponent(() => import("./views/StoragePage"), "StoragePage"), undefined, { detailName: "storage.file", menu: STORAGE_ID }),
   {
     // The drives/backends admin. A static `/storage/settings` outranks the
     // `/storage/$id` file route, so it is a sibling, not a file id. Its chrome
     // resolves from the menu child that references it.
     name: "storage.settings",
     path: "/storage/settings",
-    layout: "console",
     component: lazyRouteComponent(() => import("./views/StorageSettingsPage"), "StorageSettingsPage"),
   },
 ];

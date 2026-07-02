@@ -1,18 +1,14 @@
-import type { Row } from "@angee/resources";
+import type { Row } from "@angee/metadata";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  useUpdate,
-  type BaseRecord,
-  type HttpError,
-} from "@refinedev/core";
+  useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
 
 import { useDebouncedCallback } from "use-debounce";
-import { refineFieldsFromPaths } from "@angee/refine";
-import { useAuthoredMutation } from "@angee/ui";
+import { refineFieldsFromPaths, useAuthoredMutation } from "@angee/refine";
 import {
   refineResourceName,
   useModelMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 import { KnowledgeUpdatePageBody } from "./documents";
 

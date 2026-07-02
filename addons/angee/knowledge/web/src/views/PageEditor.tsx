@@ -1,16 +1,7 @@
 import { useMemo, type ReactElement } from "react";
 
 import {
-  Button,
-  EmptyState,
-  Glyph,
-  Spinner,
-  cn,
-  formatDate as formatBaseDate,
-  textRoleVariants,
-  useResolvedWidget,
-  type WidgetField,
-} from "@angee/ui";
+  Button, EmptyState, Glyph, Spinner, cn, formatDate as formatBaseDate, textRoleVariants, useResolvedWidget, type WidgetField } from "@angee/ui";
 import { useKnowledgeT } from "../i18n";
 import type { KnowledgePageDetail } from "../data/documents";
 import { usePageEditor, type SaveStatus } from "../data/use-page-editor";
@@ -50,7 +41,7 @@ export function PageEditor({
   const Body = markdown?.edit;
   const isNote = detail.kind !== "folder";
   const bodyField = useMemo<WidgetField>(
-    () => ({ name: "body", label: t("knowledge.editor.bodyPlaceholder") }),
+    () => ({ name: "body", label: t("editor.bodyPlaceholder") }),
     [t],
   );
 
@@ -65,8 +56,8 @@ export function PageEditor({
           />
           <input
             value={editor.title}
-            placeholder={t("knowledge.editor.titlePlaceholder")}
-            aria-label={t("knowledge.editor.titleLabel")}
+            placeholder={t("editor.titlePlaceholder")}
+            aria-label={t("editor.titleLabel")}
             className="min-w-0 flex-1 border-0 bg-transparent text-28 font-semibold leading-9 text-fg outline-none placeholder:text-fg-subtle"
             onChange={(event) => editor.setTitle(event.currentTarget.value)}
             onBlur={editor.commitTitle}
@@ -75,7 +66,7 @@ export function PageEditor({
             type="button"
             size="iconMd"
             variant="ghost"
-            aria-label={t("knowledge.editor.deleteLabel")}
+            aria-label={t("editor.deleteLabel")}
             onClick={onDelete}
           >
             <Glyph name="trash" />
@@ -97,8 +88,8 @@ export function PageEditor({
         <EmptyState
           fill
           icon="folder"
-          title={t("knowledge.editor.folderTitle")}
-          description={t("knowledge.editor.folderDescription")}
+          title={t("editor.folderTitle")}
+          description={t("editor.folderDescription")}
         />
       )}
     </div>
@@ -117,19 +108,19 @@ function SaveBadge({
     return (
       <span className="inline-flex items-center gap-1 text-fg-muted">
         <Spinner size="sm" />
-        {t("knowledge.editor.saving")}
+        {t("editor.saving")}
       </span>
     );
   }
   if (status === "error") {
     return (
-      <span className="text-danger-text">{t("knowledge.editor.saveFailed")}</span>
+      <span className="text-danger-text">{t("editor.saveFailed")}</span>
     );
   }
   return (
     <span className="inline-flex items-center gap-1 text-success-text">
       <Glyph decorative name="check" />
-      {t("knowledge.editor.saved")}
+      {t("editor.saved")}
     </span>
   );
 }
@@ -141,7 +132,7 @@ function metaLine(detail: KnowledgePageDetail, t: Translate): string {
   ];
   if (detail.markdown) {
     parts.push(
-      t("knowledge.editor.wordCount", {
+      t("editor.wordCount", {
         count: detail.markdown.word_count.toLocaleString(),
       }),
     );

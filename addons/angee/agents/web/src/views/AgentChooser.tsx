@@ -57,7 +57,7 @@ export function AgentChooser({
     >
       <SelectPrimitive.Trigger
         size="sm"
-        aria-label={t("agents.chat.switchAgent")}
+        aria-label={t("chat.switchAgent")}
         className="w-auto max-w-[18rem] gap-1.5 border-transparent bg-transparent hover:border-transparent hover:bg-inset"
       >
         <StatusDot
@@ -79,7 +79,7 @@ export function AgentChooser({
                 <SelectPrimitive.Item key={agent.id} value={agent.id} label={agent.name} size="sm">
                   <StatusDot
                     tone={statusTone(agent.runtime_status)}
-                    label={t("agents.chat.running")}
+                    label={t("chat.running")}
                   />
                   <SelectPrimitive.ItemText>
                     {agent.name}

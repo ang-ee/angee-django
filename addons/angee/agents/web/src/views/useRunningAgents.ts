@@ -1,10 +1,10 @@
+import { useAuthoredQuery } from "@angee/refine";
 // The one owner of "the user's running agents", shared by both agent switchers — the
 // side-chatter (`AgentChatterPane`) and the full-page sessions view (`AgentSessionsPage`) —
 // so the running-set query, its live dependency, and the running/template filter live once
 // and the two can never drift.
 
 import * as React from "react";
-import { useAuthoredQuery } from "@angee/ui";
 
 import { AgentRoster, type AgentRosterItem } from "../documents";
 

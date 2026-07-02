@@ -1,0 +1,10 @@
+import { expectValidBaseAddon } from "@angee/app/testing";
+import { describe, expect, test } from "vitest";
+
+import addon from ".";
+
+describe("{{ addon_id }} addon manifest", () => {
+  test("satisfies the shared manifest invariants", () => {
+    expect(() => expectValidBaseAddon(addon)).not.toThrow();
+  });
+});

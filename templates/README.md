@@ -10,6 +10,7 @@ copy of each one.
 | dir | kind | renders |
 |-----|------|---------|
 | `projects/` | `project` | a downstream host repo — `manage.py`, `settings.yaml`, the consumer-addon namespace, the web package; owns the project root |
+| `addons/` | `addon` | a source addon package, including the frontend manifest, i18n, tests, and package wiring |
 | `stacks/` | `stack` | a runnable `angee.yaml` the operator brings up on docker-compose / process-compose |
 | `workspaces/` | `workspace` | a set of sources + agentic config, materialized as files |
 | `services/` | `service` | one long-running service added to a stack |

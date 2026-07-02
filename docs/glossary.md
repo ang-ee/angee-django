@@ -136,5 +136,4 @@ before copying or forking a component.
 than passing color props or one-off variants.
 
 **Rendered binding** — the single rendered (styled) Angee binding over Refine
-state. During the package split this code lives in `@angee/base`; the target
-owner is `@angee/ui`.
+state, owned by `@angee/ui`.

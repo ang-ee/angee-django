@@ -1,6 +1,6 @@
 import { PageObject } from "@angee/e2e";
 
-/** The `/login` page: the username/password form from `@angee/base`. */
+/** The `/login` page: the username/password form from the rendered binding. */
 export class LoginPage extends PageObject {
   readonly path = "/login";
 

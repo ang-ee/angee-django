@@ -1,20 +1,7 @@
+import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import {
-  Button,
-  Dialog,
-  FieldLabel,
-  FieldRoot,
-  Glyph,
-  Input,
-  RelationField,
-  Spinner,
-  errorMessage,
-  textRoleVariants,
-  useAuthoredMutation,
-  useAuthoredQuery,
-  useRelationOptions,
-  useToast,
-} from "@angee/ui";
+import { Button, Dialog, Glyph, MutationDialog, Spinner, errorMessage, textRoleVariants, useRelationOptions, useToast, type MutationDialogField } from "@angee/ui";
+import { VCS_BRIDGE_RELATION } from "@angee/integrate";
 
 import {
   AddAddonSource,
@@ -24,15 +11,6 @@ import {
 } from "../documents";
 import { usePlatformT } from "../i18n";
 import { ADDON_MODEL } from "./AddonCard";
-
-// The VCS bridge an addon source is inventoried on — a local checkout in dev, or a
-// host bridge. Picked like a foreign key (the integrate addon owns the resource; we
-// reference it by name through the runtime resource metadata).
-const VCS_BRIDGE_RELATION = {
-  resource: "integrate.VcsBridge",
-  labelField: "display_name",
-  canCreate: false,
-};
 
 /**
  * The marketplace source controls for the board toolbar: **Add source** inventories a
@@ -48,11 +26,11 @@ export function AddonSourceControls(): React.ReactElement {
     <div className="flex items-center gap-2">
       <Button variant="secondary" size="sm" onClick={() => setScanOpen(true)}>
         <Glyph decorative name="search" />
-        {t("platform.apps.scan")}
+        {t("apps.scan")}
       </Button>
       <Button variant="primary" size="sm" onClick={() => setAddOpen(true)}>
         <Glyph decorative name="plus" />
-        {t("platform.apps.addSource")}
+        {t("apps.addSource")}
       </Button>
       <AddSourceDialog open={addOpen} onOpenChange={setAddOpen} />
       <ScanSourcesDialog open={scanOpen} onOpenChange={setScanOpen} />
@@ -73,132 +51,81 @@ function AddSourceDialog({
     enabled: open,
     sort: true,
   });
-  const [pickedId, setPickedId] = React.useState<string | null>(null);
   // Auto-select when there is exactly one bridge, so a single-bridge dev host skips
   // straight to typing the repository.
   const soleBridge = bridgeOptions.length === 1 ? bridgeOptions[0] : undefined;
-  const vcsBridgeId = pickedId ?? soleBridge?.value ?? "";
+  const vcsBridgeId = soleBridge?.value ?? "";
 
-  const [name, setName] = React.useState("");
-  const [ref, setRef] = React.useState("");
-  const [path, setPath] = React.useState("");
-  const [addSource, { fetching }] = useAuthoredMutation(AddAddonSource, {
+  const [addSource] = useAuthoredMutation(AddAddonSource, {
     invalidateModels: [ADDON_MODEL],
     shouldInvalidate: (data) => Boolean(data?.add_source?.ok),
   });
-
-  React.useEffect(() => {
-    if (!open) {
-      setName("");
-      setRef("");
-      setPath("");
-      setPickedId(null);
-    }
-  }, [open]);
-
-  const ready = vcsBridgeId !== "" && name.trim() !== "" && !fetching;
-  const submit = React.useCallback(async () => {
-    if (vcsBridgeId === "" || name.trim() === "") return;
-    try {
-      const result = (
-        await addSource({
-          data: {
-            vcs_bridge_id: vcsBridgeId,
-            name: name.trim(),
-            ref: ref.trim(),
-            path: path.trim(),
-          },
-        })
-      )?.add_source;
-      if (result?.ok) {
-        toast.success({ title: result.message });
-        onOpenChange(false);
-      } else {
-        toast.danger({ title: result?.message ?? t("platform.apps.actionFailed") });
-      }
-    } catch (cause) {
-      toast.danger({ title: errorMessage(cause, t("platform.apps.actionFailed")) });
-    }
-  }, [addSource, vcsBridgeId, name, ref, path, toast, t, onOpenChange]);
+  const fields = React.useMemo<readonly MutationDialogField[]>(
+    () => [
+      {
+        name: "vcsBridgeId",
+        label: t("apps.addSource.bridge"),
+        widget: "many2one",
+        options: bridgeOptions,
+        placeholder: t("apps.addSource.bridgePlaceholder"),
+        required: true,
+      },
+      {
+        name: "name",
+        label: t("apps.addSource.repo"),
+        placeholder: t("apps.addSource.repoPlaceholder"),
+        required: true,
+        readOnlyWhen: (values) => stringValue(values.vcsBridgeId) === "",
+      },
+      {
+        name: "ref",
+        label: t("apps.addSource.ref"),
+        placeholder: t("apps.addSource.refPlaceholder"),
+      },
+      {
+        name: "path",
+        label: t("apps.addSource.path"),
+        placeholder: t("apps.addSource.pathPlaceholder"),
+      },
+    ],
+    [bridgeOptions, t],
+  );
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Backdrop />
-        <Dialog.Content size="md">
-          <Dialog.Header>
-            <div className="flex items-start gap-3">
-              <div className="min-w-0 flex-1">
-                <Dialog.Title>{t("platform.apps.addSource.title")}</Dialog.Title>
-                <Dialog.Description>
-                  {t("platform.apps.addSource.description")}
-                </Dialog.Description>
-              </div>
-              <Dialog.Close />
-            </div>
-          </Dialog.Header>
-          <Dialog.Body>
-            <div className="flex flex-col gap-3">
-              <FieldRoot>
-                <FieldLabel nativeLabel={false} render={<span />}>
-                  {t("platform.apps.addSource.bridge")}
-                </FieldLabel>
-                <RelationField
-                  aria-label={t("platform.apps.addSource.bridge")}
-                  value={vcsBridgeId}
-                  options={bridgeOptions}
-                  placeholder={t("platform.apps.addSource.bridgePlaceholder")}
-                  onChange={setPickedId}
-                />
-              </FieldRoot>
-              <FieldRoot>
-                <FieldLabel htmlFor="addon-source-name">
-                  {t("platform.apps.addSource.repo")}
-                </FieldLabel>
-                <Input
-                  id="addon-source-name"
-                  value={name}
-                  placeholder={t("platform.apps.addSource.repoPlaceholder")}
-                  disabled={vcsBridgeId === ""}
-                  onChange={(event) => setName(event.currentTarget.value)}
-                />
-              </FieldRoot>
-              <FieldRoot>
-                <FieldLabel htmlFor="addon-source-ref">
-                  {t("platform.apps.addSource.ref")}
-                </FieldLabel>
-                <Input
-                  id="addon-source-ref"
-                  value={ref}
-                  placeholder={t("platform.apps.addSource.refPlaceholder")}
-                  onChange={(event) => setRef(event.currentTarget.value)}
-                />
-              </FieldRoot>
-              <FieldRoot>
-                <FieldLabel htmlFor="addon-source-path">
-                  {t("platform.apps.addSource.path")}
-                </FieldLabel>
-                <Input
-                  id="addon-source-path"
-                  value={path}
-                  placeholder={t("platform.apps.addSource.pathPlaceholder")}
-                  onChange={(event) => setPath(event.currentTarget.value)}
-                />
-              </FieldRoot>
-            </div>
-          </Dialog.Body>
-          <Dialog.Footer>
-            <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
-              {t("platform.apps.cancel")}
-            </Button>
-            <Button variant="primary" size="sm" disabled={!ready} onClick={submit}>
-              {fetching ? t("platform.apps.adding") : t("platform.apps.add")}
-            </Button>
-          </Dialog.Footer>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <MutationDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title={t("apps.addSource.title")}
+      description={t("apps.addSource.description")}
+      fields={fields}
+      initialValues={{ vcsBridgeId }}
+      submitLabel={t("apps.add")}
+      submittingLabel={t("apps.adding")}
+      cancelLabel={t("apps.cancel")}
+      errorFallback={t("apps.actionFailed")}
+      onSubmit={async (values) => {
+        const result = (
+          await addSource({
+            data: {
+              vcs_bridge_id: stringValue(values.vcsBridgeId),
+              name: stringValue(values.name).trim(),
+              ref: stringValue(values.ref).trim(),
+              path: stringValue(values.path).trim(),
+            },
+          })
+        )?.add_source;
+        if (result?.ok) {
+          toast.success({ title: result.message });
+          return;
+        }
+        throw new Error(result?.message ?? t("apps.actionFailed"));
+      }}
+    />
   );
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
 }
 
 function ScanSourcesDialog({
@@ -228,10 +155,10 @@ function ScanSourcesDialog({
           toast.success({ title: result.message });
           refetch();
         } else {
-          toast.danger({ title: result?.message ?? t("platform.apps.actionFailed") });
+          toast.danger({ title: result?.message ?? t("apps.actionFailed") });
         }
       } catch (cause) {
-        toast.danger({ title: errorMessage(cause, t("platform.apps.actionFailed")) });
+        toast.danger({ title: errorMessage(cause, t("apps.actionFailed")) });
       } finally {
         setScanning(null);
       }
@@ -249,8 +176,8 @@ function ScanSourcesDialog({
           <Dialog.Header>
             <div className="flex items-start gap-3">
               <div className="min-w-0 flex-1">
-                <Dialog.Title>{t("platform.apps.scan.title")}</Dialog.Title>
-                <Dialog.Description>{t("platform.apps.scan.description")}</Dialog.Description>
+                <Dialog.Title>{t("apps.scan.title")}</Dialog.Title>
+                <Dialog.Description>{t("apps.scan.description")}</Dialog.Description>
               </div>
               <Dialog.Close />
             </div>
@@ -284,12 +211,12 @@ function ScanSourceList({
   if (fetching && sources.length === 0) {
     return (
       <div className={textRoleVariants({ role: "meta" })}>
-        <Spinner size="sm" /> {t("platform.apps.scan.loading")}
+        <Spinner size="sm" /> {t("apps.scan.loading")}
       </div>
     );
   }
   if (sources.length === 0) {
-    return <p className={textRoleVariants({ role: "meta" })}>{t("platform.apps.scan.empty")}</p>;
+    return <p className={textRoleVariants({ role: "meta" })}>{t("apps.scan.empty")}</p>;
   }
   return (
     <ul className="flex max-h-72 flex-col gap-1 overflow-auto">
@@ -315,7 +242,7 @@ function ScanSourceList({
               ) : (
                 <Glyph decorative name="search" />
               )}
-              {t("platform.apps.scan")}
+              {t("apps.scan")}
             </Button>
           </li>
         );

@@ -1,12 +1,6 @@
 // @vitest-environment happy-dom
 
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, baseIcons } from "@angee/ui";
 
@@ -48,20 +42,24 @@ vi.mock("@angee/ui", async (importOriginal) => {
       list: { fetching: false, refetch: baseMocks.refetchBridges },
       options: baseMocks.bridgeOptions,
     }),
-    useAuthoredQuery: (document: unknown, variables: unknown) => {
-      const name = operationName(document);
-      if (name === "IntegrateSearchRepositories") {
-        sdkMocks.lastSearchVars = variables;
-        return sdkMocks.search;
-      }
-      return { data: undefined, fetching: false, error: null, refetch: vi.fn() };
-    },
-    useAuthoredMutation: (_document: unknown, options: unknown) => {
-      sdkMocks.addOptions = options;
-      return [sdkMocks.addRepository, sdkMocks.addState];
-    },
   };
 });
+
+vi.mock("@angee/refine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/refine")>()),
+  useAuthoredQuery: (document: unknown, variables: unknown) => {
+    const name = operationName(document);
+    if (name === "IntegrateSearchRepositories") {
+      sdkMocks.lastSearchVars = variables;
+      return sdkMocks.search;
+    }
+    return { data: undefined, fetching: false, error: null, refetch: vi.fn() };
+  },
+  useAuthoredMutation: (_document: unknown, options: unknown) => {
+    sdkMocks.addOptions = options;
+    return [sdkMocks.addRepository, sdkMocks.addState];
+  },
+}));
 
 const VCS_ID = "VkNTSW50ZWdyYXRpb25UeXBlOjE=";
 

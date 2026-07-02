@@ -12,10 +12,10 @@ import { afterEach,
   vi } from "vitest";
 import {
   ModelMetadataProvider,
-} from "@angee/resources";
+} from "@angee/metadata";
 import type {
   SchemaFieldMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 const sdkMocks = vi.hoisted(() => ({
   updatePage: vi.fn(),
@@ -26,6 +26,11 @@ const sdkMocks = vi.hoisted(() => ({
 
 vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
+  return { ...actual };
+});
+
+vi.mock("@angee/refine", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/refine")>();
   return {
     ...actual,
     useAuthoredMutation: sdkMocks.useAuthoredMutation,

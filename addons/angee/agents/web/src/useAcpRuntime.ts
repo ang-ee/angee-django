@@ -6,32 +6,12 @@
 // re-minted and the socket reconnected when the token nears expiry.
 
 import * as React from "react";
+import { SimpleImageAttachmentAdapter, useExternalStoreRuntime, type AppendMessage, type CompleteAttachment, type ThreadMessageLike, } from "@assistant-ui/react";
 import {
-  SimpleImageAttachmentAdapter,
-  useExternalStoreRuntime,
-  type AppendMessage,
-  type CompleteAttachment,
-  type ThreadMessageLike,
-} from "@assistant-ui/react";
-import {
-  ClientSideConnection,
-  PROTOCOL_VERSION,
-  type Agent,
-  type AvailableCommand,
-  type Client,
-  type ContentBlock,
-  type McpServer,
-  type NewSessionResponse,
-  type PromptCapabilities,
-  type RequestPermissionRequest,
-  type RequestPermissionResponse,
-  type SessionConfigSelectGroup,
-  type SessionConfigSelectOption,
-  type SessionNotification,
-} from "@agentclientprotocol/sdk";
+  ClientSideConnection, PROTOCOL_VERSION, type Agent, type AvailableCommand, type Client, type ContentBlock, type McpServer, type NewSessionResponse, type PromptCapabilities, type RequestPermissionRequest, type RequestPermissionResponse, type SessionConfigSelectGroup, type SessionConfigSelectOption, type SessionNotification, } from "@agentclientprotocol/sdk";
 import * as v from "valibot";
-import { useAuthoredMutation } from "@angee/ui";
-import type { DocumentVariables } from "@angee/refine";
+import { useAuthoredMutation, type DocumentVariables } from "@angee/refine";
+import { useLatestRef } from "@angee/ui";
 
 import { messageOf } from "./acp-error";
 import { foldIntoLog, type ChatMessage, type ChatPart } from "./acp-log";
@@ -107,8 +87,7 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
   // context is on by default; clearing the view-record chip flips it off. A ref mirror lets the
   // send-time `onNew` read the latest value without re-subscribing the callback.
   const [recordAttached, setRecordAttached] = React.useState(true);
-  const recordAttachedRef = React.useRef(recordAttached);
-  recordAttachedRef.current = recordAttached;
+  const recordAttachedRef = useLatestRef(recordAttached);
   // Latent session state (the agent's advertised slash commands today) folded from `session/update`
   // alongside the transcript; held outside the message log because it is not a transcript part.
   const [session, setSession] = React.useState<AcpSession>(emptySession);
@@ -121,8 +100,7 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
   // The agent's advertised prompt capabilities (from `initialize`), read by `onNew` to pick
   // the native context-block shape; a ref so a fresh value never re-triggers the connect effect.
   const promptCapabilitiesRef = React.useRef<PromptCapabilities | null>(null);
-  const viewRef = React.useRef(view);
-  viewRef.current = view;
+  const viewRef = useLatestRef(view);
 
   const [mintEndpoint] = useAuthoredMutation(AgentChatEndpointMutation);
   const [renderPrompt] = useAuthoredMutation(RenderAgentPrompt);
@@ -137,8 +115,7 @@ export function useAcpRuntime(agentId: string, view: AgentChatView): AcpRuntime 
   // The connect effect builds the ACP client once; it reads `onUpdate` through a ref so a
   // callback-identity change never tears down and reconnects the socket (which tracks
   // `agentId`/`reconnectNonce` alone).
-  const onUpdateRef = React.useRef(onUpdate);
-  onUpdateRef.current = onUpdate;
+  const onUpdateRef = useLatestRef(onUpdate);
 
   // Connect on mount; reconnect before the route token expires or when `reconnect()` is
   // called; tear the socket down on unmount or agent change. A per-effect `active` flag

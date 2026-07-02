@@ -1,13 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import {
-  Button,
-  FieldRow,
-  FormActions,
-  FormFooter,
-  FormGrid,
-  Input,
-  Textarea,
-} from "@angee/ui";
+import { Button, FieldRow, FormActions, FormFooter, FormGrid, Input, Textarea } from "@angee/ui";
 
 const meta = {
   title: "Forms/FormLayout",

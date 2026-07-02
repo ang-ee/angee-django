@@ -1,19 +1,6 @@
+import { useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import {
-  Button,
-  ChatBubble,
-  EmptyState,
-  Glyph,
-  LoadingPanel,
-  MessageAttachmentChip,
-  ReactionBar,
-  RelativeTime,
-  cn,
-  textRoleVariants,
-  useAuthoredQuery,
-  type ChatBubbleRole,
-  type Reaction,
-} from "@angee/ui";
+import { Button, ChatBubble, EmptyState, Glyph, LoadingPanel, MessageAttachmentChip, ReactionBar, RelativeTime, cn, textRoleVariants, type ChatBubbleRole, type Reaction } from "@angee/ui";
 import { formatSize } from "@angee/ui/preview/index";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
@@ -131,14 +118,14 @@ export function ThreadTranscript({
   }
 
   if (transcript.fetching && windowRows === undefined) {
-    return <LoadingPanel message={t("messaging.transcript.loading")} />;
+    return <LoadingPanel message={t("transcript.loading")} />;
   }
   if (transcript.error) {
     return (
       <EmptyState
         icon="comments"
-        title={t("messaging.transcript.error")}
-        description={t("messaging.transcript.emptyHint")}
+        title={t("transcript.error")}
+        description={t("transcript.emptyHint")}
         className="min-h-48 p-4"
       />
     );
@@ -147,8 +134,8 @@ export function ThreadTranscript({
     return (
       <EmptyState
         icon="comments"
-        title={t("messaging.transcript.emptyTitle")}
-        description={t("messaging.transcript.emptyHint")}
+        title={t("transcript.emptyTitle")}
+        description={t("transcript.emptyHint")}
         className="min-h-48 p-4"
       />
     );
@@ -169,14 +156,14 @@ export function ThreadTranscript({
             onClick={loadOlder}
           >
             <Glyph name="chevron-up" />
-            {t("messaging.transcript.loadOlder")}
+            {t("transcript.loadOlder")}
           </Button>
         </div>
       ) : null}
       <div ref={scrollRef} className="overflow-y-auto" style={{ maxHeight: "calc(100vh - 16rem)" }}>
         <ul
           ref={listRef}
-          aria-label={t("messaging.transcript.label")}
+          aria-label={t("transcript.label")}
           className="relative w-full p-3"
           style={{ height: totalSize }}
         >
@@ -213,7 +200,7 @@ function TranscriptMessage({ message, t }: TranscriptMessageProps): React.ReactE
   // Read the SDL's UPPERCASE `Direction` enum verbatim — one enum-casing convention
   // across the messaging web surface (see `message_type` reads in RecordChatterPane).
   const direction = message.direction;
-  const author = message.sender?.display_name || message.sender?.value || t("messaging.message.author");
+  const author = message.sender?.display_name || message.sender?.value || t("message.author");
   const text = transcriptText(message);
   const timestamp = message.sent_at ?? message.created_at;
   const attachments = message.parts
@@ -245,7 +232,7 @@ function TranscriptMessage({ message, t }: TranscriptMessageProps): React.ReactE
       ) : null}
       {reactions.length > 0 ? (
         <div className="mt-2">
-          <ReactionBar reactions={reactions} label={t("messaging.message.reactions")} />
+          <ReactionBar reactions={reactions} label={t("message.reactions")} />
         </div>
       ) : null}
     </>
@@ -258,7 +245,7 @@ function TranscriptMessage({ message, t }: TranscriptMessageProps): React.ReactE
       <div className="rounded-6 border border-dashed border-border-subtle bg-surface-inset px-3 py-2 text-13 text-fg">
         <div className="mb-0.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
           <span className="text-2xs font-semibold uppercase tracking-wide text-warning-text">
-            {t("messaging.transcript.noteLabel")}
+            {t("transcript.noteLabel")}
           </span>
           <span className="text-13 font-medium text-fg">{author}</span>
           {timestamp ? (

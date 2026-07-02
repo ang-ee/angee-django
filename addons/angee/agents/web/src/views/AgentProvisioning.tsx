@@ -1,30 +1,16 @@
 import * as React from "react";
 import type {
   Row,
-} from "@angee/resources";
+} from "@angee/metadata";
+import { useOne, type BaseRecord, type HttpError, } from "@refinedev/core";
 import {
-  useOne,
-  type BaseRecord,
-  type HttpError,
-  } from "@refinedev/core";
+  OperatorTransportProvider, ServiceLogs, ServiceRow, WorkspaceSources, WorkspaceRow, useWorkspaceStatus, type WorkspaceStatusResult, } from "@angee/operator/runtime";
 import {
-  OperatorTransportProvider,
-  ServiceLogs,
-  ServiceRow,
-  WorkspaceSources,
-  WorkspaceRow,
-  useWorkspaceStatus,
-  type WorkspaceStatusResult,
-  } from "@angee/operator/runtime";
+  refineFieldsFromPaths, } from "@angee/refine";
 import {
-  refineFieldsFromPaths,
-  } from "@angee/refine";
+  refineResourceName, } from "@angee/metadata";
 import {
-  refineResourceName,
-} from "@angee/resources";
-import {
-  useModelMetadata,
-} from "@angee/resources";
+  useModelMetadata, } from "@angee/metadata";
 import { textRoleVariants } from "@angee/ui";
 
 import { useAgentsT } from "../i18n";
@@ -106,8 +92,8 @@ export function AgentProvisioning({
       {!agent ? (
         <p className={textRoleVariants({ role: "meta" })}>
           {fetching
-            ? t("agents.provisioning.loading")
-            : t("agents.provisioning.saveFirst")}
+            ? t("provisioning.loading")
+            : t("provisioning.saveFirst")}
         </p>
       ) : (
         <>
@@ -127,11 +113,11 @@ export function AgentProvisioning({
           ) : (
             <div className="flex flex-col items-start gap-2">
               <p className={textRoleVariants({ role: "meta" })}>
-                {t("agents.provisioning.intro")}
+                {t("provisioning.intro")}
               </p>
               {!hasWorkspaceTemplate ? (
                 <p className={textRoleVariants({ role: "meta" })}>
-                  {t("agents.provisioning.needsTemplate")}
+                  {t("provisioning.needsTemplate")}
                 </p>
               ) : null}
             </div>
@@ -195,23 +181,23 @@ function WorkspaceRuntimeView({
       {error ? <p className="text-13 text-danger-text">{error}</p> : null}
       {workspace ? (
         <WorkspaceRow
-          emptyMessage={t("agents.provisioning.activityWaiting")}
+          emptyContent={t("provisioning.activityWaiting")}
           name={workspace}
         />
       ) : (
         <p className={textRoleVariants({ role: "meta" })}>
           {isLifecycleActive(lifecycleStatus)
-            ? t("agents.provisioning.activityWaiting")
-            : t("agents.provisioning.none")}
+            ? t("provisioning.activityWaiting")
+            : t("provisioning.none")}
         </p>
       )}
       {workspaceError ? (
         <p className="text-13 text-danger-text">{workspaceError}</p>
       ) : null}
       <WorkspaceSources
-        emptyMessage={t("agents.provisioning.workspaceSourcesEmpty")}
+        emptyContent={t("provisioning.workspaceSourcesEmpty")}
         sources={sources}
-        title={t("agents.provisioning.workspaceSources")}
+        title={t("provisioning.workspaceSources")}
       />
     </div>
   );
@@ -234,16 +220,16 @@ function ServiceRuntimeView({
       {service ? (
         <>
           <ServiceRow
-            emptyMessage={t("agents.provisioning.activityWaitingService")}
+            emptyContent={t("provisioning.activityWaitingService")}
             name={service}
           />
-          <ServiceLogs name={service} title={t("agents.provisioning.serviceLogs")} />
+          <ServiceLogs name={service} title={t("provisioning.serviceLogs")} />
         </>
       ) : (
         <p className={textRoleVariants({ role: "meta" })}>
           {expectsService
-            ? t("agents.provisioning.activityWaitingService")
-            : t("agents.provisioning.none")}
+            ? t("provisioning.activityWaitingService")
+            : t("provisioning.none")}
         </p>
       )}
     </div>

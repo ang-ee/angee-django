@@ -1,4 +1,4 @@
-import { defineBaseAddon, type BaseAddonRoute } from "@angee/app";
+import { defineBaseAddon, resourcePageRoutes, type BaseAddonRoute } from "@angee/app";
 import { type BaseMenuItem } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 
@@ -35,12 +35,18 @@ const platformMenu: readonly BaseMenuItem[] = [
 ];
 
 const platformRoutes: readonly BaseAddonRoute[] = [
-  { name: "platform.graph", path: "/platform", layout: "console", component: lazyRouteComponent(() => import("./views/GraphPage"), "GraphPage") },
-  { name: "platform.models", path: "/platform/models", layout: "console", resource: "platform.Model", component: lazyRouteComponent(() => import("./views/ModelsPage"), "ModelsPage") },
-  { name: "platform.models.record", path: "/platform/models/$id", layout: "console", menu: "platform.models", component: lazyRouteComponent(() => import("./views/ModelDetail"), "ModelDetail") },
-  { name: "platform.fields", path: "/platform/fields", layout: "console", resource: "platform.Field", component: lazyRouteComponent(() => import("./views/FieldsPage"), "FieldsPage") },
-  { name: "platform.addons", path: "/platform/addons", layout: "console", resource: "platform.Addon", component: lazyRouteComponent(() => import("./views/AddonsPage"), "AddonsPage") },
-  { name: "platform.addons.record", path: "/platform/addons/$id", layout: "console", menu: "platform.addons", component: lazyRouteComponent(() => import("./views/AddonDetail"), "AddonDetail") },
+  { name: "platform.graph", path: "/platform", component: lazyRouteComponent(() => import("./views/GraphPage"), "GraphPage") },
+  ...resourcePageRoutes("platform.models", "/platform/models", lazyRouteComponent(() => import("./views/ModelsPage"), "ModelsPage"), "platform.Model", {
+    detailName: "platform.models.record",
+    detailMenu: "platform.models",
+    detailComponent: lazyRouteComponent(() => import("./views/ModelDetail"), "ModelDetail"),
+  }),
+  { name: "platform.fields", path: "/platform/fields", resource: "platform.Field", component: lazyRouteComponent(() => import("./views/FieldsPage"), "FieldsPage") },
+  ...resourcePageRoutes("platform.addons", "/platform/addons", lazyRouteComponent(() => import("./views/AddonsPage"), "AddonsPage"), "platform.Addon", {
+    detailName: "platform.addons.record",
+    detailMenu: "platform.addons",
+    detailComponent: lazyRouteComponent(() => import("./views/AddonDetail"), "AddonDetail"),
+  }),
 ];
 
 const platform = defineBaseAddon({

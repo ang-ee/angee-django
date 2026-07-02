@@ -73,8 +73,8 @@ function OperatorLogsDrawerBody(): ReactNode {
         options={options}
         value={selected}
         onValueChange={setSelected}
-        placeholder={t("operator.logs.target.placeholder")}
-        aria-label={t("operator.logs.target.label")}
+        placeholder={t("logs.target.placeholder")}
+        aria-label={t("logs.target.label")}
       />
       {target ? (
         <LogPanel logs={logs} title={target.name} />
@@ -82,8 +82,8 @@ function OperatorLogsDrawerBody(): ReactNode {
         <EmptyState
           fill
           icon="operator-logs"
-          title={t("operator.logs.target.empty.title")}
-          description={t("operator.logs.target.empty.description")}
+          title={t("logs.target.empty.title")}
+          description={t("logs.target.empty.description")}
         />
       )}
     </div>

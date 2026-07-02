@@ -1,13 +1,5 @@
 import * as React from "react";
-import {
-  Column,
-  ResourceList,
-  Facet,
-  Field,
-  Form,
-  Group,
-  List,
-} from "@angee/ui";
+import { Column, ResourceList, Facet, Field, Form, Group, List } from "@angee/ui";
 
 import { useIntegrateT } from "../i18n";
 import { AddRepositoryControl } from "./AddRepositoryControl";
@@ -47,13 +39,13 @@ export function RepositoriesPage(): React.ReactElement {
           still wires the per-record delete (the only Repository mutation). */}
       <Form resource={MODEL}>
         <Field name="vcs_bridge" readOnly />
-        <Group label={t("integrate.repositories.repository")} columns={2}>
+        <Group label={t("repositories.repository")} columns={2}>
           <Field name="org" readOnly />
           <Field name="name" readOnly />
           <Field name="default_branch" readOnly />
           <Field name="visibility" readOnly />
         </Group>
-        <Group label={t("integrate.repositories.remote")} columns={2}>
+        <Group label={t("repositories.remote")} columns={2}>
           <Field name="remote" readOnly />
           <Field name="ssh_remote" readOnly />
         </Group>

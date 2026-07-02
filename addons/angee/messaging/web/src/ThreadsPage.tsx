@@ -1,15 +1,5 @@
 import * as React from "react";
-import {
-  Action,
-  Column,
-  ResourceList,
-  Facet,
-  Field,
-  Form,
-  Group,
-  List,
-  type RecordTabDescriptor,
-} from "@angee/ui";
+import { Action, Column, ResourceList, Facet, Field, Form, Group, List, type RecordTabDescriptor } from "@angee/ui";
 
 import { ThreadTranscript } from "./ThreadTranscript";
 

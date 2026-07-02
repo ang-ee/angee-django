@@ -101,7 +101,6 @@ function schemaNamesFor(runtimeDir) {
     .sort();
 }
 
-
 function documentRootsFor(webRoot, manifest) {
   const roots = Array.isArray(manifest.documentRoots) ? manifest.documentRoots : [];
   return roots

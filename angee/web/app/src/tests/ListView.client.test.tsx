@@ -3,8 +3,8 @@
 // Stage F1: a client row-model resource (rowModel:"client") fetches once and
 // filters/sorts/paginates/groups in the browser. This proves ListView renders a
 // computed `platform.Addon` resource over `useList`, groups it by namespace via
-// the flat-list groupRows() machinery, and never issues a server `_groups`
-// query (the computed resource exposes no group aggregate).
+// TanStack row models, and never issues a server `_groups` query (the computed
+// resource exposes no group aggregate).
 
 import {
   act,
@@ -32,7 +32,7 @@ import {
   ModelMetadataProvider,
   type Row,
   type SchemaFieldMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 const ADDON_ROWS: readonly Row[] = [
   { id: "a", label: "Notes", namespace: "example", kind: "consumer" },
@@ -76,8 +76,8 @@ vi.mock("@refinedev/core", async (importOriginal) => {
 
 // The computed resource has no group aggregate; record any server group query so
 // the test can assert none is issued.
-vi.mock("@angee/ui/data/hooks", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/ui/data/hooks")>();
+vi.mock("@angee/refine", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/refine")>();
   return {
     ...actual,
     useAngeeFacets: () => ({ facets: [], fetching: false }),
@@ -164,8 +164,8 @@ describe("ListView client row model", () => {
     );
 
     // Grouped client-side by namespace: the fetched set is grouped in the
-    // browser into the two namespace buckets, which render as group headers
-    // through the flat-list groupRows() machinery (groups start collapsed).
+    // browser into the two namespace buckets, which render as TanStack group
+    // headers (groups start collapsed).
     // Group headers carry the title-cased namespace value (statusLabel).
     const example = (await screen.findByText("Example")).closest("button");
     const angee = screen.getByText("Angee").closest("button");

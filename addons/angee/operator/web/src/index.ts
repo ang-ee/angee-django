@@ -1,5 +1,5 @@
 import type { BaseMenuItem } from "@angee/ui";
-import { defineBaseAddon, type BaseAddonRoute } from "@angee/app";
+import { defineBaseAddon, resourcePageRoutes, type BaseAddonRoute } from "@angee/app";
 import { lazyRouteComponent, type RouteComponent } from "@tanstack/react-router";
 import { createElement, type ReactNode } from "react";
 
@@ -20,15 +20,15 @@ const OPERATOR_ID = "operator";
 const OPERATOR_TITLE = "Operator";
 const OPERATOR_ROOT_PATH = "/operator";
 
-// Each section view is its own chunk: the dynamic import code-splits the view,
+// Each routed page is its own chunk: the dynamic import code-splits the view,
 // and the wrapper threads the (light, eager) operator transport around it. The
-// section's load suspends to the router-owned pending fallback.
-function operatorSectionRoute(Section: RouteComponent): RouteComponent {
-  return function OperatorSectionRoute(): ReactNode {
+// page's load suspends to the router-owned pending fallback.
+function operatorPageRoute(Page: RouteComponent): RouteComponent {
+  return function OperatorPageRoute(): ReactNode {
     return createElement(
       OperatorTransportProvider,
       null,
-      createElement(Section),
+      createElement(Page),
     );
   };
 }
@@ -37,93 +37,67 @@ const operatorRoutes: readonly BaseAddonRoute[] = [
   {
     name: "operator.overview",
     path: OPERATOR_ROOT_PATH,
-    layout: "console",
     menu: OPERATOR_ID,
-    component: operatorSectionRoute(
-      lazyRouteComponent(() => import("./views/sections/OverviewSection"), "OverviewSection"),
+    component: operatorPageRoute(
+      lazyRouteComponent(() => import("./views/sections/OverviewPage"), "OverviewPage"),
     ),
   },
-  {
-    name: "operator.services",
-    path: "/operator/services",
-    layout: "console",
-    component: operatorSectionRoute(
-      lazyRouteComponent(() => import("./views/sections/ServicesSection"), "ServicesSection"),
-    ),
-  },
-  {
-    name: "operator.services.detail",
-    path: "/operator/services/$name",
-    layout: "console",
-    menu: "operator.services",
-    component: operatorSectionRoute(
+  ...resourcePageRoutes("operator.services", "/operator/services", operatorPageRoute(
+    lazyRouteComponent(() => import("./views/sections/ServicesPage"), "ServicesPage"),
+  ), undefined, {
+    detailName: "operator.services.detail",
+    detailMenu: "operator.services",
+    param: "name",
+    detailComponent: operatorPageRoute(
       lazyRouteComponent(() => import("./views/sections/ServiceDetail"), "ServiceDetail"),
     ),
-  },
-  {
-    name: "operator.workspaces",
-    path: "/operator/workspaces",
-    layout: "console",
-    component: operatorSectionRoute(
-      lazyRouteComponent(() => import("./views/sections/WorkspacesSection"), "WorkspacesSection"),
-    ),
-  },
-  {
-    name: "operator.workspaces.detail",
-    path: "/operator/workspaces/$name",
-    layout: "console",
-    menu: "operator.workspaces",
-    component: operatorSectionRoute(
+  }),
+  ...resourcePageRoutes("operator.workspaces", "/operator/workspaces", operatorPageRoute(
+    lazyRouteComponent(() => import("./views/sections/WorkspacesPage"), "WorkspacesPage"),
+  ), undefined, {
+    detailName: "operator.workspaces.detail",
+    detailMenu: "operator.workspaces",
+    param: "name",
+    detailComponent: operatorPageRoute(
       lazyRouteComponent(() => import("./views/sections/WorkspaceDetail"), "WorkspaceDetail"),
     ),
-  },
-  {
-    name: "operator.sources",
-    path: "/operator/sources",
-    layout: "console",
-    component: operatorSectionRoute(
-      lazyRouteComponent(() => import("./views/sections/SourcesSection"), "SourcesSection"),
-    ),
-  },
-  {
-    name: "operator.sources.detail",
-    path: "/operator/sources/$name",
-    layout: "console",
-    menu: "operator.sources",
-    component: operatorSectionRoute(
+  }),
+  ...resourcePageRoutes("operator.sources", "/operator/sources", operatorPageRoute(
+    lazyRouteComponent(() => import("./views/sections/SourcesPage"), "SourcesPage"),
+  ), undefined, {
+    detailName: "operator.sources.detail",
+    detailMenu: "operator.sources",
+    param: "name",
+    detailComponent: operatorPageRoute(
       lazyRouteComponent(() => import("./views/sections/SourceDetail"), "SourceDetail"),
     ),
-  },
+  }),
   {
     name: "operator.gitops",
     path: "/operator/gitops",
-    layout: "console",
-    component: operatorSectionRoute(
-      lazyRouteComponent(() => import("./views/sections/GitOpsSection"), "GitOpsSection"),
+    component: operatorPageRoute(
+      lazyRouteComponent(() => import("./views/sections/GitOpsPage"), "GitOpsPage"),
     ),
   },
   {
     name: "operator.operations",
     path: "/operator/operations",
-    layout: "console",
-    component: operatorSectionRoute(
-      lazyRouteComponent(() => import("./views/sections/OperationsSection"), "OperationsSection"),
+    component: operatorPageRoute(
+      lazyRouteComponent(() => import("./views/sections/OperationsPage"), "OperationsPage"),
     ),
   },
   {
     name: "operator.templates",
     path: "/operator/templates",
-    layout: "console",
-    component: operatorSectionRoute(
-      lazyRouteComponent(() => import("./views/sections/TemplatesSection"), "TemplatesSection"),
+    component: operatorPageRoute(
+      lazyRouteComponent(() => import("./views/sections/TemplatesPage"), "TemplatesPage"),
     ),
   },
   {
     name: "operator.secrets",
     path: "/operator/secrets",
-    layout: "console",
-    component: operatorSectionRoute(
-      lazyRouteComponent(() => import("./views/sections/SecretsSection"), "SecretsSection"),
+    component: operatorPageRoute(
+      lazyRouteComponent(() => import("./views/sections/SecretsPage"), "SecretsPage"),
     ),
   },
 ];

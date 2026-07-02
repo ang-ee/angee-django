@@ -17,6 +17,11 @@ vi.mock("@tanstack/react-router", () => ({
   useParams: () => routerMocks.params,
 }));
 
+vi.mock("@angee/ui", async () => ({
+  ...(await vi.importActual<typeof import("@angee/ui")>("@angee/ui")),
+  useRouteRecordId: () => routerMocks.params.id,
+}));
+
 vi.mock("../i18n", () => ({
   usePlatformT: () => (key: string, vars?: Record<string, number>) =>
     vars?.count ? `${key}:${vars.count}` : key,
@@ -82,7 +87,7 @@ describe("platform detail surfaces", () => {
     const view = render(<AddonDetail />);
 
     expect(screen.getByRole("status")).toBeTruthy();
-    expect(screen.getByText("platform.detail.addon.loading")).toBeTruthy();
+    expect(screen.getByText("detail.addon.loading")).toBeTruthy();
 
     platformMocks.usePlatformAddon.mockReturnValue({
       addon: undefined,
@@ -95,7 +100,7 @@ describe("platform detail surfaces", () => {
     view.rerender(<AddonDetail />);
 
     expect(screen.getByRole("heading", {
-      name: "platform.detail.addon.notFound",
+      name: "detail.addon.notFound",
     })).toBeTruthy();
     expect(screen.getByText("angee.missing")).toBeTruthy();
   });
@@ -122,12 +127,12 @@ describe("platform detail surfaces", () => {
 
     expect(screen.getByRole("heading", { name: "Storage" })).toBeTruthy();
     expect(screen.getByText("angee.storage")).toBeTruthy();
-    expect(screen.getByText("platform.col.models")).toBeTruthy();
+    expect(screen.getByText("col.models")).toBeTruthy();
     expect(screen.getByText("2")).toBeTruthy();
-    expect(screen.getByText("platform.detail.dependencies")).toBeTruthy();
+    expect(screen.getByText("detail.dependencies")).toBeTruthy();
     expect((screen.getByRole("link", { name: "iam" }) as HTMLAnchorElement).pathname)
       .toBe("/platform/addons/angee.iam");
-    expect(screen.getByText("platform.detail.modelsWithCount:1")).toBeTruthy();
+    expect(screen.getByText("detail.modelsWithCount:1")).toBeTruthy();
     expect(
       (screen.getByRole("link", { name: "storage.File" }) as HTMLAnchorElement)
         .pathname,
@@ -155,11 +160,11 @@ describe("platform detail surfaces", () => {
     render(<ModelDetail />);
 
     expect(screen.getByRole("heading", { name: "Note" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("link", { name: /platform.col.graph/ }));
+    fireEvent.click(screen.getByRole("link", { name: /col.graph/ }));
     expect(platformMocks.navigate).toHaveBeenCalledWith(
       "/platform?model=notes.Note",
     );
-    expect(screen.getByText("platform.detail.definition")).toBeTruthy();
+    expect(screen.getByText("detail.definition")).toBeTruthy();
     expect(screen.getByText("notes_note")).toBeTruthy();
   });
 });

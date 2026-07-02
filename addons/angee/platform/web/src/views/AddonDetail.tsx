@@ -1,7 +1,6 @@
 import { type ReactElement } from "react";
-import { useParams } from "@tanstack/react-router";
 
-import { Badge, Code, DetailSection, DetailSurface } from "@angee/ui";
+import { Badge, Code, DetailSection, DetailSurface, useRouteRecordId } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
 import {
@@ -17,8 +16,7 @@ const shortName = (dep: string): string => dep.split(".").pop() ?? dep;
 
 export function AddonDetail(): ReactElement {
   const t = usePlatformT();
-  const params = useParams({ strict: false });
-  const id = "id" in params && typeof params.id === "string" ? params.id : undefined;
+  const id = useRouteRecordId();
   const { addon, dependsOn, dependedBy, modelLabels, fetching } =
     usePlatformAddon(id);
   const go = useRouteNavigate();
@@ -26,12 +24,12 @@ export function AddonDetail(): ReactElement {
   return (
     <DetailSurface
       loading={fetching && !addon}
-      loadingMessage={t("platform.detail.addon.loading")}
+      loadingMessage={t("detail.addon.loading")}
       empty={
         !addon
           ? {
               icon: "list",
-              title: t("platform.detail.addon.notFound"),
+              title: t("detail.addon.notFound"),
               description: id,
             }
           : null
@@ -52,7 +50,7 @@ export function AddonDetail(): ReactElement {
         addon
           ? [
               {
-                label: t("platform.col.models"),
+                label: t("col.models"),
                 value: addon.model_count,
                 icon: "grid",
                 href: addon.model_count
@@ -61,7 +59,7 @@ export function AddonDetail(): ReactElement {
                 onNavigate: go,
               },
               {
-                label: t("platform.col.fields"),
+                label: t("col.fields"),
                 value: addon.field_count,
                 icon: "columns",
                 href: addon.field_count
@@ -70,7 +68,7 @@ export function AddonDetail(): ReactElement {
                 onNavigate: go,
               },
               {
-                label: t("platform.col.resources"),
+                label: t("col.resources"),
                 value: addon.resource_count,
                 icon: "files",
               },
@@ -81,10 +79,10 @@ export function AddonDetail(): ReactElement {
       {addon ? (
         <>
           <DetailSection
-            title={t("platform.detail.dependencies")}
+            title={t("detail.dependencies")}
             rows={[
               [
-                t("platform.col.dependsOn"),
+                t("col.dependsOn"),
                 <LinkedChips
                   items={dependsOn}
                   href={addonDetailPath}
@@ -92,7 +90,7 @@ export function AddonDetail(): ReactElement {
                 />,
               ],
               [
-                t("platform.col.dependedBy"),
+                t("col.dependedBy"),
                 <LinkedChips
                   items={dependedBy}
                   href={addonDetailPath}
@@ -104,7 +102,7 @@ export function AddonDetail(): ReactElement {
 
           {modelLabels.length ? (
             <DetailSection
-              title={t("platform.detail.modelsWithCount", {
+              title={t("detail.modelsWithCount", {
                 count: modelLabels.length,
               })}
             >

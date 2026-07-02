@@ -252,6 +252,7 @@ class DataResourceMetadata:
     roots: DataResourceRoots
     type_names: DataResourceTypeNames
     row_model: str = "server"
+    record_representation: str | None = None
     capabilities: tuple[str, ...] = ()
     fields: tuple[DataResourceFieldMetadata, ...] = ()
     filter_fields: tuple[str, ...] = ()
@@ -295,6 +296,16 @@ class DataResourceMetadata:
             roots=self.roots.merge(self, other),
             type_names=self.type_names.merge(self, other),
             row_model=_merge_row_model(self, other),
+            record_representation=cast(
+                str | None,
+                _merge_value(
+                    self,
+                    other,
+                    "record_representation",
+                    self.record_representation,
+                    other.record_representation,
+                ),
+            ),
             capabilities=_merge_capabilities(self.capabilities, other.capabilities),
             fields=_merge_resource_fields(self.fields, other.fields),
             filter_fields=self.filter_fields or other.filter_fields,
@@ -457,6 +468,7 @@ def make_data_resource_metadata(
         else generated_fields
     )
     active_fields = _require_unique_resource_fields(exposed_model_label, active_fields)
+    record_representation = _record_representation_field(active_fields)
     return DataResourceMetadata(
         model=model,
         model_label=exposed_model_label,
@@ -467,6 +479,7 @@ def make_data_resource_metadata(
         roots=roots,
         type_names=type_names,
         row_model=row_model,
+        record_representation=record_representation,
         capabilities=capabilities,
         fields=active_fields,
         filter_fields=filter_fields,
@@ -730,6 +743,37 @@ def _merge_resource_fields(
             relation_label_axis=existing.relation_label_axis or field.relation_label_axis,
         )
     return tuple(by_name[name] for name in order)
+
+
+def _record_representation_field(fields: tuple[DataResourceFieldMetadata, ...]) -> str | None:
+    """Return the backend-owned display field for a resource record."""
+
+    candidates = (
+        "title",
+        "name",
+        "displayName",
+        "display_name",
+        "fullName",
+        "full_name",
+        "label",
+        "username",
+        "email",
+        "slug",
+    )
+    by_name = {field.name: field for field in fields}
+    for candidate in candidates:
+        if _is_display_scalar(by_name.get(candidate)):
+            return candidate
+    for field in fields:
+        if _is_display_scalar(field):
+            return field.name
+    return None
+
+
+def _is_display_scalar(field: DataResourceFieldMetadata | None) -> bool:
+    """Return whether ``field`` is suitable as a compact record label."""
+
+    return field is not None and field.kind == "scalar" and field.scalar == "String"
 
 
 def _input_fields(surface: type | None) -> tuple[str, ...]:

@@ -1,31 +1,5 @@
 import * as React from "react";
-import {
-  Alert,
-  ChatBar,
-  ChatBubble,
-  ChatHeaderAction,
-  ChatTypingIndicator,
-  ContextBlock,
-  DialogBackdrop,
-  DialogBody,
-  DialogContent,
-  DialogPortal,
-  DialogRoot,
-  DialogTitle,
-  DropdownMenu,
-  Glyph,
-  MessageActions,
-  MessageAttachmentChip,
-  MessageComposer,
-  MessageComposerHint,
-  MessageReasoningFrame,
-  StatusDot,
-  ToolFallback,
-  cn,
-  messageComposerInputClassName,
-  statusTone,
-  textRoleVariants,
-} from "@angee/ui";
+import { Alert, ChatBar, ChatBubble, ChatHeaderAction, ChatTypingIndicator, ContextBlock, DialogBackdrop, DialogBody, DialogContent, DialogPortal, DialogRoot, DialogTitle, DropdownMenu, Glyph, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageReasoningFrame, StatusDot, ToolFallback, buttonVariants, cn, messageComposerInputClassName, statusTone, textRoleVariants } from "@angee/ui";
 import {
   ActionBarPrimitive,
   AssistantRuntimeProvider,
@@ -98,7 +72,7 @@ export function AgentChat({
   } = runtimeState;
   const effectiveModelHandle = runtimeState.modelHandle || modelHandle;
   const ready = status === "ready";
-  const statusLabel = t(`agents.chat.status.${status}`);
+  const statusLabel = t(`chat.status.${status}`);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
 
   return (
@@ -125,7 +99,7 @@ export function AgentChat({
                     className={status === "connecting" ? "motion-safe:animate-pulse" : undefined}
                   />
                   <span className="truncate text-13 font-medium text-fg">
-                    {t("agents.chat.title")}
+                    {t("chat.title")}
                     {effectiveModelHandle ? (
                       <span className="font-normal text-fg-muted"> · {effectiveModelHandle}</span>
                     ) : null}
@@ -143,8 +117,8 @@ export function AgentChat({
           end={
             <DropdownMenu.Root>
               <DropdownMenu.Trigger
-                aria-label={t("agents.chat.conversationOptions")}
-                className="inline-flex size-7 items-center justify-center rounded-6 text-fg-muted outline-none transition-colors hover:bg-inset focus-visible:focus-ring [&_.glyph]:size-4"
+                aria-label={t("chat.conversationOptions")}
+                className={buttonVariants({ variant: "ghost", size: "iconSm" })}
               >
                 <Glyph name="more-horizontal" />
               </DropdownMenu.Trigger>
@@ -153,17 +127,17 @@ export function AgentChat({
                   <DropdownMenu.Content>
                     <DropdownMenu.Item onClick={() => setSettingsOpen(true)}>
                       <Glyph name="settings" />
-                      <span className="flex-1 truncate">{t("agents.chat.settings")}</span>
+                      <span className="flex-1 truncate">{t("chat.settings")}</span>
                     </DropdownMenu.Item>
                     <DropdownMenu.Item onClick={reconnect}>
                       <Glyph name="link" />
-                      <span className="flex-1 truncate">{t("agents.chat.reconnect")}</span>
+                      <span className="flex-1 truncate">{t("chat.reconnect")}</span>
                     </DropdownMenu.Item>
                     {/* Clear is destructive → last, after a separator. */}
                     <DropdownMenu.Separator />
                     <DropdownMenu.Item variant="danger" onClick={clear}>
                       <Glyph name="trash" />
-                      <span className="flex-1 truncate">{t("agents.chat.clear")}</span>
+                      <span className="flex-1 truncate">{t("chat.clear")}</span>
                     </DropdownMenu.Item>
                   </DropdownMenu.Content>
                 </DropdownMenu.Positioner>
@@ -188,13 +162,16 @@ export function AgentChat({
           <div className="relative flex min-h-0 flex-1 flex-col">
             <ThreadPrimitive.Viewport autoScroll className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
               <ThreadPrimitive.Empty>
-                <p className={cn(textRoleVariants({ role: "meta" }), "leading-relaxed")}>{t("agents.chat.empty")}</p>
+                <p className={cn(textRoleVariants({ role: "meta" }), "leading-relaxed")}>{t("chat.empty")}</p>
               </ThreadPrimitive.Empty>
               <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} />
             </ThreadPrimitive.Viewport>
             <ThreadPrimitive.ScrollToBottom
-              aria-label={t("agents.chat.scrollToBottom")}
-              className="absolute bottom-3 right-3 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-border-subtle bg-sheet-2 text-fg-muted shadow-xs hover:bg-inset disabled:pointer-events-none disabled:opacity-0"
+              aria-label={t("chat.scrollToBottom")}
+              className={cn(
+                buttonVariants({ variant: "secondary", size: "iconSm" }),
+                "absolute bottom-3 right-3 z-10 rounded-full disabled:pointer-events-none disabled:opacity-0",
+              )}
             >
               <Glyph name="arrow-down" className="h-4 w-4" />
             </ThreadPrimitive.ScrollToBottom>
@@ -207,7 +184,7 @@ export function AgentChat({
                     render={<textarea />}
                     className={messageComposerInputClassName}
                     rows={3}
-                    placeholder={ready ? t("agents.chat.placeholder") : t(`agents.chat.status.${status}`)}
+                    placeholder={ready ? t("chat.placeholder") : t(`chat.status.${status}`)}
                     disabled={!ready}
                   />
                 }
@@ -229,8 +206,8 @@ export function AgentChat({
                   <>
                     {imageSupported ? (
                       <ComposerPrimitive.AddAttachment
-                        aria-label={t("agents.chat.attach")}
-                        className="inline-flex h-6 items-center rounded-6 px-2 text-fg-muted hover:bg-inset disabled:text-fg-subtle"
+                        aria-label={t("chat.attach")}
+                        className={buttonVariants({ variant: "ghost", size: "sm" })}
                       >
                         <Glyph name="attachment" className="h-4 w-4" />
                       </ComposerPrimitive.AddAttachment>
@@ -240,12 +217,12 @@ export function AgentChat({
                         disabled={!ready}
                         className="text-13 text-accent disabled:text-fg-muted"
                       >
-                        {t("agents.chat.send")}
+                        {t("chat.send")}
                       </ComposerPrimitive.Send>
                     </ThreadPrimitive.If>
                     <ThreadPrimitive.If running>
                       <ComposerPrimitive.Cancel className="text-13 text-danger-text">
-                        {t("agents.chat.stop")}
+                        {t("chat.stop")}
                       </ComposerPrimitive.Cancel>
                     </ThreadPrimitive.If>
                   </>
@@ -290,7 +267,7 @@ function ComposerImageAttachment(): React.ReactElement {
         <div className="relative">
           <img src={previewUrl} alt={name} title={name} className="h-12 w-12 rounded-6 object-cover" />
           <AttachmentPrimitive.Remove
-            aria-label={t("agents.chat.removeAttachment")}
+            aria-label={t("chat.removeAttachment")}
             className="absolute -right-1 -top-1 inline-flex size-4 items-center justify-center rounded-full border border-border-subtle bg-sheet-2 text-fg-muted shadow-xs hover:text-fg"
           >
             <Glyph name="x" className="h-3 w-3" />
@@ -301,7 +278,7 @@ function ComposerImageAttachment(): React.ReactElement {
           icon={<Glyph name="attachment" className="h-3 w-3" />}
           remove={
             <AttachmentPrimitive.Remove
-              aria-label={t("agents.chat.removeAttachment")}
+              aria-label={t("chat.removeAttachment")}
               className="flex shrink-0 items-center text-fg-muted hover:text-fg"
             >
               <Glyph name="x" className="h-3 w-3" />
@@ -359,7 +336,7 @@ function RecordAttachmentChip({
   const context = useRenderedContext(renderContext, open);
 
   if (!attached) {
-    return <ChatHeaderAction onClick={attachRecord}>{t("agents.chat.attachView")}</ChatHeaderAction>;
+    return <ChatHeaderAction onClick={attachRecord}>{t("chat.attachView")}</ChatHeaderAction>;
   }
 
   return (
@@ -371,22 +348,22 @@ function RecordAttachmentChip({
           <button
             type="button"
             onClick={clearRecord}
-            aria-label={t("agents.chat.removeAttachment")}
+            aria-label={t("chat.removeAttachment")}
             className="flex shrink-0 items-center text-fg-muted hover:text-fg"
           >
             <Glyph name="x" className="h-3 w-3" />
           </button>
         }
       >
-        {t("agents.chat.viewAttachment")}
+        {t("chat.viewAttachment")}
       </MessageAttachmentChip>
       <DialogRoot open={open} onOpenChange={setOpen}>
         <DialogPortal>
           <DialogBackdrop />
           <DialogContent>
-            <DialogTitle>{t("agents.chat.context")}</DialogTitle>
+            <DialogTitle>{t("chat.context")}</DialogTitle>
             <DialogBody>
-              <ContextBlock label={t("agents.chat.inspectContext")}>{context || "—"}</ContextBlock>
+              <ContextBlock label={t("chat.inspectContext")}>{context || "—"}</ContextBlock>
             </DialogBody>
           </DialogContent>
         </DialogPortal>
@@ -417,8 +394,8 @@ function AssistantMessage(): React.ReactElement {
       <MessageActions align="start">
         <ActionBarPrimitive.Root>
           <ActionBarPrimitive.Copy
-            aria-label={t("agents.chat.copy")}
-            className="inline-flex h-6 items-center gap-1 rounded-6 px-2 text-2xs text-fg-muted hover:bg-inset"
+            aria-label={t("chat.copy")}
+            className={buttonVariants({ variant: "ghost", size: "sm" })}
           >
             <Glyph name="copy" className="h-3 w-3" />
           </ActionBarPrimitive.Copy>
@@ -486,7 +463,7 @@ function SettingsDialog({
       <DialogPortal>
         <DialogBackdrop />
         <DialogContent>
-          <DialogTitle>{t("agents.chat.settings")}</DialogTitle>
+          <DialogTitle>{t("chat.settings")}</DialogTitle>
           <DialogBody>
             <SessionInfo
               modelHandle={modelHandle}
@@ -520,10 +497,10 @@ function SessionInfo({
   const servers = Object.keys(mcpServers);
   return (
     <div className="space-y-2 text-2xs">
-      <InfoRow label={t("agents.chat.model")} value={modelHandle || "—"} />
-      <InfoRow label={t("agents.chat.viewLabel")} value={`${view.kind} · ${view.type}`} />
+      <InfoRow label={t("chat.model")} value={modelHandle || "—"} />
+      <InfoRow label={t("chat.viewLabel")} value={`${view.kind} · ${view.type}`} />
       <div>
-        <div className="font-medium text-fg-muted">{t("agents.chat.mcpServers")}</div>
+        <div className="font-medium text-fg-muted">{t("chat.mcpServers")}</div>
         {servers.length === 0 ? (
           <div className="text-fg-subtle">—</div>
         ) : (
@@ -534,7 +511,7 @@ function SessionInfo({
           ))
         )}
       </div>
-      <ContextBlock label={t("agents.chat.context")}>{context || "—"}</ContextBlock>
+      <ContextBlock label={t("chat.context")}>{context || "—"}</ContextBlock>
     </div>
   );
 }

@@ -1,8 +1,10 @@
 {
-  "name": "@angee/resources-addon",
+  "name": "@angee/resources",
   "version": "0.0.0",
+  "license": "AGPL-3.0-or-later",
   "private": true,
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": "./src/index.ts"
   },

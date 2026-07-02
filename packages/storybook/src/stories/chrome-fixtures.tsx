@@ -1,9 +1,11 @@
+import type { ReactNode } from "react";
 import type {
   AppChooserItem,
   ChromeMenuItem,
   SpotlightCommand,
   TopMenuTab,
 } from "@angee/ui";
+import { cn } from "@angee/ui";
 
 export const chromeMenuItems: readonly ChromeMenuItem[] = [
   {
@@ -163,6 +165,69 @@ export const spotlightCommands: readonly SpotlightCommand[] = [
     run: () => undefined,
   },
 ];
+
+export function StorySurface({
+  children,
+  className,
+  padded = true,
+  size = "md",
+}: {
+  children: ReactNode;
+  className?: string;
+  padded?: boolean;
+  size?: "sm" | "md" | "lg";
+}) {
+  const width = {
+    sm: "max-w-md",
+    md: "max-w-lg",
+    lg: "max-w-2xl",
+  }[size];
+  return (
+    <div
+      className={cn(
+        width,
+        "overflow-hidden rounded-6 border border-border-subtle bg-sheet",
+        padded && "p-3",
+        className,
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+export function PageStoryShell({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cn("h-screen bg-canvas p-6 text-fg", className)}>
+      {children}
+    </div>
+  );
+}
+
+export function ConsoleContentStoryShell({
+  children,
+  label = "Workspace / Notes",
+}: {
+  children: ReactNode;
+  label?: string;
+}) {
+  return (
+    <div className="grid h-screen grid-rows-[auto_1fr] bg-inset">
+      <div className="flex h-12 shrink-0 items-center border-b border-border-subtle bg-sheet px-4 text-sm font-semibold text-fg">
+        {label}
+      </div>
+      <main className="min-h-0 min-w-0 overflow-auto bg-canvas">
+        {children}
+      </main>
+    </div>
+  );
+}
 
 export function LayoutStoryBody() {
   return (

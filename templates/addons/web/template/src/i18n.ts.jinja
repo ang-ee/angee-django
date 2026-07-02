@@ -1,0 +1,11 @@
+import { createNamespaceT } from "@angee/ui";
+
+export const en{{ addon_title | replace(" ", "") }}Messages = {
+  "menu.label": "{{ addon_title }}",
+  "page.empty": "No {{ addon_title | lower }} yet.",
+};
+
+export const use{{ addon_title | replace(" ", "") }}T = createNamespaceT(
+  "{{ addon_id }}",
+  en{{ addon_title | replace(" ", "") }}Messages,
+);

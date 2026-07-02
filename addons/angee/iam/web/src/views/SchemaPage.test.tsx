@@ -1,19 +1,14 @@
 // @vitest-environment happy-dom
 
 import { cleanup, render, screen, within } from "@testing-library/react";
-import { type ReactElement, type ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import {
-  AppRuntimeProvider,
-  ChatterProvider,
-  PrimaryPaneProvider,
-  baseIcons,
-  useChatter,
-  usePrimaryPaneContent,
-} from "@angee/ui";
+  ChatterTabsTestHost,
+  PrimaryPaneTestHost,
+  ShellPageTestProviders,
+} from "@angee/app/testing";
 
 import { SchemaPage } from "./SchemaPage";
-import { documentName } from "./test-documents";
 
 // One mocked `rebac_schema` payload routed through `useAuthoredQuery`. Sorted by
 // the page to `iam/user` first, so that resource is the default selection.
@@ -43,10 +38,10 @@ const sdkMocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("@angee/ui", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/ui")>();
+vi.mock("@angee/refine", async (importOriginal) => {
+  const { documentName } = await import("./test-documents");
   return {
-    ...actual,
+    ...(await importOriginal<typeof import("@angee/refine")>()),
     useAuthoredQuery: (document: unknown) =>
       documentName(document) === "IamRebacSchema"
         ? sdkMocks.schema
@@ -123,35 +118,10 @@ describe("IAM schema page", () => {
 
 function renderPage(): ReturnType<typeof render> {
   return render(
-    <AppRuntimeProvider runtime={{ icons: baseIcons }}>
-      <PrimaryPaneProvider>
-        <ChatterProvider>
-          <SchemaPage />
-          <PrimaryHost />
-          <ChatterHost />
-        </ChatterProvider>
-      </PrimaryPaneProvider>
-    </AppRuntimeProvider>,
-  );
-}
-
-/** Renders whatever the page published into the shell primary pane. */
-function PrimaryHost(): ReactElement {
-  const { node } = usePrimaryPaneContent();
-  return <div data-testid="shell-primary">{node}</div>;
-}
-
-/** Renders the page's published chatter tabs the way the shell secondary would. */
-function ChatterHost(): ReactNode {
-  const { content } = useChatter();
-  return (
-    <>
-      {content?.tabs?.map((tab) => (
-        <div key={tab.id} data-testid={`tab-${tab.id}`}>
-          {tab.label}
-          {tab.children}
-        </div>
-      ))}
-    </>
+    <ShellPageTestProviders>
+      <SchemaPage />
+      <PrimaryPaneTestHost />
+      <ChatterTabsTestHost />
+    </ShellPageTestProviders>,
   );
 }

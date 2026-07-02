@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { SectionEyebrow } from "../ui/section-eyebrow";
 import type { ChromeMenuNode } from "./menu-tree";
@@ -37,7 +37,7 @@ export function ConsoleSubNav({
 }: {
   className?: string;
 }): ReactElement | null {
-  const t = useBaseT();
+  const t = useUiT();
   const { show, sections, pathname } = useConsoleSubNav();
   if (!show) return null;
   return (

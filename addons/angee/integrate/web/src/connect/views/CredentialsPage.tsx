@@ -1,21 +1,10 @@
+import { useAuthoredMutation } from "@angee/refine";
 import * as React from "react";
-import {
-  Action,
-  Column,
-  ResourceList,
-  Field,
-  Form,
-  Group,
-  List,
-  recordActionId,
-  useAuthoredMutation,
-  useRecordActionMutation,
-  type ActionContext,
-} from "@angee/ui";
+import { Action, Column, ResourceList, Field, Form, Group, List, recordActionId, useRecordActionMutation, type ActionContext } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 
 import { useIntegrateT } from "../../i18n";
-import { IntegrateRevealCredential } from "../documents.console";
+import { IntegrateRevealCredential } from "../documents";
 
 const MODEL = "Credential";
 
@@ -38,7 +27,7 @@ export function CredentialsPage(): React.ReactElement {
   // only fires when a consumer touches it). Single-id `{ ok, message }` action: the
   // helper toasts the outcome and re-pulls the row so the health fields update.
   const [refresh] = useRecordActionMutation<ActionFieldName>("refresh_credential", {
-    defaultMessage: t("integrate.credentials.refresh.done"),
+    defaultMessage: t("credentials.refresh.done"),
   });
 
   // The secret is never in the credential's read projection; this fetches and
@@ -50,15 +39,15 @@ export function CredentialsPage(): React.ReactElement {
       const result = await revealCredential({ id });
       const secret = result?.reveal_credential.secret ?? "";
       if (!secret) {
-        throw new Error(t("integrate.credentials.reveal.noSecret"));
+        throw new Error(t("credentials.reveal.noSecret"));
       }
       await ctx.prompt({
-        title: t("integrate.credentials.reveal.title"),
-        body: t("integrate.credentials.reveal.body"),
+        title: t("credentials.reveal.title"),
+        body: t("credentials.reveal.body"),
         fields: [
           {
             name: "secret",
-            label: t("integrate.credentials.reveal.secretLabel"),
+            label: t("credentials.reveal.secretLabel"),
             defaultValue: secret,
             readOnly: true,
           },
@@ -75,7 +64,7 @@ export function CredentialsPage(): React.ReactElement {
     <Form resource={MODEL}>
       <Field name="display_name" title readOnly />
       <Field name="status" widget="statusbar" />
-      <Group label={t("integrate.credentials.group.health")} columns={2}>
+      <Group label={t("credentials.group.health")} columns={2}>
         <Field name="kind" readOnly />
         <Field name="expires_at" readOnly />
         <Field name="last_refresh_at" readOnly />
@@ -84,11 +73,11 @@ export function CredentialsPage(): React.ReactElement {
       {/* Only OAuth credentials carry a refresh token; static/ssh/basic kinds cannot renew. */}
       <Action
         id="refresh"
-        label={t("integrate.credentials.action.refresh")}
+        label={t("credentials.action.refresh")}
         run={refresh}
         visibleWhen={(record) => String(record.kind ?? "").toLowerCase() === "oauth"}
       />
-      <Action id="reveal" label={t("integrate.credentials.action.reveal")} icon="eye" run={reveal} />
+      <Action id="reveal" label={t("credentials.action.reveal")} icon="eye" run={reveal} />
     </Form>
   );
 

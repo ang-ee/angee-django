@@ -1,7 +1,7 @@
 import * as React from "react";
 import type {
   Row,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 import {
   ListView,

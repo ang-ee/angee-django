@@ -1,13 +1,5 @@
 import * as React from "react";
-import {
-  Action,
-  Column,
-  ResourceList,
-  Field,
-  Form,
-  Group,
-  List,
-} from "@angee/ui";
+import { Action, Column, ResourceList, Field, Form, Group, List } from "@angee/ui";
 
 import { useIamT } from "../i18n";
 
@@ -28,12 +20,12 @@ export function UsersPage(): React.ReactElement {
   const userForm = (
     <Form resource={MODEL}>
       <Field name="username" title />
-      <Group label={t("iam.users.group.profile")} columns={2}>
+      <Group label={t("users.group.profile")} columns={2}>
         <Field name="email" />
         <Field name="first_name" />
         <Field name="last_name" />
       </Group>
-      <Group label={t("iam.users.group.access")} columns={2}>
+      <Group label={t("users.group.access")} columns={2}>
         <Field name="is_staff" />
         <Field name="is_active" />
       </Group>
@@ -42,14 +34,14 @@ export function UsersPage(): React.ReactElement {
       {/* Reset password collects a value and patches it through update (hashed server-side). */}
       <Action
         id="reset-password"
-        label={t("iam.users.resetPassword")}
+        label={t("users.resetPassword")}
         prompt={{
-          title: t("iam.users.resetPassword.title"),
-          body: t("iam.users.resetPassword.body"),
+          title: t("users.resetPassword.title"),
+          body: t("users.resetPassword.body"),
           fields: [
             {
               name: "password",
-              label: t("iam.users.resetPassword.fieldLabel"),
+              label: t("users.resetPassword.fieldLabel"),
               type: "password",
             },
           ],
@@ -57,14 +49,14 @@ export function UsersPage(): React.ReactElement {
       />
       <Action
         id="deactivate"
-        label={t("iam.users.deactivate")}
+        label={t("users.deactivate")}
         danger
         set={{ is_active: false }}
         visibleWhen={(record) => record.is_active === true}
       />
       <Action
         id="activate"
-        label={t("iam.users.activate")}
+        label={t("users.activate")}
         set={{ is_active: true }}
         visibleWhen={(record) => record.is_active === false}
       />

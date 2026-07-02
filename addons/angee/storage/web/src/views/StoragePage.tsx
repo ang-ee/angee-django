@@ -1,32 +1,9 @@
-import { useCallback, useMemo, useRef, type ReactElement } from "react";
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { useAuthoredQuery } from "@angee/refine";
+import { useCallback, useMemo, type ReactElement } from "react";
+import { useNavigate } from "@tanstack/react-router";
 
 import {
-  Button,
-  buttonVariants,
-  ControlBand,
-  EmptyState,
-  formatSize,
-  Glyph,
-  LoadingPanel,
-  PreviewPane,
-  RecordPager,
-  RelationPicker,
-  recordPath,
-  SelectionBarAction,
-  SurfaceHeader,
-  TreeView,
-  useBreadcrumbLeafLabel,
-  useChatterContent,
-  useConfirm,
-  usePrimaryPane,
-  useScopedTreeExplorer,
-  useAuthoredQuery,
-  type ChatterTab,
-  type FieldDescriptor,
-  type PreviewFile,
-  type RecordNavigation,
-} from "@angee/ui";
+  Button, buttonVariants, ControlBand, EmptyState, formatSize, Glyph, LoadingPanel, PreviewPane, RecordPager, ScopedExplorerPane, recordPath, SelectionBarAction, SurfaceHeader, TreeView, useBreadcrumbLeafLabel, useChatterContent, useConfirm, useLatestRef, useRouteRecordId, type ChatterTab, type FieldDescriptor, type PreviewFile, type RecordNavigation, type ScopedExplorerController } from "@angee/ui";
 
 import {
   StorageBackends,
@@ -66,6 +43,11 @@ const STORAGE_LIST_LIMIT = 500;
 const driveRootId = (drive: StorageDrive): string => drive.id;
 const driveRootLabel = (drive: StorageDrive): string => drive.name || drive.slug;
 
+type StorageExplorerController = ScopedExplorerController<
+  StorageDrive,
+  StorageTreeRow
+>;
+
 /**
  * The file browser: it publishes a folder navigator into the console shell's
  * primary pane and an open file's metadata into the chatter's details tab, and
@@ -94,9 +76,7 @@ export function StoragePage(): ReactElement {
   // The open file is route state: `/storage/$id` swaps the content to the large
   // preview and the aside to editable metadata; `/storage` is the list.
   const navigate = useNavigate();
-  const params = useParams({ strict: false });
-  const openFileId =
-    "id" in params && typeof params.id === "string" ? params.id : null;
+  const openFileId = useRouteRecordId() ?? null;
   const closeDetail = useCallback(() => {
     void navigate({ to: "/storage" });
   }, [navigate]);
@@ -106,21 +86,16 @@ export function StoragePage(): ReactElement {
     [files, openFileId],
   );
   useBreadcrumbLeafLabel(openFile ? openFile.title || openFile.filename : null);
-  const explorer = useScopedTreeExplorer({
-    roots: drives,
-    getRootId: driveRootId,
-    getRootLabel: driveRootLabel,
-    getTreeRows: useCallback(
-      (rootId: string) => folderTreeRows(folders, rootId, openFile),
-      [folders, openFile],
-    ),
-    defaultSelectedId: ALL_SCOPE,
-    selectedRootId: openFile?.drive ?? null,
-    isSelectedIdValid: (id, rows) =>
-      id === ALL_SCOPE || id === TRASH_SCOPE || rows.some((row) => row.id === id),
-  });
-  const driveId = explorer.rootId;
-  const driveOptions = explorer.rootOptions;
+  const openFileRoute = useCallback(
+    (id: string) => {
+      void navigate({ to: recordPath("/storage", id) });
+    },
+    [navigate],
+  );
+  const getTreeRows = useCallback(
+    (rootId: string) => folderTreeRows(folders, rootId, openFile),
+    [folders, openFile],
+  );
   // The inline drive-create form. `name` is the record title (prefilled with the
   // typed query); `backend` is the required FK, picked from the catalogue above.
   // This stays a passed `fields` (not a `forms:` registration) because its
@@ -147,32 +122,6 @@ export function StoragePage(): ReactElement {
     ],
     [backends],
   );
-  const treeRows = explorer.treeRows;
-  const effectiveScope = explorer.selectedId ?? ALL_SCOPE;
-  const rows = useMemo(
-    () => fileRows(files, { driveId, scope: effectiveScope }),
-    [files, driveId, effectiveScope],
-  );
-  const fileNavigation = useMemo<RecordNavigation | null>(() => {
-    if (!openFileId) return null;
-    const currentIndex = rows.findIndex((row) => row.id === openFileId);
-    const openAt = (index: number): void => {
-      const row = rows[index];
-      if (row) void navigate({ to: recordPath("/storage", row.id) });
-    };
-    return {
-      total: rows.length,
-      ...(currentIndex >= 0 ? { current: currentIndex + 1 } : {}),
-      ...(currentIndex > 0 ? { onPrev: () => openAt(currentIndex - 1) } : {}),
-      ...(currentIndex >= 0 && currentIndex < rows.length - 1
-        ? { onNext: () => openAt(currentIndex + 1) }
-        : {}),
-    };
-  }, [navigate, openFileId, rows]);
-  const rowHref = useCallback(
-    (row: StorageFileRow) => recordPath("/storage", row.id),
-    [],
-  );
   const uploads = useStorageUpload({ onUploaded: () => filesQuery.refetch() });
   const fileActions = useFileActions({ onChanged: () => filesQuery.refetch() });
   const folderActions = useFolderActions({
@@ -184,13 +133,12 @@ export function StoragePage(): ReactElement {
     },
   });
   const confirm = useConfirm();
+  const { refetch: refetchDrives } = drivesQuery;
   // The action hooks return a fresh object each render; the navigator is
   // published into the shell primary pane, so its callbacks read the live
   // actions through a ref and stay referentially stable across renders.
-  const fileActionsRef = useRef(fileActions);
-  fileActionsRef.current = fileActions;
-  const folderActionsRef = useRef(folderActions);
-  folderActionsRef.current = folderActions;
+  const fileActionsRef = useLatestRef(fileActions);
+  const folderActionsRef = useLatestRef(folderActions);
   // Dropping a file on a navigator node moves it: the Trash node trashes, All
   // files moves to the drive root, any folder node moves into that folder.
   const handleFileDrop = useCallback(
@@ -202,160 +150,95 @@ export function StoragePage(): ReactElement {
     },
     [],
   );
-  // New folders land under the active folder scope (or the drive root).
-  const handleNewFolder = useCallback(
-    (name: string) => {
-      if (!driveId) return;
-      const parent =
-        effectiveScope === ALL_SCOPE || effectiveScope === TRASH_SCOPE
-          ? null
-          : effectiveScope;
-      void folderActionsRef.current.create({ drive: driveId, name, parent });
-    },
-    [driveId, effectiveScope],
-  );
-  // The active folder scope (a real folder, not the All/Trash pseudo-nodes); its
-  // navigator footer offers rename + delete.
-  const selectedFolder =
-    effectiveScope !== ALL_SCOPE && effectiveScope !== TRASH_SCOPE
-      ? explorer.selectedRow
-      : undefined;
-  const setSelectedId = explorer.setSelectedId;
-  const handleRenameFolder = useCallback(
-    (name: string): void => {
-      void folderActionsRef.current.rename(effectiveScope, name);
-    },
-    [effectiveScope],
-  );
-  const handleDeleteFolder = useCallback(async (): Promise<void> => {
-    if (!selectedFolder) return;
-    const ok = await confirm({
-      title: t("storage.folder.deleteTitle", { name: selectedFolder.name }),
-      body: t("storage.folder.deleteBody"),
-      confirm: t("storage.folder.deleteConfirm"),
-      danger: true,
-    });
-    if (!ok) return;
-    void folderActionsRef.current
-      .remove(effectiveScope)
-      .then(() => setSelectedId(ALL_SCOPE));
-  }, [selectedFolder, confirm, t, effectiveScope, setSelectedId]);
-  // The selection bar's bulk verbs: Restore in the Trash scope, else Trash.
-  const renderBulkActions = (ids: ReadonlySet<string>, clear: () => void) =>
-    effectiveScope === TRASH_SCOPE ? (
-      <SelectionBarAction
-        surface="brand"
-        pending={fileActions.busy}
-        onClick={() => void fileActions.restoreMany(ids).then(clear)}
-      >
-        <Glyph name="restore" />
-        {t("storage.bulk.restore")}
-      </SelectionBarAction>
-    ) : (
-      <SelectionBarAction
-        surface="brand"
-        pending={fileActions.busy}
-        onClick={() => void fileActions.trashMany(ids).then(clear)}
-      >
-        <Glyph name="trash" />
-        {t("storage.bulk.trash")}
-      </SelectionBarAction>
-    );
-  // Uploads land in the active drive, into the current folder (or its root); the
-  // Trash scope is not an upload target.
-  const canUpload = driveId !== "" && effectiveScope !== TRASH_SCOPE;
-  const uploadTarget = useMemo(
+  const driveRootPicker = useMemo(
     () => ({
-      driveId,
-      folderId:
-        effectiveScope === ALL_SCOPE || effectiveScope === TRASH_SCOPE
-          ? null
-          : effectiveScope,
+      "aria-label": t("drive.label"),
+      placeholder: t("drive.placeholder"),
+      searchPlaceholder: t("drive.searchPlaceholder"),
+      create: { resource: "Drive", fields: driveCreateFields },
+      onCreated: () => void refetchDrives(),
     }),
-    [driveId, effectiveScope],
+    [driveCreateFields, refetchDrives, t],
   );
-
-  // The folder navigator, published into the console shell's primary pane. Memoized
-  // so the published node only changes when its inputs do (an inline node would
-  // republish — and re-render — on every commit).
-  const setRootId = explorer.setRootId;
-  const navigator = useMemo(
-    () => (
-      <div
-        role="navigation"
-        aria-label={t("storage.nav.label")}
-        className="flex h-full flex-col gap-2 p-2"
-      >
-        <RelationPicker
-          aria-label={t("storage.drive.label")}
-          value={driveId}
-          options={driveOptions}
-          placeholder={t("storage.drive.placeholder")}
-          searchPlaceholder={t("storage.drive.searchPlaceholder")}
-          onChange={(value) => {
-            setRootId(value);
-            closeDetail();
-          }}
-          create={{ resource: "Drive", fields: driveCreateFields }}
-          onCreated={() => drivesQuery.refetch()}
-        />
-        <TreeView<StorageTreeRow>
-          rows={treeRows}
-          parent="parent"
-          label="name"
-          rowKey="id"
-          icon="icon"
-          selectedId={openFile?.id ?? effectiveScope}
-          onSelect={(row) => {
-            if (row.kind === "file") {
-              void navigate({ to: recordPath("/storage", row.id) });
-              return;
-            }
-            setSelectedId(row.id);
-            closeDetail();
-          }}
-          dropAccept={STORAGE_FILE_DND}
-          canDropOnNode={(_nodeId, row) => row.kind !== "file"}
-          onNodeDrop={(nodeId, payload) =>
-            handleFileDrop(nodeId, payload.data as FileDragData)
+  const renderTree = useCallback(
+    (controller: StorageExplorerController) => (
+      <TreeView<StorageTreeRow>
+        rows={controller.treeRows}
+        parent="parent"
+        label="name"
+        rowKey="id"
+        icon="icon"
+        selectedId={openFile?.id ?? (controller.selectedId ?? ALL_SCOPE)}
+        onSelect={(row) => {
+          if (row.kind === "file") {
+            openFileRoute(row.id);
+            return;
           }
-          className="min-h-0 flex-1 overflow-auto"
-        />
-        {selectedFolder ? (
-          <SelectedFolderControl
-            key={selectedFolder.id}
-            name={selectedFolder.name}
-            busy={folderActions.busy}
-            onRename={handleRenameFolder}
-            onDelete={handleDeleteFolder}
-          />
-        ) : null}
-        <NewFolderControl busy={folderActions.busy} onCreate={handleNewFolder} />
-      </div>
+          controller.setSelectedId(row.id);
+          closeDetail();
+        }}
+        dropAccept={STORAGE_FILE_DND}
+        canDropOnNode={(_nodeId, row) => row.kind !== "file"}
+        onNodeDrop={(nodeId, payload) =>
+          handleFileDrop(nodeId, payload.data as FileDragData)
+        }
+        className="min-h-0 flex-1 overflow-auto"
+      />
     ),
-    [
-      t,
-      driveId,
-      driveOptions,
-      setRootId,
-      setSelectedId,
-      closeDetail,
-      driveCreateFields,
-      drivesQuery.refetch,
-      treeRows,
-      openFile,
-      effectiveScope,
-      navigate,
-      handleFileDrop,
-      selectedFolder,
-      folderActions.busy,
-      handleRenameFolder,
-      handleDeleteFolder,
-      handleNewFolder,
-    ],
+    [closeDetail, handleFileDrop, openFile, openFileRoute],
   );
-  // No navigator until drives exist (loading/empty states own the whole surface).
-  usePrimaryPane(drives.length === 0 ? null : navigator);
+  const renderNavigatorFooter = useCallback(
+    (controller: StorageExplorerController) => {
+      const effectiveScope = controller.selectedId ?? ALL_SCOPE;
+      const selectedFolder =
+        effectiveScope !== ALL_SCOPE && effectiveScope !== TRASH_SCOPE
+          ? controller.selectedRow
+          : undefined;
+      const createFolder = (name: string): void => {
+        if (!controller.rootId) return;
+        const parent =
+          effectiveScope === ALL_SCOPE || effectiveScope === TRASH_SCOPE
+            ? null
+            : effectiveScope;
+        void folderActionsRef.current.create({
+          drive: controller.rootId,
+          name,
+          parent,
+        });
+      };
+      const renameFolder = (name: string): void => {
+        void folderActionsRef.current.rename(effectiveScope, name);
+      };
+      const deleteFolder = async (): Promise<void> => {
+        if (!selectedFolder) return;
+        const ok = await confirm({
+          title: t("folder.deleteTitle", { name: selectedFolder.name }),
+          body: t("folder.deleteBody"),
+          confirm: t("folder.deleteConfirm"),
+          danger: true,
+        });
+        if (!ok) return;
+        void folderActionsRef.current
+          .remove(effectiveScope)
+          .then(() => controller.setSelectedId(ALL_SCOPE));
+      };
+      return (
+        <>
+          {selectedFolder ? (
+            <SelectedFolderControl
+              key={selectedFolder.id}
+              name={selectedFolder.name}
+              busy={folderActions.busy}
+              onRename={renameFolder}
+              onDelete={deleteFolder}
+            />
+          ) : null}
+          <NewFolderControl busy={folderActions.busy} onCreate={createFolder} />
+        </>
+      );
+    },
+    [confirm, folderActions.busy, folderActionsRef, t],
+  );
 
   // The open file's metadata, published as an additive `details` tab into the
   // chatter; nothing published renders the default chatter tabs.
@@ -365,7 +248,7 @@ export function StoragePage(): ReactElement {
         ? [
             {
               id: "details",
-              label: t("storage.file.detailsTab"),
+              label: t("file.detailsTab"),
               icon: "info",
               children: (
                 <FileDetail
@@ -382,25 +265,144 @@ export function StoragePage(): ReactElement {
   const chatter = useMemo(() => ({ tabs: detailsTab }), [detailsTab]);
   useChatterContent(chatter);
 
-  if (drivesQuery.fetching && drives.length === 0) {
-    return <LoadingPanel message={t("storage.loading")} />;
-  }
-  if (drives.length === 0) {
-    return (
-      <EmptyState
-        fill
-        icon="drive"
-        title={
-          drivesQuery.error
-            ? t("storage.drives.unavailableTitle")
-            : t("storage.drives.emptyTitle")
-        }
-        description={
-          drivesQuery.error?.message ?? t("storage.drives.emptyDescription")
-        }
-      />
-    );
-  }
+  return (
+    <ScopedExplorerPane<StorageDrive, StorageTreeRow>
+      roots={drives}
+      getRootId={driveRootId}
+      getRootLabel={driveRootLabel}
+      getTreeRows={getTreeRows}
+      defaultSelectedId={ALL_SCOPE}
+      selectedRootId={openFile?.drive ?? null}
+      isSelectedIdValid={(id, rows) =>
+        id === ALL_SCOPE || id === TRASH_SCOPE || rows.some((row) => row.id === id)
+      }
+      navigatorLabel={t("nav.label")}
+      rootPicker={driveRootPicker}
+      onRootChange={closeDetail}
+      renderTree={renderTree}
+      renderNavigatorFooter={renderNavigatorFooter}
+      loading={drivesQuery.fetching && drives.length === 0}
+      loadingContent={<LoadingPanel message={t("loading")} />}
+      emptyContent={
+        <EmptyState
+          fill
+          icon="drive"
+          title={
+            drivesQuery.error
+              ? t("drives.unavailableTitle")
+              : t("drives.emptyTitle")
+          }
+          description={
+            drivesQuery.error?.message ?? t("drives.emptyDescription")
+          }
+        />
+      }
+    >
+      {(controller) => (
+        <StorageExplorerContent
+          controller={controller}
+          files={files}
+          openFileId={openFileId}
+          openFile={openFile}
+          filesFetching={filesQuery.fetching}
+          filesError={filesQuery.error}
+          uploads={uploads}
+          fileActions={fileActions}
+          closeDetail={closeDetail}
+          onOpenFile={openFileRoute}
+        />
+      )}
+    </ScopedExplorerPane>
+  );
+}
+
+function StorageExplorerContent({
+  controller,
+  files,
+  openFileId,
+  openFile,
+  filesFetching,
+  filesError,
+  uploads,
+  fileActions,
+  closeDetail,
+  onOpenFile,
+}: {
+  controller: StorageExplorerController;
+  files: readonly StorageFile[];
+  openFileId: string | null;
+  openFile: StorageFile | null;
+  filesFetching: boolean;
+  filesError: Error | null;
+  uploads: ReturnType<typeof useStorageUpload>;
+  fileActions: ReturnType<typeof useFileActions>;
+  closeDetail: () => void;
+  onOpenFile: (id: string) => void;
+}): ReactElement {
+  const t = useStorageT();
+  const driveId = controller.rootId;
+  const effectiveScope = controller.selectedId ?? ALL_SCOPE;
+  const rows = useMemo(
+    () => fileRows(files, { driveId, scope: effectiveScope }),
+    [files, driveId, effectiveScope],
+  );
+  const fileNavigation = useMemo<RecordNavigation | null>(() => {
+    if (!openFileId) return null;
+    const currentIndex = rows.findIndex((row) => row.id === openFileId);
+    const openAt = (index: number): void => {
+      const row = rows[index];
+      if (row) onOpenFile(row.id);
+    };
+    return {
+      total: rows.length,
+      ...(currentIndex >= 0 ? { current: currentIndex + 1 } : {}),
+      ...(currentIndex > 0 ? { onPrev: () => openAt(currentIndex - 1) } : {}),
+      ...(currentIndex >= 0 && currentIndex < rows.length - 1
+        ? { onNext: () => openAt(currentIndex + 1) }
+        : {}),
+    };
+  }, [onOpenFile, openFileId, rows]);
+  const rowHref = useCallback(
+    (row: StorageFileRow) => recordPath("/storage", row.id),
+    [],
+  );
+  // The selection bar's bulk verbs: Restore in the Trash scope, else Trash.
+  const renderBulkActions = useCallback(
+    (ids: ReadonlySet<string>, clear: () => void) =>
+      effectiveScope === TRASH_SCOPE ? (
+        <SelectionBarAction
+          surface="brand"
+          pending={fileActions.busy}
+          onClick={() => void fileActions.restoreMany(ids).then(clear)}
+        >
+          <Glyph name="restore" />
+          {t("bulk.restore")}
+        </SelectionBarAction>
+      ) : (
+        <SelectionBarAction
+          surface="brand"
+          pending={fileActions.busy}
+          onClick={() => void fileActions.trashMany(ids).then(clear)}
+        >
+          <Glyph name="trash" />
+          {t("bulk.trash")}
+        </SelectionBarAction>
+      ),
+    [effectiveScope, fileActions, t],
+  );
+  // Uploads land in the active drive, into the current folder (or its root); the
+  // Trash scope is not an upload target.
+  const canUpload = driveId !== "" && effectiveScope !== TRASH_SCOPE;
+  const uploadTarget = useMemo(
+    () => ({
+      driveId,
+      folderId:
+        effectiveScope === ALL_SCOPE || effectiveScope === TRASH_SCOPE
+          ? null
+          : effectiveScope,
+    }),
+    [driveId, effectiveScope],
+  );
 
   return (
     <>
@@ -413,7 +415,7 @@ export function StoragePage(): ReactElement {
               download={openFile.filename}
             >
               <Glyph name="download" />
-              {t("storage.file.download")}
+              {t("file.download")}
             </a>
           ) : null}
           {openFile.is_trashed ? (
@@ -425,7 +427,7 @@ export function StoragePage(): ReactElement {
               onClick={() => void fileActions.restore(openFile.id)}
             >
               <Glyph name="restore" />
-              {t("storage.file.restore")}
+              {t("file.restore")}
             </Button>
           ) : (
             <Button
@@ -438,7 +440,7 @@ export function StoragePage(): ReactElement {
               }
             >
               <Glyph name="trash" />
-              {t("storage.file.trash")}
+              {t("file.trash")}
             </Button>
           )}
           {fileNavigation ? (
@@ -451,21 +453,21 @@ export function StoragePage(): ReactElement {
       {openFileId ? (
         openFile ? (
           <FilePreviewFrame file={openFile} />
-        ) : filesQuery.fetching ? (
-          <LoadingPanel message={t("storage.loadingFile")} />
+        ) : filesFetching ? (
+          <LoadingPanel message={t("loadingFile")} />
         ) : (
           <EmptyState
             fill
             icon="file"
-            title={t("storage.file.notFoundTitle")}
-            description={t("storage.file.notFoundDescription")}
+            title={t("file.notFoundTitle")}
+            description={t("file.notFoundDescription")}
           />
         )
       ) : (
         <FileBrowserContent
           rows={rows}
-          fetching={filesQuery.fetching}
-          error={filesQuery.error}
+          fetching={filesFetching}
+          error={filesError}
           rowHref={rowHref}
           bulkActions={renderBulkActions}
           uploads={uploads}
@@ -488,11 +490,11 @@ function FilePreviewFrame({ file }: { file: StorageFile }): ReactElement {
         headingLevel={2}
         icon={file.mime_type?.icon_key || "file"}
         title={file.title || file.filename}
-        subtitle={t("storage.file.subtitle", {
+        subtitle={t("file.subtitle", {
           type:
             file.mime_type?.label ||
             file.mime_type?.mime_type ||
-            t("storage.file.unknownType"),
+            t("file.unknownType"),
           size: formatSize(file.size_bytes),
         })}
       />
@@ -518,7 +520,7 @@ function FilePreview({ file }: { file: StorageFile }): ReactElement {
         <EmptyState
           icon="file"
           title={file.title || file.filename}
-          description={t("storage.preview.unsupported")}
+          description={t("preview.unsupported")}
         />
       }
     />

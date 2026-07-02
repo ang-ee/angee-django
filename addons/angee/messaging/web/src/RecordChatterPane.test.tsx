@@ -30,21 +30,25 @@ vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
   return {
     ...actual,
-    useAuthoredQuery: mocks.useAuthoredQuery,
-    useAuthoredMutation: (document: unknown) => {
-      const op = operationName(document);
-      const mutate = vi.fn(async (vars: Record<string, unknown>) => {
-        mocks.mutateCalls.push({ op, vars });
-        return {};
-      });
-      return [mutate, { fetching: false }];
-    },
     useNamespaceT:
       (_namespace: string, messages: Record<string, string>) =>
       (key: string, vars?: Record<string, unknown>) =>
         interpolate(messages[key] ?? key, vars),
   };
 });
+
+vi.mock("@angee/refine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/refine")>()),
+  useAuthoredQuery: mocks.useAuthoredQuery,
+  useAuthoredMutation: (document: unknown) => {
+    const op = operationName(document);
+    const mutate = vi.fn(async (vars: Record<string, unknown>) => {
+      mocks.mutateCalls.push({ op, vars });
+      return {};
+    });
+    return [mutate, { fetching: false }];
+  },
+}));
 
 vi.mock("@angee/storage", () => ({
   useStorageUpload: () => ({ tasks: [], upload: vi.fn(), clearFinished: vi.fn() }),

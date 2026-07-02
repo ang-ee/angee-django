@@ -2,7 +2,7 @@
 // the SDL by the ResourceList; only bespoke *custom* operations are authored here as
 // typed `graphql()` documents (no hand-written result types). Single-id
 // `{ ok, message }` action mutations use `useActionMutation(field)` from
-// `@angee/ui` at the call site — no document is authored here.
+// `@angee/refine` at the call site — no document is authored here.
 
 import { graphql, type DocumentType } from "@angee/gql/console";
 import * as v from "valibot";

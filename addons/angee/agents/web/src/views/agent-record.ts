@@ -1,6 +1,6 @@
 import type {
   Row,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 /** Read a string field off the boundary record (`Record<string, unknown>`), or "". */
 export function stringField(record: Row | null, key: string): string {

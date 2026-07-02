@@ -33,6 +33,7 @@ from angee.graphql.data.metadata import (
     resource_type_name,
     resource_wire_field_name,
 )
+from angee.graphql.data.resource_bundle import resource_attr, resource_type_by_name
 
 
 def pydantic_node(row_model: type[BaseModel], *, name: str) -> type:
@@ -86,7 +87,17 @@ def hasura_pydantic_resource(
         source=source,
         id_field=id_field,
     )
-    if resource.detail_root is None:
+    list_root = resource_attr(resource, "list_root", name)
+    detail_root = resource_attr(resource, "detail_root", f"{name}_by_pk")
+    aggregate_root = resource_attr(resource, "aggregate_root", f"{name}_aggregate")
+    filter_type = resource_attr(resource, "filter_type", resource_type_by_name(resource, f"{name}_bool_exp"))
+    order_by_type = resource_attr(resource, "order_by_type", resource_type_by_name(resource, f"{name}_order_by"))
+    aggregate_container_type = resource_attr(
+        resource,
+        "aggregate_container_type",
+        resource_type_by_name(resource, f"{name}_aggregate"),
+    )
+    if detail_root is None:
         raise ImproperlyConfigured(f"{model_label or name} Hasura resource did not expose a detail root.")
     attach_data_resource_metadata(
         resource.query,
@@ -97,24 +108,24 @@ def hasura_pydantic_resource(
             # library uses for ``<name>_by_pk``; keep them one source of truth.
             public_id_field=id_field,
             node_type=node,
-            filter_type=resource.filter_type,
-            order_type=resource.order_by_type,
+            filter_type=filter_type,
+            order_type=order_by_type,
             # Read the wire names off the built query surface (the owner), as the
             # model path does, instead of re-templating the dialect convention.
             roots=DataResourceRoots(
-                list_name=resource_wire_field_name(resource.query, str(resource.list_root or name)),
-                detail_name=resource_wire_field_name(resource.query, str(resource.detail_root)),
+                list_name=resource_wire_field_name(resource.query, str(list_root or name)),
+                detail_name=resource_wire_field_name(resource.query, str(detail_root)),
                 aggregate_name=resource_wire_field_name(
                     resource.query,
-                    str(resource.aggregate_root or f"{name}_aggregate"),
+                    str(aggregate_root or f"{name}_aggregate"),
                 ),
             ),
             type_names=DataResourceTypeNames(
                 query=resource_type_name(resource.query),
                 node=node_type_name,
-                filter=resource_type_name(resource.filter_type),
-                order=resource_type_name(resource.order_by_type),
-                aggregate=resource_type_name(resource.aggregate_container_type),
+                filter=resource_type_name(filter_type),
+                order=resource_type_name(order_by_type),
+                aggregate=resource_type_name(aggregate_container_type),
             ),
             capabilities=("list", "detail", "aggregate"),
             # A computed pydantic source is small and admin-only: the frontend

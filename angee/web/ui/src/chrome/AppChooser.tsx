@@ -6,7 +6,7 @@ import {
 } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { toneClass as toneFillClass } from "../lib/tones";
 import { Button } from "../ui/button";
@@ -74,7 +74,7 @@ export function AppChooser({
   trigger,
   triggerLabel,
 }: AppChooserProps): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const resolvedSearchPlaceholder = searchPlaceholder ?? t("chrome.searchApps");
   const resolvedTitle = title ?? t("chrome.switchApp");
   const resolvedTriggerLabel = triggerLabel ?? t("chrome.switchApp");

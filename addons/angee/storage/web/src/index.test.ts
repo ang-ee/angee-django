@@ -1,15 +1,19 @@
+import { expectValidBaseAddon } from "@angee/app/testing";
 import type { BaseMenuItem } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import storage from "./index";
 
 describe("storage addon manifest", () => {
+  test("satisfies the rendered-addon invariants", () => {
+    expect(() => expectValidBaseAddon(storage)).not.toThrow();
+  });
+
   test("registers the files route on the console layout with a component", () => {
     const routes = storage.routes ?? [];
     expect(routes).toHaveLength(3);
     expect(routes[0]?.name).toBe("storage.files");
     expect(routes[0]?.path).toBe("/storage");
-    expect(routes[0]?.layout).toBe("console");
     expect(routes[0]?.component).toBeTypeOf("function");
   });
 
@@ -29,7 +33,6 @@ describe("storage addon manifest", () => {
     expect(record?.path).toBe("/storage/$id");
     expect(record?.parent).toBe("storage.files");
     expect(record?.component).toBeUndefined();
-    expect(record?.layout).toBe("console");
   });
 
   test("exposes a Files menu with a Settings child", () => {

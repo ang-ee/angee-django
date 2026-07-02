@@ -17,7 +17,7 @@ export interface GraphQLResult<T = unknown> {
 /**
  * A GraphQL caller bound to a Playwright request context. It carries the session
  * cookie already in the context and adds the Django CSRF header, mirroring the
- * SPA's own transport (`@angee/sdk` `graphql-client`) — so a test speaks to the
+ * SPA's own transport — so a test speaks to the
  * backend exactly as the running app does. Requests go through the SPA origin
  * (the Vite proxy), keeping cookies same-origin with the browser.
  */

@@ -1,12 +1,5 @@
-import {
-  Alert,
-  Button,
-  Glyph,
-  Spinner,
-  errorMessage,
-  useAuthoredMutation,
-  useAuthoredQuery,
-} from "@angee/ui";
+import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
+import { Alert, Button, Glyph, Spinner, errorMessage } from "@angee/ui";
 import { useState, type ReactNode } from "react";
 
 import {
@@ -43,9 +36,9 @@ export function OAuthLoginMethods(): ReactNode {
         window.location.assign(payload.authorize_url);
         return;
       }
-      setStartError(payload?.error ?? t("iam.login.startError"));
+      setStartError(payload?.error ?? t("login.startError"));
     } catch (caught) {
-      setStartError(errorMessage(caught, t("iam.login.startError")));
+      setStartError(errorMessage(caught, t("login.startError")));
     }
     setStartingSqid(null);
   }
@@ -58,15 +51,15 @@ export function OAuthLoginMethods(): ReactNode {
         role="status"
       >
         <Spinner size="sm" tone="brand" />
-        <span>{t("iam.login.loadingOptions")}</span>
+        <span>{t("login.loadingOptions")}</span>
       </div>
     );
   }
 
   if (queryError && connections.length === 0) {
     return (
-      <Alert className="mb-6" tone="danger" title={t("iam.login.providersUnavailable")}>
-        {t("iam.login.passwordStillAvailable")}
+      <Alert className="mb-6" tone="danger" title={t("login.providersUnavailable")}>
+        {t("login.passwordStillAvailable")}
       </Alert>
     );
   }
@@ -86,19 +79,19 @@ export function OAuthLoginMethods(): ReactNode {
               className="!h-11 w-full justify-start bg-sheet"
               disabled={startingSqid !== null}
               loading={active}
-              loadingText={t("iam.login.continueWith", { provider: label })}
+              loadingText={t("login.continueWith", { provider: label })}
               onClick={() => void startLogin(connection)}
               size="lg"
               variant="secondary"
             >
               <ProviderMark label={label} />
-              <span className="min-w-0 truncate">{t("iam.login.continueWith", { provider: label })}</span>
+              <span className="min-w-0 truncate">{t("login.continueWith", { provider: label })}</span>
             </Button>
           );
         })}
       </div>
       {startError ? (
-        <Alert tone="danger" title={t("iam.login.startFailed")}>
+        <Alert tone="danger" title={t("login.startFailed")}>
           {startError}
         </Alert>
       ) : null}

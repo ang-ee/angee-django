@@ -11,7 +11,7 @@ import messaging from "@angee/messaging";
 import operator from "@angee/operator";
 import parties from "@angee/parties";
 import platform from "@angee/platform";
-import resources from "@angee/resources-addon";
+import resources from "@angee/resources";
 import storage from "@angee/storage";
 import { describe, expect, test } from "vitest";
 

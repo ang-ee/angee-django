@@ -1,0 +1,29 @@
+import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
+import { lazyRouteComponent } from "@tanstack/react-router";
+
+import {
+  en{{ addon_title | replace(" ", "") }}Messages,
+} from "./i18n";
+
+const addon = defineBaseAddon({
+  id: "{{ addon_id }}",
+  routes: resourcePageRoutes(
+    "{{ addon_id }}.{{ resource_name | lower }}",
+    "{{ route_path }}",
+    lazyRouteComponent(() => import("./views/{{ resource_name }}Page"), "{{ resource_name }}Page"),
+    "{{ resource_name }}",
+  ),
+  menus: [
+    {
+      id: "{{ addon_id }}",
+      label: "{{ addon_title }}",
+      icon: "file",
+      route: "{{ addon_id }}.{{ resource_name | lower }}",
+    },
+  ],
+  i18n: {
+    "{{ addon_id }}": en{{ addon_title | replace(" ", "") }}Messages,
+  },
+});
+
+export default addon;

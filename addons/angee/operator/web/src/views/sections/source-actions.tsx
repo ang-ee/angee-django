@@ -34,9 +34,9 @@ export function useSourceActions(refetch: () => void): {
       variant: SourceRowAction["variant"];
       run: (variables: { name: string }) => Promise<object | undefined>;
     }[] = [
-      { field: "sourceFetch", label: t("operator.sources.fetch"), variant: "secondary", run: fetchSource.run },
-      { field: "sourcePull", label: t("operator.sources.pull"), variant: "ghost", run: pull.run },
-      { field: "sourcePush", label: t("operator.sources.push"), variant: "ghost", run: push.run },
+      { field: "sourceFetch", label: t("sources.fetch"), variant: "secondary", run: fetchSource.run },
+      { field: "sourcePull", label: t("sources.pull"), variant: "ghost", run: pull.run },
+      { field: "sourcePush", label: t("sources.push"), variant: "ghost", run: push.run },
     ];
     return defs.map((def) => ({
       label: def.label,

@@ -1,14 +1,7 @@
 import { type ReactElement } from "react";
 
 import {
-  Code,
-  ListView,
-  formatDateTime,
-  textRoleVariants,
-  type ResourceToolbarFilterField,
-  type ResourceToolbarGroupOption,
-  type ListColumn,
-} from "@angee/ui";
+  Code, ListView, formatDateTime, textRoleVariants, type ResourceToolbarFilterField, type ResourceToolbarGroupOption, type ListColumn } from "@angee/ui";
 
 import { useResourcesT } from "../i18n";
 
@@ -31,7 +24,7 @@ function columns(t: (key: string) => string): readonly ListColumn<ResourceLedger
   return [
     {
       field: "source_addon",
-      header: t("resources.col.source"),
+      header: t("col.source"),
       render: (row) => (
         <span className="flex min-w-0 flex-col">
           <span className="font-medium text-fg">{row.source_addon}</span>
@@ -39,10 +32,10 @@ function columns(t: (key: string) => string): readonly ListColumn<ResourceLedger
         </span>
       ),
     },
-    { field: "tier", header: t("resources.col.tier") },
+    { field: "tier", header: t("col.tier") },
     {
       field: "target_model",
-      header: t("resources.col.target"),
+      header: t("col.target"),
       render: (row) => (
         <span className="flex min-w-0 flex-col">
           <Code truncate>{row.target_model}</Code>
@@ -54,13 +47,13 @@ function columns(t: (key: string) => string): readonly ListColumn<ResourceLedger
     },
     {
       field: "content_hash",
-      header: t("resources.col.hash"),
+      header: t("col.hash"),
       sortable: false,
       render: (row) => <Code truncate tone="muted">{row.content_hash.slice(0, 12)}</Code>,
     },
     {
       field: "loaded_at",
-      header: t("resources.col.loaded"),
+      header: t("col.loaded"),
       render: (row) => <>{formatDateTime(row.loaded_at)}</>,
     },
   ];
@@ -71,19 +64,19 @@ function filterFields(t: (key: string) => string): readonly ResourceToolbarFilte
     {
       id: "source_addon",
       field: "source_addon",
-      label: t("resources.col.sourceAddon"),
+      label: t("col.sourceAddon"),
       type: "text",
     },
     {
       id: "source_path",
       field: "source_path",
-      label: t("resources.col.sourcePath"),
+      label: t("col.sourcePath"),
       type: "text",
     },
     {
       id: "tier",
       field: "tier",
-      label: t("resources.col.tier"),
+      label: t("col.tier"),
       type: "selection",
       options: [
         { value: "master", label: "Master" },
@@ -100,19 +93,19 @@ function groupOptions(
   return [
     {
       id: "source_addon",
-      label: t("resources.col.sourceAddon"),
+      label: t("col.sourceAddon"),
       group: { field: "source_addon" },
       type: "value",
     },
     {
       id: "source_path",
-      label: t("resources.col.sourcePath"),
+      label: t("col.sourcePath"),
       group: { field: "source_path" },
       type: "value",
     },
     {
       id: "tier",
-      label: t("resources.col.tier"),
+      label: t("col.tier"),
       group: { field: "tier" },
       type: "value",
     },
@@ -126,12 +119,12 @@ export function ResourcesPage(): ReactElement {
     <ListView<ResourceLedgerResourceRow>
       resource="resources.Resource"
       columns={columns(t)}
-      filterFields={filterFields(t)}
+      customFilterFields={filterFields(t)}
       groupOptions={groupOptions(t)}
       defaultGroup={{ field: "tier" }}
       order={{ source_addon: "ASC" }}
       pageSize={100}
-      emptyMessage={t("resources.empty.ledger")}
+      emptyContent={t("empty.ledger")}
     />
   );
 }

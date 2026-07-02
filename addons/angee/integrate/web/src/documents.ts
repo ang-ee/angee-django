@@ -1,7 +1,7 @@
 // Bespoke custom operations for the integrate console. Model CRUD is model-driven
 // (ResourceList reads the SDL); these are the non-CRUD operations a ResourceList needs that
 // aren't single-id `{ ok, message }` actions. Single-id action mutations use
-// `useActionMutation(field)` from `@angee/ui` at the call site — no document is
+// `useActionMutation(field)` from `@angee/refine` at the call site — no document is
 // authored here.
 
 import { graphql, type DocumentType } from "@angee/gql/console";

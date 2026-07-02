@@ -9,10 +9,10 @@ const uploadMocks = vi.hoisted(() => ({
   useAuthoredMutation: vi.fn(),
 }));
 
-vi.mock("@angee/ui", () => ({
+vi.mock("@angee/ui", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/ui")>()),
   errorMessage: (error: unknown, fallback: string) =>
     error instanceof Error ? error.message : fallback,
-  useAuthoredMutation: uploadMocks.useAuthoredMutation,
   useNamespaceT:
     (_namespace: string, messages: Record<string, string>) =>
     (key: string, vars?: Record<string, string | number>) => {
@@ -22,6 +22,11 @@ vi.mock("@angee/ui", () => ({
       }
       return message;
     },
+}));
+
+vi.mock("@angee/refine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/refine")>()),
+  useAuthoredMutation: uploadMocks.useAuthoredMutation,
 }));
 
 import { StorageFileUploadBegin, StorageFileUploadFinalize } from "./documents";

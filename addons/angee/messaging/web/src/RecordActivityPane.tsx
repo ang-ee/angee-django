@@ -1,20 +1,6 @@
+import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import {
-  Button,
-  DatePopover,
-  EmptyState,
-  FieldRoot,
-  Glyph,
-  LoadingPanel,
-  Textarea,
-  cn,
-  dateFromValue,
-  formatDate,
-  formatDateStorage,
-  textRoleVariants,
-  useAuthoredMutation,
-  useAuthoredQuery,
-} from "@angee/ui";
+import { Button, DatePopover, EmptyState, FieldRoot, Glyph, LoadingPanel, Textarea, cn, dateFromValue, errorMessage, formatDate, formatDateStorage, textRoleVariants } from "@angee/ui";
 import type { ChatterViewContext } from "@angee/ui/runtime";
 
 import { useMessagingT } from "./i18n";
@@ -49,15 +35,15 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
   });
   const [scheduleActivity, scheduleState] = useAuthoredMutation(ScheduleRecordActivityDocument, {
     invalidateModels: READ_MODELS,
-    shouldInvalidate: (data) => !data?.schedule_record_activity.error_code,
+    errorFrom: (data) => data?.schedule_record_activity,
   });
   const [completeActivity, completeState] = useAuthoredMutation(CompleteRecordActivityDocument, {
     invalidateModels: READ_MODELS,
-    shouldInvalidate: (data) => !data?.complete_record_activity.error_code,
+    errorFrom: (data) => data?.complete_record_activity,
   });
   const [cancelActivity, cancelState] = useAuthoredMutation(CancelRecordActivityDocument, {
     invalidateModels: READ_MODELS,
-    shouldInvalidate: (data) => !data?.cancel_record_activity.error_code,
+    errorFrom: (data) => data?.cancel_record_activity,
   });
   const [summary, setSummary] = React.useState("");
   const [note, setNote] = React.useState("");
@@ -76,21 +62,21 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
     return (
       <EmptyState
         icon="activity"
-        title={t("messaging.activity.noRecord")}
-        description={t("messaging.activity.noRecordHint")}
+        title={t("activity.noRecord")}
+        description={t("activity.noRecordHint")}
         className="min-h-48 p-4"
       />
     );
   }
   if (threadQuery.fetching && threadQuery.data === undefined) {
-    return <LoadingPanel message={t("messaging.activity.loading")} />;
+    return <LoadingPanel message={t("activity.loading")} />;
   }
   if (threadQuery.error || threadPayload?.error_code === "BAD_RECORD") {
     return (
       <EmptyState
         icon="activity"
-        title={t("messaging.activity.disabled")}
-        description={t("messaging.activity.disabledHint")}
+        title={t("activity.disabled")}
+        description={t("activity.disabledHint")}
         className="min-h-48 p-4"
       />
     );
@@ -102,7 +88,7 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
     if (!nextSummary || !modelLabel || !recordId) return;
     setError(null);
     try {
-      const data = await scheduleActivity({
+      await scheduleActivity({
         modelLabel,
         recordId,
         summary: nextSummary,
@@ -110,55 +96,40 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
         dueDate: dueDate || null,
         activityType: "todo",
       });
-      const payload = data?.schedule_record_activity;
-      if (payload?.error_code) {
-        setError(payload.error ?? t("messaging.activity.errorSchedule"));
-        return;
-      }
       setSummary("");
       setNote("");
       setDueDate("");
-    } catch {
-      setError(t("messaging.error.generic"));
+    } catch (cause) {
+      setError(errorMessage(cause, t("activity.errorSchedule")));
     }
   }
 
   async function handleComplete(activityId: string): Promise<void> {
     setError(null);
     try {
-      const data = await completeActivity({
+      await completeActivity({
         activityId,
         feedback: feedbackById[activityId] ?? "",
       });
-      const payload = data?.complete_record_activity;
-      if (payload?.error_code) {
-        setError(payload.error ?? t("messaging.activity.errorComplete"));
-        return;
-      }
       setFeedbackById((current) => {
         const { [activityId]: _removed, ...rest } = current;
         return rest;
       });
-    } catch {
-      setError(t("messaging.error.generic"));
+    } catch (cause) {
+      setError(errorMessage(cause, t("activity.errorComplete")));
     }
   }
 
   async function handleCancel(activityId: string): Promise<void> {
     setError(null);
     try {
-      const data = await cancelActivity({ activityId });
-      const payload = data?.cancel_record_activity;
-      if (payload?.error_code) {
-        setError(payload.error ?? t("messaging.activity.errorCancel"));
-        return;
-      }
-    } catch {
-      setError(t("messaging.error.generic"));
+      await cancelActivity({ activityId });
+    } catch (cause) {
+      setError(errorMessage(cause, t("activity.errorCancel")));
     }
   }
 
-  const dueDateLabel = dueDate ? formatDate(dueDate) : t("messaging.activity.noDueDate");
+  const dueDateLabel = dueDate ? formatDate(dueDate) : t("activity.noDueDate");
 
   return (
     <div className="flex min-h-72 flex-col gap-4">
@@ -181,8 +152,8 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
       ) : (
         <EmptyState
           icon="activity"
-          title={t("messaging.activity.emptyTitle")}
-          description={t("messaging.activity.emptyHint")}
+          title={t("activity.emptyTitle")}
+          description={t("activity.emptyHint")}
           className="min-h-40 p-4"
         />
       )}
@@ -191,11 +162,11 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
         className="mt-auto space-y-2 border-t border-border-subtle pt-3"
       >
         <FieldRoot>
-          <FieldRoot.Label className="sr-only">{t("messaging.activity.summary")}</FieldRoot.Label>
+          <FieldRoot.Label className="sr-only">{t("activity.summary")}</FieldRoot.Label>
           <FieldRoot.Control
             value={summary}
             onChange={(event) => setSummary(event.currentTarget.value)}
-            placeholder={t("messaging.activity.summary")}
+            placeholder={t("activity.summary")}
           />
         </FieldRoot>
         <Textarea
@@ -203,15 +174,15 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
           onChange={(event) => setNote(event.currentTarget.value)}
           rows={2}
           resize="none"
-          aria-label={t("messaging.activity.notes")}
-          placeholder={t("messaging.activity.notes")}
+          aria-label={t("activity.notes")}
+          placeholder={t("activity.notes")}
         />
         <div className="flex items-center gap-2">
           <div className="min-w-0 flex-1">
             <DatePopover
               selected={dateFromValue(dueDate)}
               label={dueDateLabel}
-              ariaLabel={t("messaging.activity.dueDate")}
+              ariaLabel={t("activity.dueDate")}
               open={dateOpen}
               onOpenChange={setDateOpen}
               onSelectDate={(date) => setDueDate(formatDateStorage(date) ?? "")}
@@ -228,7 +199,7 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
                     }}
                   >
                     <Glyph name="x" />
-                    {t("messaging.activity.clearDueDate")}
+                    {t("activity.clearDueDate")}
                   </Button>
                 ) : null
               }
@@ -241,7 +212,7 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
             disabled={scheduleState.fetching || summary.trim() === ""}
           >
             <Glyph name="calendar" />
-            {t("messaging.activity.schedule")}
+            {t("activity.schedule")}
           </Button>
         </div>
         {error ? (
@@ -295,7 +266,7 @@ function ActivityItem({
             size="iconSm"
             disabled={busy}
             onClick={onCancel}
-            aria-label={t("messaging.activity.cancel")}
+            aria-label={t("activity.cancel")}
           >
             <Glyph name="trash" />
           </Button>
@@ -316,12 +287,12 @@ function ActivityItem({
             onChange={(event) => onFeedback(event.currentTarget.value)}
             rows={2}
             resize="none"
-            aria-label={t("messaging.activity.feedback")}
-            placeholder={t("messaging.activity.feedback")}
+            aria-label={t("activity.feedback")}
+            placeholder={t("activity.feedback")}
           />
           <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={onComplete}>
             <Glyph name="check" />
-            {t("messaging.activity.markDone")}
+            {t("activity.markDone")}
           </Button>
         </div>
       ) : null}
@@ -349,9 +320,9 @@ function activityStateLabel(
   activity: RecordActivityRow,
   t: ReturnType<typeof useMessagingT>,
 ): string {
-  if (activity.status === "DONE") return t("messaging.activity.stateDone");
-  if (activity.status === "CANCELED") return t("messaging.activity.stateCanceled");
-  if (activity.state === "overdue") return t("messaging.activity.stateOverdue");
-  if (activity.state === "today") return t("messaging.activity.stateToday");
-  return t("messaging.activity.statePlanned");
+  if (activity.status === "DONE") return t("activity.stateDone");
+  if (activity.status === "CANCELED") return t("activity.stateCanceled");
+  if (activity.state === "overdue") return t("activity.stateOverdue");
+  if (activity.state === "today") return t("activity.stateToday");
+  return t("activity.statePlanned");
 }

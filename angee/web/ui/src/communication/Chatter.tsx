@@ -8,7 +8,7 @@ import {
 
 import { Glyph } from "../chrome/Glyph";
 import { EmptyState } from "../fragments/EmptyState";
-import { useBaseT, type BaseMessageVars } from "../i18n";
+import { useUiT, type UiMessageVars } from "../i18n";
 import { cn } from "../lib/cn";
 import {
   useAppRuntime,
@@ -35,7 +35,7 @@ export function Chatter({
   composer,
   className,
 }: ChatterProps): React.ReactElement | null {
-  const t = useBaseT();
+  const t = useUiT();
   const { activeTab, content, setActiveTab } = useChatter();
   const runtime = useAppRuntime();
   // Tabs merge by id (last wins): the default agent/comments/activity tabs are the
@@ -200,7 +200,7 @@ function mergeChatterTabs(
 
 function defaultTabs(
   children: React.ReactNode,
-  t: (key: string, vars?: BaseMessageVars) => string,
+  t: (key: string, vars?: UiMessageVars) => string,
 ): readonly ChatterTab[] {
   return [
     {

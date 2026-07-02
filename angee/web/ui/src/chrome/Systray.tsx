@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { Button } from "../ui/button";
 import { Tooltip } from "../ui/tooltip";
 import { Glyph } from "./Glyph";
@@ -14,7 +14,7 @@ export function Systray({
   onHelp,
   onNotifications,
 }: SystrayProps): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const notifications = t("chrome.notifications");
   const help = t("chrome.help");
   return (
