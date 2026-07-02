@@ -9,7 +9,7 @@ inside ``advance()``.
 from __future__ import annotations
 
 import traceback
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import datetime
 from typing import Any, Literal, cast
 
@@ -124,6 +124,8 @@ def advance(run_id: int, *, now: datetime | None = None) -> dict[str, int]:
 
         _activate_run_if_needed(run, timestamp=timestamp)
         _route_completed_steps(run)
+        if _fail_if_budget_exceeded(run):
+            return {"claimed": 0}
         claimed_ids = _claim_due_steps(run, timestamp=timestamp)
         _update_run_status(run, timestamp=timestamp)
         for step_run_id in claimed_ids:
@@ -939,6 +941,41 @@ def _claim_due_steps(run: Any, *, timestamp: datetime) -> list[int]:
     run.steps_taken += len(claimed)
     run.save(update_fields=["steps_taken", "updated_at"])
     return claimed
+
+
+def _fail_if_budget_exceeded(run: Any) -> bool:
+    """Fail ``run`` when its top-level numeric budget spend exceeds a limit."""
+
+    budget = run.workflow.budget if isinstance(run.workflow.budget, Mapping) else {}
+    spent = run.budget_spent if isinstance(run.budget_spent, Mapping) else {}
+    for key, limit in _numeric_budget_items(budget):
+        spent_value = _numeric_budget_value(spent.get(key))
+        if spent_value is None or spent_value <= limit:
+            continue
+        run.mark_failed(f"Workflow exceeded budget {key}={limit:g} (spent {spent_value:g}).")
+        return True
+    return False
+
+
+def _numeric_budget_items(budget: Mapping[str, Any]) -> Iterable[tuple[str, float]]:
+    """Yield numeric top-level budget limits in deterministic key order."""
+
+    for key in sorted(budget):
+        value = _numeric_budget_value(budget[key])
+        if value is not None:
+            yield str(key), value
+
+
+def _numeric_budget_value(value: Any) -> float | None:
+    """Return ``value`` as a non-negative budget number, or ``None``."""
+
+    if isinstance(value, bool) or value in (None, ""):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
 
 
 def _update_run_status(run: Any, *, timestamp: datetime) -> None:

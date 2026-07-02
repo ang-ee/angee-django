@@ -7,6 +7,7 @@ INSTALLED_APPS:
   - angee.tasks
   - angee.agents
   - angee.workflows
+  - angee.workflows_agents
   - angee.agents_integrate_anthropic
   - angee.agents_integrate_openai
   - angee.integrate

@@ -18,6 +18,7 @@ INSTALLED_APPS = [
     "angee.iam_integrate_oidc",
     "angee.agents",
     "angee.workflows",
+    "angee.workflows_agents",
     "angee.knowledge",
     "angee.mcp",
     "angee.storage",
@@ -76,6 +77,7 @@ ANGEE_WORKFLOW_STEP_CLASSES = {
     "handler": "angee.workflows.steps.HandlerStep",
     "wait": "angee.workflows.steps.WaitStep",
     "gate": "angee.workflows.steps.GateStep",
+    "agent": "angee.workflows_agents.steps.AgentStepImpl",
 }
 ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES = {
     "lexical": "angee.knowledge.retrieval.LexicalRetrievalBackend",

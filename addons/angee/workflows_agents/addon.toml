@@ -1,0 +1,8 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.workflows_agents"
+description = "Workflow activity steps backed by the agents inference catalogue"
+keywords = ["workflows", "agents", "inference"]
+category = "Workflows"
+depends_on = ["angee.workflows", "angee.agents"]
