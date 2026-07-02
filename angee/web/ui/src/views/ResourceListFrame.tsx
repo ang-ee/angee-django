@@ -47,7 +47,12 @@ export function ResourceListFrame({
           className={cn(controlBandItemClassName, toolbar.className)}
         />
       </ControlBand>
-      <div className={cn("min-h-0 overflow-hidden bg-sheet", className)}>
+      <div
+        className={cn(
+          "flex min-h-full flex-col overflow-visible bg-sheet",
+          className,
+        )}
+      >
         {selection && selection.count > 0 ? (
           <SelectionBar
             count={selection.count}

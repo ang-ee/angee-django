@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { render, screen } from "@testing-library/react";
-import { describe, expect, test, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { BoardView } from "./BoardView";
 import type { RowGroup } from "./ListInternals";
@@ -12,9 +12,13 @@ import type { Row } from "@angee/resources";
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
 vi.mock("../i18n", () => ({ useBaseT: () => (key: string) => key }));
 
+afterEach(() => cleanup());
+
 interface DemoRow extends Row {
   id: string;
   label: string;
+  tags?: readonly string[];
+  wordCount?: number;
 }
 
 // BoardView consumes precomputed rows + a minimal view context; build just the shape
@@ -55,6 +59,69 @@ describe("BoardView", () => {
   test("renders the default key/value body from columns", () => {
     renderBoard();
     expect(screen.getByText("Notes")).toBeTruthy();
+  });
+
+  test("lets the browser own board overflow instead of internal board scrollbars", () => {
+    renderBoard();
+
+    const laneRegion = screen.getByRole("region", { name: "Data" });
+    const surface = laneRegion.parentElement;
+    const card = screen.getByText("Notes").closest("article");
+    const laneBody = card?.parentElement;
+
+    expect(surface?.className).not.toContain("overflow-x-auto");
+    expect(surface?.className).not.toContain("overflow-y-hidden");
+    expect(surface?.className).not.toContain("h-full");
+    expect(surface?.style.height).toBe("");
+    expect(laneBody?.className).not.toContain("overflow-y-auto");
+  });
+
+  test("keeps default card detail rows inside the fixed lane width", () => {
+    renderBoard({
+      columns: [
+        { field: "label", header: "Label" },
+        { field: "tags", header: "Tags" },
+        { field: "wordCount", header: "Word Count" },
+      ],
+      groups: [
+        lane([
+          {
+            id: "1",
+            label: "Release train status (translated: ES / FR / DE)",
+            tags: ["engineering", "release", "translation"],
+            wordCount: 155,
+          },
+        ]),
+      ],
+    });
+
+    const card = screen.getByText(/Release train status/).closest("article");
+    const frame = card?.querySelector("button");
+    const wordCountRow = screen.getByText("Word Count").closest("div");
+    const wordCountValue = screen.getByText("155").closest("span");
+
+    expect(card?.className).toContain("min-w-0");
+    expect(card?.className).toContain("board-card-grid");
+    expect(frame?.className).toContain("min-w-0");
+    expect(frame?.className).toContain("max-w-full");
+    expect(wordCountRow?.className).toContain("grid");
+    expect(wordCountRow?.className).toContain("board-card-detail-grid");
+    expect(wordCountValue?.className).toContain("overflow-hidden");
+    expect(wordCountValue?.className).toContain("[overflow-wrap:anywhere]");
+  });
+
+  test("lets the browser own loading-board overflow too", () => {
+    renderBoard({
+      fetching: true,
+      groups: [lane([])],
+    });
+
+    const surface = screen.getByRole("status");
+
+    expect(surface.className).not.toContain("overflow-x-auto");
+    expect(surface.className).not.toContain("overflow-y-hidden");
+    expect(surface.className).not.toContain("h-full");
+    expect(surface.style.height).toBe("");
   });
 
   test("renderCard overrides the card body while the actions footer still renders", () => {

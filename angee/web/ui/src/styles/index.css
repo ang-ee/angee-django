@@ -382,14 +382,14 @@
 @utility console-grid {
   display: grid;
   grid-template-columns: var(--spacing-rail-w) 1fr;
-  /* The trailing `auto` status row collapses to zero height when its host is
-     empty, so the optional statusline costs nothing for pages that omit it. */
+  /* The statusline host is fixed chrome; the grid row is only a named portal
+     target and must not reserve the old footer gap. */
   grid-template-rows:
     var(--spacing-topbar-h)
     var(--spacing-crumbs-h)
     auto
     1fr
-    auto;
+    0;
   grid-template-areas:
     "rail topbar"
     "rail crumbs"
@@ -403,6 +403,43 @@
 @utility area-control { grid-area: control; }
 @utility area-content { grid-area: content; }
 @utility area-status  { grid-area: status; }
+
+.console-browser-scroll-main {
+  min-height: 100%;
+  overflow: visible;
+  padding-bottom: 1.75rem;
+}
+
+.console-browser-scroll-main > * {
+  min-height: 100%;
+}
+
+.console-statusline-host {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: var(--spacing-rail-w);
+  z-index: 40;
+}
+
+.console-content-main {
+  /* Retained for older composed packages during rolling upgrades. */
+  min-height: 0;
+  overflow: auto;
+}
+
+.console-content-main > * {
+  height: 100%;
+  min-height: 0;
+}
+
+@utility board-card-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@utility board-card-detail-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+}
 
 /* ============================================================================
    Decorative grid background — two intersecting 1px lines repeated on a

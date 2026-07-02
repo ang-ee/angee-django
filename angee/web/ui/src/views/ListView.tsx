@@ -581,6 +581,7 @@ function ListViewContent<TRow extends Row = Row>({
       error={groupedListMode ? null : surface.list.error}
       loadingFooter={
         !groupedListMode
+        && resourceView.state.view !== "board"
         && surface.list.fetching
         && surface.rowModels.length > 0
       }
