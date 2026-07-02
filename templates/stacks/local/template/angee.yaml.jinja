@@ -54,6 +54,35 @@ sources:
     kind: local
     path: .
 
+{% if frontend_mode == "caddy_static" %}
+jobs:
+  # Static frontend build for Caddy ingress. This mirrors the Vite service's
+  # codegen bootstrap, then emits the SPA into <web_path>/dist for Caddy to serve.
+  frontend-build:
+    runtime: container
+    image: {{ web_image }}
+    mounts:
+      - source://app:/opt/angee-web/project
+    workdir: /opt/angee-web/project/{{ web_path }}
+    command:
+      - sh
+      - "-c"
+      - >-
+        cd /opt/angee-web
+        && printf 'packages:\n  - "packages/*"\n  - "project/{{ web_path }}"\n' > pnpm-workspace.yaml
+        && pnpm install
+        && n=0
+        && until [ -s project/runtime/schemas/console.graphql ] && [ -s project/runtime/schemas/public.graphql ]; do
+        n=$$((n+1));
+        [ "$$n" -ge 120 ] && { echo 'runtime GraphQL schemas not ready after 120s' >&2; ls -R project/runtime >&2 || true; exit 1; };
+        echo "waiting for runtime GraphQL schemas ($$n/120)..."; sleep 1;
+        done
+        && cd project/{{ web_path }}
+        && pnpm codegen
+        && pnpm build
+    depends_on: [django]
+
+{% endif %}
 services:
   # The control plane. Open on loopback — no --token — so the CLI needs only
   # `export ANGEE_OPERATOR_URL=http://127.0.0.1:{{ operator_port }}`. Runs on the host
@@ -105,6 +134,13 @@ services:
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_USERNAME: "admin"
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_EMAIL: "admin@example.com"
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_PASSWORD: "${secret.admin-password}"
+      # Browser traffic reaches the daemon through the frontend ingress. Django's
+      # server-side bridge reaches the host-local operator directly.
+      ANGEE_OPERATOR_GRAPHQL_ENDPOINT: "/operator/graphql"
+      ANGEE_OPERATOR_URL: "http://host.docker.internal:${ports.operator}"
+      # Agents and container services reach the built-in MCP server on the Docker
+      # network, not through a host-published Django port.
+      ANGEE_BUILTIN_MCP_URL: "http://django:8000/mcp"
     command:
       - sh
       - "-c"
@@ -124,9 +160,12 @@ services:
         && python manage.py bootstrap_admin
         && exec uvicorn angee.asgi:application --host 0.0.0.0 --port 8000
     after: [postgres]
+{% if frontend_mode == "vite" %}
     ports:
       - "{{ django_port }}:8000"
+{% endif %}
 
+{% if frontend_mode == "vite" %}
   # Vite frontend on the framework's JS runtime image (node + the @angee/* packages,
   # copied from the django-angee wheel, as a pnpm workspace). The project mounts INTO
   # the workspace as a member, so its `@angee/*: workspace:*` deps link to the baked
@@ -160,3 +199,49 @@ services:
     after: [django]
     ports:
       - "{{ ui_port }}:5173"
+{% elif frontend_mode == "caddy_static" %}
+  # Browser-facing ingress. Caddy serves the built SPA and proxies only backend
+  # endpoints over internal routes; SPA pages like /operator/services still fall
+  # through to index.html.
+  caddy:
+    runtime: container
+    image: {{ caddy_image }}
+    mounts:
+      - source://app:/srv/project
+    command:
+      - sh
+      - "-c"
+      - |-
+        cat >/etc/caddy/Caddyfile <<'CADDY'
+        :80 {
+          encode zstd gzip
+
+          @django path /graphql/* /auth/csrf /auth/csrf/ /storage/upload /storage/upload/* /storage/download /storage/download/* /admin/* /static/* /media/*
+          handle @django {
+            reverse_proxy django:8000
+          }
+
+          @operator_graphql path /operator/graphql /operator/graphql/*
+          handle @operator_graphql {
+            uri strip_prefix /operator
+            reverse_proxy host.docker.internal:${ports.operator}
+          }
+
+          @operator_logs path_regexp operator_logs ^/operator/services/[^/]+/logs/stream$
+          handle @operator_logs {
+            uri strip_prefix /operator
+            reverse_proxy host.docker.internal:${ports.operator}
+          }
+
+          handle {
+            root * /srv/project/{{ web_path }}/dist
+            try_files {path} /index.html
+            file_server
+          }
+        }
+        CADDY
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    after: [django, frontend-build]
+    ports:
+      - "{{ ui_port }}:80"
+{% endif %}
