@@ -1,0 +1,44 @@
+_meta:
+  model: workflows.Step
+rows:
+  - xref: note_publish_entry
+    fields:
+      workflow: notes.note_publish_approval
+      key: entry
+      name: Entry handler
+      step_class: handler
+      config:
+        outcome: needs_review
+      is_entry: true
+      position:
+        x: 0
+        y: 0
+  - xref: note_publish_gate
+    fields:
+      workflow: notes.note_publish_approval
+      key: approval
+      name: Approval gate
+      step_class: gate
+      config:
+        policy: one_done
+        action: approve-note-publish
+        slots:
+          - assignee: angee/role:admin#member
+      join_rule: all_success
+      is_entry: false
+      position:
+        x: 280
+        y: 0
+  - xref: note_publish_finalize
+    fields:
+      workflow: notes.note_publish_approval
+      key: finalize
+      name: Finalize handler
+      step_class: handler
+      config:
+        outcome: done
+      join_rule: all_success
+      is_entry: false
+      position:
+        x: 560
+        y: 0

@@ -5,7 +5,7 @@ name = "example.notes"
 description = "A notes example — the minimal consumer addon the example project composes"
 keywords = ["notes", "example"]
 category = "Example"
-depends_on = ["angee.iam", "angee.integrate", "angee.iam_integrate_oidc", "angee.agents", "angee.agents_integrate_anthropic", "angee.mcp", "angee.messaging"]
+depends_on = ["angee.iam", "angee.integrate", "angee.iam_integrate_oidc", "angee.agents", "angee.agents_integrate_anthropic", "angee.mcp", "angee.messaging", "angee.workflows"]
 
 [resources]
 install = [
@@ -20,4 +20,8 @@ demo = [
   { path = "resources/demo/085_integrate.source.yaml", depends_on = "resources/demo/084_integrate.repository.yaml" },
   { path = "resources/demo/094_integrate.template.yaml", depends_on = "resources/demo/085_integrate.source.yaml", adopt = ["source", "path"] },
   { path = "resources/demo/095_agents.agent.yaml", depends_on = ["resources/demo/094_integrate.template.yaml", "agents:resources/demo/020_agents.mcpserver.yaml", "agents_integrate_anthropic:resources/demo/040_agents.inferencemodel.yaml"] },
+  { path = "resources/demo/100_workflows.workflow.yaml", publish = true },
+  { path = "resources/demo/101_workflows.step.yaml", depends_on = "resources/demo/100_workflows.workflow.yaml" },
+  { path = "resources/demo/102_workflows.edge.yaml", depends_on = "resources/demo/101_workflows.step.yaml" },
+  { path = "resources/demo/103_workflows.trigger.yaml", depends_on = "resources/demo/100_workflows.workflow.yaml" },
 ]

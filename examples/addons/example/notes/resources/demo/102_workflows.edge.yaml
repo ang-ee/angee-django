@@ -1,0 +1,15 @@
+_meta:
+  model: workflows.Edge
+rows:
+  - xref: note_publish_entry_to_gate
+    fields:
+      workflow: notes.note_publish_approval
+      source: notes.note_publish_entry
+      target: notes.note_publish_gate
+      condition: needs_review
+  - xref: note_publish_gate_to_finalize
+    fields:
+      workflow: notes.note_publish_approval
+      source: notes.note_publish_gate
+      target: notes.note_publish_finalize
+      condition: completed
