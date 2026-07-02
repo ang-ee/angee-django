@@ -1,0 +1,8 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.tasks"
+description = "The framework queue seam — Procrastinate-backed deferred and periodic execution"
+keywords = ["tasks", "queue", "jobs"]
+category = "Foundation"
+depends_on = ["angee.compose", "procrastinate.contrib.django"]

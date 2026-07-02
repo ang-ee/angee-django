@@ -161,9 +161,10 @@ Rules that follow from the layering:
   method.
 - GraphQL schema files declare Strawberry types, inputs, filters, buckets, and
   field-level resolver glue. They bind to composed runtime models and compose
-  library primitives (`strawberry-django`, `crud`, `changes`, aggregate builders)
-  instead of reimplementing ORM, permission, or serialization behavior.
-- Model-backed `hasura_resource(...)` surfaces expose sqid public identity. Use
+  library primitives (`strawberry-django`, `hasura_model_resource`, `changes`,
+  aggregate builders) instead of reimplementing ORM, permission, or serialization
+  behavior.
+- Model-backed `hasura_model_resource(...)` surfaces expose sqid public identity. Use
   `AngeeDataModel`/`SqidMixin` for concrete rows. For third-party Django models
   that Angee exposes but does not own, pass an explicit sqid public identity
   decoder to the resource instead of creating source-addon migration state. A
@@ -381,15 +382,16 @@ data through REBAC, never a queryset bypass.
 
 Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 
-- **`crud()` create `full_clean`s the input, so model + input defaults must agree.**
-  `strawberry-django`'s create builds a dummy instance from the input and calls
+- **`hasura_model_resource` create `full_clean`s the input, so model + input defaults must agree.**
+  The Hasura model-resource create path builds a dummy instance from the input and calls
   `full_clean()` before saving — two traps follow. (1) A `JSONField(default=dict)`
   (or `default=list`) needs `blank=True`: Django counts `{}`/`[]` as blank, so a
   `blank=False` container default fails `full_clean` ("cannot be blank") on every
   create. (2) An optional create-input field over a **non-null** column must
   default to `strawberry.UNSET`, never `None` — `None` is submitted as an explicit
   null that overwrites the model default (e.g. `status`/`config`), and
-  `full_clean` then rejects the null. Mirror this for any new `crud()` input.
+  `full_clean` then rejects the null. Mirror this for any new
+  `hasura_model_resource` input.
 - **`uv run` tool shebangs are stale** — run Python tools by module:
   `uv run python -m pytest`, `uv run python -m mypy angee addons`,
   `uv run python -m ruff check .`. Bare `uv run pytest`/`mypy` fail to spawn.

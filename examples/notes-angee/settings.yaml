@@ -4,6 +4,7 @@ ALLOWED_HOSTS:
   - "*"
 
 INSTALLED_APPS:
+  - angee.tasks
   - angee.agents
   - angee.agents_integrate_anthropic
   - angee.agents_integrate_openai

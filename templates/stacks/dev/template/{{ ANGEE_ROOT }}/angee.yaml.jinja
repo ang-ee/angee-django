@@ -39,10 +39,12 @@ secrets_backend:
 
 secrets:
   operator-token: { generated: true, length: 32 }
+  db-password: { generated: true, length: 32 }
 
 ports:
   django: { value: {{ django_port }}, export_env: DJANGO_PORT }
   process_compose: { value: {{ process_compose_port }}, export_env: PROCESS_COMPOSE_PORT }
+  postgres: { value: {{ postgres_port }}, export_env: POSTGRES_PORT }
   # The operator daemon's port — workspace-allocated (operator.port_pool.operator),
   # never a hardcoded 9000. Services reference it as ${ports.operator}.
   operator: { value: {{ operator_port }}, export_env: ANGEE_OPERATOR_PORT }
@@ -57,6 +59,7 @@ ports:
 persist:
   app-data: { subpath: {{ ANGEE_ROOT }}/data, scope: stack }
   chrome-profile: { subpath: {{ ANGEE_ROOT }}/data/chrome, scope: stack }
+  pgdata: { subpath: {{ ANGEE_ROOT }}/pgdata, scope: stack }
 
 sources:
   app:
@@ -72,14 +75,32 @@ sources:
 # emitted only by the explicit build job; normal Django startup checks and
 # imports the generated models without writing.
 jobs:
+  postgres-ready:
+    runtime: local
+    command:
+      - sh
+      - "-c"
+      - >-
+        n=0;
+        until uv run --extra postgres python -c "import os, psycopg; psycopg.connect(os.environ['DATABASE_URL']).close()" 2>/tmp/pgwait.err; do
+        n=$$((n+1));
+        [ "$$n" -ge 60 ] && { echo 'postgres not reachable after 60s:' >&2; cat /tmp/pgwait.err >&2; exit 1; };
+        echo "waiting for postgres ($$n/60)..."; sleep 1;
+        done
+    env:
+      DATABASE_URL: "postgres://angee:${secret.db-password}@127.0.0.1:${ports.postgres}/angee"
+    depends_on: [postgres]
+
   # Explicit runtime emit. Later jobs and services check/import this output
   # without rewriting it during Django app population.
   build:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "python", "manage.py", "angee", "build"]
+    command: ["uv", "run", "--extra", "postgres", "python", "manage.py", "angee", "build"]
     env:
       ANGEE_PROJECT_DIR: "."
+      DATABASE_URL: "postgres://angee:${secret.db-password}@127.0.0.1:${ports.postgres}/angee"
+    depends_on: [postgres-ready]
 
   # Prune stale package-managed REBAC schema before any check-gated DB step. An
   # addon dropped from INSTALLED_APPS, or a definition removed from a still-composed
@@ -89,9 +110,10 @@ jobs:
   reconcile-permissions:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "python", "manage.py", "reconcile_permissions"]
+    command: ["uv", "run", "--extra", "postgres", "python", "manage.py", "reconcile_permissions"]
     env:
       ANGEE_PROJECT_DIR: "."
+      DATABASE_URL: "postgres://angee:${secret.db-password}@127.0.0.1:${ports.postgres}/angee"
     depends_on: [build]
 
   # Generate migrations against the freshly emitted concrete models. Mandatory:
@@ -102,25 +124,28 @@ jobs:
   makemigrations:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "python", "manage.py", "makemigrations"]
+    command: ["uv", "run", "--extra", "postgres", "python", "manage.py", "makemigrations"]
     env:
       ANGEE_PROJECT_DIR: "."
+      DATABASE_URL: "postgres://angee:${secret.db-password}@127.0.0.1:${ports.postgres}/angee"
     depends_on: [reconcile-permissions]
 
   migrate:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "python", "manage.py", "migrate", "--noinput"]
+    command: ["uv", "run", "--extra", "postgres", "python", "manage.py", "migrate", "--noinput"]
     env:
       ANGEE_PROJECT_DIR: "."
+      DATABASE_URL: "postgres://angee:${secret.db-password}@127.0.0.1:${ports.postgres}/angee"
     depends_on: [makemigrations]
 
   permissions:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "python", "manage.py", "rebac", "sync", "--yes"]
+    command: ["uv", "run", "--extra", "postgres", "python", "manage.py", "rebac", "sync", "--yes"]
     env:
       ANGEE_PROJECT_DIR: "."
+      DATABASE_URL: "postgres://angee:${secret.db-password}@127.0.0.1:${ports.postgres}/angee"
     depends_on: [migrate]
 
   resources:
@@ -129,9 +154,10 @@ jobs:
     command:
       - sh
       - "-c"
-      - uv run python manage.py resources load --include-demo
+      - uv run --extra postgres python manage.py resources load --include-demo
     env:
       ANGEE_PROJECT_DIR: "."
+      DATABASE_URL: "postgres://angee:${secret.db-password}@127.0.0.1:${ports.postgres}/angee"
     depends_on: [permissions]
 
   # Render GraphQL SDL to runtime/schemas/<name>.graphql; the SPA imports it to
@@ -139,9 +165,10 @@ jobs:
   schema:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "python", "manage.py", "schema"]
+    command: ["uv", "run", "--extra", "postgres", "python", "manage.py", "schema"]
     env:
       ANGEE_PROJECT_DIR: "."
+      DATABASE_URL: "postgres://angee:${secret.db-password}@127.0.0.1:${ports.postgres}/angee"
     depends_on: [build]
 
   # Install the JS workspace so the frontend service has its node_modules.
@@ -159,9 +186,10 @@ jobs:
   operator-schema:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "python", "manage.py", "operator_schema"]
+    command: ["uv", "run", "--extra", "postgres", "python", "manage.py", "operator_schema"]
     env:
       ANGEE_PROJECT_DIR: "."
+      DATABASE_URL: "postgres://angee:${secret.db-password}@127.0.0.1:${ports.postgres}/angee"
       ANGEE_OPERATOR_URL: "http://127.0.0.1:${ports.operator}"
       ANGEE_OPERATOR_TOKEN: "${secret.operator-token}"
     depends_on: [operator, build]
@@ -177,6 +205,18 @@ jobs:
     depends_on: [deps, schema, operator-schema]
 
 services:
+  postgres:
+    runtime: container
+    image: pgvector/pgvector:pg17
+    env:
+      POSTGRES_USER: angee
+      POSTGRES_DB: angee
+      POSTGRES_PASSWORD: "${secret.db-password}"
+    mounts:
+      - bind://{{ ANGEE_ROOT }}/pgdata:/var/lib/postgresql/data
+    ports:
+      - "${ports.postgres}:5432"
+
   # Angee overrides `runserver` to serve angee.asgi with uvicorn (keeping the ASGI
   # lifespan the MCP mount's session manager needs — see angee.asgi) under Django's
   # own follow-imports autoreloader. That watches every imported source file —
@@ -187,9 +227,10 @@ services:
   django:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "python", "manage.py", "runserver", "127.0.0.1:{{ django_port }}"]
+    command: ["uv", "run", "--extra", "postgres", "python", "manage.py", "runserver", "127.0.0.1:{{ django_port }}"]
     env:
       ANGEE_PROJECT_DIR: "."
+      DATABASE_URL: "postgres://angee:${secret.db-password}@127.0.0.1:${ports.postgres}/angee"
       # Django mints the browser's scoped connection token over the daemon's direct
       # URL + the shared generated secret. The browser then opens the daemon GraphQL
       # same-origin via /operator/graphql (the UI proxies /operator → the daemon, so
@@ -200,6 +241,15 @@ services:
       # Container-reachable URL for this Django process's built-in /mcp mount.
       # Agents run in containers, so they reach the local backend through the host gateway.
       ANGEE_BUILTIN_MCP_URL: "http://host.docker.internal:{{ django_port }}/mcp"
+    after: [resources, schema]
+
+  procrastinate-worker:
+    runtime: local
+    workdir: source://app
+    command: ["uv", "run", "--extra", "postgres", "python", "manage.py", "procrastinate", "worker"]
+    env:
+      ANGEE_PROJECT_DIR: "."
+      DATABASE_URL: "postgres://angee:${secret.db-password}@127.0.0.1:${ports.postgres}/angee"
     after: [resources, schema]
 
   # Vite dev server for the SPA. It proxies /graphql/ and /auth/csrf/ to Django,

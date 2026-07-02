@@ -49,6 +49,10 @@ operator_port:
   type: int
   default: 9000
 
+postgres_port:
+  type: int
+  default: 5433
+
 # Host port the Caddy edge publishes (ws://localhost:<edge_port>/<service>/). Defaults
 # to 80 for the base stack; workspaces lease a distinct value from operator.port_pool.edge
 # so parallel stacks on one host don't all contend for :80.

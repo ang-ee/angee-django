@@ -27,11 +27,12 @@ Dependency changes must update this file in the same change.
 |---|---|---|
 | Python >= 3.14 | Runtime and typing | Project conventions |
 | Django 6.0+ | ORM, migrations, admin, auth contract, app registry | Abstract bases and build-time composition into runtime apps |
-| strawberry-django | GraphQL types, resolvers, dataloaders, schema printing | Merge addon schema parts into named schemas, `crud`/`changes` shortcuts, emit SDL, serve per name |
+| strawberry-django | GraphQL types, resolvers, dataloaders, schema printing | Merge addon schema parts into named schemas, `changes` subscription shortcuts, emit SDL, serve per name |
 | django-choices-field | Enum-backed model fields | `StateField` semantic wrapper |
 | strawberry-django-aggregates | Aggregation and group-by resolvers | Addon-level `AggregateBuilder` wiring (per addon, e.g. notes) |
 | strawberry-django-hasura | Expose Django models in the Hasura GraphQL dialect (`_bool_exp`/`_aggregate`/`x_by_pk`/`_set`), plus computed (non-model) sources via a `run_query` `RowSource` | Composes it as the model emitter (`hasura_model_resource`) and the pydantic computed-source emitter (`hasura_pydantic_resource`) |
 | pydantic | Typed model validation/parsing | Row-shape SSOT for computed (non-model) Hasura resources — the node + filter scalars derive from the pydantic model (`hasura_pydantic_resource`) |
+| Procrastinate | Postgres task queue — deferred/periodic jobs, retries, priorities, queueing locks | hosted by the `angee.tasks` framework app; dispatch confined to engine seams |
 | channels + uvicorn | ASGI/WebSocket transport and serving | GraphQL subscription mounting; uvicorn serves the composed ASGI app and sends the lifespan that enters the MCP mount's `http_app` lifespan (`angee.asgi`) |
 | django-zed-rebac | REBAC engine, actor scoping, relationship storage, local and SpiceDB-compatible backends | Per-addon schema merge, reserved roles, actor resolver |
 | django-sqids | Opaque external IDs | `SqidMixin`, `SqidField` (NULL-safe decode on joins), GraphQL boundary scalar |
@@ -160,11 +161,9 @@ domain presentation over refine state. The active frontend owners are
 | Pick | Role |
 |---|---|
 | Yjs + Hocuspocus | Collaborative editing |
-| Celery + django-celery-beat | Queues and schedules |
 | pgvector / sqlite-vec / python-igraph / lightrag-hku | Vector search and graph RAG |
 | django-ninja | Typed REST sidecars (callbacks, webhooks, health) — over the locked pydantic |
 | boto3 | S3-compatible storage backend (S3 / R2 / MinIO presigned IO) |
-| @xyflow/react | Graph and canvas (node/edge) views |
 | react-json-view-lite + ansi-to-react | JSON widget read tree, debug/log JSON + ANSI panels |
 | simple-icons + @lobehub/icons | Brand and vendor SVG icon registry |
 
