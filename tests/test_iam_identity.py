@@ -6,6 +6,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.http import HttpRequest
 
+from angee.iam import identity as identity_module
 from angee.iam.identity import (
     user_display_label,
     user_from_public_id,
@@ -31,6 +32,12 @@ def test_user_principal_accepts_raw_public_id() -> None:
     assert user_from_public_id(node_id) == user
     assert user_public_id(user.pk) == node_id
     assert user_display_label(str(user.pk)) == "Identity Target"
+
+
+def test_user_principal_has_no_identity_passthrough_helper() -> None:
+    """The principal id is consumed directly; no identity helper should survive."""
+
+    assert not hasattr(identity_module, "_user_principal_node_id")
 
 
 @pytest.mark.django_db

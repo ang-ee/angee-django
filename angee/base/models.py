@@ -8,7 +8,7 @@ from typing import Any, Self, TypeVar, cast
 
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
-from django.db import models
+from django.db import connections, models
 from django.db.models.utils import make_model_tuple
 from django_sqids.field import DEFAULT_ALPHABET
 from rebac import RebacMixin, SubjectRef, check_new, current_actor, to_object_ref
@@ -38,6 +38,18 @@ class AngeeQuerySet(RebacQuerySet[_ModelT]):
 
         self._apply_scope_in_place()
         return self
+
+    def lock_if_supported(self) -> Self:
+        """Apply ``select_for_update`` only on database backends that support it."""
+
+        if connections[self.db].features.has_select_for_update:
+            return cast(Self, self.select_for_update())
+        return self
+
+    def locked_get(self, *args: Any, **kwargs: Any) -> _ModelT:
+        """Return one row under a database row lock when the backend supports it."""
+
+        return self.lock_if_supported().get(*args, **kwargs)
 
     def scoped_for_aggregate(self) -> Self:
         """Return a row-scoped queryset safe for permission-naive aggregation.
@@ -240,10 +252,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
     def public_id(self) -> str:
         """Return the stable public identifier for this model instance."""
 
-        value = self.public_id_value()
-        if value in (None, ""):
-            return ""
-        return str(value)
+        return public_id_of(self)
 
     @classmethod
     def from_public_id(cls, value: str) -> Self | None:

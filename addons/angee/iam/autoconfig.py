@@ -12,8 +12,10 @@ SETTINGS = {
         "angee.iam.middleware.BearerTokenCsrfExemptMiddleware",
         "simple_history.middleware.HistoryRequestMiddleware",
         "reversion.middleware.RevisionMiddleware",
+        "axes.middleware.AxesMiddleware",
     ],
     "AUTHENTICATION_BACKENDS:append": [
+        "axes.backends.AxesStandaloneBackend",
         "rebac.backends.auth.RebacBackend",
         "angee.iam.auth.ModelBackend",
     ],

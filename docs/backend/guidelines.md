@@ -362,17 +362,17 @@ data through REBAC, never a queryset bypass.
   it fails live ("loaded N rows outside actor scope") while passing unit tests.
   Resolve the field elevated by FK id under `system_context`, and verify by
   rendering the live page, not just the test.
-- The relationship store has two storage modes, and only `filter`/`exclude`/`get`
-  **kwargs** are storage-translated. Composed projects run the FK-backed
-  `registry` mode (`angee.base` autoconfig) while bare `tests/settings.py` runs
-  the library's `denormalized` default — so a `Q(resource_type=…)`,
-  `values_list("subject_id")`, or `order_by("resource_type")` against
-  `active_relationship_model()` passes unit tests and raises `FieldError` live.
-  Read relationship rows only through translated filter kwargs, the library's
-  `for_resource`/`order_by_resource`-style helpers, or instance attributes
-  (`row.subject_id` — the registry manager eager-joins them); regression-test
-  permission-hub surfaces under
-  `override_settings(REBAC_LOCAL_BACKEND_STORAGE="registry")`.
+- The relationship store has two storage modes: composed projects run the
+  FK-backed `registry` mode (`angee.base` autoconfig) while bare
+  `tests/settings.py` runs the library's `denormalized` default — a
+  registry-only break therefore passes unit tests and fails live. Since
+  django-zed-rebac 0.14 the registry queryset storage-translates the whole read
+  API — `filter`/`exclude`/`get` kwargs, `Q` objects, and
+  `values`/`values_list`/`order_by`/`annotate` field names — so query with the
+  natural denormalized names; instance attributes (`row.subject_id`) are
+  portable too (the registry manager eager-joins them). Any read shape beyond
+  that API must be verified in both modes — regression-test permission-hub
+  surfaces under `override_settings(REBAC_LOCAL_BACKEND_STORAGE="registry")`.
 - Derive operator/edge token scope from `<ns>/role:<id>#effective_member` (folds
   in role-hierarchy `includes`), never `roles_of`/`roleRefs` (a direct-grants UX
   hint that under-grants).
@@ -469,12 +469,15 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   fire before resolvers and never reach it, so guard required inputs client-side
   from `rootFields.requiredCreateFields`.
 - **In test-client logins pass the backend** —
-  `force_login(user, backend="angee.iam.auth.ModelBackend")`; the default pins
-  `RebacBackend`, whose `get_user` fails outside actor scope and yields
-  `AnonymousUser`.
+  `force_login(user, backend="angee.iam.auth.ModelBackend")`; the default backend
+  order is chosen for runtime authentication concerns and may not be the session
+  reload backend a focused test wants.
 - **Login throttling belongs at the IAM auth seam.** Do not add per-view or
-  per-test throttles; implement the scheduled hardening where the login backend
-  and audit trail can enforce one policy.
+  per-test throttles; IAM composes `django-axes` at the `authenticate(request=...)`
+  backend/signal path, so the password GraphQL mutation stays a thin caller.
+- **Row locks must keep the SQLite floor.** Wrap `select_for_update()` through the
+  owning queryset/manager's feature-gated helper; SQLite is a supported backend
+  and raises `NotSupportedError` if a caller takes a row lock unconditionally.
 - **A gated factory that uses `sudo()` must restore the actor before returning.**
   Elevated writes may be necessary to create the row, but callers continue under
   the original actor. Capture `current_actor()` before the elevated block and

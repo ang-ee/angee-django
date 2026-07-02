@@ -145,16 +145,15 @@ def user_principal(principal_id: str) -> Any:
     """Return the user addressed by a role-grant principal id."""
 
     user_model = get_user_model()
-    resolved_id = _user_principal_node_id(principal_id)
     lookups: list[dict[str, Any]] = []
     subject_id_attr = str(getattr(user_model._meta, "rebac_id_attr", None) or app_settings.REBAC_USER_ID_ATTR)
-    lookups.append({subject_id_attr: resolved_id})
+    lookups.append({subject_id_attr: principal_id})
     public_lookup = getattr(user_model, "public_id_lookup", None)
     if callable(public_lookup):
-        lookups.append(public_lookup(resolved_id))
+        lookups.append(public_lookup(principal_id))
     pk = user_model._meta.pk
     if pk is not None:
-        lookups.append({pk.name: resolved_id})
+        lookups.append({pk.name: principal_id})
 
     tried: set[tuple[tuple[str, Any], ...]] = set()
     with system_context(reason="iam.identity.principal"):
@@ -181,9 +180,3 @@ def user_from_public_id(user_id: Any) -> Any:
     if user is None:
         raise ValueError(f"User {user_id!s} was not found.")
     return user
-
-
-def _user_principal_node_id(principal_id: str) -> str:
-    """Return the public id from a user principal id."""
-
-    return principal_id

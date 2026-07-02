@@ -1465,6 +1465,15 @@ def test_disconnect_account_only_removes_callers_credential(
         assert Credential.objects.filter(user=bob, external_account=account).exists()
 
 
+def test_disconnect_account_docstring_names_check_disconnect_owner() -> None:
+    """The disconnect mutation docs must describe the current guard owner."""
+
+    doc = integrate_schema.ConnectionMutation.disconnect_account.__doc__ or ""
+
+    assert "pre_delete" not in doc
+    assert "check_disconnect" in doc
+
+
 def test_disconnect_account_revokes_owner_so_oidc_login_is_blocked(
     iam_connection_tables: None,
     monkeypatch: pytest.MonkeyPatch,

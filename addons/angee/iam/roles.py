@@ -383,18 +383,23 @@ def unassigned_user_queryset() -> QuerySet[Any]:
     """Return users without direct role grants."""
 
     user_model = get_user_model()
-    assigned = permission_hub_grant_rows(limit=None)
     subject_lookup = user_subject_lookup(user_model)
     if subject_lookup == "sqid":
-        # Read subject ids off row instances: both storage modes expose
-        # ``subject_id`` as an instance attribute (eager-joined in registry
-        # mode), while a values_list("subject_id") resolves raw field names
-        # and fails on the FK-backed store — only filter/exclude/get kwargs
-        # are storage-translated.
-        assigned_filter = user_subject_filter(user_model, (row.subject_id for row in assigned))
+        # Materialized: the sqid field decodes lookup values in Python, so the
+        # id set cannot ride a SQL subquery.
+        subject_ids = tuple(
+            dict.fromkeys(
+                str(subject_id)
+                for subject_id in permission_hub_grant_rows(limit=None).values_list("subject_id", flat=True)
+                if subject_id
+            )
+        )
+        assigned_user_pks = user_model._default_manager.filter(sqid__in=subject_ids).values("pk")
         return cast(
             QuerySet[Any],
-            user_model._default_manager.all().exclude(assigned_filter).order_by(*user_ordering(user_model)),
+            user_model._default_manager.all()
+            .exclude(pk__in=Subquery(assigned_user_pks))
+            .order_by(*user_ordering(user_model)),
         )
 
     assigned_exists = active_relationship_model().objects.filter(
@@ -487,15 +492,13 @@ def privileged_role_refs() -> set[str]:
 def _privileged_grant_rows(grant_rows: QuerySet[Any]) -> QuerySet[Any]:
     """Return grant rows whose role is privileged by the installed schema."""
 
-    # Filter with kwargs, never Q objects: the registry storage mode translates
-    # the denormalized relationship field names only at the queryset boundary,
-    # so a Q(resource_type=..., resource_id=...) bypasses the rewrite and
-    # raises FieldError on the FK-backed store.
-    role_ids_by_type: dict[str, set[str]] = {}
-    for role in privileged_role_refs():
+    query = Q()
+    for role in sorted(privileged_role_refs()):
         role_object = ObjectRef.parse(role)
-        role_ids_by_type.setdefault(role_object.resource_type, set()).add(role_object.resource_id)
-    privileged = grant_rows.none()
-    for resource_type, role_ids in sorted(role_ids_by_type.items()):
-        privileged |= grant_rows.filter(resource_type=resource_type, resource_id__in=sorted(role_ids))
-    return cast(QuerySet[Any], privileged)
+        query |= Q(
+            resource_type=role_object.resource_type,
+            resource_id=role_object.resource_id,
+        )
+    if not query:
+        return cast(QuerySet[Any], grant_rows.none())
+    return cast(QuerySet[Any], grant_rows.filter(query))

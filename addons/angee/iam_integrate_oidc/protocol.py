@@ -167,7 +167,13 @@ def _audience_matches(value: object, expected: str) -> bool:
 
 
 class _PinnedPyJWKClient(PyJWKClient):
-    """PyJWT JWKS parser whose fetches use Angee's pinned HTTP owner."""
+    """PyJWT JWKS parser whose fetches use Angee's pinned HTTP owner.
+
+    Fetches pass ``allow_private=True``: self-hosted and dev IdPs commonly
+    serve ``jwks_uri`` on private addresses, and the URL is writable only
+    through the admin-gated OAuth client surface — the same posture as the
+    CardDAV backend's self-hosted servers.
+    """
 
     def __init__(self, uri: str) -> None:
         """Bind one JWKS URI with PyJWT's JWK-set TTL cache enabled."""

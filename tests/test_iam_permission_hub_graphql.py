@@ -364,6 +364,36 @@ def test_iam_overview_privileged_grants_on_registry_relationship_storage(
     assert {row["role"] for row in overview["privileged_grants"]} == {"angee/role:admin"}
 
 
+def test_unassigned_user_queryset_sqid_path_uses_relationship_subquery(
+    iam_permission_hub_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The sqid user path must not build a Python OR-chain from grant subject ids."""
+
+    admin = _platform_admin("hub-unassigned-admin")
+    assigned = User.objects.create_user(
+        username="hub-unassigned-assigned",
+        email="hub-unassigned-assigned@example.com",
+    )
+    unassigned = User.objects.create_user(
+        username="hub-unassigned-free",
+        email="hub-unassigned-free@example.com",
+    )
+    grant(actor=assigned, role="angee/role:auditor")
+
+    def forbidden_user_subject_filter(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("unassigned_user_queryset must use the relationship subquery")
+
+    monkeypatch.setattr(iam_roles, "user_subject_filter", forbidden_user_subject_filter)
+
+    with system_context(reason="test.iam.unassigned"):
+        rows = list(iam_roles.unassigned_user_queryset())
+
+    assert admin not in rows
+    assert assigned not in rows
+    assert unassigned in rows
+
+
 def test_permission_hub_mutations_are_admin_only(
     iam_permission_hub_tables: None,
 ) -> None:

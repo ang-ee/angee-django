@@ -937,9 +937,10 @@ class ConnectionMutation:
     ) -> UnlinkAccountResult:
         """Remove this session user's credential link to an external account.
 
-        The credential delete fires ``pre_delete`` — the login addon, when
-        installed, vetoes removing a user's last sign-in account by raising an
-        :class:`OAuthFlowError`, surfaced here as a typed error rather than a 500.
+        ``Credential.objects.check_disconnect`` runs installed guards before the
+        credential is deleted; the login addon, when installed, vetoes removing a
+        user's last sign-in account by raising an :class:`OAuthFlowError`, surfaced
+        here as a typed error rather than a 500.
         """
 
         user = _session_user(info)

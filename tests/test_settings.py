@@ -131,6 +131,24 @@ def test_iam_installs_csrf_middleware_for_session_graphql(tmp_path: Path) -> Non
     assert session_at < csrf_at < auth_at < actor_at < bearer_at
 
 
+def test_iam_auth_throttling_comes_from_axes(tmp_path: Path) -> None:
+    """IAM wires login throttling at Django's authenticate/backend seam."""
+
+    from angee.iam.autoconfig import SETTINGS
+
+    settings = _compose(tmp_path)
+    installed = _installed_paths(settings["INSTALLED_APPS"])
+
+    assert "axes.apps.AppConfig" in installed
+    assert "axes.middleware.AxesMiddleware" in settings["MIDDLEWARE"]
+    assert SETTINGS["AUTHENTICATION_BACKENDS:append"] == [
+        "axes.backends.AxesStandaloneBackend",
+        "rebac.backends.auth.RebacBackend",
+        "angee.iam.auth.ModelBackend",
+    ]
+    assert settings["AUTHENTICATION_BACKENDS"][0] == "axes.backends.AxesStandaloneBackend"
+
+
 def test_addons_are_sorted_by_declared_dependencies(tmp_path: Path) -> None:
     """The host may list addons in any order; AppConfig depends_on orders them."""
 
@@ -166,6 +184,7 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "channels.apps.ChannelsConfig",
         "angee.graphql",
         "angee.resources",
+        "axes.apps.AppConfig",
         "django.contrib.auth.apps.AuthConfig",
         "django.contrib.sessions.apps.SessionsConfig",
         "angee.iam.apps.IAMConfig",
@@ -253,6 +272,7 @@ def test_auth_user_model_comes_from_iam_autoconfig(
 
     assert SETTINGS["AUTH_USER_MODEL"] == "iam.User"
     assert SETTINGS["AUTHENTICATION_BACKENDS:append"] == [
+        "axes.backends.AxesStandaloneBackend",
         "rebac.backends.auth.RebacBackend",
         "angee.iam.auth.ModelBackend",
     ]

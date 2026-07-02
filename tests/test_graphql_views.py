@@ -5,8 +5,15 @@ from __future__ import annotations
 from typing import Any
 
 from django.http import HttpResponse
+from strawberry.django.views import GraphQLView as SyncGraphQLView
 
 from angee.graphql import views
+
+
+def test_graphql_endpoint_uses_sync_django_graphql_view() -> None:
+    """Blocking resolver I/O stays safe because HTTP GraphQL uses the sync view."""
+
+    assert views.GraphQLView is SyncGraphQLView
 
 
 def test_get_view_reuses_built_schema_per_name(monkeypatch) -> None:

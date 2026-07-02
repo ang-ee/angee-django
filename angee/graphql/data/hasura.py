@@ -26,6 +26,7 @@ from angee.base.models import (
     requires_angee_rebac_contract,
 )
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
+from angee.graphql.data.field_classification import model_field_scalar
 from angee.graphql.data.metadata import (
     DataAggregateMeasureMetadata,
     DataGroupBucketFilterMetadata,
@@ -36,7 +37,6 @@ from angee.graphql.data.metadata import (
     DataResourceTypeNames,
     attach_data_resource_metadata,
     make_data_resource_metadata,
-    model_field_scalar,
     model_resource_fields,
     resource_type_name,
     resource_wire_field_name,

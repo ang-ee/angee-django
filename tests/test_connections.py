@@ -21,7 +21,7 @@ from angee.integrate.credentials import CredentialKind, OAuthCredentialHandler, 
 from angee.integrate.models import AccountStatus
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import TOKEN_EXCHANGE_FAILED, OAuthFlowError
-from tests.conftest import Credential, ExternalAccount, OAuthClient, _create_missing_tables
+from tests.conftest import Credential, ExternalAccount, Integration, OAuthClient, Vendor, _create_missing_tables
 
 
 def test_oauth_client_blank_client_id_means_needs_client() -> None:
@@ -666,6 +666,44 @@ def test_ensure_fresh_does_not_call_select_for_update_on_sqlite(monkeypatch: pyt
             credential.ensure_fresh()
 
         assert credential.secret_value() == "sqlite-access"
+    finally:
+        _drop_models(created_models)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_activate_from_credential_does_not_call_select_for_update_on_sqlite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SQLite is the documented floor; activation locking degrades to a plain read there."""
+
+    created_models = _create_missing_tables()
+    try:
+        user = get_user_model().objects.create_user(username="activate-sqlite", email="activate@example.com")
+        call_command("rebac", "sync", verbosity=0)
+        with system_context(reason="test activate setup"):
+            vendor = Vendor.objects.create(slug="activate", display_name="Activate")
+            oauth_client = OAuthClient.objects.create(
+                slug="activate",
+                display_name="Activate prod",
+                client_id="activate-client",
+                token_endpoint="https://idp.example/token",
+            )
+            credential = Credential.objects.upsert_for_user(
+                user,
+                oauth_client,
+                CredentialKind.OAUTH,
+                {"access_token": "activate-token"},
+            )
+
+        def forbidden_select_for_update(self: Any, *args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("SQLite activation must not call select_for_update()")
+
+        monkeypatch.setattr(type(Integration.objects.all()), "select_for_update", forbidden_select_for_update)
+
+        integration = Integration.objects.activate_from_credential(user, vendor=vendor, credential=credential)
+
+        assert integration.credential_id == credential.pk
+        assert integration.status == "active"
     finally:
         _drop_models(created_models)
 

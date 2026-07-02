@@ -1132,10 +1132,7 @@ class Credential(SqidMixin, AuditMixin, AngeeModel):
         """
 
         with transaction.atomic():
-            queryset = type(self).objects.sudo(reason="integrate.credential.refresh")
-            if connections[queryset.db].features.has_select_for_update:
-                queryset = queryset.select_for_update()
-            locked = queryset.get(pk=self.pk)
+            locked = type(self).objects.sudo(reason="integrate.credential.refresh").locked_get(pk=self.pk)
             stale = locked.expires_at is not None and locked.expires_at <= timezone.now() + _OAUTH_REFRESH_MARGIN
             if force or stale:
                 self.handler.refresh(locked)
@@ -1276,7 +1273,7 @@ class IntegrationManager(AngeeManager):
 
         integration = self.draft_for(user, vendor=vendor, impl_class=impl_class)
         with system_context(reason="integrate.integration.activate_from_credential"), transaction.atomic():
-            integration = self.select_for_update().get(pk=integration.pk)
+            integration = self.locked_get(pk=integration.pk)
             integration.credential = credential
             integration.account = getattr(credential, "external_account", None)
             integration.status = IntegrationStatus.ACTIVE

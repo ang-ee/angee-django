@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib
 import inspect
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple, cast
 
@@ -41,6 +42,19 @@ class ModelContributions(NamedTuple):
 
     extensions: tuple[type[models.Model], ...]
     """Same-row extensions that merge fields into another addon's model."""
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeModelRenderPlan:
+    """Named render plan for one concrete runtime model class."""
+
+    model_class: type[AngeeModel]
+    source_alias: str
+    runtime_parent_alias: str | None
+    extension_bases: tuple[type[models.Model], ...]
+    extension_aliases: tuple[tuple[type[models.Model], str], ...]
+    decorators: tuple[ModelDecorator, ...]
+    attributes: tuple[ModelClassAttribute, ...]
 
 
 class Runtime:
@@ -278,16 +292,7 @@ class Runtime:
             "",
         ]
         imports: list[str] = []
-        render_plans: list[
-            tuple[
-                type[AngeeModel],
-                str,
-                str | None,
-                tuple[tuple[type[models.Model], str], ...],
-                tuple[ModelDecorator, ...],
-                tuple[ModelClassAttribute, ...],
-            ]
-        ] = []
+        render_plans: list[RuntimeModelRenderPlan] = []
         for model_class in self._ordered_source_models(label, source_models):
             source_alias = f"Abstract{model_class.__name__}"
             imports.extend(self._class_import(model_class, source_alias))
@@ -314,49 +319,50 @@ class Runtime:
             imports.extend(self._model_decorator_imports(decorators))
             imports.extend(self._model_attribute_imports(attributes))
             render_plans.append(
-                (
-                    model_class,
-                    source_alias,
-                    runtime_parent_alias,
-                    tuple(aliased_extensions),
-                    decorators,
-                    attributes,
+                RuntimeModelRenderPlan(
+                    model_class=model_class,
+                    source_alias=source_alias,
+                    runtime_parent_alias=runtime_parent_alias,
+                    extension_bases=extension_bases,
+                    extension_aliases=tuple(aliased_extensions),
+                    decorators=decorators,
+                    attributes=attributes,
                 )
             )
 
         lines.extend(sorted(set(imports)))
         lines.append("")
-        for model_class, source_alias, runtime_parent_alias, extension_aliases, decorators, attributes in render_plans:
-            meta_name = f"_{model_class.__name__}Meta"
-            base_names = [alias for _extension, alias in extension_aliases]
-            if runtime_parent_alias is not None:
-                base_names.append(runtime_parent_alias)
-            base_names.append(source_alias)
+        for plan in render_plans:
+            meta_name = f"_{plan.model_class.__name__}Meta"
+            base_names = [alias for _extension, alias in plan.extension_aliases]
+            if plan.runtime_parent_alias is not None:
+                base_names.append(plan.runtime_parent_alias)
+            base_names.append(plan.source_alias)
             meta_lines = [
                 "        abstract = False",
                 f"        app_label = {label!r}",
             ]
-            meta_lines.extend(self._rebac_meta_source(model_class))
+            meta_lines.extend(self._rebac_meta_source(plan.model_class))
             body_lines = [
                 line
-                for attribute in attributes
+                for attribute in plan.attributes
                 for line in (*self._model_attribute_source(attribute), "")
             ]
             decorator_lines = [
                 self._model_decorator_source(
-                    model_class,
-                    extension_bases,
+                    plan.model_class,
+                    plan.extension_bases,
                     decorator,
                 )
-                for decorator in decorators
+                for decorator in plan.decorators
             ]
             lines.extend(
                 [
-                    f"{meta_name} = getattr({source_alias}, 'Meta', object)",
+                    f"{meta_name} = getattr({plan.source_alias}, 'Meta', object)",
                     "",
                     *decorator_lines,
-                    f"class {model_class.__name__}({', '.join(base_names)}):",
-                    f'    """Concrete {model_class.__name__} model."""',
+                    f"class {plan.model_class.__name__}({', '.join(base_names)}):",
+                    f'    """Concrete {plan.model_class.__name__} model."""',
                     "",
                     *body_lines,
                     f"    class Meta({meta_name}):",

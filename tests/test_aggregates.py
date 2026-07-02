@@ -16,6 +16,7 @@ from strawberry_django_aggregates.errors import GroupByFieldNotAllowed
 
 from angee.base.models import AngeeDataModel
 from angee.graphql.data import hasura_model_resource
+from angee.graphql.data import metadata as metadata_module
 from angee.graphql.data.hasura import _measure_ops_for_field
 from angee.graphql.data.metadata import (
     DataAggregateMeasureMetadata,
@@ -130,6 +131,17 @@ with warnings.catch_warnings():
         serialize=str,
         parse_value=str,
     )
+
+
+def test_resource_field_metadata_has_a_field_owner_module() -> None:
+    """Resource field metadata/classification lives outside the resource envelope module."""
+
+    from angee.graphql.data import resource_fields
+
+    assert DataResourceFieldMetadata.__module__ == "angee.graphql.data.resource_fields"
+    assert metadata_module.resource_type_name is resource_fields.resource_type_name
+    assert metadata_module.resource_wire_field_name is resource_fields.resource_wire_field_name
+    assert not hasattr(metadata_module, "_optional_type_name")
 
 
 def test_hasura_resource_attaches_angee_resource_metadata() -> None:

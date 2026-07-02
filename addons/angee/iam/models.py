@@ -96,7 +96,7 @@ class UserManager(AngeeManager, BaseUserManager):
         if actor is not None:
             user.with_actor(actor)
         else:
-            user._rebac_sudo_reason = None
+            user.unsudo()
         return user
 
 

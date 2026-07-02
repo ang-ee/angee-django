@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import is_dataclass
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -85,6 +86,32 @@ class SkippedRuntimeThing(AngeeModel):
         app_label = "tests"
 
 
+class FirstRenderPlanMetaThing(AngeeModel):
+    """Abstract model with model-specific REBAC Meta for render-plan tests."""
+
+    runtime = True
+
+    class Meta:
+        """Django model options for the test source model."""
+
+        abstract = True
+        app_label = "tests"
+        rebac_resource_type = "tests/first-render-plan"
+
+
+class SecondRenderPlanMetaThing(AngeeModel):
+    """Abstract model with model-specific REBAC Meta for render-plan tests."""
+
+    runtime = True
+
+    class Meta:
+        """Django model options for the test source model."""
+
+        abstract = True
+        app_label = "tests"
+        rebac_resource_type = "tests/second-render-plan"
+
+
 def runtime_for(tmp_path: Path) -> Runtime:
     """Return a runtime that emits the installed resource addon."""
 
@@ -116,6 +143,28 @@ def test_runtime_renders_resource_sources(tmp_path: Path) -> None:
     assert Path("web/app.ts") not in sources
     assert '"package": "@angee/resources-addon"' in sources[Path("web/manifest.json")]
     assert '@source "../../web/node_modules/@angee/resources-addon/src";' in sources[Path("web/tailwind.sources.css")]
+
+
+def test_runtime_model_render_plan_is_named() -> None:
+    """The runtime model render plan is a named owner, not an anonymous tuple."""
+
+    assert is_dataclass(runtime_module.RuntimeModelRenderPlan)
+
+
+def test_runtime_model_render_plan_keeps_model_owned_meta(tmp_path: Path) -> None:
+    """Each named render plan carries the Meta facts for its own model."""
+
+    source = Runtime((), runtime_dir=tmp_path / "runtime")._models_source(
+        "tests",
+        (FirstRenderPlanMetaThing, SecondRenderPlanMetaThing),
+    )
+
+    first_source = source[
+        source.index("class FirstRenderPlanMetaThing") : source.index("class SecondRenderPlanMetaThing")
+    ]
+    assert "rebac_resource_type = 'tests/first-render-plan'" in first_source
+    assert "rebac_resource_type = 'tests/second-render-plan'" not in first_source
+    assert "rebac_resource_type = 'tests/second-render-plan'" in source
 
 
 def test_web_runtime_projects_addon_web_packages_in_composed_order(stub_contracts: None) -> None:
