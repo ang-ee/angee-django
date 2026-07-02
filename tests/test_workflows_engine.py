@@ -59,6 +59,28 @@ else:
     StepRun = None
 
 
+AbstractDecision = getattr(workflow_models, "Decision", None)
+
+
+if AbstractDecision is not None:
+
+    class Decision(AbstractDecision):
+        """Concrete decision model for source-addon runtime tests."""
+
+        class Meta(AbstractDecision.Meta):
+            """Django options for the concrete test decision model."""
+
+            abstract = False
+            app_label = "workflows"
+            db_table = "test_workflows_decision"
+            rebac_resource_type = "workflows/decision"
+            rebac_id_attr = "sqid"
+
+
+else:
+    Decision = None
+
+
 def runtime_models() -> tuple[type[Any], type[Any]]:
     """Return concrete runtime models, failing loudly while Slice 3 is absent."""
 
@@ -83,7 +105,9 @@ def workflow_engine_tables(transactional_db: Any) -> Iterator[None]:
 
     del transactional_db
     run_model, step_run_model = runtime_models()
-    models = (Workflow, Step, Edge, Trigger, run_model, step_run_model)
+    models: tuple[type[Any], ...] = (Workflow, Step, Edge, Trigger, run_model, step_run_model)
+    if Decision is not None:
+        models = (*models, Decision)
     created = _create_missing_tables(models)
     call_command("rebac", "sync", verbosity=0)
     _clear_model_tables(models)

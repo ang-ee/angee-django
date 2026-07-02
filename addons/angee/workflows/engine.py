@@ -761,7 +761,11 @@ def _escalation_subjects(decision: Any) -> tuple[str, ...]:
 def _expire_pending_decisions(step_run: Any, *, resolved_by: str) -> None:
     """Expire pending decisions attached to a canceled waiting step-run."""
 
-    for decision in step_run.decisions.select_for_update().filter(verdict=VERDICT_PENDING):
+    decision_model = _model("Decision")
+    pending = decision_model.objects.select_for_update().filter(
+        step_run=step_run, verdict=VERDICT_PENDING
+    )
+    for decision in pending:
         decision.mark_expired(resolution={}, resolved_by=resolved_by)
 
 

@@ -24,29 +24,17 @@ from angee.workflows import models as workflow_models
 from angee.workflows.steps import DecisionSpec, HandlerStep, StepResult
 from tests.conftest import SchemaAddon, _clear_model_tables, _create_missing_tables, execute_schema, result_data
 from tests.test_workflows import Edge, Step, Trigger, Workflow
-from tests.test_workflows_engine import StepRun, WorkflowRun, advance_once, execute_started, start_run, step_for
+from tests.test_workflows_engine import (
+    Decision,
+    StepRun,
+    WorkflowRun,
+    advance_once,
+    execute_started,
+    start_run,
+    step_for,
+)
 
 User = get_user_model()
-AbstractDecision = getattr(workflow_models, "Decision", None)
-
-
-if AbstractDecision is not None:
-
-    class Decision(AbstractDecision):
-        """Concrete decision model for source-addon gate tests."""
-
-        class Meta(AbstractDecision.Meta):
-            """Django options for the concrete test decision model."""
-
-            abstract = False
-            app_label = "workflows"
-            db_table = "test_workflows_decision"
-            rebac_resource_type = "workflows/decision"
-            rebac_id_attr = "sqid"
-
-
-else:
-    Decision = None
 
 
 def decision_model() -> type[Any]:
