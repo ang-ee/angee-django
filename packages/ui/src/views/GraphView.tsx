@@ -29,6 +29,7 @@ export interface GraphViewNode<
   code?: React.ReactNode;
   detail?: React.ReactNode;
   highlighted?: boolean;
+  position?: GraphViewPosition;
   meta?: TMeta;
 }
 
@@ -70,6 +71,18 @@ export interface GraphViewLayout {
   marginy?: number;
 }
 
+export interface GraphViewPosition {
+  x: number;
+  y: number;
+}
+
+export interface GraphViewConnection {
+  source: string;
+  target: string;
+  sourceHandle?: string | null;
+  targetHandle?: string | null;
+}
+
 export interface GraphViewProps<
   TNodeKind extends string = string,
   TEdgeKind extends string = string,
@@ -85,6 +98,14 @@ export interface GraphViewProps<
   fitViewOptions?: FitViewOptions;
   className?: string;
   onNodeClick?: (node: GraphViewNode<TNodeKind, TNodeMeta>) => void;
+  nodesDraggable?: boolean;
+  onNodeDragEnd?: (
+    node: GraphViewNode<TNodeKind, TNodeMeta>,
+    position: GraphViewPosition,
+  ) => void;
+  onConnect?: (edge: GraphViewConnection) => void;
+  onNodeSelect?: (node: GraphViewNode<TNodeKind, TNodeMeta> | null) => void;
+  onEdgeSelect?: (edge: GraphViewEdge<TEdgeKind, TEdgeMeta> | null) => void;
 }
 
 interface GraphViewNodeData<
@@ -141,6 +162,11 @@ export function GraphView<
   fitViewOptions = { padding: 0.18 },
   className,
   onNodeClick,
+  nodesDraggable = false,
+  onNodeDragEnd,
+  onConnect,
+  onNodeSelect,
+  onEdgeSelect,
 }: GraphViewProps<
   TNodeKind,
   TEdgeKind,
@@ -167,12 +193,42 @@ export function GraphView<
         edges={graph.edges}
         fitView
         fitViewOptions={fitViewOptions}
-        nodesDraggable={false}
-        nodesConnectable={false}
-        elementsSelectable={false}
+        nodesDraggable={nodesDraggable}
+        nodesConnectable={Boolean(onConnect)}
+        elementsSelectable={Boolean(onNodeSelect || onEdgeSelect)}
         onNodeClick={
           onNodeClick
             ? (_, node) => onNodeClick(node.data.node)
+            : undefined
+        }
+        onNodeDragStop={
+          onNodeDragEnd
+            ? (_event, node) =>
+                onNodeDragEnd(node.data.node, {
+                  x: node.position.x,
+                  y: node.position.y,
+                })
+            : undefined
+        }
+        onConnect={
+          onConnect
+            ? (connection) => {
+                if (!connection.source || !connection.target) return;
+                onConnect({
+                  source: connection.source,
+                  target: connection.target,
+                  sourceHandle: connection.sourceHandle,
+                  targetHandle: connection.targetHandle,
+                });
+              }
+            : undefined
+        }
+        onSelectionChange={
+          onNodeSelect || onEdgeSelect
+            ? ({ nodes: selectedNodes, edges: selectedEdges }) => {
+                onNodeSelect?.(selectedNodes[0]?.data.node ?? null);
+                onEdgeSelect?.(selectedEdges[0]?.data?.edge ?? null);
+              }
             : undefined
         }
       >
@@ -309,11 +365,12 @@ function layoutGraph<
 
   return {
     nodes: nodes.map((node) => {
+      const persistedPosition = node.data.node.position;
       const position = graph.node(node.id);
       const style = nodeStyleFor(node.data.node.kind, nodeStyles);
       return {
         ...node,
-        position: {
+        position: persistedPosition ?? {
           x: position.x - style.width / 2,
           y: position.y - style.height / 2,
         },
