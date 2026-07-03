@@ -54,6 +54,7 @@ export interface RowsListViewProps<TRow extends StringIdRow = StringIdRow> {
   fetching?: boolean;
   error?: Error | null;
   onRowClick?: (row: TRow) => void;
+  activeRowId?: string | null;
   onListStateChange?: (state: ResourceListSnapshot<TRow>) => void;
   rowHref?: (row: TRow) => string;
   emptyContent?: ListEmptyContent;
@@ -127,6 +128,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
   fetching = false,
   error = null,
   onRowClick,
+  activeRowId,
   onListStateChange,
   rowHref,
   emptyContent,
@@ -291,6 +293,7 @@ function RowsListViewBody<TRow extends StringIdRow = StringIdRow>({
           selectable={selectable}
           rowHref={rowHref}
           onRowClick={onRowClick}
+          activeRowId={activeRowId}
           draggableRow={draggableRow}
           emptyContent={resolvedEmptyContent}
           fetching={fetching}

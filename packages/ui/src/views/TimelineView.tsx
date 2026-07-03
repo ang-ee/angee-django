@@ -1,6 +1,5 @@
 import { useMemo, type ReactElement, type ReactNode } from "react";
 import { format } from "date-fns";
-import type { Row } from "@angee/metadata";
 
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
@@ -16,7 +15,7 @@ import type { ListEmptyContent } from "./resource-view-types";
  * composes inside a `ResourceList` or stands alone over a row array. `renderEntry`
  * overrides the entry body for richer rows (e.g. an avatar).
  */
-export interface TimelineViewProps<TRow extends Row = Row> {
+export interface TimelineViewProps<TRow extends object = Record<string, unknown>> {
   rows?: readonly TRow[];
   /** Field holding an ISO datetime string (the bucket + entry time). */
   dateField: keyof TRow & string;
@@ -39,7 +38,7 @@ interface DayGroup<TRow> {
   rows: TRow[];
 }
 
-export function TimelineView<TRow extends Row = Row>({
+export function TimelineView<TRow extends object = Record<string, unknown>>({
   rows = [],
   dateField,
   titleField,
@@ -53,7 +52,7 @@ export function TimelineView<TRow extends Row = Row>({
   const resolvedEmptyContent = emptyContent ?? t("list.empty");
   const groups = useMemo<DayGroup<TRow>[]>(() => {
     const dated = rows
-      .map((row) => ({ row, date: dateFromUnknown(row[dateField]) }))
+      .map((row) => ({ row, date: dateFromUnknown(fieldValue(row, dateField)) }))
       .filter((entry): entry is { row: TRow; date: Date } => entry.date !== null)
       .sort((a, b) => b.date.getTime() - a.date.getTime());
     const buckets = new Map<string, DayGroup<TRow>>();
@@ -79,7 +78,7 @@ export function TimelineView<TRow extends Row = Row>({
             </SectionEyebrow>
             <ol className="flex flex-col gap-2">
               {group.rows.map((row, index) => {
-                const id = String(row[rowKey] ?? `entry-${index}`);
+                const id = String(fieldValue(row, rowKey) ?? `entry-${index}`);
                 return renderEntry ? (
                   <li key={id} className="rounded-6 border border-border-subtle bg-sheet-2 p-3">
                     {renderEntry(row)}
@@ -87,9 +86,9 @@ export function TimelineView<TRow extends Row = Row>({
                 ) : (
                   <TimelineEntry
                     key={id}
-                    title={titleField ? String(row[titleField] ?? "") : ""}
-                    timestamp={dateFromUnknown(row[dateField])}
-                    body={bodyField ? row[bodyField] : undefined}
+                    title={titleField ? String(fieldValue(row, titleField) ?? "") : ""}
+                    timestamp={dateFromUnknown(fieldValue(row, dateField))}
+                    body={bodyField ? fieldValue(row, bodyField) : undefined}
                   />
                 );
               })}
@@ -100,4 +99,8 @@ export function TimelineView<TRow extends Row = Row>({
       )}
     </div>
   );
+}
+
+function fieldValue<TRow extends object>(row: TRow, field: keyof TRow & string): unknown {
+  return (row as Record<string, unknown>)[field];
 }
