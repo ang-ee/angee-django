@@ -414,6 +414,15 @@
   min-height: 100%;
 }
 
+.console-route-viewport {
+  min-height: calc(100vh - var(--spacing-topbar-h) - var(--spacing-crumbs-h));
+}
+
+.console-route-canvas {
+  height: calc(100vh - var(--spacing-topbar-h) - var(--spacing-crumbs-h));
+  min-height: 32rem;
+}
+
 .console-statusline-host {
   position: fixed;
   right: 0;
