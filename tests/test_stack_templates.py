@@ -96,6 +96,8 @@ def test_local_stack_caddy_static_renders_single_public_frontend_ingress() -> No
     assert "caddy" in stack["services"]
     assert "ports" not in stack["services"]["django"]
     assert stack["services"]["django"]["env"]["ANGEE_BUILTIN_MCP_URL"] == "http://django:8000/mcp"
+    assert stack["persist"]["pgdata"]["subpath"] == "./data/pgdata"
+    assert stack["services"]["postgres"]["mounts"] == ["bind://./data/pgdata:/var/lib/postgresql/data"]
 
     caddy = stack["services"]["caddy"]
     assert caddy["ports"] == ["5173:80"]

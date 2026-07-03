@@ -42,10 +42,10 @@ ports:
 persist:
   # App media/static (ANGEE_DATA_DIR → /app/.angee/data via the django bind mount).
   app-data: { subpath: ./data, scope: stack }
-  # The Postgres data volume — the database survives re-up. A SIBLING of ./data (not
-  # nested under it), so the cluster (uid 999, mode 0700) is never exposed inside the
-  # django container's ./data → /app/.angee/data mount.
-  pgdata: { subpath: ./pgdata, scope: stack }
+  # The Postgres data volume — the database survives re-up. Keep it under ./data so
+  # one directory contains the local instance's mutable app + database state. Only the
+  # postgres service mounts this subpath; Django still sees ./data at /app/.angee/data.
+  pgdata: { subpath: ./data/pgdata, scope: stack }
 
 # The application source IS this root — the project is the stack (no git clone; the
 # framework is baked into the runtime image, not pulled in as a source).
@@ -77,7 +77,7 @@ services:
       POSTGRES_DB: angee
       POSTGRES_PASSWORD: "${secret.db-password}"
     mounts:
-      - bind://./pgdata:/var/lib/postgresql/data
+      - bind://./data/pgdata:/var/lib/postgresql/data
 
   # angee-django backend on the framework runtime image (framework code + deps +
   # psycopg baked in). The project mounts at /app OVER the image's own /app workdir;
