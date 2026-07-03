@@ -10,6 +10,7 @@ copy of each one.
 | dir | kind | renders |
 |-----|------|---------|
 | `projects/` | `project` | a downstream host repo — `manage.py`, `settings.yaml`, the consumer-addon namespace, the web package; owns the project root |
+| `addons/` | `addon` | a source addon package, including the frontend manifest, i18n, tests, and package wiring |
 | `stacks/` | `stack` | a runnable `angee.yaml` the operator brings up on docker-compose / process-compose |
 | `workspaces/` | `workspace` | a set of sources + agentic config, materialized as files |
 | `services/` | `service` | one long-running service added to a stack |
@@ -40,7 +41,7 @@ Commit what you author; ignore what a tool regenerates:
 ```
 <root>/                    # project == stack (ANGEE_ROOT=.)
   ── committed ──
-  angee.yaml               # stack: operator · postgres · django · vite
+  angee.yaml               # stack: operator · postgres · django · frontend ingress
   manage.py                # ANGEE_PROJECT_DIR = here
   settings.yaml            # INSTALLED_APPS (base) · DATABASE_URL → postgres
   addons/<ns>/             # your addons
@@ -63,12 +64,13 @@ example later by adding a source onto `angee-django/examples` and enabling it in
 > **Status.** The `local` template now *is* this shape: a thin `kind: stack` that
 > chains `projects/web`, runs the framework from the `ghcr.io/ang-ee/django-angee`
 > runtime image on `pgvector/pgvector:pg17`, bootstraps a generated `admin` user,
-> and runs Vite from the matching `ghcr.io/ang-ee/angee-web` image. The one-command
-> render uses the operator's template-chain resolver (`ang-ee/angee-operator#39`);
-> once that lands in a released operator, `angee stack init` renders host + overlay
-> in one step. The web image rebuild depends on the published `hatch-angee` release
-> that ships addon `web/schema/` directories. Until those releases are available,
-> use the two-copier-step render below.
+> and serves the frontend through Caddy by default (`frontend_mode=caddy_static`),
+> with legacy Vite dev serving still available via `frontend_mode=vite`. The
+> one-command render uses the operator's template-chain resolver
+> (`ang-ee/angee-operator#39`); once that lands in a released operator, `angee stack
+> init` renders host + overlay in one step. The web image rebuild depends on the
+> published `hatch-angee` release that ships addon `web/schema/` directories.
+> Until those releases are available, use the two-copier-step render below.
 
 ## Run a local stack
 
@@ -80,9 +82,47 @@ angee up --root ~/.angee
 export ANGEE_OPERATOR_URL=http://127.0.0.1:9000   # the CLI then drives the operator
 ```
 
+### Update an existing local stack
+
+`angee stack update --template` re-renders `angee.yaml` from the stack template
+recorded in `.copier-answers.stack.yml`, then regenerates the derived runtime
+files. If the stack was initialized from an unpinned template ref such as
+`.../tree/main/templates/stacks/local`, template fixes are picked up by:
+
+```sh
+angee stack update --root ~/.angee --template
+```
+
+If the stack was initialized from a pinned tag, first re-render from the newer
+template tag with `angee stack init ... --force`, or update the recorded template
+ref intentionally before running `stack update --template`.
+
+Stacks rendered before `0.1.6` may record the local catalog name
+`template.active: stacks/local`; outside an Angee source checkout,
+`stack update --template` cannot resolve that name. Patch the active ref once,
+then update from the template:
+
+```sh
+sed -i.bak \
+  's#active: stacks/local#active: https://github.com/ang-ee/angee-django/tree/v0.1.7/templates/stacks/local#' \
+  ~/.angee/angee.yaml
+angee stack update --root ~/.angee --template
+```
+
+For the `0.1.5` local-stack layout change, stop the stack before moving the
+database directory:
+
+```sh
+angee down --root ~/.angee
+mkdir -p ~/.angee/data
+mv ~/.angee/pgdata ~/.angee/data/pgdata
+angee stack update --root ~/.angee --template
+angee up --root ~/.angee
+```
+
 Until then, render the two templates in sequence (the stack overlays the host),
 then bring it up. First start emits the local runtime, migrations, and GraphQL
-schemas before starting Django and Vite:
+schemas before starting Django and the selected frontend ingress:
 
 ```sh
 copier copy .../templates/projects/web ~/.angee

@@ -1,0 +1,8 @@
+import { EmptyState } from "@angee/ui";
+
+import { use{{ addon_title | replace(" ", "") }}T } from "../i18n";
+
+export function {{ resource_name }}Page() {
+  const t = use{{ addon_title | replace(" ", "") }}T();
+  return <EmptyState fill icon="file" title={t("page.empty")} />;
+}
