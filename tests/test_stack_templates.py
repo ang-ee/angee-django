@@ -15,6 +15,7 @@ LOCAL_STACK_GITIGNORE = ROOT / "templates" / "stacks" / "local" / "template" / "
 DEV_COPIER = ROOT / "templates" / "stacks" / "dev" / "copier.yml"
 DEV_TEMPLATE = ROOT / "templates" / "stacks" / "dev" / "template" / "{{ ANGEE_ROOT }}" / "angee.yaml.jinja"
 PROJECT_GITIGNORE = ROOT / "templates" / "projects" / "web" / "template" / ".gitignore.jinja"
+PROJECT_SETTINGS_TEMPLATE = ROOT / "templates" / "projects" / "web" / "template" / "settings.yaml.jinja"
 
 
 def _render_local_stack(*, frontend_mode: str) -> dict[str, Any]:
@@ -68,6 +69,62 @@ def _render_dev_stack() -> dict[str, Any]:
     rendered = yaml.safe_load(text)
     assert isinstance(rendered, dict)
     return rendered
+
+
+def _render_project_settings(*, addon_installer_backend: str, include_operator_installer: bool) -> dict[str, Any]:
+    """Render project settings enough for stack-owned installer contract tests."""
+
+    text = PROJECT_SETTINGS_TEMPLATE.read_text(encoding="utf-8")
+    text = _render_project_settings_conditionals(
+        text,
+        addon_installer_backend=addon_installer_backend,
+        include_operator_installer=include_operator_installer,
+    )
+    replacements = {
+        "addon_installer_backend": addon_installer_backend,
+        "addon_namespace": "angee_local",
+        "project_name": "angee-local",
+        "project_title": "Angee",
+    }
+    for key, value in replacements.items():
+        text = text.replace(f"{{{{ {key} }}}}", value)
+    assert "{{" not in text
+    assert "{%" not in text
+    rendered = yaml.safe_load(text)
+    assert isinstance(rendered, dict)
+    return rendered
+
+
+def _render_project_settings_conditionals(
+    text: str,
+    *,
+    addon_installer_backend: str,
+    include_operator_installer: bool,
+) -> str:
+    """Evaluate the simple settings-template conditionals these tests need."""
+
+    frames: list[bool] = []
+    output: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == "{% if include_operator_installer %}":
+            frames.append(include_operator_installer and _project_parent_active(frames))
+            continue
+        if stripped == '{% if addon_installer_backend != "local" %}':
+            frames.append((addon_installer_backend != "local") and _project_parent_active(frames))
+            continue
+        if stripped == "{% endif %}":
+            frames.pop()
+            continue
+        if _project_parent_active(frames):
+            output.append(line)
+
+    assert not frames
+    return "\n".join(output) + "\n"
+
+
+def _project_parent_active(frames: list[bool]) -> bool:
+    return all(frames)
 
 
 def _render_simple_set_tags(text: str) -> tuple[str, dict[str, str]]:
@@ -125,6 +182,8 @@ def _parent_active(frames: list[dict[str, bool]]) -> bool:
 def test_local_stack_frontend_mode_contract() -> None:
     manifest = yaml.safe_load(LOCAL_COPIER.read_text(encoding="utf-8"))
 
+    assert "angee dev" in manifest["_message_after_copy"]
+    assert "ANGEE_SECRET_OPERATOR_TOKEN" in manifest["_message_after_copy"]
     assert manifest["frontend_mode"] == {
         "type": "str",
         "default": "caddy_static",
@@ -163,6 +222,10 @@ def test_local_stack_caddy_static_renders_single_public_frontend_ingress() -> No
     assert "root * /srv/project/web/dist" in caddyfile_command
     assert "try_files {path} /index.html" in caddyfile_command
 
+    frontend_command = stack["services"]["frontend-build"]["command"][-1]
+    assert 'path.join(root,"project/web/node_modules/@angee")' in frontend_command
+    assert "fs.symlinkSync" in frontend_command
+
 
 def test_local_stack_vite_mode_preserves_legacy_direct_ports() -> None:
     stack = _render_local_stack(frontend_mode="vite")
@@ -173,6 +236,41 @@ def test_local_stack_vite_mode_preserves_legacy_direct_ports() -> None:
     assert stack["services"]["django"]["ports"] == ["8000:8000"]
     assert stack["services"]["vite"]["ports"] == ["5173:5173"]
     assert stack["services"]["vite"]["env"]["ANGEE_DJANGO_URL"] == "http://django:8000"
+    assert 'path.join(root,"project/web/node_modules/@angee")' in stack["services"]["vite"]["command"][-1]
+    assert "fs.symlinkSync" in stack["services"]["vite"]["command"][-1]
+
+
+def test_local_stack_uses_operator_backed_addon_installer() -> None:
+    """Containerized local stacks edit project files through the host operator."""
+
+    manifest = yaml.safe_load(LOCAL_COPIER.read_text(encoding="utf-8"))
+    chain_inputs = manifest["_angee"]["chain"][0]["inputs"]
+    stack = _render_local_stack(frontend_mode="vite")
+
+    assert chain_inputs["addon_installer_backend"] == "operator"
+    assert chain_inputs["include_operator_installer"] is True
+    assert "operator-token" in stack["secrets"]
+    assert stack["services"]["django"]["env"]["ANGEE_OPERATOR_TOKEN"] == "${secret.operator-token}"
+    assert stack["services"]["operator"]["env"]["ANGEE_OPERATOR_TOKEN"] == "${secret.operator-token}"
+    assert '--token "$ANGEE_OPERATOR_TOKEN"' in stack["services"]["operator"]["command"][-1]
+
+
+def test_project_template_can_render_operator_addon_installer_settings() -> None:
+    """The local stack can opt into the operator installer bridge at project render time."""
+
+    settings = _render_project_settings(addon_installer_backend="operator", include_operator_installer=True)
+
+    assert "angee.platform_integrate_operator" in settings["INSTALLED_APPS"]
+    assert settings["ANGEE_ADDON_INSTALLER_BACKEND"] == "operator"
+
+
+def test_project_template_defaults_to_local_addon_installer() -> None:
+    """Plain generated projects keep the dev/local writer unless a stack opts in."""
+
+    settings = _render_project_settings(addon_installer_backend="local", include_operator_installer=False)
+
+    assert "angee.platform_integrate_operator" not in settings["INSTALLED_APPS"]
+    assert "ANGEE_ADDON_INSTALLER_BACKEND" not in settings
 
 
 def test_dev_stack_mounts_postgres_data_from_generated_stack_dir() -> None:
