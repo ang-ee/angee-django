@@ -1,12 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import {
-  Button,
-  Card,
-  FieldRow,
-  FormGrid,
-  HeroPage,
-  Input,
-} from "@angee/ui";
+import { Button, Card, FieldRow, FormGrid, HeroPage, Input } from "@angee/ui";
 
 const meta = {
   title: "Layouts/HeroPage",

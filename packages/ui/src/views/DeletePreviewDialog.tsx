@@ -6,7 +6,7 @@ import type {
 } from "@angee/refine";
 
 import { Glyph } from "../chrome/Glyph";
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { Button } from "../ui/button";
 import { Dialog } from "../ui/dialog";
 import { DeletePreviewTree } from "./DeletePreviewTree";
@@ -30,7 +30,7 @@ export function DeletePreviewDialog({
   onConfirm,
   onCancel,
 }: DeletePreviewDialogProps): React.ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const fullyBlocked = recordCount > 0 && blockedRecordCount >= recordCount;
   const treeNodes = treeNodesFor(preview.root);
   return (
@@ -91,7 +91,7 @@ function DeleteSummary({
   preview: DeletePreview;
   overflowCount: number;
 }): React.ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   return (
     <div className="grid gap-2 text-13 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
       <div className="rounded-6 border border-border-subtle bg-sheet px-3 py-2">

@@ -1,5 +1,10 @@
 import * as React from "react";
-import { useActionMutation } from "../data/hooks";
+import { useActionMutation } from "@angee/refine";
+import {
+  refineInvalidationParams,
+  resourceInvalidationTargets,
+  useSchemaFieldMetadata,
+} from "@angee/metadata";
 
 import type { ActionContext, ActionResult } from "./page";
 
@@ -59,7 +64,7 @@ export function useRecordAction(
 }
 
 /**
- * Compose @angee/data single-id `ActionResult` mutations into a record form action.
+ * Compose single-id `ActionResult` mutations into a record form action.
  *
  * The returned `run` callback can be passed directly to `<Action run={...} />`.
  */
@@ -67,8 +72,17 @@ export function useRecordActionMutation<TField extends string = string>(
   field: TField,
   options?: UseRecordActionOptions,
 ): [RecordAction, { fetching: boolean; error: Error | null }] {
+  const schemaMetadata = useSchemaFieldMetadata();
+  const invalidates = React.useMemo(
+    () =>
+      resourceInvalidationTargets(
+        schemaMetadata,
+        options?.invalidateModels ?? [],
+      ).map(refineInvalidationParams),
+    [schemaMetadata, options?.invalidateModels],
+  );
   const [mutate, state] = useActionMutation<TField>(field, {
-    invalidateModels: options?.invalidateModels,
+    invalidates,
   });
   const run = React.useCallback<RecordActionRunner>((id) => mutate(id), [mutate]);
   return [useRecordAction(run, options), state];

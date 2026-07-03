@@ -2,7 +2,7 @@ import * as React from "react";
 
 // Layout slot ids are registered symbols namespaced under `@angee/ui.*`
 // (e.g. `Symbol.for("@angee/ui.record-aside-slot")`). Use this one convention
-// for every new slot id; the legacy `@angee/base.*` prefix is retired.
+// for every new slot id; legacy rendered-binding prefixes are retired.
 
 export type LayoutSlotComponent<
   TProps extends { children?: React.ReactNode },

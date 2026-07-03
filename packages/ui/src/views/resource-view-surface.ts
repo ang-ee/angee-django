@@ -2,7 +2,7 @@ import * as React from "react";
 import {
   rowPublicId,
   type Row,
-} from "@angee/resources";
+} from "@angee/metadata";
 import {
   useTable as useRefineTable } from "@refinedev/react-table";
 import {
@@ -14,11 +14,20 @@ import {
 import {
   functionalUpdate,
   getCoreRowModel,
+  getExpandedRowModel,
+  getFilteredRowModel,
+  getGroupedRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
   useReactTable,
   type ColumnDef,
+  type ExpandedState,
+  type FilterFn,
+  type GroupingState,
   type OnChangeFn,
   type PaginationState,
   type Row as TableRowModel,
+  type RowSelectionState,
   type SortingState,
   type Table as TableModel,
   type VisibilityState,
@@ -32,42 +41,37 @@ import {
   hasuraWhereFromCrudFilters,
   refineFieldsFromPaths,
   refineSortersFromAngeeOrder,
-  type AggregateBucket,
-  type GroupByRequestOptions,
-  } from "@angee/refine";
-import {
-  refineResourceName,
-} from "@angee/resources";
-import type {
-  DataResourceDefaultSortMetadata,
-} from "@angee/resources";
-import type {
-  ModelMetadata,
-} from "@angee/resources";
-
-import type { ResourceViewContextValue } from "./resource-view-context";
-import { useExpandedKeys } from "./grouped-list-utils";
-import {
   useAngeeAggregate,
   useAngeeGroupByBatch,
   useAngeeListBatch,
+  type AggregateBucket,
   type AngeeListBatchEntry,
   type AngeeListBatchScope,
   type GroupByBatchScope,
+  type GroupByRequestOptions,
   type UseAngeeGroupByResult,
-} from "../data/hooks";
+  } from "@angee/refine";
 import {
+  refineResourceName,
+} from "@angee/metadata";
+import type {
+  DataResourceDefaultSortMetadata,
+} from "@angee/metadata";
+import type {
+  ModelMetadata,
+} from "@angee/metadata";
+
+import { errorFromUnknown } from "../data/errors";
+import { useUiT } from "../i18n";
+import type { ResourceViewContextValue } from "./resource-view-context";
+import {
+  DEFAULT_TEXT_FILTER_FIELD,
   Filter,
   stableSerialize,
   type ResourceViewFilter,
   type ResourceViewGroup,
+  type ResourceViewSort,
 } from "./resource-view-model";
-import {
-  createLocalRowsDataSource,
-  nextRowTextFilter,
-  rowTextFilterValue,
-  useLocalRowsPage,
-} from "./local-rows";
 import {
   GROUP_ROW_HEIGHT,
   RECORD_ROW_HEIGHT,
@@ -75,13 +79,14 @@ import {
   bucketValueLabels,
   buildColumns,
   estimateGroupedItemSize,
+  groupedRowLabel,
   groupFieldLabel,
-  groupKey,
   groupLabelDimension,
   groupMeasuresFromColumns,
   hasuraGroupDimension,
   hasuraGroupOrderForDimensions,
   hasuraMeasuresFromGroupMeasures,
+  isGroupingOnlyColumn,
   readPath,
   resourceViewGroupToAggregateDimension,
   tableColumnLabel,
@@ -89,11 +94,15 @@ import {
   type GroupedListItem,
   type GroupedRecordNav,
   type GroupMeasure,
-  type ListRenderItem,
   type RowGroup,
   type VisibleFieldOption,
-} from "./ListInternals";
+} from "./resource-view-list-body";
 import type { ColumnDescriptor } from "./page";
+import {
+  listBatchTarget,
+  useAggregateOperation,
+  useGroupOperation,
+} from "./resource-operations";
 
 /** Leaf record page size inside a server-grouped bucket. */
 const GROUPED_LEAF_PAGE_SIZE = 20;
@@ -103,7 +112,6 @@ type ListOrder = Record<string, unknown>;
 type RowRecord = BaseRecord & Row;
 
 export type StringIdRow = Row & { id: string };
-export { nextRowTextFilter, rowTextFilterValue };
 
 export interface ResourceListSnapshot<TRow extends Row = Row> {
   rows: readonly TRow[];
@@ -118,7 +126,7 @@ export interface ResourceListSnapshot<TRow extends Row = Row> {
 }
 
 export interface ListViewNavigationScope {
-  filter: ListFilter | undefined;
+  filter: ResourceViewFilter | undefined;
   order: ListOrder | undefined;
   page: number;
   pageSize: number;
@@ -190,10 +198,6 @@ interface ResourceViewPresentationSurface<TRow extends Row = Row> {
   somePageSelected: boolean;
   setPageSelection: (checked: boolean) => void;
   groupedRows: readonly RowGroup<TRow>[];
-  listItems: readonly ListRenderItem<TRow>[];
-  /** Keys of the groups the viewer has expanded; empty means collapsed-by-default. */
-  expandedKeys: ReadonlySet<string>;
-  toggleGroup: (key: string) => void;
   tableScrollRef: React.RefObject<HTMLDivElement | null>;
   rowVirtualizer: Virtualizer<HTMLDivElement, Element>;
 }
@@ -212,12 +216,17 @@ export interface ResourceViewSurface<TRow extends Row = Row>
   setScopePage: (key: string, page: number) => void;
   /** The windowed server-grouped render stream; empty on flat surfaces. */
   groupedItems: readonly GroupedListItem<TRow>[];
+  /** Server `_groups` bucket expansion keys; flat lists use TanStack expansion. */
+  expandedKeys: ReadonlySet<string>;
+  toggleGroup: (key: string) => void;
 }
 
 const EMPTY_ARRAY = [] as const;
 const EMPTY_SELECTED_IDS: ReadonlySet<string> = new Set();
+const EMPTY_EXPANDED_KEYS: ReadonlySet<string> = new Set();
 const EMPTY_LEAF_RESULTS: ReadonlyMap<string, AngeeListBatchEntry> = new Map();
 const NOOP_SET_SCOPE_PAGE = (_key: string, _page: number): void => undefined;
+const NOOP_TOGGLE_GROUP = (_key: string): void => undefined;
 
 export interface RowsResourceViewSurface<TRow extends StringIdRow = StringIdRow>
   extends ResourceViewPresentationSurface<TRow> {
@@ -272,13 +281,18 @@ export function useResourceRowsSnapshot<TRow extends Row = Row>(
   );
 }
 
-function listResultFromRefineTable<TRow extends Row>({
+function listResultFromPageState<TRow extends Row>({
   resourceView,
   error,
   fetching,
   refetch,
   rows,
   total,
+  page = resourceView.state.page,
+  pageSize = resourceView.state.pageSize,
+  pageCount = total === undefined
+    ? undefined
+    : Math.max(1, Math.ceil(total / pageSize)),
 }: {
   resourceView: ResourceViewContextValue;
   error: unknown;
@@ -286,12 +300,10 @@ function listResultFromRefineTable<TRow extends Row>({
   refetch: () => void;
   rows: readonly TRow[];
   total: number | undefined;
+  page?: number;
+  pageSize?: number;
+  pageCount?: number | undefined;
 }): ResourceListResult {
-  const page = resourceView.state.page;
-  const pageSize = resourceView.state.pageSize;
-  const pageCount = total === undefined
-    ? undefined
-    : Math.max(1, Math.ceil(total / pageSize));
   return {
     rows,
     total,
@@ -335,8 +347,12 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   modelMetadata = null,
   groupStack,
 }: UseResourceViewSurfaceProps<TRow>): ResourceViewSurface<TRow> {
+  const t = useUiT();
   useSyncPageSize(resourceView, pageSize);
   const dataResource = requireGroupedDataResource(resource, modelMetadata);
+  const aggregateOperation = useAggregateOperation(dataResource);
+  const groupOperation = useGroupOperation(dataResource);
+  const listTarget = listBatchTarget(dataResource);
 
   const requestedFields = React.useMemo(
     () => requestedFieldPaths(columns, fields, modelMetadata),
@@ -367,8 +383,11 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
       buildColumns(columns, {
         sort: resourceView.state.sort,
         setSort: resourceView.setSort,
+      }, {
+        groupStack: rowGroupStack,
+        metadata: modelMetadata,
       }),
-    [columns, resourceView.state.sort, resourceView.setSort],
+    [columns, rowGroupStack, modelMetadata, resourceView.state.sort, resourceView.setSort],
   );
   const [columnVisibility, setColumnVisibility] =
     React.useState<VisibilityState>({});
@@ -384,14 +403,24 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     () => hasuraWhereFromCrudFilters(crudFiltersFromFilterRecord(mergedFilter)),
     [mergedFilter],
   );
-  const grandTotal = useAngeeAggregate(dataResource, {
+  const grandTotal = useAngeeAggregate(aggregateOperation.target, {
+    document: aggregateOperation.document,
     where,
     measures: queryMeasures,
     enabled: rowGroupStack.length > 0 && measures.length > 0,
   });
 
   // Collapse state and per-scope pager pages (one map, keyed by cumulative scope).
-  const { expandedKeys, toggle: toggleGroup } = useExpandedKeys();
+  const [expandedKeys, setExpandedKeys] =
+    React.useState<ReadonlySet<string>>(EMPTY_EXPANDED_KEYS);
+  const toggleGroup = React.useCallback((key: string) => {
+    setExpandedKeys((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
   const [pageByScope, setPageByScope] =
     React.useState<Record<string, number>>({});
   const setScopePage = React.useCallback((key: string, page: number) => {
@@ -409,6 +438,9 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
       queryMeasures,
       leafOrder,
       modelMetadata,
+      emptyGroupMessage: t("list.emptyGroup"),
+      emptySubgroupsMessage: t("list.emptySubgroups"),
+      allRecordsLabel: t("list.allRecords"),
     }),
     [
       rowGroupStack,
@@ -420,6 +452,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
       queryMeasures,
       leafOrder,
       modelMetadata,
+      t,
     ],
   );
 
@@ -429,7 +462,8 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   // array is rules-of-hooks safe.
   const [groupScopes, setGroupScopes] =
     React.useState<readonly GroupByBatchScope[]>(EMPTY_ARRAY);
-  const groupByResults = useAngeeGroupByBatch(dataResource, groupScopes, {
+  const groupByResults = useAngeeGroupByBatch(groupOperation.target, groupScopes, {
+    document: groupOperation.document,
     enabled: rowGroupStack.length > 0,
   });
   const scopeModel = React.useMemo(
@@ -451,7 +485,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   }, [desiredGroupScopes]);
 
   // Every expanded leaf bucket's record page, batched into one request round.
-  const leafResults = useAngeeListBatch(dataResource, leafScopes, {
+  const leafResults = useAngeeListBatch(listTarget, leafScopes, {
     fields: requestedFields,
     enabled: leafScopes.length > 0,
   });
@@ -519,30 +553,19 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   const rootPageCount =
     rootTotal === undefined ? undefined : Math.max(1, Math.ceil(rootTotal / statePageSize));
   const list = React.useMemo<ResourceListResult>(
-    () => ({
-      rows: EMPTY_ARRAY,
-      total: rootTotal,
-      pageCount: rootPageCount,
-      page: rootPage,
-      pageSize: statePageSize,
-      pageInfo: undefined,
-      hasNext: rootPageCount !== undefined && rootPage < rootPageCount,
-      hasPrev: rootPage > 1,
-      setPage: resourceView.setPage,
-      firstPage: () => resourceView.setPage(1),
-      nextPage: () =>
-        resourceView.setPage(
-          rootPageCount ? Math.min(rootPage + 1, rootPageCount) : rootPage + 1,
-        ),
-      prevPage: () => resourceView.setPage(Math.max(1, rootPage - 1)),
-      lastPage: () => {
-        if (rootPageCount) resourceView.setPage(rootPageCount);
-      },
-      fetching: rootResult ? rootResult.fetching : true,
-      error: errorFromUnknown(rootResult?.error ?? null),
-      refetch: () => rootResult?.refetch(),
-    }),
-    [resourceView.setPage, rootResult, rootPage, rootPageCount, rootTotal, statePageSize],
+    () =>
+      listResultFromPageState({
+        resourceView,
+        error: rootResult?.error ?? null,
+        fetching: rootResult ? rootResult.fetching : true,
+        refetch: () => rootResult?.refetch(),
+        rows: EMPTY_ARRAY,
+        total: rootTotal,
+        page: rootPage,
+        pageSize: statePageSize,
+        pageCount: rootPageCount,
+      }),
+    [resourceView, rootResult, rootPage, rootPageCount, rootTotal, statePageSize],
   );
   const listState = useResourceRowsSnapshot<TRow>(list);
 
@@ -569,7 +592,6 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     somePageSelected: false,
     setPageSelection: () => undefined,
     groupedRows: EMPTY_ARRAY,
-    listItems: EMPTY_ARRAY,
     expandedKeys,
     toggleGroup,
     tableScrollRef,
@@ -607,16 +629,21 @@ export function useResourceViewSurface<TRow extends Row = Row>({
       ?? defaultResourceOrder(modelMetadata),
     [resourceView.state.sort, modelMetadata, order],
   );
+  const rowGroupStack = groupStack ?? resourceView.state.groupStack;
   const tableColumns = React.useMemo(
     () =>
       buildColumns(columns, {
         sort: resourceView.state.sort,
         setSort: resourceView.setSort,
+      }, {
+        groupStack: rowGroupStack,
+        metadata: modelMetadata,
       }),
-    [columns, resourceView.state.sort, resourceView.setSort],
+    [columns, rowGroupStack, modelMetadata, resourceView.state.sort, resourceView.setSort],
   );
   const [columnVisibility, setColumnVisibility] =
     React.useState<VisibilityState>({});
+  const [expanded, setExpanded] = React.useState<ExpandedState>({});
   const dataResource = modelMetadata?.resource ?? null;
   const refineFilters = React.useMemo(
     () => crudFiltersFromFilterRecord(mergedFilter) ?? [],
@@ -645,6 +672,14 @@ export function useResourceViewSurface<TRow extends Row = Row>({
       })),
     [refineSorters],
   );
+  const grouping = React.useMemo(
+    () => groupingStateFromResourceGroups(rowGroupStack),
+    [rowGroupStack],
+  );
+  const rowSelection = React.useMemo(
+    () => rowSelectionStateFromIds(resourceView.state.selectedIds),
+    [resourceView.state.selectedIds],
+  );
   const handlePaginationChange = React.useCallback<OnChangeFn<PaginationState>>(
     (updater) => {
       const next = functionalUpdate(updater, paginationState);
@@ -665,19 +700,35 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     },
     [resourceView, sortingState],
   );
+  const handleRowSelectionChange = React.useCallback<OnChangeFn<RowSelectionState>>(
+    (updater) => {
+      resourceView.setSelectedIds(
+        idsFromRowSelectionState(functionalUpdate(updater, rowSelection)),
+      );
+    },
+    [resourceView, rowSelection],
+  );
   const resourceName = dataResource ? refineResourceName(dataResource) : "__angee_disabled__";
   const active = enabled && Boolean(dataResource);
   const tableResult = useRefineTable<RowRecord, HttpError, RowRecord>({
     columns: tableColumns as ColumnDef<RowRecord>[],
     state: {
       columnVisibility,
+      expanded,
+      grouping,
       pagination: paginationState,
+      rowSelection,
       sorting: sortingState,
     },
     onColumnVisibilityChange: setColumnVisibility,
+    onExpandedChange: setExpanded,
     onPaginationChange: handlePaginationChange,
+    onRowSelectionChange: handleRowSelectionChange,
     onSortingChange: handleSortingChange,
     getRowId: modelRowId,
+    enableRowSelection: (row) => !row.getIsGrouped(),
+    getGroupedRowModel: getGroupedRowModel(),
+    getExpandedRowModel: getExpandedRowModel(),
     autoResetPageIndex: false,
     autoResetExpanded: false,
     refineCoreProps: {
@@ -706,7 +757,7 @@ export function useResourceViewSurface<TRow extends Row = Row>({
   );
   const list = React.useMemo(
     () =>
-      listResultFromRefineTable({
+      listResultFromPageState({
         resourceView,
         error: tableResult.refineCore.tableQuery.error,
         fetching: tableResult.refineCore.tableQuery.isFetching,
@@ -728,9 +779,7 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     table: tableResult.reactTable as unknown as TableModel<TRow>,
     columnVisibility,
     resourceView,
-    modelMetadata,
     groupStack,
-    getRowId: modelRowId,
   });
 
   return {
@@ -743,6 +792,8 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     footerAggregate: null,
     setScopePage: NOOP_SET_SCOPE_PAGE,
     groupedItems: EMPTY_ARRAY,
+    expandedKeys: EMPTY_EXPANDED_KEYS,
+    toggleGroup: NOOP_TOGGLE_GROUP,
     ...presentation,
   };
 }
@@ -822,68 +873,64 @@ export function useClientResourceViewSurface<TRow extends Row = Row>({
     }
   }, [totalRows, dataResource?.modelLabel, resourceName]);
 
-  const source = React.useMemo(
-    () => createLocalRowsDataSource(allRows),
-    [allRows],
-  );
-  const localPage = useLocalRowsPage({
-    source,
-    columns,
-    resourceView,
-    filter: mergedFilter,
-  });
-
   const fetching = run.query.isFetching;
   const error = errorFromUnknown(run.query.error);
   const refetch = React.useCallback(() => {
     void run.query.refetch();
   }, [run.query]);
+  const presentation = useResourceViewPresentationSurface<TRow>({
+    rows: allRows,
+    columns,
+    resourceView,
+    modelMetadata,
+    groupStack,
+    getRowId: modelRowId,
+    filter: mergedFilter,
+  });
+  const pageRows = React.useMemo(
+    () => leafTableRows(presentation.rowModels).map((row) => row.original),
+    [presentation.rowModels],
+  );
+  const filteredTotal = presentation.table.getFilteredRowModel().rows.length;
+  const pageCount = Math.max(1, presentation.table.getPageCount());
   const list = React.useMemo<ResourceListResult>(
-    () => ({
-      rows: localPage.rows,
-      total: localPage.total,
-      pageCount: localPage.pageCount,
-      page: localPage.page,
-      pageSize: localPage.pageSize,
-      pageInfo: undefined,
-      hasNext: localPage.hasNext,
-      hasPrev: localPage.hasPrev,
-      setPage: resourceView.setPage,
-      firstPage: () => resourceView.setPage(1),
-      nextPage: () =>
-        resourceView.setPage(Math.min(localPage.page + 1, localPage.pageCount)),
-      prevPage: () => resourceView.setPage(Math.max(1, localPage.page - 1)),
-      lastPage: () => resourceView.setPage(localPage.pageCount),
-      fetching,
+    () =>
+      listResultFromPageState({
+        resourceView,
+        error,
+        fetching,
+        refetch,
+        rows: pageRows,
+        total: filteredTotal,
+        pageCount,
+      }),
+    [
       error,
+      fetching,
+      filteredTotal,
+      pageCount,
+      pageRows,
       refetch,
-    }),
-    [localPage, fetching, error, refetch, resourceView.setPage],
+      resourceView,
+    ],
   );
   const listState = useResourceRowsSnapshot<TRow>(list);
   React.useEffect(() => {
     onListStateChange?.(listState);
   }, [listState, onListStateChange]);
 
-  const presentation = useResourceViewPresentationSurface<TRow>({
-    rows: localPage.rows as readonly TRow[],
-    columns,
-    resourceView,
-    modelMetadata,
-    groupStack,
-    getRowId: modelRowId,
-  });
-
   return {
     list,
     listState,
-    rows: localPage.rows as readonly TRow[],
+    rows: pageRows,
     requestedFields,
     mergedFilter,
     sortOrder,
     footerAggregate: null,
     setScopePage: NOOP_SET_SCOPE_PAGE,
     groupedItems: EMPTY_ARRAY,
+    expandedKeys: EMPTY_EXPANDED_KEYS,
+    toggleGroup: NOOP_TOGGLE_GROUP,
     ...presentation,
   };
 }
@@ -903,54 +950,53 @@ export function useRowsResourceViewSurface<
 }: UseRowsResourceViewSurfaceProps<TRow>): RowsResourceViewSurface<TRow> {
   useSyncPageSize(resourceView, pageSize);
 
-  const source = React.useMemo(
-    () => createLocalRowsDataSource(rows),
-    [rows],
+  const textSearchFields = React.useMemo(
+    () => columns.map((column) => column.field),
+    [columns],
   );
-  const localPage = useLocalRowsPage({
-    source,
+  const presentation = useResourceViewPresentationSurface({
+    rows,
     columns,
     resourceView,
     filter: resourceView.state.filter,
+    textSearchField: DEFAULT_TEXT_FILTER_FIELD,
+    textSearchFields,
+    modelMetadata,
+    groupStack,
+    getRowId: stringRowId,
   });
+  const pageRows = React.useMemo(
+    () => leafTableRows(presentation.rowModels).map((row) => row.original),
+    [presentation.rowModels],
+  );
+  const total = presentation.table.getFilteredRowModel().rows.length;
+  const pageCount = Math.max(1, presentation.table.getPageCount());
 
-  const pageRows = localPage.rows;
   const listState = React.useMemo<RowsResourceListSnapshot<TRow>>(
     () => ({
       rows: pageRows,
-      total: localPage.total,
-      page: localPage.page,
-      pageSize: localPage.pageSize,
-      pageCount: localPage.pageCount,
-      hasNext: localPage.hasNext,
-      hasPrev: localPage.hasPrev,
+      total,
+      page: resourceView.state.page,
+      pageSize: resourceView.state.pageSize,
+      pageCount,
+      hasNext: resourceView.state.page < pageCount,
+      hasPrev: resourceView.state.page > 1,
       fetching,
       error,
     }),
     [
       error,
       fetching,
-      localPage.hasNext,
-      localPage.hasPrev,
-      localPage.page,
-      localPage.pageCount,
-      localPage.pageSize,
-      localPage.total,
+      pageCount,
       pageRows,
+      resourceView.state.page,
+      resourceView.state.pageSize,
+      total,
     ],
   );
   React.useEffect(() => {
     onListStateChange?.(listState);
   }, [listState, onListStateChange]);
-
-  const presentation = useResourceViewPresentationSurface({
-    rows: pageRows,
-    columns,
-    resourceView,
-    modelMetadata,
-    groupStack,
-    getRowId: stringRowId,
-  });
 
   return {
     list: listState,
@@ -968,6 +1014,9 @@ function useResourceViewPresentationSurface<TRow extends Row>({
   modelMetadata,
   groupStack,
   getRowId,
+  filter,
+  textSearchField,
+  textSearchFields,
 }: {
   rows: readonly TRow[];
   columns: readonly ColumnDescriptor<TRow>[];
@@ -975,23 +1024,105 @@ function useResourceViewPresentationSurface<TRow extends Row>({
   modelMetadata?: ModelMetadata | null;
   groupStack?: readonly ResourceViewGroup[];
   getRowId: (row: TRow, index: number) => string;
+  filter?: ResourceViewFilter;
+  textSearchField?: string;
+  textSearchFields?: readonly string[];
 }): ResourceViewPresentationSurface<TRow> {
+  const rowGroupStack = groupStack ?? resourceView.state.groupStack;
   const tableColumns = React.useMemo(
     () =>
       buildColumns(columns, {
         sort: resourceView.state.sort,
         setSort: resourceView.setSort,
+      }, {
+        groupStack: rowGroupStack,
+        metadata: modelMetadata,
       }),
-    [columns, resourceView.state.sort, resourceView.setSort],
+    [columns, rowGroupStack, modelMetadata, resourceView.state.sort, resourceView.setSort],
   );
   const [columnVisibility, setColumnVisibility] =
     React.useState<VisibilityState>({});
+  const [expanded, setExpanded] = React.useState<ExpandedState>({});
+  const sortingState = React.useMemo(
+    () => sortingStateFromResourceSort(resourceView.state.sort),
+    [resourceView.state.sort],
+  );
+  const grouping = React.useMemo(
+    () => groupingStateFromResourceGroups(rowGroupStack),
+    [rowGroupStack],
+  );
+  const pagination = React.useMemo<PaginationState>(
+    () => ({
+      pageIndex: Math.max(0, resourceView.state.page - 1),
+      pageSize: resourceView.state.pageSize,
+    }),
+    [resourceView.state.page, resourceView.state.pageSize],
+  );
+  const rowSelection = React.useMemo(
+    () => rowSelectionStateFromIds(resourceView.state.selectedIds),
+    [resourceView.state.selectedIds],
+  );
+  const globalFilter = React.useMemo<LocalFilterState>(
+    () => ({
+      filter,
+      textSearchField,
+      textSearchFields,
+    }),
+    [filter, textSearchField, textSearchFields],
+  );
+  const handlePaginationChange = React.useCallback<OnChangeFn<PaginationState>>(
+    (updater) => {
+      const next = functionalUpdate(updater, pagination);
+      if (next.pageSize !== resourceView.state.pageSize) {
+        resourceView.setPageSize(next.pageSize);
+      }
+      const nextPage = next.pageIndex + 1;
+      if (nextPage !== resourceView.state.page) resourceView.setPage(nextPage);
+    },
+    [pagination, resourceView],
+  );
+  const handleSortingChange = React.useCallback<OnChangeFn<SortingState>>(
+    (updater) => {
+      const [next] = functionalUpdate(updater, sortingState);
+      resourceView.setSort(
+        next ? { field: next.id, dir: next.desc ? "desc" : "asc" } : null,
+      );
+    },
+    [resourceView, sortingState],
+  );
+  const handleRowSelectionChange = React.useCallback<OnChangeFn<RowSelectionState>>(
+    (updater) => {
+      resourceView.setSelectedIds(
+        idsFromRowSelectionState(functionalUpdate(updater, rowSelection)),
+      );
+    },
+    [resourceView, rowSelection],
+  );
   const table = useReactTable<TRow>({
     data: rows as TRow[],
     columns: tableColumns as ColumnDef<TRow>[],
-    state: { columnVisibility },
+    state: {
+      columnVisibility,
+      expanded,
+      globalFilter,
+      grouping,
+      pagination,
+      rowSelection,
+      sorting: sortingState,
+    },
     onColumnVisibilityChange: setColumnVisibility,
+    onExpandedChange: setExpanded,
+    onPaginationChange: handlePaginationChange,
+    onRowSelectionChange: handleRowSelectionChange,
+    onSortingChange: handleSortingChange,
     getCoreRowModel: getCoreRowModel(),
+    enableRowSelection: (row) => !row.getIsGrouped(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getGroupedRowModel: getGroupedRowModel(),
+    getExpandedRowModel: getExpandedRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    globalFilterFn: resourceViewFilterFn as FilterFn<TRow>,
     getRowId,
     // Pagination/sort/filter/grouping are owned by the resource-view (URL) state, not the
     // table. Without this, TanStack Table auto-resets its own page index whenever the
@@ -1001,14 +1132,18 @@ function useResourceViewPresentationSurface<TRow extends Row>({
     autoResetPageIndex: false,
     autoResetExpanded: false,
   });
+  const pageCount = table.getPageCount();
+  React.useEffect(() => {
+    if (resourceView.state.page > pageCount) {
+      resourceView.setPage(Math.max(1, pageCount));
+    }
+  }, [pageCount, resourceView.setPage, resourceView.state.page]);
   return useResourceViewPresentationSurfaceFromTable({
     rows,
     table,
     columnVisibility,
     resourceView,
-    modelMetadata,
     groupStack,
-    getRowId,
   });
 }
 
@@ -1017,17 +1152,13 @@ function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
   table,
   columnVisibility,
   resourceView,
-  modelMetadata,
   groupStack,
-  getRowId,
 }: {
   rows: readonly TRow[];
   table: TableModel<TRow>;
   columnVisibility: VisibilityState;
   resourceView: ResourceViewContextValue;
-  modelMetadata?: ModelMetadata | null;
   groupStack?: readonly ResourceViewGroup[];
-  getRowId: (row: TRow, index: number) => string;
 }): ResourceViewPresentationSurface<TRow> {
   const tableColumns = table.options.columns as readonly ColumnDef<TRow>[];
   const {
@@ -1037,51 +1168,33 @@ function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
   } = useResourceViewTableChrome(table, columnVisibility);
 
   const rowModels = table.getRowModel().rows;
-  const selectedIds = resourceView.state.selectedIds;
-  // Memoize so the surface returns stable references — safe for a memoized
-  // FlatListBody and so the freeze guard isn't the only thing absorbing churn.
+  const tableRowSelection = table.getState().rowSelection;
+  const selectedIds = React.useMemo(
+    () => idsFromRowSelectionState(tableRowSelection),
+    [tableRowSelection],
+  );
   const pageIds = React.useMemo(
-    () => rows.map((row, index) => getRowId(row, index)),
-    [getRowId, rows],
-  );
-  const allPageSelected = React.useMemo(
-    () => pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id)),
-    [pageIds, selectedIds],
-  );
-  const somePageSelected = React.useMemo(
-    () => pageIds.some((id) => selectedIds.has(id)),
-    [pageIds, selectedIds],
+    () => leafTableRows(rowModels).map((row) => row.id),
+    [rowModels],
   );
   const setPageSelection = React.useCallback(
     (checked: boolean) => {
-      const next = new Set(resourceView.state.selectedIds);
-      for (const id of pageIds) {
-        if (checked) next.add(id);
-        else next.delete(id);
-      }
-      resourceView.setSelectedIds(next);
+      table.toggleAllPageRowsSelected(checked);
     },
-    [resourceView, pageIds],
+    [table],
   );
   const rowGroupStack = groupStack ?? resourceView.state.groupStack;
   const groupedRows = React.useMemo(
-    () => groupRows(rowModels, rowGroupStack, modelMetadata),
-    [modelMetadata, rowGroupStack, rowModels],
-  );
-  // Collapse is the framework default for grouped rows: groups start collapsed
-  // and the viewer expands them. The state machine is shared with GroupedList.
-  const { expandedKeys, toggle: toggleGroup } = useExpandedKeys();
-  const listItems = React.useMemo(
-    () => flattenListItems(groupedRows, expandedKeys),
-    [expandedKeys, groupedRows],
+    () => rowGroupsFromTableRows(table.getGroupedRowModel().rows, rowGroupStack),
+    [table, rowGroupStack, rows],
   );
   const tableScrollRef = React.useRef<HTMLDivElement | null>(null);
   const rowVirtualizer = useVirtualizer({
-    count: listItems.length,
+    count: rowModels.length,
     getScrollElement: () => tableScrollRef.current,
     initialRect: { width: 1024, height: 600 },
     estimateSize: (index) =>
-      listItems[index]?.kind === "group" ? GROUP_ROW_HEIGHT : RECORD_ROW_HEIGHT,
+      rowModels[index]?.getIsGrouped() ? GROUP_ROW_HEIGHT : RECORD_ROW_HEIGHT,
     overscan: 10,
   });
 
@@ -1095,13 +1208,10 @@ function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
     rowModels,
     selectedIds,
     pageIds,
-    allPageSelected,
-    somePageSelected,
+    allPageSelected: table.getIsAllPageRowsSelected(),
+    somePageSelected: table.getIsSomePageRowsSelected(),
     setPageSelection,
     groupedRows,
-    listItems,
-    expandedKeys,
-    toggleGroup,
     tableScrollRef,
     rowVirtualizer,
   };
@@ -1114,11 +1224,18 @@ function useResourceViewTableChrome<TRow extends Row>(
   ResourceViewPresentationSurface<TRow>,
   "visibleColumnCount" | "visibleFields" | "toggleVisibleField"
 > {
-  const visibleColumnCount = table.getVisibleLeafColumns().length;
+  const visibleColumnCount = table
+    .getVisibleLeafColumns()
+    .filter((column) => !isGroupingOnlyColumn(column.columnDef)).length;
   const visibleFields = React.useMemo<readonly VisibleFieldOption[]>(
     () => {
-      const visibleCount = table.getVisibleLeafColumns().length;
-      return table.getAllLeafColumns().map((column) => {
+      const chooserColumns = table
+        .getAllLeafColumns()
+        .filter((column) => !isGroupingOnlyColumn(column.columnDef));
+      const visibleCount = chooserColumns.filter((column) =>
+        column.getIsVisible(),
+      ).length;
+      return chooserColumns.map((column) => {
         const visible = column.getIsVisible();
         return {
           id: column.id,
@@ -1171,7 +1288,6 @@ function requestedFieldPaths<TRow extends Row>(
   return [...paths];
 }
 
-
 function modelRowId<TRow extends Row>(row: TRow, index: number): string {
   return rowPublicId(row) ?? String(index);
 }
@@ -1196,95 +1312,226 @@ function stringRowId<TRow extends StringIdRow>(row: TRow): string {
   return row.id;
 }
 
-function errorFromUnknown(error: unknown): Error | null {
-  if (!error) return null;
-  if (error instanceof Error) return error;
-  if (typeof error === "object" && "message" in error) {
-    return Object.assign(
-      new Error(String((error as { message?: unknown }).message ?? "Unknown error")),
-      error,
-    );
-  }
-  return new Error(String(error));
+function sortingStateFromResourceSort(
+  sort: ResourceViewSort | null,
+): SortingState {
+  return sort ? [{ id: sort.field, desc: sort.dir === "desc" }] : [];
 }
 
-function groupRows<TRow extends Row>(
-  rows: readonly TableRowModel<TRow>[],
+function groupingStateFromResourceGroups(
   groupStack: readonly ResourceViewGroup[],
-  modelMetadata: ModelMetadata | null = null,
-  depth = 0,
-  parentPath: readonly string[] = [],
-): readonly RowGroup<TRow>[] {
-  const [group, ...rest] = groupStack;
-  if (!group) {
-    return [{
-      key: groupPathKey(parentPath) || "root",
-      label: null,
-      path: parentPath,
-      depth,
-      rows,
-      children: [],
-    }];
+): GroupingState {
+  return groupStack.map((group) => group.field);
+}
+
+function rowSelectionStateFromIds(ids: ReadonlySet<string>): RowSelectionState {
+  const state: RowSelectionState = {};
+  for (const id of ids) state[id] = true;
+  return state;
+}
+
+function idsFromRowSelectionState(state: RowSelectionState): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const [id, selected] of Object.entries(state)) {
+    if (selected) ids.add(id);
   }
-  const groups = new Map<string, TableRowModel<TRow>[]>();
+  return ids;
+}
+
+function leafTableRows<TRow extends Row>(
+  rows: readonly TableRowModel<TRow>[],
+): readonly TableRowModel<TRow>[] {
+  const output: TableRowModel<TRow>[] = [];
   for (const row of rows) {
-    const key = groupKey(readPath(row.original, group.field), group, modelMetadata);
-    const next = groups.get(key) ?? [];
-    next.push(row);
-    groups.set(key, next);
-  }
-  return [...groups.entries()].map(([label, groupRows]) => {
-    const path = [...parentPath, label];
-    return {
-      key: groupPathKey(path),
-      label,
-      path,
-      depth,
-      rows: groupRows,
-      children: groupRows.length > 0
-        ? groupRowsByRest(groupRows, rest, modelMetadata, depth + 1, path)
-        : [],
-    };
-  });
-}
-
-function groupRowsByRest<TRow extends Row>(
-  rows: readonly TableRowModel<TRow>[],
-  groupStack: readonly ResourceViewGroup[],
-  modelMetadata: ModelMetadata | null,
-  depth: number,
-  parentPath: readonly string[],
-): readonly RowGroup<TRow>[] {
-  return groupRows(rows, groupStack, modelMetadata, depth, parentPath).filter(
-    (group) => group.label !== null || group.children.length > 0,
-  );
-}
-
-// Flatten the group tree to the virtualizer's render list, emitting a collapsed
-// group's header but none of its body. Re-flattening expanded-only (rather than
-// post-filtering rows) keeps the virtualizer count and estimated heights exact.
-function flattenListItems<TRow extends Row>(
-  groups: readonly RowGroup<TRow>[],
-  expandedKeys: ReadonlySet<string>,
-): ListRenderItem<TRow>[] {
-  const output: ListRenderItem<TRow>[] = [];
-  for (const group of groups) {
-    const hasHeader = group.label !== null;
-    if (hasHeader) output.push({ kind: "group", group });
-    // The label-less root carries no header and is always open; a real group is
-    // open only when the viewer has expanded its key.
-    if (hasHeader && !expandedKeys.has(group.key)) continue;
-    if (group.children.length > 0) {
-      output.push(...flattenListItems(group.children, expandedKeys));
+    if (row.getIsGrouped()) {
+      output.push(...leafTableRows(row.subRows));
     } else {
-      for (const row of group.rows) output.push({ kind: "row", row });
+      output.push(row);
     }
   }
   return output;
 }
 
-function groupPathKey(path: readonly string[]): string {
-  return JSON.stringify(path);
+function rowGroupsFromTableRows<TRow extends Row>(
+  rows: readonly TableRowModel<TRow>[],
+  groupStack: readonly ResourceViewGroup[],
+): readonly RowGroup<TRow>[] {
+  if (groupStack.length === 0) {
+    return [{
+      key: "root",
+      label: null,
+      path: [],
+      depth: 0,
+      rows: leafTableRows(rows),
+      children: [],
+    }];
+  }
+  return rows.map((row) => rowGroupFromTableRow(row, []));
+}
+
+function rowGroupFromTableRow<TRow extends Row>(
+  row: TableRowModel<TRow>,
+  parentPath: readonly string[],
+): RowGroup<TRow> {
+  const label = groupedRowLabel(row);
+  const path = [...parentPath, label];
+  const children = row.subRows.filter((child) => child.getIsGrouped());
+  const leafRows = leafTableRows(row.subRows);
+  return {
+    key: row.id,
+    label,
+    path,
+    depth: row.depth,
+    rows: leafRows,
+    children: children.map((child) => rowGroupFromTableRow(child, path)),
+  };
+}
+
+
+interface LocalFilterState {
+  filter: ResourceViewFilter | undefined;
+  textSearchField?: string;
+  textSearchFields?: readonly string[];
+}
+
+const resourceViewFilterFn: FilterFn<Row> = (row, _columnId, state) => {
+  const filterState = state as LocalFilterState | undefined;
+  return rowMatchesFilter(row.original, filterState);
+};
+
+function rowMatchesFilter(
+  row: Row,
+  state: LocalFilterState | undefined,
+): boolean {
+  const filter = state?.filter;
+  if (!filter || Object.keys(filter).length === 0) return true;
+  return rowMatchesFilterEntries(row, Object.entries(filter), state);
+}
+
+function rowMatchesFilterEntries(
+  row: Row,
+  entries: readonly [string, unknown][],
+  state: LocalFilterState,
+): boolean {
+  return entries.every(([field, lookup]) => {
+    if (field === "AND") return rowMatchesBranch(row, lookup, state, "AND");
+    if (field === "OR") return rowMatchesBranch(row, lookup, state, "OR");
+    if (field === "NOT") return !rowMatchesBranch(row, lookup, state, "AND");
+    if (
+      state.textSearchField
+      && field === state.textSearchField
+      && textSearchMatches(row, lookup, state.textSearchFields ?? [])
+    ) {
+      return true;
+    }
+    return matchesLocalLookup(readPath(row, field), lookup);
+  });
+}
+
+function rowMatchesBranch(
+  row: Row,
+  branch: unknown,
+  state: LocalFilterState,
+  operator: "AND" | "OR",
+): boolean {
+  const filters = Array.isArray(branch) ? branch : [branch];
+  const matches = filters.map((filter) =>
+    isFilterObject(filter)
+      && rowMatchesFilterEntries(row, Object.entries(filter), state),
+  );
+  return operator === "AND"
+    ? matches.every(Boolean)
+    : matches.some(Boolean);
+}
+
+function textSearchMatches(
+  row: Row,
+  lookup: unknown,
+  textFields: readonly string[],
+): boolean {
+  if (!lookup || typeof lookup !== "object" || Array.isArray(lookup)) return false;
+  const text = (lookup as Record<string, unknown>).iContains;
+  if (typeof text !== "string" || text.trim() === "") return false;
+  const query = text.trim().toLowerCase();
+  return textFields.some((field) =>
+    String(readPath(row, field) ?? "")
+      .toLowerCase()
+      .includes(query),
+  );
+}
+
+function matchesLocalLookup(value: unknown, lookup: unknown): boolean {
+  if (!lookup || typeof lookup !== "object" || Array.isArray(lookup)) {
+    return value === lookup;
+  }
+  const record = lookup as Record<string, unknown>;
+  if ("sqid" in record) return relationPublicId(value) === record.sqid;
+  if ("pk" in record) return relationPublicId(value) === record.pk;
+  if ("exact" in record) return value === record.exact;
+  if (Array.isArray(record.inList)) return record.inList.includes(value);
+  if (typeof record.isNull === "boolean") return (value == null) === record.isNull;
+  if ("iExact" in record) {
+    return String(value ?? "").toLowerCase()
+      === String(record.iExact ?? "").toLowerCase();
+  }
+  if ("contains" in record) {
+    return String(value ?? "").includes(String(record.contains ?? ""));
+  }
+  if (typeof record.iContains === "string") {
+    return String(value ?? "")
+      .toLowerCase()
+      .includes(record.iContains.toLowerCase());
+  }
+  if ("startsWith" in record) {
+    return String(value ?? "").startsWith(String(record.startsWith ?? ""));
+  }
+  if ("iStartsWith" in record) {
+    return String(value ?? "")
+      .toLowerCase()
+      .startsWith(String(record.iStartsWith ?? "").toLowerCase());
+  }
+  if ("endsWith" in record) {
+    return String(value ?? "").endsWith(String(record.endsWith ?? ""));
+  }
+  if ("iEndsWith" in record) {
+    return String(value ?? "")
+      .toLowerCase()
+      .endsWith(String(record.iEndsWith ?? "").toLowerCase());
+  }
+  if ("gt" in record && compareLocalValues(value, record.gt) <= 0) return false;
+  if ("gte" in record && compareLocalValues(value, record.gte) < 0) return false;
+  if ("lt" in record && compareLocalValues(value, record.lt) >= 0) return false;
+  if ("lte" in record && compareLocalValues(value, record.lte) > 0) return false;
+  return true;
+}
+
+function relationPublicId(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const record = value as Row;
+  return rowPublicId(record) ?? record.sqid ?? record.pk ?? value;
+}
+
+function compareLocalValues(left: unknown, right: unknown): number {
+  if (left == null && right == null) return 0;
+  if (left == null) return -1;
+  if (right == null) return 1;
+  if (typeof left === "number" && typeof right === "number") {
+    return left - right;
+  }
+  if (typeof left === "boolean" && typeof right === "boolean") {
+    return Number(left) - Number(right);
+  }
+  return String(left).localeCompare(String(right), undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
+function isFilterObject(value: unknown): value is ResourceViewFilter {
+  return Boolean(value)
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && Object.getPrototypeOf(value) === Object.prototype;
 }
 
 interface GroupedRenderParams {
@@ -1297,6 +1544,9 @@ interface GroupedRenderParams {
   queryMeasures: readonly GroupMeasure[];
   leafOrder: ListOrder | undefined;
   modelMetadata: ModelMetadata | null;
+  emptyGroupMessage: string;
+  emptySubgroupsMessage: string;
+  allRecordsLabel: string;
 }
 
 interface GroupedRenderModel<TRow extends Row> {
@@ -1330,6 +1580,9 @@ function buildGroupedRenderModel<TRow extends Row>(
     queryMeasures,
     leafOrder,
     modelMetadata,
+    emptyGroupMessage,
+    emptySubgroupsMessage,
+    allRecordsLabel,
   } = params;
   const groupScopes: GroupByBatchScope[] = [];
   const leafScopes: AngeeListBatchScope[] = [];
@@ -1384,7 +1637,7 @@ function buildGroupedRenderModel<TRow extends Row>(
         kind: "status",
         itemKey: `leaf-empty:${bucketKey}`,
         depth,
-        message: "No records in this group.",
+        message: emptyGroupMessage,
         tone: "muted",
       });
     } else {
@@ -1443,7 +1696,7 @@ function buildGroupedRenderModel<TRow extends Row>(
 
     if (!result || result.error || result.buckets.length === 0) {
       // Depth 0 defers its empty/loading/error states to the thin body (which owns
-      // the `emptyMessage`); a nested level renders its own status inline.
+      // the `emptyContent`); a nested level renders its own status inline.
       if (depth > 0) {
         if (result?.error) {
           items.push({
@@ -1465,7 +1718,7 @@ function buildGroupedRenderModel<TRow extends Row>(
             kind: "status",
             itemKey: `empty:${levelScopeKey}`,
             depth,
-            message: "No sub-groups.",
+            message: emptySubgroupsMessage,
             tone: "muted",
           });
         }
@@ -1483,7 +1736,7 @@ function buildGroupedRenderModel<TRow extends Row>(
         bucket: bucket.key ?? null,
       });
       const expanded = expandable && expandedKeys.has(bucketKey);
-      const label = bucketLabel(bucket, axisGroup, modelMetadata);
+      const label = bucketLabel(bucket, axisGroup, modelMetadata, allRecordsLabel);
       items.push({
         kind: "groupHeader",
         bucketKey,
@@ -1526,10 +1779,11 @@ function bucketLabel(
   bucket: AggregateBucket,
   group: ResourceViewGroup | undefined,
   metadata: ModelMetadata | null,
+  allRecordsLabel: string,
 ): string {
-  if (!group) return "All records";
+  if (!group) return allRecordsLabel;
   const [label] = bucketValueLabels(bucket, [group], metadata);
-  return label ?? "All records";
+  return label ?? allRecordsLabel;
 }
 
 function groupScopesEqual(

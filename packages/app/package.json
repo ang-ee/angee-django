@@ -29,6 +29,14 @@
       "types": "./src/testing.tsx",
       "import": "./src/testing.tsx"
     },
+    "./providers/i18n": {
+      "types": "./src/providers/i18n.ts",
+      "import": "./src/providers/i18n.ts"
+    },
+    "./providers/auth": {
+      "types": "./src/providers/auth.tsx",
+      "import": "./src/providers/auth.tsx"
+    },
     "./vite": {
       "types": "./config/vite.ts",
       "import": "./config/vite.ts"
@@ -46,12 +54,13 @@
   "dependencies": {
     "@angee/logo-react": "^0.2.1",
     "@angee/refine": "workspace:*",
-    "@angee/resources": "workspace:*",
+    "@angee/metadata": "workspace:*",
     "@angee/ui": "workspace:*",
     "@graphql-codegen/cli": "^7.1.3",
     "@graphql-codegen/client-preset": "^6.0.1",
     "@refinedev/core": "^5.0.12",
     "graphql": "^16.14.0",
+    "i18next": "^26.3.2",
     "nuqs": "^2.5.0"
   },
   "peerDependencies": {

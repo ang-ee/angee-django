@@ -164,6 +164,11 @@ export function useChatter(): ChatterContextValue {
   return useContext(ChatterContext);
 }
 
+/**
+ * Publish secondary-pane content for the lifetime of the calling component.
+ * Pass a memoized `content` object; inline objects or tab arrays republish on
+ * every render and can churn the shell.
+ */
 export function useChatterContent(content: ChatterContent | null): void {
   const ownerRef = useRef<symbol | null>(null);
   if (ownerRef.current === null) ownerRef.current = Symbol("chatter-content");

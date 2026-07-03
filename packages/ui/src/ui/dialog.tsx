@@ -11,7 +11,7 @@ import type {
   DialogTriggerProps as BaseDialogTriggerProps,
 } from "@base-ui/react/dialog";
 import { Glyph } from "../chrome/Glyph";
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import { textRoleVariants } from "./text";
@@ -188,7 +188,7 @@ export const DialogClose = React.forwardRef<
   HTMLButtonElement,
   DialogCloseProps
 >(function DialogClose({ className, children, ...props }, ref) {
-  const t = useBaseT();
+  const t = useUiT();
   const styles = dialogVariants();
   const ariaLabel = props["aria-label"] ?? (children ? undefined : t("dialog.close"));
   return (

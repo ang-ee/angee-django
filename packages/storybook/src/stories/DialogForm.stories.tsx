@@ -1,12 +1,6 @@
 import * as React from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import {
-  Button,
-  DialogForm,
-  FieldRow,
-  Input,
-  Textarea,
-} from "@angee/ui";
+import { Button, DialogForm, FieldRow, Input, Textarea } from "@angee/ui";
 
 const meta = {
   title: "Fragments/DialogForm",

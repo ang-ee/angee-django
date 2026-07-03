@@ -2,23 +2,146 @@
 // createApp provider/router stack while keeping network and layout chrome
 // assertions hermetic.
 
-import { createElement, useEffect, type ReactNode } from "react";
+import { createElement, useEffect, type ReactElement, type ReactNode } from "react";
 import { waitFor } from "@testing-library/react";
 import { useBreadcrumb as useRefineBreadcrumb } from "@refinedev/core";
 import type { Root } from "react-dom/client";
+import {
+  AppRuntimeProvider,
+  ChatterProvider,
+  PrimaryPaneProvider,
+  baseIcons,
+  useChatter,
+  usePrimaryPaneContent,
+} from "@angee/ui";
+import type { AppRuntime } from "@angee/ui/runtime";
 
 import {
   PassthroughChrome,
   createApp,
   type BaseAddon,
+  type BaseAddonRoute,
   type CreateAppInput,
 } from "./create-app";
-import type { ChromeMenuItem } from "@angee/ui/chrome/menu-tree";
+import type { BaseMenuItem, ChromeMenuItem } from "@angee/ui/chrome/menu-tree";
 import { useChromeMenuItems } from "@angee/ui/chrome/refine-menu";
+
+export interface ShellPageTestProvidersProps {
+  children: ReactNode;
+  runtime?: Partial<AppRuntime>;
+}
+
+export function ShellPageTestProviders({
+  children,
+  runtime = {},
+}: ShellPageTestProvidersProps): ReactElement {
+  return (
+    <AppRuntimeProvider runtime={{ icons: baseIcons, ...runtime }}>
+      <PrimaryPaneProvider>
+        <ChatterProvider>{children}</ChatterProvider>
+      </PrimaryPaneProvider>
+    </AppRuntimeProvider>
+  );
+}
+
+export function PrimaryPaneTestHost({
+  testId = "shell-primary",
+}: {
+  testId?: string;
+}): ReactElement {
+  const { node } = usePrimaryPaneContent();
+  return <div data-testid={testId}>{node}</div>;
+}
+
+export function ChatterTabsTestHost({
+  testId = "shell-chatter",
+  tabTestId = (id) => `tab-${id}`,
+}: {
+  testId?: string;
+  tabTestId?: (id: string) => string;
+}): ReactElement {
+  const { content } = useChatter();
+  const tabs = content?.tabs ?? [];
+  return (
+    <div data-testid={testId} data-tab-ids={tabs.map((tab) => tab.id).join(",")}>
+      {tabs.map((tab) => (
+        <div key={tab.id} data-testid={tabTestId(tab.id)}>
+          {tab.label}
+          {tab.children}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 interface CapturedBreadcrumbItem {
   label: ReactNode;
   to?: string;
+}
+
+export function expectValidBaseAddon(addon: BaseAddon): void {
+  const routes = addon.routes ?? [];
+  const routesByName = new Map(routes.map((route) => [route.name, route]));
+  const resourceOwners = new Map<string, string>();
+  for (const route of routes) {
+    if (route.resource) {
+      const owner = resourceOwners.get(route.resource);
+      if (owner) {
+        throw new Error(
+          `Addon "${addon.id}" resource "${route.resource}" is claimed by both "${owner}" and "${route.name}".`,
+        );
+      }
+      resourceOwners.set(route.resource, route.name);
+    }
+    if (trailingRouteParamName(route.path) && !route.parent) {
+      throw new Error(
+        `Addon "${addon.id}" route "${route.name}" is a record route but has no parent.`,
+      );
+    }
+    if (route.parent && !routesByName.has(route.parent)) {
+      throw new Error(
+        `Addon "${addon.id}" route "${route.name}" references unknown parent "${route.parent}".`,
+      );
+    }
+    if (route.component !== undefined && typeof route.component !== "function") {
+      throw new Error(
+        `Addon "${addon.id}" route "${route.name}" component must be a function.`,
+      );
+    }
+  }
+  for (const item of addon.menus ?? []) {
+    assertValidMenuItem(addon.id, item, routesByName);
+  }
+  for (const iconName of Object.keys(addon.icons ?? {})) {
+    if (!isKebabCase(iconName)) {
+      throw new Error(`Addon "${addon.id}" icon "${iconName}" must be kebab-case.`);
+    }
+  }
+}
+
+function assertValidMenuItem(
+  addonId: string,
+  item: BaseMenuItem,
+  routesByName: ReadonlyMap<string, BaseAddonRoute>,
+): void {
+  if (item.route && !routesByName.has(item.route)) {
+    throw new Error(
+      `Addon "${addonId}" menu item "${item.id ?? item.route}" references unknown route "${item.route}".`,
+    );
+  }
+  if (item.icon && !isKebabCase(item.icon)) {
+    throw new Error(`Addon "${addonId}" menu icon "${item.icon}" must be kebab-case.`);
+  }
+  item.children?.forEach((child) => assertValidMenuItem(addonId, child, routesByName));
+}
+
+function trailingRouteParamName(path: string): string | undefined {
+  const segment = path.replace(/\/+$/, "").split("/").at(-1);
+  return segment?.startsWith("$") ? segment.slice(1) || undefined : undefined;
+}
+
+function isKebabCase(value: string): boolean {
+  return /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(value);
 }
 
 /** Captured layout chrome plus runtime menus from a mounted route. */
@@ -173,4 +296,33 @@ export function testGraphQLFetch(): Promise<Response> {
       },
     ),
   );
+}
+
+/**
+ * Install a deterministic in-memory `window.localStorage` for happy-dom
+ * suites: Vitest's happy-dom global copy does not expose `localStorage`, and
+ * the lookup falls through to Node's experimental accessor (undefined).
+ * Returns the stub for direct assertions.
+ */
+export function installTestLocalStorage(): Storage {
+  const entries = new Map<string, string>();
+  const storage: Storage = {
+    get length() {
+      return entries.size;
+    },
+    clear: () => entries.clear(),
+    getItem: (key) => entries.get(key) ?? null,
+    key: (index) => [...entries.keys()][index] ?? null,
+    removeItem: (key) => {
+      entries.delete(key);
+    },
+    setItem: (key, value) => {
+      entries.set(key, value);
+    },
+  };
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: storage,
+  });
+  return storage;
 }

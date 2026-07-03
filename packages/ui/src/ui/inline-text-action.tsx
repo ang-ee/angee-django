@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { Button, type ButtonSize, type ButtonVariant } from "./button";
 import { FormRoot } from "./form";
@@ -72,7 +72,7 @@ export function InlineTextAction({
   submitVariant = "secondary",
   ...props
 }: InlineTextActionProps): React.ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen);
   const editing = open ?? uncontrolledOpen;

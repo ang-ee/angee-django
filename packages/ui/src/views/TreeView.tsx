@@ -1,5 +1,6 @@
 import { useMemo, useState, type ReactElement, type ReactNode } from "react";
 
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import {
   dragHasAcceptedType,
@@ -8,8 +9,8 @@ import {
   type DndPayload,
 } from "../lib/dnd";
 import { Tree, type TreeNode } from "../ui/tree";
-import { ListEmpty } from "./ListInternals";
-import type { ListEmptyState } from "./list-view-types";
+import { ListEmpty } from "./resource-view-list-body";
+import type { ListEmptyContent } from "./resource-view-types";
 
 /**
  * The hierarchical View: flat `rows` carrying a self-referential `parent`
@@ -42,10 +43,8 @@ export interface TreeViewProps<
   canDropOnNode?: (nodeId: string, row: TRow) => boolean;
   /** Called with the decoded payload when an accepted item drops on a node. */
   onNodeDrop?: (nodeId: string, payload: DndPayload, row: TRow) => void;
-  /** Shown centered when there are no nodes. */
-  emptyMessage?: ReactNode;
-  /** Structured empty state shown when there are no nodes. */
-  emptyState?: ListEmptyState;
+  /** Empty-state content shown when there are no nodes. */
+  emptyContent?: ListEmptyContent;
   className?: string;
 }
 
@@ -63,11 +62,11 @@ export function TreeView<TRow extends Record<string, unknown>>({
   dropAccept,
   canDropOnNode,
   onNodeDrop,
-  emptyMessage = "No records.",
-  emptyState,
+  emptyContent,
   className,
 }: TreeViewProps<TRow>): ReactElement {
-  const emptyContent = emptyState ?? emptyMessage;
+  const t = useUiT();
+  const resolvedEmptyContent = emptyContent ?? t("list.empty");
   const rowsById = useMemo(
     () => new Map(rows.map((row) => [String(row[rowKey] ?? ""), row])),
     [rows, rowKey],
@@ -81,7 +80,7 @@ export function TreeView<TRow extends Record<string, unknown>>({
 
   if (nodes.length === 0) {
     return (
-      <ListEmpty className={cn("min-h-0 p-8", className)}>{emptyContent}</ListEmpty>
+      <ListEmpty className={cn("min-h-0 p-8", className)}>{resolvedEmptyContent}</ListEmpty>
     );
   }
 

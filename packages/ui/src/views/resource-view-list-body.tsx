@@ -23,19 +23,24 @@ import type {
   GroupOrder,
   } from "@angee/refine";
 import type {
-  DataResourceGroupBucketFilterMetadata,
-  DataResourceGroupDimensionMetadata,
-  DataResourceGroupExtractionMetadata,
   ModelEnumValueMetadata,
   ModelMetadata,
   Row,
-} from "@angee/resources";
+} from "@angee/metadata";
+import {
+  bucketFilterForGroup as metadataBucketFilterForGroup,
+  groupDimensionForField,
+  groupDimensionForGroup,
+  groupExtractionForGroup,
+  looksLikeDateField,
+  resourceFieldPathToSnake,
+} from "@angee/metadata";
 import { format } from "date-fns";
 import { Spinner } from "../ui/spinner";
 
 import { Glyph } from "../chrome/Glyph";
 import { EmptyState } from "../fragments/EmptyState";
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { RelativeTime } from "../fragments/RelativeTime";
 import { cn } from "../lib/cn";
 import { dragSourceProps, type DndPayload, type DragSourceProps } from "../lib/dnd";
@@ -70,13 +75,25 @@ import type {
   ListEmptyAction,
   ListEmptyContent,
   ListEmptyState,
-} from "./list-view-types";
+} from "./resource-view-types";
 import { columnTone } from "./page";
 import type {
   ColumnAggregate,
   ColumnDescriptor,
   PageColumnAlign,
 } from "./page";
+
+export { looksLikeDateField } from "@angee/metadata";
+
+export function bucketFilterForGroup(
+  bucket: AggregateBucket,
+  group: ResourceViewGroup | undefined,
+  metadata: ModelMetadata | null,
+): ResourceViewFilter | undefined {
+  return metadataBucketFilterForGroup(bucket, group, metadata) as
+    | ResourceViewFilter
+    | undefined;
+}
 
 export type ColumnAlign = PageColumnAlign;
 export type ListColumn<TRow extends Row = Row> = ColumnDescriptor<TRow>;
@@ -111,10 +128,6 @@ export interface GroupMeasure extends AggregateMeasure {
   unit: string;
 }
 
-export type ListRenderItem<TRow extends Row> =
-  | { kind: "group"; group: RowGroup<TRow> }
-  | { kind: "row"; row: TableRowModel<TRow> };
-
 /**
  * One windowed row of a server-grouped list. The grouped surface flattens its
  * group tree (per-level `_groups` headers, the leaf record rows of expanded
@@ -131,7 +144,7 @@ export type ListRenderItem<TRow extends Row> =
  * module the surface can depend on).
  */
 export interface GroupedRecordNav {
-  filter: Record<string, unknown> | undefined;
+  filter: ResourceViewFilter | undefined;
   order: Record<string, unknown> | undefined;
   page: number;
   pageSize: number;
@@ -227,7 +240,7 @@ export function SelectionBar({
   /** Caller-supplied bulk actions rendered before the built-in Delete/Clear. */
   actions?: React.ReactNode;
 }): React.ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const actions = (
     <>
       {extraActions}
@@ -260,7 +273,6 @@ export interface FlatListBodyProps<TRow extends Row> {
   columns: readonly ColumnDescriptor<TRow>[];
   table: TableModel<TRow>;
   rowModels: readonly TableRowModel<TRow>[];
-  listItems: readonly ListRenderItem<TRow>[];
   tableScrollRef: React.RefObject<HTMLDivElement | null>;
   rowVirtualizer: Virtualizer<HTMLDivElement, Element>;
   visibleColumnCount: number;
@@ -275,19 +287,15 @@ export interface FlatListBodyProps<TRow extends Row> {
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
   draggableRow?: (row: TRow) => DndPayload | null;
-  emptyMessage: ListEmptyContent;
+  emptyContent: ListEmptyContent;
   fetching: boolean;
   footerAggregate?: AggregateBucket | null;
-  /** Expanded group keys; when provided, group headers become collapse toggles. */
-  expandedKeys?: ReadonlySet<string>;
-  onToggleGroup?: (key: string) => void;
 }
 
 export function FlatListBody<TRow extends Row>({
   columns,
   table,
   rowModels,
-  listItems,
   tableScrollRef,
   rowVirtualizer,
   visibleColumnCount,
@@ -302,13 +310,11 @@ export function FlatListBody<TRow extends Row>({
   rowHref,
   onRowClick,
   draggableRow,
-  emptyMessage,
+  emptyContent,
   fetching,
   footerAggregate,
-  expandedKeys,
-  onToggleGroup,
 }: FlatListBodyProps<TRow>): React.ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const colSpan = Math.max(1, visibleColumnCount + (selectable ? 1 : 0));
   const measures = React.useMemo(
     () => groupMeasuresFromColumns(columns),
@@ -316,9 +322,9 @@ export function FlatListBody<TRow extends Row>({
   );
   const { paddingTop, paddingBottom, visibleIndexes } = useVirtualWindow(
     rowVirtualizer,
-    listItems.length,
+    rowModels.length,
     (index) =>
-      listItems[index]?.kind === "group" ? GROUP_ROW_HEIGHT : RECORD_ROW_HEIGHT,
+      rowModels[index]?.getIsGrouped() ? GROUP_ROW_HEIGHT : RECORD_ROW_HEIGHT,
   );
   return (
     <div
@@ -367,7 +373,7 @@ export function FlatListBody<TRow extends Row>({
                 colSpan={colSpan}
                 className="py-8 text-center text-fg-muted"
               >
-                <ListEmpty>{emptyMessage}</ListEmpty>
+                <ListEmpty>{emptyContent}</ListEmpty>
               </TableCell>
             </TableRow>
           ) : (
@@ -379,10 +385,10 @@ export function FlatListBody<TRow extends Row>({
                 />
               ) : null}
               {visibleIndexes.map((index) => {
-                const item = listItems[index];
-                return item
-                  ? renderListItem({
-                      item,
+                const row = rowModels[index];
+                return row
+                  ? renderListRow({
+                      row,
                       colSpan,
                       resourceView,
                       interactive,
@@ -390,8 +396,6 @@ export function FlatListBody<TRow extends Row>({
                       rowHref,
                       onRowClick,
                       draggableRow,
-                      expandedKeys,
-                      onToggleGroup,
                     })
                   : null;
               })}
@@ -405,7 +409,7 @@ export function FlatListBody<TRow extends Row>({
           )}
         </TableBody>
         {measures.length > 0 && footerAggregate ? (
-          <FlatMeasureFooter
+          <MeasureFooter
             table={table}
             measures={measures}
             aggregate={footerAggregate}
@@ -417,23 +421,29 @@ export function FlatListBody<TRow extends Row>({
   );
 }
 
-function FlatMeasureFooter<TRow extends Row>({
+export function MeasureFooter<TRow extends Row>({
   table,
   measures,
   aggregate,
   selectable,
+  labelInSelectionColumn = false,
 }: {
   table: TableModel<TRow>;
   measures: readonly GroupMeasure[];
   aggregate: AggregateBucket;
   selectable: boolean;
+  labelInSelectionColumn?: boolean;
 }): React.ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const byColumn = new Map(measures.map((measure) => [measure.columnId, measure]));
   return (
     <TableFooter>
       <TableRow>
-        {selectable ? <TableCell className="w-8" /> : null}
+        {selectable ? (
+          <TableCell className="w-8 text-fg-muted">
+            {labelInSelectionColumn ? t("list.total") : null}
+          </TableCell>
+        ) : null}
         {table.getVisibleLeafColumns().map((column, index) => {
           const measure = byColumn.get(column.id);
           const value = measure ? measureValue(aggregate, measure) : undefined;
@@ -510,7 +520,7 @@ export function VisibleFieldsMenu({
   fields: readonly VisibleFieldOption[];
   onToggle?: (id: string, visible: boolean) => void;
 }): React.ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger
@@ -559,9 +569,50 @@ export function buildColumns<TRow extends Row>(
   sortController: Pick<ResourceViewContextValue, "setSort"> & {
     sort: ResourceViewSort | null;
   },
+  options: {
+    groupStack?: readonly ResourceViewGroup[];
+    metadata?: ModelMetadata | null;
+  } = {},
+): ColumnDef<TRow>[] {
+  // TanStack grouping requires a column def per grouping id; a group axis that
+  // is not a display column gets a grouping-only accessor column (never
+  // rendered, hidden from the column chooser via `meta.groupingOnly`).
+  const groupOnlyColumns: ColumnDef<TRow>[] = (options.groupStack ?? [])
+    .filter((group) => !columns.some((column) => column.field === group.field))
+    .map((group) => ({
+      id: group.field,
+      accessorFn: (row: TRow) => readPath(row, group.field),
+      getGroupingValue: (row: TRow) =>
+        groupKey(readPath(row, group.field), group, options.metadata ?? null),
+      enableHiding: false,
+      meta: {
+        align: "left",
+        label: group.field,
+        field: group.field,
+        groupingOnly: true,
+      },
+    }));
+  return [...displayColumns(columns, sortController, options), ...groupOnlyColumns];
+}
+
+function displayColumns<TRow extends Row>(
+  columns: readonly ColumnDescriptor<TRow>[],
+  sortController: Pick<ResourceViewContextValue, "setSort"> & {
+    sort: ResourceViewSort | null;
+  },
+  options: {
+    groupStack?: readonly ResourceViewGroup[];
+    metadata?: ModelMetadata | null;
+  },
 ): ColumnDef<TRow>[] {
   return columns.map((column) => ({
     id: column.field,
+    accessorFn: (row) => readPath(row, column.field),
+    getGroupingValue: (row) => {
+      const group = options.groupStack?.find((item) => item.field === column.field);
+      if (!group) return readPath(row, column.field);
+      return groupKey(readPath(row, column.field), group, options.metadata ?? null);
+    },
     header: () => (
       <SortHeader column={column} sortController={sortController}>
         {column.header ?? column.field}
@@ -617,7 +668,7 @@ function SortHeader<TRow extends Row>({
   };
   children: React.ReactNode;
 }): React.ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   if (column.sortable === false) return <>{children}</>;
   const sort = sortController.sort;
   const active = sort?.field === column.field;
@@ -718,10 +769,10 @@ function LinkedRecordRow<TRow extends Row>({
   onRecordOpen?: (row: TRow) => void;
   dragProps?: DragSourceProps;
 }): React.ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const id = row.id;
   const navigate = useNavigate();
-  const openHref = React.useCallback(
+  const openRow = React.useCallback(
     (event: React.MouseEvent<HTMLTableRowElement>) => {
       if (isInteractiveTarget(event.target)) return;
       if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
@@ -734,22 +785,30 @@ function LinkedRecordRow<TRow extends Row>({
     },
     [href, navigate, onRecordOpen, row.original],
   );
+  const openLink = React.useCallback(
+    (event: React.MouseEvent<HTMLAnchorElement>) => {
+      if (
+        event.defaultPrevented
+        || event.button !== 0
+        || event.metaKey
+        || event.ctrlKey
+        || event.shiftKey
+        || event.altKey
+      ) {
+        return;
+      }
+      event.preventDefault();
+      onRecordOpen?.(row.original);
+      void navigate({ to: href });
+    },
+    [href, navigate, onRecordOpen, row.original],
+  );
   return (
     <TableRow
       {...dragProps}
       interactive
-      role="link"
-      tabIndex={0}
       data-selected={selected ? "" : undefined}
-      onClick={openHref}
-      onKeyDown={(event) => {
-        if (event.key !== "Enter" || event.target !== event.currentTarget) {
-          return;
-        }
-        event.preventDefault();
-        onRecordOpen?.(row.original);
-        void navigate({ to: href });
-      }}
+      onClick={openRow}
     >
       {selectable ? (
         <TableCell className="w-8">
@@ -764,12 +823,25 @@ function LinkedRecordRow<TRow extends Row>({
           />
         </TableCell>
       ) : null}
-      {row.getVisibleCells().map((cell) => (
+      {row.getVisibleCells().map((cell, index) => (
         <TableCell
           key={cell.id}
           className={ALIGN_CLASS[alignOf(cell.column.columnDef)]}
         >
-          {renderCell(cell)}
+          {index === 0 ? (
+            <a
+              href={href}
+              className="block min-w-0 rounded-4 text-inherit outline-none focus-visible:focus-ring"
+              aria-label={t("list.openRecord", {
+                label: rowActionLabelForTableColumn(cell.column, row.original),
+              })}
+              onClick={openLink}
+            >
+              {renderCell(cell)}
+            </a>
+          ) : (
+            renderCell(cell)
+          )}
         </TableCell>
       ))}
     </TableRow>
@@ -795,7 +867,7 @@ function PlainRecordRow<TRow extends Row>({
   onRecordOpen?: (row: TRow) => void;
   dragProps?: DragSourceProps;
 }): React.ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const id = row.id;
   return (
     <TableRow
@@ -829,7 +901,9 @@ function PlainRecordRow<TRow extends Row>({
             <button
               type="button"
               className="block w-full min-w-0 rounded-4 text-left text-inherit outline-none focus-visible:focus-ring"
-              aria-label={`Open ${rowActionLabelForTableColumn(cell.column, row.original)}`}
+              aria-label={t("list.openRecord", {
+                label: rowActionLabelForTableColumn(cell.column, row.original),
+              })}
               onClick={(event) => {
                 event.stopPropagation();
                 onRecordOpen?.(row.original);
@@ -847,8 +921,8 @@ function PlainRecordRow<TRow extends Row>({
   );
 }
 
-function renderListItem<TRow extends Row>({
-  item,
+function renderListRow<TRow extends Row>({
+  row,
   colSpan,
   resourceView,
   interactive,
@@ -856,10 +930,8 @@ function renderListItem<TRow extends Row>({
   rowHref,
   onRowClick,
   draggableRow,
-  expandedKeys,
-  onToggleGroup,
 }: {
-  item: ListRenderItem<TRow>;
+  row: TableRowModel<TRow>;
   colSpan: number;
   resourceView: ResourceViewContextValue;
   interactive: boolean;
@@ -867,28 +939,21 @@ function renderListItem<TRow extends Row>({
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
   draggableRow?: (row: TRow) => DndPayload | null;
-  expandedKeys?: ReadonlySet<string>;
-  onToggleGroup?: (key: string) => void;
 }): React.ReactElement {
-  if (item.kind === "group") {
+  if (row.getIsGrouped()) {
     return (
       <GroupHeader
-        key={`group:${item.group.key}`}
-        groupKey={item.group.key}
-        label={item.group.label ?? ""}
-        rows={item.group.rows}
-        depth={item.group.depth}
+        key={row.id}
+        row={row}
         colSpan={colSpan}
-        expanded={expandedKeys?.has(item.group.key) ?? true}
-        onToggle={onToggleGroup}
       />
     );
   }
   return (
     <RecordRow
-      key={item.row.id}
-      row={item.row}
-      selected={resourceView.state.selectedIds.has(item.row.id)}
+      key={row.id}
+      row={row}
+      selected={resourceView.state.selectedIds.has(row.id)}
       onToggleSelected={resourceView.toggleSelectedId}
       interactive={interactive}
       selectable={selectable}
@@ -953,31 +1018,24 @@ export function useVirtualWindow(
 }
 
 function GroupHeader<TRow extends Row>({
-  groupKey,
-  label,
-  rows,
-  depth,
+  row,
   colSpan,
-  expanded,
-  onToggle,
 }: {
-  groupKey: string;
-  label: string;
-  rows: readonly TableRowModel<TRow>[];
-  depth: number;
+  row: TableRowModel<TRow>;
   colSpan: number;
-  expanded: boolean;
-  onToggle?: (key: string) => void;
 }): React.ReactElement {
-  const rowCount = rows.length;
-  const indent = { paddingLeft: `calc(0.75rem + ${depth * 1.25}rem)` };
+  const canExpand = row.getCanExpand();
+  const expanded = row.getIsExpanded();
+  const label = groupedRowLabel(row);
+  const rowCount = row.getLeafRows().length;
+  const indent = { paddingLeft: `calc(0.75rem + ${row.depth * 1.25}rem)` };
   // The chevron only appears when the header is a toggle; the lead/trailing
   // content is identical either way, so it is rendered once and the branch
   // chooses only the wrapper (interactive button vs static row).
   const content = (
     <>
       <span className="inline-flex min-w-0 items-center gap-2 font-semibold text-fg">
-        {onToggle ? (
+        {canExpand ? (
           <Glyph
             name={expanded ? "chevron-down" : "chevron-right"}
             className="size-3.5 shrink-0 text-fg-muted"
@@ -993,7 +1051,7 @@ function GroupHeader<TRow extends Row>({
   return (
     <TableRow>
       <TableCell colSpan={colSpan} className="h-8 bg-sheet-2 p-0">
-        {onToggle ? (
+        {canExpand ? (
           // aria-controls is omitted deliberately: the group's rows are loose
           // virtualized siblings with no stable container id to reference.
           <button
@@ -1001,7 +1059,7 @@ function GroupHeader<TRow extends Row>({
             className="flex h-8 w-full min-w-0 items-center justify-between gap-3 px-3 text-left text-13 outline-none hover:bg-inset focus-visible:focus-ring"
             style={indent}
             aria-expanded={expanded}
-            onClick={() => onToggle(groupKey)}
+            onClick={() => row.toggleExpanded()}
           >
             {content}
           </button>
@@ -1016,6 +1074,21 @@ function GroupHeader<TRow extends Row>({
       </TableCell>
     </TableRow>
   );
+}
+
+/**
+ * The display label of a TanStack grouped row — the one owner. The grouping
+ * value is the display form (the column's `getGroupingValue` routes through
+ * `groupKey`: title-cased statuses, date buckets); `getValue` would return the
+ * raw accessor value of the first leaf.
+ */
+export function groupedRowLabel<TRow extends Row>(
+  row: TableRowModel<TRow>,
+): string {
+  const columnId = row.groupingColumnId;
+  const value = columnId ? row.getGroupingValue(columnId) : undefined;
+  if (value == null || value === "") return "No value";
+  return String(value);
 }
 
 export function resourceViewGroupToAggregateDimension(
@@ -1078,61 +1151,6 @@ function groupLabelKey(
   return metadata?.fields[field]?.relationFilter?.labelKey;
 }
 
-function groupDimensionForGroup(
-  group: ResourceViewGroup,
-  metadata: ModelMetadata | null,
-): DataResourceGroupDimensionMetadata {
-  return groupDimensionForField(group.aggregateField ?? group.field, metadata);
-}
-
-function groupDimensionForField(
-  field: string,
-  metadata: ModelMetadata | null,
-): DataResourceGroupDimensionMetadata {
-  const dimension = resourceGroupDimensionForField(field, metadata);
-  if (!dimension) {
-    const model = metadata?.typeName ?? "unknown model";
-    throw new Error(
-      `Resource metadata for ${model} does not declare group dimension "${field}".`,
-    );
-  }
-  return dimension;
-}
-
-export function resourceGroupDimensionForField(
-  field: string,
-  metadata: ModelMetadata | null,
-): DataResourceGroupDimensionMetadata | undefined {
-  const dimensions = metadata?.resource?.groupDimensions ?? [];
-  const snakeField = fieldToSnake(field);
-  return dimensions.find((candidate) =>
-    candidate.field === field ||
-    candidate.key === field ||
-    fieldToSnake(candidate.field) === snakeField ||
-    fieldToSnake(candidate.key) === snakeField
-  );
-}
-
-function groupExtractionForGroup(
-  dimension: DataResourceGroupDimensionMetadata,
-  group: ResourceViewGroup,
-): DataResourceGroupExtractionMetadata | null {
-  if (!group.granularity) return null;
-  const requested = group.granularity.toUpperCase();
-  const extraction = dimension.extractions?.find(
-    (candidate) =>
-      candidate.name === group.granularity
-      || candidate.input === requested,
-  );
-  if (!extraction) {
-    throw new Error(
-      `Resource metadata for group dimension "${dimension.field}" does not ` +
-        `declare extraction "${group.granularity}".`,
-    );
-  }
-  return extraction;
-}
-
 export function bucketValueLabels(
   bucket: AggregateBucket,
   groupStack: readonly ResourceViewGroup[],
@@ -1148,169 +1166,6 @@ export function bucketValueLabels(
     const value = bucket.key?.[dimension.key ?? dimension.field];
     return groupKey(value, group, metadata);
   });
-}
-
-export function bucketFilterForGroup(
-  bucket: AggregateBucket,
-  group: ResourceViewGroup | undefined,
-  metadata: ModelMetadata | null,
-): ResourceViewFilter | undefined {
-  if (!group) return {};
-  const dimensionMetadata = groupDimensionForGroup(group, metadata);
-  const extraction = groupExtractionForGroup(dimensionMetadata, group);
-  const filter = extraction?.filter ?? dimensionMetadata.filter;
-  if (!filter) {
-    throw new Error(
-      `Resource metadata for group dimension "${dimensionMetadata.field}" does ` +
-        "not declare a bucket filter.",
-    );
-  }
-  if (filter.kind === "range") {
-    return bucketRangeDrillDownFilter(bucket, filter, dimensionMetadata);
-  }
-
-  const value = bucket.key?.[filter.valueKey ?? extraction?.key ?? dimensionMetadata.key];
-  if (value === undefined) return undefined;
-
-  if (isNullBucketValue(value, filter)) {
-    return bucketNullFilter(filter);
-  }
-
-  return bucketEqualityFilter(filter, bucketFilterValue(value, filter));
-}
-
-function bucketRangeDrillDownFilter(
-  bucket: AggregateBucket,
-  filter: DataResourceGroupBucketFilterMetadata,
-  dimension: DataResourceGroupDimensionMetadata,
-): ResourceViewFilter | undefined {
-  const rangeValue = filter.rangeKey ? bucket.key?.[filter.rangeKey] : undefined;
-  const scalar = dateRangeScalar(dimension);
-  const range = scalar ? bucketRangeFilter(rangeValue, scalar) : null;
-  if (range) return { [filter.field]: range };
-
-  const value = filter.valueKey ? bucket.key?.[filter.valueKey] : undefined;
-  if (isNullBucketValue(value, filter)) return bucketNullFilter(filter);
-  if (value === undefined) return undefined;
-  throw new Error(
-    `Group bucket for "${dimension.field}" did not include declared range key ` +
-      `"${filter.rangeKey ?? ""}".`,
-  );
-}
-
-function dateRangeScalar(
-  dimension: DataResourceGroupDimensionMetadata,
-): "Date" | "DateTime" | null {
-  return dimension.scalar === "Date" || dimension.scalar === "DateTime"
-    ? dimension.scalar
-    : null;
-}
-
-function bucketEqualityFilter(
-  filter: DataResourceGroupBucketFilterMetadata,
-  value: unknown,
-): ResourceViewFilter {
-  if (filter.lookup) return { [filter.field]: { [filter.lookup]: value } };
-  return { [filter.field]: value as ResourceViewFilter[string] };
-}
-
-function bucketFilterValue(
-  value: unknown,
-  filter: DataResourceGroupBucketFilterMetadata,
-): unknown {
-  const mapped = filter.valueMap?.find((item) => Object.is(item.from, value));
-  if (mapped) return mapped.to;
-  if (filter.valueTransform === "json") return jsonBucketValue(value);
-  return value;
-}
-
-function isNullBucketValue(
-  value: unknown,
-  filter: DataResourceGroupBucketFilterMetadata,
-): boolean {
-  return value === null || (filter.kind === "range" && value === "");
-}
-
-function bucketNullFilter(
-  filter: DataResourceGroupBucketFilterMetadata,
-): ResourceViewFilter {
-  return { [filter.field]: { [filter.nullLookup ?? "isNull"]: true } };
-}
-
-function jsonBucketValue(value: unknown): unknown {
-  if (typeof value !== "string") return value;
-  const trimmed = value.trim();
-  if (!trimmed || !/^[\[{"]|^(true|false|null|-?\d)/.test(trimmed)) {
-    return value;
-  }
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    return value;
-  }
-}
-
-function bucketRangeFilter(
-  value: unknown,
-  scalar: "Date" | "DateTime",
-): ResourceViewFilter[string] | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const range = value as Record<string, unknown>;
-  const from = dateBucketBoundary(range.from, scalar);
-  const to = dateBucketBoundary(range.to, scalar);
-  return from && to ? { gte: from, lt: to } : null;
-}
-
-function dateBucketBoundary(
-  value: unknown,
-  scalar: "Date" | "DateTime",
-): string | null {
-  const date = dateBucketStart(value);
-  return date ? formatDateBoundary(date, scalar) : null;
-}
-
-function dateBucketStart(value: unknown): Date | null {
-  if (value instanceof Date) {
-    return Number.isNaN(value.getTime()) ? null : value;
-  }
-  if (typeof value === "number") {
-    const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? null : date;
-  }
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const normalized = normalizeDateBucketValue(trimmed);
-  const date = new Date(normalized);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function normalizeDateBucketValue(value: string): string {
-  const withTimeSeparator = value.replace(
-    /^(\d{4}-\d{2}-\d{2})\s+(\d)/,
-    "$1T$2",
-  );
-  if (/^\d{4}-\d{2}-\d{2}$/.test(withTimeSeparator)) {
-    return `${withTimeSeparator}T00:00:00.000Z`;
-  }
-  if (
-    /^\d{4}-\d{2}-\d{2}T/.test(withTimeSeparator) &&
-    !/(Z|[+-]\d{2}:?\d{2})$/.test(withTimeSeparator)
-  ) {
-    return `${withTimeSeparator}Z`;
-  }
-  return withTimeSeparator;
-}
-
-function formatDateBoundary(date: Date, scalar: "Date" | "DateTime"): string {
-  if (scalar === "Date") {
-    return [
-      date.getUTCFullYear(),
-      String(date.getUTCMonth() + 1).padStart(2, "0"),
-      String(date.getUTCDate()).padStart(2, "0"),
-    ].join("-");
-  }
-  return date.toISOString();
 }
 
 export function groupKey(
@@ -1470,7 +1325,7 @@ function hasuraMeasureInput(
   measure: Pick<GroupMeasure, "op" | "field">,
   metadata: ModelMetadata | null,
 ): string {
-  const snakeField = fieldToSnake(measure.field);
+  const snakeField = resourceFieldPathToSnake(measure.field);
   const declared = metadata?.resource?.aggregateMeasures?.find(
     (candidate) =>
       candidate.op === measure.op &&
@@ -1551,6 +1406,7 @@ function columnMeta<TRow extends Row>(
   label?: React.ReactNode;
   field?: string;
   aggregate?: ColumnAggregate;
+  groupingOnly?: boolean;
 } {
   return (
     column.meta as
@@ -1559,9 +1415,17 @@ function columnMeta<TRow extends Row>(
           label?: React.ReactNode;
           field?: string;
           aggregate?: ColumnAggregate;
+          groupingOnly?: boolean;
         }
       | undefined
   ) ?? {};
+}
+
+/** A grouping-accessor column that exists only to feed TanStack grouping. */
+export function isGroupingOnlyColumn<TRow extends Row>(
+  column: ColumnDef<TRow>,
+): boolean {
+  return columnMeta(column).groupingOnly === true;
 }
 
 function nextSort(
@@ -1582,20 +1446,6 @@ function isInteractiveTarget(target: EventTarget): boolean {
     );
 }
 
-export function fieldToSnake(field: string): string {
-  return field
-    // A `_<Capital>` is Strawberry's camel form of a Django `__` relation
-    // path (e.g. `oauthClient_IsEnabled` ← `oauth_client__is_enabled`):
-    // restore the double underscore so a to-one group axis round-trips to
-    // its backend enum (`OAUTH_CLIENT__IS_ENABLED`). A no-op for ordinary
-    // camelCase fields, which never contain `_<Capital>`.
-    .replace(/_([A-Z])/g, "__$1")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
-    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-    .replace(/[-\s]+/g, "_")
-    .toLowerCase();
-}
-
 export function groupFieldLabel(field: string): string {
   const label = titleCase(field);
   return label.endsWith(" At") ? label.slice(0, -3) : label;
@@ -1611,7 +1461,7 @@ export function enumValueLabel(value: ModelEnumValueMetadata): string {
 
 /** The flush "Loading…" footer shown under a list layout while a page fetches. */
 export function ListLoadingFooter(): React.ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   return (
     <div className={cn(textRoleVariants({ role: "meta" }), "flex items-center justify-center gap-2 border-t border-border px-3 py-4")}>
       <Spinner size="sm" />
@@ -1767,8 +1617,4 @@ function renderListEmptyAction(
 
 function isInternalHref(href: string): boolean {
   return href.startsWith("/") && !href.startsWith("//");
-}
-
-export function looksLikeDateField(field: string): boolean {
-  return /(?:At|Date|On)$/.test(field);
 }

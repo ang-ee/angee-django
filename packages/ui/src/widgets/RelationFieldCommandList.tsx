@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactElement } from "react";
 
 import { Glyph } from "../chrome/Glyph";
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { Command } from "../ui/command";
 import type { RelationOption } from "./RelationField";
 
@@ -33,7 +33,7 @@ export default function RelationFieldCommandList({
   onCreate,
   onDismiss,
 }: RelationFieldCommandListProps): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const [query, setQuery] = useState("");
   const normalized = query.trim().toLowerCase();
   const filtered = useMemo(() => {

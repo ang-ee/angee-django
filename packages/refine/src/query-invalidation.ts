@@ -1,3 +1,5 @@
+import { recordValue } from "./dialect/wire";
+
 export function authoredQueryMeta(
   modelLabels: readonly string[],
 ): Record<string, unknown> | undefined {
@@ -12,10 +14,4 @@ export function authoredQueryReadsAnyModel(
   if (!Array.isArray(models)) return false;
   const wanted = new Set(modelLabels);
   return models.some((model) => typeof model === "string" && wanted.has(model));
-}
-
-function recordValue(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
 }

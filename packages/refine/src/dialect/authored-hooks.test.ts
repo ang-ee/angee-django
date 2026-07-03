@@ -3,7 +3,7 @@ import { describe, expect, test } from "vitest";
 import {
   authoredQueryMeta,
   authoredQueryReadsAnyModel,
-} from "@angee/refine";
+} from "../query-invalidation";
 import { authoredOperationData, authoredQueryData } from "./authored-hooks";
 
 describe("authoredOperationData", () => {

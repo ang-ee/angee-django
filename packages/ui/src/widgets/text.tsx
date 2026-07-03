@@ -15,7 +15,7 @@ function TextEdit({
       value={value ?? ""}
       readOnly={readOnly}
       aria-label={widgetLabel(field, "Text")}
-      placeholder={typeof field?.label === "string" ? field.label : undefined}
+      placeholder={field?.placeholder ?? (typeof field?.label === "string" ? field.label : undefined)}
       onChange={(event) => onChange?.(event.currentTarget.value)}
     />
   );

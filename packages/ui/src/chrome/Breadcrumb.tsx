@@ -6,7 +6,7 @@ import {
 import * as React from "react";
 import type { ReactElement } from "react";
 
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { barVariants } from "../layouts/bar";
 import { cn } from "../lib/cn";
 
@@ -68,7 +68,7 @@ function BreadcrumbTrail({
   className?: string;
   items: readonly BreadcrumbItem[];
 }): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   return (
     <nav
       aria-label={t("chrome.breadcrumb")}

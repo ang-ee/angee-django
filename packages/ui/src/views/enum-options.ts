@@ -1,12 +1,12 @@
 import * as React from "react";
-import { useAuthoredQuery } from "../data/authored-hooks";
+import { useAuthoredQuery } from "@angee/refine";
 import {
   useModelMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 import type { WidgetOption } from "../widgets";
 import { BaseImplChoices, type ImplChoice } from "./documents";
-import { enumValueLabel } from "./ListInternals";
+import { enumValueLabel } from "./resource-view-list-body";
 
 /**
  * SDL-derived `<select>` options for an enum field, with lower-cased values.

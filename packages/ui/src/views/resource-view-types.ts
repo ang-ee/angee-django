@@ -2,12 +2,12 @@ import type {
   Row,
   ResourceFilter,
   ResourceOrder,
-} from "@angee/resources";
+} from "@angee/metadata";
 import type {
   ReactNode } from "react";
 import type {
   ResourceTypeName,
-} from "@angee/resources";
+} from "@angee/metadata";
 import type {
   ResourceViewDefaultGroups,
   ResourceViewGroup,
@@ -54,13 +54,13 @@ export interface ListViewProps<TRow extends Row = Row> {
   /** Extra resource fields selected in addition to the declared columns. */
   fields?: readonly string[];
   /** Base resource filter applied before user-owned view filters. */
-  filter?: ResourceFilter<ResourceTypeName>;
+  baseFilter?: ResourceFilter<ResourceTypeName>;
   /** Favorite or quick filters shown in the list toolbar. */
-  filters?: readonly ResourceToolbarFilterOption[];
+  filterOptions?: readonly ResourceToolbarFilterOption[];
   /** Explicit relation facets exposed as quick filters and group-by axes. */
   facets?: readonly FacetDescriptor[];
   /** Fields available to the toolbar's custom filter editor. */
-  filterFields?: readonly ResourceToolbarFilterField[];
+  customFilterFields?: readonly ResourceToolbarFilterField[];
   /** Fields available to the toolbar's group-by editor. */
   groupOptions?: readonly ResourceToolbarGroupOption[];
   /** Default resource order when the URL-owned data view has no sort. */
@@ -93,9 +93,7 @@ export interface ListViewProps<TRow extends Row = Row> {
    * grouping, frame link/click, and the `cardActions` footer are unchanged. */
   renderCard?: (row: TRow) => ReactNode;
   /** Empty-state content shown when the list has no rows. */
-  emptyMessage?: ReactNode;
-  /** Structured empty-state content, including an optional action. */
-  emptyState?: ListEmptyState;
+  emptyContent?: ListEmptyContent;
   /** Class name applied to the collection renderer root. */
   className?: string;
   /** Use a local resource-view state (not URL-synced) even when rendered inside

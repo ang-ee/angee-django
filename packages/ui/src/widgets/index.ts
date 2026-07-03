@@ -13,7 +13,7 @@ import { floatWidget, integerWidget } from "./number";
 import { ownerCellWidget } from "./ownerCell";
 import { progressBarWidget } from "./progressBar";
 import { ribbonWidget } from "./ribbon";
-import { emailWidget, phoneWidget, urlWidget } from "./scalarText";
+import { emailWidget, passwordWidget, phoneWidget, urlWidget } from "./scalarText";
 import { selectionWidget, selectWidget } from "./select";
 import { slugWidget } from "./slug";
 import { statusBadgeWidget } from "./statusBadge";
@@ -88,6 +88,7 @@ export const defaultWidgets = {
   integer: integerWidget,
   float: floatWidget,
   email: emailWidget,
+  password: passwordWidget,
   url: urlWidget,
   phone: phoneWidget,
   boolean: booleanWidget,

@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import type { AngeeLiveResource } from "./provider";
 
 import {
@@ -8,6 +8,10 @@ import {
 } from "./provider";
 
 describe("Angee Hasura provider defaults", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   test("pins the stock provider to Angee's Hasura dialect", () => {
     expect(ANGEE_HASURA_PROVIDER_OPTIONS).toEqual({
       idType: "String",
@@ -162,6 +166,39 @@ describe("Angee Hasura provider defaults", () => {
     expect(subscribe).toHaveBeenCalledTimes(2);
   });
 
+  test("logs and drops errored subscriptions so the next subscriber reconnects", () => {
+    const { subscribe, sinks } = recordingClient();
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const provider = createAngeeChangeLiveProvider(
+      { subscribe } as never,
+      [resource({ changes: "noteChanged" })],
+    );
+
+    const subA = provider.subscribe({
+      channel: "resources/notes",
+      types: ["*"],
+      callback: vi.fn(),
+      params: { resource: "notes" },
+    });
+    nthSink(sinks, 0).error(new Error("subscription rejected"));
+    provider.unsubscribe(subA);
+
+    provider.subscribe({
+      channel: "resources/notes",
+      types: ["*"],
+      callback: vi.fn(),
+      params: { resource: "notes" },
+    });
+
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    expect(nthSink(sinks, 0).dispose).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledWith(
+      "Angee live subscription failed; the next subscriber will reconnect.",
+      expect.objectContaining({ changesRoot: "noteChanged" }),
+      expect.any(Error),
+    );
+  });
+
   test("keeps a separate upstream subscription per change root", () => {
     const { subscribe, sinks } = recordingClient();
     const provider = createAngeeChangeLiveProvider(
@@ -198,6 +235,7 @@ describe("Angee Hasura provider defaults", () => {
 
 interface RecordedSink {
   next: (result: { data: unknown }) => void;
+  error: (error: unknown) => void;
   dispose: ReturnType<typeof vi.fn>;
 }
 
@@ -208,7 +246,7 @@ function recordingClient(): {
   const sinks: RecordedSink[] = [];
   const subscribe = vi.fn((_payload, sink) => {
     const dispose = vi.fn();
-    sinks.push({ next: sink.next, dispose });
+    sinks.push({ next: sink.next, error: sink.error, dispose });
     return dispose;
   });
   return { subscribe, sinks };

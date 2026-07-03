@@ -26,7 +26,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { Tooltip } from "../ui/tooltip";
 import { AppChooser } from "./AppChooser";
@@ -52,7 +52,7 @@ const RAIL_BUTTON_ACTIVE =
   "bg-rail-hi text-on-rail-hi before:absolute before:-left-[7px] before:top-1/2 before:h-[18px] before:w-[3px] before:-translate-y-1/2 before:rounded-r-2 before:bg-brand before:content-['']";
 
 export function AppRail({ className }: AppRailProps): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });

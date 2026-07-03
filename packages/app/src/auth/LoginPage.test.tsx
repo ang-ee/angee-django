@@ -22,16 +22,12 @@ vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => vi.fn(),
 }));
 
-vi.mock("@angee/refine", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/refine")>();
-  return {
-    ...actual,
-    useLoginWithPassword: () => ({
-      fetching: false,
-      login: vi.fn(async () => ({ ok: true })),
-    }),
-  };
-});
+vi.mock("../providers/auth", () => ({
+  useLoginWithPassword: () => ({
+    fetching: false,
+    login: vi.fn(async () => ({ ok: true })),
+  }),
+}));
 
 afterEach(cleanup);
 
@@ -60,11 +56,11 @@ describe("LoginPage", () => {
 
     expect(screen.getByRole("heading", { name: "Sign in" })).toBeTruthy();
     expect(screen.getByTestId("angee-logo-cube")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Forgot your password?" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Forgot your password?" })).toBeNull();
     expect(screen.getByText("Demo users")).toBeTruthy();
   });
 
-  test("replaces the default password help from the login slot", () => {
+  test("renders password help from the login slot", () => {
     const Wrapper = wrapperFor({
       slots: [
         {

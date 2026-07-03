@@ -93,3 +93,14 @@ export function usePrimaryPane(node: ReactNode | null): void {
     return () => setNode(owner, null);
   }, [node, owner, setNode]);
 }
+
+/** Rendered twin of `usePrimaryPane` for page tests and shared page shells.
+ * Pass a memoized `node`; inline elements republish on every render. */
+export function PrimaryPanePublisher({
+  node,
+}: {
+  node: ReactNode | null;
+}): null {
+  usePrimaryPane(node);
+  return null;
+}

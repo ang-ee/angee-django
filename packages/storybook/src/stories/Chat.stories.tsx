@@ -1,22 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import {
-  Button,
-  ChatBar,
-  ChatBubble,
-  ChatCommandEmpty,
-  ChatCommandItem,
-  ChatCommandList,
-  ChatHeader,
-  ChatHeaderAction,
-  ChatTypingIndicator,
-  ContextBlock,
-  Glyph,
-  MessageReasoningFrame,
-  SessionRail,
-  SessionRailItem,
-  StatusDot,
-  ToolFallback,
-} from "@angee/ui";
+import { Button, ChatBar, ChatBubble, ChatCommandEmpty, ChatCommandItem, ChatCommandList, ChatHeader, ChatHeaderAction, ChatTypingIndicator, ContextBlock, Glyph, MessageReasoningFrame, SessionRail, SessionRailItem, StatusDot, ToolFallback } from "@angee/ui";
+
+import { StorySurface } from "./chrome-fixtures";
 
 const meta = {
   title: "Communication/Chat",
@@ -28,15 +13,9 @@ export default meta;
 
 type Story = StoryObj;
 
-const Surface = ({ children }: { children: React.ReactNode }) => (
-  <div className="max-w-md overflow-hidden rounded-6 border border-border-subtle bg-sheet">
-    {children}
-  </div>
-);
-
 export const Header: Story = {
   render: () => (
-    <Surface>
+    <StorySurface size="sm" padded={false}>
       <ChatHeader
         title="Demo Agent"
         subtitle="claude-sonnet-4-6"
@@ -50,13 +29,13 @@ export const Header: Story = {
           </>
         }
       />
-    </Surface>
+    </StorySurface>
   ),
 };
 
 export const Bar: Story = {
   render: () => (
-    <Surface>
+    <StorySurface size="sm" padded={false}>
       {/* The dense single-row chat header: a leading status + agent/model label (the agents
           addon swaps a status dot + label for the live `AgentChooser`), and a trailing overflow
           (⋯) menu. Pure presentation — the consumer composes the chooser/menu. */}
@@ -76,7 +55,7 @@ export const Bar: Story = {
           </Button>
         }
       />
-    </Surface>
+    </StorySurface>
   ),
 };
 

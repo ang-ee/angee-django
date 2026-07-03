@@ -2,7 +2,7 @@
 
 import type {
   SchemaFieldMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 import {
   cleanup,
   fireEvent,
@@ -22,10 +22,10 @@ import {
   } from "../runtime";
 import {
   ModelMetadataProvider,
-} from "@angee/resources";
+} from "@angee/metadata";
 import type {
   Row,
-} from "@angee/resources";
+} from "@angee/metadata";
 import { type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -38,8 +38,8 @@ const sdkMocks = vi.hoisted(() => ({
   mutate: vi.fn(),
 }));
 
-vi.mock("../data/hooks", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../data/hooks")>();
+vi.mock("@angee/refine", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/refine")>();
   return actual;
 });
 

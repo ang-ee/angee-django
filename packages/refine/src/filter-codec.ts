@@ -4,10 +4,45 @@ import {
   type Fields,
   type LogicalFilter,
 } from "@refinedev/core";
+import { isRecord } from "./dialect/wire";
 
 type FieldTree = Map<string, FieldTree>;
 type UnsupportedFilter = { field: string; operator: string };
 type HasuraOrderBy = Record<string, unknown>;
+
+export const ANGEE_FILTER_LOOKUP_OPERATORS = [
+  "exact",
+  "inList",
+  "isNull",
+  "contains",
+  "iContains",
+  "startsWith",
+  "iStartsWith",
+  "endsWith",
+  "iEndsWith",
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+] as const;
+export type AngeeFilterLookupOperator =
+  (typeof ANGEE_FILTER_LOOKUP_OPERATORS)[number];
+
+// The offered text vocabulary — every entry must round-trip the FULL wire
+// stack (refine provider encoding AND the backend lookup registry). The
+// case-sensitive startsWith/endsWith variants ride the provider's `_similar`
+// encoding, which the backend deliberately leaves unmapped, so they are not
+// offered (the codec still maps them for URL-supplied filters). `contains`
+// (case-sensitive) leads so a custom text filter on the free-text search field
+// coexists with the search box's own `iContains` filter (distinct keys, each
+// keeps its own chip) instead of being deduplicated away.
+export const ANGEE_TEXT_FILTER_LOOKUP_OPERATORS = [
+  "contains",
+  "iContains",
+  "iStartsWith",
+  "iEndsWith",
+  "isNull",
+] as const satisfies readonly AngeeFilterLookupOperator[];
 
 export function refineFieldsFromPaths(paths: readonly string[]): Fields {
   const root: FieldTree = new Map();
@@ -92,9 +127,10 @@ function filtersFromRecord(filter: unknown): CrudFilters {
       continue;
     }
     if (isNotKey(field)) {
-      throw new Error(
+      warnUnsupportedFilter(
         "The refine/Hasura list provider does not support Angee NOT filters yet.",
       );
+      continue;
     }
     filters.push(...filtersForLookup(field, lookup));
   }
@@ -117,9 +153,13 @@ function hasuraWhereFromCrudFilterList(filters: CrudFilters): Record<string, unk
       continue;
     }
     if (!isLogicalCrudFilter(filter)) {
-      throw new Error(`Unsupported refine/Hasura conditional filter "${filter.operator}".`);
+      warnUnsupportedFilter(
+        `Unsupported refine/Hasura conditional filter "${filter.operator}".`,
+      );
+      continue;
     }
-    setNestedComparison(where, filter.field, hasuraComparisonForCrudFilter(filter));
+    const comparison = hasuraComparisonForCrudFilter(filter);
+    if (comparison) setNestedComparison(where, filter.field, comparison);
   }
   return where;
 }
@@ -146,7 +186,8 @@ function filtersForLookup(field: string, lookup: unknown): CrudFilters {
   const filters: CrudFilters = [];
   for (const [operator, value] of Object.entries(lookup)) {
     if (isUnsupportedRefineLookupOperator(operator)) {
-      throw unsupportedFilter({ field, operator });
+      warnUnsupportedFilter(unsupportedFilter({ field, operator }).message);
+      continue;
     }
     const refineOperator = lookupOperator(operator);
     if (refineOperator) {
@@ -161,12 +202,15 @@ function filtersForLookup(field: string, lookup: unknown): CrudFilters {
       filters.push(...filtersForLookup(`${field}.${operator}`, value));
       continue;
     }
-    throw unsupportedFilter({ field, operator });
+    warnUnsupportedFilter(unsupportedFilter({ field, operator }).message);
   }
   return filters;
 }
 
 const KEEP_VALUE = Symbol("keep-value");
+type HasuraOperatorValue =
+  | typeof KEEP_VALUE
+  | ((value: unknown) => unknown);
 
 function lookupOperator(
   operator: string,
@@ -266,17 +310,25 @@ function setNestedOrder(
 
 function hasuraComparisonForCrudFilter(
   filter: LogicalFilter,
-): Record<string, unknown> {
+): Record<string, unknown> | null {
   const operator = hasuraOperatorForCrudOperator(filter.operator);
-  if (!operator) throw unsupportedFilter({ field: filter.field, operator: filter.operator });
+  if (!operator) {
+    warnUnsupportedFilter(unsupportedFilter({
+      field: filter.field,
+      operator: filter.operator,
+    }).message);
+    return null;
+  }
   return {
-    [operator.operator]: operator.value === KEEP_VALUE ? filter.value : operator.value,
+    [operator.operator]: operator.value === KEEP_VALUE
+      ? filter.value
+      : operator.value(filter.value),
   };
 }
 
 function hasuraOperatorForCrudOperator(
   operator: LogicalFilter["operator"],
-): { operator: string; value: unknown | typeof KEEP_VALUE } | null {
+): { operator: string; value: HasuraOperatorValue } | null {
   switch (operator) {
     case "eq":
       return { operator: "_eq", value: KEEP_VALUE };
@@ -297,12 +349,40 @@ function hasuraOperatorForCrudOperator(
     case "null":
       return { operator: "_is_null", value: KEEP_VALUE };
     case "containss":
-      return { operator: "_like", value: KEEP_VALUE };
+      return { operator: "_like", value: containsPattern };
     case "contains":
-      return { operator: "_ilike", value: KEEP_VALUE };
+      return { operator: "_ilike", value: containsPattern };
+    case "startswiths":
+      return { operator: "_like", value: startsWithPattern };
+    case "startswith":
+      return { operator: "_ilike", value: startsWithPattern };
+    case "endswiths":
+      return { operator: "_like", value: endsWithPattern };
+    case "endswith":
+      return { operator: "_ilike", value: endsWithPattern };
     default:
       return null;
   }
+}
+
+function containsPattern(value: unknown): string {
+  return `%${escapeLikePatternValue(value)}%`;
+}
+
+function startsWithPattern(value: unknown): string {
+  return `${escapeLikePatternValue(value)}%`;
+}
+
+function endsWithPattern(value: unknown): string {
+  return `%${escapeLikePatternValue(value)}`;
+}
+
+function escapeLikePatternValue(value: unknown): string {
+  return String(value).replace(/[\\%_]/g, "\\$&");
+}
+
+function warnUnsupportedFilter(message: string): void {
+  console.warn(message);
 }
 
 function setNestedComparison(
@@ -330,8 +410,4 @@ function mergeRecords(
 
 function isLogicalCrudFilter(filter: CrudFilters[number]): filter is LogicalFilter {
   return "field" in filter;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

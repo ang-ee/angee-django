@@ -1,9 +1,9 @@
 import { useState, type ReactElement, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { rowPublicId } from "@angee/resources";
+import { rowPublicId } from "@angee/metadata";
 
 import { Glyph } from "../chrome/Glyph";
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { ControlBandProvider } from "../layouts/ControlBand";
 import { Button } from "../ui/button";
 import { Dialog } from "../ui/dialog";
@@ -108,7 +108,7 @@ export function RelationPicker({
   onOpenChange,
   followHref,
 }: RelationPickerProps): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   // The open inline-form dialog; `null` means closed.
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const prefillField = create?.prefillField ?? "name";
@@ -220,7 +220,7 @@ function dialogTitle(
  * only when a follow target exists (router-less renders pass no `followHref`).
  */
 function FollowRecordLink({ href }: { href: string }): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const navigate = useNavigate();
   return (
     // A real `<a href>` (via `TextLink`) so cmd/middle-click opens the record in

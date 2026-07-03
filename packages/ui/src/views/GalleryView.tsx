@@ -1,15 +1,15 @@
 import type { ReactElement, ReactNode } from "react";
-import type { Row } from "@angee/resources";
+import type { Row } from "@angee/metadata";
 
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { dragSourceProps, type DndPayload } from "../lib/dnd";
 import { Card } from "../ui/card";
 import { Checkbox } from "../ui/checkbox";
 import { Skeleton, SkeletonStatus } from "../ui/skeleton";
 import { textRoleVariants } from "../ui/text";
-import { ListEmpty } from "./ListInternals";
-import type { ListEmptyState } from "./list-view-types";
+import { ListEmpty } from "./resource-view-list-body";
+import type { ListEmptyContent } from "./resource-view-types";
 
 /**
  * The card-grid View — a frameless sibling of `ListView` that renders each row
@@ -38,10 +38,8 @@ export interface GalleryViewProps<TRow extends Row = Row> {
   onToggleSelected?: (id: string, selected: boolean) => void;
   /** Draw card-shaped placeholders while the first page is loading. */
   fetching?: boolean;
-  /** Shown centered when `rows` is empty. */
-  emptyMessage?: ReactNode;
-  /** Structured empty state shown when `rows` is empty. */
-  emptyState?: ListEmptyState;
+  /** Empty-state content shown when `rows` is empty. */
+  emptyContent?: ListEmptyContent;
   className?: string;
 }
 
@@ -58,12 +56,11 @@ export function GalleryView<TRow extends Row = Row>({
   selectedIds,
   onToggleSelected,
   fetching = false,
-  emptyMessage = "No records.",
-  emptyState,
+  emptyContent,
   className,
 }: GalleryViewProps<TRow>): ReactElement {
-  const t = useBaseT();
-  const emptyContent = emptyState ?? emptyMessage;
+  const t = useUiT();
+  const resolvedEmptyContent = emptyContent ?? t("list.empty");
   return (
     <div className={cn("flex-1 overflow-y-auto bg-canvas p-4", className)}>
       {fetching && rows.length === 0 ? (
@@ -72,7 +69,7 @@ export function GalleryView<TRow extends Row = Row>({
           loadingLabel={t("list.loading")}
         />
       ) : rows.length === 0 ? (
-        <ListEmpty>{emptyContent}</ListEmpty>
+        <ListEmpty>{resolvedEmptyContent}</ListEmpty>
       ) : (
       <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-4">
         {rows.map((row) => {

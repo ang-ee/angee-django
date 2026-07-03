@@ -1,6 +1,6 @@
 import {
   ModelMetadataProvider,
-} from "@angee/resources";
+} from "@angee/metadata";
 import type {
   Decorator,
   Preview } from "@storybook/react-vite";
@@ -13,11 +13,8 @@ import {
   type AppRuntime,
   } from "@angee/ui";
 import {
-  AuthProvider,
-} from "@angee/refine";
-import {
   ActiveGraphQLSchemaProvider,
-} from "@angee/resources";
+} from "@angee/metadata";
 import {
   createAngeeHasuraDataProviders,
   tanStackRouterProvider,
@@ -35,8 +32,19 @@ import {
 
 import "../src/storybook.css";
 
+// Stories read auth from the runtime (the ui-owned seam); no app-level auth
+// provider is mounted in the preview.
 const previewRuntime = {
   icons: baseIcons,
+  auth: {
+    user: {
+      id: "user_ada",
+      name: "Ada Lovelace",
+      email: "ada@example.com",
+    },
+    status: "authenticated" as const,
+    hasRole: () => true,
+  },
 } satisfies Partial<AppRuntime>;
 
 const previewResources: ResourceProps[] = [
@@ -45,16 +53,6 @@ const previewResources: ResourceProps[] = [
   previewMenuResource("iam", "IAM", "/iam", "auth"),
   previewMenuResource("activity", "Activity", "/activity", "activity"),
 ];
-
-const previewAuth = {
-  user: {
-    id: "user_ada",
-    name: "Ada Lovelace",
-    username: "ada",
-    email: "ada@example.com",
-  },
-  status: "authenticated" as const,
-};
 
 const previewSchemas = {
   public: {
@@ -120,26 +118,24 @@ const withAngeeProviders: Decorator = (Story) => {
 
   return (
     <AppRuntimeProvider runtime={previewRuntime}>
-      <AuthProvider auth={previewAuth}>
-        <Refine
-          dataProvider={previewDataProviders}
-          resources={previewResources}
-          routerProvider={tanStackRouterProvider}
-          options={{ syncWithLocation: false }}
-        >
-          <ActiveGraphQLSchemaProvider schema="public">
-            <ModelMetadataProvider>
-              <NuqsTestingAdapter>
-                <ToastProvider>
-                  <div className="min-h-screen bg-canvas p-6 font-sans text-fg">
-                    <RouterProvider router={router} />
-                  </div>
-                </ToastProvider>
-              </NuqsTestingAdapter>
-            </ModelMetadataProvider>
-          </ActiveGraphQLSchemaProvider>
-        </Refine>
-      </AuthProvider>
+      <Refine
+        dataProvider={previewDataProviders}
+        resources={previewResources}
+        routerProvider={tanStackRouterProvider}
+        options={{ syncWithLocation: false }}
+      >
+        <ActiveGraphQLSchemaProvider schema="public">
+          <ModelMetadataProvider>
+            <NuqsTestingAdapter>
+              <ToastProvider>
+                <div className="min-h-screen bg-canvas p-6 font-sans text-fg">
+                  <RouterProvider router={router} />
+                </div>
+              </ToastProvider>
+            </NuqsTestingAdapter>
+          </ModelMetadataProvider>
+        </ActiveGraphQLSchemaProvider>
+      </Refine>
     </AppRuntimeProvider>
   );
 };

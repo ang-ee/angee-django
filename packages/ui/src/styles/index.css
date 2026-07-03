@@ -1,5 +1,5 @@
 /* ============================================================================
-   @angee/base — Tailwind 4 entry stylesheet.
+   @angee/ui — Tailwind 4 entry stylesheet.
 
    Imports tokens, binds the dark-mode variant to [data-theme="dark"], and
    bridges every semantic token into a Tailwind utility through the @theme
@@ -412,6 +412,15 @@
 
 .console-browser-scroll-main > * {
   min-height: 100%;
+}
+
+.console-route-viewport {
+  min-height: calc(100vh - var(--spacing-topbar-h) - var(--spacing-crumbs-h));
+}
+
+.console-route-canvas {
+  height: calc(100vh - var(--spacing-topbar-h) - var(--spacing-crumbs-h));
+  min-height: 32rem;
 }
 
 .console-statusline-host {

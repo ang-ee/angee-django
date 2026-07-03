@@ -4,7 +4,7 @@ import { usePreviews } from "../runtime";
 import { EmptyState } from "../fragments/EmptyState";
 import { LazyBoundary } from "../fragments/LazyBoundary";
 import { LoadingPanel } from "../fragments/LoadingPanel";
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { builtinPreviewProviders } from "./builtins";
 import { displayMime } from "./model";
 import {
@@ -33,7 +33,7 @@ export function PreviewPane({
   mime,
   fallback,
 }: PreviewPaneProps): ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const resolvedMime = mime ?? displayMime(file);
   // Addon-contributed providers first so one can override a built-in at an equal
   // priority (resolve sorts stably); built-ins are always available. The SDK

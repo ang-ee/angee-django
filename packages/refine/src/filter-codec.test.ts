@@ -1,6 +1,8 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
+  ANGEE_FILTER_LOOKUP_OPERATORS,
+  ANGEE_TEXT_FILTER_LOOKUP_OPERATORS,
   crudFiltersFromFilterRecord,
   hasuraOrderByFromAngeeOrder,
   hasuraWhereFromCrudFilters,
@@ -9,6 +11,10 @@ import {
 } from "./filter-codec";
 
 describe("refine/Hasura filter codec", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   test("turns dotted field paths into refine GraphQL field selections", () => {
     expect(refineFieldsFromPaths([
       "id",
@@ -58,6 +64,9 @@ describe("refine/Hasura filter codec", () => {
       provider: { sqid: "provider_1" },
       owner: { display_name: { exact: "Iva" } },
       title: { iContains: "launch" },
+      summary: { contains: "100%_ready" },
+      code: { startsWith: "Q1_" },
+      slug: { iEndsWith: "%done" },
       word_count: { gte: 10, lt: 50 },
       archived_at: { isNull: true },
       OR: [
@@ -70,7 +79,10 @@ describe("refine/Hasura filter codec", () => {
       status: { _eq: "ACTIVE" },
       provider: { _eq: "provider_1" },
       owner: { display_name: { _eq: "Iva" } },
-      title: { _ilike: "launch" },
+      title: { _ilike: "%launch%" },
+      summary: { _like: "%100\\%\\_ready%" },
+      code: { _like: "Q1\\_%" },
+      slug: { _ilike: "%\\%done" },
       word_count: { _gte: 10, _lt: 50 },
       archived_at: { _is_null: true },
       _or: [
@@ -80,16 +92,51 @@ describe("refine/Hasura filter codec", () => {
     });
   });
 
-  test("rejects filters the stock refine/Hasura operator set cannot express", () => {
-    expect(() =>
-      crudFiltersFromFilterRecord({ title: { iExact: "Launch" } })
-    ).toThrow(/Unsupported refine\/Hasura list filter "iExact"/);
-    expect(() =>
-      crudFiltersFromFilterRecord({ NOT: { title: { exact: "Draft" } } })
-    ).toThrow(/does not support Angee NOT filters/);
-    expect(() =>
-      crudFiltersFromFilterRecord({ metadata: { jsonContains: { kind: "note" } } })
-    ).toThrow(/Unsupported refine\/Hasura list filter "jsonContains"/);
+  test("drops URL-sourced filters the stock refine/Hasura operator set cannot express", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    expect(crudFiltersFromFilterRecord({
+      title: { iExact: "Launch" },
+      NOT: { title: { exact: "Draft" } },
+      metadata: { jsonContains: { kind: "note" } },
+      status: { exact: "ACTIVE" },
+    })).toEqual([{ field: "status", operator: "eq", value: "ACTIVE" }]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('Unsupported refine/Hasura list filter "iExact"'),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("does not support Angee NOT filters"),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('Unsupported refine/Hasura list filter "jsonContains"'),
+    );
+  });
+
+  test("exports the UI operator vocabulary from the codec owner", () => {
+    expect(ANGEE_FILTER_LOOKUP_OPERATORS).toEqual([
+      "exact",
+      "inList",
+      "isNull",
+      "contains",
+      "iContains",
+      "startsWith",
+      "iStartsWith",
+      "endsWith",
+      "iEndsWith",
+      "gt",
+      "gte",
+      "lt",
+      "lte",
+    ]);
+    // The case-sensitive startsWith/endsWith variants ride the provider's
+    // `_similar` encoding, which the backend leaves unmapped — not offered.
+    expect(ANGEE_TEXT_FILTER_LOOKUP_OPERATORS).toEqual([
+      "contains",
+      "iContains",
+      "iStartsWith",
+      "iEndsWith",
+      "isNull",
+    ]);
   });
 
   test("maps Angee order objects to refine sorters", () => {

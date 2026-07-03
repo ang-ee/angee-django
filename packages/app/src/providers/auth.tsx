@@ -5,7 +5,7 @@ import {
   useMemo,
   type ReactNode,
 } from "react";
-import { parse, type DocumentNode } from "graphql";
+import { parse } from "graphql";
 import {
   keys,
   useCustomMutation,
@@ -22,8 +22,12 @@ import {
 
 import {
   createAngeeGraphQLClient,
+  mutationMeta,
+  recordValue,
+  stringValue,
   type AngeeHasuraClientOptions,
-} from "./provider";
+} from "@angee/refine";
+import { errorFromUnknown as sharedErrorFromUnknown } from "@angee/ui/data/errors";
 
 export type UserPreferences = Record<string, unknown>;
 
@@ -135,6 +139,10 @@ const PUBLIC_USER_SELECTION =
   "id username firstName: first_name lastName: last_name email isStaff: is_staff isActive: is_active preferences";
 const CURRENT_USER_SELECTION = `${PUBLIC_USER_SELECTION} roleRefs: role_refs`;
 
+// Auth is an app-owned bootstrapping concern: it runs before a generated
+// project `@angee/gql/public` fixture is guaranteed to exist for framework
+// package tests. Keep these public operations runtime-narrowed until the wire
+// owner exposes generated public auth documents to framework packages.
 export const CURRENT_USER_DOCUMENT =
   `query angee_current_user { current_user { ${CURRENT_USER_SELECTION} } }`;
 
@@ -189,7 +197,7 @@ export function createAngeeAuthProviderFromRequest(
           ? { authenticated: true }
           : { authenticated: false, redirectTo: loginPath };
       } catch (caught) {
-        return { authenticated: false, error: errorFromUnknown(caught) };
+        return { authenticated: false, error: authErrorFromUnknown(caught) };
       }
     },
     async getIdentity() {
@@ -217,7 +225,7 @@ export function createAngeeAuthProviderFromRequest(
           user: parseCurrentUser(login?.user),
         } satisfies AngeeAuthActionResponse;
       } catch (caught) {
-        return { success: false, error: errorFromUnknown(caught) };
+        return { success: false, error: authErrorFromUnknown(caught) };
       }
     },
     async logout() {
@@ -227,11 +235,11 @@ export function createAngeeAuthProviderFromRequest(
         if (success) options.onAuthChange?.();
         return { success };
       } catch (caught) {
-        return { success: false, error: errorFromUnknown(caught) };
+        return { success: false, error: authErrorFromUnknown(caught) };
       }
     },
     async onError(error) {
-      const resolved = errorFromUnknown(error);
+      const resolved = authErrorFromUnknown(error);
       return isUnauthorizedError(error)
         ? { logout: true, redirectTo: loginPath, error: resolved }
         : { error: resolved };
@@ -252,20 +260,23 @@ export function createAngeeAuthProviderFromRequest(
  * authorization boundary).
  */
 export const IDENTITY_STALE_TIME = Number.POSITIVE_INFINITY;
+const IDENTITY_QUERY_SETTINGS = {
+  staleTime: IDENTITY_STALE_TIME,
+  retry: false,
+} as const;
 
 export function identityQueryOptions(authProvider: RefineAuthProvider) {
   return {
     queryKey: keys().auth().action("identity").get(),
     queryFn: async (): Promise<AuthUser | null> =>
       ((await authProvider.getIdentity?.()) ?? null) as AuthUser | null,
-    staleTime: IDENTITY_STALE_TIME,
-    retry: false,
+    ...IDENTITY_QUERY_SETTINGS,
   };
 }
 
 export function useRuntimeAuthState(): UseRuntimeAuthStateResult {
   const identity = useGetIdentity<AuthUser | null>({
-    queryOptions: { retry: false, staleTime: IDENTITY_STALE_TIME },
+    queryOptions: IDENTITY_QUERY_SETTINGS,
   });
   const auth = useMemo(
     () => authStateFromUser(identity.data ?? null),
@@ -302,7 +313,7 @@ export function useLoginWithPassword(): {
   };
 }
 
-export function useLogout(): {
+export function useLogoutAction(): {
   logout: () => Promise<boolean>;
   fetching: boolean;
   error: Error | null;
@@ -362,22 +373,14 @@ export function useUpdatePreferences(
   };
 }
 
-export function AuthProvider({
+export function AuthStateProvider({
   auth,
   children,
 }: {
-  auth: Partial<Pick<AuthState, "user" | "status">>;
+  auth: AuthState;
   children: ReactNode;
 }): ReactNode {
-  const value = useMemo<AuthState>(() => {
-    const user = auth.user ?? null;
-    return {
-      user,
-      status: auth.status ?? (user ? "authenticated" : "anonymous"),
-      hasRole: (role) => Boolean(user?.roles?.includes(role)),
-    };
-  }, [auth]);
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={auth}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthState {
@@ -425,9 +428,9 @@ export function parseCurrentUser(value: unknown): CurrentUserPayload | null {
   return {
     id: record.id,
     username: record.username,
-    firstName: stringValue(record.firstName),
-    lastName: stringValue(record.lastName),
-    email: stringValue(record.email),
+    firstName: stringValue(record.firstName) ?? "",
+    lastName: stringValue(record.lastName) ?? "",
+    email: stringValue(record.email) ?? "",
     isStaff: record.isStaff === true,
     isActive: record.isActive === true,
     preferences: preferencesValue(record.preferences),
@@ -477,42 +480,22 @@ function preferencesValue(value: unknown): UserPreferences {
   return record ? { ...record } : {};
 }
 
-function stringValue(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
 function stringList(value: unknown): readonly string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
 }
 
-function recordValue(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
 function errorFromUnknownOrNull(value: unknown): Error | null {
-  return value == null ? null : errorFromUnknown(value);
+  return value == null ? null : sharedErrorFromUnknown(value);
 }
 
-function errorFromUnknown(value: unknown): Error {
-  if (value instanceof Error) return value;
-  const record = recordValue(value);
-  if (typeof record?.message === "string") return new Error(record.message);
-  return new Error("GraphQL auth request failed");
+function authErrorFromUnknown(value: unknown): Error {
+  return sharedErrorFromUnknown(value) ?? new Error("GraphQL auth request failed");
 }
 
 function isUnauthorizedError(value: unknown): boolean {
   const record = recordValue(value);
   const response = recordValue(record?.response);
   return response?.status === 401 || record?.statusCode === 401 || record?.status === 401;
-}
-
-function mutationMeta(
-  gqlMutation: DocumentNode,
-  gqlVariables: Record<string, unknown>,
-): MetaQuery {
-  return { gqlMutation, gqlVariables } as unknown as MetaQuery;
 }

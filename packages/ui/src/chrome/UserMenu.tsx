@@ -1,9 +1,9 @@
 import { type ReactElement } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { useAuth, useLogout } from "@angee/refine";
 
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
+import { useRuntimeAuth, useRuntimeLogoutAction } from "../runtime";
 import { avatarInitials } from "../ui/avatar";
 import {
   DropdownMenu,
@@ -25,9 +25,9 @@ export function UserMenu({
   align = "end",
   sideOffset = 8,
 }: UserMenuProps): ReactElement {
-  const t = useBaseT();
-  const { user } = useAuth();
-  const { logout, fetching } = useLogout();
+  const t = useUiT();
+  const { user } = useRuntimeAuth();
+  const { logout, fetching } = useRuntimeLogoutAction();
   const navigate = useNavigate();
   const userMenu = t("chrome.userMenu");
   const displayName = user?.name || user?.username || t("chrome.userFallback");

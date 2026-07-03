@@ -1,14 +1,14 @@
 import * as React from "react";
 import {
   useModelMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 import {
   useAngeeAggregate,
   useAngeeGroupBy,
-} from "../data/hooks";
+} from "@angee/refine";
 import type { AggregateBucket } from "@angee/refine";
 
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { CountBadge } from "../ui/badge";
 import { Skeleton, SkeletonStatus } from "../ui/skeleton";
@@ -16,7 +16,11 @@ import { textRoleVariants } from "../ui/text";
 import {
   hasuraGroupDimension,
   type GroupByDimension,
-} from "./ListInternals";
+} from "./resource-view-list-body";
+import {
+  useAggregateOperation,
+  useGroupOperation,
+} from "./resource-operations";
 
 /** One grouped dimension plus how to label it in the panel header. */
 export interface AggregateDimension extends GroupByDimension {
@@ -49,19 +53,25 @@ export function AggregatePanel({
   formatKey = defaultFormat,
   className,
 }: AggregatePanelProps): React.ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const grouped = dimensions.length > 0;
   const metadata = useModelMetadata(resource);
   const dataResource = requireDataResource(resource, metadata);
+  const aggregateOperation = useAggregateOperation(dataResource);
+  const groupOperation = useGroupOperation(dataResource);
   const groupDimensions = React.useMemo(
     () => dimensions.map(hasuraGroupDimension),
     [dimensions],
   );
-  const group = useAngeeGroupBy(dataResource, {
+  const group = useAngeeGroupBy(groupOperation.target, {
+    document: groupOperation.document,
     dimensions: groupDimensions,
     enabled: grouped,
   });
-  const ungrouped = useAngeeAggregate(dataResource, { enabled: !grouped });
+  const ungrouped = useAngeeAggregate(aggregateOperation.target, {
+    document: aggregateOperation.document,
+    enabled: !grouped,
+  });
 
   const fetching = grouped ? group.fetching : ungrouped.fetching;
   const error = grouped ? group.error : ungrouped.error;

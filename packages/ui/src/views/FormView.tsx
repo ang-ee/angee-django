@@ -1,9 +1,11 @@
 import * as React from "react";
 import {
   refineResourceName,
+  recordSubtitleFields,
   rowPublicId,
+  type RecordSubtitleFields,
   type Row,
-} from "@angee/resources";
+} from "@angee/metadata";
 import {
   type BaseKey,
   type BaseRecord,
@@ -19,18 +21,18 @@ import {
   } from "@angee/refine";
 import {
   publicIdLabel,
-} from "@angee/resources";
+} from "@angee/metadata";
 import {
   useSchemaFieldMetadata,
   type ModelMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 import {
   useFormOverride,
   useSlot,
   } from "../runtime";
 import {
   useModelMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
 
 import { Button } from "../ui/button";
 import { ErrorBanner } from "../fragments/ErrorBanner";
@@ -52,9 +54,6 @@ import { SlotOutlet } from "../lib/slot-outlet";
 import { validationErrorsFromError } from "./validation-errors";
 import {
   slugify,
-  useResolvedWidget,
-  type WidgetDefinition,
-  type WidgetField,
 } from "../widgets";
 import { canonicalOptionValue, relationValueId } from "../widgets/types";
 import { dateFromUnknown, formatDate } from "../widgets/date-format";
@@ -85,7 +84,8 @@ import {
 import { RelationFieldWidget } from "./RelationFieldWidget";
 import { relationSelectedOption } from "./relation-options";
 import type { RelationOption } from "../widgets/RelationField";
-import { useBaseT } from "../i18n";
+import { useUiT, type UiTranslate } from "../i18n";
+import { FieldDescriptorControl } from "./field-descriptor-control";
 
 export type FieldKind = PageFieldKind;
 export type FormField = FieldDescriptor;
@@ -288,7 +288,7 @@ export function FormView({
   layout = "stacked",
   className,
 }: FormViewProps): React.ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const [activeRecordTab, setActiveRecordTab] = React.useState(OVERVIEW_TAB_ID);
   const hasFieldChildren = hasPageField(children);
   const hasGroupChildren = hasDirectPageElement(children, "group");
@@ -300,9 +300,18 @@ export function FormView({
       "FormView cannot mix the fields/groups props with element children.",
     );
   }
-  const childFields = parsePageFields(children);
-  const childGroups = parsePageGroups(children);
-  const childActions = parsePageActions(children);
+  const childFields = React.useMemo(
+    () => parsePageFields(children),
+    [children],
+  );
+  const childGroups = React.useMemo(
+    () => parsePageGroups(children),
+    [children],
+  );
+  const childActions = React.useMemo(
+    () => parsePageActions(children),
+    [children],
+  );
   const modelMetadata = useModelMetadata(resource);
   const schemaMetadata = useSchemaFieldMetadata();
   const formOverride = useFormOverride(resource);
@@ -334,16 +343,36 @@ export function FormView({
   // malformed registration (not an element) reads as no override, not a blank form.
   const overrideNode =
     isCreate && React.isValidElement(formOverride) ? formOverride : null;
-  const declaredFields =
-    overrideNode != null ? parsePageFields(overrideNode) : fields ?? childFields;
-  const declaredGroups = [
-    ...(overrideNode != null ? parsePageGroups(overrideNode) : groups ?? childGroups),
-    ...slotGroups,
-  ];
-  const declaredActions = [
-    ...(overrideNode != null ? parsePageActions(overrideNode) : actions ?? childActions),
-    ...slotActions,
-  ];
+  const overrideFields = React.useMemo(
+    () => (overrideNode != null ? parsePageFields(overrideNode) : null),
+    [overrideNode],
+  );
+  const overrideGroups = React.useMemo(
+    () => (overrideNode != null ? parsePageGroups(overrideNode) : null),
+    [overrideNode],
+  );
+  const overrideActions = React.useMemo(
+    () => (overrideNode != null ? parsePageActions(overrideNode) : null),
+    [overrideNode],
+  );
+  const declaredFields = React.useMemo(
+    () => overrideFields ?? fields ?? childFields,
+    [childFields, fields, overrideFields],
+  );
+  const declaredGroups = React.useMemo(
+    () => [
+      ...(overrideGroups ?? groups ?? childGroups),
+      ...slotGroups,
+    ],
+    [childGroups, groups, overrideGroups, slotGroups],
+  );
+  const declaredActions = React.useMemo(
+    () => [
+      ...(overrideActions ?? actions ?? childActions),
+      ...slotActions,
+    ],
+    [actions, childActions, overrideActions, slotActions],
+  );
   const resolvedFields = React.useMemo(
     () =>
       withModeLockedFields(
@@ -443,11 +472,13 @@ export function FormView({
   // Fields the create input requires (non-null, no default) that this form
   // renders editably — validated client-side so a missing one is flagged inline
   // instead of failing as a GraphQL "required type was not provided" coercion error.
-  const requiredFieldNames = React.useMemo(() => {
+  const requiredFieldNames = React.useMemo<ReadonlySet<string>>(() => {
     const required = new Set(modelMetadata?.rootFields?.requiredCreateFields ?? []);
-    return formFields
-      .filter((field) => required.has(field.name) && !field.readOnly)
-      .map((field) => field.name);
+    return new Set(
+      formFields
+        .filter((field) => required.has(field.name) && !field.readOnly)
+        .map((field) => field.name),
+    );
   }, [formFields, modelMetadata]);
   const writableFieldNames = React.useMemo<ReadonlySet<string> | null>(() => {
     const fields = isCreate
@@ -506,9 +537,12 @@ export function FormView({
   });
 
   const resetForm = React.useCallback(
-    (values: Values) => {
-      form.reset(values);
-      formIsDirtyRef.current = false;
+    (values: Values, options: { keepDirtyValues?: boolean } = {}) => {
+      form.reset(
+        values,
+        options.keepDirtyValues ? { keepDirtyValues: true } : undefined,
+      );
+      formIsDirtyRef.current = Boolean(options.keepDirtyValues && formIsDirtyRef.current);
     },
     [form],
   );
@@ -552,24 +586,8 @@ export function FormView({
       if (!dataResource) {
         throw new Error(`Resource metadata for "${resource}" is not available.`);
       }
-      if (isCreate) {
-        const missing = requiredFieldNames.filter(
-          (name) =>
-            isEmptyFieldValue(value[name]) &&
-            isFieldVisible(fieldByName.get(name) ?? { name }, value),
-        );
-        if (missing.length > 0) {
-          setServerFieldErrors(
-            Object.fromEntries(
-              missing.map((name) => [name, ["This field is required."]]),
-            ),
-          );
-          setSaveError("Please fill in the required fields.");
-          return;
-        }
-      }
       const data = mutationData(value, formFields, {
-        baseline: baselineValuesRef.current,
+        dirtyFields: form.formState.dirtyFields as Record<string, unknown>,
         isCreate,
         writableFields: writableFieldNames,
       });
@@ -587,8 +605,8 @@ export function FormView({
           formErrors.length > 0
             ? formErrors.join(" ")
             : Object.keys(fieldErrors).length > 0
-              ? fieldValidationSummary(fieldErrors, fieldByName)
-              : "Could not save record.",
+              ? fieldValidationSummary(fieldErrors, fieldByName, t)
+              : t("form.genericSaveError"),
         );
       }
     },
@@ -600,9 +618,9 @@ export function FormView({
       isCreate,
       commitSavedRecord,
       resource,
-      requiredFieldNames,
       runSubmit,
       writableFieldNames,
+      form.formState.dirtyFields,
     ],
   );
   const submitForm = form.handleSubmit(submitValues);
@@ -692,13 +710,27 @@ export function FormView({
       if (!recordChanged && !cleanFieldShapeChanged) return;
       seededIdRef.current = recordId;
       seededRecordRef.current = record;
+      const keepDirtyValues =
+        seededIdRef.current === recordId && formIsDirtyRef.current;
       baselineValuesRef.current = recordValues;
-      resetForm(recordValues);
+      // Same-record refetches can land while the user is editing; keep their
+      // dirty values while updating RHF's clean baseline to the fresh server row.
+      resetForm(recordValues, { keepDirtyValues });
       setSaveError(null);
     }
   }, [emptyValues, formFields, isCreate, patchedRecord, record, resetForm]);
 
   const titleField = titleFieldFor(formFields, modelMetadata);
+  const titleFieldMessages = titleField
+    ? [
+        ...fieldErrorMessages(
+          form.formState.errors[titleField.name]
+            ? [form.formState.errors[titleField.name]]
+            : [],
+        ),
+        ...(serverFieldErrors[titleField.name] ?? []),
+      ]
+    : [];
   const statusField = formFields.find(
     (field) => fieldWidgetId(field) === "statusbar" && !field.showWhen,
   );
@@ -733,9 +765,16 @@ export function FormView({
     [gridFields, gridGroups],
   );
   const subtitleParts = React.useMemo(
-    () => recordSubtitleParts(displayRecord, id),
-    [displayRecord, id],
+    () =>
+      recordSubtitleParts(
+        displayRecord,
+        id,
+        recordSubtitleFields(modelMetadata),
+        t,
+      ),
+    [displayRecord, id, modelMetadata, t],
   );
+  const requiredMessage = t("form.required");
   const renderField = (field: FieldDescriptor): React.ReactNode => {
     const relation = relationByField.get(field.name);
     // The selected record's label comes from the parent read (folded above), so
@@ -749,6 +788,7 @@ export function FormView({
         key={field.name}
         control={form.control}
         name={field.name}
+        rules={fieldValidationRules(field, requiredFieldNames, requiredMessage)}
         render={({ field: controller, fieldState }) => (
           <BoundFieldRow
             field={field}
@@ -888,6 +928,7 @@ export function FormView({
           <Controller
             control={form.control}
             name={bodyField.name}
+            rules={fieldValidationRules(bodyField, requiredFieldNames, requiredMessage)}
             render={({ field: controller, fieldState }) => (
               <BodyFieldControl
                 field={bodyField}
@@ -937,7 +978,7 @@ export function FormView({
                   disabled={form.refineCore.mutation.isPending || form.formState.isSubmitting}
                   onClick={() => resetForm(baselineValuesRef.current)}
                 >
-                  Discard
+                  {t("form.discard")}
                 </Button>
               ) : null}
               <Button
@@ -950,7 +991,7 @@ export function FormView({
                   void submitForm();
                 }}
               >
-                {submitLabel ?? (isCreate ? "Create" : "Save")}
+                {submitLabel ?? (isCreate ? t("form.create") : t("form.save"))}
               </Button>
             </div>
           ) : null}
@@ -986,15 +1027,16 @@ export function FormView({
                 <Controller
                   control={form.control}
                   name={titleField.name}
+                  rules={fieldValidationRules(titleField, requiredFieldNames, requiredMessage)}
                   render={({ field: controller }) => (
                     fieldReadOnly(titleField) ? (
                       <h1 className={TITLE_TEXT_CLASS}>
-                        {titleText(controller.value)}
+                        {titleText(controller.value, t("form.untitled"))}
                       </h1>
                     ) : (
                       <Input
                         value={String(controller.value ?? "")}
-                        placeholder={titleField.placeholder ?? "Untitled"}
+                        placeholder={titleField.placeholder ?? t("form.untitled")}
                         aria-label={fieldAriaLabel(titleField)}
                         className={cn(TITLE_TEXT_CLASS, TITLE_INPUT_CLASS)}
                         onChange={(event) => {
@@ -1008,25 +1050,30 @@ export function FormView({
                 />
               ) : (
                 <h1 className="truncate text-28 font-semibold leading-9 text-fg">
-                  Record
+                  {t("form.record")}
                 </h1>
               )}
               {/* The title field renders in the header (no FieldRoot), so its
                   server validation error is surfaced here rather than inline. */}
-              {titleField && serverFieldErrors[titleField.name] ? (
+              {titleField && titleFieldMessages.length > 0 ? (
                 <p className="mt-1 text-xs leading-5 text-danger-text">
-                  {serverFieldErrors[titleField.name]?.join(", ")}
+                  {titleFieldMessages.join(", ")}
                 </p>
               ) : null}
-              <RecordSubtitle loading={loading} parts={subtitleParts} />
+              <RecordSubtitle
+                loading={loading}
+                loadingLabel={t("form.loading")}
+                parts={subtitleParts}
+              />
             </div>
             {statusField ? (
               <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-3 max-[900px]:w-full">
                 <Controller
                   control={form.control}
                   name={statusField.name}
+                  rules={fieldValidationRules(statusField, requiredFieldNames, requiredMessage)}
                   render={({ field: controller }) => (
-                    <FieldWidget
+                    <FieldDescriptorControl
                       field={statusField}
                       value={controller.value}
                       readOnly={fieldReadOnly(statusField)}
@@ -1123,6 +1170,7 @@ function useUnsavedChangesNavigationGuard({
   readOnly: boolean;
 }): void {
   const confirm = useConfirm();
+  const t = useUiT();
   const shouldBlockFn = React.useCallback(async () => {
     // Read the live store, not the captured render value. A successful save resets
     // the form (isDirty → false) and navigates in the same tick, before the React
@@ -1130,47 +1178,19 @@ function useUnsavedChangesNavigationGuard({
     // redirect with a phantom "unsaved changes" prompt.
     if (readOnly || !isDirtyNow()) return false;
     const leave = await confirm({
-      title: "Unsaved changes — leave without saving?",
-      cancel: "Stay",
-      confirm: "Leave",
+      title: t("form.unsavedLeaveTitle"),
+      cancel: t("form.stay"),
+      confirm: t("form.leave"),
       danger: true,
     });
     return !leave;
-  }, [confirm, isDirtyNow, readOnly]);
+  }, [confirm, isDirtyNow, readOnly, t]);
 
   useBlocker({
     shouldBlockFn,
     enableBeforeUnload: isDirty && !readOnly,
     disabled: readOnly || !isDirty,
   });
-}
-
-function FieldWidget({
-  field,
-  value,
-  readOnly,
-  onChange,
-}: {
-  field: FieldDescriptor;
-  value: unknown;
-  readOnly?: boolean;
-  onChange?: (value: unknown) => void;
-}): React.ReactElement {
-  const widget = useResolvedWidget(fieldWidgetId(field)) ?? fallbackWidget();
-  const Component = readOnly ? widget.read : (widget.edit ?? widget.read);
-  const widgetField: WidgetField = {
-    name: field.name,
-    label: field.label,
-    options: field.options,
-  };
-  return (
-    <Component
-      value={value}
-      field={widgetField}
-      readOnly={readOnly}
-      onChange={onChange}
-    />
-  );
 }
 
 type FormSectionModel = {
@@ -1182,9 +1202,11 @@ type FormSectionModel = {
 
 function RecordSubtitle({
   loading,
+  loadingLabel,
   parts,
 }: {
   loading: boolean;
+  loadingLabel: React.ReactNode;
   parts: readonly React.ReactNode[];
 }): React.ReactElement | null {
   if (!loading && parts.length === 0) return null;
@@ -1201,7 +1223,7 @@ function RecordSubtitle({
           {parts.length > 0 ? <span aria-hidden="true">/</span> : null}
           <span className="inline-flex items-center gap-2">
             <Spinner size="sm" />
-            Loading...
+            {loadingLabel}
           </span>
         </>
       ) : null}
@@ -1344,7 +1366,7 @@ function BoundFieldRow({
             aria-label={fieldAriaLabel(field)}
           />
         ) : (
-          <FieldWidget
+          <FieldDescriptorControl
             field={field}
             value={value}
             readOnly={effectiveReadOnly}
@@ -1375,7 +1397,7 @@ function BodyFieldControl({
   const messages = [...fieldErrorMessages(errors), ...(serverMessages ?? [])];
   return (
     <FieldRoot invalid={messages.length > 0} className="grid gap-2">
-      <FieldWidget
+      <FieldDescriptorControl
         field={field}
         value={value}
         readOnly={readOnly}
@@ -1479,9 +1501,9 @@ function isLongTextField(field: FieldDescriptor): boolean {
   );
 }
 
-function titleText(value: unknown): string {
+function titleText(value: unknown, fallback: string): string {
   const text = String(value ?? "").trim();
-  return text || "Untitled";
+  return text || fallback;
 }
 
 function addFieldSelection(
@@ -1579,6 +1601,17 @@ function isFieldVisible(field: FieldDescriptor, values: Values): boolean {
   return !field.showWhen || field.showWhen(values);
 }
 
+function fieldValidationRules(
+  field: FieldDescriptor,
+  requiredFieldNames: ReadonlySet<string>,
+  requiredMessage: string,
+): { validate: (value: unknown) => true | string } | undefined {
+  if (field.readOnly || !requiredFieldNames.has(field.name)) return undefined;
+  return {
+    validate: (value) => !isEmptyFieldValue(value) || requiredMessage,
+  };
+}
+
 /** Drop fields whose `showWhen` predicate fails; an emptied section renders nothing. */
 function visibleSections(
   sections: readonly FormSectionModel[],
@@ -1594,7 +1627,7 @@ function mutationData(
   values: Values,
   fields: readonly FieldDescriptor[],
   options: {
-    baseline: Values;
+    dirtyFields: Record<string, unknown>;
     id?: string | null;
     isCreate: boolean;
     writableFields?: ReadonlySet<string> | null;
@@ -1609,13 +1642,12 @@ function mutationData(
     // A field hidden by its `showWhen` predicate is not part of the record.
     if (!isFieldVisible(field, values)) continue;
     const next = mutationFieldValue(field, values[field.name]);
-    const baseline = mutationFieldValue(field, options.baseline[field.name]);
     if (isUnselectedOption(field, next)) continue;
     // Blank numeric create fields should let the GraphQL input default apply.
     // Sending "" fails Int/Float coercion, and sending null fails non-null fields
     // with defaults such as `Int! = 0`.
     if (options.isCreate && isEmptyNumericValue(field, next)) continue;
-    if (!options.isCreate && valuesEqual(next, baseline)) {
+    if (!options.isCreate && !options.dirtyFields[field.name]) {
       continue;
     }
     data[field.name] = next;
@@ -1715,13 +1747,14 @@ function fieldErrorMessages(errors: readonly unknown[]): string[] {
 function fieldValidationSummary(
   fieldErrors: Record<string, readonly string[]>,
   fieldByName: ReadonlyMap<string, FormField>,
+  t: UiTranslate,
 ): string {
   const fields = Object.keys(fieldErrors).map(
     (name) => fieldByName.get(name)?.label || name,
   );
   return fields.length > 0
-    ? `Please fix the highlighted fields: ${fields.join(", ")}.`
-    : "Please fix the highlighted fields.";
+    ? t("form.fixHighlightedFieldsNamed", { fields: fields.join(", ") })
+    : t("form.fixHighlightedFields");
 }
 
 function fieldErrorMessage(error: unknown): string {
@@ -1740,38 +1773,29 @@ function fieldErrorMessage(error: unknown): string {
 function recordSubtitleParts(
   record: Row | null | undefined,
   id: string | null | undefined,
+  fields: RecordSubtitleFields,
+  t: UiTranslate,
 ): React.ReactNode[] {
   const parts: React.ReactNode[] = [];
   const recordId = presentValue(record?.id) ?? presentValue(id);
   if (recordId !== undefined) parts.push(recordIdLabel(String(recordId)));
   if (record) {
-    // Reads conventional metadata names until Row exposes typed metadata.
-    const created = recordValue(record, ["createdAt", "created_at", "created"]);
-    const updated = recordValue(record, ["updatedAt", "updated_at", "updated"]);
-    const words = recordValue(record, ["wordCount", "word_count", "words"]);
-    if (created !== undefined) parts.push(`created ${formatRecordDate(created)}`);
-    if (updated !== undefined) parts.push(`updated ${formatRecordDate(updated)}`);
-    if (words !== undefined) parts.push(formatWordCount(words));
+    const created = fieldValue(record, fields.created);
+    const updated = fieldValue(record, fields.updated);
+    const words = fieldValue(record, fields.wordCount);
+    if (created !== undefined) {
+      parts.push(t("form.created", { value: formatRecordDate(created) }));
+    }
+    if (updated !== undefined) {
+      parts.push(t("form.updated", { value: formatRecordDate(updated) }));
+    }
+    if (words !== undefined) parts.push(formatWordCount(words, t));
   }
   return parts.filter((part) => String(part).trim() !== "");
 }
 
-function recordValue(
-  record: Row,
-  names: readonly string[],
-): unknown | undefined {
-  for (const name of names) {
-    const value = presentValue(record[name]);
-    if (value !== undefined) return value;
-  }
-  const normalised = new Set(names.map(normaliseFieldName));
-  for (const [key, value] of Object.entries(record)) {
-    if (normalised.has(normaliseFieldName(key))) {
-      const present = presentValue(value);
-      if (present !== undefined) return present;
-    }
-  }
-  return undefined;
+function fieldValue(record: Row, field: string | undefined): unknown | undefined {
+  return field ? presentValue(record[field]) : undefined;
 }
 
 function presentValue(value: unknown): unknown | undefined {
@@ -1796,7 +1820,10 @@ function formatRecordDate(value: unknown): string {
   return date ? formatDate(date) : String(value);
 }
 
-function formatWordCount(value: unknown): string {
+function formatWordCount(
+  value: unknown,
+  t: UiTranslate,
+): string {
   const count =
     typeof value === "number"
       ? value
@@ -1804,17 +1831,11 @@ function formatWordCount(value: unknown): string {
         ? Number(value)
         : Number.NaN;
   if (Number.isFinite(count)) {
-    return `${new Intl.NumberFormat().format(count)} words`;
+    return t("form.wordCount", { count: new Intl.NumberFormat().format(count) });
   }
-  return `${String(value)} words`;
+  return t("form.wordCount", { count: String(value) });
 }
 
 function normaliseFieldName(value: string): string {
   return value.replace(/[-_\s]+/g, "").toLowerCase();
-}
-
-function fallbackWidget(): WidgetDefinition {
-  return {
-    read: ({ value }) => <span className="text-13 text-fg">{String(value ?? "")}</span>,
-  };
 }

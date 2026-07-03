@@ -1,6 +1,15 @@
+import {
+  arrayValue,
+  countOf,
+  fieldRecord,
+  isRecord,
+  mutationMeta,
+  operationName,
+  queryMeta,
+  recordValue,
+  stringValue,
+} from "./dialect/wire";
 import type { MetaQuery } from "@refinedev/core";
-
-const GRAPHQL_NAME = /^[_A-Za-z][_0-9A-Za-z]*$/;
 
 export const AGGREGATE_MEASURE_OPERATORS = [
   "sum",
@@ -203,7 +212,7 @@ export function actionRequest(
   variables: ByIdVariables,
   options: { dataProviderName?: string; document: unknown },
 ): CustomGraphQLMutationRequest {
-  const root = assertName(field);
+  const root = operationName(field);
   return {
     dataProviderName: options.dataProviderName ?? "default",
     root,
@@ -222,20 +231,6 @@ export function revisionsRequest(
     root: operation.root,
     meta: queryMeta(options.document, { id }),
   };
-}
-
-function queryMeta(
-  gqlQuery: unknown,
-  gqlVariables: Record<string, unknown>,
-): MetaQuery {
-  return { gqlQuery, gqlVariables } as unknown as MetaQuery;
-}
-
-function mutationMeta(
-  gqlMutation: unknown,
-  gqlVariables: Record<string, unknown>,
-): MetaQuery {
-  return { gqlMutation, gqlVariables } as unknown as MetaQuery;
 }
 
 export function groupByVariables(
@@ -462,19 +457,12 @@ function paginationVariables(
   };
 }
 
-function assertName(name: string): string {
-  if (!GRAPHQL_NAME.test(name)) {
-    throw new Error(`Invalid GraphQL name: ${name}`);
-  }
-  return name;
-}
-
 function operationTarget(
   target: CustomGraphQLOperationTarget,
 ): CustomGraphQLOperationTarget {
   return {
     dataProviderName: target.dataProviderName,
-    root: assertName(target.root),
+    root: operationName(target.root),
   };
 }
 
@@ -483,35 +471,7 @@ function normalisePage(page: number | undefined): number {
 }
 
 export const MAX_PAGE_SIZE = 100;
-export const PAGE_SIZE_OPTIONS = [10, 20, 50, 80, MAX_PAGE_SIZE] as const;
-export const DEFAULT_PAGE_SIZE = PAGE_SIZE_OPTIONS[2];
 
 export function clampPageSize(pageSize: number): number {
   return Math.min(MAX_PAGE_SIZE, Math.max(1, Math.floor(pageSize)));
-}
-
-function fieldRecord(data: unknown, field: string): Record<string, unknown> | null {
-  return recordValue(recordValue(data)?.[field]);
-}
-
-function recordValue(value: unknown): Record<string, unknown> | null {
-  return isRecord(value) ? value : null;
-}
-
-function arrayValue(value: unknown): readonly unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function countOf(value: unknown): number {
-  return typeof value === "number" ? value : 0;
-}
-
-function stringValue(value: unknown): string | null {
-  if (value == null) return null;
-  const text = String(value).trim();
-  return text === "" ? null : text;
 }

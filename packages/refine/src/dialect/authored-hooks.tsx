@@ -5,34 +5,31 @@ import {
   useInvalidate,
   type BaseRecord,
   type HttpError,
-  type MetaQuery,
 } from "@refinedev/core";
 import { useQueryClient } from "@tanstack/react-query";
 
 import {
-  modelMetadataForLabel,
-  useActiveGraphQLSchemaName,
-  useSchemaFieldMetadata,
-  refineInvalidationParams,
-  resourceInvalidationTargets,
-} from "@angee/resources";
-import {
   authoredQueryMeta,
   authoredQueryReadsAnyModel,
+} from "../query-invalidation";
+import {
   useStableArray,
   useStableVariables,
-} from "@angee/refine";
+} from "../stable-deps";
 import type {
   DocumentData,
   DocumentVariables,
   TypedDocumentNode,
-} from "@angee/refine";
+} from "../typed-document";
+import { useActiveDataProviderName } from "./data-provider-context";
+import { mutationMeta, queryMeta } from "./wire";
 
 type AuthoredDocument = TypedDocumentNode<unknown, any>;
 type AuthoredVariables<TDocument extends AuthoredDocument> =
   DocumentVariables<TDocument> extends Record<string, unknown>
     ? DocumentVariables<TDocument>
     : Record<string, never>;
+type InvalidateParams = Parameters<ReturnType<typeof useInvalidate>>[0];
 
 export interface AuthoredOperationOptions {
   /** Refine data provider name; defaults to the active Angee layout schema. */
@@ -60,8 +57,8 @@ export function useAuthoredQuery<TDocument extends AuthoredDocument>(
   const stable = useStableVariables(variables);
   const enabled = options.enabled ?? true;
   const models = useStableArray(options.models ?? []);
-  const activeSchema = useActiveGraphQLSchemaName();
-  const dataProviderName = options.dataProviderName ?? activeSchema ?? "default";
+  const activeDataProviderName = useActiveDataProviderName();
+  const dataProviderName = options.dataProviderName ?? activeDataProviderName ?? "default";
   const meta = useMemo(
     () => queryMeta(document, stable),
     [document, stable],
@@ -103,8 +100,19 @@ export interface AuthoredMutationOptions<
 > extends AuthoredOperationOptions {
   /** Models whose registered reads should refetch after this mutation succeeds. */
   invalidateModels?: readonly string[];
+  /** Resource invalidations prepared by the caller that owns resource metadata. */
+  invalidates?: readonly InvalidateParams[];
   /** Optional domain-level success guard before invalidating registered reads. */
   shouldInvalidate?: (data: TData | undefined, variables: TVariables) => boolean;
+  /**
+   * Extract a domain result envelope from successful GraphQL transport data.
+   * If it carries `{ error_code, error }`, the hook throws before invalidating
+   * reads so callers do not each re-implement the same result gating.
+   */
+  errorFrom?: (
+    data: TData | undefined,
+    variables: TVariables,
+  ) => AuthoredMutationEnvelope | Error | string | null | undefined;
 }
 
 export function useAuthoredMutation<TDocument extends AuthoredDocument>(
@@ -116,28 +124,15 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
 ): [AuthoredMutate<TDocument>, { fetching: boolean; error: Error | null }] {
   type Data = DocumentData<TDocument>;
   type Variables = AuthoredVariables<TDocument>;
-  const activeSchema = useActiveGraphQLSchemaName();
-  const dataProviderName = options.dataProviderName ?? activeSchema ?? "default";
+  const activeDataProviderName = useActiveDataProviderName();
+  const dataProviderName = options.dataProviderName ?? activeDataProviderName ?? "default";
   const run = useCustomMutation<BaseRecord, HttpError, Variables>();
   const invalidateModelLabels = useStableArray(options.invalidateModels ?? []);
-  const schemaMetadata = useSchemaFieldMetadata();
+  const invalidates = options.invalidates ?? EMPTY_INVALIDATIONS;
   const invalidate = useInvalidate();
   const queryClient = useQueryClient();
-  // Authored reads may depend on internal or changes-only models; only list-root
-  // resources are registered in Refine and can go through resource invalidation.
-  const resourceInvalidateModelLabels = useMemo(
-    () =>
-      invalidateModelLabels.filter(
-        (modelLabel) =>
-          modelMetadataForLabel(schemaMetadata, modelLabel)?.resource?.roots.list,
-      ),
-    [schemaMetadata, invalidateModelLabels],
-  );
-  const invalidationTargets = useMemo(
-    () => resourceInvalidationTargets(schemaMetadata, resourceInvalidateModelLabels),
-    [schemaMetadata, resourceInvalidateModelLabels],
-  );
   const shouldInvalidate = options.shouldInvalidate;
+  const errorFrom = options.errorFrom;
   // Stable identity: chat runtimes and other long-lived effects may depend on
   // authored mutations, while refine can churn `mutateAsync` across renders.
   // Read the latest execution context at call time so consumers do not reconnect
@@ -147,20 +142,22 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
     document,
     invalidate,
     invalidateModelLabels,
-    invalidationTargets,
+    invalidates,
     mutateAsync: run.mutateAsync,
     queryClient,
     shouldInvalidate,
+    errorFrom,
   });
   mutationRef.current = {
     dataProviderName,
     document,
     invalidate,
     invalidateModelLabels,
-    invalidationTargets,
+    invalidates,
     mutateAsync: run.mutateAsync,
     queryClient,
     shouldInvalidate,
+    errorFrom,
   };
   const mutate = useCallback<AuthoredMutate<TDocument>>(async (variables) => {
     const {
@@ -168,10 +165,11 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
       document,
       invalidate,
       invalidateModelLabels,
-      invalidationTargets,
+      invalidates,
       mutateAsync,
       queryClient,
       shouldInvalidate,
+      errorFrom,
     } = mutationRef.current;
     const resolvedVariables = (variables ?? {}) as Variables;
     const response = await mutateAsync({
@@ -182,20 +180,26 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
       meta: mutationMeta(document, resolvedVariables),
     });
     const data = authoredOperationData<Data>(response.data);
+    const resultError = errorFromAuthoredEnvelope(
+      errorFrom?.(data, resolvedVariables),
+    );
+    if (resultError) throw resultError;
     if (
-      invalidateModelLabels.length > 0
+      (invalidateModelLabels.length > 0 || invalidates.length > 0)
       && (shouldInvalidate?.(data, resolvedVariables) ?? true)
     ) {
       await Promise.all([
-        ...invalidationTargets.map((target) =>
-          invalidate(refineInvalidationParams(target)),
-        ),
-        queryClient.invalidateQueries({
-          predicate: (query) =>
-            authoredQueryReadsAnyModel(query.meta, invalidateModelLabels),
-          type: "all",
-          refetchType: "active",
-        }),
+        ...invalidates.map((target) => invalidate(target)),
+        ...(invalidateModelLabels.length > 0
+          ? [
+              queryClient.invalidateQueries({
+                predicate: (query) =>
+                  authoredQueryReadsAnyModel(query.meta, invalidateModelLabels),
+                type: "all",
+                refetchType: "active",
+              }),
+            ]
+          : []),
       ]);
     }
     return data;
@@ -207,6 +211,24 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
       error: run.mutation.error as Error | null,
     },
   ];
+}
+
+export interface AuthoredMutationEnvelope {
+  error?: unknown;
+  error_code?: unknown;
+}
+
+export function errorFromAuthoredEnvelope(
+  value: AuthoredMutationEnvelope | Error | string | null | undefined,
+): Error | null {
+  if (!value) return null;
+  if (value instanceof Error) return value;
+  if (typeof value === "string") return value ? new Error(value) : null;
+  if (!value.error_code) return null;
+  const message = typeof value.error === "string" && value.error
+    ? value.error
+    : String(value.error_code);
+  return new Error(message);
 }
 
 export function authoredOperationData<TData>(payload: unknown): TData | undefined {
@@ -234,16 +256,4 @@ function isGraphQLResponseEnvelope(
     keys.every((key) => key === "data" || key === "errors" || key === "extensions");
 }
 
-function queryMeta(
-  gqlQuery: AuthoredDocument,
-  gqlVariables: Record<string, unknown>,
-): MetaQuery {
-  return { gqlQuery, gqlVariables } as unknown as MetaQuery;
-}
-
-function mutationMeta(
-  gqlMutation: AuthoredDocument,
-  gqlVariables: Record<string, unknown>,
-): MetaQuery {
-  return { gqlMutation, gqlVariables } as unknown as MetaQuery;
-}
+const EMPTY_INVALIDATIONS: readonly InvalidateParams[] = [];

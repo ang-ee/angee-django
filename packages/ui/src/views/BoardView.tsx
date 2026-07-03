@@ -5,9 +5,9 @@ import type {
   Row as TableRowModel } from "@tanstack/react-table";
 import { useNavigate } from "@tanstack/react-router";
 import type { Row,
-} from "@angee/resources";
+} from "@angee/metadata";
 
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { type Tone } from "../lib/tones";
 import { CountBadge } from "../ui/badge";
 import { Skeleton, SkeletonStatus } from "../ui/skeleton";
@@ -19,11 +19,11 @@ import {
   ListEmpty,
   readPath,
   type RowGroup,
-} from "./ListInternals";
-import type { ListEmptyContent } from "./list-view-types";
+} from "./resource-view-list-body";
+import type { ListEmptyContent } from "./resource-view-types";
 import { columnTone } from "./page";
 import type { ColumnDescriptor } from "./page";
-import type { CardActionContext } from "./list-view-types";
+import type { CardActionContext } from "./resource-view-types";
 
 const BOARD_SCROLL_SURFACE_CLASS =
   "flex items-start gap-3 p-3";
@@ -37,7 +37,7 @@ export interface BoardViewProps<TRow extends Row = Row> {
   selectedIds: ReadonlySet<string>;
   interactive: boolean;
   fetching?: boolean;
-  emptyMessage: ListEmptyContent;
+  emptyContent: ListEmptyContent;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
   cardActions?: (row: TRow, context: CardActionContext) => React.ReactNode;
@@ -56,7 +56,7 @@ export function BoardView<TRow extends Row = Row>(
     groups,
     resourceView,
     fetching = false,
-    emptyMessage,
+    emptyContent,
     rowHref,
     onRowClick,
     cardActions,
@@ -69,7 +69,7 @@ export function BoardView<TRow extends Row = Row>(
       fetching={fetching}
       groups={groups}
       groupStack={resourceView.state.groupStack}
-      emptyMessage={emptyMessage}
+      emptyContent={emptyContent}
       rowHref={rowHref}
       onRowClick={onRowClick}
       cardActions={cardActions}
@@ -88,7 +88,7 @@ function BoardRows<TRow extends Row>({
   fetching,
   groups,
   groupStack,
-  emptyMessage,
+  emptyContent,
   rowHref,
   onRowClick,
   cardActions,
@@ -99,14 +99,14 @@ function BoardRows<TRow extends Row>({
   fetching: boolean;
   groups: readonly RowGroup<TRow>[];
   groupStack: readonly ResourceViewGroup[];
-  emptyMessage: ListEmptyContent;
+  emptyContent: ListEmptyContent;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
   cardActions?: (row: TRow, context: CardActionContext) => React.ReactNode;
   cardActionContext: CardActionContext;
   renderCard?: (row: TRow) => React.ReactNode;
 }): React.ReactElement {
-  const t = useBaseT();
+  const t = useUiT();
   const leaves = groups.flatMap(flattenLeaves);
   const groupFields = new Set(groupStack.map((group) => group.field));
   if (leaves.every((group) => group.rows.length === 0)) {
@@ -118,7 +118,7 @@ function BoardRows<TRow extends Row>({
         />
       );
     }
-    return <ListEmpty className="px-3 py-8">{emptyMessage}</ListEmpty>;
+    return <ListEmpty className="px-3 py-8">{emptyContent}</ListEmpty>;
   }
   // Kanban is most useful with an active group axis; with no group-by applied a single lane is shown.
   // The board renders the current page only (bounded by the page-size cap, MAX_PAGE_SIZE), grouped into lanes; no row virtualization is used here.
@@ -221,6 +221,7 @@ function BoardLane<TRow extends Row>({
   renderCard?: (row: TRow) => React.ReactNode;
 }): React.ReactElement {
   const headingId = React.useId();
+  const t = useUiT();
   const tone = laneDotTone(group, groupStack, columns);
   return (
     <section
@@ -233,7 +234,7 @@ function BoardLane<TRow extends Row>({
           id={headingId}
           className="min-w-0 flex-1 truncate text-13 font-semibold text-fg"
         >
-          {group.label ?? "All records"}
+          {group.label ?? t("list.allRecords")}
         </h3>
         <CountBadge value={group.rows.length} />
       </div>
@@ -349,23 +350,43 @@ function BoardCardFrame({
   children: React.ReactNode;
 }): React.ReactElement {
   const navigate = useNavigate();
-  const handleClick = React.useCallback(() => {
-    if (href) {
+  const handleLinkClick = React.useCallback(
+    (event: React.MouseEvent<HTMLAnchorElement>) => {
+      if (
+        !href
+        || event.defaultPrevented
+        || event.button !== 0
+        || event.metaKey
+        || event.ctrlKey
+        || event.shiftKey
+        || event.altKey
+      ) {
+        return;
+      }
+      event.preventDefault();
       void navigate({ to: href });
-      return;
-    }
-    onClick?.();
-  }, [href, navigate, onClick]);
-  return (
-    <button
-      type="button"
-      role={href ? "link" : undefined}
-      className={BOARD_CARD_SHELL_CLASS}
-      onClick={handleClick}
-    >
-      {children}
-    </button>
+    },
+    [href, navigate],
   );
+  if (href) {
+    return (
+      <a href={href} className={BOARD_CARD_SHELL_CLASS} onClick={handleLinkClick}>
+        {children}
+      </a>
+    );
+  }
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        className={BOARD_CARD_SHELL_CLASS}
+        onClick={onClick}
+      >
+        {children}
+      </button>
+    );
+  }
+  return <div className={BOARD_CARD_SHELL_CLASS}>{children}</div>;
 }
 
 function laneDotTone<TRow extends Row>(

@@ -63,7 +63,7 @@ import type {
 import type {
   AngeeListBatchScope,
   GroupByBatchScope,
-} from "@angee/ui/data/hooks";
+} from "@angee/refine";
 import {
   Action,
   Column,
@@ -79,13 +79,14 @@ import {
 } from "@angee/refine";
 import {
   type Row,
-  } from "@angee/resources";
+  } from "@angee/metadata";
 import {
   ModelMetadataProvider,
-} from "@angee/resources";
+} from "@angee/metadata";
 import type {
   SchemaFieldMetadata,
-} from "@angee/resources";
+} from "@angee/metadata";
+import { installTestLocalStorage } from "../testing";
 
 interface ResourceListOptions {
   fields?: readonly string[];
@@ -492,6 +493,8 @@ vi.mock("@refinedev/react-table", async () => {
         filters?: { initial?: RefineFilter[] };
         queryOptions?: { enabled?: boolean };
       };
+      onExpandedChange?: (updater: unknown) => void;
+      onRowSelectionChange?: (updater: unknown) => void;
     }) => {
       const props = options.refineCoreProps ?? {};
       const pageSize =
@@ -520,6 +523,12 @@ vi.mock("@refinedev/react-table", async () => {
         columns: options.columns as never[],
         state: options.state as never,
         getCoreRowModel: TanStackTable.getCoreRowModel(),
+        // Mirror the surface's row models: grouping/expansion resolve through
+        // TanStack, so the mock must supply the same factories.
+        getGroupedRowModel: TanStackTable.getGroupedRowModel(),
+        getExpandedRowModel: TanStackTable.getExpandedRowModel(),
+        onExpandedChange: options.onExpandedChange as never,
+        onRowSelectionChange: options.onRowSelectionChange as never,
         getRowId: options.getRowId,
         autoResetPageIndex: false,
         autoResetExpanded: false,
@@ -540,8 +549,8 @@ vi.mock("@refinedev/react-table", async () => {
 
 });
 
-vi.mock("@angee/ui/data/hooks", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/ui/data/hooks")>();
+vi.mock("@angee/refine", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/refine")>();
   function filteredRows(
     rows: readonly Row[],
     filter: unknown,
@@ -1104,6 +1113,7 @@ function lastListCall(): ResourceListOptions | undefined {
 describe("ResourceList", () => {
   beforeAll(() => {
     Element.prototype.getAnimations ??= () => [];
+    installTestLocalStorage();
   });
 
   afterEach(async () => {
@@ -1158,8 +1168,8 @@ describe("ResourceList", () => {
         >
           <List
             createLabel="Add note"
-            emptyMessage="No matching notes."
-            filters={[{ id: "active", label: "Active", filter: {} }]}
+            emptyContent="No matching notes."
+            filterOptions={[{ id: "active", label: "Active", filter: {} }]}
           >
             <Facet field="author" label="Author" labelField="displayName" />
             <Column field="title" header="Title" />
@@ -1185,14 +1195,14 @@ describe("ResourceList", () => {
         aggregate: "sum",
       },
     ]);
-    expect(captured.current?.filters).toEqual([
+    expect(captured.current?.filterOptions).toEqual([
       { id: "active", label: "Active", filter: {} },
     ]);
     expect(captured.current?.facets).toEqual([
       { field: "author", label: "Author", labelField: "displayName" },
     ]);
     expect(captured.current?.createLabel).toBe("Add note");
-    expect(captured.current?.emptyMessage).toBe("No matching notes.");
+    expect(captured.current?.emptyContent).toBe("No matching notes.");
     expect(captured.current?.rowHref).toBe(rowHref);
   });
 
@@ -2326,7 +2336,12 @@ describe("ResourceList", () => {
         title: { contains: "Fir" },
       });
     });
-    expect(await screen.findByText("Title contains Fir")).toBeTruthy();
+    // A custom text filter defaults to case-sensitive `contains` so it coexists
+    // with the free-text search box's `iContains` on the same field; the chip
+    // labels that distinction.
+    expect(
+      await screen.findByText("Title contains (case-sensitive) Fir"),
+    ).toBeTruthy();
   });
 
   test("saves and reapplies the current resource-view search", async () => {

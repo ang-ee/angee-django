@@ -11,7 +11,7 @@ import type {
 } from "@base-ui/react/number-field";
 
 import { Glyph } from "../chrome/Glyph";
-import { useBaseT } from "../i18n";
+import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { tv, type VariantProps } from "../lib/variants";
 import {
@@ -180,7 +180,7 @@ export const NumberFieldIncrement = React.forwardRef<
   },
   ref,
 ) {
-  const t = useBaseT();
+  const t = useUiT();
   const styles = numberFieldVariants({ size });
   return (
     <BaseNumberField.Increment
@@ -215,7 +215,7 @@ export const NumberFieldDecrement = React.forwardRef<
   },
   ref,
 ) {
-  const t = useBaseT();
+  const t = useUiT();
   const styles = numberFieldVariants({ size });
   return (
     <BaseNumberField.Decrement
@@ -325,7 +325,7 @@ export const NumberField = React.forwardRef<HTMLDivElement, NumberFieldProps>(
     },
     ref,
   ) {
-    const t = useBaseT();
+    const t = useUiT();
     const { className: inputPropsClassName, ...restInputProps } =
       inputProps ?? {};
 
