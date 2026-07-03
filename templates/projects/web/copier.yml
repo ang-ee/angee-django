@@ -53,6 +53,25 @@ web_path:
   default: "web"
   help: Path of the web package relative to the project root (matches the dev stack's web_path).
 
+# Backend used by the platform addon installer. Plain projects default to direct
+# local file edits; containerized stacks can opt into an operator-backed writer so
+# project source mutations happen on the host side of the bind mount.
+addon_installer_backend:
+  type: str
+  default: local
+  choices:
+    - local
+    - operator
+  help: Addon installer backend for platform install/uninstall flows.
+
+# Whether the rendered host should include the operator installer bridge addon.
+# Kept separate from the backend name so a stack explicitly owns both the setting
+# and the addon dependency it requires.
+include_operator_installer:
+  type: bool
+  default: false
+  help: Include angee.platform_integrate_operator in INSTALLED_APPS.
+
 # The rendered web package reaches the framework's build-config (Vite, Vitest) by
 # PACKAGE NAME — `@angee/app/vite`, `@angee/app/vitest` — not a sibling path.
 # `@angee/app` is a dependency of the web package, so those exports resolve the

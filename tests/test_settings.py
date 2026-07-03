@@ -188,6 +188,10 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "django.contrib.auth.apps.AuthConfig",
         "django.contrib.sessions.apps.SessionsConfig",
         "angee.iam.apps.IAMConfig",
+        # integrate depends on angee.tasks (its periodic bridge tick), pulling the
+        # queue seam ahead of every integration addon.
+        "procrastinate.contrib.django.apps.ProcrastinateConfig",
+        "angee.tasks",
         "angee.integrate.apps.IntegrateConfig",
         "angee.mcp",
         "angee.operator",
@@ -197,8 +201,6 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "angee.storage.apps.StorageConfig",
         "angee.parties.apps.PartiesConfig",
         "angee.messaging.apps.MessagingConfig",
-        "procrastinate.contrib.django.apps.ProcrastinateConfig",
-        "angee.tasks",
         "angee.workflows.apps.WorkflowsConfig",
         "example.notes",
     ]

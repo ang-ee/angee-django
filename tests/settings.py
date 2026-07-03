@@ -98,6 +98,7 @@ ANGEE_DIRECTORY_BACKEND_CLASSES = {
 }
 ANGEE_CHANNEL_BACKEND_CLASSES = {
     "manual": "angee.messaging.backends.ManualChannelBackend",
+    "imap": "angee.messaging_integrate_imap.backend.ImapChannelBackend",
 }
 # Feed backends a ``social.Feed`` may select (social's autoconfig normally
 # contributes these). ``stub`` returns canned posts queued by the social tests.

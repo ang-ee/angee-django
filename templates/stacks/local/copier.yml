@@ -11,13 +11,14 @@ _message_after_copy: |
   project (ANGEE_ROOT=.). Postgres + Django (framework image) + frontend mode
   "{{ frontend_mode }}".
 
-  1. Bring it up (Postgres + Django + frontend under docker-compose). First start
+  1. Bring it up (operator + Postgres + Django + frontend). First start
      emits runtime/, creates migrations, writes GraphQL schemas, migrates, syncs
      permissions, loads install resources, bootstraps the admin user, and prepares
      the web frontend:
-       angee up
-  2. Point the CLI at the local operator — add to your ~/.profile:
+       angee dev
+  2. Point an external CLI shell at the tokenized local operator (run from this root):
        export ANGEE_OPERATOR_URL=http://127.0.0.1:{{ operator_port }}
+       export ANGEE_OPERATOR_TOKEN="$(awk -F= '$1=="ANGEE_SECRET_OPERATOR_TOKEN"{print $2}' .env)"
 
   App:      http://localhost:{{ ui_port }}
   Login:    admin / the generated admin-password secret in .env
@@ -51,6 +52,8 @@ _angee:
         project_name: "${inputs.instance_name}"
         web_path: "${inputs.web_path}"
         addon_namespace: "${inputs.addon_namespace}"
+        addon_installer_backend: operator
+        include_operator_installer: true
 
 # Machine name of the instance: the compose project's friendly label (the operator
 # derives a root-unique project id from it) AND the chained project's name (seeds

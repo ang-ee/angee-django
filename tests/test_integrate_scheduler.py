@@ -9,8 +9,11 @@ from typing import Any
 import pytest
 from django.db import connection
 from django.utils import timezone
+from procrastinate.contrib.django import app as procrastinate_app
 from rebac import system_context
 
+from angee.integrate import scheduler as integrate_scheduler
+from angee.integrate import tasks as integrate_tasks
 from angee.integrate.models import Bridge, IntegrationStatus
 from angee.integrate.registry import bridge_models
 from angee.integrate.scheduler import run_due_bridges
@@ -60,6 +63,21 @@ class SchedulerBridge(Integration, Bridge):
 
     def stop_live(self) -> None:
         """Stop the fixture live subscription."""
+
+
+@pytest.fixture(autouse=True)
+def _scan_only_the_fixture_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Scope the scheduler's model scan to this module's fixture bridge.
+
+    The shared test registry accumulates concrete bridge models from other
+    modules (social's Feed, messaging's Channel) whose on-demand tables may not
+    exist in this session, so an unscoped scan fails on table/relation state
+    these tests don't own. Cross-model discovery itself is covered by
+    ``test_integrate_registry_discovers_bridge_models_in_deterministic_order``,
+    which reads the registry without querying rows.
+    """
+
+    monkeypatch.setattr(integrate_scheduler, "bridge_models", lambda base: (SchedulerBridge,))
 
 
 @pytest.fixture()
@@ -239,3 +257,51 @@ def test_integrate_registry_discovers_bridge_models_in_deterministic_order(sched
 
     assert SchedulerBridge in discovered_bridge_models
     assert bridge_labels == tuple(sorted(bridge_labels))
+
+
+def test_periodic_task_drives_the_due_scan(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The queue tick calls the pure due-scan; registration is by stable task name."""
+
+    calls: list[bool] = []
+    monkeypatch.setattr(integrate_tasks.scheduler, "run_due_bridges", lambda: calls.append(True))
+    integrate_tasks.sync_due_bridges(0)
+
+    assert calls == [True]
+    assert "integrate.sync_due_bridges" in procrastinate_app.tasks
+
+
+@pytest.mark.django_db(transaction=True)
+def test_scheduler_claims_a_row_before_running_it(
+    scheduler_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An in-flight bridge's next poll is already pushed out before its sync runs.
+
+    The claim is what an overlapping scan reads: a backfill outliving the tick
+    cadence must be skipped, not double-synced, so the persisted ``next_sync_at``
+    has to move out *before* the run rather than only when it records.
+    """
+
+    del scheduler_tables
+    now = timezone.now()
+    observed: list[Any] = []
+    original_sync = SchedulerBridge.sync
+
+    def observing_sync(self: SchedulerBridge) -> int:
+        persisted = SchedulerBridge._base_manager.get(pk=self.pk)
+        observed.append(persisted.next_sync_at)
+        return original_sync(self)
+
+    with system_context(reason="test integrate scheduler claim setup"):
+        make_integration(
+            "claimed",
+            model=SchedulerBridge,
+            poll_interval=120,
+            next_sync_at=now - timedelta(seconds=1),
+        )
+    monkeypatch.setattr(SchedulerBridge, "sync", observing_sync)
+
+    counters = run_due_bridges(now=now)
+
+    assert counters == {"ran": 1, "errors": 0}
+    assert observed == [now + timedelta(seconds=120)]

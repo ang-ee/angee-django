@@ -1509,6 +1509,9 @@ class Bridge(AngeeModel):
     last_sync_status = models.CharField(max_length=64, blank=True)
     last_sync_items = models.PositiveIntegerField(default=0)
     next_sync_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    """Next scheduler poll. NULL means unscheduled: a bridge enters the poll loop
+    when its first (eager) sync records a result; the scheduler claims a due row
+    by pushing this one interval out for the duration of the run."""
 
     class Meta:
         """Django model options for abstract bridge inheritance."""
@@ -1521,6 +1524,20 @@ class Bridge(AngeeModel):
         self.last_sync_started_at = now
         with transaction.atomic():
             self.save(update_fields=["last_sync_started_at", "updated_at"])
+
+    def claim_sync(self, *, now: datetime) -> None:
+        """Push the next poll one interval out as an in-flight claim.
+
+        The scheduler claims a due row under a row lock before running it, so an
+        overlapping scan — a backfill outliving the tick cadence, or a second
+        worker — re-reads the row, sees a future ``next_sync_at``, and skips
+        instead of double-syncing one source. ``record_sync`` /
+        ``record_sync_error`` recompute the real next poll when the run ends.
+        """
+
+        self.next_sync_at = self._next_sync_at(now=now)
+        with transaction.atomic():
+            self.save(update_fields=["next_sync_at", "updated_at"])
 
     def record_sync(self, result: int, *, now: datetime) -> None:
         """Persist one successful scheduler sync result and healthy status report."""

@@ -1,0 +1,8 @@
+# Angee addon manifest. The declarative contract hatch-angee compiles into
+# the package's [project] + entry points; see angee/addons.py (AddonContract).
+[addon]
+name = "angee.messaging_integrate_imap"
+description = "IMAP email sync — pulls mailbox accounts into messaging threads and messages"
+keywords = ["imap", "email", "sync"]
+category = "Integration"
+depends_on = ["angee.messaging", "angee.integrate", "angee.parties"]

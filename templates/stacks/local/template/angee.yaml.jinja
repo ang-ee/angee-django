@@ -20,6 +20,10 @@ secrets:
   # .env`); a fresh instance needs the file to exist before bring-up. Also available
   # as the instance's Django SECRET_KEY source.
   secret-key: { generated: true, length: 50 }
+  # Shared bearer for the host-local operator daemon and Django's server-side
+  # operator bridge. The containerized backend edits host project files through the
+  # daemon instead of writing bind-mounted source directly.
+  operator-token: { generated: true, length: 32 }
   # First-admin password. Generated into .env and consumed through YAMLCONF so the
   # IAM bootstrap command reads the same declarative settings surface as any
   # operator override. Rotate/change it after first login if this instance leaves
@@ -55,15 +59,17 @@ sources:
     path: .
 
 services:
-  # The control plane. Open on loopback — no --token — so the CLI needs only
-  # `export ANGEE_OPERATOR_URL=http://127.0.0.1:{{ operator_port }}`. Runs on the host
-  # so it can drive docker-compose; add sources/services/workspaces through it.
+  # The control plane. Open on loopback with a shared bearer so Django can mint
+  # scoped browser tokens and the operator-backed addon installer can mutate host
+  # project files from outside the Django container.
   operator:
     runtime: local
     command:
       - sh
       - "-c"
-      - exec angee operator --root . --bind 127.0.0.1 --port ${ports.operator}
+      - exec angee operator --root . --bind 127.0.0.1 --port ${ports.operator} --token "$ANGEE_OPERATOR_TOKEN"
+    env:
+      ANGEE_OPERATOR_TOKEN: "${secret.operator-token}"
 
   # The database. pgvector/pgvector:pg17 = stock Postgres 17 plus the pgvector
   # extension, so a later retrieval backend has vector columns available without a
@@ -109,6 +115,7 @@ services:
       # server-side bridge reaches the host-local operator directly.
       ANGEE_OPERATOR_GRAPHQL_ENDPOINT: "/operator/graphql"
       ANGEE_OPERATOR_URL: "http://host.docker.internal:${ports.operator}"
+      ANGEE_OPERATOR_TOKEN: "${secret.operator-token}"
       # Agents and container services reach the built-in MCP server on the Docker
       # network, not through a host-published Django port.
       ANGEE_BUILTIN_MCP_URL: "http://django:8000/mcp"
@@ -139,9 +146,10 @@ services:
 {% if frontend_mode == "vite" %}
   # Vite frontend on the framework's JS runtime image (node + the @angee/* packages,
   # copied from the django-angee wheel, as a pnpm workspace). The project mounts INTO
-  # the workspace as a member, so its `@angee/*: workspace:*` deps link to the baked
-  # packages — one hoisted node_modules → a single React — with no registry. codegen's
-  # `../runtime` resolves because the whole project (web/ + runtime/) mounts together.
+  # the workspace as a member, so its declared `@angee/*: workspace:*` deps link to
+  # the baked packages. The runtime manifest may name any shipped base-addon web
+  # package, so the command exposes every baked @angee package under the mounted
+  # project's node_modules before codegen/Vite resolves runtime/web/app.ts.
   vite:
     runtime: container
     image: {{ web_image }}
@@ -158,6 +166,7 @@ services:
         cd /opt/angee-web
         && printf 'packages:\n  - "packages/*"\n  - "project/{{ web_path }}"\n' > pnpm-workspace.yaml
         && pnpm install
+        && node -e 'const fs=require("node:fs"); const path=require("node:path"); const root="/opt/angee-web"; const packages=path.join(root,"packages"); const scope=path.join(root,"project/{{ web_path }}/node_modules/@angee"); fs.mkdirSync(scope,{recursive:true}); for (const dir of fs.readdirSync(packages)) { const target=path.join(packages,dir); const packageJson=path.join(target,"package.json"); if (!fs.existsSync(packageJson)) continue; const manifest=JSON.parse(fs.readFileSync(packageJson,"utf8")); if (typeof manifest.name !== "string" || !manifest.name.startsWith("@angee/")) continue; const link=path.join(scope,manifest.name.slice("@angee/".length)); if (fs.existsSync(link)) continue; try { fs.unlinkSync(link); } catch (error) { if (error.code !== "ENOENT") throw error; } fs.symlinkSync(path.relative(scope,target),link,"dir"); }'
         && n=0
         && until [ -s project/runtime/schemas/console.graphql ] && [ -s project/runtime/schemas/public.graphql ]; do
         n=$$((n+1));
@@ -186,6 +195,7 @@ services:
         cd /opt/angee-web
         && printf 'packages:\n  - "packages/*"\n  - "project/{{ web_path }}"\n' > pnpm-workspace.yaml
         && pnpm install
+        && node -e 'const fs=require("node:fs"); const path=require("node:path"); const root="/opt/angee-web"; const packages=path.join(root,"packages"); const scope=path.join(root,"project/{{ web_path }}/node_modules/@angee"); fs.mkdirSync(scope,{recursive:true}); for (const dir of fs.readdirSync(packages)) { const target=path.join(packages,dir); const packageJson=path.join(target,"package.json"); if (!fs.existsSync(packageJson)) continue; const manifest=JSON.parse(fs.readFileSync(packageJson,"utf8")); if (typeof manifest.name !== "string" || !manifest.name.startsWith("@angee/")) continue; const link=path.join(scope,manifest.name.slice("@angee/".length)); if (fs.existsSync(link)) continue; try { fs.unlinkSync(link); } catch (error) { if (error.code !== "ENOENT") throw error; } fs.symlinkSync(path.relative(scope,target),link,"dir"); }'
         && n=0
         && until [ -s project/runtime/schemas/console.graphql ] && [ -s project/runtime/schemas/public.graphql ]; do
         n=$$((n+1));

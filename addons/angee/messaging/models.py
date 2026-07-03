@@ -17,6 +17,7 @@ managers.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, ClassVar, cast
 
@@ -724,14 +725,32 @@ class Channel(Bridge):
         return backend_class(self)
 
     def sync(self) -> int:
-        """Fetch new messages and ingest them (the Bridge child-sync contract).
+        """Drain the backend batch by batch and ingest each (the Bridge child-sync contract).
 
-        ``ingest`` returns the landed message rows; the Bridge child-sync contract is a
-        count, so this reports how many landed.
+        The batch/drain contract lives on :meth:`ChannelBackend.fetch_messages`;
+        this loop holds one backend instance across it (that is where the in-run
+        paging state and in-memory cursor advance live), releases the backend's
+        transport when the run ends either way, and fails loudly when a backend
+        stops making progress — a repeated batch with an unmoved cursor would
+        otherwise spin a worker forever. Reports how many messages landed.
         """
 
         message_model = apps.get_model("messaging", "Message")
-        return len(message_model.objects.ingest(self.backend.fetch_messages(), channel=self))
+        backend = self.backend
+        landed = 0
+        previous: tuple[tuple[str, ...], Any] | None = None
+        try:
+            while batch := backend.fetch_messages():
+                current = (tuple(parsed.external_id for parsed in batch), deepcopy(self.cursor))
+                if current == previous:
+                    raise RuntimeError(
+                        f"{type(backend).__name__} returned the same batch twice without advancing its cursor."
+                    )
+                previous = current
+                landed += len(message_model.objects.ingest(batch, channel=self))
+        finally:
+            backend.close()
+        return landed
 
 
 class Thread(SqidMixin, AuditMixin, AngeeModel):

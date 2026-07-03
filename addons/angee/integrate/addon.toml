@@ -5,7 +5,7 @@ name = "angee.integrate"
 description = "The integration substrate — OAuth connections, credentials, and the bridge/capability runtime"
 keywords = ["integrations", "oauth", "connections"]
 category = "Integration"
-depends_on = ["angee.iam", "angee.resources"]
+depends_on = ["angee.iam", "angee.resources", "angee.tasks"]
 
 [resources]
 master = [

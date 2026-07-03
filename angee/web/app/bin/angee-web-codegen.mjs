@@ -30,6 +30,7 @@ const SCALARS = {
   BigInt: "string",
   JSON: "unknown",
 };
+const ADDON_ENTRY_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx"];
 
 const options = parseOptions(process.argv.slice(2));
 const webRoot = resolveFromCwd(options["web-root"] ?? ".");
@@ -127,8 +128,7 @@ function emitAppModule(runtimeDir, webRoot, manifest, schemaNames) {
   // fixed constant), so a project that relocates its web package still resolves.
   const webRel = slash(path.relative(path.join(runtimeDir, "web"), webRoot));
   const addonImports = addonPackages.map((pkg, index) => {
-    const sourceRoot = typeof pkg.sourceRoot === "string" ? pkg.sourceRoot : "src";
-    const entry = `${webRel}/node_modules/${pkg.package}/${sourceRoot}/index`;
+    const entry = addonEntryImport(webRoot, webRel, pkg);
     return `import addon${index} from ${JSON.stringify(entry)};`;
   });
   const schemaImports = [];
@@ -168,6 +168,18 @@ function emitAppModule(runtimeDir, webRoot, manifest, schemaNames) {
   console.log(
     `composed web runtime: ${addonPackages.length} addon(s), ${schemaNames.length} schema(s)`,
   );
+}
+
+function addonEntryImport(webRoot, webRel, pkg) {
+  const sourceRoot = typeof pkg.sourceRoot === "string" ? pkg.sourceRoot : "src";
+  const entryBase = path.join(webRoot, "node_modules", pkg.package, sourceRoot, "index");
+  const extension = ADDON_ENTRY_EXTENSIONS.find((candidate) => existsSync(`${entryBase}${candidate}`));
+  if (!extension) {
+    throw new Error(
+      `Missing web addon entry for ${pkg.package}: expected ${entryBase}.{ts,tsx,js,jsx}`,
+    );
+  }
+  return `${webRel}/node_modules/${pkg.package}/${sourceRoot}/index${extension}`;
 }
 
 async function runCodegen(name, schemaPath, runtimeDir, documents, types) {

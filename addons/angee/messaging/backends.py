@@ -94,9 +94,25 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
     icon = "inbox"
 
     def fetch_messages(self) -> list[ParsedMessage]:
-        """Return the new messages since the bridge cursor as neutral dataclasses."""
+        """Return the next batch of new messages since the bridge cursor.
+
+        ``Channel.sync`` drains the backend — it calls this repeatedly on one
+        instance until an empty list says the source is exhausted. A single-shot
+        backend may return everything in its first batch; a paging backend keeps
+        its position on the instance and advances its in-memory ``bridge.cursor``
+        past each returned batch, so a large backfill streams with bounded memory
+        and an interrupted run resumes from the last *persisted* cursor.
+        """
 
         raise NotImplementedError("ChannelBackend subclasses must implement fetch_messages().")
+
+    def close(self) -> None:
+        """Release any transport this backend holds; called when the drain ends.
+
+        ``Channel.sync`` calls this in ``finally``, so a run that fails mid-drain
+        does not leak an authenticated connection. The default is a no-op for
+        connectionless backends.
+        """
 
 
 class ManualChannelBackend(ChannelBackend):

@@ -78,8 +78,9 @@ Once the operator's chain resolver ships, one command renders host + stack:
 
 ```sh
 angee stack init https://github.com/ang-ee/angee-django/tree/main/templates/stacks/local ~/.angee
-angee up --root ~/.angee
-export ANGEE_OPERATOR_URL=http://127.0.0.1:9000   # the CLI then drives the operator
+angee dev --root ~/.angee
+export ANGEE_OPERATOR_URL=http://127.0.0.1:9000
+export ANGEE_OPERATOR_TOKEN="$(awk -F= '$1=="ANGEE_SECRET_OPERATOR_TOKEN"{print $2}' ~/.angee/.env)"
 ```
 
 ### Update an existing local stack
@@ -117,7 +118,7 @@ angee down --root ~/.angee
 mkdir -p ~/.angee/data
 mv ~/.angee/pgdata ~/.angee/data/pgdata
 angee stack update --root ~/.angee --template
-angee up --root ~/.angee
+angee dev --root ~/.angee
 ```
 
 Until then, render the two templates in sequence (the stack overlays the host),
@@ -127,5 +128,5 @@ schemas before starting Django and the selected frontend ingress:
 ```sh
 copier copy .../templates/projects/web ~/.angee
 copier copy --overwrite .../templates/stacks/local ~/.angee
-angee up --root ~/.angee
+angee dev --root ~/.angee
 ```
