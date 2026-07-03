@@ -2336,7 +2336,12 @@ describe("ResourceList", () => {
         title: { contains: "Fir" },
       });
     });
-    expect(await screen.findByText("Title contains Fir")).toBeTruthy();
+    // A custom text filter defaults to case-sensitive `contains` so it coexists
+    // with the free-text search box's `iContains` on the same field; the chip
+    // labels that distinction.
+    expect(
+      await screen.findByText("Title contains (case-sensitive) Fir"),
+    ).toBeTruthy();
   });
 
   test("saves and reapplies the current resource-view search", async () => {

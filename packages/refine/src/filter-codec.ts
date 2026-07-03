@@ -32,7 +32,10 @@ export type AngeeFilterLookupOperator =
 // stack (refine provider encoding AND the backend lookup registry). The
 // case-sensitive startsWith/endsWith variants ride the provider's `_similar`
 // encoding, which the backend deliberately leaves unmapped, so they are not
-// offered (the codec still maps them for URL-supplied filters).
+// offered (the codec still maps them for URL-supplied filters). `contains`
+// (case-sensitive) leads so a custom text filter on the free-text search field
+// coexists with the search box's own `iContains` filter (distinct keys, each
+// keeps its own chip) instead of being deduplicated away.
 export const ANGEE_TEXT_FILTER_LOOKUP_OPERATORS = [
   "contains",
   "iContains",
