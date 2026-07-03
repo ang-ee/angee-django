@@ -81,6 +81,44 @@ angee up --root ~/.angee
 export ANGEE_OPERATOR_URL=http://127.0.0.1:9000   # the CLI then drives the operator
 ```
 
+### Update an existing local stack
+
+`angee stack update --template` re-renders `angee.yaml` from the stack template
+recorded in `.copier-answers.stack.yml`, then regenerates the derived runtime
+files. If the stack was initialized from an unpinned template ref such as
+`.../tree/main/templates/stacks/local`, template fixes are picked up by:
+
+```sh
+angee stack update --root ~/.angee --template
+```
+
+If the stack was initialized from a pinned tag, first re-render from the newer
+template tag with `angee stack init ... --force`, or update the recorded template
+ref intentionally before running `stack update --template`.
+
+Stacks rendered before `0.1.6` may record the local catalog name
+`template.active: stacks/local`; outside an Angee source checkout,
+`stack update --template` cannot resolve that name. Patch the active ref once,
+then update from the template:
+
+```sh
+sed -i.bak \
+  's#active: stacks/local#active: https://github.com/ang-ee/angee-django/tree/v0.1.6/templates/stacks/local#' \
+  ~/.angee/angee.yaml
+angee stack update --root ~/.angee --template
+```
+
+For the `0.1.5` local-stack layout change, stop the stack before moving the
+database directory:
+
+```sh
+angee down --root ~/.angee
+mkdir -p ~/.angee/data
+mv ~/.angee/pgdata ~/.angee/data/pgdata
+angee stack update --root ~/.angee --template
+angee up --root ~/.angee
+```
+
 Until then, render the two templates in sequence (the stack overlays the host),
 then bring it up. First start emits the local runtime, migrations, and GraphQL
 schemas before starting Django and the selected frontend ingress:
