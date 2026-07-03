@@ -18,7 +18,7 @@ def _render_local_stack(*, frontend_mode: str) -> dict[str, Any]:
 
     text = _render_frontend_mode_branches(LOCAL_TEMPLATE.read_text(encoding="utf-8"), frontend_mode)
     replacements = {
-        "_src_path": "https://github.com/ang-ee/angee-django/tree/v0.1.6/templates/stacks/local",
+        "_src_path": "https://github.com/ang-ee/angee-django/tree/v0.1.7/templates/stacks/local",
         "base_image": "ghcr.io/ang-ee/django-angee:latest",
         "caddy_image": "caddy:2.9-alpine",
         "django_port": "8000",

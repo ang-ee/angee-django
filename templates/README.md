@@ -103,7 +103,7 @@ then update from the template:
 
 ```sh
 sed -i.bak \
-  's#active: stacks/local#active: https://github.com/ang-ee/angee-django/tree/v0.1.6/templates/stacks/local#' \
+  's#active: stacks/local#active: https://github.com/ang-ee/angee-django/tree/v0.1.7/templates/stacks/local#' \
   ~/.angee/angee.yaml
 angee stack update --root ~/.angee --template
 ```
