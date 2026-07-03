@@ -136,6 +136,41 @@ describe("web architecture guardrails", () => {
 
     expect(unused).toEqual([]);
   });
+
+  test("row identity helpers are imported from the metadata owner", () => {
+    const violations = [
+      ...sourceFiles("angee/web"),
+      ...sourceFiles("addons/angee"),
+      ...sourceFiles("examples/notes-angee/web"),
+      ...sourceFiles("packages/storybook"),
+    ]
+      .filter((file) => {
+        const text = readFileSync(file, "utf8");
+        return importsNamedBindingFrom(text, "rowPublicId", "@angee/resources");
+      })
+      .map((file) => relative(REPO_ROOT, file));
+
+    expect(violations).toEqual([]);
+  });
+
+  test("authored GraphQL hooks are imported from the refine owner", () => {
+    const violations = [
+      ...sourceFiles("angee/web"),
+      ...sourceFiles("addons/angee"),
+      ...sourceFiles("examples/notes-angee/web"),
+      ...sourceFiles("packages/storybook"),
+    ]
+      .filter((file) => {
+        const text = readFileSync(file, "utf8");
+        return (
+          importsNamedBindingFrom(text, "useAuthoredMutation", "@angee/ui") ||
+          importsNamedBindingFrom(text, "useAuthoredQuery", "@angee/ui")
+        );
+      })
+      .map((file) => relative(REPO_ROOT, file));
+
+    expect(violations).toEqual([]);
+  });
 });
 
 function addonPackageRoots(): string[] {
@@ -184,6 +219,17 @@ function importSpecifiers(file: string): string[] {
   return [...imports]
     .map((match) => match[1] ?? match[2] ?? match[3])
     .filter((specifier): specifier is string => Boolean(specifier));
+}
+
+function importsNamedBindingFrom(text: string, binding: string, specifier: string): boolean {
+  const escapedSpecifier = specifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const imports = text.matchAll(
+    new RegExp(`\\bimport\\s*\\{([^}]*)\\}\\s*from\\s*["']${escapedSpecifier}["']`, "g"),
+  );
+  for (const match of imports) {
+    if (new RegExp(`\\b${binding}\\b`).test(match[1] ?? "")) return true;
+  }
+  return false;
 }
 
 function angeePackageName(specifier: string): string | null {

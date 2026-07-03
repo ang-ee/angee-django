@@ -253,9 +253,13 @@ export function createApp(input: CreateAppInput): AngeeApp {
       Record<string, Required<RefineDataProvider>>
     >,
   );
+  // The one QueryClient instance createApp owns (per `@angee/app` `index.ts`):
+  // shared by `<Refine>` and the route gate so identity is fetched once.
+  const queryClient = new QueryClient(APP_QUERY_CLIENT_CONFIG);
   const refineLiveProvider = createLiveProviderForSchema(
     schemas,
     subscriptionSchema,
+    queryClient,
   );
   const authSchema = authSchemaNameForSchemas(schemas, defaultSchema);
   const refineAuthProvider = createAuthProviderForSchema(schemas, authSchema);
@@ -263,10 +267,6 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const refineAccessControlProvider = createAngeeAccessControlProvider(
     refineResourceRegistry,
   );
-  // The one QueryClient instance createApp owns (per `@angee/app` `index.ts`):
-  // shared by `<Refine>` and the route gate so identity is fetched once.
-  const queryClient = new QueryClient(APP_QUERY_CLIENT_CONFIG);
-
   const home =
     resolvePath(input.home, pathByName) ??
     routes.find((route) => route.layout !== "public")?.path ??
@@ -435,6 +435,7 @@ function mergeAddonDataProviders(
 function createLiveProviderForSchema(
   schemas: Readonly<Record<string, NormalizedAngeeAppSchemaConfig>>,
   subscriptionSchema: string,
+  queryClient: QueryClient,
 ) {
   const schema = schemas[subscriptionSchema];
   if (!schema?.live) return undefined;
@@ -445,6 +446,7 @@ function createLiveProviderForSchema(
     : schema.live;
   return createAngeeHasuraLiveProvider({
     ...liveOptions,
+    queryClient,
     resources: dataResourcesFromAngeeSchemaMetadata(schema.metadata),
   });
 }

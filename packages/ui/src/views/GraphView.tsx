@@ -7,6 +7,8 @@ import {
   MarkerType,
   Position,
   ReactFlow,
+  applyEdgeChanges,
+  applyNodeChanges,
   type Edge,
   type FitViewOptions,
   type Node,
@@ -137,6 +139,8 @@ const DEFAULT_EDGE_STYLE: Required<GraphViewEdgeStyle> = {
   stroke: "var(--border-strong)",
   labelColor: "var(--text-muted)",
 };
+const EMPTY_EDGE_STYLES = {} as Readonly<Partial<Record<string, GraphViewEdgeStyle>>>;
+const DEFAULT_FIT_VIEW_OPTIONS: FitViewOptions = { padding: 0.18 };
 
 const DEFAULT_LAYOUT: Required<GraphViewLayout> = {
   rankdir: "TB",
@@ -156,10 +160,10 @@ export function GraphView<
   nodes,
   edges,
   nodeStyles,
-  edgeStyles = {} as Readonly<Partial<Record<TEdgeKind, GraphViewEdgeStyle>>>,
+  edgeStyles = EMPTY_EDGE_STYLES as Readonly<Partial<Record<TEdgeKind, GraphViewEdgeStyle>>>,
   defaultEdgeStyle,
   layout,
-  fitViewOptions = { padding: 0.18 },
+  fitViewOptions = DEFAULT_FIT_VIEW_OPTIONS,
   className,
   onNodeClick,
   nodesDraggable = false,
@@ -173,7 +177,7 @@ export function GraphView<
   TNodeMeta,
   TEdgeMeta
 >): React.ReactElement {
-  const graph = React.useMemo(
+  const layoutedGraph = React.useMemo(
     () =>
       layoutGraph({
         nodes: nodes.map((node) => toReactFlowNode(node, nodeStyles)),
@@ -185,12 +189,24 @@ export function GraphView<
       }),
     [defaultEdgeStyle, edgeStyles, edges, layout, nodeStyles, nodes],
   );
+  const [renderNodes, setRenderNodes] = React.useState(layoutedGraph.nodes);
+  const [renderEdges, setRenderEdges] = React.useState(layoutedGraph.edges);
+  React.useEffect(() => {
+    setRenderNodes(layoutedGraph.nodes);
+    setRenderEdges(layoutedGraph.edges);
+  }, [layoutedGraph]);
 
   return (
     <div className={cn("min-h-0", className)}>
       <ReactFlow
-        nodes={graph.nodes}
-        edges={graph.edges}
+        nodes={renderNodes}
+        edges={renderEdges}
+        onNodesChange={(changes) => {
+          setRenderNodes((current) => applyNodeChanges(changes, current));
+        }}
+        onEdgesChange={(changes) => {
+          setRenderEdges((current) => applyEdgeChanges(changes, current));
+        }}
         fitView
         fitViewOptions={fitViewOptions}
         nodesDraggable={nodesDraggable}

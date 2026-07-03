@@ -9,6 +9,7 @@ import type {
   LiveEvent,
   LiveProvider,
 } from "@refinedev/core";
+import type { QueryClient } from "@tanstack/react-query";
 import {
   graphQLWebSocketUrl,
   sessionAuth,
@@ -19,6 +20,7 @@ import {
   recordValue,
   stringValue,
 } from "./dialect/wire";
+import { authoredQueryReadsAnyModel } from "./query-invalidation";
 
 type FetchFn = typeof globalThis.fetch;
 type GraphQLWsClient = ReturnType<typeof graphqlWS.createClient>;
@@ -53,6 +55,7 @@ export interface AngeeHasuraLiveProviderOptions {
   origin?: string;
   clientOptions?: AngeeHasuraWebSocketOptions;
   resources?: readonly AngeeLiveResource[];
+  queryClient?: AuthoredQueryInvalidationClient;
 }
 
 export interface AngeeHasuraSchemaConfig
@@ -127,7 +130,9 @@ export function createAngeeHasuraLiveProvider(
         options.origin,
       ),
   });
-  return createAngeeChangeLiveProvider(wsClient, options.resources ?? []);
+  return createAngeeChangeLiveProvider(wsClient, options.resources ?? [], {
+    queryClient: options.queryClient,
+  });
 }
 
 type ChangeConsumer = (data: unknown) => void;
@@ -137,9 +142,12 @@ interface ChangeSubscription {
   consumers: Set<ChangeConsumer>;
 }
 
+type AuthoredQueryInvalidationClient = Pick<QueryClient, "invalidateQueries">;
+
 export function createAngeeChangeLiveProvider(
   client: GraphQLWsClient,
   resources: readonly AngeeLiveResource[],
+  options: { queryClient?: AuthoredQueryInvalidationClient } = {},
 ): LiveProvider {
   const resourcesByName = resourcesByListRoot(resources);
   // graphql-ws does not dedup identical documents, so fan one upstream
@@ -154,7 +162,10 @@ export function createAngeeChangeLiveProvider(
       if (!changesRoot) return noopSubscription;
       const consumer: ChangeConsumer = (data) => {
         const event = changeEventFromResult(data, changesRoot, channel, resource);
-        if (event) callback(event);
+        if (event) {
+          invalidateAuthoredQueriesForEvent(options.queryClient, event);
+          callback(event);
+        }
       };
       const entry = subscriptions.get(changesRoot) ?? {
         dispose: noopSubscription,
@@ -207,6 +218,19 @@ export function resolveGraphQLWebSocketEndpoint(
     return url.toString();
   }
   return graphQLWebSocketUrl(endpoint, origin);
+}
+
+function invalidateAuthoredQueriesForEvent(
+  queryClient: AuthoredQueryInvalidationClient | undefined,
+  event: LiveEvent,
+): void {
+  const model = stringValue(recordValue(event.payload)?.model);
+  if (!queryClient || !model) return;
+  void queryClient.invalidateQueries({
+    predicate: (query) => authoredQueryReadsAnyModel(query.meta, [model]),
+    type: "all",
+    refetchType: "active",
+  });
 }
 
 function hasuraOptions(

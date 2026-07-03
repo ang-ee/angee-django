@@ -85,6 +85,43 @@ describe("Angee Hasura provider defaults", () => {
     expect(dispose).toHaveBeenCalledTimes(1);
   });
 
+  test("invalidates authored query metadata for live model changes", () => {
+    const { subscribe, sinks } = recordingClient();
+    const invalidateQueries = vi.fn();
+    const provider = createAngeeChangeLiveProvider(
+      { subscribe } as never,
+      [resource({ changes: "decisionChanged", list: "workflow_decisions", model: "workflows.Decision" })],
+      { queryClient: { invalidateQueries } },
+    );
+
+    provider.subscribe({
+      channel: "resources/workflow_decisions",
+      types: ["*"],
+      callback: vi.fn(),
+      params: { resource: "workflow_decisions" },
+    });
+    nthSink(sinks, 0).next({
+      data: {
+        decisionChanged: {
+          model: "workflows.Decision",
+          id: "dec_1",
+          action: "update",
+        },
+      },
+    });
+
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      predicate: expect.any(Function),
+      type: "all",
+      refetchType: "active",
+    });
+    const predicate = invalidateQueries.mock.calls[0]?.[0]?.predicate as
+      | ((query: { meta: unknown }) => boolean)
+      | undefined;
+    expect(predicate?.({ meta: { angeeModels: ["workflows.Decision"] } })).toBe(true);
+    expect(predicate?.({ meta: { angeeModels: ["workflows.StepRun"] } })).toBe(false);
+  });
+
   test("skips resources without change roots", () => {
     const subscribe = vi.fn();
     const provider = createAngeeChangeLiveProvider(
