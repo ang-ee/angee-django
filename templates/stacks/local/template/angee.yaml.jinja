@@ -3,7 +3,7 @@ kind: stack
 name: {{ instance_name }}
 
 template:
-  active: stacks/local
+  active: {{ _src_path }}
   # The PROJECT owns the canonical .copier-answers.yml (rendered by the chained
   # projects/web); the stack keeps its own so it never clobbers the project's.
   answers_file: .copier-answers.stack.yml

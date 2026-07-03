@@ -18,6 +18,7 @@ def _render_local_stack(*, frontend_mode: str) -> dict[str, Any]:
 
     text = _render_frontend_mode_branches(LOCAL_TEMPLATE.read_text(encoding="utf-8"), frontend_mode)
     replacements = {
+        "_src_path": "https://github.com/ang-ee/angee-django/tree/v0.1.6/templates/stacks/local",
         "base_image": "ghcr.io/ang-ee/django-angee:latest",
         "caddy_image": "caddy:2.9-alpine",
         "django_port": "8000",
@@ -94,6 +95,8 @@ def test_local_stack_caddy_static_renders_single_public_frontend_ingress() -> No
     assert "vite" not in stack["services"]
     assert "frontend-build" in stack["services"]
     assert "caddy" in stack["services"]
+    assert stack["template"]["active"].endswith("/templates/stacks/local")
+    assert stack["template"]["active"] != "stacks/local"
     assert "ports" not in stack["services"]["django"]
     assert stack["services"]["django"]["env"]["ANGEE_BUILTIN_MCP_URL"] == "http://django:8000/mcp"
     assert stack["persist"]["pgdata"]["subpath"] == "./data/pgdata"
