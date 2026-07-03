@@ -7,7 +7,6 @@ from typing import Any
 
 import yaml
 
-
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_GITIGNORE = ROOT / ".gitignore"
 LOCAL_COPIER = ROOT / "templates" / "stacks" / "local" / "copier.yml"
@@ -60,6 +59,8 @@ def _render_dev_stack() -> dict[str, Any]:
         "ui_port": "5173",
         "web_path": "web",
     }
+    text, variables = _render_simple_set_tags(text)
+    replacements.update(variables)
     for key, value in replacements.items():
         text = text.replace(f"{{{{ {key} }}}}", value)
     assert "{{" not in text
@@ -67,6 +68,22 @@ def _render_dev_stack() -> dict[str, Any]:
     rendered = yaml.safe_load(text)
     assert isinstance(rendered, dict)
     return rendered
+
+
+def _render_simple_set_tags(text: str) -> tuple[str, dict[str, str]]:
+    """Evaluate the simple quoted `{% set name = "value" %}` tags these tests need."""
+
+    variables: dict[str, str] = {}
+    output: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("{% set ") and stripped.endswith(" %}"):
+            assignment = stripped.removeprefix("{% set ").removesuffix(" %}")
+            name, _, value = assignment.partition("=")
+            variables[name.strip()] = value.strip().strip('"')
+            continue
+        output.append(line)
+    return "\n".join(output), variables
 
 
 def _render_frontend_mode_branches(text: str, frontend_mode: str) -> str:
@@ -181,9 +198,7 @@ def test_stack_answer_files_are_ignored_where_stacks_overlay_project_roots() -> 
 def test_dev_stack_local_processes_do_not_depend_on_container_services() -> None:
     stack = _render_dev_stack()
 
-    container_services = {
-        name for name, service in stack["services"].items() if service.get("runtime") == "container"
-    }
+    container_services = {name for name, service in stack["services"].items() if service.get("runtime") == "container"}
     local_processes = stack.get("jobs", {}) | {
         name: service for name, service in stack["services"].items() if service.get("runtime") == "local"
     }
