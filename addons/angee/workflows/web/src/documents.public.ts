@@ -28,7 +28,7 @@ export const PendingWorkflowDecisionsDocument = graphql(`
 export const DecideWorkflowDecisionDocument = graphql(`
   mutation DecideWorkflowDecision(
     $decision: ID!
-    $verdict: String!
+    $verdict: DecisionVerb!
     $payload: JSON
   ) {
     decide(decision: $decision, verdict: $verdict, payload: $payload) {

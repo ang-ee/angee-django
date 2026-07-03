@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Iterator
 from datetime import timedelta
 from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
-from django.db import connection
 from django.test import RequestFactory
 from django.utils import timezone
 from rebac import PermissionDenied, app_settings, system_context, to_subject_ref
@@ -22,62 +19,21 @@ from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from angee.workflows.steps import DecisionSpec, HandlerStep, StepResult
-from tests.conftest import SchemaAddon, _clear_model_tables, _create_missing_tables, execute_schema, result_data
-from tests.test_workflows import Edge, Step, Trigger, Workflow
-from tests.test_workflows_engine import (
+from tests.conftest import SchemaAddon, execute_schema, result_data
+from tests.workflows import (
     Decision,
     StepRun,
+    Workflow,
     WorkflowRun,
     advance_once,
     execute_started,
     start_run,
     step_for,
+    workflow_with_steps,
 )
 
 User = get_user_model()
-
-
-def decision_model() -> type[Any]:
-    """Return the concrete decision model, failing loudly while Slice 4 is absent."""
-
-    if Decision is None:
-        pytest.fail("Decision runtime model must be implemented.")
-    return Decision
-
-
-@pytest.fixture()
-def workflow_gate_tables(transactional_db: Any) -> Iterator[None]:
-    """Create concrete workflow gate tables and sync their REBAC schema."""
-
-    del transactional_db
-    models = (Workflow, Step, Edge, Trigger, WorkflowRun, StepRun, decision_model())
-    created = _create_missing_tables(models)
-    call_command("rebac", "sync", verbosity=0)
-    _clear_model_tables(models)
-    try:
-        yield
-    finally:
-        _clear_model_tables(models)
-        if created:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created):
-                    schema_editor.delete_model(model)
-
-
-@pytest.fixture()
-def no_workflow_queue(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep gate tests synchronous by replacing queue enqueue hooks."""
-
-    monkeypatch.setattr(engine, "enqueue_advance", lambda run_id: None)
-    monkeypatch.setattr(engine, "enqueue_advance_at", lambda run_id, when: None)
-    monkeypatch.setattr(engine, "enqueue_execute", lambda step_run_id: None)
-    monkeypatch.setattr(
-        engine,
-        "enqueue_decision_escalation_at",
-        lambda decision_id, attempt, when: None,
-        raising=False,
-    )
-    monkeypatch.setattr(engine, "enqueue_decision_expiry_at", lambda decision_id, attempt, when: None, raising=False)
+pytest_plugins = ("tests.workflows",)
 
 
 def test_suspend_result_creates_decision_rows_and_relationship_tuples(
@@ -92,8 +48,8 @@ def test_suspend_result_creates_decision_rows_and_relationship_tuples(
     assignee = User.objects.create_user(username="wdc-assignee")
     escalated = User.objects.create_user(username="wdc-escalated")
 
-    def suspend_from_handler(self: HandlerStep, step_run: Any) -> StepResult:
-        del self, step_run
+    def suspend_from_handler(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+        del self, step_run, now
         return StepResult.suspend(
             resume_state={"phase": "awaiting-review"},
             decisions=[
@@ -109,10 +65,9 @@ def test_suspend_result_creates_decision_rows_and_relationship_tuples(
         )
 
     monkeypatch.setattr(HandlerStep, "run", suspend_from_handler)
-    workflow = _published_workflow(
-        steps=(
-            {"key": "handler", "step_class": "handler", "config": {}},
-        ),
+    workflow = workflow_with_steps(
+        name="Gate workflow",
+        steps=({"key": "handler", "step_class": "handler", "config": {}},),
         edges=(),
     )
 
@@ -230,7 +185,8 @@ def test_invalid_resolution_reopens_then_fails_at_max_attempts(
 
     del workflow_gate_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-password-assignee")
-    workflow = _published_workflow(
+    workflow = workflow_with_steps(
+        name="Gate workflow",
         steps=(
             {
                 "key": "gate",
@@ -334,7 +290,8 @@ def test_override_run_cancels_active_steps_and_injects_synthetic_step_run(
 
     del workflow_gate_tables, no_workflow_queue
     admin = _platform_admin("wdc-override-admin")
-    workflow = _published_workflow(
+    workflow = workflow_with_steps(
+        name="Gate workflow",
         steps=(
             {"key": "active", "config": {"outcome": "done"}},
             {"key": "finish", "config": {"outcome": "done"}, "is_entry": False},
@@ -405,43 +362,20 @@ def test_public_decide_mutation_uses_actor_scoped_act_permission(
     decision = _opened_decision([assignee], None)
     public = _schema("public")
     mutation = """
-        mutation Decide($decision: ID!, $payload: JSON) {
-          decide(decision: $decision, verdict: "complete", payload: $payload) {
+        mutation Decide($decision: ID!, $verdict: DecisionVerb!, $payload: JSON) {
+          decide(decision: $decision, verdict: $verdict, payload: $payload) {
             verdict
             resolution
           }
         }
     """
 
-    denied = _execute(public, mutation, {"decision": str(decision.sqid), "payload": {"ok": True}}, user=stranger)
+    variables = {"decision": str(decision.sqid), "verdict": "COMPLETE", "payload": {"ok": True}}
+    denied = _execute(public, mutation, variables, user=stranger)
     assert denied.errors is not None
 
-    data = result_data(
-        _execute(public, mutation, {"decision": str(decision.sqid), "payload": {"ok": True}}, user=assignee)
-    )
+    data = result_data(_execute(public, mutation, variables, user=assignee))
     assert data["decide"] == {"verdict": "COMPLETED", "resolution": {"ok": True}}
-
-
-def _published_workflow(
-    *,
-    steps: tuple[dict[str, Any], ...],
-    edges: tuple[tuple[str, str, str], ...],
-) -> Workflow:
-    with system_context(reason="test workflows gate definition"):
-        draft = Workflow.objects.create(name="Gate workflow")
-        by_key = {}
-        for index, spec in enumerate(steps):
-            by_key[spec["key"]] = Step.objects.create(
-                workflow=draft,
-                key=spec["key"],
-                name=spec.get("name", spec["key"].title()),
-                step_class=spec.get("step_class", "handler"),
-                config=spec.get("config", {"outcome": "done"}),
-                is_entry=index == 0 if "is_entry" not in spec else spec["is_entry"],
-            )
-        for source, target, condition in edges:
-            Edge.objects.create(workflow=draft, source=by_key[source], target=by_key[target], condition=condition)
-        return draft.publish()
 
 
 def _workflow_with_gate_routes(
@@ -475,7 +409,7 @@ def _workflow_with_gate_routes(
         ("gate", "escalated", "escalated"),
         ("gate", "expired", "expired"),
     )
-    return _published_workflow(steps=steps, edges=edges)
+    return workflow_with_steps(name="Gate workflow", steps=steps, edges=edges)
 
 
 def _gate_config(
@@ -519,7 +453,8 @@ def _open_gate_run(workflow: Workflow, *, now: Any = None) -> Any:
 
 
 def _opened_decision(assignees: list[Any], requester: Any | None) -> Any:
-    workflow = _published_workflow(
+    workflow = workflow_with_steps(
+        name="Gate workflow",
         steps=(
             {
                 "key": "gate",
@@ -534,12 +469,12 @@ def _opened_decision(assignees: list[Any], requester: Any | None) -> Any:
 
 def _decision_for(run: Any, step_key: str) -> Any:
     with system_context(reason="test workflows decision read"):
-        return decision_model().objects.get(step_run__run=run, step_run__step__key=step_key)
+        return Decision.objects.get(step_run__run=run, step_run__step__key=step_key)
 
 
 def _decisions_for(run: Any, step_key: str) -> list[Any]:
     with system_context(reason="test workflows decisions read"):
-        queryset = decision_model().objects.filter(step_run__run=run, step_run__step__key=step_key)
+        queryset = Decision.objects.filter(step_run__run=run, step_run__step__key=step_key)
         return list(queryset.order_by("priority", "pk"))
 
 

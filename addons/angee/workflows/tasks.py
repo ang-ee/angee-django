@@ -13,6 +13,8 @@ from procrastinate import jobs as procrastinate_jobs
 from procrastinate.contrib.django import app
 from rebac import system_context
 
+from angee.workflows import engine, triggers
+from angee.workflows.models import StepRunStatus
 from angee.workflows.steps import StepRetryPolicy, TransientStepError, retry_policy_from_config
 
 
@@ -47,16 +49,12 @@ class StepRunRetryStrategy(RetryStrategy):
 def advance_workflow_run(run_id: int) -> None:
     """Run one short orchestration pass for a workflow run."""
 
-    from angee.workflows import engine
-
     engine.advance(run_id)
 
 
 @app.task(name="workflows.execute", retry=StepRunRetryStrategy())
 def execute_workflow_step(step_run_id: int) -> None:
     """Execute one claimed step-run outside the advance lock."""
-
-    from angee.workflows import engine
 
     engine.execute(step_run_id)
 
@@ -65,16 +63,12 @@ def execute_workflow_step(step_run_id: int) -> None:
 def escalate_workflow_decision(decision_id: int, attempt: int) -> None:
     """Resolve a decision escalation timer if it still matches the attempt."""
 
-    from angee.workflows import engine
-
     engine.escalate_decision(decision_id, attempt)
 
 
 @app.task(name="workflows.decision_expire", retry=RetryStrategy(max_attempts=3, exponential_wait=30))
 def expire_workflow_decision(decision_id: int, attempt: int) -> None:
     """Resolve a decision expiry timer if it still matches the attempt."""
-
-    from angee.workflows import engine
 
     engine.expire_decision(decision_id, attempt)
 
@@ -84,8 +78,6 @@ def expire_workflow_decision(decision_id: int, attempt: int) -> None:
 def sweep_workflow_runs(_timestamp: int) -> None:
     """Advance workflow runs whose durable wake time is due."""
 
-    from angee.workflows import engine
-
     engine.sweep()
 
 
@@ -94,8 +86,6 @@ def sweep_workflow_runs(_timestamp: int) -> None:
 def reap_workflow_step_runs(_timestamp: int) -> None:
     """Fail started step-runs whose heartbeat has expired."""
 
-    from angee.workflows import engine
-
     engine.reap()
 
 
@@ -103,8 +93,6 @@ def reap_workflow_step_runs(_timestamp: int) -> None:
 @app.task(name="workflows.schedule_triggers", retry=RetryStrategy(max_attempts=3, exponential_wait=30))
 def run_workflow_schedule_triggers(_timestamp: int) -> None:
     """Start schedule triggers due at the injected periodic timestamp."""
-
-    from angee.workflows import triggers
 
     triggers.run_due_schedule_triggers(now=_periodic_timestamp(_timestamp))
 
@@ -138,13 +126,11 @@ def _journal_retry_exhausted(step_run: Any | None, *, exception: BaseException) 
     run_id: int | None = None
     with system_context(reason="workflows.retry_exhausted"), transaction.atomic():
         locked = step_run_model.objects.lock_if_supported().select_related("run").filter(pk=step_run.pk).first()
-        if locked is None or str(getattr(locked.status, "value", locked.status)) != "started":
+        if locked is None or locked.status != StepRunStatus.STARTED:
             return
         locked.mark_failed(error=str(exception), stacktrace="")
         run_id = locked.run_id
     if run_id is not None:
-        from angee.workflows import engine
-
         engine.enqueue_advance(run_id)
 
 

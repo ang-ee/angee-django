@@ -3,116 +3,24 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Iterator
 from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
-from django.db import connection
 from rebac import app_settings, system_context
 from rebac.roles import grant
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows.models import (
-    Edge as AbstractEdge,
-)
-from angee.workflows.models import (
-    Step as AbstractStep,
-)
-from angee.workflows.models import (
-    Trigger as AbstractTrigger,
-)
-from angee.workflows.models import (
     TriggerKind,
     WorkflowStatus,
 )
-from angee.workflows.models import (
-    Workflow as AbstractWorkflow,
-)
 from tests.conftest import SchemaAddon, execute_schema, result_data
+from tests.workflows import Edge, Step, Trigger, Workflow
 
 User = get_user_model()
-
-
-class Workflow(AbstractWorkflow):
-    """Concrete workflow model for source-addon tests."""
-
-    class Meta(AbstractWorkflow.Meta):
-        """Django options for the concrete test workflow model."""
-
-        abstract = False
-        app_label = "workflows"
-        db_table = "test_workflows_workflow"
-        rebac_resource_type = "workflows/workflow"
-        rebac_id_attr = "sqid"
-
-
-class Step(AbstractStep):
-    """Concrete workflow step model for source-addon tests."""
-
-    class Meta(AbstractStep.Meta):
-        """Django options for the concrete test step model."""
-
-        abstract = False
-        app_label = "workflows"
-        db_table = "test_workflows_step"
-        rebac_resource_type = "workflows/step"
-        rebac_id_attr = "sqid"
-
-
-class Edge(AbstractEdge):
-    """Concrete workflow edge model for source-addon tests."""
-
-    class Meta(AbstractEdge.Meta):
-        """Django options for the concrete test edge model."""
-
-        abstract = False
-        app_label = "workflows"
-        db_table = "test_workflows_edge"
-        rebac_resource_type = "workflows/edge"
-        rebac_id_attr = "sqid"
-
-
-class Trigger(AbstractTrigger):
-    """Concrete workflow trigger model for source-addon tests."""
-
-    class Meta(AbstractTrigger.Meta):
-        """Django options for the concrete test trigger model."""
-
-        abstract = False
-        app_label = "workflows"
-        db_table = "test_workflows_trigger"
-        rebac_resource_type = "workflows/trigger"
-        rebac_id_attr = "sqid"
-
-
-WORKFLOW_TEST_MODELS = (Workflow, Step, Edge, Trigger)
-
-
-@pytest.fixture()
-def workflow_tables(transactional_db: Any) -> Iterator[None]:
-    """Clear concrete workflow tables and sync their REBAC schema."""
-
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
-    clear_workflow_tables()
-    try:
-        yield
-    finally:
-        clear_workflow_tables()
-
-
-def clear_workflow_tables() -> None:
-    """Delete test workflow rows without dropping pytest-owned tables."""
-
-    existing_tables = set(connection.introspection.table_names())
-    with connection.constraint_checks_disabled(), connection.cursor() as cursor:
-        for model in reversed(WORKFLOW_TEST_MODELS):
-            table_name = model._meta.db_table
-            if table_name in existing_tables:
-                cursor.execute(f"DELETE FROM {connection.ops.quote_name(table_name)}")
+pytest_plugins = ("tests.workflows",)
 
 
 def create_workflow(name: str = "Document Review") -> Workflow:

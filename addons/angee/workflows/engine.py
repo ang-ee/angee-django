@@ -16,10 +16,11 @@ from typing import Any, Literal, cast
 from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.utils import timezone
 from procrastinate import exceptions as procrastinate_exceptions
+from procrastinate.contrib.django import app as procrastinate_app
 from pydantic import ValidationError as PydanticValidationError
 from pydantic import create_model
 from rebac import PermissionDenied, SubjectRef, current_actor, system_context
@@ -31,29 +32,17 @@ from rebac.types import RelationshipTuple
 
 from angee.base.actors import actor_user_id
 from angee.workflows.models import JoinRule, RunStatus, StepRunStatus, Verdict, WorkflowStatus
-from angee.workflows.steps import DecisionSpec, StepResult, TransientStepError
+from angee.workflows.steps import DecisionSpec, MapStep, StepResult, TransientStepError
 
-RUN_TERMINAL = {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELED}
-STEP_TERMINAL = {
-    StepRunStatus.SUCCEEDED,
-    StepRunStatus.FAILED,
-    StepRunStatus.CANCELED,
-    StepRunStatus.SKIPPED,
-}
-STEP_ACTIVE = {StepRunStatus.SCHEDULED, StepRunStatus.STARTED, StepRunStatus.WAITING}
 VERDICT_PENDING = cast(Verdict, Verdict.PENDING)
 VERDICT_COMPLETED = cast(Verdict, Verdict.COMPLETED)
 VERDICT_REJECTED = cast(Verdict, Verdict.REJECTED)
 VERDICT_ESCALATED = cast(Verdict, Verdict.ESCALATED)
 VERDICT_EXPIRED = cast(Verdict, Verdict.EXPIRED)
-VERDICT_TERMINAL = {VERDICT_COMPLETED, VERDICT_REJECTED, VERDICT_ESCALATED, VERDICT_EXPIRED}
 DECISION_VERBS: dict[str, Verdict] = {
     "complete": VERDICT_COMPLETED,
-    "completed": VERDICT_COMPLETED,
     "reject": VERDICT_REJECTED,
-    "rejected": VERDICT_REJECTED,
     "escalate": VERDICT_ESCALATED,
-    "escalated": VERDICT_ESCALATED,
 }
 
 
@@ -125,7 +114,7 @@ def advance(run_id: int, *, now: datetime | None = None) -> dict[str, int]:
 
     with system_context(reason="workflows.engine.advance"), transaction.atomic():
         run = run_model.objects.lock_if_supported().select_related("workflow").get(pk=run_id)
-        if run.status in RUN_TERMINAL:
+        if run.status in RunStatus.TERMINAL:
             return {"claimed": 0}
 
         _activate_run_if_needed(run, timestamp=timestamp)
@@ -148,18 +137,15 @@ def execute(step_run_id: int, *, now: datetime | None = None) -> dict[str, int]:
     step_run_model = _model("StepRun")
     timestamp = now or timezone.now()
     with system_context(reason="workflows.engine.execute.load"):
-        step_run = (
-            step_run_model.objects.select_related("run", "step", "run__workflow").filter(pk=step_run_id).first()
-        )
-        if step_run is None or step_run.status in STEP_TERMINAL:
+        step_run = step_run_model.objects.select_related("run", "step", "run__workflow").filter(pk=step_run_id).first()
+        if step_run is None or step_run.status in StepRunStatus.TERMINAL:
             return {"executed": 0}
-        if step_run.status != StepRunStatus.STARTED or step_run.run.status in RUN_TERMINAL:
+        if step_run.status != StepRunStatus.STARTED or step_run.run.status in RunStatus.TERMINAL:
             return {"executed": 0}
-        impl_class = step_run.step.resolve_impl("step_class", default="handler")
-        setattr(step_run, "_engine_now", timestamp)
+        impl_class = step_run.step.resolve_impl("step_class")
     with system_context(reason="workflows.engine.execute.attempt"), transaction.atomic():
         locked = step_run_model.objects.lock_if_supported().select_related("run").get(pk=step_run_id)
-        if locked.status != StepRunStatus.STARTED or locked.run.status in RUN_TERMINAL:
+        if locked.status != StepRunStatus.STARTED or locked.run.status in RunStatus.TERMINAL:
             return {"executed": 0}
         locked.record_attempt(heartbeat_at=timestamp)
         step_run.attempt = locked.attempt
@@ -169,7 +155,7 @@ def execute(step_run_id: int, *, now: datetime | None = None) -> dict[str, int]:
     error = ""
     stack = ""
     try:
-        result = cast(Any, impl_class)().run(step_run)
+        result = cast(Any, impl_class)().run(step_run, now=timestamp)
     except TransientStepError:
         raise
     except Exception as exc:  # noqa: BLE001 - impl failure is journaled as a step result.
@@ -181,7 +167,7 @@ def execute(step_run_id: int, *, now: datetime | None = None) -> dict[str, int]:
     with system_context(reason="workflows.engine.execute.persist"), transaction.atomic():
         locked = step_run_model.objects.lock_if_supported().select_related("run").get(pk=step_run_id)
         run_id = locked.run_id
-        if locked.status != StepRunStatus.STARTED or locked.run.status in RUN_TERMINAL:
+        if locked.status != StepRunStatus.STARTED or locked.run.status in RunStatus.TERMINAL:
             return {"executed": 0}
         if error:
             locked.mark_failed(error=error, stacktrace=stack)
@@ -214,7 +200,7 @@ def cancel(run: Any) -> None:
     child_ids: list[int] = []
     with system_context(reason="workflows.engine.cancel"), transaction.atomic():
         locked = run_model.objects.lock_if_supported().get(pk=run_id)
-        if locked.status in RUN_TERMINAL:
+        if locked.status in RunStatus.TERMINAL:
             return
         child_ids = list(
             run_model.objects.filter(parent_step_run__run=locked).values_list("pk", flat=True).order_by("pk")
@@ -305,7 +291,7 @@ def decide(decision: Any, verdict: str, *, payload: Any = None, actor: Any = Non
             _record_invalid_resolution(locked, error)
             run_id = locked.step_run.run_id
         else:
-            _mark_decision(locked, target, resolution=resolution, resolved_by=str(actor_ref))
+            locked.resolve(target, resolution=resolution, resolved_by=str(actor_ref))
             _apply_decision_policy(locked.step_run)
             run_id = locked.step_run.run_id
         transaction.on_commit(lambda run_id=run_id: enqueue_advance(cast(int, run_id)))
@@ -348,7 +334,10 @@ def override_run(run: Any, next_steps: Iterable[Any], *, actor: Any) -> Any:
 
     with system_context(reason="workflows.engine.override"), transaction.atomic():
         locked = run_model.objects.lock_if_supported().get(pk=run_id)
-        for step_run in step_run_model.objects.lock_if_supported().filter(run=locked, status__in=list(STEP_ACTIVE)):
+        for step_run in step_run_model.objects.lock_if_supported().filter(
+            run=locked,
+            status__in=list(StepRunStatus.ACTIVE),
+        ):
             step_run.mark_canceled()
         override = step_run_model.objects.create(
             run=locked,
@@ -370,7 +359,7 @@ def override_run(run: Any, next_steps: Iterable[Any], *, actor: Any) -> Any:
                     status=StepRunStatus.SCHEDULED,
                     input={},
                 )
-            elif row.status in STEP_TERMINAL:
+            elif row.status in StepRunStatus.TERMINAL:
                 row.reschedule_for_override(input={})
             row.previous.set([override])
         if locked.status == RunStatus.WAITING:
@@ -380,89 +369,74 @@ def override_run(run: Any, next_steps: Iterable[Any], *, actor: Any) -> Any:
 
 
 def enqueue_advance(run_id: int) -> None:
-    """Enqueue a deduped advance job after the current transaction commits."""
+    """Enqueue a deduped advance job."""
 
-    def defer() -> None:
-        # The task wrapper imports this module to call the engine; import here to
-        # keep that adapter cycle out of app loading.
-        from angee.workflows.tasks import advance_workflow_run
-
-        try:
-            advance_workflow_run.configure(queueing_lock=_advance_lock(run_id)).defer(run_id=run_id)
-        except procrastinate_exceptions.AlreadyEnqueued:
-            return
-
-    transaction.on_commit(defer)
+    _defer("workflows.advance", queueing_lock=_advance_lock(run_id), run_id=run_id)
 
 
 def enqueue_advance_at(run_id: int, when: datetime) -> None:
     """Enqueue a deferred advance job for a durable timer wake."""
 
-    def defer() -> None:
-        from angee.workflows.tasks import advance_workflow_run
-
-        try:
-            advance_workflow_run.configure(
-                lock=_advance_lock(run_id),
-                queueing_lock=f"{_advance_lock(run_id)}:wake:{when.isoformat()}",
-                schedule_at=when,
-            ).defer(run_id=run_id)
-        except procrastinate_exceptions.AlreadyEnqueued:
-            return
-
-    transaction.on_commit(defer)
+    _defer(
+        "workflows.advance",
+        lock=_advance_lock(run_id),
+        queueing_lock=f"{_advance_lock(run_id)}:wake:{when.isoformat()}",
+        schedule_at=when,
+        run_id=run_id,
+    )
 
 
 def enqueue_decision_escalation_at(decision_id: int, attempt: int, when: datetime) -> None:
     """Enqueue a deferred escalation timer for one decision attempt."""
 
-    def defer() -> None:
-        from angee.workflows.tasks import escalate_workflow_decision
-
-        try:
-            escalate_workflow_decision.configure(
-                lock=f"workflows.decision:{decision_id}",
-                queueing_lock=f"workflows.decision.escalate:{decision_id}:{attempt}",
-                schedule_at=when,
-            ).defer(decision_id=decision_id, attempt=attempt)
-        except procrastinate_exceptions.AlreadyEnqueued:
-            return
-
-    transaction.on_commit(defer)
+    _defer(
+        "workflows.decision_escalate",
+        lock=f"workflows.decision:{decision_id}",
+        queueing_lock=f"workflows.decision.escalate:{decision_id}:{attempt}",
+        schedule_at=when,
+        decision_id=decision_id,
+        attempt=attempt,
+    )
 
 
 def enqueue_decision_expiry_at(decision_id: int, attempt: int, when: datetime) -> None:
     """Enqueue a deferred expiry timer for one decision attempt."""
 
-    def defer() -> None:
-        from angee.workflows.tasks import expire_workflow_decision
-
-        try:
-            expire_workflow_decision.configure(
-                lock=f"workflows.decision:{decision_id}",
-                queueing_lock=f"workflows.decision.expire:{decision_id}:{attempt}",
-                schedule_at=when,
-            ).defer(decision_id=decision_id, attempt=attempt)
-        except procrastinate_exceptions.AlreadyEnqueued:
-            return
-
-    transaction.on_commit(defer)
+    _defer(
+        "workflows.decision_expire",
+        lock=f"workflows.decision:{decision_id}",
+        queueing_lock=f"workflows.decision.expire:{decision_id}:{attempt}",
+        schedule_at=when,
+        decision_id=decision_id,
+        attempt=attempt,
+    )
 
 
 def enqueue_execute(step_run_id: int) -> None:
-    """Enqueue one step execution job after the current transaction commits."""
+    """Enqueue one step execution job."""
 
-    def defer() -> None:
-        from angee.workflows.tasks import execute_workflow_step
+    _defer("workflows.execute", queueing_lock=f"workflows.execute:{step_run_id}", step_run_id=step_run_id)
 
-        try:
-            execute_workflow_step.configure(queueing_lock=f"workflows.execute:{step_run_id}").defer(
-                step_run_id=step_run_id
-            )
-        except procrastinate_exceptions.AlreadyEnqueued:
-            return
 
-    transaction.on_commit(defer)
+def _defer(
+    task_name: str,
+    *,
+    queueing_lock: str,
+    schedule_at: datetime | None = None,
+    lock: str | None = None,
+    **kwargs: Any,
+) -> None:
+    """Defer one Procrastinate task by registered name, ignoring dedupe races."""
+
+    options: dict[str, Any] = {"queueing_lock": queueing_lock}
+    if lock is not None:
+        options["lock"] = lock
+    if schedule_at is not None:
+        options["schedule_at"] = schedule_at
+    try:
+        procrastinate_app.configure_task(task_name, **options).defer(**kwargs)
+    except procrastinate_exceptions.AlreadyEnqueued:
+        return
 
 
 def _model(name: str) -> type[Any]:
@@ -540,9 +514,17 @@ def _schedule_decision_timers(decision: Any) -> None:
     """Schedule deadline jobs for the decision's current attempt."""
 
     if decision.escalate_at is not None:
-        enqueue_decision_escalation_at(decision.pk, decision.attempts, decision.escalate_at)
+        transaction.on_commit(
+            lambda decision_id=decision.pk, attempt=decision.attempts, when=decision.escalate_at: (
+                enqueue_decision_escalation_at(decision_id, attempt, when)
+            )
+        )
     if decision.expires_at is not None:
-        enqueue_decision_expiry_at(decision.pk, decision.attempts, decision.expires_at)
+        transaction.on_commit(
+            lambda decision_id=decision.pk, attempt=decision.attempts, when=decision.expires_at: (
+                enqueue_decision_expiry_at(decision_id, attempt, when)
+            )
+        )
 
 
 def _subject_ref(subject: str | SubjectRef) -> SubjectRef:
@@ -566,8 +548,9 @@ def _actor_ref(actor: Any) -> SubjectRef:
 def _verdict_for_verb(verb: str) -> Verdict:
     """Return the stored terminal verdict for a public resolution verb."""
 
+    value = str(getattr(verb, "value", verb)).lower()
     try:
-        return DECISION_VERBS[str(verb)]
+        return DECISION_VERBS[value]
     except KeyError as error:
         raise ValidationError({"verdict": "Verdict must be complete, reject, or escalate."}) from error
 
@@ -628,7 +611,7 @@ def _schema_for_decision(decision: Any) -> Any | None:
         return gate["decision_schema"]
     if decision.step_run.step_id is None:
         return None
-    impl_class = decision.step_run.step.resolve_impl("step_class", default="handler")
+    impl_class = decision.step_run.step.resolve_impl("step_class")
     return getattr(impl_class, "decision_schema", None)
 
 
@@ -689,21 +672,6 @@ def _record_invalid_resolution(decision: Any, error: ValidationError) -> None:
     _schedule_decision_timers(decision)
 
 
-def _mark_decision(decision: Any, verdict: Verdict, *, resolution: dict[str, Any], resolved_by: str) -> None:
-    """Apply a terminal verdict transition to one decision."""
-
-    if verdict == VERDICT_COMPLETED:
-        decision.mark_completed(resolution=resolution, resolved_by=resolved_by)
-    elif verdict == VERDICT_REJECTED:
-        decision.mark_rejected(resolution=resolution, resolved_by=resolved_by)
-    elif verdict == VERDICT_ESCALATED:
-        decision.mark_escalated(resolution=resolution, resolved_by=resolved_by)
-    elif verdict == VERDICT_EXPIRED:
-        decision.mark_expired(resolution=resolution, resolved_by=resolved_by)
-    else:
-        raise ValidationError({"verdict": "Decision verdict must be terminal."})
-
-
 def _apply_decision_policy(step_run: Any) -> None:
     """Complete ``step_run`` when its decision collection satisfies its policy."""
 
@@ -731,7 +699,7 @@ def _policy_for(step_run: Any) -> str:
 def _decision_policy_outcome(policy: str, decisions: list[Any]) -> str | None:
     """Return the aggregate outcome for ``decisions`` under ``policy``."""
 
-    terminal = [decision for decision in decisions if decision.verdict in VERDICT_TERMINAL]
+    terminal = [decision for decision in decisions if decision.verdict in Verdict.TERMINAL]
     if not decisions or not terminal:
         return None
     if policy == "one_done":
@@ -787,7 +755,7 @@ def _resolve_timed_decision(
             return {"resolved": 0}
         if verdict == VERDICT_ESCALATED:
             _write_decision_relationships(decision, escalation=_escalation_subjects(decision))
-        _mark_decision(decision, verdict, resolution={}, resolved_by=resolved_by)
+        decision.resolve(verdict, resolution={}, resolved_by=resolved_by)
         _apply_decision_policy(decision.step_run)
         run_id = decision.step_run.run_id
         transaction.on_commit(lambda run_id=run_id: enqueue_advance(run_id))
@@ -807,11 +775,9 @@ def _expire_pending_decisions(step_run: Any, *, resolved_by: str) -> None:
     """Expire pending decisions attached to a canceled waiting step-run."""
 
     decision_model = _model("Decision")
-    pending = decision_model.objects.lock_if_supported().filter(
-        step_run=step_run, verdict=VERDICT_PENDING
-    )
+    pending = decision_model.objects.lock_if_supported().filter(step_run=step_run, verdict=VERDICT_PENDING)
     for decision in pending:
-        decision.mark_expired(resolution={}, resolved_by=resolved_by)
+        decision.resolve(VERDICT_EXPIRED, resolution={}, resolved_by=resolved_by)
 
 
 def _activate_run_if_needed(run: Any, *, timestamp: datetime) -> None:
@@ -844,7 +810,7 @@ def _route_completed_steps(run: Any) -> None:
 def _terminal_step_runs(run: Any) -> Iterable[Any]:
     return (
         run.step_runs.select_related("step")
-        .filter(status__in=list(STEP_TERMINAL))
+        .filter(status__in=list(StepRunStatus.TERMINAL))
         .filter(map_index=-1)
         .filter(step__isnull=False)
         .order_by("pk")
@@ -855,7 +821,7 @@ def _process_map_steps(run: Any, *, timestamp: datetime) -> None:
     map_rows = list(
         run.step_runs.lock_if_supported()
         .select_related("step")
-        .filter(step__step_class="map", map_index=-1, status__in=[StepRunStatus.SCHEDULED, StepRunStatus.WAITING])
+        .filter(**MapStep.engine_expanded_filter(), status__in=[StepRunStatus.SCHEDULED, StepRunStatus.WAITING])
         .order_by("pk")
     )
     for step_run in map_rows:
@@ -867,8 +833,8 @@ def _process_map_steps(run: Any, *, timestamp: datetime) -> None:
 
 def _expand_map_step(run: Any, step_run: Any, *, timestamp: datetime) -> None:
     try:
-        target = _map_target(step_run)
-        items = _map_items(step_run)
+        target = MapStep.target_step(step_run)
+        items = MapStep.items(step_run)
     except ValidationError as error:
         step_run.mark_started(heartbeat_at=timestamp)
         output = {"error": str(error), "total": 0, "successes": 0, "failures": 0}
@@ -902,19 +868,15 @@ def _complete_map_step_if_ready(run: Any, step_run: Any) -> None:
     if target_id is None:
         return
     target = _model("Step").objects.get(pk=target_id)
-    children = list(
-        run.step_runs.lock_if_supported()
-        .filter(step=target, map_index__gte=0)
-        .order_by("map_index")
-    )
+    children = list(run.step_runs.lock_if_supported().filter(step=target, map_index__gte=0).order_by("map_index"))
     if len(children) < len(items):
         _ensure_map_children(run, step_run, target=target, items=items)
         return
-    if any(child.status not in STEP_TERMINAL for child in children):
+    if any(child.status not in StepRunStatus.TERMINAL for child in children):
         return
 
     output = _map_output(children)
-    outcome = "succeeded" if _map_policy_passes(step_run.step.config, output) else "failed"
+    outcome = "succeeded" if MapStep.policy_passes(step_run.step.config, output) else "failed"
     updated_state = dict(step_run.resume_state)
     map_state = dict(updated_state.get("map", {}))
     map_state["results"] = output["results"]
@@ -939,51 +901,6 @@ def _ensure_map_children(run: Any, step_run: Any, *, target: Any, items: list[An
         child.previous.add(step_run)
 
 
-def _map_target(step_run: Any) -> Any:
-    config = step_run.step.config if isinstance(step_run.step.config, Mapping) else {}
-    key = str(config.get("target_step") or "")
-    if not key:
-        raise ValidationError({"config": "Map steps require target_step."})
-    try:
-        return step_run.run.workflow.steps.get(key=key)
-    except ObjectDoesNotExist as error:
-        raise ValidationError({"config": f"Map target step {key!r} does not exist."}) from error
-
-
-def _map_items(step_run: Any) -> list[Any]:
-    config = step_run.step.config if isinstance(step_run.step.config, Mapping) else {}
-    expression = config.get("items")
-    value = _map_expression_value(expression, step_run)
-    if not isinstance(value, list):
-        raise ValidationError({"config": "Map items expression must resolve to a list."})
-    return list(value)
-
-
-def _map_expression_value(expression: Any, step_run: Any) -> Any:
-    if isinstance(expression, list):
-        return expression
-    if not isinstance(expression, str) or not expression:
-        raise ValidationError({"config": "Map steps require an items expression."})
-    root, *path = expression.split(".")
-    if root == "subject":
-        value = step_run.run.subject
-    elif root == "run":
-        value = step_run.run
-    elif root == "input":
-        value = step_run.input
-    else:
-        raise ValidationError({"config": "Map items expression must start with subject, run, or input."})
-    for part in path:
-        value = _map_lookup(value, part)
-    return value
-
-
-def _map_lookup(value: Any, key: str) -> Any:
-    if isinstance(value, Mapping):
-        return value.get(key)
-    return getattr(value, key)
-
-
 def _map_child_input(item: Any) -> Any:
     if isinstance(item, Mapping):
         return dict(item)
@@ -994,7 +911,7 @@ def _map_output(children: list[Any]) -> dict[str, Any]:
     results = [
         {
             "map_index": child.map_index,
-            "status": str(getattr(child.status, "value", child.status)),
+            "status": str(child.status),
             "outcome": child.outcome,
             "output": child.output,
             "error": child.error,
@@ -1009,25 +926,6 @@ def _map_output(children: list[Any]) -> dict[str, Any]:
         "failures": failures,
         "results": results,
     }
-
-
-def _map_policy_passes(config: Any, output: Mapping[str, Any]) -> bool:
-    total = int(output["total"])
-    successes = int(output["successes"])
-    failures = int(output["failures"])
-    mapping = config if isinstance(config, Mapping) else {}
-    if bool(mapping.get("all_must_succeed", False)):
-        return failures == 0 and successes == total
-    ratio_value = mapping.get("min_success_ratio", mapping.get("min_success"))
-    if ratio_value is None:
-        return failures == 0 and successes == total
-    try:
-        ratio = float(ratio_value)
-    except (TypeError, ValueError):
-        return False
-    if total == 0:
-        return ratio <= 0
-    return successes / total >= ratio
 
 
 def _route_success(run: Any, step_run: Any) -> None:
@@ -1118,16 +1016,16 @@ def _join_decision(rule: Any, upstream: list[Any | None], *, routed_row: Any | N
     if not statuses:
         return "run"
 
-    terminal = [status in STEP_TERMINAL for status in statuses]
-    has_missing_or_active = any(status is None or status not in STEP_TERMINAL for status in statuses)
+    terminal = [status in StepRunStatus.TERMINAL for status in statuses]
+    has_missing_or_active = any(status is None or status not in StepRunStatus.TERMINAL for status in statuses)
     has_success = any(status == StepRunStatus.SUCCEEDED for status in statuses)
-    has_done = any(status in STEP_TERMINAL for status in statuses)
+    has_done = any(status in StepRunStatus.TERMINAL for status in statuses)
     has_failed = any(status in {StepRunStatus.FAILED, StepRunStatus.CANCELED} for status in statuses)
 
     if rule == JoinRule.ALL_SUCCESS:
         if all(status == StepRunStatus.SUCCEEDED for status in statuses):
             return "run"
-        if any(status in STEP_TERMINAL and status != StepRunStatus.SUCCEEDED for status in statuses):
+        if any(status in StepRunStatus.TERMINAL and status != StepRunStatus.SUCCEEDED for status in statuses):
             return "skip"
         return "wait"
     if rule == JoinRule.ONE_SUCCESS:
@@ -1166,7 +1064,7 @@ def _claim_due_steps(run: Any, *, timestamp: datetime) -> list[int]:
             models.Q(status=StepRunStatus.SCHEDULED)
             | models.Q(status=StepRunStatus.WAITING, wait_until__isnull=False, wait_until__lte=timestamp)
         )
-        .exclude(step__step_class="map", map_index=-1)
+        .exclude(**MapStep.engine_expanded_filter())
         .order_by("pk")
     )
     if not due:
@@ -1214,13 +1112,13 @@ def _numeric_budget_value(value: Any) -> float | None:
         return None
     try:
         parsed = float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return parsed if parsed >= 0 else None
 
 
 def _update_run_status(run: Any, *, timestamp: datetime) -> None:
-    if run.status in RUN_TERMINAL:
+    if run.status in RunStatus.TERMINAL:
         return
     active_without_wait = run.step_runs.filter(status__in=[StepRunStatus.SCHEDULED, StepRunStatus.STARTED]).exists()
     if active_without_wait:

@@ -11,7 +11,9 @@ references; public ids stay at the transport boundary.
 from __future__ import annotations
 
 import copy
+import logging
 from collections.abc import Iterable, Mapping
+from datetime import datetime, timedelta
 from typing import Any, Self, cast
 
 from croniter import CroniterBadCronError, croniter
@@ -19,13 +21,21 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import models, transaction
+from rebac import system_context
 
 from angee.base.fields import ImplClassField, StateField
 from angee.base.impl import ImplDefaultsMixin
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager
-from angee.base.transitions import StateTransitions, transition
-from angee.workflows.steps import StepImpl, validate_retry_config
+from angee.base.transitions import StateTransitions, save_state, transition
+from angee.workflows.steps import (
+    StepImpl,
+    optional_non_negative_int,
+    optional_positive_int,
+    validate_retry_config,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class WorkflowStatus(models.TextChoices):
@@ -89,38 +99,23 @@ class Verdict(models.TextChoices):
     EXPIRED = "expired", "Expired"
 
 
+RunStatus.TERMINAL = frozenset({RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELED})
+StepRunStatus.TERMINAL = frozenset(
+    {StepRunStatus.SUCCEEDED, StepRunStatus.FAILED, StepRunStatus.CANCELED, StepRunStatus.SKIPPED}
+)
+StepRunStatus.ACTIVE = frozenset({StepRunStatus.SCHEDULED, StepRunStatus.STARTED, StepRunStatus.WAITING})
+Verdict.TERMINAL = frozenset({Verdict.COMPLETED, Verdict.REJECTED, Verdict.ESCALATED, Verdict.EXPIRED})
+
+
 def _save_workflow_status(instance: models.Model, source: Any, target: Any) -> None:
-    """Persist a transition-owned workflow status change."""
+    """Persist a workflow status transition through the immutable-row variant."""
 
-    del source, target
-    cast("Workflow", instance)._save_status_change()
-
-
-def _save_run_status(instance: models.Model, source: Any, target: Any) -> None:
-    """Persist a transition-owned workflow run status change."""
-
-    del source, target
-    cast("WorkflowRun", instance)._save_status_change()
-
-
-def _save_step_run_status(instance: models.Model, source: Any, target: Any) -> None:
-    """Persist a transition-owned step-run status change."""
-
-    del source, target
-    cast("StepRun", instance)._save_status_change()
-
-
-def _save_decision_verdict(instance: models.Model, source: Any, target: Any) -> None:
-    """Persist a transition-owned decision verdict change."""
-
-    del source, target
-    cast("Decision", instance)._save_verdict_change()
-
-
-def _choice_value(value: Any) -> str:
-    """Return a stable stored value for Django choice fields."""
-
-    return str(getattr(value, "value", value))
+    workflow = cast("Workflow", instance)
+    workflow._allow_immutable_status_save = True
+    try:
+        save_state(workflow, source, target)
+    finally:
+        del workflow._allow_immutable_status_save
 
 
 class WorkflowManager(AngeeManager):
@@ -332,7 +327,7 @@ class Workflow(AuditMixin, AngeeDataModel):
                     "name": step.name,
                     "step_class": step.step_class,
                     "config": copy.deepcopy(step.config),
-                    "join_rule": _choice_value(step.join_rule),
+                    "join_rule": str(step.join_rule),
                     "is_entry": step.is_entry,
                     "position": copy.deepcopy(step.position),
                 }
@@ -360,15 +355,6 @@ class Workflow(AuditMixin, AngeeDataModel):
         if entry_count != 1:
             raise ValidationError({"steps": "A workflow must have exactly one entry step before publishing."})
 
-    def _save_status_change(self) -> None:
-        """Save a transition-owned status change, including immutable rows."""
-
-        self._allow_immutable_status_save = True
-        try:
-            self.save(update_fields=["status"])
-        finally:
-            del self._allow_immutable_status_save
-
     def _raise_if_immutable_save(self) -> None:
         """Reject writes to persisted published or archived workflow definitions."""
 
@@ -378,8 +364,14 @@ class Workflow(AuditMixin, AngeeDataModel):
             persisted = type(self)._base_manager.only("status").get(pk=self.pk)
         except ObjectDoesNotExist:
             return
-        if persisted.status in {WorkflowStatus.PUBLISHED, WorkflowStatus.ARCHIVED}:
+        if persisted.is_immutable:
             raise ValidationError("Published workflow versions are immutable.")
+
+    @property
+    def is_immutable(self) -> bool:
+        """Return whether this workflow version rejects definition edits."""
+
+        return self.status in {WorkflowStatus.PUBLISHED, WorkflowStatus.ARCHIVED}
 
 
 class Step(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
@@ -422,7 +414,7 @@ class Step(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
 
         super().clean()
         try:
-            impl = cast(type[StepImpl], self.resolve_impl("step_class", default="handler"))
+            impl = cast(type[StepImpl], self.resolve_impl("step_class"))
             impl.validate_config(self.config)
             validate_retry_config(self.config)
         except ValidationError:
@@ -448,8 +440,8 @@ class Step(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
 
         if self.workflow_id is None:
             return
-        status = type(self.workflow)._base_manager.only("status").get(pk=self.workflow_id).status
-        if status in {WorkflowStatus.PUBLISHED, WorkflowStatus.ARCHIVED}:
+        workflow = type(self.workflow)._base_manager.only("status").get(pk=self.workflow_id)
+        if workflow.is_immutable:
             raise ValidationError("Published workflow versions are immutable.")
 
 
@@ -512,9 +504,86 @@ class Edge(AuditMixin, AngeeDataModel):
 
         if self.workflow_id is None:
             return
-        status = type(self.workflow)._base_manager.only("status").get(pk=self.workflow_id).status
-        if status in {WorkflowStatus.PUBLISHED, WorkflowStatus.ARCHIVED}:
+        workflow = type(self.workflow)._base_manager.only("status").get(pk=self.workflow_id)
+        if workflow.is_immutable:
             raise ValidationError("Published workflow versions are immutable.")
+
+
+class TriggerManager(AngeeManager):
+    """Manager owning trigger row claims and due schedule priming."""
+
+    def claim_due_event(self, trigger_id: int, *, timestamp: datetime) -> Any | None:
+        """Lock and record one enabled event trigger fire if rate limits allow it."""
+
+        with system_context(reason="workflows.event_triggers.claim"), transaction.atomic():
+            trigger = (
+                self.lock_if_supported()
+                .select_related("workflow")
+                .filter(pk=trigger_id, kind=TriggerKind.EVENT, enabled=True)
+                .first()
+            )
+            if trigger is None or not trigger.rate_limit_allows(timestamp=timestamp):
+                return None
+            trigger.record_fire(timestamp=timestamp)
+            return trigger
+
+    def claim_due_schedule(self, trigger_id: int, *, timestamp: datetime) -> tuple[Any, datetime] | None:
+        """Lock and advance one due schedule trigger if rate limits allow it."""
+
+        with system_context(reason="workflows.schedule_triggers.claim"), transaction.atomic():
+            trigger = (
+                self.lock_if_supported()
+                .select_related("workflow")
+                .filter(pk=trigger_id, kind=TriggerKind.SCHEDULE, enabled=True)
+                .first()
+            )
+            if trigger is None or trigger.next_fire_at is None or trigger.next_fire_at > timestamp:
+                return None
+            due_at = trigger.next_fire_at
+            trigger.next_fire_at = trigger.compute_next_fire_at(after=due_at, now=timestamp)
+            if not trigger.rate_limit_allows(timestamp=timestamp):
+                trigger.save(update_fields={"next_fire_at", "updated_at"})
+                return None
+            trigger.record_fire(timestamp=timestamp, extra_update_fields=("next_fire_at",))
+            return trigger, due_at
+
+    def prime_due_schedules(self, *, timestamp: datetime) -> int:
+        """Persist initial fire times for enabled schedules missing ``next_fire_at``."""
+
+        with system_context(reason="workflows.schedule_triggers.prime"):
+            trigger_ids = list(
+                self.filter(
+                    kind=TriggerKind.SCHEDULE,
+                    enabled=True,
+                    next_fire_at__isnull=True,
+                )
+                .order_by("pk")
+                .values_list("pk", flat=True)
+            )
+
+        primed = 0
+        for trigger_id in trigger_ids:
+            with system_context(reason="workflows.schedule_triggers.prime"), transaction.atomic():
+                trigger = (
+                    self.lock_if_supported()
+                    .filter(pk=trigger_id, kind=TriggerKind.SCHEDULE, enabled=True, next_fire_at__isnull=True)
+                    .first()
+                )
+                if trigger is None:
+                    continue
+                try:
+                    trigger.next_fire_at = trigger.initial_fire_at(now=timestamp)
+                except CroniterBadCronError, ValueError, TypeError:
+                    logger.exception(
+                        "Skipping workflow schedule trigger %s after initial fire calculation failed.",
+                        trigger.pk,
+                    )
+                    continue
+                if trigger.next_fire_at is None:
+                    continue
+                trigger.save(update_fields={"next_fire_at", "updated_at"})
+                primed += 1
+        return primed
 
 
 class Trigger(AuditMixin, AngeeDataModel):
@@ -533,7 +602,7 @@ class Trigger(AuditMixin, AngeeDataModel):
     hourly_window_started_at = models.DateTimeField(null=True, blank=True)
     hourly_fire_count = models.PositiveIntegerField(default=0)
 
-    objects = AngeeManager()
+    objects = TriggerManager()
 
     class Meta:
         """Django model options for workflow triggers."""
@@ -617,6 +686,83 @@ class Trigger(AuditMixin, AngeeDataModel):
         self.enabled = False
         self.save(update_fields={"enabled", "event_model_label", "updated_at"})
 
+    def rate_limit_allows(self, *, timestamp: datetime) -> bool:
+        """Return whether this trigger can fire at ``timestamp``."""
+
+        cooldown_seconds = optional_non_negative_int(self.config_mapping.get("cooldown_seconds"))
+        if cooldown_seconds and self.last_fire_at is not None:
+            if self.last_fire_at + timedelta(seconds=cooldown_seconds) > timestamp:
+                return False
+
+        hourly_cap = optional_positive_int(self.config_mapping.get("hourly_cap"))
+        if hourly_cap is None:
+            return True
+        window_start = self.hourly_window_started_at
+        if window_start is None or timestamp - window_start >= timedelta(hours=1):
+            return True
+        return int(self.hourly_fire_count) < hourly_cap
+
+    def record_fire(self, *, timestamp: datetime, extra_update_fields: Iterable[str] = ()) -> None:
+        """Record one trigger fire and persist rate-limit counters."""
+
+        window_start = self.hourly_window_started_at
+        if window_start is None or timestamp - window_start >= timedelta(hours=1):
+            self.hourly_window_started_at = timestamp
+            self.hourly_fire_count = 0
+        self.hourly_fire_count += 1
+        self.last_fire_at = timestamp
+        self.save(
+            update_fields={
+                "last_fire_at",
+                "hourly_window_started_at",
+                "hourly_fire_count",
+                "updated_at",
+                *extra_update_fields,
+            }
+        )
+
+    def condition_matches(self, sender: type[models.Model], instance: models.Model) -> bool:
+        """Return whether this event trigger matches a saved model instance."""
+
+        condition = self.config_mapping.get("condition", {})
+        if not isinstance(condition, Mapping):
+            return False
+        with system_context(reason="workflows.event_triggers.condition"):
+            return sender._default_manager.filter(pk=instance.pk, **dict(condition)).exists()
+
+    def initial_fire_at(self, *, now: datetime) -> datetime | None:
+        """Return the first persisted due timestamp for this schedule trigger."""
+
+        interval = optional_positive_int(self.config_mapping.get("interval_seconds"))
+        if interval is not None:
+            return now + timedelta(seconds=interval)
+
+        cron = str(self.config_mapping.get("cron", "") or "")
+        if not cron:
+            return None
+        return cast(datetime, croniter(cron, now).get_next(datetime))
+
+    def compute_next_fire_at(self, *, after: datetime, now: datetime) -> datetime | None:
+        """Return the next scheduled occurrence after ``after`` and later than ``now``."""
+
+        interval = optional_positive_int(self.config_mapping.get("interval_seconds"))
+        if interval is not None:
+            next_at = after + timedelta(seconds=interval)
+            while next_at <= now:
+                next_at += timedelta(seconds=interval)
+            return next_at
+
+        cron = str(self.config_mapping.get("cron", "") or "")
+        if not cron:
+            return None
+        return cast(datetime, croniter(cron, max(after, now)).get_next(datetime))
+
+    @property
+    def config_mapping(self) -> Mapping[str, Any]:
+        """Return trigger config when it is a JSON object."""
+
+        return self.config if isinstance(self.config, Mapping) else {}
+
     def _sync_index_fields(self) -> None:
         """Mirror config-owned event declarations into indexed query fields."""
 
@@ -657,17 +803,7 @@ class WorkflowRun(AuditMixin, AngeeDataModel):
     )
     subject_object_id = models.PositiveBigIntegerField(null=True, blank=True)
     subject = GenericForeignKey("subject_content_type", "subject_object_id")
-    artifact_content_type = models.ForeignKey(
-        ContentType,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="+",
-    )
-    artifact_object_id = models.PositiveBigIntegerField(null=True, blank=True)
-    artifact = GenericForeignKey("artifact_content_type", "artifact_object_id")
     dedup_key = models.CharField(max_length=255, unique=True, null=True, blank=True)
-    data = models.JSONField(default=dict, blank=True)
     wake_at = models.DateTimeField(null=True, blank=True, db_index=True)
     steps_taken = models.PositiveIntegerField(default=0)
     budget_spent = models.JSONField(default=dict, blank=True)
@@ -698,31 +834,19 @@ class WorkflowRun(AuditMixin, AngeeDataModel):
                 name="uniq_workflows_run_parent_step_run",
             ),
         )
-        indexes = (
-            models.Index(fields=("subject_content_type", "subject_object_id"), name="idx_wfr_subject_ref"),
-            models.Index(fields=("artifact_content_type", "artifact_object_id"), name="idx_wfr_artifact_ref"),
-        )
-
-    @property
-    def outcome_counts(self) -> dict[str, int]:
-        """Return per-outcome counts aggregated from the step-run journal."""
-
-        return {
-            str(row["outcome"] or ""): int(row["count"])
-            for row in self.step_runs.values("outcome").annotate(count=models.Count("pk")).order_by("outcome")
-        }
+        indexes = (models.Index(fields=("subject_content_type", "subject_object_id"), name="idx_wfr_subject_ref"),)
 
     @property
     def is_terminal(self) -> bool:
         """Return whether this run has reached a terminal status."""
 
-        return self.status in {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELED}
+        return self.status in RunStatus.TERMINAL
 
-    @transition(status, source=RunStatus.PENDING, target=RunStatus.RUNNING, on_success=_save_run_status)
+    @transition(status, source=RunStatus.PENDING, target=RunStatus.RUNNING, on_success=save_state)
     def mark_running(self) -> None:
         """Mark a pending run as actively orchestrating."""
 
-    @transition(status, source=RunStatus.WAITING, target=RunStatus.RUNNING, on_success=_save_run_status)
+    @transition(status, source=RunStatus.WAITING, target=RunStatus.RUNNING, on_success=save_state)
     def resume(self) -> None:
         """Mark a waiting run as actively orchestrating again."""
 
@@ -730,7 +854,7 @@ class WorkflowRun(AuditMixin, AngeeDataModel):
         status,
         source=RunStatus.RUNNING,
         target=RunStatus.WAITING,
-        on_success=_save_run_status,
+        on_success=save_state,
     )
     def mark_waiting(self, *, wake_at: Any = None) -> None:
         """Mark a run as waiting on durable external or timer state."""
@@ -742,7 +866,7 @@ class WorkflowRun(AuditMixin, AngeeDataModel):
         status,
         source=[RunStatus.RUNNING, RunStatus.WAITING],
         target=RunStatus.SUCCEEDED,
-        on_success=_save_run_status,
+        on_success=save_state,
     )
     def mark_succeeded(self) -> None:
         """Mark a run as successful."""
@@ -754,7 +878,7 @@ class WorkflowRun(AuditMixin, AngeeDataModel):
         status,
         source=[RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING],
         target=RunStatus.FAILED,
-        on_success=_save_run_status,
+        on_success=save_state,
     )
     def mark_failed(self, error: str = "") -> None:
         """Mark a run as failed with an optional durable error message."""
@@ -767,7 +891,7 @@ class WorkflowRun(AuditMixin, AngeeDataModel):
         status,
         source=[RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING],
         target=RunStatus.CANCELED,
-        on_success=_save_run_status,
+        on_success=save_state,
     )
     def mark_canceled(self) -> None:
         """Mark a run as canceled."""
@@ -790,16 +914,6 @@ class WorkflowRun(AuditMixin, AngeeDataModel):
             instance._loaded_dedup_key = values[field_names.index("dedup_key")]
         return instance
 
-    def _save_status_change(self) -> None:
-        """Save a transition-owned status change plus fields touched by its body."""
-
-        fields = {"status", *getattr(self, "_transition_fields", set())}
-        try:
-            self.save(update_fields=fields)
-        finally:
-            if hasattr(self, "_transition_fields"):
-                del self._transition_fields
-
     def _raise_if_dedup_key_changed(self) -> None:
         """Reject updates that alter the immutable trigger-start dedup key."""
 
@@ -808,6 +922,18 @@ class WorkflowRun(AuditMixin, AngeeDataModel):
         loaded_dedup_key = getattr(self, "_loaded_dedup_key", self.dedup_key)
         if loaded_dedup_key != self.dedup_key:
             raise ValidationError({"dedup_key": "Workflow run dedup keys are immutable."})
+
+    def debit_budget(self, delta: Mapping[str, int]) -> None:
+        """Atomically add usage deltas to this run's budget ledger."""
+
+        if not delta:
+            return
+        locked = type(self).objects.lock_if_supported().get(pk=self.pk)
+        spent = dict(locked.budget_spent or {})
+        for key, value in delta.items():
+            spent[str(key)] = int(spent.get(str(key), 0)) + int(value)
+        locked.budget_spent = spent
+        locked.save(update_fields=["budget_spent", "updated_at"])
 
 
 class StepRun(AuditMixin, AngeeDataModel):
@@ -883,18 +1009,13 @@ class StepRun(AuditMixin, AngeeDataModel):
     def is_terminal(self) -> bool:
         """Return whether this journal row has reached a terminal status."""
 
-        return self.status in {
-            StepRunStatus.SUCCEEDED,
-            StepRunStatus.FAILED,
-            StepRunStatus.CANCELED,
-            StepRunStatus.SKIPPED,
-        }
+        return self.status in StepRunStatus.TERMINAL
 
     @transition(
         status,
         source=[StepRunStatus.SCHEDULED, StepRunStatus.WAITING],
         target=StepRunStatus.STARTED,
-        on_success=_save_step_run_status,
+        on_success=save_state,
     )
     def mark_started(self, *, heartbeat_at: Any = None) -> None:
         """Claim this row for execution."""
@@ -910,7 +1031,7 @@ class StepRun(AuditMixin, AngeeDataModel):
             self.heartbeat_at = heartbeat_at
         self.save(update_fields=["attempt", "heartbeat_at", "updated_at"])
 
-    @transition(status, source=StepRunStatus.STARTED, target=StepRunStatus.WAITING, on_success=_save_step_run_status)
+    @transition(status, source=StepRunStatus.STARTED, target=StepRunStatus.WAITING, on_success=save_state)
     def mark_waiting(
         self,
         *,
@@ -928,7 +1049,7 @@ class StepRun(AuditMixin, AngeeDataModel):
         status,
         source=[StepRunStatus.STARTED, StepRunStatus.WAITING],
         target=StepRunStatus.SUCCEEDED,
-        on_success=_save_step_run_status,
+        on_success=save_state,
     )
     def mark_succeeded(self, *, output: Any = None, outcome: str = "") -> None:
         """Persist a successful step result."""
@@ -944,7 +1065,7 @@ class StepRun(AuditMixin, AngeeDataModel):
         status,
         source=[StepRunStatus.STARTED, StepRunStatus.WAITING],
         target=StepRunStatus.FAILED,
-        on_success=_save_step_run_status,
+        on_success=save_state,
     )
     def mark_failed(self, *, error: str = "", stacktrace: str = "", outcome: str = "failed") -> None:
         """Persist a failed step result."""
@@ -959,7 +1080,7 @@ class StepRun(AuditMixin, AngeeDataModel):
         status,
         source=[StepRunStatus.SCHEDULED, StepRunStatus.WAITING],
         target=StepRunStatus.SKIPPED,
-        on_success=_save_step_run_status,
+        on_success=save_state,
     )
     def mark_skipped(self) -> None:
         """Mark this row as skipped by routing or join semantics."""
@@ -968,7 +1089,7 @@ class StepRun(AuditMixin, AngeeDataModel):
         status,
         source=[StepRunStatus.SCHEDULED, StepRunStatus.STARTED, StepRunStatus.WAITING],
         target=StepRunStatus.CANCELED,
-        on_success=_save_step_run_status,
+        on_success=save_state,
     )
     def mark_canceled(self) -> None:
         """Mark this row as canceled."""
@@ -977,7 +1098,7 @@ class StepRun(AuditMixin, AngeeDataModel):
         status,
         source=[StepRunStatus.SUCCEEDED, StepRunStatus.FAILED, StepRunStatus.CANCELED, StepRunStatus.SKIPPED],
         target=StepRunStatus.SCHEDULED,
-        on_success=_save_step_run_status,
+        on_success=save_state,
     )
     def reschedule_for_override(self, *, input: Any = None) -> None:
         """Reset a terminal journal row so a manual override can run it again."""
@@ -1002,16 +1123,6 @@ class StepRun(AuditMixin, AngeeDataModel):
             "error",
             "stacktrace",
         }
-
-    def _save_status_change(self) -> None:
-        """Save a transition-owned status change plus fields touched by its body."""
-
-        fields = {"status", *getattr(self, "_transition_fields", set())}
-        try:
-            self.save(update_fields=fields)
-        finally:
-            if hasattr(self, "_transition_fields"):
-                del self._transition_fields
 
 
 class Decision(AuditMixin, AngeeDataModel):
@@ -1053,40 +1164,33 @@ class Decision(AuditMixin, AngeeDataModel):
         ordering = ("step_run", "priority", "created_at", "sqid")
         rebac_resource_type = "workflows/decision"
         rebac_id_attr = "sqid"
-        indexes = (
-            models.Index(fields=("step_run", "verdict", "priority"), name="idx_wdc_step_verdict"),
-        )
+        indexes = (models.Index(fields=("step_run", "verdict", "priority"), name="idx_wdc_step_verdict"),)
 
     @property
     def is_terminal(self) -> bool:
         """Return whether this decision has a terminal verdict."""
 
-        return self.verdict in {
-            Verdict.COMPLETED,
-            Verdict.REJECTED,
-            Verdict.ESCALATED,
-            Verdict.EXPIRED,
-        }
+        return self.verdict in Verdict.TERMINAL
 
-    @transition(verdict, source=Verdict.PENDING, target=Verdict.COMPLETED, on_success=_save_decision_verdict)
+    @transition(verdict, source=Verdict.PENDING, target=Verdict.COMPLETED, on_success=save_state)
     def mark_completed(self, *, resolution: Any = None, resolved_by: str = "") -> None:
         """Resolve this slot as completed."""
 
         self._set_resolution(resolution=resolution, resolved_by=resolved_by)
 
-    @transition(verdict, source=Verdict.PENDING, target=Verdict.REJECTED, on_success=_save_decision_verdict)
+    @transition(verdict, source=Verdict.PENDING, target=Verdict.REJECTED, on_success=save_state)
     def mark_rejected(self, *, resolution: Any = None, resolved_by: str = "") -> None:
         """Resolve this slot as rejected."""
 
         self._set_resolution(resolution=resolution, resolved_by=resolved_by)
 
-    @transition(verdict, source=Verdict.PENDING, target=Verdict.ESCALATED, on_success=_save_decision_verdict)
+    @transition(verdict, source=Verdict.PENDING, target=Verdict.ESCALATED, on_success=save_state)
     def mark_escalated(self, *, resolution: Any = None, resolved_by: str = "") -> None:
         """Resolve this slot as escalated."""
 
         self._set_resolution(resolution=resolution, resolved_by=resolved_by)
 
-    @transition(verdict, source=Verdict.PENDING, target=Verdict.EXPIRED, on_success=_save_decision_verdict)
+    @transition(verdict, source=Verdict.PENDING, target=Verdict.EXPIRED, on_success=save_state)
     def mark_expired(self, *, resolution: Any = None, resolved_by: str = "") -> None:
         """Resolve this slot as expired."""
 
@@ -1098,19 +1202,23 @@ class Decision(AuditMixin, AngeeDataModel):
         self.attempts += 1
         self.save(update_fields=["attempts", "updated_at"])
 
+    def resolve(self, verdict: Verdict, *, resolution: Any = None, resolved_by: str = "") -> None:
+        """Resolve this slot through the transition matching ``verdict``."""
+
+        if verdict == Verdict.COMPLETED:
+            self.mark_completed(resolution=resolution, resolved_by=resolved_by)
+        elif verdict == Verdict.REJECTED:
+            self.mark_rejected(resolution=resolution, resolved_by=resolved_by)
+        elif verdict == Verdict.ESCALATED:
+            self.mark_escalated(resolution=resolution, resolved_by=resolved_by)
+        elif verdict == Verdict.EXPIRED:
+            self.mark_expired(resolution=resolution, resolved_by=resolved_by)
+        else:
+            raise ValidationError({"verdict": "Decision verdict must be terminal."})
+
     def _set_resolution(self, *, resolution: Any = None, resolved_by: str = "") -> None:
         """Persist normalized resolution audit fields for a terminal verdict."""
 
         self.resolution = resolution if resolution is not None else {}
         self.resolved_by = resolved_by
         self._transition_fields = {"resolution", "resolved_by"}
-
-    def _save_verdict_change(self) -> None:
-        """Save a transition-owned verdict change plus touched resolution fields."""
-
-        fields = {"verdict", *getattr(self, "_transition_fields", set())}
-        try:
-            self.save(update_fields=fields)
-        finally:
-            if hasattr(self, "_transition_fields"):
-                del self._transition_fields

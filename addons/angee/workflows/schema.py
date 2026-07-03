@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any, cast
 
 import strawberry
@@ -28,6 +29,15 @@ Trigger = apps.get_model("workflows", "Trigger")
 WorkflowRun = apps.get_model("workflows", "WorkflowRun")
 StepRun = apps.get_model("workflows", "StepRun")
 Decision = apps.get_model("workflows", "Decision")
+
+
+@strawberry.enum
+class DecisionVerb(Enum):
+    """Public verbs accepted by decision resolution mutations."""
+
+    COMPLETE = "complete"
+    REJECT = "reject"
+    ESCALATE = "escalate"
 
 
 @strawberry_django.type(Workflow)
@@ -96,8 +106,6 @@ class WorkflowRunType(AngeeNode):
     parent_step_run: "StepRunType | None"
     status: auto
     subject_object_id: auto
-    artifact_object_id: auto
-    data: JSON
     wake_at: auto
     steps_taken: auto
     budget_spent: JSON
@@ -390,14 +398,14 @@ class PublicDecisionMutation:
         self,
         info: strawberry.Info,
         decision: PublicID,
-        verdict: str,
+        verdict: DecisionVerb,
         payload: JSON | None = None,
     ) -> PublicDecisionType:
         """Resolve one pending decision as the signed-in session actor."""
 
         actor = session_user(info)
         target = resolve_action_target(Decision, decision, reason="workflows.graphql.decide")
-        return cast(PublicDecisionType, engine.decide(target, verdict, payload=payload, actor=actor))
+        return cast(PublicDecisionType, engine.decide(target, verdict.value, payload=payload, actor=actor))
 
 
 @strawberry.type
@@ -409,14 +417,14 @@ class ConsoleDecisionMutation:
         self,
         info: strawberry.Info,
         decision: PublicID,
-        verdict: str,
+        verdict: DecisionVerb,
         payload: JSON | None = None,
     ) -> DecisionType:
         """Resolve one pending decision as the signed-in session actor."""
 
         actor = session_user(info)
         target = resolve_action_target(Decision, decision, reason="workflows.graphql.decide")
-        return cast(DecisionType, engine.decide(target, verdict, payload=payload, actor=actor))
+        return cast(DecisionType, engine.decide(target, verdict.value, payload=payload, actor=actor))
 
 
 @strawberry.type
@@ -458,8 +466,7 @@ class WorkflowRunActionMutation:
         actor = session_user(info)
         target = resolve_action_target(WorkflowRun, run, reason="workflows.graphql.override_run")
         steps = [
-            resolve_action_target(Step, step_id, reason="workflows.graphql.override_run.step")
-            for step_id in next_steps
+            resolve_action_target(Step, step_id, reason="workflows.graphql.override_run.step") for step_id in next_steps
         ]
         override = engine.override_run(target, steps, actor=actor)
         return ActionResult(ok=True, message=f"Override recorded as {override.sqid}.")
@@ -487,6 +494,7 @@ class TriggerActionMutation:
 
 
 _CONSOLE_TYPES: list[object] = [
+    DecisionVerb,
     WorkflowType,
     StepType,
     EdgeType,
@@ -505,6 +513,7 @@ _CONSOLE_TYPES: list[object] = [
 ]
 
 _PUBLIC_TYPES: list[object] = [
+    DecisionVerb,
     PublicDecisionType,
     *_PUBLIC_DECISION_RESOURCE.types,
 ]

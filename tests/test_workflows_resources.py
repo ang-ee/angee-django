@@ -8,15 +8,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from django.core.management import call_command
-from django.db import connection
 from rebac import system_context
 
 from angee.addons import AddonContract
 from angee.resources.models import Resource
 from angee.workflows import models as workflow_models
-from tests.conftest import _clear_model_tables, _create_missing_tables
-from tests.test_workflows import Edge, Step, Trigger, Workflow
+from tests.workflows import WORKFLOW_DEFINITION_MODELS, Trigger, Workflow, workflow_table_setup
 
 
 class WorkflowResourceLedger(Resource):
@@ -45,18 +42,9 @@ def workflow_resource_tables(transactional_db: Any) -> Iterator[None]:
     """Create concrete workflow definition and resource ledger tables."""
 
     del transactional_db
-    models: tuple[type[Any], ...] = (Workflow, Step, Edge, Trigger, WorkflowResourceLedger)
-    created = _create_missing_tables(models)
-    call_command("rebac", "sync", verbosity=0)
-    _clear_model_tables(models)
-    try:
+    models: tuple[type[Any], ...] = (*WORKFLOW_DEFINITION_MODELS, WorkflowResourceLedger)
+    with workflow_table_setup(models):
         yield
-    finally:
-        _clear_model_tables(models)
-        if created:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created):
-                    schema_editor.delete_model(model)
 
 
 def test_demo_workflow_resources_publish_lineage_and_leave_trigger_disabled(

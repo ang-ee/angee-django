@@ -80,7 +80,7 @@ export function WorkflowsPage(): React.ReactElement {
     () => [
       {
         id: "canvas",
-        label: t("workflows.tabs.canvas"),
+        label: t("tabs.canvas"),
         icon: "workflow-canvas",
         render: ({ recordId, reload }) => (
           <WorkflowCanvas workflowId={recordId} onChanged={reload} />
@@ -89,7 +89,7 @@ export function WorkflowsPage(): React.ReactElement {
       },
       {
         id: "triggers",
-        label: t("workflows.tabs.triggers"),
+        label: t("tabs.triggers"),
         icon: "workflow-trigger",
         render: ({ recordId }) => <WorkflowTriggersPanel workflowId={recordId} />,
       },
@@ -105,7 +105,7 @@ export function WorkflowsPage(): React.ReactElement {
       recordTabs={recordTabs}
     >
       <List resource={WORKFLOW_MODEL} defaultGroup={{ field: "status" }}>
-        <Facet field="status" label="Status" />
+        <Facet field="status" label={t("col.status")} />
         <Column field="name" />
         <Column field="status" widget="statusBadge" />
         <Column field="version" />
@@ -114,7 +114,7 @@ export function WorkflowsPage(): React.ReactElement {
       <Form resource={WORKFLOW_MODEL}>
         <Field name="name" title />
         <Field name="description" />
-        <Group label={t("workflows.form.definition")} columns={2}>
+        <Group label={t("form.definition")} columns={2}>
           <Field name="status" readOnly widget="statusbar" />
           <Field name="version" readOnly />
           <Field name="error_workflow" />
@@ -123,14 +123,14 @@ export function WorkflowsPage(): React.ReactElement {
         <Field name="budget" widget="json" />
         <Action
           id="publish"
-          label={t("workflows.form.publish")}
+          label={t("form.publish")}
           icon="workflow-publish"
           run={publish}
           visibleWhen={(record) => record.status === "DRAFT"}
         />
         <Action
           id="start"
-          label={t("workflows.form.start")}
+          label={t("form.start")}
           icon="workflow-run"
           run={start}
           visibleWhen={(record) => record.status !== "ARCHIVED"}
@@ -150,7 +150,7 @@ function WorkflowCanvas({
   const t = useWorkflowsT();
   const graphQuery = useAuthoredQuery(
     WorkflowGraphDocument,
-    { workflow: workflowId, workflowId },
+    { workflow: workflowId },
     { models: [WORKFLOW_MODEL, STEP_MODEL, EDGE_MODEL] },
   );
   const [updatePosition] = useAuthoredMutation(UpdateWorkflowStepPositionDocument, {
@@ -206,7 +206,7 @@ function WorkflowCanvas({
   );
 
   if (graphQuery.fetching && !graphQuery.data) {
-    return <LoadingPanel message={t("workflows.canvas.loading")} />;
+    return <LoadingPanel message={t("canvas.loading")} />;
   }
 
   return (
@@ -216,8 +216,8 @@ function WorkflowCanvas({
           <EmptyState
             fill
             icon="workflow-canvas"
-            title={t("workflows.canvas.emptyTitle")}
-            description={t("workflows.canvas.emptyDescription")}
+            title={t("canvas.emptyTitle")}
+            description={t("canvas.emptyDescription")}
           />
         ) : (
           <GraphView
@@ -240,7 +240,7 @@ function WorkflowCanvas({
         )}
         <div className="absolute left-3 top-3">
           <Badge tone={isDraft ? "warning" : "neutral"}>
-            {isDraft ? t("workflows.canvas.draft") : t("workflows.canvas.readOnly")}
+            {isDraft ? t("canvas.draft") : t("canvas.readOnly")}
           </Badge>
         </div>
         <div className="absolute inset-x-3 bottom-3">
@@ -280,8 +280,8 @@ function CanvasInspector({
     <div className="min-h-0 overflow-auto bg-sheet-1 p-4">
       <EmptyState
         icon="workflow-step"
-        title={t("workflows.canvas.stepConfig")}
-        description={t("workflows.canvas.selectStep")}
+        title={t("canvas.stepConfig")}
+        description={t("canvas.selectStep")}
       />
     </div>
   );
@@ -302,7 +302,7 @@ function StepConfigPanel({
     <div className="min-h-0 overflow-auto bg-sheet-1">
       <ResourceEdit resource={STEP_MODEL} id={stepId} onSaved={onChanged}>
         <Field name="name" title />
-        <Group label={t("workflows.canvas.step")} columns={2}>
+        <Group label={t("canvas.step")} columns={2}>
           <Field name="workflow" readOnly />
           <Field name="key" />
           <Field
@@ -331,7 +331,7 @@ function EdgeConfigPanel({
   return (
     <div className="min-h-0 overflow-auto bg-sheet-1">
       <ResourceEdit resource={EDGE_MODEL} id={edgeId} onSaved={onChanged}>
-        <Group label={t("workflows.canvas.edge")} columns={1}>
+        <Group label={t("canvas.edge")} columns={1}>
           <Field name="workflow" readOnly />
           <Field name="source" />
           <Field name="target" />
@@ -363,7 +363,7 @@ function WorkflowTriggersPanel({
         <Column field="updated_at" />
       </List>
       <Form resource={TRIGGER_MODEL}>
-        <Group label={t("workflows.triggers.details")} columns={2}>
+        <Group label={t("triggers.details")} columns={2}>
           <Field name="workflow" createOnly />
           <Field name="kind" widget="select" options={triggerKindOptions} createOnly />
           <Field name="enabled" />

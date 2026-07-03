@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
 from datetime import timedelta
 from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
 from django.db import connection, transaction
 from django.db.models.deletion import ProtectedError
 from django.test.utils import CaptureQueriesContext
@@ -23,96 +21,25 @@ from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from angee.workflows import steps as workflow_steps
 from angee.workflows.steps import HandlerStep, StepResult
-from tests.conftest import _clear_model_tables, _create_missing_tables
-from tests.test_workflows import Edge, Step, Trigger, Workflow
+from tests.workflows import (
+    Decision,
+    Edge,
+    Step,
+    StepRun,
+    Trigger,
+    Workflow,
+    WorkflowRun,
+    advance_once,
+    execute_started,
+    run_to_terminal,
+    start_run,
+    step_for,
+    step_run_for,
+    workflow_with_steps,
+)
 
 User = get_user_model()
-
-
-class WorkflowRun(workflow_models.WorkflowRun):
-    """Concrete workflow run model for source-addon engine tests."""
-
-    class Meta(workflow_models.WorkflowRun.Meta):
-        """Django options for the concrete test workflow run model."""
-
-        abstract = False
-        app_label = "workflows"
-        db_table = "test_workflows_workflow_run"
-        rebac_resource_type = "workflows/run"
-        rebac_id_attr = "sqid"
-
-
-class StepRun(workflow_models.StepRun):
-    """Concrete workflow step-run journal model for source-addon engine tests."""
-
-    class Meta(workflow_models.StepRun.Meta):
-        """Django options for the concrete test step-run model."""
-
-        abstract = False
-        app_label = "workflows"
-        db_table = "test_workflows_step_run"
-        rebac_resource_type = "workflows/step_run"
-        rebac_id_attr = "sqid"
-
-
-class Decision(workflow_models.Decision):
-    """Concrete decision model for source-addon runtime tests."""
-
-    class Meta(workflow_models.Decision.Meta):
-        """Django options for the concrete test decision model."""
-
-        abstract = False
-        app_label = "workflows"
-        db_table = "test_workflows_decision"
-        rebac_resource_type = "workflows/decision"
-        rebac_id_attr = "sqid"
-
-
-def runtime_models() -> tuple[type[Any], type[Any]]:
-    """Return concrete runtime models, failing loudly while Slice 3 is absent."""
-
-    return WorkflowRun, StepRun
-
-
-def run_statuses() -> tuple[Any, Any]:
-    """Return runtime status enums, failing loudly while Slice 3 is absent."""
-
-    run_status = getattr(workflow_models, "RunStatus", None)
-    step_run_status = getattr(workflow_models, "StepRunStatus", None)
-    if run_status is None or step_run_status is None:
-        pytest.fail("RunStatus and StepRunStatus must be implemented.")
-    return run_status, step_run_status
-
-
-@pytest.fixture()
-def workflow_engine_tables(transactional_db: Any) -> Iterator[None]:
-    """Create concrete workflow runtime tables and sync their REBAC schema."""
-
-    del transactional_db
-    run_model, step_run_model = runtime_models()
-    models: tuple[type[Any], ...] = (Workflow, Step, Edge, Trigger, run_model, step_run_model, Decision)
-    created = _create_missing_tables(models)
-    call_command("rebac", "sync", verbosity=0)
-    _clear_model_tables(models)
-    try:
-        yield
-    finally:
-        _clear_model_tables(models)
-        if created:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created):
-                    schema_editor.delete_model(model)
-
-
-@pytest.fixture()
-def no_workflow_queue(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep engine tests synchronous by replacing queue enqueue hooks."""
-
-    from angee.workflows import engine
-
-    monkeypatch.setattr(engine, "enqueue_advance", lambda run_id: None)
-    monkeypatch.setattr(engine, "enqueue_advance_at", lambda run_id, when: None)
-    monkeypatch.setattr(engine, "enqueue_execute", lambda step_run_id: None)
+pytest_plugins = ("tests.workflows",)
 
 
 @pytest.fixture()
@@ -121,8 +48,8 @@ def handler_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 
     calls: list[dict[str, Any]] = []
 
-    def run(self: HandlerStep, step_run: Any) -> StepResult:
-        del self
+    def run(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+        del self, now
         config = dict(step_run.step.config)
         calls.append(
             {
@@ -142,113 +69,6 @@ def handler_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 
     monkeypatch.setattr(HandlerStep, "run", run)
     return calls
-
-
-def workflow_with_steps(
-    *,
-    name: str = "Engine",
-    max_steps: int = 1000,
-    steps: tuple[dict[str, Any], ...],
-    edges: tuple[tuple[str, str, str], ...],
-) -> Workflow:
-    """Create and publish a workflow definition graph."""
-
-    with system_context(reason="test workflows engine definition"):
-        draft = Workflow.objects.create(name=name, max_steps=max_steps)
-        by_key = {}
-        for index, spec in enumerate(steps):
-            by_key[spec["key"]] = Step.objects.create(
-                workflow=draft,
-                key=spec["key"],
-                name=spec.get("name", spec["key"].title()),
-                step_class=spec.get("step_class", "handler"),
-                config=spec.get("config", {}),
-                join_rule=spec.get("join_rule", workflow_models.JoinRule.ALL_SUCCESS),
-                is_entry=index == 0 if "is_entry" not in spec else spec["is_entry"],
-            )
-        for source, target, condition in edges:
-            Edge.objects.create(
-                workflow=draft,
-                source=by_key[source],
-                target=by_key[target],
-                condition=condition,
-            )
-        return draft.publish()
-
-
-def start_run(workflow: Workflow) -> Any:
-    """Start a run without relying on a live queue."""
-
-    from angee.workflows import engine
-
-    return engine.start(workflow, subject=None, actor=None)
-
-
-def advance_once(run: Any, *, now: Any | None = None) -> list[Any]:
-    """Advance one run and return started rows."""
-
-    from angee.workflows import engine
-
-    _, step_run_status = run_statuses()
-    if now is None:
-        engine.advance(run.pk)
-    else:
-        engine.advance(run.pk, now=now)
-    with system_context(reason="test workflows engine read started"):
-        return list(StepRun.objects.filter(run=run, status=step_run_status.STARTED).order_by("pk"))
-
-
-def execute_started(run: Any, *, now: Any | None = None, limit: int | None = None) -> None:
-    """Execute currently started step-runs synchronously."""
-
-    from angee.workflows import engine
-
-    _, step_run_status = run_statuses()
-    with system_context(reason="test workflows engine read started"):
-        rows = list(StepRun.objects.filter(run=run, status=step_run_status.STARTED).order_by("pk"))
-    if limit is not None:
-        rows = rows[:limit]
-    for row in rows:
-        if now is None:
-            engine.execute(row.pk)
-        else:
-            engine.execute(row.pk, now=now)
-
-
-def run_to_terminal(run: Any, *, max_cycles: int = 20) -> Any:
-    """Drive a run synchronously until it reaches a terminal state."""
-
-    run_status, step_run_status = run_statuses()
-    for _ in range(max_cycles):
-        run.refresh_from_db()
-        if run.status in {run_status.SUCCEEDED, run_status.FAILED, run_status.CANCELED}:
-            return run
-        advance_once(run)
-        execute_started(run)
-        run.refresh_from_db()
-        with system_context(reason="test workflows engine active check"):
-            active = StepRun.objects.filter(
-                run=run,
-                status__in=[step_run_status.SCHEDULED, step_run_status.STARTED],
-            ).exists()
-        if not active:
-            advance_once(run)
-    run.refresh_from_db()
-    return run
-
-
-def step_run_for(run: Any, key: str) -> Any:
-    """Return one step-run row under elevated test read context."""
-
-    with system_context(reason="test workflows engine step_run read"):
-        return StepRun.objects.get(run=run, step__key=key)
-
-
-def step_for(workflow: Workflow, key: str) -> Step:
-    """Return one workflow step under elevated test read context."""
-
-    with system_context(reason="test workflows engine step read"):
-        return Step.objects.get(workflow=workflow, key=key)
 
 
 def execute_job(step_run_id: int, *, attempts: int) -> jobs.Job:
@@ -273,7 +93,7 @@ def test_two_step_run_completes_end_to_end(
     """A run pins the published version, injects output, and succeeds."""
 
     del workflow_engine_tables, no_workflow_queue
-    run_status, step_run_status = run_statuses()
+    run_status, step_run_status = workflow_models.RunStatus, workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=(
             {"key": "start", "config": {"outcome": "next", "output": {"value": 7}}},
@@ -336,7 +156,7 @@ def test_duplicate_advance_claims_a_scheduled_step_once(
     """Duplicate advance calls are idempotent while a step is already claimed."""
 
     del workflow_engine_tables, no_workflow_queue, handler_calls
-    _, step_run_status = run_statuses()
+    step_run_status = workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=({"key": "start", "config": {"outcome": "done"}},),
         edges=(),
@@ -362,7 +182,7 @@ def test_conditional_branch_skip_cascades_through_all_success_join(
     """Untaken branch targets skip, and default joins skip behind them."""
 
     del workflow_engine_tables, no_workflow_queue, handler_calls
-    step_run_status = run_statuses()[1]
+    step_run_status = workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=(
             {"key": "entry", "config": {"outcome": "left"}},
@@ -393,7 +213,7 @@ def test_none_failed_min_one_success_join_cures_post_branch_skip(
     """A post-branch join can run when one branch succeeded and the other skipped."""
 
     del workflow_engine_tables, no_workflow_queue, handler_calls
-    run_status, step_run_status = run_statuses()
+    run_status, step_run_status = workflow_models.RunStatus, workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=(
             {"key": "entry", "config": {"outcome": "left"}},
@@ -429,7 +249,7 @@ def test_one_success_join_runs_without_waiting_for_all_siblings(
     """The one_success join schedules as soon as one upstream succeeds."""
 
     del workflow_engine_tables, no_workflow_queue, handler_calls
-    _, step_run_status = run_statuses()
+    step_run_status = workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=(
             {"key": "entry", "config": {"outcome": "done"}},
@@ -483,7 +303,7 @@ def test_join_rule_truth_table(
     """Join readiness is derived from upstream sibling StepRun statuses."""
 
     del workflow_engine_tables, no_workflow_queue
-    _, step_run_status = run_statuses()
+    step_run_status = workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=(
             {"key": "left", "is_entry": True, "config": {"outcome": "done"}},
@@ -533,7 +353,7 @@ def test_content_routing_uses_outcome_edges(
     """Only edges matching the source outcome are taken."""
 
     del workflow_engine_tables, no_workflow_queue, handler_calls
-    step_run_status = run_statuses()[1]
+    step_run_status = workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=(
             {"key": "classify", "config": {"outcome": "pdf"}},
@@ -558,7 +378,7 @@ def test_max_steps_fails_run_before_claiming_next_step(
     """The engine, not a step impl, enforces the pinned max_steps bound."""
 
     del workflow_engine_tables, no_workflow_queue, handler_calls
-    run_status, step_run_status = run_statuses()
+    run_status, step_run_status = workflow_models.RunStatus, workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         max_steps=1,
         steps=(
@@ -588,7 +408,7 @@ def test_timer_wait_resumes_from_wake_sweep(
     """A durable wait step becomes executable when the sweep sees its wake time."""
 
     del workflow_engine_tables, no_workflow_queue, handler_calls
-    run_status, step_run_status = run_statuses()
+    run_status, step_run_status = workflow_models.RunStatus, workflow_models.StepRunStatus
     now = timezone.now()
     wake_at = now + timedelta(hours=1)
     workflow = workflow_with_steps(
@@ -627,7 +447,7 @@ def test_cancellation_propagates_to_journal_and_child_runs(
     """Canceling a run cancels durable waits, scheduled rows, and child runs."""
 
     del workflow_engine_tables, no_workflow_queue
-    run_status, step_run_status = run_statuses()
+    run_status, step_run_status = workflow_models.RunStatus, workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=(
             {"key": "entry", "config": {"outcome": "done"}},
@@ -683,7 +503,7 @@ def test_transient_step_error_uses_configured_retry_backoff(
     del workflow_engine_tables, no_workflow_queue
     transient_error = getattr(workflow_steps, "TransientStepError", None)
     assert transient_error is not None
-    _, step_run_status = run_statuses()
+    step_run_status = workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=(
             {
@@ -696,8 +516,8 @@ def test_transient_step_error_uses_configured_retry_backoff(
     run = start_run(workflow)
     step_run = advance_once(run)[0]
 
-    def run_transient(self: HandlerStep, step_run: Any) -> StepResult:
-        del self, step_run
+    def run_transient(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+        del self, step_run, now
         raise transient_error("try again")
 
     monkeypatch.setattr(HandlerStep, "run", run_transient)
@@ -750,7 +570,7 @@ def test_hard_failure_routes_failed_outcome(
     """Hard impl failures journal outcome=failed and activate matching edges."""
 
     del workflow_engine_tables, no_workflow_queue, handler_calls
-    run_status, step_run_status = run_statuses()
+    run_status, step_run_status = workflow_models.RunStatus, workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=(
             {"key": "start", "config": {"mode": "error", "error": "boom"}},
@@ -793,7 +613,8 @@ def test_step_impl_heartbeat_helper_updates_started_row(
     )
     run = start_run(workflow)
 
-    def run_with_heartbeat(self: HandlerStep, step_run: Any) -> StepResult:
+    def run_with_heartbeat(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+        del now
         self.heartbeat(step_run, at=pulse_at)
         return StepResult.done(output={}, outcome="done")
 
@@ -817,7 +638,7 @@ def test_heartbeat_timeout_reaps_started_rows_and_routes_failed_outcome(
 
     del workflow_engine_tables, no_workflow_queue, handler_calls
     settings.ANGEE_WORKFLOWS_HEARTBEAT_TIMEOUT = 60
-    _, step_run_status = run_statuses()
+    step_run_status = workflow_models.StepRunStatus
     now = timezone.now()
     stale_at = now - timedelta(seconds=61)
     enqueued: list[int] = []
@@ -857,7 +678,7 @@ def test_reaper_ignores_waiting_rows(
 
     del workflow_engine_tables, no_workflow_queue, handler_calls
     settings.ANGEE_WORKFLOWS_HEARTBEAT_TIMEOUT = 60
-    _, step_run_status = run_statuses()
+    step_run_status = workflow_models.StepRunStatus
     now = timezone.now()
     workflow = workflow_with_steps(
         steps=(
@@ -895,7 +716,7 @@ def test_reaper_finishes_canceled_started_rows(
 
     del workflow_engine_tables, no_workflow_queue
     settings.ANGEE_WORKFLOWS_HEARTBEAT_TIMEOUT = 60
-    run_status, step_run_status = run_statuses()
+    run_status, step_run_status = workflow_models.RunStatus, workflow_models.StepRunStatus
     now = timezone.now()
     stale_at = now - timedelta(seconds=61)
     enqueued: list[int] = []
@@ -929,7 +750,7 @@ def test_error_workflow_fires_once_with_failed_run_subject(
     """A failed run starts its linked error workflow once using the failed StepRun as parent."""
 
     del workflow_engine_tables, no_workflow_queue, handler_calls
-    run_status = run_statuses()[0]
+    run_status = workflow_models.RunStatus
     error_version = workflow_with_steps(
         name="Error workflow",
         steps=({"key": "recover", "config": {"outcome": "done"}},),
@@ -1104,12 +925,7 @@ def test_postgres_lock_sql_scopes_joined_engine_queries_to_self(
         decision = Decision.objects.create(step_run=step_run, action="approve")
 
     with transaction.atomic():
-        advance_sql = str(
-            WorkflowRun.objects.lock_if_supported()
-            .select_related("workflow")
-            .filter(pk=run.pk)
-            .query
-        )
+        advance_sql = str(WorkflowRun.objects.lock_if_supported().select_related("workflow").filter(pk=run.pk).query)
         decision_sql = str(
             Decision.objects.lock_if_supported()
             .select_related("step_run", "step_run__run", "step_run__step")
@@ -1121,8 +937,8 @@ def test_postgres_lock_sql_scopes_joined_engine_queries_to_self(
     assert "FOR UPDATE OF" in decision_sql
     assert "test_workflows_workflow_run" in advance_sql
     assert "test_workflows_decision" in decision_sql
-    assert "test_workflows_workflow\"" not in advance_sql.split("FOR UPDATE OF", 1)[1]
-    assert "test_workflows_step_run\"" not in decision_sql.split("FOR UPDATE OF", 1)[1]
+    assert 'test_workflows_workflow"' not in advance_sql.split("FOR UPDATE OF", 1)[1]
+    assert 'test_workflows_step_run"' not in decision_sql.split("FOR UPDATE OF", 1)[1]
 
 
 @pytest.mark.django_db(transaction=True)

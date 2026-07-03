@@ -25,6 +25,7 @@ import { JsonBlock } from "./JsonBlock";
 
 const DECISION_MODEL = "workflows.Decision";
 const INBOX_LIMIT = 100;
+type DecisionVerb = "COMPLETE" | "REJECT";
 
 interface DecisionRow extends Record<string, unknown> {
   id: string;
@@ -52,23 +53,23 @@ export function InboxPage(): React.ReactElement {
   const selected = rows.find((row) => row.id === selectedId) ?? rows[0] ?? null;
   const columns = React.useMemo<readonly ListColumn<DecisionRow>[]>(
     () => [
-      { field: "workflow", header: "Workflow" },
-      { field: "step", header: "Step" },
-      { field: "action", header: "Action" },
-      { field: "priority", header: "Priority", align: "right" },
+      { field: "workflow", header: t("col.workflow") },
+      { field: "step", header: t("col.step") },
+      { field: "action", header: t("col.action") },
+      { field: "priority", header: t("col.priority"), align: "right" },
       {
         field: "verdict",
-        header: "Verdict",
+        header: t("col.verdict"),
         widget: "statusBadge",
         tone: { PENDING: "warning" },
       },
-      { field: "created_at", header: "Created" },
+      { field: "created_at", header: t("col.created") },
     ],
-    [],
+    [t],
   );
 
   if (decisionsQuery.fetching && !decisionsQuery.data) {
-    return <LoadingPanel message={t("workflows.inbox.loading")} />;
+    return <LoadingPanel message={t("inbox.loading")} />;
   }
 
   return (
@@ -79,10 +80,11 @@ export function InboxPage(): React.ReactElement {
         fetching={decisionsQuery.fetching}
         error={decisionsQuery.error}
         onRowClick={(row) => setSelectedId(row.id)}
+        activeRowId={selected?.id ?? null}
         emptyContent={{
           icon: "workflow-inbox",
-          title: t("workflows.inbox.emptyTitle"),
-          description: t("workflows.inbox.emptyDescription"),
+          title: t("inbox.emptyTitle"),
+          description: t("inbox.emptyDescription"),
         }}
         className="border-r border-border-subtle"
       />
@@ -120,8 +122,8 @@ function DecisionResolutionPanel({
       <div className="min-h-0 overflow-auto bg-sheet-1 p-4">
         <EmptyState
           icon="workflow-inbox"
-          title={t("workflows.inbox.emptyTitle")}
-          description={t("workflows.inbox.emptyDescription")}
+          title={t("inbox.emptyTitle")}
+          description={t("inbox.emptyDescription")}
         />
       </div>
     );
@@ -129,25 +131,25 @@ function DecisionResolutionPanel({
 
   const current = decision;
 
-  async function resolve(verdict: "complete" | "reject"): Promise<void> {
+  async function resolve(verdict: DecisionVerb): Promise<void> {
     setError(null);
     let parsed: unknown;
     try {
-      parsed = parseJsonPayload(payload);
+      parsed = parseJsonPayload(payload, t("json.invalid"));
     } catch (parseError) {
-      setError(parseError instanceof Error ? parseError.message : t("workflows.inbox.actionFailed"));
+      setError(parseError instanceof Error ? parseError.message : t("inbox.actionFailed"));
       return;
     }
     try {
       await decide({ decision: current.id, verdict, payload: parsed });
       onResolved();
     } catch (mutationError) {
-      setError(mutationError instanceof Error ? mutationError.message : t("workflows.inbox.actionFailed"));
+      setError(mutationError instanceof Error ? mutationError.message : t("inbox.actionFailed"));
     }
   }
 
-  const title = decision.step_name || decision.action;
-  const workflow = decision.workflow_name;
+  const title = decisionStepTitle(decision);
+  const workflow = decisionWorkflowName(decision);
 
   return (
     <aside className="min-h-0 overflow-auto bg-sheet-1 p-4">
@@ -166,13 +168,13 @@ function DecisionResolutionPanel({
         </div>
         <section className="space-y-2">
           <h3 className="text-xs font-semibold text-fg-muted">
-            {t("workflows.inbox.payload")}
+            {t("inbox.payload")}
           </h3>
           <JsonBlock value={decision.payload} />
         </section>
         <FieldRoot>
           <FieldLabel htmlFor={payloadId}>
-            {t("workflows.inbox.resolution")}
+            {t("inbox.resolution")}
           </FieldLabel>
           <Textarea
             id={payloadId}
@@ -181,7 +183,7 @@ function DecisionResolutionPanel({
             invalid={Boolean(error)}
             onChange={(event) => setPayload(event.target.value)}
           />
-          <FieldDescription>JSON</FieldDescription>
+          <FieldDescription>{t("json.label")}</FieldDescription>
         </FieldRoot>
         <ErrorBanner description={error ?? decideState.error?.message ?? null} />
         <div className="flex flex-wrap justify-end gap-2">
@@ -189,19 +191,19 @@ function DecisionResolutionPanel({
             type="button"
             variant="secondary"
             loading={decideState.fetching}
-            onClick={() => void resolve("reject")}
+            onClick={() => void resolve("REJECT")}
           >
             <Glyph name="workflow-reject" />
-            {t("workflows.inbox.reject")}
+            {t("inbox.reject")}
           </Button>
           <Button
             type="button"
             variant="primary"
             loading={decideState.fetching}
-            onClick={() => void resolve("complete")}
+            onClick={() => void resolve("COMPLETE")}
           >
             <Glyph name="workflow-approve" />
-            {t("workflows.inbox.complete")}
+            {t("inbox.complete")}
           </Button>
         </div>
       </div>
@@ -214,8 +216,8 @@ function decisionRows(
 ): DecisionRow[] {
   return decisions.map((decision) => ({
     id: decision.id,
-    workflow: decision.workflow_name,
-    step: decision.step_name,
+    workflow: decisionWorkflowName(decision),
+    step: decisionStepTitle(decision),
     action: decision.action,
     priority: decision.priority,
     verdict: decision.verdict,
@@ -224,12 +226,20 @@ function decisionRows(
   }));
 }
 
-function parseJsonPayload(value: string): unknown {
+function decisionWorkflowName(decision: PendingWorkflowDecision): string {
+  return decision.workflow_name || "Workflow";
+}
+
+function decisionStepTitle(decision: PendingWorkflowDecision): string {
+  return decision.step_name || decision.action;
+}
+
+function parseJsonPayload(value: string, invalidMessage: string): unknown {
   const trimmed = value.trim();
   if (!trimmed) return {};
   try {
     return JSON.parse(trimmed) as unknown;
   } catch (error) {
-    throw new Error(error instanceof Error ? error.message : "Invalid JSON");
+    throw new Error(error instanceof Error && error.message ? `${invalidMessage}: ${error.message}` : invalidMessage);
   }
 }

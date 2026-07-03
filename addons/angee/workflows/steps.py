@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, ClassVar, Self
 
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from rebac import system_context
@@ -124,9 +124,10 @@ class StepImpl(ImplBase):
         if not isinstance(config, Mapping):
             raise ValidationError({"config": "Step config must be a JSON object."})
 
-    def run(self, step_run: Any) -> StepResult:
+    def run(self, step_run: Any, *, now: datetime) -> StepResult:
         """Execute one step-run journal row."""
 
+        del now
         raise NotImplementedError(f"{type(self).__name__}.run() is supplied by a runtime slice.")
 
     def heartbeat(self, step_run: Any, *, at: datetime | None = None) -> None:
@@ -150,20 +151,20 @@ def retry_policy_from_config(config: Any) -> StepRetryPolicy:
     if not isinstance(retry, Mapping):
         raise ValidationError({"config": "Step retry must be a JSON object."})
 
-    max_attempts = _positive_int(retry.get("max_attempts", 1), "Step retry max_attempts")
+    max_attempts = positive_int(retry.get("max_attempts", 1), "Step retry max_attempts")
     wait = 0
     linear_wait = 0
     exponential_wait = 0
     backoff = retry.get("backoff", 0)
     if isinstance(backoff, Mapping):
-        wait = _non_negative_int(backoff.get("wait", 0), "Step retry backoff.wait")
-        linear_wait = _non_negative_int(backoff.get("linear_wait", 0), "Step retry backoff.linear_wait")
-        exponential_wait = _non_negative_int(
+        wait = non_negative_int(backoff.get("wait", 0), "Step retry backoff.wait")
+        linear_wait = non_negative_int(backoff.get("linear_wait", 0), "Step retry backoff.linear_wait")
+        exponential_wait = non_negative_int(
             backoff.get("exponential_wait", 0),
             "Step retry backoff.exponential_wait",
         )
     else:
-        wait = _non_negative_int(backoff, "Step retry backoff")
+        wait = non_negative_int(backoff, "Step retry backoff")
     return StepRetryPolicy(
         max_attempts=max_attempts,
         wait=wait,
@@ -204,10 +205,9 @@ class WaitStep(StepImpl):
         if "until" in config and _config_until(config["until"]) is None:
             raise ValidationError({"config": "Wait until must be an ISO datetime."})
 
-    def run(self, step_run: Any) -> StepResult:
+    def run(self, step_run: Any, *, now: datetime) -> StepResult:
         """Return done once the timer or event condition has arrived."""
 
-        now = getattr(step_run, "_engine_now", None) or timezone.now()
         if str(getattr(step_run.status, "value", step_run.status)) == "waiting":
             if step_run.wait_until is not None and step_run.wait_until <= now:
                 return StepResult.done(output=step_run.output, outcome="timer")
@@ -267,9 +267,10 @@ class GateStep(StepImpl):
             if config.get(key) not in (None, "") and _config_datetime(config.get(key)) is None:
                 raise ValidationError({"config": f"Gate {key} must be an ISO datetime."})
 
-    def run(self, step_run: Any) -> StepResult:
+    def run(self, step_run: Any, *, now: datetime) -> StepResult:
         """Suspend the step, keeping only durable resume state."""
 
+        del now
         config = dict(step_run.step.config)
         return StepResult.suspend(
             resume_state={"gate": config},
@@ -294,14 +295,92 @@ class MapStep(StepImpl):
         items = config.get("items")
         if not isinstance(items, (str, list)) or not items:
             raise ValidationError({"config": "Map steps require an items expression or literal list."})
-        ratio = config.get("min_success_ratio", config.get("min_success"))
-        if ratio is not None:
-            try:
-                parsed = float(ratio)
-            except (TypeError, ValueError) as error:
-                raise ValidationError({"config": "Map min_success_ratio must be a number."}) from error
+        parsed = optional_number(config.get("min_success_ratio", config.get("min_success")), "Map min_success_ratio")
+        if parsed is not None:
             if parsed < 0 or parsed > 1:
                 raise ValidationError({"config": "Map min_success_ratio must be between 0 and 1."})
+
+    @classmethod
+    def engine_expanded_filter(cls) -> dict[str, Any]:
+        """Return the ORM predicate for map parent rows the engine expands."""
+
+        return {"step__step_class": cls.key, "map_index": -1}
+
+    @classmethod
+    def target_step(cls, step_run: Any) -> Any:
+        """Return the configured target step for one map parent row."""
+
+        config = cls.config_mapping(step_run)
+        key = str(config.get("target_step") or "")
+        if not key:
+            raise ValidationError({"config": "Map steps require target_step."})
+        try:
+            return step_run.run.workflow.steps.get(key=key)
+        except ObjectDoesNotExist as error:
+            raise ValidationError({"config": f"Map target step {key!r} does not exist."}) from error
+
+    @classmethod
+    def items(cls, step_run: Any) -> list[Any]:
+        """Return the item list resolved from this map step's config."""
+
+        expression = cls.config_mapping(step_run).get("items")
+        value = cls.expression_value(expression, step_run)
+        if not isinstance(value, list):
+            raise ValidationError({"config": "Map items expression must resolve to a list."})
+        return list(value)
+
+    @classmethod
+    def policy_passes(cls, config: Any, output: Mapping[str, Any]) -> bool:
+        """Return whether aggregate map output satisfies ``config``."""
+
+        total = int(output["total"])
+        successes = int(output["successes"])
+        failures = int(output["failures"])
+        mapping = config if isinstance(config, Mapping) else {}
+        if bool(mapping.get("all_must_succeed", False)):
+            return failures == 0 and successes == total
+        ratio = optional_number(mapping.get("min_success_ratio", mapping.get("min_success")), "Map min_success_ratio")
+        if ratio is None:
+            return failures == 0 and successes == total
+        if total == 0:
+            return ratio <= 0
+        return successes / total >= ratio
+
+    @classmethod
+    def config_mapping(cls, step_run: Any) -> Mapping[str, Any]:
+        """Return the map config as a mapping."""
+
+        config = step_run.step.config
+        return config if isinstance(config, Mapping) else {}
+
+    @classmethod
+    def expression_value(cls, expression: Any, step_run: Any) -> Any:
+        """Resolve a map ``items`` expression against subject, run, or input."""
+
+        if isinstance(expression, list):
+            return expression
+        if not isinstance(expression, str) or not expression:
+            raise ValidationError({"config": "Map steps require an items expression."})
+        root, *path = expression.split(".")
+        if root == "subject":
+            value = step_run.run.subject
+        elif root == "run":
+            value = step_run.run
+        elif root == "input":
+            value = step_run.input
+        else:
+            raise ValidationError({"config": "Map items expression must start with subject, run, or input."})
+        for part in path:
+            value = cls.lookup(value, part)
+        return value
+
+    @staticmethod
+    def lookup(value: Any, key: str) -> Any:
+        """Read one expression path segment from a mapping or object."""
+
+        if isinstance(value, Mapping):
+            return value.get(key)
+        return getattr(value, key)
 
 
 def _config_until(value: Any) -> datetime | None:
@@ -326,7 +405,7 @@ def _config_datetime(value: Any) -> datetime | None:
     return parsed
 
 
-def _positive_int(value: Any, label: str) -> int:
+def positive_int(value: Any, label: str) -> int:
     """Return ``value`` as a positive integer or raise a config error."""
 
     try:
@@ -338,7 +417,7 @@ def _positive_int(value: Any, label: str) -> int:
     return parsed
 
 
-def _non_negative_int(value: Any, label: str) -> int:
+def non_negative_int(value: Any, label: str) -> int:
     """Return ``value`` as a non-negative integer or raise a config error."""
 
     try:
@@ -348,6 +427,40 @@ def _non_negative_int(value: Any, label: str) -> int:
     if parsed < 0:
         raise ValidationError({"config": f"{label} must be non-negative."})
     return parsed
+
+
+def optional_number(value: Any, label: str) -> float | None:
+    """Return ``value`` as a number when present, or raise a config error."""
+
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool):
+        raise ValidationError({"config": f"{label} must be a number."})
+    try:
+        return float(value)
+    except (TypeError, ValueError) as error:
+        raise ValidationError({"config": f"{label} must be a number."}) from error
+
+
+def optional_positive_int(value: Any) -> int | None:
+    """Leniently return ``value`` as a positive integer when possible."""
+
+    parsed = optional_non_negative_int(value)
+    if parsed is None or parsed <= 0:
+        return None
+    return parsed
+
+
+def optional_non_negative_int(value: Any) -> int | None:
+    """Leniently return ``value`` as a non-negative integer when possible."""
+
+    if value in (None, "") or isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except TypeError, ValueError:
+        return None
+    return parsed if parsed >= 0 else None
 
 
 def _decision_specs_from_config(config: Mapping[str, Any]) -> tuple[DecisionSpec, ...]:

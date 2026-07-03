@@ -286,6 +286,7 @@ export interface FlatListBodyProps<TRow extends Row> {
   selectable?: boolean;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
+  activeRowId?: string | null;
   draggableRow?: (row: TRow) => DndPayload | null;
   emptyContent: ListEmptyContent;
   fetching: boolean;
@@ -309,6 +310,7 @@ export function FlatListBody<TRow extends Row>({
   selectable = true,
   rowHref,
   onRowClick,
+  activeRowId,
   draggableRow,
   emptyContent,
   fetching,
@@ -395,6 +397,7 @@ export function FlatListBody<TRow extends Row>({
                       selectable,
                       rowHref,
                       onRowClick,
+                      activeRowId,
                       draggableRow,
                     })
                   : null;
@@ -705,6 +708,7 @@ function RecordRowInner<TRow extends Row>({
   rowHref,
   onRowClick,
   onRecordOpen,
+  active,
   draggableRow,
 }: {
   row: TableRowModel<TRow>;
@@ -715,6 +719,7 @@ function RecordRowInner<TRow extends Row>({
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
   onRecordOpen?: (row: TRow) => void;
+  active?: boolean;
   draggableRow?: (row: TRow) => DndPayload | null;
 }): React.ReactElement {
   const dragProps = dragSourceProps(draggableRow?.(row.original) ?? null);
@@ -728,6 +733,7 @@ function RecordRowInner<TRow extends Row>({
         selectable={selectable}
         href={href}
         onRecordOpen={onRecordOpen}
+        active={active}
         dragProps={dragProps}
       />
     );
@@ -741,6 +747,7 @@ function RecordRowInner<TRow extends Row>({
       selectable={selectable}
       onRowClick={onRowClick}
       onRecordOpen={onRecordOpen}
+      active={active}
       dragProps={dragProps}
     />
   );
@@ -759,6 +766,7 @@ function LinkedRecordRow<TRow extends Row>({
   selectable,
   href,
   onRecordOpen,
+  active = false,
   dragProps,
 }: {
   row: TableRowModel<TRow>;
@@ -767,6 +775,7 @@ function LinkedRecordRow<TRow extends Row>({
   selectable: boolean;
   href: string;
   onRecordOpen?: (row: TRow) => void;
+  active?: boolean;
   dragProps?: DragSourceProps;
 }): React.ReactElement {
   const t = useUiT();
@@ -807,6 +816,7 @@ function LinkedRecordRow<TRow extends Row>({
     <TableRow
       {...dragProps}
       interactive
+      aria-current={active ? "true" : undefined}
       data-selected={selected ? "" : undefined}
       onClick={openRow}
     >
@@ -856,6 +866,7 @@ function PlainRecordRow<TRow extends Row>({
   selectable,
   onRowClick,
   onRecordOpen,
+  active = false,
   dragProps,
 }: {
   row: TableRowModel<TRow>;
@@ -865,6 +876,7 @@ function PlainRecordRow<TRow extends Row>({
   selectable: boolean;
   onRowClick?: (row: TRow) => void;
   onRecordOpen?: (row: TRow) => void;
+  active?: boolean;
   dragProps?: DragSourceProps;
 }): React.ReactElement {
   const t = useUiT();
@@ -873,6 +885,7 @@ function PlainRecordRow<TRow extends Row>({
     <TableRow
       {...dragProps}
       interactive={interactive}
+      aria-current={active ? "true" : undefined}
       data-selected={selected ? "" : undefined}
       onClick={onRowClick ? () => {
         onRecordOpen?.(row.original);
@@ -929,6 +942,7 @@ function renderListRow<TRow extends Row>({
   selectable,
   rowHref,
   onRowClick,
+  activeRowId,
   draggableRow,
 }: {
   row: TableRowModel<TRow>;
@@ -938,6 +952,7 @@ function renderListRow<TRow extends Row>({
   selectable: boolean;
   rowHref?: (row: TRow) => string;
   onRowClick?: (row: TRow) => void;
+  activeRowId?: string | null;
   draggableRow?: (row: TRow) => DndPayload | null;
 }): React.ReactElement {
   if (row.getIsGrouped()) {
@@ -959,6 +974,7 @@ function renderListRow<TRow extends Row>({
       selectable={selectable}
       rowHref={rowHref}
       onRowClick={onRowClick}
+      active={activeRowId != null && String(row.original.id) === activeRowId}
       draggableRow={draggableRow}
     />
   );

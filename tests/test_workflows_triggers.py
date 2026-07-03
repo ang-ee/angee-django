@@ -10,8 +10,7 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
-from django.db import connection, models
+from django.db import models
 from django.db.migrations.recorder import MigrationRecorder
 from django.utils import timezone
 from rebac import app_settings, system_context
@@ -22,19 +21,25 @@ from angee.integrate.models import Bridge
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from angee.workflows.steps import HandlerStep, StepResult
-from tests.conftest import SchemaAddon, _clear_model_tables, _create_missing_tables, execute_schema, result_data
-from tests.test_workflows import Edge, Step, Trigger, Workflow
-from tests.test_workflows_engine import (
-    Decision,
+from tests.conftest import SchemaAddon, execute_schema, result_data
+from tests.workflows import (
+    WORKFLOW_RUNTIME_MODELS,
+    Edge,
+    Step,
     StepRun,
+    Trigger,
+    Workflow,
     WorkflowRun,
     advance_once,
     execute_started,
     run_to_terminal,
+    start_run,
     step_run_for,
+    workflow_table_setup,
 )
 
 User = get_user_model()
+pytest_plugins = ("tests.workflows",)
 
 
 class TriggerSubject(models.Model):
@@ -73,31 +78,11 @@ def workflow_trigger_tables(transactional_db: Any) -> Iterator[None]:
     """Create trigger-specific concrete tables and sync workflow REBAC."""
 
     del transactional_db
-    workflow_models = (Workflow, Step, Edge, Trigger, WorkflowRun, StepRun, Decision)
-    created = _create_missing_tables((*workflow_models, *TRIGGER_TEST_MODELS))
-    call_command("rebac", "sync", verbosity=0)
-    _clear_model_tables((*workflow_models, *TRIGGER_TEST_MODELS))
+    models = (*WORKFLOW_RUNTIME_MODELS, *TRIGGER_TEST_MODELS)
     workflow_triggers = importlib.import_module("angee.workflows.triggers")
-    workflow_triggers.connect_event_trigger_receiver()
-    try:
+    with workflow_table_setup(models):
+        workflow_triggers.connect_event_trigger_receiver()
         yield
-    finally:
-        _clear_model_tables((*workflow_models, *TRIGGER_TEST_MODELS))
-        if created:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created):
-                    schema_editor.delete_model(model)
-
-
-@pytest.fixture()
-def no_workflow_queue(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep trigger tests synchronous by replacing queue enqueue hooks."""
-
-    from angee.workflows import engine
-
-    monkeypatch.setattr(engine, "enqueue_advance", lambda run_id: None)
-    monkeypatch.setattr(engine, "enqueue_advance_at", lambda run_id, when: None)
-    monkeypatch.setattr(engine, "enqueue_execute", lambda step_run_id: None)
 
 
 @pytest.fixture()
@@ -106,8 +91,8 @@ def item_handler(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 
     calls: list[dict[str, Any]] = []
 
-    def run(self: HandlerStep, step_run: Any) -> StepResult:
-        del self
+    def run(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+        del self, now
         calls.append({"key": step_run.step.key, "input": step_run.input})
         if step_run.step.key == "item" and step_run.input.get("item") == "bad":
             raise RuntimeError("bad mapped item")
@@ -366,7 +351,6 @@ def test_schedule_cron_catch_up_uses_one_base_at_max_after_now(
 ) -> None:
     """Cron catch-up asks croniter once from max(after, now), not once per missed tick."""
 
-    workflow_triggers = importlib.import_module("angee.workflows.triggers")
     bases: list[Any] = []
     after = timezone.now().replace(microsecond=0)
     now = after + timedelta(days=30)
@@ -380,11 +364,10 @@ def test_schedule_cron_catch_up_uses_one_base_at_max_after_now(
             del result_type
             return bases[-1] + timedelta(days=1)
 
-    monkeypatch.setattr(workflow_triggers, "croniter", FakeCroniter)
+    monkeypatch.setattr(workflow_models, "croniter", FakeCroniter)
+    trigger = Trigger(config={"cron": "0 0 * * *"})
 
-    assert workflow_triggers.next_schedule_fire_at({"cron": "0 0 * * *"}, after=after, now=now) == now + timedelta(
-        days=1
-    )
+    assert trigger.compute_next_fire_at(after=after, now=now) == now + timedelta(days=1)
     assert bases == [now]
 
 
@@ -427,8 +410,8 @@ def test_map_aggregates_child_outcomes_and_routes_by_policy(
     """A map step fans out one target step and routes on aggregate policy."""
 
     del workflow_trigger_tables, no_workflow_queue, item_handler
-    workflow = _map_workflow(policy=policy)
-    run = _start_run_with_items(workflow, ["ok", "bad", "also-ok"])
+    workflow = _map_workflow(policy=policy, items=["ok", "bad", "also-ok"])
+    run = start_run(workflow)
 
     run_to_terminal(run)
     run.refresh_from_db()
@@ -454,8 +437,8 @@ def test_map_replay_does_not_duplicate_sibling_step_runs(
     """Replaying advance while a map is waiting reuses existing indexed siblings."""
 
     del workflow_trigger_tables, no_workflow_queue, item_handler
-    workflow = _map_workflow(policy={"all_must_succeed": True})
-    run = _start_run_with_items(workflow, ["one", "two", "three"])
+    workflow = _map_workflow(policy={"all_must_succeed": True}, items=["one", "two", "three"])
+    run = start_run(workflow)
 
     advance_once(run)
     execute_started(run)
@@ -551,7 +534,7 @@ def _schedule_trigger(*, config: dict[str, Any], next_fire_at: Any) -> Trigger:
         )
 
 
-def _map_workflow(*, policy: dict[str, Any]) -> Workflow:
+def _map_workflow(*, policy: dict[str, Any], items: list[str]) -> Workflow:
     """Create a workflow with one map control step and success/failure branches."""
 
     with system_context(reason="test workflows map definition"):
@@ -568,7 +551,7 @@ def _map_workflow(*, policy: dict[str, Any]) -> Workflow:
             key="map",
             name="Map",
             step_class="map",
-            config={"target_step": "item", "items": "run.data.items", **policy},
+            config={"target_step": "item", "items": items, **policy},
         )
         Step.objects.create(workflow=draft, key="item", name="Item", config={"outcome": "done"})
         passed = Step.objects.create(workflow=draft, key="passed", name="Passed", config={"outcome": "done"})
@@ -577,18 +560,6 @@ def _map_workflow(*, policy: dict[str, Any]) -> Workflow:
         Edge.objects.create(workflow=draft, source=map_step, target=passed, condition="succeeded")
         Edge.objects.create(workflow=draft, source=map_step, target=failed, condition="failed")
         return draft.publish()
-
-
-def _start_run_with_items(workflow: Workflow, items: list[str]) -> WorkflowRun:
-    """Start a workflow run and journal map input on the run data."""
-
-    from angee.workflows import engine
-
-    run = engine.start(workflow, subject=None, actor=None)
-    with system_context(reason="test workflows map data"):
-        run.data = {"items": items}
-        run.save(update_fields=["data", "updated_at"])
-    return run
 
 
 def _runs_for_subject(subject: TriggerSubject) -> list[WorkflowRun]:

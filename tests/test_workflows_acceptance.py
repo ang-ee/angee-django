@@ -11,10 +11,12 @@ from rebac import system_context, to_subject_ref
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from angee.workflows.steps import DecisionSpec, HandlerStep, StepResult
-from tests.test_workflows import Edge, Step, Workflow
-from tests.test_workflows_engine import (
+from tests.workflows import (
     Decision,
+    Edge,
+    Step,
     StepRun,
+    Workflow,
     advance_once,
     execute_started,
     start_run,
@@ -22,7 +24,7 @@ from tests.test_workflows_engine import (
 )
 
 User = get_user_model()
-pytest_plugins = ("tests.test_workflows_engine",)
+pytest_plugins = ("tests.workflows",)
 
 
 def test_run_reopens_invalid_decision_then_completes_gate_and_journal(
@@ -36,8 +38,8 @@ def test_run_reopens_invalid_decision_then_completes_gate_and_journal(
     assignee = User.objects.create_user(username="workflow-decision-assignee")
     assignee_ref = str(to_subject_ref(assignee))
 
-    def run_handler(self: HandlerStep, step_run: Any) -> StepResult:
-        del self
+    def run_handler(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+        del self, now
         if step_run.step.key == "entry":
             return StepResult.suspend(
                 resume_state={"phase": "awaiting-password"},

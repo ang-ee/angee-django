@@ -17,9 +17,9 @@ import {
   ResourceList,
   TimelineView,
   cn,
+  statusTone,
   type ActionContext,
   type RecordTabDescriptor,
-  type Tone,
 } from "@angee/ui";
 
 import {
@@ -66,7 +66,7 @@ export function RunsPage(): React.ReactElement {
     () => [
       {
         id: "timeline",
-        label: t("workflows.tabs.timeline"),
+        label: t("tabs.timeline"),
         icon: "workflow-run",
         render: ({ recordId }) => <RunTimelinePanel runId={recordId} />,
         keepMounted: true,
@@ -84,8 +84,8 @@ export function RunsPage(): React.ReactElement {
       recordTabs={recordTabs}
     >
       <List resource={RUN_MODEL} defaultGroup={{ field: "status" }}>
-        <Facet field="workflow" label="Workflow" labelField="name" />
-        <Column field="workflow.name" header="Workflow" />
+        <Facet field="workflow" label={t("col.workflow")} labelField="name" />
+        <Column field="workflow.name" header={t("col.workflow")} />
         <Column field="status" widget="statusBadge" />
         <Column field="steps_taken" />
         <Column field="wake_at" />
@@ -93,18 +93,17 @@ export function RunsPage(): React.ReactElement {
       </List>
       <Form resource={RUN_MODEL}>
         <Field name="workflow" readOnly title />
-        <Group label={t("workflows.runs.timeline")} columns={2}>
+        <Group label={t("runs.timeline")} columns={2}>
           <Field name="status" readOnly widget="statusbar" />
           <Field name="steps_taken" readOnly />
           <Field name="wake_at" readOnly />
           <Field name="updated_at" readOnly />
         </Group>
-        <Field name="data" widget="json" readOnly />
         <Field name="budget_spent" widget="json" readOnly />
         <Field name="error" readOnly />
         <Action
           id="cancel"
-          label={t("workflows.form.cancel")}
+          label={t("form.cancel")}
           icon="workflow-cancel"
           danger
           run={cancel}
@@ -119,13 +118,13 @@ function RunTimelinePanel({ runId }: { runId: string }): React.ReactElement {
   const t = useWorkflowsT();
   const runQuery = useAuthoredQuery(
     WorkflowRunDetailDocument,
-    { run: runId, runId },
+    { run: runId },
     { models: [RUN_MODEL, STEP_RUN_MODEL] },
   );
   const workflowId = runQuery.data?.workflow_runs_by_pk?.workflow.id ?? "";
   const graphQuery = useAuthoredQuery(
     WorkflowGraphDocument,
-    { workflow: workflowId, workflowId },
+    { workflow: workflowId },
     {
       enabled: workflowId.length > 0,
       models: [WORKFLOW_MODEL, STEP_MODEL, EDGE_MODEL, STEP_RUN_MODEL],
@@ -146,16 +145,16 @@ function RunTimelinePanel({ runId }: { runId: string }): React.ReactElement {
   );
 
   if (runQuery.fetching && !runQuery.data) {
-    return <LoadingPanel message={t("workflows.runs.loading")} />;
+    return <LoadingPanel message={t("runs.loading")} />;
   }
 
   return (
     <div className="grid h-full min-h-[34rem] grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)] overflow-hidden bg-canvas">
-      <TimelineView<WorkflowRunStepRun & Record<string, unknown>>
-        rows={stepRuns as readonly (WorkflowRunStepRun & Record<string, unknown>)[]}
+      <TimelineView<WorkflowRunStepRun>
+        rows={stepRuns}
         dateField="created_at"
         rowKey="id"
-        emptyContent={t("workflows.runs.emptyTimeline")}
+        emptyContent={t("runs.emptyTimeline")}
         className="border-r border-border-subtle"
         renderEntry={(row) => <RunJournalEntry row={row} />}
       />
@@ -164,8 +163,8 @@ function RunTimelinePanel({ runId }: { runId: string }): React.ReactElement {
           <EmptyState
             fill
             icon="workflow-canvas"
-            title={t("workflows.canvas.emptyTitle")}
-            description={t("workflows.runs.emptyTimeline")}
+            title={t("canvas.emptyTitle")}
+            description={t("runs.emptyTimeline")}
           />
         ) : (
           <GraphView
@@ -199,12 +198,12 @@ function RunJournalEntry({
             {row.outcome || row.system_kind}
           </div>
         </div>
-        <Badge tone={toneForStepRun(row.status)}>{row.status}</Badge>
+        <Badge tone={statusTone(row.status)}>{row.status}</Badge>
       </div>
       <div className="grid gap-2 lg:grid-cols-3">
-        <JournalPayload title={t("workflows.runs.input")} value={row.input} />
-        <JournalPayload title={t("workflows.runs.output")} value={row.output} />
-        <JournalPayload title={t("workflows.runs.resume")} value={row.resume_state} />
+        <JournalPayload title={t("runs.input")} value={row.input} />
+        <JournalPayload title={t("runs.output")} value={row.output} />
+        <JournalPayload title={t("runs.resume")} value={row.resume_state} />
       </div>
       {row.error ? (
         <div className="rounded-6 border border-danger-soft-border bg-danger-soft p-3 text-13 text-danger-soft-text">
@@ -228,12 +227,4 @@ function JournalPayload({
       <JsonBlock value={value} />
     </section>
   );
-}
-
-function toneForStepRun(status: string): Tone {
-  if (status === "SUCCEEDED") return "success";
-  if (status === "FAILED") return "danger";
-  if (status === "WAITING") return "warning";
-  if (status === "STARTED") return "info";
-  return "neutral";
 }

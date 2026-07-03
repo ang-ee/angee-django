@@ -4,8 +4,7 @@
 renders one prompt from a minimal Django-template context (``subject``, ``run``,
 ``step``), sends one non-streaming chat request through the selected inference
 provider backend, journals a bounded request/response summary on the step-run,
-and debits token usage onto the run budget ledger. Operator-provisioned service
-mode is reserved but intentionally not implemented in this slice.
+and debits token usage onto the run budget ledger.
 """
 
 from __future__ import annotations
@@ -13,6 +12,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from django.apps import apps
@@ -30,13 +30,7 @@ AGENT_STEP_JOURNAL_MAX_BYTES = 4096
 AGENT_STEP_TRUNCATION_MARKER = "[truncated: workflows_agents.AgentStepImpl journal exceeded 4096 bytes]"
 """Marker appended when an agent request/response journal is shortened."""
 
-SERVICE_MODE_NOT_IMPLEMENTED = (
-    "Agent service mode is reserved for operator-provisioned agents and is not implemented in this slice."
-)
-"""Clear runtime error for the reserved service-mode config key."""
-
 _ONE_SHOT_MODE = "one_shot"
-_SERVICE_MODE = "service"
 _TEMPLATE_ENGINE = Engine(debug=False)
 
 
@@ -60,14 +54,12 @@ class AgentStepImpl(StepImpl):
 
     @classmethod
     def validate_config(cls, config: Any) -> None:
-        """Validate one-shot or reserved service-mode agent step config."""
+        """Validate one-shot agent step config."""
 
         super().validate_config(config)
         mode = str(config.get("mode", _ONE_SHOT_MODE) or _ONE_SHOT_MODE)
-        if mode not in {_ONE_SHOT_MODE, _SERVICE_MODE}:
-            raise ValidationError({"config": "Agent step mode must be one_shot or service."})
-        if mode == _SERVICE_MODE:
-            return
+        if mode != _ONE_SHOT_MODE:
+            raise ValidationError({"config": "Agent step mode must be one_shot."})
 
         prompt_template = config.get("prompt_template")
         if not isinstance(prompt_template, str) or not prompt_template.strip():
@@ -88,21 +80,19 @@ class AgentStepImpl(StepImpl):
         if "options" in config and not isinstance(config["options"], Mapping):
             raise ValidationError({"config": "Agent step options must be a JSON object."})
 
-    def run(self, step_run: Any) -> StepResult:
+    def run(self, step_run: Any, *, now: datetime) -> StepResult:
         """Execute one one-shot inference request and return a routing outcome."""
 
+        del now
         config = dict(step_run.step.config)
-        mode = str(config.get("mode", _ONE_SHOT_MODE) or _ONE_SHOT_MODE)
-        if mode == _SERVICE_MODE:
-            raise NotImplementedError(SERVICE_MODE_NOT_IMPLEMENTED)
-
         request: InferenceRequest | None = None
         try:
             prompt = _render_prompt(str(config["prompt_template"]), step_run)
             target = _resolve_target(config)
             request = _request_for(config, target=target, prompt=prompt)
             response = target.provider.backend.chat(request)
-            _debit_budget(step_run.run, _usage_delta(response.usage))
+            with system_context(reason="workflows_agents.agent_step.budget"), transaction.atomic():
+                step_run.run.debit_budget(_usage_delta(response.usage))
             return StepResult.done(
                 output=_bounded_summary(_success_summary(target=target, request=request, response=response)),
                 outcome="completed",
@@ -194,9 +184,7 @@ def _request_for(config: Mapping[str, Any], *, target: _ResolvedAgentTarget, pro
         system=target.system,
         max_tokens=_positive_int(config.get("max_tokens", _default_max_tokens(target.model)), name="max_tokens"),
         temperature=(
-            None
-            if config.get("temperature") in (None, "")
-            else _float(config.get("temperature"), name="temperature")
+            None if config.get("temperature") in (None, "") else _float(config.get("temperature"), name="temperature")
         ),
         tools=tuple(config.get("tools", ()) or ()),
         options=dict(config.get("options") or {}),
@@ -233,21 +221,6 @@ def _float(value: Any, *, name: str) -> float:
         raise ValidationError({"config": f"Agent step {name} must be a number."}) from error
 
 
-def _debit_budget(run: Any, delta: Mapping[str, int]) -> None:
-    """Atomically add usage deltas to ``WorkflowRun.budget_spent``."""
-
-    if not delta:
-        return
-    run_model = apps.get_model("workflows", "WorkflowRun")
-    with system_context(reason="workflows_agents.agent_step.budget"), transaction.atomic():
-        locked = run_model.objects.lock_if_supported().get(pk=run.pk)
-        spent = dict(locked.budget_spent or {})
-        for key, value in delta.items():
-            spent[key] = int(spent.get(key, 0) or 0) + int(value)
-        locked.budget_spent = spent
-        locked.save(update_fields=["budget_spent", "updated_at"])
-
-
 def _usage_delta(usage: Mapping[str, Any]) -> dict[str, int]:
     """Return normalized token usage deltas from provider-neutral backend usage."""
 
@@ -272,7 +245,7 @@ def _int_usage(value: Any) -> int | None:
         return None
     try:
         parsed = int(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return parsed if parsed >= 0 else None
 
@@ -363,10 +336,8 @@ def _bounded_summary(summary: Mapping[str, Any]) -> dict[str, Any]:
         "limit_bytes": AGENT_STEP_JOURNAL_MAX_BYTES,
         "summary": "",
     }
-    available = AGENT_STEP_JOURNAL_MAX_BYTES - _json_size(
-        {**wrapper, "summary": AGENT_STEP_TRUNCATION_MARKER}
-    )
-    wrapper["summary"] = f"{text[:max(0, available)]}{AGENT_STEP_TRUNCATION_MARKER}"
+    available = AGENT_STEP_JOURNAL_MAX_BYTES - _json_size({**wrapper, "summary": AGENT_STEP_TRUNCATION_MARKER})
+    wrapper["summary"] = f"{text[: max(0, available)]}{AGENT_STEP_TRUNCATION_MARKER}"
     while _json_size(wrapper) > AGENT_STEP_JOURNAL_MAX_BYTES and wrapper["summary"]:
         shortened = str(wrapper["summary"])[: -min(128, len(str(wrapper["summary"])))]
         wrapper["summary"] = f"{shortened}{AGENT_STEP_TRUNCATION_MARKER}"

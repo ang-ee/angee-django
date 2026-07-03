@@ -1,5 +1,4 @@
-import type { BaseAddonRoute } from "@angee/app";
-import { defineBaseAddon } from "@angee/app";
+import { defineBaseAddon, resourcePageRoutes, type BaseAddonRoute } from "@angee/app";
 import type { BaseMenuItem } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import {
@@ -19,32 +18,20 @@ import { enWorkflowsMessages } from "./i18n";
 const WORKFLOWS_ID = "workflows";
 
 const workflowsRoutes: readonly BaseAddonRoute[] = [
-  {
-    name: "workflows.workflows",
-    path: "/workflows",
-    layout: "console",
-    component: lazyRouteComponent(() => import("./views/WorkflowsPage"), "WorkflowsPage"),
-    resource: "workflows.Workflow",
-  },
-  {
-    name: "workflows.workflow",
-    path: "/workflows/$id",
-    layout: "console",
-    parent: "workflows.workflows",
-  },
-  {
-    name: "workflows.runs",
-    path: "/workflows/runs",
-    layout: "console",
-    component: lazyRouteComponent(() => import("./views/RunsPage"), "RunsPage"),
-    resource: "workflows.WorkflowRun",
-  },
-  {
-    name: "workflows.run",
-    path: "/workflows/runs/$id",
-    layout: "console",
-    parent: "workflows.runs",
-  },
+  ...resourcePageRoutes(
+    "workflows.workflows",
+    "/workflows",
+    lazyRouteComponent(() => import("./views/WorkflowsPage"), "WorkflowsPage"),
+    "workflows.Workflow",
+    { detailName: "workflows.workflow" },
+  ),
+  ...resourcePageRoutes(
+    "workflows.runs",
+    "/workflows/runs",
+    lazyRouteComponent(() => import("./views/RunsPage"), "RunsPage"),
+    "workflows.WorkflowRun",
+    { detailName: "workflows.run" },
+  ),
   {
     name: "workflows.inbox",
     path: "/workflows/inbox",

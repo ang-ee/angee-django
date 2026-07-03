@@ -13,7 +13,6 @@ from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.core.management import call_command
 from django.db import connection
 from rebac import system_context
 
@@ -25,15 +24,22 @@ from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,
     StubInferenceBackend,
-    _clear_model_tables,
     _create_missing_tables,
 )
 from tests.test_agents import InferenceModel, _provider
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS, Agent
-from tests.test_workflows import Edge, Step, Trigger, Workflow
-from tests.test_workflows_engine import StepRun, WorkflowRun, advance_once, execute_started, step_run_for
+from tests.workflows import (
+    WORKFLOW_RUNTIME_MODELS,
+    advance_once,
+    execute_started,
+    start_run,
+    step_run_for,
+    workflow_table_setup,
+    workflow_with_steps,
+)
 
 User = get_user_model()
+pytest_plugins = ("tests.workflows",)
 
 
 @pytest.fixture()
@@ -41,32 +47,16 @@ def workflows_agents_tables(transactional_db: Any) -> Iterator[None]:
     """Create workflow runtime plus agent catalogue test tables."""
 
     del transactional_db
-    models = (
-        IAM_CONNECTION_TEST_MODELS
-        + INTEGRATE_TEST_MODELS
-        + AGENTS_GRAPHQL_MODELS
-        + (Workflow, Step, Edge, Trigger, WorkflowRun, StepRun)
-    )
+    models = IAM_CONNECTION_TEST_MODELS + INTEGRATE_TEST_MODELS + AGENTS_GRAPHQL_MODELS + WORKFLOW_RUNTIME_MODELS
     created = _create_missing_tables(models)
-    call_command("rebac", "sync", verbosity=0)
-    _clear_model_tables(models)
     try:
-        yield
+        with workflow_table_setup(models):
+            yield
     finally:
-        _clear_model_tables(models)
         if created:
             with connection.schema_editor() as schema_editor:
                 for model in reversed(created):
                     schema_editor.delete_model(model)
-
-
-@pytest.fixture()
-def no_workflow_queue(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep workflow-agent tests synchronous by replacing queue enqueue hooks."""
-
-    monkeypatch.setattr(engine, "enqueue_advance", lambda run_id: None)
-    monkeypatch.setattr(engine, "enqueue_advance_at", lambda run_id, when: None)
-    monkeypatch.setattr(engine, "enqueue_execute", lambda step_run_id: None)
 
 
 @pytest.fixture()
@@ -107,7 +97,8 @@ def test_agent_step_renders_template_and_journals_bounded_io(
             instructions="Answer with a short summary.",
             model=model,
         )
-    workflow = _published_workflow(
+    workflow = workflow_with_steps(
+        name="Workflow agent",
         steps=(
             {
                 "key": "agent",
@@ -122,7 +113,7 @@ def test_agent_step_renders_template_and_journals_bounded_io(
         edges=(),
     )
 
-    run = _start_run(workflow, subject=subject)
+    run = start_run(workflow, subject=subject)
     advance_once(run)
     execute_started(run)
     engine.advance(run.pk)
@@ -149,7 +140,8 @@ def test_agent_step_debits_token_usage_into_run_budget_spent(
 
     del workflows_agents_tables, no_workflow_queue, stub_chats
     model = _inference_model("stub-budget")
-    workflow = _published_workflow(
+    workflow = workflow_with_steps(
+        name="Workflow agent",
         steps=(
             {
                 "key": "agent",
@@ -164,7 +156,7 @@ def test_agent_step_debits_token_usage_into_run_budget_spent(
         edges=(),
     )
 
-    run = _start_run(workflow)
+    run = start_run(workflow)
     advance_once(run)
     execute_started(run)
     run.refresh_from_db()
@@ -182,7 +174,8 @@ def test_budget_ceiling_fails_run_via_engine(
     del workflows_agents_tables, no_workflow_queue, stub_chats
     run_status, step_status = workflow_models.RunStatus, workflow_models.StepRunStatus
     model = _inference_model("stub-ceiling")
-    workflow = _published_workflow(
+    workflow = workflow_with_steps(
+        name="Workflow agent",
         budget={"tokens": 4},
         steps=(
             {
@@ -199,7 +192,7 @@ def test_budget_ceiling_fails_run_via_engine(
         edges=(("agent", "finish", "completed"),),
     )
 
-    run = _start_run(workflow)
+    run = start_run(workflow)
     advance_once(run)
     execute_started(run)
     advance_once(run)
@@ -220,7 +213,8 @@ def test_replay_does_not_reinvoke_completed_agent_step(
 
     del workflows_agents_tables, no_workflow_queue
     model = _inference_model("stub-replay")
-    workflow = _published_workflow(
+    workflow = workflow_with_steps(
+        name="Workflow agent",
         steps=(
             {
                 "key": "agent",
@@ -234,7 +228,7 @@ def test_replay_does_not_reinvoke_completed_agent_step(
         ),
         edges=(),
     )
-    run = _start_run(workflow)
+    run = start_run(workflow)
     row = advance_once(run)[0]
 
     execute_started(run)
@@ -260,7 +254,8 @@ def test_backend_error_routes_failed_outcome(
         raise RuntimeError("backend unavailable")
 
     monkeypatch.setattr(StubInferenceBackend, "chat", chat)
-    workflow = _published_workflow(
+    workflow = workflow_with_steps(
+        name="Workflow agent",
         steps=(
             {
                 "key": "agent",
@@ -275,7 +270,7 @@ def test_backend_error_routes_failed_outcome(
         ),
         edges=(("agent", "on_failed", "failed"),),
     )
-    run = _start_run(workflow)
+    run = start_run(workflow)
 
     advance_once(run)
     execute_started(run)
@@ -304,7 +299,8 @@ def test_agent_step_reraises_transient_backend_errors(
         raise TransientStepError("rate limited")
 
     monkeypatch.setattr(StubInferenceBackend, "chat", chat)
-    workflow = _published_workflow(
+    workflow = workflow_with_steps(
+        name="Workflow agent",
         steps=(
             {
                 "key": "agent",
@@ -319,7 +315,7 @@ def test_agent_step_reraises_transient_backend_errors(
         ),
         edges=(),
     )
-    run = _start_run(workflow)
+    run = start_run(workflow)
     step_run = advance_once(run)[0]
 
     with pytest.raises(TransientStepError, match="rate limited"):
@@ -335,40 +331,3 @@ def _inference_model(slug: str) -> InferenceModel:
     provider = _provider(slug, backend_class="stub_inference", name="Stub provider")
     with system_context(reason="test workflows agent model setup"):
         return InferenceModel.objects.create(provider=provider, name=f"{slug}-model")
-
-
-def _published_workflow(
-    *,
-    steps: tuple[dict[str, Any], ...],
-    edges: tuple[tuple[str, str, str], ...],
-    budget: dict[str, Any] | None = None,
-) -> Workflow:
-    """Create and publish a workflow definition graph for workflow-agent tests."""
-
-    with system_context(reason="test workflows agent definition"):
-        draft = Workflow.objects.create(name="Workflow agent", budget=budget or {})
-        by_key = {}
-        for index, spec in enumerate(steps):
-            by_key[spec["key"]] = Step.objects.create(
-                workflow=draft,
-                key=spec["key"],
-                name=spec.get("name", spec["key"].replace("_", " ").title()),
-                step_class=spec.get("step_class", "handler"),
-                config=spec.get("config", {}),
-                join_rule=spec.get("join_rule", workflow_models.JoinRule.ALL_SUCCESS),
-                is_entry=index == 0 if "is_entry" not in spec else spec["is_entry"],
-            )
-        for source, target, condition in edges:
-            Edge.objects.create(
-                workflow=draft,
-                source=by_key[source],
-                target=by_key[target],
-                condition=condition,
-            )
-        return draft.publish()
-
-
-def _start_run(workflow: Workflow, *, subject: Any = None) -> WorkflowRun:
-    """Start one workflow run with an optional subject object."""
-
-    return engine.start(workflow, subject=subject, actor=None)

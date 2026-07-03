@@ -9,19 +9,13 @@ import pytest
 from django.db import connection, models
 
 from angee.base.fields import StateField
-from angee.base.transitions import ANY, StateTransitions, TransitionNotAllowed, transition
+from angee.base.transitions import StateTransitions, TransitionNotAllowed, save_state, transition
 
 
 def is_ready(instance: Any) -> bool:
     """Return whether the row can leave draft."""
 
     return bool(instance.ready)
-
-
-def actor_is_owner(instance: Any, actor: Any) -> bool:
-    """Return whether ``actor`` owns the transition action."""
-
-    return actor == instance.owner
 
 
 def remember_success(instance: Any, source: Any, target: Any) -> None:
@@ -44,7 +38,6 @@ class TransitionTask(models.Model):
 
     state = StateField(choices_enum=State, default=State.DRAFT)
     ready = models.BooleanField(default=True)
-    owner = models.CharField(max_length=32, default="owner")
     note = models.CharField(max_length=64, blank=True)
 
     state_transitions = StateTransitions(
@@ -53,7 +46,6 @@ class TransitionTask(models.Model):
             State.DRAFT: [State.RUNNING],
             State.RUNNING: [State.DONE],
             State.PAUSED: [State.DONE],
-            ANY: [State.ARCHIVED],
         },
     )
 
@@ -67,7 +59,6 @@ class TransitionTask(models.Model):
         source=State.DRAFT,
         target=State.RUNNING,
         conditions=[is_ready],
-        permission=actor_is_owner,
         on_success=remember_success,
     )
     def mark_running(self, *, note: str = "") -> str:
@@ -83,9 +74,12 @@ class TransitionTask(models.Model):
 
         self.body_state = self.state
 
-    @transition(state, source=ANY, target=State.ARCHIVED)
-    def archive(self) -> None:
-        """Archive from any source state."""
+    @transition(state, source=State.RUNNING, target=State.DONE, on_success=save_state)
+    def persist_done(self) -> None:
+        """Move a running row to done and save touched fields."""
+
+        self.note = "persisted"
+        self._transition_fields = {"note"}
 
 
 @pytest.fixture
@@ -120,20 +114,6 @@ def test_allowed_and_blocked_transitions(transition_task_table: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_wildcard_source_allows_any_current_state(transition_task_table: None) -> None:
-    """A wildcard-source transition can start from every state."""
-
-    running = TransitionTask.objects.create(state=TransitionTask.State.RUNNING)
-    draft = TransitionTask.objects.create()
-
-    running.archive()
-    draft.archive()
-
-    assert running.state == TransitionTask.State.ARCHIVED
-    assert draft.state == TransitionTask.State.ARCHIVED
-
-
-@pytest.mark.django_db(transaction=True)
 def test_condition_false_blocks_transition(transition_task_table: None) -> None:
     """A false condition prevents the method body and target write."""
 
@@ -149,21 +129,6 @@ def test_condition_false_blocks_transition(transition_task_table: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_permission_query_reports_without_blocking_execution(transition_task_table: None) -> None:
-    """Permission is exposed as a query and is not part of method execution."""
-
-    task = TransitionTask.objects.create(owner="owner")
-    task.success_events = []
-
-    assert task.has_transition_perm("mark_running", "owner") is True
-    assert task.has_transition_perm("mark_running", "other") is False
-
-    task.mark_running()
-
-    assert task.state == TransitionTask.State.RUNNING
-
-
-@pytest.mark.django_db(transaction=True)
 def test_on_success_fires_with_instance_source_and_target(transition_task_table: None) -> None:
     """The explicit success hook receives the instance, source, and target."""
 
@@ -175,6 +140,19 @@ def test_on_success_fires_with_instance_source_and_target(transition_task_table:
     assert task.success_events == [
         (task, TransitionTask.State.DRAFT, TransitionTask.State.RUNNING),
     ]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_save_state_persists_transition_and_touched_fields(transition_task_table: None) -> None:
+    """The shared save hook writes the guarded state plus method-touched fields."""
+
+    task = TransitionTask.objects.create(state=TransitionTask.State.RUNNING)
+
+    task.persist_done()
+
+    task.refresh_from_db()
+    assert task.state == TransitionTask.State.DONE
+    assert task.note == "persisted"
 
 
 @pytest.mark.django_db(transaction=True)

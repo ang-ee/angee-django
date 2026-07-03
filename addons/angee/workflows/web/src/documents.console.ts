@@ -1,7 +1,7 @@
 import { graphql, type DocumentType } from "@angee/gql/console";
 
 export const WorkflowGraphDocument = graphql(`
-  query WorkflowGraph($workflow: String!, $workflowId: String!) {
+  query WorkflowGraph($workflow: String!) {
     workflows_by_pk(id: $workflow) {
       id
       name
@@ -9,7 +9,7 @@ export const WorkflowGraphDocument = graphql(`
       version
     }
     workflow_steps(
-      where: { workflow: { _eq: $workflowId } }
+      where: { workflow: { _eq: $workflow } }
       order_by: [{ is_entry: desc }, { key: asc }]
     ) {
       id
@@ -23,7 +23,7 @@ export const WorkflowGraphDocument = graphql(`
       updated_at
     }
     workflow_edges(
-      where: { workflow: { _eq: $workflowId } }
+      where: { workflow: { _eq: $workflow } }
       order_by: [{ source: asc }, { target: asc }, { condition: asc }]
     ) {
       id
@@ -110,12 +110,11 @@ export const CancelWorkflowRunDocument = graphql(`
 `);
 
 export const WorkflowRunDetailDocument = graphql(`
-  query WorkflowRunDetail($run: String!, $runId: String!) {
+  query WorkflowRunDetail($run: String!) {
     workflow_runs_by_pk(id: $run) {
       id
       display_name
       status
-      data
       error
       steps_taken
       budget_spent
@@ -130,7 +129,7 @@ export const WorkflowRunDetailDocument = graphql(`
       }
     }
     workflow_step_runs(
-      where: { run: { _eq: $runId } }
+      where: { run: { _eq: $run } }
       order_by: [{ created_at: asc }, { map_index: asc }]
     ) {
       id

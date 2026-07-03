@@ -198,7 +198,7 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "angee.parties.apps.PartiesConfig",
         "angee.messaging.apps.MessagingConfig",
         "procrastinate.contrib.django.apps.ProcrastinateConfig",
-        "angee.tasks.apps.TasksConfig",
+        "angee.tasks",
         "angee.workflows.apps.WorkflowsConfig",
         "example.notes",
     ]
@@ -994,11 +994,7 @@ def test_addon_autoconfig_merges_resource_source_classes(
     _write_addon(
         tmp_path,
         "alpha",
-        autoconfig=(
-            "SETTINGS = {\n"
-            "    'ANGEE_RESOURCE_SOURCE_CLASSES.url': 'alpha.sources.url_source',\n"
-            "}\n"
-        ),
+        autoconfig=("SETTINGS = {\n    'ANGEE_RESOURCE_SOURCE_CLASSES.url': 'alpha.sources.url_source',\n}\n"),
     )
     monkeypatch.syspath_prepend(str(tmp_path))
 
@@ -1182,10 +1178,7 @@ def test_addon_contribution_loads_callable_conventional_modules(
 
     _write_addon(tmp_path, "alpha")
     (tmp_path / "alpha" / "asgi.py").write_text(
-        "def websocket_urlpatterns():\n"
-        "    return ['ws']\n"
-        "\n"
-        "http_mounts = [('/mcp', 'app')]\n",
+        "def websocket_urlpatterns():\n    return ['ws']\n\nhttp_mounts = [('/mcp', 'app')]\n",
         encoding="utf-8",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -1269,9 +1262,7 @@ def test_addon_contribution_rejects_non_iterables(
 
     _write_addon(tmp_path, "alpha_non_iterable")
     (tmp_path / "alpha_non_iterable" / "asgi.py").write_text(
-        "websocket_urlpatterns = 1\n"
-        "def http_mounts():\n"
-        "    return 1\n",
+        "websocket_urlpatterns = 1\ndef http_mounts():\n    return 1\n",
         encoding="utf-8",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -1294,8 +1285,7 @@ def test_addon_contribution_rejects_urlpattern_callables(
 
     _write_addon(tmp_path, "alpha_callable_urls")
     (tmp_path / "alpha_callable_urls" / "urls.py").write_text(
-        "def urlpatterns():\n"
-        "    return []\n",
+        "def urlpatterns():\n    return []\n",
         encoding="utf-8",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
