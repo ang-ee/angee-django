@@ -4,7 +4,7 @@ name: {{ project_name }}
 
 template:
   active: stacks/dev
-  answers_file: .copier-answers.yml
+  answers_file: .copier-answers.stack.yml
 
 # Edge ingress. The operator's central Caddy fronts every service that declares a
 # `route:` block (e.g. the agent chat WebSocket) and forward-auths each upgrade
@@ -89,7 +89,6 @@ jobs:
         done
     env:
       DATABASE_URL: "postgres://angee:${secret.db-password}@127.0.0.1:${ports.postgres}/angee"
-    depends_on: [postgres]
 
   # Explicit runtime emit. Later jobs and services check/import this output
   # without rewriting it during Django app population.
@@ -213,7 +212,10 @@ services:
       POSTGRES_DB: angee
       POSTGRES_PASSWORD: "${secret.db-password}"
     mounts:
-      - bind://{{ ANGEE_ROOT }}/pgdata:/var/lib/postgresql/data
+      # docker-compose.yaml is generated inside {{ ANGEE_ROOT }}, so this relative
+      # bind targets the stack's {{ ANGEE_ROOT }}/pgdata directory instead of
+      # {{ ANGEE_ROOT }}/{{ ANGEE_ROOT }}/pgdata.
+      - bind://./pgdata:/var/lib/postgresql/data
     ports:
       - "${ports.postgres}:5432"
 

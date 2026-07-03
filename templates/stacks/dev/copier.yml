@@ -1,7 +1,10 @@
 _min_copier_version: "9.0"
 _subdirectory: template
 _templates_suffix: .jinja
-_answers_file: .copier-answers.yml
+# The dev stack is often chained under a workspace, which owns the canonical
+# .copier-answers.yml. Keep stack-specific answers separate so leases and
+# workspace inputs do not overwrite each other.
+_answers_file: .copier-answers.stack.yml
 _preserve_symlinks: true
 
 _angee:
