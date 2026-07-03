@@ -8,17 +8,18 @@ _answers_file: .copier-answers.stack.yml
 
 _message_after_copy: |
   Local Angee instance rendered — the root folder IS the stack and a git-controlled
-  project (ANGEE_ROOT=.). Postgres + Django (framework image) + Vite.
+  project (ANGEE_ROOT=.). Postgres + Django (framework image) + frontend mode
+  "{{ frontend_mode }}".
 
-  1. Bring it up (Postgres + Django + Vite under docker-compose). First start
+  1. Bring it up (Postgres + Django + frontend under docker-compose). First start
      emits runtime/, creates migrations, writes GraphQL schemas, migrates, syncs
-     permissions, loads install resources, and bootstraps the admin user:
+     permissions, loads install resources, bootstraps the admin user, and prepares
+     the web frontend:
        angee up
   2. Point the CLI at the local operator — add to your ~/.profile:
        export ANGEE_OPERATOR_URL=http://127.0.0.1:{{ operator_port }}
 
-  Backend:  http://localhost:{{ django_port }}
-  Frontend: http://localhost:{{ ui_port }}
+  App:      http://localhost:{{ ui_port }}
   Login:    admin / the generated admin-password secret in .env
 
   The framework's notes example is NOT installed by default (INSTALLED_APPS is
@@ -34,9 +35,11 @@ _angee:
     git-controlled project (ANGEE_ROOT=.). It chains the `projects/web` project
     template to scaffold the host (manage.py, settings.yaml, addons, web), then
     overlays a Postgres-backed `angee.yaml` — operator + postgres (pgvector) +
-    django (on the framework runtime image, DATABASE_URL → postgres) + vite. The
-    framework is a dependency baked into the runtime image, not a cloned source.
-    This is how you run your own Angee app locally on a real Postgres database.
+    django (on the framework runtime image, DATABASE_URL → postgres) + a
+    selectable frontend ingress (`caddy_static` by default, or `vite` for the
+    legacy dev server). The framework is a dependency baked into the runtime
+    image, not a cloned source. This is how you run your own Angee app locally on
+    a real Postgres database.
   # Chain the project template first so the stack overlays a real host, then this
   # template adds only the stack overlay (angee.yaml, .gitignore). The ref is
   # relative to THIS template's directory (the operator's chain resolver joins it
@@ -73,6 +76,14 @@ web_path:
   default: "web"
   help: Path of the web package relative to the project root.
 
+frontend_mode:
+  type: str
+  default: caddy_static
+  choices:
+    - caddy_static
+    - vite
+  help: Frontend ingress mode. caddy_static builds the SPA once and serves it through Caddy while proxying backend paths over the Docker network; vite keeps the legacy Vite dev server with direct host ports.
+
 # The framework runtime image: framework CODE + deps + psycopg baked in (the
 # Dockerfile `runtime` target). The project mounts over /app, so the framework lives
 # OFF /app in the image. Distinct from the deps-only ...-base image.
@@ -84,7 +95,12 @@ base_image:
 web_image:
   type: str
   default: "ghcr.io/ang-ee/angee-web:latest"
-  help: Framework JS runtime image (node + the @angee/* pnpm workspace) the vite service runs.
+  help: Framework JS runtime image (node + the @angee/* pnpm workspace) the frontend dev/build service runs.
+
+caddy_image:
+  type: str
+  default: "caddy:2.9-alpine"
+  help: Caddy image used when frontend_mode=caddy_static.
 
 operator_port:
   type: int
