@@ -14,9 +14,11 @@ import decimal
 from typing import cast
 
 import strawberry
+import strawberry_django
 from django.db import models
 from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.state import ModelState, ProjectState
+from strawberry import auto
 
 from angee.base.fields import MoneyField
 from angee.graphql.data.metadata import (
@@ -26,6 +28,7 @@ from angee.graphql.data.metadata import (
     serialize_data_resources,
 )
 from angee.graphql.data.resource_fields import model_resource_fields
+from angee.graphql.field_types import register_field_types
 from tests.money_models import MoneyDocument, MoneyLine
 
 
@@ -165,3 +168,39 @@ def test_resource_metadata_wire_projects_the_money_widget_and_currency_path() ->
     assert amount["scalar"] == "Decimal"
     assert amount["widget"] == "money"
     assert amount["currencyField"] == "currency"
+
+
+@strawberry_django.type(MoneyDocument)
+class _MoneyDocAuto:
+    """Projection resolving the money amount through ``auto``.
+
+    Declared at module scope (not inside the test) so Strawberry can resolve the
+    forward reference from the query root under ``from __future__ import
+    annotations``.
+    """
+
+    amount: auto
+
+
+@strawberry.type
+class _MoneyAutoQuery:
+    """Minimal query root exposing the auto-projected money document."""
+
+    doc: _MoneyDocAuto
+
+
+def test_moneyfield_resolves_under_auto() -> None:
+    """``auto`` maps a ``MoneyField`` to the ``Decimal`` scalar once registered.
+
+    strawberry-django's ``field_type_map`` is an exact-class lookup, so a
+    ``DecimalField`` subclass raises ``NotImplemented`` until
+    ``register_field_types`` maps it. After registration the amount resolves like
+    any decimal — no explicit annotation on the projecting type — which is what
+    lets an addon write ``list_price: auto`` instead of ``list_price: Decimal``.
+    """
+
+    register_field_types()
+
+    sdl = strawberry.Schema(query=_MoneyAutoQuery).as_str()
+
+    assert "amount: Decimal" in sdl
