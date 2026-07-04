@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
+import dataclasses
+import types as _types
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import strawberry
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models, transaction
+from rebac import system_context
 from strawberry_django.mutations import resolvers as mutation_resolvers
 from strawberry_django_aggregates import default_operators_for, group_by_alias
 from strawberry_django_aggregates.granularity import NumberGranularity, TimeGranularity
 from strawberry_django_hasura import (
     HasuraResource,
+    NestedInsert,
     WriteBackend,
+    input_to_dict,
 )
 from strawberry_django_hasura import filtering as hasura_filtering
 from strawberry_django_hasura import (
@@ -34,6 +40,7 @@ from angee.graphql.data.metadata import (
     DataGroupBucketFilterValueMapMetadata,
     DataGroupDimensionMetadata,
     DataGroupExtractionMetadata,
+    DataLinesMetadata,
     DataResourceRoots,
     DataResourceTypeNames,
     attach_data_resource_metadata,
@@ -49,7 +56,7 @@ from angee.graphql.data.resource_bundle import (
     resource_type_by_suffix,
 )
 from angee.graphql.deletion import delete_by_public_id
-from angee.graphql.ids import require_instance_for_id
+from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.introspection import (
     FieldPathError,
     is_to_one_relation,
@@ -67,6 +74,48 @@ from angee.graphql.writes import write_queryset
 hasura_filtering._LOOKUPS["iregex"] = ("__iregex", False)
 
 
+@dataclass(frozen=True)
+class HasuraLines:
+    """A declared editable child-lines relation for a document resource (F6).
+
+    A resource passes ``lines=HasuraLines(field="lines", model=OrderLine)`` to
+    :func:`hasura_model_resource` to gain (a) Hasura-native nested inserts
+    (``insert_<res>_one(object: {..., lines: {data: [...]}})``, riding the
+    ``strawberry-django-hasura`` nested-insert shape) and (b) an authored
+    ``<res>_save(pk, patch, lines)`` mutation that diff-applies children
+    (create/update/delete by public id) and patches the parent in one
+    transaction, REBAC-checked on the parent (children ride the §3.4 elevation
+    after that preflight).
+
+    ``field`` is the parent's reverse-FK accessor to the child rows; the child's
+    FK back to the parent is derived from it and set by the write, never asked
+    for on the wire. ``writable`` overrides the child's editable-column allowlist;
+    ``public_id_fields`` names the child relation columns exposed as public ids
+    (decoded on write). ``node`` is the child GraphQL node, used only to name the
+    child field metadata the frontend line cells render. ``position_field`` names
+    the integer order column (advertised so the composer maintains it).
+    """
+
+    field: str
+    model: type[models.Model]
+    node: type | None = None
+    writable: Sequence[str] | None = None
+    public_id_fields: Sequence[str] = ()
+    position_field: str = "position"
+
+
+def _child_back_fk(parent_model: type[models.Model], relation: str) -> str:
+    """Return the child FK field name behind a parent's to-many ``relation``."""
+
+    reverse = parent_model._meta.get_field(relation)
+    field = getattr(reverse, "field", None)
+    if field is None:
+        raise ImproperlyConfigured(
+            f"{parent_model._meta.label}.{relation} is not a to-many child relation."
+        )
+    return field.name
+
+
 class AngeeHasuraWriteBackend:
     """Authorized write backend for Angee Hasura resources.
 
@@ -82,13 +131,74 @@ class AngeeHasuraWriteBackend:
         *,
         public_id_fields: Iterable[str] | None = None,
         delete_guard: Callable[[models.Model], str | None] | None = None,
+        lines: HasuraLines | None = None,
     ) -> None:
         self.model = model
         self.public_id_fields = _public_id_field_models(model, public_id_fields or ())
         self.delete_guard = delete_guard
+        self.lines = lines
+        if lines is not None:
+            self._line_back_fk = _child_back_fk(model, lines.field)
+            self._line_public_id_fields = _public_id_field_models(lines.model, lines.public_id_fields)
+        else:
+            self._line_back_fk = ""
+            self._line_public_id_fields = {}
 
     def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
-        """Create through strawberry-django's stock mutation resolver."""
+        """Create one row (and any declared nested child lines) atomically."""
+
+        if self.lines is None:
+            return self._create_row(info, data)
+        with transaction.atomic():
+            line_rows = self._pop_line_rows(data)
+            instance = self._create_row(info, data)
+            if line_rows is not None:
+                self._apply_line_diff(info, instance, line_rows)
+            return instance
+
+    def save(
+        self,
+        info: strawberry.Info,
+        pk: str,
+        patch: dict[str, Any],
+        line_rows: list[dict[str, Any]] | None,
+    ) -> Any:
+        """Patch one parent and diff-apply its child lines in one transaction.
+
+        REBAC preflight is on the parent: the row is loaded through the
+        write-scoped queryset (an actor without write on it is denied wholesale —
+        the row is never found), and the parent patch runs the model's write
+        gate. Only after that do the children ride the §3.4 elevation — created,
+        updated, and deleted under ``system_context``, authorized by the parent
+        write, not per child row. ``line_rows`` is the full desired child set:
+        ``None`` leaves the lines untouched (a parent-only save), an empty list
+        clears them.
+        """
+
+        if self.lines is None:
+            raise ImproperlyConfigured(f"{self.model._meta.label} resource declares no editable lines.")
+        with transaction.atomic():
+            instance = require_instance_for_id(
+                self.model,
+                pk,
+                queryset=write_queryset(self.model),
+            )
+            if instance is None:
+                raise ValueError(f"{self.model._meta.object_name} {pk!r} was not found")
+            if patch:
+                instance = mutation_resolvers.update(
+                    info,
+                    instance,
+                    self._decode_public_id_fields(patch),
+                    key_attr=PUBLIC_ID_FIELD_NAME,
+                    full_clean=True,
+                )
+            if line_rows is not None:
+                self._apply_line_diff(info, instance, line_rows)
+            return instance
+
+    def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+        """Create one row through strawberry-django's stock mutation resolver."""
 
         decoded_data, relationships = self._decode_public_id_fields_with_relationships(data)
         check_create = getattr(self.model._default_manager, "check_create", None)
@@ -122,6 +232,69 @@ class AngeeHasuraWriteBackend:
         )
         bind_actor(instance, verified_actor)
         return instance
+
+    def _pop_line_rows(self, data: dict[str, Any]) -> list[dict[str, Any]] | None:
+        """Pop the nested-insert envelope for the lines relation off ``data``."""
+
+        assert self.lines is not None
+        envelope = data.pop(self.lines.field, None)
+        if envelope is None:
+            return None
+        rows = envelope.get("data", []) if isinstance(envelope, Mapping) else envelope
+        return [dict(row) for row in rows]
+
+    def _apply_line_diff(
+        self,
+        info: strawberry.Info,
+        parent: models.Model,
+        rows: list[dict[str, Any]],
+    ) -> None:
+        """Create/update/delete child lines to match ``rows`` under elevation.
+
+        A row with an ``id`` addresses an existing child (update); a row without
+        one is a new child (create); an existing child no row keeps is deleted.
+        Every write runs under ``system_context`` — the parent write is the gate
+        (§3.4). The child FK back to the parent is set here, never sent by the
+        client.
+        """
+
+        assert self.lines is not None
+        child_model = self.lines.model
+        with system_context(reason="graphql.hasura.save.lines"):
+            children = child_model._base_manager.filter(**{self._line_back_fk: parent})
+            existing_pks = set(children.values_list("pk", flat=True))
+            kept_pks: set[Any] = set()
+            for row in rows:
+                payload = dict(row)
+                public_id = payload.pop("id", None)
+                if public_id:
+                    child = require_instance_for_id(child_model, str(public_id), queryset=children)
+                    if child is None:
+                        raise ValueError(f"{child_model._meta.object_name} {public_id!r} was not found")
+                    kept_pks.add(child.pk)
+                    mutation_resolvers.update(
+                        info,
+                        child,
+                        self._decode_public_id_fields(payload, self._line_public_id_fields),
+                        key_attr=PUBLIC_ID_FIELD_NAME,
+                        full_clean=True,
+                    )
+                else:
+                    decoded, _relationships = self._decode_public_id_fields_with_relationships(
+                        payload,
+                        self._line_public_id_fields,
+                    )
+                    decoded[f"{self._line_back_fk}_id"] = parent.pk
+                    mutation_resolvers.create(
+                        info,
+                        child_model,
+                        decoded,
+                        key_attr=PUBLIC_ID_FIELD_NAME,
+                        full_clean=True,
+                    )
+            removed = existing_pks - kept_pks
+            if removed:
+                child_model._base_manager.filter(pk__in=removed).delete()
 
     def update(self, info: strawberry.Info, pk: str, data: dict[str, Any]) -> Any:
         """Patch one public-id-addressed row through the write queryset."""
@@ -163,27 +336,46 @@ class AngeeHasuraWriteBackend:
             return None
         return preview.deleted_instance
 
-    def _decode_public_id_fields(self, data: dict[str, Any]) -> dict[str, Any]:
+    def _decode_public_id_fields(
+        self,
+        data: dict[str, Any],
+        public_id_fields: Mapping[str, type[models.Model]] | None = None,
+    ) -> dict[str, Any]:
         """Translate public-id relation fields to Django-native write values."""
 
-        decoded, _relationships = self._decode_public_id_fields_with_relationships(data)
+        decoded, _relationships = self._decode_public_id_fields_with_relationships(
+            data,
+            public_id_fields,
+        )
         return decoded
 
     def _decode_public_id_fields_with_relationships(
         self,
         data: dict[str, Any],
+        public_id_fields: Mapping[str, type[models.Model]] | None = None,
     ) -> tuple[dict[str, Any], dict[str, tuple[Any, ...]]]:
-        """Translate public-id relation fields and keep relationship instances."""
+        """Translate public-id relation fields and keep relationship instances.
 
+        ``public_id_fields`` defaults to the parent's map; a child line write
+        passes the child's own map (its owner model resolves the field kind).
+        """
+
+        field_models: Mapping[str, type[models.Model]]
+        if public_id_fields is None:
+            field_models = self.public_id_fields
+            owner_model = self.model
+        else:
+            field_models = public_id_fields
+            owner_model = self.lines.model if self.lines is not None else self.model
         out: dict[str, Any] = {}
         relationships: dict[str, tuple[Any, ...]] = {}
         for key, value in data.items():
-            related_model = self.public_id_fields.get(key)
+            related_model = field_models.get(key)
             if related_model is None:
                 out[key] = value
                 continue
             try:
-                field = self.model._meta.get_field(key)
+                field = owner_model._meta.get_field(key)
             except FieldDoesNotExist:
                 field = None
             if getattr(field, "many_to_many", False):
@@ -350,6 +542,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     writable: Sequence[str] | None = None,
     insertable: Sequence[str] | None = None,
     updatable: Sequence[str] | None = None,
+    lines: HasuraLines | None = None,
     insert: bool = True,
     update: bool = True,
     delete: bool = True,
@@ -373,12 +566,21 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     write backend, and the public-id ``id`` decoder. A caller overrides any knob
     only where the resource's intent differs (REBAC-scoped reads, a custom write
     backend, a non-``pk`` identity column).
+
+    ``lines=HasuraLines(field="lines", model=...)`` (F6) declares an editable
+    child-lines relation: the insert surface rides the upstream nested-insert
+    shape (``insert_<res>_one(object: {..., lines: {data: [...]}})``) and an
+    authored ``<res>_save(pk, patch, lines)`` mutation diff-applies children plus
+    patches the parent in one transaction. The default write backend becomes a
+    lines-aware :class:`AngeeHasuraWriteBackend`; a caller supplying its own
+    ``write_backend`` must make it lines-aware.
     """
 
     resource_name = name or model.__name__.lower()
     read_queryset = get_queryset or _model_queryset(model)
     if id_decode is None and id_column == "pk":
         id_decode = public_pk_decoder(model)
+    active_write_backend = write_backend or AngeeHasuraWriteBackend(model, lines=lines)
     resource = build_hasura_resource(
         node,
         model=model,
@@ -390,16 +592,19 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         writable=list(writable) if writable is not None else None,
         insertable=list(insertable) if insertable is not None else None,
         updatable=list(updatable) if updatable is not None else None,
+        nested=_nested_inserts(lines) if lines is not None else None,
         insert=insert,
         update=update,
         delete=delete,
         field_id_decode=field_id_decode,
         get_queryset=read_queryset,
         get_aggregate_queryset=get_aggregate_queryset or _aggregate_queryset(read_queryset),
-        write_backend=write_backend or AngeeHasuraWriteBackend(model),
+        write_backend=active_write_backend,
         id_decode=id_decode,
         id_column=id_column,
     )
+    if lines is not None:
+        resource = _attach_lines_save(resource, node=node, lines=lines, write_backend=active_write_backend)
     return attach_hasura_resource_metadata(
         resource,
         node=node,
@@ -412,11 +617,83 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         insert=insert,
         update=update,
         delete=delete,
+        lines=lines,
         declared_fields=tuple(declared_fields),
         model_label=model_label,
         public_id_field=public_id_field,
         row_model=row_model,
     )
+
+
+def _nested_inserts(lines: HasuraLines) -> list[NestedInsert]:
+    """Return the upstream nested-insert declaration for a lines relation."""
+
+    field_id_decode = {
+        str(field_name): public_pk_decoder(lines.model._meta.get_field(field_name).related_model)
+        for field_name in lines.public_id_fields
+    }
+    return [
+        NestedInsert(
+            relation=lines.field,
+            model=lines.model,
+            insertable=list(lines.writable) if lines.writable is not None else None,
+            field_id_decode=field_id_decode or None,
+        )
+    ]
+
+
+def _attach_lines_save(
+    resource: HasuraResource,
+    *,
+    node: type,
+    lines: HasuraLines,
+    write_backend: Any,
+) -> HasuraResource:
+    """Merge the authored ``<res>_save`` mutation into a built resource.
+
+    The nested-insert shape rides the upstream builder; the diff-apply ``_save``
+    operation is Angee dialect glue registered here, beside the CRUD roots — the
+    frontend drives it to persist an edited document (parent patch + line diff)
+    in one REBAC-checked transaction. The line argument reuses the upstream child
+    input (an optional public ``id`` per row keys the diff).
+    """
+
+    res = resource.name or node.__name__.lower()
+    line_input = resource.nested_input_types.get(lines.field)
+    if line_input is None:
+        raise ImproperlyConfigured(f"{res} declares lines but built no nested line input.")
+    save_root = f"{res}_save"
+    patch_type = resource.set_input_type
+
+    def resolve_save(
+        self: Any,
+        info: strawberry.Info,
+        pk: PublicID,
+        patch: Any = None,
+        lines: Any = None,
+    ) -> Any:
+        patch_data = input_to_dict(patch) if patch is not None else {}
+        rows = None if lines is None else [input_to_dict(row) for row in lines]
+        return write_backend.save(info, str(pk), patch_data, rows)
+
+    annotations: dict[str, Any] = {"self": Any, "info": strawberry.Info, "pk": PublicID}
+    if patch_type is not None:
+        annotations["patch"] = patch_type | None
+    annotations["lines"] = _types.GenericAlias(list, (line_input,)) | None
+    annotations["return"] = node
+    resolve_save.__annotations__ = annotations
+
+    save_holder = strawberry.type(
+        type(
+            f"{res}__save_mutation",
+            (),
+            {save_root: strawberry.mutation(resolver=resolve_save, name=save_root)},
+        )
+    )
+    combined_mutation = strawberry.type(
+        type(f"{res}__mutation", (resource.mutation, save_holder), {})
+    )
+    return dataclasses.replace(resource, mutation=combined_mutation)
 
 
 def attach_hasura_resource_metadata(
@@ -432,6 +709,7 @@ def attach_hasura_resource_metadata(
     insert: bool = True,
     update: bool = True,
     delete: bool = True,
+    lines: HasuraLines | None = None,
     declared_fields: tuple[str, ...] = (),
     model_label: str | None = None,
     public_id_field: str = PUBLIC_ID_FIELD_NAME,
@@ -497,6 +775,12 @@ def attach_hasura_resource_metadata(
     update_by_pk_root = resource_attr(resource, "update_by_pk_root", f"update_{name}_by_pk")
     delete_by_pk_root = resource_attr(resource, "delete_by_pk_root", f"delete_{name}_by_pk")
 
+    parent_create_fields = (
+        resource_wire_field_names(insert_input_type, exclude=_parent_write_exclude(lines))
+        if insert
+        else ()
+    )
+    parent_update_fields = resource_wire_field_names(set_input_type, exclude=("id",)) if update else ()
     fields = model_resource_fields(
         model,
         declared_fields,
@@ -504,16 +788,8 @@ def attach_hasura_resource_metadata(
         order_fields=sortable,
         aggregate_fields=aggregatable,
         group_by_fields=groupable,
-        create_fields=(
-            resource_wire_field_names(insert_input_type, exclude=("id",))
-            if insert
-            else ()
-        ),
-        update_fields=(
-            resource_wire_field_names(set_input_type, exclude=("id",))
-            if update
-            else ()
-        ),
+        create_fields=parent_create_fields,
+        update_fields=parent_update_fields,
     )
     if detail_root is None:
         raise ImproperlyConfigured(f"{model._meta.label} Hasura resource did not expose a detail root.")
@@ -568,7 +844,14 @@ def attach_hasura_resource_metadata(
         update=update,
         delete=delete,
     )
+    if lines is not None:
+        mutation_capabilities = (*mutation_capabilities, "save")
     if mutation_capabilities:
+        save_root = (
+            resource_wire_field_name(resource.mutation, f"{name}_save")
+            if lines is not None
+            else None
+        )
         attach_data_resource_metadata(
             resource.mutation,
             make_data_resource_metadata(
@@ -593,6 +876,7 @@ def attach_hasura_resource_metadata(
                         if update and update_by_pk_root is not None
                         else None
                     ),
+                    save_name=save_root,
                     delete_name=(
                         resource_wire_field_name(
                             resource.mutation,
@@ -609,10 +893,48 @@ def attach_hasura_resource_metadata(
                 ),
                 create_input_type=insert_input_type,
                 update_input_type=set_input_type,
+                create_fields=parent_create_fields,
+                update_fields=parent_update_fields,
+                lines=_line_metadata(lines, resource) if lines is not None else None,
                 capabilities=mutation_capabilities,
             ),
         )
     return resource
+
+
+def _parent_write_exclude(lines: HasuraLines | None) -> tuple[str, ...]:
+    """Return parent create-field wire names to skip (id + the lines envelope)."""
+
+    return ("id",) if lines is None else ("id", lines.field)
+
+
+def _line_metadata(lines: HasuraLines, resource: HasuraResource) -> DataLinesMetadata:
+    """Return the frontend editable-lines contract for a document resource."""
+
+    line_input = resource.nested_input_types.get(lines.field)
+    child_fields = resource_wire_field_names(line_input, exclude=("id",))
+    return DataLinesMetadata(
+        field=lines.field,
+        model_label=lines.model._meta.label,
+        input_type=resource_type_name(line_input),
+        fields=model_resource_fields(
+            lines.model,
+            child_fields,
+            create_fields=child_fields,
+            update_fields=child_fields,
+        ),
+        position_field=lines.position_field if _has_model_field(lines.model, lines.position_field) else None,
+    )
+
+
+def _has_model_field(model: type[models.Model], name: str) -> bool:
+    """Return whether ``model`` declares a field named ``name``."""
+
+    try:
+        model._meta.get_field(name)
+    except FieldDoesNotExist:
+        return False
+    return True
 
 def _mutation_capabilities(
     *,

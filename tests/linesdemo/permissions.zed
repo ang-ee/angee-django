@@ -1,0 +1,18 @@
+// Authorization schema for the F6 editable-lines demo (test-only).
+// @rebac_package: linesdemo
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 1
+
+// An owner-gated document with editable child lines. `owner` is a stored
+// per-row grant (the test writes it); `write` is what the authored `_save`
+// preflights on before the lines ride the §3.4 elevation. The child line model
+// carries no definition — its rows are authorized through this parent's write.
+definition linesdemo/document {
+    relation owner: auth/user
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = authenticated
+    permission read   = owner + admin->member
+    permission write  = owner + admin->member
+    permission delete = owner + admin->member
+}
