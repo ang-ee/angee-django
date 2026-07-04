@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Self, TypeVar, cast
 
 import reversion
 from django.conf import settings
@@ -12,6 +12,18 @@ from rebac import current_actor
 from angee.base.actors import actor_user_id
 from angee.base.emission import ModelClassAttribute, ModelDecorator
 from angee.base.fields import SqidField
+
+_ArchiveModelT = TypeVar("_ArchiveModelT", bound=models.Model)
+
+ARCHIVE_FLAG_FIELD = "is_archived"
+"""The one archive-flag column name — the single archive vocabulary word.
+
+Every model that composes :class:`ArchiveMixin` carries this exact column, and
+the resource-metadata field classifier recognises the archive flag by this name
+(``angee.graphql.data.field_classification.is_archive_field``). Keeping the name
+identical everywhere is the contract that lets pickers default-filter archived
+rows and lists expose an archived facet without per-model wiring.
+"""
 
 
 class TimestampMixin(models.Model):
@@ -135,6 +147,48 @@ class AuditMixin(models.Model):
         if update_fields is not None:
             kwargs["update_fields"] = update_fields_with_auto_now(self, update_fields | touched)
         super().save(*args, **kwargs)
+
+
+class ArchiveMixin(models.Model):
+    """Add a soft-archive flag to a model.
+
+    One vocabulary, everywhere: the column is ``is_archived`` (see
+    :data:`ARCHIVE_FLAG_FIELD`) and the read scopes are ``.archived()`` /
+    ``.unarchived()`` (compose :class:`ArchiveQuerySet` into the model's
+    queryset). Archived rows are soft-hidden from default surfaces but kept for
+    an explicit archived facet — a metadata fact the field classifier carries as
+    ``archivable``, not per-page logic. This is archival, distinct from a
+    soft-delete/trash flag or an enablement flag, which own different contracts.
+    """
+
+    is_archived = models.BooleanField(default=False, db_index=True)
+    """Whether the row is archived — soft-hidden from default pickers and lists."""
+
+    class Meta:
+        """Django model options for archive-only abstract inheritance."""
+
+        abstract = True
+
+
+class ArchiveQuerySet(models.QuerySet[_ArchiveModelT]):
+    """Composable read scopes for the :class:`ArchiveMixin` archive flag.
+
+    Mix into a model's queryset alongside its base queryset (e.g.
+    ``class DriveQuerySet(ArchiveQuerySet[Drive], AngeeQuerySet[Drive])``) so the
+    archive vocabulary — ``.archived()`` / ``.unarchived()`` — reads as chainable
+    predicates over the one ``is_archived`` column rather than repeated inline
+    filters.
+    """
+
+    def archived(self) -> Self:
+        """Return rows flagged archived."""
+
+        return cast(Self, self.filter(**{ARCHIVE_FLAG_FIELD: True}))
+
+    def unarchived(self) -> Self:
+        """Return rows not flagged archived — the default picker/list scope."""
+
+        return cast(Self, self.filter(**{ARCHIVE_FLAG_FIELD: False}))
 
 
 class HistoryMixin(models.Model):

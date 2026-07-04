@@ -6,6 +6,7 @@ from typing import Any
 
 from django.db import models
 
+from angee.base.mixins import ARCHIVE_FLAG_FIELD
 from angee.graphql.introspection import is_to_many_relation
 
 RESOURCE_FIELD_KINDS = frozenset({"scalar", "enum", "relation", "list"})
@@ -59,6 +60,20 @@ def model_field_scalar(field: models.Field[Any, Any]) -> str | None:
     if isinstance(field, (models.CharField, models.TextField, models.UUIDField)):
         return "String"
     return None
+
+
+def is_archive_field(field: models.Field[Any, Any] | None) -> bool:
+    """Return whether ``field`` is the :class:`~angee.base.mixins.ArchiveMixin` flag.
+
+    The archive vocabulary is name-based — one column name across the platform
+    (:data:`angee.base.mixins.ARCHIVE_FLAG_FIELD`) — so any model composing
+    ``ArchiveMixin`` is recognised by that column and marked ``archivable`` in
+    resource metadata. A same-typed boolean under a different contract (a
+    soft-delete ``is_trashed``, an enablement ``is_enabled``/``is_active``) is
+    deliberately not matched.
+    """
+
+    return field is not None and getattr(field, "name", None) == ARCHIVE_FLAG_FIELD
 
 
 def resource_field_widget(field: models.Field[Any, Any] | None, kind: str) -> str | None:

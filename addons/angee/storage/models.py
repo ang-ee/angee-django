@@ -64,7 +64,7 @@ from rebac.managers import RebacManager
 
 from angee.base.actors import actor_user_id
 from angee.base.fields import ImplClassField, StateField
-from angee.base.mixins import AuditMixin, SqidMixin
+from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
 from angee.storage import exceptions
 from angee.storage.backends import DOWNLOAD_URL_TTL_SECONDS, StorageBackend
@@ -104,7 +104,19 @@ class UploadState(models.TextChoices):
     FAILED = "failed", "Failed"
 
 
-class Backend(SqidMixin, AuditMixin, AngeeModel):
+class StorageMasterQuerySet(ArchiveQuerySet[Any], AngeeQuerySet[Any]):
+    """AngeeQuerySet plus the archive read vocabulary for storage master rows.
+
+    Shared by the archivable admin/infra rows (:class:`Backend`, :class:`Drive`)
+    so ``.archived()`` / ``.unarchived()`` compose over the REBAC row scope.
+    """
+
+
+StorageMasterManager = AngeeManager.from_queryset(StorageMasterQuerySet)
+"""Default manager for the archivable storage master rows (Backend, Drive)."""
+
+
+class Backend(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
     """Credentialed storage backend instance.
 
     One row names a :class:`~angee.storage.backends.StorageBackend` subclass by
@@ -120,7 +132,8 @@ class Backend(SqidMixin, AuditMixin, AngeeModel):
     label = models.CharField(max_length=200)
     backend_class = ImplClassField(base_class=StorageBackend, registry_setting="ANGEE_STORAGE_BACKEND_CLASSES")
     backend_config = models.JSONField(default=dict, blank=True)
-    is_archived = models.BooleanField(default=False, db_index=True)
+
+    objects = StorageMasterManager()
 
     _storage_cache: ClassVar[OrderedDict[tuple[Any, Any], StorageBackend]] = OrderedDict()
     """Resolved backend instances keyed by ``(pk, frozen resolved config)``."""
@@ -178,7 +191,7 @@ class Backend(SqidMixin, AuditMixin, AngeeModel):
         return instance
 
 
-class Drive(SqidMixin, AuditMixin, AngeeModel):
+class Drive(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
     """Addressable storage volume on top of a backend.
 
     Object keys live under ``{prefix}/…`` inside the parent backend's
@@ -200,7 +213,8 @@ class Drive(SqidMixin, AuditMixin, AngeeModel):
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True)
     prefix = models.CharField(max_length=512, blank=True)
-    is_archived = models.BooleanField(default=False, db_index=True)
+
+    objects = StorageMasterManager()
 
     class Meta:
         """Django model options for drives."""

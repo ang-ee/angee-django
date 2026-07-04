@@ -13,13 +13,16 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.management import call_command
-from django.db import connection
+from django.db import connection, models
 from django.db.models.signals import post_save
 from rebac import actor_context, app_settings, system_context
 from rebac.actors import to_subject_ref
 from rebac.errors import PermissionDenied
 from rebac.roles import grant
 
+from angee.base.mixins import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet
+from angee.graphql.data.field_classification import is_archive_field
+from angee.graphql.data.resource_fields import model_resource_fields
 from angee.storage import exceptions
 from angee.storage.models import FileManager, UploadState
 from angee.storage.signals import file_finalized
@@ -72,6 +75,61 @@ def test_backend_has_no_dormant_default_flag() -> None:
     """The configured default drive owns defaults; backend rows do not."""
 
     assert "is_default" not in {field.name for field in Backend._meta.fields}
+
+
+def test_storage_masters_fold_their_archive_flag_onto_the_mixin() -> None:
+    """Backend and Drive carry ``is_archived`` from ArchiveMixin, not hand-rolled.
+
+    The column, its index, and the ``.archived()`` / ``.unarchived()`` read
+    vocabulary all come from the shared owner — folding the two hand-rolled
+    booleans onto one primitive.
+    """
+
+    # The mixin is the one owner of the archive column and its index.
+    mixin_field = ArchiveMixin._meta.get_field(ARCHIVE_FLAG_FIELD)
+    assert isinstance(mixin_field, models.BooleanField)
+    assert mixin_field.db_index is True
+
+    for model in (Backend, Drive):
+        assert issubclass(model, ArchiveMixin)
+        field = model._meta.get_field(ARCHIVE_FLAG_FIELD)
+        assert isinstance(field, models.BooleanField)
+        assert field.db_index is True
+
+    assert issubclass(Drive.objects.all().__class__, ArchiveQuerySet)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_archive_queryset_scopes_partition_storage_rows(drive: Any) -> None:
+    """``.archived()`` / ``.unarchived()`` split rows on the mixin flag."""
+
+    with system_context(reason="test archive scopes"):
+        archived = Drive._base_manager.create(
+            backend=drive.backend,
+            slug="retired",
+            name="Retired",
+            is_archived=True,
+        )
+        unarchived_ids = set(Drive.objects.all().unarchived().values_list("pk", flat=True))
+        archived_ids = set(Drive.objects.all().archived().values_list("pk", flat=True))
+
+    assert drive.pk in unarchived_ids and archived.pk not in unarchived_ids
+    assert archived.pk in archived_ids and drive.pk not in archived_ids
+
+
+def test_archive_column_is_marked_archivable_in_resource_metadata() -> None:
+    """The field classifier marks the mixin column archivable by its one name.
+
+    A same-typed boolean under a different contract (storage's soft-delete
+    ``is_trashed``) is deliberately left plain — the vocabulary is name-based.
+    """
+
+    fields = {field.name: field for field in model_resource_fields(Drive, ("is_archived", "slug"))}
+    assert fields["is_archived"].archivable is True
+    assert fields["slug"].archivable is False
+
+    assert is_archive_field(Drive._meta.get_field("is_archived")) is True
+    assert is_archive_field(File._meta.get_field("is_trashed")) is False
 
 
 def test_detect_mime_falls_back_to_the_filename_when_libmagic_is_unsure() -> None:
