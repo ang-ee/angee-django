@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from django.conf import settings
 from django.core import checks
-from django.core.exceptions import FieldError, ImproperlyConfigured
+from django.core.exceptions import FieldDoesNotExist, FieldError, ImproperlyConfigured
 from django.db import models
 from django.db.models.query_utils import DeferredAttribute
 from django.utils.module_loading import import_string
@@ -500,6 +500,141 @@ class ImplClassField(TextChoicesField):
         """Return the configured ``key → dotted path`` mapping for this field."""
 
         return impl_registry(self.registry_setting)
+
+
+class MoneyField(models.DecimalField):
+    """A decimal amount paired with the currency its row is denominated in.
+
+    ``docs/stack.md`` keeps money native — a ``DecimalField`` (default
+    ``max_digits=18, decimal_places=6``), never a money library. The single fact a
+    money column adds over a plain decimal is *which currency the amount is in*:
+    ``currency_field`` names the path to the ``money.Currency`` foreign key that
+    owns the row's currency, either a **sibling** FK on the same model
+    (``"currency"``, the default) or a **one-hop** related path
+    (``"order.currency"``) when the currency lives on a parent document.
+    :meth:`check` validates that path by field introspection and refers to the
+    currency model by its ``"money.Currency"`` label, so the field ships
+    independently of where the currency addon is hosted (label-based coupling, no
+    import of the sibling addon).
+
+    ``currency_field`` is a semantic declaration, not a database fact:
+    :meth:`deconstruct` drops it — exactly like :meth:`ImplClassField.deconstruct`
+    drops its runtime-composed choices — so the field keeps its own class path and
+    the decimal column kwargs while the currency path rides through ``deepcopy``
+    inheritance onto the live field. Changing ``currency_field`` therefore never
+    writes a migration. Rendering the amount with its currency (resolved through
+    the metadata's currency path) is the ``"money"`` widget's job, registered by
+    the currency addon's web package; the field only owns the backend vocabulary.
+    """
+
+    CURRENCY_MODEL_LABEL = "money.Currency"
+
+    def __init__(self, *args: Any, currency_field: str = "currency", **kwargs: Any) -> None:
+        """Record the currency path and default the money decimal precision."""
+
+        self.currency_field = currency_field
+        kwargs.setdefault("max_digits", 18)
+        kwargs.setdefault("decimal_places", 6)
+        super().__init__(*args, **kwargs)
+
+    def deconstruct(self) -> tuple[str | None, str, list[Any], dict[str, Any]]:
+        """Emit the decimal column; drop the semantic ``currency_field`` kwarg.
+
+        The currency path is resolved at ``check``/metadata time, not stored, so —
+        like :meth:`ImplClassField.deconstruct` — it is dropped from the migration
+        state and only the field's own class path plus ``max_digits`` /
+        ``decimal_places`` ride through. Adding or changing ``currency_field``
+        therefore never churns a migration.
+        """
+
+        name, path, args, kwargs = super().deconstruct()
+        kwargs.pop("currency_field", None)
+        return name, path, args, kwargs
+
+    def check(self, **kwargs: Any) -> list[checks.CheckMessage]:
+        """Validate that ``currency_field`` resolves to a ``money.Currency`` FK.
+
+        Runs at system-check time — after the app registry is populated and Django
+        has resolved lazy relations — so it introspects the sibling or one-hop
+        related field directly (``base_class``-style late resolution, never in
+        ``__init__``/``contribute_to_class`` where relations may still be strings).
+        A path segment whose relation is not yet resolvable is deferred to Django's
+        own relation checks (``fields.E300`` reports a genuinely broken foreign
+        key), so this speaks only to the currency contract.
+        """
+
+        errors = super().check(**kwargs)
+        errors.extend(self._check_currency_field())
+        return errors
+
+    def _check_currency_field(self) -> list[checks.CheckMessage]:
+        """Return check errors for the declared ``currency_field`` path."""
+
+        segments = self.currency_field.split(".") if self.currency_field else []
+        if not 1 <= len(segments) <= 2:
+            return [
+                checks.Error(
+                    f"MoneyField currency_field={self.currency_field!r} must name a sibling "
+                    "foreign key ('currency') or a one-hop related path ('order.currency').",
+                    obj=self,
+                    id="angee.E010",
+                )
+            ]
+        model = self.model
+        for hop in segments[:-1]:
+            resolved = self._foreign_key_target(model, hop)
+            if isinstance(resolved, checks.Error):
+                return [resolved]
+            if resolved is None:  # unresolved relation — Django's fields.E300 owns the report
+                return []
+            model = resolved
+        target = self._foreign_key_target(model, segments[-1])
+        if isinstance(target, checks.Error):
+            return [target]
+        if target is None:
+            return []
+        if target._meta.label != self.CURRENCY_MODEL_LABEL:
+            return [
+                checks.Error(
+                    f"MoneyField currency_field={self.currency_field!r} resolves to "
+                    f"{target._meta.label}, not {self.CURRENCY_MODEL_LABEL}.",
+                    hint=f"Point currency_field at a foreign key to {self.CURRENCY_MODEL_LABEL}.",
+                    obj=self,
+                    id="angee.E013",
+                )
+            ]
+        return []
+
+    def _foreign_key_target(
+        self, model: type[models.Model], field_name: str
+    ) -> type[models.Model] | checks.Error | None:
+        """Resolve one path segment to its related model, an error, or ``None`` (defer).
+
+        ``None`` means the segment names a relation Django has not resolved yet
+        (the target model is not installed); the caller defers to Django's own
+        relation checks rather than double-reporting.
+        """
+
+        try:
+            field = model._meta.get_field(field_name)
+        except FieldDoesNotExist:
+            return checks.Error(
+                f"MoneyField currency_field={self.currency_field!r}: "
+                f"{model._meta.label} has no field {field_name!r}.",
+                obj=self,
+                id="angee.E011",
+            )
+        if not getattr(field, "many_to_one", False):
+            return checks.Error(
+                f"MoneyField currency_field={self.currency_field!r}: "
+                f"{model._meta.label}.{field_name} is not a foreign key.",
+                obj=self,
+                id="angee.E012",
+            )
+        related = field.related_model
+        if related is None or isinstance(related, str):
+            return None
+        return related
 
 
 def enum_member_for(choices_enum: Any, value: Any) -> Any | None:

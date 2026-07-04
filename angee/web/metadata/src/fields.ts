@@ -27,13 +27,17 @@ export interface ChoiceFacetSupport {
 }
 
 /**
- * The default widget family for a generated resource field. Metadata owns the
- * field kind/scalar classification; UI owns the actual component registry.
+ * The default widget family for a generated resource field. The backend owns the
+ * widget vocabulary (`angee.graphql.data.field_classification`), so an explicit
+ * `widget` — e.g. `"money"` over a Decimal scalar — wins; only a field with no
+ * backend widget (a computed, model-less resource field) falls back to the
+ * kind/scalar-derived default. UI owns the actual component registry.
  */
 export function defaultWidgetForModelField(
   field: ModelFieldMetadata | undefined,
 ): string | undefined {
   if (!field) return undefined;
+  if (field.widget) return field.widget;
   if (field.kind === "enum") return "select";
   if (field.kind === "relation") return "many2one";
   if (field.kind === "list") return "tagInput";

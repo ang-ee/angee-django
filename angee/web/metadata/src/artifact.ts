@@ -30,6 +30,10 @@ export interface ModelFieldMetadata {
   scalar?: string;
   enumName?: string;
   values?: readonly ModelEnumValueMetadata[];
+  /** Backend-owned widget key (e.g. `"money"`); wins over the scalar-derived default. */
+  widget?: string;
+  /** For a money field: the path to the FK that owns the row's currency. */
+  currencyField?: string;
   relationTarget?: string;
   relationFilter?: ModelRelationFilterMetadata;
   filterable?: boolean;
@@ -168,6 +172,7 @@ export interface DataResourceFieldMetadata {
   scalar?: string | null;
   values?: readonly ModelEnumValueMetadata[];
   widget?: string | null;
+  currencyField?: string | null;
   readable: boolean;
   filterable: boolean;
   sortable: boolean;
@@ -361,6 +366,8 @@ function modelFieldMetadataFromResourceField(
     name: field.name,
     kind: field.kind,
     ...(field.scalar ? { scalar: field.scalar } : {}),
+    ...(field.widget ? { widget: field.widget } : {}),
+    ...(field.currencyField ? { currencyField: field.currencyField } : {}),
     ...(field.kind === "enum" ? { values: field.values ?? [] } : {}),
     ...(relationTarget ? { relationTarget } : {}),
     readable: field.readable,

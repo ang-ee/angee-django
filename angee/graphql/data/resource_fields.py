@@ -28,6 +28,7 @@ from angee.graphql.data.field_classification import (
 from angee.graphql.data.field_classification import (
     is_archive_field,
     model_field_scalar,
+    money_currency_field,
     resource_field_kind,
     resource_field_widget,
 )
@@ -72,6 +73,7 @@ class DataResourceFieldMetadata:
     updatable: bool = False
     required_on_create: bool = False
     archivable: bool = False
+    currency_field: str | None = None
     relation_model_label: str | None = None
     relation_label_axis: str | None = None
 
@@ -249,6 +251,7 @@ def resource_fields(
                 updatable=name in updatable,
                 required_on_create=name in required_on_create,
                 archivable=is_archive_field(model_field),
+                currency_field=money_currency_field(model_field),
                 relation_model_label=_relation_model_label(model_field, axis),
                 relation_label_axis=axis.label_axis if axis is not None else None,
             )
@@ -302,6 +305,7 @@ def merge_resource_fields(
             updatable=existing.updatable or field.updatable,
             required_on_create=existing.required_on_create or field.required_on_create,
             archivable=existing.archivable or field.archivable,
+            currency_field=existing.currency_field or field.currency_field,
             relation_model_label=existing.relation_model_label or field.relation_model_label,
             relation_label_axis=existing.relation_label_axis or field.relation_label_axis,
         )
@@ -393,6 +397,7 @@ def _model_resource_field(
         updatable=updatable,
         required_on_create=required_on_create,
         archivable=is_archive_field(field),
+        currency_field=money_currency_field(field),
         relation_model_label=_relation_model_label(field, relation_axis),
         relation_label_axis=relation_axis.label_axis if relation_axis is not None else None,
     )

@@ -6,6 +6,7 @@ from typing import Any
 
 from django.db import models
 
+from angee.base.fields import MoneyField
 from angee.base.mixins import ARCHIVE_FLAG_FIELD
 from angee.graphql.introspection import is_to_many_relation
 
@@ -16,7 +17,7 @@ RESOURCE_FIELD_SCALARS = frozenset({"ID", "String", "Boolean", "Int", "Float", "
 """Supported GraphQL scalar families in data-resource field metadata."""
 
 RESOURCE_FIELD_WIDGETS = frozenset(
-    {"select", "many2one", "tagInput", "switch", "integer", "float", "datetime", "date", "json"}
+    {"select", "many2one", "tagInput", "switch", "integer", "float", "money", "datetime", "date", "json"}
 )
 """Widget vocabulary owned by backend data-resource metadata."""
 
@@ -78,6 +79,19 @@ def is_archive_field(field: models.Field[Any, Any] | None) -> bool:
     return field is not None and getattr(field, "name", None) == ARCHIVE_FLAG_FIELD
 
 
+def money_currency_field(field: models.Field[Any, Any] | None) -> str | None:
+    """Return the currency path a :class:`~angee.base.fields.MoneyField` declares.
+
+    The money vocabulary is type-based — a ``MoneyField`` owns the name of the FK
+    to ``money.Currency`` that denominates its amount (a sibling ``"currency"`` or
+    a one-hop ``"order.currency"``). Emitting it in resource metadata lets the
+    ``"money"`` widget resolve a row's currency without the frontend re-deciding
+    which field owns it. A plain ``DecimalField`` returns ``None``.
+    """
+
+    return field.currency_field if isinstance(field, MoneyField) else None
+
+
 def resource_field_widget(field: models.Field[Any, Any] | None, kind: str) -> str | None:
     """Return the default rendered widget owned by the field classification."""
 
@@ -91,6 +105,8 @@ def resource_field_widget(field: models.Field[Any, Any] | None, kind: str) -> st
         return "tagInput"
     if field is None:
         return None
+    if isinstance(field, MoneyField):
+        return "money"
     if isinstance(field, models.BooleanField):
         return "switch"
     if isinstance(field, models.IntegerField):
