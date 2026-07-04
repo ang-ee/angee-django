@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from angee.iam.models import Company as AbstractCompany
 from angee.iam.models import User as AbstractUser
 
 
@@ -15,4 +16,17 @@ class User(AbstractUser):
         app_label = "iam"
         db_table = "test_iam_user"
         rebac_resource_type = "auth/user"
+        rebac_id_attr = "sqid"
+
+
+class Company(AbstractCompany):
+    """Concrete IAM company of record used by tests without the composer."""
+
+    class Meta(AbstractCompany.Meta):
+        """Django model options for the canonical test IAM company."""
+
+        abstract = False
+        app_label = "iam"
+        db_table = "test_iam_company"
+        rebac_resource_type = "iam/company"
         rebac_id_attr = "sqid"

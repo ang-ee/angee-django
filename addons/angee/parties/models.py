@@ -509,3 +509,30 @@ class Directory(Bridge):
             folder.sync_token = book.sync_token
             folder.save(update_fields=["ctag", "sync_token", "updated_at"])
         return resolved
+
+
+class CompanyParties(AngeeModel):
+    """Public-face link from an ``iam.Company`` of record to a ``parties.Party``.
+
+    A same-row ``extends`` merge (canon: ``iam_integrate_oidc`` over
+    ``integrate.OAuthClient``): the composer folds ``party`` onto the single
+    ``iam.Company`` table. ``iam`` stays fiscal- and party-free (it is the lowest
+    addon in the dependency order); the of-record company borrows a ``Party`` for
+    its public name/addresses/logo — invoice headers — when one is needed.
+    ``parties`` already depends on ``iam``, so the dependency stays one-way.
+    """
+
+    extends = "iam.Company"
+
+    party = models.OneToOneField(
+        "parties.Party",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="company_of_record",
+    )
+
+    class Meta:
+        """Abstract extension base merged into ``iam.Company``."""
+
+        abstract = True

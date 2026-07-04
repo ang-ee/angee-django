@@ -12,6 +12,7 @@ from typing import Any, cast
 
 import strawberry
 import strawberry_django
+from django.apps import apps
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
@@ -38,9 +39,15 @@ from strawberry import auto
 from strawberry.scalars import JSON
 
 from angee.base.models import SqidPublicIdentity, instance_from_public_id
-from angee.graphql.data import aggregate_queryset, hasura_model_resource, hasura_pydantic_resource
+from angee.graphql.data import (
+    AngeeHasuraWriteBackend,
+    aggregate_queryset,
+    hasura_model_resource,
+    hasura_pydantic_resource,
+    public_pk_decoder,
+)
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
-from angee.graphql.ids import PublicID
+from angee.graphql.ids import PublicID, to_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
@@ -81,6 +88,7 @@ from angee.iam.roles import (
 
 User = cast(type[Any], get_user_model())
 Group = DjangoGroup
+Company = apps.get_model("iam", "Company")
 GROUP_PUBLIC_IDENTITY = SqidPublicIdentity(prefix="grp_")
 """Public data identity for Django auth groups exposed by IAM."""
 
@@ -170,6 +178,22 @@ class GroupType:
         """Return this group row's IAM public id."""
 
         return PublicID(GROUP_PUBLIC_IDENTITY.public_id_from_pk(cast(Any, self).pk))
+
+
+@strawberry_django.type(Company)
+class CompanyType(AngeeNode):
+    """GraphQL projection of a company of record for the console admin page."""
+
+    name: auto
+    is_archived: auto
+    created_at: auto
+    updated_at: auto
+
+    @strawberry_django.field(only=["parent_id"])
+    def parent(self) -> strawberry.ID | None:
+        """Return the parent company's public id, if this company has one."""
+
+        return to_public_id(Company, cast(Any, self).parent_id)
 
 
 @strawberry.type
@@ -720,6 +744,22 @@ _GROUP_RESOURCE = hasura_model_resource(
 )
 
 
+_COMPANY_RESOURCE = hasura_model_resource(
+    CompanyType,
+    model=Company,
+    name="companies",
+    filterable=["id", "name", "parent", "is_archived"],
+    sortable=["name", "created_at", "updated_at"],
+    aggregatable=["id"],
+    groupable=["parent", "is_archived"],
+    insertable=["name", "parent", "is_archived"],
+    updatable=["name", "parent", "is_archived"],
+    field_id_decode={"parent": public_pk_decoder(Company)},
+    write_backend=AngeeHasuraWriteBackend(Company, public_id_fields=("parent",)),
+    model_label="iam.Company",
+)
+
+
 # Filter/sort only on columns the active relationship store materializes as
 # direct concrete fields. The denormalized ``resource_type``/``subject_type``
 # strings live behind ``resource_fk``/``subject_fk`` in registry storage mode, so
@@ -904,6 +944,7 @@ schemas = {
             IAMConsoleQuery,
             _USER_RESOURCE.query,
             _GROUP_RESOURCE.query,
+            _COMPANY_RESOURCE.query,
             _ROLE_RESOURCE.query,
             _GRANT_RESOURCE.query,
             _RELATIONSHIP_RESOURCE.query,
@@ -912,6 +953,7 @@ schemas = {
             IAMMutation,
             _USER_RESOURCE.mutation,
             _GROUP_RESOURCE.mutation,
+            _COMPANY_RESOURCE.mutation,
             IAMUserDeletePreviewMutation,
             IAMPermissionHubMutation,
         ],
@@ -920,6 +962,7 @@ schemas = {
             UserType,
             CurrentUserType,
             GroupType,
+            CompanyType,
             IAMRoleType,
             IAMGrantType,
             IAMRelationType,
@@ -930,6 +973,7 @@ schemas = {
             IAMOverviewType,
             *_USER_RESOURCE.types,
             *_GROUP_RESOURCE.types,
+            *_COMPANY_RESOURCE.types,
             *_ROLE_RESOURCE.types,
             *_GRANT_RESOURCE.types,
             *_RELATIONSHIP_RESOURCE.types,

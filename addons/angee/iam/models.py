@@ -1,9 +1,43 @@
 """Source models for Angee identity.
 
-Pure identity: the swappable ``User`` and its manager. The OAuth connection
-substrate (``OAuthClient``/``ExternalAccount``/``Credential``) is owned by
-``integrate``; OIDC login fields are contributed onto that OAuth client by
+Pure identity: the swappable ``User`` and its manager, plus the ``Company`` of
+record — the operating entity acting *inside* the system, an access-control
+scope with a REBAC hierarchy. The OAuth connection substrate
+(``OAuthClient``/``ExternalAccount``/``Credential``) is owned by ``integrate``;
+OIDC login fields are contributed onto that OAuth client by
 ``iam_integrate_oidc``.
+
+Company scope convention
+------------------------
+Two "company" concepts must never be conflated. An *external* company (a
+customer, vendor, any counterparty — a description of the outside world) is a
+``parties.Organization``, never modelled here. The *company of record* — the
+entity that acts inside the system — is this ``iam.Company``: an access-control
+scope, so it belongs to ``iam`` (the lowest addon in the dependency order) and
+carries no fiscal fields and no party FK. Its public face (a link to a
+``parties.Party`` for name/addresses/logo) is a same-row ``extends`` merge owned
+by ``angee.parties``; its fiscal face (currency, counterpart accounts, rounding
+policy) is a same-row ``extends`` merge owned by ``arp.accounting`` — both
+downstream, so the dependency stays one-way.
+
+Every model whose rows belong to a company of record composes
+:class:`CompanyScopedMixin` (the ``company`` FK) and adds the matching arm to its
+own ``permissions.zed`` definition, so isolation is enforced from day one::
+
+    definition <app>/<model> {
+        relation company: iam/company // rebac:field=company
+        relation admin:   angee/role   // rebac:const=admin
+
+        permission read   = company->member + admin->member
+        permission write  = company->member + admin->member
+        permission delete = company->member + admin->member
+    }
+
+Company-scoped role bindings are relations *on the company* (``accountant``,
+``salesperson``), so a scoped resource reads ``company->accountant`` — an
+accountant *of company A*, never a global accountant. Subsidiaries inherit reach
+through ``parent`` (``permission member = direct_member + parent->member``): an
+ancestor-company member reaches every descendant scope.
 """
 
 from __future__ import annotations
@@ -19,8 +53,8 @@ from rebac import app_settings, current_actor, system_context
 from rebac.permissions_mixin import RebacPermissionsMixin
 from rebac.roles import grant, revoke
 
-from angee.base.mixins import SqidMixin
-from angee.base.models import AngeeManager, AngeeModel
+from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, SqidMixin
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeModel, AngeeQuerySet
 
 
 class UserManager(AngeeManager, BaseUserManager):
@@ -175,3 +209,86 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
         """Return the user's short display name."""
 
         return self.first_name
+
+
+class CompanyQuerySet(ArchiveQuerySet[Any], AngeeQuerySet[Any]):
+    """AngeeQuerySet plus the archive read vocabulary for companies of record."""
+
+
+class CompanyManager(AngeeManager.from_queryset(CompanyQuerySet)):  # type: ignore[misc]
+    """Manager for companies of record, adding the v1 default-company accessor."""
+
+    def default(self) -> Company | None:
+        """Return the company of record for single-company v1 reads.
+
+        v1 semantics (multi-company selection UX is deferred — §3.7): the sole
+        unarchived company, or the first by primary key when several exist.
+        ``None`` until a company is provisioned — the framework ships none
+        (worldwide-generic), so consumers seed their own.
+        """
+
+        return self.unarchived().order_by("pk").first()
+
+
+class Company(AngeeDataModel, ArchiveMixin):
+    """A company of record — the operating entity acting inside the system.
+
+    An access-control scope, not a description of the outside world (an external
+    customer/vendor is a ``parties.Organization``). Companies form a hierarchy
+    through ``parent``, and REBAC lets an ancestor-company member reach every
+    descendant scope (see ``permissions.zed`` ``iam/company``). Company-scoped
+    role bindings (accountant, salesperson) live on the company row, so a role is
+    always *of a company*, never global. Carries no fiscal fields and no party
+    FK — see the module docstring for the party/fiscal faces contributed
+    downstream and the scope convention.
+    """
+
+    runtime = True
+
+    sqid_prefix = "com_"
+
+    name = models.CharField(max_length=200)
+    parent = models.ForeignKey(
+        "iam.Company",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="children",
+    )
+
+    objects = CompanyManager()
+
+    class Meta:
+        """Django model options for the company-of-record source model."""
+
+        abstract = True
+        ordering = ("name", "sqid")
+        rebac_resource_type = "iam/company"
+        rebac_id_attr = "sqid"
+
+    def __str__(self) -> str:
+        """Return the company's display name for Django displays."""
+
+        return self.name
+
+
+class CompanyScopedMixin(models.Model):
+    """Scope a model's rows to one :class:`Company` of record.
+
+    Contributes the ``company`` FK. Compose it on every model whose rows belong
+    to a company, and add the matching ``company->…`` arm to the model's own
+    ``permissions.zed`` definition (see the module docstring's scope convention),
+    so isolation is enforced from day one.
+    """
+
+    company = models.ForeignKey(
+        "iam.Company",
+        on_delete=models.PROTECT,
+        related_name="+",
+    )
+    """The company of record that owns this row (see :class:`Company`)."""
+
+    class Meta:
+        """Django model options for company-scope-only abstract inheritance."""
+
+        abstract = True
