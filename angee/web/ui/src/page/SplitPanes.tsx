@@ -14,6 +14,7 @@ import {
   type SeparatorProps as ResizableSeparatorProps,
 } from "react-resizable-panels";
 
+import { browserLocalStorage } from "../lib/browser-storage";
 import { tv, type VariantProps } from "../lib/variants";
 
 export const splitPanesVariants = tv({
@@ -69,18 +70,10 @@ export type SplitPanesProps = Omit<
   };
 
 // react-resizable-panels persists through a `Storage` (localStorage by
-// default), which throws when referenced in SSR / non-browser or when access is
-// denied (privacy mode). Mirror the `themeStorage`/`favoriteStorage` guard so
-// persistence is simply skipped when no browser storage is reachable. Exported
-// as the one owner of that guard so other layout state (the drawer open/closed
-// flags) reaches localStorage the same way.
+// default). Exported as the layout owner so other layout state (the drawer
+// open/closed flags) reaches localStorage the same way.
 export function layoutStorage(): Storage | null {
-  if (typeof window === "undefined") return null;
-  try {
-    return window.localStorage ?? null;
-  } catch {
-    return null;
-  }
+  return browserLocalStorage();
 }
 
 // A `Group` that reads/writes its layout through the library's own persistence

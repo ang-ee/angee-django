@@ -9,6 +9,7 @@ import {
 } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 
+import { browserLocalStorage } from "../lib/browser-storage";
 import {
   ResourceViewState,
   resourceViewFavoritesFromJson,
@@ -314,10 +315,5 @@ function emitFavoriteChange(storageKey: string): void {
 }
 
 function favoriteStorage(): Storage | null {
-  if (typeof window === "undefined") return null;
-  try {
-    return window.localStorage ?? null;
-  } catch {
-    return null;
-  }
+  return browserLocalStorage();
 }

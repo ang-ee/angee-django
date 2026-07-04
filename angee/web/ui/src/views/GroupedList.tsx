@@ -45,7 +45,6 @@ import {
   ListSkeletonRows,
   MeasureFooter,
   RecordRow,
-  TABLE_SCROLL_STYLE,
   VirtualPaddingRow,
   alignOf,
   estimateGroupedItemSize,
@@ -153,7 +152,7 @@ export function GroupedListBody<TRow extends Row>({
 
   return (
     <>
-      <div ref={tableScrollRef} className="overflow-auto" style={TABLE_SCROLL_STYLE}>
+      <div ref={tableScrollRef} className="min-h-0 flex-1 overflow-auto">
         <Table>
           <TableHeader>
             {table.getHeaderGroups().map((group) => (

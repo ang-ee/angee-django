@@ -211,10 +211,6 @@ export const ALIGN_CLASS: Record<PageColumnAlign, string> = {
   center: "text-center",
   right: "text-right",
 };
-export const LIST_VIEW_SCROLL_BUDGET = "calc(100vh - 12rem)";
-export const TABLE_SCROLL_STYLE: React.CSSProperties = {
-  maxHeight: LIST_VIEW_SCROLL_BUDGET,
-};
 export const GROUP_ROW_HEIGHT = 32;
 export const RECORD_ROW_HEIGHT = 40;
 /** Server-grouped header row (`h-9`); taller than the flat `h-8` group header. */
@@ -331,8 +327,7 @@ export function FlatListBody<TRow extends Row>({
   return (
     <div
       ref={tableScrollRef}
-      className="overflow-auto"
-      style={TABLE_SCROLL_STYLE}
+      className="min-h-0 flex-1 overflow-auto"
     >
       <Table>
         <TableHeader>

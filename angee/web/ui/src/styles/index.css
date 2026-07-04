@@ -22,6 +22,54 @@
    does. The `:where()` keeps specificity at zero. */
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
+:root {
+  color-scheme: light;
+}
+
+:where([data-theme="dark"]) {
+  color-scheme: dark;
+}
+
+/* Native scrollbars share the same semantic tokens as `ScrollArea`. */
+:where(*) {
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 2px solid var(--scrollbar-track);
+  border-radius: var(--r-full);
+  background-color: var(--scrollbar-thumb);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+}
+
+*::-webkit-scrollbar-corner {
+  background: var(--scrollbar-track);
+}
+
+.scroll-x-contained {
+  -ms-overflow-style: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.scroll-x-contained::-webkit-scrollbar {
+  display: none;
+}
+
 @theme {
   /* ----------------------------------------------------------------
    *  COLORS — semantic tokens → Tailwind utility classes.
@@ -45,6 +93,9 @@
   --color-overlay:       var(--surface-overlay);
   --color-popover:       var(--surface-popover);
   --color-inset:         var(--surface-inset);
+  --color-scrollbar-track:       var(--scrollbar-track);
+  --color-scrollbar-thumb:       var(--scrollbar-thumb);
+  --color-scrollbar-thumb-hover: var(--scrollbar-thumb-hover);
 
   /* shadcn alias layer — additive aliases over the angee tokens so
      shadcn-shaped snippets compile while the semantic token tree stays
@@ -263,18 +314,18 @@
    *    - modal is one tick above its own backdrop so the backdrop click
    *      handler still resolves before the popup paints.
    * ---------------------------------------------------------------- */
-  --z-sticky-cell:     5;     /* ListView sticky header */
-  --z-sticky-col:      10;    /* sticky first column */
-  --z-bulk-bar:        15;    /* ListView sticky bulk-action bar (above sticky-col) */
-  --z-topbar:          30;    /* Top menu bar */
-  --z-rail:            32;    /* Left app rail (slightly above topbar) */
-  --z-breadcrumb:      35;    /* Breadcrumb bar (above chrome, below popovers) */
-  --z-drawer:          40;    /* Non-modal edge drawers + their stripe-tabs (above chrome, below popovers/modals) */
-  --z-popover:         60;    /* Combobox, date picker, menus, fields chooser */
-  --z-toast:           80;    /* Transient toast / banner layer (above popovers) */
-  --z-tooltip:         100;   /* AppRail hover tooltip */
-  --z-modal-backdrop:  100;   /* Modal dim layer */
-  --z-modal:           101;   /* Modal popup */
+  --z-index-sticky-cell:     5;     /* ListView sticky header */
+  --z-index-sticky-col:      10;    /* sticky first column */
+  --z-index-bulk-bar:        15;    /* ListView sticky bulk-action bar (above sticky-col) */
+  --z-index-topbar:          30;    /* Top menu bar */
+  --z-index-rail:            32;    /* Left app rail (slightly above topbar) */
+  --z-index-breadcrumb:      35;    /* Breadcrumb bar (above chrome, below popovers) */
+  --z-index-drawer:          40;    /* Non-modal edge drawers + their stripe-tabs (above chrome, below popovers/modals) */
+  --z-index-popover:         60;    /* Combobox, date picker, menus, fields chooser */
+  --z-index-toast:           80;    /* Transient toast / banner layer (above popovers) */
+  --z-index-tooltip:         100;   /* AppRail hover tooltip */
+  --z-index-modal-backdrop:  100;   /* Modal dim layer */
+  --z-index-modal:           101;   /* Modal popup */
 
   /* ----------------------------------------------------------------
    *  RADII — emit `rounded-2`, `rounded-4`, etc.

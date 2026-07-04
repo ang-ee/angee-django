@@ -1,7 +1,6 @@
 import * as React from "react";
 import type { ReactElement, ReactNode } from "react";
 import { ANGEE_TEXT_FILTER_LOOKUP_OPERATORS } from "@angee/refine";
-import { useDebouncedCallback } from "use-debounce";
 import { Glyph } from "../chrome/Glyph";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
@@ -276,8 +275,7 @@ function FilterPicker({
     React.useState<ResourceToolbarCustomFilterOperator>("contains");
   const [customValue, setCustomValue] = React.useState("");
   const selectedCustomField =
-    customFilterFields.find((field) => field.id === customFieldId)
-    ?? customFilterFields[0];
+    customFilterFields.find((field) => field.id === customFieldId) ?? customFilterFields[0];
   const effectiveCustomOperator = operatorForField(
     selectedCustomField,
     customOperator,
@@ -292,17 +290,30 @@ function FilterPicker({
   const [favoriteLabel, setFavoriteLabel] =
     React.useState(defaultFavoriteLabel);
   const [draftFilterText, setDraftFilterText] = React.useState(filterText);
-  const commitFilterText = useDebouncedCallback((value: string) => {
-    if (value !== filterText) onFilterTextChange?.(value);
-  }, FILTER_TEXT_COMMIT_DELAY_MS);
+  const hasActiveChips =
+    groups.length > 0
+    || activeFilters.length > 0
+    || customFilterChips.length > 0;
 
   React.useEffect(() => {
     setDraftFilterText(filterText);
   }, [filterText]);
 
+  const commitFilterText = React.useCallback(
+    (value: string) => {
+      if (value !== filterText) onFilterTextChange?.(value);
+    },
+    [filterText, onFilterTextChange],
+  );
+
   React.useEffect(() => {
-    return () => commitFilterText.cancel();
-  }, [commitFilterText]);
+    if (draftFilterText === filterText) return undefined;
+    const timeout = window.setTimeout(
+      () => commitFilterText(draftFilterText),
+      FILTER_TEXT_COMMIT_DELAY_MS,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [commitFilterText, draftFilterText, filterText]);
 
   function addCustomFilter() {
     if (!selectedCustomField || !onCustomFilterAdd) return;
@@ -341,69 +352,71 @@ function FilterPicker({
 
   return (
     <PopoverRoot>
-      <div className="inline-flex h-8 min-w-0 max-w-xl flex-1 items-center gap-1 overflow-hidden rounded-6 border border-transparent bg-inset pl-2 pr-1 text-13 text-fg focus-within:border-border-focus focus-within:bg-sheet focus-within:focus-ring">
+      <div className="inline-flex h-8 min-w-0 max-w-xl flex-1 items-center gap-1 rounded-6 border border-transparent bg-inset pl-2 pr-1 text-13 text-fg focus-within:border-border-focus focus-within:bg-sheet focus-within:focus-ring">
         <Glyph name="search" className="size-3.5 shrink-0 text-fg-muted" />
-        {groups.map((nextGroup, index) => (
-          <FacetChip
-            key={`${nextGroup.field}:${nextGroup.granularity ?? ""}`}
-            label={index === 0 ? t("resourceToolbar.groupBy") : t("resourceToolbar.then")}
-            value={resourceViewGroupLabel(nextGroup)}
-            removeLabel={
-              index === 0
-                ? t("resourceToolbar.removeGroup")
-                : t("resourceToolbar.removeGroupLevel")
+        <div
+          className="flex min-w-0 flex-1 items-center gap-1 scroll-x-contained"
+          onWheel={handleChipLaneWheel}
+        >
+          {groups.map((nextGroup, index) => (
+            <FacetChip
+              key={`${nextGroup.field}:${nextGroup.granularity ?? ""}`}
+              label={index === 0 ? t("resourceToolbar.groupBy") : t("resourceToolbar.then")}
+              value={resourceViewGroupLabel(nextGroup)}
+              removeLabel={
+                index === 0
+                  ? t("resourceToolbar.removeGroup")
+                  : t("resourceToolbar.removeGroupLevel")
+              }
+              onRemove={() => {
+                const next = groups.filter((_, groupIndex) => groupIndex !== index);
+                if (next.length === 0) onClearGroup?.();
+                else onGroupStackChange?.(next);
+              }}
+            />
+          ))}
+          {activeFilters.map((option) => (
+            <FacetChip
+              key={option.id}
+              label={t("resourceToolbar.filter")}
+              value={option.chipLabel ?? option.label}
+              removeLabel={t("resourceToolbar.remove", {
+                label: String(option.chipLabel ?? option.label),
+              })}
+              onRemove={() => onFilterToggle?.(option.id)}
+            />
+          ))}
+          {customFilterChips.map((chip) => (
+            <FacetChip
+              key={chip.id}
+              label={t("resourceToolbar.filter")}
+              value={chip.label}
+              removeLabel={t("resourceToolbar.remove", {
+                label: labelText(chip.label) ?? t("resourceToolbar.filterFallback"),
+              })}
+              onRemove={() => onCustomFilterRemove?.(chip.id)}
+            />
+          ))}
+          <input
+            type="search"
+            value={draftFilterText}
+            placeholder={
+              hasActiveChips ? undefined : t("resourceToolbar.filterPlaceholder")
             }
-            onRemove={() => {
-              const next = groups.filter((_, groupIndex) => groupIndex !== index);
-              if (next.length === 0) onClearGroup?.();
-              else onGroupStackChange?.(next);
+            aria-label={t("resourceToolbar.filterRecords")}
+            className={cn(
+              "h-full flex-1 border-0 bg-transparent text-13 text-fg outline-none placeholder:text-fg-muted",
+              hasActiveChips ? "min-w-0" : "min-w-[7rem]",
+            )}
+            onBlur={(event) => commitFilterText(event.currentTarget.value)}
+            onChange={(event) => setDraftFilterText(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                commitFilterText(event.currentTarget.value);
+              }
             }}
           />
-        ))}
-        {activeFilters.map((option) => (
-          <FacetChip
-            key={option.id}
-            label={t("resourceToolbar.filter")}
-            value={option.chipLabel ?? option.label}
-            removeLabel={t("resourceToolbar.remove", {
-              label: String(option.chipLabel ?? option.label),
-            })}
-            onRemove={() => onFilterToggle?.(option.id)}
-          />
-        ))}
-        {customFilterChips.map((chip) => (
-          <FacetChip
-            key={chip.id}
-            label={t("resourceToolbar.filter")}
-            value={chip.label}
-            removeLabel={t("resourceToolbar.remove", {
-              label: labelText(chip.label) ?? t("resourceToolbar.filterFallback"),
-            })}
-            onRemove={() => onCustomFilterRemove?.(chip.id)}
-          />
-        ))}
-        <input
-          type="search"
-          value={draftFilterText}
-          placeholder={t("resourceToolbar.filterPlaceholder")}
-          aria-label={t("resourceToolbar.filterRecords")}
-          className="h-full min-w-[7rem] flex-1 border-0 bg-transparent text-13 text-fg outline-none placeholder:text-fg-muted"
-          onBlur={(event) => {
-            commitFilterText(event.currentTarget.value);
-            commitFilterText.flush();
-          }}
-          onChange={(event) => {
-            const value = event.currentTarget.value;
-            setDraftFilterText(value);
-            commitFilterText(value);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              commitFilterText(event.currentTarget.value);
-              commitFilterText.flush();
-            }
-          }}
-        />
+        </div>
         <PopoverTrigger
           className="grid size-6 shrink-0 place-content-center rounded-6 text-fg-muted outline-none transition-colors hover:bg-sheet hover:text-fg focus-visible:focus-ring"
           aria-label={
@@ -565,6 +578,23 @@ function FilterPicker({
       </PopoverPortal>
     </PopoverRoot>
   );
+}
+
+function handleChipLaneWheel(event: React.WheelEvent<HTMLDivElement>): void {
+  if (event.deltaX !== 0 || event.deltaY === 0) return;
+
+  const lane = event.currentTarget;
+  const maxScrollLeft = lane.scrollWidth - lane.clientWidth;
+  if (maxScrollLeft <= 0) return;
+
+  const nextScrollLeft = Math.max(
+    0,
+    Math.min(maxScrollLeft, lane.scrollLeft + event.deltaY),
+  );
+  if (nextScrollLeft === lane.scrollLeft) return;
+
+  event.preventDefault();
+  lane.scrollLeft = nextScrollLeft;
 }
 
 function FacetChip({

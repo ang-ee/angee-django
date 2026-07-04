@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 
+import { browserLocalStorage } from "./browser-storage";
+
 export type ThemePreference = "light" | "dark" | "system";
 export type ResolvedTheme = Exclude<ThemePreference, "system">;
 
@@ -144,10 +146,5 @@ function notifyThemeSubscribers(): void {
 }
 
 function themeStorage(): Storage | null {
-  if (typeof window === "undefined") return null;
-  try {
-    return window.localStorage ?? null;
-  } catch {
-    return null;
-  }
+  return browserLocalStorage();
 }

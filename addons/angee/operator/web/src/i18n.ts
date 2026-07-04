@@ -51,11 +51,15 @@ export const enOperatorMessages: Record<string, string> = {
   "transport.unknownError": "Unknown operator error.",
 
   // Overview.
-  "overview.loading": "Loading overview",
-  "overview.stack.title": "Stack",
-  "overview.stack.empty": "No stack status.",
-  "overview.health.title": "Health",
-  "overview.health.empty": "No health report.",
+  "operator.overview.loading": "Loading overview",
+  "operator.overview.stack.title": "Stack",
+  "operator.overview.stack.name": "Name",
+  "operator.overview.stack.root": "Root",
+  "operator.overview.stack.empty": "No stack status.",
+  "operator.overview.health.title": "Health",
+  "operator.overview.health.status": "Status",
+  "operator.overview.health.message": "Message",
+  "operator.overview.health.empty": "No health report.",
 
   // Services.
   "services.loading": "Loading services",

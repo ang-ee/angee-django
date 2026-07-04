@@ -1,5 +1,23 @@
 import * as React from "react";
-import { ResourceList, Form, List, Column, Field, Group, REFINE_CREATE_ID, RevisionsTab, Statusline, StatusSegment, StatuslineSpacer, useResourceRevisions, type ChatterTab, type ResourceViewDefaultGroups, type RecordSmartButtonDescriptor, useChatterContent } from "@angee/ui";
+import {
+  ResourceList,
+  Form,
+  List,
+  Column,
+  Field,
+  Group,
+  Page,
+  REFINE_CREATE_ID,
+  RevisionsTab,
+  Statusline,
+  StatusSegment,
+  StatuslineSpacer,
+  useResourceRevisions,
+  type ChatterTab,
+  type ResourceViewDefaultGroups,
+  type RecordSmartButtonDescriptor,
+  useChatterContent,
+} from "@angee/ui";
 import { useParams } from "@tanstack/react-router";
 
 const MODEL = "notes.Note";
@@ -96,7 +114,7 @@ export function NotePage(): React.ReactElement {
   );
 
   return (
-    <div className="flex flex-col gap-4">
+    <Page height="auto" overflow="visible" className="min-h-full gap-4">
       {/* Open as a month-grouped list; board view switches to status lanes. */}
       <ResourceList
         resource={MODEL}
@@ -127,6 +145,6 @@ export function NotePage(): React.ReactElement {
         <StatusSegment>notes.Note</StatusSegment>
         <StatusSegment icon="grid">console</StatusSegment>
       </Statusline>
-    </div>
+    </Page>
   );
 }

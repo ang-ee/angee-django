@@ -86,6 +86,7 @@ vi.mock("./workspace-actions", () => ({
 import { SourceDetail } from "./SourceDetail";
 import { ServiceDetail } from "./ServiceDetail";
 import { WorkspaceDetail } from "./WorkspaceDetail";
+import { OverviewPage } from "./OverviewPage";
 
 beforeEach(() => {
   routerMocks.params = {};
@@ -97,6 +98,38 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("operator detail surfaces", () => {
+  test("OverviewPage uses the shared detail frame", () => {
+    operatorMocks.useOperatorSnapshot.mockReturnValue({
+      result: { fetching: false },
+      snapshot: {
+        health: { message: "ready", status: "ok" },
+        secrets: [{ name: "OPENAI_API_KEY" }, { name: "ANTHROPIC_API_KEY" }],
+        services: [
+          { name: "web" },
+          { name: "worker" },
+          { name: "daphne" },
+        ],
+        sources: [{ name: "framework" }],
+        stack: { name: "notes-angee", root: "/work/notes/.angee" },
+        workspaces: [{ name: "dev" }],
+      },
+    });
+
+    render(<OverviewPage />);
+
+    expect(screen.getByRole("heading", {
+      level: 1,
+      name: "section.operator.overview.title",
+    })).toBeTruthy();
+    expect(screen.getByText("section.operator.services.title")).toBeTruthy();
+    expect(screen.getByText("section.operator.workspaces.title")).toBeTruthy();
+    expect(screen.getByText("operator.overview.stack.title")).toBeTruthy();
+    expect(screen.getByText("notes-angee")).toBeTruthy();
+    expect(screen.getByText("/work/notes/.angee")).toBeTruthy();
+    expect(screen.getByText("operator.overview.health.title")).toBeTruthy();
+    expect(screen.getByText("ready")).toBeTruthy();
+  });
+
   test("SourceDetail preserves loading and not-found states", () => {
     operatorMocks.useOperatorSnapshot.mockReturnValue({
       refetch: vi.fn(),

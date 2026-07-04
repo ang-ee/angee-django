@@ -48,6 +48,9 @@ const BG_COLOR_TOKENS = [
   "kbd-on-rail",
   "popover",
   "inset",
+  "scrollbar-track",
+  "scrollbar-thumb",
+  "scrollbar-thumb-hover",
   "overlay",
   "brand",
   "brand-hover",
@@ -91,7 +94,7 @@ const BORDER_COLOR_TOKENS = [
 
 const RADIUS_TOKENS = ["2", "4", "6", "8", "10", "12"];
 
-// The named z-index ladder from styles/index.css (`--z-*`). Registering them as
+// The named z-index ladder from styles/index.css (`--z-index-*`). Registering them as
 // one group lets `cn()`/`tv()` dedupe named stops — e.g. the drawer overlay
 // passing `z-drawer` overrides the drawer recipe's default `z-modal` instead of
 // leaving both classes to fight on stylesheet order.

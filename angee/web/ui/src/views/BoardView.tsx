@@ -25,10 +25,8 @@ import { columnTone } from "./page";
 import type { ColumnDescriptor } from "./page";
 import type { CardActionContext } from "./resource-view-types";
 
-const BOARD_SCROLL_SURFACE_CLASS =
-  "flex items-start gap-3 p-3";
 const BOARD_CARD_SHELL_CLASS =
-  "block min-w-0 max-w-full rounded-8 text-left text-inherit outline-none focus-visible:focus-ring";
+  "block w-full rounded-8 text-left text-inherit outline-none focus-visible:focus-ring";
 
 export interface BoardViewProps<TRow extends Row = Row> {
   columns: readonly ColumnDescriptor<TRow>[];
@@ -123,7 +121,9 @@ function BoardRows<TRow extends Row>({
   // Kanban is most useful with an active group axis; with no group-by applied a single lane is shown.
   // The board renders the current page only (bounded by the page-size cap, MAX_PAGE_SIZE), grouped into lanes; no row virtualization is used here.
   return (
-    <div className={BOARD_SCROLL_SURFACE_CLASS}>
+    <div
+      className="flex min-h-0 flex-1 gap-3 overflow-x-auto overflow-y-hidden p-3"
+    >
       {leaves.map((group) => (
         <BoardLane
           key={group.key}
@@ -152,13 +152,13 @@ function BoardSkeleton({
   return (
     <SkeletonStatus
       label={loadingLabel}
-      className={BOARD_SCROLL_SURFACE_CLASS}
+      className="flex min-h-0 flex-1 gap-3 overflow-x-auto overflow-y-hidden p-3"
     >
       {Array.from({ length: Math.max(1, laneCount) }, (_, laneIndex) => (
         <section
           key={laneIndex}
           aria-hidden="true"
-          className="flex w-[300px] flex-none flex-col rounded-[10px] border border-border-subtle bg-inset"
+          className="flex max-h-full min-h-0 w-[300px] flex-none flex-col rounded-[10px] border border-border-subtle bg-inset"
         >
           <div className="sticky top-0 z-10 flex items-center gap-2 rounded-t-[10px] bg-inset px-3 pt-3 pb-2">
             <Skeleton className="size-2.5 shrink-0 rounded-full" />
@@ -169,7 +169,7 @@ function BoardSkeleton({
             />
             <Skeleton shape="text" size="sm" className="w-5" />
           </div>
-          <div className="flex flex-col gap-2 px-2 pb-2">
+          <div className="flex min-h-0 flex-col gap-2 overflow-y-auto px-2 pb-2">
             {Array.from({ length: 3 }, (_, cardIndex) => (
               <article
                 key={cardIndex}
@@ -226,7 +226,7 @@ function BoardLane<TRow extends Row>({
   return (
     <section
       aria-labelledby={headingId}
-      className="flex w-[300px] flex-none flex-col rounded-[10px] border border-border-subtle bg-inset"
+      className="flex max-h-full min-h-0 w-[300px] flex-none flex-col rounded-[10px] border border-border-subtle bg-inset"
     >
       <div className="sticky top-0 z-10 flex items-center gap-2 rounded-t-[10px] bg-inset px-3 pt-3 pb-2">
         {tone ? <StatusDot tone={tone} /> : null}
@@ -238,7 +238,7 @@ function BoardLane<TRow extends Row>({
         </h3>
         <CountBadge value={group.rows.length} />
       </div>
-      <div className="flex flex-col gap-2 px-2 pb-2">
+      <div className="flex min-h-0 flex-col gap-2 overflow-y-auto px-2 pb-2">
         {group.rows.map((row) => (
           <BoardRowCard
             key={row.id}

@@ -125,6 +125,11 @@
   --border-focus:      var(--b-500);
   --border-on-rail:    var(--n-880);
 
+  /* Scrollbars */
+  --scrollbar-track:       var(--n-100);
+  --scrollbar-thumb:       var(--n-300);
+  --scrollbar-thumb-hover: var(--n-400);
+
   /* Brand */
   --brand:             var(--b-500);
   --brand-hover:       var(--b-600);
@@ -225,7 +230,7 @@
   --elevation-popover:    0 6px 16px rgb(from var(--n-900) r g b / 0.10),
                        0 2px 4px rgb(from var(--n-900) r g b / 0.06);
 
-  /* The canonical z-index ladder, the popover / modal surface
+  /* The canonical z-index ladder (`--z-index-*`), the popover / modal surface
      dimensions, and the `--bg-grid-step` pattern step live in
      index.css `@theme` so they emit Tailwind utilities directly. See
      `index.css § stacking layers` and `§ surface dimensions`. */
@@ -322,6 +327,10 @@
   --border-default:    var(--n-775);
   --border-strong:     var(--n-680);
   --border-on-rail:    var(--n-935);
+
+  --scrollbar-track:       var(--n-875);
+  --scrollbar-thumb:       var(--n-680);
+  --scrollbar-thumb-hover: var(--n-550);
 
   --brand:             var(--b-400);
   --brand-hover:       var(--b-300);

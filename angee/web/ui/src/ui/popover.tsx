@@ -14,6 +14,7 @@ import type {
 } from "@base-ui/react/popover";
 
 import { tv, type VariantProps } from "../lib/variants";
+import { cn } from "../lib/cn";
 
 // A positioning anchor described by a rect instead of a DOM node. Matches the
 // structural shape the positioner accepts for its `anchor` prop.
@@ -74,7 +75,25 @@ export type PopoverViewportProps = React.ComponentPropsWithoutRef<
 
 export const PopoverRoot = BasePopover.Root;
 export const PopoverPortal = BasePopover.Portal;
-export const PopoverPositioner = BasePopover.Positioner;
+export const PopoverPositioner = React.forwardRef<
+  React.ComponentRef<typeof BasePopover.Positioner>,
+  PopoverPositionerProps
+>(function PopoverPositioner({ className, ...props }, ref) {
+  const positionerClassName: PopoverPositionerProps["className"] =
+    typeof className === "function"
+      ? (state: Parameters<typeof className>[0]) =>
+          cn("z-popover", className(state))
+      : cn("z-popover", className);
+
+  return (
+    <BasePopover.Positioner
+      ref={ref}
+      className={positionerClassName}
+      {...props}
+    />
+  );
+});
+PopoverPositioner.displayName = "PopoverPositioner";
 export const PopoverArrow = BasePopover.Arrow;
 export const PopoverBackdrop = BasePopover.Backdrop;
 export const PopoverClose = BasePopover.Close;

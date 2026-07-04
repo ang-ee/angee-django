@@ -628,7 +628,7 @@ function ResourceListBody<TRow extends Row = Row>({
   }
 
   return (
-    <div className={cn("min-h-full min-w-0", className)}>
+    <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", className)}>
       {open ? (
         <>
           {listStateOnly}

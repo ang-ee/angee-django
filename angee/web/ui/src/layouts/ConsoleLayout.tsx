@@ -152,14 +152,16 @@ function ConsoleWorkbench({
     <Workbench
       className="area-content"
       autoSave="console.workbench"
-      scrollMode="browser"
       primary={primary}
       secondary={showChatter ? <Chatter /> : undefined}
       onPrimaryController={onPrimaryController}
       onSecondaryController={registerSecondaryController}
     >
-      {/* The browser owns route scrolling; the statusline remains pinned chrome. */}
-      <main className="console-browser-scroll-main">{children}</main>
+      {/* The content `main` landmark owns the scroll boundary; a full-height page
+          (e.g. a nested Workbench) fills it without scrolling. */}
+      <main className="flex h-full min-h-0 flex-col overflow-auto">
+        {children}
+      </main>
     </Workbench>
   );
 }

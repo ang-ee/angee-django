@@ -49,7 +49,7 @@ export function ResourceListFrame({
       </ControlBand>
       <div
         className={cn(
-          "flex min-h-full flex-col overflow-visible bg-sheet",
+          "flex min-h-0 flex-1 flex-col overflow-hidden bg-sheet",
           className,
         )}
       >
