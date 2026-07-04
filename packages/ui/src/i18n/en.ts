@@ -197,6 +197,7 @@ export const enUiMessages: Record<string, string> = {
   "lines.reorder": "Reorder line",
   "lines.empty": "No lines yet.",
   "lines.rowLabel": "Line {number}",
+  "lines.section": "Lines",
   "select.label": "Select",
   "theme.label": "Theme",
   "theme.light": "Light",

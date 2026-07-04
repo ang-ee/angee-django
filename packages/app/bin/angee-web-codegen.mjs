@@ -232,6 +232,7 @@ function buildOperationDocuments(name, runtimeDir) {
   const deletePreviewResources = deletePreviewFields(metadataPath);
   const groupResources = groupFields(metadataPath);
   const revisionResources = revisionFields(metadataPath);
+  const saveResources = saveFields(metadataPath);
   const union = names.length > 0 ? names.map((n) => JSON.stringify(n)).join(" | ") : "never";
   const aggregateUnion = aggregateResources.length > 0
     ? aggregateResources.map((resource) => JSON.stringify(resource.modelLabel)).join(" | ")
@@ -244,6 +245,9 @@ function buildOperationDocuments(name, runtimeDir) {
     : "never";
   const revisionUnion = revisionResources.length > 0
     ? revisionResources.map((resource) => JSON.stringify(resource.modelLabel)).join(" | ")
+    : "never";
+  const saveUnion = saveResources.length > 0
+    ? saveResources.map((resource) => JSON.stringify(resource.modelLabel)).join(" | ")
     : "never";
   const documents = names.map((field) => {
     const ast = JSON.stringify(actionDocument(field), null, 2);
@@ -268,6 +272,10 @@ function buildOperationDocuments(name, runtimeDir) {
   const revisionDocuments = revisionResources.map((resource) => {
     const ast = JSON.stringify(revisionDocument(resource.revisionsRoot, resource.fields), null, 2);
     return `  ${JSON.stringify(resource.modelLabel)}: ${ast} as RevisionDocument,`;
+  });
+  const saveDocuments = saveResources.map((resource) => {
+    const ast = JSON.stringify(saveDocument(resource), null, 2);
+    return `  ${JSON.stringify(resource.modelLabel)}: ${ast} as SaveDocument,`;
   });
   const body = [
     `// Generated from runtime/schemas/${name}.graphql - do not edit by hand.`,
@@ -399,6 +407,25 @@ function buildOperationDocuments(name, runtimeDir) {
     ...revisionDocuments,
     "};",
     "",
+    `export type SaveResource = ${saveUnion};`,
+    "",
+    "export interface SaveVariables {",
+    "  pk: string;",
+    "  patch?: Record<string, unknown>;",
+    "  lines?: readonly Record<string, unknown>[];",
+    "}",
+    "",
+    "export type SaveDocument = TypedDocumentNode<",
+    "  Record<string, Record<string, unknown>>,",
+    "  SaveVariables",
+    ">;",
+    "",
+    "export const saveDocuments: {",
+    "  readonly [Resource in SaveResource]: SaveDocument;",
+    "} = {",
+    ...saveDocuments,
+    "};",
+    "",
     "// One object shaped as @angee/refine's SchemaOperationDocuments — the single",
     "// symbol the composed web runtime imports per schema.",
     "export const operationDocuments = {",
@@ -407,6 +434,7 @@ function buildOperationDocuments(name, runtimeDir) {
     "  deletePreviews: deletePreviewDocuments,",
     "  groups: groupDocuments,",
     "  revisions: revisionDocuments,",
+    "  saves: saveDocuments,",
     "};",
     "",
   ].join("\n");
@@ -418,7 +446,8 @@ function buildOperationDocuments(name, runtimeDir) {
       `${aggregateResources.length} aggregate query(ies), ` +
       `${deletePreviewResources.length} delete-preview mutation(s), ` +
       `${groupResources.length} group query(ies), ` +
-      `${revisionResources.length} revision query(ies)`,
+      `${revisionResources.length} revision query(ies), ` +
+      `${saveResources.length} save mutation(s)`,
   );
 }
 
@@ -555,6 +584,106 @@ function revisionFields(metadataPath) {
       }];
     })
     .sort((left, right) => left.modelLabel.localeCompare(right.modelLabel));
+}
+
+function saveFields(metadataPath) {
+  const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
+  const resources = metadata?.angee?.resources;
+  if (!Array.isArray(resources)) return [];
+  return resources
+    .flatMap((resource) => {
+      const modelLabel = resource?.modelLabel;
+      const saveRoot = resource?.roots?.save;
+      const lines = resource?.linesResource;
+      if (
+        typeof modelLabel !== "string" ||
+        typeof saveRoot !== "string" ||
+        saveRoot === "" ||
+        !lines ||
+        typeof lines.field !== "string" ||
+        lines.field === ""
+      ) {
+        return [];
+      }
+      const patchType = resource?.typeNames?.updateInput;
+      const linesInputType = lines.inputType;
+      return [{
+        modelLabel,
+        saveRoot,
+        // The `<res>_set_input` parent patch type and `<res>_lines_insert_input`
+        // line type name the save mutation's `patch`/`lines` arguments; either is
+        // omitted from the operation when the schema does not expose it.
+        patchType: nonEmptyString(patchType),
+        linesInputType: nonEmptyString(linesInputType),
+        linesField: lines.field,
+        selection: selectionFields(resource.fields, lines.field),
+        linesSelection: selectionFields(lines.fields, null),
+      }];
+    })
+    .sort((left, right) => left.modelLabel.localeCompare(right.modelLabel));
+}
+
+// The read selection for a save return type: the public `id`, then each readable
+// scalar/enum field bare and each relation as `{ id <labelAxis?> }` — enough for
+// the composing form to re-seed every declared field (and a picker's label) from
+// the saved row. The lines list is added by its own child selection, so it is
+// excluded here. Mirrors the parent form's own detail selection shape.
+function selectionFields(fields, excludeField) {
+  const parts = ["id"];
+  const seen = new Set(["id"]);
+  for (const field of fields ?? []) {
+    const name = field?.name;
+    if (
+      typeof name !== "string" ||
+      name === excludeField ||
+      field?.readable !== true ||
+      seen.has(name)
+    ) {
+      continue;
+    }
+    seen.add(name);
+    if (field.kind === "relation") {
+      parts.push(`${assertGraphQLName(name)} { id${relationLabelSelection(field)} }`);
+    } else if (field.kind === "scalar" || field.kind === "enum") {
+      parts.push(assertGraphQLName(name));
+    }
+    // A nested list (`kind === "list"`) is only the lines field here; skip it.
+  }
+  return parts;
+}
+
+function relationLabelSelection(field) {
+  const axis = field?.relationLabelAxis;
+  return typeof axis === "string" && axis !== "" && axis !== "id"
+    ? ` ${assertGraphQLName(axis)}`
+    : "";
+}
+
+function saveDocument(resource) {
+  const variables = ["$pk: ID!"];
+  const args = ["pk: $pk"];
+  if (resource.patchType) {
+    variables.push(`$patch: ${assertGraphQLName(resource.patchType)}`);
+    args.push("patch: $patch");
+  }
+  if (resource.linesInputType) {
+    variables.push(`$lines: [${assertGraphQLName(resource.linesInputType)}!]`);
+    args.push("lines: $lines");
+  }
+  const linesSelection =
+    resource.linesSelection.length > 0
+      ? ` ${assertGraphQLName(resource.linesField)} { ${resource.linesSelection.join(" ")} }`
+      : "";
+  return parse(
+    `mutation ${actionOperationName(resource.saveRoot)}(${variables.join(", ")}) { ` +
+      `${resource.saveRoot}(${args.join(", ")}) { ` +
+      `${resource.selection.join(" ")}${linesSelection} } }`,
+    { noLocation: true },
+  );
+}
+
+function nonEmptyString(value) {
+  return typeof value === "string" && value !== "" ? value : null;
 }
 
 function actionDocument(field) {

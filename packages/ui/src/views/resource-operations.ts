@@ -67,6 +67,12 @@ export function useRevisionOperation(
   return useResourceOperation(resource, "revisions", "revisions");
 }
 
+export function useSaveOperation(
+  resource: DataResourceMetadata | null,
+): ResourceOperation {
+  return useResourceOperation(resource, "save", "saves");
+}
+
 export function listBatchTarget(
   resource: DataResourceMetadata | null,
 ): ListBatchTarget | null {

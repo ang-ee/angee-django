@@ -25,6 +25,7 @@ export {
   type OperationDocumentKind,
   type OperationDocumentsBySchema,
   type RevisionDocumentMap,
+  type SaveDocumentMap,
   type SchemaOperationDocuments,
 } from "./operation-documents";
 export {

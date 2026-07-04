@@ -99,6 +99,14 @@ vi.mock("@refinedev/core", async (importOriginal) => {
       }),
       mutation: { isPending: false, error: null },
     }),
+    // FormView unconditionally mounts the F6 `useAngeeResourceSave` hook (over
+    // `useCustomMutation`) and `useInvalidate`; this relation form declares no
+    // lines, so neither ever fires — the no-ops keep them off the QueryClient.
+    useCustomMutation: () => ({
+      mutateAsync: async () => ({ data: {} }),
+      mutation: { isPending: false, error: null, reset: vi.fn() },
+    }),
+    useInvalidate: () => vi.fn(async () => undefined),
   };
 });
 

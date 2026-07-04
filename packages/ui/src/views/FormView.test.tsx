@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import type {
+  DataResourceFieldMetadata,
   DataResourceMetadata,
   ModelMetadata,
   SchemaFieldMetadata,
@@ -33,10 +34,11 @@ import {
 import {
   ModelMetadataProvider,
 } from "@angee/metadata";
+import { OperationDocumentsProvider } from "@angee/refine";
 import type {
   Row,
 } from "@angee/metadata";
-import { useMemo, useState, type ReactElement } from "react";
+import { useMemo, useState, type ComponentProps, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../feedback";
@@ -62,6 +64,9 @@ const sdkMocks = vi.hoisted(() => ({
   // so this stays `false` on a read-only/show render and an editable mount.
   listEnabled: false,
   mutate: vi.fn(),
+  // The F6 `<resource>_save` diff-apply owner, mocked so a lines form asserts the
+  // routing ({pk, patch, lines}) without a live custom-mutation transport.
+  save: vi.fn(),
   recordSelection: undefined as readonly string[] | undefined,
   mutationAction: undefined as string | undefined,
   mutationOptions: undefined as { fields?: readonly string[]; enabled?: boolean } | undefined,
@@ -69,7 +74,15 @@ const sdkMocks = vi.hoisted(() => ({
 
 vi.mock("@angee/refine", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/refine")>();
-  return actual;
+  return {
+    ...actual,
+    useAngeeResourceSave: () => ({
+      save: sdkMocks.save,
+      fetching: false,
+      error: null,
+      reset: vi.fn(),
+    }),
+  };
 });
 
 vi.mock("@refinedev/core", async (importOriginal) => {
@@ -147,6 +160,9 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   };
   return {
     ...actual,
+    // The lines save path invalidates the resource caches after a custom-mutation
+    // write (no Refine provider in this harness); a no-op keeps every form render safe.
+    useInvalidate: () => vi.fn(async () => undefined),
     useForm: formResult,
     useOne: (options?: { meta?: unknown }) => {
       sdkMocks.recordSelection = fieldsFromMeta(options?.meta);
@@ -313,6 +329,7 @@ describe("FormView", () => {
       wordCount: 3,
     };
     sdkMocks.mutate.mockReset();
+    sdkMocks.save.mockReset();
     sdkMocks.listRows = [];
     sdkMocks.listEnabled = false;
     sdkMocks.recordSelection = undefined;
@@ -1784,7 +1801,203 @@ describe("FormView", () => {
       screen.getByText("Please fix the highlighted fields: Title, environment."),
     ).toBeTruthy();
   });
+
+  // Editable document lines (F6): the resource metadata carries a `linesResource`
+  // and a `save` root, so FormView renders the lines composer and routes a dirty
+  // save through `<resource>_save(pk, patch, lines)`.
+  test("seeds document lines without a reseed loop", async () => {
+    sdkMocks.record = saleDocRecord();
+    renderSaleDoc();
+
+    // Both seeded rows render; a reseed loop would exhaust React's update depth
+    // (the fix is the memo-stabilized seed array threaded through the reset).
+    expect(await screen.findByDisplayValue("Keep")).toBeTruthy();
+    expect(screen.getByDisplayValue("Drop")).toBeTruthy();
+    await act(async () => {
+      await nextTask();
+    });
+    expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Order");
+    expect(screen.getByDisplayValue("Keep")).toBeTruthy();
+    expect(sdkMocks.save).not.toHaveBeenCalled();
+  });
+
+  test("routes a dirty-lines save through the resource save mutation", async () => {
+    sdkMocks.record = saleDocRecord();
+    sdkMocks.save.mockImplementation(
+      async (variables: {
+        pk: string;
+        patch?: Record<string, unknown>;
+        lines?: readonly Record<string, unknown>[];
+      }) => ({
+        id: "doc-1",
+        title: "Order",
+        lines: (variables.lines ?? []).map((line, index) => ({
+          ...line,
+          id: line.id ?? `new-${index}`,
+        })),
+      }),
+    );
+    renderSaleDoc();
+
+    fireEvent.change(await screen.findByDisplayValue("Keep"), {
+      target: { value: "Kept" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(sdkMocks.save).toHaveBeenCalledTimes(1));
+    // Parent-only patch is empty (title untouched); the full desired line list
+    // carries each existing row's id and the row-order position.
+    expect(sdkMocks.save).toHaveBeenCalledWith({
+      pk: "doc-1",
+      patch: {},
+      lines: [
+        { id: "ln-1", label: "Kept", quantity: 1, position: 0 },
+        { id: "ln-2", label: "Drop", quantity: 9, position: 1 },
+      ],
+    });
+    // The stock update path is never taken when lines are dirty.
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+  });
+
+  test("keeps a parent-only edit on the stock update path", async () => {
+    sdkMocks.record = saleDocRecord();
+    renderSaleDoc();
+
+    await screen.findByDisplayValue("Keep");
+    fireEvent.change(screen.getByLabelText("Title"), {
+      target: { value: "Renamed" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: { title: "Renamed", id: "doc-1" },
+    });
+    // No line changed, so the diff-apply save root is never invoked.
+    expect(sdkMocks.save).not.toHaveBeenCalled();
+  });
+
+  test("maps a line save validation error to its row", async () => {
+    sdkMocks.record = saleDocRecord();
+    sdkMocks.save.mockRejectedValue({
+      graphQLErrors: [
+        {
+          extensions: {
+            validationErrors: { "lines.1.label": ["This field is required."] },
+            formErrors: [],
+          },
+        },
+      ],
+    });
+    renderSaleDoc();
+
+    fireEvent.change(await screen.findByDisplayValue("Keep"), {
+      target: { value: "Kept" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(sdkMocks.save).toHaveBeenCalledTimes(1));
+    // The row-1 cell surfaces its server message from the projected rowErrors.
+    expect(await screen.findByText("This field is required.")).toBeTruthy();
+  });
 });
+
+function saleDocRecord(): Row {
+  return {
+    id: "doc-1",
+    title: "Order",
+    lines: [
+      { id: "ln-1", label: "Keep", quantity: 1, position: 0 },
+      { id: "ln-2", label: "Drop", quantity: 9, position: 1 },
+    ],
+  };
+}
+
+function renderSaleDoc(): void {
+  renderWithProviders(
+    <FormView
+      resource="demo.SaleDoc"
+      id="doc-1"
+      fields={[{ name: "title", label: "Title", title: true }]}
+    />,
+    SALES_METADATA,
+    undefined,
+    undefined,
+    SALES_DOCUMENTS,
+  );
+}
+
+function saleLineField(
+  name: string,
+  scalar: string,
+  extra: Partial<DataResourceFieldMetadata> = {},
+): DataResourceFieldMetadata {
+  return {
+    name,
+    kind: "scalar",
+    scalar,
+    readable: true,
+    filterable: false,
+    sortable: false,
+    aggregatable: false,
+    groupable: false,
+    creatable: true,
+    updatable: true,
+    requiredOnCreate: false,
+    ...extra,
+  };
+}
+
+const SALES_METADATA: SchemaFieldMetadata = {
+  types: {
+    SaleDocType: {
+      typeName: "SaleDocType",
+      recordRepresentation: "title",
+      fields: { title: { name: "title", kind: "scalar", scalar: "String" } },
+      rootFields: {
+        list: "sale_docs",
+        detail: "sale_docs_by_pk",
+        update: "update_sale_docs_by_pk",
+      },
+      resource: {
+        schemaName: "console",
+        modelLabel: "demo.SaleDoc",
+        appLabel: "demo",
+        modelName: "SaleDoc",
+        publicIdField: "id",
+        roots: {
+          list: "sale_docs",
+          detail: "sale_docs_by_pk",
+          update: "update_sale_docs_by_pk",
+          save: "sale_docs_save",
+        },
+        typeNames: { node: "SaleDocType", updateInput: "sale_docs_set_input" },
+        capabilities: ["list", "detail", "update", "save"],
+        fields: [saleLineField("title", "String", { requiredOnCreate: true })],
+        filterFields: [],
+        orderFields: [],
+        aggregateFields: [],
+        groupByFields: [],
+        relationAxes: [],
+        linesResource: {
+          field: "lines",
+          modelLabel: "demo.SaleLine",
+          inputType: "sale_docs_lines_insert_input",
+          positionField: "position",
+          fields: [
+            saleLineField("label", "String", { requiredOnCreate: true }),
+            saleLineField("quantity", "Int"),
+            saleLineField("position", "Int"),
+          ],
+        },
+      },
+    },
+  },
+};
+
+const SALES_DOCUMENTS = {
+  console: { saves: { "demo.SaleDoc": { kind: "Document", definitions: [] } } },
+};
 
 function renderForm(id: string | null): void {
   renderWithProviders(<FormView resource="notes.Note" id={id} fields={fields} />);
@@ -1795,6 +2008,7 @@ function renderWithProviders(
   metadata?: SchemaFieldMetadata,
   forms?: Record<string, unknown>,
   runtime?: Partial<AppRuntime>,
+  documents?: ComponentProps<typeof OperationDocumentsProvider>["documents"],
 ): void {
   const rootRoute = createRootRoute();
   const indexRoute = createRoute({
@@ -1813,17 +2027,19 @@ function renderWithProviders(
       <RouterContextProvider router={router}>
         <ModalsHost>
           <ToastProvider>
-            <ModelMetadataProvider metadata={withDefaultResourceMetadata(metadata)}>
-              <AppRuntimeProvider
-                runtime={{
-                  widgets: defaultWidgets,
-                  ...(forms ? { forms } : {}),
-                  ...runtime,
-                }}
-              >
-                {children}
-              </AppRuntimeProvider>
-            </ModelMetadataProvider>
+            <OperationDocumentsProvider documents={documents ?? {}}>
+              <ModelMetadataProvider metadata={withDefaultResourceMetadata(metadata)}>
+                <AppRuntimeProvider
+                  runtime={{
+                    widgets: defaultWidgets,
+                    ...(forms ? { forms } : {}),
+                    ...runtime,
+                  }}
+                >
+                  {children}
+                </AppRuntimeProvider>
+              </ModelMetadataProvider>
+            </OperationDocumentsProvider>
           </ToastProvider>
         </ModalsHost>
       </RouterContextProvider>

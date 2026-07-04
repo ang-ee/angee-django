@@ -7,6 +7,7 @@ import {
   type Row,
 } from "@angee/metadata";
 import {
+  useInvalidate,
   type BaseKey,
   type BaseRecord,
   type HttpError,
@@ -18,6 +19,7 @@ import { Controller,
 import { useBlocker } from "@tanstack/react-router";
 import {
   refineFieldsFromPaths,
+  useAngeeResourceSave,
   } from "@angee/refine";
 import {
   publicIdLabel,
@@ -51,7 +53,18 @@ import { textRoleVariants } from "../ui/text";
 import { ControlBand } from "../layouts/ControlBand";
 import { cn } from "../lib/cn";
 import { SlotOutlet } from "../lib/slot-outlet";
-import { validationErrorsFromError } from "./validation-errors";
+import { EditableLines } from "./EditableLines";
+import {
+  diffLines,
+  lineDiffConfig,
+  recordLinesToRows,
+  type LineDiff,
+} from "./editable-lines";
+import { useSaveOperation } from "./resource-operations";
+import {
+  validationErrorsFromError,
+  type ValidationErrors,
+} from "./validation-errors";
 import {
   slugify,
 } from "../widgets";
@@ -203,6 +216,12 @@ export interface FormSubmitContext {
   id: string | null;
   isCreate: boolean;
   record: Row | null;
+  /**
+   * The diffed document lines (F6) when the resource declares editable lines and
+   * the form is dirty, else `null`. A custom `submit` owner for a lines resource
+   * persists them; the stock save path routes through `<resource>_save` directly.
+   */
+  lines: LineDiff | null;
 }
 
 export type FormSubmit = (
@@ -237,6 +256,11 @@ export function formViewSectionsSlot(resource: string): string {
 
 type Values = Record<string, unknown>;
 type RowRecord = BaseRecord & Row;
+/** The child-lines the form is seeded/reset with, threaded into a values object. */
+interface LinesSeed {
+  field: string;
+  rows: readonly Row[];
+}
 
 const TITLE_TEXT_CLASS =
   "block w-full min-w-0 truncate text-28 font-semibold leading-9 text-fg";
@@ -514,6 +538,60 @@ export function FormView({
   const refetch = React.useCallback(() => {
     void form.refineCore.query?.refetch();
   }, [form.refineCore.query]);
+
+  // Editable document lines (F6): active only when the resource metadata carries a
+  // `linesResource`, on an existing record — the `<resource>_save` diff-apply is
+  // pk-keyed, so lines are edited on a saved document, not staged on create. A
+  // custom `submit` owner (a resource with no stock save root) receives the diff
+  // instead.
+  const linesResource = dataResource?.linesResource ?? null;
+  const linesConfig = React.useMemo(
+    () => (linesResource ? lineDiffConfig(linesResource) : null),
+    [linesResource],
+  );
+  const linesField = linesResource?.field ?? null;
+  const saveOperation = useSaveOperation(dataResource);
+  const resourceSave = useAngeeResourceSave(saveOperation.target, {
+    document: saveOperation.document,
+  });
+  const invalidate = useInvalidate();
+  const linesActive =
+    !isCreate &&
+    linesConfig !== null &&
+    linesField !== null &&
+    (saveOperation.target !== null || Boolean(submit));
+  // The loaded record's lines, stabilized per record reference: fresh row objects
+  // read as unequal in the reseed comparison and would loop, so the seed threads
+  // this one array. Also the diff baseline the submit path measures edits against.
+  const seedLineRows = React.useMemo(
+    () =>
+      linesActive && linesConfig && linesField
+        ? recordLinesToRows(record?.[linesField], linesConfig)
+        : null,
+    [linesActive, linesConfig, linesField, record],
+  );
+  const linesSeed = React.useCallback(
+    (rows: readonly Row[] | null | undefined): LinesSeed | undefined =>
+      linesActive && linesField && rows ? { field: linesField, rows } : undefined,
+    [linesActive, linesField],
+  );
+  const rowsFromRecord = React.useCallback(
+    (source: Row | null | undefined): readonly Row[] | null =>
+      linesActive && linesConfig && linesField
+        ? recordLinesToRows(source?.[linesField], linesConfig)
+        : null,
+    [linesActive, linesConfig, linesField],
+  );
+  const invalidateResource = React.useCallback(async () => {
+    if (!dataResource) return;
+    await invalidate({
+      resource: refineResourceName(dataResource),
+      dataProviderName: dataResource.schemaName,
+      id: id ?? undefined,
+      invalidates: ["list", "many", "detail"],
+    });
+  }, [dataResource, id, invalidate]);
+
   // An existing-record form starts before its query resolves. Keep fields locked
   // until the record exists so a fast edit cannot be overwritten by the seed reset.
   const recordUnavailable = !isCreate && record == null;
@@ -547,7 +625,7 @@ export function FormView({
     [form],
   );
   const runSubmit = React.useCallback(
-    async (data: Values): Promise<Row | null> => {
+    async (data: Values, lines: LineDiff | null = null): Promise<Row | null> => {
       if (submit) {
         return (
           (await submit(data, {
@@ -555,17 +633,45 @@ export function FormView({
             id: id ?? null,
             isCreate,
             record: displayRecord ?? null,
+            lines,
           })) ?? null
         );
+      }
+      // Dirty lines route through the transactional `<resource>_save(pk, patch,
+      // lines)` diff-apply; a parent-only edit keeps the stock update path. The
+      // custom mutation carries no resource invalidation, so refresh the list/detail
+      // caches the plain update path would have invalidated.
+      if (lines && lines.hasChanges && id != null && saveOperation.target !== null) {
+        const saved = await resourceSave.save({
+          pk: id,
+          patch: data,
+          lines: lines.payload,
+        });
+        if (saved) await invalidateResource();
+        return saved;
       }
       const response = await form.refineCore.onFinish(data);
       return (response?.data ?? null) as Row | null;
     },
-    [displayRecord, form.refineCore, id, isCreate, resource, submit],
+    [
+      displayRecord,
+      form.refineCore,
+      id,
+      invalidateResource,
+      isCreate,
+      resource,
+      resourceSave,
+      saveOperation.target,
+      submit,
+    ],
   );
   const commitSavedRecord = React.useCallback(
     (saved: Row, options: { notify: boolean }): void => {
-      const savedValues = recordToValues(saved, formFields);
+      const savedValues = recordToValues(
+        saved,
+        formFields,
+        linesSeed(rowsFromRecord(saved)),
+      );
       baselineValuesRef.current = savedValues;
       setPatchedRecord(saved);
       resetForm(savedValues);
@@ -574,7 +680,7 @@ export function FormView({
       if (isCreate) manualSlugFieldsRef.current = new Set();
       if (options.notify) onSaved?.(saved);
     },
-    [formFields, isCreate, onSaved, resetForm],
+    [formFields, isCreate, linesSeed, onSaved, resetForm, rowsFromRecord],
   );
   const submitValues = React.useCallback(
     async (value: Values) => {
@@ -591,8 +697,18 @@ export function FormView({
         isCreate,
         writableFields: writableFieldNames,
       });
+      // Diff the edited line rows against the baseline the form was last seeded
+      // with (its stored server truth) — its output routes the submit through save.
+      const linesDiff =
+        linesActive && linesConfig && linesField
+          ? diffLines(
+              baselineLineRows(baselineValuesRef.current, linesField, seedLineRows),
+              (value[linesField] as Row[] | undefined) ?? [],
+              linesConfig,
+            )
+          : null;
       try {
-        const saved = await runSubmit(data);
+        const saved = await runSubmit(data, linesDiff);
         if (saved) {
           commitSavedRecord(saved, { notify: true });
         }
@@ -617,8 +733,12 @@ export function FormView({
       formReadOnly,
       isCreate,
       commitSavedRecord,
+      linesActive,
+      linesConfig,
+      linesField,
       resource,
       runSubmit,
+      seedLineRows,
       writableFieldNames,
       form.formState.dirtyFields,
     ],
@@ -652,14 +772,18 @@ export function FormView({
       const source = patchedRecord ?? record;
       if (!source) return;
       const next = { ...source, ...patch };
-      const nextValues = recordToValues(next, formFields);
+      const nextValues = recordToValues(
+        next,
+        formFields,
+        linesSeed(rowsFromRecord(next)),
+      );
       setPatchedRecord(next);
       baselineValuesRef.current = nextValues;
       resetForm(nextValues);
       setSaveError(null);
       setServerFieldErrors({});
     },
-    [formFields, patchedRecord, record, resetForm],
+    [formFields, linesSeed, patchedRecord, record, resetForm, rowsFromRecord],
   );
 
   React.useEffect(() => {
@@ -699,7 +823,11 @@ export function FormView({
     // record action). Keying off the reference (not a manual flag) means a stale
     // intervening render carrying the same record can't consume the re-seed.
     if (record && recordId) {
-      const recordValues = recordToValues(record, formFields);
+      const recordValues = recordToValues(
+        record,
+        formFields,
+        linesSeed(seedLineRows),
+      );
       const recordChanged =
         seededIdRef.current !== recordId || seededRecordRef.current !== record;
       const cleanFieldShapeChanged =
@@ -718,7 +846,16 @@ export function FormView({
       resetForm(recordValues, { keepDirtyValues });
       setSaveError(null);
     }
-  }, [emptyValues, formFields, isCreate, patchedRecord, record, resetForm]);
+  }, [
+    emptyValues,
+    formFields,
+    isCreate,
+    linesSeed,
+    patchedRecord,
+    record,
+    resetForm,
+    seedLineRows,
+  ]);
 
   const titleField = titleFieldFor(formFields, modelMetadata);
   const titleFieldMessages = titleField
@@ -775,6 +912,15 @@ export function FormView({
     [displayRecord, id, modelMetadata, t],
   );
   const requiredMessage = t("form.required");
+  // Project the flat server field errors keyed `<linesField>.<index>.<childField>`
+  // into the per-row error contract the lines composer renders under each cell.
+  const lineRowErrors = React.useMemo(
+    () =>
+      linesActive && linesField
+        ? projectLineRowErrors(serverFieldErrors, linesField)
+        : undefined,
+    [linesActive, linesField, serverFieldErrors],
+  );
   const renderField = (field: FieldDescriptor): React.ReactNode => {
     const relation = relationByField.get(field.name);
     // The selected record's label comes from the parent read (folded above), so
@@ -919,6 +1065,27 @@ export function FormView({
           renderSectionModels(sections)
         )}
       </div>
+
+      {linesActive && linesResource && linesField ? (
+        <section className="grid gap-3">
+          <SectionEyebrow
+            as="h3"
+            spacing="field"
+            tracking="wide"
+            weight="semibold"
+            className="border-b border-border-subtle pb-1"
+          >
+            {t("lines.section")}
+          </SectionEyebrow>
+          <EditableLines
+            control={form.control}
+            name={linesField}
+            lines={linesResource}
+            readOnly={formReadOnly}
+            rowErrors={lineRowErrors}
+          />
+        </section>
+      ) : null}
 
       {bodyField ? (
         <section className="grid gap-2">
@@ -1578,12 +1745,68 @@ function emptyDraft(
   return draft;
 }
 
-function recordToValues(record: Row, fields: readonly FieldDescriptor[]): Values {
+function recordToValues(
+  record: Row,
+  fields: readonly FieldDescriptor[],
+  lines?: LinesSeed,
+): Values {
   const values: Values = {};
   for (const field of fields) {
     values[field.name] = recordFieldValue(record, field) ?? emptyValue(field);
   }
+  // The child-lines array is not a declared FieldDescriptor, so it is seeded here
+  // (a stable reference from the caller) — a plain `form.reset(values)` would
+  // otherwise blank the `useFieldArray` the lines composer binds.
+  if (lines) values[lines.field] = lines.rows;
   return values;
+}
+
+/**
+ * The line rows the form was last seeded with — the baseline a submit diffs the
+ * edited rows against. The baseline values ref carries them (record seed, saved
+ * reset, or record-action patch); before the first seed it falls back to the
+ * record-derived rows so an unedited save is a no-op.
+ */
+function baselineLineRows(
+  baseline: Values,
+  field: string,
+  fallback: readonly Row[] | null,
+): readonly Row[] {
+  const rows = baseline[field];
+  return Array.isArray(rows) ? (rows as readonly Row[]) : fallback ?? [];
+}
+
+/**
+ * Project the flat server field errors — keyed `<linesField>.<index>.<childField>`
+ * — into the per-row `ValidationErrors` array the lines composer renders under each
+ * cell. A key that names no row index is left to the form-level error surfaces.
+ */
+function projectLineRowErrors(
+  errors: Record<string, readonly string[]>,
+  field: string,
+): readonly (ValidationErrors | undefined)[] | undefined {
+  const prefix = `${field}.`;
+  const byRow = new Map<number, ValidationErrors>();
+  for (const [key, messages] of Object.entries(errors)) {
+    if (!key.startsWith(prefix)) continue;
+    const match = /^(\d+)\.(.+)$/.exec(key.slice(prefix.length));
+    if (!match) continue;
+    const index = Number(match[1]);
+    const childField = match[2] as string;
+    const entry = byRow.get(index) ?? { fieldErrors: {}, formErrors: [] };
+    entry.fieldErrors[childField] = [
+      ...(entry.fieldErrors[childField] ?? []),
+      ...messages,
+    ];
+    byRow.set(index, entry);
+  }
+  if (byRow.size === 0) return undefined;
+  const rows: (ValidationErrors | undefined)[] = [];
+  const maxIndex = Math.max(...byRow.keys());
+  for (let index = 0; index <= maxIndex; index += 1) {
+    rows.push(byRow.get(index));
+  }
+  return rows;
 }
 
 function recordFieldValue(record: Row, field: FieldDescriptor): unknown {
