@@ -4,6 +4,7 @@ const SCALAR_WIDGET: Readonly<Record<string, string>> = {
   Boolean: "switch",
   Int: "integer",
   Float: "float",
+  Decimal: "float",
   DateTime: "datetime",
   Date: "date",
   JSON: "json",
@@ -47,7 +48,12 @@ export function filterFieldType(
   if (field?.kind === "enum") return "selection";
   if (field?.kind === "scalar" && field.scalar === "String") return "text";
   if (field?.kind === "scalar" && field.scalar === "Boolean") return "boolean";
-  if (field?.kind === "scalar" && (field.scalar === "Int" || field.scalar === "Float")) {
+  if (
+    field?.kind === "scalar" &&
+    (field.scalar === "Int" ||
+      field.scalar === "Float" ||
+      field.scalar === "Decimal")
+  ) {
     return "number";
   }
   if (field?.kind === "scalar" && field.scalar === "DateTime") return "datetime";

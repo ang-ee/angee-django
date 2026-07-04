@@ -12,7 +12,7 @@ from angee.graphql.introspection import is_to_many_relation
 RESOURCE_FIELD_KINDS = frozenset({"scalar", "enum", "relation", "list"})
 """Supported resource field kind names."""
 
-RESOURCE_FIELD_SCALARS = frozenset({"ID", "String", "Boolean", "Int", "Float", "DateTime", "Date", "JSON"})
+RESOURCE_FIELD_SCALARS = frozenset({"ID", "String", "Boolean", "Int", "Float", "Decimal", "DateTime", "Date", "JSON"})
 """Supported GraphQL scalar families in data-resource field metadata."""
 
 RESOURCE_FIELD_WIDGETS = frozenset(
@@ -49,7 +49,9 @@ def model_field_scalar(field: models.Field[Any, Any]) -> str | None:
         return "Boolean"
     if isinstance(field, models.IntegerField):
         return "Int"
-    if isinstance(field, (models.DecimalField, models.FloatField)):
+    if isinstance(field, models.DecimalField):
+        return "Decimal"
+    if isinstance(field, models.FloatField):
         return "Float"
     if isinstance(field, models.DateTimeField):
         return "DateTime"

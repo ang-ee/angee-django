@@ -104,9 +104,7 @@ def resource_wire_field_names(surface: type | None, *, exclude: tuple[str, ...] 
         return ()
     excluded = set(exclude)
     return tuple(
-        resource_wire_field_name(surface, name) or name
-        for name in surface_field_names(surface)
-        if name not in excluded
+        resource_wire_field_name(surface, name) or name for name in surface_field_names(surface) if name not in excluded
     )
 
 
@@ -169,9 +167,7 @@ def input_wire_fields(surface: type | None, *, exclude: tuple[str, ...] = ()) ->
 
     excluded = set(exclude)
     return tuple(
-        resource_wire_field_name(surface, name) or name
-        for name in _input_fields(surface)
-        if name not in excluded
+        resource_wire_field_name(surface, name) or name for name in _input_fields(surface) if name not in excluded
     )
 
 
@@ -493,7 +489,9 @@ def _surface_field_scalar_or_none(value: object | None) -> str | None:
         return "Boolean"
     if value is int:
         return "Int"
-    if value is float or value is Decimal:
+    if value is Decimal:
+        return "Decimal"
+    if value is float:
         return "Float"
     if value is datetime:
         return "DateTime"
@@ -570,12 +568,10 @@ def _resource_enum_values(
     if definition is None:
         return values
     labels_by_name = {
-        str(enum_value.name): labels_by_key.get(str(enum_value.value))
-        for enum_value in definition.values
+        str(enum_value.name): labels_by_key.get(str(enum_value.value)) for enum_value in definition.values
     }
     return tuple(
-        dataclasses.replace(item, description=labels_by_name.get(item.value) or item.description)
-        for item in values
+        dataclasses.replace(item, description=labels_by_name.get(item.value) or item.description) for item in values
     )
 
 

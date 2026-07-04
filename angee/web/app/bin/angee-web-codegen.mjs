@@ -28,6 +28,7 @@ const SCALARS = {
   DateTime: "string",
   Date: "string",
   BigInt: "string",
+  Decimal: "string",
   JSON: "unknown",
 };
 const ADDON_ENTRY_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx"];

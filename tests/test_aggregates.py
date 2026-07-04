@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import enum
 import warnings
+from decimal import Decimal
 from typing import NewType
 
 import pytest
@@ -270,9 +271,7 @@ def test_measure_ops_pin_the_curated_subset_per_field_family() -> None:
         "on_date": ("min", "max"),
         "at_time": ("min", "max"),
     }
-    resolved = {
-        name: _measure_ops_for_field(MeasureOpsThing._meta.get_field(name)) for name in expected
-    }
+    resolved = {name: _measure_ops_for_field(MeasureOpsThing._meta.get_field(name)) for name in expected}
 
     assert resolved == expected
 
@@ -446,6 +445,57 @@ def test_data_resource_metadata_marks_public_id_field_as_id_scalar() -> None:
     assert fields["id"].kind == "scalar"
     assert fields["id"].scalar == "ID"
     assert fields["id"].widget is None
+
+
+def test_model_resource_metadata_marks_decimal_fields_as_decimal_scalar() -> None:
+    """Model-field metadata keeps Decimal distinct from Float."""
+
+    fields = {
+        field.name: field
+        for field in metadata_module.model_resource_fields(
+            MeasureOpsThing,
+            ("amount", "ratio"),
+            filter_fields=("amount", "ratio"),
+            order_fields=("amount", "ratio"),
+            aggregate_fields=("amount", "ratio"),
+        )
+    }
+
+    assert fields["amount"].kind == "scalar"
+    assert fields["amount"].scalar == "Decimal"
+    assert fields["amount"].widget == "float"
+    assert fields["amount"].filterable is True
+    assert fields["amount"].sortable is True
+    assert fields["amount"].aggregatable is True
+    assert fields["ratio"].scalar == "Float"
+
+
+def test_surface_resource_metadata_marks_decimal_fields_as_decimal_scalar() -> None:
+    """Strawberry Decimal surfaces keep the same metadata scalar."""
+
+    @strawberry_django.type(MeasureOpsThing)
+    class MeasureOpsThingType(AngeeNode):
+        amount: auto
+        ratio: auto
+
+        @strawberry.field
+        def computed_amount(self) -> Decimal:
+            return self.amount
+
+    resource = make_data_resource_metadata(
+        model=MeasureOpsThing,
+        roots=DataResourceRoots(list_name="measure_ops"),
+        type_names=DataResourceTypeNames(node="MeasureOpsThingType"),
+        capabilities=("list",),
+        node_type=MeasureOpsThingType,
+    )
+    fields = {field.name: field for field in resource.fields}
+
+    assert fields["amount"].scalar == "Decimal"
+    assert fields["amount"].widget == "float"
+    assert fields["computed_amount"].scalar == "Decimal"
+    assert fields["computed_amount"].widget is None
+    assert fields["ratio"].scalar == "Float"
 
 
 def test_data_resource_metadata_marks_computed_surface_enum_field() -> None:
