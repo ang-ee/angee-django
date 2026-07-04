@@ -73,6 +73,8 @@ export interface FieldDescriptor {
   options?: readonly WidgetOption[];
   placeholder?: string;
   description?: ReactNode;
+  /** Money widget: path to the FK owning the row's currency (see `WidgetField.currencyField`). */
+  currencyField?: string;
 }
 
 /**

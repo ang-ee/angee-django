@@ -104,6 +104,26 @@ export interface DataResourceMetadata {
   revisionFields?: readonly string[];
   relationAxes: readonly DataResourceRelationAxisMetadata[];
   groupAliases?: readonly DataResourceGroupAliasMetadata[];
+  /**
+   * Editable child-lines contract (F6), present only for a document resource that
+   * declares `lines=` in `schema.py`. `EditableLines` reads it to render the line
+   * cells (each child column's widget from `fields`) and the `<resource>_save`
+   * diff-apply mutation reads `roots.save`. The wire key is `linesResource`.
+   */
+  linesResource?: DataResourceLinesMetadata | null;
+}
+
+export interface DataResourceLinesMetadata {
+  /** Parent GraphQL field holding the ordered child lines, e.g. `"lines"`. */
+  field: string;
+  /** Child model label, e.g. `"accounting.JournalItem"`. */
+  modelLabel: string;
+  /** Shared line input type name (an optional public `id` plus the editable columns). */
+  inputType?: string | null;
+  /** Integer order column maintained by drag-reorder, when the child carries one. */
+  positionField?: string | null;
+  /** Per-column metadata (scalar/widget/relation) the line cells render. */
+  fields?: readonly DataResourceFieldMetadata[];
 }
 
 export interface DataResourceRootMetadata {
@@ -113,6 +133,8 @@ export interface DataResourceRootMetadata {
   groups?: string | null;
   create?: string | null;
   update?: string | null;
+  /** Authored `<resource>_save(pk, patch, lines)` diff-apply mutation (F6). */
+  save?: string | null;
   delete?: string | null;
   deletePreview?: string | null;
   revisions?: string | null;
@@ -363,6 +385,23 @@ function modelFieldMetadataFromResourceField(
       : undefined;
   const relationTarget = relationTargetForField(field, resource);
   return {
+    ...baseModelFieldMetadata(field, relationTarget),
+    ...(relationFilter ? { relationFilter } : {}),
+  };
+}
+
+/**
+ * The resource-independent half of a field's model metadata: name, kind, scalar,
+ * widget, currency path, enum values, and relation target. Shared by the
+ * top-level resource projection (which then folds in the relation filter from the
+ * resource's axes) and the F6 child-lines projection (whose fields carry their
+ * relation target directly and need no parent-resource axes).
+ */
+function baseModelFieldMetadata(
+  field: DataResourceFieldMetadata,
+  relationTarget: string | undefined,
+): ModelFieldMetadata {
+  return {
     name: field.name,
     kind: field.kind,
     ...(field.scalar ? { scalar: field.scalar } : {}),
@@ -378,8 +417,38 @@ function modelFieldMetadataFromResourceField(
     creatable: field.creatable,
     updatable: field.updatable,
     requiredOnCreate: field.requiredOnCreate,
-    ...(relationFilter ? { relationFilter } : {}),
   };
+}
+
+/**
+ * Project one editable-lines contract into a `ModelMetadata` for the child model,
+ * so `EditableLines` resolves each line cell's widget, options, currency path, and
+ * relation target through the same field classifier the parent form uses. The
+ * child columns carry their own `relationModelLabel`, so no parent-resource axes
+ * are needed; relation cells resolve their target through the full schema metadata
+ * the caller already holds.
+ */
+export function lineChildModelMetadata(
+  lines: DataResourceLinesMetadata,
+): ModelMetadata {
+  const fields = Object.fromEntries(
+    (lines.fields ?? []).map((field) => [
+      field.name,
+      baseModelFieldMetadata(field, relationTargetForLineField(field)),
+    ]),
+  );
+  return {
+    typeName: `${typeNameForModel(lines.modelLabel)}Type`,
+    fields,
+  };
+}
+
+function relationTargetForLineField(
+  field: DataResourceFieldMetadata,
+): string | undefined {
+  return field.relationModelLabel
+    ? `${typeNameForModel(field.relationModelLabel)}Type`
+    : undefined;
 }
 
 function relationTargetForField(

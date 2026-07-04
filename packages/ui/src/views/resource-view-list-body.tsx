@@ -652,6 +652,7 @@ export function ListCellContent<TRow extends Row>({
           label: column.header,
           options: column.options,
           tone: column.tone,
+          ...(column.currencyField ? { currencyField: column.currencyField } : {}),
         }}
         readOnly
       />

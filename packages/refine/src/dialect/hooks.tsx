@@ -27,8 +27,10 @@ import {
   extractFacet,
   extractGroupBy,
   extractRevisions,
+  extractSaveResult,
   groupByRequest,
   revisionsRequest,
+  saveRequest,
   type AggregateBucket,
   type AggregateRequestOptions,
   type ByIdVariables,
@@ -40,6 +42,7 @@ import {
   type GroupByResult,
   type ResourceRevision,
   type ResourceFacetResult,
+  type ResourceSaveVariables,
 } from "../operations";
 import {
   operationDocument,
@@ -128,6 +131,13 @@ export interface UseAngeeRevisionsResult {
   fetching: boolean;
   error: HttpError | null;
   refetch: () => void;
+}
+
+export interface UseAngeeResourceSaveResult {
+  save: (variables: ResourceSaveVariables) => Promise<Row | null>;
+  fetching: boolean;
+  error: HttpError | null;
+  reset: () => void;
 }
 
 export type ActionMutate = (id: string) => Promise<string | undefined>;
@@ -460,6 +470,43 @@ export function useAngeeDeletePreview(
     fetching: run.mutation.isPending,
     error: run.mutation.error,
     mutate,
+    reset: run.mutation.reset,
+  };
+}
+
+/**
+ * Run the authored `<resource>_save(pk, patch, lines)` diff-apply mutation (F6)
+ * through refine's custom mutation owner — the transactional parent-patch-plus-line
+ * upsert/delete write. Mirrors `useAngeeDeletePreview`: the metadata edge resolves the
+ * `save` root as `target`, and the caller passes the generated `document` for that
+ * root (the single backend-binding point, see `saveRequest`). Returns the saved parent
+ * row (with its returned lines) so the form re-seeds from the server truth.
+ */
+export function useAngeeResourceSave(
+  target: CustomGraphQLOperationTarget | null,
+  options: DialectDocumentOptions,
+): UseAngeeResourceSaveResult {
+  const { document } = options;
+  const run = useCustomMutation<BaseRecord, HttpError, ResourceSaveVariables>();
+  const save = useCallback(
+    async (variables: ResourceSaveVariables) => {
+      if (!target) return null;
+      const request = saveRequest(target, variables, { document });
+      const response = await run.mutateAsync({
+        url: "",
+        method: "post",
+        values: variables,
+        dataProviderName: request.dataProviderName,
+        meta: request.meta,
+      });
+      return extractSaveResult(response.data, request.root);
+    },
+    [document, target, run.mutateAsync],
+  );
+  return {
+    save,
+    fetching: run.mutation.isPending,
+    error: run.mutation.error,
     reset: run.mutation.reset,
   };
 }

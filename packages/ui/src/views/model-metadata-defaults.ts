@@ -130,6 +130,9 @@ export function columnsWithMetadataDefaults<TRow extends object>(
     return {
       ...column,
       header: fieldLabel(column.field, field, column.header),
+      ...(column.currencyField === undefined && field?.currencyField
+        ? { currencyField: field.currencyField }
+        : {}),
       ...(column.options === undefined
         && isEnumOptionWidget(column.widget)
         && options.length > 0
@@ -159,6 +162,9 @@ export function fieldsWithMetadataDefaults(
       ...field,
       ...(widget !== field.widget ? { widget } : {}),
       label: fieldLabel(field.name, fieldMetadata, field.label),
+      ...(field.currencyField === undefined && fieldMetadata?.currencyField
+        ? { currencyField: fieldMetadata.currencyField }
+        : {}),
       ...(field.options === undefined
         && isEnumOptionWidget(widget ?? field.kind)
         && options.length > 0

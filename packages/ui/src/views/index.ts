@@ -110,6 +110,17 @@ export {
   type RecordToolbarContext,
   type RecordTabDescriptor,
 } from "./FormView";
+export { EditableLines, type EditableLinesProps } from "./EditableLines";
+export {
+  diffLines,
+  duplicateLineRow,
+  emptyLineRow,
+  lineDiffConfig,
+  lineToInput,
+  recordLinesToRows,
+  type LineDiff,
+  type LineDiffConfig,
+} from "./editable-lines";
 export {
   ResourceList,
   ResourceCreate,

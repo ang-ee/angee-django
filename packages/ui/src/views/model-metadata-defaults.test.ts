@@ -450,3 +450,38 @@ describe("resource metadata defaults", () => {
     });
   });
 });
+
+describe("money currencyField plumbing", () => {
+  const metadata: ModelMetadata = {
+    typeName: "InvoiceType",
+    fields: {
+      amountTotal: {
+        name: "amountTotal",
+        kind: "scalar",
+        scalar: "Decimal",
+        widget: "money",
+        currencyField: "currency",
+        label: "Total",
+      },
+    },
+  };
+
+  test("a column inherits the field's currencyField from metadata", () => {
+    const [column] = columnsWithMetadataDefaults<Row>([{ field: "amountTotal" }], metadata);
+    expect(column?.currencyField).toBe("currency");
+  });
+
+  test("a form field inherits the field's currencyField from metadata", () => {
+    const [field] = fieldsWithMetadataDefaults([{ name: "amountTotal" }], metadata);
+    expect(field?.currencyField).toBe("currency");
+    expect(field?.widget).toBe("money");
+  });
+
+  test("an explicit descriptor currencyField wins over metadata", () => {
+    const [field] = fieldsWithMetadataDefaults(
+      [{ name: "amountTotal", currencyField: "order.currency" }],
+      metadata,
+    );
+    expect(field?.currencyField).toBe("order.currency");
+  });
+});

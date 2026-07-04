@@ -207,6 +207,56 @@ export function deletePreviewRequest(
   };
 }
 
+/** One editable line submitted to the authored `<resource>_save` mutation. */
+export interface LineInput extends Record<string, unknown> {
+  /** Present for an existing line (update); absent for a new line (create). */
+  id?: string;
+}
+
+/** Variables for the authored `<resource>_save(pk, patch, lines)` diff-apply mutation (F6). */
+export interface ResourceSaveVariables extends Record<string, unknown> {
+  pk: string;
+  patch?: Record<string, unknown>;
+  lines?: readonly LineInput[];
+}
+
+/**
+ * Build the request for the authored `<resource>_save(pk, patch, lines)` diff-apply
+ * mutation (F6) — the transactional parent-patch-plus-child-upsert/delete write. The
+ * frozen backend contract (spec §3.14): `lines` is the full desired child list, each
+ * carrying its public `id` to update and omitting it to create; a stored child whose
+ * id is absent from the list is deleted; `patch` is the parent field patch.
+ *
+ * This is the single point where the frontend binds to that backend operation. The
+ * generated typed document for the resource's `save` root is passed as `document`
+ * (resolved from the operation registry or authored in the addon) — like every other
+ * authored dialect operation here, this builder stays metadata-free.
+ */
+export function saveRequest(
+  target: CustomGraphQLOperationTarget,
+  variables: ResourceSaveVariables,
+  options: { document: unknown },
+): CustomGraphQLMutationRequest {
+  const operation = operationTarget(target);
+  return {
+    dataProviderName: operation.dataProviderName,
+    root: operation.root,
+    meta: mutationMeta(options.document, {
+      pk: variables.pk,
+      ...(variables.patch !== undefined ? { patch: variables.patch } : {}),
+      ...(variables.lines !== undefined ? { lines: variables.lines } : {}),
+    }),
+  };
+}
+
+/** Pull the saved parent row (with its returned lines) from a `<resource>_save` response. */
+export function extractSaveResult(
+  data: unknown,
+  root: string,
+): Record<string, unknown> | null {
+  return fieldRecord(data, root);
+}
+
 export function actionRequest(
   field: string,
   variables: ByIdVariables,

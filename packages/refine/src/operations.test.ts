@@ -11,11 +11,13 @@ import {
   extractFacet,
   extractGroupBy,
   extractRevisions,
+  extractSaveResult,
   groupByRequest,
   groupDimension,
   runActionResult,
   revisionSnapshot,
   revisionsRequest,
+  saveRequest,
 } from "./operations";
 
 describe("Hasura custom operations", () => {
@@ -76,6 +78,47 @@ describe("Hasura custom operations", () => {
       confirm: true,
     });
     expect(request.meta.gqlMutation).toBe(document);
+  });
+
+  test("builds an authored save request with pk, patch, and lines", () => {
+    const document = { kind: "Document", definitions: [] } as unknown as DocumentNode;
+    const request = saveRequest(
+      target("sale_docs_save"),
+      {
+        pk: "doc_1",
+        patch: { note: "confirmed" },
+        lines: [
+          { id: "ln_1", label: "Keep", quantity: 3, position: 0 },
+          { label: "New", quantity: 7, position: 1 },
+        ],
+      },
+      { document },
+    );
+
+    expect(request.dataProviderName).toBe("console");
+    expect(request.root).toBe("sale_docs_save");
+    expect(request.meta.gqlVariables).toEqual({
+      pk: "doc_1",
+      patch: { note: "confirmed" },
+      lines: [
+        { id: "ln_1", label: "Keep", quantity: 3, position: 0 },
+        { label: "New", quantity: 7, position: 1 },
+      ],
+    });
+    expect(request.meta.gqlMutation).toBe(document);
+  });
+
+  test("omits absent patch and lines from a save request", () => {
+    const document = { kind: "Document", definitions: [] } as unknown as DocumentNode;
+    const request = saveRequest(target("sale_docs_save"), { pk: "doc_1" }, { document });
+
+    expect(request.meta.gqlVariables).toEqual({ pk: "doc_1" });
+  });
+
+  test("extracts the saved row from a save response", () => {
+    const row = { id: "doc_1", title: "Order", lines: [{ id: "ln_1" }] };
+    expect(extractSaveResult({ sale_docs_save: row }, "sale_docs_save")).toEqual(row);
+    expect(extractSaveResult({}, "sale_docs_save")).toBeNull();
   });
 
   test("builds an authored revisions request with a generated document", () => {
