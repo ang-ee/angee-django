@@ -1,0 +1,49 @@
+/* Theme FullCalendar's internals through the Angee token set. FullCalendar v6
+ * injects its own structural styles at runtime and ships no theme CSS to import,
+ * so this only remaps its CSS custom properties onto the semantic tokens and
+ * settles a few surfaces it leaves to those variables. Scoped under
+ * `.angee-calendar` so nothing leaks past the calendar. */
+.angee-calendar {
+  --fc-border-color: var(--border-subtle);
+  --fc-page-bg-color: var(--surface-canvas);
+  --fc-neutral-bg-color: var(--surface-sheet-2);
+  --fc-neutral-text-color: var(--text-muted);
+  --fc-today-bg-color: var(--brand-tint);
+  --fc-event-bg-color: var(--brand);
+  --fc-event-border-color: var(--brand);
+  --fc-event-text-color: var(--text-on-brand);
+  --fc-highlight-color: var(--brand-soft);
+  --fc-button-bg-color: var(--surface-sheet);
+  --fc-button-border-color: var(--border-default);
+  --fc-button-text-color: var(--text-primary);
+  --fc-button-hover-bg-color: var(--surface-sheet-2);
+  --fc-button-hover-border-color: var(--border-strong);
+  --fc-button-active-bg-color: var(--brand-soft);
+  --fc-button-active-border-color: var(--brand);
+  --fc-list-event-hover-bg-color: var(--surface-sheet-2);
+  --fc-more-link-bg-color: var(--surface-sheet-2);
+  --fc-more-link-text-color: var(--text-muted);
+  color: var(--text-primary);
+}
+
+.angee-calendar .fc .fc-toolbar-title {
+  font-size: var(--text-15);
+  font-weight: 600;
+}
+
+.angee-calendar .fc .fc-col-header-cell-cushion,
+.angee-calendar .fc .fc-daygrid-day-number {
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.angee-calendar .fc .fc-button {
+  text-transform: none;
+  box-shadow: none;
+}
+
+.angee-calendar .fc .fc-button-primary:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 1px;
+  box-shadow: none;
+}

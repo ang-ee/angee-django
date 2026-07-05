@@ -71,6 +71,20 @@ export {
 } from "./useScopedTreeExplorer";
 export { GalleryView, type GalleryViewProps } from "./GalleryView";
 export { TimelineView, type TimelineViewProps } from "./TimelineView";
+export {
+  CalendarView,
+  type CalendarViewProps,
+  type CalendarViewMode,
+  type CalendarWindow,
+  type Occurrence,
+} from "./CalendarView";
+export {
+  useCalendarWindow,
+  calendarWindowBounds,
+  type CalendarWindowBounds,
+  type CalendarWindowSource,
+  type UseCalendarWindowResult,
+} from "./use-calendar-window";
 export { Notebook, type NotebookProps } from "./Notebook";
 export {
   Tree,

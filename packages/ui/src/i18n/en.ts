@@ -94,6 +94,7 @@ export const enUiMessages: Record<string, string> = {
   "list.sortAscending": "Sort {label} (currently ascending)",
   "list.sortDescending": "Sort {label} (currently descending)",
   "list.sortNotSorted": "Sort {label} (not sorted)",
+  "calendar.today": "Today",
   "auth.username": "Username",
   "auth.password": "Password",
   "auth.signIn": "Sign in",
