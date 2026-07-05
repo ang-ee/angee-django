@@ -443,6 +443,38 @@ export function lineChildModelMetadata(
   };
 }
 
+/**
+ * The GraphQL selection paths a detail (`*_by_pk`) read must include for a
+ * resource's editable child lines (F6), relative to the parent's lines field.
+ * Mirrors the parent form's own field selection: the child `id`, the order
+ * column, each editable scalar/enum column by name, and each relation column as
+ * its nested `id` plus the related type's record representation — so a loaded
+ * line cell labels its relation with no extra round-trip, exactly like the
+ * `<resource>_save` return that already selects these children. Without this the
+ * detail read drops the lines and the form shows none even when the record has
+ * them. The caller prefixes each path with `<linesResource.field>.`.
+ */
+export function lineReadSelectionPaths(
+  lines: DataResourceLinesMetadata,
+  metadata: SchemaFieldMetadata,
+): readonly string[] {
+  const child = lineChildModelMetadata(lines);
+  const paths = new Set<string>(["id"]);
+  if (lines.positionField) paths.add(lines.positionField);
+  for (const field of Object.values(child.fields)) {
+    if (field.kind === "relation") {
+      paths.add(`${field.name}.id`);
+      const label = field.relationTarget
+        ? metadata.types[field.relationTarget]?.recordRepresentation
+        : undefined;
+      if (label && label !== "id") paths.add(`${field.name}.${label}`);
+    } else {
+      paths.add(field.name);
+    }
+  }
+  return [...paths];
+}
+
 function relationTargetForLineField(
   field: DataResourceFieldMetadata,
 ): string | undefined {

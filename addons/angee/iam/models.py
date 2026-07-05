@@ -43,15 +43,23 @@ ancestor-company member reaches every descendant scope.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import UnicodeUsernameValidator
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.utils import timezone
-from rebac import app_settings, current_actor, system_context
+from rebac import (
+    app_settings,
+    current_actor,
+    is_anonymous_actor,
+    system_context,
+    to_subject_ref,
+)
+from rebac.models import active_relationship_model
 from rebac.permissions_mixin import RebacPermissionsMixin
+from rebac.resources import model_resource_type
 from rebac.roles import grant, revoke
 
 from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, SqidMixin
@@ -212,6 +220,16 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
         return self.first_name
 
 
+COMPANY_MEMBER_RELATION = "direct_member"
+"""REBAC relation naming a *direct* company-of-record membership grant.
+
+Mirrors ``relation direct_member`` on the ``iam/company`` definition in
+``permissions.zed``. Membership is stored as REBAC tuples, not an ORM join, and
+the company owns that fact — so the relation name lives once here and
+:meth:`CompanyManager.direct_memberships_of` reads it from the permission store.
+"""
+
+
 class CompanyQuerySet(ArchiveQuerySet[Any], AngeeQuerySet[Any]):
     """AngeeQuerySet plus the archive read vocabulary for companies of record."""
 
@@ -229,6 +247,34 @@ class CompanyManager(AngeeManager.from_queryset(CompanyQuerySet)):  # type: igno
         """
 
         return self.unarchived().order_by("pk").first()
+
+    def direct_memberships_of(self, actor: Any) -> CompanyQuerySet:
+        """Return the companies ``actor`` is a *direct* member of.
+
+        Membership lives as REBAC ``direct_member`` tuples on ``iam/company``
+        (:data:`COMPANY_MEMBER_RELATION`), so the answer is read from the
+        permission store rather than an ORM join. The ``parent->member`` reach
+        that lets an ancestor-company member act in a subsidiary is deliberately
+        excluded — this is the direct grant, the fact
+        :class:`CompanyScopedMixin` defaults a new row's company from. The
+        matched rows are returned scope-free (the membership tuple is itself the
+        authorization), the same posture :meth:`Company.clean` uses for its
+        integrity read.
+        """
+
+        subject = to_subject_ref(actor)
+        id_attr = str(getattr(self.model._meta, "rebac_id_attr", None) or app_settings.REBAC_RESOURCE_ID_ATTR)
+        company_ids = [
+            row.resource_id
+            for row in active_relationship_model().objects.filter(
+                resource_type=model_resource_type(self.model),
+                relation=COMPANY_MEMBER_RELATION,
+                subject_type=subject.subject_type,
+                subject_id=subject.subject_id,
+                optional_subject_relation=subject.optional_relation,
+            )
+        ]
+        return cast(CompanyQuerySet, self.model._base_manager.filter(**{f"{id_attr}__in": company_ids}))
 
 
 class Company(AngeeDataModel, ArchiveMixin):
@@ -317,10 +363,50 @@ class CompanyScopedMixin(models.Model):
         "iam.Company",
         on_delete=models.PROTECT,
         related_name="+",
+        blank=True,
     )
-    """The company of record that owns this row (see :class:`Company`)."""
+    """The company of record that owns this row (see :class:`Company`).
+
+    Never nullable — every persisted row belongs to exactly one company — but
+    ``blank`` on input: when unset on create, :meth:`save` defaults it from the
+    acting user's sole direct membership (§3.7).
+    """
 
     class Meta:
         """Django model options for company-scope-only abstract inheritance."""
 
         abstract = True
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Default an unset ``company`` from the acting user's sole membership.
+
+        §3.7: ``company`` is an ordinary relation defaulted from the actor's
+        membership. When unset, the row takes the acting user's single direct
+        company membership; an ambiguous (several memberships) or
+        actorless/anonymous write fails loudly with a field-named
+        :class:`ValidationError` rather than guessing or inserting a null FK.
+        """
+
+        if self.company_id is None:
+            self.company = self._default_company_from_membership()
+        super().save(*args, **kwargs)
+
+    def _default_company_from_membership(self) -> Company:
+        """Return the acting user's sole direct company, or raise naming ``company``."""
+
+        actor = current_actor()
+        if actor is None or is_anonymous_actor(actor):
+            raise ValidationError(
+                {"company": "Select a company: it cannot be defaulted for an unauthenticated actor."}
+            )
+        company_model = type(self)._meta.get_field("company").related_model
+        memberships = list(company_model._default_manager.direct_memberships_of(actor)[:2])
+        if len(memberships) == 1:
+            return memberships[0]
+        if not memberships:
+            raise ValidationError(
+                {"company": "Select a company: you are not a direct member of any company to default from."}
+            )
+        raise ValidationError(
+            {"company": "Select a company: you are a direct member of several, so it cannot be defaulted."}
+        )

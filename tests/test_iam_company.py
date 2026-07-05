@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 from django.apps import apps
+from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import IntegrityError, models
@@ -180,3 +181,63 @@ def test_company_scoped_role_grant_is_isolated_to_that_company(django_user_model
     with actor_context(accountant):
         assert company_model.objects.filter(pk=company_a.pk).exists()
         assert not company_model.objects.filter(pk=company_b.pk).exists()
+
+
+@pytest.mark.django_db
+def test_company_scoped_save_defaults_company_from_sole_membership(django_user_model: Any) -> None:
+    """A single-membership actor's scoped row defaults ``company`` on insert (§3.7)."""
+
+    call_command("rebac", "sync", verbosity=0)
+    company_model = apps.get_model("iam", "Company")
+    scoped_model = apps.get_model("iam", "CompanyScopedDoc")
+    member = django_user_model.objects.create_user(username="sole-member")
+    with system_context(reason="test scoped default setup"):
+        company = company_model.objects.create(name="Sole Co")
+    _grant(company, "direct_member", member)
+
+    with actor_context(member):
+        doc = scoped_model.objects.create(title="Defaulted")
+
+    assert doc.company_id == company.pk
+
+
+@pytest.mark.django_db
+def test_company_scoped_save_rejects_ambiguous_membership(django_user_model: Any) -> None:
+    """Several direct memberships make the default ambiguous — raise naming company."""
+
+    call_command("rebac", "sync", verbosity=0)
+    company_model = apps.get_model("iam", "Company")
+    scoped_model = apps.get_model("iam", "CompanyScopedDoc")
+    member = django_user_model.objects.create_user(username="multi-member")
+    with system_context(reason="test scoped ambiguous setup"):
+        company_a = company_model.objects.create(name="Co A")
+        company_b = company_model.objects.create(name="Co B")
+    _grant(company_a, "direct_member", member)
+    _grant(company_b, "direct_member", member)
+
+    with actor_context(member), pytest.raises(ValidationError) as excinfo:
+        scoped_model.objects.create(title="Ambiguous")
+
+    assert "company" in excinfo.value.message_dict
+
+
+@pytest.mark.django_db
+def test_company_scoped_save_rejects_actorless_write() -> None:
+    """No acting actor cannot default ``company`` — raise naming the field."""
+
+    scoped_model = apps.get_model("iam", "CompanyScopedDoc")
+    with pytest.raises(ValidationError) as excinfo:
+        scoped_model.objects.create(title="No actor")
+
+    assert "company" in excinfo.value.message_dict
+
+
+@pytest.mark.django_db
+def test_company_scoped_save_rejects_anonymous_write() -> None:
+    """An anonymous actor cannot default ``company`` — raise naming the field."""
+
+    scoped_model = apps.get_model("iam", "CompanyScopedDoc")
+    with actor_context(AnonymousUser()), pytest.raises(ValidationError) as excinfo:
+        scoped_model.objects.create(title="Anonymous")
+
+    assert "company" in excinfo.value.message_dict

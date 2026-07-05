@@ -1,5 +1,6 @@
 import * as React from "react";
 import {
+  lineReadSelectionPaths,
   refineResourceName,
   recordSubtitleFields,
   rowPublicId,
@@ -459,9 +460,21 @@ export function FormView({
       if (modelMetadata && !modelMetadata.fields[field.name]) continue;
       addFieldSelection(paths, field, relationByField.get(field.name));
     }
+    // Editable child lines (F6) are rendered by EditableLines, not as form
+    // fields, so the loop above never selects them. Fold the lines relation and
+    // its child columns into the detail read — the metadata projection owns which
+    // columns, mirroring the `<resource>_save` return — so an existing record's
+    // lines seed the composer instead of reading as absent. On create there is no
+    // record and the diff-apply is pk-keyed, so the lines are skipped.
+    const lines = isCreate ? null : modelMetadata?.resource?.linesResource;
+    if (lines?.field) {
+      for (const path of lineReadSelectionPaths(lines, schemaMetadata)) {
+        paths.add(`${lines.field}.${path}`);
+      }
+    }
     for (const extra of returning ?? []) paths.add(extra);
     return [...paths];
-  }, [formFields, modelMetadata, relationByField, returning]);
+  }, [formFields, isCreate, modelMetadata, relationByField, returning, schemaMetadata]);
 
   const dataResource = modelMetadata?.resource ?? null;
   const refineFields = React.useMemo(

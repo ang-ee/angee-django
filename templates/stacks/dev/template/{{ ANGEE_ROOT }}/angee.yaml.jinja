@@ -2,6 +2,22 @@ version: 1
 kind: stack
 name: {{ project_name }}
 {% set database_url = "postgres://angee:${secret.db-password}@127.0.0.1:${ports.postgres}/angee" %}
+{# project_path / framework_path are given relative to the stack dir (the parent of #}
+{# ANGEE_ROOT, where `angee init` renders from). The operator resolves a source `path:` #}
+{# relative to ANGEE_ROOT itself — one level deeper — so a relative source path is #}
+{# `../`+input, and `.` collapses to `..`. Absolute inputs are kept as-is. This is what #}
+{# puts working_dir (source://app) at the project root, where manage.py lives, instead #}
+{# of inside ANGEE_ROOT. #}
+{% if (project_path | first) == "/" %}{% set app_source = project_path %}{% elif project_path == "." %}{% set app_source = ".." %}{% else %}{% set app_source = "../" + project_path %}{% endif %}
+{% if (framework_path | first) == "/" %}{% set framework_source = framework_path %}{% elif framework_path == "." %}{% set framework_source = ".." %}{% else %}{% set framework_source = "../" + framework_path %}{% endif %}
+{# Every Python job runs with working_dir at the project root. In the repo-level layout #}
+{# (framework_path == ".") the framework IS the stack root and the project is nested #}
+{# under it, so `uv run` discovers the framework pyproject (which owns the `postgres` #}
+{# extra) by walking up — no --project needed. Otherwise the framework is a separate #}
+{# checkout, not an ancestor of the project root, so walk-up fails; point uv at it #}
+{# explicitly with --project framework_path (the framework as given from the project #}
+{# root — a sibling `../angee-django`, or an absolute path). #}
+{% if framework_path == "." %}{% set uv_project = "" %}{% else %}{% set uv_project = framework_path %}{% endif %}
 
 template:
   active: stacks/dev
@@ -65,10 +81,10 @@ persist:
 sources:
   app:
     kind: local
-    path: {{ project_path }}
+    path: {{ app_source }}
   framework:
     kind: local
-    path: {{ framework_path }}
+    path: {{ framework_source }}
 
 # The compose/build/serve lifecycle. JOBS run once in depends_on order; SERVICES
 # stay up. Every command boots angee.compose.settings, which reads the project's
@@ -78,12 +94,16 @@ sources:
 jobs:
   postgres-ready:
     runtime: local
+    # Same working_dir as every other Python job: the project root, so `uv run`
+    # resolves the framework project (walking up in the repo-level layout, or via
+    # --project against it in a per-project layout) and psycopg is importable.
+    workdir: source://app
     command:
       - sh
       - "-c"
       - >-
         n=0;
-        until uv run --extra postgres python -c "import os, psycopg; psycopg.connect(os.environ['DATABASE_URL']).close()" 2>/tmp/pgwait.err; do
+        until uv run{% if uv_project %} --project {{ uv_project }}{% endif %} --extra postgres python -c "import os, psycopg; psycopg.connect(os.environ['DATABASE_URL']).close()" 2>/tmp/pgwait.err; do
         n=$$((n+1));
         [ "$$n" -ge 60 ] && { echo 'postgres not reachable after 60s:' >&2; cat /tmp/pgwait.err >&2; exit 1; };
         echo "waiting for postgres ($$n/60)..."; sleep 1;
@@ -96,7 +116,7 @@ jobs:
   build:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "--extra", "postgres", "python", "manage.py", "angee", "build"]
+    command: ["uv", "run"{% if uv_project %}, "--project", "{{ uv_project }}"{% endif %}, "--extra", "postgres", "python", "manage.py", "angee", "build"]
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
@@ -110,7 +130,7 @@ jobs:
   reconcile-permissions:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "--extra", "postgres", "python", "manage.py", "reconcile_permissions"]
+    command: ["uv", "run"{% if uv_project %}, "--project", "{{ uv_project }}"{% endif %}, "--extra", "postgres", "python", "manage.py", "reconcile_permissions"]
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
@@ -124,7 +144,7 @@ jobs:
   makemigrations:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "--extra", "postgres", "python", "manage.py", "makemigrations"]
+    command: ["uv", "run"{% if uv_project %}, "--project", "{{ uv_project }}"{% endif %}, "--extra", "postgres", "python", "manage.py", "makemigrations"]
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
@@ -133,7 +153,7 @@ jobs:
   migrate:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "--extra", "postgres", "python", "manage.py", "migrate", "--noinput"]
+    command: ["uv", "run"{% if uv_project %}, "--project", "{{ uv_project }}"{% endif %}, "--extra", "postgres", "python", "manage.py", "migrate", "--noinput"]
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
@@ -142,7 +162,7 @@ jobs:
   permissions:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "--extra", "postgres", "python", "manage.py", "rebac", "sync", "--yes"]
+    command: ["uv", "run"{% if uv_project %}, "--project", "{{ uv_project }}"{% endif %}, "--extra", "postgres", "python", "manage.py", "rebac", "sync", "--yes"]
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
@@ -154,7 +174,7 @@ jobs:
     command:
       - sh
       - "-c"
-      - uv run --extra postgres python manage.py resources load --include-demo
+      - uv run{% if uv_project %} --project {{ uv_project }}{% endif %} --extra postgres python manage.py resources load --include-demo
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
@@ -165,7 +185,7 @@ jobs:
   schema:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "--extra", "postgres", "python", "manage.py", "schema"]
+    command: ["uv", "run"{% if uv_project %}, "--project", "{{ uv_project }}"{% endif %}, "--extra", "postgres", "python", "manage.py", "schema"]
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
@@ -186,7 +206,7 @@ jobs:
   operator-schema:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "--extra", "postgres", "python", "manage.py", "operator_schema"]
+    command: ["uv", "run"{% if uv_project %}, "--project", "{{ uv_project }}"{% endif %}, "--extra", "postgres", "python", "manage.py", "operator_schema"]
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
@@ -230,7 +250,7 @@ services:
   django:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "--extra", "postgres", "python", "manage.py", "runserver", "127.0.0.1:{{ django_port }}"]
+    command: ["uv", "run"{% if uv_project %}, "--project", "{{ uv_project }}"{% endif %}, "--extra", "postgres", "python", "manage.py", "runserver", "127.0.0.1:{{ django_port }}"]
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
@@ -249,7 +269,7 @@ services:
   procrastinate-worker:
     runtime: local
     workdir: source://app
-    command: ["uv", "run", "--extra", "postgres", "python", "manage.py", "procrastinate", "worker"]
+    command: ["uv", "run"{% if uv_project %}, "--project", "{{ uv_project }}"{% endif %}, "--extra", "postgres", "python", "manage.py", "procrastinate", "worker"]
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
