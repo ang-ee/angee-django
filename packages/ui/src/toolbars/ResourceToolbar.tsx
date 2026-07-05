@@ -7,7 +7,7 @@ import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
 import { titleCase } from "../lib/titleCase";
 import { Button } from "../ui/button";
-import { Chip } from "../ui/chip";
+import { RemovableChip } from "../ui/chip";
 import { Input } from "../ui/input";
 import {
   PopoverContent,
@@ -455,11 +455,7 @@ function FilterPicker({
             key={`${nextGroup.field}:${nextGroup.granularity ?? ""}`}
             label={index === 0 ? t("resourceToolbar.groupBy") : t("resourceToolbar.then")}
             value={resourceViewGroupLabel(nextGroup)}
-            removeLabel={
-              index === 0
-                ? t("resourceToolbar.removeGroup")
-                : t("resourceToolbar.removeGroupLevel")
-            }
+            removeLabel={resourceViewGroupLabel(nextGroup)}
             onRemove={() => {
               const next = groups.filter((_, groupIndex) => groupIndex !== index);
               if (next.length === 0) onClearGroup?.();
@@ -472,9 +468,7 @@ function FilterPicker({
             key={option.id}
             label={t("resourceToolbar.filter")}
             value={option.chipLabel ?? option.label}
-            removeLabel={t("resourceToolbar.remove", {
-              label: String(option.chipLabel ?? option.label),
-            })}
+            removeLabel={String(option.chipLabel ?? option.label)}
             onRemove={() => onFilterToggle?.(option.id)}
           />
         ))}
@@ -483,9 +477,7 @@ function FilterPicker({
             key={chip.id}
             label={t("resourceToolbar.filter")}
             value={chip.label}
-            removeLabel={t("resourceToolbar.remove", {
-              label: labelText(chip.label) ?? t("resourceToolbar.filterFallback"),
-            })}
+            removeLabel={labelText(chip.label) ?? t("resourceToolbar.filterFallback")}
             onRemove={() => onCustomFilterRemove?.(chip.id)}
           />
         ))}
@@ -686,18 +678,10 @@ function FacetChip({
   onRemove: () => void;
 }): ReactElement {
   return (
-    <Chip tone="brand" size="sm" className="max-w-52 gap-1">
+    <RemovableChip tone="brand" size="sm" className="max-w-52" removeLabel={removeLabel} onRemove={onRemove}>
       <span className="shrink-0">{label}:</span>
       <span className="truncate">{value}</span>
-      <button
-        type="button"
-        aria-label={removeLabel}
-        className="ml-0.5 rounded-full text-brand-soft-text outline-none hover:bg-on-brand-soft-hover focus-visible:focus-ring"
-        onClick={onRemove}
-      >
-        <Glyph name="x" className="size-3" />
-      </button>
-    </Chip>
+    </RemovableChip>
   );
 }
 
