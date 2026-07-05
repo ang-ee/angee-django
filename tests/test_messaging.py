@@ -20,7 +20,15 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.db import connection, models
-from rebac import actor_context, system_context
+from rebac import (
+    PermissionDenied,
+    RelationshipTuple,
+    actor_context,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
@@ -46,6 +54,7 @@ from angee.parties.models import Folder as AbstractContactFolder
 from angee.parties.models import Handle as AbstractHandle
 from angee.parties.models import Party as AbstractParty
 from angee.social.models import MessagePublic, ThreadPublic
+from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,
@@ -367,6 +376,7 @@ MESSAGING_TEST_MODELS = (
     MessageEdge,
     Participant,
     ThreadedTicket,
+    ChatterDoc,
 )
 
 _AT = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
@@ -1471,3 +1481,73 @@ def test_quote_edge_runs_from_earlier_to_later(channel: Any) -> None:
     new = Message._base_manager.get(external_id="new")
     edge = MessageEdge._base_manager.get(kind="quote")
     assert (edge.src_id, edge.dst_id) == (old.pk, new.pk)
+
+
+def _grant(record: Any, relation: str, user: Any) -> None:
+    """Write one direct REBAC relationship tuple for ``user`` on ``record``."""
+
+    write_relationships(
+        [
+            RelationshipTuple(
+                resource=to_object_ref(record),
+                relation=relation,
+                subject=to_subject_ref(user),
+            )
+        ]
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_tracked_field_log_lands_without_post_access(messaging_tables: None) -> None:
+    """An automatic tracked-field log is a system write that ignores post access.
+
+    F-v part 1: a ``writer`` grant confers ``write`` (the tracked-field save) but not
+    ``post``, so ``ChatterDoc.thread_post_access="post"`` makes ``can_post`` deny the
+    actor. The tracked change and its system tracking note must both land — the save
+    is not rolled back by a post-access denial — and the thread's message count
+    increments by exactly the one tracked change.
+    """
+
+    del messaging_tables
+    user_model = get_user_model()
+    with system_context(reason="test.chatterdemo.part1.seed"):
+        writer = user_model.objects.create_user(username="cdc-writer", email="cdc-writer@example.com")
+        doc = ChatterDoc.objects.create(title="Order 1", status="open")
+    _grant(doc, "writer", writer)
+
+    with actor_context(writer):
+        doc.status = "closed"
+        doc.save(update_fields=["status"])
+
+    with system_context(reason="test.chatterdemo.part1.read"):
+        doc.refresh_from_db()
+        assert doc.status == "closed"
+        thread = doc.message_thread(create=False)
+        assert thread is not None
+        assert thread.message_count == 1
+        logs = list(Message._base_manager.filter(thread=thread))
+        assert len(logs) == 1
+        assert logs[0].message_type == Message.MessageKind.AUTO_COMMENT
+        assert [value.field_name for value in logs[0].tracking_values.all()] == ["status"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_user_authored_post_still_denied_without_post_access(messaging_tables: None) -> None:
+    """User-authored chatter still rides the post gate for a no-post actor.
+
+    F-v part 1: only automatic system writes bypass ``can_post``. A ``writer`` (write,
+    no ``post``) is still denied posting a comment or logging a note.
+    """
+
+    del messaging_tables
+    user_model = get_user_model()
+    with system_context(reason="test.chatterdemo.part1b.seed"):
+        writer = user_model.objects.create_user(username="cdc-writer2", email="cdc-writer2@example.com")
+        doc = ChatterDoc.objects.create(title="Order 2", status="open")
+    _grant(doc, "writer", writer)
+
+    with actor_context(writer):
+        with pytest.raises(PermissionDenied):
+            doc.message_post("Hello")
+        with pytest.raises(PermissionDenied):
+            doc.message_log("A note")

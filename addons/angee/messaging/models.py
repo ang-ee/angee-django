@@ -231,11 +231,19 @@ class ThreadedModelMixin(models.Model):
         subject: str = "",
         subtype_key: str = "record_updated",
     ) -> models.Model:
-        """Log Odoo-style field tracking values in this row's chatter thread."""
+        """Log Odoo-style field tracking values in this row's chatter thread.
+
+        Field tracking is an automatic system write: the log belongs to the record,
+        not to the actor whose save triggered it, so it goes through
+        :meth:`_message_system_post` — the system-write owner that never consults
+        :meth:`can_post`. An actor authorized to change a tracked field but not to
+        post comments must still get its change logged instead of having the whole
+        save rolled back by a post-access denial.
+        """
 
         message_model = apps.get_model("messaging", "Message")
-        return self.message_log(
-            body,
+        return self._message_system_post(
+            body=body,
             subject=subject,
             subtype_key=subtype_key,
             message_type=message_model.MessageKind.AUTO_COMMENT,
@@ -348,32 +356,29 @@ class ThreadedModelMixin(models.Model):
         autofollow_recipients: bool,
         autofollow_author: bool,
     ) -> models.Model:
-        """Post one chatter message after enforcing this row's post policy."""
+        """Post one user-authored chatter message after enforcing this row's post policy.
+
+        User posts ride the actor's :attr:`thread_post_access`; the message itself is
+        written by the shared system-write owner (:meth:`_message_system_post`), so the
+        post gate lives in exactly one place and the automatic-log path can reuse that
+        write without it.
+        """
 
         if not self.can_post():
             raise PermissionDenied(
                 f"Posting on {self._meta.label} requires {self.thread_post_access!r} access."
             )
-        attachment = self.message_thread_attachment(create=True)
-        if attachment is None:
-            raise ValueError("Cannot post a message without a thread.")
-        thread = attachment.thread
-        message_model = apps.get_model("messaging", "Message")
-        owner_id = _owner_user_id(self)
-        message = message_model.objects.post_to_thread(
-            thread,
+        message = self._message_system_post(
             body=body,
-            subject=subject or self.message_thread_subject(),
-            owner_id=owner_id,
-            attachment=attachment,
+            subject=subject,
             attachments=attachments,
             message_type=message_type,
             subtype_key=subtype_key,
-            subtype_model_label=self._meta.label,
             parent=parent,
             tracking_values=tracking_values,
             recipient_user_ids=recipient_user_ids,
         )
+        owner_id = _owner_user_id(self)
         follower_model = apps.get_model("messaging", "ThreadFollower")
         if autofollow_author and owner_id is not None:
             follower_model.objects.subscribe(
@@ -389,6 +394,48 @@ class ThreadedModelMixin(models.Model):
                     role=self.thread_attachment_role,
                 )
         return message
+
+    def _message_system_post(
+        self,
+        *,
+        body: str = "",
+        subject: str = "",
+        attachments: tuple[models.Model, ...] = (),
+        message_type: Message.MessageKind | None,
+        subtype_key: str,
+        parent: models.Model | None = None,
+        tracking_values: tuple[TrackingChange | dict[str, Any], ...] = (),
+        recipient_user_ids: tuple[Any, ...] = (),
+    ) -> models.Model:
+        """Write one automatic system message on this row's chatter thread.
+
+        The single owner of the chatter *system* write — record-creation notes and
+        field-tracking auto-comments. These are written by the framework on the
+        record's behalf, not authored by the acting user, so this path never consults
+        :meth:`can_post` / :attr:`thread_post_access`: an actor authorized to change a
+        tracked field but not to post comments must still get the change logged rather
+        than have its save rolled back by a post-access denial. User-authored posts go
+        through :meth:`_message_post`, which adds the post gate and the follower fan-out.
+        """
+
+        attachment = self.message_thread_attachment(create=True)
+        if attachment is None:
+            raise ValueError("Cannot post a message without a thread.")
+        message_model = apps.get_model("messaging", "Message")
+        return message_model.objects.post_to_thread(
+            attachment.thread,
+            body=body,
+            subject=subject or self.message_thread_subject(),
+            owner_id=_owner_user_id(self),
+            attachment=attachment,
+            attachments=attachments,
+            message_type=message_type,
+            subtype_key=subtype_key,
+            subtype_model_label=self._meta.label,
+            parent=parent,
+            tracking_values=tracking_values,
+            recipient_user_ids=recipient_user_ids,
+        )
 
     def message_subscribe(
         self,
@@ -584,33 +631,18 @@ class ThreadedModelMixin(models.Model):
                 role=self.thread_attachment_role,
             )
         create_changes = self._field_tracker().create_changes()
-        if not self.thread_create_log and not create_changes:
-            return
-        attachment = self.message_thread_attachment(create=True)
-        if attachment is None:
-            return
         message_model = apps.get_model("messaging", "Message")
         if self.thread_create_log:
-            message_model.objects.post_to_thread(
-                attachment.thread,
+            self._message_system_post(
                 body=self.message_creation_message(),
-                subject=self.message_thread_subject(),
-                owner_id=owner_id,
-                attachment=attachment,
                 message_type=message_model.MessageKind.NOTIFICATION,
                 subtype_key=self.thread_creation_subtype_key,
-                subtype_model_label=self._meta.label,
             )
         if create_changes:
-            message_model.objects.post_to_thread(
-                attachment.thread,
+            self._message_system_post(
                 body="",
-                subject=self.message_thread_subject(),
-                owner_id=owner_id,
-                attachment=attachment,
                 message_type=message_model.MessageKind.AUTO_COMMENT,
                 subtype_key=self.thread_tracking_subtype_key,
-                subtype_model_label=self._meta.label,
                 tracking_values=tuple(create_changes),
             )
 

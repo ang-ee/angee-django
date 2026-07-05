@@ -2115,3 +2115,160 @@ def _request(user: Any) -> Any:
     request = RequestFactory().post("/graphql/console/")
     request.user = user
     return request
+
+
+def test_generic_thread_and_message_lists_exclude_record_chatter(messaging_graphql_tables: None) -> None:
+    """The generic threads/messages resources exclude record-attached chatter.
+
+    F-v part 2: the owner-scoped ``threads``/``messages`` auto-CRUD resources are the
+    channel inbox — list, aggregate, and by-pk. Record chatter (a thread bound to a
+    record through a ``ThreadAttachment``) is reachable only through ``record_thread``
+    (gated on the parent record's read), so it must not surface here, even for a
+    platform admin who could otherwise read every owner-scoped row.
+    """
+
+    admin = _platform_admin("msg-inbox-admin")
+    channel_thread, channel_message = _seed_thread_and_message(admin)
+    with system_context(reason="test.messaging.inbox.seed"):
+        ticket = messaging_models.ThreadedTicket.objects.create(title="Case 42")
+    with actor_context(admin):
+        record_message = ticket.message_post("Internal chatter")
+    record_thread = record_message.thread
+    schema = _schema()
+
+    data = _data(
+        execute_schema(
+            schema,
+            """
+            query Inbox {
+              threads { id }
+              messages { id }
+              threads_aggregate { aggregate { count } }
+              messages_aggregate { aggregate { count } }
+            }
+            """,
+            request=_request(admin),
+        )
+    )
+    thread_ids = {row["id"] for row in data["threads"]}
+    message_ids = {row["id"] for row in data["messages"]}
+    assert channel_thread.sqid in thread_ids
+    assert record_thread.sqid not in thread_ids
+    assert channel_message.sqid in message_ids
+    assert record_message.sqid not in message_ids
+    # The aggregate source is scoped in lockstep with the list.
+    assert data["threads_aggregate"]["aggregate"]["count"] == 1
+    assert data["messages_aggregate"]["aggregate"]["count"] == 1
+
+    by_pk = _data(
+        execute_schema(
+            schema,
+            """
+            query ByPk($thread: String!, $message: String!) {
+              threads_by_pk(id: $thread) { id }
+              messages_by_pk(id: $message) { id }
+            }
+            """,
+            {"thread": record_thread.sqid, "message": record_message.sqid},
+            request=_request(admin),
+        )
+    )
+    # The by-pk route excludes the record thread/message too — not just the list.
+    assert by_pk["threads_by_pk"] is None
+    assert by_pk["messages_by_pk"] is None
+
+
+def test_complete_and_cancel_activity_authorize_through_record_read(messaging_graphql_tables: None) -> None:
+    """Complete/cancel reach the activity through the parent record's read.
+
+    F-v part 3: a user who cannot read the parent record cannot complete or cancel an
+    activity attached to it — the denial surfaces at the record read (``NOT_FOUND``),
+    not the activity's own messaging permission, so an activity id alone never leaks a
+    record's chatter. An authorized actor still completes it.
+    """
+
+    admin = _platform_admin("msg-act-admin")
+    with system_context(reason="test.chatterdemo.part3.seed"):
+        outsider = User.objects.create_user(username="cdc-outsider", email="cdc-outsider@example.com")
+        doc = messaging_models.ChatterDoc.objects.create(title="Gated 1", status="open")
+    schema = _schema()
+
+    scheduled = _data(
+        execute_schema(
+            schema,
+            """
+            mutation Schedule($model: String!, $id: ID!) {
+              schedule_record_activity(
+                input: {model_label: $model, record_id: $id, summary: "Follow up", activity_type: "todo"}
+              ) {
+                error_code
+                activity { id }
+              }
+            }
+            """,
+            {"model": "chatterdemo.ChatterDoc", "id": doc.sqid},
+            request=_request(admin),
+        )
+    )["schedule_record_activity"]
+    assert scheduled["error_code"] is None
+    activity_id = scheduled["activity"]["id"]
+
+    outsider_complete = _data(
+        execute_schema(
+            schema,
+            """
+            mutation Complete($activity: ID!) {
+              complete_record_activity(input: {activity_id: $activity, feedback: "Sneaky"}) {
+                error_code
+                activity { status }
+              }
+            }
+            """,
+            {"activity": activity_id},
+            request=_request(outsider),
+        )
+    )["complete_record_activity"]
+    assert outsider_complete["error_code"] == "NOT_FOUND"
+    assert outsider_complete["activity"] is None
+
+    outsider_cancel = _data(
+        execute_schema(
+            schema,
+            """
+            mutation Cancel($activity: ID!) {
+              cancel_record_activity(input: {activity_id: $activity}) {
+                error_code
+                activity { status }
+              }
+            }
+            """,
+            {"activity": activity_id},
+            request=_request(outsider),
+        )
+    )["cancel_record_activity"]
+    assert outsider_cancel["error_code"] == "NOT_FOUND"
+    assert outsider_cancel["activity"] is None
+
+    # The outsider changed nothing — the activity is still open.
+    with system_context(reason="test.chatterdemo.part3.read"):
+        thread = doc.message_thread(create=False)
+        assert messaging_models.ThreadActivity._base_manager.get(thread=thread).status == "todo"
+
+    completed = _data(
+        execute_schema(
+            schema,
+            """
+            mutation Complete($activity: ID!) {
+              complete_record_activity(input: {activity_id: $activity, feedback: "Real"}) {
+                error_code
+                activity { status feedback }
+              }
+            }
+            """,
+            {"activity": activity_id},
+            request=_request(admin),
+        )
+    )["complete_record_activity"]
+    assert completed["error_code"] is None
+    assert completed["activity"]["status"] == "DONE"
+    assert completed["activity"]["feedback"] == "Real"

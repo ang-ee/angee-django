@@ -258,7 +258,23 @@ class FragmentManager(AngeeManager):
         return fragment
 
 
-class ThreadManager(AngeeManager):
+class ThreadQuerySet(AngeeQuerySet[Any]):
+    """Chainable read scopes for message threads."""
+
+    def inbox(self) -> ThreadQuerySet:
+        """Return channel/inbox threads — those not attached to a record.
+
+        A thread bound to a model row through a ``ThreadAttachment`` is record
+        chatter; it is reachable only through the record-scoped ``record_thread``
+        payload (gated on the parent record's read) and must never surface in the
+        owner-scoped generic ``threads`` list, aggregate, or by-pk lookup. See F-v
+        part 2.
+        """
+
+        return cast(ThreadQuerySet, self.filter(attachments__isnull=True))
+
+
+class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore[misc]
     """Owns thread resolution — the 4-step RFC-5322 priority under a row lock."""
 
     def resolve(
@@ -1196,6 +1212,19 @@ class MessageQuerySet(AngeeQuerySet[Any]):
         """Return messages belonging to one thread."""
 
         return cast(MessageQuerySet, self.filter(thread=thread))
+
+    def inbox(self) -> MessageQuerySet:
+        """Return channel/inbox messages — those not attached to a record thread.
+
+        A message whose thread carries a ``ThreadAttachment`` is record chatter,
+        reachable only through the record-scoped ``record_thread`` payload (gated on
+        the parent record's read); it must never surface in the owner-scoped generic
+        ``messages`` list, aggregate, or by-pk lookup. A message with no thread (an
+        ingested mail whose thread was merged away) is not record-attached and stays
+        in the inbox. See F-v part 2.
+        """
+
+        return cast(MessageQuerySet, self.filter(thread__attachments__isnull=True))
 
     def visible_in_chatter(self) -> MessageQuerySet:
         """Return messages a record's chatter feed shows (drop user notifications)."""

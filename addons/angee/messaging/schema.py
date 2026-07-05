@@ -958,6 +958,9 @@ class MessagingMutation:
         record = activity.attachment.target
         if record is None or not isinstance(record, ThreadedModelMixin):
             return RecordActivityPayload(error="activity target is not threaded", error_code="BAD_RECORD")
+        record = _readable_record(record)
+        if record is None:
+            return RecordActivityPayload(error="record not found", error_code="NOT_FOUND")
         try:
             activity = cast(Any, record).activity_feedback(activity, feedback=input.feedback)
         except PermissionDenied as error:
@@ -987,6 +990,9 @@ class MessagingMutation:
         record = activity.attachment.target
         if record is None or not isinstance(record, ThreadedModelMixin):
             return RecordActivityPayload(error="activity target is not threaded", error_code="BAD_RECORD")
+        record = _readable_record(record)
+        if record is None:
+            return RecordActivityPayload(error="record not found", error_code="NOT_FOUND")
         try:
             activity = cast(Any, record).activity_unlink(activity)
         except PermissionDenied as error:
@@ -1014,6 +1020,30 @@ class MessagingMutation:
             return RecordThreadPayload(error="record not found", error_code="NOT_FOUND")
         ThreadNotification.objects.mark_read_for_record(record, user=user, role=input.role)
         return _record_thread_payload(record, info, role=input.role)
+
+
+def _thread_inbox_queryset(info: strawberry.Info) -> Any:
+    """Scope the generic ``threads`` resource to non-record (channel) threads.
+
+    Record-attached chatter is reachable only through ``record_thread`` — the parent
+    record's read is the one gate — so it is excluded from this owner-scoped inbox
+    list, aggregate, and by-pk lookup. See F-v part 2.
+    """
+
+    del info
+    return Thread.objects.inbox()
+
+
+def _message_inbox_queryset(info: strawberry.Info) -> Any:
+    """Scope the generic ``messages`` resource to non-record (channel) messages.
+
+    Record chatter surfaces only through ``record_thread`` (gated on the parent
+    record's read); it is excluded from this owner-scoped inbox list, aggregate, and
+    by-pk lookup. See F-v part 2.
+    """
+
+    del info
+    return Message.objects.inbox()
 
 
 _CHANNEL_RESOURCE = hasura_model_resource(
@@ -1077,6 +1107,7 @@ _MESSAGE_RESOURCE = hasura_model_resource(
         "sender": public_pk_decoder(Handle),
         "subtype": public_pk_decoder(MessageSubtype),
     },
+    get_queryset=_message_inbox_queryset,
 )
 _THREAD_RESOURCE = hasura_model_resource(
     ThreadType,
@@ -1089,6 +1120,7 @@ _THREAD_RESOURCE = hasura_model_resource(
     insert=False,
     updatable=["subject", "visibility"],
     field_id_decode={"channel": public_pk_decoder(Integration)},
+    get_queryset=_thread_inbox_queryset,
 )
 
 
@@ -1403,15 +1435,40 @@ def _users_from_public_ids(user_ids: list[strawberry.ID]) -> tuple[Any, ...]:
 
 
 def _thread_activity(activity_id: strawberry.ID) -> Any:
-    """Return a scheduled activity by public id."""
+    """Return a scheduled record activity by public id, decoded elevated.
+
+    The decode intentionally bypasses the activity's own read scope: authorization
+    for reaching (and acting on) a record activity rides its parent record's read —
+    the ``record_thread`` gate applied by :func:`_readable_record` in the complete
+    and cancel resolvers — not the activity's own messaging permission. So the decode
+    only resolves the public id; the record read is the gate. See F-v part 3.
+    """
 
     try:
-        activity = instance_from_public_id(ThreadActivity, str(activity_id))
+        activity = instance_from_public_id(
+            ThreadActivity,
+            str(activity_id),
+            queryset=ThreadActivity._base_manager.all(),
+        )
     except ImproperlyConfigured as error:
         raise ValueError(str(error)) from error
     if activity is None:
         raise ValueError("activity not found")
     return activity
+
+
+def _readable_record(record: Any) -> Any | None:
+    """Return ``record`` re-resolved under the request actor's read scope, else None.
+
+    The ``record_thread`` finding-12 gate: record chatter — its thread, messages, and
+    activities — is reachable only when the actor can read the parent record, so an
+    activity reached elevated (see :func:`_thread_activity`) is authorized *through*
+    the record's read. Re-resolving on the actor-scoped default manager (the exact
+    scope :func:`_threaded_record` uses) yields ``None`` when the record is unreadable,
+    which the caller surfaces as ``NOT_FOUND``. See F-v part 3.
+    """
+
+    return type(record)._default_manager.filter(pk=record.pk).first()
 
 
 def _message(message_id: strawberry.ID) -> Any:
