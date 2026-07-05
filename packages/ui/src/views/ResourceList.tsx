@@ -133,8 +133,11 @@ export interface ResourceListProps<TRow extends Row = Row> {
   recordSmartButtons?: readonly RecordSmartButtonDescriptor[];
   /** Hides the built-in "New" button when the host owns creation. */
   hideCreate?: boolean;
-  /** Field values seeded into the create form (create only, not edit) — e.g. a
-   * filtered list creating rows that match its filter. */
+  /** List-scope create seed (create only, not edit): field values a filtered list
+   * seeds new rows with so they match its active filter/facet. This is the
+   * facet-seed owner and forwards to `FormView.defaultValues`. A *fixed per-field*
+   * create default the form itself owns belongs on `Field.defaultValue` instead —
+   * which, unlike this prop, also submits when the field is `readOnly`/`createOnly`. */
   createDefaults?: Record<string, unknown>;
   /** Custom content rendered below the record form for a saved record (not on
    * create) — e.g. an operator status/provisioning panel. See `FormView.recordExtras`. */

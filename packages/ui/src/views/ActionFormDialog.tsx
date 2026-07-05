@@ -1,9 +1,7 @@
 import * as React from "react";
 import { Controller, useForm, useWatch, type Control } from "react-hook-form";
 import { rowPublicId, useModelMetadata } from "@angee/metadata";
-import type { ActionOutcome } from "@angee/refine";
 
-import { errorMessage, useToast } from "../feedback";
 import { DialogForm } from "../fragments/DialogForm";
 import { ErrorBanner } from "../fragments/ErrorBanner";
 import { Button } from "../ui/button";
@@ -16,6 +14,7 @@ import { emptyDialogValue, emptyValueForField } from "./MutationDialog";
 import { relationFieldInfoForResource } from "./model-metadata-defaults";
 import { RelationFieldWidget } from "./RelationFieldWidget";
 import { RelationMultiFieldWidget } from "./RelationMultiFieldWidget";
+import { useActionForm } from "./use-action-form";
 import type { ActionArg, ActionDescriptor, ActionFormContext } from "./page";
 
 export interface ActionFormDialogProps {
@@ -37,7 +36,8 @@ type ArgValues = Record<string, unknown>;
  * the invoking selection/record — then fires the authored mutation via the
  * action's `submit`. It composes the shared owners (`DialogForm`,
  * `FieldDescriptorControl`, `RelationFieldWidget`/`RelationMultiFieldWidget`)
- * with react-hook-form; no hand-rolled `<form>`.
+ * with react-hook-form for collection, and `useActionForm` for the submit
+ * lifecycle; no hand-rolled `<form>`.
  *
  * On an `ok=false` outcome it binds the in-band `validationErrors` to their args
  * and stays open; it closes only on `ok=true`, toasting the success `message`.
@@ -51,7 +51,6 @@ export function ActionFormDialog({
   onSucceeded,
 }: ActionFormDialogProps): React.ReactElement {
   const t = useUiT();
-  const toast = useToast();
   const args = action.args ?? EMPTY_ARGS;
   const argNames = React.useMemo(
     () => new Set(args.map((arg) => arg.name)),
@@ -63,40 +62,31 @@ export function ActionFormDialog({
     // on close), which is what re-seeds the relationList prefill for each open.
     defaultValues: argDefaultValues(args, context),
   });
-  const [serverErrors, setServerErrors] = React.useState<
-    Record<string, readonly string[]>
-  >({});
-  const [formError, setFormError] = React.useState<string | null>(null);
-  const [submitting, setSubmitting] = React.useState(false);
-
-  const clearServerError = React.useCallback((name: string) => {
-    setServerErrors((current) => {
-      if (!current[name]) return current;
-      const { [name]: _removed, ...rest } = current;
-      return rest;
-    });
-  }, []);
+  // `useActionForm` owns the fire→outcome→bind-errors→toast/close lifecycle; this
+  // dialog owns only the value collection (RHF args) and rendering.
+  const actionForm = useActionForm<ArgValues>({
+    submit: (collected) => {
+      // `run` is reached only when `action.submit` is set (guarded below); the
+      // fallback just keeps the return total for the optional descriptor field.
+      if (!action.submit) return { ok: true, message: "" };
+      return action.submit(collected, context);
+    },
+    onSuccess: () => {
+      onSucceeded?.();
+      onOpenChange(false);
+    },
+    fieldNames: argNames,
+  });
+  const {
+    fieldErrors: serverErrors,
+    formError,
+    submitting,
+    clearFieldError: clearServerError,
+  } = actionForm;
 
   const submit = form.handleSubmit(async (collected) => {
-    if (!action.submit || submitting) return;
-    setSubmitting(true);
-    setFormError(null);
-    try {
-      const outcome = await action.submit(collected, context);
-      if (outcome.ok) {
-        if (outcome.message) toast.success({ title: outcome.message });
-        onSucceeded?.();
-        onOpenChange(false);
-        return;
-      }
-      setServerErrors(outcome.validationErrors ?? {});
-      setFormError(formLevelMessage(outcome, argNames) ?? t("error.generic"));
-    } catch (cause) {
-      setServerErrors({});
-      setFormError(errorMessage(cause, t("error.generic")));
-    } finally {
-      setSubmitting(false);
-    }
+    if (!action.submit) return;
+    await actionForm.run(collected);
   });
 
   const footer = (
@@ -365,19 +355,4 @@ function defaultRelationListPrefill(
   if (context.selectedIds.length > 0) return context.selectedIds;
   const id = rowPublicId(context.record);
   return id ? [id] : [];
-}
-
-/** A form-level failure summary: the outcome message plus any validation-error
- * keys that match no argument (so a non-field error is never swallowed). */
-function formLevelMessage(
-  outcome: ActionOutcome,
-  argNames: ReadonlySet<string>,
-): string | null {
-  const unmatched = Object.entries(outcome.validationErrors ?? {})
-    .filter(([field]) => !argNames.has(field))
-    .flatMap(([, messages]) => messages);
-  const parts = [outcome.message, ...unmatched].filter((part): part is string =>
-    Boolean(part),
-  );
-  return parts.length > 0 ? parts.join(" ") : null;
 }

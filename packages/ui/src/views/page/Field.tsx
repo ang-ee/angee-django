@@ -23,6 +23,17 @@ export interface FieldProps {
   /** Editable only while editing; read-only (and never sent) on a create. */
   editOnly?: boolean;
   /**
+   * The value a create form seeds this field with — the per-field owner of a
+   * create default (converging the page-level `createDefaults` seed onto the
+   * field that owns it). On create, `emptyDraft` seeds the field from
+   * `defaultValue` (falling back to the widget's empty value), and the seeded
+   * value is included in the create payload **even when the field is
+   * `readOnly`/`createOnly`** — so a fixed, non-editable field still submits its
+   * default. Precedence: explicit user edit > `defaultValue` > empty value. No
+   * effect on edit; `editOnly` fields are still omitted on create.
+   */
+  defaultValue?: unknown;
+  /**
    * Render (and submit) this field only when the predicate matches the form's
    * current values — the form's discriminated-field mechanism. Mirrors
    * `Action.visibleWhen`, but evaluates against live form values so a `kind`
@@ -61,6 +72,8 @@ export interface FieldDescriptor {
   createOnly?: boolean;
   /** Editable only while editing; read-only (and never sent) on a create. */
   editOnly?: boolean;
+  /** Create-form seed for this field, submitted even when `readOnly`/`createOnly` (see `FieldProps.defaultValue`). */
+  defaultValue?: unknown;
   /** Render and submit this field only when the predicate matches form values (see `FieldProps`). */
   showWhen?: (values: Row) => boolean;
   /** Load the chosen preset onto sibling fields when this field changes (see `FieldProps.prefill`). */

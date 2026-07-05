@@ -30,6 +30,11 @@ export {
   type ActionFormDialogProps,
 } from "./ActionFormDialog";
 export {
+  useActionForm,
+  type UseActionFormOptions,
+  type UseActionFormResult,
+} from "./use-action-form";
+export {
   FieldDescriptorControl,
   type FieldDescriptorControlProps,
 } from "./field-descriptor-control";

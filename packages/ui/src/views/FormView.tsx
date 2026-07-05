@@ -159,7 +159,14 @@ export interface FormViewProps {
   actions?: readonly ActionDescriptor[];
   /** Extra fields returned after save and selected while editing. */
   returning?: readonly string[];
-  /** Initial values merged into create forms after widget empty defaults. */
+  /**
+   * List-scope create seed merged into create forms after widget empty defaults —
+   * the page-level owner (`ResourceList` passes its `createDefaults` here to seed
+   * rows matching the active filter/facet). For a *fixed per-field* create default
+   * a form owns, prefer the field's own `Field.defaultValue`; this prop stays the
+   * owner of list-scope seeding. It wins over `Field.defaultValue` where both name
+   * the same field, since a caller passing it names the invoking list context.
+   */
   defaultValues?: Record<string, unknown>;
   /** Called after a successful save. */
   onSaved?: (row: Row) => void;
@@ -1751,9 +1758,15 @@ function emptyDraft(
 ): Values {
   const draft: Values = {};
   for (const field of fields) {
+    // Seed precedence (a live user edit later overrides all of these): a
+    // page-level `defaultValues` entry (the list-scope create seed a
+    // `ResourceList` passes to match its active filter) wins, then the field's
+    // own `defaultValue`, then the widget's empty value.
     draft[field.name] = Object.hasOwn(defaultValues ?? {}, field.name)
       ? defaultValues?.[field.name]
-      : emptyValue(field);
+      : field.defaultValue !== undefined
+        ? field.defaultValue
+        : emptyValue(field);
   }
   return draft;
 }
@@ -1884,7 +1897,14 @@ function mutationData(
     if (options.writableFields && !options.writableFields.has(field.name)) {
       continue;
     }
-    if (field.readOnly) continue;
+    // A read-only field is normally not submitted. Exception: on create, a field
+    // carrying a `defaultValue` submits its create-seeded default even when it is
+    // `readOnly`/`createOnly` — so a fixed, non-editable field still sends its
+    // value. `editOnly` fields stay excluded on create (mode-locked read-only,
+    // and the create input omits them).
+    const seededDefault =
+      options.isCreate && field.defaultValue !== undefined && !field.editOnly;
+    if (field.readOnly && !seededDefault) continue;
     // A field hidden by its `showWhen` predicate is not part of the record.
     if (!isFieldVisible(field, values)) continue;
     const next = mutationFieldValue(field, values[field.name]);

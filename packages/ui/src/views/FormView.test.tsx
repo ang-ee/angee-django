@@ -1170,6 +1170,82 @@ describe("FormView", () => {
     });
   });
 
+  test("submits a read-only field's defaultValue in the create payload", async () => {
+    renderWithProviders(
+      <FormView
+        resource="notes.Note"
+        fields={[
+          { name: "title", label: "Title", title: true },
+          { name: "kind", label: "Kind", readOnly: true, defaultValue: "skill" },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    // The read-only field never renders an editable control, yet its create-seeded
+    // default rides the payload (F-c) — the seed the page-level `createDefaults`
+    // could only submit by faking the field editable.
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: { title: "", kind: "skill" },
+    });
+  });
+
+  test("lets an explicit user edit override a field defaultValue on create", async () => {
+    renderWithProviders(
+      <FormView
+        resource="notes.Note"
+        fields={[
+          { name: "title", label: "Title", title: true },
+          { name: "kind", label: "Kind", defaultValue: "skill" },
+        ]}
+      />,
+    );
+
+    fireEvent.change(await screen.findByLabelText("Kind"), {
+      target: { value: "task" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    // Precedence: explicit user edit > defaultValue > empty value.
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: { title: "", kind: "task" },
+    });
+  });
+
+  test("ignores a field defaultValue on edit (create-only seed)", async () => {
+    sdkMocks.record = { id: "note-1", title: "First", kind: "existing" };
+    renderWithProviders(
+      <FormView
+        resource="notes.Note"
+        id="note-1"
+        fields={[
+          { name: "title", label: "Title", title: true },
+          { name: "kind", label: "Kind", defaultValue: "skill" },
+        ]}
+      />,
+    );
+
+    const title = await screen.findByLabelText("Title");
+    await waitFor(() => expect((title as HTMLInputElement).value).toBe("First"));
+    // The editable field seeds from the record, never from the create default.
+    await waitFor(() =>
+      expect((screen.getByLabelText("Kind") as HTMLInputElement).value).toBe(
+        "existing",
+      ),
+    );
+
+    fireEvent.change(title, { target: { value: "Renamed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: { title: "Renamed", id: "note-1" },
+    });
+  });
+
   test("submits only fields accepted by the schema create input", async () => {
     sdkMocks.record = null;
     sdkMocks.mutate.mockReset();
