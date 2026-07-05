@@ -6,8 +6,9 @@ strawberry-django maps a Django model field to its GraphQL type through
 field that subclasses a Django field but adds only a semantic declaration keeps
 the base field's wire shape, yet ``auto`` raises ``NotImplementedError`` on the
 subclass because its exact class is absent from the map. Registering the subclass
-beside the base it wraps is the strawberry-django-native fix, run once from the
-GraphQL app's ``ready`` hook.
+beside the base it wraps is the strawberry-django-native fix, applied once when
+``angee.graphql.schema`` loads — before any schema (which is built through that
+module) resolves ``auto``.
 
 Choice and id fields need no entry: strawberry-django resolves ``StateField`` by
 ``isinstance`` against ``django-choices-field``'s ``TextChoicesField``, and the
