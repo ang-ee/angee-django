@@ -14,9 +14,13 @@ export interface UseActionFormOptions<TValues> {
   /**
    * Fire the collected values and return the action's in-band `ActionOutcome`.
    * A thrown (non-domain / GraphQL) failure is caught and surfaced as `formError`;
-   * an `ok=false` outcome binds its `validationErrors` and stays open.
+   * an `ok=false` outcome binds its `validationErrors` and stays open. A `null`
+   * outcome (the shape `extractActionOutcome` returns when the response carries no
+   * in-band envelope) is treated as a form-level failure here, so a consumer
+   * passing `extractActionOutcome(...)` through never has to coalesce its own
+   * `FAILED_OUTCOME` constant. Returning a non-null `ActionOutcome` stays valid.
    */
-  submit: (values: TValues) => ActionOutcome | Promise<ActionOutcome>;
+  submit: (values: TValues) => ActionOutcome | null | Promise<ActionOutcome | null>;
   /**
    * Called once after an `ok=true` outcome (after the success toast) — e.g. reset
    * the fields, reload the record, or close the dialog. The submitted values and
@@ -111,6 +115,13 @@ export function useActionForm<TValues>(
       setFormError(null);
       try {
         const outcome = await submit(values);
+        if (!outcome) {
+          // The mutation transport already reported the failure (no in-band
+          // outcome envelope); surface the fallback instead of a bound field.
+          setFieldErrors(EMPTY_ERRORS);
+          setFormError(fallback);
+          return false;
+        }
         if (outcome.ok) {
           setFieldErrors(EMPTY_ERRORS);
           if (toastSuccess && outcome.message) {
