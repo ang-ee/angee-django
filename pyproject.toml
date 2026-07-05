@@ -24,6 +24,7 @@ dependencies = [
   "pydantic>=2.13",
   "procrastinate[django]>=3.9",
   "croniter>=6.0",
+  "python-dateutil>=2.9",
   "pyjwt[crypto]>=2.12",
   "pyyaml>=6",
   # Comment/format-preserving YAML round-trip: the AddonInstaller's settings.yaml
