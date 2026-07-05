@@ -658,18 +658,23 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
 
 
 def _nested_inserts(lines: HasuraLines) -> list[NestedInsert]:
-    """Return the upstream nested-insert declaration for a lines relation."""
+    """Return the upstream nested-insert declaration for a lines relation.
 
-    field_id_decode = {
-        str(field_name): public_pk_decoder(lines.model._meta.get_field(field_name).related_model)
-        for field_name in lines.public_id_fields
-    }
+    ``public_id_columns`` names the child relation columns exposed as public ids
+    (typed ``ID`` in the generated child input); decoding them to write values
+    stays this backend's concern (:meth:`AngeeHasuraWriteBackend._apply_line_diff`),
+    exactly like the parent write path. ``id_column`` is Angee's public-id column
+    so the child's own sqid is excluded from the writable set, mirroring the
+    parent resource's ``id_column``.
+    """
+
     return [
         NestedInsert(
             relation=lines.field,
             model=lines.model,
-            insertable=list(lines.writable) if lines.writable is not None else None,
-            field_id_decode=field_id_decode or None,
+            insertable=lines.writable,
+            public_id_columns=lines.public_id_fields or None,
+            id_column=PUBLIC_ID_FIELD_NAME,
         )
     ]
 
