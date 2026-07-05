@@ -48,7 +48,8 @@ class ActionResult:
         names the form binds to, and ``NON_FIELD_ERRORS`` (or any key that matches
         no argument) surfaces at form level. Any other exception — or a
         ``ValidationError`` with only non-field messages — yields a message-only
-        failure. ``summary`` is the human banner shown either way.
+        failure. ``summary`` is the human banner shown either way; the raw exception
+        text is never leaked into it.
         """
 
         if isinstance(error, ValidationError) and hasattr(error, "error_dict"):
@@ -56,7 +57,8 @@ class ActionResult:
             for field, messages in error.message_dict.items():
                 key = field if field == NON_FIELD_ERRORS else to_camel_case(field)
                 field_errors[key] = list(messages)
-            return cls(ok=False, message=summary, validation_errors=cast(JSON, field_errors))
+            if field_errors:
+                return cls(ok=False, message=summary, validation_errors=cast(JSON, field_errors))
         return cls(ok=False, message=summary)
 
 

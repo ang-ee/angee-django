@@ -46,7 +46,9 @@ the marker that makes the app an addon), `models.py` owns data and row behavior,
 `mcp_tools.py` owns MCP tool registration, `forms.py` owns Django form
 validation/presentation, `admin.py` owns Django admin presentation, and
 `management/commands/` owns CLI parsing. `apps.py` is optional — an addon needs one
-only to run a Python seam (`ready()` / `import_models()`). Do not add a parallel
+only to run a Python seam (`ready()` / `import_models()`); a model-less addon may
+also keep one so its `AppConfig` docstring is the addon's contract home (an
+incubated addon declaring a face it owns but has not built). Do not add a parallel
 registry, loader, or naming convention until the native Django surface is proven
 insufficient.
 
