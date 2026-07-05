@@ -1,5 +1,6 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, mergeConfig, type UserConfig } from "vite";
@@ -42,12 +43,68 @@ function angeePackagesAt(cwd: string): string[] {
     .sort();
 }
 
+// Generated/vendored trees that never feed the prebundle — skipped so an
+// unchanged source tree yields a stable signature (no needless re-optimize).
+const PREBUNDLE_SKIP_DIRS = new Set(["node_modules", ".git", ".vite", ".cache", ".turbo", "dist"]);
+
+function collectSourceFiles(dir: string, out: string[]): void {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (!PREBUNDLE_SKIP_DIRS.has(entry.name)) collectSourceFiles(join(dir, entry.name), out);
+    } else if (entry.isFile()) {
+      out.push(join(dir, entry.name));
+    }
+  }
+}
+
+// A content signature over the on-disk *source* of the project's `@angee/*`
+// packages. Vite derives its optimizer hash from the lockfile + manifests, never
+// package source — so a workspace edit to a linked `@angee/*` package (same
+// version, same manifest) leaves the prebundle cache valid and Vite serves stale
+// code (the slice-1 live-verify trap). Hashing each package's resolved
+// (symlink-followed) source paths + mtimes lets a source edit invalidate the
+// prebundle while an unchanged, install-stable tree stays cached.
+function angeeSourceSignature(webRoot: string, packages: string[]): string {
+  const hash = createHash("sha1");
+  for (const pkg of packages) {
+    let dir: string;
+    try {
+      dir = realpathSync(join(webRoot, "node_modules", pkg));
+    } catch {
+      continue; // not installed yet — nothing to hash
+    }
+    const files: string[] = [];
+    collectSourceFiles(dir, files);
+    files.sort(); // deterministic, independent of readdir order
+    hash.update(pkg);
+    for (const file of files) hash.update(`${file}:${statSync(file).mtimeMs}`);
+  }
+  return hash.digest("hex");
+}
+
+// Whether to force one dependency re-optimize this start: true when the `@angee/*`
+// source signature differs from the persisted marker (a workspace source edit).
+// Refreshes the marker so the next unchanged start uses the cache again; the
+// marker sits beside — not inside — Vite's `deps/` cache, which `force` clears.
+// Exported for unit coverage of the changed-vs-unchanged decision.
+export function angeePrebundleForce(webRoot: string, packages: string[]): boolean {
+  const marker = join(webRoot, "node_modules", ".vite", "angee-prebundle-source");
+  const signature = angeeSourceSignature(webRoot, packages);
+  const previous = existsSync(marker) ? readFileSync(marker, "utf8") : "";
+  if (signature === previous) return false;
+  mkdirSync(dirname(marker), { recursive: true });
+  writeFileSync(marker, signature);
+  return true;
+}
+
 export interface AngeeWebViteConfig extends UserConfig {
   /**
    * Whether Vite pre-bundles this project's `@angee/*` packages. A downstream
    * project consumes them as installed (built) packages and pre-bundles them
    * (`true`); the in-repo example consumes them as linked workspace source and
-   * excludes them so HMR serves the framework source (`false`).
+   * excludes them so HMR serves the framework source (`false`). When `true`, a
+   * source signature over the packages busts the prebundle on a workspace edit
+   * (`angeePrebundleForce`), so a linked `@angee/*` change is never served stale.
    */
   prebundleAngeePackages: boolean;
   /**
@@ -82,8 +139,11 @@ export function defineAngeeWebViteConfig({
     resolve: {
       alias: [{ find: /^@angee\/gql\//, replacement: gqlRuntimeDir }],
     },
+    // Prebundle installed `@angee/*` packages, busting the cache when their
+    // workspace source changed (`angeePrebundleForce`); a project consuming them
+    // as linked source excludes them so HMR serves the source directly.
     optimizeDeps: prebundleAngeePackages
-      ? { include: angeePackages }
+      ? { include: angeePackages, force: angeePrebundleForce(webRoot, angeePackages) }
       : { exclude: angeePackages },
     server: {
       host: true,
