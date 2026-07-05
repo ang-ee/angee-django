@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -42,27 +43,39 @@ def _render_local_stack(*, frontend_mode: str) -> dict[str, Any]:
     return rendered
 
 
-def _render_dev_stack() -> dict[str, Any]:
-    """Render the dev stack template enough for YAML contract tests."""
+def _render_dev_stack(
+    *,
+    project_path: str = "examples/notes-angee",
+    framework_path: str = ".",
+) -> dict[str, Any]:
+    """Render the dev stack template enough for YAML contract tests.
 
-    text = DEV_TEMPLATE.read_text(encoding="utf-8")
-    replacements = {
+    ``project_path`` / ``framework_path`` are the *logical* copier inputs (the
+    `copier.yml` defaults render the repo-level layout). The template owns the
+    stack-relative source-path translation and the per-job ``--project`` guard;
+    this renderer evaluates the template's own ``{% set %}`` conditionals and
+    inline ``{% if uv_project %}`` blocks so the contract tests pin whatever the
+    template computes for each layout — never a value re-derived here.
+    """
+
+    variables: dict[str, str] = {
         "ANGEE_ROOT": ".angee",
         "django_port": "8100",
         "edge_port": "7001",
-        "framework_path": "..",
+        "framework_path": framework_path,
         "operator_port": "9000",
         "postgres_port": "5433",
         "process_compose_port": "10000",
         "project_name": "notes-angee-dev",
-        "project_path": "../examples/notes-angee",
+        "project_path": project_path,
         "storybook_port": "6006",
         "ui_port": "5173",
         "web_path": "web",
     }
-    text, variables = _render_simple_set_tags(text)
-    replacements.update(variables)
-    for key, value in replacements.items():
+    text = _strip_jinja_comments(DEV_TEMPLATE.read_text(encoding="utf-8"))
+    text = _render_jinja_set_tags(text, variables)
+    text = _render_inline_flag_conditionals(text, variables)
+    for key, value in variables.items():
         text = text.replace(f"{{{{ {key} }}}}", value)
     assert "{{" not in text
     assert "{%" not in text
@@ -127,20 +140,89 @@ def _project_parent_active(frames: list[bool]) -> bool:
     return all(frames)
 
 
-def _render_simple_set_tags(text: str) -> tuple[str, dict[str, str]]:
-    """Evaluate the simple quoted `{% set name = "value" %}` tags these tests need."""
+_JINJA_TAG = re.compile(r"{%\s*(.*?)\s*%}")
 
-    variables: dict[str, str] = {}
+
+def _strip_jinja_comments(text: str) -> str:
+    """Drop `{# … #}` comment blocks the way Jinja does before rendering."""
+
+    return re.sub(r"{#.*?#}", "", text, flags=re.DOTALL)
+
+
+def _render_jinja_set_tags(text: str, variables: dict[str, str]) -> str:
+    """Evaluate the dev template's `{% set %}` lines, binding into ``variables``.
+
+    Handles both the plain ``{% set x = "v" %}`` line and the single-line
+    ``{% if … %}{% set x = … %}{% elif … %}…{% else %}…{% endif %}`` source-path
+    conditionals, so the derived source paths and the ``uv_project`` flag come
+    straight from the template's own expressions.
+    """
+
     output: list[str] = []
     for line in text.splitlines():
         stripped = line.strip()
-        if stripped.startswith("{% set ") and stripped.endswith(" %}"):
-            assignment = stripped.removeprefix("{% set ").removesuffix(" %}")
-            name, _, value = assignment.partition("=")
-            variables[name.strip()] = value.strip().strip('"')
+        if stripped.startswith("{%") and "{% set " in stripped:
+            _apply_set_line(stripped, variables)
             continue
         output.append(line)
-    return "\n".join(output), variables
+    return "\n".join(output)
+
+
+def _apply_set_line(line: str, variables: dict[str, str]) -> None:
+    """Walk one `{% if/elif/else/set/endif %}` line as a mini branch evaluator."""
+
+    active: bool | None = None  # None ⇒ unconditional (a bare `{% set %}` line)
+    branch_taken = False
+    for body in _JINJA_TAG.findall(line):
+        if body.startswith("if "):
+            active = _eval_condition(body[len("if ") :], variables)
+            branch_taken = active
+        elif body.startswith("elif "):
+            active = not branch_taken and _eval_condition(body[len("elif ") :], variables)
+            branch_taken = branch_taken or active
+        elif body == "else":
+            active = not branch_taken
+            branch_taken = True
+        elif body == "endif":
+            active = None
+        elif body.startswith("set ") and active is not False:
+            name, _, expr = body[len("set ") :].partition("=")
+            variables[name.strip()] = _eval_expr(expr, variables)
+
+
+def _render_inline_flag_conditionals(text: str, variables: dict[str, str]) -> str:
+    """Resolve inline `{% if <flag> %}…{% endif %}` command guards by truthiness."""
+
+    return re.sub(
+        r"{%\s*if\s+(\w+)\s*%}(.*?){%\s*endif\s*%}",
+        lambda m: m.group(2) if variables.get(m.group(1)) else "",
+        text,
+    )
+
+
+def _eval_condition(condition: str, variables: dict[str, str]) -> bool:
+    left, _, right = condition.partition("==")
+    return _eval_operand(left, variables) == _eval_operand(right, variables)
+
+
+def _eval_operand(operand: str, variables: dict[str, str]) -> str:
+    operand = operand.strip().removeprefix("(").removesuffix(")").strip()
+    base, sep, filter_name = operand.partition("|")
+    value = _eval_expr(base, variables)
+    if sep and filter_name.strip() == "first":
+        return value[:1]
+    return value
+
+
+def _eval_expr(expr: str, variables: dict[str, str]) -> str:
+    return "".join(_eval_atom(atom, variables) for atom in expr.split("+"))
+
+
+def _eval_atom(atom: str, variables: dict[str, str]) -> str:
+    atom = atom.strip()
+    if atom.startswith('"') and atom.endswith('"'):
+        return atom[1:-1]
+    return variables[atom]
 
 
 def _render_frontend_mode_branches(text: str, frontend_mode: str) -> str:
@@ -278,6 +360,54 @@ def test_dev_stack_mounts_postgres_data_from_generated_stack_dir() -> None:
 
     assert stack["persist"]["pgdata"]["subpath"] == ".angee/pgdata"
     assert stack["services"]["postgres"]["mounts"] == ["bind://./pgdata:/var/lib/postgresql/data"]
+
+
+def test_dev_stack_source_paths_translate_for_the_repo_level_layout() -> None:
+    """Default copier inputs (framework at the stack root) render the repo-level layout.
+
+    The framework is an ancestor of the project root, so ``uv run`` discovers its
+    pyproject by walking up — no ``--project`` — and the stack-relative inputs
+    translate to project-root-relative source paths.
+    """
+
+    stack = _render_dev_stack()  # copier.yml defaults: project=examples/notes-angee, framework=.
+
+    assert stack["sources"]["app"]["path"] == "../examples/notes-angee"
+    assert stack["sources"]["framework"]["path"] == ".."
+    build = stack["jobs"]["build"]
+    assert build["workdir"] == "source://app"
+    assert "--project" not in build["command"]
+    postgres_ready = stack["jobs"]["postgres-ready"]["command"][-1]
+    assert "uv run --extra postgres" in postgres_ready
+
+
+def test_dev_stack_source_paths_translate_for_the_sibling_layout() -> None:
+    """A downstream `.angee/` inside the project, framework a sibling checkout.
+
+    The framework is not an ancestor of the project root, so every ``uv run``
+    gains ``--project <framework>`` and the sibling source path walks up from
+    ANGEE_ROOT.
+    """
+
+    stack = _render_dev_stack(project_path=".", framework_path="../angee-django")
+
+    assert stack["sources"]["app"]["path"] == ".."
+    assert stack["sources"]["framework"]["path"] == "../../angee-django"
+    build = stack["jobs"]["build"]
+    assert build["workdir"] == "source://app"
+    assert build["command"][:4] == ["uv", "run", "--project", "../angee-django"]
+    postgres_ready = stack["jobs"]["postgres-ready"]["command"][-1]
+    assert "uv run --project ../angee-django --extra postgres" in postgres_ready
+
+
+def test_dev_stack_keeps_absolute_source_paths_verbatim() -> None:
+    """Absolute copier inputs are kept as-is (neither `../`-prefixed nor collapsed)."""
+
+    stack = _render_dev_stack(project_path="/srv/project", framework_path="/opt/angee-django")
+
+    assert stack["sources"]["app"]["path"] == "/srv/project"
+    assert stack["sources"]["framework"]["path"] == "/opt/angee-django"
+    assert stack["jobs"]["build"]["command"][:4] == ["uv", "run", "--project", "/opt/angee-django"]
 
 
 def test_dev_stack_keeps_stack_answers_separate_from_workspace_answers() -> None:

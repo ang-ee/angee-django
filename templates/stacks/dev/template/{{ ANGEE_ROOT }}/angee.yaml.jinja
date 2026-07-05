@@ -281,7 +281,12 @@ services:
   # Vite dev server for the SPA. It proxies /graphql/ and /auth/csrf/ to Django,
   # so the SPA and backend share the session cookie across the two ports. The UI
   # port is the workspace's allocation, so an isolated workspace serves on its own
-  # port and the e2e harness (docs/testing/e2e.md) targets the same URL.
+  # port and the e2e harness (docs/testing/e2e.md) targets the same URL. A project
+  # that prebundles the `@angee/*` packages (`prebundleAngeePackages: true`) has
+  # `@angee/app/vite` bust the prebundle on any workspace source edit (a source
+  # mtime signature drives `optimizeDeps.force`), so a linked `@angee/*` change is
+  # never served stale without a manual cache wipe; the in-repo example consumes
+  # them as linked source (excluded, HMR) so this never applies here.
   frontend:
     runtime: local
     workdir: source://app
