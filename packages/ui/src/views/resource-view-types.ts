@@ -22,6 +22,26 @@ import type {
 } from "../toolbars";
 import type { ResourceListSnapshot } from "./resource-view-surface";
 import type { ColumnDescriptor, FacetDescriptor } from "./page";
+import type { Occurrence } from "./CalendarView";
+import type { AnyCalendarWindowSource } from "./use-calendar-window";
+
+/**
+ * The calendar kind's data declaration. The windowed-collection surface fetches
+ * each source per visible window, merges the occurrences, and renders the grid;
+ * `onReschedule` and `onSelectRange` are the drag and quick-create seams.
+ */
+export interface CalendarViewSpec {
+  /** Occurrence sources fetched per visible window and merged onto the grid. */
+  sources: readonly AnyCalendarWindowSource[];
+  /** Persist an editable occurrence's drag/resize; reject to revert the grid. */
+  onReschedule?: (
+    occurrence: Occurrence,
+    start: Date,
+    end: Date | null,
+  ) => void | Promise<unknown>;
+  /** Quick-create seam: a range select seeds and opens the create form. */
+  onSelectRange?: (start: Date, end: Date) => void;
+}
 
 export interface CardActionContext {
   /** Re-pull the collection backing the board/list surface. */
@@ -69,6 +89,9 @@ export interface ListViewProps<TRow extends Row = Row> {
   pageSize?: number;
   /** Initial collection view for the resource list. */
   defaultView?: ResourceViewKind;
+  /** Calendar data + interaction seams. When declared, the Calendar kind is offered
+   * in the switcher and rendered as a windowed-collection surface (no `useList`). */
+  calendar?: CalendarViewSpec;
   /** Group seeded by the resource list. */
   defaultGroup?: ResourceViewGroup | null;
   /** Per-view group defaults seeded by the resource list. */

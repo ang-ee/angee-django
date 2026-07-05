@@ -81,10 +81,17 @@ export {
 export {
   useCalendarWindow,
   calendarWindowBounds,
+  calendarWindowSource,
+  type AnyCalendarWindowSource,
   type CalendarWindowBounds,
   type CalendarWindowSource,
   type UseCalendarWindowResult,
 } from "./use-calendar-window";
+export {
+  CalendarCollectionSurface,
+  type CalendarCollectionSurfaceProps,
+  type CalendarWindowFetch,
+} from "./calendar-collection-surface";
 export { Notebook, type NotebookProps } from "./Notebook";
 export {
   Tree,
@@ -134,6 +141,7 @@ export {
   DrawerResourceList,
   REFINE_CREATE_ID,
   type ResourceListProps,
+  type ResourceListCalendarSpec,
   type ResourceFormActionProps,
   type DrawerResourceListProps,
   type ResourceRecordPlacement,

@@ -3,7 +3,11 @@ import { describe, expect, test } from "vitest";
 import {
   ResourceViewState,
   Filter,
+  RESOURCE_VIEW_KINDS,
+  RESOURCE_VIEW_KIND_CAPABILITIES,
+  availableResourceViewKinds,
   resourceViewFavoritesFromJson,
+  resourceViewKindCapabilities,
   resourceViewSearchToState,
   resourceViewStateToSearch,
 } from "./resource-view-model";
@@ -336,6 +340,97 @@ describe("resource-view model", () => {
       id: "note-1",
     });
     expect([...cleared.selectedIds]).toEqual([]);
+  });
+
+  test("registers the calendar kind with its applicability", () => {
+    expect(RESOURCE_VIEW_KINDS).toEqual(["list", "board", "calendar"]);
+    // The calendar takes only window args in v1: no group-by/pager/columns/filter.
+    expect(RESOURCE_VIEW_KIND_CAPABILITIES.calendar).toEqual({
+      grouping: false,
+      pagination: false,
+      columns: false,
+      filter: false,
+      requiresSources: true,
+    });
+    // list/board applicability is unchanged (both keep filter + pager + group-by).
+    expect(RESOURCE_VIEW_KIND_CAPABILITIES.list.filter).toBe(true);
+    expect(RESOURCE_VIEW_KIND_CAPABILITIES.list.pagination).toBe(true);
+    expect(RESOURCE_VIEW_KIND_CAPABILITIES.board.filter).toBe(true);
+    expect(RESOURCE_VIEW_KIND_CAPABILITIES.board.pagination).toBe(true);
+    // A surface that names no kind keeps every control applicable.
+    expect(resourceViewKindCapabilities(undefined)).toEqual({
+      grouping: true,
+      pagination: true,
+      columns: true,
+      filter: true,
+    });
+  });
+
+  test("offers the calendar kind only where sources are declared", () => {
+    expect(availableResourceViewKinds()).toEqual(["list", "board"]);
+    expect(availableResourceViewKinds({ calendar: false })).toEqual(["list", "board"]);
+    expect(availableResourceViewKinds({ calendar: true })).toEqual([
+      "list",
+      "board",
+      "calendar",
+    ]);
+  });
+
+  test("round-trips calendar mode + anchor through the family codec", () => {
+    const state = ResourceViewState.create({
+      view: "calendar",
+      mode: "week",
+      anchor: "2026-06-15",
+    });
+
+    const search = resourceViewStateToSearch(state);
+    expect(search).toMatchObject({
+      view: "calendar",
+      mode: "week",
+      anchor: "2026-06-15",
+    });
+
+    const roundTrip = resourceViewSearchToState(search);
+    expect(roundTrip.view).toBe("calendar");
+    expect(roundTrip.mode).toBe("week");
+    expect(roundTrip.anchor).toBe("2026-06-15");
+
+    // Router-string parse (not JSON-quoted) restores the same view.
+    const parsed = resourceViewSearchToState({
+      view: "calendar",
+      mode: "day",
+      anchor: "2026-06-15",
+    });
+    expect(parsed.mode).toBe("day");
+    expect(parsed.anchor).toBe("2026-06-15");
+  });
+
+  test("serializes mode/anchor only under the calendar kind", () => {
+    // Defaults (month + today) are omitted even under the calendar kind.
+    expect(resourceViewStateToSearch(ResourceViewState.create({ view: "calendar" })))
+      .toEqual({ view: "calendar" });
+
+    // A list state that happens to hold mode/anchor never serializes them.
+    const listState = ResourceViewState.create({
+      view: "list",
+      mode: "week",
+      anchor: "2026-06-15",
+    });
+    const listSearch = resourceViewStateToSearch(listState);
+    expect("mode" in listSearch).toBe(false);
+    expect("anchor" in listSearch).toBe(false);
+  });
+
+  test("reduces setMode and setAnchor without disturbing list scope", () => {
+    const base = ResourceViewState.create({ view: "calendar", page: 3 });
+
+    const day = base.reduce({ type: "setMode", mode: "day" });
+    expect(day.mode).toBe("day");
+    expect(day.page).toBe(3);
+
+    const moved = base.reduce({ type: "setAnchor", anchor: "2026-07-01" });
+    expect(moved.anchor).toBe("2026-07-01");
+    expect(moved.page).toBe(3);
   });
 
   test("maps view sort onto Hasura resource order", () => {

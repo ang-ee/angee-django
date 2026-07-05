@@ -24,6 +24,18 @@ const FC_VIEW: Record<CalendarViewMode, string> = {
 
 const PLUGINS = [dayGridPlugin, timeGridPlugin, interactionPlugin];
 
+/** Pill tone by occurrence kind: an all-day agenda marker reads soft, a timed
+ *  event solid; a marker with a route target is click-interactive. */
+function eventToneClass(arg: {
+  event: { extendedProps: Record<string, unknown> };
+}): string[] {
+  const occ = arg.event.extendedProps.occurrence as Occurrence | undefined;
+  return [
+    occ?.all_day ? "angee-cal-marker" : "angee-cal-event",
+    ...(occ?.to ? ["angee-cal-linked"] : []),
+  ];
+}
+
 /** A drop or resize FullCalendar hands the surface: the moved event and the
  *  native `revert()` that undoes its optimistic change. */
 interface CalendarChangeArg {
@@ -131,6 +143,10 @@ export default function CalendarSurface({
         selectable={Boolean(onSelectRange)}
         selectMirror
         events={events}
+        // Tone the pill by kind (all-day agenda markers vs timed events) and mark a
+        // marker that carries a source-declared route as click-interactive; the
+        // tokens live in `calendar-surface.css`.
+        eventClassNames={eventToneClass}
         datesSet={(arg) => {
           const key = `${arg.start.getTime()}-${arg.end.getTime()}`;
           if (key === emitted.current) return;

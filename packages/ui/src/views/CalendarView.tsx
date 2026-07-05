@@ -4,6 +4,11 @@ import { ErrorBanner } from "../fragments/ErrorBanner";
 import { LazyBoundary } from "../fragments/LazyBoundary";
 import { LoadingPanel } from "../fragments/LoadingPanel";
 import { useUiT } from "../i18n";
+import type { CalendarViewMode } from "./resource-view-model";
+
+// The window mode is a family fact (`resource-view-model` owns `mode`/`anchor`);
+// the View re-exports the name so occurrence-shape consumers keep one import.
+export type { CalendarViewMode } from "./resource-view-model";
 
 /**
  * One expanded occurrence — the wire shape a server-side occurrence query
@@ -25,9 +30,14 @@ export interface Occurrence {
   all_day: boolean;
   /** `false` whenever the event carries a recurrence — drag/resize is then withheld. */
   editable: boolean;
+  /**
+   * Optional route the marker opens on click — the source's `select` resolves it
+   * (e.g. an event's master detail, an agenda item's attachment). An occurrence
+   * carrying a `to` navigates there via the caller; one without is click-inert
+   * (no false affordance). It is a source-declared projection, not a wire field.
+   */
+  to?: string;
 }
-
-export type CalendarViewMode = "month" | "week" | "day";
 
 /** A visible calendar window: `start` inclusive, `end` exclusive. */
 export interface CalendarWindow {
@@ -61,7 +71,11 @@ export interface CalendarViewProps {
    * opens the create dialog seeding start/end; the View owns no create form.
    */
   onSelectRange?: (start: Date, end: Date) => void;
-  /** Fires when an occurrence is clicked; the caller resolves the master by `event_sqid`. */
+  /**
+   * Fires when an occurrence is clicked. The caller composes the occurrence's
+   * source-declared `to` (navigate when set, ignore when absent) or resolves the
+   * master by `event_sqid`.
+   */
   onEventClick?: (occurrence: Occurrence) => void;
   className?: string;
 }

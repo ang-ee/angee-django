@@ -19,7 +19,12 @@ import {
 import { Select } from "../ui/select";
 import { Pager, type PagerState } from "../ui/pager";
 import { textRoleVariants } from "../ui/text";
+import {
+  SegmentedControl,
+  type SegmentedControlOption,
+} from "../ui/toggle-group";
 import type {
+  CalendarViewMode,
   ResourceViewFavorite,
   ResourceViewFilter,
   ResourceViewGroup,
@@ -30,6 +35,7 @@ import type {
 import {
   RESOURCE_VIEW_GROUP_GRANULARITIES,
   resourceViewGroupsEqual,
+  resourceViewKindCapabilities,
 } from "../views/resource-view-model";
 import { groupFieldLabel } from "../views/resource-view-list-body";
 import {
@@ -55,6 +61,12 @@ export interface ResourceToolbarProps {
   onCreate?: () => void;
   /** Extra controls rendered in the toolbar's leading slot, beside the filter. */
   actions?: ReactNode;
+  /** View-contributed controls (period nav + mode switch + title) for the active
+   * kind — the calendar contributes these; list/board contribute none. */
+  viewControls?: ResourceToolbarViewControls;
+  /** The kinds the switcher offers — derived from the page's declared kinds
+   * (defaults to list + board). */
+  availableViews?: readonly ResourceViewKind[];
   /** Trailing control rendered on the right (e.g. a List/Grid layout switcher). */
   viewSwitcher?: ReactNode;
   onFilterTextChange?: (value: string) => void;
@@ -78,6 +90,21 @@ export interface ResourceToolbarFilterOption {
   label: ReactNode;
   chipLabel?: ReactNode;
   filter: ResourceViewFilter;
+}
+
+/** The typed view-controls seam a kind contributes: mode switch + period nav +
+ * current-period title, rendered with Angee primitives. */
+export interface ResourceToolbarViewControls {
+  /** The active window mode. */
+  mode: CalendarViewMode;
+  /** The mode-switch options (labelled by the contributing kind). */
+  modeOptions: readonly SegmentedControlOption<CalendarViewMode>[];
+  onModeChange: (mode: CalendarViewMode) => void;
+  /** The current-period title (derived from mode + period, no imperative API). */
+  title: ReactNode;
+  onPrev: () => void;
+  onToday: () => void;
+  onNext: () => void;
 }
 
 export interface ResourceToolbarGroupOption {
@@ -130,9 +157,23 @@ export interface ResourceViewSwitcherProps<TView extends string = ResourceViewKi
   view: TView;
   onViewChange?: (view: TView) => void;
   mode?: "resource" | "layout";
+  /** The resource-mode kinds to offer; defaults to list + board. */
+  kinds?: readonly ResourceViewKind[];
   ariaLabel?: string;
   className?: string;
 }
+
+/** Per-kind switcher chrome — the label key + glyph, keyed by kind. */
+const RESOURCE_VIEW_KIND_SWITCHER: Record<
+  ResourceViewKind,
+  { labelKey: string; icon: string }
+> = {
+  list: { labelKey: "resourceToolbar.listView", icon: "list" },
+  board: { labelKey: "resourceToolbar.boardView", icon: "grid-2x2" },
+  calendar: { labelKey: "resourceToolbar.calendarView", icon: "calendar" },
+};
+
+const DEFAULT_SWITCHER_KINDS: readonly ResourceViewKind[] = ["list", "board"];
 
 export function ResourceToolbar({
   pager,
@@ -149,6 +190,8 @@ export function ResourceToolbar({
   createLabel,
   onCreate,
   actions,
+  viewControls,
+  availableViews,
   viewSwitcher,
   onFilterToggle,
   onFilterTextChange,
@@ -167,12 +210,16 @@ export function ResourceToolbar({
 }: ResourceToolbarProps): ReactElement {
   const t = useUiT();
   const resolvedCreateLabel = createLabel ?? t("resourceToolbar.create");
+  // The active kind's applicability gates the data controls: the calendar shows
+  // none of filter/pager/group-by; a surface that names no kind keeps them all.
+  const capabilities = resourceViewKindCapabilities(view);
   const groupControls =
-    groupOptions !== undefined
-    || groupStack !== undefined
-    || group !== undefined
-    || onGroupStackChange !== undefined
-    || onClearGroup !== undefined;
+    capabilities.grouping
+    && (groupOptions !== undefined
+      || groupStack !== undefined
+      || group !== undefined
+      || onGroupStackChange !== undefined
+      || onClearGroup !== undefined);
   const toolbarGroupOptions = groupOptions ?? [];
   const groups = groupControls ? groupStack ?? (group ? [group] : []) : [];
   const activeFilters = filterOptions.filter((option) =>
@@ -193,39 +240,99 @@ export function ResourceToolbar({
         </Button>
       ) : null}
       {actions}
-      <FilterPicker
-        groups={groups}
-        groupControls={groupControls}
-        groupOptions={toolbarGroupOptions}
-        activeFilters={activeFilters}
-        activeFilterIds={activeFilterIds}
-        filterOptions={filterOptions}
-        customFilterFields={customFilterFields}
-        customFilterChips={customFilterChips}
-        favorites={favorites}
-        filterText={filterText}
-        onClearGroup={onClearGroup}
-        onFilterTextChange={onFilterTextChange}
-        onFilterToggle={onFilterToggle}
-        onGroupStackChange={onGroupStackChange}
-        onCustomFilterAdd={onCustomFilterAdd}
-        onCustomFilterRemove={onCustomFilterRemove}
-        onFavoriteSave={onFavoriteSave}
-        onFavoriteSelect={onFavoriteSelect}
-      />
+      {viewControls ? <ResourceViewControls {...viewControls} /> : null}
+      {capabilities.filter ? (
+        <FilterPicker
+          groups={groups}
+          groupControls={groupControls}
+          groupOptions={toolbarGroupOptions}
+          activeFilters={activeFilters}
+          activeFilterIds={activeFilterIds}
+          filterOptions={filterOptions}
+          customFilterFields={customFilterFields}
+          customFilterChips={customFilterChips}
+          favorites={favorites}
+          filterText={filterText}
+          onClearGroup={onClearGroup}
+          onFilterTextChange={onFilterTextChange}
+          onFilterToggle={onFilterToggle}
+          onGroupStackChange={onGroupStackChange}
+          onCustomFilterAdd={onCustomFilterAdd}
+          onCustomFilterRemove={onCustomFilterRemove}
+          onFavoriteSave={onFavoriteSave}
+          onFavoriteSelect={onFavoriteSelect}
+        />
+      ) : null}
       <div className="min-w-2 flex-1" />
-      <Pager
-        {...pager}
-        subject={pagerSubject}
-        unit={pagerTotalUnit}
-        onPageChange={onPageChange}
-        onPageSizeChange={onPageSizeChange}
-      />
+      {capabilities.pagination ? (
+        <Pager
+          {...pager}
+          subject={pagerSubject}
+          unit={pagerTotalUnit}
+          onPageChange={onPageChange}
+          onPageSizeChange={onPageSizeChange}
+        />
+      ) : null}
       {view && onViewChange ? (
-        <ResourceViewSwitcher view={view} onViewChange={onViewChange} />
+        <ResourceViewSwitcher
+          view={view}
+          kinds={availableViews}
+          onViewChange={onViewChange}
+        />
       ) : null}
       {viewSwitcher}
     </section>
+  );
+}
+
+/** The kind-contributed view controls: period nav + current-period title + mode
+ * switch, rendered with Angee primitives. */
+function ResourceViewControls({
+  mode,
+  modeOptions,
+  onModeChange,
+  title,
+  onPrev,
+  onToday,
+  onNext,
+}: ResourceToolbarViewControls): ReactElement {
+  const t = useUiT();
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <div className="flex items-center gap-0.5">
+        <Button
+          type="button"
+          variant="ghost"
+          size="iconSm"
+          aria-label={t("resourceToolbar.periodPrev")}
+          onClick={onPrev}
+        >
+          <Glyph name="chevron-left" className="glyph" />
+        </Button>
+        <Button type="button" variant="secondary" size="sm" onClick={onToday}>
+          {t("resourceToolbar.today")}
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="iconSm"
+          aria-label={t("resourceToolbar.periodNext")}
+          onClick={onNext}
+        >
+          <Glyph name="chevron-right" className="glyph" />
+        </Button>
+      </div>
+      <span className={cn(textRoleVariants({ role: "title" }), "min-w-0 truncate")}>
+        {title}
+      </span>
+      <SegmentedControl
+        size="sm"
+        options={modeOptions}
+        value={mode}
+        onValueChange={onModeChange}
+        aria-label={t("resourceToolbar.periodMode")}
+      />
+    </div>
   );
 }
 
@@ -884,6 +991,7 @@ export function ResourceViewSwitcher<TView extends string = ResourceViewKind>({
   view,
   onViewChange,
   mode = "resource",
+  kinds,
   ariaLabel,
   className,
 }: ResourceViewSwitcherProps<TView>): ReactElement {
@@ -901,18 +1009,11 @@ export function ResourceViewSwitcher<TView extends string = ResourceViewKind>({
           icon: "layout-grid",
         },
       ]
-    : [
-        {
-          value: "list" as TView,
-          label: t("resourceToolbar.listView"),
-          icon: "list",
-        },
-        {
-          value: "board" as TView,
-          label: t("resourceToolbar.boardView"),
-          icon: "grid-2x2",
-        },
-      ];
+    : (kinds ?? DEFAULT_SWITCHER_KINDS).map((kind) => ({
+        value: kind as TView,
+        label: t(RESOURCE_VIEW_KIND_SWITCHER[kind].labelKey),
+        icon: RESOURCE_VIEW_KIND_SWITCHER[kind].icon,
+      }));
   return (
     <div
       className={cn("flex items-center gap-1", className)}

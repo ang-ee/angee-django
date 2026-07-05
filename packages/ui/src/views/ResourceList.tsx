@@ -42,6 +42,9 @@ import {
   type ResourceViewGroup,
   type ResourceViewKind,
 } from "./resource-view-model";
+import type { CalendarViewSpec } from "./resource-view-types";
+import type { Occurrence } from "./CalendarView";
+import type { AnyCalendarWindowSource } from "./use-calendar-window";
 import {
   parsePageActions,
   parsePageColumns,
@@ -60,6 +63,25 @@ import { RecordPager, type RecordNavigation } from "./RecordPager";
 
 /** Where the open record's form renders relative to the list. */
 export type ResourceRecordPlacement = "inline" | "drawer";
+
+/**
+ * The calendar declaration a resource page hands `ResourceList`: the occurrence
+ * sources, the reschedule handler, and how a selected range seeds the create form.
+ * `ResourceList` owns the routed-create wiring — a range select seeds the form
+ * defaults and opens create through the same seam as the "New" button.
+ */
+export interface ResourceListCalendarSpec {
+  /** Occurrence sources fetched per visible window and merged onto the grid. */
+  sources: readonly AnyCalendarWindowSource[];
+  /** Persist an editable occurrence's drag/resize; reject to revert the grid. */
+  onReschedule?: (
+    occurrence: Occurrence,
+    start: Date,
+    end: Date | null,
+  ) => void | Promise<unknown>;
+  /** Map a selected range to the create form's seed values (quick-create). */
+  createDefaults?: (start: Date, end: Date) => Record<string, unknown>;
+}
 
 /** Record id sentinel that tells `ResourceList` to render a blank create form. */
 export const REFINE_CREATE_ID = "new";
@@ -124,6 +146,10 @@ export interface ResourceListProps<TRow extends Row = Row> {
   defaultView?: ResourceViewKind;
   defaultGroup?: ResourceViewGroup | null;
   defaultGroups?: ResourceViewDefaultGroups;
+  /** Calendar sources + interaction seams. When declared, the Calendar kind is
+   * offered in the switcher and rendered as a windowed-collection surface;
+   * quick-create rides `ResourceList`'s routed-create seam. */
+  calendar?: ResourceListCalendarSpec;
   fields?: ListViewProps<TRow>["fields"];
   /** List component used for the collection surface. Defaults to the lean flat list. */
   list?: ListComponent<TRow>;
@@ -360,6 +386,7 @@ function ResourceListBody<TRow extends Row = Row>({
   defaultView,
   defaultGroup,
   defaultGroups,
+  calendar,
   fields,
   list: ListRenderer = ListView as ListComponent<TRow>,
   returning,
@@ -422,6 +449,10 @@ function ResourceListBody<TRow extends Row = Row>({
     React.useState<ListViewNavigationScope | null>(null);
   const [pendingNavigation, setPendingNavigation] =
     React.useState<PendingRecordNavigation | null>(null);
+  // The calendar's range-select seeds the create form; it lives here (the create
+  // owner) so quick-create rides the same routed-create seam as the "New" button.
+  const [quickCreateDefaults, setQuickCreateDefaults] =
+    React.useState<Record<string, unknown> | undefined>(undefined);
   const listStateRef = React.useRef<ResourceListSnapshot<TRow> | null>(null);
 
   // A record is open when an id is selected or a create was requested.
@@ -455,6 +486,7 @@ function ResourceListBody<TRow extends Row = Row>({
     if (open) return;
     setRecordNavigationScope(null);
     setPendingNavigation(null);
+    setQuickCreateDefaults(undefined);
   }, [open]);
 
   const handleSaved = React.useCallback(
@@ -467,6 +499,27 @@ function ResourceListBody<TRow extends Row = Row>({
   const handleCreateRecord = React.useCallback(() => {
     handleSelectRecord?.(null);
   }, [handleSelectRecord]);
+  const handleCalendarSelectRange = React.useCallback(
+    (start: Date, end: Date) => {
+      setQuickCreateDefaults(calendar?.createDefaults?.(start, end));
+      handleSelectRecord?.(null);
+    },
+    [calendar, handleSelectRecord],
+  );
+  // The surface-level calendar spec: sources + reschedule from the page, the
+  // range-select seam wired to the routed create (only when a create form exists).
+  const canQuickCreate = hasRecordSurface && !hideCreate && Boolean(handleSelectRecord);
+  const listCalendar = React.useMemo<CalendarViewSpec | undefined>(
+    () =>
+      calendar
+        ? {
+            sources: calendar.sources,
+            onReschedule: calendar.onReschedule,
+            onSelectRange: canQuickCreate ? handleCalendarSelectRange : undefined,
+          }
+        : undefined,
+    [calendar, canQuickCreate, handleCalendarSelectRange],
+  );
   const handleRowClick = React.useCallback(
     (row: TRow) => {
       const id = rowPublicId(row);
@@ -570,6 +623,7 @@ function ResourceListBody<TRow extends Row = Row>({
       resource={resource}
       columns={resolvedColumns}
       {...listRenderProps}
+      calendar={listCalendar}
       onCreate={
         hasRecordSurface && !hideCreate && handleSelectRecord
           ? handleCreateRecord
@@ -598,7 +652,7 @@ function ResourceListBody<TRow extends Row = Row>({
       groups={resolvedFormGroups}
       actions={resolvedFormActions}
       {...formRenderProps}
-      defaultValues={resolvedCreating ? createDefaults : undefined}
+      defaultValues={resolvedCreating ? quickCreateDefaults ?? createDefaults : undefined}
       recordExtras={resolvedCreating ? undefined : recordExtras}
       recordTabs={resolvedCreating ? undefined : recordTabs}
       onSaved={handleSaved}

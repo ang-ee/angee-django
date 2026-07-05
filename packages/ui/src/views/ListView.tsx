@@ -24,11 +24,13 @@ import {
 import {
   RESOURCE_VIEW_KINDS,
   Filter,
+  availableResourceViewKinds,
   resourceViewGroupsEqual,
   type ResourceViewDefaultGroups,
   type ResourceViewGroup,
   type ResourceViewKind,
 } from "./resource-view-model";
+import { CalendarCollectionSurface } from "./calendar-collection-surface";
 import { DeletePreviewDialog } from "./DeletePreviewDialog";
 import {
   useClientResourceViewSurface,
@@ -79,6 +81,7 @@ export type {
   ListColumn,
 } from "./resource-view-list-body";
 export type {
+  CalendarViewSpec,
   CardActionContext,
   ListEmptyAction,
   ListEmptyContent,
@@ -142,6 +145,7 @@ function ListViewBody<TRow extends Row = Row>({
   pageSize,
   defaultGroup,
   defaultGroups,
+  calendar,
   onCreate,
   createLabel,
   onRowClick,
@@ -158,6 +162,13 @@ function ListViewBody<TRow extends Row = Row>({
 }): React.ReactElement {
   const t = useUiT();
   const resolvedEmptyContent = emptyContent ?? t("list.empty");
+  // The Calendar kind is offered only where the page declares occurrence sources;
+  // the switcher's options derive from that (list + board always).
+  const calendarAvailable = (calendar?.sources.length ?? 0) > 0;
+  const availableViews = React.useMemo(
+    () => availableResourceViewKinds({ calendar: calendarAvailable }),
+    [calendarAvailable],
+  );
   const modelMetadata = useModelMetadata(resource);
   const resolvedColumns = React.useMemo(
     () => columnsWithMetadataDefaults(columns, modelMetadata),
@@ -295,6 +306,7 @@ function ListViewBody<TRow extends Row = Row>({
       resolvedColumns={resolvedColumns}
       modelMetadata={modelMetadata}
       resourceView={resourceView}
+      availableViews={availableViews}
       effectiveGroupStack={effectiveGroupStack}
       clientRowModel={clientRowModel}
       groupedListMode={groupedListMode}
@@ -319,9 +331,24 @@ function ListViewBody<TRow extends Row = Row>({
     />
   );
   // A client resource fetches once and pages in the browser; a server resource
-  // queries Hasura per page. The two surface hooks call different data hooks, so
-  // the choice is a component boundary (never a conditional hook): a metadata
-  // flip remounts the matching surface component rather than reordering hooks.
+  // queries Hasura per page; the calendar fetches a window over authored sources.
+  // Each data path calls different hooks, so the choice is a component boundary
+  // (never a conditional hook): a view/metadata flip remounts the matching surface
+  // rather than reordering hooks. The calendar surface never calls `useList`.
+  if (calendar && resourceView.state.view === "calendar" && calendarAvailable) {
+    return (
+      <CalendarCollectionSurface
+        resource={resource}
+        resourceView={resourceView}
+        calendar={calendar}
+        availableViews={availableViews}
+        createLabel={createLabel}
+        onCreate={onCreate}
+        toolbarActions={toolbarActions}
+        className={className}
+      />
+    );
+  }
   if (clientRowModel) {
     return <ClientSurfaceBody<TRow> surfaceProps={surfaceProps}>{content}</ClientSurfaceBody>;
   }
@@ -363,6 +390,7 @@ interface ListViewContentProps<TRow extends Row> {
   resolvedColumns: readonly ColumnDescriptor<TRow>[];
   modelMetadata: ReturnType<typeof useModelMetadata>;
   resourceView: ResourceViewContextValue;
+  availableViews: readonly ResourceViewKind[];
   effectiveGroupStack: readonly ResourceViewGroup[];
   clientRowModel: boolean;
   groupedListMode: boolean;
@@ -392,6 +420,7 @@ function ListViewContent<TRow extends Row = Row>({
   resolvedColumns,
   modelMetadata,
   resourceView,
+  availableViews,
   effectiveGroupStack,
   clientRowModel,
   groupedListMode,
@@ -524,6 +553,7 @@ function ListViewContent<TRow extends Row = Row>({
   );
   const toolbar = useResourceToolbarProps({
     actions: toolbarActions,
+    availableViews,
     pager: toolbarPager,
     view: resourceView.state.view,
     group: effectiveGroupStack[0] ?? null,

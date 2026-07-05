@@ -33,7 +33,9 @@ export function calendarWindowBounds(window: CalendarWindow): CalendarWindowBoun
  * One occurrence source for {@link useCalendarWindow}: the authored query, how a
  * window maps to its variables, and how to read the occurrence array out of its
  * result. The query and its shape live downstream, so the source declares both
- * here rather than the hook probing the result.
+ * here rather than the hook probing the result. A source's `select` may also map
+ * its rows onto occurrences carrying a route `to` (see {@link Occurrence.to}), so
+ * marker navigation is source-declared rather than page-woven.
  */
 export interface CalendarWindowSource<TDocument extends AuthoredDocument> {
   /** The authored occurrence query returning the occurrence wire shape. */
@@ -50,6 +52,25 @@ export interface CalendarWindowSource<TDocument extends AuthoredDocument> {
   dataProviderName?: string;
   /** Skip the fetch while false (e.g. before a range is known). */
   enabled?: boolean;
+}
+
+/**
+ * A calendar source with its document type erased. A calendar surface fetches a
+ * stable, page-declared *set* of sources whose element documents differ, which no
+ * single generic can name — each source stays internally typed where it is
+ * authored (compose {@link calendarWindowSource} to widen one into the set).
+ */
+export type AnyCalendarWindowSource = CalendarWindowSource<AuthoredDocument>;
+
+/**
+ * Widen a typed source into the erased set type, keeping its `variables`/`select`
+ * checked against `TDocument` at the authoring site. The erasure boundary is here,
+ * once, so a page never hand-casts.
+ */
+export function calendarWindowSource<TDocument extends AuthoredDocument>(
+  source: CalendarWindowSource<TDocument>,
+): AnyCalendarWindowSource {
+  return source as AnyCalendarWindowSource;
 }
 
 export interface UseCalendarWindowResult {
