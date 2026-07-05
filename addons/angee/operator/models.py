@@ -14,7 +14,7 @@ read or written. They are type anchors, nothing more.
 
 from __future__ import annotations
 
-from angee.base.models import AngeeModel
+from angee.base.models import AngeeModel, role_anchor
 
 
 class OperatorConnection(AngeeModel):
@@ -28,17 +28,11 @@ class OperatorConnection(AngeeModel):
         rebac_resource_type = "operator/connection"
 
 
-class OperatorRole(AngeeModel):
-    """Table-less REBAC type anchor for the ``operator/role`` namespace.
+OperatorRole = role_anchor("operator/role")
+"""Table-less REBAC type anchor for the ``operator/role`` namespace.
 
-    The const-backed ``admin`` relation on ``operator/role`` (``permissions.zed``)
-    needs a model carrying its ``rebac_resource_type`` to satisfy ``rebac.E009``,
-    so a platform admin resolves as an effective operator-admin through the const.
-    """
-
-    runtime = True
-
-    class Meta:
-        abstract = True
-        managed = False
-        rebac_resource_type = "operator/role"
+The const-backed ``admin`` relation on ``operator/role`` (``permissions.zed``)
+registers through this anchor's ``rebac_resource_type`` (``rebac.E009``), so a
+platform admin resolves as an effective operator-admin through the const. See
+:func:`angee.base.models.role_anchor`.
+"""

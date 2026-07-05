@@ -65,7 +65,7 @@ from rebac.managers import RebacManager
 from angee.base.actors import actor_user_id
 from angee.base.fields import ImplClassField, StateField
 from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
+from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, role_anchor
 from angee.storage import exceptions
 from angee.storage.backends import DOWNLOAD_URL_TTL_SECONDS, StorageBackend
 from angee.storage.signals import file_finalized
@@ -1195,24 +1195,13 @@ class FileAttachment(SqidMixin, AuditMixin, AngeeModel):
         return self.label or f"attachment:{self.file_id}"
 
 
-class StorageRole(AngeeModel):
-    """Table-less REBAC type anchor for the ``storage/role`` namespace.
+StorageRole = role_anchor("storage/role")
+"""Table-less REBAC type anchor for the ``storage/role`` namespace.
 
-    The const-backed ``admin`` relation on ``storage/role`` (``permissions.zed``)
-    needs a model carrying its ``rebac_resource_type`` to satisfy the
-    ``rebac.E009`` system check — the same anchor operator's connection uses. The
-    row is never created or read; it exists only to register the type so a
-    platform admin resolves as an effective storage-admin through the const.
-    """
-
-    runtime = True
-
-    class Meta:
-        """Django model options for the storage role anchor."""
-
-        abstract = True
-        managed = False
-        rebac_resource_type = "storage/role"
+The const-backed ``admin`` relation on ``storage/role`` (``permissions.zed``)
+registers through this anchor's ``rebac_resource_type`` (``rebac.E009``); the row
+is never created or read. See :func:`angee.base.models.role_anchor`.
+"""
 
 
 def _mime_row(file_model: type[Any], mime_type: str) -> Any | None:

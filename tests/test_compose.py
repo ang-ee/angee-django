@@ -18,7 +18,7 @@ import angee.compose as compose_package
 import angee.compose.runtime as runtime_module
 from angee.base.fields import StateField
 from angee.base.mixins import HistoryMixin, RevisionMixin
-from angee.base.models import AngeeManager, AngeeModel
+from angee.base.models import AngeeManager, AngeeModel, role_anchor
 from angee.base.transitions import StateTransitions, save_state, transition
 from angee.compose.appgraph import AppGraph
 from angee.compose.apps import ComposeConfig
@@ -311,6 +311,40 @@ def test_runtime_renders_iam_user_sources(tmp_path: Path) -> None:
     assert "_UserMeta = getattr(AbstractUser, 'Meta', object)" in user_source
     assert "class Meta(_UserMeta):" in user_source
     assert "swappable = 'AUTH_USER_MODEL'" not in user_source
+
+
+def test_role_anchor_factory_pins_the_hand_rolled_anchor_shape() -> None:
+    """``role_anchor`` emits the abstract, table-less anchor the adopters declared by hand."""
+
+    anchor = role_anchor("storage/role")
+
+    assert anchor.__name__ == "StorageRole"
+    assert anchor.__module__ == __name__
+    assert anchor._meta.abstract is True
+    assert anchor._meta.managed is False
+    assert anchor._meta.rebac_resource_type == "storage/role"
+    assert anchor.__dict__["runtime"] is True
+    assert issubclass(anchor, AngeeModel)
+    # The name derives from the resource type; a symbol that differs is overridable.
+    assert role_anchor("operator/role").__name__ == "OperatorRole"
+    assert role_anchor("tags/role", name="Role").__name__ == "Role"
+
+
+def test_role_anchor_emits_the_hand_rolled_runtime_source(tmp_path: Path) -> None:
+    """A ``role_anchor`` model composes into the same concrete runtime an addon shipped by hand."""
+
+    module = ModuleType("tests.role_anchor_probe")
+    probe = role_anchor("tests/role", name="ProbeRole", module=module.__name__)
+    setattr(module, "ProbeRole", probe)
+
+    source = Runtime((), runtime_dir=tmp_path / "runtime")._models_source("tests", (probe,))
+
+    assert "from tests.role_anchor_probe import ProbeRole as AbstractProbeRole" in source
+    assert "_ProbeRoleMeta = getattr(AbstractProbeRole, 'Meta', object)" in source
+    assert "class ProbeRole(AbstractProbeRole):" in source
+    assert "class Meta(_ProbeRoleMeta):" in source
+    assert "abstract = False" in source
+    assert "rebac_resource_type = 'tests/role'" in source
 
 
 def test_django_reads_inherited_meta_defaults() -> None:

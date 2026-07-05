@@ -15,8 +15,9 @@ from rebac import system_context
 
 from angee.addons import AddonContract
 from angee.base.models import AngeeModel
-from angee.resources.entries import EntryGraph, LoadResult, ResourceEntry
+from angee.resources.entries import EntryGraph, GrantRow, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
+from angee.resources.grants import _grant_tuple
 from angee.resources.loader import build_resource
 from angee.resources.models import Resource
 from angee.resources.tiers import ResourceTier
@@ -1423,6 +1424,209 @@ def test_resource_adoption_rejects_ambiguous_unique_fields(
         with connection.schema_editor() as schema_editor:
             for model in reversed(models_to_create):
                 schema_editor.delete_model(model)
+
+
+def test_resource_entry_normalizes_and_validates_grant_kind(tmp_path: Path) -> None:
+    """A ``kind = "grants"`` entry normalizes; an unknown kind fails fast."""
+
+    grant_entry = ResourceEntry.from_declaration(
+        addon(tmp_path),
+        "demo",
+        {"path": "grants/010_demo.yaml", "kind": "grants"},
+    )
+    assert grant_entry.kind == "grants"
+
+    default_entry = ResourceEntry.from_declaration(addon(tmp_path), "demo", {"path": "resources/010_base.thing.yaml"})
+    assert default_entry.kind == "rows"
+
+    with pytest.raises(ImproperlyConfigured, match="Unknown resource entry kind"):
+        ResourceEntry.from_declaration(addon(tmp_path), "demo", {"path": "grants/010_demo.yaml", "kind": "roles"})
+
+
+def test_grant_rows_reject_malformed_records(tmp_path: Path) -> None:
+    """Grant rows require exactly resource/relation/subject and no model."""
+
+    grants_dir = tmp_path / "grants"
+    grants_dir.mkdir()
+    manifest = {"master": (), "install": (), "demo": ({"path": "grants/010_demo.yaml", "kind": "grants"},)}
+
+    (grants_dir / "010_demo.yaml").write_text(
+        '- resource: "angee/role:admin"\n  relation: "member"\n',
+        encoding="utf-8",
+    )
+    missing = ResourceEntry.from_declaration(addon(tmp_path, manifest=manifest), "demo", manifest["demo"][0])
+    with pytest.raises(ResourceLoadError, match="missing subject"):
+        missing.read_grant_rows()
+
+    (grants_dir / "010_demo.yaml").write_text(
+        '- resource: "angee/role:admin"\n  relation: "member"\n  subject: "iam.alice"\n  caveat: "x"\n',
+        encoding="utf-8",
+    )
+    unknown = ResourceEntry.from_declaration(addon(tmp_path, manifest=manifest), "demo", manifest["demo"][0])
+    with pytest.raises(ResourceLoadError, match="unknown field.*caveat"):
+        unknown.read_grant_rows()
+
+    (grants_dir / "010_demo.yaml").write_text(
+        "_meta:\n  model: base.Thing\nrows:\n"
+        '  - resource: "angee/role:admin"\n    relation: "member"\n    subject: "iam.alice"\n',
+        encoding="utf-8",
+    )
+    with_model = ResourceEntry.from_declaration(addon(tmp_path, manifest=manifest), "demo", manifest["demo"][0])
+    with pytest.raises(ResourceLoadError, match="grants entry declares no model"):
+        with_model.read_grant_rows()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_grant_tuple_resolves_xref_const_role_and_wildcard(tmp_path: Path) -> None:
+    """A grant row resolves a row xref, a const-id literal, a role subject-set, and the wildcard."""
+
+    from rebac import ObjectRef, SubjectRef, anonymous_actor, to_object_ref
+
+    class GrantDoc(AngeeModel):
+        """Row addressed by xref from the resource side of a grant."""
+
+        title = models.CharField(max_length=40)
+
+        class Meta:
+            """Django model options for the grant-resource test model."""
+
+            app_label = "base"
+            rebac_resource_type = "base/grant-doc"
+
+    class GrantResolverLedger(Resource):
+        """Concrete resource ledger for grant-resolution tests."""
+
+        class Meta(Resource.Meta):
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+            abstract = False
+
+    models_to_create = (GrantDoc, GrantResolverLedger)
+    with connection.schema_editor() as schema_editor:
+        for model in models_to_create:
+            schema_editor.create_model(model)
+    aliases = {"tests.resource_addon": "tests.resource_addon", "resource_addon": "tests.resource_addon"}
+    try:
+        with system_context(reason="grant resolver setup"):
+            doc = GrantDoc.objects.create(title="Doc")
+        GrantResolverLedger.objects.create(
+            source_addon="tests.resource_addon",
+            source_path="grants/010_demo.yaml",
+            tier=Resource.Tier.DEMO,
+            xref="doc",
+            content_hash="sha256:x",
+            target_model=GrantDoc._meta.label,
+            target_id=doc.public_id,
+        )
+        entry = ResourceEntry.from_declaration(
+            addon(tmp_path), "demo", {"path": "grants/010_demo.yaml", "kind": "grants"}
+        )
+
+        def _row(resource: str, relation: str, subject: str) -> GrantRow:
+            return GrantRow(entry=entry, resource=resource, relation=relation, subject=subject, index=1)
+
+        # Grants resolve under the loader's elevated context; mirror it here.
+        with system_context(reason="grant resolver assertions"):
+            row_xref = _grant_tuple(_row("resource_addon.doc", "direct_member", "*"), GrantResolverLedger, aliases)
+            assert row_xref.resource == to_object_ref(doc)
+            assert row_xref.relation == "direct_member"
+            assert row_xref.subject == anonymous_actor()
+
+            literal = _grant_tuple(
+                _row("angee/role:admin", "member", "products/role:mgr#member"), GrantResolverLedger, aliases
+            )
+            assert literal.resource == ObjectRef("angee/role", "admin")
+            assert literal.subject == SubjectRef(ObjectRef("products/role", "mgr"), "member")
+    finally:
+        with connection.schema_editor() as schema_editor:
+            for model in reversed(models_to_create):
+                schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_grant_fixtures_load_and_are_idempotent(tmp_path: Path) -> None:
+    """A grants-tier fixture materializes REBAC tuples idempotently through the loader."""
+
+    from django.contrib.auth import get_user_model
+    from django.core.management import call_command
+    from rebac import to_subject_ref
+    from rebac.models import active_relationship_model
+
+    class GrantLoadLedger(Resource):
+        """Concrete resource ledger for grant-load tests."""
+
+        class Meta(Resource.Meta):
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+            abstract = False
+
+    user_model = get_user_model()
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(GrantLoadLedger)
+    # Grants are validated against the composed REBAC schema on write.
+    call_command("rebac", "sync", verbosity=0)
+    try:
+        with system_context(reason="grant load setup"):
+            alice = user_model.objects.create(username="grant-alice")
+        GrantLoadLedger.objects.create(
+            source_addon="tests.resource_addon",
+            source_path="grants/010_demo.yaml",
+            tier=Resource.Tier.DEMO,
+            xref="alice",
+            content_hash="sha256:x",
+            target_model=user_model._meta.label,
+            target_id=alice.public_id,
+        )
+        grants_dir = tmp_path / "grants"
+        grants_dir.mkdir()
+        (grants_dir / "010_demo.yaml").write_text(
+            '- resource: "angee/role:admin"\n'
+            '  relation: "member"\n'
+            '  subject: "resource_addon.alice"\n'
+            '- resource: "storage/drive:demo-drive"\n'
+            '  relation: "editor"\n'
+            '  subject: "auth/user:*"\n',
+            encoding="utf-8",
+        )
+        owner = addon(
+            tmp_path,
+            manifest={
+                "master": (),
+                "install": (),
+                "demo": ({"path": "grants/010_demo.yaml", "kind": "grants"},),
+            },
+        )
+
+        result = GrantLoadLedger.objects.load_addons((owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True)
+
+        assert result.created == 2
+        assert result.skipped == 0
+        relationship_model = active_relationship_model()
+        alice_subject = to_subject_ref(alice)
+        with system_context(reason="grant load assertions"):
+            assert relationship_model._default_manager.filter(
+                resource_type="angee/role",
+                resource_id="admin",
+                relation="member",
+                subject_type=alice_subject.subject_type,
+                subject_id=alice_subject.subject_id,
+            ).exists()
+            assert relationship_model._default_manager.filter(
+                resource_type="storage/drive",
+                resource_id="demo-drive",
+                relation="editor",
+                subject_type="auth/user",
+                subject_id="*",
+            ).exists()
+
+        second = GrantLoadLedger.objects.load_addons((owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True)
+        assert second.created == 0
+        assert second.skipped == 2
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(GrantLoadLedger)
 
 
 def _write_resource_files(tmp_path: Path) -> Addon:
