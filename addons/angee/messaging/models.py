@@ -911,21 +911,27 @@ class ThreadAttachment(SqidMixin, AuditMixin, AngeeModel):
 
     @property
     def target_model_label(self) -> str:
-        """Return the ``app_label.ModelName`` label of the attached target's model."""
+        """Return the ``app_label.ModelName`` label of the attached target's model.
 
-        model_class = self.content_type.model_class()
+        Resolves the model from the process-cached ``ContentType`` by id
+        (``ContentType.objects.get_for_id``), so a list of rows projects the pointer
+        without a per-row ``content_type`` join.
+        """
+
+        model_class = ContentType.objects.get_for_id(self.content_type_id).model_class()
         return model_class._meta.label if model_class is not None else ""
 
     @property
     def target_public_id(self) -> str:
         """Return the attached target's stable public id (its sqid).
 
-        Encoded from the stored ``content_type``/``object_id`` alone, so the parent
-        pointer resolves without loading — or re-gating — the target row; navigating
-        the pointer re-gates through the target's own record read.
+        Encoded from the stored ``content_type``/``object_id`` alone — via the
+        process-cached ``ContentType.objects.get_for_id`` — so the parent pointer
+        resolves without loading (or re-gating, or per-row joining) the target row;
+        navigating the pointer re-gates through the target's own record read.
         """
 
-        model_class = self.content_type.model_class()
+        model_class = ContentType.objects.get_for_id(self.content_type_id).model_class()
         if model_class is None:
             return ""
         return public_id_for(model_class, self.object_id)

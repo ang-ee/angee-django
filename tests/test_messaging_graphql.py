@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Iterator
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +12,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.db import connection
-from django.test import RequestFactory
+from django.test import RequestFactory, override_settings
 from rebac import (
     RelationshipTuple,
     actor_context,
@@ -2035,6 +2035,100 @@ def test_record_chatter_activity_lifecycle(messaging_graphql_tables: None) -> No
         "message_count": 1,
         "messages": [{"preview": "Activity done: Call customer\n\nCustomer confirmed."}],
     }
+
+
+@pytest.mark.parametrize("storage", ["denormalized", "registry"])
+def test_activity_agenda_bare_assignee_gets_pointer_not_parent(
+    messaging_graphql_tables: None,
+    storage: str,
+) -> None:
+    """The agenda hands a bare assignee its own activity + record pointer, never the parent (§3.8).
+
+    ``activity_agenda`` is the first GraphQL surface delivering a ``ThreadActivity`` to an
+    assignee who holds NO grant on the parent record: the activities are scheduled elevated
+    (``created_by`` is the record owner, not the assignee), so the actor reaches its own
+    rows only through the ``messaging/thread_activity.read`` ``user`` (assignee) arm. The
+    projection must give the subject the activity's own fields, its own identity, and the
+    minimal record pointer (label + model_label + record_id, ordered by due date across
+    records) — and MUST NOT leak the parent thread (subject / message counts) or the
+    attachment metadata, which a to-one traversal resolves unguarded through ``_base_manager``.
+    That over-grant is closed structurally: the narrowed ``AgendaActivityType`` has no
+    ``thread`` field and its ``attachment`` is a minimal pointer with no ``metadata``, so
+    selecting either is a schema error. Verified in both REBAC storage modes — the
+    registry-only translation is exercised alongside the bare denormalized default.
+    """
+
+    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
+        owner = User.objects.create_user(username=f"agenda-owner-{storage}", email=f"ao-{storage}@example.com")
+        assignee = User.objects.create_user(
+            username=f"agenda-assignee-{storage}",
+            email=f"aa-{storage}@example.com",
+        )
+        with actor_context(owner):
+            alpha = messaging_models.ThreadedTicket.objects.create(title="Alpha")
+            beta = messaging_models.ThreadedTicket.objects.create(title="Beta")
+            beta.activity_schedule(user=assignee, summary="Call Beta", due_date=date(2026, 3, 10))
+            alpha.activity_schedule(user=assignee, summary="Email Alpha", due_date=date(2026, 3, 5))
+            # Another actor's assignment must never surface on this actor's agenda.
+            alpha.activity_schedule(user=owner, summary="Owner task", due_date=date(2026, 3, 6))
+
+        schema = _schema()
+        window = {"start": "2026-03-01", "end": "2026-04-01"}
+        rows = _data(
+            execute_schema(
+                schema,
+                """
+                query Agenda($start: Date!, $end: Date!) {
+                  activity_agenda(window_start: $start, window_end: $end) {
+                    summary
+                    due_date
+                    state
+                    attachment { label model_label record_id }
+                    user { username }
+                  }
+                }
+                """,
+                window,
+                request=_request(assignee),
+            )
+        )["activity_agenda"]
+
+        # The subject reads its own assignments across both records, due-date ordered, and
+        # nothing of the owner's own task — the assignee arm never crosses to a non-assignee.
+        assert [row["summary"] for row in rows] == ["Email Alpha", "Call Beta"]
+        assert rows[0]["user"] == {"username": f"agenda-assignee-{storage}"}
+        assert rows[0]["attachment"] == {
+            "label": "Alpha",
+            "model_label": "messaging.ThreadedTicket",
+            "record_id": alpha.public_id,
+        }
+        assert rows[1]["attachment"] == {
+            "label": "Beta",
+            "model_label": "messaging.ThreadedTicket",
+            "record_id": beta.public_id,
+        }
+
+        # §3.8 over-grant closed structurally: the parent thread and the attachment metadata
+        # are not on the narrowed agenda type, so a bare assignee cannot read the record's
+        # thread subject / message counts / attachment metadata through the agenda.
+        leaked = execute_schema(
+            schema,
+            """
+            query Leak($start: Date!, $end: Date!) {
+              activity_agenda(window_start: $start, window_end: $end) {
+                thread { subject message_count }
+                attachment { metadata }
+              }
+            }
+            """,
+            window,
+            request=_request(assignee),
+        )
+
+    assert leaked.errors is not None
+    reasons = " ".join(str(error) for error in leaked.errors)
+    assert "thread" in reasons
+    assert "metadata" in reasons
 
 
 @pytest.fixture()

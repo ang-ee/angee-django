@@ -835,9 +835,9 @@ class ThreadActivityQuerySet(AngeeQuerySet[Any]):
 
     def agenda(
         self,
-        user: Any,
-        window_start: Any,
-        window_end: Any,
+        user: models.Model,
+        window_start: date,
+        window_end: date,
         *,
         include_done: bool = False,
     ) -> ThreadActivityQuerySet:
@@ -854,6 +854,31 @@ class ThreadActivityQuerySet(AngeeQuerySet[Any]):
         if not include_done:
             queryset = queryset.open()
         return cast(ThreadActivityQuerySet, queryset.order_by("due_date", "sqid"))
+
+    def with_record_pointers(self) -> list[Any]:
+        """Materialize the agenda with each row's record-pointer ``attachment`` primed.
+
+        The agenda projects a *minimal* record pointer (label + model_label + record_id)
+        computed from each row's ``ThreadAttachment`` alone — never the target record and
+        never the parent thread. Priming the ``attachment`` FK once, elevated and keyed by
+        ``attachment_id``, turns the per-row pointer lazy-load into a single query, without
+        ``select_related`` on the REBAC-guarded relation (which fails live under the
+        actor-scoped optimizer). Each pointer's ``ContentType`` is process-cached by
+        ``ContentType.objects.get_for_id`` on :class:`ThreadAttachment`, so the whole
+        agenda costs one attachment query regardless of row count.
+        """
+
+        rows = list(self)
+        attachment_ids = [row.attachment_id for row in rows if row.attachment_id is not None]
+        if attachment_ids:
+            attachment_model = self.model._meta.get_field("attachment").related_model
+            with system_context(reason="agenda record pointers"):
+                attachments = attachment_model._base_manager.in_bulk(attachment_ids)
+            for row in rows:
+                attachment = attachments.get(row.attachment_id)
+                if attachment is not None:
+                    row.attachment = attachment
+        return rows
 
 
 class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):  # type: ignore[misc]

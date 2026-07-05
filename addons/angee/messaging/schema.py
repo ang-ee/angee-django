@@ -243,14 +243,15 @@ class ThreadAttachmentType(AngeeNode):
         return cast(Any, self).target_model_label
 
     @strawberry.field(name="record_id")
-    def record_id(self) -> str:
+    def record_id(self) -> strawberry.ID:
         """Return the attached target's stable public id (its sqid).
 
-        The agenda's parent pointer back to the record; navigating it re-gates through
-        the target's own record read (an assignee not granted the record may 404).
+        A parent pointer back to the record — the ``ID`` scalar every record reference
+        uses (``RecordReferenceInput.record_id``); navigating it re-gates through the
+        target's own record read (an assignee not granted the record may 404).
         """
 
-        return cast(Any, self).target_public_id
+        return cast(strawberry.ID, cast(Any, self).target_public_id)
 
 
 @strawberry_django.type(ThreadFollower)
@@ -290,6 +291,74 @@ class ThreadActivityType(AngeeNode):
         """Return the Odoo-style activity state."""
 
         return cast(Any, self).activity_state
+
+
+@strawberry.type
+class RecordPointerType:
+    """Minimal, read-only pointer back to the record a chatter row is attached to.
+
+    The record's human ``label``, its ``app_label.ModelName``, and its stable public id —
+    the three facts a cross-record agenda needs to link back, each computed from the
+    owning ``ThreadAttachment`` row alone (no target load, no parent-record read).
+    Navigating the link re-gates through the record's own read (an assignee not granted
+    the record may 404). See F-act / §3.8.
+    """
+
+    label: str
+    model_label: str = strawberry.field(name="model_label")
+    record_id: strawberry.ID = strawberry.field(name="record_id")
+
+
+@strawberry_django.type(ThreadActivity)
+class AgendaActivityType(AngeeNode):
+    """The actor's own scheduled activity, narrowed for the cross-record agenda.
+
+    ``activity_agenda`` delivers ``ThreadActivity`` rows to a bare assignee through the
+    ``messaging/thread_activity.read`` ``user`` (assignee) arm — an assignment is itself
+    the grant. Because that assignee holds no read on the parent record, thread, or
+    attachment, this projection exposes only the activity's own fields, the assignee's own
+    identity (``user`` — always the actor, by the agenda filter), and the minimal record
+    pointer (``attachment`` → :class:`RecordPointerType`); it deliberately drops the parent
+    ``thread`` and the attachment's ``metadata``, which a to-one traversal would resolve
+    unguarded and so leak to a bare assignee through the agenda (§3.8). The record-scoped
+    ``record_thread`` surface projects the full :class:`ThreadActivityType` for a user who
+    can already read the parent record.
+    """
+
+    user: UserType
+    activity_type: auto
+    summary: auto
+    note: auto
+    due_date: auto
+    completed_at: auto
+    feedback: auto
+    status: auto
+    metadata: strawberry.scalars.JSON
+    created_at: auto
+    updated_at: auto
+
+    @strawberry.field
+    def state(self) -> str:
+        """Return the derived activity state (planned/today/overdue/done/canceled)."""
+
+        return cast(Any, self).activity_state
+
+    @strawberry.field
+    def attachment(self) -> RecordPointerType:
+        """Return the minimal pointer to the record this activity is attached to.
+
+        The ``attachment`` FK is primed elevated and by id on the agenda queryset
+        (:meth:`ThreadActivityQuerySet.with_record_pointers`), so this reads no extra
+        row; the three pointer facts come from the ``ThreadAttachment`` owner without
+        loading or re-gating the target record.
+        """
+
+        attachment = cast(Any, self).attachment
+        return RecordPointerType(
+            label=attachment.label,
+            model_label=attachment.target_model_label,
+            record_id=cast(strawberry.ID, attachment.target_public_id),
+        )
 
 
 @strawberry_django.type(ThreadNotification)
@@ -650,7 +719,7 @@ class MessagingQuery:
         window_start: date,
         window_end: date,
         include_done: bool = False,
-    ) -> list[ThreadActivityType]:
+    ) -> list[AgendaActivityType]:
         """Return the current actor's assigned activities due within the window.
 
         The actor's own agenda across records: ``ThreadActivity`` rows assigned to the
@@ -661,20 +730,30 @@ class MessagingQuery:
 
         Authorization rides the existing ``messaging/thread_activity.read`` ``user``
         (assignee) arm — an assignment is itself the grant — so the read needs no
-        parent-record re-gate and no record-read fan-out.
+        parent-record re-gate and no record-read fan-out. Each row is projected as
+        :class:`AgendaActivityType`: the activity's own fields, the actor's own identity,
+        and the minimal record pointer — never the parent thread or attachment metadata
+        (§3.8), which a to-one traversal would otherwise resolve unguarded. The assignee
+        FK is the request actor by construction, and the pointer ``attachment`` is primed
+        elevated and by id on the queryset, so the projection needs no REBAC-guarded
+        ``select_related`` (the pitfall) and no per-row pointer fan-out.
         """
 
         user = _request_user(info)
         if user is None:
             return []
-        return list(
-            ThreadActivity.objects.agenda(
-                user,
-                window_start,
-                window_end,
-                include_done=include_done,
-            ).select_related("user")
-        )
+        rows = ThreadActivity.objects.agenda(
+            user,
+            window_start,
+            window_end,
+            include_done=include_done,
+        ).with_record_pointers()
+        for row in rows:
+            # The agenda filters on user == actor, so every row's assignee is the request
+            # actor: prime the FK from the actor already in hand instead of a per-row
+            # (and REBAC-guarded) user load.
+            row.user = user
+        return rows
 
 
 @strawberry.type
@@ -1221,6 +1300,8 @@ _MESSAGING_SCHEMA_BUCKET = {
         ThreadAttachmentType,
         ThreadFollowerType,
         ThreadActivityType,
+        AgendaActivityType,
+        RecordPointerType,
         ThreadNotificationType,
         MessageSubtypeType,
         MessageType,

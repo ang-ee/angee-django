@@ -18,8 +18,10 @@ from typing import Any
 import pytest
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 from django.db import connection, models
+from django.test.utils import CaptureQueriesContext
 from rebac import (
     PermissionDenied,
     RelationshipTuple,
@@ -853,6 +855,47 @@ def test_activity_agenda_row_reports_overdue_state_without_stored_flag(messaging
 
     assert row.status == ThreadActivity.ActivityStatus.TODO
     assert row.activity_state == "overdue"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_activity_agenda_record_pointer_batches_without_per_row_fanout(messaging_tables: None) -> None:
+    """Projecting the agenda's record pointer is one batch, not a per-row lazy-load (D5).
+
+    ``with_record_pointers`` primes every row's ``attachment`` in a single elevated query
+    and each pointer field reads the process-cached ``ContentType``, so projecting the
+    label + model_label + record_id for the whole agenda costs a constant query count —
+    not the 1+2N a per-row ``attachment``/``content_type`` lazy-load would. Doubling the
+    row count keeps the projection query count flat.
+    """
+
+    del messaging_tables
+    user_model = get_user_model()
+    window_start, window_end = date(2026, 3, 1), date(2026, 4, 1)
+    with system_context(reason="agenda n+1 setup"):
+        assignee = user_model.objects.create_user(username="agenda-n1", email="agenda-n1@example.com")
+        for index in range(6):
+            ticket = ThreadedTicket.objects.create(title=f"Case {index}")
+            ticket.activity_schedule(user=assignee, summary=f"Task {index}", due_date=date(2026, 3, 1 + index))
+
+    def project_query_count() -> tuple[int, int]:
+        with system_context(reason="agenda n+1 measure"), CaptureQueriesContext(connection) as captured:
+            rows = ThreadActivity.objects.agenda(assignee, window_start, window_end).with_record_pointers()
+            for row in rows:
+                _ = (row.attachment.label, row.attachment.target_model_label, row.attachment.target_public_id)
+        return len(rows), len(captured.captured_queries)
+
+    # Warm the process-cached ContentType so the flat comparison isolates the attachment batch.
+    ContentType.objects.get_for_model(ThreadedTicket)
+    small_rows, small_queries = project_query_count()
+
+    with system_context(reason="agenda n+1 grow"):
+        for index in range(6, 12):
+            ticket = ThreadedTicket.objects.create(title=f"Case {index}")
+            ticket.activity_schedule(user=assignee, summary=f"Task {index}", due_date=date(2026, 3, 1 + index))
+    large_rows, large_queries = project_query_count()
+
+    assert (small_rows, large_rows) == (6, 12)
+    assert large_queries == small_queries
 
 
 @pytest.mark.django_db(transaction=True)
