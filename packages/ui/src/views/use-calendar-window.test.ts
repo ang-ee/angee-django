@@ -34,13 +34,12 @@ vi.mock("@angee/refine", () => ({
 interface OccurrencesResult {
   event_occurrences: Occurrence[];
 }
-interface WindowVariables {
-  window_start: string;
-  window_end: string;
-}
+// The document's variables are a codegen-style mapped type (implicit index
+// signature), the shape a generated `TypedDocumentNode` carries.
+type WindowVariables = { window_start: string; window_end: string };
 const DOCUMENT = {} as TypedDocumentNode<OccurrencesResult, WindowVariables>;
 
-const SOURCE: CalendarWindowSource<OccurrencesResult, WindowVariables> = {
+const SOURCE: CalendarWindowSource<typeof DOCUMENT> = {
   document: DOCUMENT,
   variables: (window) => calendarWindowBounds(window),
   select: (data) => data?.event_occurrences,

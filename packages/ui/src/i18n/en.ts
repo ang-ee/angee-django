@@ -95,6 +95,7 @@ export const enUiMessages: Record<string, string> = {
   "list.sortDescending": "Sort {label} (currently descending)",
   "list.sortNotSorted": "Sort {label} (not sorted)",
   "calendar.today": "Today",
+  "calendar.loadError": "The calendar failed to load. Reload the page to try again.",
   "auth.username": "Username",
   "auth.password": "Password",
   "auth.signIn": "Sign in",

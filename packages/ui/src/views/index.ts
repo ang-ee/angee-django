@@ -110,6 +110,11 @@ export {
   type RecordToolbarContext,
   type RecordTabDescriptor,
 } from "./FormView";
+export {
+  RecordChromeProvider,
+  useRecordChromeContext,
+  type RecordChromeContext,
+} from "./record-chrome-context";
 export { EditableLines, type EditableLinesProps } from "./EditableLines";
 export {
   diffLines,

@@ -79,12 +79,14 @@ export {
   errorFromAuthoredEnvelope,
   authoredOperationData,
   authoredQueryData,
+  type AuthoredDocument,
   type AuthoredMutate,
   type AuthoredMutationEnvelope,
   type AuthoredMutationOptions,
   type AuthoredOperationOptions,
   type AuthoredQueryOptions,
   type AuthoredQueryResult,
+  type AuthoredVariables,
 } from "./dialect/authored-hooks";
 export {
   arrayValue,

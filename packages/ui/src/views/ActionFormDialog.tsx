@@ -31,7 +31,7 @@ export interface ActionFormDialogProps {
 type ArgValues = Record<string, unknown>;
 
 /**
- * The typed-args action form (F-a): a dialog that collects an action's declared
+ * The typed-args action form: a dialog that collects an action's declared
  * `args` — scalars, a single relation picker, or a relation list prefilled from
  * the invoking selection/record — then fires the authored mutation via the
  * action's `submit`. It composes the shared owners (`DialogForm`,

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { CalendarView, type Occurrence } from "./CalendarView";
@@ -58,6 +58,7 @@ interface SurfaceProps {
   datesSet?: (arg: { start: Date; end: Date }) => void;
   select?: (arg: { start: Date; end: Date }) => void;
   eventDrop?: (arg: EventDropArg) => void;
+  eventResize?: (arg: EventDropArg) => void;
   eventClick?: (arg: { event: { extendedProps: { occurrence: Occurrence } } }) => void;
 }
 
@@ -145,6 +146,84 @@ describe("CalendarView", () => {
     });
 
     expect(onEventDrop).toHaveBeenCalledWith(EDITABLE, start, end);
+    expect(revert).not.toHaveBeenCalled();
+  });
+
+  test("a resize on an editable occurrence reschedules through onEventDrop", async () => {
+    const onEventDrop = vi.fn();
+    render(
+      <CalendarView
+        view="week"
+        range={RANGE}
+        occurrences={[EDITABLE]}
+        onEventDrop={onEventDrop}
+      />,
+    );
+    await screen.findByTestId("fc");
+
+    // A resize rides the same seam as a drop — new bounds, same handler shape.
+    const revert = vi.fn();
+    const start = new Date("2026-06-15T09:00:00.000Z");
+    const end = new Date("2026-06-15T11:00:00.000Z");
+    surface().eventResize?.({
+      event: { start, end, extendedProps: { occurrence: EDITABLE } },
+      revert,
+    });
+
+    expect(onEventDrop).toHaveBeenCalledWith(EDITABLE, start, end);
+    expect(revert).not.toHaveBeenCalled();
+  });
+
+  test("reverts the optimistic change when the reschedule handler rejects", async () => {
+    const onEventDrop = vi.fn().mockRejectedValue(new Error("server rejected"));
+    render(
+      <CalendarView
+        view="week"
+        range={RANGE}
+        occurrences={[EDITABLE]}
+        onEventDrop={onEventDrop}
+      />,
+    );
+    await screen.findByTestId("fc");
+
+    const revert = vi.fn();
+    surface().eventDrop?.({
+      event: {
+        start: new Date("2026-06-16T11:00:00.000Z"),
+        end: new Date("2026-06-16T12:00:00.000Z"),
+        extendedProps: { occurrence: EDITABLE },
+      },
+      revert,
+    });
+
+    // FullCalendar already moved the event; a rejected write reverts it.
+    await waitFor(() => expect(revert).toHaveBeenCalledTimes(1));
+    expect(onEventDrop).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps the new slot when the reschedule handler resolves", async () => {
+    const onEventDrop = vi.fn().mockResolvedValue(undefined);
+    render(
+      <CalendarView
+        view="week"
+        range={RANGE}
+        occurrences={[EDITABLE]}
+        onEventDrop={onEventDrop}
+      />,
+    );
+    await screen.findByTestId("fc");
+
+    const revert = vi.fn();
+    surface().eventDrop?.({
+      event: {
+        start: new Date("2026-06-16T11:00:00.000Z"),
+        end: new Date("2026-06-16T12:00:00.000Z"),
+        extendedProps: { occurrence: EDITABLE },
+      },
+      revert,
+    });
+
+    await waitFor(() => expect(onEventDrop).toHaveBeenCalledTimes(1));
     expect(revert).not.toHaveBeenCalled();
   });
 

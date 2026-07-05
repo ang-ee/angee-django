@@ -46,10 +46,12 @@ import { defaultWidgets } from "../widgets";
 import { Form } from "./Form";
 import {
   FormView,
+  FORM_VIEW_RECORD_CHROME_SLOT,
   formViewSectionsSlot,
   type FormField,
   type FormSubmitContext,
 } from "./FormView";
+import { useRecordChromeContext } from "./record-chrome-context";
 import {
   Action,
   Field,
@@ -1459,6 +1461,37 @@ describe("FormView", () => {
     expect(sdkMocks.mutate).toHaveBeenCalledWith({
       data: { title: "Grouped" },
     });
+  });
+
+  test("provides the resource and record id to a record-chrome slot contribution", async () => {
+    function ChromeProbe(): ReactElement {
+      const chrome = useRecordChromeContext();
+      return (
+        <span data-testid="chrome-probe">
+          {chrome.resource}:{chrome.recordId}
+        </span>
+      );
+    }
+
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      undefined,
+      undefined,
+      {
+        slots: [
+          {
+            slot: FORM_VIEW_RECORD_CHROME_SLOT,
+            id: "notes.chrome",
+            content: <ChromeProbe />,
+          },
+        ],
+      },
+    );
+
+    const probe = await screen.findByTestId("chrome-probe");
+    expect(probe.textContent).toBe("notes.Note:note-1");
   });
 
   test("merges FORM_VIEW_SECTIONS_SLOT fields into the submit payload", async () => {

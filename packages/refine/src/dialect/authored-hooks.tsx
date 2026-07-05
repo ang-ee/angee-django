@@ -24,8 +24,15 @@ import type {
 import { useActiveDataProviderName } from "./data-provider-context";
 import { mutationMeta, queryMeta } from "./wire";
 
-type AuthoredDocument = TypedDocumentNode<unknown, any>;
-type AuthoredVariables<TDocument extends AuthoredDocument> =
+/** Any authored (non-CRUD) GraphQL operation: a generated `TypedDocumentNode`. */
+export type AuthoredDocument = TypedDocumentNode<unknown, any>;
+/**
+ * The variables an authored document takes, or `Record<string, never>` when it
+ * takes none — the parameter type the authored hooks require and the type a
+ * caller composing them (e.g. a source that maps its own input to a document's
+ * variables) declares, so the variables stay pinned to the document.
+ */
+export type AuthoredVariables<TDocument extends AuthoredDocument> =
   DocumentVariables<TDocument> extends Record<string, unknown>
     ? DocumentVariables<TDocument>
     : Record<string, never>;

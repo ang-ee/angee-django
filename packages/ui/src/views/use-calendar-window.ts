@@ -1,21 +1,24 @@
+import { useMemo } from "react";
 import {
   useAuthoredQuery,
+  type AuthoredDocument,
   type AuthoredQueryOptions,
-  type TypedDocumentNode,
+  type AuthoredVariables,
+  type DocumentData,
 } from "@angee/refine";
 
 import type { CalendarWindow, Occurrence } from "./CalendarView";
 
 /** The window bounds a server-side occurrence query takes. */
 export interface CalendarWindowBounds {
-  /** ISO-8601 UTC; the resolver treats it inclusive (§3.2). */
+  /** ISO-8601 UTC; the resolver treats it inclusive. */
   window_start: string;
-  /** ISO-8601 UTC; the resolver treats it exclusive (§3.2). */
+  /** ISO-8601 UTC; the resolver treats it exclusive. */
   window_end: string;
 }
 
 /**
- * The §3.2 window contract encoded once: `start` inclusive, `end` exclusive,
+ * The window contract encoded once: `start` inclusive, `end` exclusive,
  * ISO-8601. A source's `variables` builder spreads it so the argument names stay
  * with the query while the bounds conversion lives here.
  */
@@ -29,16 +32,18 @@ export function calendarWindowBounds(window: CalendarWindow): CalendarWindowBoun
 /**
  * One occurrence source for {@link useCalendarWindow}: the authored query, how a
  * window maps to its variables, and how to read the occurrence array out of its
- * result. The query and its shape live downstream (`arp.calendar`), so the
- * source declares both here rather than the hook probing the result.
+ * result. The query and its shape live downstream, so the source declares both
+ * here rather than the hook probing the result.
  */
-export interface CalendarWindowSource<TData, TVariables> {
-  /** The authored occurrence query (`event_occurrences` / `activity_agenda`) returning the §3.3 wire shape. */
-  document: TypedDocumentNode<TData, TVariables>;
+export interface CalendarWindowSource<TDocument extends AuthoredDocument> {
+  /** The authored occurrence query returning the occurrence wire shape. */
+  document: TDocument;
   /** Build the query variables for a window — the source owns its argument names (compose `calendarWindowBounds`). */
-  variables: (window: CalendarWindow) => TVariables;
+  variables: (window: CalendarWindow) => AuthoredVariables<TDocument>;
   /** Read the occurrence array out of the result (the result field is the source's). */
-  select: (data: TData | undefined) => readonly Occurrence[] | null | undefined;
+  select: (
+    data: DocumentData<TDocument> | undefined,
+  ) => readonly Occurrence[] | null | undefined;
   /** Model labels whose local writes / live changes refetch this window. */
   models?: readonly string[];
   /** Refine data provider (schema bucket); defaults to the active layout schema. */
@@ -57,15 +62,15 @@ export interface UseCalendarWindowResult {
 const NO_OCCURRENCES: readonly Occurrence[] = [];
 
 /**
- * The F-cal window adapter: fetch a source's occurrences for a window and hand
- * them to {@link CalendarView} in the §3.3 wire shape, refetching when the
- * window changes. Transport is the `@angee/refine` authored-query owner
+ * The window adapter: fetch a source's occurrences for a window and hand them to
+ * {@link CalendarView} in the occurrence wire shape, refetching when the window
+ * changes. Transport is the `@angee/refine` authored-query owner
  * ({@link useAuthoredQuery}) — the window bounds ride the query variables, so a
  * new window is a new key and the owner refetches; the caller stays a thin
  * composer and never re-authors the mapping per page.
  */
-export function useCalendarWindow<TData, TVariables>(
-  source: CalendarWindowSource<TData, TVariables>,
+export function useCalendarWindow<TDocument extends AuthoredDocument>(
+  source: CalendarWindowSource<TDocument>,
   window: CalendarWindow,
 ): UseCalendarWindowResult {
   const options: AuthoredQueryOptions = {
@@ -73,16 +78,16 @@ export function useCalendarWindow<TData, TVariables>(
     dataProviderName: source.dataProviderName,
     enabled: source.enabled,
   };
-  // The authored-query owner erases variables to `any` on its document type
-  // (`AuthoredDocument`), so instantiate it the same way: the source already
-  // typed `document`↔`variables` together, and the transport only needs the run.
-  const query = useAuthoredQuery<TypedDocumentNode<TData, any>>(
-    source.document,
-    source.variables(window),
-    options,
+  const query = useAuthoredQuery(source.document, source.variables(window), options);
+  // FullCalendar compares its events option element-wise by reference, so a new
+  // selected array each render re-parses the source. `query.data` is stable
+  // across renders (react-query structural sharing), so memoize the projection.
+  const occurrences = useMemo(
+    () => source.select(query.data) ?? NO_OCCURRENCES,
+    [source, query.data],
   );
   return {
-    occurrences: source.select(query.data) ?? NO_OCCURRENCES,
+    occurrences,
     fetching: query.fetching,
     error: query.error,
     refetch: query.refetch,

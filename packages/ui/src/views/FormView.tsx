@@ -54,6 +54,10 @@ import { textRoleVariants } from "../ui/text";
 import { ControlBand } from "../layouts/ControlBand";
 import { cn } from "../lib/cn";
 import { SlotOutlet } from "../lib/slot-outlet";
+import {
+  RecordChromeProvider,
+  type RecordChromeContext,
+} from "./record-chrome-context";
 import { EditableLines } from "./EditableLines";
 import {
   diffLines,
@@ -558,6 +562,20 @@ export function FormView({
   const refetch = React.useCallback(() => {
     void form.refineCore.query?.refetch();
   }, [form.refineCore.query]);
+  // The record a chrome contribution renders against — provided around the
+  // record-chrome slot outlet so a contribution self-gates on the resource and
+  // reads the record id without probing the URL. Only a saved record has one.
+  const recordChromeContext = React.useMemo<RecordChromeContext | null>(
+    () =>
+      isCreate || id == null
+        ? null
+        : {
+            resource,
+            recordId: rowPublicId(displayRecord) ?? id,
+            record: displayRecord ?? null,
+          },
+    [displayRecord, id, isCreate, resource],
+  );
 
   // Editable document lines (F6): active only when the resource metadata carries a
   // `linesResource`, on an existing record — the `<resource>_save` diff-apply is
@@ -1194,7 +1212,11 @@ export function FormView({
         </div>
         <div className="min-w-2 flex-1" />
         <div className="flex min-w-0 items-center gap-2">
-          {!isCreate ? <SlotOutlet entries={recordChrome} /> : null}
+          {recordChromeContext ? (
+            <RecordChromeProvider value={recordChromeContext}>
+              <SlotOutlet entries={recordChrome} />
+            </RecordChromeProvider>
+          ) : null}
           {toolbar}
         </div>
       </ControlBand>
