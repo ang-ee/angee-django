@@ -466,9 +466,29 @@ describe("money currencyField plumbing", () => {
     },
   };
 
-  test("a column inherits the field's currencyField from metadata", () => {
+  test("a bare column inherits the backend widget and currencyField from metadata", () => {
     const [column] = columnsWithMetadataDefaults<Row>([{ field: "amountTotal" }], metadata);
+    expect(column?.widget).toBe("money");
     expect(column?.currencyField).toBe("currency");
+  });
+
+  test("an explicit column widget wins over the backend widget", () => {
+    const [column] = columnsWithMetadataDefaults<Row>(
+      [{ field: "amountTotal", widget: "float" }],
+      metadata,
+    );
+    expect(column?.widget).toBe("float");
+  });
+
+  test("a bare column for an enum/boolean field inherits no kind-derived widget", () => {
+    // List cells render enums, relations, and plain scalars natively; only an
+    // explicit backend widget (like `money`) is inherited onto a column.
+    const resolved = columnsWithMetadataDefaults<Row>(
+      [{ field: "status" }, { field: "isStarred" }],
+      NOTE_METADATA,
+    );
+    expect(resolved[0]?.widget).toBeUndefined();
+    expect(resolved[1]?.widget).toBeUndefined();
   });
 
   test("a form field inherits the field's currencyField from metadata", () => {

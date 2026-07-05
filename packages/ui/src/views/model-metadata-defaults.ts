@@ -130,6 +130,14 @@ export function columnsWithMetadataDefaults<TRow extends object>(
     return {
       ...column,
       header: fieldLabel(column.field, field, column.header),
+      // A bare column inherits the backend's explicit widget (e.g. `"money"` over a
+      // Decimal), so its cell renders through the registered widget instead of the raw
+      // scalar. Only the explicit backend widget is inherited — kind/scalar-derived
+      // defaults stay out, because list cells render enums, relations, and plain
+      // scalars natively (unlike a form, which needs an edit widget per field).
+      ...(column.widget === undefined && field?.widget
+        ? { widget: field.widget }
+        : {}),
       ...(column.currencyField === undefined && field?.currencyField
         ? { currencyField: field.currencyField }
         : {}),

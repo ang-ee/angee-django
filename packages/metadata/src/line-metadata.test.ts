@@ -1,7 +1,11 @@
 import { describe, expect, test } from "vitest";
 
-import { lineChildModelMetadata } from "./artifact";
-import type { DataResourceFieldMetadata, DataResourceLinesMetadata } from "./artifact";
+import { lineChildModelMetadata, lineReadSelectionPaths } from "./artifact";
+import type {
+  DataResourceFieldMetadata,
+  DataResourceLinesMetadata,
+  SchemaFieldMetadata,
+} from "./artifact";
 
 function field(
   name: string,
@@ -60,5 +64,48 @@ describe("lineChildModelMetadata", () => {
 
   test("passes through enum values for a select cell", () => {
     expect(child.fields.role?.values).toEqual([{ value: "product" }, { value: "tax" }]);
+  });
+});
+
+describe("lineReadSelectionPaths", () => {
+  const schema: SchemaFieldMetadata = {
+    types: {
+      ProductVariantType: {
+        typeName: "ProductVariantType",
+        fields: {},
+        recordRepresentation: "name",
+      },
+    },
+  };
+
+  test("selects the child id, order column, scalars, enums, and relation id + label", () => {
+    // The detail (`*_by_pk`) read must carry the lines' child columns so an
+    // existing document's lines seed the composer instead of reading as absent.
+    expect(lineReadSelectionPaths(LINES, schema)).toEqual([
+      "id",
+      "position",
+      "product.id",
+      "product.name",
+      "priceUnit",
+      "role",
+    ]);
+  });
+
+  test("selects only the relation id when the target has no record representation", () => {
+    expect(lineReadSelectionPaths(LINES, { types: {} })).toEqual([
+      "id",
+      "position",
+      "product.id",
+      "priceUnit",
+      "role",
+    ]);
+  });
+
+  test("omits the order column when the child carries none", () => {
+    const withoutPosition: DataResourceLinesMetadata = {
+      ...LINES,
+      positionField: null,
+    };
+    expect(lineReadSelectionPaths(withoutPosition, schema)).not.toContain("position");
   });
 });

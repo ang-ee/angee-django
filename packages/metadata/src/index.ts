@@ -14,6 +14,7 @@ export {
   defineAngeeSchemaMetadata,
   isClientRowModel,
   lineChildModelMetadata,
+  lineReadSelectionPaths,
   modelMetadataForLabel,
   resourceOperationTarget,
   schemaFieldMetadataFromAngeeSchemaMetadata,
