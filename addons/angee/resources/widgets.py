@@ -21,6 +21,26 @@ class XrefWidgetMixin:
     addon_aliases: Mapping[str, str] | None = None
     """Addon aliases keyed by full addon name and short label."""
 
+    model: type[models.Model]
+    """Related model bound by the import-export FK/M2M widget base."""
+
+    def resolve_field_target(self, ref: str) -> models.Model:
+        """Resolve one xref to a row assignable to this widget's related field.
+
+        ``resolve_xref`` returns the concrete row a ``<addon>.<xref>`` handle
+        names. A ``runtime = True`` materialized child is an MTI subclass that
+        shares its parent's primary key (``Organization`` IS-A ``Party``), so a
+        child xref is a valid value for a foreign key to its MTI parent: accept
+        any instance of the bound target model — including such a descendant,
+        whose shared pk resolves the parent link — and fail fast on a genuinely
+        unrelated type.
+        """
+
+        target = resolve_xref(ref, self.ledger_model, self.addon_aliases)
+        if not isinstance(target, self.model):
+            raise ValueError(f"xref {ref!r} targets {target._meta.label}, not {self.model._meta.label}")
+        return target
+
 
 class XrefForeignKeyWidget(XrefWidgetMixin, widgets.ForeignKeyWidget):
     """Resolve ``<addon>.<xref>`` foreign keys through the ledger."""
@@ -38,9 +58,7 @@ class XrefForeignKeyWidget(XrefWidgetMixin, widgets.ForeignKeyWidget):
             return None
         if not isinstance(value, str):
             raise ValueError("xref foreign keys must be strings")
-        target = resolve_xref(value, self.ledger_model, self.addon_aliases)
-        if target._meta.concrete_model is not self.model._meta.concrete_model:
-            raise ValueError(f"xref {value!r} targets {target._meta.label}, not {self.model._meta.label}")
+        target = self.resolve_field_target(value)
         return target.pk if self.key_is_id else target
 
 
@@ -56,13 +74,7 @@ class XrefManyToManyWidget(XrefWidgetMixin, widgets.ManyToManyWidget):
         """Return target model objects for every xref in ``value``."""
 
         del row, kwargs
-        targets: list[models.Model] = []
-        for ref in xref_list(value):
-            target = resolve_xref(ref, self.ledger_model, self.addon_aliases)
-            if target._meta.concrete_model is not self.model._meta.concrete_model:
-                raise ValueError(f"xref {ref!r} targets {target._meta.label}, not {self.model._meta.label}")
-            targets.append(target)
-        return targets
+        return [self.resolve_field_target(ref) for ref in xref_list(value)]
 
 
 class _NativeJSONWidget(widgets.JSONWidget):

@@ -20,7 +20,11 @@ from angee.resources.exceptions import ResourceLoadError
 from angee.resources.loader import build_resource
 from angee.resources.models import Resource
 from angee.resources.tiers import ResourceTier
-from angee.resources.widgets import resolve_xref
+from angee.resources.widgets import (
+    XrefForeignKeyWidget,
+    XrefManyToManyWidget,
+    resolve_xref,
+)
 
 
 @dataclass(slots=True)
@@ -460,6 +464,113 @@ def test_resolve_xref_reports_ambiguous_source_rows() -> None:
                 ResolveAmbiguousLedger,
                 {"tests.resource_addon": "tests.resource_addon"},
             )
+    finally:
+        with connection.schema_editor() as schema_editor:
+            for model in reversed(models_to_create):
+                schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_xref_widgets_resolve_mti_descendant_to_parent_fk() -> None:
+    """An xref on an MTI child resolves a foreign key / m2m to its parent (F-d).
+
+    Mirrors the production shape ``parties.Party`` (MTI parent) ← a
+    ``parties.Organization`` (materialized child) xref: a ``runtime = True``
+    child shares its parent's primary key, so binding it to a ``Party`` relation
+    is valid. The guard still fails fast on a genuinely unrelated type and never
+    reaches *downward* from a parent xref to a child-bound relation.
+    """
+
+    class XrefMtiParent(models.Model):
+        """MTI parent standing in for ``parties.Party``."""
+
+        name = models.CharField(max_length=40)
+
+        class Meta:
+            """Django model options for the MTI parent test model."""
+
+            app_label = "base"
+
+    class XrefMtiChild(XrefMtiParent):
+        """MTI child standing in for ``parties.Organization``."""
+
+        detail = models.CharField(max_length=40, blank=True, default="")
+
+        class Meta:
+            """Django model options for the MTI child test model."""
+
+            app_label = "base"
+
+    class XrefMtiPeer(models.Model):
+        """Unrelated model proving the fail-fast guard still bites."""
+
+        name = models.CharField(max_length=40)
+
+        class Meta:
+            """Django model options for the unrelated peer test model."""
+
+            app_label = "base"
+
+    class XrefMtiLedger(models.Model):
+        """Ledger model without the production uniqueness constraint."""
+
+        source_addon = models.CharField(max_length=200)
+        xref = models.CharField(max_length=160)
+        target_model = models.CharField(max_length=120)
+        target_id = models.CharField(max_length=120, blank=True, default="")
+
+        class Meta:
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+
+    models_to_create: tuple[type[models.Model], ...] = (
+        XrefMtiParent,
+        XrefMtiChild,
+        XrefMtiPeer,
+        XrefMtiLedger,
+    )
+    aliases = {"tests.resource_addon": "tests.resource_addon"}
+
+    def _bind(widget: Any) -> Any:
+        widget.ledger_model = XrefMtiLedger
+        widget.addon_aliases = aliases
+        return widget
+
+    with connection.schema_editor() as schema_editor:
+        for model in models_to_create:
+            schema_editor.create_model(model)
+    try:
+        child = XrefMtiChild.objects.create(name="Acme", detail="org")
+        peer = XrefMtiPeer.objects.create(name="Nope")
+        parent_row = XrefMtiParent.objects.create(name="Bare")
+        for xref, target in (
+            ("acme", "base.XrefMtiChild"),
+            ("nope", "base.XrefMtiPeer"),
+            ("bare", "base.XrefMtiParent"),
+        ):
+            XrefMtiLedger.objects.create(
+                source_addon="tests.resource_addon",
+                xref=xref,
+                target_model=target,
+                target_id=str({"acme": child, "nope": peer, "bare": parent_row}[xref].pk),
+            )
+
+        parent_fk = _bind(XrefForeignKeyWidget(model=XrefMtiParent))
+        parent_m2m = _bind(XrefManyToManyWidget(model=XrefMtiParent))
+
+        # The FK/M2M to the MTI parent accepts the child xref (the F-d fix).
+        assert parent_fk.clean("tests.resource_addon.acme") == child
+        assert parent_m2m.clean("tests.resource_addon.acme") == [child]
+
+        # A genuinely unrelated xref still fails fast.
+        with pytest.raises(ValueError, match="not base.XrefMtiParent"):
+            parent_fk.clean("tests.resource_addon.nope")
+
+        # A parent-only xref bound to a child relation fails fast (no downward reach).
+        child_fk = _bind(XrefForeignKeyWidget(model=XrefMtiChild))
+        with pytest.raises(ValueError, match="not base.XrefMtiChild"):
+            child_fk.clean("tests.resource_addon.bare")
     finally:
         with connection.schema_editor() as schema_editor:
             for model in reversed(models_to_create):

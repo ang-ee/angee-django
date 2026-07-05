@@ -6,7 +6,7 @@ import sys
 from dataclasses import is_dataclass
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from django.apps import AppConfig, apps
@@ -118,6 +118,33 @@ def runtime_for(tmp_path: Path) -> Runtime:
     return Runtime(
         (apps.get_app_config("resources"),),
         runtime_dir=tmp_path / "runtime",
+    )
+
+
+def _source_model(module: ModuleType, name: str, label: str, **body: Any) -> type[AngeeModel]:
+    """Register an abstract source model in ``module`` and return it."""
+
+    model = type(
+        name,
+        (AngeeModel,),
+        {
+            "__module__": module.__name__,
+            "Meta": type("Meta", (), {"abstract": True, "app_label": label}),
+            **body,
+        },
+    )
+    setattr(module, name, model)
+    return cast(type[AngeeModel], model)
+
+
+def _addon_config(label: str, models_module: ModuleType) -> SimpleNamespace:
+    """Return an app-config stand-in contributing ``models_module``."""
+
+    return SimpleNamespace(
+        label=label,
+        name=f"tests.{label}",
+        module=ModuleType(f"tests.{label}"),
+        models_module=models_module,
     )
 
 
@@ -614,15 +641,126 @@ def test_runtime_extensions_follow_app_graph_order_not_class_names(tmp_path: Pat
 
     source = runtime.render_sources()[Path("target/models.py")]
 
-    assert (
-        "from tests.preferred.models import ZPreferredExtension as TargetRuntimeExtension1"
-        in source
-    )
-    assert (
-        "from tests.fallback.models import AFallbackExtension as TargetRuntimeExtension2"
-        in source
-    )
+    assert "from tests.preferred.models import ZPreferredExtension as TargetRuntimeExtension1" in source
+    assert "from tests.fallback.models import AFallbackExtension as TargetRuntimeExtension2" in source
     assert "class TargetRuntime(TargetRuntimeExtension1, TargetRuntimeExtension2, AbstractTargetRuntime):" in source
+
+
+def test_runtime_aggregates_multiple_after_resource_load_donors(tmp_path: Path) -> None:
+    """Two donors defining ``after_resource_load`` emit one ordered aggregator (F-c)."""
+
+    def first_hook(cls: type, instances: object, **kwargs: object) -> None:
+        del cls, instances, kwargs
+
+    def second_hook(cls: type, instances: object, **kwargs: object) -> None:
+        del cls, instances, kwargs
+
+    target_module = ModuleType("tests.mergetarget.models")
+    first_module = ModuleType("tests.mergefirst.models")
+    second_module = ModuleType("tests.mergesecond.models")
+    _source_model(target_module, "MergeTarget", "mergetarget", runtime=True)
+    _source_model(
+        first_module,
+        "MergeFirstDonor",
+        "mergefirst",
+        extends="mergetarget.MergeTarget",
+        after_resource_load=classmethod(first_hook),
+    )
+    _source_model(
+        second_module,
+        "MergeSecondDonor",
+        "mergesecond",
+        extends="mergetarget.MergeTarget",
+        after_resource_load=classmethod(second_hook),
+    )
+
+    runtime = Runtime(
+        (
+            _addon_config("mergetarget", target_module),
+            _addon_config("mergefirst", first_module),
+            _addon_config("mergesecond", second_module),
+        ),
+        runtime_dir=tmp_path / "runtime",
+    )
+
+    source = runtime.render_sources()[Path("mergetarget/models.py")]
+
+    assert "def after_resource_load(cls, *args: object, **kwargs: object) -> None:" in source
+    first_call = "MergeTargetExtension1.after_resource_load.__func__(cls, *args, **kwargs)"
+    second_call = "MergeTargetExtension2.after_resource_load.__func__(cls, *args, **kwargs)"
+    # Dependency order = the emitted base-tuple order (app-graph order): donor one before donor two.
+    assert source.index(first_call) < source.index(second_call)
+    # The aggregator is a class member, not free-floating.
+    assert source.index("class MergeTarget(") < source.index(first_call) < source.index("class Meta(")
+
+
+def test_runtime_keeps_single_after_resource_load_donor_native(tmp_path: Path) -> None:
+    """A single donor resolves natively — the composer emits no aggregator (F-c)."""
+
+    def only_hook(cls: type, instances: object, **kwargs: object) -> None:
+        del cls, instances, kwargs
+
+    target_module = ModuleType("tests.solotarget.models")
+    donor_module = ModuleType("tests.solodonor.models")
+    _source_model(target_module, "SoloTarget", "solotarget", runtime=True)
+    _source_model(
+        donor_module,
+        "SoloDonor",
+        "solodonor",
+        extends="solotarget.SoloTarget",
+        after_resource_load=classmethod(only_hook),
+    )
+
+    runtime = Runtime(
+        (
+            _addon_config("solotarget", target_module),
+            _addon_config("solodonor", donor_module),
+        ),
+        runtime_dir=tmp_path / "runtime",
+    )
+
+    source = runtime.render_sources()[Path("solotarget/models.py")]
+
+    assert "def after_resource_load(" not in source
+
+
+def test_runtime_dedupes_shared_after_resource_load_function(tmp_path: Path) -> None:
+    """Two donors inheriting the same hook function collapse to native dispatch (F-c)."""
+
+    def shared_hook(cls: type, instances: object, **kwargs: object) -> None:
+        del cls, instances, kwargs
+
+    target_module = ModuleType("tests.dedupetarget.models")
+    first_module = ModuleType("tests.dedupefirst.models")
+    second_module = ModuleType("tests.dedupesecond.models")
+    _source_model(target_module, "DedupeTarget", "dedupetarget", runtime=True)
+    _source_model(
+        first_module,
+        "DedupeFirstDonor",
+        "dedupefirst",
+        extends="dedupetarget.DedupeTarget",
+        after_resource_load=classmethod(shared_hook),
+    )
+    _source_model(
+        second_module,
+        "DedupeSecondDonor",
+        "dedupesecond",
+        extends="dedupetarget.DedupeTarget",
+        after_resource_load=classmethod(shared_hook),
+    )
+
+    runtime = Runtime(
+        (
+            _addon_config("dedupetarget", target_module),
+            _addon_config("dedupefirst", first_module),
+            _addon_config("dedupesecond", second_module),
+        ),
+        runtime_dir=tmp_path / "runtime",
+    )
+
+    source = runtime.render_sources()[Path("dedupetarget/models.py")]
+
+    assert "def after_resource_load(" not in source
 
 
 def test_runtime_clean_requires_generated_sentinel(tmp_path: Path) -> None:

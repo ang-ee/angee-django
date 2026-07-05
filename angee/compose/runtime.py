@@ -33,6 +33,9 @@ _COMPOSER_WEB_SOURCES = {
     Path("web/tailwind.sources.css"),
 }
 
+_RESOURCE_LOAD_HOOK = "after_resource_load"
+"""Model classmethod the resource loader fans in once every selected row loads."""
+
 
 class ModelContributions(NamedTuple):
     """Abstract source models one addon contributes, split by composition role."""
@@ -55,6 +58,12 @@ class RuntimeModelRenderPlan:
     extension_aliases: tuple[tuple[type[models.Model], str], ...]
     decorators: tuple[ModelDecorator, ...]
     attributes: tuple[ModelClassAttribute, ...]
+    after_resource_load_aliases: tuple[str, ...]
+    """Composed-base aliases whose ``after_resource_load`` the concrete model aggregates.
+
+    Empty for the single-donor status quo — one implementation resolves natively
+    through the concrete model's MRO, so the composer emits nothing new.
+    """
 
 
 class Runtime:
@@ -307,7 +316,7 @@ class Runtime:
                     model_class._meta.label_lower,
                     (),
                 )
-                    for base in extension.get_extension_bases()
+                for base in extension.get_extension_bases()
             )
             aliased_extensions: list[tuple[type[models.Model], str]] = []
             for index, extension_base in enumerate(extension_bases, start=1):
@@ -327,6 +336,12 @@ class Runtime:
                     extension_aliases=tuple(aliased_extensions),
                     decorators=decorators,
                     attributes=attributes,
+                    after_resource_load_aliases=self._after_resource_load_aliases(
+                        model_class,
+                        source_alias=source_alias,
+                        runtime_parent_alias=runtime_parent_alias,
+                        extension_aliases=tuple(aliased_extensions),
+                    ),
                 )
             )
 
@@ -344,9 +359,7 @@ class Runtime:
             ]
             meta_lines.extend(self._rebac_meta_source(plan.model_class))
             body_lines = [
-                line
-                for attribute in plan.attributes
-                for line in (*self._model_attribute_source(attribute), "")
+                line for attribute in plan.attributes for line in (*self._model_attribute_source(attribute), "")
             ]
             decorator_lines = [
                 self._model_decorator_source(
@@ -365,12 +378,75 @@ class Runtime:
                     f'    """Concrete {plan.model_class.__name__} model."""',
                     "",
                     *body_lines,
+                    *self._after_resource_load_source(plan.after_resource_load_aliases),
                     f"    class Meta({meta_name}):",
                     *meta_lines,
                     "",
                 ]
             )
         return "\n".join(lines).rstrip() + "\n"
+
+    def _after_resource_load_aliases(
+        self,
+        model_class: type[AngeeModel],
+        *,
+        source_alias: str,
+        runtime_parent_alias: str | None,
+        extension_aliases: tuple[tuple[type[models.Model], str], ...],
+    ) -> tuple[str, ...]:
+        """Return composed-base aliases whose ``after_resource_load`` must aggregate.
+
+        The resource loader resolves the hook once per composed model
+        (``angee.resources.managers``) — so ``getattr(model, "after_resource_load")``
+        picks only the first contributor its MRO reaches and shadows the rest.
+        When two or more composed bases contribute *distinct* implementations the
+        composer emits an aggregating classmethod (``_after_resource_load_source``)
+        that runs every one once; this returns the aliases it calls, in the same
+        order as the emitted base tuple (extension donors in dependency order,
+        then the materialized parent, then the source), so the aggregator walks
+        the exact order the single-dispatch MRO would — first donor first.
+
+        A single donor (or the same function inherited by several bases) returns
+        an empty tuple: one implementation resolves natively through the MRO and
+        the runtime stays byte-identical.
+        """
+
+        contributors: list[tuple[str, type[models.Model]]] = [(alias, base) for base, alias in extension_aliases]
+        if runtime_parent_alias is not None:
+            target = cast(str, model_class.get_extension_target())
+            contributors.append((runtime_parent_alias, self.source_models_by_composition_label[target]))
+        contributors.append((source_alias, model_class))
+
+        aliases: list[str] = []
+        seen: set[Any] = set()
+        for alias, base in contributors:
+            func = getattr(getattr(base, _RESOURCE_LOAD_HOOK, None), "__func__", None)
+            if func is None or func in seen:
+                continue
+            seen.add(func)
+            aliases.append(alias)
+        return tuple(aliases) if len(aliases) > 1 else ()
+
+    def _after_resource_load_source(self, aliases: tuple[str, ...]) -> list[str]:
+        """Return the aggregating ``after_resource_load`` classmethod body lines.
+
+        The emitted method forwards to each contributor's own implementation
+        through ``__func__`` (unbinding the donor's classmethod so it runs against
+        the composed ``cls``). The loader brackets the call in the load
+        transaction, so a donor that raises fails the load loudly and rolls back —
+        no skip-and-continue, and a rerun is idempotent.
+        """
+
+        if not aliases:
+            return []
+        lines = [
+            "    @classmethod",
+            f"    def {_RESOURCE_LOAD_HOOK}(cls, *args: object, **kwargs: object) -> None:",
+            '        """Run each composed after_resource_load contributor once, in dependency order."""',
+        ]
+        lines.extend(f"        {alias}.{_RESOURCE_LOAD_HOOK}.__func__(cls, *args, **kwargs)" for alias in aliases)
+        lines.append("")
+        return lines
 
     def _model_decorators(
         self,
@@ -447,8 +523,7 @@ class Runtime:
                         attributes.append(attribute)
                     elif previous != attribute:
                         raise ImproperlyConfigured(
-                            f"{model_class._meta.label} composes conflicting class attributes "
-                            f"for {attribute.name!r}"
+                            f"{model_class._meta.label} composes conflicting class attributes for {attribute.name!r}"
                         )
         return tuple(attributes)
 
