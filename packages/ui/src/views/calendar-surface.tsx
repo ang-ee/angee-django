@@ -121,9 +121,12 @@ export default function CalendarSurface({
         buttonText={{ today: t("calendar.today") }}
         locales={allLocales}
         locale={language}
-        height="100%"
-        expandRows
-        dayMaxEvents
+        // The console content area is a scrolling `main` (views grow with
+        // content — the TimelineView shape); a percentage height would resolve
+        // against an indefinite ancestor and collapse the grid, clipping rows
+        // and killing hit-testing for select/drag.
+        height="auto"
+        dayMaxEvents={4}
         editable={Boolean(onEventDrop)}
         selectable={Boolean(onSelectRange)}
         selectMirror
