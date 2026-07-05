@@ -1194,6 +1194,28 @@ describe("FormView", () => {
     });
   });
 
+  test("submits a createOnly read-only field seeded via createDefaults", async () => {
+    renderWithProviders(
+      <FormView
+        resource="notes.Note"
+        fields={[
+          { name: "title", label: "Title", title: true },
+          { name: "kind", label: "Kind", readOnly: true, createOnly: true },
+        ]}
+        defaultValues={{ kind: "skill" }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    // The page-level `createDefaults` seed pins a read-only field with no field
+    // `defaultValue`; it still rides the create payload instead of being dropped.
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: { title: "", kind: "skill" },
+    });
+  });
+
   test("lets an explicit user edit override a field defaultValue on create", async () => {
     renderWithProviders(
       <FormView

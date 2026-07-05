@@ -62,7 +62,7 @@ function PartyRelatedTab({
       resource={resource}
       scope="local"
       fields={fields}
-      baseFilter={{ party: { _eq: recordId } }}
+      baseFilter={{ party: { exact: recordId } }}
       columns={columns}
       emptyContent={emptyContent}
     />

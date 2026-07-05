@@ -6,16 +6,20 @@ import { AddRepositoryControl } from "./AddRepositoryControl";
 
 const MODEL = "integrate.Repository";
 
-const repositoryList = (
-  <List resource={MODEL}>
-    <Facet field="vcs_bridge" label="VCS bridge" labelField="display_name" />
-    <Column field="org" />
-    <Column field="name" />
-    <Column field="visibility" widget="statusBadge" />
-    <Column field="default_branch" />
-    <Column field="web_url" />
-  </List>
-);
+function repositoryList(
+  t: ReturnType<typeof useIntegrateT>,
+): React.ReactElement {
+  return (
+    <List resource={MODEL}>
+      <Facet field="vcs_bridge" label={t("col.vcsBridge")} labelField="display_name" />
+      <Column field="org" />
+      <Column field="name" />
+      <Column field="visibility" widget="statusBadge" />
+      <Column field="default_branch" />
+      <Column field="web_url" />
+    </List>
+  );
+}
 
 /**
  * The inventoried repositories, with the "Add repository" typeahead in the list
@@ -33,7 +37,7 @@ export function RepositoriesPage(): React.ReactElement {
       hideCreate
       toolbarActions={<AddRepositoryControl />}
     >
-      {repositoryList}
+      {repositoryList(t)}
       {/* Repositories are inventoried by the add typeahead and `discover`,
           never hand-created or edited, so the detail is read-only; ResourceList
           still wires the per-record delete (the only Repository mutation). */}

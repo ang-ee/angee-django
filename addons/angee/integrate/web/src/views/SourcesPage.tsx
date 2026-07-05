@@ -6,15 +6,17 @@ import { useIntegrateT } from "../i18n";
 
 const MODEL = "integrate.Source";
 
-const sourceList = (
-  <List resource={MODEL}>
-    <Facet field="repository" label="Repository" labelField="name" />
-    <Column field="kind" />
-    <Column field="ref" />
-    <Column field="path" />
-    <Column field="last_synced_at" />
-  </List>
-);
+function sourceList(t: ReturnType<typeof useIntegrateT>): React.ReactElement {
+  return (
+    <List resource={MODEL}>
+      <Facet field="repository" label={t("col.repository")} labelField="name" />
+      <Column field="kind" />
+      <Column field="ref" />
+      <Column field="path" />
+      <Column field="last_synced_at" />
+    </List>
+  );
+}
 
 /**
  * Sources: ref+path pointers into a repository. The form binds a repository
@@ -27,7 +29,7 @@ export function SourcesPage(): React.ReactElement {
 
   return (
     <ResourceList resource={MODEL} placement="inline" routed>
-      {sourceList}
+      {sourceList(t)}
       <Form resource={MODEL}>
         {/* The repository is fixed at create; the patch input omits it. */}
         <Field name="repository" createOnly />

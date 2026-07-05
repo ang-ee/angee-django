@@ -265,8 +265,10 @@ TanStack apply the URL-owned filter object to in-memory rows.
   hand-roll a new client filter/sort/paginate engine — compose TanStack Table's
   row models through `useClientResourceViewSurface` over the fetched set for a
   `rowModel:"client"` resource; `RowsListView` remains the
-  renderer for the genuinely non-resource in-memory case (the operator-daemon
-  quarantine).
+  renderer for the genuinely non-resource in-memory case — the operator-daemon
+  quarantine, and an explorer-scoped collection that is not a Hasura resource
+  (storage's folder-scoped `FileBrowserContent`, which lists a drive's
+  content-addressed files rather than a model resource).
 - A recipe's icon-button size keys are `iconSm`/`iconMd`/`iconLg` (one spelling
   across recipes). A default `size` is a visual contract — do not flip it without a
   requester (differing defaults like `Switch`/`ToggleGroup` `sm` vs `Toggle` `md`
@@ -494,12 +496,14 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   `changes(Model, field="<model>Changed")` in its `schema.py` refreshes on local
   writes only (no live push, no error). Add the subscription to opt a model into
   live updates; omit it and you simply get local-write invalidation.
-- **`createDefaults` needs a submittable field, never `readOnly`.** `ResourceList`'s
-  `createDefaults` seeds the create form, but `FormView.mutationData` drops every
-  `readOnly` field from the payload — so a `readOnly` field pinned by `createDefaults`
-  is silently *not* sent, failing a required create input. Use `createOnly` (editable
-  on create carrying the seed, locked on edit) or a plain field; reserve `readOnly`
-  for values the create input does not accept.
+- **A `createDefaults` seed submits on create even when `readOnly`.** `ResourceList`'s
+  `createDefaults` seeds the create form, and `FormView.mutationData` submits a create
+  seed even for a `readOnly`/`createOnly` field — whether the seed is the field's own
+  `defaultValue` or a page-level `createDefaults` entry — so a seeded read-only field is
+  no longer silently dropped from the create payload. Prefer `createOnly` (editable on
+  create carrying the seed, locked on edit) when the value should stay visible-but-fixed;
+  `readOnly` + `createDefaults` also works for a value the form never renders editable.
+  (`editOnly` fields stay excluded on create.)
 - **A storybook `meta.args`/`argTypes` is dead only if no story consumes it.** A
   bare `export const X: Story = {}` (or a `render: (args) => …`) AUTO-RENDERS from
   `meta.args` — those args are live; only a file whose every story is a zero-param

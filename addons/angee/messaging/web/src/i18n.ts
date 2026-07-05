@@ -102,6 +102,27 @@ export const enMessagingMessages: Record<string, string> = {
   "transcript.loadOlder": "Load older messages",
   "transcript.noteLabel": "Internal note",
 
+  // ThreadsPage — the threads list + detail.
+  "threads.tabConversation": "Conversation",
+  "threads.channel": "Channel",
+  "threads.messageCount": "Messages",
+  "threads.groupAbout": "About",
+  "threads.makePrivate": "Make private",
+  "threads.makeUnlisted": "Make unlisted",
+  "threads.makePublic": "Make public",
+  "threads.makeRestricted": "Make restricted",
+
+  // MessagesPage — the inbox list + detail.
+  "messages.channel": "Channel",
+  "messages.sender": "Sender",
+  "messages.thread": "Thread",
+  "messages.groupEnvelope": "Envelope",
+  "messages.hide": "Hide",
+  "messages.remove": "Remove",
+  "messages.removeTitle": "Remove message?",
+  "messages.removeBody": "It is hidden from the inbox until restored.",
+  "messages.restore": "Restore",
+
   // RecordActivityPane — the Activity chatter tab.
   "activity.noRecord": "No record selected",
   "activity.noRecordHint": "Open a record to plan activities.",

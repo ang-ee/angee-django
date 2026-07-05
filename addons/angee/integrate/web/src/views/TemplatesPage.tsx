@@ -12,26 +12,32 @@ const TEMPLATE_KIND_OPTIONS = [
   { value: TEMPLATE_SOURCE_KIND, label: "Template" },
 ];
 
-const templateList = (
-  <List resource={TEMPLATE_MODEL} pageSize={50}>
-    <Facet field="source" label="Source" labelField="path" />
-    <Column field="kind" />
-    <Column field="name" />
-    <Column field="path" />
-    <Column field="source.ref" header="Source" />
-    <Column field="updated_at" />
-  </List>
-);
+function templateList(t: ReturnType<typeof useIntegrateT>): React.ReactElement {
+  return (
+    <List resource={TEMPLATE_MODEL} pageSize={50}>
+      <Facet field="source" label={t("col.source")} labelField="path" />
+      <Column field="kind" />
+      <Column field="name" />
+      <Column field="path" />
+      <Column field="source.ref" header={t("col.source")} />
+      <Column field="updated_at" />
+    </List>
+  );
+}
 
-const templateSourceList = (
-  <List resource={SOURCE_MODEL} pageSize={50}>
-    <Facet field="repository" label="Repository" labelField="name" />
-    <Column field="repository.name" header="Repository" />
-    <Column field="path" />
-    <Column field="ref" />
-    <Column field="last_synced_at" />
-  </List>
-);
+function templateSourceList(
+  t: ReturnType<typeof useIntegrateT>,
+): React.ReactElement {
+  return (
+    <List resource={SOURCE_MODEL} pageSize={50}>
+      <Facet field="repository" label={t("col.repository")} labelField="name" />
+      <Column field="repository.name" header={t("col.repository")} />
+      <Column field="path" />
+      <Column field="ref" />
+      <Column field="last_synced_at" />
+    </List>
+  );
+}
 
 // Templates are reconciled from template Source rows; this surface manages those
 // sources and then inspects the discovered Copier manifest metadata.
@@ -50,7 +56,7 @@ export function TemplatesPage(): React.ReactElement {
           baseFilter={{ kind: { exact: TEMPLATE_SOURCE_KIND } }}
           createDefaults={TEMPLATE_SOURCE_DEFAULTS}
         >
-          {templateSourceList}
+          {templateSourceList(t)}
           <Form resource={SOURCE_MODEL}>
             {/* `kind` is create-only (not read-only) so the template seed is submitted. */}
             <Field name="repository" createOnly />
@@ -79,7 +85,7 @@ export function TemplatesPage(): React.ReactElement {
       <SettingsSection title={t("templates.title")}>
         <ControlBandProvider host={undefined}>
           <ResourceList resource={TEMPLATE_MODEL} placement="inline" routed hideCreate>
-            {templateList}
+            {templateList(t)}
             <Form resource={TEMPLATE_MODEL}>
               <Field name="name" title readOnly />
               <Group label={t("templates.template")} columns={2}>

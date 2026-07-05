@@ -13,6 +13,7 @@ export const enUiMessages: Record<string, string> = {
   "dialog.cancel": "Cancel",
   "error.generic": "Something went wrong.",
   "alert.dismiss": "Dismiss",
+  "chip.remove": "Remove {label}",
   "actions.list": "List",
   "actions.create": "Create",
   "actions.edit": "Edit",
