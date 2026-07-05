@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSyn
 import { dirname, join } from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { defineConfig, mergeConfig, type UserConfig } from "vite";
+import { defineConfig, mergeConfig, type Plugin, type UserConfig } from "vite";
 
 // The framework owner of the web Vite defaults: the plugin pair, the dev-server
 // host/port/proxy wiring, the `@angee/gql/<schema>` alias, and the
@@ -44,11 +44,30 @@ function angeePackagesAt(cwd: string): string[] {
 }
 
 // Generated/vendored trees that never feed the prebundle — skipped so an
-// unchanged source tree yields a stable signature (no needless re-optimize).
-const PREBUNDLE_SKIP_DIRS = new Set(["node_modules", ".git", ".vite", ".cache", ".turbo", "dist"]);
+// unchanged source tree yields a stable signature (no needless re-optimize). Test
+// and build artefacts (coverage, the storybook static build, e2e output) churn on
+// every run, so hashing them would bust the cache spuriously.
+const PREBUNDLE_SKIP_DIRS = new Set([
+  "node_modules",
+  ".git",
+  ".vite",
+  ".cache",
+  ".turbo",
+  "dist",
+  "coverage",
+  "storybook-static",
+  "test-results",
+  "playwright-report",
+]);
 
 function collectSourceFiles(dir: string, out: string[]): void {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return; // directory vanished mid-walk (a concurrent build/clean) — nothing to hash
+  }
+  for (const entry of entries) {
     if (entry.isDirectory()) {
       if (!PREBUNDLE_SKIP_DIRS.has(entry.name)) collectSourceFiles(join(dir, entry.name), out);
     } else if (entry.isFile()) {
@@ -77,7 +96,15 @@ function angeeSourceSignature(webRoot: string, packages: string[]): string {
     collectSourceFiles(dir, files);
     files.sort(); // deterministic, independent of readdir order
     hash.update(pkg);
-    for (const file of files) hash.update(`${file}:${statSync(file).mtimeMs}`);
+    for (const file of files) {
+      let mtimeMs: number;
+      try {
+        mtimeMs = statSync(file).mtimeMs;
+      } catch {
+        continue; // file removed between readdir and stat — skip it
+      }
+      hash.update(`${file}:${mtimeMs}`);
+    }
   }
   return hash.digest("hex");
 }
@@ -86,6 +113,11 @@ function angeeSourceSignature(webRoot: string, packages: string[]): string {
 // source signature differs from the persisted marker (a workspace source edit).
 // Refreshes the marker so the next unchanged start uses the cache again; the
 // marker sits beside — not inside — Vite's `deps/` cache, which `force` clears.
+// Refreshing the marker is a side effect that must only happen when the force is
+// actually consumed — the dev server's optimizer. A `build` never re-optimizes, so
+// refreshing there would record the new signature without ever re-bundling, and
+// the next `angee dev` would see "unchanged" and serve the stale source (the very
+// trap this guards). The caller gates this on `command === "serve"`.
 // Exported for unit coverage of the changed-vs-unchanged decision.
 export function angeePrebundleForce(webRoot: string, packages: string[]): boolean {
   const marker = join(webRoot, "node_modules", ".vite", "angee-prebundle-source");
@@ -95,6 +127,20 @@ export function angeePrebundleForce(webRoot: string, packages: string[]): boolea
   mkdirSync(dirname(marker), { recursive: true });
   writeFileSync(marker, signature);
   return true;
+}
+
+// The dev-server gate for the prebundle force. Vite's `config(config, env)` hook
+// runs before the optimizer, once per command, so this is where the serve-only
+// `force` (and its marker refresh) belongs — never on `build`, where the force is
+// inert and the refresh would swallow a pending change. Exported for unit coverage.
+export function angeePrebundleForcePlugin(webRoot: string, packages: string[]): Plugin {
+  return {
+    name: "angee:prebundle-force",
+    config(_config, { command }) {
+      if (command !== "serve") return undefined;
+      return { optimizeDeps: { force: angeePrebundleForce(webRoot, packages) } };
+    },
+  };
 }
 
 export interface AngeeWebViteConfig extends UserConfig {
@@ -130,7 +176,14 @@ export function defineAngeeWebViteConfig({
   const angeePackages = angeePackagesAt(webRoot);
   const base = defineConfig({
     root: webRoot,
-    plugins: [react(), tailwindcss()],
+    plugins: [
+      react(),
+      tailwindcss(),
+      // Only when this project pre-bundles the linked `@angee/*` source: bust the
+      // optimizer cache on a workspace source edit, but only on `serve` (see
+      // `angeePrebundleForcePlugin`).
+      ...(prebundleAngeePackages ? [angeePrebundleForcePlugin(webRoot, angeePackages)] : []),
+    ],
     // The `@angee/gql/<schema>` alias for this project's generated typed
     // operations, pointing at the project's OWN `runtime/gql/<name>/` tree (the
     // web package generates it via codegen). Project-supplied and
@@ -139,12 +192,11 @@ export function defineAngeeWebViteConfig({
     resolve: {
       alias: [{ find: /^@angee\/gql\//, replacement: gqlRuntimeDir }],
     },
-    // Prebundle installed `@angee/*` packages, busting the cache when their
-    // workspace source changed (`angeePrebundleForce`); a project consuming them
-    // as linked source excludes them so HMR serves the source directly.
-    optimizeDeps: prebundleAngeePackages
-      ? { include: angeePackages, force: angeePrebundleForce(webRoot, angeePackages) }
-      : { exclude: angeePackages },
+    // Prebundle installed `@angee/*` packages; the serve-only
+    // `angeePrebundleForcePlugin` merges in `force` when their workspace source
+    // changed. A project consuming them as linked source excludes them so HMR
+    // serves the source directly.
+    optimizeDeps: prebundleAngeePackages ? { include: angeePackages } : { exclude: angeePackages },
     server: {
       host: true,
       port: uiPort,
