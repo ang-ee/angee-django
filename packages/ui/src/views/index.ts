@@ -2,11 +2,7 @@
 // list/form views, their collection⇄record page composition, and aggregate
 // panels. Hosts configure them with descriptors or with the page element DSL.
 
-export {
-  List,
-  type ListComponent,
-  type ListProps,
-} from "./List";
+export { List, type ListComponent, type ListProps } from "./List";
 export {
   ListView,
   type ListViewProps,
@@ -18,10 +14,7 @@ export {
   type ResourceListSnapshot,
   type ColumnAlign,
 } from "./ListView";
-export {
-  RowsListView,
-  type RowsListViewProps,
-} from "./RowsListView";
+export { RowsListView, type RowsListViewProps } from "./RowsListView";
 export {
   RelationPicker,
   type RelationPickerProps,
@@ -33,10 +26,19 @@ export {
   type MutationDialogProps,
 } from "./MutationDialog";
 export {
+  ActionFormDialog,
+  type ActionFormDialogProps,
+} from "./ActionFormDialog";
+export {
   FieldDescriptorControl,
   type FieldDescriptorControlProps,
 } from "./field-descriptor-control";
-export { useEnumOptions, useImplCategory, useImplChoices, useImplPrefill } from "./enum-options";
+export {
+  useEnumOptions,
+  useImplCategory,
+  useImplChoices,
+  useImplPrefill,
+} from "./enum-options";
 export {
   GraphView,
   type GraphViewEdge,
@@ -48,14 +50,8 @@ export {
   type GraphViewConnection,
   type GraphViewPosition,
 } from "./GraphView";
-export {
-  DashboardView,
-  type DashboardViewProps,
-} from "./DashboardView";
-export {
-  TreeView,
-  type TreeViewProps,
-} from "./TreeView";
+export { DashboardView, type DashboardViewProps } from "./DashboardView";
+export { TreeView, type TreeViewProps } from "./TreeView";
 export {
   ScopedExplorerPane,
   type ScopedExplorerController,
@@ -68,18 +64,9 @@ export {
   type ScopedTreeExplorerOption,
   type UseScopedTreeExplorerOptions,
 } from "./useScopedTreeExplorer";
-export {
-  GalleryView,
-  type GalleryViewProps,
-} from "./GalleryView";
-export {
-  TimelineView,
-  type TimelineViewProps,
-} from "./TimelineView";
-export {
-  Notebook,
-  type NotebookProps,
-} from "./Notebook";
+export { GalleryView, type GalleryViewProps } from "./GalleryView";
+export { TimelineView, type TimelineViewProps } from "./TimelineView";
+export { Notebook, type NotebookProps } from "./Notebook";
 export {
   Tree,
   FolderTree,
@@ -88,14 +75,8 @@ export {
   type TreeProps,
   type FolderTreeProps,
 } from "../ui/tree";
-export {
-  Metric,
-  type MetricProps,
-} from "./dashboard/Metric";
-export {
-  Form,
-  type FormProps,
-} from "./Form";
+export { Metric, type MetricProps } from "./dashboard/Metric";
+export { Form, type FormProps } from "./Form";
 export {
   FormView,
   FORM_VIEW_RECORD_CHROME_SLOT,
@@ -148,10 +129,7 @@ export {
   DeletePreviewTree,
   type DeletePreviewTreeProps,
 } from "./DeletePreviewTree";
-export {
-  useBulkDelete,
-  type UseBulkDeleteResult,
-} from "./useBulkDelete";
+export { useBulkDelete, type UseBulkDeleteResult } from "./useBulkDelete";
 export {
   recordActionId,
   useRecordAction,
@@ -160,10 +138,7 @@ export {
   type RecordActionRunner,
   type UseRecordActionOptions,
 } from "./record-action";
-export {
-  RecordPager,
-  type RecordNavigation,
-} from "./RecordPager";
+export { RecordPager, type RecordNavigation } from "./RecordPager";
 export {
   useRelationFacets,
   type RelationFacets,
@@ -199,11 +174,16 @@ export {
   PAGE_ELEMENT_SLOT,
 } from "./page";
 export type {
+  ActionArg,
   ActionConfirm,
   ActionContext,
   ActionDescriptor,
+  ActionFormContext,
   ActionProps,
+  ActionRelationArg,
+  ActionRelationListArg,
   ActionResult,
+  ActionScalarArg,
   ColumnAggregate,
   ColumnDescriptor,
   ColumnProps,
