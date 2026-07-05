@@ -168,3 +168,87 @@ describe("emptyLineRow / duplicateLineRow", () => {
     expect(duplicate).toEqual({ product: "p1", label: "A", quantity: 1, position: 0 });
   });
 });
+
+// A line with an M2M child (`taxes`) and an enum child (`kind`): the F6 M2M/enum
+// cells. The M2M carries a relation target (so it is a multi-select, not a tag
+// input) and serializes to an array of public ids; the enum reads as the
+// UPPERCASE wire member and writes its lowercase model value.
+const RICH_LINES: DataResourceLinesMetadata = {
+  field: "items",
+  modelLabel: "accounting.JournalItem",
+  positionField: "position",
+  fields: [
+    field("taxes", "list", { relationModelLabel: "accounting.Tax", scalar: "ID" }),
+    field("kind", "enum", { values: [{ value: "GOODS" }, { value: "SERVICE" }] }),
+    field("labels", "list", { scalar: "String" }),
+    field("position", "scalar", { scalar: "Int" }),
+  ],
+};
+
+const richConfig = lineDiffConfig(RICH_LINES);
+
+describe("lineDiffConfig — M2M + enum classification", () => {
+  test("an M2M child (list + relation target) is a multi-relation; a plain list is not", () => {
+    expect([...richConfig.multiRelationFields]).toEqual(["taxes"]);
+    expect([...richConfig.enumFields]).toEqual(["kind"]);
+    // A relation target is what distinguishes an M2M list from a string array.
+    expect(richConfig.multiRelationFields.has("labels")).toBe(false);
+  });
+});
+
+describe("lineToInput — M2M + enum normalization", () => {
+  test("an M2M cell serializes to a de-duped id array; an enum writes its lowercase value", () => {
+    const row: Row = {
+      id: "it_a",
+      // A read carries related records ({ id }); a fresh pick carries bare ids.
+      taxes: [{ id: "tx1" }, "tx2", { id: "tx1" }],
+      kind: "SERVICE",
+      labels: ["urgent"],
+      position: 4,
+    };
+    expect(lineToInput(row, 0, richConfig)).toEqual({
+      id: "it_a",
+      taxes: ["tx1", "tx2"],
+      kind: "service",
+      labels: ["urgent"],
+      position: 0,
+    });
+  });
+
+  test("a blank row seeds an empty id array for the M2M cell", () => {
+    expect(emptyLineRow(1, richConfig)).toEqual({
+      taxes: [],
+      kind: "",
+      labels: "",
+      position: 1,
+    });
+  });
+});
+
+describe("diffLines — M2M + enum", () => {
+  const baseline: Row[] = [
+    { id: "it_a", taxes: ["tx1"], kind: "GOODS", labels: [], position: 0 },
+  ];
+
+  test("an untouched enum (UPPERCASE read) and M2M (id-array read) are not dirty", () => {
+    const current: Row[] = [
+      { id: "it_a", taxes: [{ id: "tx1" }], kind: "GOODS", labels: [], position: 0 },
+    ];
+    expect(diffLines(baseline, current, richConfig).hasChanges).toBe(false);
+  });
+
+  test("adding a tax and switching the enum both mark the row updated", () => {
+    const current: Row[] = [
+      { id: "it_a", taxes: ["tx1", "tx2"], kind: "SERVICE", labels: [], position: 0 },
+    ];
+    const diff = diffLines(baseline, current, richConfig);
+    expect(diff.updated.map((line) => line.id)).toEqual(["it_a"]);
+    expect(diff.payload[0]).toEqual({
+      id: "it_a",
+      taxes: ["tx1", "tx2"],
+      kind: "service",
+      labels: [],
+      position: 0,
+    });
+  });
+});

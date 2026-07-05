@@ -39,6 +39,9 @@ const LINES: DataResourceLinesMetadata = {
       currencyField: "entry.currency",
     }),
     field("role", "enum", { values: [{ value: "product" }, { value: "tax" }] }),
+    // An M2M child (F-b): a `kind: "list"` field carrying a relation target, read
+    // and written as a list of the related rows' public ids.
+    field("taxes", "list", { scalar: "ID", relationModelLabel: "accounting.Tax" }),
   ],
 };
 
@@ -65,6 +68,12 @@ describe("lineChildModelMetadata", () => {
   test("passes through enum values for a select cell", () => {
     expect(child.fields.role?.values).toEqual([{ value: "product" }, { value: "tax" }]);
   });
+
+  test("projects an M2M child to a list kind with its relation target", () => {
+    const taxes = child.fields.taxes;
+    expect(taxes?.kind).toBe("list");
+    expect(taxes?.relationTarget).toBe("TaxType");
+  });
 });
 
 describe("lineReadSelectionPaths", () => {
@@ -78,9 +87,11 @@ describe("lineReadSelectionPaths", () => {
     },
   };
 
-  test("selects the child id, order column, scalars, enums, and relation id + label", () => {
+  test("selects the child id, order column, scalars, enums, relation id + label, and the M2M id list", () => {
     // The detail (`*_by_pk`) read must carry the lines' child columns so an
     // existing document's lines seed the composer instead of reading as absent.
+    // An M2M child reads as a scalar list of public ids, so it is selected by
+    // name (no nested `.id`/`.label`), like the `list[ID]` node field it projects.
     expect(lineReadSelectionPaths(LINES, schema)).toEqual([
       "id",
       "position",
@@ -88,6 +99,7 @@ describe("lineReadSelectionPaths", () => {
       "product.name",
       "priceUnit",
       "role",
+      "taxes",
     ]);
   });
 
@@ -98,6 +110,7 @@ describe("lineReadSelectionPaths", () => {
       "product.id",
       "priceUnit",
       "role",
+      "taxes",
     ]);
   });
 
