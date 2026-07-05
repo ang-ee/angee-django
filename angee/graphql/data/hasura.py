@@ -248,7 +248,15 @@ class AngeeHasuraWriteBackend:
 
         def pre_save_hook(instance: models.Model) -> None:
             nonlocal verified_actor
-            verified_actor = check_create(relationships)
+            # The gate must see the row as it will persist: let the model apply
+            # its blank-on-input create defaults (a CompanyScopedMixin ``company``
+            # defaulted from the actor's sole membership) before gating, and fold
+            # the subject relations those defaults add into the preflight. A
+            # caller-supplied relation always wins the merge, so an explicit
+            # cross-company id still rides the gate — no bypass through the default.
+            apply_defaults = getattr(instance, "apply_create_defaults", None)
+            default_relationships = apply_defaults() if callable(apply_defaults) else {}
+            verified_actor = check_create({**default_relationships, **relationships})
             sudo = getattr(instance, "sudo", None)
             if callable(sudo):
                 sudo(reason="graphql.hasura.create")

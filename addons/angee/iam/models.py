@@ -42,7 +42,7 @@ ancestor-company member reaches every descendant scope.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
@@ -402,6 +402,27 @@ class CompanyScopedMixin(models.Model):
         if self.company_id is None:
             self.company = self._default_company_from_membership()
         super().save(*args, **kwargs)
+
+    def apply_create_defaults(self) -> Mapping[str, Sequence[Any]]:
+        """Default a blank ``company`` before the create gate sees the row (§3.7).
+
+        The auto-CRUD create preflight gates ``create = company->member`` on the
+        unsaved instance, before :meth:`save` defaults the blank ``company`` — so
+        without this the gate walks an absent company relation and fail-closes a
+        create a single-membership member is entitled to. Applying the default
+        here (idempotent with :meth:`save`, which then finds ``company`` already
+        set) lets the gate evaluate against the company the row will persist. A
+        caller-supplied ``company`` is left untouched and contributes nothing, so
+        it still rides the caller's value through the gate (no default bypass);
+        an ambiguous/actorless write still raises the field-named
+        :class:`ValidationError` here rather than surfacing as a REBAC denial.
+        """
+
+        contributions = dict(super().apply_create_defaults())
+        if self.company_id is None:
+            self.company = self._default_company_from_membership()
+            contributions["company"] = (self.company,)
+        return contributions
 
     def _default_company_from_membership(self) -> Company:
         """Return the acting user's sole direct company, or raise naming ``company``."""

@@ -29,6 +29,7 @@ INSTALLED_APPS = [
     "angee.platform_integrate_vcs",
     "tests.linesdemo",
     "tests.chatterdemo",
+    "tests.scopedemo",
 ]
 DATABASES = {
     "default": {

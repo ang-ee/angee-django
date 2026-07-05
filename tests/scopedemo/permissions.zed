@@ -1,0 +1,19 @@
+// Authorization schema for the company-scope create-gate demo (test-only).
+// @rebac_package: scopedemo
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 1
+
+// A company-scoped document whose `create` rides `company->member` — the arm
+// that (unlike a const-backed functional role) fail-closes unless the auto-CRUD
+// create preflight is evaluated against the company `CompanyScopedMixin` defaults
+// from the actor's sole membership. This is the framework regression handle for
+// that gate (the shape arp.calendar.event is the first real consumer of).
+definition scopedemo/doc {
+    relation company: iam/company // rebac:field=company
+    relation admin:   angee/role   // rebac:const=admin
+
+    permission create = company->member + admin->member
+    permission read   = company->member + admin->member
+    permission write  = company->member + admin->member
+    permission delete = company->member + admin->member
+}

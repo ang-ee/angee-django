@@ -277,3 +277,56 @@ def test_company_scoped_save_rejects_anonymous_write() -> None:
         scoped_model.objects.create(title="Anonymous")
 
     assert "company" in excinfo.value.message_dict
+
+
+@pytest.mark.django_db
+def test_apply_create_defaults_seeds_company_and_reports_it_for_the_gate(
+    django_user_model: Any,
+) -> None:
+    """The create-gate hook defaults a blank ``company`` and reports the relation.
+
+    The auto-CRUD create preflight gates ``create = company->member`` on the
+    unsaved row before ``save()`` defaults ``company``; the hook applies that
+    default early and returns ``{"company": (company,)}`` so the gate is
+    evaluated against the company the row will actually persist with.
+    """
+
+    call_command("rebac", "sync", verbosity=0)
+    company_model = apps.get_model("iam", "Company")
+    scoped_model = apps.get_model("iam", "CompanyScopedDoc")
+    member = django_user_model.objects.create_user(username="gate-sole")
+    with system_context(reason="test create-gate default setup"):
+        company = company_model.objects.create(name="Gate Co")
+    _grant(company, "direct_member", member)
+
+    doc = scoped_model(title="Defaulted")
+    with actor_context(member):
+        contributions = doc.apply_create_defaults()
+
+    assert doc.company_id == company.pk
+    assert contributions == {"company": (company,)}
+
+
+@pytest.mark.django_db
+def test_apply_create_defaults_leaves_a_supplied_company_and_reports_nothing(
+    django_user_model: Any,
+) -> None:
+    """A caller-supplied ``company`` is untouched and contributes no relation.
+
+    The hook only fills a *blank* ``company``, so an explicit id still rides the
+    caller's value through the gate — there is no default-path bypass around a
+    cross-company id the gate must judge on its own.
+    """
+
+    company_model = apps.get_model("iam", "Company")
+    scoped_model = apps.get_model("iam", "CompanyScopedDoc")
+    member = django_user_model.objects.create_user(username="gate-supplied")
+    with system_context(reason="test create-gate supplied setup"):
+        company = company_model.objects.create(name="Supplied Co")
+
+    doc = scoped_model(title="Explicit", company=company)
+    with actor_context(member):
+        contributions = doc.apply_create_defaults()
+
+    assert doc.company_id == company.pk
+    assert contributions == {}

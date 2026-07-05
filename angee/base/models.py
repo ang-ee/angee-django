@@ -246,6 +246,27 @@ class AngeeModel(TimestampMixin, RebacMixin):
             return field.resolve_class(default)
         return field.resolve_for(self)
 
+    def apply_create_defaults(self) -> Mapping[str, Sequence[Any]]:
+        """Apply this row's blank-on-input create defaults before the create gate.
+
+        The auto-CRUD create preflight (``AngeeManager.check_create`` via the
+        Hasura write backend) evaluates the REBAC ``create`` permission against
+        the unsaved instance *before* ``save()`` runs. A field a model defaults
+        in ``save()`` — an :class:`~angee.iam.models.CompanyScopedMixin`
+        ``company`` taken from the actor's sole membership — is therefore still
+        blank when the gate fires, so a ``create = company->member`` arm
+        fail-closes on a create that would in fact have persisted a company.
+
+        A model that defaults a subject-bearing relation on ``save()`` overrides
+        this hook to apply that default here too (idempotent with ``save()``, so
+        the row still persists with it) and return the relation contributions the
+        default adds, keyed by relation name with subject values — so the gate is
+        evaluated against the row as it will persist. The base default applies no
+        defaults and contributes nothing.
+        """
+
+        return {}
+
     @classmethod
     def get_extension_target(cls) -> str | None:
         """Return the normalized model label this source model extends."""
