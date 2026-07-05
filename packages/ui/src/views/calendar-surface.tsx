@@ -5,7 +5,6 @@ import timeGridPlugin from "@fullcalendar/timegrid";
 import interactionPlugin from "@fullcalendar/interaction";
 import allLocales from "@fullcalendar/core/locales-all";
 
-import { useUiT } from "../i18n";
 import { useAppRuntime } from "../runtime";
 import { cn } from "../lib/cn";
 import type { CalendarViewMode, CalendarViewProps, Occurrence } from "./CalendarView";
@@ -57,10 +56,8 @@ export default function CalendarSurface({
   onEventClick,
   className,
 }: CalendarViewProps): ReactElement {
-  const t = useUiT();
   // Bridge the app's active language to FullCalendar's own locale table so the
-  // weekday/month names and prev/next button hints localize with the app; the
-  // `buttonText.today` override keeps that label on the app's i18n.
+  // weekday/month names localize with the app.
   const language = useAppRuntime().i18n?.language;
   const fcRef = useRef<FullCalendar>(null);
   // Dedupe emitted windows so a controlled re-render never re-fires the caller.
@@ -129,8 +126,9 @@ export default function CalendarSurface({
         plugins={PLUGINS}
         initialView={FC_VIEW[view]}
         initialDate={range.start}
-        headerToolbar={{ left: "prev,next today", center: "title", right: "" }}
-        buttonText={{ today: t("calendar.today") }}
+        // The one toolbar row is the Angee ResourceToolbar (its typed
+        // viewControls own mode/period nav); FullCalendar contributes no chrome.
+        headerToolbar={false}
         locales={allLocales}
         locale={language}
         // The console content area is a scrolling `main` (views grow with
