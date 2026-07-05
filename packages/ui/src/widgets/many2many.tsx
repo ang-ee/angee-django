@@ -1,8 +1,6 @@
 import type { ReactElement } from "react";
 
-import { Glyph } from "../chrome/Glyph";
-import { Button } from "../ui/button";
-import { Chip } from "../ui/chip";
+import { Chip, RemovableChip } from "../ui/chip";
 import { Select } from "../ui/select";
 import { textRoleVariants } from "../ui/text";
 import { widgetLabel } from "./label";
@@ -79,23 +77,21 @@ function Many2ManyChips({
     <span className="inline-flex min-w-0 flex-wrap items-center gap-1">
       {values.map((item) => {
         const label = optionLabel(options, item);
-        return (
-          <Chip key={item} tone="info" size="sm" className="gap-1 pr-1">
-            <span className="min-w-0 truncate">{label}</span>
-            {onRemove ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="iconSm"
-                className="size-4 rounded-full"
-                aria-label={`Remove ${optionTextLabel(label, "record")}`}
-                onClick={() =>
-                  onRemove(values.filter((value) => value !== item))
-                }
-              >
-                <Glyph name="x" />
-              </Button>
-            ) : null}
+        return onRemove ? (
+          <RemovableChip
+            key={item}
+            tone="info"
+            size="sm"
+            removeLabel={optionTextLabel(label, "record")}
+            onRemove={() =>
+              onRemove(values.filter((value) => value !== item))
+            }
+          >
+            {label}
+          </RemovableChip>
+        ) : (
+          <Chip key={item} tone="info" size="sm">
+            {label}
           </Chip>
         );
       })}

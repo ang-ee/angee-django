@@ -497,6 +497,13 @@ export function FormView({
     () => emptyDraft(formFields, defaultValues),
     [defaultValues, formFields],
   );
+  // Field names the page-level create seed (`defaultValues`) pins. On create these
+  // submit even when read-only — the same exception a field's own `defaultValue`
+  // gets — so a `createDefaults` seed is never silently dropped from the payload.
+  const createSeedNames = React.useMemo<ReadonlySet<string>>(
+    () => new Set(Object.keys(defaultValues ?? {})),
+    [defaultValues],
+  );
   const [patchedRecord, setPatchedRecord] = React.useState<Row | null>(null);
   // `useForm` re-seeds an untouched form whenever `defaultValues` deep-changes.
   // Source it from this stable baseline ref (reassigned only on record seed,
@@ -733,6 +740,7 @@ export function FormView({
       const data = mutationData(value, formFields, {
         dirtyFields: form.formState.dirtyFields as Record<string, unknown>,
         isCreate,
+        seededFieldNames: createSeedNames,
         writableFields: writableFieldNames,
       });
       // Diff the edited line rows against the baseline the form was last seeded
@@ -771,6 +779,7 @@ export function FormView({
       formReadOnly,
       isCreate,
       commitSavedRecord,
+      createSeedNames,
       linesActive,
       linesConfig,
       linesField,
@@ -1911,6 +1920,7 @@ function mutationData(
     dirtyFields: Record<string, unknown>;
     id?: string | null;
     isCreate: boolean;
+    seededFieldNames?: ReadonlySet<string> | null;
     writableFields?: ReadonlySet<string> | null;
   },
 ): Values {
@@ -1920,12 +1930,16 @@ function mutationData(
       continue;
     }
     // A read-only field is normally not submitted. Exception: on create, a field
-    // carrying a `defaultValue` submits its create-seeded default even when it is
-    // `readOnly`/`createOnly` — so a fixed, non-editable field still sends its
-    // value. `editOnly` fields stay excluded on create (mode-locked read-only,
-    // and the create input omits them).
+    // carrying a create seed submits it even when `readOnly`/`createOnly` — whether
+    // the seed is the field's own `defaultValue` or a page-level `createDefaults`
+    // entry (`seededFieldNames`) — so a fixed, non-editable seeded field still
+    // sends its value. `editOnly` fields stay excluded on create (mode-locked
+    // read-only, and the create input omits them).
     const seededDefault =
-      options.isCreate && field.defaultValue !== undefined && !field.editOnly;
+      options.isCreate &&
+      !field.editOnly &&
+      (field.defaultValue !== undefined ||
+        (options.seededFieldNames?.has(field.name) ?? false));
     if (field.readOnly && !seededDefault) continue;
     // A field hidden by its `showWhen` predicate is not part of the record.
     if (!isFieldVisible(field, values)) continue;

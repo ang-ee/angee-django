@@ -14,6 +14,7 @@ export const sectionEyebrowVariants = tv({
       muted: "text-fg-muted",
       fg: "text-fg",
       brand: "text-brand",
+      warning: toneText("warning"),
       danger: toneText("danger"),
     },
     weight: {
