@@ -316,7 +316,12 @@ TanStack apply the URL-owned filter object to in-memory rows.
 - Toolbar/action dialogs with ordinary field inputs compose `MutationDialog` from
   `@angee/ui`. It owns the `DialogForm` scaffold, value reset, required gating,
   submit busy/error state, and FieldDescriptor widget rendering; addons provide
-  fields, mutation variables, and domain result handling.
+  fields, mutation variables, and domain result handling. A **record action that
+  collects typed args** — relation pickers, a relation list prefilled from the
+  invoking selection/record, scalars — instead declares `args` + `submit` on its
+  `<Action>`; `RecordActionBar` opens `ActionFormDialog`, which fires the authored
+  mutation and binds the in-band `ActionOutcome.validationErrors` to the args,
+  staying open until `ok`. Declare args, don't hand-roll the dialog.
 - A labeled control is a page element or a `FieldRoot`. Reach for `FieldRoot` /
   `FieldLabel` (the stacked label-over-control owner, e.g. for an ephemeral
   composer not bound to a model record) before hand-rolling a `<label>` wrapper.
@@ -373,6 +378,17 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   authored option via `canonicalOptionValue` (a case-insensitive unique match), so
   lower-cased `options` round-trip correctly without `createOnly`. For status verbs
   prefer an `<Action set={{status:"disabled"}}>` over an editable status field.
+  The F6 lines composer applies the same rule per cell but at the *diff boundary*,
+  not with `createOnly`: `editable-lines.ts`'s `lineFieldValue` lower-cases an enum
+  line cell's write (the child line input types the choices column as `String`), so
+  even an untouched UPPERCASE read serializes as the lowercase model value.
+- **An M2M line cell is a relation multi-select, not a `tagInput`** — a `kind:"list"`
+  child field that carries a relation target (an M2M, e.g. a line's `taxes`) renders
+  through `relationListFieldInfo` + `RelationMultiFieldWidget` (fetched options,
+  chips) and reads/writes an array of public sqids; the diff serializes it via
+  `relationIdList`. A `kind:"list"` field with *no* relation target (a plain string
+  array) stays the `tagInput`. This mirrors the to-one `relationFieldInfo` +
+  `RelationFieldWidget` cell — compose those, never hand-roll a lines cell.
 - **A server-backed typeahead is not a `RelationField`** — `RelationField`/
   `RelationPicker` own their query state and filter a fixed `options` list
   client-side, so they cannot drive a remote search. For one (e.g. a host repo

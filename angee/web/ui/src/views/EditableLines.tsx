@@ -40,16 +40,19 @@ import {
   duplicateLineRow,
   emptyLineRow,
   lineDiffConfig,
+  relationIdList,
   type LineDiffConfig,
 } from "./editable-lines";
 import { FieldDescriptorControl } from "./field-descriptor-control";
 import {
   enumOptions,
   relationFieldInfo,
+  relationListFieldInfo,
   type RelationFieldInfo,
 } from "./model-metadata-defaults";
 import type { FieldDescriptor } from "./page";
 import { RelationFieldWidget } from "./RelationFieldWidget";
+import { RelationMultiFieldWidget } from "./RelationMultiFieldWidget";
 import { relationSelectedOption } from "./relation-options";
 import type { ValidationErrors } from "./validation-errors";
 
@@ -80,6 +83,7 @@ interface LineColumn {
   field: ModelFieldMetadata;
   descriptor: FieldDescriptor;
   relation: RelationFieldInfo | null;
+  relationMulti: RelationFieldInfo | null;
   header: string;
 }
 
@@ -266,7 +270,15 @@ function LineRow({
             control={control as unknown as Control<FieldValues>}
             name={`${name}.${index}.${column.field.name}`}
             render={({ field: controller }) =>
-              column.relation ? (
+              column.relationMulti ? (
+                <RelationMultiFieldWidget
+                  value={relationIdList(controller.value)}
+                  onChange={controller.onChange}
+                  readOnly={readOnly}
+                  relation={column.relationMulti}
+                  aria-label={column.header}
+                />
+              ) : column.relation ? (
                 <RelationFieldWidget
                   value={relationValueId(controller.value) || null}
                   onChange={controller.onChange}
@@ -344,6 +356,7 @@ function lineColumns(
         field,
         descriptor,
         relation: relationFieldInfo(field.name, childMetadata, schemaMetadata),
+        relationMulti: relationListFieldInfo(field.name, childMetadata, schemaMetadata),
         header: field.label ?? titleCase(field.name),
       };
     });

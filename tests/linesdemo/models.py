@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from django.db import models
 
+from angee.base.fields import StateField
 from angee.base.models import AngeeDataModel
 
 
@@ -58,10 +59,38 @@ class Product(AngeeDataModel):
         rebac_id_attr = "sqid"
 
 
+class Tag(AngeeDataModel):
+    """A free vocabulary row a line references through an M2M (no row policy).
+
+    Stands in for the arpee ``accounting.Tax`` M2M a document line carries: the
+    child's ``tags`` decodes/persists as public sqids, and the F6 lines metadata
+    projects it as a ``kind="list"`` relation the frontend renders as a
+    multi-select. Non-REBAC (read-all) so the M2M decode is not the concern under
+    test — the relation round-trip is.
+    """
+
+    sqid_prefix = "tag_"
+
+    name = models.CharField(max_length=200)
+
+    class Meta(AngeeDataModel.Meta):
+        """Concrete read-all vocabulary model for line-M2M tests."""
+
+        abstract = False
+        app_label = "linesdemo"
+        db_table = "test_linesdemo_tag"
+
+
 class SaleLine(AngeeDataModel):
     """One ordered child line of a :class:`SaleDoc` (no row policy of its own)."""
 
     sqid_prefix = "sln_"
+
+    class Kind(models.TextChoices):
+        """The line's product/service classification — the F6 enum child field."""
+
+        GOODS = "goods", "Goods"
+        SERVICE = "service", "Service"
 
     document = models.ForeignKey(
         SaleDoc,
@@ -75,6 +104,12 @@ class SaleLine(AngeeDataModel):
         on_delete=models.PROTECT,
         related_name="+",
     )
+    # An enum child field (a ``StateField`` choices column): reads as the UPPERCASE
+    # wire member on the node, writes the lowercase model value through the String
+    # line input (the F6 enum normalization the frontend cell applies).
+    kind = StateField(choices_enum=Kind, default=Kind.GOODS)
+    # An M2M child field: reads/writes public sqids (the F6 list normalization).
+    tags = models.ManyToManyField(Tag, related_name="+", blank=True)
     label = models.CharField(max_length=200)
     quantity = models.IntegerField(default=1)
     position = models.IntegerField(default=0)

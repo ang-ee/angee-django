@@ -15,7 +15,7 @@ import {
   type WidgetRenderProps,
 } from "./types";
 
-function Many2ManyEdit({
+export function Many2ManyEdit({
   value,
   onChange,
   field,

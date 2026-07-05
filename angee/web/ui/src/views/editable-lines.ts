@@ -6,14 +6,18 @@ import { relationValueId } from "../widgets/types";
 /**
  * The facts the line diff needs from the child-lines contract: which field owns a
  * row's public id, which integer column carries the drag-maintained order, the
- * editable child columns serialized into each `LineInput`, and which of those are
- * relations (whose value normalizes to the related record's id).
+ * editable child columns serialized into each `LineInput`, and how each column's
+ * value normalizes on write — a to-one relation to its record id, an M2M relation
+ * to an array of ids, an enum to its lowercase model value (the enum reads as the
+ * UPPERCASE wire member but its String line input takes the lowercase value).
  */
 export interface LineDiffConfig {
   idField: string;
   positionField: string | null;
   fieldNames: readonly string[];
   relationFields: ReadonlySet<string>;
+  multiRelationFields: ReadonlySet<string>;
+  enumFields: ReadonlySet<string>;
 }
 
 /** Derive the diff config from a resource's editable-lines metadata. */
@@ -25,6 +29,16 @@ export function lineDiffConfig(lines: DataResourceLinesMetadata): LineDiffConfig
     fieldNames: fields.map((field) => field.name),
     relationFields: new Set(
       fields.filter((field) => field.kind === "relation").map((field) => field.name),
+    ),
+    // An M2M child is a `kind: "list"` relation (it carries a relation target);
+    // a plain `list` column (a string array) is not, so it stays verbatim.
+    multiRelationFields: new Set(
+      fields
+        .filter((field) => field.kind === "list" && Boolean(field.relationModelLabel))
+        .map((field) => field.name),
+    ),
+    enumFields: new Set(
+      fields.filter((field) => field.kind === "enum").map((field) => field.name),
     ),
   };
 }
@@ -119,10 +133,16 @@ export function recordLinesToRows(
 export function emptyLineRow(index: number, config: LineDiffConfig): Row {
   const row: Row = {};
   for (const name of config.fieldNames) {
-    row[name] = config.relationFields.has(name) ? null : "";
+    row[name] = emptyCellValue(name, config);
   }
   if (config.positionField) row[config.positionField] = index;
   return row;
+}
+
+function emptyCellValue(name: string, config: LineDiffConfig): unknown {
+  if (config.multiRelationFields.has(name)) return [];
+  if (config.relationFields.has(name)) return null;
+  return "";
 }
 
 /** Duplicate a row for the composer's "duplicate" action, dropping its identity. */
@@ -166,7 +186,26 @@ function sameLine(
 }
 
 function lineFieldValue(row: Row, name: string, config: LineDiffConfig): unknown {
-  return config.relationFields.has(name) ? relationValueId(row[name]) : row[name];
+  if (config.multiRelationFields.has(name)) return relationIdList(row[name]);
+  if (config.relationFields.has(name)) return relationValueId(row[name]);
+  if (config.enumFields.has(name)) return enumModelValue(row[name]);
+  return row[name];
+}
+
+/** Normalize an M2M cell value to the de-duped public ids the line input takes. */
+export function relationIdList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map(relationValueId))].filter(Boolean);
+}
+
+/**
+ * The lowercase model value an enum line cell writes. The enum reads as its
+ * UPPERCASE wire member (`GOODS`) but the child line input is a `String` keyed by
+ * the lowercase model value (`goods`); the member name is `value.upper()`, so
+ * lower-casing the read/picked member yields the value the input accepts.
+ */
+function enumModelValue(value: unknown): unknown {
+  return typeof value === "string" ? value.toLowerCase() : value;
 }
 
 function rowId(row: Row, config: LineDiffConfig): string | undefined {

@@ -474,7 +474,17 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   NULL (REBAC `// rebac:field=` arrows run over nullable FKs).
 - **A status field is read/write-asymmetric** — GraphQL serializes it on read as
   the uppercase enum NAME (`ACTIVE`) but the writable `Patch.status` `String`
-  takes the lowercase model value (`"disabled"`).
+  takes the lowercase model value (`"disabled"`). This holds inside F6 nested line
+  inputs too: a child enum/choices column is a `String` on the line insert input
+  (write the lowercase value), while the child node projects it as an enum (read
+  UPPERCASE); an M2M child column is `[ID]` (public sqids in and out).
+- **F6 line-cell metadata is projected from the child node surface, not the bare
+  model** — `HasuraLines(node=…)`'s child fields reconstruct through
+  `resource_fields(node, model)` (the same classifier the parent uses), because the
+  node owns a choices column's wire enum values and an M2M's `kind:"list"` relation
+  target. A writable child column the node does not expose falls back to the model
+  reconstruction, which still cannot carry enum/list — so expose any enum/M2M line
+  cell on the child node.
 - **Intersect write-only fields out of the read/return selection** — a field
   absent from the SDL read type (e.g. `password`) makes the detail query invalid
   and the form loads blank if it is selected.

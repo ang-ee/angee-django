@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import type {
   ModelMetadata,
   Row,
+  SchemaFieldMetadata,
 } from "@angee/metadata";
 
 import {
@@ -13,6 +14,8 @@ import {
 import {
   columnsWithMetadataDefaults,
   fieldsWithMetadataDefaults,
+  relationFieldInfo,
+  relationListFieldInfo,
 } from "./model-metadata-defaults";
 import { RESOURCE_VIEW_GROUP_GRANULARITIES } from "./resource-view-model";
 import type { ColumnDescriptor, FieldDescriptor } from "./page";
@@ -448,6 +451,59 @@ describe("resource metadata defaults", () => {
       aggregateField: "implClass",
       aggregateKey: "implClass",
     });
+  });
+});
+
+describe("relationFieldInfo / relationListFieldInfo", () => {
+  const schema: SchemaFieldMetadata = {
+    types: {
+      TaxType: {
+        typeName: "TaxType",
+        recordRepresentation: "name",
+        fields: {},
+        rootFields: { list: "taxes", create: "insert_taxes_one" },
+      },
+      ProductVariantType: {
+        typeName: "ProductVariantType",
+        recordRepresentation: "displayName",
+        fields: {},
+        rootFields: { list: "product_variants" },
+      },
+      UnlistableType: { typeName: "UnlistableType", fields: {}, rootFields: {} },
+    },
+  };
+  const model: ModelMetadata = {
+    typeName: "JournalItemType",
+    fields: {
+      product: { name: "product", kind: "relation", relationTarget: "ProductVariantType" },
+      taxes: { name: "taxes", kind: "list", scalar: "ID", relationTarget: "TaxType" },
+      labels: { name: "labels", kind: "list", scalar: "String" },
+      orphan: { name: "orphan", kind: "list", relationTarget: "UnlistableType" },
+    },
+  };
+
+  test("resolves a to-one relation, but not a to-many, for relationFieldInfo", () => {
+    expect(relationFieldInfo("product", model, schema)?.resource).toBe("ProductVariant");
+    // An M2M is `kind: "list"`, so the to-one resolver ignores it (else it would
+    // render a single picker over a many field).
+    expect(relationFieldInfo("taxes", model, schema)).toBeNull();
+  });
+
+  test("resolves an M2M relation target for relationListFieldInfo", () => {
+    const info = relationListFieldInfo("taxes", model, schema);
+    expect(info?.resource).toBe("Tax");
+    expect(info?.labelField).toBe("name");
+    expect(info?.canCreate).toBe(true);
+    // The to-many resolver ignores a to-one field.
+    expect(relationListFieldInfo("product", model, schema)).toBeNull();
+  });
+
+  test("a plain string list (no relation target) stays a tag input, not a picker", () => {
+    expect(relationListFieldInfo("labels", model, schema)).toBeNull();
+  });
+
+  test("an M2M whose target exposes no list root cannot be a picker", () => {
+    expect(relationListFieldInfo("orphan", model, schema)).toBeNull();
   });
 });
 

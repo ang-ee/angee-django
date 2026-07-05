@@ -4,17 +4,11 @@ import type {
   SchemaFieldMetadata,
 } from "@angee/metadata";
 import { defaultWidgetForModelField } from "@angee/metadata";
-import type {
-  ReactNode } from "react";
-import type {
-  ModelFieldMetadata,
-} from "@angee/metadata";
+import type { ReactNode } from "react";
+import type { ModelFieldMetadata } from "@angee/metadata";
 
 import type { WidgetOption } from "../widgets";
-import type {
-  ColumnDescriptor,
-  FieldDescriptor,
-} from "./page";
+import type { ColumnDescriptor, FieldDescriptor } from "./page";
 import { titleCase } from "../lib/titleCase";
 import { enumValueLabel, groupFieldLabel } from "./resource-view-list-body";
 
@@ -71,15 +65,65 @@ export function relationFieldInfo(
   schemaMetadata: SchemaFieldMetadata,
 ): RelationFieldInfo | null {
   const field = modelMetadata?.fields[fieldName];
-  if (field?.kind !== "relation" || !field.relationTarget) return null;
+  if (field?.kind !== "relation") return null;
+  return resolveRelationTarget(field, schemaMetadata);
+}
+
+/**
+ * The to-many analog of {@link relationFieldInfo}: an M2M child field
+ * (`kind: "list"`) whose `relationModelLabel` resolved to a listable related
+ * model. `EditableLines` renders it as a multi-select of related rows and
+ * persists the picked public ids. A `kind: "list"` field with no relation target
+ * (a plain string/array column) stays a tag input.
+ */
+export function relationListFieldInfo(
+  fieldName: string,
+  modelMetadata: ModelMetadata | null,
+  schemaMetadata: SchemaFieldMetadata,
+): RelationFieldInfo | null {
+  const field = modelMetadata?.fields[fieldName];
+  if (field?.kind !== "list") return null;
+  return resolveRelationTarget(field, schemaMetadata);
+}
+
+/**
+ * Resolve a relation-carrying field to its listable target — shared by the to-one
+ * ({@link relationFieldInfo}) and to-many ({@link relationListFieldInfo})
+ * resolvers, which differ only in the field kind they accept. Returns `null` when
+ * the field has no relation target or the target exposes no list root (so the
+ * picker would have no way to fetch options).
+ */
+function resolveRelationTarget(
+  field: ModelFieldMetadata,
+  schemaMetadata: SchemaFieldMetadata,
+): RelationFieldInfo | null {
+  if (!field.relationTarget) return null;
   const related = schemaMetadata.types[field.relationTarget];
-  // Without a list root field the picker has no way to fetch options.
   if (!related?.rootFields?.list) return null;
   return {
     resource: stripTypeSuffix(field.relationTarget),
     labelField: related.recordRepresentation ?? "id",
     canCreate: Boolean(related.rootFields.create),
     ...(field.relationFilter ? { filter: field.relationFilter } : {}),
+  };
+}
+
+/**
+ * Build a relation target for an explicitly-named resource — an action arg's
+ * relation picker, which names its target model rather than deriving it from a
+ * parent model field. Returns `null` when the resource exposes no list root (so
+ * the picker has no way to fetch options). Mirrors {@link relationFieldInfo}, but
+ * keyed on the resolved model metadata instead of a parent field.
+ */
+export function relationFieldInfoForResource(
+  resource: string,
+  model: ModelMetadata | null,
+): RelationFieldInfo | null {
+  if (!model?.rootFields?.list) return null;
+  return {
+    resource,
+    labelField: model.recordRepresentation ?? "id",
+    canCreate: Boolean(model.rootFields.create),
   };
 }
 
@@ -141,9 +185,9 @@ export function columnsWithMetadataDefaults<TRow extends object>(
       ...(column.currencyField === undefined && field?.currencyField
         ? { currencyField: field.currencyField }
         : {}),
-      ...(column.options === undefined
-        && isEnumOptionWidget(column.widget)
-        && options.length > 0
+      ...(column.options === undefined &&
+      isEnumOptionWidget(column.widget) &&
+      options.length > 0
         ? { options }
         : {}),
     };
@@ -173,9 +217,9 @@ export function fieldsWithMetadataDefaults(
       ...(field.currencyField === undefined && fieldMetadata?.currencyField
         ? { currencyField: fieldMetadata.currencyField }
         : {}),
-      ...(field.options === undefined
-        && isEnumOptionWidget(widget ?? field.kind)
-        && options.length > 0
+      ...(field.options === undefined &&
+      isEnumOptionWidget(widget ?? field.kind) &&
+      options.length > 0
         ? { options }
         : {}),
     };
@@ -204,10 +248,12 @@ export function enumOptions(
   field: ModelFieldMetadata | undefined,
 ): readonly WidgetOption[] {
   if (field?.kind !== "enum" && field?.kind !== "list") return [];
-  return field.values?.map((value) => ({
-    value: value.value,
-    label: enumValueLabel(value),
-  })) ?? [];
+  return (
+    field.values?.map((value) => ({
+      value: value.value,
+      label: enumValueLabel(value),
+    })) ?? []
+  );
 }
 
 function isEnumOptionWidget(widget: string | undefined): boolean {

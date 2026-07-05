@@ -51,6 +51,7 @@ __all__ = [
     "make_data_resource_metadata",
     "merge_data_resources",
     "model_resource_fields",
+    "resource_fields",
     "resource_type_name",
     "resource_wire_field_name",
     "resource_wire_field_names",

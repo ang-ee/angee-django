@@ -34,16 +34,27 @@ from angee.graphql.data.hasura import HasuraLines, hasura_model_resource
 from angee.graphql.data.metadata import data_resource_metadata, merge_data_resources
 from angee.graphql.node import AngeeNode
 from tests.conftest import create_user, execute_schema, result_data
-from tests.linesdemo.models import Product, SaleDoc, SaleLine
+from tests.linesdemo.models import Product, SaleDoc, SaleLine, Tag
 
 
 @strawberry_django.type(SaleLine)
 class SaleLineType(AngeeNode):
-    """GraphQL projection of one document line."""
+    """GraphQL projection of one document line.
+
+    ``kind`` reads as the UPPERCASE enum wire member (the choices column projects
+    a Strawberry enum on the node) and ``tags`` reads as a list of public sqids —
+    the two shapes the F6 line-metadata reconstruction must project (an enum + an
+    M2M) so the frontend renders a select cell and a relation multi-select cell.
+    """
 
     label: auto
     quantity: auto
     position: auto
+    kind: auto
+
+    @strawberry_django.field
+    def tags(self) -> list[strawberry.ID]:
+        return [strawberry.ID(tag.public_id) for tag in self.tags.all()]
 
 
 @strawberry_django.type(SaleDoc)
@@ -111,13 +122,49 @@ _SCHEMA_WITH_PRODUCT = strawberry.Schema(
     types=[SaleDocType, SaleLineType, *_RESOURCE_WITH_PRODUCT.types],
 )
 
+# A third resource whose lines expose an enum child (``kind``) and an M2M child
+# (``tags``): the F6 line-metadata reconstruction must project both (an enum's
+# values, the M2M relation target) instead of raising, and the write must persist
+# them — the enum as its lowercase model value through the String line input, the
+# M2M as decoded public sqids inside the ``<res>_save`` transaction (F-b).
+_LINES_RICH = HasuraLines(
+    field="lines",
+    model=SaleLine,
+    node=SaleLineType,
+    writable=("label", "quantity", "position", "kind", "tags"),
+    public_id_fields=("tags",),
+)
+
+_RESOURCE_RICH = hasura_model_resource(
+    SaleDocType,
+    model=SaleDoc,
+    name="sale_docs_rich",
+    filterable=["id", "title"],
+    sortable=["title"],
+    aggregatable=["id"],
+    writable=["title", "note"],
+    lines=_LINES_RICH,
+    id_column="sqid",
+)
+
+_SCHEMA_RICH = strawberry.Schema(
+    query=_RESOURCE_RICH.query,
+    mutation=_RESOURCE_RICH.mutation,
+    types=[SaleDocType, SaleLineType, *_RESOURCE_RICH.types],
+)
+
+
+_TAGS_THROUGH = SaleLine._meta.get_field("tags").remote_field.through
+
 
 @pytest.fixture()
 def linesdemo_tables(transactional_db: Any):
     """Ensure the demo tables exist and the REBAC schema is synced."""
 
     existing = set(connection.introspection.table_names())
-    created = [m for m in (SaleDoc, Product, SaleLine) if m._meta.db_table not in existing]
+    # ``Tag`` precedes ``SaleLine`` so the M2M through table (created with the
+    # line) can reference it; ``create_model(SaleLine)`` creates the through table.
+    created = [m for m in (SaleDoc, Product, Tag, SaleLine) if m._meta.db_table not in existing]
     if created:
         with connection.schema_editor() as editor:
             for model in created:
@@ -126,8 +173,10 @@ def linesdemo_tables(transactional_db: Any):
     try:
         yield
     finally:
+        # The through table first (its rows are not cascade-deleted by a raw
+        # DELETE on the parent line), then children before parents.
         with connection.cursor() as cursor:
-            for model in (SaleLine, Product, SaleDoc):
+            for model in (_TAGS_THROUGH, SaleLine, Tag, Product, SaleDoc):
                 cursor.execute(f"DELETE FROM {connection.ops.quote_name(model._meta.db_table)}")
 
 
@@ -571,3 +620,131 @@ def test_lines_resource_metadata_is_emitted():
     assert {"label", "quantity", "position"} <= line_field_names
     # The parent create fields must not leak the nested lines envelope.
     assert "lines" not in resource.create_fields
+
+
+_INSERT_RICH = """
+mutation($object: sale_docs_rich_insert_input!) {
+  insert_sale_docs_rich_one(object: $object) {
+    id
+    lines { id label kind tags }
+  }
+}
+"""
+
+_SAVE_RICH = """
+mutation($pk: ID!, $lines: [sale_docs_rich_lines_insert_input!]) {
+  sale_docs_rich_save(pk: $pk, lines: $lines) {
+    id
+    lines { id label kind tags }
+  }
+}
+"""
+
+
+def test_rich_lines_metadata_projects_enum_and_m2m_child_fields():
+    """The lines contract carries an enum child's values and an M2M's relation target (F-b).
+
+    The reconstruction routes through the child node surface, so a choices column
+    projects its wire enum values and an M2M projects a ``kind="list"`` relation
+    target — instead of the old model reconstruction raising on either.
+    """
+
+    merged = merge_data_resources(
+        (
+            *data_resource_metadata(_RESOURCE_RICH.query),
+            *data_resource_metadata(_RESOURCE_RICH.mutation),
+        )
+    )
+    (resource,) = [m for m in merged if m.model_label == "linesdemo.SaleDoc"]
+    assert resource.lines is not None
+    by_name = {field.name: field for field in resource.lines.fields}
+    kind = by_name["kind"]
+    assert kind.kind == "enum"
+    assert {value.value for value in kind.values} == {"GOODS", "SERVICE"}
+    tags = by_name["tags"]
+    assert tags.kind == "list"
+    assert tags.relation_model_label == "linesdemo.Tag"
+
+
+def test_rich_nested_insert_persists_enum_and_m2m(linesdemo_tables):
+    """A nested insert writes the enum child (lowercase model value) and its M2M tags."""
+
+    actor = create_user("author")
+    with system_context(reason="seed"):
+        red = Tag.objects.create(name="Red")
+        blue = Tag.objects.create(name="Blue")
+    result = execute_schema(
+        _SCHEMA_RICH,
+        _INSERT_RICH,
+        {
+            "object": {
+                "title": "Quotation",
+                "lines": {
+                    "data": [
+                        {
+                            "label": "Widget",
+                            "quantity": 2,
+                            "position": 0,
+                            "kind": "service",
+                            "tags": [red.public_id, blue.public_id],
+                        }
+                    ]
+                },
+            }
+        },
+        user=actor,
+    )
+    data = result_data(result)
+    (line,) = data["insert_sale_docs_rich_one"]["lines"]
+    # The wire reads the UPPERCASE enum member and the M2M as public sqids.
+    assert line["kind"] == "SERVICE"
+    assert set(line["tags"]) == {red.public_id, blue.public_id}
+    with system_context(reason="test read"):
+        row = SaleLine.objects.get(label="Widget")
+        # Stored as the lowercase model value.
+        assert row.kind == "service"
+        assert set(row.tags.values_list("name", flat=True)) == {"Red", "Blue"}
+
+
+def test_rich_save_round_trips_enum_and_m2m_diff(linesdemo_tables):
+    """``_save`` diff-applies an enum change (lowercase) and an M2M set (sqids) atomically."""
+
+    owner = create_user("owner")
+    with system_context(reason="seed"):
+        doc = SaleDoc.objects.create(title="Order")
+        red = Tag.objects.create(name="Red")
+        blue = Tag.objects.create(name="Blue")
+        green = Tag.objects.create(name="Green")
+        line = SaleLine.objects.create(
+            document=doc, label="Line", quantity=1, position=0, kind=SaleLine.Kind.GOODS
+        )
+        line.tags.set([red])
+    _grant_owner(doc, owner)
+
+    result = execute_schema(
+        _SCHEMA_RICH,
+        _SAVE_RICH,
+        {
+            "pk": doc.public_id,
+            "lines": [
+                {
+                    "id": line.public_id,
+                    "label": "Line",
+                    "quantity": 1,
+                    "position": 0,
+                    "kind": "service",
+                    "tags": [blue.public_id, green.public_id],
+                }
+            ],
+        },
+        user=owner,
+    )
+    data = result_data(result)
+    (saved,) = data["sale_docs_rich_save"]["lines"]
+    assert saved["kind"] == "SERVICE"
+    assert set(saved["tags"]) == {blue.public_id, green.public_id}
+    with system_context(reason="test read"):
+        line.refresh_from_db()
+        # The enum stored its lowercase model value; the M2M swapped red → blue+green.
+        assert line.kind == "service"
+        assert set(line.tags.values_list("name", flat=True)) == {"Blue", "Green"}

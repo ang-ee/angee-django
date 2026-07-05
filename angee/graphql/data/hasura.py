@@ -41,11 +41,13 @@ from angee.graphql.data.metadata import (
     DataGroupDimensionMetadata,
     DataGroupExtractionMetadata,
     DataLinesMetadata,
+    DataResourceFieldMetadata,
     DataResourceRoots,
     DataResourceTypeNames,
     attach_data_resource_metadata,
     make_data_resource_metadata,
     model_resource_fields,
+    resource_fields,
     resource_type_name,
     resource_wire_field_name,
     resource_wire_field_names,
@@ -956,13 +958,61 @@ def _line_metadata(lines: HasuraLines, resource: HasuraResource) -> DataLinesMet
         field=lines.field,
         model_label=lines.model._meta.label,
         input_type=resource_type_name(line_input),
-        fields=model_resource_fields(
-            lines.model,
-            child_fields,
-            create_fields=child_fields,
-            update_fields=child_fields,
-        ),
+        fields=_line_child_fields(lines, child_fields),
         position_field=lines.position_field if _has_model_field(lines.model, lines.position_field) else None,
+    )
+
+
+def _line_child_fields(
+    lines: HasuraLines,
+    child_fields: tuple[str, ...],
+) -> tuple[DataResourceFieldMetadata, ...]:
+    """Return per-column metadata for a document's editable child fields.
+
+    The child **node** surface owns each field's projected shape — an enum's
+    values, a relation/list target — so the line cells read it there through the
+    same :func:`resource_fields` classifier the parent resource uses, instead of
+    re-deriving enum members and item shapes from the model (which the bare model
+    reconstruction cannot do). An M2M child is a ``kind="list"`` relation whose
+    target the frontend renders as a multi-select and persists as public ids; an
+    enum child carries its wire values. A writable child column the node does not
+    project (a write-only relation) falls back to the model reconstruction.
+    """
+
+    wanted = set(child_fields)
+    by_name: dict[str, DataResourceFieldMetadata] = {
+        field.name: field for field in _line_node_fields(lines, child_fields) if field.name in wanted
+    }
+    unprojected = tuple(name for name in child_fields if name not in by_name)
+    for field in model_resource_fields(
+        lines.model,
+        unprojected,
+        create_fields=unprojected,
+        update_fields=unprojected,
+    ):
+        by_name[field.name] = field
+    return tuple(by_name[name] for name in child_fields)
+
+
+def _line_node_fields(
+    lines: HasuraLines,
+    child_fields: tuple[str, ...],
+) -> tuple[DataResourceFieldMetadata, ...]:
+    """Return node-surface field metadata for the editable child columns."""
+
+    if lines.node is None:
+        return ()
+    return resource_fields(
+        lines.node,
+        lines.model,
+        filter_fields=(),
+        order_fields=(),
+        aggregate_fields=(),
+        group_by_fields=(),
+        create_fields=child_fields,
+        update_fields=child_fields,
+        required_create_fields=(),
+        relation_axes=(),
     )
 
 
