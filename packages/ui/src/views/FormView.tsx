@@ -1765,7 +1765,17 @@ function recordToValues(
 ): Values {
   const values: Values = {};
   for (const field of fields) {
-    values[field.name] = recordFieldValue(record, field) ?? emptyValue(field);
+    // A `many2one` relation seeds with the record's raw relation value — its nested
+    // `{ id, <label> }` object, or `null` when unset — the exact shape refine's
+    // `useForm` re-applies to the form values (`applyValuesToFields`) after this
+    // seed. Normalizing it to a bare id here instead would leave the clean baseline
+    // disagreeing with what refine writes into the live values, so `formState.isDirty`
+    // reads true on an untouched record (a spurious unsaved-changes guard). The picker
+    // and submit read the id back out via `relationValueId`; only a user pick replaces
+    // the object with a bare id, which is then the sole dirty field.
+    values[field.name] = isRelationIdField(field)
+      ? record[field.name] ?? null
+      : recordFieldValue(record, field) ?? emptyValue(field);
   }
   // The child-lines array is not a declared FieldDescriptor, so it is seeded here
   // (a stable reference from the caller) — a plain `form.reset(values)` would
