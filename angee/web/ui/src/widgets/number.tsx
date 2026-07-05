@@ -4,7 +4,7 @@ import { NumberField } from "../ui/number-field";
 import { widgetLabel } from "./label";
 import type { WidgetDefinition, WidgetRenderProps } from "./types";
 
-type NumericWidgetValue = number | null;
+type NumericWidgetValue = number | string | null;
 
 function IntegerEdit({
   value,
@@ -72,7 +72,14 @@ export const floatWidget = {
 } satisfies WidgetDefinition<NumericWidgetValue>;
 
 function normaliseNumber(value: NumericWidgetValue | undefined): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  // Decimal columns arrive as exact strings on the wire (the Decimal scalar);
+  // a numeric widget still renders and edits them as numbers.
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
 }
 
 function formatNumber(value: NumericWidgetValue | undefined): string {

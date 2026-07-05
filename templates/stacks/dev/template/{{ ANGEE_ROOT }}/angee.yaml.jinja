@@ -162,7 +162,10 @@ jobs:
   permissions:
     runtime: local
     workdir: source://app
-    command: ["uv", "run"{% if uv_project %}, "--project", "{{ uv_project }}"{% endif %}, "--extra", "postgres", "python", "manage.py", "rebac", "sync", "--yes"]
+    # --force-overwrite: in a dev stack the source permissions.zed is the truth —
+    # without it, sync skips schema changes as "admin-edited" drift and the
+    # running app keeps stale permissions after every zed edit.
+    command: ["uv", "run"{% if uv_project %}, "--project", "{{ uv_project }}"{% endif %}, "--extra", "postgres", "python", "manage.py", "rebac", "sync", "--yes", "--force-overwrite"]
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
