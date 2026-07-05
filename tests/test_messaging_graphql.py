@@ -13,7 +13,15 @@ from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.db import connection
 from django.test import RequestFactory
-from rebac import actor_context, app_settings, system_context
+from rebac import (
+    RelationshipTuple,
+    actor_context,
+    app_settings,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 from rebac.roles import grant
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
@@ -2117,6 +2125,20 @@ def _request(user: Any) -> Any:
     return request
 
 
+def _grant(resource: Any, relation: str, user: Any) -> None:
+    """Write one direct relationship tuple for ``user`` on ``resource``."""
+
+    write_relationships(
+        [
+            RelationshipTuple(
+                resource=to_object_ref(resource),
+                relation=relation,
+                subject=to_subject_ref(user),
+            )
+        ]
+    )
+
+
 def test_generic_thread_and_message_lists_exclude_record_chatter(messaging_graphql_tables: None) -> None:
     """The generic threads/messages resources exclude record-attached chatter.
 
@@ -2272,3 +2294,137 @@ def test_complete_and_cancel_activity_authorize_through_record_read(messaging_gr
     assert completed["error_code"] is None
     assert completed["activity"]["status"] == "DONE"
     assert completed["activity"]["feedback"] == "Real"
+
+
+def test_generic_delete_excludes_record_thread_from_its_creator(messaging_graphql_tables: None) -> None:
+    """A record thread is off the generic delete surface, even for its own creator.
+
+    F-v part 2, write side: record chatter is reachable only through
+    ``record_thread`` (gated on the parent record's read). The thread's own
+    ``delete = owner + admin`` would let the creator who lost record access delete it
+    through the generic ``delete_threads_by_pk``; the ``.inbox()`` write scope keeps
+    it off that surface, so the by-pk delete cannot resolve a target. The same
+    creator still deletes an ordinary inbox thread they own — the isolation is the
+    gate, not a blanket denial.
+    """
+
+    creator = User.objects.create_user(username="thread-creator", email="tc@example.com")
+    with system_context(reason="test.messaging.delete_isolation.seed"):
+        ticket = messaging_models.ThreadedTicket.objects.create(title="Case D")
+    with actor_context(creator):
+        record_thread = ticket.message_post("Internal chatter").thread
+        inbox_thread = messaging_models.Thread.objects.create(subject="Owned inbox", created_by_id=creator.pk)
+    schema = _schema()
+
+    delete = """
+        mutation Delete($id: String!) {
+          delete_threads_by_pk(id: $id) { id }
+        }
+    """
+    record_result = execute_schema(schema, delete, {"id": record_thread.sqid}, request=_request(creator))
+    # The record thread is not on the generic write surface: the by-pk lookup misses
+    # it, so the delete resolves no target and reports the miss.
+    assert record_result.errors is not None
+    assert (record_result.data or {}).get("delete_threads_by_pk") is None
+
+    inbox_deleted = _data(
+        execute_schema(schema, delete, {"id": inbox_thread.sqid}, request=_request(creator))
+    )["delete_threads_by_pk"]
+    assert inbox_deleted == {"id": inbox_thread.sqid}
+
+    with system_context(reason="test.messaging.delete_isolation.verify"):
+        # The record thread survived; the inbox thread the creator owns did not.
+        assert messaging_models.Thread._base_manager.filter(sqid=record_thread.sqid).exists()
+        assert not messaging_models.Thread._base_manager.filter(sqid=inbox_thread.sqid).exists()
+
+
+def test_record_writer_completes_activity_they_neither_own_nor_are_assigned(
+    messaging_graphql_tables: None,
+) -> None:
+    """A record writer completes an activity on the record's authority alone (F-v §3.4).
+
+    Completing rides the record's ``thread_activity_access`` (``write`` for
+    ``ChatterDoc``), not the activity's own ``write`` (assignee/owner/thread-owner).
+    A ``writer`` who is none of those still completes it: the manager elevates the
+    activity save under ``system_context`` after the record preflight, so the
+    activity's own permission never re-denies the record-authorized action.
+    """
+
+    admin = _platform_admin("msg-act-writer-admin")
+    with system_context(reason="test.chatterdemo.writer.seed"):
+        writer = User.objects.create_user(username="cdc-writer", email="cdc-writer@example.com")
+        doc = messaging_models.ChatterDoc.objects.create(title="Writer gated", status="open")
+    _grant(doc, "writer", writer)
+    schema = _schema()
+
+    scheduled = _data(
+        execute_schema(
+            schema,
+            """
+            mutation Schedule($model: String!, $id: ID!) {
+              schedule_record_activity(
+                input: {model_label: $model, record_id: $id, summary: "Follow up", activity_type: "todo"}
+              ) {
+                error_code
+                activity { id }
+              }
+            }
+            """,
+            {"model": "chatterdemo.ChatterDoc", "id": doc.sqid},
+            request=_request(admin),
+        )
+    )["schedule_record_activity"]
+    assert scheduled["error_code"] is None
+    activity_id = scheduled["activity"]["id"]
+
+    # The writer is neither the assignee (admin), the activity/thread owner (admin),
+    # nor an admin — only a record writer. It completes on the record's authority.
+    completed = _data(
+        execute_schema(
+            schema,
+            """
+            mutation Complete($activity: ID!) {
+              complete_record_activity(input: {activity_id: $activity, feedback: "By writer"}) {
+                error_code
+                activity { status feedback }
+              }
+            }
+            """,
+            {"activity": activity_id},
+            request=_request(writer),
+        )
+    )["complete_record_activity"]
+    assert completed["error_code"] is None
+    assert completed["activity"]["status"] == "DONE"
+    assert completed["activity"]["feedback"] == "By writer"
+
+
+def test_record_chatter_rows_opt_out_of_change_broadcasts(messaging_graphql_tables: None) -> None:
+    """Record chatter rows never broadcast on the generic ``changes`` subscription.
+
+    F-v part 2, subscription side: a record-attached thread/message returns
+    ``broadcasts_changes() == False``, so the publisher drops its create/update/delete
+    at emission — it is never delivered to a subject who cannot read the record (the
+    thread/message's own ``owner``/``admin`` read would otherwise deliver it). Channel
+    inbox rows, and a message whose thread merged away, still broadcast.
+    """
+
+    admin = _platform_admin("msg-changes-admin")
+    channel_thread, channel_message = _seed_thread_and_message(admin)
+    with system_context(reason="test.messaging.changes.seed"):
+        ticket = messaging_models.ThreadedTicket.objects.create(title="Case C")
+    with actor_context(admin):
+        record_message = ticket.message_post("Internal chatter")
+    record_thread = record_message.thread
+
+    with system_context(reason="test.messaging.changes.verify"):
+        orphan = messaging_models.Message.objects.create(
+            subject="Orphan", status="synced", created_by_id=admin.pk
+        )
+        # Channel inbox rows broadcast; record-attached chatter does not.
+        assert channel_thread.broadcasts_changes() is True
+        assert channel_message.broadcasts_changes() is True
+        assert record_thread.broadcasts_changes() is False
+        assert record_message.broadcasts_changes() is False
+        # A message with no thread is not record-attached and stays on the surface.
+        assert orphan.broadcasts_changes() is True

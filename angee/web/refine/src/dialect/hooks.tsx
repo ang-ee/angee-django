@@ -48,6 +48,7 @@ import {
   operationDocument,
   useOperationDocuments,
 } from "../operation-documents";
+import { useActiveDataProviderName } from "./data-provider-context";
 import { stableKey } from "../stable-deps";
 
 type Row = Record<string, unknown>;
@@ -558,7 +559,14 @@ export function useActionMutation<TField extends string = string>(
   field: TField,
   options: UseActionMutationOptions = {},
 ): [ActionMutate, UseActionMutationState] {
-  const dataProviderName = options.dataProviderName ?? "default";
+  // Same fallback chain the authored hooks resolve: an explicit option, then the
+  // ambient DataProviderContext (a resource page's schema, e.g. "console"), then
+  // the "default" alias. Resolving the active schema keeps the action-document
+  // lookup below (keyed by real schema name) from asking for a "default" key that
+  // `operationDocumentsForSchemas` never aliases — the Post-button asymmetry.
+  const activeDataProviderName = useActiveDataProviderName();
+  const dataProviderName =
+    options.dataProviderName ?? activeDataProviderName ?? "default";
   const operationDocuments = useOperationDocuments();
   const invalidate = useInvalidate();
   const invalidates = options.invalidates ?? EMPTY_INVALIDATIONS;

@@ -30,7 +30,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import models, transaction
 from django.db.models.functions import Coalesce, Greatest
 from django.utils import timezone
-from rebac import current_actor
+from rebac import current_actor, system_context
 
 from angee.base.actors import actor_user_id
 from angee.base.models import AngeeManager, AngeeQuerySet
@@ -897,7 +897,13 @@ class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):
         activity.status = self.model.ActivityStatus.DONE
         activity.completed_at = timezone.now()
         activity.feedback = feedback
-        activity.save(update_fields=("status", "completed_at", "feedback", "updated_at"))
+        # The record's thread_activity_access is the authority — checked on the
+        # record before this manager runs (ThreadedModelMixin.activity_feedback);
+        # the activity's own write (assignee/thread-owner) would deny a record
+        # writer who is neither, so the save rides the record preflight under
+        # system_context, the §3.4 line-write elevation pattern.
+        with system_context(reason="messaging.activity.complete"):
+            activity.save(update_fields=("status", "completed_at", "feedback", "updated_at"))
         if post_message:
             body = activity.completion_message()
             if feedback:
@@ -923,7 +929,10 @@ class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):
             return activity
         activity.status = self.model.ActivityStatus.CANCELED
         activity.completed_at = timezone.now()
-        activity.save(update_fields=("status", "completed_at", "updated_at"))
+        # Authority rides the record's thread_activity_access (checked on the record
+        # before this runs); elevate the activity's own write like complete(). §3.4.
+        with system_context(reason="messaging.activity.cancel"):
+            activity.save(update_fields=("status", "completed_at", "updated_at"))
         return activity
 
 

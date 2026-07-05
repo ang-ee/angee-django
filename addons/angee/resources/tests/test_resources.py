@@ -1545,13 +1545,30 @@ def test_grant_tuple_resolves_xref_const_role_and_wildcard(tmp_path: Path) -> No
 
 
 @pytest.mark.django_db(transaction=True)
-def test_grant_fixtures_load_and_are_idempotent(tmp_path: Path) -> None:
-    """A grants-tier fixture materializes REBAC tuples idempotently through the loader."""
+def test_grant_fixtures_load_and_are_idempotent(tmp_path: Path, monkeypatch: Any) -> None:
+    """A grants-tier fixture materializes REBAC tuples idempotently through the loader.
+
+    An unchanged re-load is a *true* no-op: only missing tuples are written, so the
+    second load calls ``write_relationships`` with nothing to write — no audit entry
+    or zookie bump for grants that already exist.
+    """
 
     from django.contrib.auth import get_user_model
     from django.core.management import call_command
     from rebac import to_subject_ref
     from rebac.models import active_relationship_model
+
+    from angee.resources import grants as grants_module
+
+    written: list[int] = []
+    real_write = grants_module.write_relationships
+
+    def _spy_write(tuples: Any) -> Any:
+        rows = list(tuples)
+        written.append(len(rows))
+        return real_write(rows)
+
+    monkeypatch.setattr(grants_module, "write_relationships", _spy_write)
 
     class GrantLoadLedger(Resource):
         """Concrete resource ledger for grant-load tests."""
@@ -1603,6 +1620,8 @@ def test_grant_fixtures_load_and_are_idempotent(tmp_path: Path) -> None:
 
         assert result.created == 2
         assert result.skipped == 0
+        # The first load writes exactly the two missing tuples.
+        assert written == [2]
         relationship_model = active_relationship_model()
         alice_subject = to_subject_ref(alice)
         with system_context(reason="grant load assertions"):
@@ -1624,6 +1643,8 @@ def test_grant_fixtures_load_and_are_idempotent(tmp_path: Path) -> None:
         second = GrantLoadLedger.objects.load_addons((owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True)
         assert second.created == 0
         assert second.skipped == 2
+        # The unchanged re-load wrote nothing new — a true no-op, no churn.
+        assert written == [2]
     finally:
         with connection.schema_editor() as schema_editor:
             schema_editor.delete_model(GrantLoadLedger)

@@ -157,6 +157,20 @@ class AngeeHasuraWriteBackend:
             self._line_back_fk = ""
             self._line_public_id_fields = {}
 
+    def write_target_queryset(self) -> models.QuerySet[Any]:
+        """Return the queryset that resolves this backend's update/delete/save targets.
+
+        Defaults to the model's write-scoped queryset (REBAC row scope kept,
+        field-read redaction off). A subclass narrows it to keep rows a surface
+        must never reach by pk off the generic update/delete/save mutations — even
+        when the row's own REBAC would allow the write. Record-attached chatter,
+        isolated to the record-scoped ``record_thread`` surface, is the motivating
+        case: its own ``owner``/``admin`` permission would otherwise let a creator
+        who lost record access delete the thread through ``delete_<res>_by_pk``.
+        """
+
+        return write_queryset(self.model)
+
     def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
         """Create one row (and any declared nested child lines) atomically."""
 
@@ -198,7 +212,7 @@ class AngeeHasuraWriteBackend:
             instance = require_instance_for_id(
                 self.model,
                 pk,
-                queryset=write_queryset(self.model),
+                queryset=self.write_target_queryset(),
             )
             if not instance.has_access("write"):
                 raise PermissionDenied(f"Denied: cannot write {self.model._meta.label} {pk!r}")
@@ -334,7 +348,7 @@ class AngeeHasuraWriteBackend:
         instance = require_instance_for_id(
             self.model,
             pk,
-            queryset=write_queryset(self.model),
+            queryset=self.write_target_queryset(),
         )
         with transaction.atomic():
             return mutation_resolvers.update(
@@ -361,7 +375,7 @@ class AngeeHasuraWriteBackend:
             self.model,
             str(pk),
             confirm=True,
-            queryset=write_queryset(self.model),
+            queryset=self.write_target_queryset(),
             before_delete=guard,
         )
         if preview.has_blockers:

@@ -101,6 +101,14 @@ def _publish(
 ) -> None:
     """Build and broadcast one change payload after commit."""
 
+    # The row owns whether its changes reach the generic subscription surface; a
+    # record-chatter row that is isolated to ``record_thread`` drops out here, so
+    # its create/update/delete never broadcasts to a non-record-reader — the
+    # emission mirror of the ``.inbox()`` read scope. Checked while the instance is
+    # live, so the answer holds for the delete event too.
+    broadcasts = getattr(instance, "broadcasts_changes", None)
+    if callable(broadcasts) and not broadcasts():
+        return
     model = type(instance)
     payload = ChangePayload.from_instance(
         instance,

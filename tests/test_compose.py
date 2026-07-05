@@ -347,6 +347,27 @@ def test_role_anchor_emits_the_hand_rolled_runtime_source(tmp_path: Path) -> Non
     assert "rebac_resource_type = 'tests/role'" in source
 
 
+def test_role_anchor_wrapper_miscapture_fails_at_emission(tmp_path: Path) -> None:
+    """A ``role_anchor`` whose captured module does not bind it fails loudly (F-b).
+
+    A wrapper indirecting ``role_anchor`` makes ``sys._getframe`` capture the
+    wrapper's module, not the adopter's, so the emitted import would resolve to
+    nothing. The composer proves the captured module actually binds the anchor and
+    refuses to emit a broken import.
+    """
+
+    module = ModuleType("tests.role_anchor_wrapper_probe")
+    sys.modules[module.__name__] = module
+    try:
+        # The anchor claims this module, but the symbol is never bound there (the
+        # mis-capture a wrapper would produce).
+        stray = role_anchor("tests/role", name="StrayRole", module=module.__name__)
+        with pytest.raises(ImproperlyConfigured, match="does not bind"):
+            Runtime((), runtime_dir=tmp_path / "runtime")._models_source("tests", (stray,))
+    finally:
+        del sys.modules[module.__name__]
+
+
 def test_django_reads_inherited_meta_defaults() -> None:
     """Runtime ``Meta(SourceMeta)`` carries Django options without re-emission."""
 

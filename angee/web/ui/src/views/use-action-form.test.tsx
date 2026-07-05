@@ -101,6 +101,25 @@ describe("useActionForm", () => {
     expect(result.current.fieldErrors).toEqual({});
   });
 
+  test("treats a null outcome as a form-level failure with the fallback", async () => {
+    // `extractActionOutcome` returns null when the response carries no in-band
+    // envelope; the hook owns the fallback so consumers never define FAILED_OUTCOME.
+    const submit = vi.fn().mockResolvedValue(null);
+    const { result } = renderHook(
+      () => useActionForm({ submit, genericErrorMessage: "Nope." }),
+      { wrapper },
+    );
+
+    let ok: boolean | undefined;
+    await act(async () => {
+      ok = await result.current.run({});
+    });
+
+    expect(ok).toBe(false);
+    expect(result.current.formError).toBe("Nope.");
+    expect(result.current.fieldErrors).toEqual({});
+  });
+
   test("does not toast when toastSuccess is disabled", async () => {
     const submit = vi.fn().mockResolvedValue({ ok: true, message: "Quiet." });
     const { result } = renderHook(

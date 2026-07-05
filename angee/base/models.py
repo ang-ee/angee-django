@@ -305,6 +305,22 @@ class AngeeModel(TimestampMixin, RebacMixin):
 
         return self.pk
 
+    def broadcasts_changes(self) -> bool:
+        """Return whether this row's saves/deletes broadcast on ``changes`` subscriptions.
+
+        The publisher (:mod:`angee.graphql.publishing`) asks each row this before
+        emitting a change event, so a model can keep some rows off the generic
+        model-change subscription surface entirely — the emission mirror of a
+        ``get_queryset`` read scope that hides them from the list. Evaluated while
+        the instance is still live (a delete carries the in-memory row), so the
+        answer holds for deletes too, which a post-hoc queryset membership check
+        could not decide. Defaults to broadcasting; a model that isolates rows to a
+        record-scoped surface (record chatter reachable only through
+        ``record_thread``) overrides this to drop those rows.
+        """
+
+        return True
+
 
 class AngeeDataModel(SqidMixin, AngeeModel):
     """Abstract base for Angee rows that participate in public data contracts."""
@@ -337,9 +353,16 @@ def role_anchor(
     ``name`` defaults to a CamelCase of ``resource_type`` (``storage/role`` ->
     ``StorageRole``); pass it when the module symbol differs from that default
     (e.g. a plain ``Role = role_anchor("tags/role", name="Role")``). ``module``
-    defaults to the caller's module so the composer scans and imports the anchor
-    from the adopting addon; the module symbol you bind must match ``name`` so the
-    emitted ``from <addon>.models import <name>`` import resolves.
+    defaults to the caller's module (``sys._getframe``) so the composer scans and
+    imports the anchor from the adopting addon; the module symbol you bind must
+    match ``name`` so the emitted ``from <addon>.models import <name>`` import
+    resolves. **Wrapper hazard:** the frame default captures the *direct* caller, so
+    a helper that wraps this factory would capture the helper's module, not the
+    adopter's, and emit an import that resolves to the wrong symbol. Call
+    ``role_anchor`` directly at module level, or pass ``module=__name__`` when
+    indirecting it. The composer verifies the captured module actually binds the
+    anchor at emission (``Runtime._class_import``) and fails loudly on a mis-capture
+    rather than emitting a broken import.
 
     The ``.zed`` fragment stays **co-located and static** — each adopter ships its
     own ``definition <ns>/role`` block beside its models; the factory owns only
@@ -366,6 +389,10 @@ def role_anchor(
         "__module__": anchor_module,
         "__qualname__": anchor_name,
         "__doc__": doc or f"Table-less REBAC type anchor for the ``{resource_type}`` namespace.",
+        # Marks the factory's output so the composer verifies the sys._getframe
+        # module capture bound the anchor before emitting its import (see
+        # ``Runtime._check_role_anchor_binding``); the wrapper hazard is caught here.
+        "__angee_role_anchor__": True,
         "runtime": True,
         "Meta": meta,
     }

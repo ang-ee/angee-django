@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -960,9 +961,39 @@ class Runtime:
         model_class: type[models.Model],
         alias: str,
     ) -> list[str]:
-        """Return import lines needed to reference ``model_class``."""
+        """Return the ``from <module> import <name>`` line that references ``model_class``."""
 
+        self._check_role_anchor_binding(model_class)
         return [f"from {model_class.__module__} import {model_class.__name__} as {alias}"]
+
+    def _check_role_anchor_binding(self, model_class: type[models.Model]) -> None:
+        """Verify a ``role_anchor`` resolves back to the class its import will name.
+
+        A ``role_anchor()`` binds its ``__module__`` from ``sys._getframe`` (the
+        adopting module's) — the one-line ergonomic default. A wrapper indirecting
+        that call would capture the wrapper's module instead, so the emitted
+        ``from <module> import <name>`` would resolve to a different symbol or none.
+        Failing here — at emission, naming the mis-captured anchor — beats leaving a
+        broken generated import to blow up on the next runtime load. Scoped to the
+        anchor factory's own output (``__angee_role_anchor__``); ordinary source
+        models emit from real module-level classes and need no probe (and the
+        composer renders synthetic test modules that are not importable).
+        """
+
+        if not getattr(model_class, "__angee_role_anchor__", False):
+            return
+        # The adopter module is already imported (the composer scanned it to reach
+        # this anchor), so read it from ``sys.modules`` rather than re-importing —
+        # which also tolerates a synthetic, unregistered module used only to render.
+        module = sys.modules.get(model_class.__module__)
+        if module is None:
+            return
+        if getattr(module, model_class.__name__, None) is not model_class:
+            raise ImproperlyConfigured(
+                f"role_anchor {model_class.__name__!r} does not bind in {model_class.__module__!r}; "
+                "sys._getframe captured the wrong module — pass module=__name__ explicitly when "
+                "creating the anchor through a wrapper instead of at module level."
+            )
 
     def _runtime_parent_alias(
         self,

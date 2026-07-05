@@ -855,6 +855,19 @@ class Thread(SqidMixin, AuditMixin, AngeeModel):
 
         return self.subject or f"thread:{self.public_id}"
 
+    def broadcasts_changes(self) -> bool:
+        """Keep record-attached chatter off the generic ``changes`` subscription.
+
+        A thread bound to a record through a ``ThreadAttachment`` is chatter,
+        reachable only through the record-scoped ``record_thread`` payload (gated on
+        the parent record's read); its own ``owner``/``admin`` read would otherwise
+        deliver its change events to a subject who cannot read the record — the same
+        isolation ``ThreadQuerySet.inbox()`` gives the query surface. See F-v part 2.
+        """
+
+        attachment_model = apps.get_model("messaging", "ThreadAttachment")
+        return not attachment_model._base_manager.filter(thread_id=self.pk).exists()
+
 
 class ThreadAttachment(SqidMixin, AuditMixin, AngeeModel):
     """Polymorphic edge attaching one chatter thread to one model row."""
@@ -1359,6 +1372,22 @@ class Message(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
         """Return a readable message label for Django displays."""
 
         return self.subject or self.preview or f"message:{self.public_id}"
+
+    def broadcasts_changes(self) -> bool:
+        """Keep record-attached chatter off the generic ``changes`` subscription.
+
+        A message whose thread carries a ``ThreadAttachment`` is record chatter,
+        reachable only through ``record_thread`` (gated on the parent record's
+        read); its own ``owner``/``admin`` read would otherwise deliver its change
+        events to a subject who cannot read the record. A message with no thread (an
+        ingest whose thread merged away) is not record-attached and still broadcasts
+        — the emission mirror of ``MessageQuerySet.inbox()``. See F-v part 2.
+        """
+
+        if self.thread_id is None:
+            return True
+        attachment_model = apps.get_model("messaging", "ThreadAttachment")
+        return not attachment_model._base_manager.filter(thread_id=self.thread_id).exists()
 
 
 class ThreadNotification(SqidMixin, AuditMixin, AngeeModel):

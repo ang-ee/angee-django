@@ -502,6 +502,14 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 - **Intersect write-only fields out of the read/return selection** — a field
   absent from the SDL read type (e.g. `password`) makes the detail query invalid
   and the form loads blank if it is selected.
+- **Server-owned fields are excluded from the write surface, never merely
+  `readOnly` in a form.** A column the server owns (audit, derived, or
+  default-only) must be left out of the resource's `insertable`/`writable` set so
+  it never enters the generated input type. Marking the form control `readOnly`
+  only hides the widget: the field still rides the input, and the form's
+  `Field.defaultValue` seeds and submits a value for it, so the client can write a
+  column the server owns. Resource-level exclusion is the one authorization gate;
+  `readOnly` is presentation, not authorization.
 - **Validation surfaces two ways** — Django `ValidationError` flows through
   `extensions.validationErrors` (camelCased), but GraphQL input-coercion errors
   fire before resolvers and never reach it, so guard required inputs client-side

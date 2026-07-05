@@ -64,15 +64,21 @@ def materialize_grant_groups(
         return 0, 0
 
     relationship_model = active_relationship_model()
-    created = 0
+    new_grants: list[RelationshipTuple] = []
     skipped = 0
     for grant in resolved.values():
         if _grant_exists(relationship_model, grant):
             skipped += 1
         else:
-            created += 1
-    write_relationships(list(resolved.values()))
-    return created, skipped
+            new_grants.append(grant)
+    # Drive the write off the existence check so an unchanged re-load is a true
+    # no-op: only tuples that are actually missing are written, so a repeat load
+    # touches no rows (no audit entry, no zookie bump) instead of re-upserting
+    # every grant. ``write_relationships`` still upserts, so a concurrent insert
+    # between the check and the write stays idempotent.
+    if new_grants:
+        write_relationships(new_grants)
+    return len(new_grants), skipped
 
 
 def _grant_tuple(

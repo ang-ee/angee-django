@@ -20,7 +20,7 @@ from rebac import PermissionDenied
 from strawberry import auto
 
 from angee.base.models import instance_from_public_id
-from angee.graphql.data import hasura_model_resource, public_pk_decoder
+from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import request_from_info
@@ -1046,6 +1046,26 @@ def _message_inbox_queryset(info: strawberry.Info) -> Any:
     return Message.objects.inbox()
 
 
+class _InboxWriteBackend(AngeeHasuraWriteBackend):
+    """Write backend that keeps record-attached chatter off the generic mutations.
+
+    The read side scopes ``threads``/``messages`` to ``.inbox()`` through
+    ``get_queryset``; the write side must match, or a creator who lost record access
+    could still reach a record-attached row through ``update_<res>_by_pk`` /
+    ``delete_<res>_by_pk`` (its own ``owner``/``admin`` permission would allow it).
+    Narrowing the write-target queryset to ``.inbox()`` makes the by-pk lookup miss
+    a record-attached row, so the generic mutation reports it as not found while the
+    inbox rows keep their update/delete surfaces. The ``.inbox()`` verb resolves
+    polymorphically on each model's queryset, so one backend serves both. See F-v
+    part 2.
+    """
+
+    def write_target_queryset(self) -> Any:
+        """Scope the update/delete/save target queryset to non-record rows."""
+
+        return super().write_target_queryset().inbox()
+
+
 _CHANNEL_RESOURCE = hasura_model_resource(
     ChannelType,
     model=Channel,
@@ -1108,6 +1128,7 @@ _MESSAGE_RESOURCE = hasura_model_resource(
         "subtype": public_pk_decoder(MessageSubtype),
     },
     get_queryset=_message_inbox_queryset,
+    write_backend=_InboxWriteBackend(Message),
 )
 _THREAD_RESOURCE = hasura_model_resource(
     ThreadType,
@@ -1121,6 +1142,7 @@ _THREAD_RESOURCE = hasura_model_resource(
     updatable=["subject", "visibility"],
     field_id_decode={"channel": public_pk_decoder(Integration)},
     get_queryset=_thread_inbox_queryset,
+    write_backend=_InboxWriteBackend(Thread),
 )
 
 

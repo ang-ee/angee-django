@@ -54,7 +54,7 @@ from angee.parties.models import Folder as AbstractContactFolder
 from angee.parties.models import Handle as AbstractHandle
 from angee.parties.models import Party as AbstractParty
 from angee.social.models import MessagePublic, ThreadPublic
-from tests.chatterdemo.models import ChatterDoc
+from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild, TrackedRecordParent
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,
@@ -377,6 +377,8 @@ MESSAGING_TEST_MODELS = (
     Participant,
     ThreadedTicket,
     ChatterDoc,
+    TrackedRecordParent,
+    TrackedRecordChild,
 )
 
 _AT = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
@@ -799,6 +801,46 @@ def test_threaded_model_create_autofollows_and_logs_author(messaging_tables: Non
         tracking_message.pk,
     ]
     assert all(notification.is_read for notification in notifications)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_materialized_child_transition_yields_one_tracking_note(messaging_tables: None) -> None:
+    """A ``child_overrides_parent`` materialized child tracks a transition save once.
+
+    The child-first (flipped) MRO places ``ThreadedModelMixin.save`` once in the
+    chain, and MTI saves both tables inside that single ``save()`` — so a
+    ``StateTransitions`` ``save_state`` edge over a tracked field posts exactly one
+    tracking note, never one per MRO level. Pins the arch-review gap in the
+    materialized-child + record-chatter tracking interaction.
+    """
+
+    del messaging_tables
+    user_model = get_user_model()
+    with system_context(reason="tracked child setup"):
+        user = user_model.objects.create_user(username="flip-tracker", email="flip@example.com")
+
+    with actor_context(user):
+        record = TrackedRecordChild.objects.create(title="Flip case", note="child column")
+        # status defaults to open, so creation logs no tracking note; the transition
+        # is the one status change that must be tracked, once.
+        record.close()
+
+    thread = record.message_thread(create=False)
+    tracking_messages = [
+        message
+        for message in Message._base_manager.select_related("subtype").filter(thread=thread)
+        if message.subtype is not None and message.subtype.key == "record_updated"
+    ]
+    assert len(tracking_messages) == 1
+    tracking_value = TrackingValue._base_manager.get(message=tracking_messages[0])
+    assert tracking_value.field_name == "status"
+    assert tracking_value.old_display == "Open"
+    assert tracking_value.new_display == "Closed"
+    # The transition persisted the guarded state through save_state.
+    with system_context(reason="tracked child assertions"):
+        assert TrackedRecordChild.objects.get(pk=record.pk).status == "closed"
+        # The child column rode the same row (materialized child MTI).
+        assert TrackedRecordChild.objects.get(pk=record.pk).note == "child column"
 
 
 @pytest.mark.django_db(transaction=True)
