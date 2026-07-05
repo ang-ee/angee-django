@@ -15,9 +15,9 @@ from rebac import system_context
 
 from angee.addons import AddonContract
 from angee.base.models import AngeeModel
-from angee.resources.entries import EntryGraph, GrantRow, LoadResult, ResourceEntry
+from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
-from angee.resources.grants import _grant_tuple
+from angee.resources.grants import _grant_tuples, materialize_grant_groups
 from angee.resources.loader import build_resource
 from angee.resources.models import Resource
 from angee.resources.tiers import ResourceTier
@@ -1526,14 +1526,15 @@ def test_grant_tuple_resolves_xref_const_role_and_wildcard(tmp_path: Path) -> No
         def _row(resource: str, relation: str, subject: str) -> GrantRow:
             return GrantRow(entry=entry, resource=resource, relation=relation, subject=subject, index=1)
 
-        # Grants resolve under the loader's elevated context; mirror it here.
+        # Grants resolve under the loader's elevated context; mirror it here. A
+        # plain (non-MTI) resource and a literal ref each name exactly one tuple.
         with system_context(reason="grant resolver assertions"):
-            row_xref = _grant_tuple(_row("resource_addon.doc", "direct_member", "*"), GrantResolverLedger, aliases)
+            (row_xref,) = _grant_tuples(_row("resource_addon.doc", "direct_member", "*"), GrantResolverLedger, aliases)
             assert row_xref.resource == to_object_ref(doc)
             assert row_xref.relation == "direct_member"
             assert row_xref.subject == anonymous_actor()
 
-            literal = _grant_tuple(
+            (literal,) = _grant_tuples(
                 _row("angee/role:admin", "member", "products/role:mgr#member"), GrantResolverLedger, aliases
             )
             assert literal.resource == ObjectRef("angee/role", "admin")
@@ -1648,6 +1649,121 @@ def test_grant_fixtures_load_and_are_idempotent(tmp_path: Path, monkeypatch: Any
     finally:
         with connection.schema_editor() as schema_editor:
             schema_editor.delete_model(GrantLoadLedger)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_grant_on_mti_child_lands_on_every_identity(tmp_path: Path) -> None:
+    """A grant on an MTI child row lands on every REBAC identity it IS-A.
+
+    ``MtiChild`` IS-A ``MtiParent`` (shared primary key), so a ``reader`` grant on
+    the child materializes a tuple on both the child type and each REBAC-registered
+    parent type — and a ``read`` passes whether the row is reached as the child or
+    through a foreign key typed to the parent (the edge the parent-typed FK scopes).
+    A plain (non-MTI) grant still writes exactly one tuple.
+    """
+
+    from django.contrib.auth import get_user_model
+    from django.core.management import call_command
+    from rebac import ObjectRef, to_object_ref, to_subject_ref
+    from rebac.backends import backend
+    from rebac.models import active_relationship_model
+    from rebac.resources import model_resource_type
+
+    from tests.mtidemo.models import MtiChild, MtiParent
+
+    class MtiGrantLedger(Resource):
+        """Concrete resource ledger for the MTI grant test."""
+
+        class Meta(Resource.Meta):
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+            abstract = False
+
+    aliases = {"tests.resource_addon": "tests.resource_addon", "resource_addon": "tests.resource_addon"}
+    user_model = get_user_model()
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(MtiGrantLedger)
+    # Grants are checked against the composed REBAC schema on read; sync loads it.
+    call_command("rebac", "sync", verbosity=0)
+    try:
+        with system_context(reason="mti grant setup"):
+            child = MtiChild.objects.create(title="Acme", detail="org")
+            plain = MtiParent.objects.create(title="Plain")
+            reader = user_model.objects.create(username="mti-reader")
+            outsider = user_model.objects.create(username="mti-outsider")
+        for row, xref in ((child, "child"), (plain, "plain"), (reader, "reader")):
+            MtiGrantLedger.objects.create(
+                source_addon="tests.resource_addon",
+                source_path="grants/010_demo.yaml",
+                tier=Resource.Tier.DEMO,
+                xref=xref,
+                content_hash="sha256:x",
+                target_model=type(row)._meta.label,
+                target_id=row.public_id,
+            )
+        entry = ResourceEntry.from_declaration(
+            addon(tmp_path), "demo", {"path": "grants/010_demo.yaml", "kind": "grants"}
+        )
+        def _grant_row(xref: str, index: int) -> GrantRow:
+            return GrantRow(
+                entry=entry,
+                resource=f"resource_addon.{xref}",
+                relation="reader",
+                subject="resource_addon.reader",
+                index=index,
+            )
+
+        rows = (_grant_row("child", 1), _grant_row("plain", 2))
+        with system_context(reason="mti grant materialize"):
+            created, skipped = materialize_grant_groups(
+                (GrantGroup(entry=entry, rows=rows),),
+                ledger_model=MtiGrantLedger,
+                addon_aliases=aliases,
+            )
+
+        # The child grant expands to two identities (child + parent); the plain grant
+        # to one — three tuples materialize for the two grant rows.
+        assert (created, skipped) == (3, 0)
+
+        relationships = active_relationship_model()
+        subject = to_subject_ref(reader)
+        child_as_child = to_object_ref(child)
+        parent_type = model_resource_type(MtiParent)
+        assert parent_type is not None
+        child_as_parent = ObjectRef(parent_type, child_as_child.resource_id)
+        plain_ref = to_object_ref(plain)
+
+        def _reader_tuple(resource: ObjectRef) -> bool:
+            return relationships._default_manager.filter(
+                resource_type=resource.resource_type,
+                resource_id=resource.resource_id,
+                relation="reader",
+                subject_type=subject.subject_type,
+                subject_id=subject.subject_id,
+            ).exists()
+
+        with system_context(reason="mti grant tuple assertions"):
+            # The child grant lands on both identities the child row carries.
+            assert _reader_tuple(child_as_child)
+            assert _reader_tuple(child_as_parent)
+            # The plain (non-MTI) grant writes exactly its one identity — no change.
+            assert _reader_tuple(plain_ref)
+            assert (
+                relationships._default_manager.filter(resource_id=plain_ref.resource_id, relation="reader").count() == 1
+            )
+
+        # The subject reads the child row both as the child and through the parent
+        # type a foreign key would scope on; the plain row reads through its type.
+        for resource in (child_as_child, child_as_parent, plain_ref):
+            assert backend().has_access(subject=subject, action="read", resource=resource)
+        # No grant, no parent-typed read — the materialized tuple is what opens the edge.
+        assert not backend().has_access(
+            subject=to_subject_ref(outsider), action="read", resource=child_as_parent
+        )
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(MtiGrantLedger)
 
 
 def _write_resource_files(tmp_path: Path) -> Addon:

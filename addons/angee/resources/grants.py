@@ -18,7 +18,11 @@ Reference resolution composes the two owners, never re-deriving either:
   (:func:`angee.resources.widgets.resolve_xref`) to the loaded row, whose own
   REBAC identity (:func:`rebac.to_object_ref` / :func:`rebac.to_subject_ref`)
   gives the tuple side — so the row owns its resource type, never a fixture
-  prefix;
+  prefix. On the resource side a grant honors the row's IS-A: an MTI child
+  materializes one tuple per REBAC identity it carries — its own type plus each
+  REBAC-registered concrete parent it IS-A (``Organization`` IS-A ``Party``) —
+  so the grant reaches the row through a foreign key typed to any ancestor. An
+  ancestor with no REBAC type is skipped; the row's own type still fails fast;
 * the bare ``*`` subject is the public wildcard (the anonymous subject).
 """
 
@@ -37,6 +41,7 @@ from rebac import (
     write_relationships,
 )
 from rebac.models import active_relationship_model
+from rebac.resources import model_resource_type
 
 from angee.resources.entries import GrantGroup, GrantRow
 from angee.resources.exceptions import ResourceLoadError
@@ -58,8 +63,8 @@ def materialize_grant_groups(
     resolved: dict[tuple[str, ...], RelationshipTuple] = {}
     for group in groups:
         for row in group.rows:
-            grant = _grant_tuple(row, ledger_model, addon_aliases)
-            resolved.setdefault(grant.canonical_key(), grant)
+            for grant in _grant_tuples(row, ledger_model, addon_aliases):
+                resolved.setdefault(grant.canonical_key(), grant)
     if not resolved:
         return 0, 0
 
@@ -81,31 +86,64 @@ def materialize_grant_groups(
     return len(new_grants), skipped
 
 
-def _grant_tuple(
+def _grant_tuples(
     row: GrantRow,
     ledger_model: type[models.Model],
     addon_aliases: Mapping[str, str],
-) -> RelationshipTuple:
-    """Return the REBAC tuple one grant row names."""
+) -> list[RelationshipTuple]:
+    """Return the REBAC tuples one grant row names — one per identity its resource carries.
 
-    return RelationshipTuple(
-        resource=_resolve_resource(row, ledger_model, addon_aliases),
-        relation=row.relation,
-        subject=_resolve_subject(row, ledger_model, addon_aliases),
-    )
+    A literal ref or a plain (non-MTI) row yields exactly one tuple. An MTI child
+    on the resource side yields one tuple per REBAC identity it carries (its own
+    type plus each REBAC-registered concrete parent it IS-A), all sharing this
+    row's relation and subject.
+    """
+
+    subject = _resolve_subject(row, ledger_model, addon_aliases)
+    return [
+        RelationshipTuple(resource=resource, relation=row.relation, subject=subject)
+        for resource in _resolve_resource_refs(row, ledger_model, addon_aliases)
+    ]
 
 
-def _resolve_resource(
+def _resolve_resource_refs(
     row: GrantRow,
     ledger_model: type[models.Model],
     addon_aliases: Mapping[str, str],
-) -> ObjectRef:
-    """Resolve the grant resource to an object reference."""
+) -> list[ObjectRef]:
+    """Resolve the grant resource to every REBAC identity it carries.
+
+    A literal ref names exactly one identity. A row xref resolves through the
+    ledger to the loaded row and expands to each identity that row presents.
+    """
 
     value = row.resource
     if _is_literal_ref(value):
-        return ObjectRef.parse(value)
-    return to_object_ref(_resolve_row(row, value, ledger_model, addon_aliases))
+        return [ObjectRef.parse(value)]
+    return _identity_refs(_resolve_row(row, value, ledger_model, addon_aliases))
+
+
+def _identity_refs(row: models.Model) -> list[ObjectRef]:
+    """Return every REBAC identity ``row`` carries, nearest identity first.
+
+    The row's own identity comes first — :func:`to_object_ref` fails fast if its
+    model declares no REBAC type. An MTI child IS-A each concrete parent it shares
+    a primary key with (``Organization`` IS-A ``Party``), so a grant on the child
+    must also land on each REBAC-registered parent identity — otherwise a foreign
+    key typed to the parent scopes reads on the parent type and the granted subject
+    stays blind. ``_meta.get_parent_list()`` owns the transitive concrete-ancestor
+    walk; an ancestor with no REBAC type carries no identity and is skipped. Every
+    identity shares the row's resource id (MTI shares the id-source field), so only
+    the type varies.
+    """
+
+    own = to_object_ref(row)
+    refs = [own]
+    for ancestor in type(row)._meta.get_parent_list():
+        rebac_type = model_resource_type(ancestor)
+        if rebac_type is not None:
+            refs.append(ObjectRef(rebac_type, own.resource_id))
+    return refs
 
 
 def _resolve_subject(
