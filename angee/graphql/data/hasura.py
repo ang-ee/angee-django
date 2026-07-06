@@ -30,6 +30,7 @@ from angee.base.models import (
     aggregate_scoped_queryset,
     bind_actor,
     instance_from_public_id,
+    public_data_id_field,
     requires_angee_rebac_contract,
 )
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
@@ -455,6 +456,42 @@ def public_pk_decoder(model: type[models.Model]) -> Callable[[Any], Any]:
     return lambda value: _public_pk(model, value)
 
 
+def _relation_filter_decoders(
+    model: type[models.Model],
+    *,
+    filterable: Sequence[str],
+    declared: Mapping[str, Callable[[Any], Any]] | None,
+) -> Mapping[str, Callable[[Any], Any]] | None:
+    """Return the filter decoders for filterable public-id relation columns.
+
+    A filterable foreign-key / one-to-one column whose related model carries a
+    public identity is filtered by that related row's public id — the node
+    projects the relation as one — so its ``bool_exp`` operand is a public id,
+    never the raw primary key. Each such operand resolves through the related
+    model's identity owner (:func:`public_pk_decoder` →
+    :func:`instance_from_public_id`, which also keeps a raw primary key working)
+    instead of being handed to the ORM raw, which rejects a sqid on a numeric
+    key. A caller-declared ``field_id_decode`` always wins, so an explicit
+    write-scoped decoder is never overridden.
+    """
+
+    decoders = dict(declared or {})
+    for name in filterable:
+        if name in decoders:
+            continue
+        try:
+            field = model._meta.get_field(name)
+        except FieldDoesNotExist:
+            continue
+        if not isinstance(field, models.Field) or not is_to_one_relation(field):
+            continue
+        related = field.related_model
+        if not isinstance(related, type) or public_data_id_field(related) is None:
+            continue
+        decoders[name] = public_pk_decoder(related)
+    return decoders or None
+
+
 def _public_id_field_models(
     model: type[models.Model],
     fields: Iterable[str],
@@ -652,6 +689,16 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
             exclude=(_child_back_fk(model, lines.field),),
             surface=f"resource {resource_name!r} lines",
         )
+    # A filterable relation column is filtered by the related row's public id;
+    # auto-derive its filter decoder so a bare read resource (no write surface,
+    # no hand-declared field_id_decode) filters relations by sqid too. The
+    # writable-relation guard above still runs on the caller's declaration, so
+    # this never widens what a write may target.
+    field_id_decode = _relation_filter_decoders(
+        model,
+        filterable=filterable,
+        declared=field_id_decode,
+    )
     resource = build_hasura_resource(
         node,
         model=model,

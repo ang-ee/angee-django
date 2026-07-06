@@ -4,21 +4,22 @@ from __future__ import annotations
 
 import enum
 import warnings
+from collections.abc import Iterator
 from decimal import Decimal
-from typing import NewType
+from typing import Any, NewType, cast
 
 import pytest
 import strawberry
 import strawberry_django
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
-from django.db import models
+from django.db import connection, models
 from strawberry import auto
 from strawberry_django_aggregates.errors import GroupByFieldNotAllowed
 
 from angee.base.models import AngeeDataModel
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.data import metadata as metadata_module
-from angee.graphql.data.hasura import _measure_ops_for_field
+from angee.graphql.data.hasura import _measure_ops_for_field, _relation_filter_decoders
 from angee.graphql.data.metadata import (
     DataAggregateMeasureMetadata,
     DataResourceFieldMetadata,
@@ -26,9 +27,16 @@ from angee.graphql.data.metadata import (
     DataResourceTypeNames,
     make_data_resource_metadata,
 )
+from angee.graphql.ids import require_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from tests.conftest import SchemaAddon
+from tests.conftest import (
+    SchemaAddon,
+    _clear_model_tables,
+    _create_missing_tables,
+    execute_schema,
+    result_data,
+)
 
 
 class ResourceThing(AngeeDataModel):
@@ -675,3 +683,104 @@ def test_hasura_resource_rejects_unresolvable_axis_paths(
             write_backend=write_backend,
             id_decode=lambda value: value,
         )
+
+
+@pytest.fixture()
+def relation_filter_tables(transactional_db: Any) -> Iterator[None]:
+    """Create concrete parent/child tables for the relation-filter tests."""
+
+    del transactional_db
+    created = _create_missing_tables((ResourceParent, ResourceChild))
+    try:
+        yield
+    finally:
+        _clear_model_tables((ResourceParent, ResourceChild))
+        if created:
+            with connection.schema_editor() as schema_editor:
+                for model in reversed(created):
+                    schema_editor.delete_model(model)
+
+
+def test_relation_filter_decoders_covers_public_id_relations_only() -> None:
+    """Filterable to-one relation columns get an auto decoder; scalars and the id do not."""
+
+    decoders = _relation_filter_decoders(
+        ResourceChild,
+        filterable=["id", "name", "parent"],
+        declared=None,
+    )
+    assert decoders is not None
+    assert set(decoders) == {"parent"}
+
+
+def test_relation_filter_decoders_never_overrides_a_declared_decoder() -> None:
+    """A caller-declared field decoder wins over the auto-derived one."""
+
+    sentinel = lambda value: value  # noqa: E731 - test double
+    decoders = _relation_filter_decoders(
+        ResourceChild,
+        filterable=["parent"],
+        declared={"parent": sentinel},
+    )
+    assert decoders is not None
+    assert decoders["parent"] is sentinel
+
+
+def test_filterable_relation_filters_by_public_id_without_field_id_decode(
+    relation_filter_tables: None,
+) -> None:
+    """A child list filters by parent sqid even when the resource declares no field_id_decode."""
+
+    @strawberry_django.type(ResourceChild)
+    class ResourceChildFilterType(AngeeNode):
+        name: auto
+
+        @strawberry_django.field(only=["parent_id"])
+        def parent(self) -> strawberry.ID:
+            """Return the parent's public id."""
+
+            return require_public_id(ResourceParent, cast(Any, self).parent_id)
+
+    resource = hasura_model_resource(
+        ResourceChildFilterType,
+        model=ResourceChild,
+        name="resource_children",
+        filterable=["id", "name", "parent"],
+        sortable=["name"],
+        aggregatable=["id"],
+        insert=False,
+        update=False,
+        delete=False,
+        get_queryset=lambda info: ResourceChild._base_manager.all(),
+        id_column="sqid",
+    )
+    schema = GraphQLSchemas(
+        [
+            SchemaAddon(
+                {
+                    "public": {
+                        "query": [resource.query],
+                        "types": [ResourceChildFilterType, *resource.types],
+                    }
+                }
+            )
+        ]
+    ).build("public")
+
+    first = ResourceParent._base_manager.create(name="First")
+    second = ResourceParent._base_manager.create(name="Second")
+    ResourceChild._base_manager.create(name="under-first", parent=first)
+    ResourceChild._base_manager.create(name="under-second", parent=second)
+
+    rows = result_data(
+        execute_schema(
+            schema,
+            """
+            query ChildrenOf($parent: String!) {
+              resource_children(where: {parent: {_eq: $parent}}) { name }
+            }
+            """,
+            {"parent": str(first.sqid)},
+        )
+    )["resource_children"]
+    assert [row["name"] for row in rows] == ["under-first"]
