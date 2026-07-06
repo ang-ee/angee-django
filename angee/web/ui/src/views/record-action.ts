@@ -6,6 +6,10 @@ import {
   useSchemaFieldMetadata,
 } from "@angee/metadata";
 
+import {
+  useActionResultRun,
+  type ActionResultRunOptions,
+} from "./action-result-run";
 import type { ActionContext, ActionResult } from "./page";
 
 export type RecordActionRunner = (
@@ -27,6 +31,10 @@ export interface UseRecordActionOptions {
     context: ActionContext,
     result: ActionResult,
   ) => void | Promise<void>;
+  /** Route a successful id-returning `ActionResult` to the created record. */
+  linkTo?: string;
+  /** Let the shared ActionResult owner toast and optionally deep-link the result. */
+  settle?: boolean | ActionResultRunOptions;
 }
 
 export type RecordAction = (context: ActionContext) => Promise<ActionResult>;
@@ -84,12 +92,30 @@ export function useRecordActionMutation<TField extends string = string>(
   const [mutate, state] = useActionMutation<TField>(field, {
     invalidates,
   });
-  // Project the in-band outcome to the rendered `<Action run>` contract: a
-  // domain failure throws (the action bar toasts it) and success resolves the
-  // message. Settle-owning callers use `useActionResultRun` instead.
+  const settleOptions = React.useMemo<ActionResultRunOptions | null>(() => {
+    if (options?.settle === false) return null;
+    if (options?.settle && typeof options.settle === "object") {
+      return {
+        ...(options.linkTo ? { linkTo: options.linkTo } : {}),
+        ...options.settle,
+      };
+    }
+    if (options?.linkTo) return { linkTo: options.linkTo };
+    return options?.settle === true ? {} : null;
+  }, [options?.linkTo, options?.settle]);
+  const settleActionResult = useActionResultRun(settleOptions ?? undefined);
+  // Legacy callers project the in-band outcome to the rendered `<Action run>`
+  // contract. Id-returning bridge actions delegate toast/link settling to the
+  // shared ActionResult owner so consumer hooks stay declarative.
   const run = React.useCallback<RecordActionRunner>(
-    async (id) => runActionResult(await mutate(id)),
-    [mutate],
+    async (id) => {
+      if (settleOptions) {
+        await settleActionResult(() => mutate(id));
+        return undefined;
+      }
+      return runActionResult(await mutate(id));
+    },
+    [mutate, settleActionResult, settleOptions],
   );
   return [useRecordAction(run, options), state];
 }

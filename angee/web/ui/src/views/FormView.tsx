@@ -1,5 +1,6 @@
 import * as React from "react";
 import {
+  fieldUpdatable,
   lineReadSelectionPaths,
   refineResourceName,
   recordSubtitleFields,
@@ -539,9 +540,15 @@ export function FormView({
   const writableFieldNames = React.useMemo<ReadonlySet<string> | null>(() => {
     const fields = isCreate
       ? modelMetadata?.rootFields?.createFields
-      : modelMetadata?.rootFields?.updateFields;
+      : submit
+        ? undefined
+      : modelMetadata
+        ? formFields.map((field) => field.name).filter((fieldName) =>
+            fieldUpdatable(modelMetadata, fieldName),
+          )
+        : undefined;
     return fields ? new Set(fields) : null;
-  }, [isCreate, modelMetadata]);
+  }, [formFields, isCreate, modelMetadata, submit]);
   const form = useRefineForm<RowRecord, HttpError, Values>({
     defaultValues: baselineValuesRef.current,
     disableServerSideValidation: true,

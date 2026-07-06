@@ -5,6 +5,13 @@ import {
   type DragEventHandler,
   type DragEvent,
 } from "react";
+import {
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 
 /**
  * The drag-and-drop seam. The framework owns the wire format — one internal
@@ -19,6 +26,16 @@ import {
 
 /** The single payload MIME; the payload's `type` field discriminates kinds. */
 export const DND_MIME = "application/vnd.angee.dnd+json";
+
+/** Shared dnd-kit sensors for sortable in-app interactions. */
+export function useDndKitSensors(activationDistance: number) {
+  return useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: activationDistance },
+    }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+}
 
 // HTML5 hides the payload body during `dragover` (only `drop` can read it) but
 // the list of available *types* stays visible. We mirror the payload `type`

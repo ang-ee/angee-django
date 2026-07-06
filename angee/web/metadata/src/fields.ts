@@ -1,4 +1,4 @@
-import type { ModelFieldMetadata } from "./artifact";
+import type { ModelFieldMetadata, ModelMetadata } from "./artifact";
 
 const SCALAR_WIDGET: Readonly<Record<string, string>> = {
   Boolean: "switch",
@@ -64,6 +64,18 @@ export function filterFieldType(
   if (field?.kind === "scalar" && field.scalar === "Date") return "date";
   if (looksLikeDateField(fieldName)) return "datetime";
   return supportsChoiceFacet({ fieldName, field, ...support }) ? "selection" : null;
+}
+
+/** Whether the resource's update root accepts writes for a field. */
+export function fieldUpdatable(
+  metadata: ModelMetadata | null | undefined,
+  fieldName: string,
+): boolean {
+  if (!metadata?.rootFields?.update && !metadata?.resource?.roots.update) return false;
+  const updateFields =
+    metadata.rootFields?.updateFields ?? metadata.resource?.updateFields;
+  if (updateFields && !updateFields.includes(fieldName)) return false;
+  return metadata.fields[fieldName]?.updatable !== false;
 }
 
 export function supportsChoiceFacet(support: ChoiceFacetSupport): boolean {

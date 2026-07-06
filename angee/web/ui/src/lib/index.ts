@@ -32,6 +32,7 @@ export {
   readDndPayload,
   dragHasAcceptedType,
   dragHasFiles,
+  useDndKitSensors,
   useDraggable,
   dragSourceProps,
   useDropTarget,

@@ -321,14 +321,14 @@ describe("relation group display label (Odoo (id, display_name))", () => {
 
   test("bucketValueLabels renders the carried name, not the raw id", () => {
     const bucket = { key: { partyId: "4422", party_DisplayName: "PRG Iva" }, count: 1 };
-    expect(bucketValueLabels(bucket, [PARTY_GROUP], GROUP_METADATA)).toEqual([
+    expect(bucketValueLabels(bucket, [PARTY_GROUP], GROUP_METADATA, "No value")).toEqual([
       "PRG Iva",
     ]);
   });
 
   test("bucketValueLabels needs resource metadata for grouped buckets", () => {
     const bucket = { key: { partyId: "pty_abc", party_DisplayName: "PRG Iva" }, count: 1 };
-    expect(() => bucketValueLabels(bucket, [PARTY_GROUP], null)).toThrow(
+    expect(() => bucketValueLabels(bucket, [PARTY_GROUP], null, "No value")).toThrow(
       'group dimension "party"',
     );
   });

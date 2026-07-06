@@ -17,14 +17,19 @@ const dndMocks = vi.hoisted(() => {
     KeyboardSensor,
     contextProps: null as {
       sensors?: unknown;
+      collisionDetection?: (args: unknown) => unknown;
       onDragEnd?: (event: unknown) => void;
     } | null,
+    pointerWithin: vi.fn((): unknown[] => []),
+    rectIntersection: vi.fn((): unknown[] => []),
+    setActivatorNodeRef: vi.fn(),
     useSensor: vi.fn((sensor: unknown, options?: unknown) => ({ sensor, options })),
     useSensors: vi.fn((...sensors: unknown[]) => sensors),
     useDraggable: vi.fn(() => ({
       attributes: { "data-draggable": "true" },
       listeners: { onKeyDown: vi.fn() },
       setNodeRef: vi.fn(),
+      setActivatorNodeRef: vi.fn((node) => dndMocks.setActivatorNodeRef(node)),
       transform: null,
       isDragging: false,
     })),
@@ -41,6 +46,7 @@ vi.mock("@dnd-kit/core", () => ({
   DndContext: (props: {
     children: React.ReactNode;
     sensors?: unknown;
+    collisionDetection?: (args: unknown) => unknown;
     onDragEnd?: (event: unknown) => void;
   }) => {
     dndMocks.contextProps = props;
@@ -49,6 +55,8 @@ vi.mock("@dnd-kit/core", () => ({
   PointerSensor: dndMocks.PointerSensor,
   KeyboardSensor: dndMocks.KeyboardSensor,
   closestCenter: "closestCenter",
+  pointerWithin: dndMocks.pointerWithin,
+  rectIntersection: dndMocks.rectIntersection,
   useSensor: dndMocks.useSensor,
   useSensors: dndMocks.useSensors,
   useDraggable: dndMocks.useDraggable,
@@ -64,6 +72,11 @@ beforeEach(() => {
   dndMocks.useSensors.mockClear();
   dndMocks.useDraggable.mockClear();
   dndMocks.useDroppable.mockClear();
+  dndMocks.pointerWithin.mockClear();
+  dndMocks.rectIntersection.mockClear();
+  dndMocks.pointerWithin.mockReturnValue([]);
+  dndMocks.rectIntersection.mockReturnValue([]);
+  dndMocks.setActivatorNodeRef.mockClear();
 });
 afterEach(() => cleanup());
 
@@ -220,5 +233,79 @@ describe("BoardView", () => {
     });
 
     expect(onCardMove).toHaveBeenCalledWith({ id: "1", label: "Notes" }, "next");
+  });
+
+  test("uses pointer collision with rectangle fallback for card moves", () => {
+    const pointerHit = [{ id: "pointer" }];
+    const rectHit = [{ id: "rect" }];
+    dndMocks.pointerWithin.mockReturnValueOnce(pointerHit);
+    dndMocks.rectIntersection.mockReturnValueOnce(rectHit);
+
+    renderBoard({
+      dragEnabled: true,
+      onCardMove: vi.fn(),
+    });
+
+    expect(dndMocks.contextProps?.collisionDetection?.({})).toBe(pointerHit);
+    dndMocks.pointerWithin.mockReturnValueOnce([]);
+    expect(dndMocks.contextProps?.collisionDetection?.({})).toBe(rectHit);
+  });
+
+  test("wires a card drag handle as the keyboard activator", () => {
+    renderBoard({
+      dragEnabled: true,
+      onCardMove: vi.fn(),
+    });
+
+    expect(screen.getByRole("button", { name: "board.dragCard" })).toBeTruthy();
+    expect(dndMocks.setActivatorNodeRef).toHaveBeenCalled();
+  });
+
+  test("ignores drag-end events with malformed card data", () => {
+    const onCardMove = vi.fn();
+    renderBoard({
+      dragEnabled: true,
+      onCardMove,
+    });
+
+    act(() => {
+      dndMocks.contextProps?.onDragEnd?.({
+        active: {
+          data: {
+            current: {
+              row: { id: "1", label: "Notes" },
+              laneId: 2,
+            },
+          },
+        },
+        over: { id: "next" },
+      });
+    });
+
+    expect(onCardMove).not.toHaveBeenCalled();
+  });
+
+  test("passes null when a card is dropped on the empty lane", () => {
+    const onCardMove = vi.fn();
+    renderBoard({
+      dragEnabled: true,
+      onCardMove,
+    });
+
+    act(() => {
+      dndMocks.contextProps?.onDragEnd?.({
+        active: {
+          data: {
+            current: {
+              row: { id: "1", label: "Notes" },
+              laneId: "data",
+            },
+          },
+        },
+        over: { id: "" },
+      });
+    });
+
+    expect(onCardMove).toHaveBeenCalledWith({ id: "1", label: "Notes" }, null);
   });
 });

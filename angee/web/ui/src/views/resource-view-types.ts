@@ -48,8 +48,6 @@ export interface BoardLaneSource {
   field: string;
   /** Optional display-field override; defaults to the related model representation. */
   labelField?: string;
-  /** Optional fetch limit for the related lane records. */
-  pageSize?: number;
 }
 
 export interface CardActionContext {

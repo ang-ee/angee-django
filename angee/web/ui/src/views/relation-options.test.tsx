@@ -12,7 +12,7 @@ import {
 } from "@angee/metadata";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { useRelationLanes, useRelationOptions } from "./relation-options";
+import { useRelationOptions } from "./relation-options";
 import type { RelationFieldInfo } from "./model-metadata-defaults";
 
 const sdkMocks = vi.hoisted(() => ({
@@ -74,7 +74,7 @@ describe("useRelationOptions", () => {
     expect(screen.getByText("vnd_1: Acme")).toBeTruthy();
   });
 
-  test("returns relation lanes in server order without client label sorting", () => {
+  test("returns relation options in server order without client label sorting", () => {
     sdkMocks.rows = [
       { id: "stg_30", name: "Proposal" },
       { id: "stg_10", name: "New" },
@@ -83,7 +83,7 @@ describe("useRelationOptions", () => {
 
     render(
       <ModelMetadataProvider metadata={metadata}>
-        <RelationLanesProbe relation={stageRelation} />
+        <RelationOptionsProbe relation={stageRelation} />
       </ModelMetadataProvider>,
     );
 
@@ -109,21 +109,6 @@ function RelationOptionsProbe({
         <li key={option.value}>{`${option.value}: ${option.label}`}</li>
       ))}
     </ul>
-  );
-}
-
-function RelationLanesProbe({
-  relation,
-}: {
-  relation: RelationFieldInfo;
-}) {
-  const { lanes } = useRelationLanes(relation);
-  return (
-    <ol>
-      {lanes.map((lane) => (
-        <li key={lane.value}>{`${lane.value}: ${lane.label}`}</li>
-      ))}
-    </ol>
   );
 }
 

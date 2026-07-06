@@ -45,6 +45,7 @@ export interface ModelFieldMetadata {
   aggregatable?: boolean;
   groupable?: boolean;
   readable?: boolean;
+  nullable?: boolean;
   creatable?: boolean;
   updatable?: boolean;
   requiredOnCreate?: boolean;
@@ -207,6 +208,7 @@ export interface DataResourceFieldMetadata {
   creatable: boolean;
   updatable: boolean;
   requiredOnCreate: boolean;
+  nullable?: boolean;
   relationModelLabel?: string | null;
   relationLabelAxis?: string | null;
   relationObject?: boolean | null;
@@ -416,6 +418,7 @@ function baseModelFieldMetadata(
     ...(relationTarget ? { relationTarget } : {}),
     ...(field.relationObject ? { relationObject: true } : {}),
     readable: field.readable,
+    nullable: field.nullable ?? false,
     filterable: field.filterable,
     sortable: field.sortable,
     aggregatable: field.aggregatable,

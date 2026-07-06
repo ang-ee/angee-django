@@ -81,6 +81,31 @@ describe("resource-view model", () => {
     });
   });
 
+  test("round-trips cleared seeded filter, group, and sort through search", () => {
+    const initial = {
+      filter: { kind: { exact: "lead" } },
+      group: { field: "stage" },
+      sort: { field: "createdAt", dir: "desc" as const },
+    };
+    const cleared = ResourceViewState.create(initial)
+      .reduce({ type: "setFilter", filter: {} })
+      .reduce({ type: "setGroup", group: null })
+      .reduce({ type: "setSort", sort: null });
+
+    const search = resourceViewStateToSearch(cleared, initial);
+
+    expect(search).toMatchObject({
+      filter: "",
+      group: "",
+      sort: "",
+    });
+    const roundTrip = resourceViewSearchToState(search, initial);
+    expect(roundTrip.filter).toEqual({});
+    expect(roundTrip.group).toBeNull();
+    expect(roundTrip.groupStack).toEqual([]);
+    expect(roundTrip.sort).toBeNull();
+  });
+
   test("parses Router search strings without JSON-quoting URL values", () => {
     const state = resourceViewSearchToState({
       page: "2",

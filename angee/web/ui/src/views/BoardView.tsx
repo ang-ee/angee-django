@@ -3,16 +3,13 @@
 import * as React from "react";
 import {
   DndContext,
-  KeyboardSensor,
-  PointerSensor,
-  closestCenter,
+  pointerWithin,
+  rectIntersection,
   useDraggable,
   useDroppable,
-  useSensor,
-  useSensors,
+  type CollisionDetection,
   type DragEndEvent,
 } from "@dnd-kit/core";
-import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import type {
   Row as TableRowModel } from "@tanstack/react-table";
 import { useNavigate } from "@tanstack/react-router";
@@ -20,7 +17,9 @@ import type { Row,
 } from "@angee/metadata";
 
 import { useUiT } from "../i18n";
+import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
+import { useDndKitSensors } from "../lib/dnd";
 import { type Tone } from "../lib/tones";
 import { CountBadge } from "../ui/badge";
 import { Skeleton, SkeletonStatus } from "../ui/skeleton";
@@ -56,7 +55,7 @@ export interface BoardViewProps<TRow extends Row = Row> {
   cardActions?: (row: TRow, context: CardActionContext) => React.ReactNode;
   cardActionContext?: CardActionContext;
   dragEnabled?: boolean;
-  onCardMove?: (row: TRow, laneId: string) => void | Promise<void>;
+  onCardMove?: (row: TRow, laneId: string | null) => void | Promise<void>;
   /** Override the card body (mirrors `GalleryView.renderCard`) — for a rich card
    * (description, chips, badges) instead of the default title + key/value rows. The
    * lane grouping, frame link/click, selection, and the `cardActions` footer stay. */
@@ -126,7 +125,7 @@ function BoardRows<TRow extends Row>({
   cardActions?: (row: TRow, context: CardActionContext) => React.ReactNode;
   cardActionContext: CardActionContext;
   dragEnabled: boolean;
-  onCardMove?: (row: TRow, laneId: string) => void | Promise<void>;
+  onCardMove?: (row: TRow, laneId: string | null) => void | Promise<void>;
   renderCard?: (row: TRow) => React.ReactNode;
 }): React.ReactElement {
   const t = useUiT();
@@ -134,17 +133,15 @@ function BoardRows<TRow extends Row>({
   const hasDeclaredLanes = leaves.some((group) => group.declared);
   const groupFields = new Set(groupStack.map((group) => group.field));
   const moveEnabled = dragEnabled && Boolean(onCardMove);
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
+  const sensors = useDndKitSensors(6);
   const handleDragEnd = React.useCallback(
     (event: DragEndEvent) => {
-      const row = event.active.data.current?.row as TRow | undefined;
-      const currentLaneId = event.active.data.current?.laneId;
+      const active = boardDragData<TRow>(event);
       const nextLaneId = event.over?.id;
-      if (!row || nextLaneId == null || nextLaneId === currentLaneId) return;
-      void onCardMove?.(row, String(nextLaneId));
+      if (!active || typeof nextLaneId !== "string" || nextLaneId === active.laneId) {
+        return;
+      }
+      void onCardMove?.(active.row, nextLaneId === "" ? null : nextLaneId);
     },
     [onCardMove],
   );
@@ -184,12 +181,37 @@ function BoardRows<TRow extends Row>({
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={closestCenter}
+      collisionDetection={boardCollisionDetection}
       onDragEnd={handleDragEnd}
     >
       {board}
     </DndContext>
   );
+}
+
+const boardCollisionDetection: CollisionDetection = (args) => {
+  const pointerCollisions = pointerWithin(args);
+  return pointerCollisions.length > 0
+    ? pointerCollisions
+    : rectIntersection(args);
+};
+
+interface BoardDragData<TRow extends Row> {
+  row: TRow;
+  laneId: string;
+}
+
+function boardDragData<TRow extends Row>(
+  event: DragEndEvent,
+): BoardDragData<TRow> | null {
+  const data = event.active.data.current;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const record = data as Record<string, unknown>;
+  if (typeof record.laneId !== "string") return null;
+  if (!record.row || typeof record.row !== "object" || Array.isArray(record.row)) {
+    return null;
+  }
+  return { laneId: record.laneId, row: record.row as TRow };
 }
 
 function BoardSkeleton({
@@ -277,7 +299,7 @@ function BoardLane<TRow extends Row>({
   const tone = laneDotTone(group, groupStack, columns);
   const { setNodeRef, isOver } = useDroppable({
     id: group.key,
-    disabled: !dragEnabled,
+    disabled: !dragEnabled || group.dropDisabled === true,
   });
   return (
     <section
@@ -286,7 +308,7 @@ function BoardLane<TRow extends Row>({
       className={cn(
         "flex w-[300px] flex-none flex-col rounded-[10px] border border-border-subtle bg-inset",
         dragEnabled && "transition-colors",
-        isOver && "border-border-focus bg-brand-soft/25",
+        isOver && group.dropDisabled !== true && "border-border-focus bg-brand-soft/25",
       )}
     >
       <div className="sticky top-0 z-10 flex items-center gap-2 rounded-t-[10px] bg-inset px-3 pt-3 pb-2">
@@ -343,12 +365,14 @@ function BoardRowCard<TRow extends Row>({
   laneId: string;
   renderCard?: (row: TRow) => React.ReactNode;
 }): React.ReactElement {
+  const t = useUiT();
   const href = rowHref?.(row.original);
   const actions = cardActions?.(row.original, cardActionContext);
   const {
     attributes,
     listeners,
     setNodeRef,
+    setActivatorNodeRef,
     transform,
     isDragging,
   } = useDraggable({
@@ -364,27 +388,44 @@ function BoardRowCard<TRow extends Row>({
       ref={dragEnabled ? setNodeRef : undefined}
       style={style}
       className={cn(
-        "board-card-grid grid min-w-0 gap-2 rounded-8 border border-border-subtle bg-sheet p-3 shadow-xs transition hover:-translate-y-0.5 hover:border-border hover:shadow-md",
-        dragEnabled && "cursor-grab touch-none select-none active:cursor-grabbing",
+        "board-card-grid grid min-w-0 gap-2 rounded-8 border border-border-subtle bg-sheet p-3 shadow-xs",
+        isDragging
+          ? "transition-none"
+          : "transition hover:-translate-y-0.5 hover:border-border hover:shadow-md",
+        dragEnabled && "select-none",
         isDragging && "z-10 border-border-focus shadow-lg",
       )}
-      {...(dragEnabled ? attributes : {})}
-      {...(dragEnabled ? listeners : {})}
     >
-      <BoardCardFrame
-        href={href}
-        onClick={onRowClick ? () => onRowClick(row.original) : undefined}
-      >
-        {renderCard ? (
-          renderCard(row.original)
-        ) : (
-          <DefaultBoardCardBody
-            columns={columns}
-            groupFields={groupFields}
-            row={row.original}
-          />
-        )}
-      </BoardCardFrame>
+      <div className="flex min-w-0 max-w-full items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <BoardCardFrame
+            href={href}
+            onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+          >
+            {renderCard ? (
+              renderCard(row.original)
+            ) : (
+              <DefaultBoardCardBody
+                columns={columns}
+                groupFields={groupFields}
+                row={row.original}
+              />
+            )}
+          </BoardCardFrame>
+        </div>
+        {dragEnabled ? (
+          <button
+            ref={setActivatorNodeRef}
+            type="button"
+            aria-label={t("board.dragCard")}
+            className="grid size-7 shrink-0 touch-none cursor-grab place-content-center rounded-6 text-fg-subtle outline-none transition-colors hover:bg-inset hover:text-fg focus-visible:focus-ring active:cursor-grabbing"
+            {...attributes}
+            {...listeners}
+          >
+            <Glyph name="grip-vertical" />
+          </button>
+        ) : null}
+      </div>
       {actions ? (
         <footer className="flex items-center justify-end gap-2 border-t border-border-subtle pt-2">
           {actions}
