@@ -85,6 +85,8 @@ vi.mock("@refinedev/react-table", () => ({
           data: harness.tableRows,
           total: harness.tableRows.length,
         },
+        filters: [],
+        setFilters: vi.fn(),
         tableQuery: {
           error: null,
           isFetching: false,

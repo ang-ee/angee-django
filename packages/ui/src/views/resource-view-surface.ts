@@ -677,6 +677,10 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     () => crudFiltersFromFilterRecord(mergedFilter) ?? [],
     [mergedFilter],
   );
+  const refineFiltersKey = React.useMemo(
+    () => stableSerialize(refineFilters),
+    [refineFilters],
+  );
   const refineSorters = React.useMemo(
     () => refineSortersFromAngeeOrder(sortOrder) ?? [],
     [sortOrder],
@@ -773,12 +777,16 @@ export function useResourceViewSurface<TRow extends Row = Row>({
       },
       filters: {
         mode: "server",
-        initial: refineFilters,
+        permanent: refineFilters,
+        defaultBehavior: "replace",
       },
       meta: listMeta,
       queryOptions: { enabled: active },
     },
   });
+  React.useEffect(() => {
+    tableResult.refineCore.setFilters([], "replace");
+  }, [refineFiltersKey, tableResult.refineCore.setFilters]);
   const rows = React.useMemo(
     () => tableResult.refineCore.result.data as readonly TRow[],
     [tableResult.refineCore.result.data],
