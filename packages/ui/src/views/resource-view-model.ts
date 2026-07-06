@@ -443,6 +443,10 @@ export class ResourceViewState {
     initial: ResourceViewInitialState = {},
   ): ResourceViewState {
     const base = ResourceViewState.create(initial);
+    const sortCleared = isClearedSearchValue(search.sort);
+    const filterCleared = isClearedSearchValue(search.filter);
+    const groupCleared = isClearedSearchValue(search.group);
+    const thenCleared = isClearedSearchValue(search.then);
     const page = parseSearchInteger(search.page);
     const pageSize = parseSearchInteger(search.pageSize);
     const sort = parseSearchSort(search.sort);
@@ -456,14 +460,16 @@ export class ResourceViewState {
       ...base.toInitialState(),
       page: page ?? base.page,
       pageSize: pageSize ?? base.pageSize,
-      sort: sort ?? base.sort,
-      filter: filter ?? base.filter,
-      group: group ?? base.group,
+      sort: sortCleared ? null : (sort ?? base.sort),
+      filter: filterCleared ? {} : (filter ?? base.filter),
+      group: groupCleared ? null : (group ?? base.group),
       groupStack:
-        group || then
+        groupCleared
+          ? []
+          : group || then || thenCleared
           ? [
               ...(group ? [group] : []),
-              ...(then ?? []),
+              ...(thenCleared ? [] : (then ?? [])),
             ]
           : base.groupStack,
       view: view ?? base.view,
@@ -532,17 +538,39 @@ export class ResourceViewState {
 
   toSearch(initial: ResourceViewInitialState = {}): ResourceViewSearch {
     const search: ResourceViewSearch = {};
+    const base = ResourceViewState.create(initial);
     const defaultPageSize = defaultResourceViewPageSize(initial);
     const defaultView = initial.view ?? "list";
     if (this.page !== 1) search.page = this.page;
     if (this.pageSize !== defaultPageSize) {
       search.pageSize = this.pageSize;
     }
-    if (this.sort) search.sort = serializeResourceViewSort(this.sort);
-    if (this.hasFilter()) search.filter = JSON.stringify(this.filter);
-    if (this.group) search.group = serializeResourceViewGroup(this.group);
-    if (this.groupStack.length > 1) {
-      search.then = serializeResourceViewGroupStack(this.groupStack.slice(1));
+    const sortValue = this.sort ? serializeResourceViewSort(this.sort) : "";
+    const baseSortValue = base.sort ? serializeResourceViewSort(base.sort) : "";
+    if (this.sort) {
+      if (sortValue !== baseSortValue) search.sort = sortValue;
+    } else if (base.sort) {
+      search.sort = "";
+    }
+    const filterValue = stableSerialize(this.filter);
+    const baseFilterValue = stableSerialize(base.filter);
+    if (this.hasFilter()) {
+      if (filterValue !== baseFilterValue) search.filter = JSON.stringify(this.filter);
+    } else if (Filter.from(base.filter).hasEntries()) {
+      search.filter = "";
+    }
+    const groupStackValue = serializeResourceViewGroupStack(this.groupStack);
+    const baseGroupStackValue = serializeResourceViewGroupStack(base.groupStack);
+    if (this.groupStack.length > 0) {
+      if (groupStackValue !== baseGroupStackValue) {
+        search.group = serializeResourceViewGroup(this.groupStack[0]!);
+        if (this.groupStack.length > 1) {
+          search.then = serializeResourceViewGroupStack(this.groupStack.slice(1));
+        }
+      }
+    } else if (base.groupStack.length > 0) {
+      search.group = "";
+      if (base.groupStack.length > 1) search.then = "";
     }
     if (this.view !== defaultView) search.view = this.view;
     // mode/anchor are calendar facts: they ride the URL only under the calendar
@@ -722,6 +750,10 @@ function parseSearchInteger(value: unknown): number | null {
   if (typeof value !== "string" || value.trim() === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isClearedSearchValue(value: unknown): boolean {
+  return value === "";
 }
 
 function parseSearchSort(value: unknown): ResourceViewSort | null {

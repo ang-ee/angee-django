@@ -120,6 +120,7 @@ export type RowGroup<TRow extends Row> = {
   rows: readonly TableRowModel<TRow>[];
   children: readonly RowGroup<TRow>[];
   declared?: boolean;
+  dropDisabled?: boolean;
 };
 
 export interface GroupMeasure extends AggregateMeasure {
@@ -576,7 +577,8 @@ export function buildColumns<TRow extends Row>(
   options: {
     groupStack?: readonly ResourceViewGroup[];
     metadata?: ModelMetadata | null;
-  } = {},
+    emptyValueLabel: string;
+  },
 ): ColumnDef<TRow>[] {
   // TanStack grouping requires a column def per grouping id; a group axis that
   // is not a display column gets a grouping-only accessor column (never
@@ -587,7 +589,12 @@ export function buildColumns<TRow extends Row>(
       id: group.field,
       accessorFn: (row: TRow) => readPath(row, group.field),
       getGroupingValue: (row: TRow) =>
-        groupKey(readPath(row, group.field), group, options.metadata ?? null),
+        groupKey(
+          readPath(row, group.field),
+          group,
+          options.metadata ?? null,
+          options.emptyValueLabel,
+        ),
       enableHiding: false,
       meta: {
         align: "left",
@@ -607,6 +614,7 @@ function displayColumns<TRow extends Row>(
   options: {
     groupStack?: readonly ResourceViewGroup[];
     metadata?: ModelMetadata | null;
+    emptyValueLabel: string;
   },
 ): ColumnDef<TRow>[] {
   return columns.map((column) => ({
@@ -615,7 +623,12 @@ function displayColumns<TRow extends Row>(
     getGroupingValue: (row) => {
       const group = options.groupStack?.find((item) => item.field === column.field);
       if (!group) return readPath(row, column.field);
-      return groupKey(readPath(row, column.field), group, options.metadata ?? null);
+      return groupKey(
+        readPath(row, column.field),
+        group,
+        options.metadata ?? null,
+        options.emptyValueLabel,
+      );
     },
     header: () => (
       <SortHeader column={column} sortController={sortController}>
@@ -1042,9 +1055,10 @@ function GroupHeader<TRow extends Row>({
   row: TableRowModel<TRow>;
   colSpan: number;
 }): React.ReactElement {
+  const t = useUiT();
   const canExpand = row.getCanExpand();
   const expanded = row.getIsExpanded();
-  const label = groupedRowLabel(row);
+  const label = groupedRowLabel(row, t("list.emptyValue"));
   const rowCount = row.getLeafRows().length;
   const indent = { paddingLeft: `calc(0.75rem + ${row.depth * 1.25}rem)` };
   // The chevron only appears when the header is a toggle; the lead/trailing
@@ -1102,10 +1116,11 @@ function GroupHeader<TRow extends Row>({
  */
 export function groupedRowLabel<TRow extends Row>(
   row: TableRowModel<TRow>,
+  emptyValueLabel: string,
 ): string {
   const columnId = row.groupingColumnId;
   const value = columnId ? row.getGroupingValue(columnId) : undefined;
-  if (value == null || value === "") return "No value";
+  if (value == null || value === "") return emptyValueLabel;
   return String(value);
 }
 
@@ -1172,7 +1187,8 @@ function groupLabelKey(
 export function bucketValueLabels(
   bucket: AggregateBucket,
   groupStack: readonly ResourceViewGroup[],
-  metadata: ModelMetadata | null = null,
+  metadata: ModelMetadata | null,
+  emptyValueLabel: string,
 ): string[] {
   return groupStack.map((group) => {
     const labelKey = groupLabelKey(group, metadata);
@@ -1182,16 +1198,17 @@ export function bucketValueLabels(
     }
     const dimension = resourceViewGroupToAggregateDimension(group, metadata);
     const value = bucket.key?.[dimension.key ?? dimension.field];
-    return groupKey(value, group, metadata);
+    return groupKey(value, group, metadata, emptyValueLabel);
   });
 }
 
 export function groupKey(
   value: unknown,
   group: ResourceViewGroup,
-  metadata: ModelMetadata | null = null,
+  metadata: ModelMetadata | null,
+  emptyValueLabel: string,
 ): string {
-  if (value == null) return "No value";
+  if (value == null) return emptyValueLabel;
   const enumLabel = typeof value === "string"
     ? enumLabelFromMetadata(metadata, group.field, value)
     : null;

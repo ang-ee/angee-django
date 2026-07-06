@@ -23,6 +23,7 @@ const harness = vi.hoisted(() => ({
   tableRows: [] as LeadRow[],
   laneRows: [] as Row[],
   groupedRows: null as readonly unknown[] | null,
+  tableOptions: [] as unknown[],
   useListOptions: [] as unknown[],
   updateOptions: null as unknown,
   updateCalls: [] as unknown[],
@@ -75,6 +76,7 @@ vi.mock("@refinedev/core", async (importOriginal) => {
 
 vi.mock("@refinedev/react-table", () => ({
   useTable: (options?: { columns?: readonly unknown[] }) => {
+    harness.tableOptions.push(options);
     const rows = harness.tableRows.map(tableRow);
     const groupedRows = harness.groupedRows ?? rows;
     return {
@@ -124,11 +126,12 @@ beforeEach(() => {
     { id: "led_1", name: "Upgrade", stage: { id: "stg_new", name: "New" } },
   ];
   harness.laneRows = [
-    { id: "stg_new", name: "New" },
-    { id: "stg_qualified", name: "Qualified" },
-    { id: "stg_proposal", name: "Proposal" },
+    { id: "stg_new", name: "New", code: "NEW" },
+    { id: "stg_qualified", name: "Qualified", code: "QUAL" },
+    { id: "stg_proposal", name: "Proposal", code: "PROP" },
   ];
   harness.groupedRows = null;
+  harness.tableOptions = [];
   harness.useListOptions = [];
   harness.updateOptions = null;
   harness.updateCalls = [];
@@ -171,6 +174,61 @@ describe("ListView board laneSource", () => {
     });
   });
 
+  test("pins the board group axis from laneSource without a default group", async () => {
+    renderLeadBoard({ withDefaultGroup: false });
+
+    await waitFor(() => {
+      expect(harness.boardProps?.resourceView.state.groupStack).toEqual([
+        { field: "stage" },
+      ]);
+    });
+  });
+
+  test("fails fast when laneSource does not resolve a relation", () => {
+    expect(() => renderLeadBoard({ laneSource: { field: "name" } })).toThrow(
+      /laneSource field "name".*relation/,
+    );
+  });
+
+  test("selects the lane relation id on the row list wire", async () => {
+    renderLeadBoard({
+      columns: [
+        { field: "name", header: "Name" },
+        { field: "customer", header: "Customer" },
+      ],
+    });
+
+    await waitFor(() => expect(harness.boardProps).not.toBeNull());
+
+    expect(lastTableOption()).toMatchObject({
+      refineCoreProps: {
+        meta: {
+          fields: expect.arrayContaining([
+            "id",
+            "name",
+            { customer: ["name"] },
+            { stage: ["id"] },
+          ]),
+        },
+      },
+    });
+  });
+
+  test("uses the declared lane label field for the lane option wire", async () => {
+    renderLeadBoard({ laneSource: { field: "stage", labelField: "code" } });
+
+    await waitFor(() => {
+      expect(harness.boardProps?.groups.map((group) => group.label)).toEqual([
+        "NEW",
+        "QUAL",
+        "PROP",
+      ]);
+    });
+    expect(lastUseListOption()).toMatchObject({
+      meta: { fields: ["id", "code"] },
+    });
+  });
+
   test("keeps the derived board lanes when no laneSource is declared", async () => {
     harness.groupedRows = [
       groupedTableRow("stage:New", "New", [harness.tableRows[0]!]),
@@ -203,6 +261,60 @@ describe("ListView board laneSource", () => {
     await waitFor(() => expect(harness.boardProps).not.toBeNull());
     expect(harness.boardProps?.dragEnabled).toBe(false);
     expect(harness.boardProps?.onCardMove).toBeUndefined();
+  });
+
+  test("suppresses refine default notifications for lane restage writes", async () => {
+    renderLeadBoard();
+
+    await waitFor(() => expect(harness.boardProps).not.toBeNull());
+
+    expect(harness.updateOptions).toMatchObject({
+      resource: "crmLeads",
+      successNotification: false,
+      errorNotification: false,
+    });
+  });
+
+  test("disables dropping on the empty lane when the lane field is not nullable", async () => {
+    harness.tableRows = [
+      { id: "led_1", name: "Upgrade", stage: null },
+    ];
+
+    renderLeadBoard({ metadata: leadMetadata({ stageNullable: false }) });
+
+    await waitFor(() => {
+      const emptyLane = harness.boardProps?.groups.find((group) => group.key === "");
+      expect(emptyLane).toMatchObject({ dropDisabled: true });
+    });
+  });
+
+  test("labels undeclared lanes from folded relation rows before the i18n fallback", async () => {
+    harness.laneRows = [{ id: "stg_new", name: "New", code: "NEW" }];
+    harness.tableRows = [
+      { id: "led_1", name: "Upgrade", stage: { id: "stg_hidden", name: "Hidden" } },
+    ];
+
+    renderLeadBoard();
+
+    await waitFor(() => {
+      expect(
+        harness.boardProps?.groups.find((group) => group.key === "stg_hidden")?.label,
+      ).toBe("Hidden");
+    });
+
+    cleanup();
+    harness.boardProps = null;
+    harness.tableRows = [
+      { id: "led_1", name: "Upgrade", stage: "stg_hidden" },
+    ];
+
+    renderLeadBoard();
+
+    await waitFor(() => {
+      expect(
+        harness.boardProps?.groups.find((group) => group.key === "stg_hidden")?.label,
+      ).toBe("list.unknownValue");
+    });
   });
 
   test("optimistically moves a card, writes the group field, and reverts with a toast on error", async () => {
@@ -248,8 +360,10 @@ describe("ListView board laneSource", () => {
 });
 
 function renderLeadBoard(options: {
-  laneSource?: { field: string } | undefined;
+  laneSource?: { field: string; labelField?: string } | undefined;
   metadata?: SchemaFieldMetadata;
+  columns?: readonly ColumnDescriptor<LeadRow>[];
+  withDefaultGroup?: boolean;
 } = {}) {
   const laneSource = Object.prototype.hasOwnProperty.call(options, "laneSource")
     ? options.laneSource
@@ -259,9 +373,9 @@ function renderLeadBoard(options: {
     <ModelMetadataProvider metadata={metadata}>
       <ListView<LeadRow>
         resource="crm.Lead"
-        columns={COLUMNS}
+        columns={options.columns ?? COLUMNS}
         defaultView="board"
-        defaultGroup={{ field: "stage" }}
+        defaultGroup={options.withDefaultGroup === false ? undefined : { field: "stage" }}
         laneSource={laneSource}
         scope="local"
       />
@@ -285,6 +399,14 @@ function lastUseListOption(): {
 } | undefined {
   return harness.useListOptions.at(-1) as
     | { resource?: string; dataProviderName?: string; meta?: { fields?: unknown } }
+    | undefined;
+}
+
+function lastTableOption(): {
+  refineCoreProps?: { meta?: { fields?: unknown } };
+} | undefined {
+  return harness.tableOptions.at(-1) as
+    | { refineCoreProps?: { meta?: { fields?: unknown } } }
     | undefined;
 }
 
@@ -343,7 +465,13 @@ const COLUMNS = [
 ] as ColumnDescriptor<LeadRow>[];
 
 function leadMetadata(
-  { stageWritable = true }: { stageWritable?: boolean } = {},
+  {
+    stageNullable = true,
+    stageWritable = true,
+  }: {
+    stageNullable?: boolean;
+    stageWritable?: boolean;
+  } = {},
 ): SchemaFieldMetadata {
   return schemaFieldMetadataFromDataResources([
     {
@@ -364,7 +492,13 @@ function leadMetadata(
           relationModelLabel: "crm.Stage",
           relationObject: true,
           groupable: true,
+          nullable: stageNullable,
           updatable: stageWritable,
+        }),
+        field("customer", {
+          kind: "relation",
+          relationModelLabel: "crm.Customer",
+          relationObject: true,
         }),
       ],
       filterFields: ["id", "name", "stage"],
@@ -395,9 +529,30 @@ function leadMetadata(
       fields: [
         field("id", { scalar: "ID", updatable: false }),
         field("name", { scalar: "String" }),
+        field("code", { scalar: "String" }),
+      ],
+      filterFields: ["id", "name", "code"],
+      orderFields: ["position", "id"],
+      aggregateFields: ["id"],
+      groupByFields: [],
+      relationAxes: [],
+    },
+    {
+      schemaName: "console",
+      modelLabel: "crm.Customer",
+      appLabel: "crm",
+      modelName: "customer",
+      publicIdField: "sqid",
+      roots: { list: "crmCustomers" },
+      typeNames: { node: "CustomerType" },
+      recordRepresentation: "name",
+      capabilities: ["list"],
+      fields: [
+        field("id", { scalar: "ID", updatable: false }),
+        field("name", { scalar: "String" }),
       ],
       filterFields: ["id", "name"],
-      orderFields: ["position", "id"],
+      orderFields: ["name"],
       aggregateFields: ["id"],
       groupByFields: [],
       relationAxes: [],
@@ -413,6 +568,7 @@ function field(
     relationModelLabel: string;
     relationObject: boolean;
     groupable: boolean;
+    nullable: boolean;
     updatable: boolean;
   }> = {},
 ) {
@@ -432,6 +588,7 @@ function field(
     sortable: false,
     aggregatable: name === "id",
     groupable: overrides.groupable ?? false,
+    nullable: overrides.nullable ?? false,
     creatable: true,
     updatable: overrides.updatable ?? true,
     requiredOnCreate: false,

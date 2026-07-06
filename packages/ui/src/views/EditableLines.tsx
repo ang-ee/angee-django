@@ -8,16 +8,11 @@ import {
 } from "react-hook-form";
 import {
   DndContext,
-  KeyboardSensor,
-  PointerSensor,
   closestCenter,
-  useSensor,
-  useSensors,
   type DragEndEvent,
 } from "@dnd-kit/core";
 import {
   SortableContext,
-  sortableKeyboardCoordinates,
   useSortable,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
@@ -33,6 +28,7 @@ import {
 import { Glyph } from "../chrome/Glyph";
 import { useUiT, type UiTranslate } from "../i18n";
 import { cn } from "../lib/cn";
+import { useDndKitSensors } from "../lib/dnd";
 import { titleCase } from "../lib/titleCase";
 import { Button } from "../ui/button";
 import { relationValueId } from "../widgets/types";
@@ -127,10 +123,7 @@ export function EditableLines({
     control: control as unknown as Control<FieldValues>,
     name,
   }) as Row[] | undefined) ?? [];
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
+  const sensors = useDndKitSensors(4);
 
   const onDragEnd = (event: DragEndEvent): void => {
     const { active, over } = event;

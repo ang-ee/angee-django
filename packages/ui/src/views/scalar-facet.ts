@@ -19,6 +19,7 @@ import type {
 } from "../toolbars";
 import type { ResourceViewFilter, ResourceViewGroup } from "./resource-view-model";
 import { facetRequestSpec } from "./facet-query";
+import { useUiT } from "../i18n";
 import {
   resourceViewGroupToAggregateDimension,
   groupKey,
@@ -58,6 +59,7 @@ export function useScalarFacets<TRow extends object>(
   metadata: ModelMetadata | null,
   activeFilter?: ResourceViewFilter,
 ): ScalarFacets {
+  const t = useUiT();
   const facets = React.useMemo(
     () => scalarFacetDeclarations(columns, metadata),
     [columns, metadata],
@@ -84,10 +86,10 @@ export function useScalarFacets<TRow extends object>(
       facets.flatMap((facet) => {
         const result = facetQuery.facets[facet.id];
         return (result?.options ?? []).map((option) =>
-          scalarFilterOption(facet, option, metadata),
+          scalarFilterOption(facet, option, metadata, t("list.emptyValue")),
         );
       }),
-    [facetQuery.facets, facets, metadata],
+    [facetQuery.facets, facets, metadata, t],
   );
   const filterFields = React.useMemo<readonly ResourceToolbarFilterField[]>(
     () =>
@@ -101,11 +103,11 @@ export function useScalarFacets<TRow extends object>(
           type: "selection",
           options: result.options.map((option) => ({
             value: option.value,
-            label: scalarFacetOptionLabel(facet, option, metadata),
+            label: scalarFacetOptionLabel(facet, option, metadata, t("list.emptyValue")),
           })),
         }];
       }),
-    [facetQuery.facets, facets, metadata],
+    [facetQuery.facets, facets, metadata, t],
   );
 
   return React.useMemo(
@@ -121,8 +123,9 @@ function scalarFilterOption(
   facet: ScalarFacetDeclaration,
   option: ResourceFacetOption,
   metadata: ModelMetadata | null,
+  emptyValueLabel: string,
 ): ResourceToolbarFilterOption {
-  const label = scalarFacetOptionLabel(facet, option, metadata);
+  const label = scalarFacetOptionLabel(facet, option, metadata, emptyValueLabel);
   return {
     id: `${facet.field}:${option.value}`,
     label,
@@ -135,9 +138,10 @@ function scalarFacetOptionLabel(
   facet: ScalarFacetDeclaration,
   option: ResourceFacetOption,
   metadata: ModelMetadata | null,
+  emptyValueLabel: string,
 ): React.ReactNode {
   const value = option.key[facet.spec.valueKey ?? facet.field] ?? option.value;
-  return groupKey(value, facet.group, metadata);
+  return groupKey(value, facet.group, metadata, emptyValueLabel);
 }
 
 export function scalarFacetDeclarations<TRow extends object>(

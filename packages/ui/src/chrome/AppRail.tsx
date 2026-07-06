@@ -13,10 +13,7 @@ import {
 import { Link, useRouterState } from "@tanstack/react-router";
 import {
   DndContext,
-  PointerSensor,
   closestCenter,
-  useSensor,
-  useSensors,
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
@@ -28,6 +25,7 @@ import {
 
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
+import { useDndKitSensors } from "../lib/dnd";
 import { Tooltip } from "../ui/tooltip";
 import { AppChooser } from "./AppChooser";
 import { Glyph } from "./Glyph";
@@ -173,11 +171,7 @@ function SortableRail({
   } | null>(null);
   const blockedDragRef = useRef<string | null>(null);
   const suppressClickRef = useRef(false);
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 6 },
-    }),
-  );
+  const sensors = useDndKitSensors(6);
   const railItems = useMemo(
     () => orderedRailItems(items, draftOrder),
     [draftOrder, items],

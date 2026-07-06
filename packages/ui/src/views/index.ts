@@ -183,11 +183,9 @@ export {
   type RelationFacetOptions,
 } from "./relation-facet";
 export {
-  useRelationLanes,
   useRelationOptions,
   relationOptionsFromRows,
   relationSelectedOption,
-  type RelationLanesResult,
   type RelationOptionsConfig,
   type RelationOptionsList,
   type RelationOptionsResult,

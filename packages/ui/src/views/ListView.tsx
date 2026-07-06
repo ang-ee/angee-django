@@ -177,8 +177,18 @@ function ListViewBody<TRow extends Row = Row>({
   const schemaMetadata = useSchemaFieldMetadata();
   const resolvedLaneSource = React.useMemo<ResolvedBoardLaneSource | null>(() => {
     if (!laneSource) return null;
+    const fieldMetadata = modelMetadata?.fields[laneSource.field];
     const relation = relationFieldInfo(laneSource.field, modelMetadata, schemaMetadata);
-    return relation ? { ...laneSource, relation } : null;
+    if (!relation) {
+      if (modelMetadata) {
+        throw new Error(
+          `ListView laneSource field "${laneSource.field}" must resolve to a relation.`,
+        );
+      }
+      return null;
+    }
+    if (!fieldMetadata) return null;
+    return { ...laneSource, relation, fieldMetadata };
   }, [laneSource, modelMetadata, schemaMetadata]);
   const resolvedColumns = React.useMemo(
     () => columnsWithMetadataDefaults(columns, modelMetadata, schemaMetadata),
@@ -195,11 +205,22 @@ function ListViewBody<TRow extends Row = Row>({
     modelMetadata,
     mergedFilter,
   );
-  const rawActiveDefaultGroup = defaultGroupForView(
-    defaultGroup,
-    defaultGroups,
-    resourceView.state.view,
+  const laneSourceGroup = React.useMemo(
+    () =>
+      resolvedLaneSource
+        ? resolveResourceViewGroup({ field: resolvedLaneSource.field }, modelMetadata)
+        : null,
+    [modelMetadata, resolvedLaneSource],
   );
+  const boardGroupingPinned =
+    resourceView.state.view === "board" && laneSourceGroup !== null;
+  const rawActiveDefaultGroup = boardGroupingPinned
+    ? laneSourceGroup
+    : defaultGroupForView(
+        defaultGroup,
+        defaultGroups,
+        resourceView.state.view,
+      );
   const activeDefaultGroup = React.useMemo(
     () =>
       rawActiveDefaultGroup
@@ -229,11 +250,15 @@ function ListViewBody<TRow extends Row = Row>({
       || !resourceViewGroupsEqual(handledDefaultGroupRef.current, activeDefaultGroup)
     );
   const effectiveGroupStack = React.useMemo(() => {
+    if (boardGroupingPinned && validDefaultGroupStack.length > 0) {
+      return validDefaultGroupStack;
+    }
     if (validCurrentGroupStack.length > 0) return validCurrentGroupStack;
     if (hasInvalidGroupStack || defaultGroupPending) return validDefaultGroupStack;
     return resourceView.state.groupStack;
   }, [
     resourceView.state.groupStack,
+    boardGroupingPinned,
     hasInvalidGroupStack,
     defaultGroupPending,
     validCurrentGroupStack,
@@ -247,12 +272,20 @@ function ListViewBody<TRow extends Row = Row>({
     if (
       handledDefaultGroupRef.current
       && resourceViewGroupsEqual(handledDefaultGroupRef.current, activeDefaultGroup)
+      && (
+        !boardGroupingPinned
+        || (
+          resourceView.state.group !== null
+          && resourceViewGroupsEqual(resourceView.state.group, activeDefaultGroup)
+        )
+      )
     ) {
       return;
     }
     const previousDefault = handledDefaultGroupRef.current;
     if (
-      resourceView.state.group === null
+      boardGroupingPinned
+      || resourceView.state.group === null
       || (
         previousDefault
         && resourceViewGroupsEqual(resourceView.state.group, previousDefault)
@@ -263,6 +296,7 @@ function ListViewBody<TRow extends Row = Row>({
     }
   }, [
     activeDefaultGroup,
+    boardGroupingPinned,
     resourceView.setGroup,
     resourceView.state.group,
   ]);
@@ -319,6 +353,7 @@ function ListViewBody<TRow extends Row = Row>({
       resourceView={resourceView}
       availableViews={availableViews}
       effectiveGroupStack={effectiveGroupStack}
+      boardGroupingPinned={boardGroupingPinned}
       clientRowModel={clientRowModel}
       groupedListMode={groupedListMode}
       declaredFacets={declaredFacets}
@@ -403,6 +438,7 @@ interface ListViewContentProps<TRow extends Row> {
   resourceView: ResourceViewContextValue;
   availableViews: readonly ResourceViewKind[];
   effectiveGroupStack: readonly ResourceViewGroup[];
+  boardGroupingPinned: boolean;
   clientRowModel: boolean;
   groupedListMode: boolean;
   declaredFacets: ReturnType<typeof useRelationFacets>;
@@ -433,6 +469,7 @@ function ListViewContent<TRow extends Row = Row>({
   resourceView,
   availableViews,
   effectiveGroupStack,
+  boardGroupingPinned,
   clientRowModel,
   groupedListMode,
   declaredFacets,
@@ -580,6 +617,7 @@ function ListViewContent<TRow extends Row = Row>({
     createLabel: createLabel ?? createLabelForResource(resource),
     onCreate,
     resourceView,
+    groupingEnabled: !boardGroupingPinned,
     pagerSubject: groupedListMode ? "Groups" : undefined,
     pagerTotalUnit: groupedListMode ? "groups" : undefined,
   });

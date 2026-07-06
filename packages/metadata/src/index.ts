@@ -70,6 +70,7 @@ export {
 } from "./groups";
 export {
   defaultWidgetForModelField,
+  fieldUpdatable,
   filterFieldType,
   looksLikeDateField,
   supportsChoiceFacet,
