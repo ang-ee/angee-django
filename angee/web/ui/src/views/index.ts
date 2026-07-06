@@ -171,6 +171,11 @@ export {
   type UseRecordActionOptions,
 } from "./record-action";
 export { useAuthoredResourceMutation } from "./authored-resource-mutation";
+export {
+  useActionResultRun,
+  type ActionResultRun,
+  type ActionResultRunOptions,
+} from "./action-result-run";
 export { RecordPager, type RecordNavigation } from "./RecordPager";
 export {
   useRelationFacets,

@@ -22,7 +22,6 @@ import {
   deletePreviewRequest,
   extractActionOutcome,
   extractAggregate,
-  runActionResult,
   extractDeletePreview,
   extractFacet,
   extractGroupBy,
@@ -31,6 +30,7 @@ import {
   groupByRequest,
   revisionsRequest,
   saveRequest,
+  type ActionOutcome,
   type AggregateBucket,
   type AggregateRequestOptions,
   type ByIdVariables,
@@ -141,7 +141,13 @@ export interface UseAngeeResourceSaveResult {
   reset: () => void;
 }
 
-export type ActionMutate = (id: string) => Promise<string | undefined>;
+/**
+ * Fire a single-id action and resolve its in-band `ActionOutcome` (`undefined`
+ * when the transport returned no payload). A domain failure resolves as
+ * `ok=false` rather than throwing — project through `runActionResult` where the
+ * caller wants the legacy throw-on-failure/success-message contract.
+ */
+export type ActionMutate = (id: string) => Promise<ActionOutcome | undefined>;
 
 export interface UseActionMutationOptions {
   dataProviderName?: string;
@@ -554,6 +560,10 @@ export function useAngeeRevisions(
  * Run a single-id backend action mutation through refine's custom mutation
  * owner. The generated `ActionFieldName` union from `@angee/gql/<schema>/actions`
  * still pins callers to real action fields, while refine owns execution state.
+ * The mutate resolves the in-band `ActionOutcome` (`ok`, `message`, and the
+ * created record's `id` when the verb returns one) so callers settle success,
+ * failure, and deep-linking from one value; registered `invalidates` run only
+ * when the outcome is not a domain failure.
  */
 export function useActionMutation<TField extends string = string>(
   field: TField,
@@ -589,11 +599,17 @@ export function useActionMutation<TField extends string = string>(
         dataProviderName: request.dataProviderName,
         meta: request.meta,
       });
-      const result = runActionResult(extractActionOutcome(response.data, request.root));
-      await Promise.all(
-        invalidates.map((target) => invalidate(target)),
-      );
-      return result;
+      const outcome =
+        extractActionOutcome(response.data, request.root) ?? undefined;
+      // A domain failure (ok=false) mutated nothing — skip invalidation so a
+      // failed write never refreshes caches (the same posture as the authored
+      // hooks' errorFrom gating).
+      if (!outcome || outcome.ok) {
+        await Promise.all(
+          invalidates.map((target) => invalidate(target)),
+        );
+      }
+      return outcome;
     },
     [
       dataProviderName,

@@ -11,11 +11,14 @@ import {
 } from "./record-action";
 
 const dataMocks = vi.hoisted(() => ({
-  mutate: vi.fn(async () => "Synced"),
+  mutate: vi.fn(async () => ({ ok: true, message: "Synced" })),
   useActionMutation: vi.fn(),
 }));
 
-vi.mock("@angee/refine", () => ({
+// Keep the real `runActionResult` — the hook under test projects the in-band
+// outcome through it — and stub only the mutation owner.
+vi.mock("@angee/refine", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   useActionMutation: dataMocks.useActionMutation,
 }));
 
@@ -138,6 +141,23 @@ describe("record action helpers", () => {
     );
     expect(dataMocks.mutate).toHaveBeenCalledWith("src_1");
     expect(refresh).toHaveBeenCalledOnce();
+  });
+
+  test("projects the in-band outcome to the rendered action contract", async () => {
+    const { result } = renderHook(() => useRecordActionMutation("sync_source"));
+
+    // Success resolves the message the action bar toasts.
+    let message: string | void = undefined;
+    await act(async () => {
+      message = await result.current[0](actionContext("src_1"));
+    });
+    expect(message).toBe("Synced");
+
+    // A domain failure (ok=false) throws so the action bar surfaces the danger toast.
+    dataMocks.mutate.mockResolvedValueOnce({ ok: false, message: "Sync refused." });
+    await expect(result.current[0](actionContext("src_1"))).rejects.toThrow(
+      "Sync refused.",
+    );
   });
 });
 

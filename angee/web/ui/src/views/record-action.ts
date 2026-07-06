@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useActionMutation } from "@angee/refine";
+import { runActionResult, useActionMutation } from "@angee/refine";
 import {
   refineInvalidationParams,
   resourceInvalidationTargets,
@@ -84,6 +84,12 @@ export function useRecordActionMutation<TField extends string = string>(
   const [mutate, state] = useActionMutation<TField>(field, {
     invalidates,
   });
-  const run = React.useCallback<RecordActionRunner>((id) => mutate(id), [mutate]);
+  // Project the in-band outcome to the rendered `<Action run>` contract: a
+  // domain failure throws (the action bar toasts it) and success resolves the
+  // message. Settle-owning callers use `useActionResultRun` instead.
+  const run = React.useCallback<RecordActionRunner>(
+    async (id) => runActionResult(await mutate(id)),
+    [mutate],
+  );
   return [useRecordAction(run, options), state];
 }

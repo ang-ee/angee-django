@@ -128,6 +128,12 @@ export interface ActionOutcome {
   ok: boolean;
   message: string;
   /**
+   * Public id of the record the verb created (a register-payment, an
+   * open-document verb), when the mutation selected and populated it. Lets the
+   * caller deep-link to or refresh the new record; absent on a mutate-only verb.
+   */
+  id?: string;
+  /**
    * Field → messages returned in-band on `ok=false` (not a GraphQL error), keyed
    * by the argument names a typed-args form binds to. Present only when the
    * backend populated `validation_errors`; absent on success and on a plain result.
@@ -368,6 +374,9 @@ export function extractActionOutcome(
   return {
     ok: outcome.ok,
     message: typeof outcome.message === "string" ? outcome.message : "",
+    ...(typeof outcome.id === "string" && outcome.id !== ""
+      ? { id: outcome.id }
+      : {}),
     ...(validationErrors ? { validationErrors } : {}),
   };
 }

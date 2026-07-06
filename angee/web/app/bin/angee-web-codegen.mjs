@@ -289,6 +289,8 @@ function buildOperationDocuments(name, runtimeDir) {
     "export interface ActionResult {",
     "  ok: boolean;",
     "  message: string;",
+    "  id: string | null;",
+    "  validation_errors: Record<string, string[]> | null;",
     "}",
     "",
     "export interface ActionVariables {",
@@ -687,9 +689,12 @@ function nonEmptyString(value) {
 }
 
 function actionDocument(field) {
+  // The full in-band ActionResult surface: `id` lets the client deep-link to a
+  // record the verb created, and `validation_errors` carries the field-keyed
+  // (or non-field) domain-failure reasons the settle owner surfaces.
   return parse(
     `mutation ${actionOperationName(field)}($id: ID!) { ` +
-      `${field}(id: $id) { ok message } }`,
+      `${field}(id: $id) { ok message id validation_errors } }`,
     { noLocation: true },
   );
 }

@@ -254,9 +254,27 @@ describe("Hasura custom operations", () => {
     );
     expect(runActionResult(success)).toBe("Provisioning started.");
     expect(success?.validationErrors).toBeUndefined();
+    expect(success?.id).toBeUndefined();
     expect(() =>
       runActionResult({ ok: false, message: "Provisioning failed." }),
     ).toThrow("Provisioning failed.");
+  });
+
+  test("carries the created record id a create-and-return verb populates", () => {
+    const created = extractActionOutcome(
+      {
+        register_payment: { ok: true, message: "Payment registered.", id: "pay_1" },
+      },
+      "register_payment",
+    );
+    expect(created).toEqual({ ok: true, message: "Payment registered.", id: "pay_1" });
+
+    // A verb that only mutates leaves `id` null on the wire; the outcome omits it.
+    const mutated = extractActionOutcome(
+      { confirm_order: { ok: true, message: "Confirmed.", id: null } },
+      "confirm_order",
+    );
+    expect(mutated).toEqual({ ok: true, message: "Confirmed." });
   });
 
   test("carries the in-band snake_case validation_errors as a camelCase field map", () => {
