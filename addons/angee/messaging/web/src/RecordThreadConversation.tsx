@@ -1,6 +1,6 @@
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import { Avatar, Button, Checkbox, Chip, EmptyState, FieldRoot, Glyph, LoadingPanel, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageFeed, MessageRow, ReactionBar, ReactionPicker, SearchInput, SegmentedControl, Select, Tag, Textarea, UploadDropTarget, avatarInitials, cn, errorMessage, messageComposerInputClassName, textRoleVariants, type Reaction } from "@angee/ui";
+import { Avatar, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, LoadingPanel, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageFeed, MessageRow, ReactionBar, ReactionPicker, SearchInput, SegmentedControl, Select, Tag, Textarea, UploadDropTarget, avatarInitials, cn, errorMessage, messageComposerInputClassName, textRoleVariants, type Reaction } from "@angee/ui";
 import { formatSize } from "@angee/ui/preview/index";
 import {
   useStorageUpload,
@@ -104,7 +104,7 @@ export function RecordThreadConversation({
     enabled,
     models: READ_MODELS,
   });
-  const recipientVariables = React.useMemo(() => ({ limit: 100, offset: 0 }), []);
+  const recipientVariables = React.useMemo(() => ({ limit: 100 }), []);
   const recipientUsersQuery = useAuthoredQuery(
     MessagingRecipientUsersDocument,
     recipientVariables,
@@ -148,14 +148,16 @@ export function RecordThreadConversation({
   const recipientOptions = React.useMemo(
     () =>
       recipientOptionsFrom(
-        recipientUsersQuery.data?.users ?? [],
+        recipientUsersQuery.data?.colleagues ?? [],
         threadPayload?.followers ?? [],
         threadPayload?.suggested_recipients ?? [],
+        t,
       ),
     [
-      recipientUsersQuery.data?.users,
+      recipientUsersQuery.data?.colleagues,
       threadPayload?.followers,
       threadPayload?.suggested_recipients,
+      t,
     ],
   );
   const messageResultCount = threadPayload?.message_result_count ?? 0;
@@ -302,15 +304,12 @@ export function RecordThreadConversation({
   if (threadQuery.fetching && threadQuery.data === undefined) {
     return <LoadingPanel message={t("chatter.loading")} />;
   }
-  if (threadQuery.error || threadPayload?.error_code === "BAD_RECORD") {
-    return (
-      <EmptyState
-        icon="comments"
-        title={t("chatter.disabled")}
-        description={t("chatter.disabledHint")}
-        className="min-h-48 p-4"
-      />
-    );
+  // Any failure returns a state surface and NO composer — a `record_thread`
+  // `NOT_FOUND` (unreadable/nonexistent record) or `BAD_RECORD` (undecodable
+  // model/record) must never render a phantom room a non-member could post into.
+  const errorCode = threadPayload?.error_code ?? null;
+  if (threadQuery.error || errorCode) {
+    return renderThreadError(errorCode, t);
   }
 
   const chrome: RecordThreadConversationChrome = {
@@ -378,11 +377,49 @@ export function RecordThreadConversation({
         onPost={handlePost}
         onError={setError}
       />
-      {error ? (
-        <p className={cn(textRoleVariants({ role: "caption" }), "text-danger-text")}>{error}</p>
-      ) : null}
+      {/* The shared danger banner announces via role="alert" and is dismissable —
+          `description={null}` renders nothing, so this is the "no error" state too. */}
+      <ErrorBanner
+        description={error}
+        dismissLabel={t("error.dismiss")}
+        onDismiss={() => setError(null)}
+      />
     </div>
   );
+}
+
+/** The full `record_thread` failure surface — every arm returns a state fragment
+ *  and no composer. The two expected domain codes render an `EmptyState`
+ *  (`BAD_RECORD` keeps the chatter-disabled copy; `NOT_FOUND` gets a no-access
+ *  surface); the checked default covers a transport failure or any unknown code as
+ *  a genuine error through the shared `ErrorBanner` (role="alert"). */
+function renderThreadError(errorCode: string | null, t: MessagingT): React.ReactElement {
+  switch (errorCode) {
+    case "BAD_RECORD":
+      return (
+        <EmptyState
+          icon="comments"
+          title={t("chatter.disabled")}
+          description={t("chatter.disabledHint")}
+          className="min-h-48 p-4"
+        />
+      );
+    case "NOT_FOUND":
+      return (
+        <EmptyState
+          icon="circle-x"
+          title={t("chatter.notFoundTitle")}
+          description={t("chatter.notFoundHint")}
+          className="min-h-48 p-4"
+        />
+      );
+    default:
+      return (
+        <div className="p-4">
+          <ErrorBanner description={t("error.load")} />
+        </div>
+      );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -458,6 +495,9 @@ function ChatterComposer({
       recipientUserIds,
       autofollowRecipients,
     });
+    // Clear only on success. Safe to clear after the await: the textarea is
+    // readOnly while `posting`, so `body` cannot have changed mid-flight; on
+    // failure the draft is preserved untouched.
     if (!ok) return;
     setBody("");
     setSelectedRecipientIds([]);
@@ -600,6 +640,12 @@ function ChatterComposer({
                 onKeyDown={handleKeyDown}
                 rows={3}
                 resize="none"
+                // Freeze input while the post is in flight: `submit` clears `body`
+                // after the await, so allowing mid-flight typing would wipe text the
+                // user entered during the round-trip. readOnly keeps the value visible
+                // (unlike disabled) and is race-free — the send button is already
+                // disabled while posting.
+                readOnly={posting}
                 className={messageComposerInputClassName}
                 aria-label={t("composer.messageLabel")}
                 placeholder={
@@ -1020,13 +1066,15 @@ function recipientOptionsFrom(
   users: readonly RecipientUserRow[],
   followers: ReadonlyArray<NonNullable<RecordThreadPayload["followers"]>[number]>,
   suggestions: readonly SuggestedRecipientRow[],
+  t: MessagingT,
 ): readonly RecipientOption[] {
+  const userFallback = t("composer.userFallback");
   const byId = new Map<string, RecipientOption>();
   for (const user of users) {
     if (user.is_active === false) continue;
     byId.set(user.id, {
       id: user.id,
-      label: user.display_name || user.username || user.email || "User",
+      label: user.display_name || user.username || user.email || userFallback,
       detail: user.email || user.username || "",
       follower: false,
       suggested: false,
@@ -1039,11 +1087,11 @@ function recipientOptionsFrom(
     const previous = byId.get(user.id);
     byId.set(user.id, {
       id: user.id,
-      label: user.display_name || user.username || user.email || "User",
+      label: user.display_name || user.username || user.email || userFallback,
       detail: previous?.detail || user.email || user.username || "",
       follower: previous?.follower ?? false,
       suggested: true,
-      reason: suggestion.reason || "Suggested",
+      reason: suggestion.reason || t("composer.suggested"),
     });
   }
   for (const follower of followers) {
@@ -1051,7 +1099,7 @@ function recipientOptionsFrom(
     const previous = byId.get(user.id);
     byId.set(user.id, {
       id: user.id,
-      label: user.display_name || user.username || "User",
+      label: user.display_name || user.username || userFallback,
       detail: previous?.detail || user.username || "",
       follower: true,
       suggested: previous?.suggested ?? false,

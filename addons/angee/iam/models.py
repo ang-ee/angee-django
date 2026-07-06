@@ -288,6 +288,35 @@ class CompanyManager(AngeeManager.from_queryset(CompanyQuerySet)):  # type: igno
         )
         return scope_free.unarchived().filter(**{f"{id_attr}__in": company_ids})
 
+    def co_member_subject_ids(self, actor: Any) -> list[str]:
+        """Return the REBAC subject ids sharing a direct company membership with ``actor``.
+
+        The colleague graph, read straight from the membership tuples the company
+        owns: every :data:`COMPANY_MEMBER_RELATION` subject (``actor`` included) of
+        the unarchived companies ``actor`` is itself a direct member of. Both hops
+        stay in the permission store — the actor's companies via
+        :meth:`direct_memberships_of` (which already excludes archived companies and
+        the ancestor ``parent->member`` reach), then every direct member of those
+        companies. Direct user membership only, mirroring
+        :meth:`direct_memberships_of`; group-expanded members are out of scope. The
+        shared-company tuple is itself the authorization, so a caller may read the
+        matched users elevated — this returns only opaque subject ids, never a row.
+        """
+
+        id_attr = str(getattr(self.model._meta, "rebac_id_attr", None) or app_settings.REBAC_RESOURCE_ID_ATTR)
+        company_ids = list(self.direct_memberships_of(actor).values_list(id_attr, flat=True))
+        if not company_ids:
+            return []
+        return list(
+            active_relationship_model()
+            .objects.filter(
+                resource_type=model_resource_type(self.model),
+                relation=COMPANY_MEMBER_RELATION,
+                resource_id__in=company_ids,
+            )
+            .values_list("subject_id", flat=True)
+        )
+
 
 class Company(AngeeDataModel, ArchiveMixin):
     """A company of record — the operating entity acting inside the system.

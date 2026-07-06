@@ -19,7 +19,7 @@ from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.auth.models import Group as DjangoGroup
 from django.db import transaction
-from django.db.models import QuerySet
+from django.db.models import Q, QuerySet
 from django.http import HttpRequest
 from pydantic import BaseModel
 from rebac import (
@@ -66,6 +66,8 @@ from angee.iam.roles import (
     RelationInfo,
     ResourceSchemaInfo,
     RoleInfo,
+    user_ordering,
+    user_subject_filter,
 )
 from angee.iam.roles import (
     iam_overview as _iam_overview_owner,
@@ -93,6 +95,12 @@ GROUP_PUBLIC_IDENTITY = SqidPublicIdentity(prefix="grp_")
 """Public data identity for Django auth groups exposed by IAM."""
 
 _ROLE_SUFFIX = "/role"
+
+COLLEAGUES_DEFAULT_LIMIT = 20
+"""Default page size for the member-scoped ``colleagues`` people surface."""
+
+COLLEAGUES_MAX_LIMIT = 100
+"""Upper bound a ``colleagues`` caller's ``limit`` is clamped to."""
 
 
 def _preference_object(user: Any) -> JSON:
@@ -458,6 +466,37 @@ def _admin_user_queryset(info: strawberry.Info) -> QuerySet[Any]:
     return cast(QuerySet[Any], User.objects.all())
 
 
+def _colleagues(actor: Any, *, search: str, limit: int) -> list[Any]:
+    """Return the actor's active co-workers for the member-scoped people surface.
+
+    Scoped to the actor's own companies' direct members through the IAM membership
+    owner (``Company.co_member_subject_ids``) — never platform-wide. The actor is
+    excluded (a picker of *other* people), inactive users are dropped, and the
+    matched rows are read elevated because the shared-company membership tuple is
+    itself the authorization (``auth/user`` read is otherwise admin-only). Ordering
+    is deterministic and the result is capped at :data:`COLLEAGUES_MAX_LIMIT`.
+    """
+
+    subject_ids = apps.get_model("iam", "Company").objects.co_member_subject_ids(actor)
+    if not subject_ids:
+        return []
+    bounded = max(1, min(limit, COLLEAGUES_MAX_LIMIT))
+    queryset = (
+        User.objects.system_context(reason="iam.colleagues: shared company membership is the authorization")
+        .filter(user_subject_filter(User, subject_ids), is_active=True)
+        .exclude(pk=actor.pk)
+    )
+    term = search.strip()
+    if term:
+        queryset = queryset.filter(
+            Q(username__icontains=term)
+            | Q(first_name__icontains=term)
+            | Q(last_name__icontains=term)
+            | Q(email__icontains=term)
+        )
+    return list(queryset.order_by(*user_ordering(User))[:bounded])
+
+
 def _admin_user_aggregate_queryset(info: strawberry.Info) -> QuerySet[Any]:
     """Return the user queryset safe for aggregate and grouped math."""
 
@@ -810,6 +849,23 @@ class IAMQuery:
 @strawberry.type
 class IAMConsoleQuery:
     """Admin IAM user and permission-hub queries."""
+
+    @strawberry.field
+    def colleagues(
+        self,
+        info: strawberry.Info,
+        search: str = "",
+        limit: int = COLLEAGUES_DEFAULT_LIMIT,
+    ) -> list[UserType]:
+        """Return the signed-in actor's co-workers for member-scoped people pickers.
+
+        The member surface the admin-only ``users`` catalogue cannot serve: the
+        active users who share a company of record with the actor (recipient
+        suggestions, the discuss person picker). Requires a signed-in actor and is
+        scoped to that actor's own companies' members — not platform-wide.
+        """
+
+        return cast(list[UserType], _colleagues(session_user(info), search=search, limit=limit))
 
     @strawberry.field(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def roles(self) -> list[IAMRoleType]:

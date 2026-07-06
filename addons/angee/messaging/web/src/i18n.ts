@@ -12,6 +12,8 @@ export const enMessagingMessages: Record<string, string> = {
   "chatter.loading": "Loading comments",
   "chatter.disabled": "Comments are not enabled",
   "chatter.disabledHint": "This record has no model chatter thread.",
+  "chatter.notFoundTitle": "Record unavailable",
+  "chatter.notFoundHint": "You do not have access to this record, or it no longer exists.",
   "chatter.following": "{count} following",
   "chatter.unread": "{count} unread",
   "chatter.failed": "{count} failed",
@@ -58,6 +60,7 @@ export const enMessagingMessages: Record<string, string> = {
   "composer.followRecipients": "Follow",
   "composer.suggested": "Suggested",
   "composer.follower": "Follower",
+  "composer.userFallback": "User",
   "composer.removeRecipient": "Remove {name}",
   "composer.writeComment": "Write a comment",
   "composer.logNote": "Log an internal note",
@@ -81,6 +84,8 @@ export const enMessagingMessages: Record<string, string> = {
 
   // Chatter transport / mutation errors.
   "error.generic": "Something went wrong. Try again.",
+  "error.load": "Could not load the conversation.",
+  "error.dismiss": "Dismiss",
   "error.postComment": "Could not post comment.",
   "error.postNote": "Could not post note.",
   "error.update": "Could not update comment.",

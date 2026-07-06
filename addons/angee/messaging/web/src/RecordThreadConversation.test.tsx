@@ -8,8 +8,10 @@ import type { RecordThreadConversationChrome } from "./RecordThreadConversation"
 
 const mocks = vi.hoisted(() => ({
   threadData: undefined as unknown,
-  recipientData: { users: [] as unknown[] } as unknown,
+  threadError: null as unknown,
+  recipientData: { colleagues: [] as unknown[] } as unknown,
   mutateCalls: [] as Array<{ op: string; vars: Record<string, unknown> }>,
+  failOps: new Set<string>(),
   useAuthoredQuery: vi.fn(),
 }));
 
@@ -44,6 +46,7 @@ vi.mock("@angee/refine", async (importOriginal) => ({
     const op = operationName(document);
     const mutate = vi.fn(async (vars: Record<string, unknown>) => {
       mocks.mutateCalls.push({ op, vars });
+      if (mocks.failOps.has(op)) throw new Error("Network down");
       return {};
     });
     return [mutate, { fetching: false }];
@@ -108,13 +111,15 @@ function threadPayload(messages: RecordMessageRow[]): unknown {
 
 beforeEach(() => {
   mocks.mutateCalls = [];
-  mocks.recipientData = { users: [] };
+  mocks.failOps = new Set();
+  mocks.recipientData = { colleagues: [] };
   mocks.threadData = threadPayload([message()]);
+  mocks.threadError = null;
   mocks.useAuthoredQuery.mockReset();
   mocks.useAuthoredQuery.mockImplementation((document: unknown) => {
     const op = operationName(document);
     if (op === "MessagingRecordThread") {
-      return { data: mocks.threadData, fetching: false, error: null, refetch: vi.fn() };
+      return { data: mocks.threadData, fetching: false, error: mocks.threadError, refetch: vi.fn() };
     }
     if (op === "MessagingRecipientUsers") {
       return { data: mocks.recipientData, fetching: false, error: null, refetch: vi.fn() };
@@ -181,5 +186,40 @@ describe("RecordThreadConversation", () => {
     );
 
     expect(screen.getByText("followers:2")).toBeTruthy();
+  });
+
+  test("renders a no-access surface with NO composer for a NOT_FOUND record", () => {
+    const base = (threadPayload([]) as { record_thread: Record<string, unknown> }).record_thread;
+    mocks.threadData = {
+      record_thread: { ...base, error: "record not found", error_code: "NOT_FOUND" },
+    };
+    render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
+
+    // A NOT_FOUND record must never render a phantom room a non-member could post into.
+    expect(screen.getByText("Record unavailable")).toBeTruthy();
+    expect(screen.queryByLabelText("Message")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+  });
+
+  test("keeps the chatter-disabled copy for a BAD_RECORD, with no composer", () => {
+    const base = (threadPayload([]) as { record_thread: Record<string, unknown> }).record_thread;
+    mocks.threadData = {
+      record_thread: { ...base, error: "bad record", error_code: "BAD_RECORD" },
+    };
+    render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
+
+    expect(screen.getByText("Comments are not enabled")).toBeTruthy();
+    expect(screen.queryByLabelText("Message")).toBeNull();
+  });
+
+  test("announces a post failure through an alert banner", async () => {
+    mocks.failOps = new Set(["MessagingPostRecordMessage"]);
+    render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
+
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Hello room" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Network down");
   });
 });
