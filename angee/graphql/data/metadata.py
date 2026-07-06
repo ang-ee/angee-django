@@ -486,7 +486,17 @@ def attach_data_resource_metadata(
     surface: type[_SurfaceT],
     metadata: DataResourceMetadata,
 ) -> type[_SurfaceT]:
-    """Attach model resource metadata to a generated Strawberry surface."""
+    """Attach model resource metadata to a generated Strawberry surface.
+
+    Only query/mutation/subscription *roots* are scanned for resource
+    metadata, so an addon that extends another model's GraphQL *type* (a
+    ``type_extensions`` entry adds fields to the node, never to the model's
+    resource projection) anchors its contribution on one of its own root
+    surfaces — typically its action-mutation bucket — and the per-model merge
+    (:func:`merge_data_resources`) folds it into the owning model's resource
+    by model label. Fields only a server verb advances are contributed
+    read-only (neither creatable nor updatable).
+    """
 
     existing = data_resource_metadata(surface)
     setattr(surface, DATA_RESOURCE_METADATA_ATTR, existing + (metadata,))
