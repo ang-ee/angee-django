@@ -29,13 +29,25 @@ def resource_field_kind(
     is_list: bool = False,
     is_enum: bool = False,
     is_object: bool = False,
+    projected_as_scalar: bool = False,
 ) -> str:
-    """Return the coarse field kind used by data-resource metadata."""
+    """Return the coarse field kind used by data-resource metadata.
+
+    A to-one relation classifies by how the node *projects* it: as a nested object
+    (``is_object``) or group axis (``has_relation_axis``) it is a ``relation``; as a
+    bare scalar id (``projected_as_scalar`` — an ``ID`` with no subfields) it is a
+    scalar LEAF so the detail/form query selects it without an invalid
+    sub-selection, while still carrying relation metadata (target label + scalar-id
+    widget). Absent a known wire projection (model reconstruction with no surface),
+    a relation stays an object ``relation``.
+    """
 
     if is_list or (field is not None and is_to_many_relation(field)):
         return "list"
-    if is_object or has_relation_axis or (field is not None and field.is_relation):
+    if is_object or has_relation_axis:
         return "relation"
+    if field is not None and field.is_relation:
+        return "scalar" if projected_as_scalar else "relation"
     if is_enum or (field is not None and getattr(field, "choices", None)):
         return "enum"
     if field is not None and getattr(field, "many_to_many", False):
@@ -105,6 +117,11 @@ def resource_field_widget(field: models.Field[Any, Any] | None, kind: str) -> st
         return "tagInput"
     if field is None:
         return None
+    if field.is_relation:
+        # A to-one relation the node projects as a bare scalar id (kind == "scalar"):
+        # the scalar-id relation widget selects and writes the flat id, never a
+        # sub-object (a ``many2one`` selects ``<field>.id``, invalid on an ``ID``).
+        return "select"
     if isinstance(field, MoneyField):
         return "money"
     if isinstance(field, models.BooleanField):

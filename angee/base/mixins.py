@@ -7,8 +7,8 @@ from typing import Any, ClassVar, Self, TypeVar, cast
 
 import reversion
 from django.conf import settings
-from django.core.exceptions import FieldDoesNotExist, ValidationError
-from django.db import connections, models, transaction
+from django.core.exceptions import ValidationError
+from django.db import models, transaction
 from django.db.models import F, Value
 from django.db.models.functions import Replace
 from rebac import current_actor
@@ -16,6 +16,7 @@ from rebac import current_actor
 from angee.base.actors import actor_user_id
 from angee.base.emission import ModelClassAttribute, ModelDecorator
 from angee.base.fields import SqidField
+from angee.base.indexes import PatternOpsIndex
 
 _ArchiveModelT = TypeVar("_ArchiveModelT", bound=models.Model)
 _HierarchyModelT = TypeVar("_HierarchyModelT", bound="HierarchyMixin")
@@ -298,29 +299,6 @@ class RevisionMixin(models.Model):
             reversion.set_comment(f"Reverted to revision {version.revision_id}.")
 
 
-class PatternOpsIndex(models.Index):
-    """A btree index carrying a text-pattern operator class, auto-named per model.
-
-    PostgreSQL will not use a default btree index to serve a prefix
-    ``LIKE 'x%'`` under a non-C collation; a ``varchar_pattern_ops`` /
-    ``text_pattern_ops`` operator-class index is required, and it rides into the
-    migration through :meth:`~django.db.models.Index.deconstruct`. Django forbids
-    ``opclasses`` on an :class:`~django.db.models.Index` without an explicit
-    ``name``, but an abstract mixin cannot name one index that several concrete
-    models each build (the name would collide). This withholds ``opclasses``
-    from ``Index.__init__`` so Django auto-names one index per concrete table
-    (``set_name_with_model``), then restores the operator class. Backends without
-    operator classes (SQLite) drop it and index the column plainly, so the prefix
-    query stays correct on every backend — only the plan differs.
-    """
-
-    def __init__(self, *args: Any, opclasses: Sequence[str] = (), **kwargs: Any) -> None:
-        """Build the index withholding ``opclasses`` from the name-required guard."""
-
-        super().__init__(*args, **kwargs)
-        self.opclasses = tuple(opclasses)
-
-
 class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
     """Subtree read scopes for models composing :class:`HierarchyMixin`.
 
@@ -379,11 +357,23 @@ class HierarchyMixin(models.Model):
     lists ``*HierarchyMixin.Meta.indexes`` alongside its own.)
 
     :meth:`save` maintains the path: derived from the parent on create, and on
-    reparent it rejects a cycle (a new parent inside the node's own subtree) and
-    a cross-company parent (when the model carries a ``company`` field), then
-    rewrites the whole subtree's paths in one bulk ``UPDATE``. It owns no REBAC of
-    its own; path maintenance runs unscoped so a reparent reaches descendants the
-    acting user cannot read.
+    reparent it rejects a cycle (a new parent inside the node's own subtree) and a
+    parent in a different scope (any field the model names in
+    :attr:`hierarchy_scope_fields`), then rewrites the whole subtree's paths in one
+    bulk ``UPDATE``. It owns no REBAC of its own; path maintenance runs unscoped so
+    a reparent reaches descendants the acting user cannot read.
+    """
+
+    hierarchy_scope_fields: ClassVar[tuple[str, ...]] = ()
+    """Field names a child must share with its parent (e.g. ``("company",)``).
+
+    A reparent (and a create under a parent) rejects a parent that differs on any
+    of these fields, so a subtree never straddles a scope boundary. It is a
+    declared contract — generic and iam-free — owned by the consuming model rather
+    than probed by column name: a company-scoped tree declares
+    ``hierarchy_scope_fields = ("company",)``, an unscoped tree leaves it empty. An
+    FK is compared by its stored id (the field's ``attname``); a parent must agree
+    on every listed field.
     """
 
     parent = models.ForeignKey(
@@ -487,12 +477,20 @@ class HierarchyMixin(models.Model):
         self._hierarchy_saved_parent_id = self.parent_id
 
     def _save_created(self, *args: Any, **kwargs: Any) -> None:
-        """Insert the row, then derive and persist its ``path`` from the parent."""
+        """Insert the row, then derive its ``path`` from the parent's committed path."""
 
         with transaction.atomic():
             super().save(*args, **kwargs)
             parent = self._hierarchy_parent()
-            self._reject_cross_company_parent(parent)
+            if parent is not None:
+                # Re-read the parent's committed path under lock before deriving the
+                # child prefix: a create racing a reparent of that parent would
+                # otherwise bake in a stale prefix that the reparent's cascade never
+                # reaches (the new row is not yet under the old prefix it rewrites).
+                fresh = self._locked_paths([parent.pk])
+                if parent.pk in fresh:
+                    parent.path = fresh[parent.pk]
+            self._reject_cross_scope_parent(parent)
             new_path = self._hierarchy_path(parent)
             if new_path != self.path:
                 self._hierarchy_writer().filter(pk=self.pk).update(path=new_path)
@@ -511,7 +509,7 @@ class HierarchyMixin(models.Model):
             old_path = self._lock_moved_paths()
             parent = self._hierarchy_parent()
             self._reject_cycle(parent)
-            self._reject_cross_company_parent(parent)
+            self._reject_cross_scope_parent(parent)
             new_path = self._hierarchy_path(parent)
             self.path = new_path
             super().save(*args, **kwargs)
@@ -531,19 +529,14 @@ class HierarchyMixin(models.Model):
         """Row-lock this node and its new parent, refreshing committed paths.
 
         Two overlapping reparents interleaving on stale in-memory paths is the
-        classic materialized-path hazard, so on backends with row locks the
-        moved node and its new parent are read ``FOR UPDATE`` and their
-        committed paths replace the in-memory ones before validation and the
-        cascade prefix derive from them (feature-gated like the storage
-        ``Folder`` ancestor walk; SQLite has no row locks and stays on the
-        in-memory values). Returns this row's committed (old) path.
+        classic materialized-path hazard, so the moved node and its new parent are
+        read under the queryset's row-lock owner and their committed paths replace
+        the in-memory ones before validation and the cascade prefix derive from
+        them. Returns this row's committed (old) path.
         """
 
-        writer = self._hierarchy_writer()
-        if not connections[writer.db].features.has_select_for_update:
-            return self.path
         pks = [self.pk] if self.parent_id is None else [self.pk, self.parent_id]
-        fresh: dict[Any, str] = dict(writer.select_for_update().filter(pk__in=pks).values_list("pk", "path"))
+        fresh = self._locked_paths(pks)
         self.path = fresh.get(self.pk, self.path)
         if self.parent_id is not None and self.parent_id in fresh:
             parent = self._hierarchy_parent()
@@ -551,13 +544,38 @@ class HierarchyMixin(models.Model):
                 parent.path = fresh[self.parent_id]
         return self.path
 
+    def _locked_paths(self, pks: list[Any]) -> dict[Any, str]:
+        """Return committed ``path`` values for ``pks``, row-locked where supported.
+
+        Routes the lock through the queryset's ``lock_if_supported`` owner (the
+        greppable, backend-gated ``select_for_update`` helper the ``AngeeQuerySet``
+        exposes) rather than re-deciding the SQLite floor here: a locking backend
+        serializes overlapping moves on the maintained ``path``; SQLite has no row
+        locks and reads the committed paths unlocked (the documented floor).
+        """
+
+        writer = self._hierarchy_writer()
+        locker = getattr(writer, "lock_if_supported", None)
+        reader = locker(of=()) if callable(locker) else writer
+        return dict(reader.filter(pk__in=pks).values_list("pk", "path"))
+
     def _hierarchy_needs_repath(self) -> bool:
         """Return whether an existing row's ``parent`` moved (or its path is unset)."""
 
         if not self.path:
             return True
-        loaded = getattr(self, "_hierarchy_saved_parent_id", self.parent_id)
-        return loaded != self.parent_id
+        if hasattr(self, "_hierarchy_saved_parent_id"):
+            return self._hierarchy_saved_parent_id != self.parent_id
+        # A deferred load (``.only(...)`` excluding ``parent``) carries no baseline,
+        # so a reparent would be invisible if we compared ``parent_id`` to itself.
+        # Fetch the committed ``parent_id`` from the row to compare against the
+        # in-memory FK the caller may have moved.
+        return self._hierarchy_committed_parent_id() != self.parent_id
+
+    def _hierarchy_committed_parent_id(self) -> Any:
+        """Return this row's committed ``parent_id`` from the database."""
+
+        return self._hierarchy_writer().filter(pk=self.pk).values_list("parent_id", flat=True).first()
 
     def _hierarchy_parent(self) -> HierarchyMixin | None:
         """Return the parent instance (cached when assigned), or ``None`` for a root."""
@@ -580,13 +598,15 @@ class HierarchyMixin(models.Model):
         if parent.path.startswith(self.path):
             raise ValidationError({"parent": "A node cannot be moved under itself or a descendant."})
 
-    def _reject_cross_company_parent(self, parent: HierarchyMixin | None) -> None:
-        """Reject a parent in another company when the model is company-scoped."""
+    def _reject_cross_scope_parent(self, parent: HierarchyMixin | None) -> None:
+        """Reject a parent that differs on any declared :attr:`hierarchy_scope_fields`."""
 
-        if parent is None or not self._is_company_scoped():
+        if parent is None:
             return
-        if self.company_id != parent.company_id:
-            raise ValidationError({"parent": "Parent must belong to the same company."})
+        for name in self.hierarchy_scope_fields:
+            attname = self._meta.get_field(name).attname
+            if getattr(self, attname) != getattr(parent, attname):
+                raise ValidationError({"parent": f"Parent must belong to the same {name}."})
 
     def _hierarchy_writer(self) -> models.QuerySet[Self]:
         """Return an unscoped queryset for the mixin's own path maintenance.
@@ -602,13 +622,3 @@ class HierarchyMixin(models.Model):
         queryset = type(self)._base_manager.all()
         sudo = getattr(queryset, "sudo", None)
         return cast("models.QuerySet[Self]", sudo() if callable(sudo) else queryset)
-
-    @classmethod
-    def _is_company_scoped(cls) -> bool:
-        """Return whether the concrete model carries a ``company`` field."""
-
-        try:
-            cls._meta.get_field("company")
-        except FieldDoesNotExist:
-            return False
-        return True

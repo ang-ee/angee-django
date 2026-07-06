@@ -175,6 +175,52 @@ def test_deferred_parent_load_stays_single_query() -> None:
 
 
 @pytest.mark.django_db
+def test_deferred_load_reparent_still_repaths() -> None:
+    """A reparent on a ``.only()``-loaded row (no baseline) still rewrites its path.
+
+    A deferred load excludes ``parent``, so the instance carries no reparent
+    baseline. Without fetching the committed ``parent_id`` the save would compare
+    the moved FK to itself, miss the move, and strand the subtree under the old
+    parent. The committed-parent fetch closes that gap.
+    """
+
+    with system_context(reason="test hierarchy deferred reparent"):
+        nodes = _tree()
+        home = HierNode.objects.create(name="H")
+        deferred = HierNode.objects.only("name").get(pk=nodes["B"].pk)
+        deferred.parent = home
+        deferred.save()
+
+        moved = HierNode.objects.get(pk=nodes["B"].pk)
+        child = HierNode.objects.get(pk=nodes["C"].pk)
+    assert moved.parent_id == home.pk
+    assert moved.path.startswith(home.path)
+    assert child.path.startswith(moved.path)
+
+
+@pytest.mark.django_db
+def test_create_under_reparented_parent_uses_committed_path() -> None:
+    """A create derives the child prefix from the parent's committed path.
+
+    A parent reparented behind a stale in-memory instance must not leak its old
+    prefix into a child created under it: ``_save_created`` re-reads the parent's
+    committed path before deriving the child segment.
+    """
+
+    width = HierNode.path_segment_width
+    with system_context(reason="test hierarchy create under reparent"):
+        home = HierNode.objects.create(name="home")
+        parent = HierNode.objects.create(name="parent")  # a root
+        stale_path = parent.path
+        committed_path = f"{home.path}{parent.pk:0{width}d}/"
+        HierNode.objects.filter(pk=parent.pk).update(path=committed_path)
+        # `parent` still carries its stale root path in memory.
+        child = HierNode.objects.create(name="child", parent=parent)
+    assert not child.path.startswith(stale_path)
+    assert child.path == f"{committed_path}{child.pk:0{width}d}/"
+
+
+@pytest.mark.django_db
 def test_refresh_from_db_resyncs_the_reparent_baseline() -> None:
     """A refreshed row is not misclassified as reparented on its next save.
 

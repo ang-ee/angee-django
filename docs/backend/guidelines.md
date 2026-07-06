@@ -524,9 +524,21 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   per-test throttles; IAM composes `django-axes` at the `authenticate(request=...)`
   backend/signal path, so the password GraphQL mutation stays a thin caller.
 - **Row locks must keep the SQLite floor.** Wrap `select_for_update()` through the
-  owning queryset/manager's feature-gated helper; SQLite is a supported backend
-  and Django 6 silently drops plain `FOR UPDATE` there, so the helper is the
-  greppable contract that keeps lock intent explicit and backend-gated.
+  owning queryset/manager's feature-gated helper (`AngeeQuerySet.lock_if_supported`);
+  SQLite is a supported backend and Django 6 silently drops plain `FOR UPDATE`
+  there, so the helper is the greppable contract that keeps lock intent explicit and
+  backend-gated. `HierarchyMixin` path maintenance and `save_state`'s transition
+  guard both route their lock through it.
+- **A `HierarchyMixin` consumer declares its scope fields — the mixin never probes
+  by column name.** A subtree that must stay inside a scope (a company, a tenant)
+  declares `hierarchy_scope_fields = ("company",)` (a `ClassVar` tuple; FKs compare
+  by stored id); the mixin rejects a reparent or create under a parent that differs
+  on any listed field. It is generic and iam-free — there is no `company`-by-name
+  fallback, so a company-scoped tree that omits the declaration silently accepts a
+  cross-company parent. `StateField` transitions guarded by `save_state` get an
+  optimistic-concurrency guard for free: the committed source is re-read under the
+  same lock before the write, so a lost race raises `TransitionNotAllowed` instead
+  of double-applying (e.g. double-posting a ledger).
 - **Django 6 refreshes `F()`/expression fields back onto the instance via
   `UPDATE ... RETURNING` before `post_save`.** A `save(update_fields=…)` whose
   fields hold expressions (`F("count") + 1`, `Greatest(…)`) leaves the instance

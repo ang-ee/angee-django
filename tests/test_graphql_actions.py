@@ -8,7 +8,70 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 
 import angee.graphql.actions as actions_module
-from angee.graphql.actions import ActionResult, action_target, resolve_action_target
+from angee.base.transitions import TransitionNotAllowed
+from angee.graphql.actions import (
+    ActionResult,
+    action_guard,
+    action_target,
+    resolve_action_target,
+)
+
+
+def test_action_result_carries_created_record_id() -> None:
+    """A create-and-return verb populates ``id``; a plain result leaves it ``None``."""
+
+    assert ActionResult(ok=True, message="ok").id is None
+    created = ActionResult(ok=True, message="Payment registered.", id="pay_abc123")
+    assert created.id == "pay_abc123"
+
+
+def test_action_guard_maps_baseline_domain_errors() -> None:
+    """The guard maps each baseline domain error to an in-band ``ActionResult``."""
+
+    @action_guard("Could not register the payment.")
+    def register(kind: str) -> ActionResult:
+        if kind == "validation":
+            raise ValidationError({"amount": ["Exceeds the balance."]})
+        if kind == "transition":
+            raise TransitionNotAllowed("status draft to paid is not allowed.")
+        if kind == "missing":
+            raise Group.DoesNotExist("no such row")
+        return ActionResult(ok=True, message="Payment registered.")
+
+    ok = register("ok")
+    assert ok.ok is True
+
+    validation = register("validation")
+    assert validation.ok is False
+    assert validation.message == "Could not register the payment."
+    assert validation.validation_errors == {"amount": ["Exceeds the balance."]}
+
+    transition = register("transition")
+    assert transition.ok is False
+    assert transition.validation_errors is None
+
+    missing = register("missing")  # ObjectDoesNotExist subclass
+    assert missing.ok is False
+
+
+def test_action_guard_admits_addon_local_errors_and_reraises_others() -> None:
+    """A resolver adds its own error types; anything unlisted propagates as a GraphQL error."""
+
+    class PaymentRefused(Exception):
+        """A payment-provider domain refusal an addon owns."""
+
+    @action_guard("Payment refused.", errors=(PaymentRefused,))
+    def charge(kind: str) -> ActionResult:
+        if kind == "refused":
+            raise PaymentRefused("gateway declined")
+        raise RuntimeError("boom")
+
+    refused = charge("refused")
+    assert refused.ok is False
+    assert refused.message == "Payment refused."
+
+    with pytest.raises(RuntimeError, match="boom"):
+        charge("other")
 
 
 def test_action_result_carries_in_band_validation_errors() -> None:

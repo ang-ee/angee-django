@@ -54,7 +54,7 @@ from typing import Any, cast
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
-from django.db import models
+from django.db import models, transaction
 from django.db.models.query_utils import DeferredAttribute
 
 from angee.base.fields import StateField, enum_member_for
@@ -409,18 +409,56 @@ def _as_values(value: Any) -> tuple[Any, ...]:
 
 
 def save_state(instance: models.Model, source: Any, target: Any) -> None:
-    """Persist a transition-owned state change plus method-touched fields."""
+    """Persist a transition-owned state change plus method-touched fields.
 
-    del source, target
+    An optimistic concurrency guard brackets the write: the row is locked and its
+    committed state re-read, and a divergence from ``source`` (a concurrent
+    transition already advanced the row) raises :class:`TransitionNotAllowed` rather
+    than silently double-applying the transition — the document-row race that would
+    post a ledger entry twice. The guard and the ``save`` share one transaction, and
+    the guard only *verifies*; ``instance.save`` still performs the ``source ->
+    target`` column write, so ``post_save`` receivers, audit stamping, ``changes``
+    publishers, and pre-save change trackers observe the real old->new transition.
+    On a locking backend the row lock serializes racers (the loser's re-read blocks
+    until the winner commits, then sees the moved state); SQLite has no row lock and
+    verifies unlocked — the documented floor.
+    """
+
     field_name = cast(str | None, getattr(instance, "_angee_transition_save_field", None))
     if field_name is None:
         raise ImproperlyConfigured("save_state must run as a StateTransitions on_success hook.")
     fields = {field_name, *cast(set[str], getattr(instance, "_transition_fields", set()))}
     try:
-        instance.save(update_fields=fields)
+        with transaction.atomic():
+            _verify_uncontended_source(instance, field_name, source, target)
+            instance.save(update_fields=fields)
     finally:
         if hasattr(instance, "_transition_fields"):
             delattr(instance, "_transition_fields")
+
+
+def _verify_uncontended_source(instance: models.Model, field_name: str, source: Any, target: Any) -> None:
+    """Lock the row and confirm its committed state still equals ``source``.
+
+    Raises :class:`TransitionNotAllowed` when a concurrent transition already left
+    ``source``. Runs unscoped (the base manager, elevated when it supports ``sudo``)
+    because reading committed state for an integrity guard is a system read on one
+    addressed row, mirroring the mixin path-maintenance writer, and routes the lock
+    through the queryset's ``lock_if_supported`` owner (backend-gated, SQLite-safe).
+    """
+
+    writer = type(instance)._base_manager.all()
+    sudo = getattr(writer, "sudo", None)
+    if callable(sudo):
+        writer = sudo()
+    locker = getattr(writer, "lock_if_supported", None)
+    reader = locker(of=()) if callable(locker) else writer
+    committed = reader.filter(pk=instance.pk).values_list(field_name, flat=True).first()
+    field = cast(StateField, instance._meta.get_field(field_name))
+    if _state_key(field, committed) != _state_key(field, source):
+        raise TransitionNotAllowed(
+            _message(field, source, target, "state changed under a concurrent transition")
+        )
 
 
 def revalidate_transition_metadata(cls: type[models.Model]) -> None:

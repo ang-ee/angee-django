@@ -76,6 +76,17 @@ class DataResourceFieldMetadata:
     currency_field: str | None = None
     relation_model_label: str | None = None
     relation_label_axis: str | None = None
+    relation_object: bool = False
+    """Whether a ``relation`` field is projected as a nested selectable object.
+
+    A to-one FK can surface two ways with identical ``relation`` semantics
+    (``many2one`` widget, relation filter/group axis): as a nested node
+    (``product: ProductVariantType`` — its subfields are selectable) or as the
+    related row's public id (``location: strawberry.ID`` — a leaf). Only the
+    former may be read with a sub-selection; the frontend keys the row selection on
+    this flag so a nested relation reads ``{ id <label> }`` and an id projection
+    stays a leaf.
+    """
 
 
 # The schema is built with ``hasura_config()`` (``angee/graphql/schema.py``); its
@@ -222,12 +233,16 @@ def resource_fields(
         axis = relation_by_field.get(name)
         model_field = _model_field_or_none(model, python_name)
         surface_type = _surface_field_type(node_type, python_name)
+        is_object = _strawberry_type_is_object(surface_type)
+        is_list = _strawberry_type_is_list(surface_type)
+        is_enum = _strawberry_type_is_enum(surface_type)
         kind = resource_field_kind(
             model_field,
             has_relation_axis=axis is not None,
-            is_list=_strawberry_type_is_list(surface_type),
-            is_enum=_strawberry_type_is_enum(surface_type),
-            is_object=_strawberry_type_is_object(surface_type),
+            is_list=is_list,
+            is_enum=is_enum,
+            is_object=is_object,
+            projected_as_scalar=surface_type is not None and not is_object and not is_list and not is_enum,
         )
         scalar = _surface_field_scalar(
             surface=node_type,
@@ -242,7 +257,7 @@ def resource_fields(
                 kind=kind,
                 scalar=scalar,
                 values=values,
-                widget=None if scalar == "ID" else resource_field_widget(model_field, kind),
+                widget=_projected_widget(model_field, kind, scalar),
                 filterable=name in filterable,
                 sortable=name in sortable,
                 aggregatable=name in aggregatable,
@@ -254,6 +269,7 @@ def resource_fields(
                 currency_field=money_currency_field(model_field),
                 relation_model_label=_relation_model_label(model_field, axis),
                 relation_label_axis=axis.label_axis if axis is not None else None,
+                relation_object=kind == "relation" and is_object,
             )
         )
     return tuple(fields)
@@ -308,6 +324,7 @@ def merge_resource_fields(
             currency_field=existing.currency_field or field.currency_field,
             relation_model_label=existing.relation_model_label or field.relation_model_label,
             relation_label_axis=existing.relation_label_axis or field.relation_label_axis,
+            relation_object=existing.relation_object or field.relation_object,
         )
     return tuple(by_name[name] for name in order)
 
@@ -342,6 +359,19 @@ def _validate_resource_field(model_label: str, field: DataResourceFieldMetadata)
             f"resource metadata for {model_label} field '{field.name}' cannot declare "
             f"widget '{field.widget}' for enum fields."
         )
+
+
+def _projected_widget(field: models.Field[Any, Any] | None, kind: str, scalar: str | None) -> str | None:
+    """Return the rendered widget for a projected surface field.
+
+    A plain ``ID`` scalar (a record's own public id) renders no widget; a scalar-id
+    to-one relation (``kind == "scalar"``, ``scalar == "ID"``, a relation field)
+    keeps its ``select`` picker widget so the relation still wires through.
+    """
+
+    if scalar == "ID" and not (field is not None and field.is_relation):
+        return None
+    return resource_field_widget(field, kind)
 
 
 def _input_fields(surface: type | None) -> tuple[str, ...]:
@@ -562,22 +592,48 @@ def _resource_enum_values(
     field: models.Field[Any, Any] | None,
     value: object | None,
 ) -> tuple[DataResourceEnumValueMetadata, ...]:
-    """Return enum metadata, using impl registry labels for ImplClassField values."""
+    """Return enum metadata, folding the field's choice labels into descriptions.
+
+    An enum field's human labels live on the Django field — a ``StateField`` /
+    ``TextChoices`` member's ``label`` (``ASSIGNED = "assigned", "Ready"``) or an
+    ``ImplClassField`` registry label — not on the Strawberry enum value, so the
+    frontend cannot derive "Ready" from the wire member name alone. Fold each label
+    into the matching enum value's ``description`` so the metadata carries the
+    authored label; a value the field does not label keeps any Strawberry-declared
+    description.
+    """
 
     values = _surface_enum_values(value)
-    if not isinstance(field, ImplClassField) or not values:
+    labels_by_value = _field_choice_labels(field)
+    if not values or not labels_by_value:
         return values
 
-    labels_by_key = {choice.key: choice.label for choice in field.impl_choices()}
     definition = _strawberry_enum_definition(value)
     if definition is None:
         return values
     labels_by_name = {
-        str(enum_value.name): labels_by_key.get(str(enum_value.value)) for enum_value in definition.values
+        str(enum_value.name): labels_by_value.get(str(enum_value.value)) for enum_value in definition.values
     }
     return tuple(
         dataclasses.replace(item, description=labels_by_name.get(item.value) or item.description) for item in values
     )
+
+
+def _field_choice_labels(field: models.Field[Any, Any] | None) -> dict[str, str]:
+    """Return a stored-value -> human-label map for an enum-backed field, or empty.
+
+    An ``ImplClassField`` owns registry labels keyed by impl key; any other
+    ``TextChoicesField`` (a ``StateField`` or a plain choices enum) carries its
+    labels on the ``choices_enum`` members. A field with no enum choices yields an
+    empty map, so a non-enum field folds nothing.
+    """
+
+    if isinstance(field, ImplClassField):
+        return {str(choice.key): str(choice.label) for choice in field.impl_choices()}
+    choices_enum = getattr(field, "choices_enum", None)
+    if choices_enum is None:
+        return {}
+    return {str(member.value): str(member.label) for member in choices_enum}
 
 
 def _strawberry_enum_definition(value: object | None) -> StrawberryEnumDefinition | None:

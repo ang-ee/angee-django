@@ -32,6 +32,7 @@ from angee.base.models import (
     public_id_for,
     public_id_of,
 )
+from angee.graphql.data.field_classification import resource_field_kind, resource_field_widget
 from angee.graphql.data.metadata import model_resource_fields
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.oauth import state
@@ -1334,6 +1335,27 @@ def test_model_resource_fields_reconstructs_relation_target_label() -> None:
     assert field.kind == "relation"
     assert field.scalar is None
     assert field.relation_model_label == OAuthClient._meta.label
+
+
+def test_scalar_id_to_one_relation_classifies_as_leaf() -> None:
+    """An FK a node projects as a bare ``ID`` scalar is a scalar leaf, not an object.
+
+    A to-one FK projected as an object stays a ``relation`` (an object selection, a
+    ``many2one`` picker). Projected as a bare ``ID`` scalar it must classify as a
+    ``scalar`` leaf so the detail/form query selects it without an invalid
+    sub-selection — while still resolving a scalar-id ``select`` picker widget.
+    """
+
+    oauth_client_fk = ExternalAccount._meta.get_field("oauth_client")
+
+    # Object projection: object relation, many2one picker.
+    assert resource_field_kind(oauth_client_fk, is_object=True) == "relation"
+    assert resource_field_widget(oauth_client_fk, "relation") == "many2one"
+
+    # Bare-ID-scalar projection: scalar leaf carrying the scalar-id select widget.
+    scalar_kind = resource_field_kind(oauth_client_fk, projected_as_scalar=True)
+    assert scalar_kind == "scalar"
+    assert resource_field_widget(oauth_client_fk, scalar_kind) == "select"
 
 
 def test_console_schema_exposes_user_change_subscription(

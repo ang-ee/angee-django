@@ -54,6 +54,8 @@ class ScopedHierNode(HierarchyMixin, CompanyScopedMixin, AngeeDataModel):
 
     sqid_prefix = "shn_"
 
+    hierarchy_scope_fields = ("company",)
+
     name = models.CharField(max_length=100, blank=True, default="")
 
     objects = ScopedHierNodeManager()

@@ -31,7 +31,7 @@ from rebac import (
 from strawberry import auto
 
 from angee.graphql.data.hasura import HasuraLines, hasura_model_resource
-from angee.graphql.data.metadata import data_resource_metadata, merge_data_resources
+from angee.graphql.data.metadata import data_resource_metadata, merge_data_resources, resource_fields
 from angee.graphql.node import AngeeNode
 from tests.conftest import create_user, execute_schema, result_data
 from tests.linesdemo.models import Product, SaleDoc, SaleLine, Tag
@@ -777,3 +777,38 @@ def test_rich_save_round_trips_enum_and_m2m_diff(linesdemo_tables):
         # The enum stored its lowercase model value; the M2M swapped red → blue+green.
         assert line.kind == "service"
         assert set(line.tags.values_list("name", flat=True)) == {"Blue", "Green"}
+
+
+def test_enum_field_metadata_carries_django_choice_labels() -> None:
+    """A choices column's Django labels ride into the resource enum metadata.
+
+    The metadata is projected when the resource is built (addon import), *before*
+    the schema-build step that copies labels onto the SDL enum, so the label is
+    folded from the Django field directly — the same path ImplClassField enums use.
+    Without it the ``values`` descriptions are ``None`` and the frontend title-cases
+    the wire member name instead of showing the authored label. (This ``SaleLineType``
+    is only ever built through a plain ``strawberry.Schema``, which never runs Angee's
+    label-copy step, so the metadata is the only source of the labels here.)
+    """
+
+    fields = {
+        field.name: field
+        for field in resource_fields(
+            SaleLineType,
+            SaleLine,
+            filter_fields=(),
+            order_fields=(),
+            aggregate_fields=(),
+            group_by_fields=(),
+            create_fields=(),
+            update_fields=(),
+            required_create_fields=(),
+            relation_axes=(),
+        )
+    }
+    kind = fields["kind"]
+    assert kind.kind == "enum"
+    assert {value.value: value.description for value in kind.values} == {
+        "GOODS": "Goods",
+        "SERVICE": "Service",
+    }

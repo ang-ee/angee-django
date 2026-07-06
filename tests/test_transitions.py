@@ -160,6 +160,42 @@ def test_save_state_persists_transition_and_touched_fields(transition_task_table
 
 
 @pytest.mark.django_db(transaction=True)
+def test_save_state_loses_a_concurrent_transition_race(transition_task_table: None) -> None:
+    """Two racing transitions: the one whose committed source already moved loses.
+
+    A concurrent transition is simulated by advancing the committed row behind the
+    stale instance's back. The stale instance still reads ``running`` in memory, so
+    it clears the source/graph checks and runs its body — but the compare-and-swap
+    persist finds the committed state already ``done`` and raises rather than
+    double-applying the transition. The losing body's touched fields never persist.
+    """
+
+    task = TransitionTask.objects.create(state=TransitionTask.State.RUNNING)
+    # A racer commits the running -> done transition first, behind this instance.
+    TransitionTask.objects.filter(pk=task.pk).update(state=TransitionTask.State.DONE)
+
+    with pytest.raises(TransitionNotAllowed):
+        task.persist_done()
+
+    task.refresh_from_db()
+    assert task.state == TransitionTask.State.DONE
+    assert task.note == ""
+
+
+@pytest.mark.django_db(transaction=True)
+def test_save_state_wins_when_the_committed_source_still_holds(transition_task_table: None) -> None:
+    """The winning racer — the one whose committed source still holds — persists once."""
+
+    task = TransitionTask.objects.create(state=TransitionTask.State.RUNNING)
+
+    task.persist_done()
+
+    task.refresh_from_db()
+    assert task.state == TransitionTask.State.DONE
+    assert task.note == "persisted"
+
+
+@pytest.mark.django_db(transaction=True)
 def test_direct_assignment_rejected_on_guarded_fields(transition_task_table: None) -> None:
     """Guarded state columns cannot be changed by assignment."""
 
