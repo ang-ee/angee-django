@@ -236,6 +236,115 @@ describe("Angee Hasura provider defaults", () => {
     );
   });
 
+  test("subscribes each authored-query model to its own changes root", () => {
+    const { subscribe, sinks } = recordingClient();
+    const provider = createAngeeChangeLiveProvider(
+      { subscribe } as never,
+      [
+        resource({ changes: "noteChanged" }),
+        resource({ changes: "tagChanged", list: "tags", model: "notes.Tag" }),
+      ],
+    );
+
+    const subscription = provider.subscribe({
+      channel: "angee/authored/notes.Note,notes.Tag",
+      types: ["*"],
+      callback: vi.fn(),
+      params: { models: ["notes.Note", "notes.Tag"] },
+    });
+
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    expect(subscribe).toHaveBeenCalledWith(
+      {
+        query:
+          "subscription angee_noteChanged { noteChanged { model id action changedFields: changed_fields changedValues: changed_values } }",
+      },
+      expect.any(Object),
+    );
+
+    provider.unsubscribe(subscription);
+    expect(nthSink(sinks, 0).dispose).toHaveBeenCalledTimes(1);
+    expect(nthSink(sinks, 1).dispose).toHaveBeenCalledTimes(1);
+  });
+
+  test("joins the shared fan-out — a resource hook and an authored query share one upstream", () => {
+    const { subscribe, sinks } = recordingClient();
+    const provider = createAngeeChangeLiveProvider(
+      { subscribe } as never,
+      [resource({ changes: "noteChanged" })],
+    );
+
+    const resourceSub = provider.subscribe({
+      channel: "resources/notes",
+      types: ["*"],
+      callback: vi.fn(),
+      params: { resource: "notes" },
+    });
+    const authoredSub = provider.subscribe({
+      channel: "angee/authored/notes.Note",
+      types: ["*"],
+      callback: vi.fn(),
+      params: { models: ["notes.Note"] },
+    });
+
+    // Two consumers (a resource hook and an authored query), one upstream socket.
+    expect(subscribe).toHaveBeenCalledTimes(1);
+
+    provider.unsubscribe(resourceSub);
+    expect(nthSink(sinks, 0).dispose).not.toHaveBeenCalled();
+    provider.unsubscribe(authoredSub);
+    expect(nthSink(sinks, 0).dispose).toHaveBeenCalledTimes(1);
+  });
+
+  test("invalidates authored reads when a change arrives on a model subscription", () => {
+    const { subscribe, sinks } = recordingClient();
+    const invalidateQueries = vi.fn();
+    const provider = createAngeeChangeLiveProvider(
+      { subscribe } as never,
+      [resource({ changes: "noteChanged" })],
+      { queryClient: { invalidateQueries } },
+    );
+
+    provider.subscribe({
+      channel: "angee/authored/notes.Note",
+      types: ["*"],
+      callback: vi.fn(),
+      params: { models: ["notes.Note"] },
+    });
+    nthSink(sinks, 0).next({
+      data: { noteChanged: { model: "notes.Note", id: "note_1", action: "update" } },
+    });
+
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      predicate: expect.any(Function),
+      type: "all",
+      refetchType: "active",
+    });
+    const predicate = invalidateQueries.mock.calls[0]?.[0]?.predicate as
+      | ((query: { meta: unknown }) => boolean)
+      | undefined;
+    expect(predicate?.({ meta: { angeeModels: ["notes.Note"] } })).toBe(true);
+    expect(predicate?.({ meta: { angeeModels: ["notes.Tag"] } })).toBe(false);
+  });
+
+  test("ignores authored models with no change root", () => {
+    const subscribe = vi.fn();
+    const provider = createAngeeChangeLiveProvider(
+      { subscribe } as never,
+      [resource({ changes: null })],
+    );
+
+    const subscription = provider.subscribe({
+      channel: "angee/authored/notes.Note",
+      types: ["*"],
+      callback: vi.fn(),
+      params: { models: ["notes.Note", "unknown.Model"] },
+    });
+    provider.unsubscribe(subscription);
+
+    expect(subscribe).not.toHaveBeenCalled();
+  });
+
   test("keeps a separate upstream subscription per change root", () => {
     const { subscribe, sinks } = recordingClient();
     const provider = createAngeeChangeLiveProvider(
