@@ -42,7 +42,7 @@ import {
   type ResourceViewGroup,
   type ResourceViewKind,
 } from "./resource-view-model";
-import type { CalendarViewSpec } from "./resource-view-types";
+import type { BoardLaneSource, CalendarViewSpec } from "./resource-view-types";
 import type { Occurrence } from "./CalendarView";
 import type { AnyCalendarWindowSource } from "./use-calendar-window";
 import {
@@ -150,6 +150,8 @@ export interface ResourceListProps<TRow extends Row = Row> {
    * offered in the switcher and rendered as a windowed-collection surface;
    * quick-create rides `ResourceList`'s routed-create seam. */
   calendar?: ResourceListCalendarSpec;
+  /** Declared board lanes for a relation group field; empty lanes render too. */
+  laneSource?: BoardLaneSource;
   fields?: ListViewProps<TRow>["fields"];
   /** List component used for the collection surface. Defaults to the lean flat list. */
   list?: ListComponent<TRow>;
@@ -387,6 +389,7 @@ function ResourceListBody<TRow extends Row = Row>({
   defaultGroup,
   defaultGroups,
   calendar,
+  laneSource,
   fields,
   list: ListRenderer = ListView as ListComponent<TRow>,
   returning,
@@ -432,6 +435,7 @@ function ResourceListBody<TRow extends Row = Row>({
     rowHref: resolvedRowHref,
     toolbarActions,
     cardActions,
+    laneSource,
     ...(declarations.list
       ? listElementRenderProps(declarations.list.props)
       : {}),

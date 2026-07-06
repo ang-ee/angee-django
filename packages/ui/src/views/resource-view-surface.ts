@@ -7,6 +7,7 @@ import {
   useTable as useRefineTable } from "@refinedev/react-table";
 import {
   useList,
+  useUpdate,
   type BaseRecord,
   type HttpError,
   type MetaQuery,
@@ -98,6 +99,12 @@ import {
   type VisibleFieldOption,
 } from "./resource-view-list-body";
 import type { ColumnDescriptor } from "./page";
+import { errorMessage, useToast } from "../feedback";
+import { relationValueId } from "../widgets/types";
+import { useRelationLanes } from "./relation-options";
+import type { RelationOption } from "../widgets/RelationField";
+import type { RelationFieldInfo } from "./model-metadata-defaults";
+import type { BoardLaneSource } from "./resource-view-types";
 import {
   listBatchTarget,
   useAggregateOperation,
@@ -142,8 +149,13 @@ export interface UseResourceViewSurfaceProps<TRow extends Row = Row> {
   resourceView: ResourceViewContextValue;
   modelMetadata?: ModelMetadata | null;
   groupStack?: readonly ResourceViewGroup[];
+  laneSource?: ResolvedBoardLaneSource | null;
   enabled?: boolean;
   onListStateChange?: (state: ResourceListSnapshot<TRow>) => void;
+}
+
+export interface ResolvedBoardLaneSource extends BoardLaneSource {
+  relation: RelationFieldInfo;
 }
 
 export interface UseRowsResourceViewSurfaceProps<
@@ -198,6 +210,8 @@ interface ResourceViewPresentationSurface<TRow extends Row = Row> {
   somePageSelected: boolean;
   setPageSelection: (checked: boolean) => void;
   groupedRows: readonly RowGroup<TRow>[];
+  boardDragEnabled: boolean;
+  onBoardCardMove?: (row: TRow, laneId: string) => void | Promise<void>;
   tableScrollRef: React.RefObject<HTMLDivElement | null>;
   rowVirtualizer: Virtualizer<HTMLDivElement, Element>;
 }
@@ -225,6 +239,7 @@ const EMPTY_ARRAY = [] as const;
 const EMPTY_SELECTED_IDS: ReadonlySet<string> = new Set();
 const EMPTY_EXPANDED_KEYS: ReadonlySet<string> = new Set();
 const EMPTY_LEAF_RESULTS: ReadonlyMap<string, AngeeListBatchEntry> = new Map();
+const EMPTY_OPTIMISTIC_LANES: ReadonlyMap<string, string> = new Map();
 const NOOP_SET_SCOPE_PAGE = (_key: string, _page: number): void => undefined;
 const NOOP_TOGGLE_GROUP = (_key: string): void => undefined;
 
@@ -592,6 +607,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     somePageSelected: false,
     setPageSelection: () => undefined,
     groupedRows: EMPTY_ARRAY,
+    boardDragEnabled: false,
     expandedKeys,
     toggleGroup,
     tableScrollRef,
@@ -608,6 +624,7 @@ export function useResourceViewSurface<TRow extends Row = Row>({
   resourceView,
   modelMetadata = null,
   groupStack,
+  laneSource,
   enabled = true,
   onListStateChange,
 }: UseResourceViewSurfaceProps<TRow>): ResourceViewSurface<TRow> {
@@ -755,6 +772,12 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     () => tableResult.refineCore.result.data as readonly TRow[],
     [tableResult.refineCore.result.data],
   );
+  const boardLaneState = useBoardLaneState<TRow>({
+    laneSource,
+    modelMetadata,
+    rows,
+    enabled: active && resourceView.state.view === "board",
+  });
   const list = React.useMemo(
     () =>
       listResultFromPageState({
@@ -780,6 +803,7 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     columnVisibility,
     resourceView,
     groupStack,
+    boardLaneState,
   });
 
   return {
@@ -817,6 +841,7 @@ export function useClientResourceViewSurface<TRow extends Row = Row>({
   resourceView,
   modelMetadata = null,
   groupStack,
+  laneSource,
   enabled = true,
   onListStateChange,
 }: UseResourceViewSurfaceProps<TRow>): ResourceViewSurface<TRow> {
@@ -858,6 +883,12 @@ export function useClientResourceViewSurface<TRow extends Row = Row>({
     () => (run.result.data ?? []) as readonly RowRecord[] as readonly TRow[],
     [run.result.data],
   );
+  const boardLaneState = useBoardLaneState<TRow>({
+    laneSource,
+    modelMetadata,
+    rows: allRows,
+    enabled: active && resourceView.state.view === "board",
+  });
   // The fetched page is capped; the only signal the in-browser set is actually
   // incomplete is the resource's own total exceeding the cap (a page that
   // returned exactly the cap is not necessarily truncated).
@@ -884,6 +915,7 @@ export function useClientResourceViewSurface<TRow extends Row = Row>({
     resourceView,
     modelMetadata,
     groupStack,
+    boardLaneState,
     getRowId: modelRowId,
     filter: mergedFilter,
   });
@@ -1014,6 +1046,7 @@ function useResourceViewPresentationSurface<TRow extends Row>({
   modelMetadata,
   groupStack,
   getRowId,
+  boardLaneState,
   filter,
   textSearchField,
   textSearchFields,
@@ -1024,6 +1057,7 @@ function useResourceViewPresentationSurface<TRow extends Row>({
   modelMetadata?: ModelMetadata | null;
   groupStack?: readonly ResourceViewGroup[];
   getRowId: (row: TRow, index: number) => string;
+  boardLaneState?: BoardLaneState<TRow>;
   filter?: ResourceViewFilter;
   textSearchField?: string;
   textSearchFields?: readonly string[];
@@ -1144,6 +1178,7 @@ function useResourceViewPresentationSurface<TRow extends Row>({
     columnVisibility,
     resourceView,
     groupStack,
+    boardLaneState,
   });
 }
 
@@ -1153,12 +1188,14 @@ function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
   columnVisibility,
   resourceView,
   groupStack,
+  boardLaneState,
 }: {
   rows: readonly TRow[];
   table: TableModel<TRow>;
   columnVisibility: VisibilityState;
   resourceView: ResourceViewContextValue;
   groupStack?: readonly ResourceViewGroup[];
+  boardLaneState?: BoardLaneState<TRow>;
 }): ResourceViewPresentationSurface<TRow> {
   const tableColumns = table.options.columns as readonly ColumnDef<TRow>[];
   const {
@@ -1185,8 +1222,16 @@ function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
   );
   const rowGroupStack = groupStack ?? resourceView.state.groupStack;
   const groupedRows = React.useMemo(
-    () => rowGroupsFromTableRows(table.getGroupedRowModel().rows, rowGroupStack),
-    [table, rowGroupStack, rows],
+    () =>
+      boardLaneState?.source
+        ? rowGroupsFromLaneSource(
+            table.getRowModel().rows,
+            boardLaneState.source,
+            boardLaneState.lanes,
+            boardLaneState.optimisticLaneByRowId,
+          )
+        : rowGroupsFromTableRows(table.getGroupedRowModel().rows, rowGroupStack),
+    [table, rowGroupStack, rows, boardLaneState],
   );
   const tableScrollRef = React.useRef<HTMLDivElement | null>(null);
   const rowVirtualizer = useVirtualizer({
@@ -1212,9 +1257,122 @@ function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
     somePageSelected: table.getIsSomePageRowsSelected(),
     setPageSelection,
     groupedRows,
+    boardDragEnabled: boardLaneState?.dragEnabled ?? false,
+    ...(boardLaneState?.onCardMove
+      ? { onBoardCardMove: boardLaneState.onCardMove }
+      : {}),
     tableScrollRef,
     rowVirtualizer,
   };
+}
+
+interface BoardLaneState<TRow extends Row> {
+  source: ResolvedBoardLaneSource | null;
+  lanes: readonly RelationOption[];
+  optimisticLaneByRowId: ReadonlyMap<string, string>;
+  dragEnabled: boolean;
+  onCardMove?: (row: TRow, laneId: string) => Promise<void>;
+}
+
+function useBoardLaneState<TRow extends Row>({
+  laneSource,
+  modelMetadata,
+  rows,
+  enabled,
+}: {
+  laneSource: ResolvedBoardLaneSource | null | undefined;
+  modelMetadata: ModelMetadata | null | undefined;
+  rows: readonly TRow[];
+  enabled: boolean;
+}): BoardLaneState<TRow> {
+  const t = useUiT();
+  const toast = useToast();
+  const source = laneSource ?? null;
+  const laneResult = useRelationLanes(source?.relation ?? null, {
+    labelField: source?.labelField,
+    pageSize: source?.pageSize,
+    enabled: enabled && source !== null,
+  });
+  const [optimisticLaneByRowId, setOptimisticLaneByRowId] =
+    React.useState<ReadonlyMap<string, string>>(EMPTY_OPTIMISTIC_LANES);
+  const dataResource = modelMetadata?.resource ?? null;
+  const update = useUpdate<RowRecord, HttpError, Record<string, unknown>>({
+    resource: dataResource ? refineResourceName(dataResource) : "",
+    dataProviderName: dataResource?.schemaName,
+    invalidates: ["list", "many", "detail"],
+  });
+  const dragEnabled = boardLaneDragEnabled(source, modelMetadata);
+
+  React.useEffect(() => {
+    if (!source || optimisticLaneByRowId.size === 0) return;
+    setOptimisticLaneByRowId((current) => {
+      let changed = false;
+      const next = new Map(current);
+      for (const row of rows) {
+        const id = rowPublicId(row);
+        if (!id) continue;
+        const optimisticLane = current.get(id);
+        if (
+          optimisticLane !== undefined
+          && relationValueId(readPath(row, source.field)) === optimisticLane
+        ) {
+          next.delete(id);
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [optimisticLaneByRowId, rows, source]);
+
+  const onCardMove = React.useCallback(
+    async (row: TRow, laneId: string): Promise<void> => {
+      if (!dragEnabled || !source || !dataResource) return;
+      const id = rowPublicId(row);
+      if (!id) return;
+      const currentLane = relationValueId(readPath(row, source.field));
+      if (currentLane === laneId) return;
+      setOptimisticLaneByRowId((current) => {
+        const next = new Map(current);
+        next.set(id, laneId);
+        return next;
+      });
+      try {
+        await update.mutateAsync({
+          id,
+          values: { [source.field]: laneId },
+        });
+      } catch (error) {
+        setOptimisticLaneByRowId((current) => {
+          if (current.get(id) !== laneId) return current;
+          const next = new Map(current);
+          next.delete(id);
+          return next;
+        });
+        toast.danger({
+          title: t("board.moveFailed"),
+          description: errorMessage(error, t("board.moveFailedDescription")),
+        });
+      }
+    },
+    [dataResource, dragEnabled, source, t, toast, update],
+  );
+
+  return React.useMemo(
+    () => ({
+      source,
+      lanes: laneResult.lanes,
+      optimisticLaneByRowId,
+      dragEnabled,
+      ...(dragEnabled ? { onCardMove } : {}),
+    }),
+    [
+      dragEnabled,
+      laneResult.lanes,
+      onCardMove,
+      optimisticLaneByRowId,
+      source,
+    ],
+  );
 }
 
 function useResourceViewTableChrome<TRow extends Row>(
@@ -1389,6 +1547,70 @@ function rowGroupFromTableRow<TRow extends Row>(
     rows: leafRows,
     children: children.map((child) => rowGroupFromTableRow(child, path)),
   };
+}
+
+function rowGroupsFromLaneSource<TRow extends Row>(
+  rows: readonly TableRowModel<TRow>[],
+  laneSource: ResolvedBoardLaneSource,
+  lanes: readonly RelationOption[],
+  optimisticLaneByRowId: ReadonlyMap<string, string>,
+): readonly RowGroup<TRow>[] {
+  const leafRows = leafTableRows(rows);
+  const rowsByLane = new Map<string, TableRowModel<TRow>[]>();
+  const declaredLaneIds = new Set(lanes.map((lane) => lane.value));
+  for (const row of leafRows) {
+    const rowId = rowPublicId(row.original) ?? row.id;
+    const laneId =
+      optimisticLaneByRowId.get(rowId)
+      ?? relationValueId(readPath(row.original, laneSource.field));
+    const laneRows = rowsByLane.get(laneId);
+    if (laneRows) laneRows.push(row);
+    else rowsByLane.set(laneId, [row]);
+  }
+
+  const groups = lanes.map((lane) =>
+    laneGroup(lane.value, relationLaneLabel(lane), rowsByLane.get(lane.value) ?? []),
+  );
+  for (const [laneId, laneRows] of rowsByLane) {
+    if (!declaredLaneIds.has(laneId)) {
+      groups.push(laneGroup(laneId, laneId || "No value", laneRows));
+    }
+  }
+  return groups;
+}
+
+function laneGroup<TRow extends Row>(
+  id: string,
+  label: string,
+  rows: readonly TableRowModel<TRow>[],
+): RowGroup<TRow> {
+  return {
+    key: id,
+    label,
+    path: [label],
+    depth: 0,
+    rows,
+    children: [],
+    declared: true,
+  };
+}
+
+function relationLaneLabel(lane: RelationOption): string {
+  if (typeof lane.label === "string" || typeof lane.label === "number") {
+    return String(lane.label);
+  }
+  return lane.value;
+}
+
+function boardLaneDragEnabled(
+  laneSource: ResolvedBoardLaneSource | null,
+  modelMetadata: ModelMetadata | null | undefined,
+): boolean {
+  if (!laneSource || !modelMetadata?.resource?.roots.update) return false;
+  const updateFields =
+    modelMetadata.rootFields?.updateFields ?? modelMetadata.resource.updateFields;
+  if (updateFields && !updateFields.includes(laneSource.field)) return false;
+  return modelMetadata.fields[laneSource.field]?.updatable !== false;
 }
 
 
