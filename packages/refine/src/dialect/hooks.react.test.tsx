@@ -7,12 +7,15 @@ import type { ReactNode } from "react";
 import { ActiveDataProviderNameProvider } from "./data-provider-context";
 import { OperationDocumentsProvider } from "../operation-documents";
 import { useActionMutation } from "./hooks";
+import type { ActionOutcome } from "../operations";
 
 const mutationMock = vi.hoisted(() => ({
   calls: [] as Array<{
     dataProviderName: string;
     values: Record<string, unknown>;
   }>,
+  response: { ok: true, message: "Done" } as Record<string, unknown>,
+  invalidate: vi.fn(async () => {}),
 }));
 
 vi.mock("@refinedev/core", () => ({
@@ -27,16 +30,18 @@ vi.mock("@refinedev/core", () => ({
           dataProviderName: payload.dataProviderName,
           values: payload.values,
         });
-        return { data: { run_probe: { ok: true, message: "Done" } } };
+        return { data: { run_probe: mutationMock.response } };
       },
     ),
     mutation: { isPending: false, error: null },
   }),
-  useInvalidate: () => vi.fn(async () => {}),
+  useInvalidate: () => mutationMock.invalidate,
 }));
 
 beforeEach(() => {
   mutationMock.calls = [];
+  mutationMock.response = { ok: true, message: "Done" };
+  mutationMock.invalidate.mockClear();
 });
 
 const ACTION_DOCUMENT = "mutation Probe { run_probe(id: $id) { ok message } }";
@@ -61,20 +66,68 @@ describe("useActionMutation", () => {
       wrapper: ConsoleProvider,
     });
 
-    let message: string | undefined;
+    let outcome: ActionOutcome | undefined;
     await act(async () => {
-      message = await result.current[0]("rec_1");
+      outcome = await result.current[0]("rec_1");
     });
 
-    // The success message flows back, proving the "console" action document
+    // The in-band outcome flows back, proving the "console" action document
     // resolved — the pre-fix "default" lookup would throw (no "default" alias in
     // the operation-documents map), the Post-button asymmetry.
-    expect(message).toBe("Done");
+    expect(outcome).toEqual({ ok: true, message: "Done" });
     // The mutation runs against the active schema's provider, not the "default"
     // alias — matching the fallback the authored hooks already use.
     expect(mutationMock.calls).toEqual([
       { dataProviderName: "console", values: { id: "rec_1" } },
     ]);
+  });
+
+  test("resolves a domain failure in-band and skips invalidation", async () => {
+    mutationMock.response = {
+      ok: false,
+      message: "Not allowed.",
+      validation_errors: { __all__: ["You are not allowed to modify this order."] },
+    };
+    const { result } = renderHook(
+      () =>
+        useActionMutation("run_probe", {
+          invalidates: [{ resource: "orders", invalidates: ["list"] }],
+        }),
+      { wrapper: ConsoleProvider },
+    );
+
+    let outcome: ActionOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current[0]("rec_1");
+    });
+
+    // ok=false resolves (no throw) so a settle owner can toast message +
+    // in-band reasons; a failed write never refreshes caches.
+    expect(outcome).toEqual({
+      ok: false,
+      message: "Not allowed.",
+      validationErrors: { __all__: ["You are not allowed to modify this order."] },
+    });
+    expect(mutationMock.invalidate).not.toHaveBeenCalled();
+  });
+
+  test("carries the created record id and invalidates on success", async () => {
+    mutationMock.response = { ok: true, message: "Created.", id: "tr_9" };
+    const { result } = renderHook(
+      () =>
+        useActionMutation("run_probe", {
+          invalidates: [{ resource: "orders", invalidates: ["list"] }],
+        }),
+      { wrapper: ConsoleProvider },
+    );
+
+    let outcome: ActionOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current[0]("rec_1");
+    });
+
+    expect(outcome).toEqual({ ok: true, message: "Created.", id: "tr_9" });
+    expect(mutationMock.invalidate).toHaveBeenCalledTimes(1);
   });
 
   test("an explicit dataProviderName option still wins over the active schema", async () => {
