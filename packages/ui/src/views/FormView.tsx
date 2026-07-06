@@ -50,6 +50,7 @@ import { SectionEyebrow } from "../ui/section-eyebrow";
 import { Input } from "../ui/input";
 import { Spinner } from "../ui/spinner";
 import { Tabs } from "../ui/tabs";
+import { renderGlyph } from "../chrome/Glyph";
 import { textRoleVariants } from "../ui/text";
 import { ControlBand } from "../layouts/ControlBand";
 import { cn } from "../lib/cn";
@@ -1315,7 +1316,7 @@ export function FormView({
             <Tabs.List>
               <Tabs.Tab value={OVERVIEW_TAB_ID}>{t("form.tabOverview")}</Tabs.Tab>
               {recordTabList.map((tab) => (
-                <Tabs.Tab key={tab.id} value={tab.id} icon={tab.icon}>
+                <Tabs.Tab key={tab.id} value={tab.id} icon={renderGlyph(tab.icon)}>
                   {tab.label}
                 </Tabs.Tab>
               ))}

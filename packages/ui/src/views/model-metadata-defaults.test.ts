@@ -470,6 +470,12 @@ describe("relationFieldInfo / relationListFieldInfo", () => {
         rootFields: { list: "product_variants" },
       },
       UnlistableType: { typeName: "UnlistableType", fields: {}, rootFields: {} },
+      CompanyType: {
+        typeName: "CompanyType",
+        recordRepresentation: "name",
+        fields: {},
+        rootFields: { list: "companies" },
+      },
     },
   };
   const model: ModelMetadata = {
@@ -479,6 +485,17 @@ describe("relationFieldInfo / relationListFieldInfo", () => {
       taxes: { name: "taxes", kind: "list", scalar: "ID", relationTarget: "TaxType" },
       labels: { name: "labels", kind: "list", scalar: "String" },
       orphan: { name: "orphan", kind: "list", relationTarget: "UnlistableType" },
+      // A to-one FK the node projects as a bare `ID!` scalar: a scalar leaf that
+      // still carries a relation target + the scalar-id `select` widget.
+      company: {
+        name: "company",
+        kind: "scalar",
+        scalar: "ID",
+        widget: "select",
+        relationTarget: "CompanyType",
+      },
+      // The record's own opaque id — a bare `ID` scalar with no relation target.
+      id: { name: "id", kind: "scalar", scalar: "ID" },
     },
   };
 
@@ -487,6 +504,20 @@ describe("relationFieldInfo / relationListFieldInfo", () => {
     // An M2M is `kind: "list"`, so the to-one resolver ignores it (else it would
     // render a single picker over a many field).
     expect(relationFieldInfo("taxes", model, schema)).toBeNull();
+  });
+
+  test("resolves an ID-scalar FK as a scalar-id relation picker, but not a bare id", () => {
+    // A `company` FK the node projects as a bare `ID!` still wires the picker/label
+    // through the relation metadata, so the form gets a usable relation widget.
+    const info = relationFieldInfo("company", model, schema);
+    expect(info?.resource).toBe("Company");
+    expect(info?.labelField).toBe("name");
+    // Its metadata widget is `select` (not `many2one`), so the form selects it as a
+    // scalar leaf — a valid detail query, never an object sub-selection.
+    const [resolved] = fieldsWithMetadataDefaults([{ name: "company" }], model);
+    expect(resolved?.widget).toBe("select");
+    // The record's own bare `ID` scalar (no relation target) stays opaque.
+    expect(relationFieldInfo("id", model, schema)).toBeNull();
   });
 
   test("resolves an M2M relation target for relationListFieldInfo", () => {

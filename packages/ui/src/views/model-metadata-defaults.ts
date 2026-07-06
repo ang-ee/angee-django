@@ -54,10 +54,13 @@ export function defaultWidgetFor(
 }
 
 /**
- * Resolve a form field to its relation target, or `null` when it is not an
- * object relation whose related model is listable. Only nested object fields
- * (`kind: "relation"`) qualify — a bare `ID` scalar FK is opaque to resource
- * metadata, so it stays an explicitly-configured field.
+ * Resolve a form field to its relation target, or `null` when it carries no
+ * listable relation. Two field shapes qualify: a nested object relation
+ * (`kind: "relation"`), and a to-one FK the node projects as a bare `ID` scalar
+ * ({@link isScalarIdRelation}). The scalar-id form reads/writes the flat id and the
+ * detail/form query selects it as a leaf (never an object sub-selection); the
+ * object form reads the nested `{ id }`. Both wire the same relation picker and
+ * label through the relation metadata.
  */
 export function relationFieldInfo(
   fieldName: string,
@@ -65,8 +68,20 @@ export function relationFieldInfo(
   schemaMetadata: SchemaFieldMetadata,
 ): RelationFieldInfo | null {
   const field = modelMetadata?.fields[fieldName];
-  if (field?.kind !== "relation") return null;
+  if (!field || (field.kind !== "relation" && !isScalarIdRelation(field))) return null;
   return resolveRelationTarget(field, schemaMetadata);
+}
+
+/**
+ * A to-one relation the node projects as a bare `ID` scalar (`kind: "scalar"`,
+ * `scalar: "ID"`, carrying a `relationTarget`). The backend classifies a
+ * `CompanyScopedMixin.company` (and any FK projected as `ID!` rather than a nested
+ * object) this way, with a `select` scalar-id widget — so the detail/form query
+ * selects it as a leaf instead of emitting a sub-selection the wire `ID` rejects,
+ * while the relation picker still resolves through the relation metadata.
+ */
+export function isScalarIdRelation(field: ModelFieldMetadata): boolean {
+  return field.kind === "scalar" && field.scalar === "ID" && Boolean(field.relationTarget);
 }
 
 /**

@@ -34,7 +34,7 @@ export const STATUS_TONES: ToneValueBuckets = {
     "not_paid", "partial", "to_invoice",
   ],
   danger: ["error", "failed", "denied", "lost", "down", "crashed"],
-  info: ["started"],
+  info: ["started", "assigned"],
   neutral: [
     "archived", "deleted", "disabled", "rejected", "blocked",
     "stopped", "deprovisioned", "idle", "inactive", "offline", "unknown", "default",
