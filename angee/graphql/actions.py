@@ -1,4 +1,4 @@
-"""Shared GraphQL result type for console domain actions."""
+"""Shared GraphQL result type, guard, and target preflights for console domain actions."""
 
 from __future__ import annotations
 
@@ -10,14 +10,16 @@ from typing import ParamSpec, TypeVar, cast
 import strawberry
 from django.core.exceptions import NON_FIELD_ERRORS, ObjectDoesNotExist, ValidationError
 from django.db import models
-from rebac import system_context
+from rebac import PermissionDenied, RebacMixin, system_context
 from strawberry.scalars import JSON
 from strawberry.utils.str_converters import to_camel_case
 
 from angee.base.transitions import TransitionNotAllowed
 from angee.graphql.ids import PublicID, instance_for_id, public_id_value
+from angee.graphql.writes import instance_for_write
 
 _ActionTarget = TypeVar("_ActionTarget", bound=models.Model)
+_RebacActionTarget = TypeVar("_RebacActionTarget", bound=RebacMixin)
 _P = ParamSpec("_P")
 
 
@@ -115,6 +117,51 @@ def action_guard(
     return decorate
 
 
+def authorized_action_target(
+    info: strawberry.Info,
+    model: type[_RebacActionTarget],
+    id: PublicID,
+    permission: str,
+) -> _RebacActionTarget:
+    """Return the actor-authorized row a domain action targets.
+
+    The one owner of the action preflight ceremony (session gate → actor-scoped
+    lookup → per-row permission check) that every in-band ``ActionResult`` verb
+    repeats:
+
+    1. An unauthenticated session raises ``rebac.PermissionDenied`` — a GraphQL
+       error, the same contract as ``angee.iam``'s ``session_user`` gate, so the
+       client re-authenticates instead of toasting.
+    2. The row resolves through the actor's write-scoped queryset
+       (:func:`angee.graphql.writes.instance_for_write`): a row the actor cannot
+       reach reads as plain not-found, never an existence oracle.
+    3. The resolved row must grant the per-row REBAC ``permission`` (e.g.
+       ``"write"``, ``"write__status"``).
+
+    Not-found and denied raise the non-field ``ValidationError`` shape
+    :func:`action_guard` maps to an in-band :class:`ActionResult`: the verb's
+    guard ``summary`` banners the toast while the specific reason rides
+    ``validation_errors[NON_FIELD_ERRORS]``. The returned row stays bound to the
+    actor, so the model write that follows runs under REBAC — this is the
+    *actor-scoped* sibling of :func:`resolve_action_target`, which is *elevated*
+    and leaves authorization to the caller.
+    """
+
+    user = getattr(info.context.request, "user", None)
+    if user is None or not getattr(user, "is_authenticated", False):
+        raise PermissionDenied("Authentication required.")
+    instance = instance_for_write(model, id)
+    if instance is None:
+        raise ValidationError(
+            {NON_FIELD_ERRORS: [f"{model._meta.object_name} {public_id_value(id)!r} was not found."]}
+        )
+    if not instance.has_access(permission):
+        raise ValidationError(
+            {NON_FIELD_ERRORS: [f"You are not allowed to modify this {model._meta.verbose_name}."]}
+        )
+    return cast(_RebacActionTarget, instance)
+
+
 def resolve_action_target(
     model: type[_ActionTarget],
     id: PublicID,
@@ -125,10 +172,16 @@ def resolve_action_target(
 ) -> _ActionTarget:
     """Return an elevated action target addressed by one GraphQL public id.
 
-    The caller owns actor authorization, usually with field ``permission_classes``.
+    The caller owns actor authorization, usually with field ``permission_classes``
+    (an operator/admin verb where the actor's role, not the row, authorizes).
     This helper owns the repeated action-write lookup shape: build the requested
     queryset, enter ``system_context`` for the row read, and raise a stable
-    not-found error instead of leaking ``None`` into the action body.
+    not-found error instead of leaking ``None`` into the action body. A missing
+    row raises ``ValueError`` — a GraphQL error, matching the role-gated surface.
+
+    For a domain verb authorized by the row itself (the ceremony
+    session gate → actor-scoped lookup → per-row check, returning in-band
+    failures), use :func:`authorized_action_target` instead.
     """
 
     active_queryset = queryset if queryset is not None else model._default_manager.all()
