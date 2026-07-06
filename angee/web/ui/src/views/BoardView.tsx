@@ -1,6 +1,18 @@
 // Kanban board rendering for the resource-view surface. It consumes precomputed rows
 // from its parent and remains fetch-free.
 import * as React from "react";
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import type {
   Row as TableRowModel } from "@tanstack/react-table";
 import { useNavigate } from "@tanstack/react-router";
@@ -8,6 +20,7 @@ import type { Row,
 } from "@angee/metadata";
 
 import { useUiT } from "../i18n";
+import { cn } from "../lib/cn";
 import { type Tone } from "../lib/tones";
 import { CountBadge } from "../ui/badge";
 import { Skeleton, SkeletonStatus } from "../ui/skeleton";
@@ -42,6 +55,8 @@ export interface BoardViewProps<TRow extends Row = Row> {
   onRowClick?: (row: TRow) => void;
   cardActions?: (row: TRow, context: CardActionContext) => React.ReactNode;
   cardActionContext?: CardActionContext;
+  dragEnabled?: boolean;
+  onCardMove?: (row: TRow, laneId: string) => void | Promise<void>;
   /** Override the card body (mirrors `GalleryView.renderCard`) — for a rich card
    * (description, chips, badges) instead of the default title + key/value rows. The
    * lane grouping, frame link/click, selection, and the `cardActions` footer stay. */
@@ -61,6 +76,8 @@ export function BoardView<TRow extends Row = Row>(
     onRowClick,
     cardActions,
     cardActionContext,
+    dragEnabled = false,
+    onCardMove,
     renderCard,
   } = props;
   return (
@@ -74,6 +91,8 @@ export function BoardView<TRow extends Row = Row>(
       onRowClick={onRowClick}
       cardActions={cardActions}
       cardActionContext={cardActionContext ?? EMPTY_CARD_ACTION_CONTEXT}
+      dragEnabled={dragEnabled}
+      onCardMove={onCardMove}
       renderCard={renderCard}
     />
   );
@@ -93,6 +112,8 @@ function BoardRows<TRow extends Row>({
   onRowClick,
   cardActions,
   cardActionContext,
+  dragEnabled,
+  onCardMove,
   renderCard,
 }: {
   columns: readonly ColumnDescriptor<TRow>[];
@@ -104,12 +125,30 @@ function BoardRows<TRow extends Row>({
   onRowClick?: (row: TRow) => void;
   cardActions?: (row: TRow, context: CardActionContext) => React.ReactNode;
   cardActionContext: CardActionContext;
+  dragEnabled: boolean;
+  onCardMove?: (row: TRow, laneId: string) => void | Promise<void>;
   renderCard?: (row: TRow) => React.ReactNode;
 }): React.ReactElement {
   const t = useUiT();
   const leaves = groups.flatMap(flattenLeaves);
+  const hasDeclaredLanes = leaves.some((group) => group.declared);
   const groupFields = new Set(groupStack.map((group) => group.field));
-  if (leaves.every((group) => group.rows.length === 0)) {
+  const moveEnabled = dragEnabled && Boolean(onCardMove);
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+  const handleDragEnd = React.useCallback(
+    (event: DragEndEvent) => {
+      const row = event.active.data.current?.row as TRow | undefined;
+      const currentLaneId = event.active.data.current?.laneId;
+      const nextLaneId = event.over?.id;
+      if (!row || nextLaneId == null || nextLaneId === currentLaneId) return;
+      void onCardMove?.(row, String(nextLaneId));
+    },
+    [onCardMove],
+  );
+  if (!hasDeclaredLanes && leaves.every((group) => group.rows.length === 0)) {
     if (fetching) {
       return (
         <BoardSkeleton
@@ -122,7 +161,7 @@ function BoardRows<TRow extends Row>({
   }
   // Kanban is most useful with an active group axis; with no group-by applied a single lane is shown.
   // The board renders the current page only (bounded by the page-size cap, MAX_PAGE_SIZE), grouped into lanes; no row virtualization is used here.
-  return (
+  const board = (
     <div className={BOARD_SCROLL_SURFACE_CLASS}>
       {leaves.map((group) => (
         <BoardLane
@@ -135,10 +174,21 @@ function BoardRows<TRow extends Row>({
           onRowClick={onRowClick}
           cardActions={cardActions}
           cardActionContext={cardActionContext}
+          dragEnabled={moveEnabled}
           renderCard={renderCard}
         />
       ))}
     </div>
+  );
+  if (!moveEnabled) return board;
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragEnd={handleDragEnd}
+    >
+      {board}
+    </DndContext>
   );
 }
 
@@ -208,6 +258,7 @@ function BoardLane<TRow extends Row>({
   onRowClick,
   cardActions,
   cardActionContext,
+  dragEnabled,
   renderCard,
 }: {
   columns: readonly ColumnDescriptor<TRow>[];
@@ -218,15 +269,25 @@ function BoardLane<TRow extends Row>({
   onRowClick?: (row: TRow) => void;
   cardActions?: (row: TRow, context: CardActionContext) => React.ReactNode;
   cardActionContext: CardActionContext;
+  dragEnabled: boolean;
   renderCard?: (row: TRow) => React.ReactNode;
 }): React.ReactElement {
   const headingId = React.useId();
   const t = useUiT();
   const tone = laneDotTone(group, groupStack, columns);
+  const { setNodeRef, isOver } = useDroppable({
+    id: group.key,
+    disabled: !dragEnabled,
+  });
   return (
     <section
+      ref={dragEnabled ? setNodeRef : undefined}
       aria-labelledby={headingId}
-      className="flex w-[300px] flex-none flex-col rounded-[10px] border border-border-subtle bg-inset"
+      className={cn(
+        "flex w-[300px] flex-none flex-col rounded-[10px] border border-border-subtle bg-inset",
+        dragEnabled && "transition-colors",
+        isOver && "border-border-focus bg-brand-soft/25",
+      )}
     >
       <div className="sticky top-0 z-10 flex items-center gap-2 rounded-t-[10px] bg-inset px-3 pt-3 pb-2">
         {tone ? <StatusDot tone={tone} /> : null}
@@ -249,6 +310,8 @@ function BoardLane<TRow extends Row>({
             onRowClick={onRowClick}
             cardActions={cardActions}
             cardActionContext={cardActionContext}
+            dragEnabled={dragEnabled}
+            laneId={group.key}
             renderCard={renderCard}
           />
         ))}
@@ -265,6 +328,8 @@ function BoardRowCard<TRow extends Row>({
   onRowClick,
   cardActions,
   cardActionContext,
+  dragEnabled,
+  laneId,
   renderCard,
 }: {
   columns: readonly ColumnDescriptor<TRow>[];
@@ -274,12 +339,38 @@ function BoardRowCard<TRow extends Row>({
   onRowClick?: (row: TRow) => void;
   cardActions?: (row: TRow, context: CardActionContext) => React.ReactNode;
   cardActionContext: CardActionContext;
+  dragEnabled: boolean;
+  laneId: string;
   renderCard?: (row: TRow) => React.ReactNode;
 }): React.ReactElement {
   const href = rowHref?.(row.original);
   const actions = cardActions?.(row.original, cardActionContext);
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    isDragging,
+  } = useDraggable({
+    id: row.id,
+    data: { row: row.original, laneId },
+    disabled: !dragEnabled,
+  });
+  const style = dragEnabled && transform
+    ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` }
+    : undefined;
   return (
-    <article className="board-card-grid grid min-w-0 gap-2 rounded-8 border border-border-subtle bg-sheet p-3 shadow-xs transition hover:-translate-y-0.5 hover:border-border hover:shadow-md">
+    <article
+      ref={dragEnabled ? setNodeRef : undefined}
+      style={style}
+      className={cn(
+        "board-card-grid grid min-w-0 gap-2 rounded-8 border border-border-subtle bg-sheet p-3 shadow-xs transition hover:-translate-y-0.5 hover:border-border hover:shadow-md",
+        dragEnabled && "cursor-grab touch-none select-none active:cursor-grabbing",
+        isDragging && "z-10 border-border-focus shadow-lg",
+      )}
+      {...(dragEnabled ? attributes : {})}
+      {...(dragEnabled ? listeners : {})}
+    >
       <BoardCardFrame
         href={href}
         onClick={onRowClick ? () => onRowClick(row.original) : undefined}

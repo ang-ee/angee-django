@@ -43,6 +43,15 @@ export interface CalendarViewSpec {
   onSelectRange?: (start: Date, end: Date) => void;
 }
 
+export interface BoardLaneSource {
+  /** Resource field that owns the board lane id and receives drag writes. */
+  field: string;
+  /** Optional display-field override; defaults to the related model representation. */
+  labelField?: string;
+  /** Optional fetch limit for the related lane records. */
+  pageSize?: number;
+}
+
 export interface CardActionContext {
   /** Re-pull the collection backing the board/list surface. */
   refresh: () => void;
@@ -92,6 +101,8 @@ export interface ListViewProps<TRow extends Row = Row> {
   /** Calendar data + interaction seams. When declared, the Calendar kind is offered
    * in the switcher and rendered as a windowed-collection surface (no `useList`). */
   calendar?: CalendarViewSpec;
+  /** Declared board lanes for a relation group field; empty lanes render too. */
+  laneSource?: BoardLaneSource;
   /** Group seeded by the resource list. */
   defaultGroup?: ResourceViewGroup | null;
   /** Per-view group defaults seeded by the resource list. */

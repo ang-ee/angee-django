@@ -119,6 +119,7 @@ export type RowGroup<TRow extends Row> = {
   depth: number;
   rows: readonly TableRowModel<TRow>[];
   children: readonly RowGroup<TRow>[];
+  declared?: boolean;
 };
 
 export interface GroupMeasure extends AggregateMeasure {

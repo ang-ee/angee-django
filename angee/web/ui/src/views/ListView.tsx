@@ -37,6 +37,7 @@ import {
   useClientResourceViewSurface,
   useGroupedResourceViewSurface,
   useResourceViewSurface,
+  type ResolvedBoardLaneSource,
   type ResourceViewSurface,
   type UseResourceViewSurfaceProps,
 } from "./resource-view-surface";
@@ -68,7 +69,7 @@ import {
   textFilterValue,
   validResourceViewGroupStack,
 } from "./resource-view-utils";
-import { columnsWithMetadataDefaults } from "./model-metadata-defaults";
+import { columnsWithMetadataDefaults, relationFieldInfo } from "./model-metadata-defaults";
 import type { ColumnDescriptor } from "./page";
 import { useRelationFacets } from "./relation-facet";
 import { useScalarFacets } from "./scalar-facet";
@@ -82,6 +83,7 @@ export type {
   ListColumn,
 } from "./resource-view-list-body";
 export type {
+  BoardLaneSource,
   CalendarViewSpec,
   CardActionContext,
   ListEmptyAction,
@@ -147,6 +149,7 @@ function ListViewBody<TRow extends Row = Row>({
   defaultGroup,
   defaultGroups,
   calendar,
+  laneSource,
   onCreate,
   createLabel,
   onRowClick,
@@ -172,6 +175,11 @@ function ListViewBody<TRow extends Row = Row>({
   );
   const modelMetadata = useModelMetadata(resource);
   const schemaMetadata = useSchemaFieldMetadata();
+  const resolvedLaneSource = React.useMemo<ResolvedBoardLaneSource | null>(() => {
+    if (!laneSource) return null;
+    const relation = relationFieldInfo(laneSource.field, modelMetadata, schemaMetadata);
+    return relation ? { ...laneSource, relation } : null;
+  }, [laneSource, modelMetadata, schemaMetadata]);
   const resolvedColumns = React.useMemo(
     () => columnsWithMetadataDefaults(columns, modelMetadata, schemaMetadata),
     [columns, modelMetadata, schemaMetadata],
@@ -298,6 +306,7 @@ function ListViewBody<TRow extends Row = Row>({
     resourceView,
     modelMetadata,
     groupStack: effectiveGroupStack,
+    laneSource: resolvedLaneSource,
     enabled: !groupedListMode,
     onListStateChange,
   };
@@ -646,6 +655,8 @@ function ListViewContent<TRow extends Row = Row>({
           cardActions={cardActions}
           cardActionContext={cardActionContext}
           renderCard={renderCard}
+          dragEnabled={surface.boardDragEnabled}
+          onCardMove={surface.onBoardCardMove}
         />
       ) : flatMeasures.length > 0 && !clientRowModel ? (
         <FlatListBodyWithAggregate

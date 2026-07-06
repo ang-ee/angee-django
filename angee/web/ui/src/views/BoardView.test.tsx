@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { act, cleanup, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { BoardView } from "./BoardView";
 import type { RowGroup } from "./resource-view-list-body";
@@ -9,9 +9,62 @@ import type { ResourceViewContextValue } from "./resource-view-context";
 import type { ColumnDescriptor } from "./page";
 import type { Row } from "@angee/metadata";
 
+const dndMocks = vi.hoisted(() => {
+  const PointerSensor = function PointerSensor() {};
+  const KeyboardSensor = function KeyboardSensor() {};
+  return {
+    PointerSensor,
+    KeyboardSensor,
+    contextProps: null as {
+      sensors?: unknown;
+      onDragEnd?: (event: unknown) => void;
+    } | null,
+    useSensor: vi.fn((sensor: unknown, options?: unknown) => ({ sensor, options })),
+    useSensors: vi.fn((...sensors: unknown[]) => sensors),
+    useDraggable: vi.fn(() => ({
+      attributes: { "data-draggable": "true" },
+      listeners: { onKeyDown: vi.fn() },
+      setNodeRef: vi.fn(),
+      transform: null,
+      isDragging: false,
+    })),
+    useDroppable: vi.fn(() => ({
+      setNodeRef: vi.fn(),
+      isOver: false,
+    })),
+  };
+});
+
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
 vi.mock("../i18n", () => ({ useUiT: () => (key: string) => key }));
+vi.mock("@dnd-kit/core", () => ({
+  DndContext: (props: {
+    children: React.ReactNode;
+    sensors?: unknown;
+    onDragEnd?: (event: unknown) => void;
+  }) => {
+    dndMocks.contextProps = props;
+    return props.children;
+  },
+  PointerSensor: dndMocks.PointerSensor,
+  KeyboardSensor: dndMocks.KeyboardSensor,
+  closestCenter: "closestCenter",
+  useSensor: dndMocks.useSensor,
+  useSensors: dndMocks.useSensors,
+  useDraggable: dndMocks.useDraggable,
+  useDroppable: dndMocks.useDroppable,
+}));
+vi.mock("@dnd-kit/sortable", () => ({
+  sortableKeyboardCoordinates: "sortableKeyboardCoordinates",
+}));
 
+beforeEach(() => {
+  dndMocks.contextProps = null;
+  dndMocks.useSensor.mockClear();
+  dndMocks.useSensors.mockClear();
+  dndMocks.useDraggable.mockClear();
+  dndMocks.useDroppable.mockClear();
+});
 afterEach(() => cleanup());
 
 interface DemoRow extends Row {
@@ -133,5 +186,39 @@ describe("BoardView", () => {
     });
     expect(screen.getByTestId("custom").textContent).toBe("NOTES");
     expect(screen.getByRole("button", { name: "act Notes" })).toBeTruthy();
+  });
+
+  test("wires dnd-kit pointer and keyboard sensors when card moves are enabled", () => {
+    const onCardMove = vi.fn();
+    renderBoard({
+      dragEnabled: true,
+      onCardMove,
+    });
+
+    expect(dndMocks.contextProps).not.toBeNull();
+    expect(dndMocks.useSensor).toHaveBeenCalledWith(
+      dndMocks.PointerSensor,
+      { activationConstraint: { distance: 6 } },
+    );
+    expect(dndMocks.useSensor).toHaveBeenCalledWith(
+      dndMocks.KeyboardSensor,
+      { coordinateGetter: "sortableKeyboardCoordinates" },
+    );
+
+    act(() => {
+      dndMocks.contextProps?.onDragEnd?.({
+        active: {
+          data: {
+            current: {
+              row: { id: "1", label: "Notes" },
+              laneId: "data",
+            },
+          },
+        },
+        over: { id: "next" },
+      });
+    });
+
+    expect(onCardMove).toHaveBeenCalledWith({ id: "1", label: "Notes" }, "next");
   });
 });

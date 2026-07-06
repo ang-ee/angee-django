@@ -52,6 +52,8 @@ export const RESOURCE_VIEW_KIND_CAPABILITIES: Record<
   ResourceViewKindCapabilities
 > = {
   list: { grouping: true, pagination: true, columns: true, filter: true },
+  // Board grouping may be backed by a declared laneSource; the kind still uses
+  // the group control, but lanes can come from the relation owner instead of rows.
   board: { grouping: true, pagination: true, columns: false, filter: true },
   // A windowed occurrence fetch takes only window args in v1: no pagination, no
   // group-by, no columns chooser, and no filter/search (a filterable calendar is

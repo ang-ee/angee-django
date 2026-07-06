@@ -98,6 +98,8 @@ export const enUiMessages: Record<string, string> = {
   "list.sortAscending": "Sort {label} (currently ascending)",
   "list.sortDescending": "Sort {label} (currently descending)",
   "list.sortNotSorted": "Sort {label} (not sorted)",
+  "board.moveFailed": "Could not move card",
+  "board.moveFailedDescription": "The card move failed.",
   "calendar.loadError": "The calendar failed to load. Reload the page to try again.",
   "calendar.loadFailed": "The calendar data failed to load.",
   "calendar.weekOf": "Week of {date}",

@@ -41,6 +41,11 @@ export interface RelationOptionsResult {
   options: readonly RelationOption[];
 }
 
+export interface RelationLanesResult {
+  list: RelationOptionsList;
+  lanes: readonly RelationOption[];
+}
+
 export function useRelationOptions(
   relation: RelationFieldInfo | null,
   config: RelationOptionsConfig = {},
@@ -89,6 +94,20 @@ export function useRelationOptions(
     [labelField, rows, sort],
   );
   return React.useMemo(() => ({ list, options }), [list, options]);
+}
+
+export function useRelationLanes(
+  relation: RelationFieldInfo | null,
+  config: Omit<RelationOptionsConfig, "sort"> = {},
+): RelationLanesResult {
+  const { list, options } = useRelationOptions(relation, {
+    ...config,
+    sort: false,
+  });
+  return React.useMemo(
+    () => ({ list, lanes: options }),
+    [list, options],
+  );
 }
 
 /**
