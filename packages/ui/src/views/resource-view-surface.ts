@@ -1280,7 +1280,11 @@ function requestedFieldPaths<TRow extends Row>(
       : null;
   const paths = new Set<string>(["id"]);
   for (const column of columns) {
-    if (knownNames === null || knownNames.has(column.field)) {
+    // A relation column reads through a dotted label path (`product.display_name`);
+    // gate on the path head (`product`) so the resource's own relation field keeps
+    // it while still dropping a render-only column whose head is no real field.
+    const head = column.field.split(".", 1)[0] ?? column.field;
+    if (knownNames === null || knownNames.has(head)) {
       paths.add(column.field);
     }
   }

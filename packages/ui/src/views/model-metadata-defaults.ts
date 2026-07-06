@@ -182,19 +182,31 @@ const ENUM_OPTION_WIDGETS = new Set([
 export function columnsWithMetadataDefaults<TRow extends object>(
   columns: readonly ColumnDescriptor<TRow>[],
   metadata: ModelMetadata | null,
+  schemaMetadata?: SchemaFieldMetadata,
 ): readonly ColumnDescriptor<TRow>[] {
   return columns.map((column) => {
     const field = metadata?.fields[column.field];
     const options = enumOptions(field);
+    // A bare relation column (`<Column field="product">`) reads a GraphQL object
+    // type, which cannot be selected as a leaf. Resolve it to its related type's
+    // label path (`product.<recordRepresentation>`, e.g. `product.display_name`) —
+    // the same relation read-expansion the form (`addFieldSelection`) and F6 child
+    // lines (`lineReadSelectionPaths`) already do — so the read selects
+    // `{ product { display_name } }` and the cell renders the label. The relation's
+    // own name still keys grouping via the dotted-path group option.
+    const relationLabelField = relationColumnLabelField(column, field, schemaMetadata);
     return {
       ...column,
+      ...(relationLabelField ? { field: relationLabelField } : {}),
       header: fieldLabel(column.field, field, column.header),
       // A bare column inherits the backend's explicit widget (e.g. `"money"` over a
       // Decimal), so its cell renders through the registered widget instead of the raw
       // scalar. Only the explicit backend widget is inherited — kind/scalar-derived
       // defaults stay out, because list cells render enums, relations, and plain
-      // scalars natively (unlike a form, which needs an edit widget per field).
-      ...(column.widget === undefined && field?.widget
+      // scalars natively (unlike a form, which needs an edit widget per field). A
+      // relation resolved to its label path renders the scalar label as text, so it
+      // drops the relation's `many2one` edit widget.
+      ...(!relationLabelField && column.widget === undefined && field?.widget
         ? { widget: field.widget }
         : {}),
       ...(column.currencyField === undefined && field?.currencyField
@@ -207,6 +219,31 @@ export function columnsWithMetadataDefaults<TRow extends object>(
         : {}),
     };
   });
+}
+
+/**
+ * The label path a bare relation column reads for display: `<field>.<labelField>`,
+ * where `labelField` is the related type's `recordRepresentation` (a readable
+ * scalar) or `id` when the type declares none. Returns `null` for a non-relation
+ * column, an already-dotted path, or a column that pins its own `render`/`widget`
+ * (those own their value shape). Only a relation projected as a nested object
+ * (`relationObject`) can be sub-selected — a FK projected as a public-id scalar
+ * (`location: ID`) stays a leaf, so it is left untouched. Without this a
+ * nested-relation column selects the whole object as a leaf — a GraphQL error.
+ */
+function relationColumnLabelField<TRow extends object>(
+  column: ColumnDescriptor<TRow>,
+  field: ModelFieldMetadata | undefined,
+  schemaMetadata: SchemaFieldMetadata | undefined,
+): string | null {
+  if (column.render || column.widget !== undefined || column.field.includes(".")) {
+    return null;
+  }
+  if (field?.kind !== "relation" || !field.relationTarget || field.relationObject !== true) {
+    return null;
+  }
+  const rep = schemaMetadata?.types[field.relationTarget]?.recordRepresentation;
+  return `${column.field}.${rep && rep !== "id" ? rep : "id"}`;
 }
 
 /** Apply metadata-derived field labels and enum options without overriding props. */

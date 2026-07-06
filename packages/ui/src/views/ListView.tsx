@@ -7,6 +7,7 @@ import {
 import {
   isClientRowModel,
   useModelMetadata,
+  useSchemaFieldMetadata,
 } from "@angee/metadata";
 import type {
   Row,
@@ -170,9 +171,10 @@ function ListViewBody<TRow extends Row = Row>({
     [calendarAvailable],
   );
   const modelMetadata = useModelMetadata(resource);
+  const schemaMetadata = useSchemaFieldMetadata();
   const resolvedColumns = React.useMemo(
-    () => columnsWithMetadataDefaults(columns, modelMetadata),
-    [columns, modelMetadata],
+    () => columnsWithMetadataDefaults(columns, modelMetadata, schemaMetadata),
+    [columns, modelMetadata, schemaMetadata],
   );
   const mergedFilter = React.useMemo(
     () => Filter.combineOptional(baseFilter, resourceView.state.filter),

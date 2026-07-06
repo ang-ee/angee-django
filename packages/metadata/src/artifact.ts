@@ -35,6 +35,10 @@ export interface ModelFieldMetadata {
   /** For a money field: the path to the FK that owns the row's currency. */
   currencyField?: string;
   relationTarget?: string;
+  /** A `relation` field projected as a nested selectable object (vs a public-id
+   * scalar). Only these read a `{ id <label> }` sub-selection; an id projection
+   * stays a leaf. */
+  relationObject?: boolean;
   relationFilter?: ModelRelationFilterMetadata;
   filterable?: boolean;
   sortable?: boolean;
@@ -205,6 +209,7 @@ export interface DataResourceFieldMetadata {
   requiredOnCreate: boolean;
   relationModelLabel?: string | null;
   relationLabelAxis?: string | null;
+  relationObject?: boolean | null;
 }
 
 export interface DataResourceRelationAxisMetadata {
@@ -409,6 +414,7 @@ function baseModelFieldMetadata(
     ...(field.currencyField ? { currencyField: field.currencyField } : {}),
     ...(field.kind === "enum" ? { values: field.values ?? [] } : {}),
     ...(relationTarget ? { relationTarget } : {}),
+    ...(field.relationObject ? { relationObject: true } : {}),
     readable: field.readable,
     filterable: field.filterable,
     sortable: field.sortable,
