@@ -1,7 +1,7 @@
 // Authorization schema for the IAM addon.
 // @rebac_package: iam
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 8
+// @rebac_schema_revision: 9
 
 definition auth/user {
     // Const-backed universal admin: every user points at angee/role:admin
@@ -30,9 +30,9 @@ definition angee/role {
 // access-control scope (not an external counterparty; that is parties/organization).
 // `parent` is the company hierarchy (field-backed by the parent FK): a member of
 // an ancestor company reaches every descendant scope through `parent->member`.
-// `direct_member` is the per-company membership grant; `accountant`/`salesperson`
-// are the first company-scoped role bindings — a role always *of a company*, never
-// global — that a scoped resource reads as `company->accountant`, `company->member`
+// `direct_member` is the per-company membership grant; `accountant`/`salesperson`/
+// `purchaser` are the company-scoped role bindings — a role always *of a company*,
+// never global — that a scoped resource reads as `company->accountant`, `company->member`
 // (see CompanyScopedMixin). Platform admins (angee/role:admin) reach every company
 // through the const-backed `admin` relation (synthetic — no per-row tuple), the
 // same universal-admin path the other definitions use.
@@ -41,12 +41,13 @@ definition iam/company {
     relation direct_member: auth/user | auth/group#member
     relation accountant:    auth/user
     relation salesperson:   auth/user
+    relation purchaser:     auth/user
     relation admin:         angee/role // rebac:const=admin
 
     permission member = direct_member + parent->member
 
     permission create = admin->member
-    permission read   = member + accountant + salesperson + admin->member
+    permission read   = member + accountant + salesperson + purchaser + admin->member
     // Company config (name, hierarchy) is an admin surface: re-parenting a
     // company rewires every descendant scope, so plain membership must not
     // grant it.

@@ -168,18 +168,25 @@ def test_company_clean_rejects_ancestor_cycle() -> None:
 
 
 @pytest.mark.django_db
-def test_company_scoped_role_grant_is_isolated_to_that_company(django_user_model: Any) -> None:
-    """A company-scoped role binding grants reach only within that company."""
+@pytest.mark.parametrize("role", ["accountant", "salesperson", "purchaser"])
+def test_company_scoped_role_grant_is_isolated_to_that_company(
+    django_user_model: Any, role: str
+) -> None:
+    """Each company-scoped read binding reaches only within its company.
+
+    Pins every relation on ``iam/company.read`` — ``accountant``/``salesperson``/
+    ``purchaser`` — so a functional grant on one company never leaks to another.
+    """
 
     call_command("rebac", "sync", verbosity=0)
     company_model = apps.get_model("iam", "Company")
-    accountant = django_user_model.objects.create_user(username="accountant-a")
+    member = django_user_model.objects.create_user(username=f"{role}-a")
     with system_context(reason="test company role isolation"):
         company_a = company_model.objects.create(name="Company A")
         company_b = company_model.objects.create(name="Company B")
-    _grant(company_a, "accountant", accountant)
+    _grant(company_a, role, member)
 
-    with actor_context(accountant):
+    with actor_context(member):
         assert company_model.objects.filter(pk=company_a.pk).exists()
         assert not company_model.objects.filter(pk=company_b.pk).exists()
 
