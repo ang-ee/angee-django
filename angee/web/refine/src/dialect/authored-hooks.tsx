@@ -3,6 +3,7 @@ import {
   useCustom,
   useCustomMutation,
   useInvalidate,
+  useSubscription,
   type BaseRecord,
   type HttpError,
 } from "@refinedev/core";
@@ -79,6 +80,20 @@ export function useAuthoredQuery<TDocument extends AuthoredDocument>(
       enabled,
       meta: authoredQueryMeta(models),
     },
+  });
+  // An authored read is invisible to the live bridge unless it declares interest:
+  // a page built only from authored queries would open no socket and never go
+  // live. Register each read model so its changes root is subscribed through the
+  // shared fan-out (one upstream per root, joined with any resource hook watching
+  // the same model) and torn down with the hook. refine's useSubscription owns
+  // the lifecycle and no-ops when the app has no live provider; the provider's
+  // consumer invalidates this read on each change, so onLiveEvent stays a noop.
+  useSubscription({
+    channel: authoredLiveChannel(models),
+    params: { models },
+    types: ["*"],
+    enabled: enabled && models.length > 0,
+    onLiveEvent: NO_LIVE_EVENT,
   });
   // Stable identity: callers (e.g. the operator token-refresh interval) put
   // `refetch` in effect deps, and react-query churns `run.query`'s identity on
@@ -264,3 +279,11 @@ function isGraphQLResponseEnvelope(
 }
 
 const EMPTY_INVALIDATIONS: readonly InvalidateParams[] = [];
+
+/** Live invalidation rides the provider's change consumer, so the hook's own event handler is a noop. */
+const NO_LIVE_EVENT = (): void => undefined;
+
+/** A stable per-model-set channel for the authored read's live subscription. */
+function authoredLiveChannel(models: readonly string[]): string {
+  return `angee/authored/${models.join(",")}`;
+}
