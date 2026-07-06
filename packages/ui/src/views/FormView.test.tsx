@@ -1990,6 +1990,49 @@ describe("FormView", () => {
     expect(sdkMocks.mutate).not.toHaveBeenCalled();
   });
 
+  // The slice-7 acceptance step: a new line whose numeric cells are left blank
+  // must save — the untouched Int/Decimal cells are omitted from the line input
+  // (Strawberry rejects "" for those scalars) so the model defaults apply.
+  test("a new line with untouched numeric cells creates without those keys", async () => {
+    sdkMocks.record = saleDocRecord();
+    sdkMocks.save.mockImplementation(
+      async (variables: { lines?: readonly Record<string, unknown>[] }) => ({
+        id: "doc-1",
+        title: "Order",
+        lines: (variables.lines ?? []).map((line, index) => ({
+          ...line,
+          id: line.id ?? `new-${index}`,
+        })),
+      }),
+    );
+    renderSaleDoc();
+
+    await screen.findByDisplayValue("Keep");
+    fireEvent.click(screen.getByRole("button", { name: "Add line" }));
+    // Fill only the label; quantity (Int) and price (Decimal) stay untouched.
+    const newLabelCell = screen
+      .getAllByLabelText("Text")
+      .find((cell) => (cell as HTMLInputElement).value === "");
+    expect(newLabelCell).toBeTruthy();
+    fireEvent.change(newLabelCell as HTMLInputElement, {
+      target: { value: "New" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(sdkMocks.save).toHaveBeenCalledTimes(1));
+    const variables = sdkMocks.save.mock.calls[0]?.[0] as {
+      lines: readonly Record<string, unknown>[];
+    };
+    // The created row carries only the typed cell and its position — the blank
+    // numeric cells are absent so the save document coerces and defaults apply.
+    expect(variables.lines[2]).toEqual({ label: "New", position: 2 });
+    expect(variables.lines[2]).not.toHaveProperty("quantity");
+    expect(variables.lines[2]).not.toHaveProperty("price");
+    expect(variables.lines[0]).toEqual(
+      expect.objectContaining({ id: "ln-1", quantity: 1 }),
+    );
+  });
+
   test("keeps a parent-only edit on the stock update path", async () => {
     sdkMocks.record = saleDocRecord();
     renderSaleDoc();
@@ -2118,6 +2161,7 @@ const SALES_METADATA: SchemaFieldMetadata = {
           fields: [
             saleLineField("label", "String", { requiredOnCreate: true }),
             saleLineField("quantity", "Int"),
+            saleLineField("price", "Decimal"),
             saleLineField("position", "Int"),
           ],
         },

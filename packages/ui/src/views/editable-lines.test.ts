@@ -55,6 +55,10 @@ describe("lineDiffConfig", () => {
     expect(config.fieldNames).toEqual(["product", "label", "quantity", "position"]);
     expect([...config.relationFields]).toEqual(["product"]);
   });
+
+  test("classifies String scalars as the columns whose blank is a real value", () => {
+    expect([...config.stringFields]).toEqual(["label"]);
+  });
 });
 
 describe("lineToInput", () => {
@@ -74,6 +78,37 @@ describe("lineToInput", () => {
     const input = lineToInput(row, 1, config);
     expect(input.id).toBeUndefined();
     expect(input).toEqual({ product: "p3", label: "New", quantity: 1, position: 1 });
+  });
+
+  // FormView's blank-value rule at the line boundary: an untouched Decimal cell
+  // ("") must not ride the create input — Strawberry Decimal coercion rejects ""
+  // and the whole save dies — so the key is omitted and the input/model defaults
+  // apply. A blank String cell IS the value "" and ships verbatim.
+  test("omits blank non-String cells on a new row so input and model defaults apply", () => {
+    const input = lineToInput(emptyLineRow(2, config), 2, config);
+    expect(input).toEqual({ label: "", position: 2 });
+    expect(input).not.toHaveProperty("quantity");
+    expect(input).not.toHaveProperty("product");
+  });
+
+  test("ships null for a cleared non-String cell on an existing row", () => {
+    const row: Row = { id: "ln_a", product: "", label: "A", quantity: "" };
+    expect(lineToInput(row, 0, config)).toEqual({
+      id: "ln_a",
+      product: null,
+      label: "A",
+      quantity: null,
+      position: 0,
+    });
+  });
+
+  // A number/date widget clears to null (not ""): the same blank rule applies,
+  // matching mutationData's `value == null` create omission.
+  test("a widget-cleared (null) numeric cell is omitted on a new row", () => {
+    const row: Row = { product: "p3", label: "C", quantity: null };
+    const input = lineToInput(row, 0, config);
+    expect(input).toEqual({ product: "p3", label: "C", position: 0 });
+    expect(input).not.toHaveProperty("quantity");
   });
 });
 
@@ -125,6 +160,18 @@ describe("diffLines", () => {
       { id: "ln_b", product: "p2", label: "B", quantity: 2, position: 0 },
       { id: "ln_a", product: "p1", label: "A", quantity: 1, position: 1 },
     ]);
+  });
+
+  test("a new row with untouched numeric cells creates without those keys", () => {
+    const current: Row[] = [
+      ...baseline,
+      { product: "p3", label: "C", quantity: "", position: 2 },
+    ];
+    const diff = diffLines(baseline, current, config);
+
+    expect(diff.created).toEqual([{ product: "p3", label: "C", position: 2 }]);
+    expect(diff.created[0]).not.toHaveProperty("quantity");
+    expect(diff.payload[2]).not.toHaveProperty("quantity");
   });
 });
 
@@ -222,6 +269,16 @@ describe("lineToInput — M2M + enum normalization", () => {
       labels: "",
       position: 1,
     });
+  });
+
+  // A blank enum ("" would fail the String input's choice validation) and a
+  // blank plain-list cell are withheld on a new row; the empty M2M id array is
+  // a real value ("no relations") and ships.
+  test("a new row omits its blank enum and plain-list cells", () => {
+    const input = lineToInput(emptyLineRow(1, richConfig), 1, richConfig);
+    expect(input).toEqual({ taxes: [], position: 1 });
+    expect(input).not.toHaveProperty("kind");
+    expect(input).not.toHaveProperty("labels");
   });
 });
 

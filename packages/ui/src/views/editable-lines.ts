@@ -10,6 +10,9 @@ import { relationValueId } from "../widgets/types";
  * value normalizes on write — a to-one relation to its record id, an M2M relation
  * to an array of ids, an enum to its lowercase model value (the enum reads as the
  * UPPERCASE wire member but its String line input takes the lowercase value).
+ * `stringFields` marks the String-scalar columns — the one wire shape where a
+ * blank `""` is a real value; every other blank cell is withheld from the line
+ * input (see `lineToInput`).
  */
 export interface LineDiffConfig {
   idField: string;
@@ -18,6 +21,7 @@ export interface LineDiffConfig {
   relationFields: ReadonlySet<string>;
   multiRelationFields: ReadonlySet<string>;
   enumFields: ReadonlySet<string>;
+  stringFields: ReadonlySet<string>;
 }
 
 /** Derive the diff config from a resource's editable-lines metadata. */
@@ -39,6 +43,13 @@ export function lineDiffConfig(lines: DataResourceLinesMetadata): LineDiffConfig
     ),
     enumFields: new Set(
       fields.filter((field) => field.kind === "enum").map((field) => field.name),
+    ),
+    // A scalar-less computed column stays verbatim — conservative: it has no
+    // widget, so a blank can only be a loaded value the row round-trips.
+    stringFields: new Set(
+      fields
+        .filter((field) => field.kind === "scalar" && (field.scalar ?? "String") === "String")
+        .map((field) => field.name),
     ),
   };
 }
@@ -70,7 +81,24 @@ export function lineToInput(
   if (id) input.id = id;
   for (const name of config.fieldNames) {
     if (config.positionField && name === config.positionField) continue;
-    input[name] = lineFieldValue(row, name, config);
+    const value = lineFieldValue(row, name, config);
+    // FormView's blank-value rule (`mutationData`) at the line diff boundary: a
+    // blank cell — `""` from the composer's empty seed or a cleared text-ish
+    // input, `null` from a cleared number/date widget or an unpicked relation —
+    // is never sent verbatim unless the column is a String scalar, where `""`
+    // is a real wire value. Sending `""` to any other input fails GraphQL
+    // coercion (Decimal/Int/Date) or decodes as an invalid id/choice. On a new
+    // row the key is omitted so the input and model defaults apply (mirroring
+    // mutationData's create rule); on an existing row it ships `null` — the
+    // honest "cleared" value — so a nullable column clears and a non-null one
+    // raises a proper field error. `undefined` (a column the read never
+    // carried) stays verbatim: JSON serialization drops the key, and mapping it
+    // to `null` would clear a column the user never touched.
+    if ((value === "" || value === null) && !config.stringFields.has(name)) {
+      if (id) input[name] = null;
+      continue;
+    }
+    input[name] = value;
   }
   if (config.positionField) input[config.positionField] = index;
   return input;
