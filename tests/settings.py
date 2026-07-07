@@ -23,10 +23,21 @@ INSTALLED_APPS = [
     "angee.mcp",
     "angee.storage",
     "angee.parties",
+    "angee.money",
+    "angee.scheduling",
+    "angee.sequence",
+    "angee.tags",
+    "angee.uom",
     "angee.messaging",
     "angee.social",
     "angee.platform",
     "angee.platform_integrate_vcs",
+    "tests.linesdemo",
+    "tests.chatterdemo",
+    "tests.scopedemo",
+    "tests.extcontrib.apps.ExtContribConfig",
+    "tests.mtidemo",
+    "tests.hierdemo",
 ]
 DATABASES = {
     "default": {

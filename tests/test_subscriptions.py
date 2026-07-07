@@ -286,6 +286,46 @@ def test_subscription_resolver_denies_without_current_actor(
     assert calls == []
 
 
+def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:
+    """``_publish`` drops a row whose ``broadcasts_changes()`` returns False.
+
+    The emission mirror of a read scope that hides rows: a model isolates some rows
+    (record chatter) to a record-scoped surface, so their changes never reach the
+    generic ``changes`` subscription — checked while the instance is live, so it
+    holds for deletes too. A row without the hook broadcasts by default.
+    """
+
+    sent: list[dict[str, object]] = []
+    monkeypatch.setattr(publishing, "_broadcast", lambda model, payload: sent.append(payload))
+    # Run the on_commit callback inline so the (non-)broadcast is observable now.
+    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback: callback())
+    stub_payload = SimpleNamespace(as_message=lambda: {"stub": True})
+    monkeypatch.setattr(
+        publishing.ChangePayload,
+        "from_instance",
+        classmethod(lambda cls, instance, **kwargs: stub_payload),
+    )
+
+    class Row:
+        """Minimal instance carrying only the broadcast opt-out decision."""
+
+        def __init__(self, broadcasts: bool) -> None:
+            self._broadcasts = broadcasts
+
+        def broadcasts_changes(self) -> bool:
+            return self._broadcasts
+
+    publishing._publish(Row(broadcasts=False), action="update", update_fields=None)
+    assert sent == []
+
+    publishing._publish(Row(broadcasts=True), action="delete", update_fields=None)
+    assert sent == [{"stub": True}]
+
+    # A plain model with no hook keeps the default broadcast behavior.
+    publishing._publish(object(), action="create", update_fields=None)
+    assert sent == [{"stub": True}, {"stub": True}]
+
+
 @override_settings(
     DEBUG=False,
     ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER=False,

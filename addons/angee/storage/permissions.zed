@@ -1,7 +1,7 @@
 // Authorization schema for the storage addon.
 // @rebac_package: storage
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 2
+// @rebac_schema_revision: 3
 
 // Roles-as-namespace anchor, mirroring operator/role: `includes` lets one
 // storage role imply another, and resources gate on `effective_member` so
@@ -23,15 +23,18 @@ definition storage/role {
 // backend — drive rows are the unit of user-facing access control.
 definition storage/backend {
     relation admin:   angee/role // rebac:const=admin
-    relation manager: storage/role:storage_admin#effective_member
+    // Const-backed role reach (the framework canon): `manager->effective_member`
+    // resolves any effective member of storage_admin tuple-free — no per-object
+    // `manager` tuple, so it also satisfies the id-less create check the same way
+    // `admin->member` does. (The reserved pinned-id userset shape
+    // `storage/role:storage_admin#effective_member` would need a per-row tuple
+    // nobody writes and the local evaluator never synthesizes — see F-g.)
+    relation manager: storage/role // rebac:const=storage_admin
 
-    // Unsatisfiable for a table-backed insert (the sqid only exists
-    // post-insert); console creates run elevated behind the storage-admin
-    // permission gate in schema.py. Kept to document the intent.
-    permission create = admin->member + manager
-    permission read   = admin->member + manager
-    permission write  = admin->member + manager
-    permission delete = admin->member + manager
+    permission create = admin->member + manager->effective_member
+    permission read   = admin->member + manager->effective_member
+    permission write  = admin->member + manager->effective_member
+    permission delete = admin->member + manager->effective_member
 }
 
 // `owner` is the creating user (field-backed by created_by). `editor` and
@@ -42,17 +45,19 @@ definition storage/drive {
     relation editor:  auth/user | auth/group#member | auth/user:*
     relation viewer:  auth/user | auth/group#member | auth/user:*
     relation admin:   angee/role // rebac:const=admin
-    relation manager: storage/role:storage_admin#effective_member
+    // Const-backed, mirroring storage/backend: `manager->effective_member`
+    // reaches every effective member of storage_admin tuple-free.
+    relation manager: storage/role // rebac:const=storage_admin
 
-    // Drive creation is admin-only (mirrors storage/backend): the const-arrow
-    // `admin->member` resolves against the empty resource id the create signal
-    // supplies on insert — no per-object tuple — so a platform admin or storage
-    // admin is granted and every other actor is denied. The id-less insert gates
-    // here directly, with no GraphQL permission gate and no elevated write.
-    permission create = admin->member + manager
-    permission read   = owner + editor + viewer + admin->member + manager
-    permission write  = owner + editor + admin->member + manager
-    permission delete = owner + admin->member + manager
+    // Drive creation is admin-only (mirrors storage/backend): both const arms
+    // resolve against the empty resource id the create signal supplies on insert
+    // — no per-object tuple — so a platform admin or storage admin is granted and
+    // every other actor is denied. The id-less insert gates here directly, with
+    // no GraphQL permission gate and no elevated write.
+    permission create = admin->member + manager->effective_member
+    permission read   = owner + editor + viewer + admin->member + manager->effective_member
+    permission write  = owner + editor + admin->member + manager->effective_member
+    permission delete = owner + admin->member + manager->effective_member
 }
 
 // Real folders reach the actor through their drive (and parent); per-user

@@ -141,6 +141,13 @@ TanStack apply the URL-owned filter object to in-memory rows.
   missing-record handling, success hooks).
   Don't hand-author these as `graphql()` documents or page-local
   `ctx.record.id → mutate → refresh` callbacks.
+- **`ActionResult` verbs settle through `useActionResultRun`** (`@angee/ui`) —
+  it fires the verb, toasts the outcome (danger with the in-band non-field
+  reasons; success with the message), and deep-links to a created record via
+  `linkTo` + the routed resource page when the outcome carries an `id`. It
+  serves authored verbs (extract the outcome field inside `fire`) and derived
+  verbs (`useActionMutation`'s mutate resolves the full `ActionOutcome`)
+  alike; never hand-roll the fire → toast → navigate ceremony in a chrome.
 - React does not own business logic, permissions, models, or persistence.
 - **React state has one owner.** Keep canonical facts in the smallest owner:
   route/search facts in TanStack Router/nuqs, server facts in refine data hooks
@@ -248,6 +255,13 @@ TanStack apply the URL-owned filter object to in-memory rows.
   action controls or hooks, but they do not own table mechanics, duplicate route
   params, cache state, bespoke loading/error surfaces, or local copies of shared
   resource-view state.
+- **Two-collection settings pages are a sanctioned family, not a double toolbar.**
+  A `SettingsShell` may stack several `SettingsSection`s, each wrapping its own
+  `ResourceList`/`DrawerResourceList` (integrate Templates: template sources +
+  templates; storage settings: drives + backends). Each section is a *distinct*
+  collection and owns its own data-controls/toolbar row — that is correct
+  uniformity, not the double-toolbar defect. The defect is *two* chrome rows
+  stacked over the *same* collection; one collection gets exactly one controls row.
 - **The data view's client/server boundary is a row-model choice, not a fork.**
   Where list operations (filter/sort/paginate/group) resolve follows the
   established data-grid pattern — AG Grid's named *row models*, TanStack's
@@ -265,8 +279,10 @@ TanStack apply the URL-owned filter object to in-memory rows.
   hand-roll a new client filter/sort/paginate engine — compose TanStack Table's
   row models through `useClientResourceViewSurface` over the fetched set for a
   `rowModel:"client"` resource; `RowsListView` remains the
-  renderer for the genuinely non-resource in-memory case (the operator-daemon
-  quarantine).
+  renderer for the genuinely non-resource in-memory case — the operator-daemon
+  quarantine, and an explorer-scoped collection that is not a Hasura resource
+  (storage's folder-scoped `FileBrowserContent`, which lists a drive's
+  content-addressed files rather than a model resource).
 - A recipe's icon-button size keys are `iconSm`/`iconMd`/`iconLg` (one spelling
   across recipes). A default `size` is a visual contract — do not flip it without a
   requester (differing defaults like `Switch`/`ToggleGroup` `sm` vs `Toggle` `md`
@@ -316,7 +332,12 @@ TanStack apply the URL-owned filter object to in-memory rows.
 - Toolbar/action dialogs with ordinary field inputs compose `MutationDialog` from
   `@angee/ui`. It owns the `DialogForm` scaffold, value reset, required gating,
   submit busy/error state, and FieldDescriptor widget rendering; addons provide
-  fields, mutation variables, and domain result handling.
+  fields, mutation variables, and domain result handling. A **record action that
+  collects typed args** — relation pickers, a relation list prefilled from the
+  invoking selection/record, scalars — instead declares `args` + `submit` on its
+  `<Action>`; `RecordActionBar` opens `ActionFormDialog`, which fires the authored
+  mutation and binds the in-band `ActionOutcome.validationErrors` to the args,
+  staying open until `ok`. Declare args, don't hand-roll the dialog.
 - A labeled control is a page element or a `FieldRoot`. Reach for `FieldRoot` /
   `FieldLabel` (the stacked label-over-control owner, e.g. for an ephemeral
   composer not bound to a model record) before hand-rolling a `<label>` wrapper.
@@ -358,9 +379,24 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   the backend "Regenerate the SDL after `angee build`" pitfall) → `pnpm codegen` → then the
   filtered typecheck/test.
 - **Relation widgets follow the SDL field kind** — a nested object FK
-  (`kind:"relation"`) auto-wires to a creatable `many2one` picker; a bare `ID`
-  scalar (`kind:"scalar"`) is not auto-detected and must use `widget:"select"`
-  (`many2one` selects `<field>.id`, invalid on a scalar id).
+  (`kind:"relation"`) auto-wires to a creatable `many2one` picker; a to-one FK a
+  node projects as a bare `ID` scalar auto-wires too, but as a scalar-id relation:
+  the backend classifies it `kind:"scalar"`, `scalar:"ID"`, `widget:"select"` while
+  keeping its `relationModelLabel`, so `relationFieldInfo` still resolves the picker
+  and label (see the ID-scalar to-one pitfall below). A bare `ID` scalar with **no**
+  relation target (a record's own id) stays a leaf with no widget.
+- **An `ID`-scalar to-one is selected as a leaf, not an object.** A
+  `CompanyScopedMixin.company` (and any FK a node projects as a bare `ID!` rather
+  than a nested object) is a scalar on the wire: FormView must select it *without* a
+  sub-selection, or the detail query fails to build with `Field 'company' must not
+  have a selection since type 'ID!' has no subfields`. The owner is the
+  field-classification/metadata layer (`angee.graphql.data.field_classification` +
+  the metadata projection): a to-one relation the node projects as a bare scalar id
+  classifies as a `scalar` LEAF (so the form/detail query selects it as a scalar)
+  carrying a `select` scalar-id widget and the relation target, and the frontend
+  `relationFieldInfo` (`@angee/ui`'s `model-metadata-defaults`) resolves that
+  scalar-id shape to the same relation picker/label as an object relation. The
+  scalar-id form reads/writes the flat id; the object form reads the nested `{id}`.
 - **An enum field reads UPPERCASE but writes lowercase** — a `StateField`/
   `ImplClassField` column serializes the enum *member name* on read (`GITHUB`,
   `ACTIVE`) yet its create/patch input is a `String` keyed by the lowercase
@@ -373,6 +409,22 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   authored option via `canonicalOptionValue` (a case-insensitive unique match), so
   lower-cased `options` round-trip correctly without `createOnly`. For status verbs
   prefer an `<Action set={{status:"disabled"}}>` over an editable status field.
+  The F6 lines composer applies the same rule per cell but at the *diff boundary*,
+  not with `createOnly`: `editable-lines.ts`'s `lineFieldValue` lower-cases an enum
+  line cell's write (the child line input types the choices column as `String`), so
+  even an untouched UPPERCASE read serializes as the lowercase model value. The
+  same boundary owns the blank-cell rule (`lineToInput`): a blank non-String cell
+  (`""` seed or widget-cleared `null`) is omitted on a created row so input/model
+  defaults apply — Strawberry rejects `""` for Decimal/Int/Date — and ships `null`
+  on an existing row (the honest "cleared" value); only a String-scalar cell's
+  `""` is a real wire value and ships verbatim.
+- **An M2M line cell is a relation multi-select, not a `tagInput`** — a `kind:"list"`
+  child field that carries a relation target (an M2M, e.g. a line's `taxes`) renders
+  through `relationListFieldInfo` + `RelationMultiFieldWidget` (fetched options,
+  chips) and reads/writes an array of public sqids; the diff serializes it via
+  `relationIdList`. A `kind:"list"` field with *no* relation target (a plain string
+  array) stays the `tagInput`. This mirrors the to-one `relationFieldInfo` +
+  `RelationFieldWidget` cell — compose those, never hand-roll a lines cell.
 - **A server-backed typeahead is not a `RelationField`** — `RelationField`/
   `RelationPicker` own their query state and filter a fixed `options` list
   client-side, so they cannot drive a remote search. For one (e.g. a host repo
@@ -424,6 +476,27 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 - **A new web package needs `pnpm install` + a Vite restart** (Vite snapshots
   workspace packages at start) plus registration in the host `main.tsx` addons and
   `package.json`.
+- **A sibling repo's `pnpm install` can stomp this repo's per-package
+  `node_modules`.** A downstream checkout that links `@angee/*` by path (e.g. a
+  downstream project checkout) rewrites `angee/web/<pkg>/node_modules` symlinks into *its own*
+  `.pnpm` store; TS then loads two `vite`/`vitest` type identities and every
+  package typecheck fails with `Excessive stack depth comparing types
+  'UserConfig' and 'UserConfig'` in `vitest.shared.ts` — nothing in this repo's
+  diff is at fault. Fix the environment, not the types: remove the stomped
+  per-package `node_modules` dirs and re-run `pnpm install` here (a plain or
+  `--force` install alone does not re-link them). Diagnose with
+  `readlink angee/web/app/node_modules/vitest` — it must not point into the
+  sibling repo.
+- **Prebundled `@angee/*` source edits are cache-busted by source signature, not
+  a manual wipe.** A project that consumes `@angee/*` as installed packages
+  (`prebundleAngeePackages: true`) prebundles them; Vite's optimizer hash comes
+  from the lockfile + manifests, never package source, so a workspace edit to a
+  linked `@angee/*` package (same version) would otherwise be served stale (the
+  slice-1 live-verify trap). `defineAngeeWebViteConfig` (`@angee/app/vite`) hashes
+  each package's on-disk source mtimes and sets `optimizeDeps.force` when it
+  changed vs a persisted marker — a source edit re-optimizes, an unchanged tree
+  stays cached. The in-repo example excludes `@angee/*` (linked source, HMR) so
+  this never applies there.
 - **Start new addon web packages from `templates/addons/web`.** The Copier template
   owns the current ceremony: `defineBaseAddon`, `resourcePageRoutes`, lazy routed
   pages, `createNamespaceT`, `expectValidBaseAddon`, and package/test wiring.
@@ -458,12 +531,14 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   `changes(Model, field="<model>Changed")` in its `schema.py` refreshes on local
   writes only (no live push, no error). Add the subscription to opt a model into
   live updates; omit it and you simply get local-write invalidation.
-- **`createDefaults` needs a submittable field, never `readOnly`.** `ResourceList`'s
-  `createDefaults` seeds the create form, but `FormView.mutationData` drops every
-  `readOnly` field from the payload — so a `readOnly` field pinned by `createDefaults`
-  is silently *not* sent, failing a required create input. Use `createOnly` (editable
-  on create carrying the seed, locked on edit) or a plain field; reserve `readOnly`
-  for values the create input does not accept.
+- **A `createDefaults` seed submits on create even when `readOnly`.** `ResourceList`'s
+  `createDefaults` seeds the create form, and `FormView.mutationData` submits a create
+  seed even for a `readOnly`/`createOnly` field — whether the seed is the field's own
+  `defaultValue` or a page-level `createDefaults` entry — so a seeded read-only field is
+  no longer silently dropped from the create payload. Prefer `createOnly` (editable on
+  create carrying the seed, locked on edit) when the value should stay visible-but-fixed;
+  `readOnly` + `createDefaults` also works for a value the form never renders editable.
+  (`editOnly` fields stay excluded on create.)
 - **A storybook `meta.args`/`argTypes` is dead only if no story consumes it.** A
   bare `export const X: Story = {}` (or a `render: (args) => …`) AUTO-RENDERS from
   `meta.args` — those args are live; only a file whose every story is a zero-param

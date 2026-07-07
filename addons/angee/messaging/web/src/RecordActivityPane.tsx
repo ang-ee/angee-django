@@ -1,6 +1,6 @@
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import { Button, DatePopover, EmptyState, FieldRoot, Glyph, LoadingPanel, Textarea, cn, dateFromValue, errorMessage, formatDate, formatDateStorage, textRoleVariants } from "@angee/ui";
+import { Button, DatePopover, EmptyState, FieldRoot, Glyph, LoadingPanel, Textarea, cn, dateFromValue, errorMessage, formatDate, formatDateStorage, textRoleVariants, useActionForm } from "@angee/ui";
 import type { ChatterViewContext } from "@angee/ui/runtime";
 
 import { useMessagingT } from "./i18n";
@@ -15,6 +15,13 @@ import {
 
 export interface RecordActivityPaneProps {
   context: ChatterViewContext;
+}
+
+/** The activity-scheduler form's collected values, fired through `useActionForm`. */
+interface ScheduleValues {
+  summary: string;
+  note: string;
+  dueDate: string;
 }
 
 /** The Activity chatter tab: the record's scheduled activities plus a scheduler.
@@ -33,7 +40,7 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
     enabled,
     models: READ_MODELS,
   });
-  const [scheduleActivity, scheduleState] = useAuthoredMutation(ScheduleRecordActivityDocument, {
+  const [scheduleActivity] = useAuthoredMutation(ScheduleRecordActivityDocument, {
     invalidateModels: READ_MODELS,
     errorFrom: (data) => data?.schedule_record_activity,
   });
@@ -50,13 +57,38 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
   const [dueDate, setDueDate] = React.useState("");
   const [dateOpen, setDateOpen] = React.useState(false);
   const [feedbackById, setFeedbackById] = React.useState<Record<string, string>>({});
+  // `error` carries the imperative complete/cancel failures; the schedule form's
+  // own lifecycle (busy + failure + reset) is owned by `useActionForm` below.
   const [error, setError] = React.useState<string | null>(null);
+  // The schedule form composes the shared action-form lifecycle: fire the authored
+  // mutation, surface a thrown failure as `formError`, and clear the fields on
+  // success. No toast — the scheduled activity appears in the list via invalidation.
+  const scheduleForm = useActionForm<ScheduleValues>({
+    submit: async ({ summary, note, dueDate }) => {
+      await scheduleActivity({
+        modelLabel: modelLabel ?? "",
+        recordId: recordId ?? "",
+        summary,
+        note,
+        dueDate: dueDate || null,
+        activityType: "todo",
+      });
+      return { ok: true, message: "" };
+    },
+    onSuccess: () => {
+      setSummary("");
+      setNote("");
+      setDueDate("");
+    },
+    toastSuccess: false,
+    genericErrorMessage: t("activity.errorSchedule"),
+  });
   const threadPayload = threadQuery.data?.record_thread;
   const activities = React.useMemo(
     () => [...(threadPayload?.activities ?? [])].sort(compareActivities),
     [threadPayload?.activities],
   );
-  const busy = scheduleState.fetching || completeState.fetching || cancelState.fetching;
+  const busy = scheduleForm.submitting || completeState.fetching || cancelState.fetching;
 
   if (!enabled) {
     return (
@@ -86,22 +118,7 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
     event.preventDefault();
     const nextSummary = summary.trim();
     if (!nextSummary || !modelLabel || !recordId) return;
-    setError(null);
-    try {
-      await scheduleActivity({
-        modelLabel,
-        recordId,
-        summary: nextSummary,
-        note,
-        dueDate: dueDate || null,
-        activityType: "todo",
-      });
-      setSummary("");
-      setNote("");
-      setDueDate("");
-    } catch (cause) {
-      setError(errorMessage(cause, t("activity.errorSchedule")));
-    }
+    await scheduleForm.run({ summary: nextSummary, note, dueDate });
   }
 
   async function handleComplete(activityId: string): Promise<void> {
@@ -209,14 +226,16 @@ export function RecordActivityPane({ context }: RecordActivityPaneProps): React.
             type="submit"
             variant="primary"
             size="sm"
-            disabled={scheduleState.fetching || summary.trim() === ""}
+            disabled={scheduleForm.submitting || summary.trim() === ""}
           >
             <Glyph name="calendar" />
             {t("activity.schedule")}
           </Button>
         </div>
-        {error ? (
-          <p className={cn(textRoleVariants({ role: "caption" }), "text-danger-text")}>{error}</p>
+        {(scheduleForm.formError ?? error) ? (
+          <p className={cn(textRoleVariants({ role: "caption" }), "text-danger-text")}>
+            {scheduleForm.formError ?? error}
+          </p>
         ) : null}
       </form>
     </div>

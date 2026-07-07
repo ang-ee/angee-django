@@ -1,0 +1,6 @@
+[addon]
+name = "angee.scheduling"
+description = "RFC-5545 recurrence (RRULE) parsing and bounded, timezone-aware occurrence expansion."
+keywords = ["scheduling", "recurrence", "rrule", "rfc-5545", "calendar"]
+category = "Foundation"
+depends_on = ["angee.graphql"]

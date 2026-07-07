@@ -30,10 +30,11 @@ Dependency changes must update this file in the same change.
 | strawberry-django | GraphQL types, resolvers, dataloaders, schema printing | Merge addon schema parts into named schemas, `changes` subscription shortcuts, emit SDL, serve per name |
 | django-choices-field | Enum-backed model fields | `StateField` semantic wrapper |
 | strawberry-django-aggregates | Aggregation and group-by resolvers | Addon-level `AggregateBuilder` wiring (per addon, e.g. notes) |
-| strawberry-django-hasura | Expose Django models in the Hasura GraphQL dialect (`_bool_exp`/`_aggregate`/`x_by_pk`/`_set`), plus computed (non-model) sources via a `run_query` `RowSource` | Composes it as the model emitter (`hasura_model_resource`) and the pydantic computed-source emitter (`hasura_pydantic_resource`) |
+| strawberry-django-hasura >= 0.5 | Expose Django models in the Hasura GraphQL dialect (`_bool_exp`/`_aggregate`/`x_by_pk`/`_set`, exact `Decimal` filters, nested to-many `NestedInsert`), plus computed (non-model) sources via a `run_query` `RowSource` | Composes it as the model emitter (`hasura_model_resource`, incl. `lines=` editable-child nested inserts) and the pydantic computed-source emitter (`hasura_pydantic_resource`) |
 | pydantic | Typed model validation/parsing | Row-shape SSOT for computed (non-model) Hasura resources — the node + filter scalars derive from the pydantic model (`hasura_pydantic_resource`) |
 | Procrastinate | Postgres task queue — deferred/periodic jobs, retries, priorities, queueing locks | hosted by the `angee.tasks` framework app; dispatch confined to engine seams |
 | croniter | Cron-expression schedule parsing | schedule triggers compute `next_fire_at` (workflows) |
+| python-dateutil | RFC-5545 recurrence-rule parsing and expansion (`rrulestr`) | `angee.scheduling` owns recurrence — `RecurrenceField` (a validated RRULE column) + `Recurrence.occurrences(window)`, bounded, timezone-aware expansion in the project `TIME_ZONE` |
 | channels + uvicorn | ASGI/WebSocket transport and serving | GraphQL subscription mounting; uvicorn serves the composed ASGI app and sends the lifespan that enters the MCP mount's `http_app` lifespan (`angee.asgi`) |
 | django-zed-rebac | REBAC engine, actor scoping, relationship storage, local and SpiceDB-compatible backends | Per-addon schema merge, reserved roles, actor resolver |
 | django-axes | Login failure throttling at Django's `authenticate()`/auth-backend signal seam | IAM composes the app, standalone backend, and middleware so password GraphQL login stays a thin `authenticate(request=...)` caller |
@@ -59,6 +60,12 @@ Dependency changes must update this file in the same change.
 | markdown-it-py | CommonMark tokenizer with source line spans (block token `.map`) | `knowledge` slices doc sections by heading without re-rendering — the `MarkdownPage` structure methods (`parse_outline`/`outline`, `section_range`, `spliced_section`, `spliced_unique`) shared by the `outline` read field and the section-anchored patch write |
 | uv | Python dependency resolution and workspaces | Workspace layout |
 
+Money representation: money stays native — a `DecimalField` (default
+`max_digits=18, decimal_places=6`) paired with `MoneyField`'s `currency_field`
+path declaration, never a money library. `angee.money` owns the currency
+catalogue, dated exchange rates, and conversion; the reference currency is a
+required project setting.
+
 ## Frontend
 
 | Pick | Owns | Angee adds |
@@ -67,7 +74,7 @@ Dependency changes must update this file in the same change.
 | TypeScript >= 6 | Language and type system | Branded boundary types |
 | @refinedev/core | Resource registry, standard data hooks, react-query cache/invalidation, auth/i18n/live provider contracts | Angee projects emitted `angee.resources` metadata to refine resources and mounts one composed `<Refine>` root with named providers and the TanStack Router binding |
 | @refinedev/hasura + graphql-request 5 + graphql 16 | Hasura GraphQL data provider (`_bool_exp`, `order_by`, `_aggregate`, `_by_pk`, `_set`) and authored `meta.gqlQuery` / `meta.gqlMutation` execution | Angee pins `idType: "String"` and `namingConvention: "hasura-default"`, uses refine-compatible GraphQL document ASTs, and applies session/CSRF or service auth at the transport boundary |
-| graphql-ws 5 | GraphQL WebSocket lifecycle for the Hasura live provider and daemon-owned operator transport | Endpoint derivation, connection params, retry policy, and the operator daemon subscription + raw log socket transport — request/response now rides a Refine `operator` data provider, leaving only the intrinsically streaming surfaces on this ws transport |
+| graphql-ws 6 + 5 | GraphQL WebSocket lifecycle for the Hasura live provider and daemon-owned operator transport | Endpoint derivation, connection params, retry policy, and the operator daemon subscription + raw log socket transport — request/response now rides a Refine `operator` data provider, leaving only the intrinsically streaming surfaces on this ws transport. Two majors resolve honestly: the Hasura live provider pulls `graphql-ws@6` (the peer of `@refinedev/hasura@7`), while the operator daemon transport pins `^5.16.2` |
 | GraphQL Code Generator (client-preset) + @graphql-typed-document-node/core | Generated TypeScript schema and operation types from emitted Django SDL and daemon-owned SDL, as `TypedDocumentNode` documents | `@angee/app` owns the one `angee-web-codegen` CLI: it reads `runtime/web/manifest.json`, generates each Django schema from `runtime/schemas/<schema>.graphql` (routing documents by filename: `documents.ts`/`documents.console.ts` → console, `documents.public.ts` → public), derives authored action/aggregate/group/delete-preview/revision documents, and emits the composed `runtime/web/app.ts`. The operator daemon joins the same pass as an external `[web].codegen` manifest entry — its committed SDL read straight from the operator package, scanning only `documents.daemon.ts`, with a bare `typescript` types module the console re-exports; authored operations carry no hand-written result/variables types |
 | TanStack Router | Type-safe routing and search params | `defineAddon` to `createApp` route composition and flat URL search codec |
 | @refinedev/react-hook-form + react-hook-form + @hookform/resolvers + zod | Form state, submit lifecycle, and validation binding | `FormView` keeps Angee's declarative rendered DSL while delegating state/validation to refine/react-hook-form |
@@ -138,8 +145,19 @@ domain presentation over refine state. The active frontend owners are
 | react-json-view-lite | JSON value tree rendering | JSON widget read tree and debug JSON panels |
 | @xyflow/react | node/edge graph canvas | `@angee/ui` `GraphView` canvas |
 | @dagrejs/dagre | directed-graph layout | `@angee/ui` `GraphView` node placement |
+| FullCalendar (Standard: `@fullcalendar/react` + `@fullcalendar/daygrid` + `@fullcalendar/timegrid` + `@fullcalendar/interaction`) | Month/week/day event calendar, drag/resize/select | `@angee/ui` `CalendarView` renders server-expanded occurrences and wires interactions to auto-CRUD; code-split behind a lazy import and themed through the token set |
 | @dnd-kit | Drag and drop | Board and rail interactions |
 | Native browser drag/drop | File drag enter/leave/drop events and `DataTransfer.files` | `@angee/ui` upload drop target primitive |
+
+Event-calendar library choice: FullCalendar Standard (all four packages MIT)
+owns the month/week/day event surface. `@schedule-x` was evaluated and rejected
+because its drag-and-drop and drag-to-create plugins — exactly the two
+interactions a framework calendar primitive requires — are premium/paid, a
+license cliff on code every consumer inherits (revisit only if it relicenses).
+FullCalendar's commercial `@fullcalendar/resource-*` views stay out, a separate
+license decision at the W4/W5 resource calendars. Distinct from `react-day-picker`
+above, which owns the date-picker day grid behind date widgets, not an event
+calendar.
 
 ## Tooling
 

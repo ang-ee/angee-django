@@ -13,13 +13,16 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.management import call_command
-from django.db import connection
+from django.db import connection, models
 from django.db.models.signals import post_save
 from rebac import actor_context, app_settings, system_context
 from rebac.actors import to_subject_ref
 from rebac.errors import PermissionDenied
 from rebac.roles import grant
 
+from angee.base.mixins import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet
+from angee.graphql.data.field_classification import is_archive_field
+from angee.graphql.data.resource_fields import model_resource_fields
 from angee.storage import exceptions
 from angee.storage.models import FileManager, UploadState
 from angee.storage.signals import file_finalized
@@ -72,6 +75,61 @@ def test_backend_has_no_dormant_default_flag() -> None:
     """The configured default drive owns defaults; backend rows do not."""
 
     assert "is_default" not in {field.name for field in Backend._meta.fields}
+
+
+def test_storage_masters_fold_their_archive_flag_onto_the_mixin() -> None:
+    """Backend and Drive carry ``is_archived`` from ArchiveMixin, not hand-rolled.
+
+    The column, its index, and the ``.archived()`` / ``.unarchived()`` read
+    vocabulary all come from the shared owner — folding the two hand-rolled
+    booleans onto one primitive.
+    """
+
+    # The mixin is the one owner of the archive column and its index.
+    mixin_field = ArchiveMixin._meta.get_field(ARCHIVE_FLAG_FIELD)
+    assert isinstance(mixin_field, models.BooleanField)
+    assert mixin_field.db_index is True
+
+    for model in (Backend, Drive):
+        assert issubclass(model, ArchiveMixin)
+        field = model._meta.get_field(ARCHIVE_FLAG_FIELD)
+        assert isinstance(field, models.BooleanField)
+        assert field.db_index is True
+
+    assert issubclass(Drive.objects.all().__class__, ArchiveQuerySet)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_archive_queryset_scopes_partition_storage_rows(drive: Any) -> None:
+    """``.archived()`` / ``.unarchived()`` split rows on the mixin flag."""
+
+    with system_context(reason="test archive scopes"):
+        archived = Drive._base_manager.create(
+            backend=drive.backend,
+            slug="retired",
+            name="Retired",
+            is_archived=True,
+        )
+        unarchived_ids = set(Drive.objects.all().unarchived().values_list("pk", flat=True))
+        archived_ids = set(Drive.objects.all().archived().values_list("pk", flat=True))
+
+    assert drive.pk in unarchived_ids and archived.pk not in unarchived_ids
+    assert archived.pk in archived_ids and drive.pk not in archived_ids
+
+
+def test_archive_column_is_marked_archivable_in_resource_metadata() -> None:
+    """The field classifier marks the mixin column archivable by its one name.
+
+    A same-typed boolean under a different contract (storage's soft-delete
+    ``is_trashed``) is deliberately left plain — the vocabulary is name-based.
+    """
+
+    fields = {field.name: field for field in model_resource_fields(Drive, ("is_archived", "slug"))}
+    assert fields["is_archived"].archivable is True
+    assert fields["slug"].archivable is False
+
+    assert is_archive_field(Drive._meta.get_field("is_archived")) is True
+    assert is_archive_field(File._meta.get_field("is_trashed")) is False
 
 
 def test_detect_mime_falls_back_to_the_filename_when_libmagic_is_unsure() -> None:
@@ -463,14 +521,16 @@ def test_create_drive_gates_on_the_rebac_create_rule(drive: Any) -> None:
     """The ``storage/drive`` ``create`` rule authorizes admins and denies others.
 
     The de-elevated drive Hasura insert carries no GraphQL gate and no elevated write:
-    the id-less insert is authorized by ``create = admin->member + manager``
-    (mirroring ``storage/backend``) against the request actor. Tested at the model
-    owner so the create rule is isolated from FK-read redaction: the const-arrow
-    ``admin->member`` resolves without a per-object tuple, so a platform admin
-    creates while an unprivileged actor is denied with ``PermissionDenied`` and an
-    anonymous request resolves no actor. (The ``manager`` arm needs a per-object
-    ``manager`` tuple an id-less insert cannot carry — the same admin-only outcome
-    ``storage/backend`` already relies on.)
+    the id-less insert is authorized by
+    ``create = admin->member + manager->effective_member`` (mirroring
+    ``storage/backend``) against the request actor. Tested at the model owner so the
+    create rule is isolated from FK-read redaction: both arms are const-backed and
+    resolve without a per-object tuple, so a platform admin creates while an
+    unprivileged actor — a member of neither ``angee/role:admin`` nor
+    ``storage/role:storage_admin`` — is denied with ``PermissionDenied`` and an
+    anonymous request resolves no actor. (The storage_admin reach of the ``manager``
+    arm is probed tuple-free in
+    ``test_storage_admin_role_reaches_manager_gated_rows_tuple_free``.)
     """
 
     admin = get_user_model().objects.create_superuser(
@@ -491,6 +551,43 @@ def test_create_drive_gates_on_the_rebac_create_rule(drive: Any) -> None:
         Drive._default_manager.create(backend=drive.backend, slug="anon-drive", name="Anon Drive")
     with system_context(reason="test drive create denial"):
         assert not Drive._base_manager.filter(slug__in=["bob-drive", "anon-drive"]).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_storage_admin_role_reaches_manager_gated_rows_tuple_free(drive: Any) -> None:
+    """A ``storage_admin`` grant opens the const-backed ``manager`` arm tuple-free.
+
+    ``storage/backend`` and ``storage/drive`` reach every effective member of
+    ``storage/role:storage_admin`` through ``manager->effective_member`` (the F-g
+    const canon). The role grant is the *only* row written — no per-object
+    ``manager`` tuple — so the reach flips on membership alone, and a
+    non-owning/non-admin actor is denied until granted.
+    """
+
+    from rebac.models import active_relationship_model
+
+    manager_user = get_user_model().objects.create_user(
+        username="storage-manager", email="storage-manager@example.com"
+    )
+
+    with actor_context(manager_user):
+        assert not drive.backend.has_access("read")
+        assert not drive.has_access("read")
+
+    grant(actor=manager_user, role="storage/role:storage_admin")
+
+    with actor_context(manager_user):
+        for action in ("read", "write", "delete"):
+            assert drive.backend.has_access(action), f"backend {action}"
+            assert drive.has_access(action), f"drive {action}"
+
+    # Tuple-free: the grant wrote a role membership, never a backend/drive tuple.
+    with system_context(reason="probe manager reach is tuple-free"):
+        assert not (
+            active_relationship_model()
+            .objects.filter(resource_type__in=["storage/backend", "storage/drive"])
+            .exists()
+        )
 
 
 @pytest.mark.django_db(transaction=True)

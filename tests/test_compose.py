@@ -6,7 +6,7 @@ import sys
 from dataclasses import is_dataclass
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from django.apps import AppConfig, apps
@@ -16,8 +16,10 @@ from django.db import models
 
 import angee.compose as compose_package
 import angee.compose.runtime as runtime_module
+from angee.base.fields import StateField
 from angee.base.mixins import HistoryMixin, RevisionMixin
-from angee.base.models import AngeeModel
+from angee.base.models import AngeeManager, AngeeModel, role_anchor
+from angee.base.transitions import StateTransitions, save_state, transition
 from angee.compose.appgraph import AppGraph
 from angee.compose.apps import ComposeConfig
 from angee.compose.management.commands.angee import Command
@@ -118,6 +120,33 @@ def runtime_for(tmp_path: Path) -> Runtime:
     return Runtime(
         (apps.get_app_config("resources"),),
         runtime_dir=tmp_path / "runtime",
+    )
+
+
+def _source_model(module: ModuleType, name: str, label: str, **body: Any) -> type[AngeeModel]:
+    """Register an abstract source model in ``module`` and return it."""
+
+    model = type(
+        name,
+        (AngeeModel,),
+        {
+            "__module__": module.__name__,
+            "Meta": type("Meta", (), {"abstract": True, "app_label": label}),
+            **body,
+        },
+    )
+    setattr(module, name, model)
+    return cast(type[AngeeModel], model)
+
+
+def _addon_config(label: str, models_module: ModuleType) -> SimpleNamespace:
+    """Return an app-config stand-in contributing ``models_module``."""
+
+    return SimpleNamespace(
+        label=label,
+        name=f"tests.{label}",
+        module=ModuleType(f"tests.{label}"),
+        models_module=models_module,
     )
 
 
@@ -284,6 +313,61 @@ def test_runtime_renders_iam_user_sources(tmp_path: Path) -> None:
     assert "swappable = 'AUTH_USER_MODEL'" not in user_source
 
 
+def test_role_anchor_factory_pins_the_hand_rolled_anchor_shape() -> None:
+    """``role_anchor`` emits the abstract, table-less anchor the adopters declared by hand."""
+
+    anchor = role_anchor("storage/role")
+
+    assert anchor.__name__ == "StorageRole"
+    assert anchor.__module__ == __name__
+    assert anchor._meta.abstract is True
+    assert anchor._meta.managed is False
+    assert anchor._meta.rebac_resource_type == "storage/role"
+    assert anchor.__dict__["runtime"] is True
+    assert issubclass(anchor, AngeeModel)
+    # The name derives from the resource type; a symbol that differs is overridable.
+    assert role_anchor("operator/role").__name__ == "OperatorRole"
+    assert role_anchor("tags/role", name="Role").__name__ == "Role"
+
+
+def test_role_anchor_emits_the_hand_rolled_runtime_source(tmp_path: Path) -> None:
+    """A ``role_anchor`` model composes into the same concrete runtime an addon shipped by hand."""
+
+    module = ModuleType("tests.role_anchor_probe")
+    probe = role_anchor("tests/role", name="ProbeRole", module=module.__name__)
+    setattr(module, "ProbeRole", probe)
+
+    source = Runtime((), runtime_dir=tmp_path / "runtime")._models_source("tests", (probe,))
+
+    assert "from tests.role_anchor_probe import ProbeRole as AbstractProbeRole" in source
+    assert "_ProbeRoleMeta = getattr(AbstractProbeRole, 'Meta', object)" in source
+    assert "class ProbeRole(AbstractProbeRole):" in source
+    assert "class Meta(_ProbeRoleMeta):" in source
+    assert "abstract = False" in source
+    assert "rebac_resource_type = 'tests/role'" in source
+
+
+def test_role_anchor_wrapper_miscapture_fails_at_emission(tmp_path: Path) -> None:
+    """A ``role_anchor`` whose captured module does not bind it fails loudly (F-b).
+
+    A wrapper indirecting ``role_anchor`` makes ``sys._getframe`` capture the
+    wrapper's module, not the adopter's, so the emitted import would resolve to
+    nothing. The composer proves the captured module actually binds the anchor and
+    refuses to emit a broken import.
+    """
+
+    module = ModuleType("tests.role_anchor_wrapper_probe")
+    sys.modules[module.__name__] = module
+    try:
+        # The anchor claims this module, but the symbol is never bound there (the
+        # mis-capture a wrapper would produce).
+        stray = role_anchor("tests/role", name="StrayRole", module=module.__name__)
+        with pytest.raises(ImproperlyConfigured, match="does not bind"):
+            Runtime((), runtime_dir=tmp_path / "runtime")._models_source("tests", (stray,))
+    finally:
+        del sys.modules[module.__name__]
+
+
 def test_django_reads_inherited_meta_defaults() -> None:
     """Runtime ``Meta(SourceMeta)`` carries Django options without re-emission."""
 
@@ -439,6 +523,203 @@ def test_runtime_renders_materialized_child_extension_across_apps(tmp_path: Path
     assert "from tests.child.models import RuntimeChild as AbstractRuntimeChild" in child_source
     assert "class RuntimeChild(TargetRuntime, AbstractRuntimeChild):" in child_source
     assert "class TargetRuntime(AbstractTargetRuntime):" in sources[Path("target/models.py")]
+
+
+class _ProbeParentManager(AngeeManager):  # type: ignore[misc]
+    """Distinct manager standing in for a materialized parent's default manager."""
+
+
+class _ProbeMixinManager(AngeeManager):  # type: ignore[misc]
+    """Distinct manager a source-side mixin would inject under a child-first flip."""
+
+
+def test_runtime_child_override_flips_base_order(tmp_path: Path) -> None:
+    """``child_overrides_parent`` emits the abstract source before the concrete parent (F-e)."""
+
+    class OverrideChild(AngeeModel):
+        runtime = True
+        extends = "tests.DecoratedRevisionThing"
+        child_overrides_parent = True
+        child_value = models.CharField(max_length=16)
+
+        class Meta:
+            abstract = True
+            app_label = "tests"
+
+    app_config = SimpleNamespace(
+        label="tests",
+        name=__name__,
+        module=sys.modules[__name__],
+        models_module=SimpleNamespace(
+            DecoratedRevisionThing=DecoratedRevisionThing,
+            OverrideChild=OverrideChild,
+        ),
+    )
+
+    source = Runtime((app_config,), runtime_dir=tmp_path / "runtime").render_sources()[Path("tests/models.py")]
+
+    assert "class DecoratedRevisionThing(AbstractDecoratedRevisionThing):" in source
+    # Flipped: source before parent (vs the parent-first status quo).
+    assert "class OverrideChild(AbstractOverrideChild, DecoratedRevisionThing):" in source
+    assert "class OverrideChild(DecoratedRevisionThing, AbstractOverrideChild):" not in source
+    # The flip re-declares the parent-shared framework fields as None so the child
+    # inherits the parent's columns instead of duplicating them.
+    child_body = source[source.index("class OverrideChild") :]
+    assert "created_at = None" in child_body
+    assert "updated_at = None" in child_body
+
+
+def test_runtime_parties_children_stay_parent_first(tmp_path: Path) -> None:
+    """Guard (a): parties children never opt in — parent-first order is byte-preserved (F-e)."""
+
+    runtime = Runtime(
+        tuple(apps.get_app_config(label) for label in ("resources", "iam", "integrate", "storage", "parties")),
+        runtime_dir=tmp_path / "runtime",
+    )
+
+    source = runtime.render_sources()[Path("parties/models.py")]
+
+    assert "class Person(Party, AbstractPerson):" in source
+    assert "class Organization(Party, AbstractOrganization):" in source
+    assert "AbstractPerson, Party" not in source
+    assert "AbstractOrganization, Party" not in source
+    # No opt-in → no field-removal shadows anywhere in the parties runtime.
+    assert "created_at = None" not in source
+
+
+def test_runtime_child_override_rejects_silent_manager_swap(tmp_path: Path) -> None:
+    """Guard (b): a flip that would swap the default manager without an explicit one fails (F-e)."""
+
+    class ParentWithManager(AngeeModel):
+        runtime = True
+        objects = _ProbeParentManager()
+
+        class Meta:
+            abstract = True
+            app_label = "tests"
+
+    class ManagerMixin(AngeeModel):
+        objects = _ProbeMixinManager()
+
+        class Meta:
+            abstract = True
+            app_label = "tests"
+
+    class SwapChild(ManagerMixin):
+        runtime = True
+        extends = "tests.ParentWithManager"
+        child_overrides_parent = True
+
+        class Meta:
+            abstract = True
+            app_label = "tests"
+
+    app_config = SimpleNamespace(
+        label="tests",
+        name=__name__,
+        module=sys.modules[__name__],
+        models_module=SimpleNamespace(ParentWithManager=ParentWithManager, SwapChild=SwapChild),
+    )
+
+    with pytest.raises(ImproperlyConfigured, match="default manager"):
+        Runtime((app_config,), runtime_dir=tmp_path / "runtime")
+
+
+def test_runtime_child_override_allows_explicit_own_manager(tmp_path: Path) -> None:
+    """Guard (b): the same swap is allowed when the child declares its own manager (F-e)."""
+
+    class ParentWithManager(AngeeModel):
+        runtime = True
+        objects = _ProbeParentManager()
+
+        class Meta:
+            abstract = True
+            app_label = "tests"
+
+    class ExplicitChild(AngeeModel):
+        runtime = True
+        extends = "tests.ParentWithManager"
+        child_overrides_parent = True
+        objects = _ProbeMixinManager()
+
+        class Meta:
+            abstract = True
+            app_label = "tests"
+
+    app_config = SimpleNamespace(
+        label="tests",
+        name=__name__,
+        module=sys.modules[__name__],
+        models_module=SimpleNamespace(ParentWithManager=ParentWithManager, ExplicitChild=ExplicitChild),
+    )
+
+    source = Runtime((app_config,), runtime_dir=tmp_path / "runtime").render_sources()[Path("tests/models.py")]
+
+    assert "class ExplicitChild(AbstractExplicitChild, ParentWithManager):" in source
+
+
+def test_runtime_child_override_rejects_non_child_optin(tmp_path: Path) -> None:
+    """The opt-in is meaningless off a materialized child, so the composer rejects it (F-e)."""
+
+    class NotAChild(AngeeModel):
+        runtime = True
+        child_overrides_parent = True
+
+        class Meta:
+            abstract = True
+            app_label = "tests"
+
+    app_config = SimpleNamespace(
+        label="tests",
+        name=__name__,
+        module=sys.modules[__name__],
+        models_module=SimpleNamespace(NotAChild=NotAChild),
+    )
+
+    with pytest.raises(ImproperlyConfigured, match="not a materialized child"):
+        Runtime((app_config,), runtime_dir=tmp_path / "runtime")
+
+
+def test_runtime_child_override_revalidates_transition_metadata(tmp_path: Path) -> None:
+    """Guard (c): an opting child's inherited transition metadata re-validates on the flip (F-e)."""
+
+    class Lifecycle(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        DONE = "done", "Done"
+
+    class TxnParent(AngeeModel):
+        runtime = True
+        status = StateField(choices_enum=Lifecycle, default=Lifecycle.DRAFT)
+        status_transitions = StateTransitions(status, {Lifecycle.DRAFT: [Lifecycle.DONE]})
+
+        class Meta:
+            abstract = True
+            app_label = "tests"
+
+        @transition(status, source=Lifecycle.DRAFT, target=Lifecycle.DONE, on_success=save_state)
+        def finish(self) -> None:
+            """Move draft to done."""
+
+    class TxnChild(AngeeModel):
+        runtime = True
+        extends = "tests.TxnParent"
+        child_overrides_parent = True
+        note = models.CharField(max_length=16, blank=True, default="")
+
+        class Meta:
+            abstract = True
+            app_label = "tests"
+
+    app_config = SimpleNamespace(
+        label="tests",
+        name=__name__,
+        module=sys.modules[__name__],
+        models_module=SimpleNamespace(TxnParent=TxnParent, TxnChild=TxnChild),
+    )
+
+    source = Runtime((app_config,), runtime_dir=tmp_path / "runtime").render_sources()[Path("tests/models.py")]
+
+    assert "class TxnChild(AbstractTxnChild, TxnParent):" in source
 
 
 def test_runtime_rejects_mismatched_runtime_model_label(tmp_path: Path) -> None:
@@ -614,15 +895,310 @@ def test_runtime_extensions_follow_app_graph_order_not_class_names(tmp_path: Pat
 
     source = runtime.render_sources()[Path("target/models.py")]
 
-    assert (
-        "from tests.preferred.models import ZPreferredExtension as TargetRuntimeExtension1"
-        in source
-    )
-    assert (
-        "from tests.fallback.models import AFallbackExtension as TargetRuntimeExtension2"
-        in source
-    )
+    assert "from tests.preferred.models import ZPreferredExtension as TargetRuntimeExtension1" in source
+    assert "from tests.fallback.models import AFallbackExtension as TargetRuntimeExtension2" in source
     assert "class TargetRuntime(TargetRuntimeExtension1, TargetRuntimeExtension2, AbstractTargetRuntime):" in source
+
+
+def test_runtime_aggregates_multiple_after_resource_load_donors(tmp_path: Path) -> None:
+    """Two donors defining ``after_resource_load`` emit one ordered aggregator (F-c)."""
+
+    def first_hook(cls: type, instances: object, **kwargs: object) -> None:
+        del cls, instances, kwargs
+
+    def second_hook(cls: type, instances: object, **kwargs: object) -> None:
+        del cls, instances, kwargs
+
+    target_module = ModuleType("tests.mergetarget.models")
+    first_module = ModuleType("tests.mergefirst.models")
+    second_module = ModuleType("tests.mergesecond.models")
+    _source_model(target_module, "MergeTarget", "mergetarget", runtime=True)
+    _source_model(
+        first_module,
+        "MergeFirstDonor",
+        "mergefirst",
+        extends="mergetarget.MergeTarget",
+        after_resource_load=classmethod(first_hook),
+    )
+    _source_model(
+        second_module,
+        "MergeSecondDonor",
+        "mergesecond",
+        extends="mergetarget.MergeTarget",
+        after_resource_load=classmethod(second_hook),
+    )
+
+    runtime = Runtime(
+        (
+            _addon_config("mergetarget", target_module),
+            _addon_config("mergefirst", first_module),
+            _addon_config("mergesecond", second_module),
+        ),
+        runtime_dir=tmp_path / "runtime",
+    )
+
+    source = runtime.render_sources()[Path("mergetarget/models.py")]
+
+    assert "def after_resource_load(cls, *args: object, **kwargs: object) -> None:" in source
+    first_call = "MergeTargetExtension1.after_resource_load.__func__(cls, *args, **kwargs)"
+    second_call = "MergeTargetExtension2.after_resource_load.__func__(cls, *args, **kwargs)"
+    # Dependency order = the emitted base-tuple order (app-graph order): donor one before donor two.
+    assert source.index(first_call) < source.index(second_call)
+    # The aggregator is a class member, not free-floating.
+    assert source.index("class MergeTarget(") < source.index(first_call) < source.index("class Meta(")
+
+
+def test_runtime_keeps_single_after_resource_load_donor_native(tmp_path: Path) -> None:
+    """A single donor resolves natively — the composer emits no aggregator (F-c)."""
+
+    def only_hook(cls: type, instances: object, **kwargs: object) -> None:
+        del cls, instances, kwargs
+
+    target_module = ModuleType("tests.solotarget.models")
+    donor_module = ModuleType("tests.solodonor.models")
+    _source_model(target_module, "SoloTarget", "solotarget", runtime=True)
+    _source_model(
+        donor_module,
+        "SoloDonor",
+        "solodonor",
+        extends="solotarget.SoloTarget",
+        after_resource_load=classmethod(only_hook),
+    )
+
+    runtime = Runtime(
+        (
+            _addon_config("solotarget", target_module),
+            _addon_config("solodonor", donor_module),
+        ),
+        runtime_dir=tmp_path / "runtime",
+    )
+
+    source = runtime.render_sources()[Path("solotarget/models.py")]
+
+    assert "def after_resource_load(" not in source
+
+
+def test_runtime_dedupes_shared_after_resource_load_function(tmp_path: Path) -> None:
+    """Two donors inheriting the same hook function collapse to native dispatch (F-c)."""
+
+    def shared_hook(cls: type, instances: object, **kwargs: object) -> None:
+        del cls, instances, kwargs
+
+    target_module = ModuleType("tests.dedupetarget.models")
+    first_module = ModuleType("tests.dedupefirst.models")
+    second_module = ModuleType("tests.dedupesecond.models")
+    _source_model(target_module, "DedupeTarget", "dedupetarget", runtime=True)
+    _source_model(
+        first_module,
+        "DedupeFirstDonor",
+        "dedupefirst",
+        extends="dedupetarget.DedupeTarget",
+        after_resource_load=classmethod(shared_hook),
+    )
+    _source_model(
+        second_module,
+        "DedupeSecondDonor",
+        "dedupesecond",
+        extends="dedupetarget.DedupeTarget",
+        after_resource_load=classmethod(shared_hook),
+    )
+
+    runtime = Runtime(
+        (
+            _addon_config("dedupetarget", target_module),
+            _addon_config("dedupefirst", first_module),
+            _addon_config("dedupesecond", second_module),
+        ),
+        runtime_dir=tmp_path / "runtime",
+    )
+
+    source = runtime.render_sources()[Path("dedupetarget/models.py")]
+
+    assert "def after_resource_load(" not in source
+
+
+def test_runtime_child_aggregates_parent_donor_and_own_hook(tmp_path: Path) -> None:
+    """A materialized child runs a parent-side donor's hook and its own, each once.
+
+    Regression for the parent modelled via its abstract source alone: the parent's
+    hook lives on a donor, not the source, so the old code dropped it and the child
+    silently lost either the parent's hook or its own. The fix models the parent as
+    its whole composed set (the concrete parent's own ``after_resource_load``), so
+    the child aggregates the parent (which runs the donor's hook) then its own.
+    """
+
+    def parent_donor_hook(cls: type, instances: object, **kwargs: object) -> None:
+        del cls, instances, kwargs
+
+    def child_hook(cls: type, instances: object, **kwargs: object) -> None:
+        del cls, instances, kwargs
+
+    parent_module = ModuleType("tests.hookparent.models")
+    donor_module = ModuleType("tests.hookdonor.models")
+    child_module = ModuleType("tests.hookchild.models")
+    _source_model(parent_module, "HookParent", "hookparent", runtime=True)
+    _source_model(
+        donor_module,
+        "HookParentDonor",
+        "hookdonor",
+        extends="hookparent.HookParent",
+        after_resource_load=classmethod(parent_donor_hook),
+    )
+    _source_model(
+        child_module,
+        "HookChild",
+        "hookchild",
+        runtime=True,
+        extends="hookparent.HookParent",
+        after_resource_load=classmethod(child_hook),
+    )
+
+    runtime = Runtime(
+        (
+            _addon_config("hookparent", parent_module),
+            _addon_config("hookdonor", donor_module),
+            _addon_config("hookchild", child_module),
+        ),
+        runtime_dir=tmp_path / "runtime",
+    )
+    sources = runtime.render_sources()
+
+    # The parent runs its single donor natively — no parent aggregator emitted.
+    assert "def after_resource_load(" not in sources[Path("hookparent/models.py")]
+    # The child aggregates the whole parent (its donor's hook) then its own, in order.
+    child_source = sources[Path("hookchild/models.py")]
+    assert "def after_resource_load(cls, *args: object, **kwargs: object) -> None:" in child_source
+    parent_call = "HookParent.after_resource_load.__func__(cls, *args, **kwargs)"
+    child_call = "AbstractHookChild.after_resource_load.__func__(cls, *args, **kwargs)"
+    assert child_source.index(parent_call) < child_source.index(child_call)
+
+
+def test_runtime_child_dedupes_hook_shared_with_a_parent_donor(tmp_path: Path) -> None:
+    """A hook shared by a parent donor and a child donor runs once — via the parent.
+
+    The child dedups its own contributors against the parent's *whole* composed set,
+    so a function the parent already runs (through its donor) is not called again by
+    the child's donor. The child aggregator calls the parent and the child's own
+    hook, but never the child donor's copy of the shared function.
+    """
+
+    def shared_hook(cls: type, instances: object, **kwargs: object) -> None:
+        del cls, instances, kwargs
+
+    def child_hook(cls: type, instances: object, **kwargs: object) -> None:
+        del cls, instances, kwargs
+
+    parent_module = ModuleType("tests.sharedparent.models")
+    parent_donor_module = ModuleType("tests.sharedpdonor.models")
+    child_module = ModuleType("tests.sharedchild.models")
+    child_donor_module = ModuleType("tests.sharedcdonor.models")
+    _source_model(parent_module, "SharedParent", "sharedparent", runtime=True)
+    _source_model(
+        parent_donor_module,
+        "SharedParentDonor",
+        "sharedpdonor",
+        extends="sharedparent.SharedParent",
+        after_resource_load=classmethod(shared_hook),
+    )
+    _source_model(
+        child_module,
+        "SharedChild",
+        "sharedchild",
+        runtime=True,
+        extends="sharedparent.SharedParent",
+        after_resource_load=classmethod(child_hook),
+    )
+    _source_model(
+        child_donor_module,
+        "SharedChildDonor",
+        "sharedcdonor",
+        extends="sharedchild.SharedChild",
+        after_resource_load=classmethod(shared_hook),  # the SAME function the parent donor runs
+    )
+
+    runtime = Runtime(
+        (
+            _addon_config("sharedparent", parent_module),
+            _addon_config("sharedpdonor", parent_donor_module),
+            _addon_config("sharedchild", child_module),
+            _addon_config("sharedcdonor", child_donor_module),
+        ),
+        runtime_dir=tmp_path / "runtime",
+    )
+    child_source = runtime.render_sources()[Path("sharedchild/models.py")]
+
+    assert "def after_resource_load(cls, *args: object, **kwargs: object) -> None:" in child_source
+    assert "SharedParent.after_resource_load.__func__(cls, *args, **kwargs)" in child_source
+    assert "AbstractSharedChild.after_resource_load.__func__(cls, *args, **kwargs)" in child_source
+    # The child donor's own copy of the shared hook is NOT called — it deduped
+    # against the parent's set, so the shared function runs exactly once.
+    assert "SharedChildExtension1.after_resource_load" not in child_source
+
+
+def test_child_override_removed_fields_rejects_divergent_same_name_field(tmp_path: Path) -> None:
+    """A child that redefines an inherited parent-shared field fails the build (finding #2).
+
+    ``_child_override_removed_fields`` shadows a parent-shared inherited field with
+    ``None`` so the child inherits the parent's column. That is only sound when the
+    two are the *same* field; a deliberate same-name override with a different
+    definition would vanish behind the shadow, so the composer rejects it instead of
+    silently dropping the override.
+    """
+
+    narrow = type(
+        "NarrowLabel",
+        (AngeeModel,),
+        {
+            "__module__": "tests.divparent.models",
+            "label": models.CharField(max_length=10),
+            "Meta": type("Meta", (), {"abstract": True, "app_label": "divparent"}),
+        },
+    )
+    wide = type(
+        "WideLabel",
+        (AngeeModel,),
+        {
+            "__module__": "tests.divchild.models",
+            "label": models.CharField(max_length=99),
+            "Meta": type("Meta", (), {"abstract": True, "app_label": "divchild"}),
+        },
+    )
+    parent_module = ModuleType("tests.divparent.models")
+    child_module = ModuleType("tests.divchild.models")
+    DivParent = type(
+        "DivParent",
+        (narrow, AngeeModel),
+        {
+            "__module__": parent_module.__name__,
+            "runtime": True,
+            "Meta": type("Meta", (), {"abstract": True, "app_label": "divparent"}),
+        },
+    )
+    # A materialized child that inherits a *different* ``label`` (max_length 99) than
+    # the parent's (max_length 10) — the deliberate same-name override.
+    DivChild = type(
+        "DivChild",
+        (wide, AngeeModel),
+        {
+            "__module__": child_module.__name__,
+            "runtime": True,
+            "extends": "divparent.DivParent",
+            "Meta": type("Meta", (), {"abstract": True, "app_label": "divchild"}),
+        },
+    )
+    parent_module.DivParent = DivParent
+    child_module.DivChild = DivChild
+
+    runtime = Runtime(
+        (
+            _addon_config("divparent", parent_module),
+            _addon_config("divchild", child_module),
+        ),
+        runtime_dir=tmp_path / "runtime",
+    )
+
+    with pytest.raises(ImproperlyConfigured, match="different column of the same name"):
+        runtime._child_override_removed_fields(cast(type[AngeeModel], DivChild))
 
 
 def test_runtime_clean_requires_generated_sentinel(tmp_path: Path) -> None:

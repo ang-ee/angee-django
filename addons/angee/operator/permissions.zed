@@ -1,7 +1,7 @@
 // Authorization schema for the operator addon.
 // @rebac_package: operator
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
 
 definition operator/role {
     // Roles-as-namespace with a runtime hierarchy: `includes` lets one operator
@@ -26,9 +26,13 @@ definition operator/connection {
     // persisted schema, so no per-object tuple is stored; a table-less
     // (`managed = False`) `OperatorConnection` model backs the type only to
     // satisfy the rebac.E009 system check and is never read. The operator_admin
-    // role stays as the grantable path for non-admin operators.
+    // role stays the grantable path for non-admin operators, reached tuple-free
+    // through the same const-backed canon: `reader->effective_member` resolves any
+    // effective member of operator_admin with no per-object tuple (the pinned-id
+    // userset shape it replaces needs a per-row tuple the evaluator never
+    // synthesizes — see F-g).
     relation admin:  angee/role // rebac:const=admin
-    relation reader: operator/role:operator_admin#effective_member
+    relation reader: operator/role // rebac:const=operator_admin
 
-    permission read = admin->member + reader
+    permission read = admin->member + reader->effective_member
 }

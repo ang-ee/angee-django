@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, connection, models
 from import_export.results import Result, RowResult
@@ -15,12 +16,18 @@ from rebac import system_context
 
 from angee.addons import AddonContract
 from angee.base.models import AngeeModel
-from angee.resources.entries import EntryGraph, LoadResult, ResourceEntry
+from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
+from angee.resources.grants import _grant_tuples, materialize_grant_groups
 from angee.resources.loader import build_resource
 from angee.resources.models import Resource
 from angee.resources.tiers import ResourceTier
-from angee.resources.widgets import resolve_xref
+from angee.resources.widgets import (
+    XrefForeignKeyWidget,
+    XrefManyToManyWidget,
+    resolve_ledger_xref,
+    resolve_xref,
+)
 
 
 @dataclass(slots=True)
@@ -460,6 +467,184 @@ def test_resolve_xref_reports_ambiguous_source_rows() -> None:
                 ResolveAmbiguousLedger,
                 {"tests.resource_addon": "tests.resource_addon"},
             )
+    finally:
+        with connection.schema_editor() as schema_editor:
+            for model in reversed(models_to_create):
+                schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_resolve_ledger_xref_binds_ledger_and_app_registry_aliases(monkeypatch) -> None:
+    """The loader owns persona lookup: ledger + app-registry aliases in one call.
+
+    A demo-seed hook resolves ``<addon>.<xref>`` by the same alias convention the
+    loader builds per addon — the installed app's canonical name resolves from both
+    its dotted name and its short label — so the persona-lookup logic lives once
+    here, not copied byte-for-byte into every ``after_resource_load`` donor.
+    """
+
+    class LedgerXrefTarget(models.Model):
+        """Target row a ledger xref points at."""
+
+        name = models.CharField(max_length=40)
+
+        class Meta:
+            """Django model options for the test target model."""
+
+            app_label = "base"
+
+    class LedgerXrefLedger(models.Model):
+        """Ledger model without the production uniqueness constraint."""
+
+        source_addon = models.CharField(max_length=200)
+        xref = models.CharField(max_length=160)
+        target_model = models.CharField(max_length=120)
+        target_id = models.CharField(max_length=120, blank=True, default="")
+
+        class Meta:
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+
+    models_to_create: tuple[type[models.Model], ...] = (LedgerXrefTarget, LedgerXrefLedger)
+    with connection.schema_editor() as schema_editor:
+        for model in models_to_create:
+            schema_editor.create_model(model)
+    # No concrete ``resources.Resource`` exists under bare test settings (the composer
+    # is not run), so stand the ledger model in for the helper's own ledger lookup only;
+    # every other ``get_model`` (the target-model resolution inside ``resolve_xref``)
+    # delegates to the real registry, and the addon-alias map is built from the real
+    # installed apps.
+    real_get_model = apps.get_model
+
+    def fake_get_model(app_label: str, model_name: str, *args: Any, **kwargs: Any) -> Any:
+        if (app_label, model_name) == ("resources", "Resource"):
+            return LedgerXrefLedger
+        return real_get_model(app_label, model_name, *args, **kwargs)
+
+    monkeypatch.setattr(apps, "get_model", fake_get_model)
+    try:
+        target = LedgerXrefTarget.objects.create(name="alice")
+        LedgerXrefLedger.objects.create(
+            source_addon="angee.resources",
+            xref="user_alice",
+            target_model="base.LedgerXrefTarget",
+            target_id=str(target.pk),
+        )
+
+        # ``resources`` is the short label of the ``angee.resources`` app, so the
+        # app-registry alias map resolves the label form to the canonical addon name.
+        assert resolve_ledger_xref("resources.user_alice") == target
+        # An unresolved handle is a graceful ``None``, never a raise.
+        assert resolve_ledger_xref("resources.user_missing") is None
+        assert resolve_ledger_xref("no_such_addon.user_alice") is None
+    finally:
+        with connection.schema_editor() as schema_editor:
+            for model in reversed(models_to_create):
+                schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_xref_widgets_resolve_mti_descendant_to_parent_fk() -> None:
+    """An xref on an MTI child resolves a foreign key / m2m to its parent (F-d).
+
+    Mirrors the production shape ``parties.Party`` (MTI parent) ← a
+    ``parties.Organization`` (materialized child) xref: a ``runtime = True``
+    child shares its parent's primary key, so binding it to a ``Party`` relation
+    is valid. The guard still fails fast on a genuinely unrelated type and never
+    reaches *downward* from a parent xref to a child-bound relation.
+    """
+
+    class XrefMtiParent(models.Model):
+        """MTI parent standing in for ``parties.Party``."""
+
+        name = models.CharField(max_length=40)
+
+        class Meta:
+            """Django model options for the MTI parent test model."""
+
+            app_label = "base"
+
+    class XrefMtiChild(XrefMtiParent):
+        """MTI child standing in for ``parties.Organization``."""
+
+        detail = models.CharField(max_length=40, blank=True, default="")
+
+        class Meta:
+            """Django model options for the MTI child test model."""
+
+            app_label = "base"
+
+    class XrefMtiPeer(models.Model):
+        """Unrelated model proving the fail-fast guard still bites."""
+
+        name = models.CharField(max_length=40)
+
+        class Meta:
+            """Django model options for the unrelated peer test model."""
+
+            app_label = "base"
+
+    class XrefMtiLedger(models.Model):
+        """Ledger model without the production uniqueness constraint."""
+
+        source_addon = models.CharField(max_length=200)
+        xref = models.CharField(max_length=160)
+        target_model = models.CharField(max_length=120)
+        target_id = models.CharField(max_length=120, blank=True, default="")
+
+        class Meta:
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+
+    models_to_create: tuple[type[models.Model], ...] = (
+        XrefMtiParent,
+        XrefMtiChild,
+        XrefMtiPeer,
+        XrefMtiLedger,
+    )
+    aliases = {"tests.resource_addon": "tests.resource_addon"}
+
+    def _bind(widget: Any) -> Any:
+        widget.ledger_model = XrefMtiLedger
+        widget.addon_aliases = aliases
+        return widget
+
+    with connection.schema_editor() as schema_editor:
+        for model in models_to_create:
+            schema_editor.create_model(model)
+    try:
+        child = XrefMtiChild.objects.create(name="Acme", detail="org")
+        peer = XrefMtiPeer.objects.create(name="Nope")
+        parent_row = XrefMtiParent.objects.create(name="Bare")
+        for xref, target in (
+            ("acme", "base.XrefMtiChild"),
+            ("nope", "base.XrefMtiPeer"),
+            ("bare", "base.XrefMtiParent"),
+        ):
+            XrefMtiLedger.objects.create(
+                source_addon="tests.resource_addon",
+                xref=xref,
+                target_model=target,
+                target_id=str({"acme": child, "nope": peer, "bare": parent_row}[xref].pk),
+            )
+
+        parent_fk = _bind(XrefForeignKeyWidget(model=XrefMtiParent))
+        parent_m2m = _bind(XrefManyToManyWidget(model=XrefMtiParent))
+
+        # The FK/M2M to the MTI parent accepts the child xref (the F-d fix).
+        assert parent_fk.clean("tests.resource_addon.acme") == child
+        assert parent_m2m.clean("tests.resource_addon.acme") == [child]
+
+        # A genuinely unrelated xref still fails fast.
+        with pytest.raises(ValueError, match="not base.XrefMtiParent"):
+            parent_fk.clean("tests.resource_addon.nope")
+
+        # A parent-only xref bound to a child relation fails fast (no downward reach).
+        child_fk = _bind(XrefForeignKeyWidget(model=XrefMtiChild))
+        with pytest.raises(ValueError, match="not base.XrefMtiChild"):
+            child_fk.clean("tests.resource_addon.bare")
     finally:
         with connection.schema_editor() as schema_editor:
             for model in reversed(models_to_create):
@@ -1312,6 +1497,346 @@ def test_resource_adoption_rejects_ambiguous_unique_fields(
         with connection.schema_editor() as schema_editor:
             for model in reversed(models_to_create):
                 schema_editor.delete_model(model)
+
+
+def test_resource_entry_normalizes_and_validates_grant_kind(tmp_path: Path) -> None:
+    """A ``kind = "grants"`` entry normalizes; an unknown kind fails fast."""
+
+    grant_entry = ResourceEntry.from_declaration(
+        addon(tmp_path),
+        "demo",
+        {"path": "grants/010_demo.yaml", "kind": "grants"},
+    )
+    assert grant_entry.kind == "grants"
+
+    default_entry = ResourceEntry.from_declaration(addon(tmp_path), "demo", {"path": "resources/010_base.thing.yaml"})
+    assert default_entry.kind == "rows"
+
+    with pytest.raises(ImproperlyConfigured, match="Unknown resource entry kind"):
+        ResourceEntry.from_declaration(addon(tmp_path), "demo", {"path": "grants/010_demo.yaml", "kind": "roles"})
+
+
+def test_grant_rows_reject_malformed_records(tmp_path: Path) -> None:
+    """Grant rows require exactly resource/relation/subject and no model."""
+
+    grants_dir = tmp_path / "grants"
+    grants_dir.mkdir()
+    manifest = {"master": (), "install": (), "demo": ({"path": "grants/010_demo.yaml", "kind": "grants"},)}
+
+    (grants_dir / "010_demo.yaml").write_text(
+        '- resource: "angee/role:admin"\n  relation: "member"\n',
+        encoding="utf-8",
+    )
+    missing = ResourceEntry.from_declaration(addon(tmp_path, manifest=manifest), "demo", manifest["demo"][0])
+    with pytest.raises(ResourceLoadError, match="missing subject"):
+        missing.read_grant_rows()
+
+    (grants_dir / "010_demo.yaml").write_text(
+        '- resource: "angee/role:admin"\n  relation: "member"\n  subject: "iam.alice"\n  caveat: "x"\n',
+        encoding="utf-8",
+    )
+    unknown = ResourceEntry.from_declaration(addon(tmp_path, manifest=manifest), "demo", manifest["demo"][0])
+    with pytest.raises(ResourceLoadError, match="unknown field.*caveat"):
+        unknown.read_grant_rows()
+
+    (grants_dir / "010_demo.yaml").write_text(
+        "_meta:\n  model: base.Thing\nrows:\n"
+        '  - resource: "angee/role:admin"\n    relation: "member"\n    subject: "iam.alice"\n',
+        encoding="utf-8",
+    )
+    with_model = ResourceEntry.from_declaration(addon(tmp_path, manifest=manifest), "demo", manifest["demo"][0])
+    with pytest.raises(ResourceLoadError, match="grants entry declares no model"):
+        with_model.read_grant_rows()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_grant_tuple_resolves_xref_const_role_and_wildcard(tmp_path: Path) -> None:
+    """A grant row resolves a row xref, a const-id literal, a role subject-set, and the wildcard."""
+
+    from rebac import ObjectRef, SubjectRef, anonymous_actor, to_object_ref
+
+    class GrantDoc(AngeeModel):
+        """Row addressed by xref from the resource side of a grant."""
+
+        title = models.CharField(max_length=40)
+
+        class Meta:
+            """Django model options for the grant-resource test model."""
+
+            app_label = "base"
+            rebac_resource_type = "base/grant-doc"
+
+    class GrantResolverLedger(Resource):
+        """Concrete resource ledger for grant-resolution tests."""
+
+        class Meta(Resource.Meta):
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+            abstract = False
+
+    models_to_create = (GrantDoc, GrantResolverLedger)
+    with connection.schema_editor() as schema_editor:
+        for model in models_to_create:
+            schema_editor.create_model(model)
+    aliases = {"tests.resource_addon": "tests.resource_addon", "resource_addon": "tests.resource_addon"}
+    try:
+        with system_context(reason="grant resolver setup"):
+            doc = GrantDoc.objects.create(title="Doc")
+        GrantResolverLedger.objects.create(
+            source_addon="tests.resource_addon",
+            source_path="grants/010_demo.yaml",
+            tier=Resource.Tier.DEMO,
+            xref="doc",
+            content_hash="sha256:x",
+            target_model=GrantDoc._meta.label,
+            target_id=doc.public_id,
+        )
+        entry = ResourceEntry.from_declaration(
+            addon(tmp_path), "demo", {"path": "grants/010_demo.yaml", "kind": "grants"}
+        )
+
+        def _row(resource: str, relation: str, subject: str) -> GrantRow:
+            return GrantRow(entry=entry, resource=resource, relation=relation, subject=subject, index=1)
+
+        # Grants resolve under the loader's elevated context; mirror it here. A
+        # plain (non-MTI) resource and a literal ref each name exactly one tuple.
+        with system_context(reason="grant resolver assertions"):
+            (row_xref,) = _grant_tuples(_row("resource_addon.doc", "direct_member", "*"), GrantResolverLedger, aliases)
+            assert row_xref.resource == to_object_ref(doc)
+            assert row_xref.relation == "direct_member"
+            assert row_xref.subject == anonymous_actor()
+
+            (literal,) = _grant_tuples(
+                _row("angee/role:admin", "member", "products/role:mgr#member"), GrantResolverLedger, aliases
+            )
+            assert literal.resource == ObjectRef("angee/role", "admin")
+            assert literal.subject == SubjectRef(ObjectRef("products/role", "mgr"), "member")
+    finally:
+        with connection.schema_editor() as schema_editor:
+            for model in reversed(models_to_create):
+                schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_grant_fixtures_load_and_are_idempotent(tmp_path: Path, monkeypatch: Any) -> None:
+    """A grants-tier fixture materializes REBAC tuples idempotently through the loader.
+
+    An unchanged re-load is a *true* no-op: only missing tuples are written, so the
+    second load calls ``write_relationships`` with nothing to write — no audit entry
+    or zookie bump for grants that already exist.
+    """
+
+    from django.contrib.auth import get_user_model
+    from django.core.management import call_command
+    from rebac import to_subject_ref
+    from rebac.models import active_relationship_model
+
+    from angee.resources import grants as grants_module
+
+    written: list[int] = []
+    real_write = grants_module.write_relationships
+
+    def _spy_write(tuples: Any) -> Any:
+        rows = list(tuples)
+        written.append(len(rows))
+        return real_write(rows)
+
+    monkeypatch.setattr(grants_module, "write_relationships", _spy_write)
+
+    class GrantLoadLedger(Resource):
+        """Concrete resource ledger for grant-load tests."""
+
+        class Meta(Resource.Meta):
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+            abstract = False
+
+    user_model = get_user_model()
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(GrantLoadLedger)
+    # Grants are validated against the composed REBAC schema on write.
+    call_command("rebac", "sync", verbosity=0)
+    try:
+        with system_context(reason="grant load setup"):
+            alice = user_model.objects.create(username="grant-alice")
+        GrantLoadLedger.objects.create(
+            source_addon="tests.resource_addon",
+            source_path="grants/010_demo.yaml",
+            tier=Resource.Tier.DEMO,
+            xref="alice",
+            content_hash="sha256:x",
+            target_model=user_model._meta.label,
+            target_id=alice.public_id,
+        )
+        grants_dir = tmp_path / "grants"
+        grants_dir.mkdir()
+        (grants_dir / "010_demo.yaml").write_text(
+            '- resource: "angee/role:admin"\n'
+            '  relation: "member"\n'
+            '  subject: "resource_addon.alice"\n'
+            '- resource: "storage/drive:demo-drive"\n'
+            '  relation: "editor"\n'
+            '  subject: "auth/user:*"\n',
+            encoding="utf-8",
+        )
+        owner = addon(
+            tmp_path,
+            manifest={
+                "master": (),
+                "install": (),
+                "demo": ({"path": "grants/010_demo.yaml", "kind": "grants"},),
+            },
+        )
+
+        result = GrantLoadLedger.objects.load_addons((owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True)
+
+        assert result.created == 2
+        assert result.skipped == 0
+        # The first load writes exactly the two missing tuples.
+        assert written == [2]
+        relationship_model = active_relationship_model()
+        alice_subject = to_subject_ref(alice)
+        with system_context(reason="grant load assertions"):
+            assert relationship_model._default_manager.filter(
+                resource_type="angee/role",
+                resource_id="admin",
+                relation="member",
+                subject_type=alice_subject.subject_type,
+                subject_id=alice_subject.subject_id,
+            ).exists()
+            assert relationship_model._default_manager.filter(
+                resource_type="storage/drive",
+                resource_id="demo-drive",
+                relation="editor",
+                subject_type="auth/user",
+                subject_id="*",
+            ).exists()
+
+        second = GrantLoadLedger.objects.load_addons((owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True)
+        assert second.created == 0
+        assert second.skipped == 2
+        # The unchanged re-load wrote nothing new — a true no-op, no churn.
+        assert written == [2]
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(GrantLoadLedger)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_grant_on_mti_child_lands_on_every_identity(tmp_path: Path) -> None:
+    """A grant on an MTI child row lands on every REBAC identity it IS-A.
+
+    ``MtiChild`` IS-A ``MtiParent`` (shared primary key), so a ``reader`` grant on
+    the child materializes a tuple on both the child type and each REBAC-registered
+    parent type — and a ``read`` passes whether the row is reached as the child or
+    through a foreign key typed to the parent (the edge the parent-typed FK scopes).
+    A plain (non-MTI) grant still writes exactly one tuple.
+    """
+
+    from django.contrib.auth import get_user_model
+    from django.core.management import call_command
+    from rebac import ObjectRef, to_object_ref, to_subject_ref
+    from rebac.backends import backend
+    from rebac.models import active_relationship_model
+    from rebac.resources import model_resource_type
+
+    from tests.mtidemo.models import MtiChild, MtiParent
+
+    class MtiGrantLedger(Resource):
+        """Concrete resource ledger for the MTI grant test."""
+
+        class Meta(Resource.Meta):
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+            abstract = False
+
+    aliases = {"tests.resource_addon": "tests.resource_addon", "resource_addon": "tests.resource_addon"}
+    user_model = get_user_model()
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(MtiGrantLedger)
+    # Grants are checked against the composed REBAC schema on read; sync loads it.
+    call_command("rebac", "sync", verbosity=0)
+    try:
+        with system_context(reason="mti grant setup"):
+            child = MtiChild.objects.create(title="Acme", detail="org")
+            plain = MtiParent.objects.create(title="Plain")
+            reader = user_model.objects.create(username="mti-reader")
+            outsider = user_model.objects.create(username="mti-outsider")
+        for row, xref in ((child, "child"), (plain, "plain"), (reader, "reader")):
+            MtiGrantLedger.objects.create(
+                source_addon="tests.resource_addon",
+                source_path="grants/010_demo.yaml",
+                tier=Resource.Tier.DEMO,
+                xref=xref,
+                content_hash="sha256:x",
+                target_model=type(row)._meta.label,
+                target_id=row.public_id,
+            )
+        entry = ResourceEntry.from_declaration(
+            addon(tmp_path), "demo", {"path": "grants/010_demo.yaml", "kind": "grants"}
+        )
+        def _grant_row(xref: str, index: int) -> GrantRow:
+            return GrantRow(
+                entry=entry,
+                resource=f"resource_addon.{xref}",
+                relation="reader",
+                subject="resource_addon.reader",
+                index=index,
+            )
+
+        rows = (_grant_row("child", 1), _grant_row("plain", 2))
+        with system_context(reason="mti grant materialize"):
+            created, skipped = materialize_grant_groups(
+                (GrantGroup(entry=entry, rows=rows),),
+                ledger_model=MtiGrantLedger,
+                addon_aliases=aliases,
+            )
+
+        # The child grant expands to two identities (child + parent); the plain grant
+        # to one — three tuples materialize for the two grant rows.
+        assert (created, skipped) == (3, 0)
+
+        relationships = active_relationship_model()
+        subject = to_subject_ref(reader)
+        child_as_child = to_object_ref(child)
+        parent_type = model_resource_type(MtiParent)
+        assert parent_type is not None
+        child_as_parent = ObjectRef(parent_type, child_as_child.resource_id)
+        plain_ref = to_object_ref(plain)
+
+        def _reader_tuple(resource: ObjectRef) -> bool:
+            return relationships._default_manager.filter(
+                resource_type=resource.resource_type,
+                resource_id=resource.resource_id,
+                relation="reader",
+                subject_type=subject.subject_type,
+                subject_id=subject.subject_id,
+            ).exists()
+
+        with system_context(reason="mti grant tuple assertions"):
+            # The child grant lands on both identities the child row carries.
+            assert _reader_tuple(child_as_child)
+            assert _reader_tuple(child_as_parent)
+            # The plain (non-MTI) grant writes exactly its one identity — no change.
+            assert _reader_tuple(plain_ref)
+            assert (
+                relationships._default_manager.filter(resource_id=plain_ref.resource_id, relation="reader").count() == 1
+            )
+
+        # The subject reads the child row both as the child and through the parent
+        # type a foreign key would scope on; the plain row reads through its type.
+        for resource in (child_as_child, child_as_parent, plain_ref):
+            assert backend().has_access(subject=subject, action="read", resource=resource)
+        # No grant, no parent-typed read — the materialized tuple is what opens the edge.
+        assert not backend().has_access(
+            subject=to_subject_ref(outsider), action="read", resource=child_as_parent
+        )
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(MtiGrantLedger)
 
 
 def _write_resource_files(tmp_path: Path) -> Addon:

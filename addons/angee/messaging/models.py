@@ -23,19 +23,29 @@ from typing import Any, ClassVar, cast
 
 from django.apps import apps
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from django.utils import timezone
 from django.utils.text import capfirst
-from rebac import PermissionDenied, current_actor
+from rebac import (
+    PermissionDenied,
+    RelationshipTuple,
+    SubjectRef,
+    current_actor,
+    delete_relationship,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 from rebac.managers import RebacManager
 
 from angee.base.actors import actor_user_id
 from angee.base.fields import ImplClassField, SqidField, StateField
 from angee.base.mixins import AuditMixin, HistoryMixin, SqidMixin
-from angee.base.models import AngeeModel
+from angee.base.models import AngeeModel, public_id_for
 from angee.integrate.models import Bridge
 from angee.messaging.backends import ChannelBackend
 from angee.messaging.managers import (
@@ -66,6 +76,21 @@ def _owner_user_id(instance: models.Model) -> Any | None:
     return actor_user_id(actor)
 
 
+def _user_subject_ref(*, user: Any = None, user_id: Any = None) -> SubjectRef:
+    """Return the REBAC subject ref for a user instance or a bare user id.
+
+    The user model owns its subject identity (its ``rebac_id_attr`` sqid, not the raw
+    pk), so a bare ``user_id`` is loaded and resolved through :func:`to_subject_ref`
+    rather than assembling an ``auth/user:<pk>`` ref by hand.
+    """
+
+    if user is not None:
+        return to_subject_ref(user)
+    if user_id is None:
+        raise ValueError("A user or user_id is required to build a subject reference.")
+    return to_subject_ref(get_user_model()._base_manager.get(pk=user_id))
+
+
 class ThreadedModelMixin(models.Model):
     """Add Odoo-style chatter thread behavior to a model row.
 
@@ -79,6 +104,17 @@ class ThreadedModelMixin(models.Model):
 
     thread_post_access: ClassVar[str] = "write"
     """Record permission required to post a chatter message."""
+
+    thread_broadcasts_changes: ClassVar[bool] = False
+    """Whether this host streams its record-attached chatter over ``changes(Thread)``.
+
+    Default ``False`` keeps record chatter isolated to the record-scoped
+    ``record_thread`` surface: a threaded record stays silent on the generic
+    ``changes`` subscription. A host that opts in (a chat room) stamps the flag
+    onto its chatter thread at attachment (``host_broadcasts_changes``), so its
+    members — holding ``messaging/thread.reader`` — receive member-gated
+    ``threadChanged`` events while every other record's chatter stays isolated.
+    """
 
     thread_read_access: ClassVar[str] = "read"
     """Record permission required to read/react to personal chatter state."""
@@ -231,11 +267,19 @@ class ThreadedModelMixin(models.Model):
         subject: str = "",
         subtype_key: str = "record_updated",
     ) -> models.Model:
-        """Log Odoo-style field tracking values in this row's chatter thread."""
+        """Log Odoo-style field tracking values in this row's chatter thread.
+
+        Field tracking is an automatic system write: the log belongs to the record,
+        not to the actor whose save triggered it, so it goes through
+        :meth:`_message_system_post` — the system-write owner that never consults
+        :meth:`can_post`. An actor authorized to change a tracked field but not to
+        post comments must still get its change logged instead of having the whole
+        save rolled back by a post-access denial.
+        """
 
         message_model = apps.get_model("messaging", "Message")
-        return self.message_log(
-            body,
+        return self._message_system_post(
+            body=body,
             subject=subject,
             subtype_key=subtype_key,
             message_type=message_model.MessageKind.AUTO_COMMENT,
@@ -348,32 +392,29 @@ class ThreadedModelMixin(models.Model):
         autofollow_recipients: bool,
         autofollow_author: bool,
     ) -> models.Model:
-        """Post one chatter message after enforcing this row's post policy."""
+        """Post one user-authored chatter message after enforcing this row's post policy.
+
+        User posts ride the actor's :attr:`thread_post_access`; the message itself is
+        written by the shared system-write owner (:meth:`_message_system_post`), so the
+        post gate lives in exactly one place and the automatic-log path can reuse that
+        write without it.
+        """
 
         if not self.can_post():
             raise PermissionDenied(
                 f"Posting on {self._meta.label} requires {self.thread_post_access!r} access."
             )
-        attachment = self.message_thread_attachment(create=True)
-        if attachment is None:
-            raise ValueError("Cannot post a message without a thread.")
-        thread = attachment.thread
-        message_model = apps.get_model("messaging", "Message")
-        owner_id = _owner_user_id(self)
-        message = message_model.objects.post_to_thread(
-            thread,
+        message = self._message_system_post(
             body=body,
-            subject=subject or self.message_thread_subject(),
-            owner_id=owner_id,
-            attachment=attachment,
+            subject=subject,
             attachments=attachments,
             message_type=message_type,
             subtype_key=subtype_key,
-            subtype_model_label=self._meta.label,
             parent=parent,
             tracking_values=tracking_values,
             recipient_user_ids=recipient_user_ids,
         )
+        owner_id = _owner_user_id(self)
         follower_model = apps.get_model("messaging", "ThreadFollower")
         if autofollow_author and owner_id is not None:
             follower_model.objects.subscribe(
@@ -390,14 +431,64 @@ class ThreadedModelMixin(models.Model):
                 )
         return message
 
+    def _message_system_post(
+        self,
+        *,
+        body: str = "",
+        subject: str = "",
+        attachments: tuple[models.Model, ...] = (),
+        message_type: Message.MessageKind | None,
+        subtype_key: str,
+        parent: models.Model | None = None,
+        tracking_values: tuple[TrackingChange | dict[str, Any], ...] = (),
+        recipient_user_ids: tuple[Any, ...] = (),
+    ) -> models.Model:
+        """Write one automatic system message on this row's chatter thread.
+
+        The single owner of the chatter *system* write — record-creation notes and
+        field-tracking auto-comments. These are written by the framework on the
+        record's behalf, not authored by the acting user, so this path never consults
+        :meth:`can_post` / :attr:`thread_post_access`: an actor authorized to change a
+        tracked field but not to post comments must still get the change logged rather
+        than have its save rolled back by a post-access denial. User-authored posts go
+        through :meth:`_message_post`, which adds the post gate and the follower fan-out.
+        """
+
+        attachment = self.message_thread_attachment(create=True)
+        if attachment is None:
+            raise ValueError("Cannot post a message without a thread.")
+        message_model = apps.get_model("messaging", "Message")
+        return message_model.objects.post_to_thread(
+            attachment.thread,
+            body=body,
+            subject=subject or self.message_thread_subject(),
+            owner_id=_owner_user_id(self),
+            attachment=attachment,
+            attachments=attachments,
+            message_type=message_type,
+            subtype_key=subtype_key,
+            subtype_model_label=self._meta.label,
+            parent=parent,
+            tracking_values=tracking_values,
+            recipient_user_ids=recipient_user_ids,
+        )
+
     def message_subscribe(
         self,
         *,
         user: models.Model | None = None,
-        notification_policy: str = "inbox",
-        subtype_keys: tuple[str, ...] = (),
+        notification_policy: str | None = None,
+        subtype_keys: tuple[str, ...] | None = None,
+        grant_read: bool = False,
     ) -> models.Model:
-        """Subscribe a user to this row's chatter thread."""
+        """Subscribe a user to this row's chatter thread.
+
+        ``notification_policy`` / ``subtype_keys`` seed a first subscribe and default to
+        an inbox follow with no subtype filter; a re-subscribe preserves an existing
+        follower's state unless a value is passed. ``grant_read`` also grants the user
+        ``reader`` on the thread in the same write (a chat-room membership) — a consumer
+        that manages room membership composes this rather than writing the tuple itself.
+        """
 
         follower_model = apps.get_model("messaging", "ThreadFollower")
         return follower_model.objects.subscribe(
@@ -406,13 +497,23 @@ class ThreadedModelMixin(models.Model):
             role=self.thread_attachment_role,
             notification_policy=notification_policy,
             subtype_keys=subtype_keys,
+            grant_read=grant_read,
         )
 
-    def message_unsubscribe(self, *, user: models.Model | None = None) -> bool:
-        """Unsubscribe a user from this row's chatter thread."""
+    def message_unsubscribe(self, *, user: models.Model | None = None, revoke_read: bool = False) -> bool:
+        """Unsubscribe a user from this row's chatter thread.
+
+        ``revoke_read`` also revokes the user's thread ``reader`` grant (the mirror of
+        :meth:`message_subscribe`'s ``grant_read``) — expelling a chat-room member drops
+        the follow and the read that kept the member's ``threadChanged`` socket live.
+        """
 
         follower_model = apps.get_model("messaging", "ThreadFollower")
-        return bool(follower_model.objects.unsubscribe(self, user=user, role=self.thread_attachment_role))
+        return bool(
+            follower_model.objects.unsubscribe(
+                self, user=user, role=self.thread_attachment_role, revoke_read=revoke_read
+            )
+        )
 
     def message_is_follower(self, *, user: models.Model | None = None) -> bool:
         """Return whether a user follows this row's chatter thread."""
@@ -584,33 +685,18 @@ class ThreadedModelMixin(models.Model):
                 role=self.thread_attachment_role,
             )
         create_changes = self._field_tracker().create_changes()
-        if not self.thread_create_log and not create_changes:
-            return
-        attachment = self.message_thread_attachment(create=True)
-        if attachment is None:
-            return
         message_model = apps.get_model("messaging", "Message")
         if self.thread_create_log:
-            message_model.objects.post_to_thread(
-                attachment.thread,
+            self._message_system_post(
                 body=self.message_creation_message(),
-                subject=self.message_thread_subject(),
-                owner_id=owner_id,
-                attachment=attachment,
                 message_type=message_model.MessageKind.NOTIFICATION,
                 subtype_key=self.thread_creation_subtype_key,
-                subtype_model_label=self._meta.label,
             )
         if create_changes:
-            message_model.objects.post_to_thread(
-                attachment.thread,
+            self._message_system_post(
                 body="",
-                subject=self.message_thread_subject(),
-                owner_id=owner_id,
-                attachment=attachment,
                 message_type=message_model.MessageKind.AUTO_COMMENT,
                 subtype_key=self.thread_tracking_subtype_key,
-                subtype_model_label=self._meta.label,
                 tracking_values=tuple(create_changes),
             )
 
@@ -800,6 +886,14 @@ class Thread(SqidMixin, AuditMixin, AngeeModel):
     message_count = models.PositiveIntegerField(default=0, db_index=True)
     last_message_at = models.DateTimeField(null=True, blank=True, db_index=True)
     metadata = models.JSONField(blank=True, default=dict)
+    host_broadcasts_changes = models.BooleanField(default=False)
+    """Whether the attached host opted this record thread into ``changes`` broadcast.
+
+    Stamped from the host's :attr:`ThreadedModelMixin.thread_broadcasts_changes` at
+    attachment. A composition fact, not a client-writable column: it never enters the
+    thread resource's write surface. Default ``False`` keeps record chatter isolated; a
+    host that opts in flips :meth:`broadcasts_changes` on for its thread only.
+    """
 
     objects = ThreadManager()
 
@@ -822,6 +916,63 @@ class Thread(SqidMixin, AuditMixin, AngeeModel):
         """Return the thread subject for Django displays."""
 
         return self.subject or f"thread:{self.public_id}"
+
+    def is_record_attached(self) -> bool:
+        """Whether this thread is bound to a model row through a ``ThreadAttachment``.
+
+        The one owner of the record-attachment fact, used by both the thread's and the
+        message's ``broadcasts_changes`` gates: a record-attached thread is chatter,
+        reachable only through the record-scoped ``record_thread`` payload (gated on the
+        parent record's read) — the emission mirror of ``ThreadQuerySet.inbox()``.
+        """
+
+        attachment_model = apps.get_model("messaging", "ThreadAttachment")
+        return attachment_model._base_manager.filter(thread_id=self.pk).exists()
+
+    def broadcasts_changes(self) -> bool:
+        """Whether this thread's changes reach the generic ``changes`` subscription.
+
+        Record chatter stays off the generic surface: its own ``owner``/``admin`` read
+        would otherwise deliver change events to a subject who cannot read the record.
+        A host opts back in per model (a chat room): ``host_broadcasts_changes``, stamped
+        from :attr:`ThreadedModelMixin.thread_broadcasts_changes` at attachment, streams
+        the thread's changes to its members (who hold ``messaging/thread.reader``) while
+        every non-opted record thread stays silent.
+        """
+
+        return self.host_broadcasts_changes or not self.is_record_attached()
+
+    def grant_reader(self, *, user: models.Model | None = None, user_id: Any = None) -> None:
+        """Grant a user direct ``reader`` access to this thread.
+
+        The one owner of the ``messaging/thread#reader`` write: the relation name and
+        the tuple shape live here beside ``permissions.zed``, so a consumer that manages
+        room membership composes this instead of hand-writing the tuple with a literal
+        relation name. :meth:`revoke_reader` is the mirror, and
+        :meth:`~angee.messaging.managers.ThreadFollowerManager.subscribe` with
+        ``grant_read`` writes it atomically with the follower row.
+        """
+
+        write_relationships(
+            [
+                RelationshipTuple(
+                    resource=to_object_ref(self),
+                    relation="reader",
+                    subject=_user_subject_ref(user=user, user_id=user_id),
+                )
+            ]
+        )
+
+    def revoke_reader(self, *, user: models.Model | None = None, user_id: Any = None) -> None:
+        """Revoke a user's direct ``reader`` access to this thread (mirror of :meth:`grant_reader`)."""
+
+        delete_relationship(
+            RelationshipTuple(
+                resource=to_object_ref(self),
+                relation="reader",
+                subject=_user_subject_ref(user=user, user_id=user_id),
+            )
+        )
 
 
 class ThreadAttachment(SqidMixin, AuditMixin, AngeeModel):
@@ -863,6 +1014,33 @@ class ThreadAttachment(SqidMixin, AuditMixin, AngeeModel):
             ),
         )
         indexes = (models.Index(fields=("content_type", "object_id", "role")),)
+
+    @property
+    def target_model_label(self) -> str:
+        """Return the ``app_label.ModelName`` label of the attached target's model.
+
+        Resolves the model from the process-cached ``ContentType`` by id
+        (``ContentType.objects.get_for_id``), so a list of rows projects the pointer
+        without a per-row ``content_type`` join.
+        """
+
+        model_class = ContentType.objects.get_for_id(self.content_type_id).model_class()
+        return model_class._meta.label if model_class is not None else ""
+
+    @property
+    def target_public_id(self) -> str:
+        """Return the attached target's stable public id (its sqid).
+
+        Encoded from the stored ``content_type``/``object_id`` alone — via the
+        process-cached ``ContentType.objects.get_for_id`` — so the parent pointer
+        resolves without loading (or re-gating, or per-row joining) the target row;
+        navigating the pointer re-gates through the target's own record read.
+        """
+
+        model_class = ContentType.objects.get_for_id(self.content_type_id).model_class()
+        if model_class is None:
+            return ""
+        return public_id_for(model_class, self.object_id)
 
     def __str__(self) -> str:
         """Return a readable attachment label."""
@@ -1327,6 +1505,22 @@ class Message(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
         """Return a readable message label for Django displays."""
 
         return self.subject or self.preview or f"message:{self.public_id}"
+
+    def broadcasts_changes(self) -> bool:
+        """Whether this message's changes reach the generic ``changes`` subscription.
+
+        A message on a record-attached thread stays off the generic ``messageChanged``
+        surface, whether or not the host opted in: the members of an opted-in room hold
+        ``messaging/thread.reader``, not ``message.read``, so ``ChangeReadGate`` drops
+        every per-message event for them — the live contract for a room is the thread's
+        ``threadChanged`` (see :meth:`Thread.broadcasts_changes`). Only a message on a
+        generic (non-record) thread, or one whose thread merged away, broadcasts — the
+        emission mirror of ``MessageQuerySet.inbox()``.
+        """
+
+        if self.thread_id is None:
+            return True
+        return not self.thread.is_record_attached()
 
 
 class ThreadNotification(SqidMixin, AuditMixin, AngeeModel):

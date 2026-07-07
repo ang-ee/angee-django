@@ -177,6 +177,13 @@ cleaner.
   forms, generated SDL, and dependency-native extension points. Do not cross a
   boundary by ad hoc import, object-shape probing, monkey-patching, or runtime
   registration.
+- Domain knowledge never leaks into a framework-owned file. The framework owns
+  the seam; each addon owns its own vocabulary and contributes it additively
+  through that seam — never by editing a framework/base-addon file to name a
+  product concept. A REBAC `permissions.zed` relation is the named example: a
+  consumer addon adds a company-scoped role to `iam/company` from its own
+  `permissions.extends.zed`, and editing the framework's `iam` zed to name a
+  domain role (`accountant`, `salesperson`, …) is a bug.
 - **Compose, never re-implement, at the addon level.** An addon composes the
   framework's shared primitives (the data grid/list/group/board views, forms,
   detail/record views, navigation, glyphs, state surfaces); it never hand-rolls

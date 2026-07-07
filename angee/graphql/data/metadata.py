@@ -40,6 +40,7 @@ __all__ = [
     "DataGroupBucketFilterValueMapMetadata",
     "DataGroupDimensionMetadata",
     "DataGroupExtractionMetadata",
+    "DataLinesMetadata",
     "DataRelationAxisMetadata",
     "DataResourceFieldMetadata",
     "DataResourceMetadata",
@@ -50,6 +51,7 @@ __all__ = [
     "make_data_resource_metadata",
     "merge_data_resources",
     "model_resource_fields",
+    "resource_fields",
     "resource_type_name",
     "resource_wire_field_name",
     "resource_wire_field_names",
@@ -68,6 +70,7 @@ _RESOURCE_CAPABILITY_ORDER = (
     "revisions",
     "create",
     "update",
+    "save",
     "delete",
     "deletePreview",
     "changes",
@@ -146,6 +149,26 @@ class DataDefaultSortMetadata:
 
 
 @dataclass(frozen=True, slots=True)
+class DataLinesMetadata:
+    """Editable child-lines contract for one document resource.
+
+    Emitted when a resource declares ``lines=`` (F6): the frontend reads it to
+    drive the ``EditableLines`` composer and the authored ``<res>_save``
+    diff-apply mutation. ``field`` is the parent's child accessor, ``model_label``
+    the child model, ``input_type`` the shared GraphQL line input (an optional
+    public ``id`` plus the editable child columns), and ``fields`` the per-column
+    metadata (scalar/widget) the line cells render. ``position_field`` names the
+    integer order column when the child carries one.
+    """
+
+    field: str
+    model_label: str
+    input_type: str | None = None
+    fields: tuple[DataResourceFieldMetadata, ...] = ()
+    position_field: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class DataResourceRoots:
     """GraphQL wire root names emitted for one model data resource."""
 
@@ -155,6 +178,7 @@ class DataResourceRoots:
     group_name: str | None = dataclasses.field(default=None, metadata={"wire": "groups"})
     create_name: str | None = dataclasses.field(default=None, metadata={"wire": "create"})
     update_name: str | None = dataclasses.field(default=None, metadata={"wire": "update"})
+    save_name: str | None = dataclasses.field(default=None, metadata={"wire": "save"})
     delete_name: str | None = dataclasses.field(default=None, metadata={"wire": "delete"})
     delete_preview_name: str | None = dataclasses.field(default=None, metadata={"wire": "deletePreview"})
     revisions_name: str | None = dataclasses.field(default=None, metadata={"wire": "revisions"})
@@ -243,6 +267,7 @@ class DataResourceMetadata:
     revision_fields: tuple[str, ...] = ()
     relation_axes: tuple[DataRelationAxisMetadata, ...] = ()
     group_aliases: tuple[DataGroupAliasMetadata, ...] = ()
+    lines: DataLinesMetadata | None = dataclasses.field(default=None, metadata={"wire": "linesResource"})
     node_type: type | None = dataclasses.field(default=None, metadata={"wire": False})
     filter_type: type | None = dataclasses.field(default=None, metadata={"wire": False})
     order_type: type | None = dataclasses.field(default=None, metadata={"wire": False})
@@ -296,6 +321,7 @@ class DataResourceMetadata:
             revision_fields=self.revision_fields or other.revision_fields,
             relation_axes=self.relation_axes or other.relation_axes,
             group_aliases=self.group_aliases or other.group_aliases,
+            lines=self.lines or other.lines,
             node_type=self.node_type or other.node_type,
             filter_type=self.filter_type or other.filter_type,
             order_type=self.order_type or other.order_type,
@@ -345,6 +371,7 @@ def make_data_resource_metadata(
     revision_fields: tuple[str, ...] = (),
     relation_axes: tuple[DataRelationAxisMetadata, ...] = (),
     group_aliases: tuple[DataGroupAliasMetadata, ...] = (),
+    lines: DataLinesMetadata | None = None,
     fields: tuple[DataResourceFieldMetadata, ...] = (),
     model_label: str | None = None,
     public_id_field: str = PUBLIC_ID_FIELD_NAME,
@@ -445,6 +472,7 @@ def make_data_resource_metadata(
         revision_fields=revision_fields,
         relation_axes=relation_axes,
         group_aliases=group_aliases,
+        lines=lines,
         node_type=node_type,
         filter_type=filter_type,
         order_type=order_type,
@@ -458,7 +486,17 @@ def attach_data_resource_metadata(
     surface: type[_SurfaceT],
     metadata: DataResourceMetadata,
 ) -> type[_SurfaceT]:
-    """Attach model resource metadata to a generated Strawberry surface."""
+    """Attach model resource metadata to a generated Strawberry surface.
+
+    Only query/mutation/subscription *roots* are scanned for resource
+    metadata, so an addon that extends another model's GraphQL *type* (a
+    ``type_extensions`` entry adds fields to the node, never to the model's
+    resource projection) anchors its contribution on one of its own root
+    surfaces — typically its action-mutation bucket — and the per-model merge
+    (:func:`merge_data_resources`) folds it into the owning model's resource
+    by model label. Fields only a server verb advances are contributed
+    read-only (neither creatable nor updatable).
+    """
 
     existing = data_resource_metadata(surface)
     setattr(surface, DATA_RESOURCE_METADATA_ATTR, existing + (metadata,))

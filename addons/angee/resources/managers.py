@@ -13,7 +13,9 @@ from rebac import system_context
 
 from angee.base.models import AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.resources.entries import (
+    GRANT_KIND,
     EntryGraph,
+    GrantGroup,
     LoadResult,
     ResourceEntry,
     ResourceGroup,
@@ -23,6 +25,7 @@ from angee.resources.entries import (
     resource_manifest_for,
 )
 from angee.resources.exceptions import ResourceLoadError
+from angee.resources.grants import materialize_grant_groups
 from angee.resources.loader import (
     DryRunRollback,
     build_resource,
@@ -41,16 +44,19 @@ class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
         """Validate selected addon resource files without saving rows."""
 
         selected_addons = tuple(addons)
-        groups = self._groups_for(selected_addons, tiers=tiers)
-        self._check_xref_collisions(groups)
+        row_groups, grant_groups = self._groups_for(selected_addons, tiers=tiers)
+        self._check_xref_collisions(row_groups)
         self._import_groups(
-            groups,
+            row_groups,
+            grant_groups,
             dry_run=True,
             addon_aliases=self._addon_aliases(selected_addons),
         )
         return ValidationResult(
-            checked_files=len(groups),
-            checked_rows=sum(len(group.rows) for group in groups),
+            checked_files=len(row_groups) + len(grant_groups),
+            checked_rows=(
+                sum(len(group.rows) for group in row_groups) + sum(len(group.rows) for group in grant_groups)
+            ),
         )
 
     def load_addons(
@@ -68,29 +74,37 @@ class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
             raise ImproperlyConfigured("resources load demo requires DEBUG or --allow-non-dev")
 
         selected_addons = tuple(addons)
-        groups = self._groups_for(selected_addons, tiers=active_tiers)
-        self._check_xref_collisions(groups)
+        row_groups, grant_groups = self._groups_for(selected_addons, tiers=active_tiers)
+        self._check_xref_collisions(row_groups)
         return self._import_groups(
-            groups,
+            row_groups,
+            grant_groups,
             dry_run=dry_run,
             addon_aliases=self._addon_aliases(selected_addons),
         )
 
     def _import_groups(
         self,
-        groups: tuple[ResourceGroup, ...],
+        row_groups: tuple[ResourceGroup, ...],
+        grant_groups: tuple[GrantGroup, ...],
         *,
         dry_run: bool,
         addon_aliases: Mapping[str, str],
     ) -> LoadResult:
-        """Import ``groups`` and optionally roll the transaction back."""
+        """Import model rows and materialize grants; optionally roll back.
+
+        Grants resolve their references through the ledger written by the row
+        import above, so they run last within the same transaction. A dry run
+        exercises both paths — resolving grant xrefs against the (uncommitted)
+        rows — before rolling everything back.
+        """
 
         load_result = LoadResult(created=0, updated=0, skipped=0)
         try:
             reason = "resources.validate" if dry_run else "resources.load"
             with system_context(reason=reason), transaction.atomic():
                 loaded_groups: list[tuple[ResourceGroup, Any]] = []
-                for group in groups:
+                for group in row_groups:
                     resource = build_resource(
                         group.model,
                         group.entry,
@@ -111,6 +125,16 @@ class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
                     loaded_groups.append((group, resource))
                 if not dry_run:
                     self._run_post_load_hooks(loaded_groups)
+                created, skipped = materialize_grant_groups(
+                    grant_groups,
+                    ledger_model=self.model,
+                    addon_aliases=addon_aliases,
+                )
+                load_result = LoadResult(
+                    created=load_result.created + created,
+                    updated=load_result.updated,
+                    skipped=load_result.skipped + skipped,
+                )
                 if dry_run:
                     raise DryRunRollback()
         except DryRunRollback:
@@ -160,7 +184,11 @@ class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
         """Return resource display names and parsed row counts."""
 
         return tuple(
-            (entry.display, len(entry.read_resource_rows())) for entry in self._entries_for(addons, tiers=tiers)
+            (
+                entry.display,
+                len(entry.read_grant_rows() if entry.kind == GRANT_KIND else entry.read_resource_rows()),
+            )
+            for entry in self._entries_for(addons, tiers=tiers)
         )
 
     def counts_by_addon(self) -> dict[str, int]:
@@ -193,12 +221,16 @@ class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
         addons: Iterable[Any],
         *,
         tiers: Iterable[object] | None,
-    ) -> tuple[ResourceGroup, ...]:
-        """Return selected rows grouped by source entry and model."""
+    ) -> tuple[tuple[ResourceGroup, ...], tuple[GrantGroup, ...]]:
+        """Return selected model-row groups and grant groups in dependency order."""
 
         groups: list[ResourceGroup] = []
+        grant_groups: list[GrantGroup] = []
         by_key: dict[tuple[str, str, str], ResourceGroup] = {}
         for entry in self._entries_for(addons, tiers=tiers):
+            if entry.kind == GRANT_KIND:
+                grant_groups.append(GrantGroup(entry=entry, rows=entry.read_grant_rows()))
+                continue
             for row in entry.read_resource_rows():
                 model = resolve_model(row.model_label)
                 key = (entry.addon.name, entry.source, model._meta.label_lower)
@@ -208,7 +240,7 @@ class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
                     by_key[key] = group
                     groups.append(group)
                 group.rows.append(row)
-        return tuple(groups)
+        return tuple(groups), tuple(grant_groups)
 
     def _entries_for(
         self,

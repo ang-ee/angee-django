@@ -13,6 +13,7 @@ import {
 } from "@angee/metadata";
 import {
   refineFieldsFromPaths,
+  runActionResult,
   useActionMutation,
 } from "@angee/refine";
 import {
@@ -123,7 +124,9 @@ function AgentProvisionToolbarAction({
   const handleProvision = async (): Promise<void> => {
     setOptimisticProvisioning(true);
     try {
-      const message = await provisionAgent(recordId);
+      // Keep the throw-on-failure/success-message projection over the in-band
+      // outcome so a domain failure lands in the catch toast below.
+      const message = runActionResult(await provisionAgent(recordId));
       reload();
       if (message) toast.success({ title: message });
     } catch (caught) {

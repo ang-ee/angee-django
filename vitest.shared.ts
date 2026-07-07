@@ -1,5 +1,4 @@
 import { fileURLToPath } from "node:url";
-import { mergeConfig, type ViteUserConfig } from "vitest/config";
 import {
   type AngeeWebVitestConfig,
   defineAngeePackageVitestConfig as definePackageVitestConfig,
@@ -32,21 +31,43 @@ export const gqlAlias = gqlAliasFor(
   fileURLToPath(new URL("./examples/notes-angee/runtime/gql/", import.meta.url)),
 );
 
+type PackageVitestConfig = NonNullable<Parameters<typeof definePackageVitestConfig>[0]>;
+type PackageVitestResult = ReturnType<typeof definePackageVitestConfig>;
+type AliasEntry = { find: string | RegExp; replacement: string };
+type AliasList = AliasEntry[];
+
 // Core framework packages resolve the same fixture: `@angee/ui` owns authored
 // `documents.ts` view operations, so any core package whose test import graph
 // reaches them needs the `@angee/gql/<schema>` alias too.
 export function defineAngeePackageVitestConfig(
-  config: ViteUserConfig = {},
-): ViteUserConfig {
-  return definePackageVitestConfig(
-    mergeConfig({ resolve: { alias: gqlAlias } }, config),
-  );
+  config: PackageVitestConfig = {},
+): PackageVitestResult {
+  return definePackageVitestConfig(withGqlAlias(config));
 }
 
 // Defaults `gqlAlias` to the in-repo fixture so a base-addon config need not
 // repeat it; a config that owns its own `runtime/gql/` passes `gqlAlias`.
 export function defineAngeeWebVitestConfig(
   config: Partial<AngeeWebVitestConfig> = {},
-): ViteUserConfig {
-  return defineWebVitestConfig({ gqlAlias, ...config });
+): ReturnType<typeof defineWebVitestConfig> {
+  return defineWebVitestConfig({ gqlAlias, ...config } as AngeeWebVitestConfig);
+}
+
+function withGqlAlias(config: PackageVitestConfig): PackageVitestConfig {
+  return {
+    ...config,
+    resolve: {
+      ...config.resolve,
+      alias: [...gqlAlias, ...aliasArray(config.resolve?.alias)],
+    },
+  } as PackageVitestConfig;
+}
+
+function aliasArray(alias: unknown): AliasList {
+  if (!alias) return [];
+  if (Array.isArray(alias)) return alias as AliasList;
+  return Object.entries(alias as Record<string, string>).map(([find, replacement]) => ({
+    find,
+    replacement,
+  }));
 }

@@ -16,6 +16,9 @@ export const enIntegrateMessages: Record<string, string> = {
   "col.vendor": "Vendor",
   "col.credential": "Credential",
   "col.lastError": "Last error",
+  "col.source": "Source",
+  "col.repository": "Repository",
+  "col.vcsBridge": "VCS bridge",
 
   // Integrations page.
   "integrations.identity": "Identity",

@@ -7,6 +7,7 @@ import {
 import {
   isClientRowModel,
   useModelMetadata,
+  useSchemaFieldMetadata,
 } from "@angee/metadata";
 import type {
   Row,
@@ -24,16 +25,19 @@ import {
 import {
   RESOURCE_VIEW_KINDS,
   Filter,
+  availableResourceViewKinds,
   resourceViewGroupsEqual,
   type ResourceViewDefaultGroups,
   type ResourceViewGroup,
   type ResourceViewKind,
 } from "./resource-view-model";
+import { CalendarCollectionSurface } from "./calendar-collection-surface";
 import { DeletePreviewDialog } from "./DeletePreviewDialog";
 import {
   useClientResourceViewSurface,
   useGroupedResourceViewSurface,
   useResourceViewSurface,
+  type ResolvedBoardLaneSource,
   type ResourceViewSurface,
   type UseResourceViewSurfaceProps,
 } from "./resource-view-surface";
@@ -65,7 +69,7 @@ import {
   textFilterValue,
   validResourceViewGroupStack,
 } from "./resource-view-utils";
-import { columnsWithMetadataDefaults } from "./model-metadata-defaults";
+import { columnsWithMetadataDefaults, relationFieldInfo } from "./model-metadata-defaults";
 import type { ColumnDescriptor } from "./page";
 import { useRelationFacets } from "./relation-facet";
 import { useScalarFacets } from "./scalar-facet";
@@ -79,6 +83,8 @@ export type {
   ListColumn,
 } from "./resource-view-list-body";
 export type {
+  BoardLaneSource,
+  CalendarViewSpec,
   CardActionContext,
   ListEmptyAction,
   ListEmptyContent,
@@ -142,6 +148,8 @@ function ListViewBody<TRow extends Row = Row>({
   pageSize,
   defaultGroup,
   defaultGroups,
+  calendar,
+  laneSource,
   onCreate,
   createLabel,
   onRowClick,
@@ -158,10 +166,33 @@ function ListViewBody<TRow extends Row = Row>({
 }): React.ReactElement {
   const t = useUiT();
   const resolvedEmptyContent = emptyContent ?? t("list.empty");
+  // The Calendar kind is offered only where the page declares occurrence sources;
+  // the switcher's options derive from that (list + board always).
+  const calendarAvailable = (calendar?.sources.length ?? 0) > 0;
+  const availableViews = React.useMemo(
+    () => availableResourceViewKinds({ calendar: calendarAvailable }),
+    [calendarAvailable],
+  );
   const modelMetadata = useModelMetadata(resource);
+  const schemaMetadata = useSchemaFieldMetadata();
+  const resolvedLaneSource = React.useMemo<ResolvedBoardLaneSource | null>(() => {
+    if (!laneSource) return null;
+    const fieldMetadata = modelMetadata?.fields[laneSource.field];
+    const relation = relationFieldInfo(laneSource.field, modelMetadata, schemaMetadata);
+    if (!relation) {
+      if (modelMetadata) {
+        throw new Error(
+          `ListView laneSource field "${laneSource.field}" must resolve to a relation.`,
+        );
+      }
+      return null;
+    }
+    if (!fieldMetadata) return null;
+    return { ...laneSource, relation, fieldMetadata };
+  }, [laneSource, modelMetadata, schemaMetadata]);
   const resolvedColumns = React.useMemo(
-    () => columnsWithMetadataDefaults(columns, modelMetadata),
-    [columns, modelMetadata],
+    () => columnsWithMetadataDefaults(columns, modelMetadata, schemaMetadata),
+    [columns, modelMetadata, schemaMetadata],
   );
   const mergedFilter = React.useMemo(
     () => Filter.combineOptional(baseFilter, resourceView.state.filter),
@@ -174,11 +205,22 @@ function ListViewBody<TRow extends Row = Row>({
     modelMetadata,
     mergedFilter,
   );
-  const rawActiveDefaultGroup = defaultGroupForView(
-    defaultGroup,
-    defaultGroups,
-    resourceView.state.view,
+  const laneSourceGroup = React.useMemo(
+    () =>
+      resolvedLaneSource
+        ? resolveResourceViewGroup({ field: resolvedLaneSource.field }, modelMetadata)
+        : null,
+    [modelMetadata, resolvedLaneSource],
   );
+  const boardGroupingPinned =
+    resourceView.state.view === "board" && laneSourceGroup !== null;
+  const rawActiveDefaultGroup = boardGroupingPinned
+    ? laneSourceGroup
+    : defaultGroupForView(
+        defaultGroup,
+        defaultGroups,
+        resourceView.state.view,
+      );
   const activeDefaultGroup = React.useMemo(
     () =>
       rawActiveDefaultGroup
@@ -208,11 +250,15 @@ function ListViewBody<TRow extends Row = Row>({
       || !resourceViewGroupsEqual(handledDefaultGroupRef.current, activeDefaultGroup)
     );
   const effectiveGroupStack = React.useMemo(() => {
+    if (boardGroupingPinned && validDefaultGroupStack.length > 0) {
+      return validDefaultGroupStack;
+    }
     if (validCurrentGroupStack.length > 0) return validCurrentGroupStack;
     if (hasInvalidGroupStack || defaultGroupPending) return validDefaultGroupStack;
     return resourceView.state.groupStack;
   }, [
     resourceView.state.groupStack,
+    boardGroupingPinned,
     hasInvalidGroupStack,
     defaultGroupPending,
     validCurrentGroupStack,
@@ -226,12 +272,20 @@ function ListViewBody<TRow extends Row = Row>({
     if (
       handledDefaultGroupRef.current
       && resourceViewGroupsEqual(handledDefaultGroupRef.current, activeDefaultGroup)
+      && (
+        !boardGroupingPinned
+        || (
+          resourceView.state.group !== null
+          && resourceViewGroupsEqual(resourceView.state.group, activeDefaultGroup)
+        )
+      )
     ) {
       return;
     }
     const previousDefault = handledDefaultGroupRef.current;
     if (
-      resourceView.state.group === null
+      boardGroupingPinned
+      || resourceView.state.group === null
       || (
         previousDefault
         && resourceViewGroupsEqual(resourceView.state.group, previousDefault)
@@ -242,6 +296,7 @@ function ListViewBody<TRow extends Row = Row>({
     }
   }, [
     activeDefaultGroup,
+    boardGroupingPinned,
     resourceView.setGroup,
     resourceView.state.group,
   ]);
@@ -285,6 +340,7 @@ function ListViewBody<TRow extends Row = Row>({
     resourceView,
     modelMetadata,
     groupStack: effectiveGroupStack,
+    laneSource: resolvedLaneSource,
     enabled: !groupedListMode,
     onListStateChange,
   };
@@ -295,7 +351,9 @@ function ListViewBody<TRow extends Row = Row>({
       resolvedColumns={resolvedColumns}
       modelMetadata={modelMetadata}
       resourceView={resourceView}
+      availableViews={availableViews}
       effectiveGroupStack={effectiveGroupStack}
+      boardGroupingPinned={boardGroupingPinned}
       clientRowModel={clientRowModel}
       groupedListMode={groupedListMode}
       declaredFacets={declaredFacets}
@@ -319,9 +377,24 @@ function ListViewBody<TRow extends Row = Row>({
     />
   );
   // A client resource fetches once and pages in the browser; a server resource
-  // queries Hasura per page. The two surface hooks call different data hooks, so
-  // the choice is a component boundary (never a conditional hook): a metadata
-  // flip remounts the matching surface component rather than reordering hooks.
+  // queries Hasura per page; the calendar fetches a window over authored sources.
+  // Each data path calls different hooks, so the choice is a component boundary
+  // (never a conditional hook): a view/metadata flip remounts the matching surface
+  // rather than reordering hooks. The calendar surface never calls `useList`.
+  if (calendar && resourceView.state.view === "calendar" && calendarAvailable) {
+    return (
+      <CalendarCollectionSurface
+        resource={resource}
+        resourceView={resourceView}
+        calendar={calendar}
+        availableViews={availableViews}
+        createLabel={createLabel}
+        onCreate={onCreate}
+        toolbarActions={toolbarActions}
+        className={className}
+      />
+    );
+  }
   if (clientRowModel) {
     return <ClientSurfaceBody<TRow> surfaceProps={surfaceProps}>{content}</ClientSurfaceBody>;
   }
@@ -363,7 +436,9 @@ interface ListViewContentProps<TRow extends Row> {
   resolvedColumns: readonly ColumnDescriptor<TRow>[];
   modelMetadata: ReturnType<typeof useModelMetadata>;
   resourceView: ResourceViewContextValue;
+  availableViews: readonly ResourceViewKind[];
   effectiveGroupStack: readonly ResourceViewGroup[];
+  boardGroupingPinned: boolean;
   clientRowModel: boolean;
   groupedListMode: boolean;
   declaredFacets: ReturnType<typeof useRelationFacets>;
@@ -392,7 +467,9 @@ function ListViewContent<TRow extends Row = Row>({
   resolvedColumns,
   modelMetadata,
   resourceView,
+  availableViews,
   effectiveGroupStack,
+  boardGroupingPinned,
   clientRowModel,
   groupedListMode,
   declaredFacets,
@@ -524,6 +601,7 @@ function ListViewContent<TRow extends Row = Row>({
   );
   const toolbar = useResourceToolbarProps({
     actions: toolbarActions,
+    availableViews,
     pager: toolbarPager,
     view: resourceView.state.view,
     group: effectiveGroupStack[0] ?? null,
@@ -539,6 +617,7 @@ function ListViewContent<TRow extends Row = Row>({
     createLabel: createLabel ?? createLabelForResource(resource),
     onCreate,
     resourceView,
+    groupingEnabled: !boardGroupingPinned,
     pagerSubject: groupedListMode ? "Groups" : undefined,
     pagerTotalUnit: groupedListMode ? "groups" : undefined,
   });
@@ -614,6 +693,8 @@ function ListViewContent<TRow extends Row = Row>({
           cardActions={cardActions}
           cardActionContext={cardActionContext}
           renderCard={renderCard}
+          dragEnabled={surface.boardDragEnabled}
+          onCardMove={surface.onBoardCardMove}
         />
       ) : flatMeasures.length > 0 && !clientRowModel ? (
         <FlatListBodyWithAggregate

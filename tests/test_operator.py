@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Iterator, cast
 
 import pytest
 import strawberry
 from django.core.cache import cache
-from rebac import SubjectRef
+from rebac import LocalBackend, ObjectRef, RelationshipTuple, SubjectRef
+from rebac.schema import ConstBinding, parse_zed
 
 from angee.integrate.http import HttpResponse
 from angee.operator import daemon as daemon_module
 from angee.operator import schema as operator_schema
 from angee.operator.daemon import OperatorDaemon, OperatorDaemonError, OperatorDaemonNotFound, _daemon_error_body
+from angee.operator.models import OperatorConnection as _AbstractOperatorConnection
+from angee.operator.models import OperatorRole as _AbstractOperatorRole
 
 _CONNECTION_QUERY = "{ operatorConnection { endpoint token } }"
 _ACTOR = SubjectRef.of("auth/user", "abc")
@@ -527,3 +531,86 @@ def test_operator_contributes_only_the_console_surface() -> None:
     console = operator_schema.schemas["console"]
     assert operator_schema.OperatorQuery in console["query"]
     assert operator_schema.OperatorConnectionInfo in console["types"]
+
+
+# --- REBAC const-canon reach (F-g) --------------------------------------------
+
+# The operator addon is not in the bare test INSTALLED_APPS, so the composer's
+# runtime anchors are absent. These concrete `managed = False` anchors (no table)
+# back `model_for_resource_type(...)` so the const relations on
+# `operator/connection` / `operator/role` resolve exactly as they do composed.
+
+
+class _OperatorConnectionAnchor(_AbstractOperatorConnection):
+    """Concrete table-less REBAC anchor for `operator/connection` (probe only)."""
+
+    class Meta(_AbstractOperatorConnection.Meta):
+        """Django options for the operator connection probe anchor."""
+
+        abstract = False
+        managed = False
+        app_label = "integrate"
+        rebac_resource_type = "operator/connection"
+
+
+class _OperatorRoleAnchor(_AbstractOperatorRole):
+    """Concrete table-less REBAC anchor for the `operator/role` namespace (probe only)."""
+
+    class Meta(_AbstractOperatorRole.Meta):
+        """Django options for the operator role probe anchor."""
+
+        abstract = False
+        managed = False
+        app_label = "integrate"
+        rebac_resource_type = "operator/role"
+
+
+# `operator/connection` / `operator/role` reference these cross-package types; the
+# probe evaluates the *real* permissions.zed against a standalone schema, so the
+# referenced externals are defined minimally here.
+_OPERATOR_SCHEMA_PREAMBLE = """
+definition auth/user {}
+definition auth/group { relation member: auth/user }
+definition angee/role { relation member: auth/user | auth/group#member }
+"""
+_OPERATOR_ZED = Path(__file__).resolve().parents[1] / "addons/angee/operator/permissions.zed"
+
+
+@pytest.mark.django_db
+def test_operator_admin_role_reaches_connection_read_tuple_free() -> None:
+    """`operator/connection#read` resolves for an operator_admin member tuple-free.
+
+    The migrated def reaches the role through the const canon
+    (`reader->effective_member`), mirroring storage/backend. The role membership is
+    the only tuple written — no per-object `reader` tuple — and a non-member is
+    denied cleanly (never a SchemaError from the walk into `operator/role#admin`).
+    """
+
+    schema = parse_zed(_OPERATOR_SCHEMA_PREAMBLE + _OPERATOR_ZED.read_text(encoding="utf-8"))
+
+    connection = schema.get_definition("operator/connection")
+    assert connection is not None
+    reader = next(relation for relation in connection.relations if relation.name == "reader")
+    assert reader.backing == ConstBinding(target_id="operator_admin", kind="const")
+
+    backend = LocalBackend()
+    backend.set_schema(schema)
+    operator = SubjectRef.of("auth/user", "operator-1")
+    connection_ref = ObjectRef("operator/connection", "default")
+
+    # A non-member is denied — and the walk into `operator/role#admin` resolves to
+    # a clean deny, not a SchemaError.
+    assert not backend.has_access(subject=operator, action="read", resource=connection_ref)
+
+    backend.write_relationships(
+        [
+            RelationshipTuple(
+                resource=ObjectRef("operator/role", "operator_admin"),
+                relation="member",
+                subject=operator,
+            )
+        ]
+    )
+
+    # The single role-membership row opens `read` through `reader->effective_member`.
+    assert backend.has_access(subject=operator, action="read", resource=connection_ref)

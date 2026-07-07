@@ -1,4 +1,4 @@
-import { Alert, LoadingPanel } from "@angee/ui";
+import { Alert, LoadingPanel, textRoleVariants } from "@angee/ui";
 import type { ReactNode } from "react";
 
 /**
@@ -37,7 +37,7 @@ export function OperatorSection({
 }: OperatorSectionProps): ReactNode {
   return (
     <div className="flex flex-col gap-4">
-      {title ? <h2 className="text-lg font-semibold text-fg">{title}</h2> : null}
+      {title ? <h2 className={textRoleVariants({ role: "heading" })}>{title}</h2> : null}
       {error ? (
         <Alert tone="danger">{error.message}</Alert>
       ) : loading ? (

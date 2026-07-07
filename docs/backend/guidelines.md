@@ -46,7 +46,9 @@ the marker that makes the app an addon), `models.py` owns data and row behavior,
 `mcp_tools.py` owns MCP tool registration, `forms.py` owns Django form
 validation/presentation, `admin.py` owns Django admin presentation, and
 `management/commands/` owns CLI parsing. `apps.py` is optional — an addon needs one
-only to run a Python seam (`ready()` / `import_models()`). Do not add a parallel
+only to run a Python seam (`ready()` / `import_models()`); a model-less addon may
+also keep one so its `AppConfig` docstring is the addon's contract home (an
+incubated addon declaring a face it owns but has not built). Do not add a parallel
 registry, loader, or naming convention until the native Django surface is proven
 insufficient.
 
@@ -355,6 +357,42 @@ data through REBAC, never a queryset bypass.
   with a `managed=False` abstract anchor model (passes `rebac.E009`, emits no
   table) plus that const admin, and keep an `| angee/role:admin#member` arm in
   `member` or `rebac.W004` fires.
+- **Const-backing is the one canon for tuple-free role reach.** A resource that
+  grants a *named* role (e.g. `storage_admin`, `accounting_admin`) declares a
+  const-backed relation to the role namespace and arrows through
+  `effective_member`: `relation manager: storage/role // rebac:const=storage_admin`
+  with `permission … = manager->effective_member` (mirror of `admin->member`).
+  Never a pinned-id userset allowed subject
+  (`storage/role:storage_admin#effective_member`): nobody writes the per-row tuple
+  it needs and the local backend never synthesises one — the subject-set walk
+  scans relations only, so a permission-typed `#effective_member` userset denies.
+  The const *target* role namespace needs its own `definition` + `managed=False`
+  anchor model (like the resource's const admin), because a **non-member** check
+  walks the arrow into `<ns>/role#admin`; without the anchor that const cannot
+  resolve and the evaluator raises instead of returning a clean deny. Bump the
+  package `@rebac_schema_revision` when migrating a def to the const shape.
+- **A consumer addon contributes domain relations to a framework definition
+  additively — never by editing the framework zed.** The owning addon's
+  `permissions.zed` declares the *seam* (e.g. `iam/company`); a consumer addon
+  that needs a company-scoped role adds it from its own **`permissions.extends.zed`**
+  (sibling to `permissions.zed`), owned by `angee.compose.permissions`. Each
+  `definition <target> { … }` block in the fragment names an existing definition
+  and lists the relations it contributes and the permission arms it unions in
+  (`permission read = <term>` merges to `read = (<base>) + (<term>)`). The
+  composer merges every fragment into its target's owning package at build time,
+  emits the merged effective zed to `runtime/permissions/<package>.zed`, and
+  repoints that package's `AppConfig.rebac_schema` at it, so `rebac sync` /
+  `rebac check` / `reconcile_permissions` all read the additive superset with no
+  library change. The merge fails fast on a relation-name collision (base or two
+  contributors), an arm whose permission the base does not declare, and a target
+  no installed package declares; contributors merge in sorted package order.
+  Functional drift is caught by `rebac sync` (content hash) and `angee build
+  --check` (the emitted file); the contribution is revisioned by the contributing
+  addon (`@rebac_schema_revision` in its fragment, echoed into the merged file's
+  `@rebac_extended_by`), so the base addon does **not** bump its revision for an
+  additive extension. **Editing a framework/base-addon `permissions.zed` to name
+  a domain role (`accountant`, `salesperson`, …) is a bug** — the vocabulary
+  belongs in the consumer addon that owns the concern.
 - There is no `rebac_roles` command — grant roles with `rebac.roles.grant`. A
   superuser created without a real `save()` (bulk_create, loaddata, or skipped as
   unchanged) is never in `angee/role:admin#member`, so const-admin reach fails
@@ -474,10 +512,28 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   NULL (REBAC `// rebac:field=` arrows run over nullable FKs).
 - **A status field is read/write-asymmetric** — GraphQL serializes it on read as
   the uppercase enum NAME (`ACTIVE`) but the writable `Patch.status` `String`
-  takes the lowercase model value (`"disabled"`).
+  takes the lowercase model value (`"disabled"`). This holds inside F6 nested line
+  inputs too: a child enum/choices column is a `String` on the line insert input
+  (write the lowercase value), while the child node projects it as an enum (read
+  UPPERCASE); an M2M child column is `[ID]` (public sqids in and out).
+- **F6 line-cell metadata is projected from the child node surface, not the bare
+  model** — `HasuraLines(node=…)`'s child fields reconstruct through
+  `resource_fields(node, model)` (the same classifier the parent uses), because the
+  node owns a choices column's wire enum values and an M2M's `kind:"list"` relation
+  target. A writable child column the node does not expose falls back to the model
+  reconstruction, which still cannot carry enum/list — so expose any enum/M2M line
+  cell on the child node.
 - **Intersect write-only fields out of the read/return selection** — a field
   absent from the SDL read type (e.g. `password`) makes the detail query invalid
   and the form loads blank if it is selected.
+- **Server-owned fields are excluded from the write surface, never merely
+  `readOnly` in a form.** A column the server owns (audit, derived, or
+  default-only) must be left out of the resource's `insertable`/`writable` set so
+  it never enters the generated input type. Marking the form control `readOnly`
+  only hides the widget: the field still rides the input, and the form's
+  `Field.defaultValue` seeds and submits a value for it, so the client can write a
+  column the server owns. Resource-level exclusion is the one authorization gate;
+  `readOnly` is presentation, not authorization.
 - **Validation surfaces two ways** — Django `ValidationError` flows through
   `extensions.validationErrors` (camelCased), but GraphQL input-coercion errors
   fire before resolvers and never reach it, so guard required inputs client-side
@@ -490,9 +546,29 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   per-test throttles; IAM composes `django-axes` at the `authenticate(request=...)`
   backend/signal path, so the password GraphQL mutation stays a thin caller.
 - **Row locks must keep the SQLite floor.** Wrap `select_for_update()` through the
-  owning queryset/manager's feature-gated helper; SQLite is a supported backend
-  and Django 6 silently drops plain `FOR UPDATE` there, so the helper is the
-  greppable contract that keeps lock intent explicit and backend-gated.
+  owning queryset/manager's feature-gated helper (`AngeeQuerySet.lock_if_supported`);
+  SQLite is a supported backend and Django 6 silently drops plain `FOR UPDATE`
+  there, so the helper is the greppable contract that keeps lock intent explicit and
+  backend-gated. `HierarchyMixin` path maintenance and `save_state`'s transition
+  guard both route their lock through it.
+- **A `HierarchyMixin` consumer declares its scope fields — the mixin never probes
+  by column name.** A subtree that must stay inside a scope (a company, a tenant)
+  declares `hierarchy_scope_fields = ("company",)` (a `ClassVar` tuple; FKs compare
+  by stored id); the mixin rejects a reparent or create under a parent that differs
+  on any listed field. It is generic and iam-free — there is no `company`-by-name
+  fallback, so a company-scoped tree that omits the declaration silently accepts a
+  cross-company parent. `StateField` transitions guarded by `save_state` get an
+  optimistic-concurrency guard for free: the committed source is re-read under the
+  same lock before the write, so a lost race raises `TransitionNotAllowed` instead
+  of double-applying (e.g. double-posting a ledger).
+- **Django 6 refreshes `F()`/expression fields back onto the instance via
+  `UPDATE ... RETURNING` before `post_save`.** A `save(update_fields=…)` whose
+  fields hold expressions (`F("count") + 1`, `Greatest(…)`) leaves the instance
+  carrying the DB-true resolved values, not the expression objects — the
+  `post_save` receiver (and any `changes` publisher) sees the true row. Never
+  "restore" a locally recomputed value (`prior + 1`) after such a save: it stomps
+  the RETURNING value and undercounts whenever a concurrent write advanced the
+  column further.
 - **A gated factory that uses `sudo()` must restore the actor before returning.**
   Elevated writes may be necessary to create the row, but callers continue under
   the original actor. Capture `current_actor()` before the elevated block and

@@ -9,6 +9,18 @@
 // Each owns its own created_by rather than reaching through the party, so a
 // handle synced for an unknown sender (party still null) stays readable.
 
+// Read-model decision (v1): party visibility is a per-row `reader` grant — a
+// tuple naming a user or a group#member on the concrete row — not a directory- or
+// company-wide read arm. A persona therefore sees a party only where a `reader`
+// grant reaches it, so demo tiers grant readers explicitly (the per-row `reader`
+// grant fixtures each parties-owning addon ships); a grant on an MTI child lands
+// on the child *and* every concrete parent it IS-A via the resources grant
+// loader's MTI-aware expansion (`addons/angee/resources/grants.py`), so a foreign
+// key typed to `parties/party` still authorizes. A first-class directory/company
+// read arm is deliberately deferred until a real multi-tenant directory
+// requirement lands — parties are shared directory entities, not the
+// company-isolation surface (documents are).
+
 definition parties/party {
     relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member

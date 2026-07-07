@@ -22,13 +22,15 @@ import {
   deletePreviewRequest,
   extractActionOutcome,
   extractAggregate,
-  runActionResult,
   extractDeletePreview,
   extractFacet,
   extractGroupBy,
   extractRevisions,
+  extractSaveResult,
   groupByRequest,
   revisionsRequest,
+  saveRequest,
+  type ActionOutcome,
   type AggregateBucket,
   type AggregateRequestOptions,
   type ByIdVariables,
@@ -40,11 +42,13 @@ import {
   type GroupByResult,
   type ResourceRevision,
   type ResourceFacetResult,
+  type ResourceSaveVariables,
 } from "../operations";
 import {
   operationDocument,
   useOperationDocuments,
 } from "../operation-documents";
+import { useActiveDataProviderName } from "./data-provider-context";
 import { stableKey } from "../stable-deps";
 
 type Row = Record<string, unknown>;
@@ -130,7 +134,20 @@ export interface UseAngeeRevisionsResult {
   refetch: () => void;
 }
 
-export type ActionMutate = (id: string) => Promise<string | undefined>;
+export interface UseAngeeResourceSaveResult {
+  save: (variables: ResourceSaveVariables) => Promise<Row | null>;
+  fetching: boolean;
+  error: HttpError | null;
+  reset: () => void;
+}
+
+/**
+ * Fire a single-id action and resolve its in-band `ActionOutcome` (`undefined`
+ * when the transport returned no payload). A domain failure resolves as
+ * `ok=false` rather than throwing — project through `runActionResult` where the
+ * caller wants the legacy throw-on-failure/success-message contract.
+ */
+export type ActionMutate = (id: string) => Promise<ActionOutcome | undefined>;
 
 export interface UseActionMutationOptions {
   dataProviderName?: string;
@@ -464,6 +481,43 @@ export function useAngeeDeletePreview(
   };
 }
 
+/**
+ * Run the authored `<resource>_save(pk, patch, lines)` diff-apply mutation (F6)
+ * through refine's custom mutation owner — the transactional parent-patch-plus-line
+ * upsert/delete write. Mirrors `useAngeeDeletePreview`: the metadata edge resolves the
+ * `save` root as `target`, and the caller passes the generated `document` for that
+ * root (the single backend-binding point, see `saveRequest`). Returns the saved parent
+ * row (with its returned lines) so the form re-seeds from the server truth.
+ */
+export function useAngeeResourceSave(
+  target: CustomGraphQLOperationTarget | null,
+  options: DialectDocumentOptions,
+): UseAngeeResourceSaveResult {
+  const { document } = options;
+  const run = useCustomMutation<BaseRecord, HttpError, ResourceSaveVariables>();
+  const save = useCallback(
+    async (variables: ResourceSaveVariables) => {
+      if (!target) return null;
+      const request = saveRequest(target, variables, { document });
+      const response = await run.mutateAsync({
+        url: "",
+        method: "post",
+        values: variables,
+        dataProviderName: request.dataProviderName,
+        meta: request.meta,
+      });
+      return extractSaveResult(response.data, request.root);
+    },
+    [document, target, run.mutateAsync],
+  );
+  return {
+    save,
+    fetching: run.mutation.isPending,
+    error: run.mutation.error,
+    reset: run.mutation.reset,
+  };
+}
+
 export function useAngeeRevisions(
   target: CustomGraphQLOperationTarget | null,
   id: string | null | undefined,
@@ -506,12 +560,23 @@ export function useAngeeRevisions(
  * Run a single-id backend action mutation through refine's custom mutation
  * owner. The generated `ActionFieldName` union from `@angee/gql/<schema>/actions`
  * still pins callers to real action fields, while refine owns execution state.
+ * The mutate resolves the in-band `ActionOutcome` (`ok`, `message`, and the
+ * created record's `id` when the verb returns one) so callers settle success,
+ * failure, and deep-linking from one value; registered `invalidates` run only
+ * when the outcome is not a domain failure.
  */
 export function useActionMutation<TField extends string = string>(
   field: TField,
   options: UseActionMutationOptions = {},
 ): [ActionMutate, UseActionMutationState] {
-  const dataProviderName = options.dataProviderName ?? "default";
+  // Same fallback chain the authored hooks resolve: an explicit option, then the
+  // ambient DataProviderContext (a resource page's schema, e.g. "console"), then
+  // the "default" alias. Resolving the active schema keeps the action-document
+  // lookup below (keyed by real schema name) from asking for a "default" key that
+  // `operationDocumentsForSchemas` never aliases — the Post-button asymmetry.
+  const activeDataProviderName = useActiveDataProviderName();
+  const dataProviderName =
+    options.dataProviderName ?? activeDataProviderName ?? "default";
   const operationDocuments = useOperationDocuments();
   const invalidate = useInvalidate();
   const invalidates = options.invalidates ?? EMPTY_INVALIDATIONS;
@@ -534,11 +599,17 @@ export function useActionMutation<TField extends string = string>(
         dataProviderName: request.dataProviderName,
         meta: request.meta,
       });
-      const result = runActionResult(extractActionOutcome(response.data, request.root));
-      await Promise.all(
-        invalidates.map((target) => invalidate(target)),
-      );
-      return result;
+      const outcome =
+        extractActionOutcome(response.data, request.root) ?? undefined;
+      // A domain failure (ok=false) mutated nothing — skip invalidation so a
+      // failed write never refreshes caches (the same posture as the authored
+      // hooks' errorFrom gating).
+      if (!outcome || outcome.ok) {
+        await Promise.all(
+          invalidates.map((target) => invalidate(target)),
+        );
+      }
+      return outcome;
     },
     [
       dataProviderName,

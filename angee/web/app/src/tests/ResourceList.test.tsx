@@ -2083,13 +2083,13 @@ describe("ResourceList", () => {
     );
 
     const removeGroup = await screen.findByRole("button", {
-      name: "Remove group",
+      name: "Remove Updated \u00b7 Day",
     });
     fireEvent.click(removeGroup);
 
     await waitFor(() =>
       expect(
-        screen.queryByRole("button", { name: "Remove group" }),
+        screen.queryByRole("button", { name: "Remove Updated \u00b7 Day" }),
       ).toBeNull(),
     );
   });
@@ -2408,7 +2408,7 @@ describe("ResourceList", () => {
     );
 
     await screen.findByRole("button", { name: "Groups 1-2 / 4 groups" });
-    await screen.findByRole("button", { name: "Remove group" });
+    await screen.findByRole("button", { name: "Remove Updated \u00b7 Day" });
     await waitFor(() => {
       const latest = onUrlUpdate.mock.calls.at(-1)?.[0];
       expect(latest?.searchParams.get("pageSize")).toBeNull();

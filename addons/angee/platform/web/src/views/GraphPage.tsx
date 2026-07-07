@@ -3,7 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { parseAsString, useQueryState } from "nuqs";
 
 import {
-  GraphView, type GraphViewNode, type GraphViewNodeStyle } from "@angee/ui";
+  ErrorBanner, GraphView, type GraphViewNode, type GraphViewNodeStyle } from "@angee/ui";
 
 import { usePlatformModelGraph } from "../lib/explorer";
 import { modelDetailPath } from "../lib/paths";
@@ -24,8 +24,8 @@ export function GraphPage(): ReactElement {
 
   if (error) {
     return (
-      <div className="px-3 py-6 text-13 text-danger-text">
-        {error.message}
+      <div className="px-3 py-6">
+        <ErrorBanner description={error.message} />
       </div>
     );
   }

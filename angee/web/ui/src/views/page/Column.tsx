@@ -41,6 +41,8 @@ export interface ColumnDescriptor<
   align?: PageColumnAlign;
   render?: (row: TRow) => ReactNode;
   tone?: Record<string, Tone>;
+  /** Money widget: path to the FK owning the row's currency (see `WidgetField.currencyField`). */
+  currencyField?: string;
 }
 
 /**

@@ -66,6 +66,18 @@ EntryKey = tuple[str, str]
 RESERVED_ROW_KEYS = frozenset({"_xref", "xref", "model", "_meta"})
 """Row keys interpreted by the resource loader rather than model fields."""
 
+ROW_KIND = "rows"
+"""Default entry kind: rows imported into a Django model through the ledger."""
+
+GRANT_KIND = "grants"
+"""Entry kind whose rows the loader materializes into REBAC relationship tuples."""
+
+ENTRY_KINDS = frozenset({ROW_KIND, GRANT_KIND})
+"""Every resource entry kind the loader knows how to materialize."""
+
+GRANT_ROW_KEYS = ("resource", "relation", "subject")
+"""The three fields one declarative grant row must carry, in tuple direction."""
+
 TEXT_FORMATS = {
     ".csv": "csv",
     ".tsv": "tsv",
@@ -167,6 +179,16 @@ def _normalize_depends_on(value: object) -> tuple[str, ...]:
     return tuple(str(item) for item in value)
 
 
+def _entry_kind(value: object) -> str:
+    """Return a validated resource entry kind (``rows`` or ``grants``)."""
+
+    kind = str(value)
+    if kind not in ENTRY_KINDS:
+        expected = ", ".join(sorted(ENTRY_KINDS))
+        raise ImproperlyConfigured(f"Unknown resource entry kind {kind!r}; expected one of {expected}")
+    return kind
+
+
 @dataclass(slots=True)
 class ResourceEntry:
     """One local or remote resource file declared by an addon."""
@@ -185,6 +207,9 @@ class ResourceEntry:
 
     model: str | None = None
     """Optional fallback model label for every row in the file."""
+
+    kind: str = ROW_KIND
+    """Materialization kind: ``rows`` (model rows) or ``grants`` (REBAC tuples)."""
 
     encoding: str = "utf-8"
     """Text encoding used when reading the materialized file."""
@@ -221,6 +246,7 @@ class ResourceEntry:
             source_key=source_key,
             source_value=str(declaration[source_key]),
             model=declaration.get("model"),
+            kind=_entry_kind(declaration.get("kind", ROW_KIND)),
             encoding=declaration.get("encoding", "utf-8"),
             depends_on=declaration.get("depends_on", ()),
             adopt=_resource_adopt_value(declaration["adopt"]) if "adopt" in declaration else False,
@@ -263,6 +289,19 @@ class ResourceEntry:
                 for index, record in enumerate(records, start=1)
             )
         return self._rows
+
+    def read_grant_rows(self) -> tuple[GrantRow, ...]:
+        """Return parsed grant rows for a ``kind = "grants"`` entry.
+
+        A grant file is a flat list of ``{resource, relation, subject}`` rows; it
+        declares no model (the loader materializes tuples, not model rows), so a
+        model in the entry or file metadata is a declaration error.
+        """
+
+        records, file_model = self._read_records()
+        if self.model or file_model:
+            raise ResourceLoadError(f"{self.display}: a grants entry declares no model")
+        return tuple(GrantRow.from_record(self, record, index=index) for index, record in enumerate(records, start=1))
 
     def infer_model_label(self) -> str:
         """Infer ``app.Model`` from a ``[NNN_]app.model.ext`` filename."""
@@ -540,6 +579,61 @@ class ResourceRow:
                 )
             return dict(fields_value)
         return {key: value for key, value in payload.items() if key not in RESERVED_ROW_KEYS}
+
+
+@dataclass(slots=True)
+class GrantRow:
+    """One declarative REBAC grant row, in ``resource <- relation <- subject`` direction."""
+
+    entry: ResourceEntry
+    """Entry that contributed this grant row."""
+
+    resource: str
+    """The grant resource: a ``<ns>/type:<const-id>`` literal or a row xref."""
+
+    relation: str
+    """The relation granted on the resource (e.g. ``member``, ``direct_member``)."""
+
+    subject: str
+    """The subject granted: a user/row xref, a ``<ns>/role:<id>#member`` literal, or ``*``."""
+
+    index: int
+    """1-based position of this row within its source file, for diagnostics."""
+
+    @classmethod
+    def from_record(
+        cls,
+        entry: ResourceEntry,
+        record: Mapping[str, Any],
+        *,
+        index: int,
+    ) -> GrantRow:
+        """Return one validated grant row from parsed file data."""
+
+        unknown = sorted(set(record) - set(GRANT_ROW_KEYS))
+        if unknown:
+            raise ResourceLoadError(
+                f"{entry.display} grant {index}: unknown field(s) {', '.join(unknown)}; "
+                f"expected {', '.join(GRANT_ROW_KEYS)}"
+            )
+        values: dict[str, str] = {}
+        for key in GRANT_ROW_KEYS:
+            value = record.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ResourceLoadError(f"{entry.display} grant {index}: missing {key}")
+            values[key] = value.strip()
+        return cls(entry=entry, index=index, **values)
+
+
+@dataclass(slots=True)
+class GrantGroup:
+    """Grant rows from one ``kind = "grants"`` entry."""
+
+    entry: ResourceEntry
+    """Resource entry that supplied the grant rows."""
+
+    rows: tuple[GrantRow, ...]
+    """Grant rows the loader materializes into REBAC relationship tuples."""
 
 
 @dataclass(slots=True)

@@ -6,16 +6,18 @@ from typing import Any
 
 from django.db import models
 
+from angee.base.fields import MoneyField
+from angee.base.mixins import ARCHIVE_FLAG_FIELD
 from angee.graphql.introspection import is_to_many_relation
 
 RESOURCE_FIELD_KINDS = frozenset({"scalar", "enum", "relation", "list"})
 """Supported resource field kind names."""
 
-RESOURCE_FIELD_SCALARS = frozenset({"ID", "String", "Boolean", "Int", "Float", "DateTime", "Date", "JSON"})
+RESOURCE_FIELD_SCALARS = frozenset({"ID", "String", "Boolean", "Int", "Float", "Decimal", "DateTime", "Date", "JSON"})
 """Supported GraphQL scalar families in data-resource field metadata."""
 
 RESOURCE_FIELD_WIDGETS = frozenset(
-    {"select", "many2one", "tagInput", "switch", "integer", "float", "datetime", "date", "json"}
+    {"select", "many2one", "tagInput", "switch", "integer", "float", "money", "datetime", "date", "json"}
 )
 """Widget vocabulary owned by backend data-resource metadata."""
 
@@ -27,12 +29,26 @@ def resource_field_kind(
     is_list: bool = False,
     is_enum: bool = False,
     is_object: bool = False,
+    projected_as_scalar: bool = False,
 ) -> str:
-    """Return the coarse field kind used by data-resource metadata."""
+    """Return the coarse field kind used by data-resource metadata.
+
+    A to-one relation classifies by how the node *projects* it: as a nested object
+    (``is_object``) or group axis (``has_relation_axis``) it is a ``relation``; as a
+    bare scalar id (``projected_as_scalar`` — an ``ID`` with no subfields) it is a
+    scalar LEAF so the detail/form query selects it without an invalid
+    sub-selection, while still carrying relation metadata (target label + scalar-id
+    widget). Absent a known wire projection (model reconstruction with no surface),
+    a relation stays an object ``relation``.
+    """
 
     if is_list or (field is not None and is_to_many_relation(field)):
         return "list"
-    if is_object or has_relation_axis or (field is not None and field.is_relation):
+    if field is not None and field.is_relation and projected_as_scalar:
+        return "scalar"
+    if is_object or has_relation_axis:
+        return "relation"
+    if field is not None and field.is_relation:
         return "relation"
     if is_enum or (field is not None and getattr(field, "choices", None)):
         return "enum"
@@ -48,7 +64,9 @@ def model_field_scalar(field: models.Field[Any, Any]) -> str | None:
         return "Boolean"
     if isinstance(field, models.IntegerField):
         return "Int"
-    if isinstance(field, (models.DecimalField, models.FloatField)):
+    if isinstance(field, models.DecimalField):
+        return "Decimal"
+    if isinstance(field, models.FloatField):
         return "Float"
     if isinstance(field, models.DateTimeField):
         return "DateTime"
@@ -59,6 +77,33 @@ def model_field_scalar(field: models.Field[Any, Any]) -> str | None:
     if isinstance(field, (models.CharField, models.TextField, models.UUIDField)):
         return "String"
     return None
+
+
+def is_archive_field(field: models.Field[Any, Any] | None) -> bool:
+    """Return whether ``field`` is the :class:`~angee.base.mixins.ArchiveMixin` flag.
+
+    The archive vocabulary is name-based — one column name across the platform
+    (:data:`angee.base.mixins.ARCHIVE_FLAG_FIELD`) — so any model composing
+    ``ArchiveMixin`` is recognised by that column and marked ``archivable`` in
+    resource metadata. A same-typed boolean under a different contract (a
+    soft-delete ``is_trashed``, an enablement ``is_enabled``/``is_active``) is
+    deliberately not matched.
+    """
+
+    return field is not None and getattr(field, "name", None) == ARCHIVE_FLAG_FIELD
+
+
+def money_currency_field(field: models.Field[Any, Any] | None) -> str | None:
+    """Return the currency path a :class:`~angee.base.fields.MoneyField` declares.
+
+    The money vocabulary is type-based — a ``MoneyField`` owns the name of the FK
+    to ``money.Currency`` that denominates its amount (a sibling ``"currency"`` or
+    a one-hop ``"order.currency"``). Emitting it in resource metadata lets the
+    ``"money"`` widget resolve a row's currency without the frontend re-deciding
+    which field owns it. A plain ``DecimalField`` returns ``None``.
+    """
+
+    return field.currency_field if isinstance(field, MoneyField) else None
 
 
 def resource_field_widget(field: models.Field[Any, Any] | None, kind: str) -> str | None:
@@ -74,6 +119,13 @@ def resource_field_widget(field: models.Field[Any, Any] | None, kind: str) -> st
         return "tagInput"
     if field is None:
         return None
+    if field.is_relation:
+        # A to-one relation the node projects as a bare scalar id (kind == "scalar"):
+        # the scalar-id relation widget selects and writes the flat id, never a
+        # sub-object (a ``many2one`` selects ``<field>.id``, invalid on an ``ID``).
+        return "select"
+    if isinstance(field, MoneyField):
+        return "money"
     if isinstance(field, models.BooleanField):
         return "switch"
     if isinstance(field, models.IntegerField):

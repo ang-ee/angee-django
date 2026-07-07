@@ -1,0 +1,6 @@
+[addon]
+name = "angee.sequence"
+description = "Gapless, period-resetting document numbering drawn under a row lock."
+keywords = ["sequence", "numbering", "counter"]
+category = "Foundation"
+depends_on = ["angee.iam", "angee.graphql"]

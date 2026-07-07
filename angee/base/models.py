@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Self, TypeVar, cast
@@ -171,6 +173,21 @@ class AngeeModel(TimestampMixin, RebacMixin):
     Extensions use ``extends`` instead of this flag.
     """
 
+    child_overrides_parent: bool = False
+    """Whether a materialized child's own methods override its concrete parent's.
+
+    A materialized child (``runtime = True`` + ``extends``) is emitted
+    ``class Child(ConcreteParent, AbstractChild)`` — concrete parent first — so the
+    parent wins the MRO and the child cannot override the parent's methods
+    natively. Declaring ``child_overrides_parent = True`` flips this one child's
+    base order to ``class Child(AbstractChild, ConcreteParent)`` so the child's own
+    methods win. Read non-inherited (like ``runtime``); the default preserves the
+    safe parent-first status quo, so ``parties.Person``/``Organization`` (which
+    declare a different default manager than ``Party``) stay parent-first and
+    byte-for-byte unchanged. The composer enforces the flip's manager/transition
+    guards (see ``angee.compose.runtime``).
+    """
+
     class Meta:
         """Django model options for Angee's abstract model base."""
 
@@ -181,6 +198,12 @@ class AngeeModel(TimestampMixin, RebacMixin):
         """Return whether this model class declares itself as a runtime model."""
 
         return cls.__dict__.get("runtime", False)
+
+    @classmethod
+    def overrides_runtime_parent(cls) -> bool:
+        """Return whether this materialized child opts into child-first emission."""
+
+        return bool(cls.__dict__.get("child_overrides_parent", False))
 
     @classmethod
     def impl_key_for(cls, field_name: str, value: Any, *, default: str | None = None) -> str:
@@ -222,6 +245,27 @@ class AngeeModel(TimestampMixin, RebacMixin):
         if not value and default is not None:
             return field.resolve_class(default)
         return field.resolve_for(self)
+
+    def apply_create_defaults(self) -> Mapping[str, Sequence[Any]]:
+        """Apply this row's blank-on-input create defaults before the create gate.
+
+        The auto-CRUD create preflight (``AngeeManager.check_create`` via the
+        Hasura write backend) evaluates the REBAC ``create`` permission against
+        the unsaved instance *before* ``save()`` runs. A field a model defaults
+        in ``save()`` — an :class:`~angee.iam.models.CompanyScopedMixin`
+        ``company`` taken from the actor's sole membership — is therefore still
+        blank when the gate fires, so a ``create = company->member`` arm
+        fail-closes on a create that would in fact have persisted a company.
+
+        A model that defaults a subject-bearing relation on ``save()`` overrides
+        this hook to apply that default here too (idempotent with ``save()``, so
+        the row still persists with it) and return the relation contributions the
+        default adds, keyed by relation name with subject values — so the gate is
+        evaluated against the row as it will persist. The base default applies no
+        defaults and contributes nothing.
+        """
+
+        return {}
 
     @classmethod
     def get_extension_target(cls) -> str | None:
@@ -282,6 +326,22 @@ class AngeeModel(TimestampMixin, RebacMixin):
 
         return self.pk
 
+    def broadcasts_changes(self) -> bool:
+        """Return whether this row's saves/deletes broadcast on ``changes`` subscriptions.
+
+        The publisher (:mod:`angee.graphql.publishing`) asks each row this before
+        emitting a change event, so a model can keep some rows off the generic
+        model-change subscription surface entirely — the emission mirror of a
+        ``get_queryset`` read scope that hides them from the list. Evaluated while
+        the instance is still live (a delete carries the in-memory row), so the
+        answer holds for deletes too, which a post-hoc queryset membership check
+        could not decide. Defaults to broadcasting; a model that isolates rows to a
+        record-scoped surface (record chatter reachable only through
+        ``record_thread``) overrides this to drop those rows.
+        """
+
+        return True
+
 
 class AngeeDataModel(SqidMixin, AngeeModel):
     """Abstract base for Angee rows that participate in public data contracts."""
@@ -290,6 +350,81 @@ class AngeeDataModel(SqidMixin, AngeeModel):
         """Django model options for Angee's public data model base."""
 
         abstract = True
+
+
+def role_anchor(
+    resource_type: str,
+    *,
+    name: str | None = None,
+    module: str | None = None,
+    doc: str | None = None,
+) -> type[AngeeModel]:
+    """Return an abstract, table-less REBAC role anchor for ``resource_type``.
+
+    A const-backed role relation (``admin: <ns>/role // rebac:const=admin`` in an
+    addon's ``permissions.zed``) needs a model carrying that ``<ns>/role``
+    ``rebac_resource_type`` so the ``rebac.E009`` system check resolves the type;
+    the anchor is ``managed = False`` (Django owns no table, there are never any
+    rows) and ``runtime = True`` (the composer materializes it into the generated
+    runtime, exactly like the hand-rolled anchors it replaces). One adopter
+    declares its role in one line::
+
+        StorageRole = role_anchor("storage/role")
+
+    ``name`` defaults to a CamelCase of ``resource_type`` (``storage/role`` ->
+    ``StorageRole``); pass it when the module symbol differs from that default
+    (e.g. ``TagRole = role_anchor("tags/role", name="TagRole")``). ``module``
+    defaults to the caller's module (``sys._getframe``) so the composer scans and
+    imports the anchor from the adopting addon; the module symbol you bind must
+    match ``name`` so the emitted ``from <addon>.models import <name>`` import
+    resolves. **Wrapper hazard:** the frame default captures the *direct* caller, so
+    a helper that wraps this factory would capture the helper's module, not the
+    adopter's, and emit an import that resolves to the wrong symbol. Call
+    ``role_anchor`` directly at module level, or pass ``module=__name__`` when
+    indirecting it. The composer verifies the captured module actually binds the
+    anchor at emission (``Runtime._class_import``) and fails loudly on a mis-capture
+    rather than emitting a broken import.
+
+    The ``.zed`` fragment stays **co-located and static** — each adopter ships its
+    own ``definition <ns>/role`` block beside its models; the factory owns only
+    the Django anchor model, never a composer ``.zed`` emission.
+
+    Adopters declare their role in one line beside their own models — for
+    example, framework ``storage`` (``StorageRole``) and ``tags`` (``TagRole``).
+    """
+
+    anchor_name = name or _role_anchor_name(resource_type)
+    anchor_module = module or sys._getframe(1).f_globals.get("__name__", __name__)
+    meta = type(
+        "Meta",
+        (),
+        {
+            "abstract": True,
+            "managed": False,
+            "rebac_resource_type": resource_type,
+        },
+    )
+    namespace: dict[str, Any] = {
+        "__module__": anchor_module,
+        "__qualname__": anchor_name,
+        "__doc__": doc or f"Table-less REBAC type anchor for the ``{resource_type}`` namespace.",
+        # Marks the factory's output so the composer verifies the sys._getframe
+        # module capture bound the anchor before emitting its import (see
+        # ``Runtime._check_role_anchor_binding``); the wrapper hazard is caught here.
+        "__angee_role_anchor__": True,
+        "runtime": True,
+        "Meta": meta,
+    }
+    return cast("type[AngeeModel]", type(anchor_name, (AngeeModel,), namespace))
+
+
+def _role_anchor_name(resource_type: str) -> str:
+    """Return the CamelCase anchor class name derived from a role resource type."""
+
+    parts = [part for part in re.split(r"[^0-9A-Za-z]+", resource_type) if part]
+    if not parts:
+        raise ImproperlyConfigured(f"role_anchor: invalid resource_type {resource_type!r}")
+    return "".join(part[:1].upper() + part[1:] for part in parts)
 
 
 @dataclass(frozen=True, slots=True)

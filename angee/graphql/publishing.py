@@ -39,6 +39,20 @@ def connect_publishers(model: type[models.Model]) -> None:
     )
 
 
+def disconnect_publishers(model: type[models.Model]) -> bool:
+    """Disconnect ``model``'s save and delete publishers; return whether any were wired.
+
+    The public inverse of :func:`connect_publishers` — a test that wires a lone
+    publisher to observe a broadcast restores prior state through this seam instead of
+    re-deriving the private dispatch-uid format or probing receiver tuples.
+    """
+
+    dispatch_uid = f"angee-changes-{model._meta.label}"
+    disconnected = post_save.disconnect(sender=model, dispatch_uid=f"{dispatch_uid}-save")
+    disconnected = post_delete.disconnect(sender=model, dispatch_uid=f"{dispatch_uid}-delete") or disconnected
+    return disconnected
+
+
 def change_channel_layer() -> Any:
     """Return the configured channel layer after validating deployment safety."""
 
@@ -101,6 +115,14 @@ def _publish(
 ) -> None:
     """Build and broadcast one change payload after commit."""
 
+    # The row owns whether its changes reach the generic subscription surface; a
+    # record-chatter row that is isolated to ``record_thread`` drops out here, so
+    # its create/update/delete never broadcasts to a non-record-reader — the
+    # emission mirror of the ``.inbox()`` read scope. Checked while the instance is
+    # live, so the answer holds for the delete event too.
+    broadcasts = getattr(instance, "broadcasts_changes", None)
+    if callable(broadcasts) and not broadcasts():
+        return
     model = type(instance)
     payload = ChangePayload.from_instance(
         instance,

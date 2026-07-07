@@ -29,6 +29,7 @@ from angee.graphql.data.metadata import (
     merge_data_resources,
     serialize_data_resources,
 )
+from angee.graphql.field_types import register_field_types
 from angee.graphql.ids import assert_unique_sqid_prefixes
 from angee.graphql.introspection import (
     django_model,
@@ -37,6 +38,11 @@ from angee.graphql.introspection import (
 )
 from angee.graphql.publishing import connect_publishers
 from graphql import GraphQLError, GraphQLSchema
+
+# Teach strawberry-django Angee's custom value fields (e.g. MoneyField) as this
+# module — the one owner of schema construction — loads, so every schema build
+# below resolves those fields under ``auto``. See angee.graphql.field_types.
+register_field_types()
 
 DEFAULT_SCHEMA_NAME = "public"
 """Default GraphQL schema name served by Angee hosts."""

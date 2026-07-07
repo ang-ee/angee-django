@@ -1,6 +1,6 @@
 import { useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import { Button, ChatBubble, EmptyState, Glyph, LoadingPanel, MessageAttachmentChip, ReactionBar, RelativeTime, cn, textRoleVariants, type ChatBubbleRole, type Reaction } from "@angee/ui";
+import { Button, ChatBubble, EmptyState, Glyph, LoadingPanel, MessageAttachmentChip, ReactionBar, RelativeTime, SectionEyebrow, cn, textRoleVariants, type ChatBubbleRole, type Reaction } from "@angee/ui";
 import { formatSize } from "@angee/ui/preview/index";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
@@ -244,9 +244,9 @@ function TranscriptMessage({ message, t }: TranscriptMessageProps): React.ReactE
     return (
       <div className="rounded-6 border border-dashed border-border-subtle bg-surface-inset px-3 py-2 text-13 text-fg">
         <div className="mb-0.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-          <span className="text-2xs font-semibold uppercase tracking-wide text-warning-text">
+          <SectionEyebrow as="span" tone="warning">
             {t("transcript.noteLabel")}
-          </span>
+          </SectionEyebrow>
           <span className="text-13 font-medium text-fg">{author}</span>
           {timestamp ? (
             <RelativeTime value={timestamp} className={textRoleVariants({ role: "caption" })} />

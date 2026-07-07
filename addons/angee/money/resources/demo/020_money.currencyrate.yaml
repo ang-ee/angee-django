@@ -1,0 +1,39 @@
+# Demo exchange rates (demo tier). `rate` is units of `currency` per one
+# reference unit (ANGEE_MONEY_REFERENCE_CURRENCY) on `date`; these illustrative
+# EUR/USD/GBP rows read naturally with USD as the reference (USD == 1.0), but the
+# data itself names no reference — the setting owns that. `currency` names the 010
+# catalogue row by `<app>.<xref>`; the (currency, date) pair is unique. depends_on
+# in addon.toml orders this after the currency catalogue so the FK resolves.
+_meta:
+  model: money.CurrencyRate
+rows:
+  - xref: usd_20260101
+    fields:
+      currency: money.usd
+      date: 2026-01-01
+      rate: "1.0000000000"
+  - xref: eur_20260101
+    fields:
+      currency: money.eur
+      date: 2026-01-01
+      rate: "0.9500000000"
+  - xref: gbp_20260101
+    fields:
+      currency: money.gbp
+      date: 2026-01-01
+      rate: "0.8200000000"
+  - xref: usd_20260701
+    fields:
+      currency: money.usd
+      date: 2026-07-01
+      rate: "1.0000000000"
+  - xref: eur_20260701
+    fields:
+      currency: money.eur
+      date: 2026-07-01
+      rate: "0.9200000000"
+  - xref: gbp_20260701
+    fields:
+      currency: money.gbp
+      date: 2026-07-01
+      rate: "0.7900000000"

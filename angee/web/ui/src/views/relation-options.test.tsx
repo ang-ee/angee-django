@@ -21,6 +21,9 @@ const sdkMocks = vi.hoisted(() => ({
     dataProviderName?: string;
     meta?: { fields?: unknown };
   } | null,
+  rows: [
+    { id: "vnd_1", display_name: "Acme" },
+  ] as Record<string, unknown>[],
   refetch: vi.fn(),
 }));
 
@@ -36,10 +39,8 @@ vi.mock("@refinedev/core", async (importOriginal) => {
       sdkMocks.useListOptions = options ?? null;
       return {
         result: {
-          data: [
-            { id: "vnd_1", display_name: "Acme" },
-          ],
-          total: 1,
+          data: sdkMocks.rows,
+          total: sdkMocks.rows.length,
         },
         query: {
           isFetching: false,
@@ -53,6 +54,9 @@ vi.mock("@refinedev/core", async (importOriginal) => {
 afterEach(() => {
   cleanup();
   sdkMocks.useListOptions = null;
+  sdkMocks.rows = [
+    { id: "vnd_1", display_name: "Acme" },
+  ];
   sdkMocks.refetch.mockClear();
 });
 
@@ -68,6 +72,28 @@ describe("useRelationOptions", () => {
     expect(sdkMocks.useListOptions?.dataProviderName).toBe("console");
     expect(sdkMocks.useListOptions?.meta?.fields).toEqual(["id", "display_name"]);
     expect(screen.getByText("vnd_1: Acme")).toBeTruthy();
+  });
+
+  test("returns relation options in server order without client label sorting", () => {
+    sdkMocks.rows = [
+      { id: "stg_30", name: "Proposal" },
+      { id: "stg_10", name: "New" },
+      { id: "stg_20", name: "Qualified" },
+    ];
+
+    render(
+      <ModelMetadataProvider metadata={metadata}>
+        <RelationOptionsProbe relation={stageRelation} />
+      </ModelMetadataProvider>,
+    );
+
+    expect(sdkMocks.useListOptions?.resource).toBe("stages");
+    expect(sdkMocks.useListOptions?.meta?.fields).toEqual(["id", "name"]);
+    expect(screen.getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "stg_30: Proposal",
+      "stg_10: New",
+      "stg_20: Qualified",
+    ]);
   });
 });
 
@@ -89,6 +115,12 @@ function RelationOptionsProbe({
 const vendorRelation: RelationFieldInfo = {
   resource: "integrate.Vendor",
   labelField: "display_name",
+  canCreate: false,
+};
+
+const stageRelation: RelationFieldInfo = {
+  resource: "crm.Stage",
+  labelField: "name",
   canCreate: false,
 };
 
@@ -132,6 +164,50 @@ const metadata: SchemaFieldMetadata = schemaFieldMetadataFromDataResources([
     ],
     filterFields: ["id", "display_name"],
     orderFields: ["display_name"],
+    aggregateFields: ["id"],
+    groupByFields: [],
+    relationAxes: [],
+  },
+  {
+    schemaName: "console",
+    modelLabel: "crm.Stage",
+    appLabel: "crm",
+    modelName: "stage",
+    publicIdField: "sqid",
+    roots: { list: "stages" },
+    typeNames: { node: "StageType" },
+    recordRepresentation: "name",
+    capabilities: ["list"],
+    fields: [
+      {
+        name: "id",
+        kind: "scalar",
+        scalar: "ID",
+        readable: true,
+        filterable: true,
+        sortable: false,
+        aggregatable: true,
+        groupable: false,
+        creatable: false,
+        updatable: false,
+        requiredOnCreate: false,
+      },
+      {
+        name: "name",
+        kind: "scalar",
+        scalar: "String",
+        readable: true,
+        filterable: true,
+        sortable: true,
+        aggregatable: false,
+        groupable: false,
+        creatable: true,
+        updatable: true,
+        requiredOnCreate: true,
+      },
+    ],
+    filterFields: ["id", "name"],
+    orderFields: ["position", "id"],
     aggregateFields: ["id"],
     groupByFields: [],
     relationAxes: [],

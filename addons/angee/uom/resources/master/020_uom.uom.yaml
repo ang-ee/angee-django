@@ -1,0 +1,77 @@
+# Units of measure (master tier). `ratio` is the number of a category's
+# reference units contained in one of this unit (a dozen is 12 units; a gram is
+# 0.001 kg). Exactly one unit per category is the reference (ratio 1,
+# is_reference true) — the partial unique constraint enforces it. `rounding` is
+# the decimal step conversions into this unit are quantized to. `category` names
+# the 010 category row by `<app>.<xref>`. Unit xrefs are namespaced by category
+# so they never collide with a category xref within this addon's ledger.
+_meta:
+  model: uom.Uom
+rows:
+  # Unit (discrete count) — reference: a single unit.
+  - xref: unit_each
+    fields:
+      category: uom.unit
+      name: Unit(s)
+      ratio: 1
+      rounding: 0.01
+      is_reference: true
+  - xref: unit_dozen
+    fields:
+      category: uom.unit
+      name: Dozen
+      ratio: 12
+      rounding: 0.01
+      is_reference: false
+  # Weight — reference: kilogram.
+  - xref: weight_kilogram
+    fields:
+      category: uom.weight
+      name: Kilogram
+      ratio: 1
+      rounding: 0.001
+      is_reference: true
+  - xref: weight_gram
+    fields:
+      category: uom.weight
+      name: Gram
+      ratio: 0.001
+      rounding: 0.001
+      is_reference: false
+  - xref: weight_tonne
+    fields:
+      category: uom.weight
+      name: Tonne
+      ratio: 1000
+      rounding: 0.001
+      is_reference: false
+  # Volume — reference: litre.
+  - xref: volume_litre
+    fields:
+      category: uom.volume
+      name: Litre
+      ratio: 1
+      rounding: 0.001
+      is_reference: true
+  - xref: volume_millilitre
+    fields:
+      category: uom.volume
+      name: Millilitre
+      ratio: 0.001
+      rounding: 0.001
+      is_reference: false
+  # Time — reference: hour.
+  - xref: time_hour
+    fields:
+      category: uom.time
+      name: Hour
+      ratio: 1
+      rounding: 0.01
+      is_reference: true
+  - xref: time_day
+    fields:
+      category: uom.time
+      name: Day
+      ratio: 24
+      rounding: 0.01
+      is_reference: false

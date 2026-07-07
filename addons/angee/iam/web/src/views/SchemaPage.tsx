@@ -1,5 +1,5 @@
 import { useAuthoredQuery, type MessageVars } from "@angee/refine";
-import { Alert, Badge, Button, Code, GraphView, PrimaryPanePublisher, SearchInput, Spinner, cn, textRoleVariants, useChatterContent, type ChatterTab, type GraphViewEdge, type GraphViewEdgeStyle, type GraphViewNode, type GraphViewNodeStyle } from "@angee/ui";
+import { Alert, Badge, Button, Code, GraphView, PrimaryPanePublisher, SearchInput, Spinner, barVariants, cn, textRoleVariants, useChatterContent, type ChatterTab, type GraphViewEdge, type GraphViewEdgeStyle, type GraphViewNode, type GraphViewNodeStyle } from "@angee/ui";
 import { type KeyboardEvent, type MutableRefObject, type ReactElement, type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState, } from "react";
 
 import {
@@ -343,9 +343,9 @@ function SchemaGraphCanvas({
 
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
-      <header className="flex min-w-0 items-start justify-between gap-3 border-b border-border-subtle px-4 py-3">
+      <header className={barVariants({ edge: "bottom", pad: "compactTall", align: "start", justify: "between", gap: 3 })}>
         <div className="min-w-0">
-          <h2 className="m-0 truncate text-sm font-semibold text-fg">
+          <h2 className={cn("m-0", textRoleVariants({ role: "title", truncate: true }))}>
             {t("schema.permissionGraph")}
           </h2>
           {selectedResource ? (
@@ -388,13 +388,15 @@ function SchemaInspector({
 
   return (
     <aside className="flex h-full min-h-0 min-w-0 flex-col">
-      <header className="border-b border-border-subtle px-4 py-3">
-        <h2 className="m-0 truncate text-sm font-semibold text-fg">
-          {resourceLabel(resource.resource_type)}
-        </h2>
-        <Code className="mt-1" truncate tone="muted">
-          {resource.resource_type}
-        </Code>
+      <header className={barVariants({ edge: "bottom", pad: "compactTall", align: "start" })}>
+        <div className="min-w-0">
+          <h2 className={cn("m-0", textRoleVariants({ role: "title", truncate: true }))}>
+            {resourceLabel(resource.resource_type)}
+          </h2>
+          <Code className="mt-1" truncate tone="muted">
+            {resource.resource_type}
+          </Code>
+        </div>
       </header>
       <div className="grid min-h-0 flex-1 content-start gap-5 overflow-auto p-4">
         <RelationList relations={resource.relations} />

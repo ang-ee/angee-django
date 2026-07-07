@@ -64,8 +64,8 @@ from rebac.managers import RebacManager
 
 from angee.base.actors import actor_user_id
 from angee.base.fields import ImplClassField, StateField
-from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
+from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin, SqidMixin
+from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, role_anchor
 from angee.storage import exceptions
 from angee.storage.backends import DOWNLOAD_URL_TTL_SECONDS, StorageBackend
 from angee.storage.signals import file_finalized
@@ -104,7 +104,19 @@ class UploadState(models.TextChoices):
     FAILED = "failed", "Failed"
 
 
-class Backend(SqidMixin, AuditMixin, AngeeModel):
+class StorageMasterQuerySet(ArchiveQuerySet[Any], AngeeQuerySet[Any]):
+    """AngeeQuerySet plus the archive read vocabulary for storage master rows.
+
+    Shared by the archivable admin/infra rows (:class:`Backend`, :class:`Drive`)
+    so ``.archived()`` / ``.unarchived()`` compose over the REBAC row scope.
+    """
+
+
+StorageMasterManager = AngeeManager.from_queryset(StorageMasterQuerySet)
+"""Default manager for the archivable storage master rows (Backend, Drive)."""
+
+
+class Backend(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
     """Credentialed storage backend instance.
 
     One row names a :class:`~angee.storage.backends.StorageBackend` subclass by
@@ -120,7 +132,8 @@ class Backend(SqidMixin, AuditMixin, AngeeModel):
     label = models.CharField(max_length=200)
     backend_class = ImplClassField(base_class=StorageBackend, registry_setting="ANGEE_STORAGE_BACKEND_CLASSES")
     backend_config = models.JSONField(default=dict, blank=True)
-    is_archived = models.BooleanField(default=False, db_index=True)
+
+    objects = StorageMasterManager()
 
     _storage_cache: ClassVar[OrderedDict[tuple[Any, Any], StorageBackend]] = OrderedDict()
     """Resolved backend instances keyed by ``(pk, frozen resolved config)``."""
@@ -178,7 +191,7 @@ class Backend(SqidMixin, AuditMixin, AngeeModel):
         return instance
 
 
-class Drive(SqidMixin, AuditMixin, AngeeModel):
+class Drive(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
     """Addressable storage volume on top of a backend.
 
     Object keys live under ``{prefix}/…`` inside the parent backend's
@@ -200,7 +213,8 @@ class Drive(SqidMixin, AuditMixin, AngeeModel):
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True)
     prefix = models.CharField(max_length=512, blank=True)
-    is_archived = models.BooleanField(default=False, db_index=True)
+
+    objects = StorageMasterManager()
 
     class Meta:
         """Django model options for drives."""
@@ -1181,24 +1195,13 @@ class FileAttachment(SqidMixin, AuditMixin, AngeeModel):
         return self.label or f"attachment:{self.file_id}"
 
 
-class StorageRole(AngeeModel):
-    """Table-less REBAC type anchor for the ``storage/role`` namespace.
+StorageRole = role_anchor("storage/role")
+"""Table-less REBAC type anchor for the ``storage/role`` namespace.
 
-    The const-backed ``admin`` relation on ``storage/role`` (``permissions.zed``)
-    needs a model carrying its ``rebac_resource_type`` to satisfy the
-    ``rebac.E009`` system check — the same anchor operator's connection uses. The
-    row is never created or read; it exists only to register the type so a
-    platform admin resolves as an effective storage-admin through the const.
-    """
-
-    runtime = True
-
-    class Meta:
-        """Django model options for the storage role anchor."""
-
-        abstract = True
-        managed = False
-        rebac_resource_type = "storage/role"
+The const-backed ``admin`` relation on ``storage/role`` (``permissions.zed``)
+registers through this anchor's ``rebac_resource_type`` (``rebac.E009``); the row
+is never created or read. See :func:`angee.base.models.role_anchor`.
+"""
 
 
 def _mime_row(file_model: type[Any], mime_type: str) -> Any | None:

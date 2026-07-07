@@ -1,9 +1,10 @@
-import type { ModelFieldMetadata } from "./artifact";
+import type { ModelFieldMetadata, ModelMetadata } from "./artifact";
 
 const SCALAR_WIDGET: Readonly<Record<string, string>> = {
   Boolean: "switch",
   Int: "integer",
   Float: "float",
+  Decimal: "float",
   DateTime: "datetime",
   Date: "date",
   JSON: "json",
@@ -26,13 +27,17 @@ export interface ChoiceFacetSupport {
 }
 
 /**
- * The default widget family for a generated resource field. Metadata owns the
- * field kind/scalar classification; UI owns the actual component registry.
+ * The default widget family for a generated resource field. The backend owns the
+ * widget vocabulary (`angee.graphql.data.field_classification`), so an explicit
+ * `widget` — e.g. `"money"` over a Decimal scalar — wins; only a field with no
+ * backend widget (a computed, model-less resource field) falls back to the
+ * kind/scalar-derived default. UI owns the actual component registry.
  */
 export function defaultWidgetForModelField(
   field: ModelFieldMetadata | undefined,
 ): string | undefined {
   if (!field) return undefined;
+  if (field.widget) return field.widget;
   if (field.kind === "enum") return "select";
   if (field.kind === "relation") return "many2one";
   if (field.kind === "list") return "tagInput";
@@ -47,13 +52,30 @@ export function filterFieldType(
   if (field?.kind === "enum") return "selection";
   if (field?.kind === "scalar" && field.scalar === "String") return "text";
   if (field?.kind === "scalar" && field.scalar === "Boolean") return "boolean";
-  if (field?.kind === "scalar" && (field.scalar === "Int" || field.scalar === "Float")) {
+  if (
+    field?.kind === "scalar" &&
+    (field.scalar === "Int" ||
+      field.scalar === "Float" ||
+      field.scalar === "Decimal")
+  ) {
     return "number";
   }
   if (field?.kind === "scalar" && field.scalar === "DateTime") return "datetime";
   if (field?.kind === "scalar" && field.scalar === "Date") return "date";
   if (looksLikeDateField(fieldName)) return "datetime";
   return supportsChoiceFacet({ fieldName, field, ...support }) ? "selection" : null;
+}
+
+/** Whether the resource's update root accepts writes for a field. */
+export function fieldUpdatable(
+  metadata: ModelMetadata | null | undefined,
+  fieldName: string,
+): boolean {
+  if (!metadata?.rootFields?.update && !metadata?.resource?.roots.update) return false;
+  const updateFields =
+    metadata.rootFields?.updateFields ?? metadata.resource?.updateFields;
+  if (updateFields && !updateFields.includes(fieldName)) return false;
+  return metadata.fields[fieldName]?.updatable !== false;
 }
 
 export function supportsChoiceFacet(support: ChoiceFacetSupport): boolean {

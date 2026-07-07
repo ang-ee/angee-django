@@ -487,6 +487,7 @@ dependencies = [
     { name = "procrastinate", extra = ["django"] },
     { name = "pydantic" },
     { name = "pyjwt", extra = ["crypto"] },
+    { name = "python-dateutil" },
     { name = "python-magic" },
     { name = "pyyaml" },
     { name = "ruamel-yaml" },
@@ -543,11 +544,12 @@ requires-dist = [
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.13" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.12" },
+    { name = "python-dateutil", specifier = ">=2.9" },
     { name = "python-magic", specifier = ">=0.4.27" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "ruamel-yaml", specifier = ">=0.18" },
     { name = "strawberry-django-aggregates", specifier = ">=0.9.1" },
-    { name = "strawberry-django-hasura", specifier = ">=0.4" },
+    { name = "strawberry-django-hasura", specifier = ">=0.5" },
     { name = "strawberry-graphql", git = "https://github.com/ang-ee/strawberry.git?branch=codex%2Finput-object-extensions" },
     { name = "strawberry-graphql-django", git = "https://github.com/ang-ee/strawberry-django.git?branch=hotfix-angee-django" },
     { name = "tablib", specifier = ">=3" },
@@ -1927,7 +1929,7 @@ wheels = [
 
 [[package]]
 name = "strawberry-django-hasura"
-version = "0.4.0"
+version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
@@ -1935,9 +1937,9 @@ dependencies = [
     { name = "strawberry-graphql" },
     { name = "strawberry-graphql-django" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6a/12/8ae4780c4e1c630248fd18296fdc998e17d67f5ac5db802bed2a7ec717fd/strawberry_django_hasura-0.4.0.tar.gz", hash = "sha256:e2c4a6c72cafff29b7d036ff6838b087329e888ce83baedaac2a42ce3fc3fcb4", size = 62234, upload-time = "2026-07-02T06:52:17.774Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/59/01/32f8789a514e15f4678c9e73da1953f466628ad31a764ef13f2c13b143e3/strawberry_django_hasura-0.5.0.tar.gz", hash = "sha256:283123d65588f6b394494df18ac6f940c13eabf4b7c45c7c5daad699c357a5bf", size = 71478, upload-time = "2026-07-05T07:17:34.503Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b6/29/92b4c22f54f2d18865d4198afe148687bcaa01cdae57220f5f86bf464765/strawberry_django_hasura-0.4.0-py3-none-any.whl", hash = "sha256:fc051e79047b4769aeec75102a0aa6cfae5144c3d0d2cf215625735ae1c5e8fe", size = 51835, upload-time = "2026-07-02T06:52:16.717Z" },
+    { url = "https://files.pythonhosted.org/packages/da/0f/350b377ae10df99676060bd740106c5369c6db74d08fc6d4aad8000ece7b/strawberry_django_hasura-0.5.0-py3-none-any.whl", hash = "sha256:40682db79d068482445a6dfe812a07748793714044f9407d612ce46ee31cbc75", size = 55419, upload-time = "2026-07-05T07:17:33.322Z" },
 ]
 
 [[package]]

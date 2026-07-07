@@ -1,0 +1,27 @@
+# Demo tags (demo tier). These are shared vocabulary — `company` is omitted, so
+# each tag is null-company and readable by every authenticated actor (the
+# `shared@auth/user:*` wildcard reader is written by Tag.save on load). Company-
+# scoped tags are exercised by the addon's own tests, which seed their own company;
+# the shared seed stays self-contained so it loads with no cross-addon company xref.
+# Party assignments are created through the authored `tag` mutation (the polymorphic
+# edge is not an ordinary resource insert), so they are not seeded here.
+# Idempotency is the resource ledger's (source_addon, xref) identity.
+_meta:
+  model: tags.Tag
+rows:
+  - xref: vip
+    fields:
+      name: VIP
+      color: "#c0392b"
+  - xref: prospect
+    fields:
+      name: Prospect
+      color: "#2980b9"
+  - xref: wholesale
+    fields:
+      name: Wholesale
+      color: "#27ae60"
+  - xref: partner
+    fields:
+      name: Partner
+      color: "#8e44ad"

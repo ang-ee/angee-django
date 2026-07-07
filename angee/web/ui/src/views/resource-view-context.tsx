@@ -15,6 +15,7 @@ import {
   resourceViewSearchToState,
   resourceViewStateToSearch,
   mergeResourceViewSearch,
+  type CalendarViewMode,
   type ResourceViewAction,
   type ResourceViewFavorite,
   type ResourceViewFilter,
@@ -36,6 +37,8 @@ export interface ResourceViewContextValue {
   toggleSelectedId: (id: string, selected?: boolean) => void;
   clearSelectedIds: () => void;
   setView: (view: ResourceViewKind) => void;
+  setMode: (mode: CalendarViewMode) => void;
+  setAnchor: (anchor: string) => void;
   savedFavorites: readonly ResourceViewFavorite[];
   saveFavorite: (label: string) => void;
   applyFavorite: (favorite: ResourceViewFavorite) => void;
@@ -255,6 +258,8 @@ function createResourceViewActions(
       dispatch({ type: "toggleSelectedId", id, selected }),
     clearSelectedIds: () => dispatch({ type: "clearSelectedIds" }),
     setView: (view) => dispatch({ type: "setView", view }),
+    setMode: (mode) => dispatch({ type: "setMode", mode }),
+    setAnchor: (anchor) => dispatch({ type: "setAnchor", anchor }),
     applyFavorite: (favorite) => dispatch({ type: "applyFavorite", favorite }),
   };
 }

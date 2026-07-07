@@ -1,0 +1,56 @@
+// Authorization schema for the tags addon.
+// @rebac_package: tags
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 1
+
+// Roles-as-namespace anchor, mirroring money/sequence/role: `includes` lets one
+// tags role imply another, and resources gate on `effective_member` so granted +
+// implied members both resolve. Platform admins (angee/role:admin) reach every
+// tags role through the const-backed `admin` relation — synthetic, no per-object
+// tuple — the same universal-admin path the resource types below use.
+definition tags/role {
+    relation member:   auth/user | auth/group#member | angee/role:admin#member
+    relation includes: tags/role#effective_member
+    relation admin:    angee/role // rebac:const=admin
+
+    permission effective_member = member + includes + admin->member
+}
+
+// A tag is either shared vocabulary (company null) or company-scoped. The two
+// reads compose in one permission:
+//   - `company->member` (field-backed by the nullable `company` FK) resolves the
+//     actor's membership in *this tag's* company; a null company matches no one,
+//     so a scoped tag is invisible cross-company (a member of only company B
+//     reads nothing of company A).
+//   - `shared` is a wildcard-subject relation: a shared (null-company) tag carries
+//     one `shared@auth/user:*` tuple (written by `Tag.save`) that opens it to every
+//     authenticated actor — the same mechanism `storage/drive` uses to open a
+//     drive to everyone. A scoped tag carries none.
+// Configuration is admin-only: a `tags_admin` (const-backed, the framework canon)
+// writes the vocabulary, everyone else only reads. The create path preflights
+// `create` through the write backend and runs elevated, so an admin/manager is
+// granted and everyone else denied on writes.
+definition tags/tag {
+    relation company:  iam/company // rebac:field=company
+    relation shared:   auth/user:*
+    relation admin:    angee/role  // rebac:const=admin
+    relation manager:  tags/role   // rebac:const=tags_admin
+
+    permission create = admin->member + manager->effective_member
+    permission read   = shared + company->member + admin->member + manager->effective_member
+    permission write  = admin->member + manager->effective_member
+    permission delete = admin->member + manager->effective_member
+}
+
+// The assignment target is polymorphic (GenericForeignKey to any row), so no
+// single zed type can cover it; access rides entirely on the tag parent — the
+// `storage/file_attachment` canon (which rides its file the same way). A scoped
+// tag's assignments are therefore only as visible as the tag itself.
+definition tags/tag_assignment {
+    relation tag:   tags/tag // rebac:field=tag
+    relation admin: angee/role // rebac:const=admin
+
+    permission read   = tag->read + admin->member
+    permission write  = tag->write + admin->member
+    permission delete = tag->write + admin->member
+}

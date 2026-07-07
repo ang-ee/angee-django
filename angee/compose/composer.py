@@ -11,6 +11,7 @@ from django.core.exceptions import ImproperlyConfigured
 
 from angee.compose.appgraph import AppGraph
 from angee.compose.autoconfig import AutoConfig
+from angee.compose.permissions import apply_schema_paths
 from angee.paths import resolve_path
 
 COMPOSER_OWNED_SETTINGS = frozenset(
@@ -56,6 +57,11 @@ class Composer:
         runtime_dir = resolve_path(runtime_setting)
 
         app_configs = AppGraph().resolve(root_apps)
+        # A consumer addon that contributes relations to another addon's REBAC
+        # definition (via ``permissions.extends.zed``) repoints the owning app's
+        # ``rebac_schema`` at the build-emitted merged zed, so ``rebac sync`` reads
+        # the additive superset. No-op unless a fragment exists.
+        apply_schema_paths(app_configs, runtime_dir)
         self.namespace["INSTALLED_APPS"] = list(app_configs)
         self._set_composer_setting("ROOT_URLCONF", "angee.urls")
         self._set_composer_setting("ASGI_APPLICATION", "angee.asgi.application")

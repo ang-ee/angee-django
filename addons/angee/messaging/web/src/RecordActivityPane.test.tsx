@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+import { ToastProvider } from "@angee/ui";
 import type { ChatterViewContext } from "@angee/ui/runtime";
 import type { RecordActivityRow } from "./documents";
 
@@ -73,6 +74,16 @@ const context: ChatterViewContext = {
   view: { kind: "record", type: "notes/note", sqid: "nte_1" },
 };
 
+// The pane composes `useActionForm`, whose shared toast owner needs a provider —
+// the app shell supplies one in production; the test wraps it the same way.
+function renderPane(ctx: ChatterViewContext = context): void {
+  render(
+    <ToastProvider>
+      <RecordActivityPane context={ctx} />
+    </ToastProvider>,
+  );
+}
+
 beforeEach(() => {
   mocks.mutateCalls = [];
   mocks.useAuthoredQuery.mockReset();
@@ -91,7 +102,7 @@ describe("RecordActivityPane", () => {
   test("renders scheduled activities and the scheduler", () => {
     mocks.threadData = threadPayload([activity()]);
 
-    render(<RecordActivityPane context={context} />);
+    renderPane();
 
     expect(screen.getByText("Follow up call")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Schedule" })).toBeTruthy();
@@ -105,7 +116,7 @@ describe("RecordActivityPane", () => {
       activity({ id: "act_done", summary: "Closed task", status: "DONE", completed_at: "2026-07-01T00:00:00Z" }),
     ]);
 
-    render(<RecordActivityPane context={context} />);
+    renderPane();
 
     // Only the open (TODO) activity offers complete + cancel.
     expect(screen.getAllByRole("button", { name: "Mark done" })).toHaveLength(1);
@@ -115,7 +126,7 @@ describe("RecordActivityPane", () => {
   test("cancels through the mutation keyed by activity id", () => {
     mocks.threadData = threadPayload([activity({ id: "act_open" })]);
 
-    render(<RecordActivityPane context={context} />);
+    renderPane();
     fireEvent.click(screen.getByRole("button", { name: "Cancel activity" }));
 
     expect(
@@ -126,10 +137,36 @@ describe("RecordActivityPane", () => {
     ).toBe(true);
   });
 
+  test("schedules an activity through the mutation and clears the form", async () => {
+    mocks.threadData = threadPayload([]);
+
+    renderPane();
+    const summaryInput = screen.getByPlaceholderText("Activity summary");
+    fireEvent.change(summaryInput, { target: { value: "Call the customer" } });
+    fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+
+    // The migrated form fires the authored schedule mutation with the collected
+    // summary through the shared `useActionForm` lifecycle.
+    await waitFor(() =>
+      expect(
+        mocks.mutateCalls.some(
+          (call) =>
+            call.op === "MessagingScheduleRecordActivity" &&
+            call.vars.summary === "Call the customer" &&
+            call.vars.activityType === "todo",
+        ),
+      ).toBe(true),
+    );
+    // On success `onSuccess` clears the form fields.
+    await waitFor(() =>
+      expect((summaryInput as HTMLInputElement).value).toBe(""),
+    );
+  });
+
   test("shows the not-enabled state for a record without a thread", () => {
     mocks.threadData = { record_thread: { error_code: "BAD_RECORD" } };
 
-    render(<RecordActivityPane context={context} />);
+    renderPane();
 
     expect(screen.getByText("Activities are not enabled")).toBeTruthy();
   });

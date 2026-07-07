@@ -8,7 +8,7 @@ import type { RecordMessageRow } from "./documents";
 
 const mocks = vi.hoisted(() => ({
   threadData: undefined as unknown,
-  recipientData: { users: [] as unknown[] } as unknown,
+  recipientData: { colleagues: [] as unknown[] } as unknown,
   mutateCalls: [] as Array<{ op: string; vars: Record<string, unknown> }>,
   useAuthoredQuery: vi.fn(),
 }));
@@ -115,7 +115,7 @@ const context: ChatterViewContext = {
 
 beforeEach(() => {
   mocks.mutateCalls = [];
-  mocks.recipientData = { users: [] };
+  mocks.recipientData = { colleagues: [] };
   mocks.useAuthoredQuery.mockReset();
   mocks.useAuthoredQuery.mockImplementation((document: unknown) => {
     const op = operationName(document);

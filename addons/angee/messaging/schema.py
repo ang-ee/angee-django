@@ -20,7 +20,7 @@ from rebac import PermissionDenied
 from strawberry import auto
 
 from angee.base.models import instance_from_public_id
-from angee.graphql.data import hasura_model_resource, public_pk_decoder
+from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import request_from_info
@@ -236,6 +236,23 @@ class ThreadAttachmentType(AngeeNode):
     created_at: auto
     updated_at: auto
 
+    @strawberry.field(name="model_label")
+    def model_label(self) -> str:
+        """Return the attached target's model label (``app_label.ModelName``)."""
+
+        return cast(Any, self).target_model_label
+
+    @strawberry.field(name="record_id")
+    def record_id(self) -> strawberry.ID:
+        """Return the attached target's stable public id (its sqid).
+
+        A parent pointer back to the record — the ``ID`` scalar every record reference
+        uses (``RecordReferenceInput.record_id``); navigating it re-gates through the
+        target's own record read (an assignee not granted the record may 404).
+        """
+
+        return cast(strawberry.ID, cast(Any, self).target_public_id)
+
 
 @strawberry_django.type(ThreadFollower)
 class ThreadFollowerType(AngeeNode):
@@ -274,6 +291,74 @@ class ThreadActivityType(AngeeNode):
         """Return the Odoo-style activity state."""
 
         return cast(Any, self).activity_state
+
+
+@strawberry.type
+class RecordPointerType:
+    """Minimal, read-only pointer back to the record a chatter row is attached to.
+
+    The record's human ``label``, its ``app_label.ModelName``, and its stable public id —
+    the three facts a cross-record agenda needs to link back, each computed from the
+    owning ``ThreadAttachment`` row alone (no target load, no parent-record read).
+    Navigating the link re-gates through the record's own read (an assignee not granted
+    the record may 404).
+    """
+
+    label: str
+    model_label: str = strawberry.field(name="model_label")
+    record_id: strawberry.ID = strawberry.field(name="record_id")
+
+
+@strawberry_django.type(ThreadActivity)
+class AgendaActivityType(AngeeNode):
+    """The actor's own scheduled activity, narrowed for the cross-record agenda.
+
+    ``activity_agenda`` delivers ``ThreadActivity`` rows to a bare assignee through the
+    ``messaging/thread_activity.read`` ``user`` (assignee) arm — an assignment is itself
+    the grant. Because that assignee holds no read on the parent record, thread, or
+    attachment, this projection exposes only the activity's own fields, the assignee's own
+    identity (``user`` — always the actor, by the agenda filter), and the minimal record
+    pointer (``attachment`` → :class:`RecordPointerType`); it deliberately drops the parent
+    ``thread`` and the attachment's ``metadata``, which a to-one traversal would resolve
+    unguarded and so leak to a bare assignee through the agenda. The record-scoped
+    ``record_thread`` surface projects the full :class:`ThreadActivityType` for a user who
+    can already read the parent record.
+    """
+
+    user: UserType
+    activity_type: auto
+    summary: auto
+    note: auto
+    due_date: auto
+    completed_at: auto
+    feedback: auto
+    status: auto
+    metadata: strawberry.scalars.JSON
+    created_at: auto
+    updated_at: auto
+
+    @strawberry.field
+    def state(self) -> str:
+        """Return the derived activity state (planned/today/overdue/done/canceled)."""
+
+        return cast(Any, self).activity_state
+
+    @strawberry.field
+    def attachment(self) -> RecordPointerType:
+        """Return the minimal pointer to the record this activity is attached to.
+
+        The ``attachment`` FK is primed elevated and by id on the agenda queryset
+        (:meth:`ThreadActivityQuerySet.with_record_pointers`), so this reads no extra
+        row; the three pointer facts come from the ``ThreadAttachment`` owner without
+        loading or re-gating the target record.
+        """
+
+        attachment = cast(Any, self).attachment
+        return RecordPointerType(
+            label=attachment.label,
+            model_label=attachment.target_model_label,
+            record_id=cast(strawberry.ID, attachment.target_public_id),
+        )
 
 
 @strawberry_django.type(ThreadNotification)
@@ -604,7 +689,7 @@ class RecordActivityPayload:
 
 @strawberry.type
 class MessagingQuery:
-    """Record-backed chatter queries."""
+    """Record- and actor-scoped chatter queries."""
 
     @strawberry.field(name="record_thread")
     def record_thread(self, info: strawberry.Info, input: RecordThreadInput) -> RecordThreadPayload:
@@ -626,6 +711,49 @@ class MessagingQuery:
             after=input.after,
             around=input.around,
         )
+
+    @strawberry.field(name="activity_agenda")
+    def activity_agenda(
+        self,
+        info: strawberry.Info,
+        window_start: date,
+        window_end: date,
+        include_done: bool = False,
+    ) -> list[AgendaActivityType]:
+        """Return the current actor's assigned activities due within the window.
+
+        The actor's own agenda across records: ``ThreadActivity`` rows assigned to the
+        actor (``user``), due within ``[window_start, window_end)``, ordered by due date.
+        The window is the whole bound — no pagination. Done and canceled are excluded
+        unless ``include_done``. Overdue is neither stored nor filtered; it rides each
+        row's ``state`` derivation.
+
+        Authorization rides the existing ``messaging/thread_activity.read`` ``user``
+        (assignee) arm — an assignment is itself the grant — so the read needs no
+        parent-record re-gate and no record-read fan-out. Each row is projected as
+        :class:`AgendaActivityType`: the activity's own fields, the actor's own identity,
+        and the minimal record pointer — never the parent thread or attachment metadata,
+        which a to-one traversal would otherwise resolve unguarded. The assignee
+        FK is the request actor by construction, and the pointer ``attachment`` is primed
+        elevated and by id on the queryset, so the projection needs no REBAC-guarded
+        ``select_related`` (the pitfall) and no per-row pointer fan-out.
+        """
+
+        user = _request_user(info)
+        if user is None:
+            return []
+        rows = ThreadActivity.objects.agenda(
+            user,
+            window_start,
+            window_end,
+            include_done=include_done,
+        ).with_record_pointers()
+        for row in rows:
+            # The agenda filters on user == actor, so every row's assignee is the request
+            # actor: prime the FK from the actor already in hand instead of a per-row
+            # (and REBAC-guarded) user load.
+            row.user = user
+        return rows
 
 
 @strawberry.type
@@ -958,6 +1086,9 @@ class MessagingMutation:
         record = activity.attachment.target
         if record is None or not isinstance(record, ThreadedModelMixin):
             return RecordActivityPayload(error="activity target is not threaded", error_code="BAD_RECORD")
+        record = _readable_record(record)
+        if record is None:
+            return RecordActivityPayload(error="record not found", error_code="NOT_FOUND")
         try:
             activity = cast(Any, record).activity_feedback(activity, feedback=input.feedback)
         except PermissionDenied as error:
@@ -987,6 +1118,9 @@ class MessagingMutation:
         record = activity.attachment.target
         if record is None or not isinstance(record, ThreadedModelMixin):
             return RecordActivityPayload(error="activity target is not threaded", error_code="BAD_RECORD")
+        record = _readable_record(record)
+        if record is None:
+            return RecordActivityPayload(error="record not found", error_code="NOT_FOUND")
         try:
             activity = cast(Any, record).activity_unlink(activity)
         except PermissionDenied as error:
@@ -1014,6 +1148,49 @@ class MessagingMutation:
             return RecordThreadPayload(error="record not found", error_code="NOT_FOUND")
         ThreadNotification.objects.mark_read_for_record(record, user=user, role=input.role)
         return _record_thread_payload(record, info, role=input.role)
+
+
+def _thread_inbox_queryset(info: strawberry.Info) -> Any:
+    """Scope the generic ``threads`` resource to non-record (channel) threads.
+
+    Record-attached chatter is reachable only through ``record_thread`` — the parent
+    record's read is the one gate — so it is excluded from this owner-scoped inbox
+    list, aggregate, and by-pk lookup.
+    """
+
+    del info
+    return Thread.objects.inbox()
+
+
+def _message_inbox_queryset(info: strawberry.Info) -> Any:
+    """Scope the generic ``messages`` resource to non-record (channel) messages.
+
+    Record chatter surfaces only through ``record_thread`` (gated on the parent
+    record's read); it is excluded from this owner-scoped inbox list, aggregate, and
+    by-pk lookup.
+    """
+
+    del info
+    return Message.objects.inbox()
+
+
+class _InboxWriteBackend(AngeeHasuraWriteBackend):
+    """Write backend that keeps record-attached chatter off the generic mutations.
+
+    The read side scopes ``threads``/``messages`` to ``.inbox()`` through
+    ``get_queryset``; the write side must match, or a creator who lost record access
+    could still reach a record-attached row through ``update_<res>_by_pk`` /
+    ``delete_<res>_by_pk`` (its own ``owner``/``admin`` permission would allow it).
+    Narrowing the write-target queryset to ``.inbox()`` makes the by-pk lookup miss
+    a record-attached row, so the generic mutation reports it as not found while the
+    inbox rows keep their update/delete surfaces. The ``.inbox()`` verb resolves
+    polymorphically on each model's queryset, so one backend serves both.
+    """
+
+    def write_target_queryset(self) -> Any:
+        """Scope the update/delete/save target queryset to non-record rows."""
+
+        return super().write_target_queryset().inbox()
 
 
 _CHANNEL_RESOURCE = hasura_model_resource(
@@ -1077,6 +1254,8 @@ _MESSAGE_RESOURCE = hasura_model_resource(
         "sender": public_pk_decoder(Handle),
         "subtype": public_pk_decoder(MessageSubtype),
     },
+    get_queryset=_message_inbox_queryset,
+    write_backend=_InboxWriteBackend(Message),
 )
 _THREAD_RESOURCE = hasura_model_resource(
     ThreadType,
@@ -1089,6 +1268,8 @@ _THREAD_RESOURCE = hasura_model_resource(
     insert=False,
     updatable=["subject", "visibility"],
     field_id_decode={"channel": public_pk_decoder(Integration)},
+    get_queryset=_thread_inbox_queryset,
+    write_backend=_InboxWriteBackend(Thread),
 )
 
 
@@ -1118,6 +1299,8 @@ _MESSAGING_SCHEMA_BUCKET = {
         ThreadAttachmentType,
         ThreadFollowerType,
         ThreadActivityType,
+        AgendaActivityType,
+        RecordPointerType,
         ThreadNotificationType,
         MessageSubtypeType,
         MessageType,
@@ -1403,15 +1586,40 @@ def _users_from_public_ids(user_ids: list[strawberry.ID]) -> tuple[Any, ...]:
 
 
 def _thread_activity(activity_id: strawberry.ID) -> Any:
-    """Return a scheduled activity by public id."""
+    """Return a scheduled record activity by public id, decoded elevated.
+
+    The decode intentionally bypasses the activity's own read scope: authorization
+    for reaching (and acting on) a record activity rides its parent record's read —
+    the ``record_thread`` gate applied by :func:`_readable_record` in the complete
+    and cancel resolvers — not the activity's own messaging permission. So the decode
+    only resolves the public id; the record read is the gate.
+    """
 
     try:
-        activity = instance_from_public_id(ThreadActivity, str(activity_id))
+        activity = instance_from_public_id(
+            ThreadActivity,
+            str(activity_id),
+            queryset=ThreadActivity._base_manager.all(),
+        )
     except ImproperlyConfigured as error:
         raise ValueError(str(error)) from error
     if activity is None:
         raise ValueError("activity not found")
     return activity
+
+
+def _readable_record(record: Any) -> Any | None:
+    """Return ``record`` re-resolved under the request actor's read scope, else None.
+
+    The ``record_thread`` gate: record chatter — its thread, messages, and
+    activities — is reachable only when the actor can read the parent record, so an
+    activity reached elevated (see :func:`_thread_activity`) is authorized *through*
+    the record's read. Re-resolving on the actor-scoped default manager (the exact
+    scope :func:`_threaded_record` uses) yields ``None`` when the record is unreadable,
+    which the caller surfaces as ``NOT_FOUND``.
+    """
+
+    return type(record)._default_manager.filter(pk=record.pk).first()
 
 
 def _message(message_id: strawberry.ID) -> Any:

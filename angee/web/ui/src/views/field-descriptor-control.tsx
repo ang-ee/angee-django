@@ -34,6 +34,7 @@ export function FieldDescriptorControl({
     label: field.label,
     options: field.options,
     placeholder: field.placeholder,
+    ...(field.currencyField ? { currencyField: field.currencyField } : {}),
   };
   return (
     <Component

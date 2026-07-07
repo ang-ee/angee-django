@@ -1,21 +1,22 @@
 import type { ReactNode } from "react";
 
 import type {
+  ActionArg,
   ActionContext,
   ActionDescriptor,
+  ActionFormContext,
   ActionProps,
+  ActionRelationArg,
+  ActionRelationListArg,
   ActionResult,
+  ActionScalarArg,
 } from "./Action";
 import type { ColumnDescriptor, ColumnProps } from "./Column";
 import type { FacetDescriptor, FacetProps } from "./Facet";
 import type { FieldDescriptor, FieldProps } from "./Field";
 import type { GroupDescriptor, GroupProps } from "./Group";
 import type { TabDescriptor, TabProps } from "./Tab";
-import {
-  pageChildren,
-  pageChildrenCacheKey,
-  pageElementProps,
-} from "./types";
+import { pageChildren, pageChildrenCacheKey, pageElementProps } from "./types";
 
 export { Action, type ActionConfirm } from "./Action";
 export {
@@ -41,10 +42,15 @@ export {
   type PageElementKind,
 } from "./types";
 export type {
+  ActionArg,
   ActionContext,
   ActionDescriptor,
+  ActionFormContext,
   ActionProps,
+  ActionRelationArg,
+  ActionRelationListArg,
   ActionResult,
+  ActionScalarArg,
   ColumnDescriptor,
   ColumnProps,
   FacetDescriptor,
@@ -57,24 +63,20 @@ export type {
   TabProps,
 };
 
-export function parsePageColumns<
-  TRow extends object = Record<string, unknown>,
->(children: ReactNode): ColumnDescriptor<TRow>[] {
-  return cachedChildDescriptors(
-    columnListCache,
-    children,
-    () => {
-      const columns = pageChildren(children).flatMap((child) => {
-        const props = pageElementProps<ColumnProps<TRow>>(child, "column");
-        return props ? [columnDescriptor(props)] : [];
-      });
-      return assertUniqueDescriptor(
-        columns,
-        (column) => column.field,
-        "column field",
-      );
-    },
-  );
+export function parsePageColumns<TRow extends object = Record<string, unknown>>(
+  children: ReactNode,
+): ColumnDescriptor<TRow>[] {
+  return cachedChildDescriptors(columnListCache, children, () => {
+    const columns = pageChildren(children).flatMap((child) => {
+      const props = pageElementProps<ColumnProps<TRow>>(child, "column");
+      return props ? [columnDescriptor(props)] : [];
+    });
+    return assertUniqueDescriptor(
+      columns,
+      (column) => column.field,
+      "column field",
+    );
+  });
 }
 
 export function parsePageFields(children: ReactNode): FieldDescriptor[] {
@@ -140,9 +142,9 @@ export function requirePageColumns<
   throw new Error(`${component} requires at least one Column child.`);
 }
 
-function columnDescriptor<
-  TRow extends object = Record<string, unknown>,
->(props: ColumnProps<TRow>): ColumnDescriptor<TRow> {
+function columnDescriptor<TRow extends object = Record<string, unknown>>(
+  props: ColumnProps<TRow>,
+): ColumnDescriptor<TRow> {
   return cachedDescriptor(columnDescriptorCache, props, () => ({
     field: props.field,
     ...(props.header !== undefined ? { header: props.header } : {}),
@@ -188,8 +190,12 @@ function fieldDescriptor(props: FieldProps): FieldDescriptor {
     ...(props.body !== undefined ? { body: props.body } : {}),
     ...(props.kind !== undefined ? { kind: props.kind } : {}),
     ...(props.options !== undefined ? { options: props.options } : {}),
-    ...(props.placeholder !== undefined ? { placeholder: props.placeholder } : {}),
-    ...(props.description !== undefined ? { description: props.description } : {}),
+    ...(props.placeholder !== undefined
+      ? { placeholder: props.placeholder }
+      : {}),
+    ...(props.description !== undefined
+      ? { description: props.description }
+      : {}),
   }));
 }
 
@@ -204,7 +210,11 @@ function actionDescriptor(props: ActionProps): ActionDescriptor {
     ...(props.set !== undefined ? { set: props.set } : {}),
     ...(props.prompt !== undefined ? { prompt: props.prompt } : {}),
     ...(props.run !== undefined ? { run: props.run } : {}),
-    ...(props.visibleWhen !== undefined ? { visibleWhen: props.visibleWhen } : {}),
+    ...(props.args !== undefined ? { args: props.args } : {}),
+    ...(props.submit !== undefined ? { submit: props.submit } : {}),
+    ...(props.visibleWhen !== undefined
+      ? { visibleWhen: props.visibleWhen }
+      : {}),
   }));
 }
 
@@ -286,7 +296,11 @@ export function parsePageFacets(children: ReactNode): FacetDescriptor[] {
       const props = pageElementProps<FacetProps>(child, "facet");
       return props ? [facetDescriptor(props)] : [];
     });
-    return assertUniqueDescriptor(facets, (facet) => facet.field, "facet field");
+    return assertUniqueDescriptor(
+      facets,
+      (facet) => facet.field,
+      "facet field",
+    );
   });
 }
 

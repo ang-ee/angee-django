@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Iterator
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -12,8 +12,16 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.db import connection
-from django.test import RequestFactory
-from rebac import actor_context, app_settings, system_context
+from django.test import RequestFactory, override_settings
+from rebac import (
+    RelationshipTuple,
+    actor_context,
+    app_settings,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 from rebac.roles import grant
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
@@ -2029,6 +2037,100 @@ def test_record_chatter_activity_lifecycle(messaging_graphql_tables: None) -> No
     }
 
 
+@pytest.mark.parametrize("storage", ["denormalized", "registry"])
+def test_activity_agenda_bare_assignee_gets_pointer_not_parent(
+    messaging_graphql_tables: None,
+    storage: str,
+) -> None:
+    """The agenda hands a bare assignee its own activity + record pointer, never the parent (§3.8).
+
+    ``activity_agenda`` is the first GraphQL surface delivering a ``ThreadActivity`` to an
+    assignee who holds NO grant on the parent record: the activities are scheduled elevated
+    (``created_by`` is the record owner, not the assignee), so the actor reaches its own
+    rows only through the ``messaging/thread_activity.read`` ``user`` (assignee) arm. The
+    projection must give the subject the activity's own fields, its own identity, and the
+    minimal record pointer (label + model_label + record_id, ordered by due date across
+    records) — and MUST NOT leak the parent thread (subject / message counts) or the
+    attachment metadata, which a to-one traversal resolves unguarded through ``_base_manager``.
+    That over-grant is closed structurally: the narrowed ``AgendaActivityType`` has no
+    ``thread`` field and its ``attachment`` is a minimal pointer with no ``metadata``, so
+    selecting either is a schema error. Verified in both REBAC storage modes — the
+    registry-only translation is exercised alongside the bare denormalized default.
+    """
+
+    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
+        owner = User.objects.create_user(username=f"agenda-owner-{storage}", email=f"ao-{storage}@example.com")
+        assignee = User.objects.create_user(
+            username=f"agenda-assignee-{storage}",
+            email=f"aa-{storage}@example.com",
+        )
+        with actor_context(owner):
+            alpha = messaging_models.ThreadedTicket.objects.create(title="Alpha")
+            beta = messaging_models.ThreadedTicket.objects.create(title="Beta")
+            beta.activity_schedule(user=assignee, summary="Call Beta", due_date=date(2026, 3, 10))
+            alpha.activity_schedule(user=assignee, summary="Email Alpha", due_date=date(2026, 3, 5))
+            # Another actor's assignment must never surface on this actor's agenda.
+            alpha.activity_schedule(user=owner, summary="Owner task", due_date=date(2026, 3, 6))
+
+        schema = _schema()
+        window = {"start": "2026-03-01", "end": "2026-04-01"}
+        rows = _data(
+            execute_schema(
+                schema,
+                """
+                query Agenda($start: Date!, $end: Date!) {
+                  activity_agenda(window_start: $start, window_end: $end) {
+                    summary
+                    due_date
+                    state
+                    attachment { label model_label record_id }
+                    user { username }
+                  }
+                }
+                """,
+                window,
+                request=_request(assignee),
+            )
+        )["activity_agenda"]
+
+        # The subject reads its own assignments across both records, due-date ordered, and
+        # nothing of the owner's own task — the assignee arm never crosses to a non-assignee.
+        assert [row["summary"] for row in rows] == ["Email Alpha", "Call Beta"]
+        assert rows[0]["user"] == {"username": f"agenda-assignee-{storage}"}
+        assert rows[0]["attachment"] == {
+            "label": "Alpha",
+            "model_label": "messaging.ThreadedTicket",
+            "record_id": alpha.public_id,
+        }
+        assert rows[1]["attachment"] == {
+            "label": "Beta",
+            "model_label": "messaging.ThreadedTicket",
+            "record_id": beta.public_id,
+        }
+
+        # §3.8 over-grant closed structurally: the parent thread and the attachment metadata
+        # are not on the narrowed agenda type, so a bare assignee cannot read the record's
+        # thread subject / message counts / attachment metadata through the agenda.
+        leaked = execute_schema(
+            schema,
+            """
+            query Leak($start: Date!, $end: Date!) {
+              activity_agenda(window_start: $start, window_end: $end) {
+                thread { subject message_count }
+                attachment { metadata }
+              }
+            }
+            """,
+            window,
+            request=_request(assignee),
+        )
+
+    assert leaked.errors is not None
+    reasons = " ".join(str(error) for error in leaked.errors)
+    assert "thread" in reasons
+    assert "metadata" in reasons
+
+
 @pytest.fixture()
 def messaging_graphql_tables(transactional_db: Any) -> Iterator[None]:
     """Create concrete messaging GraphQL tables and sync REBAC."""
@@ -2115,3 +2217,308 @@ def _request(user: Any) -> Any:
     request = RequestFactory().post("/graphql/console/")
     request.user = user
     return request
+
+
+def _grant(resource: Any, relation: str, user: Any) -> None:
+    """Write one direct relationship tuple for ``user`` on ``resource``."""
+
+    write_relationships(
+        [
+            RelationshipTuple(
+                resource=to_object_ref(resource),
+                relation=relation,
+                subject=to_subject_ref(user),
+            )
+        ]
+    )
+
+
+def test_generic_thread_and_message_lists_exclude_record_chatter(messaging_graphql_tables: None) -> None:
+    """The generic threads/messages resources exclude record-attached chatter.
+
+    F-v part 2: the owner-scoped ``threads``/``messages`` auto-CRUD resources are the
+    channel inbox — list, aggregate, and by-pk. Record chatter (a thread bound to a
+    record through a ``ThreadAttachment``) is reachable only through ``record_thread``
+    (gated on the parent record's read), so it must not surface here, even for a
+    platform admin who could otherwise read every owner-scoped row.
+    """
+
+    admin = _platform_admin("msg-inbox-admin")
+    channel_thread, channel_message = _seed_thread_and_message(admin)
+    with system_context(reason="test.messaging.inbox.seed"):
+        ticket = messaging_models.ThreadedTicket.objects.create(title="Case 42")
+    with actor_context(admin):
+        record_message = ticket.message_post("Internal chatter")
+    record_thread = record_message.thread
+    schema = _schema()
+
+    data = _data(
+        execute_schema(
+            schema,
+            """
+            query Inbox {
+              threads { id }
+              messages { id }
+              threads_aggregate { aggregate { count } }
+              messages_aggregate { aggregate { count } }
+            }
+            """,
+            request=_request(admin),
+        )
+    )
+    thread_ids = {row["id"] for row in data["threads"]}
+    message_ids = {row["id"] for row in data["messages"]}
+    assert channel_thread.sqid in thread_ids
+    assert record_thread.sqid not in thread_ids
+    assert channel_message.sqid in message_ids
+    assert record_message.sqid not in message_ids
+    # The aggregate source is scoped in lockstep with the list.
+    assert data["threads_aggregate"]["aggregate"]["count"] == 1
+    assert data["messages_aggregate"]["aggregate"]["count"] == 1
+
+    by_pk = _data(
+        execute_schema(
+            schema,
+            """
+            query ByPk($thread: String!, $message: String!) {
+              threads_by_pk(id: $thread) { id }
+              messages_by_pk(id: $message) { id }
+            }
+            """,
+            {"thread": record_thread.sqid, "message": record_message.sqid},
+            request=_request(admin),
+        )
+    )
+    # The by-pk route excludes the record thread/message too — not just the list.
+    assert by_pk["threads_by_pk"] is None
+    assert by_pk["messages_by_pk"] is None
+
+
+def test_complete_and_cancel_activity_authorize_through_record_read(messaging_graphql_tables: None) -> None:
+    """Complete/cancel reach the activity through the parent record's read.
+
+    F-v part 3: a user who cannot read the parent record cannot complete or cancel an
+    activity attached to it — the denial surfaces at the record read (``NOT_FOUND``),
+    not the activity's own messaging permission, so an activity id alone never leaks a
+    record's chatter. An authorized actor still completes it.
+    """
+
+    admin = _platform_admin("msg-act-admin")
+    with system_context(reason="test.chatterdemo.part3.seed"):
+        outsider = User.objects.create_user(username="cdc-outsider", email="cdc-outsider@example.com")
+        doc = messaging_models.ChatterDoc.objects.create(title="Gated 1", status="open")
+    schema = _schema()
+
+    scheduled = _data(
+        execute_schema(
+            schema,
+            """
+            mutation Schedule($model: String!, $id: ID!) {
+              schedule_record_activity(
+                input: {model_label: $model, record_id: $id, summary: "Follow up", activity_type: "todo"}
+              ) {
+                error_code
+                activity { id }
+              }
+            }
+            """,
+            {"model": "chatterdemo.ChatterDoc", "id": doc.sqid},
+            request=_request(admin),
+        )
+    )["schedule_record_activity"]
+    assert scheduled["error_code"] is None
+    activity_id = scheduled["activity"]["id"]
+
+    outsider_complete = _data(
+        execute_schema(
+            schema,
+            """
+            mutation Complete($activity: ID!) {
+              complete_record_activity(input: {activity_id: $activity, feedback: "Sneaky"}) {
+                error_code
+                activity { status }
+              }
+            }
+            """,
+            {"activity": activity_id},
+            request=_request(outsider),
+        )
+    )["complete_record_activity"]
+    assert outsider_complete["error_code"] == "NOT_FOUND"
+    assert outsider_complete["activity"] is None
+
+    outsider_cancel = _data(
+        execute_schema(
+            schema,
+            """
+            mutation Cancel($activity: ID!) {
+              cancel_record_activity(input: {activity_id: $activity}) {
+                error_code
+                activity { status }
+              }
+            }
+            """,
+            {"activity": activity_id},
+            request=_request(outsider),
+        )
+    )["cancel_record_activity"]
+    assert outsider_cancel["error_code"] == "NOT_FOUND"
+    assert outsider_cancel["activity"] is None
+
+    # The outsider changed nothing — the activity is still open.
+    with system_context(reason="test.chatterdemo.part3.read"):
+        thread = doc.message_thread(create=False)
+        assert messaging_models.ThreadActivity._base_manager.get(thread=thread).status == "todo"
+
+    completed = _data(
+        execute_schema(
+            schema,
+            """
+            mutation Complete($activity: ID!) {
+              complete_record_activity(input: {activity_id: $activity, feedback: "Real"}) {
+                error_code
+                activity { status feedback }
+              }
+            }
+            """,
+            {"activity": activity_id},
+            request=_request(admin),
+        )
+    )["complete_record_activity"]
+    assert completed["error_code"] is None
+    assert completed["activity"]["status"] == "DONE"
+    assert completed["activity"]["feedback"] == "Real"
+
+
+def test_generic_delete_excludes_record_thread_from_its_creator(messaging_graphql_tables: None) -> None:
+    """A record thread is off the generic delete surface, even for its own creator.
+
+    F-v part 2, write side: record chatter is reachable only through
+    ``record_thread`` (gated on the parent record's read). The thread's own
+    ``delete = owner + admin`` would let the creator who lost record access delete it
+    through the generic ``delete_threads_by_pk``; the ``.inbox()`` write scope keeps
+    it off that surface, so the by-pk delete cannot resolve a target. The same
+    creator still deletes an ordinary inbox thread they own — the isolation is the
+    gate, not a blanket denial.
+    """
+
+    creator = User.objects.create_user(username="thread-creator", email="tc@example.com")
+    with system_context(reason="test.messaging.delete_isolation.seed"):
+        ticket = messaging_models.ThreadedTicket.objects.create(title="Case D")
+    with actor_context(creator):
+        record_thread = ticket.message_post("Internal chatter").thread
+        inbox_thread = messaging_models.Thread.objects.create(subject="Owned inbox", created_by_id=creator.pk)
+    schema = _schema()
+
+    delete = """
+        mutation Delete($id: String!) {
+          delete_threads_by_pk(id: $id) { id }
+        }
+    """
+    record_result = execute_schema(schema, delete, {"id": record_thread.sqid}, request=_request(creator))
+    # The record thread is not on the generic write surface: the by-pk lookup misses
+    # it, so the delete resolves no target and reports the miss.
+    assert record_result.errors is not None
+    assert (record_result.data or {}).get("delete_threads_by_pk") is None
+
+    inbox_deleted = _data(
+        execute_schema(schema, delete, {"id": inbox_thread.sqid}, request=_request(creator))
+    )["delete_threads_by_pk"]
+    assert inbox_deleted == {"id": inbox_thread.sqid}
+
+    with system_context(reason="test.messaging.delete_isolation.verify"):
+        # The record thread survived; the inbox thread the creator owns did not.
+        assert messaging_models.Thread._base_manager.filter(sqid=record_thread.sqid).exists()
+        assert not messaging_models.Thread._base_manager.filter(sqid=inbox_thread.sqid).exists()
+
+
+def test_record_writer_completes_activity_they_neither_own_nor_are_assigned(
+    messaging_graphql_tables: None,
+) -> None:
+    """A record writer completes an activity on the record's authority alone (F-v §3.4).
+
+    Completing rides the record's ``thread_activity_access`` (``write`` for
+    ``ChatterDoc``), not the activity's own ``write`` (assignee/owner/thread-owner).
+    A ``writer`` who is none of those still completes it: the manager elevates the
+    activity save under ``system_context`` after the record preflight, so the
+    activity's own permission never re-denies the record-authorized action.
+    """
+
+    admin = _platform_admin("msg-act-writer-admin")
+    with system_context(reason="test.chatterdemo.writer.seed"):
+        writer = User.objects.create_user(username="cdc-writer", email="cdc-writer@example.com")
+        doc = messaging_models.ChatterDoc.objects.create(title="Writer gated", status="open")
+    _grant(doc, "writer", writer)
+    schema = _schema()
+
+    scheduled = _data(
+        execute_schema(
+            schema,
+            """
+            mutation Schedule($model: String!, $id: ID!) {
+              schedule_record_activity(
+                input: {model_label: $model, record_id: $id, summary: "Follow up", activity_type: "todo"}
+              ) {
+                error_code
+                activity { id }
+              }
+            }
+            """,
+            {"model": "chatterdemo.ChatterDoc", "id": doc.sqid},
+            request=_request(admin),
+        )
+    )["schedule_record_activity"]
+    assert scheduled["error_code"] is None
+    activity_id = scheduled["activity"]["id"]
+
+    # The writer is neither the assignee (admin), the activity/thread owner (admin),
+    # nor an admin — only a record writer. It completes on the record's authority.
+    completed = _data(
+        execute_schema(
+            schema,
+            """
+            mutation Complete($activity: ID!) {
+              complete_record_activity(input: {activity_id: $activity, feedback: "By writer"}) {
+                error_code
+                activity { status feedback }
+              }
+            }
+            """,
+            {"activity": activity_id},
+            request=_request(writer),
+        )
+    )["complete_record_activity"]
+    assert completed["error_code"] is None
+    assert completed["activity"]["status"] == "DONE"
+    assert completed["activity"]["feedback"] == "By writer"
+
+
+def test_record_chatter_rows_opt_out_of_change_broadcasts(messaging_graphql_tables: None) -> None:
+    """Record chatter rows never broadcast on the generic ``changes`` subscription.
+
+    F-v part 2, subscription side: a record-attached thread/message returns
+    ``broadcasts_changes() == False``, so the publisher drops its create/update/delete
+    at emission — it is never delivered to a subject who cannot read the record (the
+    thread/message's own ``owner``/``admin`` read would otherwise deliver it). Channel
+    inbox rows, and a message whose thread merged away, still broadcast.
+    """
+
+    admin = _platform_admin("msg-changes-admin")
+    channel_thread, channel_message = _seed_thread_and_message(admin)
+    with system_context(reason="test.messaging.changes.seed"):
+        ticket = messaging_models.ThreadedTicket.objects.create(title="Case C")
+    with actor_context(admin):
+        record_message = ticket.message_post("Internal chatter")
+    record_thread = record_message.thread
+
+    with system_context(reason="test.messaging.changes.verify"):
+        orphan = messaging_models.Message.objects.create(
+            subject="Orphan", status="synced", created_by_id=admin.pk
+        )
+        # Channel inbox rows broadcast; record-attached chatter does not.
+        assert channel_thread.broadcasts_changes() is True
+        assert channel_message.broadcasts_changes() is True
+        assert record_thread.broadcasts_changes() is False
+        assert record_message.broadcasts_changes() is False
+        # A message with no thread is not record-attached and stays on the surface.
+        assert orphan.broadcasts_changes() is True

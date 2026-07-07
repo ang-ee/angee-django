@@ -7,6 +7,15 @@ import { enMessagingMessages } from "./i18n";
 import { RecordActivityPane } from "./RecordActivityPane";
 import { RecordChatterPane } from "./RecordChatterPane";
 
+// The reusable record-thread conversation owner (transcript + composer + mark-read
+// + live refetch): the record-chatter pane composes it below, and a discuss room
+// composes the same one — no second transcript implementation.
+export {
+  RecordThreadConversation,
+  type RecordThreadConversationProps,
+  type RecordThreadConversationChrome,
+} from "./RecordThreadConversation";
+
 const messagingMenu: readonly BaseMenuItem[] = [
   {
     id: "messaging",

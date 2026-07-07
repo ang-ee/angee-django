@@ -10,20 +10,35 @@ direction.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Iterator
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import pytest
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 from django.db import connection, models
-from rebac import actor_context, system_context
+from django.db.models.signals import post_save
+from django.test.utils import CaptureQueriesContext
+from rebac import (
+    PermissionDenied,
+    RelationshipTuple,
+    actor_context,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
+from angee.graphql import publishing
+from angee.graphql.access import ChangeReadGate
+from angee.graphql.events import ChangePayload
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedRecipient
 from angee.messaging.managers import normalize_subject, strip_null_bytes
 from angee.messaging.models import Fragment as AbstractFragment
@@ -46,6 +61,7 @@ from angee.parties.models import Folder as AbstractContactFolder
 from angee.parties.models import Handle as AbstractHandle
 from angee.parties.models import Party as AbstractParty
 from angee.social.models import MessagePublic, ThreadPublic
+from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild, TrackedRecordParent
 from tests.conftest import (
     IAM_CONNECTION_TEST_MODELS,
     INTEGRATE_TEST_MODELS,
@@ -342,6 +358,32 @@ class ThreadedTicket(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel):
         return self.title
 
 
+class BroadcastRoom(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel):
+    """A threaded host that opts its chatter into the ``changes(Thread)`` stream.
+
+    Stands in for a chat room: ``thread_broadcasts_changes = True`` flips the F-stream
+    opt-in, so a post on this host's thread emits a member-gated ``threadChanged``
+    while every non-opted record thread (``ThreadedTicket``) stays silent.
+    """
+
+    sqid_prefix = "brm_"
+    thread_broadcasts_changes = True
+
+    title = models.CharField(max_length=160)
+
+    class Meta:
+        """Django model options for the broadcasting threaded test record."""
+
+        abstract = False
+        app_label = "messaging"
+        db_table = "test_messaging_broadcast_room"
+
+    def __str__(self) -> str:
+        """Return the room title for thread subjects."""
+
+        return self.title
+
+
 # Parents before children so the on-demand table creation satisfies FK targets.
 MESSAGING_TEST_MODELS = (
     *STORAGE_TEST_MODELS,
@@ -367,6 +409,10 @@ MESSAGING_TEST_MODELS = (
     MessageEdge,
     Participant,
     ThreadedTicket,
+    BroadcastRoom,
+    ChatterDoc,
+    TrackedRecordParent,
+    TrackedRecordChild,
 )
 
 _AT = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
@@ -754,6 +800,137 @@ def test_threaded_record_bulk_delete_tears_down_chatter_graph(messaging_tables: 
 
 
 @pytest.mark.django_db(transaction=True)
+def test_activity_agenda_lists_assignee_activities_across_records(messaging_tables: None) -> None:
+    """The actor's assigned activities across records, ordered by due date, windowed (F-act).
+
+    The agenda rides the ``messaging/thread_activity.read`` ``user`` (assignee) arm: the
+    activities are scheduled elevated (``created_by`` is not the assignee), so the actor
+    reaches its own rows through the assignee arm alone, with no parent-record grant. The
+    window is the whole bound — ``window_start`` inclusive, ``window_end`` exclusive — and
+    another actor's assignment, plus a company-B actor with no assignments, see nothing of
+    it. Each row carries its parent pointer (label + sqid + model_label) through the
+    attachment's owning model, computed without loading the target row.
+    """
+
+    del messaging_tables
+    user_model = get_user_model()
+    window_start, window_end = date(2026, 3, 1), date(2026, 4, 1)
+    with system_context(reason="agenda across-records setup"):
+        assignee = user_model.objects.create_user(username="agenda-assignee", email="agenda-assignee@example.com")
+        other = user_model.objects.create_user(username="agenda-other", email="agenda-other@example.com")
+        company_b = user_model.objects.create_user(username="agenda-company-b", email="agenda-company-b@example.com")
+        alpha = ThreadedTicket.objects.create(title="Alpha")
+        beta = ThreadedTicket.objects.create(title="Beta")
+        # Assignee's activities across two records, out of due-date order.
+        beta.activity_schedule(user=assignee, summary="Call Beta", due_date=date(2026, 3, 10))
+        alpha.activity_schedule(user=assignee, summary="Email Alpha", due_date=date(2026, 3, 5))
+        # Window boundaries: start is inclusive, end is exclusive.
+        alpha.activity_schedule(user=assignee, summary="Kickoff", due_date=window_start)
+        alpha.activity_schedule(user=assignee, summary="Boundary", due_date=window_end)
+        # Out of window, another assignee, and an unassigned company-B actor — all absent.
+        alpha.activity_schedule(user=assignee, summary="Later", due_date=date(2026, 4, 15))
+        alpha.activity_schedule(user=other, summary="Other task", due_date=date(2026, 3, 7))
+
+    with actor_context(assignee):
+        rows = list(ThreadActivity.objects.agenda(assignee, window_start, window_end))
+        empty = list(ThreadActivity.objects.agenda(company_b, window_start, window_end))
+
+    assert [row.summary for row in rows] == ["Kickoff", "Email Alpha", "Call Beta"]
+    assert {row.attachment.object_id for row in rows} == {alpha.pk, beta.pk}
+    assert empty == []
+
+    email_alpha = next(row for row in rows if row.summary == "Email Alpha")
+    assert email_alpha.attachment.label == "Alpha"
+    assert email_alpha.attachment.target_model_label == "messaging.ThreadedTicket"
+    assert email_alpha.attachment.target_public_id == alpha.public_id
+
+
+@pytest.mark.django_db(transaction=True)
+def test_activity_agenda_excludes_done_unless_included(messaging_tables: None) -> None:
+    """Done/canceled rows drop out of the agenda by default and return under include_done (F-act)."""
+
+    del messaging_tables
+    user_model = get_user_model()
+    window_start, window_end = date(2026, 5, 1), date(2026, 6, 1)
+    with system_context(reason="agenda done-filter setup"):
+        assignee = user_model.objects.create_user(username="agenda-done", email="agenda-done@example.com")
+        ticket = ThreadedTicket.objects.create(title="Case")
+        ticket.activity_schedule(user=assignee, summary="Open task", due_date=date(2026, 5, 10))
+        done = ticket.activity_schedule(user=assignee, summary="Done task", due_date=date(2026, 5, 12))
+        ThreadActivity.objects.complete(done, post_message=False)
+
+    with actor_context(assignee):
+        default_summaries = [row.summary for row in ThreadActivity.objects.agenda(assignee, window_start, window_end)]
+        with_done_summaries = [
+            row.summary
+            for row in ThreadActivity.objects.agenda(assignee, window_start, window_end, include_done=True)
+        ]
+
+    assert default_summaries == ["Open task"]
+    assert with_done_summaries == ["Open task", "Done task"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_activity_agenda_row_reports_overdue_state_without_stored_flag(messaging_tables: None) -> None:
+    """An overdue agenda row derives ``state == "overdue"`` from its due date, storing no flag (F-act)."""
+
+    del messaging_tables
+    user_model = get_user_model()
+    window_start, window_end = date(2019, 1, 1), date(2021, 1, 1)
+    with system_context(reason="agenda overdue setup"):
+        assignee = user_model.objects.create_user(username="agenda-overdue", email="agenda-overdue@example.com")
+        ticket = ThreadedTicket.objects.create(title="Escalation")
+        ticket.activity_schedule(user=assignee, summary="Chase", due_date=date(2020, 6, 1))
+
+    with actor_context(assignee):
+        (row,) = list(ThreadActivity.objects.agenda(assignee, window_start, window_end))
+
+    assert row.status == ThreadActivity.ActivityStatus.TODO
+    assert row.activity_state == "overdue"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_activity_agenda_record_pointer_batches_without_per_row_fanout(messaging_tables: None) -> None:
+    """Projecting the agenda's record pointer is one batch, not a per-row lazy-load (D5).
+
+    ``with_record_pointers`` primes every row's ``attachment`` in a single elevated query
+    and each pointer field reads the process-cached ``ContentType``, so projecting the
+    label + model_label + record_id for the whole agenda costs a constant query count —
+    not the 1+2N a per-row ``attachment``/``content_type`` lazy-load would. Doubling the
+    row count keeps the projection query count flat.
+    """
+
+    del messaging_tables
+    user_model = get_user_model()
+    window_start, window_end = date(2026, 3, 1), date(2026, 4, 1)
+    with system_context(reason="agenda n+1 setup"):
+        assignee = user_model.objects.create_user(username="agenda-n1", email="agenda-n1@example.com")
+        for index in range(6):
+            ticket = ThreadedTicket.objects.create(title=f"Case {index}")
+            ticket.activity_schedule(user=assignee, summary=f"Task {index}", due_date=date(2026, 3, 1 + index))
+
+    def project_query_count() -> tuple[int, int]:
+        with system_context(reason="agenda n+1 measure"), CaptureQueriesContext(connection) as captured:
+            rows = ThreadActivity.objects.agenda(assignee, window_start, window_end).with_record_pointers()
+            for row in rows:
+                _ = (row.attachment.label, row.attachment.target_model_label, row.attachment.target_public_id)
+        return len(rows), len(captured.captured_queries)
+
+    # Warm the process-cached ContentType so the flat comparison isolates the attachment batch.
+    ContentType.objects.get_for_model(ThreadedTicket)
+    small_rows, small_queries = project_query_count()
+
+    with system_context(reason="agenda n+1 grow"):
+        for index in range(6, 12):
+            ticket = ThreadedTicket.objects.create(title=f"Case {index}")
+            ticket.activity_schedule(user=assignee, summary=f"Task {index}", due_date=date(2026, 3, 1 + index))
+    large_rows, large_queries = project_query_count()
+
+    assert (small_rows, large_rows) == (6, 12)
+    assert large_queries == small_queries
+
+
+@pytest.mark.django_db(transaction=True)
 def test_threaded_model_create_autofollows_and_logs_author(messaging_tables: None) -> None:
     """Creating a threaded row follows Odoo's creator subscription and log behavior."""
 
@@ -789,6 +966,46 @@ def test_threaded_model_create_autofollows_and_logs_author(messaging_tables: Non
         tracking_message.pk,
     ]
     assert all(notification.is_read for notification in notifications)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_materialized_child_transition_yields_one_tracking_note(messaging_tables: None) -> None:
+    """A ``child_overrides_parent`` materialized child tracks a transition save once.
+
+    The child-first (flipped) MRO places ``ThreadedModelMixin.save`` once in the
+    chain, and MTI saves both tables inside that single ``save()`` — so a
+    ``StateTransitions`` ``save_state`` edge over a tracked field posts exactly one
+    tracking note, never one per MRO level. Pins the arch-review gap in the
+    materialized-child + record-chatter tracking interaction.
+    """
+
+    del messaging_tables
+    user_model = get_user_model()
+    with system_context(reason="tracked child setup"):
+        user = user_model.objects.create_user(username="flip-tracker", email="flip@example.com")
+
+    with actor_context(user):
+        record = TrackedRecordChild.objects.create(title="Flip case", note="child column")
+        # status defaults to open, so creation logs no tracking note; the transition
+        # is the one status change that must be tracked, once.
+        record.close()
+
+    thread = record.message_thread(create=False)
+    tracking_messages = [
+        message
+        for message in Message._base_manager.select_related("subtype").filter(thread=thread)
+        if message.subtype is not None and message.subtype.key == "record_updated"
+    ]
+    assert len(tracking_messages) == 1
+    tracking_value = TrackingValue._base_manager.get(message=tracking_messages[0])
+    assert tracking_value.field_name == "status"
+    assert tracking_value.old_display == "Open"
+    assert tracking_value.new_display == "Closed"
+    # The transition persisted the guarded state through save_state.
+    with system_context(reason="tracked child assertions"):
+        assert TrackedRecordChild.objects.get(pk=record.pk).status == "closed"
+        # The child column rode the same row (materialized child MTI).
+        assert TrackedRecordChild.objects.get(pk=record.pk).note == "child column"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1471,3 +1688,325 @@ def test_quote_edge_runs_from_earlier_to_later(channel: Any) -> None:
     new = Message._base_manager.get(external_id="new")
     edge = MessageEdge._base_manager.get(kind="quote")
     assert (edge.src_id, edge.dst_id) == (old.pk, new.pk)
+
+
+def _grant(record: Any, relation: str, user: Any) -> None:
+    """Write one direct REBAC relationship tuple for ``user`` on ``record``."""
+
+    write_relationships(
+        [
+            RelationshipTuple(
+                resource=to_object_ref(record),
+                relation=relation,
+                subject=to_subject_ref(user),
+            )
+        ]
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_tracked_field_log_lands_without_post_access(messaging_tables: None) -> None:
+    """An automatic tracked-field log is a system write that ignores post access.
+
+    F-v part 1: a ``writer`` grant confers ``write`` (the tracked-field save) but not
+    ``post``, so ``ChatterDoc.thread_post_access="post"`` makes ``can_post`` deny the
+    actor. The tracked change and its system tracking note must both land — the save
+    is not rolled back by a post-access denial — and the thread's message count
+    increments by exactly the one tracked change.
+    """
+
+    del messaging_tables
+    user_model = get_user_model()
+    with system_context(reason="test.chatterdemo.part1.seed"):
+        writer = user_model.objects.create_user(username="cdc-writer", email="cdc-writer@example.com")
+        doc = ChatterDoc.objects.create(title="Order 1", status="open")
+    _grant(doc, "writer", writer)
+
+    with actor_context(writer):
+        doc.status = "closed"
+        doc.save(update_fields=["status"])
+
+    with system_context(reason="test.chatterdemo.part1.read"):
+        doc.refresh_from_db()
+        assert doc.status == "closed"
+        thread = doc.message_thread(create=False)
+        assert thread is not None
+        assert thread.message_count == 1
+        logs = list(Message._base_manager.filter(thread=thread))
+        assert len(logs) == 1
+        assert logs[0].message_type == Message.MessageKind.AUTO_COMMENT
+        assert [value.field_name for value in logs[0].tracking_values.all()] == ["status"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_user_authored_post_still_denied_without_post_access(messaging_tables: None) -> None:
+    """User-authored chatter still rides the post gate for a no-post actor.
+
+    F-v part 1: only automatic system writes bypass ``can_post``. A ``writer`` (write,
+    no ``post``) is still denied posting a comment or logging a note.
+    """
+
+    del messaging_tables
+    user_model = get_user_model()
+    with system_context(reason="test.chatterdemo.part1b.seed"):
+        writer = user_model.objects.create_user(username="cdc-writer2", email="cdc-writer2@example.com")
+        doc = ChatterDoc.objects.create(title="Order 2", status="open")
+    _grant(doc, "writer", writer)
+
+    with actor_context(writer):
+        with pytest.raises(PermissionDenied):
+            doc.message_post("Hello")
+        with pytest.raises(PermissionDenied):
+            doc.message_log("A note")
+
+
+@contextlib.contextmanager
+def _collecting_broadcasts(
+    monkeypatch: pytest.MonkeyPatch,
+    *models: type[models.Model],
+) -> Iterator[list[tuple[Any, dict[str, Any]]]]:
+    """Yield the change payloads broadcast for ``models`` while their publishers are wired.
+
+    Runs ``_broadcast`` and ``on_commit`` inline so a post's broadcast is observable
+    now, and restores each model's prior publisher wiring on exit through the public
+    ``connect_publishers`` / ``disconnect_publishers`` seam.
+    """
+
+    sent: list[tuple[Any, dict[str, Any]]] = []
+    monkeypatch.setattr(publishing, "_broadcast", lambda model, payload: sent.append((model, payload)))
+    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback: callback())
+    already_wired = {model: publishing.disconnect_publishers(model) for model in models}
+    for model in models:
+        publishing.connect_publishers(model)
+    try:
+        yield sent
+    finally:
+        for model in models:
+            publishing.disconnect_publishers(model)
+            if already_wired[model]:
+                publishing.connect_publishers(model)
+
+
+@contextlib.contextmanager
+def _collecting_thread_broadcasts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[list[tuple[Any, dict[str, Any]]]]:
+    """Yield the ``Thread`` change payloads broadcast while its publisher is wired."""
+
+    with _collecting_broadcasts(monkeypatch, Thread) as sent:
+        yield sent
+
+
+@pytest.mark.django_db(transaction=True)
+def test_post_bumps_thread_through_an_instance_save(messaging_tables: None) -> None:
+    """A post advances the thread with an instance ``save``, so ``post_save`` fires once.
+
+    F-stream part B: the bump moved off the publisher-invisible queryset ``.update()``
+    onto ``save(update_fields=…)``, so the ``changes`` publisher (``post_save``) sees a
+    new post at all. The denormalised counters land exactly as the queryset bump left
+    them — the regression guard.
+    """
+
+    del messaging_tables
+    saves: list[dict[str, Any]] = []
+
+    def _record(sender: Any, instance: Any, created: bool, update_fields: Any = None, **kwargs: Any) -> None:
+        del sender, instance, kwargs
+        saves.append({"created": created, "update_fields": set(update_fields or ())})
+
+    post_save.connect(_record, sender=Thread, dispatch_uid="test-thread-bump-probe")
+    try:
+        with system_context(reason="test thread bump fires post_save"):
+            ticket = ThreadedTicket.objects.create(title="Bump case")
+            message = ticket.message_post("First post.")
+    finally:
+        post_save.disconnect(sender=Thread, dispatch_uid="test-thread-bump-probe")
+
+    # One thread INSERT (the lazy get_or_create) and exactly one bump UPDATE for the post.
+    bumps = [row for row in saves if not row["created"]]
+    assert len(bumps) == 1
+    assert {"message_count", "last_message_at"} <= bumps[0]["update_fields"]
+
+    thread = Thread._base_manager.get()
+    assert thread.message_count == 1
+    assert thread.last_message_at == message.sent_at
+
+
+@pytest.mark.django_db(transaction=True)
+def test_post_on_opted_in_host_emits_one_member_gated_thread_changed(
+    messaging_tables: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A post on an opted-in host emits one ``threadChanged``, gated to thread readers.
+
+    F-stream end to end: ``BroadcastRoom`` opts in (``thread_broadcasts_changes = True``),
+    so a post fires ``post_save`` (part B) and ``_publish`` broadcasts one ``threadChanged``
+    (part A). The event passes ``ChangeReadGate`` for a member holding ``thread.reader``
+    and is dropped for a non-member — no existence or activity leak on the socket.
+    """
+
+    del messaging_tables
+    user_model = get_user_model()
+    with system_context(reason="test opted-in room seed"):
+        member = user_model.objects.create_user(username="room-member", email="room-member@example.com")
+        stranger = user_model.objects.create_user(username="room-stranger", email="room-stranger@example.com")
+        room = BroadcastRoom.objects.create(title="general")
+        thread = room.message_thread(create=True)
+    _grant(thread, "reader", member)
+
+    with _collecting_thread_broadcasts(monkeypatch) as sent:
+        with system_context(reason="test opted-in room post"):
+            room.message_post("Live to the room.")
+
+    events = [payload for model, payload in sent if model is Thread]
+    assert len(events) == 1
+    assert events[0]["model"] == "messaging.Thread"
+    assert events[0]["action"] == "update"
+
+    change = ChangePayload.from_mapping(events[0])
+    assert ChangeReadGate(Thread, to_subject_ref(member)).filter(change) is not None
+    assert ChangeReadGate(Thread, to_subject_ref(stranger)).filter(change) is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_record_chatter_host_stays_silent_on_a_post(
+    messaging_tables: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-opted threaded host streams nothing on a post — F-v isolation intact.
+
+    The F-stream default is ``thread_broadcasts_changes = False``, so a record-chatter
+    thread (``ThreadedTicket``) never broadcasts: the bump-save change is inert for a
+    silent thread because ``_publish`` short-circuits on ``broadcasts_changes()``.
+    """
+
+    del messaging_tables
+    with system_context(reason="test record chatter silent seed"):
+        ticket = ThreadedTicket.objects.create(title="Silent case")
+        ticket.message_thread(create=True)
+
+    with _collecting_thread_broadcasts(monkeypatch) as sent:
+        with system_context(reason="test record chatter silent post"):
+            ticket.message_post("No one should stream this.")
+
+    assert [payload for model, payload in sent if model is Thread] == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_room_post_emits_no_message_changed(messaging_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A post on an opted-in room streams ``threadChanged`` only, never ``messageChanged``.
+
+    Room members hold ``messaging/thread.reader``, not ``message.read``, so every
+    per-message event would be dropped by ``ChangeReadGate`` — pure gated noise. A
+    message on any record-attached thread therefore stays off the generic message
+    surface (``Message.broadcasts_changes`` is ``False``); the thread's ``threadChanged``
+    is the live contract.
+    """
+
+    del messaging_tables
+    with system_context(reason="test room message-silence seed"):
+        room = BroadcastRoom.objects.create(title="general")
+        room.message_thread(create=True)
+
+    with _collecting_broadcasts(monkeypatch, Thread, Message) as sent:
+        with system_context(reason="test room message-silence post"):
+            message = room.message_post("Live to the room.")
+
+    assert message.broadcasts_changes() is False
+    assert [payload for model, payload in sent if model is Message] == []
+    assert [payload for model, payload in sent if model is Thread] != []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_resubscribe_preserves_follower_policy(messaging_tables: None) -> None:
+    """A re-subscribe leaves an existing follower's create-time state untouched.
+
+    ``notification_policy`` / ``subtype_keys`` are create-time defaults: a bare
+    re-subscribe (e.g. autofollow on a later post) must not reset a muted follower
+    back to ``inbox``. An explicit value still wins.
+    """
+
+    del messaging_tables
+    user_model = get_user_model()
+    with system_context(reason="test resubscribe seed"):
+        watcher = user_model.objects.create_user(username="resub-watcher", email="resub-watcher@example.com")
+        ticket = ThreadedTicket.objects.create(title="Resub case")
+        first = ticket.message_subscribe(user=watcher, notification_policy="muted", subtype_keys=("comment",))
+        assert first.notification_policy == "muted"
+
+        # A bare re-subscribe preserves the muted policy and subtype filter.
+        again = ticket.message_subscribe(user=watcher)
+        again.refresh_from_db()
+        assert again.pk == first.pk
+        assert again.notification_policy == "muted"
+        assert again.subtype_keys == ["comment"]
+
+        # An explicit value still updates it.
+        changed = ticket.message_subscribe(user=watcher, notification_policy="email")
+        changed.refresh_from_db()
+        assert changed.notification_policy == "email"
+        assert changed.subtype_keys == ["comment"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_stale_broadcast_flag_heals_on_next_activity(messaging_tables: None) -> None:
+    """A record thread minted before its host opted in heals its broadcast flag on next post.
+
+    ``host_broadcasts_changes`` is stamped only in the ``get_or_create`` defaults, so a
+    thread created while the host was silent would keep the stale ``False``;
+    ``ensure_for_record`` re-stamps it from the host on the next activity.
+    """
+
+    del messaging_tables
+    with system_context(reason="test broadcast-flag heal seed"):
+        room = BroadcastRoom.objects.create(title="stale-room")
+        thread = room.message_thread(create=True)
+        # Simulate a thread minted before the host opted in.
+        Thread._base_manager.filter(pk=thread.pk).update(host_broadcasts_changes=False)
+        thread.refresh_from_db()
+        assert thread.host_broadcasts_changes is False
+
+        room.message_post("First post after opt-in.")
+        thread.refresh_from_db()
+
+    assert thread.host_broadcasts_changes is True
+    assert thread.broadcasts_changes() is True
+
+
+@pytest.mark.django_db(transaction=True)
+def test_broadcasting_room_creator_socket_gated_by_membership(messaging_tables: None) -> None:
+    """A broadcasting room's thread is system-owned, so membership is the only live gate.
+
+    A member who *created* the room thread would otherwise keep ``thread.read`` forever
+    through the field-backed ``owner`` (``created_by``) arm, so an expelled creator's
+    ``threadChanged`` socket would never go dark. Minting a broadcasting host's thread
+    system-owned (``created_by=None``) makes ``reader`` + admin the live gate.
+    """
+
+    del messaging_tables
+    user_model = get_user_model()
+    with system_context(reason="test expelled-creator seed"):
+        creator = user_model.objects.create_user(username="room-creator", email="room-creator@example.com")
+        room = BroadcastRoom.objects.create(title="creator-room")
+
+    # The creator mints the thread under their own actor, so the audit stamp would set
+    # created_by=creator; minting a broadcasting host's thread system-owned clears it.
+    with actor_context(creator):
+        thread = room.message_thread(create=True)
+    assert thread.created_by_id is None
+
+    with system_context(reason="test expelled-creator read"):
+        thread.refresh_from_db()
+        assert thread.created_by_id is None
+
+        change = ChangePayload.from_instance(thread, action="update", update_fields=None)
+        creator_subject = to_subject_ref(creator)
+
+        # Not a member: the socket is dark despite having created the room.
+        assert ChangeReadGate(Thread, creator_subject).filter(change) is None
+
+        # Granted membership through the atomic subscribe verb: the socket is live.
+        room.message_subscribe(user=creator, grant_read=True)
+        assert ChangeReadGate(Thread, creator_subject).filter(change) is not None
+
+        # Expelled through the mirror revoke verb: the socket goes dark again.
+        room.message_unsubscribe(user=creator, revoke_read=True)
+        assert ChangeReadGate(Thread, creator_subject).filter(change) is None

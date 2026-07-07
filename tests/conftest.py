@@ -54,6 +54,7 @@ from angee.storage.models import Drive as AbstractDrive
 from angee.storage.models import File as AbstractFile
 from angee.storage.models import Folder as AbstractFolder
 from angee.storage.models import MimeType as AbstractMimeType
+from angee.storage.models import StorageRole as AbstractStorageRole
 
 
 class OAuthClient(AbstractOAuthClient, AbstractOAuthClientOidc):
@@ -483,6 +484,25 @@ class File(AbstractFile):
         db_table = "test_storage_file"
         rebac_resource_type = "storage/file"
         rebac_id_attr = "sqid"
+
+
+class StorageRole(AbstractStorageRole):
+    """Concrete table-less REBAC anchor for the ``storage/role`` namespace.
+
+    The composer emits this anchor in the runtime; the bare test env must
+    register it too so the const-backed ``admin`` arm of ``storage/role`` (reached
+    for a non-member through ``storage/backend``/``storage/drive``'s
+    ``manager->effective_member``) resolves to a deny instead of raising
+    ``SchemaError``. ``managed = False`` — never a table, only a type anchor.
+    """
+
+    class Meta(AbstractStorageRole.Meta):
+        """Django model options for the canonical test storage role anchor."""
+
+        abstract = False
+        managed = False
+        app_label = "storage"
+        rebac_resource_type = "storage/role"
 
 
 STORAGE_TEST_MODELS = (Backend, Drive, Folder, MimeType, File)

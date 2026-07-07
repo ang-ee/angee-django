@@ -152,9 +152,13 @@ export const ThreadTranscriptDocument = graphql(`
   }
 `);
 
+// The recipient picker's "add anyone" catalogue. Member-scoped: the IAM
+// `colleagues` surface returns the active users who share a company of record with
+// the actor, so a plain member (not just a platform admin) can address a comment to
+// a co-worker. The admin-only `users` catalogue is out of reach here by design.
 export const MessagingRecipientUsersDocument = graphql(`
-  query MessagingRecipientUsers($limit: Int = 100, $offset: Int = 0) {
-    users(limit: $limit, offset: $offset, order_by: [{ username: asc }]) {
+  query MessagingRecipientUsers($limit: Int = 100) {
+    colleagues(limit: $limit) {
       id
       username
       display_name
@@ -683,4 +687,4 @@ export type RecordNotificationRow = NonNullable<RecordThreadPayload["notificatio
 export type SuggestedRecipientRow =
   NonNullable<RecordThreadPayload["suggested_recipients"]>[number];
 export type RecipientUserRow =
-  NonNullable<DocumentType<typeof MessagingRecipientUsersDocument>["users"]>[number];
+  NonNullable<DocumentType<typeof MessagingRecipientUsersDocument>["colleagues"]>[number];

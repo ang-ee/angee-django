@@ -2,7 +2,7 @@ import { useAuthoredMutation } from "@angee/refine";
 import { useMemo, useState, type ReactElement, } from "react";
 
 import {
-  Alert, Button, Code, ListView, errorMessage, useConfirm, type ListColumn } from "@angee/ui";
+  Button, Code, ListView, errorMessage, useConfirm, useToast, type ListColumn } from "@angee/ui";
 
 import { IamRevokeRole } from "../documents";
 import { useIamT } from "../i18n";
@@ -31,12 +31,12 @@ const GRANT_INVALIDATES = ["iam.Grant", "iam.Relationship"];
 export function GrantsPage(): ReactElement {
   const t = useIamT();
   const confirm = useConfirm();
+  const toast = useToast();
   const [revoke_role, revokeState] = useAuthoredMutation(IamRevokeRole, {
     invalidateModels: GRANT_INVALIDATES,
     shouldInvalidate: (result) => result?.revoke_role === true,
   });
   const [pendingGrantId, setPendingGrantId] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
 
   async function revoke(row: GrantResourceRow): Promise<void> {
     const confirmed = await confirm({
@@ -48,7 +48,6 @@ export function GrantsPage(): ReactElement {
     });
     if (!confirmed) return;
     setPendingGrantId(row.id);
-    setActionError(null);
     try {
       const result = await revoke_role({
         principal_id: row.principal_id,
@@ -58,7 +57,13 @@ export function GrantsPage(): ReactElement {
         throw new Error(t("grants.revoke.error"));
       }
     } catch (caught) {
-      setActionError(errorMessage(caught, t("grants.revoke.error")));
+      // A failed revoke rides the same danger-toast path every record action
+      // surfaces its ActionResult through (RecordActionBar), not a page-local
+      // Alert band.
+      toast.danger({
+        title: t("grants.revoke.failedTitle"),
+        description: errorMessage(caught, t("grants.revoke.error")),
+      });
     } finally {
       setPendingGrantId(null);
     }
@@ -118,18 +123,11 @@ export function GrantsPage(): ReactElement {
   );
 
   return (
-    <div className="flex flex-col gap-3">
-      {actionError ? (
-        <Alert tone="danger" title={t("grants.revoke.failedTitle")}>
-          {actionError}
-        </Alert>
-      ) : null}
-      <ListView<GrantResourceRow>
-        resource="iam.Grant"
-        columns={grantColumns}
-        defaultGroup={{ field: "namespace" }}
-        pageSize={50}
-      />
-    </div>
+    <ListView<GrantResourceRow>
+      resource="iam.Grant"
+      columns={grantColumns}
+      defaultGroup={{ field: "namespace" }}
+      pageSize={50}
+    />
   );
 }
