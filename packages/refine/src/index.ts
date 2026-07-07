@@ -25,6 +25,7 @@ export {
   type OperationDocumentKind,
   type OperationDocumentsBySchema,
   type RevisionDocumentMap,
+  type SaveDocumentMap,
   type SchemaOperationDocuments,
 } from "./operation-documents";
 export {
@@ -54,6 +55,7 @@ export {
   useAngeeGroupBy,
   useAngeeGroupByBatch,
   useAngeeListBatch,
+  useAngeeResourceSave,
   useAngeeRevisions,
   type ActionMutate,
   type AngeeListBatchEntry,
@@ -68,6 +70,7 @@ export {
   type UseAngeeFacetsOptions,
   type UseAngeeFacetsResult,
   type UseAngeeGroupByResult,
+  type UseAngeeResourceSaveResult,
   type UseAngeeRevisionsResult,
 } from "./dialect/hooks";
 export {
@@ -76,12 +79,14 @@ export {
   errorFromAuthoredEnvelope,
   authoredOperationData,
   authoredQueryData,
+  type AuthoredDocument,
   type AuthoredMutate,
   type AuthoredMutationEnvelope,
   type AuthoredMutationOptions,
   type AuthoredOperationOptions,
   type AuthoredQueryOptions,
   type AuthoredQueryResult,
+  type AuthoredVariables,
 } from "./dialect/authored-hooks";
 export {
   arrayValue,
@@ -107,12 +112,14 @@ export {
   extractFacet,
   extractGroupBy,
   extractRevisions,
+  extractSaveResult,
   groupByRequest,
   groupByVariables,
   groupDimension,
   revisionSnapshot,
   revisionsRequest,
   runActionResult,
+  saveRequest,
   type ActionOutcome,
   type AggregateBucket,
   type AggregateMeasure,
@@ -134,9 +141,11 @@ export {
   type GroupNullsPosition,
   type GroupOrder,
   type GroupOrderDirection,
+  type LineInput,
   type ResourceFacetOption,
   type ResourceFacetResult,
   type ResourceRevision,
+  type ResourceSaveVariables,
 } from "./operations";
 export {
   tanStackRouterProvider,

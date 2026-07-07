@@ -7,6 +7,7 @@ describe("statusTone", () => {
     expect(statusTone("connecting")).toBe("warning");
     expect(statusTone("CLOSED")).toBe("warning");
     expect(statusTone("ready")).toBe("success");
+    expect(statusTone("WON")).toBe("success");
     expect(statusTone("SUCCEEDED")).toBe("success");
     expect(statusTone("STARTED")).toBe("info");
     expect(statusTone("WAITING")).toBe("warning");

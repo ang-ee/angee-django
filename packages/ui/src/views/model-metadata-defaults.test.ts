@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import type {
   ModelMetadata,
   Row,
+  SchemaFieldMetadata,
 } from "@angee/metadata";
 
 import {
@@ -13,6 +14,8 @@ import {
 import {
   columnsWithMetadataDefaults,
   fieldsWithMetadataDefaults,
+  relationFieldInfo,
+  relationListFieldInfo,
 } from "./model-metadata-defaults";
 import { RESOURCE_VIEW_GROUP_GRANULARITIES } from "./resource-view-model";
 import type { ColumnDescriptor, FieldDescriptor } from "./page";
@@ -448,5 +451,235 @@ describe("resource metadata defaults", () => {
       aggregateField: "implClass",
       aggregateKey: "implClass",
     });
+  });
+});
+
+describe("relationFieldInfo / relationListFieldInfo", () => {
+  const schema: SchemaFieldMetadata = {
+    types: {
+      TaxType: {
+        typeName: "TaxType",
+        recordRepresentation: "name",
+        fields: {},
+        rootFields: { list: "taxes", create: "insert_taxes_one" },
+      },
+      ProductVariantType: {
+        typeName: "ProductVariantType",
+        recordRepresentation: "displayName",
+        fields: {},
+        rootFields: { list: "product_variants" },
+      },
+      UnlistableType: { typeName: "UnlistableType", fields: {}, rootFields: {} },
+      CompanyType: {
+        typeName: "CompanyType",
+        recordRepresentation: "name",
+        fields: {},
+        rootFields: { list: "companies" },
+      },
+    },
+  };
+  const model: ModelMetadata = {
+    typeName: "JournalItemType",
+    fields: {
+      product: { name: "product", kind: "relation", relationTarget: "ProductVariantType" },
+      taxes: { name: "taxes", kind: "list", scalar: "ID", relationTarget: "TaxType" },
+      labels: { name: "labels", kind: "list", scalar: "String" },
+      orphan: { name: "orphan", kind: "list", relationTarget: "UnlistableType" },
+      // A to-one FK the node projects as a bare `ID!` scalar: a scalar leaf that
+      // still carries a relation target + the scalar-id `select` widget.
+      company: {
+        name: "company",
+        kind: "scalar",
+        scalar: "ID",
+        widget: "select",
+        relationTarget: "CompanyType",
+      },
+      // The record's own opaque id — a bare `ID` scalar with no relation target.
+      id: { name: "id", kind: "scalar", scalar: "ID" },
+    },
+  };
+
+  test("resolves a to-one relation, but not a to-many, for relationFieldInfo", () => {
+    expect(relationFieldInfo("product", model, schema)?.resource).toBe("ProductVariant");
+    // An M2M is `kind: "list"`, so the to-one resolver ignores it (else it would
+    // render a single picker over a many field).
+    expect(relationFieldInfo("taxes", model, schema)).toBeNull();
+  });
+
+  test("resolves an ID-scalar FK as a scalar-id relation picker, but not a bare id", () => {
+    // A `company` FK the node projects as a bare `ID!` still wires the picker/label
+    // through the relation metadata, so the form gets a usable relation widget.
+    const info = relationFieldInfo("company", model, schema);
+    expect(info?.resource).toBe("Company");
+    expect(info?.labelField).toBe("name");
+    // Its metadata widget is `select` (not `many2one`), so the form selects it as a
+    // scalar leaf — a valid detail query, never an object sub-selection.
+    const [resolved] = fieldsWithMetadataDefaults([{ name: "company" }], model);
+    expect(resolved?.widget).toBe("select");
+    // The record's own bare `ID` scalar (no relation target) stays opaque.
+    expect(relationFieldInfo("id", model, schema)).toBeNull();
+  });
+
+  test("resolves an M2M relation target for relationListFieldInfo", () => {
+    const info = relationListFieldInfo("taxes", model, schema);
+    expect(info?.resource).toBe("Tax");
+    expect(info?.labelField).toBe("name");
+    expect(info?.canCreate).toBe(true);
+    // The to-many resolver ignores a to-one field.
+    expect(relationListFieldInfo("product", model, schema)).toBeNull();
+  });
+
+  test("a plain string list (no relation target) stays a tag input, not a picker", () => {
+    expect(relationListFieldInfo("labels", model, schema)).toBeNull();
+  });
+
+  test("an M2M whose target exposes no list root cannot be a picker", () => {
+    expect(relationListFieldInfo("orphan", model, schema)).toBeNull();
+  });
+});
+
+describe("money currencyField plumbing", () => {
+  const metadata: ModelMetadata = {
+    typeName: "InvoiceType",
+    fields: {
+      amountTotal: {
+        name: "amountTotal",
+        kind: "scalar",
+        scalar: "Decimal",
+        widget: "money",
+        currencyField: "currency",
+        label: "Total",
+      },
+    },
+  };
+
+  test("a bare column inherits the backend widget and currencyField from metadata", () => {
+    const [column] = columnsWithMetadataDefaults<Row>([{ field: "amountTotal" }], metadata);
+    expect(column?.widget).toBe("money");
+    expect(column?.currencyField).toBe("currency");
+  });
+
+  test("an explicit column widget wins over the backend widget", () => {
+    const [column] = columnsWithMetadataDefaults<Row>(
+      [{ field: "amountTotal", widget: "float" }],
+      metadata,
+    );
+    expect(column?.widget).toBe("float");
+  });
+
+  test("a bare column for an enum/boolean field inherits no kind-derived widget", () => {
+    // List cells render enums, relations, and plain scalars natively; only an
+    // explicit backend widget (like `money`) is inherited onto a column.
+    const resolved = columnsWithMetadataDefaults<Row>(
+      [{ field: "status" }, { field: "isStarred" }],
+      NOTE_METADATA,
+    );
+    expect(resolved[0]?.widget).toBeUndefined();
+    expect(resolved[1]?.widget).toBeUndefined();
+  });
+
+  test("a form field inherits the field's currencyField from metadata", () => {
+    const [field] = fieldsWithMetadataDefaults([{ name: "amountTotal" }], metadata);
+    expect(field?.currencyField).toBe("currency");
+    expect(field?.widget).toBe("money");
+  });
+
+  test("an explicit descriptor currencyField wins over metadata", () => {
+    const [field] = fieldsWithMetadataDefaults(
+      [{ name: "amountTotal", currencyField: "order.currency" }],
+      metadata,
+    );
+    expect(field?.currencyField).toBe("order.currency");
+  });
+});
+
+describe("relation column read expansion", () => {
+  const metadata: ModelMetadata = {
+    typeName: "StockLevelType",
+    fields: {
+      product: {
+        name: "product",
+        kind: "relation",
+        widget: "many2one",
+        relationTarget: "ProductVariantType",
+        relationObject: true,
+        label: "Product",
+      },
+      // A to-one FK projected as a public-id scalar: `relation` semantics
+      // (many2one widget, relation axis) but NOT a nested object — must stay a leaf.
+      location: {
+        name: "location",
+        kind: "relation",
+        widget: "many2one",
+        relationTarget: "LocationType",
+        label: "Location",
+      },
+      quantity: { name: "quantity", kind: "scalar", scalar: "Decimal" },
+    },
+  };
+  const schema: SchemaFieldMetadata = {
+    types: {
+      ProductVariantType: {
+        typeName: "ProductVariantType",
+        recordRepresentation: "display_name",
+        fields: {},
+      },
+      LocationType: {
+        typeName: "LocationType",
+        recordRepresentation: "name",
+        fields: {},
+      },
+    },
+  };
+
+  test("a bare relation column reads its related type's label path, not a leaf object", () => {
+    const [column] = columnsWithMetadataDefaults<Row>(
+      [{ field: "product", header: "Product" }],
+      metadata,
+      schema,
+    );
+    expect(column?.field).toBe("product.display_name");
+    // The label renders as a scalar, so the relation's many2one edit widget drops.
+    expect(column?.widget).toBeUndefined();
+    expect(column?.header).toBe("Product");
+  });
+
+  test("a relation column falls back to the related id when the type declares no representation", () => {
+    const bare: SchemaFieldMetadata = {
+      types: { ProductVariantType: { typeName: "ProductVariantType", fields: {} } },
+    };
+    const [column] = columnsWithMetadataDefaults<Row>([{ field: "product" }], metadata, bare);
+    expect(column?.field).toBe("product.id");
+  });
+
+  test("without schema metadata a relation column still reads its id, never a leaf object", () => {
+    const [column] = columnsWithMetadataDefaults<Row>([{ field: "product" }], metadata);
+    expect(column?.field).toBe("product.id");
+  });
+
+  test("a to-one FK projected as a public-id scalar stays a leaf (not sub-selected)", () => {
+    const [column] = columnsWithMetadataDefaults<Row>([{ field: "location" }], metadata, schema);
+    // `location` is `kind: relation` but not `relationObject` — selecting
+    // `location { name }` would fail ("ID has no subfields"), so it stays a leaf.
+    expect(column?.field).toBe("location");
+  });
+
+  test("an explicit dotted relation path and scalar columns are left untouched", () => {
+    const resolved = columnsWithMetadataDefaults<Row>(
+      [{ field: "product.default_code" }, { field: "quantity" }],
+      metadata,
+      schema,
+    );
+    expect(resolved[0]?.field).toBe("product.default_code");
+    expect(resolved[1]?.field).toBe("quantity");
+  });
+
+  test("a column that pins its own render or widget keeps its relation field verbatim", () => {
+    const [rendered] = columnsWithMetadataDefaults<Row>(
+      [{ field: "product", render: () => null }],
+      metadata,
+      schema,
+    );
+    expect(rendered?.field).toBe("product");
   });
 });

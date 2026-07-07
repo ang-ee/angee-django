@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import type {
+  DataResourceFieldMetadata,
   DataResourceMetadata,
   ModelMetadata,
   SchemaFieldMetadata,
@@ -33,10 +34,11 @@ import {
 import {
   ModelMetadataProvider,
 } from "@angee/metadata";
+import { OperationDocumentsProvider } from "@angee/refine";
 import type {
   Row,
 } from "@angee/metadata";
-import { useMemo, useState, type ReactElement } from "react";
+import { useMemo, useState, type ComponentProps, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../feedback";
@@ -44,10 +46,12 @@ import { defaultWidgets } from "../widgets";
 import { Form } from "./Form";
 import {
   FormView,
+  FORM_VIEW_RECORD_CHROME_SLOT,
   formViewSectionsSlot,
   type FormField,
   type FormSubmitContext,
 } from "./FormView";
+import { useRecordChromeContext } from "./record-chrome-context";
 import {
   Action,
   Field,
@@ -62,6 +66,9 @@ const sdkMocks = vi.hoisted(() => ({
   // so this stays `false` on a read-only/show render and an editable mount.
   listEnabled: false,
   mutate: vi.fn(),
+  // The F6 `<resource>_save` diff-apply owner, mocked so a lines form asserts the
+  // routing ({pk, patch, lines}) without a live custom-mutation transport.
+  save: vi.fn(),
   recordSelection: undefined as readonly string[] | undefined,
   mutationAction: undefined as string | undefined,
   mutationOptions: undefined as { fields?: readonly string[]; enabled?: boolean } | undefined,
@@ -69,7 +76,15 @@ const sdkMocks = vi.hoisted(() => ({
 
 vi.mock("@angee/refine", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/refine")>();
-  return actual;
+  return {
+    ...actual,
+    useAngeeResourceSave: () => ({
+      save: sdkMocks.save,
+      fetching: false,
+      error: null,
+      reset: vi.fn(),
+    }),
+  };
 });
 
 vi.mock("@refinedev/core", async (importOriginal) => {
@@ -147,6 +162,9 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   };
   return {
     ...actual,
+    // The lines save path invalidates the resource caches after a custom-mutation
+    // write (no Refine provider in this harness); a no-op keeps every form render safe.
+    useInvalidate: () => vi.fn(async () => undefined),
     useForm: formResult,
     useOne: (options?: { meta?: unknown }) => {
       sdkMocks.recordSelection = fieldsFromMeta(options?.meta);
@@ -313,6 +331,7 @@ describe("FormView", () => {
       wordCount: 3,
     };
     sdkMocks.mutate.mockReset();
+    sdkMocks.save.mockReset();
     sdkMocks.listRows = [];
     sdkMocks.listEnabled = false;
     sdkMocks.recordSelection = undefined;
@@ -1153,6 +1172,104 @@ describe("FormView", () => {
     });
   });
 
+  test("submits a read-only field's defaultValue in the create payload", async () => {
+    renderWithProviders(
+      <FormView
+        resource="notes.Note"
+        fields={[
+          { name: "title", label: "Title", title: true },
+          { name: "kind", label: "Kind", readOnly: true, defaultValue: "skill" },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    // The read-only field never renders an editable control, yet its create-seeded
+    // default rides the payload (F-c) — the seed the page-level `createDefaults`
+    // could only submit by faking the field editable.
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: { title: "", kind: "skill" },
+    });
+  });
+
+  test("submits a createOnly read-only field seeded via createDefaults", async () => {
+    renderWithProviders(
+      <FormView
+        resource="notes.Note"
+        fields={[
+          { name: "title", label: "Title", title: true },
+          { name: "kind", label: "Kind", readOnly: true, createOnly: true },
+        ]}
+        defaultValues={{ kind: "skill" }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    // The page-level `createDefaults` seed pins a read-only field with no field
+    // `defaultValue`; it still rides the create payload instead of being dropped.
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: { title: "", kind: "skill" },
+    });
+  });
+
+  test("lets an explicit user edit override a field defaultValue on create", async () => {
+    renderWithProviders(
+      <FormView
+        resource="notes.Note"
+        fields={[
+          { name: "title", label: "Title", title: true },
+          { name: "kind", label: "Kind", defaultValue: "skill" },
+        ]}
+      />,
+    );
+
+    fireEvent.change(await screen.findByLabelText("Kind"), {
+      target: { value: "task" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    // Precedence: explicit user edit > defaultValue > empty value.
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: { title: "", kind: "task" },
+    });
+  });
+
+  test("ignores a field defaultValue on edit (create-only seed)", async () => {
+    sdkMocks.record = { id: "note-1", title: "First", kind: "existing" };
+    renderWithProviders(
+      <FormView
+        resource="notes.Note"
+        id="note-1"
+        fields={[
+          { name: "title", label: "Title", title: true },
+          { name: "kind", label: "Kind", defaultValue: "skill" },
+        ]}
+      />,
+    );
+
+    const title = await screen.findByLabelText("Title");
+    await waitFor(() => expect((title as HTMLInputElement).value).toBe("First"));
+    // The editable field seeds from the record, never from the create default.
+    await waitFor(() =>
+      expect((screen.getByLabelText("Kind") as HTMLInputElement).value).toBe(
+        "existing",
+      ),
+    );
+
+    fireEvent.change(title, { target: { value: "Renamed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: { title: "Renamed", id: "note-1" },
+    });
+  });
+
   test("submits only fields accepted by the schema create input", async () => {
     sdkMocks.record = null;
     sdkMocks.mutate.mockReset();
@@ -1366,6 +1483,37 @@ describe("FormView", () => {
     expect(sdkMocks.mutate).toHaveBeenCalledWith({
       data: { title: "Grouped" },
     });
+  });
+
+  test("provides the resource and record id to a record-chrome slot contribution", async () => {
+    function ChromeProbe(): ReactElement {
+      const chrome = useRecordChromeContext();
+      return (
+        <span data-testid="chrome-probe">
+          {chrome.resource}:{chrome.recordId}
+        </span>
+      );
+    }
+
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1">
+        <Field name="title" label="Title" title />
+      </FormView>,
+      undefined,
+      undefined,
+      {
+        slots: [
+          {
+            slot: FORM_VIEW_RECORD_CHROME_SLOT,
+            id: "notes.chrome",
+            content: <ChromeProbe />,
+          },
+        ],
+      },
+    );
+
+    const probe = await screen.findByTestId("chrome-probe");
+    expect(probe.textContent).toBe("notes.Note:note-1");
   });
 
   test("merges FORM_VIEW_SECTIONS_SLOT fields into the submit payload", async () => {
@@ -1784,7 +1932,247 @@ describe("FormView", () => {
       screen.getByText("Please fix the highlighted fields: Title, environment."),
     ).toBeTruthy();
   });
+
+  // Editable document lines (F6): the resource metadata carries a `linesResource`
+  // and a `save` root, so FormView renders the lines composer and routes a dirty
+  // save through `<resource>_save(pk, patch, lines)`.
+  test("seeds document lines without a reseed loop", async () => {
+    sdkMocks.record = saleDocRecord();
+    renderSaleDoc();
+
+    // Both seeded rows render; a reseed loop would exhaust React's update depth
+    // (the fix is the memo-stabilized seed array threaded through the reset).
+    expect(await screen.findByDisplayValue("Keep")).toBeTruthy();
+    expect(screen.getByDisplayValue("Drop")).toBeTruthy();
+    await act(async () => {
+      await nextTask();
+    });
+    expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Order");
+    expect(screen.getByDisplayValue("Keep")).toBeTruthy();
+    expect(sdkMocks.save).not.toHaveBeenCalled();
+  });
+
+  test("routes a dirty-lines save through the resource save mutation", async () => {
+    sdkMocks.record = saleDocRecord();
+    sdkMocks.save.mockImplementation(
+      async (variables: {
+        pk: string;
+        patch?: Record<string, unknown>;
+        lines?: readonly Record<string, unknown>[];
+      }) => ({
+        id: "doc-1",
+        title: "Order",
+        lines: (variables.lines ?? []).map((line, index) => ({
+          ...line,
+          id: line.id ?? `new-${index}`,
+        })),
+      }),
+    );
+    renderSaleDoc();
+
+    fireEvent.change(await screen.findByDisplayValue("Keep"), {
+      target: { value: "Kept" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(sdkMocks.save).toHaveBeenCalledTimes(1));
+    // Parent-only patch is empty (title untouched); the full desired line list
+    // carries each existing row's id and the row-order position.
+    expect(sdkMocks.save).toHaveBeenCalledWith({
+      pk: "doc-1",
+      patch: {},
+      lines: [
+        { id: "ln-1", label: "Kept", quantity: 1, position: 0 },
+        { id: "ln-2", label: "Drop", quantity: 9, position: 1 },
+      ],
+    });
+    // The stock update path is never taken when lines are dirty.
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+  });
+
+  // The slice-7 acceptance step: a new line whose numeric cells are left blank
+  // must save — the untouched Int/Decimal cells are omitted from the line input
+  // (Strawberry rejects "" for those scalars) so the model defaults apply.
+  test("a new line with untouched numeric cells creates without those keys", async () => {
+    sdkMocks.record = saleDocRecord();
+    sdkMocks.save.mockImplementation(
+      async (variables: { lines?: readonly Record<string, unknown>[] }) => ({
+        id: "doc-1",
+        title: "Order",
+        lines: (variables.lines ?? []).map((line, index) => ({
+          ...line,
+          id: line.id ?? `new-${index}`,
+        })),
+      }),
+    );
+    renderSaleDoc();
+
+    await screen.findByDisplayValue("Keep");
+    fireEvent.click(screen.getByRole("button", { name: "Add line" }));
+    // Fill only the label; quantity (Int) and price (Decimal) stay untouched.
+    const newLabelCell = screen
+      .getAllByLabelText("Text")
+      .find((cell) => (cell as HTMLInputElement).value === "");
+    expect(newLabelCell).toBeTruthy();
+    fireEvent.change(newLabelCell as HTMLInputElement, {
+      target: { value: "New" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(sdkMocks.save).toHaveBeenCalledTimes(1));
+    const variables = sdkMocks.save.mock.calls[0]?.[0] as {
+      lines: readonly Record<string, unknown>[];
+    };
+    // The created row carries only the typed cell and its position — the blank
+    // numeric cells are absent so the save document coerces and defaults apply.
+    expect(variables.lines[2]).toEqual({ label: "New", position: 2 });
+    expect(variables.lines[2]).not.toHaveProperty("quantity");
+    expect(variables.lines[2]).not.toHaveProperty("price");
+    expect(variables.lines[0]).toEqual(
+      expect.objectContaining({ id: "ln-1", quantity: 1 }),
+    );
+  });
+
+  test("keeps a parent-only edit on the stock update path", async () => {
+    sdkMocks.record = saleDocRecord();
+    renderSaleDoc();
+
+    await screen.findByDisplayValue("Keep");
+    fireEvent.change(screen.getByLabelText("Title"), {
+      target: { value: "Renamed" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({
+      data: { title: "Renamed", id: "doc-1" },
+    });
+    // No line changed, so the diff-apply save root is never invoked.
+    expect(sdkMocks.save).not.toHaveBeenCalled();
+  });
+
+  test("maps a line save validation error to its row", async () => {
+    sdkMocks.record = saleDocRecord();
+    sdkMocks.save.mockRejectedValue({
+      graphQLErrors: [
+        {
+          extensions: {
+            validationErrors: { "lines.1.label": ["This field is required."] },
+            formErrors: [],
+          },
+        },
+      ],
+    });
+    renderSaleDoc();
+
+    fireEvent.change(await screen.findByDisplayValue("Keep"), {
+      target: { value: "Kept" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(sdkMocks.save).toHaveBeenCalledTimes(1));
+    // The row-1 cell surfaces its server message from the projected rowErrors.
+    expect(await screen.findByText("This field is required.")).toBeTruthy();
+  });
 });
+
+function saleDocRecord(): Row {
+  return {
+    id: "doc-1",
+    title: "Order",
+    lines: [
+      { id: "ln-1", label: "Keep", quantity: 1, position: 0 },
+      { id: "ln-2", label: "Drop", quantity: 9, position: 1 },
+    ],
+  };
+}
+
+function renderSaleDoc(): void {
+  renderWithProviders(
+    <FormView
+      resource="demo.SaleDoc"
+      id="doc-1"
+      fields={[{ name: "title", label: "Title", title: true }]}
+    />,
+    SALES_METADATA,
+    undefined,
+    undefined,
+    SALES_DOCUMENTS,
+  );
+}
+
+function saleLineField(
+  name: string,
+  scalar: string,
+  extra: Partial<DataResourceFieldMetadata> = {},
+): DataResourceFieldMetadata {
+  return {
+    name,
+    kind: "scalar",
+    scalar,
+    readable: true,
+    filterable: false,
+    sortable: false,
+    aggregatable: false,
+    groupable: false,
+    creatable: true,
+    updatable: true,
+    requiredOnCreate: false,
+    ...extra,
+  };
+}
+
+const SALES_METADATA: SchemaFieldMetadata = {
+  types: {
+    SaleDocType: {
+      typeName: "SaleDocType",
+      recordRepresentation: "title",
+      fields: { title: { name: "title", kind: "scalar", scalar: "String" } },
+      rootFields: {
+        list: "sale_docs",
+        detail: "sale_docs_by_pk",
+        update: "update_sale_docs_by_pk",
+      },
+      resource: {
+        schemaName: "console",
+        modelLabel: "demo.SaleDoc",
+        appLabel: "demo",
+        modelName: "SaleDoc",
+        publicIdField: "id",
+        roots: {
+          list: "sale_docs",
+          detail: "sale_docs_by_pk",
+          update: "update_sale_docs_by_pk",
+          save: "sale_docs_save",
+        },
+        typeNames: { node: "SaleDocType", updateInput: "sale_docs_set_input" },
+        capabilities: ["list", "detail", "update", "save"],
+        fields: [saleLineField("title", "String", { requiredOnCreate: true })],
+        filterFields: [],
+        orderFields: [],
+        aggregateFields: [],
+        groupByFields: [],
+        relationAxes: [],
+        linesResource: {
+          field: "lines",
+          modelLabel: "demo.SaleLine",
+          inputType: "sale_docs_lines_insert_input",
+          positionField: "position",
+          fields: [
+            saleLineField("label", "String", { requiredOnCreate: true }),
+            saleLineField("quantity", "Int"),
+            saleLineField("price", "Decimal"),
+            saleLineField("position", "Int"),
+          ],
+        },
+      },
+    },
+  },
+};
+
+const SALES_DOCUMENTS = {
+  console: { saves: { "demo.SaleDoc": { kind: "Document", definitions: [] } } },
+};
 
 function renderForm(id: string | null): void {
   renderWithProviders(<FormView resource="notes.Note" id={id} fields={fields} />);
@@ -1795,6 +2183,7 @@ function renderWithProviders(
   metadata?: SchemaFieldMetadata,
   forms?: Record<string, unknown>,
   runtime?: Partial<AppRuntime>,
+  documents?: ComponentProps<typeof OperationDocumentsProvider>["documents"],
 ): void {
   const rootRoute = createRootRoute();
   const indexRoute = createRoute({
@@ -1813,17 +2202,19 @@ function renderWithProviders(
       <RouterContextProvider router={router}>
         <ModalsHost>
           <ToastProvider>
-            <ModelMetadataProvider metadata={withDefaultResourceMetadata(metadata)}>
-              <AppRuntimeProvider
-                runtime={{
-                  widgets: defaultWidgets,
-                  ...(forms ? { forms } : {}),
-                  ...runtime,
-                }}
-              >
-                {children}
-              </AppRuntimeProvider>
-            </ModelMetadataProvider>
+            <OperationDocumentsProvider documents={documents ?? {}}>
+              <ModelMetadataProvider metadata={withDefaultResourceMetadata(metadata)}>
+                <AppRuntimeProvider
+                  runtime={{
+                    widgets: defaultWidgets,
+                    ...(forms ? { forms } : {}),
+                    ...runtime,
+                  }}
+                >
+                  {children}
+                </AppRuntimeProvider>
+              </ModelMetadataProvider>
+            </OperationDocumentsProvider>
           </ToastProvider>
         </ModalsHost>
       </RouterContextProvider>

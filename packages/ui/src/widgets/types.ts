@@ -70,6 +70,13 @@ export interface WidgetField {
   placeholder?: string;
   /** Explicit `value → Tone` map (from `<Column tone>`) for status widgets. */
   tone?: Record<string, Tone>;
+  /**
+   * For a money widget: the path to the FK owning the row's currency — a sibling
+   * field (`"currency"`) or a one-hop related path (`"order.currency"`). Carried
+   * from the backend field metadata so the money renderer resolves the row's
+   * currency from the record without re-deriving it.
+   */
+  currencyField?: string;
 }
 
 export interface WidgetRenderProps<TValue = unknown, TRow = unknown> {

@@ -11,16 +11,21 @@ import {
   extractFacet,
   extractGroupBy,
   extractRevisions,
+  extractSaveResult,
   groupByRequest,
   groupDimension,
   runActionResult,
   revisionSnapshot,
   revisionsRequest,
+  saveRequest,
 } from "./operations";
 
 describe("Hasura custom operations", () => {
   test("builds an aggregate request with a generated document", () => {
-    const document = { kind: "Document", definitions: [] } as unknown as DocumentNode;
+    const document = {
+      kind: "Document",
+      definitions: [],
+    } as unknown as DocumentNode;
     const request = aggregateRequest(
       target("notes_aggregate"),
       {
@@ -38,15 +43,22 @@ describe("Hasura custom operations", () => {
   });
 
   test("builds a typed-key grouped request using group_by, where, order_by, limit, and offset", () => {
-    const document = { kind: "Document", definitions: [] } as unknown as DocumentNode;
-    const request = groupByRequest(target("notes_groups"), {
-      dimensions: [groupDimension("STATUS", "status")],
-      where: { is_starred: { _eq: true } },
-      orderBy: [{ field: "status", direction: "ASC", nulls: "LAST" }],
-      page: 2,
-      pageSize: 20,
-      measures: [{ op: "avg", input: "word_count" }],
-    }, { document });
+    const document = {
+      kind: "Document",
+      definitions: [],
+    } as unknown as DocumentNode;
+    const request = groupByRequest(
+      target("notes_groups"),
+      {
+        dimensions: [groupDimension("STATUS", "status")],
+        where: { is_starred: { _eq: true } },
+        orderBy: [{ field: "status", direction: "ASC", nulls: "LAST" }],
+        page: 2,
+        pageSize: 20,
+        measures: [{ op: "avg", input: "word_count" }],
+      },
+      { document },
+    );
 
     expect(request.meta.gqlVariables).toEqual({
       group_by: [{ field: "STATUS" }],
@@ -59,7 +71,10 @@ describe("Hasura custom operations", () => {
   });
 
   test("builds an authored delete-preview request with a generated document", () => {
-    const document = { kind: "Document", definitions: [] } as unknown as DocumentNode;
+    const document = {
+      kind: "Document",
+      definitions: [],
+    } as unknown as DocumentNode;
     const request = deletePreviewRequest(
       target("delete_note"),
       {
@@ -78,9 +93,67 @@ describe("Hasura custom operations", () => {
     expect(request.meta.gqlMutation).toBe(document);
   });
 
+  test("builds an authored save request with pk, patch, and lines", () => {
+    const document = {
+      kind: "Document",
+      definitions: [],
+    } as unknown as DocumentNode;
+    const request = saveRequest(
+      target("sale_docs_save"),
+      {
+        pk: "doc_1",
+        patch: { note: "confirmed" },
+        lines: [
+          { id: "ln_1", label: "Keep", quantity: 3, position: 0 },
+          { label: "New", quantity: 7, position: 1 },
+        ],
+      },
+      { document },
+    );
+
+    expect(request.dataProviderName).toBe("console");
+    expect(request.root).toBe("sale_docs_save");
+    expect(request.meta.gqlVariables).toEqual({
+      pk: "doc_1",
+      patch: { note: "confirmed" },
+      lines: [
+        { id: "ln_1", label: "Keep", quantity: 3, position: 0 },
+        { label: "New", quantity: 7, position: 1 },
+      ],
+    });
+    expect(request.meta.gqlMutation).toBe(document);
+  });
+
+  test("omits absent patch and lines from a save request", () => {
+    const document = {
+      kind: "Document",
+      definitions: [],
+    } as unknown as DocumentNode;
+    const request = saveRequest(
+      target("sale_docs_save"),
+      { pk: "doc_1" },
+      { document },
+    );
+
+    expect(request.meta.gqlVariables).toEqual({ pk: "doc_1" });
+  });
+
+  test("extracts the saved row from a save response", () => {
+    const row = { id: "doc_1", title: "Order", lines: [{ id: "ln_1" }] };
+    expect(
+      extractSaveResult({ sale_docs_save: row }, "sale_docs_save"),
+    ).toEqual(row);
+    expect(extractSaveResult({}, "sale_docs_save")).toBeNull();
+  });
+
   test("builds an authored revisions request with a generated document", () => {
-    const document = { kind: "Document", definitions: [] } as unknown as DocumentNode;
-    const request = revisionsRequest(target("note_revisions"), "note_123", { document });
+    const document = {
+      kind: "Document",
+      definitions: [],
+    } as unknown as DocumentNode;
+    const request = revisionsRequest(target("note_revisions"), "note_123", {
+      document,
+    });
 
     expect(request.dataProviderName).toBe("console");
     expect(request.root).toBe("note_revisions");
@@ -89,7 +162,10 @@ describe("Hasura custom operations", () => {
   });
 
   test("builds a single-id action mutation for refine custom mutation execution", () => {
-    const document = { kind: "Document", definitions: [] } as unknown as DocumentNode;
+    const document = {
+      kind: "Document",
+      definitions: [],
+    } as unknown as DocumentNode;
     const request = actionRequest(
       "provision_agent",
       { id: "agent_123" },
@@ -177,9 +253,46 @@ describe("Hasura custom operations", () => {
       "provision_agent",
     );
     expect(runActionResult(success)).toBe("Provisioning started.");
+    expect(success?.validationErrors).toBeUndefined();
+    expect(success?.id).toBeUndefined();
     expect(() =>
       runActionResult({ ok: false, message: "Provisioning failed." }),
     ).toThrow("Provisioning failed.");
+  });
+
+  test("carries the created record id a create-and-return verb populates", () => {
+    const created = extractActionOutcome(
+      {
+        register_payment: { ok: true, message: "Payment registered.", id: "pay_1" },
+      },
+      "register_payment",
+    );
+    expect(created).toEqual({ ok: true, message: "Payment registered.", id: "pay_1" });
+
+    // A verb that only mutates leaves `id` null on the wire; the outcome omits it.
+    const mutated = extractActionOutcome(
+      { confirm_order: { ok: true, message: "Confirmed.", id: null } },
+      "confirm_order",
+    );
+    expect(mutated).toEqual({ ok: true, message: "Confirmed." });
+  });
+
+  test("carries the in-band snake_case validation_errors as a camelCase field map", () => {
+    const failure = extractActionOutcome(
+      {
+        register_payment: {
+          ok: false,
+          message: "Fix the amount.",
+          validation_errors: { amount: ["Amount exceeds the balance."] },
+        },
+      },
+      "register_payment",
+    );
+    expect(failure).toEqual({
+      ok: false,
+      message: "Fix the amount.",
+      validationErrors: { amount: ["Amount exceeds the balance."] },
+    });
   });
 
   test("extracts revisions and snapshots changed fields", () => {
@@ -254,19 +367,17 @@ describe("Hasura custom operations", () => {
         "notes_groups",
         { id: "status", dimensions: [groupDimension("STATUS", "status")] },
       ),
-    ).toEqual(
-      {
-        count: 7,
-        options: [
-          {
-            value: "ACTIVE",
-            label: "ACTIVE",
-            count: 7,
-            key: { status: "ACTIVE" },
-          },
-        ],
-      },
-    );
+    ).toEqual({
+      count: 7,
+      options: [
+        {
+          value: "ACTIVE",
+          label: "ACTIVE",
+          count: 7,
+          key: { status: "ACTIVE" },
+        },
+      ],
+    });
   });
 });
 

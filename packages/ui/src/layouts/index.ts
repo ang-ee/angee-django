@@ -1,3 +1,4 @@
+export { barVariants, type BarRecipeProps } from "./bar";
 export { ConsoleLayout, type ConsoleLayoutProps } from "./ConsoleLayout";
 export {
   ControlBand,

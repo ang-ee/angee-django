@@ -1,9 +1,7 @@
 import { useState, type KeyboardEvent, type ReactElement } from "react";
 
-import { Glyph } from "../chrome/Glyph";
 import { cn } from "../lib/cn";
-import { Button } from "../ui/button";
-import { Chip } from "../ui/chip";
+import { Chip, RemovableChip } from "../ui/chip";
 import { textRoleVariants } from "../ui/text";
 import { widgetLabel } from "./label";
 import type { WidgetDefinition, WidgetRenderProps } from "./types";
@@ -48,19 +46,15 @@ function TagInputEdit({
       )}
     >
       {tags.map((tag, index) => (
-        <Chip key={`${tag}:${index}`} tone="info" size="sm" className="gap-1 pr-1">
+        <RemovableChip
+          key={`${tag}:${index}`}
+          tone="info"
+          size="sm"
+          removeLabel={tag}
+          onRemove={() => remove(index)}
+        >
           {tag}
-          <Button
-            type="button"
-            variant="ghost"
-            size="iconSm"
-            className="size-4 rounded-full"
-            aria-label={`Remove ${tag}`}
-            onClick={() => remove(index)}
-          >
-            <Glyph name="x" className="glyph" />
-          </Button>
-        </Chip>
+        </RemovableChip>
       ))}
       <input
         value={draft}

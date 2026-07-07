@@ -1,3 +1,4 @@
+import { format } from "date-fns";
 import {
   ANGEE_FILTER_LOOKUP_OPERATORS,
   clampPageSize,
@@ -6,7 +7,14 @@ import {
 import { dedupeBy } from "../lib/dedupe";
 import { DEFAULT_PAGE_SIZE } from "./page-size";
 
-export const RESOURCE_VIEW_KINDS = ["list", "board"] as const;
+export const RESOURCE_VIEW_KINDS = ["list", "board", "calendar"] as const;
+
+/** The calendar kind's window modes; `month` is the default period. */
+export const CALENDAR_VIEW_MODES = ["month", "week", "day"] as const;
+export type CalendarViewMode = (typeof CALENDAR_VIEW_MODES)[number];
+export const DEFAULT_CALENDAR_VIEW_MODE: CalendarViewMode = "month";
+/** The anchor date's serialized shape — a local `yyyy-MM-dd`. */
+export const CALENDAR_ANCHOR_FORMAT = "yyyy-MM-dd";
 export const RESOURCE_VIEW_GROUP_GRANULARITIES = [
   "day",
   "week",
@@ -17,6 +25,80 @@ export const RESOURCE_VIEW_GROUP_GRANULARITIES = [
 export const DEFAULT_RESOURCE_VIEW_PAGE_SIZE = DEFAULT_PAGE_SIZE;
 
 export type ResourceViewKind = (typeof RESOURCE_VIEW_KINDS)[number];
+
+/**
+ * Which data-controls a kind can carry — the owner map on the kind. The toolbar
+ * reads the active kind's applicability to gate the filter/search box, the pager,
+ * the group-by picker, and the columns chooser rather than each page hiding them.
+ * `requiresSources` marks a kind offered only where the composing page declares
+ * the data it needs (the calendar's windowed occurrence sources).
+ */
+export interface ResourceViewKindCapabilities {
+  /** The group-by picker + group/board lane renderers apply. */
+  grouping: boolean;
+  /** The pager applies. */
+  pagination: boolean;
+  /** The column show/hide chooser applies. */
+  columns: boolean;
+  /** The filter/search box applies. */
+  filter: boolean;
+  /** The kind is offered only where the page declares its data source. */
+  requiresSources?: boolean;
+}
+
+/** The applicable data-controls per resource-view kind (the owner map on the kind). */
+export const RESOURCE_VIEW_KIND_CAPABILITIES: Record<
+  ResourceViewKind,
+  ResourceViewKindCapabilities
+> = {
+  list: { grouping: true, pagination: true, columns: true, filter: true },
+  // Board grouping may be backed by a declared laneSource; the kind still uses
+  // the group control, but lanes can come from the relation owner instead of rows.
+  board: { grouping: true, pagination: true, columns: false, filter: true },
+  // A windowed occurrence fetch takes only window args in v1: no pagination, no
+  // group-by, no columns chooser, and no filter/search (a filterable calendar is
+  // a named follow-up needing backend query args).
+  calendar: {
+    grouping: false,
+    pagination: false,
+    columns: false,
+    filter: false,
+    requiresSources: true,
+  },
+};
+
+/** All applicable, for a surface (e.g. an in-memory rows list) that names no kind. */
+export const FULL_RESOURCE_VIEW_KIND_CAPABILITIES: ResourceViewKindCapabilities = {
+  grouping: true,
+  pagination: true,
+  columns: true,
+  filter: true,
+};
+
+/** The active kind's applicability, or all-applicable when no kind is named. */
+export function resourceViewKindCapabilities(
+  view: ResourceViewKind | undefined,
+): ResourceViewKindCapabilities {
+  return view
+    ? RESOURCE_VIEW_KIND_CAPABILITIES[view]
+    : FULL_RESOURCE_VIEW_KIND_CAPABILITIES;
+}
+
+/**
+ * The kinds a page offers, in declaration order: every kind whose capability is
+ * unconditional, plus each `requiresSources` kind whose data the page declares.
+ * The switcher's options derive from this — never a hardcoded array.
+ */
+export function availableResourceViewKinds(
+  declared: { calendar?: boolean } = {},
+): readonly ResourceViewKind[] {
+  return RESOURCE_VIEW_KINDS.filter((kind) => {
+    if (!RESOURCE_VIEW_KIND_CAPABILITIES[kind].requiresSources) return true;
+    if (kind === "calendar") return declared.calendar ?? false;
+    return false;
+  });
+}
+
 export type ResourceViewGroupGranularity =
   (typeof RESOURCE_VIEW_GROUP_GRANULARITIES)[number];
 export type ResourceViewSortDirection = "asc" | "desc";
@@ -77,6 +159,10 @@ export interface ResourceViewInitialState {
   groupStack?: readonly ResourceViewGroup[];
   selectedIds?: Iterable<string>;
   view?: ResourceViewKind;
+  /** Calendar window mode; defaults to month. */
+  mode?: CalendarViewMode;
+  /** Calendar anchor day (`yyyy-MM-dd`); defaults to today. */
+  anchor?: string;
 }
 
 export interface ResourceViewFavorite {
@@ -111,6 +197,8 @@ export type ResourceViewAction =
   | { type: "toggleSelectedId"; id: string; selected?: boolean }
   | { type: "clearSelectedIds" }
   | { type: "setView"; view: ResourceViewKind }
+  | { type: "setMode"; mode: CalendarViewMode }
+  | { type: "setAnchor"; anchor: string }
   | { type: "applyFavorite"; favorite: ResourceViewFavorite };
 
 export interface FilterFacet {
@@ -325,6 +413,8 @@ export class ResourceViewState {
   readonly groupStack: readonly ResourceViewGroup[];
   readonly selectedIds: ReadonlySet<string>;
   readonly view: ResourceViewKind;
+  readonly mode: CalendarViewMode;
+  readonly anchor: string;
 
   constructor(initial: ResourceViewInitialState = {}) {
     const groupStack = ResourceViewState.normaliseGroupStack(
@@ -340,6 +430,8 @@ export class ResourceViewState {
     this.groupStack = groupStack;
     this.selectedIds = new Set(initial.selectedIds ?? []);
     this.view = initial.view ?? "list";
+    this.mode = initial.mode ?? DEFAULT_CALENDAR_VIEW_MODE;
+    this.anchor = initial.anchor ?? todayCalendarAnchor();
   }
 
   static create(initial: ResourceViewInitialState = {}): ResourceViewState {
@@ -351,6 +443,10 @@ export class ResourceViewState {
     initial: ResourceViewInitialState = {},
   ): ResourceViewState {
     const base = ResourceViewState.create(initial);
+    const sortCleared = isClearedSearchValue(search.sort);
+    const filterCleared = isClearedSearchValue(search.filter);
+    const groupCleared = isClearedSearchValue(search.group);
+    const thenCleared = isClearedSearchValue(search.then);
     const page = parseSearchInteger(search.page);
     const pageSize = parseSearchInteger(search.pageSize);
     const sort = parseSearchSort(search.sort);
@@ -358,21 +454,27 @@ export class ResourceViewState {
     const group = parseSearchGroup(search.group);
     const then = parseSearchGroupStack(search.then);
     const view = parseSearchView(search.view);
+    const mode = parseSearchMode(search.mode);
+    const anchor = parseSearchAnchor(search.anchor);
     return ResourceViewState.create({
       ...base.toInitialState(),
       page: page ?? base.page,
       pageSize: pageSize ?? base.pageSize,
-      sort: sort ?? base.sort,
-      filter: filter ?? base.filter,
-      group: group ?? base.group,
+      sort: sortCleared ? null : (sort ?? base.sort),
+      filter: filterCleared ? {} : (filter ?? base.filter),
+      group: groupCleared ? null : (group ?? base.group),
       groupStack:
-        group || then
+        groupCleared
+          ? []
+          : group || then || thenCleared
           ? [
               ...(group ? [group] : []),
-              ...(then ?? []),
+              ...(thenCleared ? [] : (then ?? [])),
             ]
           : base.groupStack,
       view: view ?? base.view,
+      mode: mode ?? base.mode,
+      anchor: anchor ?? base.anchor,
     });
   }
 
@@ -419,6 +521,10 @@ export class ResourceViewState {
         return this.with({ selectedIds: new Set() });
       case "setView":
         return this.with({ view: action.view });
+      case "setMode":
+        return this.with({ mode: action.mode });
+      case "setAnchor":
+        return this.with({ anchor: action.anchor });
       case "applyFavorite":
         return this.resetQueryScope({
           pageSize: action.favorite.pageSize,
@@ -432,19 +538,47 @@ export class ResourceViewState {
 
   toSearch(initial: ResourceViewInitialState = {}): ResourceViewSearch {
     const search: ResourceViewSearch = {};
+    const base = ResourceViewState.create(initial);
     const defaultPageSize = defaultResourceViewPageSize(initial);
     const defaultView = initial.view ?? "list";
     if (this.page !== 1) search.page = this.page;
     if (this.pageSize !== defaultPageSize) {
       search.pageSize = this.pageSize;
     }
-    if (this.sort) search.sort = serializeResourceViewSort(this.sort);
-    if (this.hasFilter()) search.filter = JSON.stringify(this.filter);
-    if (this.group) search.group = serializeResourceViewGroup(this.group);
-    if (this.groupStack.length > 1) {
-      search.then = serializeResourceViewGroupStack(this.groupStack.slice(1));
+    const sortValue = this.sort ? serializeResourceViewSort(this.sort) : "";
+    const baseSortValue = base.sort ? serializeResourceViewSort(base.sort) : "";
+    if (this.sort) {
+      if (sortValue !== baseSortValue) search.sort = sortValue;
+    } else if (base.sort) {
+      search.sort = "";
+    }
+    const filterValue = stableSerialize(this.filter);
+    const baseFilterValue = stableSerialize(base.filter);
+    if (this.hasFilter()) {
+      if (filterValue !== baseFilterValue) search.filter = JSON.stringify(this.filter);
+    } else if (Filter.from(base.filter).hasEntries()) {
+      search.filter = "";
+    }
+    const groupStackValue = serializeResourceViewGroupStack(this.groupStack);
+    const baseGroupStackValue = serializeResourceViewGroupStack(base.groupStack);
+    if (this.groupStack.length > 0) {
+      if (groupStackValue !== baseGroupStackValue) {
+        search.group = serializeResourceViewGroup(this.groupStack[0]!);
+        if (this.groupStack.length > 1) {
+          search.then = serializeResourceViewGroupStack(this.groupStack.slice(1));
+        }
+      }
+    } else if (base.groupStack.length > 0) {
+      search.group = "";
+      if (base.groupStack.length > 1) search.then = "";
     }
     if (this.view !== defaultView) search.view = this.view;
+    // mode/anchor are calendar facts: they ride the URL only under the calendar
+    // kind, so a list/board deep-link never carries them.
+    if (this.view === "calendar") {
+      if (this.mode !== DEFAULT_CALENDAR_VIEW_MODE) search.mode = this.mode;
+      if (this.anchor !== todayCalendarAnchor()) search.anchor = this.anchor;
+    }
     return search;
   }
 
@@ -517,6 +651,8 @@ export class ResourceViewState {
       groupStack: this.groupStack,
       selectedIds: this.selectedIds,
       view: this.view,
+      mode: this.mode,
+      anchor: this.anchor,
     };
   }
 
@@ -567,6 +703,8 @@ const RESOURCE_VIEW_SEARCH_SHAPE = {
   group: undefined as string | undefined,
   then: undefined as string | undefined,
   view: undefined as string | undefined,
+  mode: undefined as string | undefined,
+  anchor: undefined as string | undefined,
 };
 
 export type ResourceViewSearchKey = keyof typeof RESOURCE_VIEW_SEARCH_SHAPE;
@@ -614,6 +752,10 @@ function parseSearchInteger(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function isClearedSearchValue(value: unknown): boolean {
+  return value === "";
+}
+
 function parseSearchSort(value: unknown): ResourceViewSort | null {
   if (typeof value !== "string") return null;
   return parseResourceViewSort(value);
@@ -643,6 +785,24 @@ function parseSearchGroupStack(
 function parseSearchView(value: unknown): ResourceViewKind | null {
   if (typeof value !== "string") return null;
   return isResourceViewKind(value) ? value : null;
+}
+
+function parseSearchMode(value: unknown): CalendarViewMode | null {
+  if (typeof value !== "string") return null;
+  return isCalendarViewMode(value) ? value : null;
+}
+
+function parseSearchAnchor(value: unknown): string | null {
+  return typeof value === "string" && CALENDAR_ANCHOR_PATTERN.test(value)
+    ? value
+    : null;
+}
+
+const CALENDAR_ANCHOR_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Today as a local `yyyy-MM-dd` anchor (the calendar's default reference day). */
+export function todayCalendarAnchor(): string {
+  return format(new Date(), CALENDAR_ANCHOR_FORMAT);
 }
 
 function defaultResourceViewPageSize(initial: ResourceViewInitialState): number {
@@ -748,6 +908,10 @@ function isGroupGranularity(value: string): value is ResourceViewGroupGranularit
 
 function isResourceViewKind(value: string): value is ResourceViewKind {
   return RESOURCE_VIEW_KINDS.includes(value as ResourceViewKind);
+}
+
+function isCalendarViewMode(value: string): value is CalendarViewMode {
+  return CALENDAR_VIEW_MODES.includes(value as CalendarViewMode);
 }
 
 function isResourceViewFavorite(value: unknown): value is ResourceViewFavorite {

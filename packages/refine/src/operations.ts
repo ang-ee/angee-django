@@ -19,8 +19,7 @@ export const AGGREGATE_MEASURE_OPERATORS = [
 ] as const;
 
 export type AggregateMeasureOperator =
-  | "count"
-  | (typeof AGGREGATE_MEASURE_OPERATORS)[number];
+  "count" | (typeof AGGREGATE_MEASURE_OPERATORS)[number];
 
 export interface AggregateMeasure {
   op: AggregateMeasureOperator;
@@ -124,10 +123,22 @@ export interface DeletePreview {
   root: DeletePreviewNode;
 }
 
-/** The shape every backend single-id ActionResult mutation returns. */
+/** The shape every backend ActionResult mutation returns. */
 export interface ActionOutcome {
   ok: boolean;
   message: string;
+  /**
+   * Public id of the record the verb created (a register-payment, an
+   * open-document verb), when the mutation selected and populated it. Lets the
+   * caller deep-link to or refresh the new record; absent on a mutate-only verb.
+   */
+  id?: string;
+  /**
+   * Field → messages returned in-band on `ok=false` (not a GraphQL error), keyed
+   * by the argument names a typed-args form binds to. Present only when the
+   * backend populated `validation_errors`; absent on success and on a plain result.
+   */
+  validationErrors?: Record<string, readonly string[]>;
 }
 
 /** Variables for a mutation shaped `<field>(id: ID!): ActionResult`. */
@@ -197,14 +208,61 @@ export function deletePreviewRequest(
   return {
     dataProviderName: operation.dataProviderName,
     root: operation.root,
-    meta: mutationMeta(
-      options.document,
-      {
-        id: variables.id,
-        confirm: variables.confirm ?? false,
-      },
-    ),
+    meta: mutationMeta(options.document, {
+      id: variables.id,
+      confirm: variables.confirm ?? false,
+    }),
   };
+}
+
+/** One editable line submitted to the authored `<resource>_save` mutation. */
+export interface LineInput extends Record<string, unknown> {
+  /** Present for an existing line (update); absent for a new line (create). */
+  id?: string;
+}
+
+/** Variables for the authored `<resource>_save(pk, patch, lines)` diff-apply mutation (F6). */
+export interface ResourceSaveVariables extends Record<string, unknown> {
+  pk: string;
+  patch?: Record<string, unknown>;
+  lines?: readonly LineInput[];
+}
+
+/**
+ * Build the request for the authored `<resource>_save(pk, patch, lines)` diff-apply
+ * mutation (F6) — the transactional parent-patch-plus-child-upsert/delete write. The
+ * frozen backend contract (spec §3.14): `lines` is the full desired child list, each
+ * carrying its public `id` to update and omitting it to create; a stored child whose
+ * id is absent from the list is deleted; `patch` is the parent field patch.
+ *
+ * This is the single point where the frontend binds to that backend operation. The
+ * generated typed document for the resource's `save` root is passed as `document`
+ * (resolved from the operation registry or authored in the addon) — like every other
+ * authored dialect operation here, this builder stays metadata-free.
+ */
+export function saveRequest(
+  target: CustomGraphQLOperationTarget,
+  variables: ResourceSaveVariables,
+  options: { document: unknown },
+): CustomGraphQLMutationRequest {
+  const operation = operationTarget(target);
+  return {
+    dataProviderName: operation.dataProviderName,
+    root: operation.root,
+    meta: mutationMeta(options.document, {
+      pk: variables.pk,
+      ...(variables.patch !== undefined ? { patch: variables.patch } : {}),
+      ...(variables.lines !== undefined ? { lines: variables.lines } : {}),
+    }),
+  };
+}
+
+/** Pull the saved parent row (with its returned lines) from a `<resource>_save` response. */
+export function extractSaveResult(
+  data: unknown,
+  root: string,
+): Record<string, unknown> | null {
+  return fieldRecord(data, root);
 }
 
 export function actionRequest(
@@ -253,7 +311,11 @@ export function extractAggregate(
   const node = fieldRecord(data, root);
   const aggregate = recordValue(node?.aggregate);
   if (!aggregate) return null;
-  return { key: null, count: countOf(aggregate.count), ...extractMeasures(aggregate) };
+  return {
+    key: null,
+    count: countOf(aggregate.count),
+    ...extractMeasures(aggregate),
+  };
 }
 
 export function extractGroupBy(data: unknown, root: string): GroupByResult {
@@ -276,7 +338,10 @@ export function extractFacet(
 // The wire payload is snake_case (the schema's Hasura naming); this boundary
 // reads those keys and exposes the idiomatic camelCase `DeletePreview` domain
 // shape the views consume.
-export function extractDeletePreview(data: unknown, root: string): DeletePreview | null {
+export function extractDeletePreview(
+  data: unknown,
+  root: string,
+): DeletePreview | null {
   const preview = fieldRecord(data, root);
   if (!preview) return null;
   const previewRoot = deletePreviewNode(preview.root);
@@ -303,10 +368,33 @@ export function extractActionOutcome(
 ): ActionOutcome | null {
   const outcome = fieldRecord(data, root);
   if (!outcome || typeof outcome.ok !== "boolean") return null;
+  // The wire field is snake_case (the schema's Hasura naming); expose the
+  // idiomatic camelCase domain key, like the other extractors here.
+  const validationErrors = stringListMap(outcome.validation_errors);
   return {
     ok: outcome.ok,
     message: typeof outcome.message === "string" ? outcome.message : "",
+    ...(typeof outcome.id === "string" && outcome.id !== ""
+      ? { id: outcome.id }
+      : {}),
+    ...(validationErrors ? { validationErrors } : {}),
   };
+}
+
+/** Read a `{ field: string[] }` map (the in-band `validationErrors` shape), or null. */
+function stringListMap(
+  value: unknown,
+): Record<string, readonly string[]> | null {
+  if (!isRecord(value)) return null;
+  const map: Record<string, readonly string[]> = {};
+  for (const [field, messages] of Object.entries(value)) {
+    if (Array.isArray(messages)) {
+      map[field] = messages.filter(
+        (item): item is string => typeof item === "string",
+      );
+    }
+  }
+  return Object.keys(map).length > 0 ? map : null;
 }
 
 /**
@@ -328,16 +416,23 @@ export function extractRevisions(
 ): readonly ResourceRevision[] {
   return arrayValue(recordValue(data)?.[root]).flatMap((row) => {
     if (!isRecord(row) || typeof row.id !== "string") return [];
-    return [{
-      ...row,
-      id: row.id,
-      created_at: typeof row.created_at === "string" ? row.created_at : "",
-      comment: typeof row.comment === "string" ? row.comment : null,
-    }];
+    return [
+      {
+        ...row,
+        id: row.id,
+        created_at: typeof row.created_at === "string" ? row.created_at : "",
+        comment: typeof row.comment === "string" ? row.comment : null,
+      },
+    ];
   });
 }
 
-const REVISION_META_FIELDS = new Set(["id", "created_at", "comment", "__typename"]);
+const REVISION_META_FIELDS = new Set([
+  "id",
+  "created_at",
+  "comment",
+  "__typename",
+]);
 
 export function revisionSnapshot(revision: ResourceRevision): unknown {
   for (const [field, value] of Object.entries(revision)) {
@@ -360,14 +455,19 @@ function facetResult(
 ): ResourceFacetResult {
   return {
     count: result.count,
-    ...(result.totalCount === undefined ? {} : { totalCount: result.totalCount }),
+    ...(result.totalCount === undefined
+      ? {}
+      : { totalCount: result.totalCount }),
     options: result.buckets.flatMap((bucket) => {
       const key = bucket.key ?? {};
-      const valueKey = facet.valueKey ?? facet.dimensions[0]?.key ?? facet.dimensions[0]?.input;
+      const valueKey =
+        facet.valueKey ??
+        facet.dimensions[0]?.key ??
+        facet.dimensions[0]?.input;
       const value = valueKey ? stringValue(key[valueKey]) : null;
       if (value === null) return [];
       const labelKey = facet.labelKey ?? valueKey;
-      const label = labelKey ? stringValue(key[labelKey]) ?? value : value;
+      const label = labelKey ? (stringValue(key[labelKey]) ?? value) : value;
       return [{ value, label, count: bucket.count, key }];
     }),
   };
@@ -376,7 +476,9 @@ function facetResult(
 function deletePreviewGroups(value: unknown): DeletePreviewGroup[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((group) =>
-    isRecord(group) && typeof group.label === "string" && typeof group.count === "number"
+    isRecord(group) &&
+    typeof group.label === "string" &&
+    typeof group.count === "number"
       ? [{ label: group.label, count: group.count }]
       : [],
   );
@@ -415,7 +517,9 @@ function groupBucket(group: Record<string, unknown>): AggregateBucket {
   };
 }
 
-function groupBySpecVariable(dimension: GroupDimension): Record<string, string> {
+function groupBySpecVariable(
+  dimension: GroupDimension,
+): Record<string, string> {
   return {
     field: dimension.input,
     ...(dimension.granularity ? { granularity: dimension.granularity } : {}),

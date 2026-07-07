@@ -149,57 +149,78 @@ export function createAngeeChangeLiveProvider(
   resources: readonly AngeeLiveResource[],
   options: { queryClient?: AuthoredQueryInvalidationClient } = {},
 ): LiveProvider {
-  const resourcesByName = resourcesByListRoot(resources);
+  const resourcesByList = resourcesByListRoot(resources);
+  const resourcesByModel = resourcesByModelLabel(resources);
   // graphql-ws does not dedup identical documents, so fan one upstream
-  // subscription per changes root out to every mounted hook and tear the
-  // socket subscription down only when the last consumer leaves.
+  // subscription per changes root out to every mounted consumer — resource hooks
+  // (useList/useOne, keyed by list root) and authored queries (keyed by model
+  // label) alike — and tear the socket subscription down only when the last
+  // consumer leaves.
   const subscriptions = new Map<string, ChangeSubscription>();
+
+  // Attach one fan-in consumer to the shared upstream for `changesRoot`, opening
+  // the socket subscription on the first consumer; the returned disposer removes
+  // that consumer and closes the socket once the last one leaves.
+  function joinChangesRoot(
+    changesRoot: string,
+    resource: AngeeLiveResource,
+    channel: string,
+    callback: (event: LiveEvent) => void,
+  ): () => void {
+    const consumer: ChangeConsumer = (data) => {
+      const event = changeEventFromResult(data, changesRoot, channel, resource);
+      if (event) {
+        invalidateAuthoredQueriesForEvent(options.queryClient, event);
+        callback(event);
+      }
+    };
+    const entry = subscriptions.get(changesRoot) ?? {
+      dispose: noopSubscription,
+      consumers: new Set<ChangeConsumer>(),
+    };
+    entry.consumers.add(consumer);
+    if (!subscriptions.has(changesRoot)) {
+      subscriptions.set(changesRoot, entry);
+      entry.dispose = client.subscribe(
+        { query: changeSubscriptionDocument(changesRoot) },
+        {
+          next: (result) => entry.consumers.forEach((c) => c(result.data)),
+          error: (error) => {
+            console.error(
+              "Angee live subscription failed; the next subscriber will reconnect.",
+              { changesRoot, model: resource.modelLabel },
+              error,
+            );
+            if (subscriptions.get(changesRoot) === entry) {
+              entry.dispose();
+              subscriptions.delete(changesRoot);
+            }
+          },
+          complete: () => undefined,
+        },
+      );
+    }
+    return () => {
+      entry.consumers.delete(consumer);
+      if (entry.consumers.size === 0 && subscriptions.get(changesRoot) === entry) {
+        entry.dispose();
+        subscriptions.delete(changesRoot);
+      }
+    };
+  }
+
   return {
     subscribe({ channel, callback, params }) {
-      const resourceName = typeof params?.resource === "string" ? params.resource : "";
-      const resource = resourcesByName.get(resourceName);
-      const changesRoot = resource?.roots.changes;
-      if (!changesRoot) return noopSubscription;
-      const consumer: ChangeConsumer = (data) => {
-        const event = changeEventFromResult(data, changesRoot, channel, resource);
-        if (event) {
-          invalidateAuthoredQueriesForEvent(options.queryClient, event);
-          callback(event);
-        }
-      };
-      const entry = subscriptions.get(changesRoot) ?? {
-        dispose: noopSubscription,
-        consumers: new Set<ChangeConsumer>(),
-      };
-      entry.consumers.add(consumer);
-      if (!subscriptions.has(changesRoot)) {
-        subscriptions.set(changesRoot, entry);
-        entry.dispose = client.subscribe(
-          { query: changeSubscriptionDocument(changesRoot) },
-          {
-            next: (result) => entry.consumers.forEach((c) => c(result.data)),
-            error: (error) => {
-              console.error(
-                "Angee live subscription failed; the next subscriber will reconnect.",
-                { changesRoot, resource: resourceName },
-                error,
-              );
-              if (subscriptions.get(changesRoot) === entry) {
-                entry.dispose();
-                subscriptions.delete(changesRoot);
-              }
-            },
-            complete: () => undefined,
-          },
-        );
-      }
-      return () => {
-        entry.consumers.delete(consumer);
-        if (entry.consumers.size === 0 && subscriptions.get(changesRoot) === entry) {
-          entry.dispose();
-          subscriptions.delete(changesRoot);
-        }
-      };
+      const targets = changeTargetsFromSubscribeParams(
+        params,
+        resourcesByList,
+        resourcesByModel,
+      );
+      if (targets.length === 0) return noopSubscription;
+      const disposers = targets.map(({ resource, changesRoot }) =>
+        joinChangesRoot(changesRoot, resource, channel, callback),
+      );
+      return () => disposers.forEach((dispose) => dispose());
     },
     unsubscribe(subscription) {
       if (typeof subscription === "function") subscription();
@@ -242,6 +263,13 @@ function hasuraOptions(
   };
 }
 
+type LiveSubscribeParams = Parameters<LiveProvider["subscribe"]>[0]["params"];
+
+interface ChangeTarget {
+  resource: AngeeLiveResource;
+  changesRoot: string;
+}
+
 function resourcesByListRoot(
   resources: readonly AngeeLiveResource[],
 ): ReadonlyMap<string, AngeeLiveResource> {
@@ -250,6 +278,40 @@ function resourcesByListRoot(
       resource.roots.list ? [[resource.roots.list, resource] as const] : [],
     ),
   );
+}
+
+function resourcesByModelLabel(
+  resources: readonly AngeeLiveResource[],
+): ReadonlyMap<string, AngeeLiveResource> {
+  return new Map(
+    resources.map((resource) => [resource.modelLabel, resource] as const),
+  );
+}
+
+// Resolve a subscribe request to the changes roots it wants: resource hooks name
+// their refine resource (a list root); authored queries declare the model labels
+// they read. Both resolve through the registry the data providers were built
+// from, so the changes-root mapping lives here, never hand-coded in the hook.
+function changeTargetsFromSubscribeParams(
+  params: LiveSubscribeParams,
+  byListRoot: ReadonlyMap<string, AngeeLiveResource>,
+  byModelLabel: ReadonlyMap<string, AngeeLiveResource>,
+): ChangeTarget[] {
+  const listRoot = typeof params?.resource === "string" ? params.resource : undefined;
+  const resources = listRoot
+    ? [byListRoot.get(listRoot)]
+    : modelLabelsFromSubscribeParams(params).map((label) => byModelLabel.get(label));
+  return resources.flatMap((resource) => {
+    const changesRoot = resource?.roots.changes;
+    return resource && changesRoot ? [{ resource, changesRoot }] : [];
+  });
+}
+
+function modelLabelsFromSubscribeParams(params: LiveSubscribeParams): string[] {
+  const models = params?.models;
+  return Array.isArray(models)
+    ? models.filter((model): model is string => typeof model === "string")
+    : [];
 }
 
 function changeSubscriptionDocument(changesRoot: string): string {

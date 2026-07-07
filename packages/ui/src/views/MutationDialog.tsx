@@ -4,15 +4,8 @@ import { errorMessage } from "../feedback";
 import { DialogForm } from "../fragments/DialogForm";
 import { ErrorBanner } from "../fragments/ErrorBanner";
 import { Button } from "../ui/button";
-import {
-  FieldDescription,
-  FieldLabel,
-  FieldRoot,
-} from "../ui/field";
-import type {
-  DialogPlacement,
-  DialogSize,
-} from "../ui/dialog";
+import { FieldDescription, FieldLabel, FieldRoot } from "../ui/field";
+import type { DialogPlacement, DialogSize } from "../ui/dialog";
 import { useUiT } from "../i18n";
 import { FieldDescriptorControl } from "./field-descriptor-control";
 import type { FieldDescriptor } from "./page";
@@ -107,13 +100,20 @@ export function MutationDialog<
       >
         {cancelLabel ?? t("dialog.cancel")}
       </Button>
-      <Button type="submit" variant="primary" size="sm" disabled={!ready || submitting}>
+      <Button
+        type="submit"
+        variant="primary"
+        size="sm"
+        disabled={!ready || submitting}
+      >
         {submitting ? (submittingLabel ?? submitLabel) : submitLabel}
       </Button>
     </>
   );
 
-  async function submit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
+  async function submit(
+    event: React.FormEvent<HTMLFormElement>,
+  ): Promise<void> {
     event.preventDefault();
     if (!ready || submitting) return;
     setSubmitting(true);
@@ -142,10 +142,13 @@ export function MutationDialog<
       placement={placement}
     >
       {fields.map((field) => {
-        const readOnly = field.readOnly || field.readOnlyWhen?.(values) || submitting;
+        const readOnly =
+          field.readOnly || field.readOnlyWhen?.(values) || submitting;
         return (
           <FieldRoot key={field.name}>
-            <FieldLabel required={field.required}>{field.label ?? field.name}</FieldLabel>
+            <FieldLabel required={field.required}>
+              {field.label ?? field.name}
+            </FieldLabel>
             <FieldDescriptorControl
               field={field}
               value={values[field.name]}
@@ -171,18 +174,27 @@ function initialDialogValues(
 ): Record<string, unknown> {
   const values: Record<string, unknown> = {};
   for (const field of fields) {
-    values[field.name] = initialValues?.[field.name] ?? emptyValueForField(field);
+    values[field.name] =
+      initialValues?.[field.name] ?? emptyValueForField(field);
   }
   return values;
 }
 
-function emptyValueForField(field: FieldDescriptor): unknown {
+/**
+ * The empty starting value for a dialog field, by its widget shape (list widgets
+ * start `[]`, switches `false`, everything else `""`). MutationDialog owns the
+ * dialog value ceremony; the typed-args action form seeds through the same rule.
+ */
+export function emptyValueForField(
+  field: Pick<FieldDescriptor, "widget" | "kind">,
+): unknown {
   if (field.widget === "tagInput") return [];
   if (field.kind === "switch" || field.widget === "switch") return false;
   return "";
 }
 
-function emptyDialogValue(value: unknown): boolean {
+/** Whether a dialog value counts as unfilled for the required-submit gate. */
+export function emptyDialogValue(value: unknown): boolean {
   if (value == null) return true;
   if (typeof value === "string") return value.trim() === "";
   if (Array.isArray(value)) return value.length === 0;

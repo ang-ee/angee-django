@@ -13,6 +13,8 @@ export {
   ModelMetadataProvider,
   defineAngeeSchemaMetadata,
   isClientRowModel,
+  lineChildModelMetadata,
+  lineReadSelectionPaths,
   modelMetadataForLabel,
   resourceOperationTarget,
   schemaFieldMetadataFromAngeeSchemaMetadata,
@@ -31,6 +33,7 @@ export {
   type DataResourceGroupBucketFilterValueMapMetadata,
   type DataResourceGroupDimensionMetadata,
   type DataResourceGroupExtractionMetadata,
+  type DataResourceLinesMetadata,
   type DataResourceMetadata,
   type DataResourceOperationTarget,
   type DataResourceRelationAxisMetadata,
@@ -67,6 +70,7 @@ export {
 } from "./groups";
 export {
   defaultWidgetForModelField,
+  fieldUpdatable,
   filterFieldType,
   looksLikeDateField,
   supportsChoiceFacet,
