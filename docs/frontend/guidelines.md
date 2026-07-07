@@ -477,8 +477,8 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   workspace packages at start) plus registration in the host `main.tsx` addons and
   `package.json`.
 - **A sibling repo's `pnpm install` can stomp this repo's per-package
-  `node_modules`.** A downstream checkout that links `@angee/*` by path (e.g.
-  arpee) rewrites `angee/web/<pkg>/node_modules` symlinks into *its own*
+  `node_modules`.** A downstream checkout that links `@angee/*` by path (e.g. a
+  downstream project checkout) rewrites `angee/web/<pkg>/node_modules` symlinks into *its own*
   `.pnpm` store; TS then loads two `vite`/`vitest` type identities and every
   package typecheck fails with `Excessive stack depth comparing types
   'UserConfig' and 'UserConfig'` in `vitest.shared.ts` — nothing in this repo's

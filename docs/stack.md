@@ -60,6 +60,12 @@ Dependency changes must update this file in the same change.
 | markdown-it-py | CommonMark tokenizer with source line spans (block token `.map`) | `knowledge` slices doc sections by heading without re-rendering — the `MarkdownPage` structure methods (`parse_outline`/`outline`, `section_range`, `spliced_section`, `spliced_unique`) shared by the `outline` read field and the section-anchored patch write |
 | uv | Python dependency resolution and workspaces | Workspace layout |
 
+Money representation: money stays native — a `DecimalField` (default
+`max_digits=18, decimal_places=6`) paired with `MoneyField`'s `currency_field`
+path declaration, never a money library. `angee.money` owns the currency
+catalogue, dated exchange rates, and conversion; the reference currency is a
+required project setting.
+
 ## Frontend
 
 | Pick | Owns | Angee adds |

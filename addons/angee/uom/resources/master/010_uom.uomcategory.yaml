@@ -1,0 +1,19 @@
+# Unit-of-measure categories (master tier). Each category groups the units that
+# measure one physical quantity; the units seed in 020 and reference these rows
+# by xref. Idempotency is the resource ledger's (source_addon, xref) identity —
+# a re-load skips unchanged rows and updates changed ones in place.
+_meta:
+  model: uom.UomCategory
+rows:
+  - xref: unit
+    fields:
+      name: Unit
+  - xref: weight
+    fields:
+      name: Weight
+  - xref: volume
+    fields:
+      name: Volume
+  - xref: time
+    fields:
+      name: Time

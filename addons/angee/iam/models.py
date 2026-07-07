@@ -17,8 +17,8 @@ scope, so it belongs to ``iam`` (the lowest addon in the dependency order) and
 carries no fiscal fields and no party FK. Its public face (a link to a
 ``parties.Party`` for name/addresses/logo) is a same-row ``extends`` merge owned
 by ``angee.parties``; its fiscal face (currency, counterpart accounts, rounding
-policy) is a same-row ``extends`` merge owned by ``arp.accounting`` — both
-downstream, so the dependency stays one-way.
+policy) is a same-row ``extends`` merge owned by a downstream accounting addon —
+both downstream, so the dependency stays one-way.
 
 Every model whose rows belong to a company of record composes
 :class:`CompanyScopedMixin` (the ``company`` FK) and adds the matching arm to its

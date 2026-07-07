@@ -1,13 +1,12 @@
-"""Concrete stand-in models for ``MoneyField`` tests.
+"""Concrete money models used by the bare source-addon test harness.
 
-The framework core ships ``MoneyField`` but not the ``angee.money`` addon (that
-incubates in arpee), so these bare models stand in for the currency addon: a
-``Currency`` under app label ``money`` — the ``"money.Currency"`` label
-``MoneyField.check`` resolves against — plus documents carrying a ``MoneyField``
-in both currency-path shapes (a sibling FK and a one-hop related path). They are
-plain models under an app that is not installed: nothing migrates them and no
-row is ever created, so they serve field ``check``/``deconstruct``/metadata
-introspection without a database table.
+``angee.money`` ships abstract source models (the composer materializes them in
+a real project), so these concrete twins register them under the ``money`` app
+label for tests: ``Currency``/``CurrencyRate`` back the runtime behavior tests
+(``tests/test_money.py``), and the ``MoneyField``-composing documents pin the
+field contract (``tests/test_money_field.py``) in both currency-path shapes — a
+sibling FK and a one-hop related path. Tables are created on demand by
+``_create_missing_tables``; the field-contract documents never need one.
 """
 
 from __future__ import annotations
@@ -15,17 +14,38 @@ from __future__ import annotations
 from django.db import models
 
 from angee.base.fields import MoneyField
+from angee.money.models import Currency as AbstractCurrency
+from angee.money.models import CurrencyRate as AbstractCurrencyRate
 
 
-class Currency(models.Model):
-    """Stand-in for ``money.Currency`` — the FK target ``MoneyField`` validates."""
+class Currency(AbstractCurrency):
+    """Concrete currency — the ``money.Currency`` target ``MoneyField`` validates."""
 
-    code = models.CharField(max_length=3, unique=True)
+    class Meta(AbstractCurrency.Meta):
+        """Django model options for the canonical test currency."""
 
-    class Meta:
-        """Register under the ``money`` app label the field couples to."""
-
+        abstract = False
         app_label = "money"
+        db_table = "test_money_currency"
+        rebac_resource_type = "money/currency"
+        rebac_id_attr = "sqid"
+
+
+class CurrencyRate(AbstractCurrencyRate):
+    """Concrete dated exchange rate used by the conversion tests."""
+
+    class Meta(AbstractCurrencyRate.Meta):
+        """Django model options for the canonical test currency rate."""
+
+        abstract = False
+        app_label = "money"
+        db_table = "test_money_rate"
+        rebac_resource_type = "money/rate"
+        rebac_id_attr = "sqid"
+
+
+MONEY_TEST_MODELS = (Currency, CurrencyRate)
+"""Concrete money models created on demand by money test fixtures."""
 
 
 class MoneyOrder(models.Model):

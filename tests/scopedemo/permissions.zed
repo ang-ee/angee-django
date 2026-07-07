@@ -7,7 +7,7 @@
 // that (unlike a const-backed functional role) fail-closes unless the auto-CRUD
 // create preflight is evaluated against the company `CompanyScopedMixin` defaults
 // from the actor's sole membership. This is the framework regression handle for
-// that gate (the shape arp.calendar.event is the first real consumer of).
+// that gate (the shape downstream company-scoped documents ride).
 definition scopedemo/doc {
     relation company: iam/company // rebac:field=company
     relation admin:   angee/role   // rebac:const=admin

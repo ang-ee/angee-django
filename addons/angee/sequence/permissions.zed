@@ -1,0 +1,35 @@
+// Authorization schema for the sequence addon.
+// @rebac_package: sequence
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 1
+
+// Roles-as-namespace anchor, mirroring storage/role: `includes` lets one
+// sequence role imply another, and resources gate on `effective_member` so
+// granted + implied members both resolve. Platform admins (angee/role:admin)
+// reach every sequence role through the const-backed `admin` relation —
+// synthetic, no per-object tuple — the same universal-admin path the resource
+// type below uses.
+definition sequence/role {
+    relation member:   auth/user | auth/group#member | angee/role:admin#member
+    relation includes: sequence/role#effective_member
+    relation admin:    angee/role // rebac:const=admin
+
+    permission effective_member = member + includes + admin->member
+}
+
+// Sequences are numbering configuration: admin-only end to end. Counters are
+// internal bookkeeping with no GraphQL surface, so they carry no definition —
+// numbers are drawn server-side under system_context, never through a mutation.
+definition sequence/sequence {
+    relation admin:   angee/role // rebac:const=admin
+    relation manager: sequence/role:sequence_admin#effective_member
+
+    // Unsatisfiable for a table-backed insert (the sqid only exists
+    // post-insert); the create path preflights `create` through the write
+    // backend and runs elevated, so an admin is granted and everyone else
+    // denied. Kept to document the intent.
+    permission create = admin->member + manager
+    permission read   = admin->member + manager
+    permission write  = admin->member + manager
+    permission delete = admin->member + manager
+}

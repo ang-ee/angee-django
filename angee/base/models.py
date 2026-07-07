@@ -373,7 +373,7 @@ def role_anchor(
 
     ``name`` defaults to a CamelCase of ``resource_type`` (``storage/role`` ->
     ``StorageRole``); pass it when the module symbol differs from that default
-    (e.g. a plain ``Role = role_anchor("tags/role", name="Role")``). ``module``
+    (e.g. ``TagRole = role_anchor("tags/role", name="TagRole")``). ``module``
     defaults to the caller's module (``sys._getframe``) so the composer scans and
     imports the anchor from the adopting addon; the module symbol you bind must
     match ``name`` so the emitted ``from <addon>.models import <name>`` import
@@ -389,10 +389,8 @@ def role_anchor(
     own ``definition <ns>/role`` block beside its models; the factory owns only
     the Django anchor model, never a composer ``.zed`` emission.
 
-    Adopters: framework ``storage`` (``StorageRole``) and ``operator``
-    (``OperatorRole``); the arpee consumer lane migrates ``ProductsRole``,
-    ``AnalyticRole``, tags ``Role``, ``AccountingRole``, and ``SalesRole`` as its
-    follow-up.
+    Adopters declare their role in one line beside their own models — for
+    example, framework ``storage`` (``StorageRole``) and ``tags`` (``TagRole``).
     """
 
     anchor_name = name or _role_anchor_name(resource_type)
