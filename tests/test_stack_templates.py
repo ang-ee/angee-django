@@ -201,6 +201,8 @@ def _render_inline_flag_conditionals(text: str, variables: dict[str, str]) -> st
 
 
 def _eval_condition(condition: str, variables: dict[str, str]) -> bool:
+    if " and " in condition:
+        return all(_eval_condition(part, variables) for part in condition.split(" and "))
     left, _, right = condition.partition("==")
     return _eval_operand(left, variables) == _eval_operand(right, variables)
 
@@ -371,6 +373,24 @@ def test_dev_stack_source_paths_translate_for_the_repo_level_layout() -> None:
     """
 
     stack = _render_dev_stack()  # copier.yml defaults: project=examples/notes-angee, framework=.
+
+    assert stack["sources"]["app"]["path"] == "../examples/notes-angee"
+    assert stack["sources"]["framework"]["path"] == ".."
+    build = stack["jobs"]["build"]
+    assert build["workdir"] == "source://app"
+    assert "--project" not in build["command"]
+    postgres_ready = stack["jobs"]["postgres-ready"]["command"][-1]
+    assert "uv run --extra postgres" in postgres_ready
+
+
+def test_dev_stack_source_paths_accept_legacy_repo_shortcut_answers() -> None:
+    """The old `angee init --dev` shortcut passed source-relative repo defaults.
+
+    Those answers already point from `.angee/` to the repo/project roots, so the
+    template must not add another `../` or force `uv run --project ..`.
+    """
+
+    stack = _render_dev_stack(project_path="../examples/notes-angee", framework_path="..")
 
     assert stack["sources"]["app"]["path"] == "../examples/notes-angee"
     assert stack["sources"]["framework"]["path"] == ".."

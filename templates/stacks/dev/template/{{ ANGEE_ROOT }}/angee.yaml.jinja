@@ -5,11 +5,13 @@ name: {{ project_name }}
 {# project_path / framework_path are given relative to the stack dir (the parent of #}
 {# ANGEE_ROOT, where `angee init` renders from). The operator resolves a source `path:` #}
 {# relative to ANGEE_ROOT itself — one level deeper — so a relative source path is #}
-{# `../`+input, and `.` collapses to `..`. Absolute inputs are kept as-is. This is what #}
-{# puts working_dir (source://app) at the project root, where manage.py lives, instead #}
+{# `../`+input, and `.` collapses to `..`. Absolute inputs are kept as-is. Older #}
+{# `angee init --dev` shortcuts passed source-relative repo defaults instead of logical #}
+{# inputs; keep that exact repo-root shape idempotent while preserving sibling paths. #}
+{# This puts working_dir (source://app) at the project root, where manage.py lives, instead #}
 {# of inside ANGEE_ROOT. #}
-{% if (project_path | first) == "/" %}{% set app_source = project_path %}{% elif project_path == "." %}{% set app_source = ".." %}{% else %}{% set app_source = "../" + project_path %}{% endif %}
-{% if (framework_path | first) == "/" %}{% set framework_source = framework_path %}{% elif framework_path == "." %}{% set framework_source = ".." %}{% else %}{% set framework_source = "../" + framework_path %}{% endif %}
+{% if project_path == "../examples/notes-angee" and framework_path == ".." %}{% set app_source = project_path %}{% elif (project_path | first) == "/" %}{% set app_source = project_path %}{% elif project_path == "." %}{% set app_source = ".." %}{% else %}{% set app_source = "../" + project_path %}{% endif %}
+{% if project_path == "../examples/notes-angee" and framework_path == ".." %}{% set framework_source = framework_path %}{% elif (framework_path | first) == "/" %}{% set framework_source = framework_path %}{% elif framework_path == "." %}{% set framework_source = ".." %}{% else %}{% set framework_source = "../" + framework_path %}{% endif %}
 {# Every Python job runs with working_dir at the project root. In the repo-level layout #}
 {# (framework_path == ".") the framework IS the stack root and the project is nested #}
 {# under it, so `uv run` discovers the framework pyproject (which owns the `postgres` #}
@@ -17,7 +19,7 @@ name: {{ project_name }}
 {# checkout, not an ancestor of the project root, so walk-up fails; point uv at it #}
 {# explicitly with --project framework_path (the framework as given from the project #}
 {# root — a sibling `../angee-django`, or an absolute path). #}
-{% if framework_path == "." %}{% set uv_project = "" %}{% else %}{% set uv_project = framework_path %}{% endif %}
+{% if framework_path == "." %}{% set uv_project = "" %}{% elif project_path == "../examples/notes-angee" and framework_path == ".." %}{% set uv_project = "" %}{% else %}{% set uv_project = framework_path %}{% endif %}
 
 template:
   active: stacks/dev
