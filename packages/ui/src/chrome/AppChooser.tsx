@@ -43,6 +43,7 @@ export interface AppChooserItem {
   description?: string;
   group?: ChromeMenuGroup;
   icon?: string;
+  searchText?: string;
   status?: ChromeMenuStatus;
   tone?: ChromeMenuTone;
 }
@@ -196,6 +197,7 @@ export function appChooserItemsFromMenuItems(
       description: item.description,
       group: item.group,
       icon: item.iconName,
+      searchText: appChooserSearchText(item),
       status: item.status,
       tone: item.tone,
     }];
@@ -304,7 +306,7 @@ function appChooserGroups(items: readonly AppChooserItem[]): {
   };
 }
 
-function filterAppChooserItems(
+export function filterAppChooserItems(
   items: readonly AppChooserItem[],
   query: string,
 ): readonly AppChooserItem[] {
@@ -313,9 +315,18 @@ function filterAppChooserItems(
   return items.filter((item) => {
     return (
       item.label.toLowerCase().includes(normalized) ||
-      item.description?.toLowerCase().includes(normalized)
+      item.description?.toLowerCase().includes(normalized) ||
+      item.searchText?.toLowerCase().includes(normalized)
     );
   });
+}
+
+function appChooserSearchText(item: ChromeMenuItem): string {
+  return [
+    item.label,
+    item.description,
+    ...(item.children ?? []).map(appChooserSearchText),
+  ].filter(Boolean).join(" ");
 }
 
 // The primary app tile is a solid brand fill; the rest are soft. Both route
