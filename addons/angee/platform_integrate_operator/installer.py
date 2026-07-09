@@ -16,16 +16,17 @@ from angee.platform.installer import AddonInstallerBackend
 
 _SOURCE = "app"
 _SETTINGS_PATH = "settings.yaml"
+_WEB_PACKAGE_JSON_PATH = "web/package.json"
 
 
 class OperatorInstallerBackend(AddonInstallerBackend):
     """Production transport: edit ``app/settings.yaml`` + rebuild through the operator.
 
-    ``read_settings_text`` seeds :attr:`_etag` from the operator read; the matching
-    ``write_settings_text`` echoes it for the daemon's optimistic-concurrency check
-    (the two run within one ``AddonInstaller.install``/``uninstall`` call on this one
-    instance). An unconfigured or unreachable daemon surfaces as ``FileNotFoundError``
-    on the read, which the installer turns into a clean refusal rather than a crash.
+    Each read seeds that file's etag, and the matching write echoes it for the
+    daemon's optimistic-concurrency check (the read/write pair runs within one
+    ``AddonInstaller.install``/``uninstall`` call on this one instance). An
+    unconfigured or unreachable daemon surfaces as ``FileNotFoundError`` on the read,
+    which the installer turns into a clean refusal rather than a crash.
     """
 
     key = "operator"
@@ -34,7 +35,8 @@ class OperatorInstallerBackend(AddonInstallerBackend):
         """Resolve the operator daemon from settings; the read seeds the write etag."""
 
         self._daemon = OperatorDaemon.from_settings()
-        self._etag = ""
+        self._settings_etag = ""
+        self._web_package_json_etag = ""
 
     def read_settings_text(self) -> str:
         """Return ``app/settings.yaml`` via the operator, seeding the concurrency etag.
@@ -48,13 +50,35 @@ class OperatorInstallerBackend(AddonInstallerBackend):
             remote = self._daemon.read_file(_SOURCE, _SETTINGS_PATH)
         except (OSError, RuntimeError) as error:
             raise FileNotFoundError(f"operator {_SOURCE}/{_SETTINGS_PATH} unavailable: {error}") from error
-        self._etag = remote.etag
+        self._settings_etag = remote.etag
         return remote.content
 
     def write_settings_text(self, text: str) -> None:
         """Write the edited ``app/settings.yaml`` back through the operator with the read etag."""
 
-        self._etag = self._daemon.write_file(_SOURCE, _SETTINGS_PATH, text, self._etag)
+        self._settings_etag = self._daemon.write_file(_SOURCE, _SETTINGS_PATH, text, self._settings_etag)
+
+    def read_web_package_json_text(self) -> str:
+        """Return ``app/web/package.json`` via the operator, seeding its concurrency etag."""
+
+        try:
+            remote = self._daemon.read_file(_SOURCE, _WEB_PACKAGE_JSON_PATH)
+        except (OSError, RuntimeError) as error:
+            raise FileNotFoundError(
+                f"operator {_SOURCE}/{_WEB_PACKAGE_JSON_PATH} unavailable: {error}"
+            ) from error
+        self._web_package_json_etag = remote.etag
+        return remote.content
+
+    def write_web_package_json_text(self, text: str) -> None:
+        """Write the edited ``app/web/package.json`` through the operator with the read etag."""
+
+        self._web_package_json_etag = self._daemon.write_file(
+            _SOURCE,
+            _WEB_PACKAGE_JSON_PATH,
+            text,
+            self._web_package_json_etag,
+        )
 
     def request_rebuild(self) -> str:
         """Trigger the operator rebuild + restart (``POST /stack/build``)."""

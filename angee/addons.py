@@ -191,6 +191,43 @@ class AvailableAddon:
     source: str
     anchor: str
 
+    def contract(self) -> AddonContract | None:
+        """Return this available addon's manifest contract, when it can be read.
+
+        Local addons are anchored at their source directory. Installed addons are
+        anchored at the ``angee.addons`` entry point's import target; walk that target
+        back to the package directory that carries ``addon.toml`` without requiring a
+        configured Django app registry.
+        """
+
+        if self.source == "local":
+            return _read_addon_contract(str(Path(self.anchor) / "addon.toml"))
+        target = self.anchor.split(":", 1)[0]
+        parts = target.split(".")
+        for end in range(len(parts), 0, -1):
+            module_name = ".".join(parts[:end])
+            try:
+                module = importlib.import_module(module_name)
+            except ImportError:
+                continue
+            for directory in _module_directories(module):
+                contract = _read_addon_contract(str(directory / "addon.toml"))
+                if contract is not None:
+                    return contract
+        return None
+
+
+def _module_directories(module: Any) -> tuple[Path, ...]:
+    """Return directories that may contain ``module``'s co-located addon manifest."""
+
+    path = getattr(module, "__path__", None)
+    if path is not None:
+        return tuple(Path(item) for item in path)
+    file = getattr(module, "__file__", None)
+    if file is None:
+        return ()
+    return (Path(file).parent,)
+
 
 def available_addons(addon_dirs: Iterable[Path | str] = ()) -> dict[str, AvailableAddon]:
     """Return every *available* addon, keyed by name.
