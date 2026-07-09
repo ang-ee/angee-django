@@ -12,7 +12,9 @@ requires-python = ">=3.14"
 # `dynamic = ["entry-points"]` and the build hooks are injected by the hatch-angee
 # build backend (build-backend above) — see [tool.hatch-angee] below.
 dependencies = [
+  "celery[redis]>=5.5",
   "channels>=4.0",
+  "channels-redis>=4.2",
   "cryptography>=44",
   "django-import-export>=4.3",
   "django-axes>=8.0",
@@ -22,7 +24,6 @@ dependencies = [
   "django-zed-rebac[strawberry-django]>=0.14",
   "django>=6.0",
   "pydantic>=2.13",
-  "procrastinate[django]>=3.9",
   "croniter>=6.0",
   "python-dateutil>=2.9",
   "pyjwt[crypto]>=2.12",
