@@ -2,6 +2,8 @@ version: 1
 kind: stack
 name: {{ project_name }}
 {% set database_url = "postgres://angee:${secret.db-password}@127.0.0.1:${ports.postgres}/angee" %}
+{% set redis_url = "redis://127.0.0.1:${ports.redis}/0" %}
+{% set celery_broker_url = "redis://127.0.0.1:${ports.redis}/1" %}
 {# project_path / framework_path are given relative to the stack dir (the parent of #}
 {# ANGEE_ROOT, where `angee init` renders from). The operator resolves a source `path:` #}
 {# relative to ANGEE_ROOT itself — one level deeper — so a relative source path is #}
@@ -62,6 +64,7 @@ ports:
   django: { value: {{ django_port }}, export_env: DJANGO_PORT }
   process_compose: { value: {{ process_compose_port }}, export_env: PROCESS_COMPOSE_PORT }
   postgres: { value: {{ postgres_port }}, export_env: POSTGRES_PORT }
+  redis: { value: {{ redis_port }}, export_env: REDIS_PORT }
   # The operator daemon's port — workspace-allocated (operator.port_pool.operator),
   # never a hardcoded 9000. Services reference it as ${ports.operator}.
   operator: { value: {{ operator_port }}, export_env: ANGEE_OPERATOR_PORT }
@@ -243,6 +246,12 @@ services:
     ports:
       - "${ports.postgres}:5432"
 
+  redis:
+    runtime: container
+    image: redis:7-alpine
+    ports:
+      - "${ports.redis}:6379"
+
   # Angee overrides `runserver` to serve angee.asgi with uvicorn (keeping the ASGI
   # lifespan the MCP mount's session manager needs — see angee.asgi) under Django's
   # own follow-imports autoreloader. That watches every imported source file —
@@ -267,15 +276,30 @@ services:
       # Container-reachable URL for this Django process's built-in /mcp mount.
       # Agents run in containers, so they reach the local backend through the host gateway.
       ANGEE_BUILTIN_MCP_URL: "http://host.docker.internal:{{ django_port }}/mcp"
+      REDIS_URL: "{{ redis_url }}"
+      CELERY_BROKER_URL: "{{ celery_broker_url }}"
     after: [resources, schema]
 
-  procrastinate-worker:
+  celery-worker:
     runtime: local
     workdir: source://app
-    command: ["uv", "run"{% if uv_project %}, "--project", "{{ uv_project }}"{% endif %}, "--extra", "postgres", "python", "manage.py", "procrastinate", "worker"]
+    command: ["uv", "run"{% if uv_project %}, "--project", "{{ uv_project }}"{% endif %}, "--extra", "postgres", "celery", "-A", "angee.tasks.celery:app", "worker", "--loglevel=INFO"]
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
+      REDIS_URL: "{{ redis_url }}"
+      CELERY_BROKER_URL: "{{ celery_broker_url }}"
+    after: [resources, schema]
+
+  celery-beat:
+    runtime: local
+    workdir: source://app
+    command: ["uv", "run"{% if uv_project %}, "--project", "{{ uv_project }}"{% endif %}, "--extra", "postgres", "celery", "-A", "angee.tasks.celery:app", "beat", "--loglevel=INFO"]
+    env:
+      ANGEE_PROJECT_DIR: "."
+      DATABASE_URL: "{{ database_url }}"
+      REDIS_URL: "{{ redis_url }}"
+      CELERY_BROKER_URL: "{{ celery_broker_url }}"
     after: [resources, schema]
 
   # Vite dev server for the SPA. It proxies /graphql/ and /auth/csrf/ to Django,

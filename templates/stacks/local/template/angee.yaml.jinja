@@ -85,6 +85,12 @@ services:
     mounts:
       - bind://./data/pgdata:/var/lib/postgresql/data
 
+  # Shared Redis for Channels fanout and Celery transport. Channels uses DB 0;
+  # Celery uses DB 1 so task backlog never shares keys with WebSocket fanout.
+  redis:
+    runtime: container
+    image: redis:7-alpine
+
   # angee-django backend on the framework runtime image (framework code + deps +
   # psycopg baked in). The project mounts at /app OVER the image's own /app workdir;
   # the framework lives off /app in the image, so `import angee.*` still resolves from
@@ -119,6 +125,8 @@ services:
       # Agents and container services reach the built-in MCP server on the Docker
       # network, not through a host-published Django port.
       ANGEE_BUILTIN_MCP_URL: "http://django:8000/mcp"
+      REDIS_URL: "redis://redis:6379/0"
+      CELERY_BROKER_URL: "redis://redis:6379/1"
     command:
       - sh
       - "-c"
@@ -137,15 +145,15 @@ services:
         && python manage.py resources load
         && python manage.py bootstrap_admin
         && exec uvicorn angee.asgi:application --host 0.0.0.0 --port 8000
-    after: [postgres]
+    after: [postgres, redis]
 {% if frontend_mode == "vite" %}
     ports:
       - "{{ django_port }}:8000"
 {% endif %}
 
-  # Background queue worker. Manual bridge syncs enqueue Procrastinate jobs so the
-  # HTTP action returns immediately while this service owns the long-running work.
-  procrastinate-worker:
+  # Background queue worker. Manual bridge syncs enqueue Celery tasks so the HTTP
+  # action returns immediately while this service owns long-running work.
+  celery-worker:
     runtime: container
     image: {{ base_image }}
     mounts:
@@ -160,24 +168,54 @@ services:
       ANGEE_OPERATOR_URL: "http://host.docker.internal:${ports.operator}"
       ANGEE_OPERATOR_TOKEN: "${secret.operator-token}"
       ANGEE_BUILTIN_MCP_URL: "http://django:8000/mcp"
+      REDIS_URL: "redis://redis:6379/0"
+      CELERY_BROKER_URL: "redis://redis:6379/1"
     command:
       - sh
       - "-c"
       - >-
         trap 'exit 0' TERM INT;
-        while :; do
         n=0;
-        until python -c "import os,psycopg; conn=psycopg.connect(os.environ['DATABASE_URL']); cur=conn.cursor(); cur.execute(\"select 1 from django_migrations where app='procrastinate' limit 1\"); row=cur.fetchone(); conn.close(); raise SystemExit(0 if row else 1)" 2>/tmp/migratewait.err; do
+        until python -c "import os,psycopg; conn=psycopg.connect(os.environ['DATABASE_URL']); cur=conn.cursor(); cur.execute('select 1 from django_migrations limit 1'); row=cur.fetchone(); conn.close(); raise SystemExit(0 if row else 1)" 2>/tmp/migratewait.err; do
         n=$$((n+1));
         [ "$$n" -ge 300 ] && { echo 'django migrations not ready after 300s:' >&2; cat /tmp/migratewait.err >&2; exit 1; };
         echo "waiting for django migrations ($$n/300)..."; sleep 1;
         done;
-        python manage.py procrastinate worker;
-        status=$$?;
-        echo "procrastinate worker exited with status $$status; restarting in 5s";
-        sleep 5;
-        done
-    after: [django]
+        exec celery -A angee.tasks.celery:app worker --loglevel=INFO
+    after: [django, redis]
+
+  # Celery beat owns static framework ticks; product schedules remain durable
+  # Angee rows scanned by periodic tasks.
+  celery-beat:
+    runtime: container
+    image: {{ base_image }}
+    mounts:
+      - source://app:/app
+      - bind://./data:/app/.angee/data
+    workdir: /app
+    env:
+      ANGEE_PROJECT_DIR: /app
+      DATABASE_URL: "postgres://angee:${secret.db-password}@postgres:5432/angee"
+      YAMLCONF_SECRET_KEY: "${secret.secret-key}"
+      ANGEE_OPERATOR_GRAPHQL_ENDPOINT: "/operator/graphql"
+      ANGEE_OPERATOR_URL: "http://host.docker.internal:${ports.operator}"
+      ANGEE_OPERATOR_TOKEN: "${secret.operator-token}"
+      ANGEE_BUILTIN_MCP_URL: "http://django:8000/mcp"
+      REDIS_URL: "redis://redis:6379/0"
+      CELERY_BROKER_URL: "redis://redis:6379/1"
+    command:
+      - sh
+      - "-c"
+      - >-
+        trap 'exit 0' TERM INT;
+        n=0;
+        until python -c "import os,psycopg; conn=psycopg.connect(os.environ['DATABASE_URL']); cur=conn.cursor(); cur.execute('select 1 from django_migrations limit 1'); row=cur.fetchone(); conn.close(); raise SystemExit(0 if row else 1)" 2>/tmp/migratewait.err; do
+        n=$$((n+1));
+        [ "$$n" -ge 300 ] && { echo 'django migrations not ready after 300s:' >&2; cat /tmp/migratewait.err >&2; exit 1; };
+        echo "waiting for django migrations ($$n/300)..."; sleep 1;
+        done;
+        exec celery -A angee.tasks.celery:app beat --loglevel=INFO
+    after: [django, redis]
 
 {% if frontend_mode == "vite" %}
   # Vite frontend on the framework's JS runtime image (node + the @angee/* packages,
