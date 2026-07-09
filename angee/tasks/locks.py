@@ -206,16 +206,13 @@ def get_lock_backend() -> LockBackend:
 
 
 def _advisory_pair(name: str) -> tuple[int, int]:
-    """Return a stable signed int4 pair for Postgres advisory locks."""
+    """Return a stable positive int4 pair for Postgres advisory locks."""
 
     digest = hashlib.sha256(name.encode("utf-8")).digest()
-    return (_signed_int4(digest[:4]), _signed_int4(digest[4:8]))
+    return (_positive_int4(digest[:4]), _positive_int4(digest[4:8]))
 
 
-def _signed_int4(raw: bytes) -> int:
-    """Interpret four digest bytes as a signed Postgres int4."""
+def _positive_int4(raw: bytes) -> int:
+    """Interpret four digest bytes inside Postgres' non-negative int4 range."""
 
-    value = int.from_bytes(raw, byteorder="big", signed=False)
-    if value >= 2**31:
-        value -= 2**32
-    return value
+    return int.from_bytes(raw, byteorder="big", signed=False) & 0x7FFFFFFF

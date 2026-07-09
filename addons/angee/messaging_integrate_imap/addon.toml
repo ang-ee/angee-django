@@ -5,7 +5,7 @@ name = "angee.messaging_integrate_imap"
 description = "IMAP email sync — pulls mailbox accounts into messaging threads and messages"
 keywords = ["imap", "email", "sync"]
 category = "Integration"
-depends_on = ["angee.messaging", "angee.integrate", "angee.parties"]
+depends_on = ["angee.messaging", "angee.integrate", "angee.parties", "angee.storage"]
 
 [resources]
 master = [{ path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" }]

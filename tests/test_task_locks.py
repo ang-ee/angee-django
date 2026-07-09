@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from angee.tasks.locks import LocalLockBackend, record_lock_key, task_lock, task_lock_is_held
+from angee.tasks.locks import LocalLockBackend, _advisory_pair, record_lock_key, task_lock, task_lock_is_held
 
 
 def test_record_lock_key_is_stable() -> None:
@@ -27,6 +27,15 @@ def test_local_lock_backend_excludes_same_key() -> None:
     assert second is None
     first.release()
     assert backend.try_acquire(key) is not None
+
+
+def test_postgres_advisory_pair_uses_positive_int4_values() -> None:
+    """Advisory keys stay in the pg_locks-friendly non-negative int4 range."""
+
+    pair = _advisory_pair("angee:record:messaging.Channel:42:sync")
+
+    assert len(pair) == 2
+    assert all(0 <= value < 2**31 for value in pair)
 
 
 def test_task_lock_releases_after_context(settings) -> None:
