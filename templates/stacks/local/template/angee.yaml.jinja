@@ -143,6 +143,42 @@ services:
       - "{{ django_port }}:8000"
 {% endif %}
 
+  # Background queue worker. Manual bridge syncs enqueue Procrastinate jobs so the
+  # HTTP action returns immediately while this service owns the long-running work.
+  procrastinate-worker:
+    runtime: container
+    image: {{ base_image }}
+    mounts:
+      - source://app:/app
+      - bind://./data:/app/.angee/data
+    workdir: /app
+    env:
+      ANGEE_PROJECT_DIR: /app
+      DATABASE_URL: "postgres://angee:${secret.db-password}@postgres:5432/angee"
+      YAMLCONF_SECRET_KEY: "${secret.secret-key}"
+      ANGEE_OPERATOR_GRAPHQL_ENDPOINT: "/operator/graphql"
+      ANGEE_OPERATOR_URL: "http://host.docker.internal:${ports.operator}"
+      ANGEE_OPERATOR_TOKEN: "${secret.operator-token}"
+      ANGEE_BUILTIN_MCP_URL: "http://django:8000/mcp"
+    command:
+      - sh
+      - "-c"
+      - >-
+        trap 'exit 0' TERM INT;
+        while :; do
+        n=0;
+        until python -c "import os,psycopg; conn=psycopg.connect(os.environ['DATABASE_URL']); cur=conn.cursor(); cur.execute(\"select 1 from django_migrations where app='procrastinate' limit 1\"); row=cur.fetchone(); conn.close(); raise SystemExit(0 if row else 1)" 2>/tmp/migratewait.err; do
+        n=$$((n+1));
+        [ "$$n" -ge 300 ] && { echo 'django migrations not ready after 300s:' >&2; cat /tmp/migratewait.err >&2; exit 1; };
+        echo "waiting for django migrations ($$n/300)..."; sleep 1;
+        done;
+        python manage.py procrastinate worker;
+        status=$$?;
+        echo "procrastinate worker exited with status $$status; restarting in 5s";
+        sleep 5;
+        done
+    after: [django]
+
 {% if frontend_mode == "vite" %}
   # Vite frontend on the framework's JS runtime image (node + the @angee/* packages,
   # copied from the django-angee wheel, as a pnpm workspace). The project mounts INTO
