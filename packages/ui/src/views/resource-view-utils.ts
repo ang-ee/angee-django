@@ -96,8 +96,9 @@ export function buildGroupOptions<TRow extends Row>(
     if (!metadata) continue;
     if (aliasedAggregateFields.has(fieldName)) continue;
     const field = metadata.fields[fieldName];
-    if (!field) continue;
-    if (field.kind === "relation") continue;
+    const dimension = resourceGroupDimensionForField(fieldName, metadata);
+    if (!field && !dimension) continue;
+    if (field?.kind === "relation") continue;
     const type = dateGroupType(fieldName, field) ? "date" : "value";
     addOption({
       id: fieldName,

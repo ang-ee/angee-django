@@ -63,6 +63,7 @@ describe("refine/Hasura filter codec", () => {
       status: { exact: "ACTIVE" },
       provider: { sqid: "provider_1" },
       owner: { display_name: { exact: "Iva" } },
+      metadata: { jsonContains: { mailbox: "INBOX" } },
       title: { iContains: "launch" },
       summary: { contains: "100%_ready" },
       code: { startsWith: "Q1_" },
@@ -79,6 +80,7 @@ describe("refine/Hasura filter codec", () => {
       status: { _eq: "ACTIVE" },
       provider: { _eq: "provider_1" },
       owner: { display_name: { _eq: "Iva" } },
+      metadata: { _contains: { mailbox: "INBOX" } },
       title: { _ilike: "%launch%" },
       summary: { _like: "%100\\%\\_ready%" },
       code: { _like: "Q1\\_%" },
@@ -100,14 +102,17 @@ describe("refine/Hasura filter codec", () => {
       NOT: { title: { exact: "Draft" } },
       metadata: { jsonContains: { kind: "note" } },
       status: { exact: "ACTIVE" },
-    })).toEqual([{ field: "status", operator: "eq", value: "ACTIVE" }]);
+    })).toEqual([
+      { field: "metadata", operator: "jsonContains", value: { kind: "note" } },
+      { field: "status", operator: "eq", value: "ACTIVE" },
+    ]);
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('Unsupported refine/Hasura list filter "iExact"'),
     );
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("does not support Angee NOT filters"),
     );
-    expect(warn).toHaveBeenCalledWith(
+    expect(warn).not.toHaveBeenCalledWith(
       expect.stringContaining('Unsupported refine/Hasura list filter "jsonContains"'),
     );
   });

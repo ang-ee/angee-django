@@ -452,6 +452,45 @@ describe("resource metadata defaults", () => {
       aggregateKey: "implClass",
     });
   });
+
+  test("derives group options from JSON path dimensions", () => {
+    const messageMetadata: ModelMetadata = {
+      typeName: "MessageType",
+      fields: {},
+      resource: {
+        schemaName: "console",
+        modelLabel: "messaging.Message",
+        appLabel: "messaging",
+        modelName: "message",
+        publicIdField: "sqid",
+        roots: {},
+        typeNames: { node: "MessageType" },
+        capabilities: ["list", "groups"],
+        filterFields: [],
+        orderFields: [],
+        aggregateFields: ["id"],
+        groupByFields: ["metadata.mailbox"],
+        relationAxes: [],
+        groupDimensions: [
+          {
+            field: "metadata.mailbox",
+            input: "METADATA__MAILBOX",
+            key: "metadata__mailbox",
+            kind: "json",
+          },
+        ],
+      },
+    };
+
+    expect(buildGroupOptions([], messageMetadata, null)).toEqual([
+      {
+        id: "metadata.mailbox",
+        label: "Metadata Mailbox",
+        group: { field: "metadata.mailbox" },
+        type: "value",
+      },
+    ]);
+  });
 });
 
 describe("relationFieldInfo / relationListFieldInfo", () => {
