@@ -246,7 +246,7 @@ function lookupOperator(
       return { operator: "null", value: KEEP_VALUE };
     case "jsonContains":
     case "_contains":
-      return null;
+      return { operator: "jsonContains" as LogicalFilter["operator"], value: KEEP_VALUE };
     case "contains":
       return { operator: "containss", value: KEEP_VALUE };
     case "iContains":
@@ -266,8 +266,6 @@ function lookupOperator(
 
 function isUnsupportedRefineLookupOperator(operator: string): boolean {
   return (
-    operator === "jsonContains" ||
-    operator === "_contains" ||
     operator === "iExact" ||
     operator === "_ilike" ||
     operator === "_like"
@@ -348,6 +346,8 @@ function hasuraOperatorForCrudOperator(
       return { operator: "_nin", value: KEEP_VALUE };
     case "null":
       return { operator: "_is_null", value: KEEP_VALUE };
+    case "jsonContains":
+      return { operator: "_contains", value: KEEP_VALUE };
     case "containss":
       return { operator: "_like", value: containsPattern };
     case "contains":

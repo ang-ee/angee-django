@@ -13,6 +13,7 @@ import strawberry
 import strawberry_django
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import connection, models
+from rebac import system_context
 from strawberry import auto
 from strawberry_django_aggregates.errors import GroupByFieldNotAllowed
 
@@ -22,6 +23,8 @@ from angee.graphql.data import metadata as metadata_module
 from angee.graphql.data.hasura import _measure_ops_for_field, _relation_filter_decoders
 from angee.graphql.data.metadata import (
     DataAggregateMeasureMetadata,
+    DataGroupBucketFilterMetadata,
+    DataGroupDimensionMetadata,
     DataResourceFieldMetadata,
     DataResourceRoots,
     DataResourceTypeNames,
@@ -107,6 +110,21 @@ class HasuraResourceThing(AngeeDataModel):
         app_label = "tests"
         ordering = ("-word_count", "name")
         rebac_resource_type = "tests/hasura_resource_thing"
+
+
+class HasuraJsonResourceThing(AngeeDataModel):
+    """Concrete model used by JSON-path aggregate bridge tests."""
+
+    sqid_prefix = "hjrt_"
+
+    name = models.CharField(max_length=64)
+    metadata = models.JSONField(blank=True, default=dict)
+
+    class Meta:
+        """Django model options for the test model."""
+
+        app_label = "tests"
+        rebac_resource_type = "tests/hasura_json_resource_thing"
 
 
 class MeasureOpsThing(AngeeDataModel):
@@ -260,6 +278,150 @@ def test_hasura_resource_attaches_angee_resource_metadata() -> None:
     sdl = schema.as_str()
     assert "word_count" in sdl
     assert "wordCount" not in sdl
+
+
+def test_hasura_model_resource_groups_json_path_axes() -> None:
+    """Hasura resources can expose allowlisted JSON paths as group axes."""
+
+    @strawberry_django.type(HasuraJsonResourceThing)
+    class HasuraJsonResourceThingType(AngeeNode):
+        name: auto
+
+    write_backend = type(
+        "NoopWriteBackend",
+        (),
+        {
+            "create": lambda self, info, data: None,
+            "update": lambda self, info, pk, data: None,
+            "delete": lambda self, info, pk: None,
+        },
+    )()
+    resource = hasura_model_resource(
+        HasuraJsonResourceThingType,
+        model=HasuraJsonResourceThing,
+        name="json_things",
+        filterable=["id", "name"],
+        sortable=["name"],
+        aggregatable=["id"],
+        groupable=["metadata.mailbox"],
+        json_paths={"metadata.mailbox": "str"},
+        get_queryset=lambda info: HasuraJsonResourceThing.objects.all(),
+        write_backend=write_backend,
+        id_decode=lambda value: value,
+    )
+    schema = GraphQLSchemas(
+        [
+            SchemaAddon(
+                {
+                    "public": {
+                        "query": [resource.query],
+                        "mutation": [resource.mutation],
+                        "types": [HasuraJsonResourceThingType, *resource.types],
+                    }
+                }
+            )
+        ]
+    ).build("public")
+    metadata = schema.angee_resources[0]
+
+    assert metadata.group_by_fields == ("metadata.mailbox",)
+    assert metadata.group_dimensions == (
+        DataGroupDimensionMetadata(
+            field="metadata.mailbox",
+            input="METADATA__MAILBOX",
+            key="metadata__mailbox",
+            kind="json",
+            filter=DataGroupBucketFilterMetadata(
+                kind="equality",
+                field="metadata",
+                value_key="metadata__mailbox",
+                lookup="jsonContains",
+                null_lookup=None,
+                value_transform="jsonObject:mailbox",
+            ),
+        ),
+    )
+    assert "METADATA__MAILBOX" in schema.as_str()
+    assert "metadata__mailbox: String" in schema.as_str()
+
+
+def test_hasura_model_resource_groups_json_path_values(transactional_db: Any) -> None:
+    """The generated groups resolver groups by allowlisted JSON path values."""
+
+    del transactional_db
+
+    @strawberry_django.type(HasuraJsonResourceThing)
+    class HasuraJsonValuesThingType(AngeeNode):
+        name: auto
+
+    write_backend = type(
+        "NoopWriteBackend",
+        (),
+        {
+            "create": lambda self, info, data: None,
+            "update": lambda self, info, pk, data: None,
+            "delete": lambda self, info, pk: None,
+        },
+    )()
+    resource = hasura_model_resource(
+        HasuraJsonValuesThingType,
+        model=HasuraJsonResourceThing,
+        name="json_value_things",
+        filterable=["id", "name"],
+        sortable=["name"],
+        aggregatable=["id"],
+        groupable=["metadata.mailbox"],
+        json_paths={"metadata.mailbox": "str"},
+        get_queryset=lambda info: HasuraJsonResourceThing.objects.all(),
+        write_backend=write_backend,
+        id_decode=lambda value: value,
+    )
+    schema = GraphQLSchemas(
+        [
+            SchemaAddon(
+                {
+                    "public": {
+                        "query": [resource.query],
+                        "mutation": [resource.mutation],
+                        "types": [HasuraJsonValuesThingType, *resource.types],
+                    }
+                }
+            )
+        ]
+    ).build("public")
+    created = _create_missing_tables((HasuraJsonResourceThing,))
+    try:
+        with system_context(reason="test.aggregate.json_path_group.seed"):
+            HasuraJsonResourceThing.objects.create(name="one", metadata={"mailbox": "INBOX"})
+            HasuraJsonResourceThing.objects.create(name="two", metadata={"mailbox": "Sent Messages"})
+            HasuraJsonResourceThing.objects.create(name="three", metadata={"mailbox": "INBOX"})
+
+        with system_context(reason="test.aggregate.json_path_group.query"):
+            grouped = result_data(
+                execute_schema(
+                    schema,
+                    """
+                    query MailboxGroups($groupBy: [HasuraJsonValuesThingTypeGroupBySpec!]!) {
+                      json_value_things_groups(group_by: $groupBy, limit: 10) {
+                        key { metadata__mailbox }
+                        aggregate { count }
+                      }
+                    }
+                    """,
+                    {"groupBy": [{"field": "METADATA__MAILBOX"}]},
+                )
+            )["json_value_things_groups"]
+    finally:
+        _clear_model_tables((HasuraJsonResourceThing,))
+        if created:
+            with connection.schema_editor() as schema_editor:
+                for model in reversed(created):
+                    schema_editor.delete_model(model)
+
+    assert sorted(grouped, key=lambda row: row["key"]["metadata__mailbox"] or "") == [
+        {"key": {"metadata__mailbox": "INBOX"}, "aggregate": {"count": 2}},
+        {"key": {"metadata__mailbox": "Sent Messages"}, "aggregate": {"count": 1}},
+    ]
 
 
 def test_measure_ops_pin_the_curated_subset_per_field_family() -> None:

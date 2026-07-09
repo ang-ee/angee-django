@@ -1249,8 +1249,10 @@ _MESSAGE_RESOURCE = hasura_model_resource(
         "subtype",
         "subtype__key",
         "platform",
+        "metadata.mailbox",
         "sent_at",
     ],
+    json_paths={"metadata.mailbox": "str"},
     insert=False,
     updatable=["status", "subject"],
     field_id_decode={

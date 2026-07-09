@@ -112,6 +112,7 @@ def test_console_resource_metadata_declares_message_surface() -> None:
         "subtype",
         "subtype__key",
         "platform",
+        "metadata.mailbox",
         "sent_at",
     )
     assert metadata.update_fields == ("status", "subject")
@@ -152,8 +153,23 @@ def test_console_resource_metadata_declares_message_surface() -> None:
         "subtype",
         "subtype__key",
         "platform",
+        "metadata.mailbox",
         "sent_at",
     ]
+    mailbox_dimension = {dimension["field"]: dimension for dimension in message["groupDimensions"]}["metadata.mailbox"]
+    assert mailbox_dimension["input"] == "METADATA__MAILBOX"
+    assert mailbox_dimension["key"] == "metadata__mailbox"
+    assert mailbox_dimension["kind"] == "json"
+    assert mailbox_dimension["filter"] == {
+        "kind": "equality",
+        "field": "metadata",
+        "valueKey": "metadata__mailbox",
+        "rangeKey": None,
+        "lookup": "jsonContains",
+        "nullLookup": None,
+        "valueTransform": "jsonObject:mailbox",
+        "valueMap": [],
+    }
     assert message["updateFields"] == ["status", "subject"]
     status_field = {field["name"]: field for field in message["fields"]}["status"]
     assert status_field["filterable"] is True

@@ -204,6 +204,9 @@ function bucketFilterValue(
 ): unknown {
   const mapped = filter.valueMap?.find((item) => Object.is(item.from, value));
   if (mapped) return mapped.to;
+  if (filter.valueTransform?.startsWith("jsonObject:")) {
+    return jsonObjectValue(value, filter.valueTransform.slice("jsonObject:".length));
+  }
   if (filter.valueTransform === "json") return jsonBucketValue(value);
   return value;
 }
@@ -212,6 +215,7 @@ function isNullBucketValue(
   value: unknown,
   filter: DataResourceGroupBucketFilterMetadata,
 ): boolean {
+  if (filter.valueTransform?.startsWith("jsonObject:")) return false;
   return value === null || (filter.kind === "range" && value === "");
 }
 
@@ -232,6 +236,18 @@ function jsonBucketValue(value: unknown): unknown {
   } catch {
     return value;
   }
+}
+
+function jsonObjectValue(value: unknown, path: string): unknown {
+  const keys = path.split(".").filter(Boolean);
+  if (keys.length === 0) return value;
+  let current: unknown = value;
+  for (let index = keys.length - 1; index >= 0; index -= 1) {
+    const key = keys[index];
+    if (!key) continue;
+    current = { [key]: current };
+  }
+  return current;
 }
 
 function bucketRangeFilter(

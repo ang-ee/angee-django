@@ -905,7 +905,7 @@ class Thread(SqidMixin, AuditMixin, AngeeModel):
     platform = StateField(choices_enum=Handle.Platform, default=Handle.Platform.EMAIL)
     modality = StateField(choices_enum=Modality, default=Modality.EMAIL_THREAD)
     visibility = StateField(choices_enum=Visibility, default=Visibility.PRIVATE)
-    external_id = models.CharField(max_length=512, blank=True, default="")
+    external_id = models.CharField(max_length=4096, blank=True, default="")
     subject = models.CharField(max_length=512, blank=True, default="")
     subject_normalized = models.CharField(max_length=512, blank=True, default="", db_index=True)
     message_count = models.PositiveIntegerField(default=0, db_index=True)
@@ -1390,7 +1390,7 @@ class Message(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
         on_delete=models.SET_NULL,
         related_name="messages",
     )
-    external_id = models.CharField(max_length=512, blank=True, default="")
+    external_id = models.CharField(max_length=4096, blank=True, default="")
     subject = models.CharField(max_length=512, blank=True, default="")
     preview = models.CharField(max_length=512, blank=True, default="")
     sent_at = models.DateTimeField(null=True, blank=True, db_index=True)

@@ -13,7 +13,12 @@ from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, Vali
 from django.db import models, transaction
 from rebac import PermissionDenied, system_context
 from strawberry_django.mutations import resolvers as mutation_resolvers
-from strawberry_django_aggregates import default_operators_for, group_by_alias
+from strawberry_django_aggregates import (
+    compute_aggregation,
+    default_operators_for,
+    group_by_alias,
+    shape_aggregate_row,
+)
 from strawberry_django_aggregates.granularity import NumberGranularity, TimeGranularity
 from strawberry_django_hasura import (
     HasuraResource,
@@ -22,6 +27,7 @@ from strawberry_django_hasura import (
     input_to_dict,
 )
 from strawberry_django_hasura import filtering as hasura_filtering
+from strawberry_django_hasura import grouping as hasura_grouping
 from strawberry_django_hasura import (
     hasura_resource as build_hasura_resource,
 )
@@ -621,6 +627,117 @@ def _public_instance(
     return instance
 
 
+def _make_json_groups_field(  # noqa: PLR0913 - mirrors strawberry-django-hasura's groups field.
+    *,
+    builder: Any,
+    built: Any,
+    resource_name: str,
+    filter_type: type,
+    get_queryset: Callable[[strawberry.Info], models.QuerySet[Any]],
+    json_paths: Mapping[str, str],
+    id_decode: Callable[[Any], Any] | None = None,
+    id_column: str = "pk",
+    field_decoders: Mapping[str, Callable[[Any], Any]] | None = None,
+    max_groups: int | None = None,
+) -> tuple[Any, list[type]]:
+    """Return a Hasura groups field that carries JSON-paths into execution."""
+
+    module = hasura_grouping._host_module(resource_name)
+    group_key_type = built.group_key_type
+    aggregate_type = built.aggregate_type
+    group_by_spec = built.group_by_spec
+    having_input = built.having_input
+    group_order_input = built.group_order_input
+    group_type = strawberry.type(
+        type(
+            f"{resource_name}_group",
+            (),
+            {
+                "__module__": module.__name__,
+                "__annotations__": {
+                    "key": group_key_type,
+                    "aggregate": aggregate_type,
+                },
+            },
+        ),
+        name=f"{resource_name}_group",
+    )
+    setattr(module, f"{resource_name}_group", group_type)
+
+    def resolve_groups(
+        self: Any,
+        info: strawberry.Info,
+        group_by: list[Any],
+        where: Any = None,
+        having: Any = None,
+        order_by: Any = None,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> list[Any]:
+        del self
+        qs = get_queryset(info)
+        if where is not None:
+            qs = qs.filter(
+                hasura_filtering.where_to_q(
+                    where,
+                    id_column=id_column,
+                    id_decode=id_decode,
+                    field_decoders=field_decoders,
+                )
+            )
+        spec = builder.translate_group_by(group_by)
+        requested = hasura_grouping._requested_group_ops(info)
+        having_dict = builder.translate_having(having, requested)
+        order_terms = builder.translate_order_by(order_by, spec, requested)
+        rows = compute_aggregation(
+            qs,
+            group_by=spec,
+            aggregates=requested,
+            having=having_dict,
+            order_by=order_terms,
+            limit=hasura_grouping._capped(limit, max_groups),
+            offset=offset or 0,
+            json_paths=dict(json_paths),
+        )
+        return [
+            group_type(
+                key=builder.shape_group_key(group_key_type, row, spec),
+                aggregate=shape_aggregate_row(
+                    aggregate_type,
+                    row,
+                    requested,
+                    json_paths=dict(json_paths),
+                ),
+            )
+            for row in rows
+        ]
+
+    resolve_groups.__annotations__ = {
+        "self": Any,
+        "info": strawberry.Info,
+        "group_by": list[group_by_spec],  # type: ignore[valid-type]
+        "where": filter_type | None,
+        "having": having_input | None,
+        "order_by": list[group_order_input] | None,  # type: ignore[valid-type]
+        "limit": int | None,
+        "offset": int | None,
+        "return": list[group_type],  # type: ignore[valid-type]
+    }
+    return (
+        strawberry.field(
+            resolver=resolve_groups,
+            name=f"{resource_name}_groups",
+        ),
+        [
+            group_type,
+            group_key_type,
+            group_by_spec,
+            having_input,
+            group_order_input,
+        ],
+    )
+
+
 def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative builder.
     node: type,
     *,
@@ -630,6 +747,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     sortable: Sequence[str],
     aggregatable: Sequence[str],
     groupable: Sequence[str] = (),
+    json_paths: Mapping[str, str] | None = None,
     writable: Sequence[str] | None = None,
     insertable: Sequence[str] | None = None,
     updatable: Sequence[str] | None = None,
@@ -699,28 +817,57 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         filterable=filterable,
         declared=field_id_decode,
     )
-    resource = build_hasura_resource(
-        node,
-        model=model,
-        name=name,
-        filterable=list(filterable),
-        sortable=list(sortable),
-        aggregatable=list(aggregatable),
-        groupable=list(groupable) or None,
-        writable=list(writable) if writable is not None else None,
-        insertable=list(insertable) if insertable is not None else None,
-        updatable=list(updatable) if updatable is not None else None,
-        nested=_nested_inserts(lines) if lines is not None else None,
-        insert=insert,
-        update=update,
-        delete=delete,
-        field_id_decode=field_id_decode,
-        get_queryset=read_queryset,
-        get_aggregate_queryset=get_aggregate_queryset or _aggregate_queryset(read_queryset),
-        write_backend=active_write_backend,
-        id_decode=id_decode,
-        id_column=id_column,
-    )
+    active_json_paths = dict(json_paths or {})
+    aggregate_builder_globals = build_hasura_resource.__globals__
+    original_aggregate_builder = None
+    original_groups_field_builder = None
+    if active_json_paths:
+        # strawberry-django-aggregates supports JSON-path group axes, but the
+        # strawberry-django-hasura facade has not exposed that knob yet. Keep
+        # the adaptation local to resource construction so Angee can advertise
+        # the same typed group surface without forking the upstream builder.
+        original_aggregate_builder = aggregate_builder_globals["AggregateBuilder"]
+        original_groups_field_builder = aggregate_builder_globals["make_groups_field"]
+        json_path_allowlist = dict(active_json_paths)
+
+        class _JsonPathAggregateBuilder(original_aggregate_builder):  # type: ignore[misc, valid-type]
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                kwargs.setdefault("json_paths", json_path_allowlist)
+                super().__init__(*args, **kwargs)
+
+        def _make_json_path_groups_field(**kwargs: Any) -> tuple[Any, list[type]]:
+            return _make_json_groups_field(json_paths=json_path_allowlist, **kwargs)
+
+        aggregate_builder_globals["AggregateBuilder"] = _JsonPathAggregateBuilder
+        aggregate_builder_globals["make_groups_field"] = _make_json_path_groups_field
+    try:
+        resource = build_hasura_resource(
+            node,
+            model=model,
+            name=name,
+            filterable=list(filterable),
+            sortable=list(sortable),
+            aggregatable=list(aggregatable),
+            groupable=list(groupable) or None,
+            writable=list(writable) if writable is not None else None,
+            insertable=list(insertable) if insertable is not None else None,
+            updatable=list(updatable) if updatable is not None else None,
+            nested=_nested_inserts(lines) if lines is not None else None,
+            insert=insert,
+            update=update,
+            delete=delete,
+            field_id_decode=field_id_decode,
+            get_queryset=read_queryset,
+            get_aggregate_queryset=get_aggregate_queryset or _aggregate_queryset(read_queryset),
+            write_backend=active_write_backend,
+            id_decode=id_decode,
+            id_column=id_column,
+        )
+    finally:
+        if original_groups_field_builder is not None:
+            aggregate_builder_globals["make_groups_field"] = original_groups_field_builder
+        if original_aggregate_builder is not None:
+            aggregate_builder_globals["AggregateBuilder"] = original_aggregate_builder
     if lines is not None:
         resource = _attach_lines_save(resource, node=node, lines=lines, write_backend=active_write_backend)
     return attach_hasura_resource_metadata(
@@ -732,6 +879,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         sortable=tuple(sortable),
         aggregatable=tuple(aggregatable),
         groupable=tuple(groupable),
+        json_paths=active_json_paths,
         insert=insert,
         update=update,
         delete=delete,
@@ -894,6 +1042,7 @@ def attach_hasura_resource_metadata(
     sortable: tuple[str, ...],
     aggregatable: tuple[str, ...],
     groupable: tuple[str, ...] = (),
+    json_paths: Mapping[str, str] | None = None,
     insert: bool = True,
     update: bool = True,
     delete: bool = True,
@@ -969,6 +1118,7 @@ def attach_hasura_resource_metadata(
         else ()
     )
     parent_update_fields = resource_wire_field_names(set_input_type, exclude=("id",)) if update else ()
+    active_json_paths = dict(json_paths or {})
     fields = model_resource_fields(
         model,
         declared_fields,
@@ -1020,7 +1170,7 @@ def attach_hasura_resource_metadata(
             order_fields=sortable,
             aggregate_fields=aggregatable,
             group_by_fields=groupable,
-            group_dimensions=_hasura_group_dimensions(model, groupable, filterable),
+            group_dimensions=_hasura_group_dimensions(model, groupable, filterable, json_paths=active_json_paths),
             aggregate_measures=_hasura_aggregate_measures(model, aggregatable),
             default_measures=(DataAggregateMeasureMetadata(op="count"),),
             fields=fields,
@@ -1195,17 +1345,38 @@ def _hasura_group_dimensions(
     model: type[models.Model],
     groupable: tuple[str, ...],
     filterable: tuple[str, ...],
+    *,
+    json_paths: Mapping[str, str] | None = None,
 ) -> tuple[DataGroupDimensionMetadata, ...]:
     """Return typed-key group metadata using the aggregate builder's public contract."""
 
-    return tuple(_hasura_group_dimension(model, path, filterable) for path in groupable)
+    active_json_paths = dict(json_paths or {})
+    return tuple(
+        _hasura_group_dimension(model, path, filterable, json_paths=active_json_paths)
+        for path in groupable
+    )
 
 
 def _hasura_group_dimension(
     model: type[models.Model],
     path: str,
     filterable: tuple[str, ...],
+    *,
+    json_paths: Mapping[str, str] | None = None,
 ) -> DataGroupDimensionMetadata:
+    declared_json_type = (json_paths or {}).get(path)
+    if declared_json_type is not None:
+        key = group_by_alias(path, None)
+        filter_metadata = _hasura_json_group_bucket_filter(model, path, key)
+        return DataGroupDimensionMetadata(
+            field=path,
+            input=_group_input_name(path),
+            key=key,
+            kind="json",
+            scalar=_scalar_for_json_group_type(declared_json_type),
+            filter=filter_metadata,
+            extractions=_hasura_json_group_extractions(path, declared_json_type, key),
+        )
     field = _require_group_field(model, path)
     key = _group_key_path(field, path)
     is_relation = "__" not in path and is_to_one_relation(field)
@@ -1258,6 +1429,30 @@ def _hasura_group_extractions(
     return tuple(extractions)
 
 
+def _hasura_json_group_extractions(
+    path: str,
+    declared_type: str,
+    key: str,
+) -> tuple[DataGroupExtractionMetadata, ...]:
+    """Return date/datetime extraction metadata for a JSON-path group axis."""
+
+    if declared_type not in {"date", "datetime"}:
+        return ()
+    extractions: list[DataGroupExtractionMetadata] = []
+    for granularity in (*TimeGranularity, *NumberGranularity):
+        extraction_key = group_by_alias(path, granularity)
+        range_key = f"{extraction_key}_range" if isinstance(granularity, TimeGranularity) else None
+        extractions.append(
+            DataGroupExtractionMetadata(
+                name=granularity.value,
+                input=granularity.name,
+                key=extraction_key,
+                range_key=range_key,
+            )
+        )
+    return tuple(extractions)
+
+
 def _hasura_group_bucket_filter(
     field: models.Field[Any, Any],
     path: str,
@@ -1291,6 +1486,32 @@ def _hasura_group_bucket_filter(
         field=filter_field,
         value_key=key,
         value_map=_enum_value_map_for_field(field),
+    )
+
+
+def _hasura_json_group_bucket_filter(
+    model: type[models.Model],
+    path: str,
+    key: str,
+) -> DataGroupBucketFilterMetadata | None:
+    """Return the JSON containment drill-down filter for an allowlisted path."""
+
+    root, *json_path = path.split(".")
+    if not root or not json_path:
+        return None
+    try:
+        field = model._meta.get_field(root)
+    except FieldDoesNotExist:
+        return None
+    if not isinstance(field, models.JSONField):
+        return None
+    return DataGroupBucketFilterMetadata(
+        kind="equality",
+        field=root,
+        value_key=key,
+        lookup="jsonContains",
+        null_lookup=None,
+        value_transform=f"jsonObject:{'.'.join(json_path)}",
     )
 
 
@@ -1416,3 +1637,17 @@ def _scalar_for_field(field: models.Field[Any, Any]) -> str | None:
 
     scalar = model_field_scalar(field)
     return None if scalar == "String" else scalar
+
+
+def _scalar_for_json_group_type(declared_type: str) -> str | None:
+    """Return the group-dimension key scalar for a declared JSON-path type."""
+
+    return {
+        "str": None,
+        "int": "Int",
+        "float": "Float",
+        "Decimal": "Decimal",
+        "bool": "Boolean",
+        "date": "Date",
+        "datetime": "DateTime",
+    }.get(declared_type)

@@ -133,6 +133,20 @@ const GROUP_METADATA = {
           valueTransform: "json",
         },
       },
+      {
+        field: "metadata.mailbox",
+        input: "METADATA__MAILBOX",
+        key: "metadata__mailbox",
+        kind: "json",
+        scalar: "String",
+        filter: {
+          kind: "equality",
+          field: "metadata",
+          valueKey: "metadata__mailbox",
+          lookup: "jsonContains",
+          valueTransform: "jsonObject:mailbox",
+        },
+      },
     ],
   },
 } as unknown as ModelMetadata;
@@ -378,6 +392,18 @@ describe("bucketFilterForGroup", () => {
       ),
     ).toEqual({
       metadata: { exact: { kind: "note", flags: ["pinned"] } },
+    });
+  });
+
+  test("wraps JSON path bucket values in a JSON contains filter", () => {
+    expect(
+      bucketFilterForGroup(
+        { key: { metadata__mailbox: "Sent Messages" }, count: 1 },
+        { field: "metadata.mailbox" },
+        GROUP_METADATA,
+      ),
+    ).toEqual({
+      metadata: { jsonContains: { mailbox: "Sent Messages" } },
     });
   });
 

@@ -134,6 +134,27 @@ def test_missing_message_id_gets_stable_synthetic_id() -> None:
     assert _parse(first).external_id == synthetic_external_id(first)
 
 
+def test_overlong_message_id_is_preserved() -> None:
+    """A valid but long RFC Message-ID remains the message idempotency key."""
+
+    long_message_id = f"outlook-{'x' * 700}@example.com"
+    raw = _eml(
+        message_id=f"<{long_message_id}>",
+        extra_headers=(
+            f"In-Reply-To: <{long_message_id}>\r\n"
+            f"References: <root@example.com> <{long_message_id}>"
+        ),
+    )
+
+    parsed = _parse(raw)
+
+    assert parsed.external_id == long_message_id
+    assert parsed.in_reply_to == long_message_id
+    assert parsed.references == ("root@example.com", long_message_id)
+    assert len(parsed.external_id) > 512
+    assert parsed.metadata["headers"]["Message-ID"] == [f"<{long_message_id}>"]
+
+
 def test_malformed_date_falls_back_to_internal_date() -> None:
     """A garbage Date header falls back to the server receipt time."""
 
@@ -961,6 +982,35 @@ def _wire_fake(monkeypatch: pytest.MonkeyPatch, account: FakeImapAccount) -> Non
 
     monkeypatch.setattr(FakeIMAPClient, "account", account, raising=False)
     monkeypatch.setattr(ImapChannelBackend, "client_class", FakeIMAPClient)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_channel_sync_preserves_overlong_message_id(
+    imap_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A long but valid Message-ID lands unchanged as the message/thread key."""
+
+    del imap_tables
+    long_message_id = f"outlook-{'x' * 700}@example.com"
+    account = FakeImapAccount(
+        {
+            "INBOX": _folder(
+                _eml(message_id=f"<{long_message_id}>", subject="", body="No subject.\n")
+            )
+        }
+    )
+    _wire_fake(monkeypatch, account)
+    channel = _imap_channel(batch_size=1)
+
+    with system_context(reason="test imap long message-id"):
+        landed = channel.run_sync(now=datetime(2026, 7, 2, 12, 0, tzinfo=UTC))
+
+    assert landed == 1
+    message = Message._base_manager.get()
+    assert message.external_id == long_message_id
+    assert len(message.external_id) > 512
+    assert message.thread.external_id == f"msg:{long_message_id}"
 
 
 @pytest.mark.django_db(transaction=True)
