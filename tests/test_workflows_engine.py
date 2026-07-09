@@ -13,8 +13,6 @@ from django.db import connection, transaction
 from django.db.models.deletion import ProtectedError
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
-from procrastinate import jobs
-from procrastinate import retry as procrastinate_retry
 from rebac import system_context
 
 from angee.workflows import engine
@@ -69,19 +67,6 @@ def handler_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 
     monkeypatch.setattr(HandlerStep, "run", run)
     return calls
-
-
-def execute_job(step_run_id: int, *, attempts: int) -> jobs.Job:
-    """Return a Procrastinate job payload for retry-strategy tests."""
-
-    return jobs.Job(
-        queue="default",
-        lock=None,
-        queueing_lock=f"workflows.execute:{step_run_id}",
-        task_name="workflows.execute",
-        task_kwargs={"step_run_id": step_run_id},
-        attempts=attempts,
-    )
 
 
 @pytest.mark.django_db(transaction=True)
@@ -498,7 +483,7 @@ def test_transient_step_error_uses_configured_retry_backoff(
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Transient impl failures stay started and let Procrastinate retry per step config."""
+    """Transient impl failures stay started and Celery retries per step config."""
 
     del workflow_engine_tables, no_workflow_queue
     transient_error = getattr(workflow_steps, "TransientStepError", None)
@@ -531,34 +516,13 @@ def test_transient_step_error_uses_configured_retry_backoff(
     assert step_run.status == step_run_status.STARTED
     assert step_run.attempt == 1
 
-    monkeypatch.setattr(
-        procrastinate_retry.utils,
-        "datetime_from_timedelta_params",
-        lambda params: params,
-    )
-    retry_exception = tasks.execute_workflow_step.get_retry_exception(
-        transient_error("try again"),
-        execute_job(step_run.pk, attempts=1),
-    )
-    assert retry_exception is not None
-    assert retry_exception.retry_decision.retry_at == {"seconds": 7}
-    assert (
-        tasks.execute_workflow_step.get_retry_exception(
-            transient_error("try again"),
-            execute_job(step_run.pk, attempts=3),
-        )
-        is None
-    )
+    policy = tasks._retry_policy_for_step_run(step_run)
+    assert policy.max_attempts == 3
+    assert tasks._retry_countdown(policy, 1) == 7
+    tasks._journal_retry_exhausted(step_run, exception=transient_error("try again"))
     step_run.refresh_from_db()
     assert step_run.status == step_run_status.FAILED
     assert "try again" in step_run.error
-    assert (
-        tasks.execute_workflow_step.get_retry_exception(
-            RuntimeError("hard failure"),
-            execute_job(step_run.pk, attempts=1),
-        )
-        is None
-    )
 
 
 @pytest.mark.django_db(transaction=True)

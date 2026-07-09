@@ -43,6 +43,9 @@ class LockBackend(Protocol):
     def try_acquire(self, key: LockKey, *, timeout: timedelta | None = None) -> LockHandle | None:
         """Return a handle when ``key`` is acquired, else ``None``."""
 
+    def is_held(self, key: LockKey) -> bool:
+        """Return whether ``key`` is currently held."""
+
 
 @dataclass
 class _LocalLockHandle:
@@ -84,6 +87,12 @@ class LocalLockBackend:
         with self._mutex:
             self._held.discard(key)
 
+    def is_held(self, key: LockKey) -> bool:
+        """Return whether ``key`` is held locally."""
+
+        with self._mutex:
+            return key in self._held
+
 
 @dataclass
 class _PostgresAdvisoryLockHandle:
@@ -124,6 +133,29 @@ class PostgresAdvisoryLockBackend:
             return None
         return _PostgresAdvisoryLockHandle(self.alias, advisory_key)
 
+    def is_held(self, key: LockKey) -> bool:
+        """Return whether Postgres reports ``key`` as held."""
+
+        connection = connections[self.alias]
+        if connection.vendor != "postgresql":
+            raise ImproperlyConfigured("PostgresAdvisoryLockBackend requires a PostgreSQL database connection.")
+        advisory_key = _advisory_pair(key.name)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_locks
+                    WHERE locktype = 'advisory'
+                      AND classid = %s
+                      AND objid = %s
+                      AND granted
+                )
+                """,
+                advisory_key,
+            )
+            return bool(cursor.fetchone()[0])
+
 
 _LOCAL_BACKEND = LocalLockBackend()
 _CONFIGURED_BACKENDS: dict[str, LockBackend] = {}
@@ -147,6 +179,12 @@ def task_lock(key: LockKey, *, timeout: timedelta | None = None) -> Iterator[boo
         yield True
     finally:
         handle.release()
+
+
+def task_lock_is_held(key: LockKey) -> bool:
+    """Return whether the configured backend reports ``key`` as held."""
+
+    return get_lock_backend().is_held(key)
 
 
 def get_lock_backend() -> LockBackend:

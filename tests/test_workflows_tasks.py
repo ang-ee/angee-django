@@ -1,4 +1,4 @@
-"""Tests for workflow Procrastinate task wrappers."""
+"""Tests for workflow Celery task wrappers."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from typing import Any
 
 import pytest
 from django.utils import timezone
-from procrastinate.contrib.django import app as procrastinate_app
 
 from angee.workflows import tasks as workflow_tasks
 
@@ -19,13 +18,13 @@ from angee.workflows import tasks as workflow_tasks
         (workflow_tasks.reap_workflow_step_runs, "workflows.reap", "reap"),
     ],
 )
-def test_periodic_engine_tasks_accept_procrastinate_timestamp_keyword(
+def test_periodic_engine_tasks_accept_timestamp_keyword(
     monkeypatch: pytest.MonkeyPatch,
     task: Any,
     task_name: str,
     owner_attr: str,
 ) -> None:
-    """Periodic workers pass the injected Unix tick as ``timestamp``."""
+    """Periodic workers may pass an injected Unix tick as ``timestamp``."""
 
     calls: list[bool] = []
     monkeypatch.setattr(workflow_tasks.engine, owner_attr, lambda: calls.append(True))
@@ -33,13 +32,13 @@ def test_periodic_engine_tasks_accept_procrastinate_timestamp_keyword(
     task(timestamp=0)
 
     assert calls == [True]
-    assert task_name in procrastinate_app.tasks
+    assert task.name == task_name
 
 
-def test_periodic_schedule_trigger_task_accepts_procrastinate_timestamp_keyword(
+def test_periodic_schedule_trigger_task_accepts_timestamp_keyword(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The schedule scan uses Procrastinate's persisted ``timestamp`` kwarg."""
+    """The schedule scan uses the injected ``timestamp`` when provided."""
 
     calls: list[datetime] = []
     monkeypatch.setattr(
@@ -51,4 +50,12 @@ def test_periodic_schedule_trigger_task_accepts_procrastinate_timestamp_keyword(
     workflow_tasks.run_workflow_schedule_triggers(timestamp=0)
 
     assert calls == [datetime.fromtimestamp(0, tz=timezone.get_current_timezone())]
-    assert "workflows.schedule_triggers" in procrastinate_app.tasks
+    assert workflow_tasks.run_workflow_schedule_triggers.name == "workflows.schedule_triggers"
+
+
+def test_retry_countdown_matches_step_policy() -> None:
+    """Celery retry countdown mirrors the static step retry policy."""
+
+    policy = workflow_tasks.StepRetryPolicy(max_attempts=3, wait=7)
+
+    assert workflow_tasks._retry_countdown(policy, 1) == 7

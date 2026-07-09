@@ -49,3 +49,32 @@ def run_due_bridges(*, now: datetime | None = None) -> dict[str, int]:
                         ran += 1
 
     return {"ran": ran, "errors": errors}
+
+
+def enqueue_due_bridges(*, now: datetime | None = None) -> dict[str, int]:
+    """Claim every due bridge row and enqueue one sync task for each."""
+
+    from angee.integrate.tasks import queue_bridge_sync
+
+    timestamp = now or timezone.now()
+    enqueued = 0
+    skipped = 0
+
+    with system_context(reason="integrate.scheduler"):
+        for model in bridge_models(Bridge):
+            due_ids = list(
+                model._default_manager.filter(next_sync_at__lte=timestamp).order_by("pk").values_list("pk", flat=True)
+            )
+            for pk in due_ids:
+                with transaction.atomic():
+                    bridge = (
+                        model._default_manager.lock_if_supported().filter(pk=pk, next_sync_at__lte=timestamp).first()
+                    )
+                    if bridge is None:
+                        skipped += 1
+                        continue
+                    bridge.claim_sync(now=timestamp)
+                queue_bridge_sync(bridge, now=timestamp)
+                enqueued += 1
+
+    return {"enqueued": enqueued, "skipped": skipped}

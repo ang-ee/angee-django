@@ -9,7 +9,6 @@ INSTALLED_APPS = [
     "rebac",
     "reversion",
     "simple_history",
-    "procrastinate.contrib.django",
     "angee.base",
     "angee.tasks",
     "angee.resources",
@@ -45,11 +44,6 @@ DATABASES = {
         "NAME": ":memory:",
     }
 }
-# Procrastinate's migrations are Postgres-only (CREATE EXTENSION); this module
-# is the SQLite unit floor where queue jobs run through the InMemoryConnector
-# and never touch its tables. Queue semantics that need real Postgres (SKIP
-# LOCKED claiming, queueing locks) belong to the Postgres-marked fixtures.
-MIGRATION_MODULES = {"procrastinate": None}
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "iam.User"
 USE_TZ = True

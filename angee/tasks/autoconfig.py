@@ -7,6 +7,24 @@ from collections.abc import Mapping
 from typing import Any
 
 SETTINGS = {
+    "CELERY_BEAT_SCHEDULE": {
+        "integrate.sync_due_bridges": {
+            "task": "integrate.sync_due_bridges",
+            "schedule": 60.0,
+        },
+        "workflows.reap": {
+            "task": "workflows.reap",
+            "schedule": 60.0,
+        },
+        "workflows.schedule_triggers": {
+            "task": "workflows.schedule_triggers",
+            "schedule": 60.0,
+        },
+        "workflows.sweep": {
+            "task": "workflows.sweep",
+            "schedule": 60.0,
+        },
+    },
     "CELERY_BROKER_URL": "redis://redis:6379/1",
     "CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP": True,
     "CELERY_TASK_IGNORE_RESULT": True,

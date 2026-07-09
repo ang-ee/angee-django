@@ -19,8 +19,6 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.utils import timezone
-from procrastinate import exceptions as procrastinate_exceptions
-from procrastinate.contrib.django import app as procrastinate_app
 from pydantic import ValidationError as PydanticValidationError
 from pydantic import create_model
 from rebac import PermissionDenied, SubjectRef, current_actor, system_context
@@ -31,6 +29,7 @@ from rebac.resources import to_object_ref
 from rebac.types import RelationshipTuple
 
 from angee.base.actors import actor_user_id
+from angee.tasks.enqueue import enqueue_task
 from angee.workflows.models import JoinRule, RunStatus, StepRunStatus, Verdict, WorkflowStatus
 from angee.workflows.steps import DecisionSpec, MapStep, StepResult, TransientStepError
 
@@ -369,9 +368,9 @@ def override_run(run: Any, next_steps: Iterable[Any], *, actor: Any) -> Any:
 
 
 def enqueue_advance(run_id: int) -> None:
-    """Enqueue a deduped advance job."""
+    """Enqueue an advance job."""
 
-    _defer("workflows.advance", queueing_lock=_advance_lock(run_id), run_id=run_id)
+    _defer("workflows.advance", run_id=run_id)
 
 
 def enqueue_advance_at(run_id: int, when: datetime) -> None:
@@ -379,8 +378,6 @@ def enqueue_advance_at(run_id: int, when: datetime) -> None:
 
     _defer(
         "workflows.advance",
-        lock=_advance_lock(run_id),
-        queueing_lock=f"{_advance_lock(run_id)}:wake:{when.isoformat()}",
         schedule_at=when,
         run_id=run_id,
     )
@@ -391,8 +388,6 @@ def enqueue_decision_escalation_at(decision_id: int, attempt: int, when: datetim
 
     _defer(
         "workflows.decision_escalate",
-        lock=f"workflows.decision:{decision_id}",
-        queueing_lock=f"workflows.decision.escalate:{decision_id}:{attempt}",
         schedule_at=when,
         decision_id=decision_id,
         attempt=attempt,
@@ -404,8 +399,6 @@ def enqueue_decision_expiry_at(decision_id: int, attempt: int, when: datetime) -
 
     _defer(
         "workflows.decision_expire",
-        lock=f"workflows.decision:{decision_id}",
-        queueing_lock=f"workflows.decision.expire:{decision_id}:{attempt}",
         schedule_at=when,
         decision_id=decision_id,
         attempt=attempt,
@@ -415,28 +408,18 @@ def enqueue_decision_expiry_at(decision_id: int, attempt: int, when: datetime) -
 def enqueue_execute(step_run_id: int) -> None:
     """Enqueue one step execution job."""
 
-    _defer("workflows.execute", queueing_lock=f"workflows.execute:{step_run_id}", step_run_id=step_run_id)
+    _defer("workflows.execute", step_run_id=step_run_id)
 
 
 def _defer(
     task_name: str,
     *,
-    queueing_lock: str,
     schedule_at: datetime | None = None,
-    lock: str | None = None,
     **kwargs: Any,
 ) -> None:
-    """Defer one Procrastinate task by registered name, ignoring dedupe races."""
+    """Send one Celery task by registered name."""
 
-    options: dict[str, Any] = {"queueing_lock": queueing_lock}
-    if lock is not None:
-        options["lock"] = lock
-    if schedule_at is not None:
-        options["schedule_at"] = schedule_at
-    try:
-        procrastinate_app.configure_task(task_name, **options).defer(**kwargs)
-    except procrastinate_exceptions.AlreadyEnqueued:
-        return
+    enqueue_task(task_name, kwargs=kwargs, eta=schedule_at)
 
 
 def _model(name: str) -> type[Any]:
@@ -1244,7 +1227,3 @@ def _owner_id(*, actor: Any, trigger: Any, workflow: Any) -> Any | None:
     if lineage is not None and getattr(lineage, "created_by_id", None) is not None:
         return lineage.created_by_id
     return getattr(workflow, "created_by_id", None)
-
-
-def _advance_lock(run_id: int) -> str:
-    return f"workflows.advance:{run_id}"

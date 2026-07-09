@@ -9,6 +9,6 @@ from __future__ import annotations
 
 from angee.tasks.celery import app as celery_app
 from angee.tasks.enqueue import enqueue_task
-from angee.tasks.locks import LockKey, record_lock_key, task_lock
+from angee.tasks.locks import LockKey, record_lock_key, task_lock, task_lock_is_held
 
-__all__ = ["LockKey", "celery_app", "enqueue_task", "record_lock_key", "task_lock"]
+__all__ = ["LockKey", "celery_app", "enqueue_task", "record_lock_key", "task_lock", "task_lock_is_held"]

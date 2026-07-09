@@ -776,18 +776,17 @@ def test_sync_integration_queues_bridge_for_an_admin(
     console_schema = _schema()
     admin = _platform_admin("sync-queue-admin")
     bridge = make_integration("sync-queue", backend_class="stub", model=VcsBridge)
-    configured: list[tuple[str, dict[str, Any]]] = []
-    deferred: list[dict[str, Any]] = []
+    queued: list[tuple[int, Any]] = []
 
-    class ConfiguredTask:
-        def defer(self, **kwargs: Any) -> None:
-            deferred.append(kwargs)
+    def fake_queue_bridge_sync(queued_bridge: VcsBridge, *, now: Any = None) -> None:
+        queued.append((queued_bridge.pk, now))
+        queued_bridge.sync_stage = queued_bridge.SyncStage.QUEUED
+        queued_bridge.sync_error = ""
+        queued_bridge.sync_progress = {"stage": queued_bridge.SyncStage.QUEUED, "queued_at": now.isoformat()}
+        queued_bridge.save(update_fields=["sync_error", "sync_progress", "sync_stage", "updated_at"])
 
-    def fake_configure_task(task_name: str, **options: Any) -> ConfiguredTask:
-        configured.append((task_name, options))
-        return ConfiguredTask()
-
-    monkeypatch.setattr(integrate_tasks.app, "configure_task", fake_configure_task)
+    monkeypatch.setattr(integrate_tasks, "queue_bridge_sync", fake_queue_bridge_sync)
+    monkeypatch.setattr("angee.integrate.schema.queue_bridge_sync", fake_queue_bridge_sync)
 
     result = _data(
         _execute(
@@ -800,15 +799,8 @@ def test_sync_integration_queues_bridge_for_an_admin(
 
     assert result["ok"] is True
     assert result["message"] == "Queued 1 bridge sync(s)."
-    assert configured == [
-        (
-            "integrate.sync_bridge_now",
-            {"queueing_lock": f"integrate.sync_bridge_now:{VcsBridge._meta.label_lower}:{bridge.pk}"},
-        )
-    ]
-    assert len(deferred) == 1
-    assert deferred[0]["model_label"] == VcsBridge._meta.label_lower
-    assert deferred[0]["pk"] == bridge.pk
+    assert len(queued) == 1
+    assert queued[0][0] == bridge.pk
     bridge.refresh_from_db()
     assert bridge.sync_stage == VcsBridge.SyncStage.QUEUED
 

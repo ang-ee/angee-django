@@ -67,6 +67,7 @@ from angee.integrate.sync import bridge_progress_context, bridge_sync_context
 from angee.integrate.vcs.backend import VCSBackend
 from angee.integrate.vcs.templates import parse_template_meta
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
+from angee.tasks.locks import LockKey, record_lock_key
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -1543,6 +1544,11 @@ class Bridge(AngeeModel):
         """Return whether a worker currently holds this bridge's live sync lock."""
 
         return bridge_is_locked(self)
+
+    def sync_lock_key(self) -> LockKey:
+        """Return the advisory task lock key for this bridge sync."""
+
+        return record_lock_key(self._meta.label_lower, self.pk, "sync")
 
     def mark_sync_started(self, *, now: datetime) -> None:
         """Persist the start timestamp for one scheduler sync attempt."""

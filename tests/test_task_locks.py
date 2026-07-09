@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from angee.tasks.locks import LocalLockBackend, record_lock_key, task_lock
+from angee.tasks.locks import LocalLockBackend, record_lock_key, task_lock, task_lock_is_held
 
 
 def test_record_lock_key_is_stable() -> None:
@@ -42,3 +42,16 @@ def test_task_lock_releases_after_context(settings) -> None:
 
     with task_lock(key) as acquired_again:
         assert acquired_again is True
+
+
+def test_task_lock_reports_held_state(settings) -> None:
+    """Read-side lock checks use the same configured backend."""
+
+    settings.ANGEE_TASK_LOCK_BACKEND = "angee.tasks.locks.LocalLockBackend"
+    key = record_lock_key("messaging.Channel", 84, "sync")
+
+    assert task_lock_is_held(key) is False
+    with task_lock(key) as acquired:
+        assert acquired is True
+        assert task_lock_is_held(key) is True
+    assert task_lock_is_held(key) is False

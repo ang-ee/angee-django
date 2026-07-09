@@ -1,23 +1,22 @@
-"""Procrastinate task wrappers for the integrate bridge scheduler."""
+"""Celery task wrappers for the integrate bridge scheduler."""
 
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
 
-from django.db import IntegrityError, transaction
+from celery import shared_task
+from django.db import transaction
 from django.utils import timezone
-from procrastinate import RetryStrategy
-from procrastinate import exceptions as procrastinate_exceptions
-from procrastinate.contrib.django import app
 from rebac import system_context
 
 from angee.integrate import scheduler
 from angee.integrate.sync_runner import run_bridge_sync_job
+from angee.tasks.enqueue import enqueue_task
 
 
 def queue_bridge_sync(bridge: Any, *, now: datetime | None = None) -> None:
-    """Persist queued state and defer one bridge sync task."""
+    """Persist queued state and send one bridge sync task."""
 
     if bridge.pk is None:
         raise ValueError("Cannot queue an unsaved bridge.")
@@ -27,36 +26,36 @@ def queue_bridge_sync(bridge: Any, *, now: datetime | None = None) -> None:
     bridge.sync_progress = {"stage": bridge.SyncStage.QUEUED, "queued_at": timestamp.isoformat()}
     with system_context(reason="integrate.queue_bridge_sync"), transaction.atomic():
         bridge.save(update_fields=["sync_error", "sync_progress", "sync_stage", "updated_at"])
-    try:
-        with transaction.atomic():
-            app.configure_task(
-                "integrate.sync_bridge_now",
-                queueing_lock=f"integrate.sync_bridge_now:{bridge._meta.label_lower}:{bridge.pk}",
-            ).defer(
-                model_label=bridge._meta.label_lower,
-                pk=bridge.pk,
-                timestamp=timestamp.isoformat(),
-            )
-    except (procrastinate_exceptions.AlreadyEnqueued, IntegrityError):
-        return
+    enqueue_task(
+        "integrate.sync_bridge_now",
+        kwargs={
+            "model_label": bridge._meta.label_lower,
+            "pk": bridge.pk,
+            "timestamp": timestamp.isoformat(),
+        },
+    )
 
 
-@app.task(name="integrate.sync_bridge_now", retry=RetryStrategy(max_attempts=3, exponential_wait=30))
+@shared_task(
+    name="integrate.sync_bridge_now",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 3},
+)
 def sync_bridge_now(model_label: str, pk: int, timestamp: str | None = None) -> dict[str, Any]:
     """Run one queued bridge sync task."""
 
     return run_bridge_sync_job(model_label, pk, timestamp)
 
 
-@app.periodic(cron="* * * * *", periodic_id="integrate.sync_due_bridges")
-@app.task(name="integrate.sync_due_bridges", retry=RetryStrategy(max_attempts=3, exponential_wait=30))
-def sync_due_bridges(timestamp: int) -> None:
-    """Run every bridge row whose ``next_sync_at`` is due.
-
-    The scan uses the wall clock rather than the injected periodic timestamp so a
-    tick delayed by queue backlog still picks up everything due by the time it
-    actually runs; per-bridge failures are recorded as telemetry by ``run_sync``.
-    """
+@shared_task(
+    name="integrate.sync_due_bridges",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 3},
+)
+def sync_due_bridges(timestamp: int | None = None) -> None:
+    """Queue every bridge row whose ``next_sync_at`` is due."""
 
     del timestamp
-    scheduler.run_due_bridges()
+    scheduler.enqueue_due_bridges()

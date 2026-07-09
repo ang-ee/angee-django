@@ -41,3 +41,16 @@ def test_enqueue_task_sends_named_task(monkeypatch: Any) -> None:
     enqueue_task("workflows.advance", kwargs={"run_id": 1}, eta=eta, queue="default")
 
     assert calls == [("workflows.advance", {"run_id": 1}, eta, "default")]
+
+
+def test_task_autoconfig_declares_periodic_celery_schedule() -> None:
+    """Celery beat owns the framework's static periodic ticks."""
+
+    from angee.tasks.autoconfig import SETTINGS
+
+    schedule = SETTINGS["CELERY_BEAT_SCHEDULE"]
+
+    assert schedule["integrate.sync_due_bridges"]["task"] == "integrate.sync_due_bridges"
+    assert schedule["workflows.sweep"]["task"] == "workflows.sweep"
+    assert schedule["workflows.reap"]["task"] == "workflows.reap"
+    assert schedule["workflows.schedule_triggers"]["task"] == "workflows.schedule_triggers"
