@@ -18,7 +18,7 @@ from angee.integrate import scheduler
 
 @app.periodic(cron="* * * * *", periodic_id="integrate.sync_due_bridges")
 @app.task(name="integrate.sync_due_bridges", retry=RetryStrategy(max_attempts=3, exponential_wait=30))
-def sync_due_bridges(_timestamp: int) -> None:
+def sync_due_bridges(timestamp: int) -> None:
     """Run every bridge row whose ``next_sync_at`` is due.
 
     The scan uses the wall clock rather than the injected periodic timestamp so a
@@ -26,4 +26,5 @@ def sync_due_bridges(_timestamp: int) -> None:
     actually runs; per-bridge failures are recorded as telemetry by ``run_sync``.
     """
 
+    del timestamp
     scheduler.run_due_bridges()

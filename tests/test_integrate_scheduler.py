@@ -264,7 +264,7 @@ def test_periodic_task_drives_the_due_scan(monkeypatch: pytest.MonkeyPatch) -> N
 
     calls: list[bool] = []
     monkeypatch.setattr(integrate_tasks.scheduler, "run_due_bridges", lambda: calls.append(True))
-    integrate_tasks.sync_due_bridges(0)
+    integrate_tasks.sync_due_bridges(timestamp=0)
 
     assert calls == [True]
     assert "integrate.sync_due_bridges" in procrastinate_app.tasks

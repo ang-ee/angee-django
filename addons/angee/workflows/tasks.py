@@ -75,26 +75,28 @@ def expire_workflow_decision(decision_id: int, attempt: int) -> None:
 
 @app.periodic(cron="* * * * *", periodic_id="workflows.sweep")
 @app.task(name="workflows.sweep", retry=RetryStrategy(max_attempts=3, exponential_wait=30))
-def sweep_workflow_runs(_timestamp: int) -> None:
+def sweep_workflow_runs(timestamp: int) -> None:
     """Advance workflow runs whose durable wake time is due."""
 
+    del timestamp
     engine.sweep()
 
 
 @app.periodic(cron="* * * * *", periodic_id="workflows.reap")
 @app.task(name="workflows.reap", retry=RetryStrategy(max_attempts=3, exponential_wait=30))
-def reap_workflow_step_runs(_timestamp: int) -> None:
+def reap_workflow_step_runs(timestamp: int) -> None:
     """Fail started step-runs whose heartbeat has expired."""
 
+    del timestamp
     engine.reap()
 
 
 @app.periodic(cron="* * * * *", periodic_id="workflows.schedule_triggers")
 @app.task(name="workflows.schedule_triggers", retry=RetryStrategy(max_attempts=3, exponential_wait=30))
-def run_workflow_schedule_triggers(_timestamp: int) -> None:
+def run_workflow_schedule_triggers(timestamp: int) -> None:
     """Start schedule triggers due at the injected periodic timestamp."""
 
-    triggers.run_due_schedule_triggers(now=_periodic_timestamp(_timestamp))
+    triggers.run_due_schedule_triggers(now=_periodic_timestamp(timestamp))
 
 
 def _step_run_for_job(job: procrastinate_jobs.Job) -> Any | None:

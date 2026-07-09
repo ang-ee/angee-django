@@ -445,6 +445,10 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 - **`uv run` tool shebangs are stale** — run Python tools by module:
   `uv run python -m pytest`, `uv run python -m mypy angee addons`,
   `uv run python -m ruff check .`. Bare `uv run pytest`/`mypy` fail to spawn.
+- **Procrastinate periodic tasks receive `timestamp`, not a private alias.**
+  Keep the wrapper parameter named `timestamp` even when the task ignores it; the
+  persisted periodic job calls the task with that keyword, and renaming it to
+  `_timestamp` breaks worker execution.
 - **Regenerate the SDL after `angee build`** — re-run `manage.py schema`
   (+ `--check`). A missing `runtime/schemas/*.graphql` makes Vite ENOENT and the
   SPA silently fails to mount (every e2e fails at list load) while `:5173` still
