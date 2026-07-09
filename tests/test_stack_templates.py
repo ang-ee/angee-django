@@ -65,6 +65,7 @@ def _render_dev_stack(
         "framework_path": framework_path,
         "operator_port": "9000",
         "postgres_port": "5433",
+        "redis_port": "6379",
         "process_compose_port": "10000",
         "project_name": "notes-angee-dev",
         "project_path": project_path,
@@ -291,6 +292,14 @@ def test_local_stack_caddy_static_renders_single_public_frontend_ingress() -> No
     assert stack["services"]["django"]["env"]["ANGEE_BUILTIN_MCP_URL"] == "http://django:8000/mcp"
     assert stack["persist"]["pgdata"]["subpath"] == "./data/pgdata"
     assert stack["services"]["postgres"]["mounts"] == ["bind://./data/pgdata:/var/lib/postgresql/data"]
+    assert "redis" in stack["services"]
+    assert "procrastinate-worker" not in stack["services"]
+    assert "celery-worker" in stack["services"]
+    assert "celery-beat" in stack["services"]
+    assert stack["services"]["django"]["env"]["REDIS_URL"] == "redis://redis:6379/0"
+    assert stack["services"]["django"]["env"]["CELERY_BROKER_URL"] == "redis://redis:6379/1"
+    assert "celery -A angee.tasks.celery:app worker" in stack["services"]["celery-worker"]["command"][-1]
+    assert "celery -A angee.tasks.celery:app beat" in stack["services"]["celery-beat"]["command"][-1]
 
     caddy = stack["services"]["caddy"]
     assert caddy["ports"] == ["5173:80"]
@@ -360,6 +369,21 @@ def test_dev_stack_mounts_postgres_data_from_generated_stack_dir() -> None:
 
     assert stack["persist"]["pgdata"]["subpath"] == ".angee/pgdata"
     assert stack["services"]["postgres"]["mounts"] == ["bind://./pgdata:/var/lib/postgresql/data"]
+
+
+def test_dev_stack_runs_redis_and_celery_services() -> None:
+    stack = _render_dev_stack()
+
+    assert "redis" in stack["services"]
+    assert stack["services"]["redis"]["ports"] == ["${ports.redis}:6379"]
+    assert "procrastinate-worker" not in stack["services"]
+    assert stack["services"]["django"]["env"]["REDIS_URL"] == "redis://127.0.0.1:${ports.redis}/0"
+    assert stack["services"]["django"]["env"]["CELERY_BROKER_URL"] == "redis://127.0.0.1:${ports.redis}/1"
+    assert stack["services"]["celery-worker"]["env"]["CELERY_BROKER_URL"] == "redis://127.0.0.1:${ports.redis}/1"
+    assert "celery" in stack["services"]["celery-worker"]["command"]
+    assert "worker" in stack["services"]["celery-worker"]["command"]
+    assert "celery" in stack["services"]["celery-beat"]["command"]
+    assert "beat" in stack["services"]["celery-beat"]["command"]
 
 
 def test_dev_stack_source_paths_translate_for_the_repo_level_layout() -> None:
