@@ -1084,6 +1084,9 @@ importers:
       '@angee/messaging-integrate-imap':
         specifier: workspace:*
         version: link:../../../addons/angee/messaging_integrate_imap/web
+      '@angee/money':
+        specifier: workspace:*
+        version: link:../../../addons/angee/money/web
       '@angee/operator':
         specifier: workspace:*
         version: link:../../../addons/angee/operator/web

@@ -9,7 +9,35 @@ describe("money addon manifest", () => {
   });
 
   test("contributes the money widget renderer", () => {
-    // The addon's whole job: teach the UI the backend-owned `"money"` widget key.
     expect(money.widgets?.money).toBeDefined();
+  });
+
+  test("contributes the currency administration menu", () => {
+    expect(money.menus?.[0]).toMatchObject({
+      id: "money",
+      label: "Money",
+      sidebar: true,
+      children: [
+        { id: "money.currencies", label: "Currencies", route: "money.currencies" },
+        { id: "money.rates", label: "Rates", route: "money.rates" },
+      ],
+    });
+  });
+
+  test("routes currencies and rates through their model resources", () => {
+    expect(money.routes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "money.currencies",
+          path: "/money/currencies",
+          resource: "money.Currency",
+        }),
+        expect.objectContaining({
+          name: "money.rates",
+          path: "/money/rates",
+          resource: "money.CurrencyRate",
+        }),
+      ]),
+    );
   });
 });

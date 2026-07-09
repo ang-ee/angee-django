@@ -19,6 +19,7 @@
     "@angee/knowledge": "workspace:*",
     "@angee/messaging": "workspace:*",
     "@angee/messaging-integrate-imap": "workspace:*",
+    "@angee/money": "workspace:*",
     "@angee/operator": "workspace:*",
     "@angee/parties": "workspace:*",
     "@angee/platform": "workspace:*",
