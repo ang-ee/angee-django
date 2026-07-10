@@ -537,6 +537,7 @@ vi.mock("@refinedev/react-table", async () => {
         reactTable,
         refineCore: {
           result: { data: rows, total: active ? matchingRows.length : undefined },
+          setFilters: vi.fn(),
           tableQuery: {
             isFetching: false,
             error: null,

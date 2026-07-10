@@ -65,6 +65,8 @@ type JsonWidgetValue =
   | readonly JsonWidgetValue[]
   | { readonly [key: string]: JsonWidgetValue };
 
+type NumericWidgetValue = number | string | null;
+
 const meta = {
   title: "Widgets/Scalar Fields",
   parameters: {
@@ -88,13 +90,13 @@ export const EditAndRead: Story = {
             <span>Cell</span>
           </div>
           <div className="divide-y divide-border-subtle">
-            <WidgetExample<number | null>
+            <WidgetExample<NumericWidgetValue>
               kind="integer"
               widget={defaultWidgets.integer}
               initialValue={42}
               field={{ label: "Quantity" }}
             />
-            <WidgetExample<number | null>
+            <WidgetExample<NumericWidgetValue>
               kind="float"
               widget={defaultWidgets.float}
               initialValue={19.75}
