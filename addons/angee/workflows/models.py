@@ -17,10 +17,12 @@ from datetime import datetime, timedelta
 from typing import Any, Self, cast
 
 from croniter import CroniterBadCronError, croniter
+from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
+from django.core import checks
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
-from django.db import models, transaction
+from django.db import OperationalError, ProgrammingError, models, transaction
 from rebac import system_context
 
 from angee.base.fields import StateField
@@ -37,6 +39,7 @@ from angee.workflows.steps import (
 )
 
 logger = logging.getLogger(__name__)
+_CHANGE_FEED_FIX = "declare changes() for the model to join the change feed"
 
 
 class WorkflowStatus(models.TextChoices):
@@ -587,8 +590,52 @@ class TriggerManager(AngeeManager):
         return primed
 
 
+def check_event_trigger_change_publishers(
+    app_configs: list[object] | None = None,
+    **kwargs: object,
+) -> list[checks.CheckMessage]:
+    """Report persisted event triggers targeting models outside the change feed."""
+
+    del app_configs, kwargs
+    try:
+        trigger_model = apps.get_model("workflows", "Trigger")
+    except LookupError:
+        return []
+    try:
+        published_labels = _change_publisher_model_labels()
+        invalid = list(
+            trigger_model._base_manager.filter(kind=TriggerKind.EVENT)
+            .exclude(event_model_label="")
+            .exclude(event_model_label__in=published_labels)
+            .order_by("pk")
+            .values_list("pk", "event_model_label")[:20]
+        )
+    except (OperationalError, ProgrammingError):
+        return []
+    return [
+        checks.Error(
+            f"Workflow trigger {pk} targets {label!r}, which is not in the change feed; {_CHANGE_FEED_FIX}.",
+            obj=trigger_model,
+            id="angee.workflows.E001",
+        )
+        for pk, label in invalid
+    ]
+
+
+def _change_publisher_model_labels() -> frozenset[str]:
+    """Return model labels declared into GraphQL's change feed."""
+
+    from angee.graphql.schema import GraphQLSchemas
+
+    return GraphQLSchemas.from_discovery().change_publisher_model_labels()
+
+
 class Trigger(AuditMixin, AngeeDataModel):
-    """Start rule attached to a workflow lineage head."""
+    """Start rule attached to a workflow lineage head.
+
+    Event triggers consume the GraphQL change feed: their target model must
+    declare ``changes()`` so publisher wiring and workflow delivery agree.
+    """
 
     runtime = True
 
@@ -637,6 +684,15 @@ class Trigger(AuditMixin, AngeeDataModel):
         if self.kind == TriggerKind.EVENT:
             if not self.event_model_label:
                 raise ValidationError({"config": "Event triggers require a model label."})
+            if self.event_model_label not in _change_publisher_model_labels():
+                raise ValidationError(
+                    {
+                        "event_model_label": (
+                            f"Event trigger target {self.event_model_label!r} is not in the change feed; "
+                            f"{_CHANGE_FEED_FIX}."
+                        )
+                    }
+                )
             condition = self.config.get("condition", {})
             if condition is not None and not isinstance(condition, Mapping):
                 raise ValidationError({"config": "Event trigger condition must be a JSON object."})

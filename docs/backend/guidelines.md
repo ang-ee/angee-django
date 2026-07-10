@@ -602,12 +602,14 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   Elevated writes may be necessary to create the row, but callers continue under
   the original actor. Capture `current_actor()` before the elevated block and
   rebind the returned instance with `.with_actor(actor)` after save.
-- **Publishers wire during schema build, not schema import.** GraphQL schema
-  modules declare subscription surfaces; `GraphQLSchemas` connects publishers
-  from declared `changes` metadata when a schema is built, so importing a schema
-  for SDL/tests never mutates process-global signal state. Processes that never
-  build a schema do not publish changes; base and consumer addons behave
-  identically because no addon owns its own publisher label list.
+- **Publishers wire during `angee.graphql` app `ready()`, not schema build or
+  schema import.** GraphQL schema modules declare subscription surfaces;
+  `GraphQLSchemas` connects publishers from declared `changes` metadata after
+  app population, so building a schema no longer mutates process-global signal
+  state.
+- **Workflow event triggers consume the declared change feed.** A trigger's
+  target model must declare `changes()`; otherwise validation tells the addon to
+  declare `changes()` for the model to join the change feed.
 - **`AngeeModel` managers/querysets must keep the canon.** If a model customizes
   `objects`, its queryset class must derive from `AngeeQuerySet`; otherwise
   shared methods such as public-id lookup, actor scoping, and elevated reads drift

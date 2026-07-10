@@ -1864,6 +1864,7 @@ def _collecting_broadcasts(
     sent: list[tuple[Any, dict[str, Any]]] = []
     monkeypatch.setattr(publishing, "_broadcast", lambda model, payload: sent.append((model, payload)))
     monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback: callback())
+    publishing.connect_change_broadcast_receiver()
     already_wired = {model: publishing.disconnect_publishers(model) for model in models}
     for model in models:
         publishing.connect_publishers(model)
@@ -1928,7 +1929,7 @@ def test_post_on_opted_in_host_emits_one_member_gated_thread_changed(
     """A post on an opted-in host emits one ``threadChanged``, gated to thread readers.
 
     F-stream end to end: ``BroadcastRoom`` opts in (``thread_broadcasts_changes = True``),
-    so a post fires ``post_save`` (part B) and ``_publish`` broadcasts one ``threadChanged``
+    so a post fires ``post_save`` (part B) and ``publish_change`` broadcasts one ``threadChanged``
     (part A). The event passes ``ChangeReadGate`` for a member holding ``thread.reader``
     and is dropped for a non-member — no existence or activity leak on the socket.
     """
@@ -1964,7 +1965,7 @@ def test_record_chatter_host_stays_silent_on_a_post(
 
     The F-stream default is ``thread_broadcasts_changes = False``, so a record-chatter
     thread (``ThreadedTicket``) never broadcasts: the bump-save change is inert for a
-    silent thread because ``_publish`` short-circuits on ``broadcasts_changes()``.
+    silent thread because ``publish_change`` short-circuits on ``broadcasts_changes()``.
     """
 
     del messaging_tables

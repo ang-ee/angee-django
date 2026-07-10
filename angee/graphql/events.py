@@ -38,6 +38,9 @@ class ChangePayload:
     resource_id: str | None = None
     """REBAC resource id when it differs from the public id."""
 
+    during_ingestion: bool = False
+    """Whether the change happened inside a sync ingestion context; not part of the wire message."""
+
     @classmethod
     def from_instance(
         cls,
@@ -45,6 +48,7 @@ class ChangePayload:
         *,
         action: str,
         update_fields: Iterable[str] | None,
+        during_ingestion: bool = False,
     ) -> ChangePayload:
         """Return the channel payload for a saved or deleted model instance."""
 
@@ -60,6 +64,7 @@ class ChangePayload:
             changed_fields=changed_fields,
             changed_values=changed_values,
             resource_id=resource_id,
+            during_ingestion=during_ingestion,
         )
 
     @classmethod
