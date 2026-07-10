@@ -8,20 +8,17 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Self, TypeVar, cast
 
-from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import connections, models
 from django.db.models.utils import make_model_tuple
-from django_sqids.field import DEFAULT_ALPHABET
 from rebac import RebacMixin, SubjectRef, check_new, current_actor, to_object_ref
 from rebac.actors import is_sudo as ambient_is_sudo
 from rebac.actors import to_subject_ref
 from rebac.errors import MissingActorError, NoActorResolvedError, PermissionDenied
 from rebac.managers import RebacManager, RebacQuerySet
 from rebac.resources import model_resource_type
-from sqids import Sqids
 
-from angee.base.fields import SqidField, canonical_sqid_prefix, encode_public_id
+from angee.base.fields import SqidField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import SqidMixin, TimestampMixin
 
@@ -303,7 +300,10 @@ class AngeeModel(TimestampMixin, RebacMixin):
     def public_id(self) -> str:
         """Return the stable public identifier for this model instance."""
 
-        return public_id_of(self)
+        value = self.public_id_value()
+        if value in (None, ""):
+            return ""
+        return str(value)
 
     @classmethod
     def from_public_id(cls, value: str) -> Self | None:
@@ -434,27 +434,26 @@ def _role_anchor_name(resource_type: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class SqidPublicIdentity:
-    """Sqid public identity for a model Angee does not own with a field."""
+    """Sqid adapter for a model Angee does not own with a ``SqidField``.
+
+    Survives only for third-party Django models such as ``auth.Group`` where
+    Angee exposes a public sqid-shaped surface but cannot add its own field.
+    ``SqidField`` still owns the codec and prefix rules.
+    """
 
     prefix: str
-    min_length: int = 8
+    min_length: int | None = None
     alphabet: str | None = None
 
     def public_id_from_pk(self, value: Any) -> str:
         """Return the public id encoded from a primary-key value."""
 
-        return encode_public_id(self._codec(), self.canonical_prefix, value)
+        return self.sqid_field.public_id_from_value(value)
 
     def public_id_to_pk(self, value: str) -> int | None:
         """Decode one public id to the backing primary-key value."""
 
-        raw_value = value
-        if self.canonical_prefix:
-            if not value.startswith(self.canonical_prefix):
-                return None
-            raw_value = value[len(self.canonical_prefix) :]
-        decoded = self._codec().decode(raw_value)
-        return decoded[0] if len(decoded) == 1 else None
+        return self.sqid_field.public_id_to_value(value)
 
     def public_id_lookup(self, model: type[models.Model], value: str) -> dict[str, Any]:
         """Return a Django lookup for ``value`` against ``model``."""
@@ -463,16 +462,17 @@ class SqidPublicIdentity:
         return {pk.name: self.public_id_to_pk(value)} if pk is not None else {}
 
     @property
-    def canonical_prefix(self) -> str:
-        """Return the canonical Angee sqid prefix."""
+    def sqid_field(self) -> SqidField:
+        """Return the owner field used to encode and decode this adapter's ids."""
 
-        return canonical_sqid_prefix(self.prefix)
-
-    def _codec(self) -> Sqids:
-        """Return the sqids codec for this identity."""
-
-        alphabet = self.alphabet or getattr(settings, "DJANGO_SQIDS_ALPHABET", None) or DEFAULT_ALPHABET
-        return Sqids(min_length=self.min_length, alphabet=alphabet)
+        # Deliberately per-call: this rare third-party path keeps SqidField as
+        # the codec owner without attaching a field to a model Angee does not own.
+        return SqidField(
+            real_field_name="id",
+            prefix=self.prefix,
+            min_length=self.min_length,
+            alphabet=self.alphabet,
+        )
 
 
 def public_data_id_field(model: type[models.Model]) -> SqidField | None:
@@ -495,7 +495,13 @@ def instance_from_public_id(
     queryset: models.QuerySet[_ModelT] | None = None,
     public_identity: SqidPublicIdentity | None = None,
 ) -> _ModelT | None:
-    """Return ``model`` instance addressed by Angee or Django public ID."""
+    """Return ``model`` instance addressed by a public id.
+
+    Thin adapter for generic surfaces that receive a model class/queryset at
+    runtime or a third-party ``public_identity``; Angee-owned callers should use
+    ``Model.from_public_id`` or ``queryset.from_public_id`` when they know the
+    owner statically.
+    """
 
     active_queryset = queryset if queryset is not None else model._default_manager.all()
     return _instance_from_public_id_queryset(
@@ -506,18 +512,19 @@ def instance_from_public_id(
 
 
 def public_id_of(instance: models.Model) -> str:
-    """Return the Angee public id or Django primary key for ``instance``.
+    """Return the public id for a generic model instance.
 
-    The user model is swappable, so ``instance`` may be a plain Django model
-    (e.g. ``django.contrib.auth.User``) that Angee does not own — those carry no
-    ``public_id_value`` and fall back to the primary key.
+    Thin adapter for generic surfaces that may receive a third-party Django
+    model. Angee-owned instances should use their ``public_id`` property.
     """
 
-    resolver = getattr(instance, "public_id_value", None)
-    value = resolver() if callable(resolver) else instance.pk
-    if value in (None, ""):
+    public_id = getattr(instance, "public_id", None)
+    if isinstance(public_id, str):
+        return public_id
+    pk = instance.pk
+    if pk in (None, ""):
         return ""
-    return str(value)
+    return str(pk)
 
 
 def public_id_for(
@@ -526,11 +533,11 @@ def public_id_for(
     *,
     public_identity: SqidPublicIdentity | None = None,
 ) -> str:
-    """Return the public id for ``model`` when only its primary key is known.
+    """Return the public id for a generic model when only its primary key is known.
 
-    ``model`` may be a plain Django model Angee does not own (the swappable user
-    model, or a third-party model reached with a ``public_identity`` decoder);
-    one without the public-id contract falls back to its primary key.
+    Thin adapter for relation/projector code that receives a model class at
+    runtime, including third-party models reached through ``public_identity``.
+    Angee-owned callers should prefer ``Model.public_id_from_pk``.
     """
 
     if pk in (None, ""):
@@ -629,28 +636,19 @@ def _instance_from_public_id_queryset(
         return None
 
     try:
-        lookup = _public_id_lookup(queryset.model, value, public_identity=public_identity)
+        if public_identity is not None:
+            lookup = public_identity.public_id_lookup(queryset.model, value)
+        else:
+            lookup_owner = getattr(queryset.model, "public_id_lookup", None)
+            if callable(lookup_owner):
+                lookup = dict(lookup_owner(value))
+            else:
+                pk = queryset.model._meta.pk
+                lookup = {pk.name: value} if pk is not None else {}
         instance = queryset.filter(**lookup).first()
     except (TypeError, ValueError):
         return None
     return cast(_ModelT | None, instance)
-
-
-def _public_id_lookup(
-    model: type[models.Model],
-    value: str,
-    *,
-    public_identity: SqidPublicIdentity | None = None,
-) -> dict[str, Any]:
-    """Return the model-owned lookup for one public id value."""
-
-    if public_identity is not None:
-        return public_identity.public_id_lookup(model, value)
-    lookup = getattr(model, "public_id_lookup", None)
-    if callable(lookup):
-        return dict(lookup(value))
-    pk = model._meta.pk
-    return {pk.name: value} if pk is not None else {}
 
 
 def requires_angee_rebac_contract(model: type[models.Model]) -> bool:

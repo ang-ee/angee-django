@@ -1634,7 +1634,7 @@ def _message(message_id: strawberry.ID) -> Any:
     """Return a message by public id."""
 
     try:
-        message = instance_from_public_id(Message, str(message_id))
+        message = Message.from_public_id(str(message_id))
     except ImproperlyConfigured as error:
         raise ValueError(str(error)) from error
     if message is None:
@@ -1647,7 +1647,7 @@ def _storage_files(file_ids: list[strawberry.ID]) -> tuple[Any, ...]:
 
     files = []
     for file_id in file_ids:
-        file = instance_from_public_id(File, str(file_id), queryset=File.objects.all())
+        file = File.objects.all().from_public_id(str(file_id))
         if file is None:
             raise ValueError("attachment not found")
         files.append(file)

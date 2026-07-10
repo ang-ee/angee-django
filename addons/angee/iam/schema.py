@@ -91,7 +91,7 @@ from angee.iam.roles import (
 User = cast(type[Any], get_user_model())
 Group = DjangoGroup
 Company = apps.get_model("iam", "Company")
-GROUP_PUBLIC_IDENTITY = SqidPublicIdentity(prefix="grp_")
+GROUP_PUBLIC_IDENTITY = SqidPublicIdentity(prefix="grp_", min_length=8)
 """Public data identity for Django auth groups exposed by IAM."""
 
 _ROLE_SUFFIX = "/role"

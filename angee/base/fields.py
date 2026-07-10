@@ -50,8 +50,8 @@ def encode_public_id(sqids: Sqids, prefix: str, value: Any) -> str:
     """Return the public id encoding ``value``'s backing integer under ``prefix``.
 
     The one reading of "encode a primary-key value to an Angee public id" — the
-    shared body behind ``SqidField.public_id_from_value`` and
-    ``SqidPublicIdentity.public_id_from_pk``. ``prefix`` is already canonical.
+    shared body behind ``SqidField.public_id_from_value``. ``prefix`` is already
+    canonical.
     """
 
     if value in (None, ""):
@@ -74,7 +74,13 @@ class SqidField(SqidsField):
     arrives through a nullable join — e.g. ``values_list("parent__sqid")`` over
     a nullable self-FK, the shape REBAC field-backed arrows query — and upstream
     encodes unconditionally there.
+
+    The field is also usable unbound as a pure public-id codec through
+    ``public_id_from_value`` and ``public_id_to_value``; third-party-model
+    adapters such as ``SqidPublicIdentity`` build on that declared API.
     """
+
+    sqids_instance: Sqids | None
 
     def __init__(self, *args: Any, prefix: str = "", **kwargs: Any) -> None:
         """Normalize Angee public-id prefixes to the canonical ``abc_`` shape."""
@@ -136,7 +142,25 @@ class SqidField(SqidsField):
     def public_id_from_value(self, value: Any) -> str:
         """Return the encoded public id for one backing integer value."""
 
-        return encode_public_id(self.sqids_instance, self.prefix, value)
+        return encode_public_id(self._public_id_codec(), self.prefix, value)
+
+    def public_id_to_value(self, public_id: Any) -> int | None:
+        """Return the backing integer decoded from one public id."""
+
+        if public_id in (None, ""):
+            return None
+        self.sqids_instance = self._public_id_codec()
+        decoded = self.get_prep_value(str(public_id))
+        return cast(int | None, decoded)
+
+    def _public_id_codec(self) -> Sqids:
+        """Return the field's Sqids codec, initialising unbound adapter fields."""
+
+        codec = self.sqids_instance
+        if codec is None:
+            codec = cast(Sqids, self.get_sqid_instance())
+            self.sqids_instance = codec
+        return codec
 
 
 class StateField(TextChoicesField):
