@@ -5,14 +5,14 @@ import { useMessagingT } from "./i18n";
 
 const MODEL = "messaging.Message";
 
-// Default the inbox to a by-status grouping. Hoisted to a stable reference so the
-// list does not re-seed its grouping on every render.
-const DEFAULT_GROUPS = { list: { field: "status" } } as const;
+// Default the inbox to a by-channel grouping. Hoisted to a stable reference so
+// the list does not re-seed its grouping on every render.
+const DEFAULT_GROUPS = { list: { field: "channel.display_name" } } as const;
 
 /**
  * The inbox: cross-thread "smart aggregation" over messages. Channel is an
  * explicit high-cardinality facet because it is useful here but not rendered as
- * a column. The list groups by status/channel through `ResourceList` +
+ * a column. The list groups by relation label axes through `ResourceList` +
  * `ListView`, not a hand-rolled inbox. Messages arrive via channel sync,
  * so the list creates nothing; status is the one human-editable field.
  */
@@ -26,7 +26,7 @@ export function MessagesPage(): React.ReactElement {
       >
         <Facet field="channel" label={t("messages.channel")} labelField="display_name" />
         <Column field="subject" />
-        <Column field="sender.value" header={t("messages.sender")} />
+        <Column field="sender" header={t("messages.sender")} />
         <Column field="thread.subject" header={t("messages.thread")} />
         <Column field="status" widget="statusBadge" />
         <Column field="sent_at" />
