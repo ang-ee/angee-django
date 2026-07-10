@@ -234,6 +234,7 @@ class AgentNotesMCPServerTests(MCPStreamableHTTPMixin, TransactionTestCase):
             )
             server = MCPServer.objects.create(name="agent-notes", url="http://localhost/mcp", credential=credential)
             agent = Agent.objects.create(name="Notes Agent", owner=owner)
+            agent.mark_provisioning()
             agent.mark_provisioned(workspace="ws-notes-agent", service="svc-notes-agent")
             agent.mcp_servers.add(server)
             self.note_count = Note.objects.count()

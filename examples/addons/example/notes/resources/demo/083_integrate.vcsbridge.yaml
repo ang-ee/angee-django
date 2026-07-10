@@ -5,7 +5,7 @@
   vendor: notes.vendor_local
   backend_class: local
   credential: notes.cred_local_templates
-  status: active
+  lifecycle: active
   config:
     local_root: "../.."
     local_name: angee-django
