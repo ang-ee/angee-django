@@ -66,6 +66,27 @@ path declaration, never a money library. `angee.money` owns the currency
 catalogue, dated exchange rates, and conversion; the reference currency is a
 required project setting.
 
+State-transition library choice: `angee.base.transitions` is deliberately owned
+in-repo. `django-fsm-2` and `viewflow.fsm` were evaluated and rejected because
+Angee's guard is REBAC permission-as-query with a settings-backed policy overlay
+and composer revalidation, which a user-callable permission hook cannot express.
+
+Tree library choice: `HierarchyMixin`'s materialized path is deliberately owned
+in-repo. `django-tree-queries` and `treebeard` were evaluated and rejected
+because the indexed path-prefix subtree test composes into the Hasura
+`_bool_exp` filter dialect and REBAC subtree scoping as a plain column predicate;
+recursive CTE ownership does not.
+
+Implementation-registry choice: the settings-keyed `ImplClassField` registry is
+Angee's declared composition contract. Python entry points were evaluated and
+rejected because composition facts belong to project settings, not package
+metadata.
+
+Audit-history exclusions: `django-easy-audit` was evaluated and rejected because
+GPL code is incompatible with a framework composed into commercial consumers.
+`django-reversion-compare` was evaluated and rejected for the same GPL reason;
+`django-reversion` itself remains the locked owner for snapshots and revert.
+
 ## Frontend
 
 | Pick | Owns | Angee adds |

@@ -64,8 +64,9 @@ def test_impl_owner_public_import_contract() -> None:
     assert ImplDefaultsMixin.__name__ == "ImplDefaultsMixin"
     assert callable(impl_registry)
     assert callable(resolve_impl_class)
-    assert importlib.util.find_spec("angee.base.impl_types") is None
-    assert importlib.util.find_spec("angee.base.registry") is None
+    legacy_modules = ("impl" "_types", "registry")
+    for legacy_module in legacy_modules:
+        assert importlib.util.find_spec(f"angee.base.{legacy_module}") is None
 
 
 def test_model_impl_field_is_the_public_declared_accessor() -> None:

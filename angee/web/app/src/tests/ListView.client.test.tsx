@@ -15,6 +15,10 @@ import {
   type RenderResult,
 } from "@testing-library/react";
 import {
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
+import {
   Outlet,
   RouterProvider,
   createMemoryHistory,
@@ -192,10 +196,18 @@ describe("ListView client row model", () => {
 });
 
 function render(ui: ReactElement): RenderResult {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
   return rtlRender(
-    <ModelMetadataProvider metadata={ADDON_SCHEMA_METADATA}>
-      {ui}
-    </ModelMetadataProvider>,
+    <QueryClientProvider client={queryClient}>
+      <ModelMetadataProvider metadata={ADDON_SCHEMA_METADATA}>
+        {ui}
+      </ModelMetadataProvider>
+    </QueryClientProvider>,
   );
 }
 

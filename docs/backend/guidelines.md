@@ -152,6 +152,11 @@ Rules that follow from the layering:
   chainable read predicates and reusable scoping. If a resolver, view, or command
   repeats a filter predicate, promote it to a QuerySet; if it mutates row state,
   promote it to a model or manager method.
+- External side effects and DB reflection are separate phases. File edits,
+  daemon calls, network calls, and other non-DB effects never run inside
+  `transaction.atomic`; the following DB mutation path names its transaction
+  owner and `system_context` reason. Platform install, agent provisioning, OAuth
+  flows, and resources loading all follow this two-phase shape.
 - Cross-addon and generated-model references go through Django's app registry
   (`apps.get_model`, `apps.get_app_config`, `apps.get_app_configs`) and `_meta`.
   Never import generated `runtime/` modules or rediscover model/app facts by
@@ -230,6 +235,14 @@ Rules that follow from the layering:
 - Source models are abstract. Concrete apps are emitted by the composer.
 - Keep Django `Meta` for Django and library-owned options such as
   `rebac_resource_type`; Angee extension facts live on the owning model class.
+- `angee.base` declares model markers, decorators, and field projection facts;
+  `angee.compose` interprets them during emission. If runtime code consumes a
+  source-model structural marker, the composer carries it onto the emitted
+  concrete class instead of callers inheriting or probing the abstract source.
+- Field classes own data-resource classification declarations. Field authors set
+  `angee_widget`, `angee_scalar_hint`, and `angee_currency_field` on the field;
+  `angee.graphql.data.field_classification` reads those declarations and does
+  not special-case addon-owned field classes.
 - `runtime/`, generated schemas, migrations, and codegen stubs are output.
   Change the source, not the artifact.
 - REBAC is structural and owned by `django-zed-rebac`. Addons declare
