@@ -17,8 +17,11 @@ from typing import Any, cast
 from django.apps import apps
 from django.conf import settings
 from django.db import models, transaction
+from django.db.models.signals import class_prepared, m2m_changed
 from django.utils import timezone
-from rebac import system_context
+from rebac import RelationshipTuple, SubjectRef, system_context, to_object_ref
+from rebac.relationships import delete_relationships, write_relationships
+from rebac.types import RelationshipFilter
 
 from angee.agents.backends import InferenceBackend, InferenceRequest, InferenceResponse
 from angee.agents.runtimes import AgentRuntime, operator_secret_ref
@@ -557,6 +560,16 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
 
         return self.name
 
+    def principal_subject(self) -> SubjectRef:
+        """Return this agent's own REBAC subject identity for actions it performs.
+
+        This is distinct from :attr:`owner`: the owner manages the agent definition,
+        while the agent subject represents the running agent as an actor.
+        """
+
+        ref = to_object_ref(self)
+        return SubjectRef.of(ref.resource_type, ref.resource_id)
+
     @property
     def runtime_backend(self) -> AgentRuntime:
         """Return the :class:`~angee.agents.runtimes.AgentRuntime` this agent renders into.
@@ -913,3 +926,138 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
             return override
         model = getattr(self, "model", None)
         return model.credential if model is not None else None
+
+
+_MCP_AGENT_RELATION = "agent"
+
+
+def _write_agent_mcp_relation(resource: models.Model, agent: Agent) -> None:
+    """Grant one selected agent access to one selected MCP resource."""
+
+    write_relationships(
+        [
+            RelationshipTuple(
+                resource=to_object_ref(resource),
+                relation=_MCP_AGENT_RELATION,
+                subject=agent.principal_subject(),
+            )
+        ]
+    )
+
+
+def _delete_agent_mcp_relation(resource: models.Model, agent: Agent) -> None:
+    """Revoke one selected agent's access to one selected MCP resource."""
+
+    resource_ref = to_object_ref(resource)
+    subject = agent.principal_subject()
+    delete_relationships(
+        RelationshipFilter(
+            resource_type=resource_ref.resource_type,
+            resource_id=resource_ref.resource_id,
+            relation=_MCP_AGENT_RELATION,
+            subject_type=subject.subject_type,
+            subject_id=subject.subject_id,
+        )
+    )
+
+
+def _sync_agent_mcp_selection(
+    *,
+    instance: models.Model,
+    action: str,
+    reverse: bool,
+    model: type[models.Model],
+    pk_set: set[Any] | None,
+    field_name: str,
+) -> None:
+    """Mirror one Agent↔MCP M2M edit into the non-field REBAC relation."""
+
+    if action not in {"post_add", "post_remove", "pre_clear"}:
+        return
+    if action == "pre_clear":
+        if reverse:
+            pairs = [(instance, agent) for agent in getattr(instance, "agents").all()]
+        else:
+            pairs = [(resource, instance) for resource in getattr(instance, field_name).all()]
+    elif reverse:
+        pairs = [(instance, agent) for agent in model._base_manager.filter(pk__in=pk_set or ())]
+    else:
+        pairs = [(resource, instance) for resource in model._base_manager.filter(pk__in=pk_set or ())]
+
+    for resource, agent in pairs:
+        if action == "post_add":
+            _write_agent_mcp_relation(resource, cast(Agent, agent))
+        else:
+            _delete_agent_mcp_relation(resource, cast(Agent, agent))
+
+
+def _sync_agent_mcp_servers(
+    sender: type[models.Model],
+    instance: models.Model,
+    action: str,
+    reverse: bool,
+    model: type[models.Model],
+    pk_set: set[Any] | None,
+    **kwargs: Any,
+) -> None:
+    """Mirror Agent.mcp_servers changes into ``agents/mcp_server#agent`` tuples."""
+
+    del sender, kwargs
+    _sync_agent_mcp_selection(
+        instance=instance,
+        action=action,
+        reverse=reverse,
+        model=model,
+        pk_set=pk_set,
+        field_name="mcp_servers",
+    )
+
+
+def _sync_agent_mcp_tools(
+    sender: type[models.Model],
+    instance: models.Model,
+    action: str,
+    reverse: bool,
+    model: type[models.Model],
+    pk_set: set[Any] | None,
+    **kwargs: Any,
+) -> None:
+    """Mirror Agent.mcp_tools changes into ``agents/mcp_tool#agent`` tuples."""
+
+    del sender, kwargs
+    _sync_agent_mcp_selection(
+        instance=instance,
+        action=action,
+        reverse=reverse,
+        model=model,
+        pk_set=pk_set,
+        field_name="mcp_tools",
+    )
+
+
+def _connect_agent_mcp_reconcile(sender: type[models.Model], **kwargs: Any) -> None:
+    """Connect M2M reconcile handlers for each concrete Agent subclass."""
+
+    del kwargs
+    try:
+        is_agent = issubclass(sender, Agent)
+    except TypeError:
+        return
+    if not is_agent or sender._meta.abstract:
+        return
+    m2m_changed.connect(
+        _sync_agent_mcp_servers,
+        sender=getattr(sender, "mcp_servers").through,
+        dispatch_uid=f"angee.agents.{sender._meta.label_lower}.mcp_servers.rebac",
+    )
+    m2m_changed.connect(
+        _sync_agent_mcp_tools,
+        sender=getattr(sender, "mcp_tools").through,
+        dispatch_uid=f"angee.agents.{sender._meta.label_lower}.mcp_tools.rebac",
+    )
+
+
+class_prepared.connect(
+    _connect_agent_mcp_reconcile,
+    dispatch_uid="angee.agents.agent_mcp_reconcile.class_prepared",
+)

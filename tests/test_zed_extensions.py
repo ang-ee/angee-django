@@ -231,6 +231,22 @@ def test_render_round_trips_a_real_backed_schema() -> None:
     assert {p.name for p in roundtripped.permissions} == {p.name for p in original.permissions}
 
 
+def test_agents_mcp_relations_accept_agent_subjects() -> None:
+    """Agents may be direct subjects only on the agents addon's MCP access relations."""
+
+    source = Path(apps.get_app_config("agents").path) / "permissions.zed"
+    schema = parse_zed(source.read_text(encoding="utf-8"))
+
+    for resource_type in ("agents/mcp_server", "agents/mcp_tool"):
+        definition = schema.get_definition(resource_type)
+        relation = next(relation for relation in definition.relations if relation.name == "agent")
+        assert {(subject.type, subject.id, subject.relation) for subject in relation.allowed_subjects} == {
+            ("agents/agent", "", "")
+        }
+        read = next(permission for permission in definition.permissions if permission.name == "read")
+        assert "agent" in _render_expr_names(read)
+
+
 # ---------- full wiring: emit + repoint + sync + resolve ----------
 
 

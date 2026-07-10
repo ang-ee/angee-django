@@ -27,7 +27,6 @@ from rebac import app_settings, system_context
 from rebac.roles import grant
 
 from angee.agents.context import render_view_context
-from angee.agents.mcp_verifier import resolve_actor
 from angee.agents.models import Agent as AbstractAgent
 from angee.agents.models import MCPServer as AbstractMCPServer
 from angee.agents.models import MCPTool as AbstractMCPTool
@@ -1369,29 +1368,6 @@ def test_mcp_config_resolves_builtin_server_from_settings(
             "angee": {"type": "http", "url": "http://host.docker.internal:8111/mcp"},
         },
     }
-
-
-def test_mcp_actor_verifier_resolves_bearer_to_the_credential_owner(agents_console_tables: None) -> None:
-    """The agents bearer verifier maps an MCP-server credential to its owning user.
-
-    Interim model (option A): an agent acts with the identity of the user who owns the
-    credential it presents, so it gets that user's notes CRUD with correct attribution.
-    An unknown bearer resolves to nothing, so the runtime denies it with no fallback.
-    """
-
-    owner = User.objects.create_user(username="agt-verify-owner", email="verify@example.com")
-    with system_context(reason="test.agents.mcp_verify"):
-        credential = Credential.objects.create_local_credential(
-            owner, kind=str(CredentialKind.STATIC_TOKEN), name="mcp-bearer", material={"api_key": "tok-secret"}
-        )
-        MCPServer.objects.create(name="notes", url="http://x/mcp/notes/", credential=credential)
-
-    actor = resolve_actor("tok-secret")
-    assert actor is not None
-    assert actor.subject_type == "auth/user"
-    assert actor.subject_id == str(owner.sqid)  # the agent runs as the credential's owner
-    assert resolve_actor("wrong-token") is None
-    assert resolve_actor("") is None
 
 
 def test_provision_service_inputs_credential_drives_auth_env(agents_console_tables: None) -> None:
