@@ -108,6 +108,9 @@ services:
     workdir: /app
     env:
       ANGEE_PROJECT_DIR: /app
+      # Prefer a materialized local framework checkout when this stack root carries
+      # one under sources/; otherwise this inert path falls through to the baked wheel.
+      PYTHONPATH: "/app/sources/angee-django"
       # django-environ (angee.compose.settings) parses this into DATABASES override-safe.
       # Host `postgres` is the compose service name; user/db `angee` match the postgres
       # env; the base64url password needs no encoding.
@@ -162,6 +165,7 @@ services:
     workdir: /app
     env:
       ANGEE_PROJECT_DIR: /app
+      PYTHONPATH: "/app/sources/angee-django"
       DATABASE_URL: "postgres://angee:${secret.db-password}@postgres:5432/angee"
       YAMLCONF_SECRET_KEY: "${secret.secret-key}"
       ANGEE_OPERATOR_GRAPHQL_ENDPOINT: "/operator/graphql"
@@ -195,6 +199,7 @@ services:
     workdir: /app
     env:
       ANGEE_PROJECT_DIR: /app
+      PYTHONPATH: "/app/sources/angee-django"
       DATABASE_URL: "postgres://angee:${secret.db-password}@postgres:5432/angee"
       YAMLCONF_SECRET_KEY: "${secret.secret-key}"
       ANGEE_OPERATOR_GRAPHQL_ENDPOINT: "/operator/graphql"
@@ -279,6 +284,8 @@ services:
         && cd project/{{ web_path }}
         && pnpm codegen
         && pnpm build
+        && echo 'frontend build complete; holding for caddy_static dev stack'
+        && exec tail -f /dev/null
     after: [django]
 
   # Browser-facing ingress. Caddy serves the built SPA and proxies only backend

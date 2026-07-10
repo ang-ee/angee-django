@@ -280,6 +280,16 @@ def test_local_stack_frontend_mode_contract() -> None:
     assert manifest["caddy_image"]["default"] == "caddy:2.9-alpine"
 
 
+def test_local_stack_prefers_mounted_framework_source() -> None:
+    """A materialized source checkout must override the baked django-angee wheel."""
+
+    stack = _render_local_stack(frontend_mode="caddy_static")
+
+    for service_name in ("django", "celery-worker", "celery-beat"):
+        service = stack["services"][service_name]
+        assert service["env"]["PYTHONPATH"] == "/app/sources/angee-django"
+
+
 def test_local_stack_caddy_static_renders_single_public_frontend_ingress() -> None:
     stack = _render_local_stack(frontend_mode="caddy_static")
 
@@ -316,6 +326,8 @@ def test_local_stack_caddy_static_renders_single_public_frontend_ingress() -> No
     frontend_command = stack["services"]["frontend-build"]["command"][-1]
     assert 'path.join(root,"project/web/node_modules/@angee")' in frontend_command
     assert "fs.symlinkSync" in frontend_command
+    assert "pnpm build" in frontend_command
+    assert "exec tail -f /dev/null" in frontend_command
 
 
 def test_local_stack_vite_mode_preserves_legacy_direct_ports() -> None:
