@@ -32,8 +32,8 @@ from angee.messaging_integrate_imap.parser import (
 )
 from tests.conftest import _clear_model_tables, _create_missing_tables, make_integration
 from tests.test_messaging import (
-    Handle,
     MESSAGING_TEST_MODELS,
+    Handle,
     Message,
     Part,
     Participant,

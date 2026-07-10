@@ -197,7 +197,7 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
     assert channel.roots.create_name is None
     assert channel.roots.update_name is None
     assert channel.roots.delete_name is None
-    assert channel.capabilities == ("list", "detail", "aggregate", "groups")
+    assert channel.capabilities == ("list", "detail", "aggregate", "groups", "changes")
 
 
 def test_messaging_schema_does_not_expose_optional_imap_connect() -> None:
