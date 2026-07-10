@@ -11,7 +11,7 @@ _angee:
   schema: 1
   kind: stack
   name: dev
-  description: Generic Django+Vite+Playwright+Storybook dev stack for any consumer project under angee-django or downstream.
+  description: Generic Django+Vite+Storybook process-compose dev stack for any consumer project under angee-django or downstream.
 
 project_name:
   type: str
@@ -25,7 +25,7 @@ project_path:
 framework_path:
   type: path
   default: "."
-  help: Path to the angee-django monorepo root. Used to reach Storybook (the `@angee/storybook` package under `packages/storybook`) and to run `pnpm install` at the workspace root. Default `.` assumes the repo-level layout (manifest at `<repo>/.angee/angee.yaml`); for downstream projects that consume angee-django as a sibling checkout, point at the sibling (e.g. `--input framework_path=../angee-django`).
+  help: Path to the angee-django monorepo root. Used to reach Storybook (the `@angee/storybook` package under `packages/storybook`), to run `pnpm install` at the workspace root, and as `uv --project` for Python jobs. Logical — angee resolves it relative to where the manifest is being rendered. Default `.` assumes the repo-level layout (manifest at `<repo>/.angee/angee.yaml`), where uv needs no --project (walk-up). Any OTHER checkout must be given as an ABSOLUTE path — uv resolves --project against each job's workdir (the project root), where a relative value would point wrong.
 
 web_path:
   type: str
@@ -67,14 +67,6 @@ edge_port:
   type: int
   default: 80
 
-playwright_port:
-  type: int
-  default: 9223
-
 process_compose_port:
   type: int
   default: 8080
-
-playwright_browser:
-  type: str
-  default: chrome

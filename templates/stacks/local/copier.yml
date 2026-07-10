@@ -8,13 +8,20 @@ _answers_file: .copier-answers.stack.yml
 
 _message_after_copy: |
   Local Angee instance rendered — the root folder IS the stack and a git-controlled
-  project (ANGEE_ROOT=.). Postgres + Django (framework image) + frontend mode
-  "{{ frontend_mode }}".
+  project (ANGEE_ROOT=.). Operator + Postgres + Redis + Django + Caddy-served SPA.
 
-  1. Bring it up (operator + Postgres + Django + frontend). First start
-     emits runtime/, creates migrations, writes GraphQL schemas, migrates, syncs
-     permissions, loads install resources, bootstraps the admin user, and prepares
-     the web frontend:
+  Framework mode: "{{ framework }}".
+  - source (default): the django service runs the deps-only base image
+    (ghcr.io/ang-ee/django-angee-base) and links the framework editable from a local
+    checkout at container start. Clone it at the stack root FIRST:
+      git clone https://github.com/ang-ee/angee-django sources/angee-django
+  - baked: set framework=baked and django_image=ghcr.io/ang-ee/django-angee:latest to
+    run a code-baked runtime image (no source checkout, no per-start uv sync).
+
+  1. Bring it up (operator + Postgres + Redis + Django + Caddy). The django container's
+     `manage.py angee provision` owns first start: it waits for Postgres, emits runtime/,
+     creates migrations, migrates, syncs permissions, loads resources, writes GraphQL
+     schemas, and bootstraps the admin user. Then Caddy serves the built SPA:
        angee dev
   2. Point an external CLI shell at the tokenized local operator (run from this root):
        export ANGEE_OPERATOR_URL=http://127.0.0.1:{{ operator_port }}
@@ -36,11 +43,11 @@ _angee:
     git-controlled project (ANGEE_ROOT=.). It chains the `projects/web` project
     template to scaffold the host (manage.py, settings.yaml, addons, web), then
     overlays a Postgres-backed `angee.yaml` — operator + postgres (pgvector) +
-    django (on the framework runtime image, DATABASE_URL → postgres) + a
-    selectable frontend ingress (`caddy_static` by default, or `vite` for the
-    legacy dev server). The framework is a dependency baked into the runtime
-    image, not a cloned source. This is how you run your own Angee app locally on
-    a real Postgres database.
+    redis + django (DATABASE_URL → postgres) + Caddy serving the built SPA. By
+    default (`framework=source`) the django service runs the deps-only base image
+    and links the framework editable from a local `sources/angee-django` checkout
+    at container start; `framework=baked` runs a code-baked runtime image instead.
+    This is how you run your own Angee app locally on a real Postgres database.
   # Chain the project template first so the stack overlays a real host, then this
   # template adds only the stack overlay (angee.yaml, .gitignore). The ref is
   # relative to THIS template's directory (the operator's chain resolver joins it
@@ -72,38 +79,45 @@ addon_namespace:
   default: angee_local
   help: Import namespace for this project's consumer addons; a valid Python identifier.
 
-# Path of the web (Vite) package relative to the project root; matches the chained
-# project's web_path and the vite service's workdir (/app/<web_path>).
+# Path of the web package relative to the project root; matches the chained project's
+# web_path and the frontend-build/caddy services' project-relative web path.
 web_path:
   type: str
   default: "web"
   help: Path of the web package relative to the project root.
 
-frontend_mode:
+# How the django service obtains the framework code. `source` (default) runs the
+# deps-only base image and links the framework editable from a `sources/angee-django`
+# checkout at container start (`uv sync --project sources/angee-django`) — the checkout
+# must exist at the stack root, so clone it there. `baked` runs a code-baked runtime
+# image with the framework already installed (no source checkout, no per-start uv sync);
+# set django_image=ghcr.io/ang-ee/django-angee:latest yourself when choosing baked.
+framework:
   type: str
-  default: caddy_static
+  default: source
   choices:
-    - caddy_static
-    - vite
-  help: Frontend ingress mode. caddy_static builds the SPA once and serves it through Caddy while proxying backend paths over the Docker network; vite keeps the legacy Vite dev server with direct host ports.
+    - source
+    - baked
+  help: How the django service obtains framework code. source = deps-only base image + editable link from sources/angee-django; baked = code-baked runtime image (also set django_image to the runtime image).
 
-# The framework runtime image: framework CODE + deps + psycopg baked in (the
-# Dockerfile `runtime` target). The project mounts over /app, so the framework lives
-# OFF /app in the image. Distinct from the deps-only ...-base image.
-base_image:
+# The image the django/celery services run. Default is the deps-only base image
+# (deps + uv + git, framework code NOT baked): `framework=source` links the framework
+# editable into the baked /opt/.venv from sources/angee-django at start. For
+# `framework=baked`, set this to the code-baked runtime image ghcr.io/ang-ee/django-angee:latest.
+django_image:
   type: str
-  default: "ghcr.io/ang-ee/django-angee:latest"
-  help: Framework runtime image (code + deps + psycopg) the django service runs.
+  default: "ghcr.io/ang-ee/django-angee-base:latest"
+  help: Image the django/celery services run. Default = deps-only base image (for framework=source). For framework=baked, set to ghcr.io/ang-ee/django-angee:latest.
 
 web_image:
   type: str
   default: "ghcr.io/ang-ee/angee-web:latest"
-  help: Framework JS runtime image (node + the @angee/* pnpm workspace) the frontend dev/build service runs.
+  help: Framework JS runtime image (node + the @angee/* pnpm workspace) the frontend build service runs.
 
 caddy_image:
   type: str
   default: "caddy:2.9-alpine"
-  help: Caddy image used when frontend_mode=caddy_static.
+  help: Caddy image serving the built SPA and proxying backend paths over the Docker network.
 
 operator_port:
   type: int

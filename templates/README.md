@@ -22,17 +22,25 @@ that is the owner.
 
 One `angee.yaml` describes a stack in either of the two layouts covered by
 [Concepts](https://docs.angee.ai/guide/concepts) and the [glossary](../docs/glossary.md);
-the difference is where the stack root sits and where its sources come from.
+the difference is where the stack root sits and where its sources come from. Both
+render from ONE shared manifest body (`stacks/_shared/stack-body.yaml.jinja`): each
+template's `angee.yaml.jinja` is a thin `{% set %}` header (mode + address variables)
+that includes it, and `{% if runtime_mode == "process" | "docker" %}` branches cover
+only where the two modes differ. Both collapse the first-run lifecycle into one
+`manage.py angee provision` command.
 
-- **`stacks/dev`** — a gitignored `.angee/` overlay (`ANGEE_ROOT=.angee`) on a
-  framework checkout, with `local` sources pointing at that checkout. Added with
-  `angee init --dev`. For developing the framework (or a consumer) against live
-  source; it runs the checkout's example.
-- **`stacks/local`** — a self-contained instance where the root folder *is* the
-  stack **and** a git-controlled project (`ANGEE_ROOT=.`). You own the root; the
-  framework is a dependency baked into the runtime image, not a cloned source.
-  This is how you run your own Angee app locally on a real (Postgres + pgvector)
-  database.
+- **`stacks/dev`** (`runtime_mode: process`) — a gitignored `.angee/` overlay
+  (`ANGEE_ROOT=.angee`) on a framework checkout, with `local` sources pointing at that
+  checkout, run on process-compose. Added with `angee init --dev`. For developing the
+  framework (or a consumer) against live source; it runs the checkout's example. The
+  lifecycle is a single `provision` job.
+- **`stacks/local`** (`runtime_mode: docker`) — a self-contained instance where the
+  root folder *is* the stack **and** a git-controlled project (`ANGEE_ROOT=.`), run on
+  docker-compose. You own the root. By default (`framework=source`) the django/celery
+  services run the deps-only base image and link the framework editable from a local
+  `sources/angee-django` checkout at container start; `framework=baked` runs a
+  code-baked runtime image instead. `provision` runs inside the django container. This
+  is how you run your own Angee app locally on a real (Postgres + pgvector) database.
 
 ### The `local` root is a git-controlled project
 
@@ -62,21 +70,29 @@ example later by adding a source onto `angee-django/examples` and enabling it in
 `INSTALLED_APPS`.
 
 > **Status.** The `local` template now *is* this shape: a thin `kind: stack` that
-> chains `projects/web`, runs the framework from the `ghcr.io/ang-ee/django-angee`
-> runtime image on `pgvector/pgvector:pg17`, bootstraps a generated `admin` user,
-> and serves the frontend through Caddy by default (`frontend_mode=caddy_static`),
-> with legacy Vite dev serving still available via `frontend_mode=vite`. The
-> one-command render uses the operator's template-chain resolver
-> (`ang-ee/angee-operator#39`); once that lands in a released operator, `angee stack
-> init` renders host + overlay in one step. The web image rebuild depends on the
-> published `hatch-angee` release that ships addon `web/schema/` directories.
-> Until those releases are available, use the two-copier-step render below.
+> chains `projects/web` and includes the shared manifest body in `docker` mode. By
+> default (`framework=source`) its django/celery services run the deps-only
+> `ghcr.io/ang-ee/django-angee-base` image and link the framework editable from a
+> `sources/angee-django` checkout at container start (clone it at the stack root first);
+> `framework=baked` runs the code-baked `ghcr.io/ang-ee/django-angee` runtime image
+> instead. It runs on `pgvector/pgvector:pg17`, drives first start through
+> `manage.py angee provision --bootstrap-admin` (which bootstraps a generated `admin`
+> user), and serves the built SPA through Caddy. The one-command render uses the
+> operator's template-chain resolver (`ang-ee/angee-operator#39`); once that lands in a
+> released operator, `angee stack init` renders host + overlay in one step. The web
+> image rebuild depends on the published `hatch-angee` release that ships addon
+> `web/schema/` directories. Until those releases are available, use the two-copier-step
+> render below.
 
 ## Run a local stack
 
-Once the operator's chain resolver ships, one command renders host + stack:
+Once the operator's chain resolver ships, one command renders host + stack. The
+default `framework=source` links the framework editable from a local checkout at
+container start, and `stack init` validates that source exists — so clone it first:
 
 ```sh
+mkdir -p ~/.angee/sources
+git clone https://github.com/ang-ee/angee-django ~/.angee/sources/angee-django
 angee stack init https://github.com/ang-ee/angee-django/tree/main/templates/stacks/local ~/.angee
 angee dev --root ~/.angee
 export ANGEE_OPERATOR_URL=http://127.0.0.1:9000
