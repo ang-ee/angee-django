@@ -1,0 +1,8 @@
+# Example vendor catalogue contribution. `integrate.Vendor` is a master-tier
+# catalogue model, so every addon that contributes vendor rows seeds them at the
+# same tier. Adopted by slug so it links an existing row instead of duplicating.
+- xref: acme
+  slug: acme
+  display_name: Acme Integrations
+  website_url: https://acme.example.com
+  description: Example vendor contributed by the notes consumer addon.

@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Self, TypeVar, cast
 
+from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import connections, models
 from django.db.models.utils import make_model_tuple
@@ -23,6 +24,14 @@ from angee.base.impl import ImplClassField
 from angee.base.mixins import SqidMixin, TimestampMixin
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
+
+CATALOGUE_TIERS = ("master", "install", "demo")
+"""Resource tiers a catalogue model may declare.
+
+Mirrors :class:`angee.resources.tiers.ResourceTier`, the authoritative resource
+tier owner. ``angee.base`` cannot import the resources addon without reversing the
+dependency direction, so the resources test suite pins these literals in sync.
+"""
 
 
 class AngeeQuerySet(RebacQuerySet[_ModelT]):
@@ -186,6 +195,16 @@ class AngeeModel(TimestampMixin, RebacMixin):
     guards (see ``angee.compose.runtime``).
     """
 
+    catalogue: bool = False
+    """Whether this class declares itself as catalogue/reference data.
+
+    The read is non-inherited: a subclass must declare ``catalogue = True`` on
+    its own class body to opt in, matching ``runtime``'s structural-marker shape.
+    """
+
+    catalogue_tier: str = CATALOGUE_TIERS[0]
+    """Resource tier the catalogue rows belong to; read non-inherited."""
+
     class Meta:
         """Django model options for Angee's abstract model base."""
 
@@ -195,13 +214,51 @@ class AngeeModel(TimestampMixin, RebacMixin):
     def is_runtime_model(cls) -> bool:
         """Return whether this model class declares itself as a runtime model."""
 
-        return cls.__dict__.get("runtime", False)
+        return bool(cls.__dict__.get("runtime", False))
 
     @classmethod
     def overrides_runtime_parent(cls) -> bool:
         """Return whether this materialized child opts into child-first emission."""
 
         return bool(cls.__dict__.get("child_overrides_parent", False))
+
+    @classmethod
+    def is_catalogue_model(cls) -> bool:
+        """Return whether this class declares itself as catalogue data."""
+
+        return bool(cls.__dict__.get("catalogue", False))
+
+    @classmethod
+    def get_catalogue_tier(cls) -> str:
+        """Return this class's declared catalogue tier, defaulting to master."""
+
+        return str(cls.__dict__.get("catalogue_tier", CATALOGUE_TIERS[0]))
+
+    @classmethod
+    def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
+        """Run Django model checks plus Angee structural declaration checks."""
+
+        errors = super().check(**kwargs)
+        errors.extend(cls._check_catalogue_tier())
+        return errors
+
+    @classmethod
+    def _check_catalogue_tier(cls) -> list[checks.CheckMessage]:
+        """Return system-check errors for an invalid catalogue tier declaration."""
+
+        if not cls.is_catalogue_model():
+            return []
+        tier = cls.get_catalogue_tier()
+        if tier in CATALOGUE_TIERS:
+            return []
+        expected = ", ".join(repr(value) for value in CATALOGUE_TIERS)
+        return [
+            checks.Error(
+                f"{cls._meta.label}.catalogue_tier must be one of {expected}; got {tier!r}.",
+                obj=cls,
+                id="angee.E014",
+            )
+        ]
 
     @classmethod
     def impl_key_for(cls, field_name: str, value: Any, *, default: str | None = None) -> str:

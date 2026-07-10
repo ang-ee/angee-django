@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import json
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -392,6 +393,7 @@ class Runtime:
             body_lines = [
                 line for name in plan.override_removed_fields for line in (f"    {name} = None", "")
             ]
+            body_lines.extend(self._catalogue_marker_source(plan.model_class))
             body_lines.extend(
                 line for attribute in plan.attributes for line in (*self._model_attribute_source(attribute), "")
             )
@@ -419,6 +421,17 @@ class Runtime:
                 ]
             )
         return "\n".join(lines).rstrip() + "\n"
+
+    def _catalogue_marker_source(self, model_class: type[AngeeModel]) -> tuple[str, ...]:
+        """Return concrete class-body source for a non-inherited catalogue marker."""
+
+        if not model_class.is_catalogue_model():
+            return ()
+        return (
+            "    catalogue = True",
+            f"    catalogue_tier = {json.dumps(model_class.get_catalogue_tier())}",
+            "",
+        )
 
     def _after_resource_load_aliases(
         self,

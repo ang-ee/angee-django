@@ -1180,6 +1180,8 @@ class Vendor(SqidMixin, AuditMixin, AngeeModel):
     """
 
     runtime = True
+    catalogue = True
+    catalogue_tier = "master"
 
     sqid_prefix = "vnd_"
     slug = models.SlugField(unique=True)

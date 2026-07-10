@@ -545,6 +545,52 @@ def test_runtime_emits_only_models_marked_runtime(tmp_path: Path) -> None:
     assert "class SkippedRuntimeThing" not in source
 
 
+def test_runtime_carries_catalogue_markers_on_emitted_concrete_model(tmp_path: Path) -> None:
+    """Catalogue declarations survive the abstract-source to concrete-runtime hop."""
+
+    module = ModuleType("tests.catalogue_emission.models")
+    CatalogueThing = type(
+        "CatalogueThing",
+        (AngeeModel,),
+        {
+            "__module__": module.__name__,
+            "runtime": True,
+            "catalogue": True,
+            "catalogue_tier": "install",
+            "name": models.CharField(max_length=32),
+            "Meta": type("Meta", (), {"abstract": True, "app_label": "catalogue"}),
+        },
+    )
+    CatalogueChild = type(
+        "CatalogueChild",
+        (AngeeModel,),
+        {
+            "__module__": module.__name__,
+            "runtime": True,
+            "extends": "catalogue.CatalogueThing",
+            "child_value": models.CharField(max_length=16),
+            "Meta": type("Meta", (), {"abstract": True, "app_label": "catalogue"}),
+        },
+    )
+    module.CatalogueThing = CatalogueThing
+    module.CatalogueChild = CatalogueChild
+    app_config = SimpleNamespace(
+        label="catalogue",
+        name="tests.catalogue_emission",
+        module=ModuleType("tests.catalogue_emission"),
+        models_module=module,
+    )
+
+    source = Runtime((app_config,), runtime_dir=tmp_path / "runtime").render_sources()[Path("catalogue/models.py")]
+    parent_body = source[source.index("class CatalogueThing") : source.index("class CatalogueChild")]
+    child_body = source[source.index("class CatalogueChild") :]
+
+    assert "catalogue = True" in parent_body
+    assert 'catalogue_tier = "install"' in parent_body
+    assert "catalogue = True" not in child_body
+    assert "catalogue_tier" not in child_body
+
+
 def test_runtime_renders_materialized_child_extension(tmp_path: Path) -> None:
     """``extends`` + ``runtime = True`` emits a concrete MTI child model."""
 

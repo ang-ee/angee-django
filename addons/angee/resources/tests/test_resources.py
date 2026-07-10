@@ -15,7 +15,7 @@ from import_export.results import Result, RowResult
 from rebac import system_context
 
 from angee.addons import AddonContract
-from angee.base.models import AngeeModel
+from angee.base.models import CATALOGUE_TIERS, AngeeModel
 from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.grants import _grant_tuples, materialize_grant_groups
@@ -278,6 +278,12 @@ def test_resource_tiers_include_prerequisites() -> None:
     assert ResourceTier.with_prerequisites(["install"]) == ("master", "install")
     assert ResourceTier.with_prerequisites(["demo"]) == ("master", "install", "demo")
     assert ResourceTier.with_prerequisites(["demo", "master"]) == ("master", "install", "demo")
+
+
+def test_catalogue_tier_literals_match_resource_tiers() -> None:
+    """Base catalogue tier literals stay in sync with the resource tier owner."""
+
+    assert set(CATALOGUE_TIERS) == set(ResourceTier.values)
 
 
 def test_entry_graph_detects_cycles(tmp_path: Path) -> None:

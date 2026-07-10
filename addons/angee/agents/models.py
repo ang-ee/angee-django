@@ -216,6 +216,8 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
     """
 
     runtime = True
+    catalogue = True
+    catalogue_tier = "demo"
 
     sqid_prefix = "imd_"
     provider = models.ForeignKey("agents.InferenceProvider", on_delete=models.CASCADE, related_name="models")
@@ -361,6 +363,8 @@ class MCPServer(SqidMixin, AuditMixin, AngeeModel):
     """
 
     runtime = True
+    catalogue = True
+    catalogue_tier = "demo"
 
     sqid_prefix = "mcp_"
     name = models.CharField(max_length=200, unique=True)

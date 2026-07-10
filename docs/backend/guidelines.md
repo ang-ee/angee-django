@@ -156,6 +156,9 @@ Rules that follow from the layering:
   (`apps.get_model`, `apps.get_app_config`, `apps.get_app_configs`) and `_meta`.
   Never import generated `runtime/` modules or rediscover model/app facts by
   string parsing.
+- A marked catalogue model belongs to exactly one resource tier for all seeders;
+  the resources loader enforces each manifest tier against the model's declared
+  `catalogue_tier`.
 - GraphQL resolvers stay thin. They resolve the runtime model, actor/context, and
   input object, then delegate to the model, manager/queryset, action, or
   aggregate builder that owns the rule. If a resolver branches on field names,
@@ -445,6 +448,9 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
 - **A `strawberry_django.field(only=[...])` hint must list every column the resolver dereferences.**
   Include columns read by shared properties the resolver delegates to; otherwise
   selecting that field alone can defer-load the missing column per row.
+- **A structural marker consumed after runtime emission must be emitted too.**
+  A non-inherited `__dict__` source-model marker stops at the abstract source unless
+  the composer carries it into the concrete runtime class body.
 - **`uv run` tool shebangs are stale** — run Python tools by module:
   `uv run python -m pytest`, `uv run python -m mypy angee addons`,
   `uv run python -m ruff check .`. Bare `uv run pytest`/`mypy` fail to spawn.

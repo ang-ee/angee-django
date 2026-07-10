@@ -457,6 +457,8 @@ class MimeType(SqidMixin, AngeeModel):
     """
 
     runtime = True
+    catalogue = True
+    catalogue_tier = "master"
 
     sqid_prefix = "mim_"
     mime_type = models.CharField(max_length=200, unique=True)
