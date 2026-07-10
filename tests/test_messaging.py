@@ -757,6 +757,85 @@ def test_threaded_record_delete_tears_down_chatter_graph(messaging_tables: None)
 
 
 @pytest.mark.django_db(transaction=True)
+def test_record_authorized_delete_tears_down_private_chatter_graph(messaging_tables: None) -> None:
+    """Deleting a permitted parent record removes its private chatter implementation rows."""
+
+    del messaging_tables
+    user_model = get_user_model()
+    with system_context(reason="test threaded model actor delete setup"):
+        owner = user_model.objects.create_user(username="actor-cascade-owner", email="actor-cascade-owner@example.com")
+        watcher = user_model.objects.create_user(
+            username="actor-cascade-watcher",
+            email="actor-cascade-watcher@example.com",
+        )
+        doc = ChatterDoc.objects.create(title="Actor cascade", status="open")
+        write_relationships(
+            [
+                RelationshipTuple(
+                    resource=to_object_ref(doc),
+                    relation="owner",
+                    subject=to_subject_ref(owner),
+                )
+            ]
+        )
+        doc.message_subscribe(user=watcher)
+        doc.message_post("Body to be collected by owner delete.")
+        doc.activity_schedule(user=watcher, summary="Follow up", due_date=_AT.date())
+
+    thread = doc.message_thread(create=False)
+    assert thread is not None
+    thread_pk = thread.pk
+    assert ThreadFollower._base_manager.filter(thread_id=thread_pk).exists()
+    assert ThreadActivity._base_manager.filter(thread_id=thread_pk).exists()
+
+    with actor_context(owner):
+        doc.delete()
+
+    assert not ChatterDoc._base_manager.filter(pk=doc.pk).exists()
+    assert not Thread._base_manager.filter(pk=thread_pk).exists()
+    assert not ThreadAttachment._base_manager.filter(object_id=doc.pk).exists()
+    assert not Message._base_manager.filter(thread_id=thread_pk).exists()
+    assert not ThreadFollower._base_manager.filter(thread_id=thread_pk).exists()
+    assert not ThreadActivity._base_manager.filter(thread_id=thread_pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_record_denied_delete_does_not_teardown_private_chatter_graph(messaging_tables: None) -> None:
+    """A record actor without delete permission cannot trigger the elevated chatter cascade."""
+
+    del messaging_tables
+    user_model = get_user_model()
+    with system_context(reason="test threaded model denied delete setup"):
+        writer = user_model.objects.create_user(
+            username="actor-cascade-writer",
+            email="actor-cascade-writer@example.com",
+        )
+        doc = ChatterDoc.objects.create(title="Denied actor cascade", status="open")
+        write_relationships(
+            [
+                RelationshipTuple(
+                    resource=to_object_ref(doc),
+                    relation="writer",
+                    subject=to_subject_ref(writer),
+                )
+            ]
+        )
+        message = doc.message_post("Body that must survive denied delete.")
+
+    thread = doc.message_thread(create=False)
+    assert thread is not None
+    thread_pk = thread.pk
+    message_pk = message.pk
+
+    with actor_context(writer), pytest.raises(PermissionDenied):
+        doc.delete()
+
+    assert ChatterDoc._base_manager.filter(pk=doc.pk).exists()
+    assert Thread._base_manager.filter(pk=thread_pk).exists()
+    assert Message._base_manager.filter(pk=message_pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_threaded_record_bulk_delete_tears_down_chatter_graph(messaging_tables: None) -> None:
     """A bulk ``QuerySet.delete()`` tears down the thread subtree too, not just the row (M1).
 

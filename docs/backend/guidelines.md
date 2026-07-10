@@ -458,6 +458,14 @@ Hard-won traps — the wise learn from others' mistakes (`docs/guidelines.md`).
   Reconcile every on-disk migration in the same change: source migrations get the
   schema-identical dotted-path edit; generated runtime migrations are regenerated
   from source, and downstream consumers must regenerate their own runtime output.
+- **Explicit delete preflight plus elevated destructive work must test both branches.**
+  Storage's soft-delete path and messaging's threaded-record delete path check the
+  public `delete` permission themselves, then run the owned destructive work under
+  `system_context`; the library's denial-audit signal is skipped on the explicit
+  deny branch by design, so add a deny-path regression whenever you use this shape.
+  Do not hide independently-authorized `on_delete=CASCADE` children under an elevated
+  parent cascade; dependent rows must derive delete through the parent in their own
+  zed relation, like the workflows Step/Edge pattern.
 - **Agent runtime auth is a `(runtime × provider × credential-kind)` fact, not provider-only.**
   The `AgentRuntime` an agent's `runtime_class` selects (`angee.agents.runtimes`) owns how a
   credential becomes container env *and* the synced secret payload (`auth_env` /

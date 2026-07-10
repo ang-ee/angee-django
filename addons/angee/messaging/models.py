@@ -36,6 +36,7 @@ from rebac import (
     SubjectRef,
     current_actor,
     delete_relationship,
+    system_context,
     to_object_ref,
     to_subject_ref,
     write_relationships,
@@ -180,6 +181,24 @@ class ThreadedModelMixin(models.Model):
         changes = tracker.changes(tracking_before)
         if changes:
             self.message_track(changes, subtype_key=self.thread_tracking_subtype_key)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        """Delete this row after authorizing the record, then elevate its cascade.
+
+        Composing this mixin means an instance delete checks this record's own
+        ``delete`` permission explicitly, then runs the entire Django delete collector
+        under ``system_context`` so messaging's private chatter graph can be torn down.
+        A host model must not attach independently-authorized ``on_delete=CASCADE``
+        children under the same record; such children must derive their delete
+        permission through the record in their own zed. ``QuerySet.delete()`` does not
+        call this override, so bulk deletion of threaded records is a system-context
+        maintenance path only.
+        """
+
+        if not self.has_access("delete"):
+            raise PermissionDenied(f"Denied: cannot delete {self._meta.label}")
+        with system_context(reason="messaging.threaded_record.delete"):
+            return super().delete(*args, **kwargs)
 
     def message_thread(self, *, create: bool = True) -> models.Model | None:
         """Return this row's chatter thread, optionally creating it."""
