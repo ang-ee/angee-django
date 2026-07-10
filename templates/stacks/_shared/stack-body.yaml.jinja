@@ -150,10 +150,15 @@ sources:
 # angee build, reconcile_permissions, makemigrations, migrate, rebac sync, resources
 # load, schema) in one command, so the eight-job DAG collapses to a single job.
 jobs:
-  # Install the JS workspace so the frontend service has its node_modules.
+  # Install the JS workspace that OWNS the project's web package, so the frontend
+  # and codegen have their node_modules. Runs at source://app: pnpm walks up to the
+  # nearest workspace root, so in the repo layout (project under examples/) this
+  # installs the framework workspace, and in the project-at-root layout it installs
+  # the project's own workspace (whose globs include the framework packages under
+  # sources/angee-django).
   deps:
     runtime: local
-    workdir: source://framework
+    workdir: source://app
     command: ["pnpm", "install"]
 
   # First-run lifecycle in one command. provision OWNS waiting for postgres (it does
@@ -167,6 +172,7 @@ jobs:
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
+      {% if uv_cache_dir %}UV_CACHE_DIR: "{{ uv_cache_dir }}"{% endif %}
 
   # Refresh the operator daemon's committed SDL from the LIVE daemon; the unified
   # codegen reads this SDL, so codegen waits on this refresh.
@@ -179,6 +185,7 @@ jobs:
       DATABASE_URL: "{{ database_url }}"
       ANGEE_OPERATOR_URL: "{{ operator_url }}"
       ANGEE_OPERATOR_TOKEN: "${secret.operator-token}"
+      {% if uv_cache_dir %}UV_CACHE_DIR: "{{ uv_cache_dir }}"{% endif %}
     depends_on: [operator, provision]
 
   # Regenerate this project's typed GraphQL operations from the emitted Django SDL
@@ -243,6 +250,7 @@ services:
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
+      {% if uv_cache_dir %}UV_CACHE_DIR: "{{ uv_cache_dir }}"{% endif %}
       # The browser opens the daemon GraphQL same-origin via /operator/graphql.
       ANGEE_OPERATOR_GRAPHQL_ENDPOINT: "/operator/graphql"
       ANGEE_OPERATOR_URL: "{{ operator_url }}"
@@ -282,6 +290,7 @@ services:
       ANGEE_BUILTIN_MCP_URL: "{{ mcp_url }}"
       REDIS_URL: "{{ redis_url }}"
       CELERY_BROKER_URL: "{{ celery_broker_url }}"
+      {% if uv_cache_dir %}UV_CACHE_DIR: "{{ uv_cache_dir }}"{% endif %}
     command:
       - sh
       - "-c"
@@ -304,6 +313,7 @@ services:
       DATABASE_URL: "{{ database_url }}"
       REDIS_URL: "{{ redis_url }}"
       CELERY_BROKER_URL: "{{ celery_broker_url }}"
+      {% if uv_cache_dir %}UV_CACHE_DIR: "{{ uv_cache_dir }}"{% endif %}
     after: [provision]
 {% endif %}
 {% if runtime_mode == "docker" %}
@@ -323,6 +333,7 @@ services:
       ANGEE_BUILTIN_MCP_URL: "{{ mcp_url }}"
       REDIS_URL: "{{ redis_url }}"
       CELERY_BROKER_URL: "{{ celery_broker_url }}"
+      {% if uv_cache_dir %}UV_CACHE_DIR: "{{ uv_cache_dir }}"{% endif %}
     # In source mode each container runs its own uv sync before importing psycopg — a
     # known per-container startup cost. Then wait for django's migrations (healthchecks
     # are deferred) and exec celery.
@@ -356,11 +367,13 @@ services:
     after: [deps, provision, django, operator, codegen]
 
   # Storybook component workshop (@angee/storybook): renders @angee/ui with mocked
-  # fixtures, so it needs only the JS workspace installed.
+  # fixtures. It lives in the FRAMEWORK workspace, which the deps job no longer
+  # necessarily installs (deps installs the workspace owning the project web package),
+  # so it installs its own workspace first — idempotent and fast when satisfied.
   storybook:
     runtime: local
     workdir: source://framework
-    command: ["pnpm", "--filter", "@angee/storybook", "dev", "--no-open"]
+    command: ["sh", "-c", "pnpm install && exec pnpm --filter @angee/storybook dev --no-open"]
     env:
       STORYBOOK_PORT: "{{ storybook_port }}"
     after: [deps]

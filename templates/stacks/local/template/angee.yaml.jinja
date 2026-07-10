@@ -12,4 +12,9 @@
 {% set mcp_url = "http://django:8000/mcp" %}
 {% set operator_bind = "127.0.0.1" %}
 {% set pgdata_mount = "./data/pgdata" %}
+{# uv's cache: the framework pyproject pins cache-dir ".angee/caches/uv", resolved #}
+{# against the CWD — in the django container that is /app (the project mount), which #}
+{# would mint a stray nested `.angee/` on the host. Pin the stack-owned, gitignored #}
+{# ./caches/uv instead (/app/caches/uv inside the mount). #}
+{% set uv_cache_dir = "/app/caches/uv" %}
 {% include "../../_shared/stack-body.yaml.jinja" %}

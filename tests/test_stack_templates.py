@@ -244,7 +244,11 @@ def _render_inline_flag_conditionals(text: str, variables: dict[str, str]) -> st
 
 
 def _eval_condition(condition: str, variables: dict[str, str]) -> bool:
-    left, _, right = condition.partition("==")
+    left, eq, right = condition.partition("==")
+    if not eq:
+        # Bare-flag condition (`{% if uv_project %}`): pongo2 truthiness — a
+        # non-empty string is true.
+        return bool(_eval_operand(left, variables))
     return _eval_operand(left, variables) == _eval_operand(right, variables)
 
 
@@ -619,6 +623,32 @@ def test_dev_stack_external_framework_checkout_is_absolute_and_drives_uv_project
     provision = stack["jobs"]["provision"]
     assert provision["workdir"] == "source://app"
     assert provision["command"][:4] == ["uv", "run", "--project", "/opt/checkouts/angee-django"]
+
+
+def test_uv_caches_are_stack_owned_never_a_nested_dot_angee() -> None:
+    """Every stack pins uv's cache inside the stack, never a stray nested `.angee/`.
+
+    The framework pyproject's ``cache-dir = ".angee/caches/uv"`` resolves against
+    the job CWD (the project root / the container's /app), which mints a nested
+    `.angee/` outside the repo layout. Repo-layout dev keeps the pyproject default
+    (it lands in the repo's gitignored .angee); every other shape overrides
+    UV_CACHE_DIR with the stack-owned, gitignored caches dir.
+    """
+
+    repo_dev = _render_dev_stack()
+    assert "UV_CACHE_DIR" not in repo_dev["services"]["django"]["env"]
+
+    consumer_dev = _render_dev_stack(project_path="..", framework_path="/opt/checkouts/angee-django")
+    for node in (consumer_dev["jobs"]["provision"], consumer_dev["services"]["django"],
+                 consumer_dev["services"]["celery-worker"], consumer_dev["services"]["celery-beat"]):
+        assert node["env"]["UV_CACHE_DIR"] == "caches/uv"
+
+    local = _render_local_stack()
+    for name in ("django", "celery-worker", "celery-beat"):
+        assert local["services"][name]["env"]["UV_CACHE_DIR"] == "/app/caches/uv"
+
+    gitignore = LOCAL_STACK_GITIGNORE.read_text(encoding="utf-8")
+    assert "/caches/" in gitignore
 
 
 def test_dev_stack_keeps_absolute_source_paths_verbatim() -> None:

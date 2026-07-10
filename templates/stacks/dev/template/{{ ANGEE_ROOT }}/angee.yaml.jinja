@@ -17,6 +17,13 @@
 {# resolves --project against each job's workdir (the project root), where an #}
 {# ANGEE_ROOT-relative value would point at the wrong directory. #}
 {% if framework_path == ".." %}{% set uv_project = "" %}{% else %}{% set uv_project = framework_path %}{% endif %}
+{# uv's cache: the framework pyproject pins cache-dir ".angee/caches/uv", which uv #}
+{# resolves against the CWD (the job workdir = project root). In the repo layout the #}
+{# workdir is the repo root, so that default lands in the repo's gitignored .angee — #}
+{# keep it (empty uv_cache_dir = no env override). In a consumer layout the workdir is #}
+{# the project root, where the default would mint a stray nested `.angee/`; override #}
+{# with the stack-owned, gitignored `caches/uv` under the project root instead. #}
+{% if uv_project %}{% set uv_cache_dir = "caches/uv" %}{% else %}{% set uv_cache_dir = "" %}{% endif %}
 {# Address variables: process mode reaches postgres/redis/operator on 127.0.0.1:${ports.x} #}
 {# and the host gateway (host.docker.internal) where containers must reach the host. #}
 {% set database_url = "postgres://angee:${secret.db-password}@127.0.0.1:${ports.postgres}/angee" %}

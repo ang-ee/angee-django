@@ -20,6 +20,12 @@
 /data/
 /pgdata/
 
+# Stack-owned tool caches (UV_CACHE_DIR and friends): every cache this stack's jobs
+# and containers produce lives here, never in a stray nested `.angee/` or a shared
+# home cache. The `templates` symlink is stack machinery for catalog resolution.
+/caches/
+/templates
+
 # Python
 __pycache__/
 *.py[cod]
