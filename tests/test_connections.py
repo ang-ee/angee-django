@@ -703,7 +703,51 @@ def test_activate_from_credential_does_not_call_select_for_update_on_sqlite(
         integration = Integration.objects.activate_from_credential(user, vendor=vendor, credential=credential)
 
         assert integration.credential_id == credential.pk
-        assert integration.status == "active"
+        assert integration.lifecycle == "active"
+    finally:
+        _drop_models(created_models)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_activate_from_credential_reconnect_swaps_credential_on_active_integration() -> None:
+    """Re-auth can replace credentials on an already-active parent row without a self-edge."""
+
+    created_models = _create_missing_tables()
+    try:
+        user = get_user_model().objects.create_user(username="activate-again", email="again@example.com")
+        call_command("rebac", "sync", verbosity=0)
+        with system_context(reason="test activate again setup"):
+            vendor = Vendor.objects.create(slug="activate-again", display_name="Activate Again")
+            first = Credential.objects.create_local_credential(
+                user,
+                kind=CredentialKind.STATIC_TOKEN,
+                name="first-token",
+                material={"api_key": "first"},
+            )
+            second = Credential.objects.create_local_credential(
+                user,
+                kind=CredentialKind.STATIC_TOKEN,
+                name="second-token",
+                material={"api_key": "second"},
+            )
+
+        integration = Integration.objects.activate_from_credential(user, vendor=vendor, credential=first)
+        with system_context(reason="test activate again seed error"):
+            integration.report_status("error", "expired token")
+
+        reconnected = Integration.objects.activate_from_credential(user, vendor=vendor, credential=second)
+
+        assert reconnected.pk == integration.pk
+        assert reconnected.credential_id == second.pk
+        assert str(reconnected.lifecycle) == "active"
+        assert str(reconnected.runtime_status) == "ok"
+        assert reconnected.last_error == ""
+        with system_context(reason="test activate again verify"):
+            persisted = Integration.objects.get(pk=integration.pk)
+            assert persisted.credential_id == second.pk
+            assert str(persisted.lifecycle) == "active"
+            assert str(persisted.runtime_status) == "ok"
+            assert persisted.last_error == ""
     finally:
         _drop_models(created_models)
 

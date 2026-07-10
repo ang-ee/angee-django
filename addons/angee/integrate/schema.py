@@ -15,6 +15,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.core.exceptions import FieldDoesNotExist
 from django.db import transaction
 from django.db.models import Prefetch
 from django.utils import timezone
@@ -23,6 +24,7 @@ from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
+from angee.base.impl import ImplBase
 from angee.graphql.actions import ActionResult, action_target, resolve_action_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
@@ -45,7 +47,7 @@ from angee.iam.schema import UserType
 from angee.integrate import connect as _connect
 from angee.integrate.credentials import handler_for
 from angee.integrate.impl import IntegrationImpl
-from angee.integrate.models import Bridge, IntegrationStatus
+from angee.integrate.models import Bridge, IntegrationLifecycle
 from angee.integrate.oauth import flow, state
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, OAuthFlowError
@@ -659,8 +661,8 @@ def integration_create_attrs(
         attrs["credential"] = credential
     if account is not strawberry.UNSET:
         attrs["account"] = account
-    if data.status not in (strawberry.UNSET, None):
-        attrs["status"] = IntegrationStatus.from_value(data.status)
+    if data.lifecycle not in (strawberry.UNSET, None):
+        attrs["lifecycle"] = IntegrationLifecycle.from_value(data.lifecycle)
     return attrs
 
 
@@ -669,9 +671,14 @@ def apply_integration_patch_fields(
     data: Any,
     *,
     reason: str,
-    ignore_null_status: bool = False,
+    ignore_null_lifecycle: bool = False,
 ) -> set[str]:
-    """Apply inherited ``Integration`` patch fields and return provided names."""
+    """Apply inherited ``Integration`` patch fields and return caller-save names.
+
+    Lifecycle is guarded by ``Integration.set_lifecycle()``, which eagerly saves
+    through the transition hook. It is therefore deliberately omitted from the
+    returned set so child update callers do not re-emit the state write.
+    """
 
     provided: set[str] = set()
     if data.vendor is not strawberry.UNSET:
@@ -694,10 +701,36 @@ def apply_integration_patch_fields(
             else resolve_action_target(ExternalAccount, data.account, reason=f"{reason}.account")
         )
         provided.add("account")
-    if data.status is not strawberry.UNSET and (data.status is not None or not ignore_null_status):
-        target.status = IntegrationStatus.from_value(data.status)
-        provided.add("status")
+    if data.lifecycle is not strawberry.UNSET and (data.lifecycle is not None or not ignore_null_lifecycle):
+        target.set_lifecycle(IntegrationLifecycle.from_value(data.lifecycle))
     return provided
+
+
+def impl_default_update_fields(target: Any, field_name: str) -> set[str]:
+    """Return model fields the selected impl may have materialized on ``target``."""
+
+    field = type(target).impl_field(field_name)
+    key = getattr(target, field.attname, None)
+    if not key:
+        return set()
+    impl = field.resolve_class(key)
+    if not (isinstance(impl, type) and issubclass(impl, ImplBase)):
+        return set()
+    fields: set[str] = set()
+    for default_name in impl.effective_defaults():
+        try:
+            model_field = target._meta.get_field(default_name)
+        except FieldDoesNotExist:
+            continue
+        fields.add(model_field.name)
+    return fields
+
+
+def save_provided_fields(target: Any, provided: set[str]) -> None:
+    """Persist provided fields once, skipping the save when a transition already did all work."""
+
+    if provided:
+        target.save(update_fields={*provided, "updated_at"})
 
 
 def _oauth_client_for_integration(integration: Any) -> Any:
@@ -1115,12 +1148,12 @@ class IntegrationLabelMixin:
 
     Compose alongside the node base, e.g. ``class ChannelType(IntegrationLabelMixin,
     AngeeNode)``, to surface the operator label (falling back to ``Vendor
-    (status)``) on every ``Integration`` child type without re-declaring the
+    (lifecycle)``) on every ``Integration`` child type without re-declaring the
     resolver. A ``@strawberry.type`` (not an interface): merges the field into the
     concrete type without adding a GraphQL interface to the SDL.
     """
 
-    @strawberry_django.field(only=["display_name", "vendor", "status"])
+    @strawberry_django.field(only=["display_name", "vendor", "lifecycle"])
     def display_name(self) -> str:
         """Return the operator label, falling back to the vendor-derived one."""
 
@@ -1153,7 +1186,8 @@ class IntegrationType(IntegrationLabelMixin, AngeeNode):
     owner: UserType
     kind: auto
     impl_class: auto
-    status: auto
+    lifecycle: auto
+    runtime_status: auto
     last_used_at: auto
     last_used_status: auto
     use_count_24h: auto
@@ -1207,7 +1241,8 @@ class ConnectedIntegrationType(IntegrationLabelMixin, AngeeNode):
     owner: UserType
     kind: auto
     impl_class: auto
-    status: auto
+    lifecycle: auto
+    runtime_status: auto
     last_used_at: auto
     last_used_status: auto
     created_at: auto
@@ -1251,12 +1286,21 @@ _INTEGRATION_RESOURCE = hasura_model_resource(
     IntegrationType,
     model=Integration,
     name="integrations",
-    filterable=["id", "display_name", "vendor", "kind", "impl_class", "status", "updated_at"],
-    sortable=["display_name", "vendor", "kind", "impl_class", "status", "created_at", "updated_at"],
+    filterable=["id", "display_name", "vendor", "kind", "impl_class", "lifecycle", "runtime_status", "updated_at"],
+    sortable=[
+        "display_name",
+        "vendor",
+        "kind",
+        "impl_class",
+        "lifecycle",
+        "runtime_status",
+        "created_at",
+        "updated_at",
+    ],
     aggregatable=["id"],
-    groupable=["kind", "impl_class", "vendor", "vendor__display_name", "status"],
-    insertable=["vendor", "owner", "credential", "account", "impl_class", "status"],
-    updatable=["vendor", "credential", "account", "owner", "status"],
+    groupable=["kind", "impl_class", "vendor", "vendor__display_name", "lifecycle", "runtime_status"],
+    insertable=["vendor", "owner", "credential", "account", "impl_class", "lifecycle"],
+    updatable=["vendor", "credential", "account", "owner"],
     field_id_decode={
         "vendor": public_pk_decoder(Vendor),
         "owner": public_pk_decoder(User),
@@ -1365,6 +1409,32 @@ class IntegrationCredentialMutation:
 class IntegrationActionMutation:
     """Operational actions on an integration (sync, connection test)."""
 
+    # Follow-up: surface these declared lifecycle actions as console row buttons
+    # once the action metadata registry lands.
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def activate_integration(self, id: PublicID) -> ActionResult:
+        """Move an integration to ACTIVE through its guarded transition."""
+
+        with action_target(Integration, id, reason="integrate.graphql.activate_integration") as integration:
+            integration.activate()
+        return ActionResult(ok=True, message="Activated integration.")
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def pause_integration(self, id: PublicID) -> ActionResult:
+        """Move an integration to PAUSED through its guarded transition."""
+
+        with action_target(Integration, id, reason="integrate.graphql.pause_integration") as integration:
+            integration.pause()
+        return ActionResult(ok=True, message="Paused integration.")
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def disable_integration(self, id: PublicID) -> ActionResult:
+        """Move an integration to DISABLED through its guarded transition."""
+
+        with action_target(Integration, id, reason="integrate.graphql.disable_integration") as integration:
+            integration.disable()
+        return ActionResult(ok=True, message="Disabled integration.")
+
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def sync_integration(self, id: PublicID) -> ActionResult:
         """Queue every bridge of one integration for sync now."""
@@ -1436,7 +1506,8 @@ class VcsBridgeType(BridgeSyncStatusMixin, AngeeNode):
     account: ExternalAccountType | None
     owner: UserType
     backend_class: auto
-    status: auto
+    lifecycle: auto
+    runtime_status: auto
     config: JSON
     last_sync_completed_at: auto
     last_sync_status: auto
@@ -1447,12 +1518,12 @@ class VcsBridgeType(BridgeSyncStatusMixin, AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["backend_class", "status"])
+    @strawberry_django.field(only=["backend_class", "lifecycle"])
     def display_name(self) -> str:
         """Return a human label for the record header and relation pickers."""
 
         bridge = cast(Any, self)
-        return f"{bridge.backend_class} ({bridge.status})"
+        return f"{bridge.backend_class} ({bridge.lifecycle})"
 
 
 @strawberry_django.type(Repository)
@@ -1522,7 +1593,7 @@ class VcsBridgeInput:
     credential: PublicID | None = None
     account: PublicID | None = strawberry.UNSET
     backend_class: str | None = strawberry.UNSET
-    status: str | None = strawberry.UNSET
+    lifecycle: str | None = strawberry.UNSET
     config: JSON | None = strawberry.UNSET
     webhook_secret: str = ""
 
@@ -1537,7 +1608,7 @@ class VcsBridgePatch:
     account: PublicID | None = strawberry.UNSET
     owner: PublicID | None = strawberry.UNSET
     backend_class: str | None = strawberry.UNSET
-    status: str | None = strawberry.UNSET
+    lifecycle: str | None = strawberry.UNSET
     config: JSON | None = strawberry.UNSET
     webhook_secret: str | None = strawberry.UNSET
 
@@ -1561,10 +1632,35 @@ _VCS_BRIDGE_RESOURCE = hasura_model_resource(
     VcsBridgeType,
     model=VcsBridge,
     name="vcs_bridges",
-    filterable=["id", "vendor", "backend_class", "status", "last_sync_status", "sync_stage", "updated_at"],
-    sortable=["vendor", "backend_class", "status", "last_sync_completed_at", "created_at", "updated_at"],
+    filterable=[
+        "id",
+        "vendor",
+        "backend_class",
+        "lifecycle",
+        "runtime_status",
+        "last_sync_status",
+        "sync_stage",
+        "updated_at",
+    ],
+    sortable=[
+        "vendor",
+        "backend_class",
+        "lifecycle",
+        "runtime_status",
+        "last_sync_completed_at",
+        "created_at",
+        "updated_at",
+    ],
     aggregatable=["id", "last_sync_items"],
-    groupable=["vendor", "vendor__display_name", "backend_class", "status", "last_sync_status", "sync_stage"],
+    groupable=[
+        "vendor",
+        "vendor__display_name",
+        "backend_class",
+        "lifecycle",
+        "runtime_status",
+        "last_sync_status",
+        "sync_stage",
+    ],
     insert=False,
     update=False,
     delete=True,
@@ -1675,6 +1771,7 @@ class VcsBridgeUpdateMutation:
             )
             if data.backend_class is not strawberry.UNSET:
                 backend_changed = bridge.set_impl_key("backend_class", data.backend_class, default="local")
+                provided.add("backend_class")
             if data.config is not strawberry.UNSET:
                 bridge.config = data.config
                 provided.add("config")
@@ -1683,7 +1780,8 @@ class VcsBridgeUpdateMutation:
                 provided.add("webhook_secret")
             if backend_changed:
                 bridge.materialize_impl_defaults("backend_class", provided=frozenset(provided))
-            bridge.save()
+                provided.update(impl_default_update_fields(bridge, "backend_class"))
+            save_provided_fields(bridge, provided)
         return cast(VcsBridgeType, bridge)
 
 

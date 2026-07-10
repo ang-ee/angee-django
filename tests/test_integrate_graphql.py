@@ -22,6 +22,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.management import call_command
 from django.db import IntegrityError
+from django.db.models.signals import post_save
 from django.test import RequestFactory
 from rebac import app_settings, system_context
 from rebac.roles import grant
@@ -73,7 +74,8 @@ def test_integration_node_resolves_nested_relations(
             """
             query Integration($id: String!) {
               integrations_by_pk(id: $id) {
-                status
+                lifecycle
+                runtime_status
                 vendor { slug }
                 credential { display_name }
                 owner { username }
@@ -86,7 +88,8 @@ def test_integration_node_resolves_nested_relations(
         )
     )["integrations_by_pk"]
     assert resolved == {
-        "status": "ACTIVE",
+        "lifecycle": "ACTIVE",
+        "runtime_status": "OK",
         "vendor": {"slug": "conn-node"},
         # ``make_integration`` builds the OAuth client with ``display_name=slug.title()``,
         # and an OAuth credential's label is its provider's display name (set on create by
@@ -161,13 +164,20 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     assert metadata.roots.update_name == "update_integrations_by_pk"
     assert metadata.roots.delete_name == "delete_integrations_by_pk"
     assert metadata.filter_fields == (
-        "id", "display_name", "vendor", "kind", "impl_class", "status", "updated_at",
+        "id", "display_name", "vendor", "kind", "impl_class", "lifecycle", "runtime_status", "updated_at",
     )
     assert metadata.order_fields == (
-        "display_name", "vendor", "kind", "impl_class", "status", "created_at", "updated_at",
+        "display_name", "vendor", "kind", "impl_class", "lifecycle", "runtime_status", "created_at", "updated_at",
     )
     assert metadata.aggregate_fields == ("id",)
-    assert metadata.group_by_fields == ("kind", "impl_class", "vendor", "vendor__display_name", "status")
+    assert metadata.group_by_fields == (
+        "kind",
+        "impl_class",
+        "vendor",
+        "vendor__display_name",
+        "lifecycle",
+        "runtime_status",
+    )
     assert {
         dimension.field: (dimension.input, dimension.key, dimension.kind, dimension.scalar)
         for dimension in metadata.group_dimensions
@@ -176,7 +186,8 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
         "impl_class": ("IMPL_CLASS", "impl_class", "column", None),
         "vendor": ("VENDOR", "vendor_id", "relation", "ID"),
         "vendor__display_name": ("VENDOR__DISPLAY_NAME", "vendor__display_name", "column", None),
-        "status": ("STATUS", "status", "column", None),
+        "lifecycle": ("LIFECYCLE", "lifecycle", "column", None),
+        "runtime_status": ("RUNTIME_STATUS", "runtime_status", "column", None),
     }
     assert metadata.default_measures[0].op == "count"
     assert metadata.aggregate_measures == ()
@@ -210,7 +221,14 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
         "delete",
         "changes",
     ]
-    assert integration["groupByFields"] == ["kind", "impl_class", "vendor", "vendor__display_name", "status"]
+    assert integration["groupByFields"] == [
+        "kind",
+        "impl_class",
+        "vendor",
+        "vendor__display_name",
+        "lifecycle",
+        "runtime_status",
+    ]
     assert {
         dimension["field"]: (
             dimension["input"],
@@ -224,7 +242,8 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
         "impl_class": ("IMPL_CLASS", "impl_class", "column", None),
         "vendor": ("VENDOR", "vendor_id", "relation", "ID"),
         "vendor__display_name": ("VENDOR__DISPLAY_NAME", "vendor__display_name", "column", None),
-        "status": ("STATUS", "status", "column", None),
+        "lifecycle": ("LIFECYCLE", "lifecycle", "column", None),
+        "runtime_status": ("RUNTIME_STATUS", "runtime_status", "column", None),
     }
     assert integration["defaultMeasures"] == [{"op": "count", "field": None, "input": None}]
     assert integration["aggregateMeasures"] == []
@@ -237,7 +256,7 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
         }
     ]
     assert integration["groupAliases"] == []
-    assert integration["updateFields"] == ["vendor", "credential", "account", "owner", "status"]
+    assert integration["updateFields"] == ["vendor", "credential", "account", "owner"]
     kind_field = {field["name"]: field for field in integration["fields"]}["kind"]
     assert kind_field["kind"] == "scalar"
     assert kind_field["filterable"] is True
@@ -246,14 +265,21 @@ def test_console_resource_metadata_declares_integration_surface() -> None:
     assert kind_field["updatable"] is False
     impl_field = {field["name"]: field for field in integration["fields"]}["impl_class"]
     assert impl_field["values"] == [{"value": "NONE", "description": "Draft"}]
-    status_field = {field["name"]: field for field in integration["fields"]}["status"]
-    assert status_field["kind"] == "enum"
-    assert status_field["widget"] == "select"
-    assert status_field["readable"] is True
-    assert status_field["filterable"] is True
-    assert status_field["sortable"] is True
-    assert status_field["groupable"] is True
-    assert status_field["updatable"] is True
+    lifecycle_field = {field["name"]: field for field in integration["fields"]}["lifecycle"]
+    assert lifecycle_field["kind"] == "enum"
+    assert lifecycle_field["widget"] == "select"
+    assert lifecycle_field["readable"] is True
+    assert lifecycle_field["filterable"] is True
+    assert lifecycle_field["sortable"] is True
+    assert lifecycle_field["groupable"] is True
+    assert lifecycle_field["updatable"] is False
+    runtime_status_field = {field["name"]: field for field in integration["fields"]}["runtime_status"]
+    assert runtime_status_field["kind"] == "enum"
+    assert runtime_status_field["readable"] is True
+    assert runtime_status_field["filterable"] is True
+    assert runtime_status_field["sortable"] is True
+    assert runtime_status_field["groupable"] is True
+    assert runtime_status_field["updatable"] is False
 
 
 def test_impl_choices_are_admin_only(integrate_console_tables: None) -> None:
@@ -302,7 +328,7 @@ def test_update_integration_rejects_impl_class_patch(integrate_console_tables: N
         """
         mutation UpdateIntegration($id: String!) {
           update_integrations_by_pk(pk_columns: {id: $id}, _set: {impl_class: "stub"}) {
-            status
+            lifecycle
           }
         }
         """,
@@ -370,7 +396,7 @@ def test_vcs_bridge_child_creation_creates_parent_identity(integrate_console_tab
             credential=credential,
             owner=user,
             backend_class="stub",
-            status="draft",
+            lifecycle="draft",
             webhook_secret="created-secret",
         )
         integration = Integration.objects.get(pk=bridge.pk)
@@ -378,7 +404,7 @@ def test_vcs_bridge_child_creation_creates_parent_identity(integrate_console_tab
         assert integration.impl_class == "none"
         assert integration.kind == "VCS bridge"
         assert bridge.backend_class == "stub"
-        assert str(integration.status) == "draft"
+        assert str(integration.lifecycle) == "draft"
         assert bridge.pk == integration.pk
         assert bridge.owner_id == integration.owner_id
         assert bridge.vendor_id == integration.vendor_id
@@ -416,7 +442,7 @@ def test_integration_update_delete_are_admin_only(
         """
         mutation CreateIntegration($owner: ID!) {
           insert_integrations_one(object: {owner: $owner, vendor: $owner, credential: $owner}) {
-            status
+            lifecycle
           }
         }
         """,
@@ -427,8 +453,8 @@ def test_integration_update_delete_are_admin_only(
     integration_id = _public_id(conn)
     update_integration = """
         mutation UpdateIntegration($id: String!) {
-          update_integrations_by_pk(pk_columns: {id: $id}, _set: {status: "disabled"}) {
-            status
+          update_integrations_by_pk(pk_columns: {id: $id}, _set: {account: null}) {
+            account { external_id }
             vendor { slug }
           }
         }
@@ -439,7 +465,7 @@ def test_integration_update_delete_are_admin_only(
     updated = _data(
         _execute(console_schema, update_integration, {"id": integration_id}, user=admin)
     )["update_integrations_by_pk"]
-    assert updated == {"status": "DISABLED", "vendor": {"slug": "conn-crud"}}
+    assert updated == {"account": None, "vendor": {"slug": "conn-crud"}}
 
     delete_integration = """
         mutation DeleteIntegration($id: String!) {
@@ -457,6 +483,48 @@ def test_integration_update_delete_are_admin_only(
     assert deleted["id"] == integration_id
     with system_context(reason="test.integrate.integration_crud.after_delete"):
         assert not Integration.objects.filter(pk=conn.pk).exists()
+
+
+def test_integration_lifecycle_action_mutations_pause_and_activate(integrate_console_tables: None) -> None:
+    """Admin action mutations move Integration lifecycle through guarded transitions."""
+
+    plain = User.objects.create_user(username="conn-action-plain", email="plain@example.com")
+    admin = _platform_admin("conn-action-admin")
+    conn = make_integration("conn-action")
+    console_schema = _schema()
+    integration_id = _public_id(conn)
+
+    pause = """
+        mutation Pause($id: ID!) {
+          pause_integration(id: $id) { ok message }
+        }
+    """
+    assert _execute(console_schema, pause, {"id": integration_id}, user=plain).errors is not None
+    paused = _data(_execute(console_schema, pause, {"id": integration_id}, user=admin))["pause_integration"]
+    assert paused == {"ok": True, "message": "Paused integration."}
+
+    with system_context(reason="test.integrate.integration_actions.seed_error"):
+        conn.refresh_from_db()
+        conn.report_status("error", "token expired")
+
+    activated = _data(
+        _execute(
+            console_schema,
+            """
+            mutation Activate($id: ID!) {
+              activate_integration(id: $id) { ok message }
+            }
+            """,
+            {"id": integration_id},
+            user=admin,
+        )
+    )["activate_integration"]
+    assert activated == {"ok": True, "message": "Activated integration."}
+    with system_context(reason="test.integrate.integration_actions.verify"):
+        conn.refresh_from_db()
+        assert str(conn.lifecycle) == "active"
+        assert str(conn.runtime_status) == "ok"
+        assert conn.last_error == ""
 
 
 def test_webhook_crud_secret_write_only(
@@ -901,61 +969,91 @@ def test_test_webhook_delivery_records_failure_status(
     assert subscription.consecutive_failures == 1
 
 
-def test_update_integration_status_accepts_the_lowercase_value(
+def test_update_vcs_bridge_lifecycle_accepts_the_lowercase_value(
     integrate_console_tables: None,
 ) -> None:
-    """A `set`-action status patch sends the lowercase model value and reads back the enum.
-
-    The console form's "Disable" action sends ``status: "disabled"`` through the
-    generated ``update_integrations_by_pk``; this locks that the String patch persists the
-    value and the output enum serializes it as the uppercase name.
-    """
+    """A VCS bridge lifecycle patch accepts the lowercase model value and reads back the enum."""
 
     console_schema = _schema()
-    admin = _platform_admin("status-admin")
-    conn = make_integration("status-set")
+    admin = _platform_admin("lifecycle-admin")
+    bridge = make_integration("lifecycle-set", model=VcsBridge, backend_class="stub")
     result = _data(
         _execute(
             console_schema,
             """
-            mutation($id: String!) {
-              update_integrations_by_pk(pk_columns: {id: $id}, _set: {status: "disabled"}) { status }
+            mutation($id: ID!) {
+              update_vcs_bridge(data: {id: $id, lifecycle: "disabled"}) { lifecycle }
             }
             """,
-            {"id": _public_id(conn)},
+            {"id": _public_id(bridge)},
             user=admin,
         )
-    )["update_integrations_by_pk"]
-    assert result["status"] == "DISABLED"
-    with system_context(reason="test.integrate.status.verify"):
-        conn.refresh_from_db()
-        assert str(conn.status) == "disabled"
+    )["update_vcs_bridge"]
+    assert result["lifecycle"] == "DISABLED"
+    with system_context(reason="test.integrate.lifecycle.verify"):
+        bridge.refresh_from_db()
+        assert str(bridge.lifecycle) == "disabled"
 
 
-def test_update_integration_status_accepts_the_graphql_enum_name(
-    integrate_console_tables: None,
-) -> None:
-    """A status patch can echo the read-side GraphQL enum name back to the server."""
+def test_update_vcs_bridge_lifecycle_only_emits_one_state_save(integrate_console_tables: None) -> None:
+    """A guarded lifecycle patch saves in the transition hook, not again in the caller."""
 
     console_schema = _schema()
-    admin = _platform_admin("status-enum-admin")
-    conn = make_integration("status-enum")
+    admin = _platform_admin("lifecycle-save-admin")
+    bridge = make_integration("lifecycle-save", model=VcsBridge, backend_class="stub")
+    events: list[tuple[str, ...] | None] = []
+
+    def capture_update_fields(sender: Any, instance: Any, update_fields: Any, **kwargs: Any) -> None:
+        del sender, kwargs
+        if instance.pk == bridge.pk:
+            events.append(None if update_fields is None else tuple(sorted(update_fields)))
+
+    post_save.connect(capture_update_fields, sender=VcsBridge, weak=False)
+    try:
+        result = _data(
+            _execute(
+                console_schema,
+                """
+                mutation($id: ID!) {
+                  update_vcs_bridge(data: {id: $id, lifecycle: "paused"}) { lifecycle }
+                }
+                """,
+                {"id": _public_id(bridge)},
+                user=admin,
+            )
+        )["update_vcs_bridge"]
+    finally:
+        post_save.disconnect(capture_update_fields, sender=VcsBridge)
+
+    assert result["lifecycle"] == "PAUSED"
+    assert len(events) == 1
+    assert events[0] is not None and "lifecycle" in events[0]
+
+
+def test_update_vcs_bridge_lifecycle_accepts_the_graphql_enum_name(
+    integrate_console_tables: None,
+) -> None:
+    """A lifecycle patch can echo the read-side GraphQL enum name back to the server."""
+
+    console_schema = _schema()
+    admin = _platform_admin("lifecycle-enum-admin")
+    bridge = make_integration("lifecycle-enum", model=VcsBridge, backend_class="stub")
     result = _data(
         _execute(
             console_schema,
             """
-            mutation($id: String!) {
-              update_integrations_by_pk(pk_columns: {id: $id}, _set: {status: "DRAFT"}) { status }
+            mutation($id: ID!) {
+              update_vcs_bridge(data: {id: $id, lifecycle: "PAUSED"}) { lifecycle }
             }
             """,
-            {"id": _public_id(conn)},
+            {"id": _public_id(bridge)},
             user=admin,
         )
-    )["update_integrations_by_pk"]
-    assert result["status"] == "DRAFT"
-    with system_context(reason="test.integrate.status_enum.verify"):
-        conn.refresh_from_db()
-        assert str(conn.status) == "draft"
+    )["update_vcs_bridge"]
+    assert result["lifecycle"] == "PAUSED"
+    with system_context(reason="test.integrate.lifecycle_enum.verify"):
+        bridge.refresh_from_db()
+        assert str(bridge.lifecycle) == "paused"
 
 
 def test_create_vcs_bridge_creates_child_row(
@@ -975,7 +1073,7 @@ def test_create_vcs_bridge_creates_child_row(
                 data: {vendor: $vendor, owner: $owner, backend_class: "stub", config: {stub_repos: []}}
               ) {
                 backend_class
-                status
+                lifecycle
                 config
               }
             }
@@ -988,7 +1086,7 @@ def test_create_vcs_bridge_creates_child_row(
         )
     )["create_vcs_bridge"]
 
-    assert result == {"backend_class": "STUB", "status": "DRAFT", "config": {"stub_repos": []}}
+    assert result == {"backend_class": "STUB", "lifecycle": "DRAFT", "config": {"stub_repos": []}}
 
 
 def test_update_vcs_bridge_accepts_backend_class(

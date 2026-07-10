@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from django.db import models
 
-from angee.integrate.models import Bridge, IntegrationStatus
+from angee.integrate.models import Bridge, IntegrationLifecycle, IntegrationRuntimeStatus, integration_status_axes
 from angee.integrate.registry import bridge_models, check_source_kind_contracts, source_kind_models
 from tests.conftest import Integration, Source, Template
 
@@ -77,26 +77,46 @@ def test_report_status_records_integration_telemetry() -> None:
 
     integration = Integration()
 
-    integration.report_status(status=IntegrationStatus.ERROR, error="boom")
+    integration.report_status(status=IntegrationRuntimeStatus.ERROR, error="boom")
 
-    assert integration.status == IntegrationStatus.ERROR
+    assert integration.lifecycle == IntegrationLifecycle.DRAFT
+    assert integration.runtime_status == IntegrationRuntimeStatus.ERROR
     assert integration.last_used_status == "error"
     assert integration.last_error == "boom"
     assert integration.last_error_at is not None
     assert integration.last_used_at is not None
 
-    # A bare-string status with no error clears the error timestamp.
+    # A bare-string legacy success status maps to the healthy runtime axis.
     integration.report_status(status="active")
 
+    assert integration.runtime_status == IntegrationRuntimeStatus.OK
     assert integration.last_used_status == "active"
     assert integration.last_error == ""
     assert integration.last_error_at is None
 
 
-def test_integration_status_from_value_accepts_graphql_enum_name() -> None:
-    """The integration status owner accepts GraphQL enum member names."""
+def test_integration_lifecycle_from_value_accepts_graphql_enum_name() -> None:
+    """The integration lifecycle owner accepts GraphQL enum member names."""
 
-    assert IntegrationStatus.from_value("DISABLED") is IntegrationStatus.DISABLED
+    assert IntegrationLifecycle.from_value("DISABLED") is IntegrationLifecycle.DISABLED
+
+
+def test_legacy_integration_status_mapping_is_deterministic() -> None:
+    """Every legacy fused status maps to a lifecycle/runtime-status pair."""
+
+    assert {
+        "draft": integration_status_axes("draft"),
+        "active": integration_status_axes("active"),
+        "paused": integration_status_axes("paused"),
+        "disabled": integration_status_axes("disabled"),
+        "error": integration_status_axes("error"),
+    } == {
+        "draft": (IntegrationLifecycle.DRAFT, IntegrationRuntimeStatus.OK),
+        "active": (IntegrationLifecycle.ACTIVE, IntegrationRuntimeStatus.OK),
+        "paused": (IntegrationLifecycle.PAUSED, IntegrationRuntimeStatus.OK),
+        "disabled": (IntegrationLifecycle.DISABLED, IntegrationRuntimeStatus.OK),
+        "error": (IntegrationLifecycle.ACTIVE, IntegrationRuntimeStatus.ERROR),
+    }
 
 
 def test_report_status_updates_unsaved_integration_in_memory() -> None:
@@ -104,7 +124,7 @@ def test_report_status_updates_unsaved_integration_in_memory() -> None:
 
     integration = Integration()
 
-    integration.report_status(status=IntegrationStatus.ERROR, error="boom")
+    integration.report_status(status=IntegrationRuntimeStatus.ERROR, error="boom")
 
-    assert integration.status == IntegrationStatus.ERROR
+    assert integration.runtime_status == IntegrationRuntimeStatus.ERROR
     assert integration.last_error == "boom"

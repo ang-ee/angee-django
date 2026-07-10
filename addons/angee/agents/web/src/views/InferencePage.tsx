@@ -56,7 +56,8 @@ export function InferenceProvidersPage(): React.ReactElement {
         <Facet field="vendor" label="Vendor" labelField="display_name" />
         <Column field="name" />
         <Column field="backend_class" />
-        <Column field="status" widget="statusBadge" />
+        <Column field="lifecycle" widget="statusBadge" />
+        <Column field="runtime_status" widget="colorDot" />
         <Column field="credential.display_name" header={t("inference.credential")} />
       </List>
       <Form resource={PROVIDER_MODEL} submit={submitProvider}>
@@ -72,7 +73,8 @@ export function InferenceProvidersPage(): React.ReactElement {
           <Field name="vendor" />
           <Field name="credential" />
           <Field name="account" />
-          <Field name="status" widget="statusbar" />
+          <Field name="lifecycle" widget="statusbar" />
+          <Field name="runtime_status" readOnly />
         </Group>
         <Group label={t("inference.provider")} columns={2}>
           <Field name="base_url" />

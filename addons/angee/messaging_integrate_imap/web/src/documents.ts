@@ -25,7 +25,8 @@ export const ConnectImapChannel = graphql(`
       own_addresses: $ownAddresses
     ) {
       id
-      status
+      lifecycle
+      runtime_status
     }
   }
 `);

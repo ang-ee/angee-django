@@ -15,7 +15,7 @@ from angee.integrate import queue as integrate_queue
 from angee.integrate import scheduler as integrate_scheduler
 from angee.integrate import tasks as integrate_tasks
 from angee.integrate.locks import bridge_advisory_lock
-from angee.integrate.models import Bridge, IntegrationStatus
+from angee.integrate.models import Bridge, IntegrationLifecycle, IntegrationRuntimeStatus
 from angee.integrate.registry import bridge_models
 from angee.integrate.scheduler import enqueue_due_bridges, run_due_bridges
 from angee.integrate.sync import current_bridge_progress
@@ -185,13 +185,14 @@ def test_run_due_bridges_persists_success_telemetry(scheduler_tables: None) -> N
     assert bridge.last_sync_summary["items"] == 7
     assert bridge.cursor == {"seen": 7}
     assert bridge.next_sync_at == now + timedelta(seconds=42)
-    assert integration.status == IntegrationStatus.ACTIVE
-    assert integration.last_used_status == "active"
+    assert integration.lifecycle == IntegrationLifecycle.ACTIVE
+    assert integration.runtime_status == IntegrationRuntimeStatus.OK
+    assert integration.last_used_status == "ok"
 
 
 @pytest.mark.django_db(transaction=True)
-def test_run_due_bridges_records_errors_on_integration_status(scheduler_tables: None) -> None:
-    """Failing syncs record bridge errors, reschedule, and push integration status."""
+def test_run_due_bridges_records_errors_on_integration_runtime_status(scheduler_tables: None) -> None:
+    """Failing syncs record bridge errors, reschedule, and push integration runtime status."""
 
     del scheduler_tables
     now = timezone.now()
@@ -217,7 +218,8 @@ def test_run_due_bridges_records_errors_on_integration_status(scheduler_tables: 
     assert bridge.sync_progress["stage"] == Bridge.SyncStage.FAILED
     assert bridge.sync_progress["error"] == "RuntimeError: vendor unavailable"
     assert bridge.next_sync_at == now + timedelta(seconds=17)
-    assert integration.status == IntegrationStatus.ERROR
+    assert integration.lifecycle == IntegrationLifecycle.ACTIVE
+    assert integration.runtime_status == IntegrationRuntimeStatus.ERROR
     assert integration.last_used_status == "error"
     assert integration.last_error == "RuntimeError: vendor unavailable"
     assert integration.last_error_at is not None
@@ -225,8 +227,8 @@ def test_run_due_bridges_records_errors_on_integration_status(scheduler_tables: 
 
 
 @pytest.mark.django_db(transaction=True)
-def test_run_due_bridges_success_recovers_bridge_and_integration_status(scheduler_tables: None) -> None:
-    """A healthy sync after an error clears the integration status."""
+def test_run_due_bridges_success_recovers_bridge_and_integration_runtime_status(scheduler_tables: None) -> None:
+    """A healthy sync after an error clears the integration runtime status."""
 
     del scheduler_tables
     first_now = timezone.now()
@@ -245,7 +247,7 @@ def test_run_due_bridges_success_recovers_bridge_and_integration_status(schedule
     assert error_result == {"ran": 1, "errors": 1}
     bridge.refresh_from_db()
     integration.refresh_from_db()
-    assert integration.status == IntegrationStatus.ERROR
+    assert integration.runtime_status == IntegrationRuntimeStatus.ERROR
 
     second_now = first_now + timedelta(minutes=1)
     with system_context(reason="test integrate scheduler setup"):
@@ -261,8 +263,9 @@ def test_run_due_bridges_success_recovers_bridge_and_integration_status(schedule
     assert bridge.last_sync_status == "ok"
     assert bridge.last_sync_items == 5
     assert bridge.next_sync_at == second_now + timedelta(seconds=23)
-    assert integration.status == IntegrationStatus.ACTIVE
-    assert integration.last_used_status == "active"
+    assert integration.lifecycle == IntegrationLifecycle.ACTIVE
+    assert integration.runtime_status == IntegrationRuntimeStatus.OK
+    assert integration.last_used_status == "ok"
     assert integration.last_error == ""
     assert integration.last_error_at is None
 

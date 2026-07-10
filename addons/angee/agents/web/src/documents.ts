@@ -95,7 +95,8 @@ export const UpdateInferenceProvider = graphql(`
         id
         display_name
       }
-      status
+      lifecycle
+      runtime_status
       base_url
       config
       created_at

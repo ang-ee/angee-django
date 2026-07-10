@@ -188,7 +188,8 @@ class DirectoryType(IntegrationLabelMixin, BridgeSyncStatusMixin, AngeeNode):
     """GraphQL projection of a connected contacts directory (e.g. a CardDAV source)."""
 
     backend_class: auto
-    status: auto
+    lifecycle: auto
+    runtime_status: auto
     config: strawberry.scalars.JSON
     poll_interval: auto
     last_sync_status: auto
@@ -243,7 +244,7 @@ class PartiesDirectoryMutation:
                 backend_class="carddav",
                 display_name=name,
                 config={"server_url": server_url},
-                status="active",
+                lifecycle="active",
                 created_by_id=user.pk,
             )
             # Validate the URL + credentials before the directory persists, so a bad
@@ -428,15 +429,16 @@ _DIRECTORY_RESOURCE = hasura_model_resource(
         "id",
         "display_name",
         "backend_class",
-        "status",
+        "lifecycle",
+        "runtime_status",
         "last_sync_status",
         "sync_stage",
         "last_sync_completed_at",
         "updated_at",
     ],
-    sortable=["display_name", "backend_class", "status", "last_sync_completed_at", "updated_at"],
+    sortable=["display_name", "backend_class", "lifecycle", "runtime_status", "last_sync_completed_at", "updated_at"],
     aggregatable=["id", "last_sync_items"],
-    groupable=["backend_class", "status", "last_sync_status", "sync_stage"],
+    groupable=["backend_class", "lifecycle", "runtime_status", "last_sync_status", "sync_stage"],
     insert=False,
     update=False,
     delete=False,

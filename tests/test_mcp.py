@@ -50,6 +50,7 @@ def test_mcp_bearer_resolves_to_single_agent_principal(agents_console_tables: No
         )
         server = MCPServer.objects.create(name="notes", url="http://x/mcp/notes/", credential=credential)
         agent = Agent.objects.create(name="MCP Agent", owner=owner)
+        agent.mark_provisioning()
         agent.mark_provisioned(workspace="ws-mcp-agent", service="svc-mcp-agent")
         agent.mcp_servers.add(server)
 
@@ -70,7 +71,9 @@ def test_mcp_bearer_shared_by_multiple_agents_fails_closed(agents_console_tables
         server = MCPServer.objects.create(name="shared", url="http://x/mcp/shared/", credential=credential)
         first = Agent.objects.create(name="First MCP Agent", owner=owner)
         second = Agent.objects.create(name="Second MCP Agent", owner=owner)
+        first.mark_provisioning()
         first.mark_provisioned(workspace="ws-first", service="svc-first")
+        second.mark_provisioning()
         second.mark_provisioned(workspace="ws-second", service="svc-second")
         first.mcp_servers.add(server)
         second.mcp_servers.add(server)
@@ -129,6 +132,7 @@ def test_mcp_bearer_ignores_template_and_unprovisioned_agents(
         )
         agent = Agent.objects.create(name=f"Filtered {mark_provisioned}", owner=owner, **agent_kwargs)
         if mark_provisioned:
+            agent.mark_provisioning()
             agent.mark_provisioned(
                 workspace=f"ws-filtered-{mark_provisioned}",
                 service=f"svc-filtered-{mark_provisioned}",
@@ -146,6 +150,7 @@ def test_agent_mcp_m2m_reconciles_rebac_read_tuples(agents_console_tables: None)
         server = MCPServer.objects.create(name="rebac-server", url="http://x/mcp/rebac/")
         tool = MCPTool.objects.create(server=server, name="rebac-tool")
         agent = Agent.objects.create(name="REBAC Agent", owner=owner)
+        agent.mark_provisioning()
         agent.mark_provisioned(workspace="ws-rebac", service="svc-rebac")
         subject = agent.principal_subject()
         server_ref = to_object_ref(server)

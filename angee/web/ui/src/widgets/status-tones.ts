@@ -21,7 +21,7 @@ export const STATUS_TONES: ToneValueBuckets = {
   success: [
     "active", "published", "approved", "live", "open", "done",
     "running", "ready", "up", "online", "healthy", "completed",
-    "succeeded", "won",
+    "succeeded", "won", "ok",
     // Document lifecycle (accounting/sales): a posted/paid/confirmed/invoiced
     // document has reached its healthy terminal state.
     "posted", "paid", "confirmed", "invoiced",

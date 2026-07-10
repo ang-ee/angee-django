@@ -48,7 +48,8 @@ def test_connect_imap_channel_creates_basic_auth_channel(messaging_graphql_table
         "id": channel["id"],
         "display_name": "Ada Mail",
         "backend_class": "IMAP",
-        "status": "ACTIVE",
+        "lifecycle": "ACTIVE",
+        "runtime_status": "OK",
         "config": {
             "host": "imap.example.com",
             "security": "starttls",
@@ -63,7 +64,8 @@ def test_connect_imap_channel_creates_basic_auth_channel(messaging_graphql_table
         assert saved.created_by_id == admin.pk
         assert saved.vendor.slug == "imap"
         assert saved.backend_class == "imap"
-        assert saved.status == "active"
+        assert saved.lifecycle == "active"
+        assert saved.runtime_status == "ok"
         assert saved.credential.kind == CredentialKind.BASIC_AUTH
         assert saved.credential.reveal() == {
             "username": "ada@example.com",
@@ -194,7 +196,8 @@ mutation ConnectImap(
     id
     display_name
     backend_class
-    status
+    lifecycle
+    runtime_status
     config
   }
 }

@@ -23,7 +23,8 @@ export function DirectoriesPage(): React.ReactElement {
     <ResourceList resource={MODEL} placement="inline" routed hideCreate toolbarActions={<ConnectCardDav />}>
       <List resource={MODEL}>
         <Column field="display_name" header={t("directory.name")} />
-        <Column field="status" widget="statusBadge" />
+        <Column field="lifecycle" widget="statusBadge" />
+        <Column field="runtime_status" widget="colorDot" />
         <Column field="backend_class" />
         <Column field="sync_stage" />
         <Column field="last_sync_status" />
@@ -32,7 +33,8 @@ export function DirectoriesPage(): React.ReactElement {
       </List>
       <Form resource={MODEL}>
         <Field name="display_name" title readOnly />
-        <Field name="status" readOnly />
+        <Field name="lifecycle" readOnly />
+        <Field name="runtime_status" readOnly />
         <Field name="backend_class" readOnly />
         <Field name="config" readOnly />
         <Group label={t("directory.group.lastSync")} columns={2}>

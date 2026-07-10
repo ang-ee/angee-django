@@ -6,5 +6,5 @@
   vendor: integrate.anthropic
   backend_class: anthropic
   credential: agents_integrate_anthropic.cred_anthropic_demo
-  status: active
+  lifecycle: active
   name: Anthropic

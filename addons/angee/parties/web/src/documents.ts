@@ -15,7 +15,8 @@ export const ConnectCardDavDirectory = graphql(`
   ) {
     connect_card_dav_directory(name: $name, server_url: $serverUrl, username: $username, password: $password) {
       id
-      status
+      lifecycle
+      runtime_status
     }
   }
 `);

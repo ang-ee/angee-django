@@ -432,7 +432,8 @@ def test_create_inference_provider_creates_child_row(agents_console_tables: None
             name
             base_url
             backend_class
-            status
+            lifecycle
+            runtime_status
           }
         }
     """
@@ -452,7 +453,8 @@ def test_create_inference_provider_creates_child_row(agents_console_tables: None
         "name": "Provider",
         "base_url": "https://api.example.test",
         "backend_class": "MANUAL",
-        "status": "DRAFT",
+        "lifecycle": "DRAFT",
+        "runtime_status": "OK",
     }
     with system_context(reason="test.agents.provider_mti.verify"):
         provider = InferenceProvider.objects.get(name="Provider")
@@ -538,7 +540,7 @@ def test_connect_inference_provider_uses_provider_backend_oauth_client(agents_co
           connect_inference_provider(id: $id) {
             attached
             error
-            integration { status credential { display_name } }
+            integration { lifecycle credential { display_name } }
           }
         }
     """
@@ -551,7 +553,7 @@ def test_connect_inference_provider_uses_provider_backend_oauth_client(agents_co
         "attached": True,
         "error": None,
         "integration": {
-            "status": "ACTIVE",
+            "lifecycle": "ACTIVE",
             "credential": {"display_name": "Anthropic Personal"},
         },
     }
@@ -724,6 +726,159 @@ def test_provision_agent_renders_via_daemon_and_is_admin_gated(agents_console_ta
             "stopped",
         )
     assert ("destroy", "ws-bot") in calls
+
+
+def test_mark_provisioning_can_reenter_provisioning(agents_console_tables: None) -> None:
+    """Crash recovery can re-enter the provisioning target without a new graph edge."""
+
+    admin = _platform_admin("agt-reenter-admin")
+    agent = _provisionable_agent(
+        admin,
+        "Reenter",
+        slug="agt-reenter-tpl",
+        lifecycle="provisioning",
+        runtime_status="error",
+        last_error="worker crashed",
+    )
+
+    with system_context(reason="test.agents.reenter"):
+        agent.mark_provisioning()
+        agent.refresh_from_db()
+
+    assert str(agent.lifecycle) == "provisioning"
+    assert str(agent.runtime_status) == "stopped"
+    assert agent.last_error == ""
+
+
+def test_provision_agent_reenters_existing_provisioning_row(
+    agents_console_tables: None, monkeypatch: Any
+) -> None:
+    """A repeated provision request for a stuck PROVISIONING row resumes the render flow."""
+
+    admin = _platform_admin("agt-double-provision-admin")
+    agent = _provisionable_agent(
+        admin,
+        "Double Provision",
+        slug="agt-double-provision-tpl",
+        lifecycle="provisioning",
+        runtime_status="stopped",
+    )
+    agent_id = _public_id(agent.sqid)
+    calls: list[str] = []
+
+    class _FakeDaemon:
+        @classmethod
+        def from_settings(cls) -> _FakeDaemon:
+            return cls()
+
+        def resolve_template_ref(self, *, name: str, kind: str) -> str:
+            return f"ref:{name}"
+
+        def set_secret(self, name: str, value: str) -> None:
+            calls.append(f"secret:{name}:{value}")
+
+        def create_workspace(self, *, template: str, inputs: dict[str, str]) -> str:
+            calls.append(template)
+            return "ws-double"
+
+        def create_service(self, *, template: str, workspace: str, inputs: dict[str, str]) -> str:
+            calls.append(f"{template}:{workspace}")
+            return "svc-double"
+
+    monkeypatch.setattr(agents_provisioning, "OperatorDaemon", _FakeDaemon)
+
+    result = _data(
+        _execute(
+            _schema(),
+            "mutation($id: ID!){ provision_agent(id: $id){ ok message } }",
+            {"id": agent_id},
+            user=admin,
+        )
+    )["provision_agent"]
+
+    assert result == {"ok": True, "message": "Provisioned “svc-double”."}
+    assert calls == ["ref:agent-default", "ref:claude-code:ws-double"]
+    with system_context(reason="test.agents.double_provision.verify"):
+        agent.refresh_from_db()
+        assert (agent.workspace, agent.service, str(agent.lifecycle)) == ("ws-double", "svc-double", "ready")
+
+
+def test_deprovision_agent_from_empty_provisioning_row_is_idempotent(
+    agents_console_tables: None, monkeypatch: Any
+) -> None:
+    """A teardown retry for a stuck PROVISIONING row with no daemon names clears locally."""
+
+    admin = _platform_admin("agt-empty-deprov-admin")
+    agent = _provisionable_agent(
+        admin,
+        "Empty Deprovision",
+        slug="agt-empty-deprov-tpl",
+        lifecycle="provisioning",
+        runtime_status="stopped",
+    )
+    agent_id = _public_id(agent.sqid)
+    calls: list[str] = []
+
+    class _UnusedDaemon:
+        @classmethod
+        def from_settings(cls) -> _UnusedDaemon:
+            calls.append("from_settings")
+            return cls()
+
+    monkeypatch.setattr(agents_provisioning, "OperatorDaemon", _UnusedDaemon)
+
+    result = _data(
+        _execute(
+            _schema(),
+            "mutation($id: ID!){ deprovision_agent(id: $id){ ok message } }",
+            {"id": agent_id},
+            user=admin,
+        )
+    )["deprovision_agent"]
+
+    assert result == {"ok": True, "message": "Deprovisioned."}
+    assert calls == []
+    with system_context(reason="test.agents.empty_deprov.verify"):
+        agent.refresh_from_db()
+        assert (agent.workspace, agent.service, str(agent.lifecycle), str(agent.runtime_status)) == (
+            "",
+            "",
+            "deprovisioned",
+            "stopped",
+        )
+
+
+def test_provision_agent_reports_racing_deprovision_without_clobbering_state(
+    agents_console_tables: None, monkeypatch: Any
+) -> None:
+    """If teardown advances the row before final record, provision reports failure and leaves it."""
+
+    admin = _platform_admin("agt-race-admin")
+    agent = _provisionable_agent(admin, "Race", slug="agt-race-tpl")
+    agent_id = _public_id(agent.sqid)
+
+    def render_after_racing_deprovision(*args: Any, **kwargs: Any) -> dict[str, str]:
+        del args, kwargs
+        with system_context(reason="test.agents.race.concurrent_deprovision"):
+            Agent.objects.filter(pk=agent.pk).update(lifecycle="deprovisioning")
+        return {"workspace": "ws-race", "service": "svc-race"}
+
+    monkeypatch.setattr(agents_provisioning, "_render_agent", render_after_racing_deprovision)
+
+    result = _data(
+        _execute(
+            _schema(),
+            "mutation($id: ID!){ provision_agent(id: $id){ ok message } }",
+            {"id": agent_id},
+            user=admin,
+        )
+    )["provision_agent"]
+
+    assert result["ok"] is False
+    assert "Provisioning failed" in result["message"]
+    with system_context(reason="test.agents.race.verify"):
+        agent.refresh_from_db()
+        assert (agent.workspace, agent.service, str(agent.lifecycle)) == ("", "", "deprovisioning")
 
 
 def test_provision_agent_failure_tears_down_workspace_and_records_error(

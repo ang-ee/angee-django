@@ -9,6 +9,7 @@ import { isRecord } from "./dialect/wire";
 type FieldTree = Map<string, FieldTree>;
 type UnsupportedFilter = { field: string; operator: string };
 type HasuraOrderBy = Record<string, unknown>;
+type AngeeCrudFilterOperator = LogicalFilter["operator"] | "jsonContains";
 
 export const ANGEE_FILTER_LOOKUP_OPERATORS = [
   "exact",
@@ -325,7 +326,7 @@ function hasuraComparisonForCrudFilter(
 }
 
 function hasuraOperatorForCrudOperator(
-  operator: LogicalFilter["operator"],
+  operator: AngeeCrudFilterOperator,
 ): { operator: string; value: HasuraOperatorValue } | null {
   switch (operator) {
     case "eq":

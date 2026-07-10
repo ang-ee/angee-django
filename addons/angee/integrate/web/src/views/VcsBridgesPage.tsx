@@ -34,9 +34,14 @@ export function VcsBridgesPage(): React.ReactElement {
         <Column field="display_name" />
         <Column field="backend_class" header={t("vcs.backendClass")} />
         <Column
-          field="status"
-          header={t("col.status")}
+          field="lifecycle"
+          header={t("col.lifecycle")}
           widget="statusBadge"
+        />
+        <Column
+          field="runtime_status"
+          header={t("col.runtimeStatus")}
+          widget="colorDot"
         />
         <Column field="sync_stage" />
         <Column field="last_sync_completed_at" />
@@ -51,7 +56,8 @@ export function VcsBridgesPage(): React.ReactElement {
           prefill={backendClassPrefill}
         />
         <Field name="credential" />
-        <Field name="status" widget="statusbar" />
+        <Field name="lifecycle" widget="statusbar" readOnly />
+        <Field name="runtime_status" readOnly />
         <Field name="config" widget="json" />
         <Group label={t("bridge.group.sync")} columns={2}>
           <Field name="is_syncing" readOnly />

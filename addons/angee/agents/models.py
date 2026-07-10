@@ -30,6 +30,7 @@ from angee.base.fields import StateField
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel
+from angee.base.transitions import StateTransitions, save_state, transition
 
 
 class InferenceModelUse(models.TextChoices):
@@ -545,6 +546,35 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
     last_error = models.TextField(blank=True)
     """The reason ``runtime_status`` is ``ERROR`` — the last failed operation."""
 
+    lifecycle_transitions = StateTransitions(
+        lifecycle,
+        {
+            AgentLifecycle.DRAFT: [
+                AgentLifecycle.PROVISIONING,
+                AgentLifecycle.DEPROVISIONING,
+                AgentLifecycle.DEPROVISIONED,
+            ],
+            AgentLifecycle.PROVISIONING: [
+                AgentLifecycle.PROVISIONING,
+                AgentLifecycle.READY,
+                AgentLifecycle.DEPROVISIONING,
+            ],
+            AgentLifecycle.READY: [
+                AgentLifecycle.PROVISIONING,
+                AgentLifecycle.DEPROVISIONING,
+            ],
+            AgentLifecycle.DEPROVISIONING: [
+                AgentLifecycle.DEPROVISIONING,
+                AgentLifecycle.DEPROVISIONED,
+            ],
+            AgentLifecycle.DEPROVISIONED: [
+                AgentLifecycle.PROVISIONING,
+                AgentLifecycle.DEPROVISIONING,
+                AgentLifecycle.DEPROVISIONED,
+            ],
+        },
+    )
+
     objects = AngeeManager()
 
     class Meta:
@@ -613,30 +643,56 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
             return None
         return "Deprovision this agent before deleting it."
 
+    @transition(
+        lifecycle,
+        source=[
+            AgentLifecycle.DRAFT,
+            AgentLifecycle.PROVISIONING,
+            AgentLifecycle.READY,
+            AgentLifecycle.DEPROVISIONED,
+        ],
+        target=AgentLifecycle.PROVISIONING,
+        on_success=save_state,
+    )
     def mark_provisioning(self) -> None:
         """Enter the provision flow: lifecycle provisioning, run state reset to stopped."""
 
-        self.lifecycle = cast(AgentLifecycle, AgentLifecycle.PROVISIONING)
         self.runtime_status = cast(RuntimeStatus, RuntimeStatus.STOPPED)
         self.last_error = ""
-        self.save(update_fields=["lifecycle", "runtime_status", "last_error", "updated_at"])
+        self._transition_fields = {"runtime_status", "last_error"}
 
+    @transition(
+        lifecycle,
+        source=AgentLifecycle.PROVISIONING,
+        target=AgentLifecycle.PROVISIONING,
+        on_success=save_state,
+    )
     def mark_workspace_provisioned(self, *, workspace: str) -> None:
         """Record the workspace as soon as the operator creates it."""
 
         self.workspace = workspace
-        self.lifecycle = cast(AgentLifecycle, AgentLifecycle.PROVISIONING)
         self.last_error = ""
-        self.save(update_fields=["workspace", "lifecycle", "last_error", "updated_at"])
+        self._transition_fields = {"workspace", "last_error"}
 
+    @transition(
+        lifecycle,
+        source=AgentLifecycle.PROVISIONING,
+        target=AgentLifecycle.PROVISIONING,
+        on_success=save_state,
+    )
     def mark_service_provisioned(self, *, service: str) -> None:
         """Record the service as soon as the operator creates it."""
 
         self.service = service
-        self.lifecycle = cast(AgentLifecycle, AgentLifecycle.PROVISIONING)
         self.last_error = ""
-        self.save(update_fields=["service", "lifecycle", "last_error", "updated_at"])
+        self._transition_fields = {"service", "last_error"}
 
+    @transition(
+        lifecycle,
+        source=AgentLifecycle.PROVISIONING,
+        target=AgentLifecycle.READY,
+        on_success=save_state,
+    )
     def mark_provisioned(self, *, workspace: str, service: str = "") -> None:
         """Record the operator instance the provision flow rendered for this agent.
 
@@ -648,27 +704,42 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
 
         self.workspace = workspace
         self.service = service
-        self.lifecycle = cast(AgentLifecycle, AgentLifecycle.READY)
         self.runtime_status = cast(RuntimeStatus, RuntimeStatus.RUNNING)
         self.last_error = ""
-        self.save(update_fields=["workspace", "service", "lifecycle", "runtime_status", "last_error", "updated_at"])
+        self._transition_fields = {"workspace", "service", "runtime_status", "last_error"}
 
+    @transition(
+        lifecycle,
+        source=[AgentLifecycle.DRAFT, AgentLifecycle.DEPROVISIONING, AgentLifecycle.DEPROVISIONED],
+        target=AgentLifecycle.DEPROVISIONED,
+        on_success=save_state,
+    )
     def mark_deprovisioned(self) -> None:
         """Clear the operator instance after teardown: lifecycle deprovisioned, run state stopped."""
 
         self.workspace = ""
         self.service = ""
-        self.lifecycle = cast(AgentLifecycle, AgentLifecycle.DEPROVISIONED)
         self.runtime_status = cast(RuntimeStatus, RuntimeStatus.STOPPED)
         self.last_error = ""
-        self.save(update_fields=["workspace", "service", "lifecycle", "runtime_status", "last_error", "updated_at"])
+        self._transition_fields = {"workspace", "service", "runtime_status", "last_error"}
 
+    @transition(
+        lifecycle,
+        source=[
+            AgentLifecycle.DRAFT,
+            AgentLifecycle.PROVISIONING,
+            AgentLifecycle.READY,
+            AgentLifecycle.DEPROVISIONING,
+            AgentLifecycle.DEPROVISIONED,
+        ],
+        target=AgentLifecycle.DEPROVISIONING,
+        on_success=save_state,
+    )
     def mark_deprovisioning(self) -> None:
         """Mark the agent as tearing down through the operator teardown flow."""
 
-        self.lifecycle = cast(AgentLifecycle, AgentLifecycle.DEPROVISIONING)
         self.last_error = ""
-        self.save(update_fields=["lifecycle", "last_error", "updated_at"])
+        self._transition_fields = {"last_error"}
 
     def mark_provision_failed(
         self, message: str, *, clear_instances: bool = False, clear_service: bool = False
@@ -682,21 +753,27 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         The lifecycle then follows the workspace, never stranding mid-flow: an agent left
         holding a workspace is still provisioned (``READY``), one rolled back to nothing is
         a clean ``DRAFT`` retry. The red run-state dot carries the failure either way, and
-        the persisted names never point at a torn-down instance.
+        the persisted names never point at a torn-down instance. This deliberately bypasses
+        the declared lifecycle graph because the target is data-dependent recovery state,
+        not a user-visible lifecycle action.
         """
 
-        update_fields = ["lifecycle", "runtime_status", "last_error", "updated_at"]
+        transition_fields = {"runtime_status", "last_error"}
         if clear_instances:
             self.workspace = ""
             self.service = ""
-            update_fields = ["workspace", "service", *update_fields]
+            transition_fields.update({"workspace", "service"})
         elif clear_service:
             self.service = ""
-            update_fields = ["service", *update_fields]
-        self.lifecycle = cast(AgentLifecycle, AgentLifecycle.READY if self.workspace else AgentLifecycle.DRAFT)
+            transition_fields.add("service")
         self.runtime_status = cast(RuntimeStatus, RuntimeStatus.ERROR)
         self.last_error = message[:2000]
-        self.save(update_fields=update_fields)
+        self._transition_fields = transition_fields
+        self.lifecycle_transitions.force_state(
+            self,
+            cast(AgentLifecycle, AgentLifecycle.READY if self.workspace else AgentLifecycle.DRAFT),
+            reason="agent provision failure reconciles lifecycle from persisted operator instance names",
+        )
 
     def provision_workspace_inputs(self) -> dict[str, str]:
         """Resolve the ``agent-default`` workspace template inputs from this agent.

@@ -74,8 +74,8 @@ def test_model_impl_field_is_the_public_declared_accessor() -> None:
     from angee.base.impl import ImplClassField  # noqa: PLC0415
 
     assert isinstance(Integration.impl_field("impl_class"), ImplClassField)
-    with pytest.raises(FieldDoesNotExist, match="Integration.status is not an ImplClassField"):
-        Integration.impl_field("status")
+    with pytest.raises(FieldDoesNotExist, match="Integration.lifecycle is not an ImplClassField"):
+        Integration.impl_field("lifecycle")
     assert not hasattr(Integration, "_impl_field")
 
 

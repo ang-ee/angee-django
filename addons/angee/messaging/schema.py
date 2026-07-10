@@ -56,7 +56,8 @@ class ChannelType(IntegrationLabelMixin, BridgeSyncStatusMixin, AngeeNode):
     """GraphQL projection of a connected message channel (e.g. an email account)."""
 
     backend_class: auto
-    status: auto
+    lifecycle: auto
+    runtime_status: auto
     config: strawberry.scalars.JSON
     last_sync_status: auto
     last_sync_completed_at: auto
@@ -1206,15 +1207,16 @@ _CHANNEL_RESOURCE = hasura_model_resource(
         "id",
         "display_name",
         "backend_class",
-        "status",
+        "lifecycle",
+        "runtime_status",
         "last_sync_status",
         "sync_stage",
         "last_sync_completed_at",
         "updated_at",
     ],
-    sortable=["display_name", "backend_class", "status", "last_sync_completed_at", "updated_at"],
+    sortable=["display_name", "backend_class", "lifecycle", "runtime_status", "last_sync_completed_at", "updated_at"],
     aggregatable=["id", "last_sync_items"],
-    groupable=["backend_class", "status", "last_sync_status", "sync_stage"],
+    groupable=["backend_class", "lifecycle", "runtime_status", "last_sync_status", "sync_stage"],
     insert=False,
     update=False,
     delete=False,

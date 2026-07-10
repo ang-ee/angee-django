@@ -6,5 +6,5 @@
   vendor: integrate.openai
   backend_class: openai
   credential: agents_integrate_openai.cred_openai_demo
-  status: active
+  lifecycle: active
   name: OpenAI
