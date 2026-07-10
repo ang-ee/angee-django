@@ -12,11 +12,12 @@ _angee:
   kind: project
   name: web
   description: >-
-    Full host scaffold for a downstream Angee project: manage.py, settings.yaml,
-    the consumer-addon namespace, and the Vite + React web package. The composed
-    runtime graph owns frontend package discovery, Tailwind source scanning, app
-    addon/schema wiring, and typed GraphQL operation codegen through
-    `runtime/web/*` artifacts emitted by `manage.py angee build`.
+    Full host scaffold for a downstream Angee project: manage.py, pyproject.toml
+    (uv owns framework resolution, so `uv run manage.py` works bare from the
+    root), settings.yaml, the consumer-addon namespace, and the Vite + React web
+    package. The composed runtime graph owns frontend package discovery, Tailwind
+    source scanning, app addon/schema wiring, and typed GraphQL operation codegen
+    through `runtime/web/*` artifacts emitted by `manage.py angee build`.
 
 # Machine name of the project — the slug used for the SECRET_KEY, the manage.py
 # docstring, and (by default) the web package's npm scope. Lowercase, no spaces.
@@ -86,3 +87,14 @@ react_version:
   type: str
   default: "^19.2.0"
   help: React (and react-dom) version range for the rendered package.
+
+# Where the rendered pyproject.toml resolves django-angee from. Empty (default)
+# emits a plain PyPI dependency; a path (relative to the project root) emits a
+# `[tool.uv.sources]` editable override onto a local framework checkout — the
+# `stacks/local` chain passes `sources/angee-django` so host-run `uv run manage.py`
+# and the framework=source stack share one code source. For a framework=baked
+# instance without a checkout, blank this or keep the checkout cloned.
+framework_source_path:
+  type: str
+  default: ""
+  help: Path (relative to the project root) of a local framework checkout for the pyproject `[tool.uv.sources]` editable override; empty = plain PyPI dependency.

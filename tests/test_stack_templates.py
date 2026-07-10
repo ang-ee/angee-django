@@ -651,6 +651,26 @@ def test_uv_caches_are_stack_owned_never_a_nested_dot_angee() -> None:
     assert "/caches/" in gitignore
 
 
+def test_secret_key_is_mode_invariant() -> None:
+    """Both modes declare the secret-key secret and run Django on it.
+
+    Encrypted-at-rest fields (angee.base EncryptedField) derive their Fernet key
+    from SECRET_KEY, so re-rendering a stack from process to docker (or back)
+    must never rotate the effective key: both modes declare the same generated
+    `secret-key` (the env-file backend reuses the existing .env value) and pin
+    YAMLCONF_SECRET_KEY on every Django-running node.
+    """
+
+    dev = _render_dev_stack()
+    local = _render_local_stack()
+    assert "secret-key" in dev["secrets"]
+    assert "secret-key" in local["secrets"]
+    for stack in (dev, local):
+        for name in ("django", "celery-worker", "celery-beat"):
+            assert stack["services"][name]["env"]["YAMLCONF_SECRET_KEY"] == "${secret.secret-key}"
+    assert dev["jobs"]["provision"]["env"]["YAMLCONF_SECRET_KEY"] == "${secret.secret-key}"
+
+
 def test_dev_stack_keeps_absolute_source_paths_verbatim() -> None:
     """Absolute copier inputs are kept as-is (neither `../`-prefixed nor collapsed)."""
 

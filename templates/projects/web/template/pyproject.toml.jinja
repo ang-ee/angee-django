@@ -1,0 +1,24 @@
+# This project's Python environment: `uv run manage.py …` from the project root
+# resolves django-angee (and its postgres driver) with no --project flag — uv owns
+# framework location, manage.py stays a thin entrypoint. uv applies the framework's
+# own [tool.uv.sources] transitively, so the pinned ang-ee/strawberry* forks resolve
+# the same way they do inside the framework checkout.
+[project]
+name = "{{ project_name }}"
+version = "0.0.0"
+requires-python = ">=3.14"
+dependencies = ["django-angee[postgres]"]
+{% if framework_source_path %}
+
+[tool.uv.sources]
+# Framework editable from the local checkout ({{ framework_source_path }}) — the
+# same source a `framework=source` stack runs, so host-run management commands and
+# the stack share one code source.
+django-angee = { path = "{{ framework_source_path }}", editable = true }
+{% endif %}
+
+[tool.uv]
+# Not a distributable package — just an environment for the composed project.
+package = false
+# Stack-owned cache (matches the stack services' UV_CACHE_DIR); gitignored.
+cache-dir = "caches/uv"

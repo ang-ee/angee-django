@@ -68,11 +68,12 @@ secrets_backend:
   path: .env
 
 secrets:
-{% if runtime_mode == "docker" %}
-  # Bootstraps the env-file the compose backend loads unconditionally, and seeds the
-  # instance's Django SECRET_KEY.
+  # The instance's Django SECRET_KEY, in BOTH modes: encrypted-at-rest fields
+  # (angee.base EncryptedField — e.g. integrate.oauthclient.client_secret) derive
+  # their Fernet key from it, so switching a stack between process and docker
+  # rendering must NEVER rotate it. The env-file backend reuses the value already
+  # in .env, so a re-render keeps the key stable.
   secret-key: { generated: true, length: 50 }
-{% endif %}
   operator-token: { generated: true, length: 32 }
 {% if runtime_mode == "docker" %}
   # First-admin password. Generated into .env and consumed through YAMLCONF so the
@@ -172,6 +173,7 @@ jobs:
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
+      YAMLCONF_SECRET_KEY: "${secret.secret-key}"
       {% if uv_cache_dir %}UV_CACHE_DIR: "{{ uv_cache_dir }}"{% endif %}
 
   # Refresh the operator daemon's committed SDL from the LIVE daemon; the unified
@@ -183,6 +185,7 @@ jobs:
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
+      YAMLCONF_SECRET_KEY: "${secret.secret-key}"
       ANGEE_OPERATOR_URL: "{{ operator_url }}"
       ANGEE_OPERATOR_TOKEN: "${secret.operator-token}"
       {% if uv_cache_dir %}UV_CACHE_DIR: "{{ uv_cache_dir }}"{% endif %}
@@ -250,6 +253,7 @@ services:
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
+      YAMLCONF_SECRET_KEY: "${secret.secret-key}"
       {% if uv_cache_dir %}UV_CACHE_DIR: "{{ uv_cache_dir }}"{% endif %}
       # The browser opens the daemon GraphQL same-origin via /operator/graphql.
       ANGEE_OPERATOR_GRAPHQL_ENDPOINT: "/operator/graphql"
@@ -311,6 +315,7 @@ services:
     env:
       ANGEE_PROJECT_DIR: "."
       DATABASE_URL: "{{ database_url }}"
+      YAMLCONF_SECRET_KEY: "${secret.secret-key}"
       REDIS_URL: "{{ redis_url }}"
       CELERY_BROKER_URL: "{{ celery_broker_url }}"
       {% if uv_cache_dir %}UV_CACHE_DIR: "{{ uv_cache_dir }}"{% endif %}

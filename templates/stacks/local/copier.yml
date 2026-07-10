@@ -61,6 +61,10 @@ _angee:
         addon_namespace: "${inputs.addon_namespace}"
         addon_installer_backend: operator
         include_operator_installer: true
+        # The rendered pyproject resolves django-angee editable from the same
+        # checkout the framework=source stack runs, so `uv run manage.py` works
+        # bare from the instance root.
+        framework_source_path: sources/angee-django
 
 # Machine name of the instance: the compose project's friendly label (the operator
 # derives a root-unique project id from it) AND the chained project's name (seeds
